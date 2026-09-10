@@ -57,7 +57,11 @@ pub fn run(cfg: &mut CfgBody) {
         let all_successors: Vec<SmallVec<[BlockIdx; 2]>> = (0..cfg.blocks.len())
             .map(|i| cfg.successors(BlockIdx(i)))
             .collect();
-        let (phi_insertions, var_subst, undef_defs) = run_ssa_builder(
+        let SsaBuild {
+            phi_insertions,
+            var_subst,
+            entry_defs,
+        } = run_ssa_builder(
             &cfg.blocks,
             &all_successors,
             &preds,
@@ -68,16 +72,7 @@ pub fn run(cfg: &mut CfgBody) {
         if !phi_insertions.is_empty() {
             patch_instructions(cfg, &phi_insertions, &ssa_info);
         }
-        if !undef_defs.is_empty() {
-            let undef_insts: Vec<Inst> = undef_defs
-                .into_iter()
-                .map(|dst| Inst {
-                    span: acvus_ast::Span::ZERO,
-                    kind: InstKind::Undef { dst },
-                })
-                .collect();
-            cfg.blocks[0].insts.splice(0..0, undef_insts);
-        }
+        materialize_entry_defs(cfg, entry_defs);
         var_subst
     } else {
         FxHashMap::default()
@@ -661,11 +656,7 @@ fn run_ssa_builder(
     ssa_info: &SsaInfo,
     val_factory: &mut acvus_utils::LocalFactory<ValueId>,
     val_types: &mut FxHashMap<ValueId, Ty>,
-) -> (
-    Vec<super::ssa::PhiInsertion>,
-    FxHashMap<ValueId, ValueId>,
-    Vec<ValueId>,
-) {
+) -> SsaBuild {
     let mut ssa = SSABuilder::new();
 
     let block_label = |bi: BlockIdx| -> Label { blocks[bi.0].label };
@@ -689,19 +680,17 @@ fn run_ssa_builder(
     }
 
     // -- Define initial values in entry block --
-    let mut undef_defs: Vec<ValueId> = Vec::new();
+    let mut entry_defs = EntryDefs::default();
 
     // Context entry defs (from ContextLoad in entry region).
     for (&ctx_id, &val) in &ssa_info.entry_ctx_defs {
         ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx_id), val);
     }
-    // Written contexts without entry defs need undef initial value.
-    for &ctx_id in &ssa_info.written_contexts {
-        if !ssa_info.entry_ctx_defs.contains_key(&ctx_id) {
-            let undef_val =
-                alloc_var_val(val_factory, val_types, SsaVar::Context(ctx_id), ssa_info);
-            ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx_id), undef_val);
-            undef_defs.push(undef_val);
+    for &ctx in &ssa_info.written_contexts {
+        if !ssa_info.entry_ctx_defs.contains_key(&ctx) {
+            let value = alloc_var_val(val_factory, val_types, SsaVar::Context(ctx), ssa_info);
+            ssa.define(ENTRY_BLOCK, SsaVar::Context(ctx), value);
+            entry_defs.ctx_loads.push(EntryLoad { ctx, value });
         }
     }
 
@@ -722,7 +711,7 @@ fn run_ssa_builder(
         if !ssa_info.entry_param_defs.contains_key(&slot) {
             let undef_val = alloc_var_val(val_factory, val_types, SsaVar::Local(slot), ssa_info);
             ssa.define(ENTRY_BLOCK, SsaVar::Local(slot), undef_val);
-            undef_defs.push(undef_val);
+            entry_defs.undef_locals.push(undef_val);
         }
     }
 
@@ -817,7 +806,69 @@ fn run_ssa_builder(
         }
     }
 
-    (phi_insertions, var_subst, undef_defs)
+    SsaBuild {
+        phi_insertions,
+        var_subst,
+        entry_defs,
+    }
+}
+
+/// What SSA construction produced for the body.
+struct SsaBuild {
+    phi_insertions: Vec<super::ssa::PhiInsertion>,
+    /// VarLoad/ParamLoad result -> the SSA value that replaces it.
+    var_subst: FxHashMap<ValueId, ValueId>,
+    entry_defs: EntryDefs,
+}
+
+/// Initial SSA values the entry block must define before its first instruction.
+#[derive(Default)]
+struct EntryDefs {
+    /// A local variable has no value before its first store.
+    undef_locals: Vec<ValueId>,
+    /// A written context starts from its value on entry.
+    ctx_loads: Vec<EntryLoad>,
+}
+
+/// The entry value of a written context, loaded before the body runs.
+struct EntryLoad {
+    ctx: QualifiedRef,
+    value: ValueId,
+}
+
+/// Prepend the entry definitions to block 0.
+fn materialize_entry_defs(cfg: &mut CfgBody, entry_defs: EntryDefs) {
+    let mut insts: Vec<Inst> = entry_defs
+        .undef_locals
+        .into_iter()
+        .map(|dst| Inst {
+            span: acvus_ast::Span::ZERO,
+            kind: InstKind::Undef { dst },
+        })
+        .collect();
+    for EntryLoad { ctx, value: dst } in entry_defs.ctx_loads {
+        let ctx_ty = cfg.val_types[&dst].clone();
+        let ref_dst = alloc_val(
+            &mut cfg.val_factory,
+            &mut cfg.val_types,
+            Ty::Ref(Box::new(ctx_ty)),
+        );
+        insts.push(Inst {
+            span: acvus_ast::Span::ZERO,
+            kind: InstKind::Ref {
+                dst: ref_dst,
+                target: crate::ir::RefTarget::Context(ctx),
+                path: vec![],
+            },
+        });
+        insts.push(Inst {
+            span: acvus_ast::Span::ZERO,
+            kind: InstKind::Load { dst, src: ref_dst },
+        });
+    }
+    if !insts.is_empty() {
+        cfg.blocks[0].insts.splice(0..0, insts);
+    }
 }
 
 // -- Step 3: Patch instructions --------------------------------------

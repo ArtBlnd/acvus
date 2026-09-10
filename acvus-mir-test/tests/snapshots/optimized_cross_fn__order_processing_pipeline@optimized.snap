@@ -10,7 +10,7 @@ expression: opt
   T4 = " total:"
 
 === main ===
-     0 |   r0 = undef
+     0 |   r0 = ref @shipping
      1 |   r1 = ref @shipping
      2 |   r2 = ref @item_count
      3 |   r3 = const 100
@@ -33,66 +33,68 @@ expression: opt
     20 |   r3 = load r2
     21 |   r8 = r7 > r3
     22 |   r9 = test r8 == true
+    23 |   r10 = const 0
     24 |   r8 = r7 <= r3
-    25 |   r10 = test r8 == true
+    25 |   r11 = test r8 == true
     26 |   r2 = ref @default_ship
-    27 |   r11 = ref @customer
-    28 |   r12 = const T0
-    29 |   r13 = const T1
-    30 |   r14 = const T2
-    33 |   r15 = ref @total_out
-    34 |   r16 = ref @receipt_out
-    35 |   jump_if r9 then L0 else L1(r0)
-    36 | L0:
-    37 |   jump L1(0 (r17))
-    38 | L1(r0: Int):
-    39 |   jump_if r10 then L2 else L3(r0)
-    40 | L2:
-    41 |   r0 = load r2
-    42 |   jump L3(r0)
-    43 | L3(r0: Int):
-    44 |   r3 = r7 + r0
-    45 |   r18 = load r11
-    46 |   r19 = r18 + r12
-    47 |   store r1 = r0
-    48 |   r12 = call #0(r5)
-    49 |   r18 = r19 + r12
-    50 |   r12 = r18 + r13
-    51 |   r13 = call #0(r6)
-    52 |   r18 = r12 + r13
-    53 |   r12 = r18 + r14
-    54 |   r13 = call #0(r4)
-    55 |   r14 = r12 + r13
-    56 |   r12 = r14 + T3
-    57 |   r13 = call #0(r0)
-    58 |   r14 = r12 + r13
-    59 |   r12 = r14 + T4
-    60 |   r13 = call #0(r3)
-    61 |   r14 = r12 + r13
-    62 |   r20 = spawn #1(r14)
-    63 |   store r15 = r3
-    64 |   store r16 = r14
-    65 |   r0 = eval r20
-    66 |   return r3
+    27 |   r12 = ref @customer
+    28 |   r13 = const T0
+    29 |   r14 = const T1
+    30 |   r15 = const T2
+    33 |   r16 = ref @total_out
+    34 |   r17 = ref @receipt_out
+    35 |   r3 = load r0
+    36 |   jump_if r9 then L0 else L1(r3)
+    37 | L0:
+    38 |   jump L1(r10)
+    39 | L1(r3: Int):
+    40 |   jump_if r11 then L2 else L3(r3)
+    41 | L2:
+    42 |   r3 = load r2
+    43 |   jump L3(r3)
+    44 | L3(r3: Int):
+    45 |   r10 = r7 + r3
+    46 |   r18 = load r12
+    47 |   r19 = r18 + r13
+    48 |   store r1 = r3
+    49 |   r13 = call #0(r5)
+    50 |   r18 = r19 + r13
+    51 |   r13 = r18 + r14
+    52 |   r14 = call #0(r6)
+    53 |   r18 = r13 + r14
+    54 |   r13 = r18 + r15
+    55 |   r14 = call #0(r4)
+    56 |   r15 = r13 + r14
+    57 |   r13 = r15 + T3
+    58 |   r14 = call #0(r3)
+    59 |   r15 = r13 + r14
+    60 |   r13 = r15 + T4
+    61 |   r14 = call #0(r10)
+    62 |   r15 = r13 + r14
+    63 |   r20 = spawn #1(r15)
+    64 |   store r17 = r15
+    65 |   store r16 = r10
+    66 |   r3 = eval r20
+    67 |   return r10
 
-    ; r0 (@default_ship) : Int
+    ; r0 (@shipping) : Ref<Int>
     ; r1 (@shipping) : Ref<Int>
     ; r2 (@default_ship) : Ref<Int>
-    ; r3 (@free_ship_min) : Int
+    ; r3 (@default_ship) : Int
     ; r4 (@tax_rate) : Int
     ; r5 (v6) : Int
     ; r6 (v7) : Int
     ; r7 (v8) : Int
     ; r8 (v9) : Bool
     ; r9 (v10) : Bool
-    ; r10 (v12) : Bool
-    ; r11 (@customer) : Ref<String>
-    ; r12 (to_string(...)) : String
+    ; r10 (v11) : Int
+    ; r11 (v12) : Bool
+    ; r12 (@customer) : Ref<String>
     ; r13 (to_string(...)) : String
-    ; r14 (v16) : String
-    ; r15 (@total_out) : Ref<Int>
-    ; r16 (@receipt_out) : Ref<String>
-    ; r17 (v11) : Int
+    ; r14 (to_string(...)) : String
+    ; r15 (v16) : String
+    ; r16 (@total_out) : Ref<Int>
+    ; r17 (@receipt_out) : Ref<String>
     ; r18 (@customer) : String
     ; r19 (v22) : String
     ; r20 (v23) : Handle<Int>
