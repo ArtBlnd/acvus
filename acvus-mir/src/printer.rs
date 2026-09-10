@@ -196,39 +196,40 @@ fn write_body(
         }
     }
 
+    // A constant is shown at its use sites only while its ValueId names that
+    // one definition; after register allocation an id is reused, and a use
+    // of a reused id prints as the id.
+    let mut def_count: FxHashMap<ValueId, usize> = FxHashMap::default();
+    for inst in &body.insts {
+        for dst in crate::analysis::inst_info::defs(&inst.kind) {
+            *def_count.entry(dst).or_default() += 1;
+        }
+    }
+    let single_consts = body.insts.iter().filter_map(|inst| match &inst.kind {
+        InstKind::Const { dst, value } if def_count[dst] == 1 => Some((*dst, value)),
+        _ => None,
+    });
+
     // Small constants (Int, Float, Bool, Byte) -> inline at use sites.
-    let consts: FxHashMap<ValueId, &Literal> = body
-        .insts
-        .iter()
-        .filter_map(|inst| match &inst.kind {
-            InstKind::Const { dst, value }
-                if !matches!(value, Literal::String(_) | Literal::List(_)) =>
-            {
-                Some((*dst, value))
-            }
-            _ => None,
-        })
+    let consts: FxHashMap<ValueId, &Literal> = single_consts
+        .clone()
+        .filter(|(_, value)| !matches!(value, Literal::String(_) | Literal::List(_)))
         .collect();
 
     // String/List constants -> T-indexed references.
-    let texts: FxHashMap<ValueId, usize> = body
-        .insts
-        .iter()
-        .filter_map(|inst| match &inst.kind {
-            InstKind::Const { dst, value }
-                if matches!(value, Literal::String(_) | Literal::List(_)) =>
-            {
-                ctx.lit_to_tidx
-                    .get(&fmt_literal(value))
-                    .map(|&tidx| (*dst, tidx))
-            }
-            _ => None,
+    let texts: FxHashMap<ValueId, usize> = single_consts
+        .filter(|(_, value)| matches!(value, Literal::String(_) | Literal::List(_)))
+        .filter_map(|(dst, value)| {
+            ctx.lit_to_tidx
+                .get(&fmt_literal(value))
+                .map(|&tidx| (dst, tidx))
         })
         .collect();
 
     for (i, inst) in body.insts.iter().enumerate() {
-        // All constants are represented elsewhere: small ones inline, String/List in texts section.
-        if matches!(&inst.kind, InstKind::Const { .. }) {
+        if let InstKind::Const { dst, .. } = &inst.kind
+            && (consts.contains_key(dst) || texts.contains_key(dst))
+        {
             continue;
         }
 
@@ -241,8 +242,15 @@ fn write_body(
         }
 
         match &inst.kind {
-            // Constants -- all skipped above, unreachable here.
-            InstKind::Const { .. } => unreachable!(),
+            InstKind::Const { dst, value } => {
+                let shown = match ctx.lit_to_tidx.get(&fmt_literal(value)) {
+                    Some(tidx) if matches!(value, Literal::String(_) | Literal::List(_)) => {
+                        format!("T{tidx}")
+                    }
+                    _ => fmt_literal(value),
+                };
+                writeln!(f, "{} = const {}", vn.fmt_val(*dst), shown)?
+            }
             // Projection
             InstKind::Ref { dst, target, path } => {
                 let base = match target {

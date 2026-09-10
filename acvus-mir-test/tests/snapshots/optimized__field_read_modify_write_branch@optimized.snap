@@ -10,8 +10,9 @@ expression: opt
      5 |   r4 = r3 + 1 (r5)
      6 |   r3 = r2.threshold
      7 |   r6 = r4 > r3
-     8 |   r7 = test true (r6) == true
-    10 |   r8 = field_set r2.exceeded = true (r6)
+     8 |   r7 = test r6 == true
+     9 |   r6 = const true
+    10 |   r8 = field_set r2.exceeded = r6
     11 |   jump_if r7 then L0 else L1(r2)
     12 | L0:
     13 |   jump L1(r8)

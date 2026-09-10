@@ -15,53 +15,59 @@ expression: opt
      1 |   r1 = ref @user
      2 |   r2 = load r1
      3 |   r3 = r2.age
-     6 |   r4 = r3 >= 18 (r5)
-     7 |   r6 = test r4 == true
-    10 |   r4 = r3 >= 18 (r5)
-    11 |   r7 = test r4 == true
-    14 |   r4 = r3 < 18 (r5)
-    15 |   r8 = test r4 == true
-    17 |   r9 = ref @output
-    18 |   r10 = r2.name
-    20 |   r11 = T5 + T4
-    21 |   r12 = ref @output
-    23 |   r13 = ref @output
-    24 |   jump_if r6 then L0 else L1(T0)
+     4 |   r4 = const T0
+     5 |   r5 = const 65
+     6 |   r6 = r3 >= r5
+     7 |   r7 = test r6 == true
+     8 |   r8 = const T1
+     9 |   r5 = const 18
+    10 |   r6 = r3 >= r5
+    11 |   r9 = test r6 == true
+    13 |   r5 = const 18
+    14 |   r6 = r3 < r5
+    15 |   r10 = test r6 == true
+    17 |   r11 = ref @output
+    18 |   r12 = r2.name
+    20 |   r13 = r12 + T4
+    21 |   r14 = ref @output
+    22 |   r12 = const T5
+    23 |   r15 = ref @output
+    24 |   jump_if r7 then L0 else L1(r4)
     25 | L0:
-    26 |   jump L1(T1)
-    27 | L1(r14: String):
-    28 |   jump_if r7 then L2 else L3(T0)
+    26 |   jump L1(r8)
+    27 | L1(r4: String):
+    28 |   jump_if r9 then L2 else L3(r4)
     29 | L2:
     30 |   jump L3(T2)
-    31 | L3(r14: String):
-    32 |   store r0 = T0
-    33 |   jump_if r8 then L4 else L5
+    31 | L3(r4: String):
+    32 |   store r0 = r4
+    33 |   jump_if r10 then L4 else L5
     34 | L4:
-    35 |   store r9 = T3
+    35 |   store r11 = T3
     36 |   jump L5
     37 | L5:
-    38 |   r14 = load r12
-    39 |   r15 = r11 + T0
-    40 |   r14 = T1 + T5
-    41 |   store r13 = T0
-    42 |   return T0
+    38 |   r4 = load r14
+    39 |   r8 = r13 + r4
+    40 |   r4 = r8 + r12
+    41 |   store r15 = r4
+    42 |   return r4
 
     ; r0 (@output) : Ref<String>
     ; r1 (@user) : Ref<{age: Int, name: String}>
     ; r2 (@user) : {age: Int, name: String}
     ; r3 (age) : Int
-    ; r4 (v7) : Bool
+    ; r4 (@output) : String
     ; r5 (v6) : Int
-    ; r6 (v8) : Bool
-    ; r7 (v10) : Bool
-    ; r8 (v12) : Bool
-    ; r9 (@output) : Ref<String>
-    ; r10 (name) : String
-    ; r11 (v17) : String
-    ; r12 (@output) : Ref<String>
-    ; r13 (@output) : Ref<String>
-    ; r14 (@output) : String
-    ; r15 (v9) : String
+    ; r6 (v7) : Bool
+    ; r7 (v8) : Bool
+    ; r8 (v9) : String
+    ; r9 (v10) : Bool
+    ; r10 (v12) : Bool
+    ; r11 (@output) : Ref<String>
+    ; r12 (name) : String
+    ; r13 (v17) : String
+    ; r14 (@output) : Ref<String>
+    ; r15 (@output) : Ref<String>
     ; r16 (v11) : String
     ; r17 (v13) : String
     ; r18 (v16) : String
