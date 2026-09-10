@@ -372,7 +372,7 @@ impl IncrementalGraph {
                 &known_ctx,
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
-                &self.sources,
+                &mut self.sources,
             );
 
             resolved_fn_types.extend(
@@ -467,7 +467,7 @@ impl IncrementalGraph {
                 &known_ctx,
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
-                &self.sources,
+                &mut self.sources,
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -534,7 +534,7 @@ impl IncrementalGraph {
     }
 
     /// Build a snapshot InferResult for compatibility with batch APIs.
-    pub fn infer_result(&self) -> super::infer::InferResult {
+    pub fn infer_result(&mut self) -> super::infer::InferResult {
         let mut outcomes: FxHashMap<QualifiedRef, super::infer::FnInferOutcome> =
             FxHashMap::default();
 
@@ -557,9 +557,10 @@ impl IncrementalGraph {
             outcomes,
             context_types: {
                 // PolyTy -> InferTy (instantiate) -> Ty (freeze) at the output boundary.
-                let mut solver = crate::ty::Solver::new(self.sources.clone());
+                let known = self.known_context_types();
+                let mut solver = crate::ty::Solver::new(&mut self.sources);
                 Freeze::new(
-                    self.known_context_types()
+                    known
                         .into_iter()
                         .map(|(k, v)| {
                             let infer = solver.instantiate_poly(&v);

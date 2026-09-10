@@ -73,7 +73,8 @@ fn it(ty: &Ty) -> InferTy {
 #[test]
 fn iterator_same_args_unifies() {
     let (i, reg) = setup();
-    let mut s = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut s = Solver::new(&mut sources);
     let a = iter_ity(&i, it(&Ty::Int));
     let b = iter_ity(&i, it(&Ty::Int));
     assert!(s.unify_ty(&a, &b, Invariant, &reg).is_ok());
@@ -82,7 +83,8 @@ fn iterator_same_args_unifies() {
 #[test]
 fn iterator_type_arg_mismatch_fails() {
     let (i, reg) = setup();
-    let mut s = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut s = Solver::new(&mut sources);
     let a = iter_ity(&i, it(&Ty::Int));
     let b = iter_ity(&i, it(&Ty::String));
     assert!(s.unify_ty(&a, &b, Invariant, &reg).is_err());
@@ -91,7 +93,8 @@ fn iterator_type_arg_mismatch_fails() {
 #[test]
 fn iterator_type_param_resolves() {
     let (i, reg) = setup();
-    let mut s = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut s = Solver::new(&mut sources);
     let t = s.fresh_ty_var();
     let a = iter_ity(&i, t.clone());
     let b = iter_ity(&i, it(&Ty::Int));
@@ -170,7 +173,8 @@ fn instantiate_pair_shares_params() {
     };
     let to = PolyTy::Array(Box::new(t), acvus_mir::ty::LenTerm::Known(3));
 
-    let mut s = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut s = Solver::new(&mut sources);
     let (inst_from, inst_to) = s.instantiate_poly_pair(&from, &to);
 
     // Unify inst_from with concrete -> T resolves
@@ -201,7 +205,8 @@ fn instantiate_pair_shares_params() {
 fn coerce_list_to_iterator_completeness() {
     // List<Int> <= Iterator<Int> via CastRule
     let (i, reg) = setup();
-    let mut s = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut s = Solver::new(&mut sources);
     let list = it(&Ty::Array(
         Box::new(Ty::Int),
         acvus_mir::ty::LenTerm::Known(3),
@@ -217,7 +222,8 @@ fn coerce_list_to_iterator_completeness() {
 fn coerce_iterator_to_list_soundness_rejected() {
     // Iterator -> List is NOT valid (can't materialize lazy into eager implicitly)
     let (i, reg) = setup();
-    let mut s = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut s = Solver::new(&mut sources);
     let iter = iter_ity(&i, it(&Ty::Int));
     let list = it(&Ty::Array(
         Box::new(Ty::Int),
@@ -233,7 +239,8 @@ fn coerce_iterator_to_list_soundness_rejected() {
 fn coerce_invariant_rejects_list_to_iterator() {
     // Invariant polarity: no coercion allowed
     let (i, reg) = setup();
-    let mut s = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut s = Solver::new(&mut sources);
     let list = it(&Ty::Array(
         Box::new(Ty::Int),
         acvus_mir::ty::LenTerm::Known(3),

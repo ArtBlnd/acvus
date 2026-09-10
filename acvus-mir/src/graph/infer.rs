@@ -478,9 +478,9 @@ pub fn infer_scc(
     known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
     declared: &FxHashMap<QualifiedRef, Vec<TyVarBound>>,
-    sources: &Sources,
+    sources: &mut Sources,
 ) -> SccInferResult {
-    let mut solver = Solver::new(sources.clone());
+    let mut solver = Solver::new(sources);
     let registry = TypeRegistry::default();
 
     // Instantiate context types into solver-scoped InferTy.
@@ -669,7 +669,8 @@ pub fn infer(
     user_context_types: &FxHashMap<QualifiedRef, PolyTy>,
     type_registry: Freeze<TypeRegistry>,
 ) -> InferResult {
-    let mut solver = Solver::new(Sources::new());
+    let mut sources = Sources::new();
+    let mut solver = Solver::new(&mut sources);
     let registry_ref: &TypeRegistry = &type_registry;
 
     // Per-function state accumulated across SCCs.

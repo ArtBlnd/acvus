@@ -34,14 +34,16 @@ fn source_of(ty: &Ty) -> acvus_mir::ty::IdentityId {
 fn a_source_frozen_in_one_solver_is_never_minted_by_another() {
     let i = Interner::new();
     let reg = TypeRegistry::new();
-    let sources = Sources::new();
+    let mut sources = Sources::new();
 
-    let mut a = Solver::new(sources.clone());
-    let mut pb = PolyBuilder::new();
-    let y = a.instantiate_poly(&iter_poly(&i, pb.fresh_identity_var()));
-    let frozen_y = a.freeze_ty(&y).unwrap();
+    let frozen_y = {
+        let mut a = Solver::new(&mut sources);
+        let mut pb = PolyBuilder::new();
+        let y = a.instantiate_poly(&iter_poly(&i, pb.fresh_identity_var()));
+        a.freeze_ty(&y).unwrap()
+    };
 
-    let mut b = Solver::new(sources.clone());
+    let mut b = Solver::new(&mut sources);
     let imported_y = b.instantiate_poly(&lift_to_poly(&frozen_y));
     for _ in 0..8 {
         let mut pb = PolyBuilder::new();

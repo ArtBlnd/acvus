@@ -82,21 +82,18 @@ pub struct SolverSnapshot {
 /// The sources of one compilation. A source number names one identity
 /// for every solver of the compilation, so a frozen type may pass from
 /// one solver to another and still name the source it was frozen with.
-/// Every solver of a compilation mints from the same `Sources`.
-#[derive(Debug, Clone, Default)]
-pub struct Sources(std::sync::Arc<std::sync::Mutex<acvus_utils::LocalFactory<IdentityId>>>);
+/// The compilation owns it and lends it to one solver at a time.
+#[derive(Debug)]
+pub struct Sources(acvus_utils::LocalFactory<IdentityId>);
 
 impl Sources {
     pub fn new() -> Self {
-        Self::default()
+        Self(acvus_utils::LocalFactory::new())
     }
 
     /// Mint a source no solver of this compilation has minted before.
-    pub fn next(&self) -> IdentityId {
-        self.0
-            .lock()
-            .expect("sources mutex poisoned: a solver panicked while minting")
-            .next()
+    pub fn next(&mut self) -> IdentityId {
+        self.0.next()
     }
 }
 
@@ -104,18 +101,18 @@ impl Sources {
 ///
 /// Manages type inference variables. All constraint/resolution
 /// state lives here - no inference state leaks into `Ty`.
-pub struct Solver {
+pub struct Solver<'src> {
     pub(crate) ty_bounds: Vec<TypeBound>,
     pub(crate) effect_vars: Vec<EffectBound>,
     pub(crate) len_vars: Vec<LenBound>,
     pub(crate) identity_vars: Vec<IdentityBound>,
     /// Mints a new source for every identity a declaration introduces;
-    /// shared by every solver of the compilation.
-    sources: Sources,
+    /// lent by the compilation for this solver's lifetime.
+    sources: &'src mut Sources,
 }
 
-impl Solver {
-    pub fn new(sources: Sources) -> Self {
+impl<'src> Solver<'src> {
+    pub fn new(sources: &'src mut Sources) -> Self {
         Self {
             ty_bounds: Vec::new(),
             effect_vars: Vec::new(),
@@ -123,10 +120,6 @@ impl Solver {
             identity_vars: Vec::new(),
             sources,
         }
-    }
-
-    pub fn sources(&self) -> &Sources {
-        &self.sources
     }
 
     // -- Identity variables ------------------------------------------
@@ -1343,7 +1336,7 @@ pub struct Instantiated {
 
 // -- Poly -> Infer instantiation (in Solver) --------------------------
 
-impl Solver {
+impl Solver<'_> {
     /// Instantiate a PolyTy template into InferTy, replacing each positional
     /// placeholder with a fresh Solver variable.
     fn instantiate_effect_inner(
@@ -1390,7 +1383,7 @@ impl Solver {
         let effect_vars = &mut self.effect_vars;
         let len_vars = &mut self.len_vars;
         let identity_vars = &mut self.identity_vars;
-        let sources = &self.sources;
+        let sources = &mut *self.sources;
         let from_params = Self::identity_vars_bound_by_params(ty);
         let mut identity_map: FxHashMap<u32, IdentityTerm<Infer>> = FxHashMap::default();
         ty.map(
@@ -1440,7 +1433,7 @@ impl Solver {
         let effect_vars = &mut self.effect_vars;
         let len_vars = &mut self.len_vars;
         let identity_vars = &mut self.identity_vars;
-        let sources = &self.sources;
+        let sources = &mut *self.sources;
         let mut identity_map: FxHashMap<u32, IdentityTerm<Infer>> = FxHashMap::default();
         let mut on_len = |id: u32| {
             let var = *len_map

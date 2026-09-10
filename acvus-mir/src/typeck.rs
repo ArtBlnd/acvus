@@ -95,7 +95,7 @@ struct AnalysisState {
     next_declared_param: usize,
 }
 
-pub struct TypeChecker<'a, 's> {
+pub struct TypeChecker<'a, 's, 'src> {
     /// Interner for string interning.
     interner: &'a Interner,
     /// Unified type environment: contexts + functions.
@@ -110,7 +110,7 @@ pub struct TypeChecker<'a, 's> {
     /// SmallVec to preserve insertion order - iteration order must match Signature order.
     param_types: smallvec::SmallVec<[(Astr, InferTy); 4]>,
     /// Solver state (borrowed - may be shared across compilations).
-    solver: &'s mut Solver,
+    solver: &'s mut Solver<'src>,
     /// Accumulated type map (internal, uses InferTy during inference).
     type_map: FxHashMap<AstId, InferTy>,
     /// Accumulated coercion records (span -> CastKind).
@@ -141,12 +141,12 @@ pub struct TypeChecker<'a, 's> {
     body_effect: EffectTerm<Infer>,
 }
 
-impl<'a, 's> TypeChecker<'a, 's> {
+impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     pub fn new(
         interner: &'a Interner,
         env: &'a TypeEnv,
         registry: &'a TypeRegistry,
-        solver: &'s mut Solver,
+        solver: &'s mut Solver<'src>,
     ) -> Self {
         let body_effect = solver.fresh_effect_var();
         Self {
@@ -251,11 +251,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
     /// Check if an InferTy is an error.
     fn is_error(ty: &InferTy) -> bool {
         matches!(ty, TyTerm::Error(_))
-    }
-
-    /// Check if an InferTy is an unresolved variable.
-    fn is_var(ty: &InferTy) -> bool {
-        matches!(ty, TyTerm::Var(_))
     }
 
     /// Type check a template. Consumes self, returns TypeResolution.
@@ -2296,7 +2291,8 @@ mod tests {
         interner: &Interner,
     ) -> Result<TypeMap, String> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let mut solver = Solver::new(crate::ty::Sources::new());
+        let mut sources = crate::ty::Sources::new();
+        let mut solver = Solver::new(&mut sources);
         let registry = TypeRegistry::default();
         let qref_contexts: FxHashMap<QualifiedRef, InferTy> = context
             .iter()
