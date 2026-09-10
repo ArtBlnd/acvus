@@ -18,11 +18,10 @@ pub struct Lowerer<'a> {
     body: MirBody,
     /// Interner for string interning.
     interner: &'a Interner,
-    /// Stack of scopes: variable name -> type (for validity, capture, and Ref+Load typing).
-    scopes: Vec<FxHashMap<Astr, Ty>>,
-    /// Variable name -> storage slot ValueId.
-    /// Each variable gets a unique slot (like LLVM's alloca).
-    var_slots: FxHashMap<Astr, ValueId>,
+    /// Stack of scopes: variable name -> its binding. A binding introduced
+    /// while a name is already bound shadows it: a fresh slot, and the outer
+    /// binding is untouched and visible again when the scope ends.
+    scopes: Vec<FxHashMap<Astr, Local>>,
     /// Frozen type resolution from typeck. Contains type_map, coercion_map, direct_calls.
     resolution: Freeze<TypeResolution>,
     /// Coercion map from type checker (expr AstId -> CastKind).
@@ -51,6 +50,13 @@ pub struct Lowerer<'a> {
 struct AnyorderScope {
     entry: ValueId,
     acc: ValueId,
+}
+
+/// A local variable binding: its type and the storage slot it owns.
+#[derive(Clone)]
+struct Local {
+    ty: Ty,
+    slot: ValueId,
 }
 
 /// A pattern that matches every value of its type: a binding, a context
@@ -154,7 +160,6 @@ impl<'a> Lowerer<'a> {
             body,
             interner,
             scopes: vec![initial_scope],
-            var_slots: FxHashMap::default(),
             resolution,
             coercion_lookup,
             closures: FxHashMap::default(),
@@ -320,10 +325,8 @@ impl<'a> Lowerer<'a> {
                     .get(&val)
                     .cloned()
                     .unwrap_or(Ty::error());
-                let slot = self.var_slot(*name);
-                self.set_origin(slot, ValOrigin::Named(*name));
+                let slot = self.define_var(*name, ty);
                 self.emit_ref_store(*span, RefTarget::Var(slot), vec![], val);
-                self.define_var(*name, ty);
             }
             Stmt::ContextStore {
                 name,
@@ -374,18 +377,14 @@ impl<'a> Lowerer<'a> {
                     .get(&val)
                     .cloned()
                     .unwrap_or(Ty::error());
-                let slot = self.var_slot(*name);
-                self.set_origin(slot, ValOrigin::Named(*name));
+                let slot = self.define_var(*name, ty);
                 self.emit_ref_store(*span, RefTarget::Var(slot), vec![], val);
-                self.define_var(*name, ty);
             }
-            Stmt::LetUninit { id, name, span, .. } => {
-                let slot = self.var_slot(*name);
-                self.set_origin(slot, ValOrigin::Named(*name));
+            Stmt::LetUninit { id, name, .. } => {
                 // Type from typeck (fresh variable, unified later).
                 let ty = self.type_of_id(*id);
-                self.set_val_type(slot, ty.clone());
-                self.define_var(*name, ty);
+                let slot = self.define_var(*name, ty.clone());
+                self.set_val_type(slot, ty);
                 // No store - init_check tracks this as uninit.
             }
             Stmt::Assign {
@@ -1024,24 +1023,17 @@ impl<'a> Lowerer<'a> {
     }
 
     fn pop_scope(&mut self) {
-        let inner = self.scopes.pop().unwrap();
-        if let Some(outer) = self.scopes.last_mut() {
-            // Hoisting: variables that exist in outer scope keep their (possibly updated) type.
-            // Variables defined only in inner scope do NOT propagate out.
-            for (name, ty) in &inner {
-                if outer.contains_key(name) {
-                    // Already in outer - update type (inner may have re-bound with different value).
-                    outer.insert(*name, ty.clone());
-                }
-                // else: inner-only definition - does not escape.
-            }
-        }
+        self.scopes.pop().expect("a scope to pop");
     }
 
-    fn define_var(&mut self, name: Astr, ty: Ty) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, ty);
-        }
+    /// Introduce a binding in the current scope with a fresh slot. A name
+    /// already bound, here or outside, is shadowed.
+    fn define_var(&mut self, name: Astr, ty: Ty) -> ValueId {
+        let slot = self.body.val_factory.next();
+        self.set_origin(slot, ValOrigin::Named(name));
+        let scope = self.scopes.last_mut().expect("a scope to define in");
+        scope.insert(name, Local { ty, slot });
+        slot
     }
 
     fn is_defined(&self, name: Astr) -> bool {
@@ -1052,27 +1044,24 @@ impl<'a> Lowerer<'a> {
     }
 
     fn var_type(&self, name: Astr) -> Ty {
-        for scope in self.scopes.iter().rev() {
-            if let Some(ty) = scope.get(&name) {
-                return ty.clone();
-            }
-        }
-        Ty::error()
+        self.lookup_local(name)
+            .map(|l| l.ty.clone())
+            .unwrap_or_else(Ty::error)
     }
 
-    /// Get or create a storage slot ValueId for the given variable name.
+    /// The innermost binding of `name`.
+    fn lookup_local(&self, name: Astr) -> Option<&Local> {
+        self.scopes.iter().rev().find_map(|scope| scope.get(&name))
+    }
+
     fn lookup_var_slot(&self, name: Astr) -> Option<ValueId> {
-        self.var_slots.get(&name).copied()
+        self.lookup_local(name).map(|l| l.slot)
     }
 
+    /// The slot of the innermost binding of `name`; the name must be bound.
     fn var_slot(&mut self, name: Astr) -> ValueId {
-        if let Some(&slot) = self.var_slots.get(&name) {
-            slot
-        } else {
-            let slot = self.body.val_factory.next();
-            self.var_slots.insert(name, slot);
-            slot
-        }
+        self.lookup_var_slot(name)
+            .unwrap_or_else(|| panic!("variable {:?} used before it is bound", name))
     }
 
     /// Look up the param_reg for an extern parameter by name.
@@ -1720,11 +1709,11 @@ impl<'a> Lowerer<'a> {
 
                 // Build the closure body MIR in a sub-lowerer.
                 let mut sub_body = MirBody::new();
-                let mut sub_scopes: Vec<FxHashMap<Astr, Ty>> = vec![FxHashMap::default()];
 
                 // Captures become the first registers.
                 let mut closure_capture_regs = Vec::new();
-                for (i, (name, _, _)) in free_vars.iter().enumerate() {
+                let mut capture_tys = Vec::new();
+                for (i, _) in free_vars.iter().enumerate() {
                     let reg = sub_body.val_factory.next();
                     closure_capture_regs.push(reg);
                     let cap_ty = capture_regs
@@ -1732,8 +1721,8 @@ impl<'a> Lowerer<'a> {
                         .and_then(|r| self.body.val_types.get(r))
                         .cloned()
                         .unwrap_or(Ty::error());
-                    sub_scopes[0].insert(*name, cap_ty.clone());
-                    sub_body.val_types.insert(reg, cap_ty);
+                    sub_body.val_types.insert(reg, cap_ty.clone());
+                    capture_tys.push(cap_ty);
                 }
 
                 // Params follow captures.
@@ -1742,31 +1731,30 @@ impl<'a> Lowerer<'a> {
                     let reg = sub_body.val_factory.next();
                     closure_param_regs.push(reg);
                     let ty = self.type_of_id(p.id);
-                    sub_scopes[0].insert(p.name, ty.clone());
                     sub_body.val_types.insert(reg, ty);
                 }
 
                 // We need to lower the body in context of the sub-body.
                 // Swap state.
                 let saved_body = std::mem::replace(&mut self.body, sub_body);
-                let saved_scopes = std::mem::replace(&mut self.scopes, sub_scopes);
-                let saved_var_slots = std::mem::replace(&mut self.var_slots, FxHashMap::default());
+                let saved_scopes = std::mem::replace(&mut self.scopes, vec![FxHashMap::default()]);
                 let saved_order_slot = self.order_slot;
                 let saved_anyorder = self.anyorder;
                 let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
 
-                // Emit Ref+Store for captures so Ref+Load in body can find them.
-                for ((name, _, _), capture_reg) in free_vars.iter().zip(closure_capture_regs.iter())
+                // Captures and params are the closure body's first bindings.
+                for (((name, _, _), capture_reg), cap_ty) in free_vars
+                    .iter()
+                    .zip(closure_capture_regs.iter())
+                    .zip(capture_tys)
                 {
-                    let slot = self.var_slot(*name);
-                    self.set_origin(slot, ValOrigin::Named(*name));
+                    let slot = self.define_var(*name, cap_ty);
                     self.emit_ref_store(*span, RefTarget::Var(slot), vec![], *capture_reg);
                 }
-                // Emit Ref+Store for params.
                 for (p, param_reg) in params.iter().zip(closure_param_regs.iter()) {
-                    let slot = self.var_slot(p.name);
-                    self.set_origin(slot, ValOrigin::Named(p.name));
+                    let ty = self.type_of_id(p.id);
+                    let slot = self.define_var(p.name, ty);
                     self.emit_ref_store(p.span, RefTarget::Var(slot), vec![], *param_reg);
                 }
 
@@ -1784,7 +1772,6 @@ impl<'a> Lowerer<'a> {
 
                 let mut closure_body_mir = std::mem::replace(&mut self.body, saved_body);
                 self.scopes = saved_scopes;
-                self.var_slots = saved_var_slots;
                 self.order_slot = saved_order_slot;
                 self.anyorder = saved_anyorder;
 
@@ -2112,10 +2099,8 @@ impl<'a> Lowerer<'a> {
                         .get(&src)
                         .cloned()
                         .unwrap_or(Ty::error());
-                    let slot = self.var_slot(*name);
-                    self.set_origin(slot, ValOrigin::Named(*name));
+                    let slot = self.define_var(*name, ty);
                     self.emit_ref_store(*pat_span, RefTarget::Var(slot), vec![], src);
-                    self.define_var(*name, ty);
                 }
             }
             return self.emit_empty_string(mb.span);
@@ -2422,10 +2407,8 @@ impl<'a> Lowerer<'a> {
                     .get(&src_reg)
                     .cloned()
                     .unwrap_or(Ty::error());
-                let slot = self.var_slot(*name);
-                self.set_origin(slot, ValOrigin::Named(*name));
+                let slot = self.define_var(*name, ty);
                 self.emit_ref_store(span, RefTarget::Var(slot), vec![], src_reg);
-                self.define_var(*name, ty);
             }
             Pattern::Binding {
                 name: _,

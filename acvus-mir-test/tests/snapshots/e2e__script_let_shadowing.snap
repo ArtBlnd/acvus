@@ -20,6 +20,6 @@ expression: ir
     ; r3 (x) : Int
     ; r4 (v7) : Int
     ; r5 (v6) : Int
-    ; r6 (v8) : Ref<Int>
-    ; r7 (v9) : Ref<Int>
+    ; r6 (v9) : Ref<Int>
+    ; r7 (v10) : Ref<Int>
     ; r8 (x) : Int
