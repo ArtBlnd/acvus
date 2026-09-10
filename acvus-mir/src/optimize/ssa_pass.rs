@@ -305,7 +305,7 @@ fn forward_context_values(
 }
 
 /// Apply value substitutions to an instruction's operands.
-fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
+pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
     let s = |v: &mut ValueId| {
         if let Some(&new) = subst.get(v) {
             *v = new;
@@ -413,7 +413,7 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
 }
 
 /// Apply value substitutions to a block terminator's operands.
-fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) {
+pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) {
     let s = |v: &mut ValueId| {
         if let Some(&new) = subst.get(v) {
             *v = new;

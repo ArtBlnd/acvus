@@ -1,4 +1,5 @@
 pub mod code_motion;
+pub mod commute;
 pub mod const_dedup;
 pub mod dce;
 pub mod drop_insertion;

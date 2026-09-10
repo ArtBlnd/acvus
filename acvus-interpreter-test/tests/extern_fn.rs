@@ -222,9 +222,20 @@ fn fetch_by(_: &Interner, x: i64) -> i64 {
 }
 
 /// Four independent Opaque fetches and one parameterized.
+/// A fresh draw: two draws in either order are the same program.
+#[extern_fn(effect = idempotent, commutative)]
+fn draw_a(_: &Interner) -> i64 {
+    5
+}
+
+#[extern_fn(effect = idempotent, commutative)]
+fn draw_b(_: &Interner) -> i64 {
+    7
+}
+
 fn io_registry() -> ExternRegistry<AcvusRuntime> {
     extern_registry! {
-        fns: [fetch_a, fetch_b, fetch_c, fetch_d, fetch_by],
+        fns: [fetch_a, fetch_b, fetch_c, fetch_d, fetch_by, draw_a, draw_b],
     }
 }
 
@@ -483,6 +494,52 @@ fn io_two_independent_chains_mir() {
 
     assert_eq!(spawns.len(), 4, "4 IO calls");
     assert_source_order(&spawns, &evals);
+}
+
+// -- Commutative runs (RFC-0013) ------------------------------------
+//
+// Two draws are neighbours on the chain and both commute: they take the
+// same entry order and are issued together, and a merge of what they
+// yield follows. A call that does not commute between them keeps them
+// apart.
+
+#[tokio::test]
+async fn commutative_draws_add_up() {
+    let i = Interner::new();
+    let result =
+        run_script_with_externs(&i, "draw_a() + draw_b()", ctx(&i, &[]), vec![io_registry()]).await;
+    assert_eq!(result.value, Value::Int(12));
+}
+
+#[test]
+fn commutative_run_is_issued_together_mir() {
+    let (i, cr) = compile_io_script("draw_a() + draw_b()");
+    let (spawns, evals) = dump_and_positions("commutative_run", &i, &cr);
+    assert_eq!(spawns.len(), 2, "expected 2 spawns");
+    assert!(
+        spawns.iter().all(|&s| evals.iter().all(|&e| s < e)),
+        "both draws are issued before either is awaited"
+    );
+    assert!(has_merge(&cr), "a merge joins what the run yielded");
+}
+
+#[test]
+fn a_call_that_does_not_commute_keeps_source_order_mir() {
+    let (i, cr) = compile_io_script("draw_a() + fetch_a() + draw_b()");
+    let (spawns, evals) = dump_and_positions("broken_run", &i, &cr);
+    assert_eq!(spawns.len(), 3, "expected 3 spawns");
+    assert_source_order(&spawns, &evals);
+    assert!(!has_merge(&cr), "no run, no merge");
+}
+
+fn has_merge(cr: &CompileResult) -> bool {
+    let Executable::Module(m) = cr.modules.get(&cr.entry_qref).unwrap() else {
+        panic!("expected Module");
+    };
+    m.main
+        .insts
+        .iter()
+        .any(|i| matches!(i.kind, InstKind::Merge { .. }))
 }
 
 // -- 7. IO in iteration ---------------------------------------------

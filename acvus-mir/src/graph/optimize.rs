@@ -109,6 +109,7 @@ fn run_pass2_body(
 
 /// Pass 2 pipeline on CfgBody.
 fn run_pass2(cfg: &mut CfgBody, untyped_scalars: bool) {
+    optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
     optimize::ssa_pass::run(cfg);
     optimize::dse::run(cfg);
