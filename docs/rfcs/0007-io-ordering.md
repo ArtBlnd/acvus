@@ -127,3 +127,8 @@ place where the intent lives, which none of them has.
 
 - Whether a block may also declare an order among its own sub-blocks, or
   nesting is the only composition.
+- Whether a commutative call may be issued earlier than its block, into a
+  dominator that its block post-dominates. Every path through that
+  dominator reaches the call, so issuing it there speculates nothing;
+  this is the one condition under which the ruling against hoisting a
+  call's issue does not apply. A run is read within one block today.
