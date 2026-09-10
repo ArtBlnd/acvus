@@ -31,9 +31,6 @@ pub struct Lowerer<'a> {
     /// Global closure label counter - shared across nesting levels to prevent
     /// label collisions when nested closures each allocate from a sub-body.
     closure_label_count: u32,
-    /// Context projection alias stack: @x -> (@a, [x]) means @x is an alias for @a.x.
-    /// Pushed/popped around match-bind bodies for destructure projection.
-    context_aliases: Vec<FxHashMap<QualifiedRef, (QualifiedRef, Vec<Astr>)>>,
     /// The storage slot holding the current `Order` of the body being lowered
     /// (RFC-0007). `None` for a body whose effect is Pure. The SSA pass
     /// promotes the slot, so branches and loops join orders through phis.
@@ -67,7 +64,9 @@ struct Local {
 }
 
 /// A pattern that matches every value of its type: a binding, a context
-/// bind, or a tuple of such.
+/// bind, a tuple of such, or an object of such. The type checker has
+/// already required every key an object pattern names to exist on the
+/// source type, so the pattern cannot fail at run time.
 fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Binding { .. } | Pattern::ContextBind { .. } => true,
@@ -75,10 +74,10 @@ fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
             TuplePatternElem::Pattern(p) => pattern_is_irrefutable(p),
             TuplePatternElem::Wildcard(_) => true,
         }),
-        Pattern::Literal { .. }
-        | Pattern::List { .. }
-        | Pattern::Object { .. }
-        | Pattern::Variant { .. } => false,
+        Pattern::Object { fields, .. } => fields
+            .iter()
+            .all(|field| pattern_is_irrefutable(&field.pattern)),
+        Pattern::Literal { .. } | Pattern::List { .. } | Pattern::Variant { .. } => false,
     }
 }
 
@@ -171,7 +170,6 @@ impl<'a> Lowerer<'a> {
             coercion_lookup,
             closures: FxHashMap::default(),
             closure_label_count: 0,
-            context_aliases: vec![],
             order_slot: None,
             anyorder: None,
         }
@@ -369,14 +367,7 @@ impl<'a> Lowerer<'a> {
                 span,
                 ..
             } => {
-                // Resolve alias: if @x -> @a.x, then @x.y = v becomes @a.x.y = v
-                if let Some((real_ctx, alias_path)) = self.resolve_context_alias(name) {
-                    let mut full_path = alias_path;
-                    full_path.extend_from_slice(path);
-                    self.lower_context_store(real_ctx, &full_path, expr, *span);
-                } else {
-                    self.lower_context_store(*name, path, expr, *span);
-                }
+                self.lower_context_store(*name, path, expr, *span);
             }
             Stmt::VarFieldStore {
                 name,
@@ -461,59 +452,9 @@ impl<'a> Lowerer<'a> {
         body: &[Stmt],
         span: Span,
     ) {
-        // Projection destructure: { @x, @y, } = @a { body }
-        // When source is ContextRef and pattern is Object with ContextBind fields,
-        // register aliases instead of copying values.
-        if let (
-            Expr::ContextRef {
-                name: source_ctx, ..
-            },
-            Pattern::Object { fields, .. },
-        ) = (source, pattern)
-        {
-            self.push_scope();
-            self.push_context_alias_scope();
-            for field in fields {
-                match &field.pattern {
-                    Pattern::ContextBind {
-                        name: alias_ctx, ..
-                    } => {
-                        self.register_context_alias(*alias_ctx, *source_ctx, vec![field.key]);
-                    }
-                    _ => {
-                        // Non-projection sub-pattern: copy via field load.
-                        let source_reg = self.lower_expr(source);
-                        let source_val = self.materialize(source_reg, span);
-                        let field_val = self.alloc_val();
-                        self.set_val_type(field_val, self.object_field_type(source_val, field.key));
-                        self.emit_inst(
-                            span,
-                            InstKind::ObjectGet {
-                                dst: field_val,
-                                object: source_val,
-                                key: field.key,
-                            },
-                        );
-                        self.lower_pattern_bind(&field.pattern, field_val, span);
-                    }
-                }
-            }
-            for s in body {
-                self.lower_stmt(s);
-            }
-            self.pop_context_alias_scope();
-            self.pop_scope();
-            return;
-        }
-
         let source_reg = self.lower_expr(source);
 
-        let is_irrefutable = matches!(
-            pattern,
-            Pattern::Binding { .. } | Pattern::ContextBind { .. }
-        );
-
-        if is_irrefutable {
+        if pattern_is_irrefutable(pattern) {
             // No branching needed - just bind and execute body.
             self.push_scope();
             self.lower_pattern_bind(pattern, source_reg, span);
@@ -937,46 +878,10 @@ impl<'a> Lowerer<'a> {
         path.reverse();
         let target = match root {
             Expr::Ident { name, .. } => RefTarget::Var(self.var_slot(name.name)),
-            Expr::ContextRef { name, .. } => match self.resolve_context_alias(name) {
-                Some((real, alias_path)) => {
-                    let mut full = alias_path;
-                    full.extend(path);
-                    path = full;
-                    RefTarget::Context(real)
-                }
-                None => RefTarget::Context(*name),
-            },
+            Expr::ContextRef { name, .. } => RefTarget::Context(*name),
             other => panic!("not a place: {other:?}; type checking admits only places here"),
         };
         LentPlace { target, path, ty }
-    }
-
-    fn resolve_context_alias(&self, ctx: &QualifiedRef) -> Option<(QualifiedRef, Vec<Astr>)> {
-        for scope in self.context_aliases.iter().rev() {
-            if let Some((real_ctx, path)) = scope.get(ctx) {
-                return Some((*real_ctx, path.clone()));
-            }
-        }
-        None
-    }
-
-    fn push_context_alias_scope(&mut self) {
-        self.context_aliases.push(FxHashMap::default());
-    }
-
-    fn pop_context_alias_scope(&mut self) {
-        self.context_aliases.pop();
-    }
-
-    fn register_context_alias(
-        &mut self,
-        alias: QualifiedRef,
-        target: QualifiedRef,
-        path: Vec<Astr>,
-    ) {
-        if let Some(scope) = self.context_aliases.last_mut() {
-            scope.insert(alias, (target, path));
-        }
     }
 
     /// Emit Ref + Store: write `value` to the given storage target.
@@ -1445,30 +1350,16 @@ impl<'a> Lowerer<'a> {
                 name: qref,
                 span,
             } => {
-                // Resolve alias: @x -> @a.x becomes Ref { target: Context(a), path: [x] }
-                let (real_ctx, path) = if let Some((real, path)) = self.resolve_context_alias(qref)
-                {
-                    (real, path)
-                } else {
-                    (*qref, vec![])
-                };
                 let inner_ty = self.type_of_id(*id);
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::Ref(Box::new(inner_ty)));
-                if path.is_empty() {
-                    self.set_origin(dst, ValOrigin::Context(real_ctx.name));
-                } else {
-                    self.set_origin(
-                        dst,
-                        ValOrigin::RefField(RefTarget::Context(real_ctx), path.clone()),
-                    );
-                }
+                self.set_origin(dst, ValOrigin::Context(qref.name));
                 self.emit_inst(
                     *span,
                     InstKind::Ref {
                         dst,
-                        target: RefTarget::Context(real_ctx),
-                        path,
+                        target: RefTarget::Context(*qref),
+                        path: vec![],
                     },
                 );
                 dst

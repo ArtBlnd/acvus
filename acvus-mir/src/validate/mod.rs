@@ -65,9 +65,6 @@ impl ValidationError {
                     "use of move-only value Val({value_id}) after move (moved at inst #{moved_at}), type: {ty:?}"
                 )
             }
-            ValidationErrorKind::NotMaterializable { ty } => {
-                format!("cannot store non-materializable type to context: {ty:?}")
-            }
         };
 
         MirError {

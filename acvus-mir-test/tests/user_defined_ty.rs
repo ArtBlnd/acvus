@@ -1,12 +1,12 @@
 //! Tests for the Iterator UserDefined type.
 //!
 //! These tests construct Iterator as `Ty::UserDefined` with proper `QualifiedRef`
-//! via `acvus_ext::std_registries`, verifying unification, materiality,
-//! and coercion behaviors.
+//! via `acvus_ext::std_registries`, verifying unification, the data
+//! predicate, and coercion behaviors.
 
 use acvus_mir::graph::types::QualifiedRef;
 use acvus_mir::ty::{
-    InferTy, Materiality, Polarity, PolyBuilder, PolyTy, Solver, Ty, TypeRegistry, lift_ty,
+    InferTy, Polarity, PolyBuilder, PolyTy, Solver, Ty, TypeRegistry, lift_ty,
 };
 use acvus_utils::Interner;
 
@@ -24,7 +24,7 @@ fn setup() -> (Interner, TypeRegistry) {
     (interner, type_registry)
 }
 
-/// Build Iterator<T> as concrete Ty (for materiality/pureable tests).
+/// Build Iterator<T> as concrete Ty.
 fn iter_ty(interner: &Interner, elem: Ty) -> Ty {
     let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
     Ty::UserDefined {
@@ -100,39 +100,35 @@ fn iterator_type_param_resolves() {
 }
 
 // ================================================================
-// Materiality - UserDefined types are Ephemeral
+// is_data - an extension type is data; one over a function is not
 // ================================================================
 
 #[test]
-fn iterator_is_ephemeral() {
+fn iterator_is_data() {
     let (i, _reg) = setup();
-    assert_eq!(iter_ty(&i, Ty::Int).materiality(), Materiality::Ephemeral);
+    assert!(iter_ty(&i, Ty::Int).is_data());
 }
 
 #[test]
-fn iterator_not_materializable() {
-    let (i, _reg) = setup();
-    assert!(!iter_ty(&i, Ty::Int).is_materializable());
-}
-
-#[test]
-fn list_of_iterator_not_materializable() {
+fn list_of_iterator_is_data() {
     let (i, _reg) = setup();
     let list = Ty::Array(
         Box::new(iter_ty(&i, Ty::Int)),
         acvus_mir::ty::LenTerm::Known(3),
     );
-    assert!(!list.is_materializable());
+    assert!(list.is_data());
 }
 
-// ================================================================
-// is_pureable - UserDefined types are not pureable
-// ================================================================
-
 #[test]
-fn iterator_not_pureable() {
+fn iterator_over_fn_is_not_data() {
     let (i, _reg) = setup();
-    assert!(!iter_ty(&i, Ty::Int).is_pureable());
+    let fn_ty = Ty::Fn {
+        params: vec![],
+        ret: Box::new(Ty::Int),
+        captures: vec![],
+        effect: acvus_mir::ty::Effect::PURE.into(),
+    };
+    assert!(!iter_ty(&i, fn_ty).is_data());
 }
 
 // ================================================================

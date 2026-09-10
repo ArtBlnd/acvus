@@ -68,8 +68,8 @@ pub enum MirErrorKind {
         actual: Ty,
     },
 
-    // Value errors
-    NonPureContextLoad {
+    /// A context's type is not data (RFC-0014).
+    ContextNotData {
         name: String,
         ty: Ty,
     },
@@ -263,10 +263,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "extern param `${name}` is immutable and cannot be assigned"
                 )
             }
-            MirErrorKind::NonPureContextLoad { name, ty } => {
+            MirErrorKind::ContextNotData { name, ty } => {
                 write!(
                     f,
-                    "`@{name}` has non-pure type {} and cannot be used as a value; it can only be called directly",
+                    "`@{name}` has type {}, which is not data; a context holds only what a host keeps between runs",
                     ty.display(interner)
                 )
             }

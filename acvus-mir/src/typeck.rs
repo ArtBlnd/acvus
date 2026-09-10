@@ -9,7 +9,7 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Materiality, Param, ParamMode, ParamTerm,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Param, ParamMode, ParamTerm,
     Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
 };
 use crate::variant::VariantPayload;
@@ -119,6 +119,10 @@ pub struct TypeChecker<'a, 's> {
     direct_calls: DirectCallMap,
     /// Accumulated errors.
     errors: Vec<MirError>,
+    /// Every context the program names, at the span of its first use. A
+    /// context's type must be data (RFC-0014); the check runs once the
+    /// types are known.
+    context_uses: FxHashMap<QualifiedRef, Span>,
     /// Bounded variables instantiated so far, each at the span that will
     /// report a violation.
     bound_sites: Vec<BoundSite>,
@@ -158,6 +162,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             direct_calls: DirectCallMap::default(),
             bound_sites: Vec::new(),
             errors: Vec::new(),
+            context_uses: FxHashMap::default(),
             analysis: None,
             lambda_stack: Vec::new(),
             lambda_body_ids: FxHashMap::default(),
@@ -262,6 +267,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         self.check_nodes(&template.body);
         self.verify_bounds();
         self.solver.settle_identities();
+        self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -296,7 +302,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             self.check_stmt(stmt);
         }
         let tail_ty = if let Some(tail) = &script.tail {
-            let ty = self.check_expr(false, tail);
+            let ty = self.check_expr(tail);
             if let Some(expected) = expected_tail {
                 let expected_infer = lift_ty(expected);
                 if self
@@ -327,6 +333,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         };
         self.verify_bounds();
         self.solver.settle_identities();
+        self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -505,6 +512,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     }
 
     fn resolve_context_type(&mut self, qref: QualifiedRef, span: Span) -> InferTy {
+        self.note_context_use(qref, span);
         if let Some(ty) = self.env.contexts.get(&qref) {
             return ty.clone();
         }
@@ -521,6 +529,44 @@ impl<'a, 's> TypeChecker<'a, 's> {
             span,
         );
         Self::infer_error()
+    }
+
+    fn note_context_use(&mut self, qref: QualifiedRef, span: Span) {
+        self.context_uses.entry(qref).or_insert(span);
+    }
+
+    /// The type a context resolved to, once every use has been checked.
+    /// `None` while it is still open, or when the context is unknown.
+    fn context_type(&self, qref: QualifiedRef) -> Option<Ty> {
+        let ty = self.env.contexts.get(&qref).cloned().or_else(|| {
+            self.analysis
+                .as_ref()
+                .and_then(|state| state.infer_vars.get(&qref.name).cloned())
+        })?;
+        let resolved = self.solver.resolve_ty(&ty);
+        self.solver.freeze_ty(&resolved).ok()
+    }
+
+    /// A context holds only data (RFC-0014): a function, a handle, an
+    /// order, or a reference cannot be kept by a host from one run to the
+    /// next. Checked after inference, at the first use of each context.
+    fn check_contexts_are_data(&mut self) {
+        let uses: Vec<(QualifiedRef, Span)> = self.context_uses.iter().map(|(q, s)| (*q, *s)).collect();
+        for (qref, span) in uses {
+            let Some(ty) = self.context_type(qref) else {
+                continue;
+            };
+            if ty.is_error() || ty.is_data() {
+                continue;
+            }
+            self.error(
+                MirErrorKind::ContextNotData {
+                    name: self.interner.resolve(qref.name).to_string(),
+                    ty,
+                },
+                span,
+            );
+        }
     }
 
     fn binop_error(&mut self, op: &'static str, left: InferTy, right: InferTy, span: Span) {
@@ -644,7 +690,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         match node {
             Node::Text { .. } | Node::Comment { .. } => {}
             Node::InlineExpr { expr, span, .. } => {
-                let ty = self.check_expr(false, expr);
+                let ty = self.check_expr(expr);
                 let resolved = self.solver.resolve_ty(&ty);
                 match &resolved {
                     TyTerm::String | TyTerm::Error(_) => {}
@@ -689,7 +735,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 expr,
                 span: _,
             } => {
-                let ty = self.check_expr(false, expr);
+                let ty = self.check_expr(expr);
                 self.define_var(*name, ty.clone());
                 self.record(*id, ty);
             }
@@ -700,7 +746,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 expr,
                 span,
             } => {
-                let ty = self.check_expr(false, expr);
+                let ty = self.check_expr(expr);
+                self.note_context_use(*name, *span);
                 let ctx_ty = self
                     .env
                     .contexts
@@ -731,7 +778,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 expr,
                 span,
             } => {
-                let ty = self.check_expr(false, expr);
+                let ty = self.check_expr(expr);
                 let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
                     self.error(
                         MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
@@ -756,7 +803,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 self.record(*id, ty);
             }
             acvus_ast::Stmt::Expr(expr) => {
-                self.check_expr(false, expr);
+                self.check_expr(expr);
             }
             acvus_ast::Stmt::MatchBind {
                 pattern,
@@ -765,7 +812,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span,
                 ..
             } => {
-                let source_ty = self.check_expr(false, source);
+                let source_ty = self.check_expr(source);
                 let resolved_source = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
                 self.check_pattern(pattern, &resolved_source, *span);
@@ -782,7 +829,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 expr,
                 span: _,
             } => {
-                let ty = self.check_expr(false, expr);
+                let ty = self.check_expr(expr);
                 self.define_var(*name, ty.clone());
                 self.record(*id, ty);
             }
@@ -797,7 +844,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 expr,
                 span,
             } => {
-                let ty = self.check_expr(false, expr);
+                let ty = self.check_expr(expr);
                 let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
                     self.error(
                         MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
@@ -823,7 +870,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             acvus_ast::Stmt::While {
                 cond, body, span, ..
             } => {
-                let cond_ty = self.check_expr(false, cond);
+                let cond_ty = self.check_expr(cond);
                 if self
                     .solver
                     .unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry)
@@ -857,7 +904,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span,
                 ..
             } => {
-                let source_ty = self.check_expr(false, source);
+                let source_ty = self.check_expr(source);
                 let resolved = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
                 self.check_pattern(pattern, &resolved, *span);
@@ -872,7 +919,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     fn check_match_block(&mut self, mb: &MatchBlock) {
         // Body-less variable binding: define in current scope (no push/pop).
         if self.is_bodyless_var_binding(mb) {
-            let source_ty = self.check_expr(false, &mb.source);
+            let source_ty = self.check_expr(&mb.source);
             if matches!(&mb.arms[0].pattern, Pattern::Variant { .. }) {
                 self.check_pattern(&mb.arms[0].pattern, &source_ty, mb.arms[0].tag_span);
             } else {
@@ -882,7 +929,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             return;
         }
 
-        let source_ty = self.check_expr(false, &mb.source);
+        let source_ty = self.check_expr(&mb.source);
         let resolved_source = self.solver.resolve_ty(&source_ty);
 
         for arm in &mb.arms {
@@ -939,7 +986,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         }
     }
 
-    fn check_expr(&mut self, allow_non_pure: bool, expr: &Expr) -> InferTy {
+    fn check_expr(&mut self, expr: &Expr) -> InferTy {
         match expr {
             // A lent place types as the place; the mode is checked at the call.
             Expr::Borrow {
@@ -948,7 +995,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 if place_of(place).is_none() {
                     self.error(MirErrorKind::NotAPlace, *span);
                 }
-                let ty = self.check_expr(true, place);
+                let ty = self.check_expr(place);
                 self.record_ret(*id, ty)
             }
             Expr::Literal { id, value, span } => {
@@ -1004,24 +1051,6 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 span,
             } => {
                 let ty = self.resolve_context_type(*qref, *span);
-                // Check materiality: need to freeze to check concrete type properties.
-                let ty = if !allow_non_pure && !Self::is_error(&ty) && !Self::is_var(&ty) {
-                    let frozen = self.freeze_or_error(&ty);
-                    if frozen.materiality() == Materiality::Ephemeral {
-                        self.error(
-                            MirErrorKind::NonPureContextLoad {
-                                name: self.interner.resolve(qref.name).to_string(),
-                                ty: frozen,
-                            },
-                            *span,
-                        );
-                        Self::infer_error()
-                    } else {
-                        ty
-                    }
-                } else {
-                    ty
-                };
                 self.record_ret(*id, ty)
             }
 
@@ -1090,8 +1119,8 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 right,
                 span,
             } => {
-                let lt = self.check_expr(false, left);
-                let rt = self.check_expr(false, right);
+                let lt = self.check_expr(left);
+                let rt = self.check_expr(right);
                 let lt = self.solver.resolve_ty(&lt);
                 let rt = self.solver.resolve_ty(&rt);
 
@@ -1208,7 +1237,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 operand,
                 span,
             } => {
-                let ot = self.check_expr(false, operand);
+                let ot = self.check_expr(operand);
                 let ot = self.solver.resolve_ty(&ot);
 
                 // Early guard: if operand is Error, suppress cascading errors.
@@ -1250,7 +1279,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 field,
                 span,
             } => {
-                let ot_raw = self.check_expr(false, object);
+                let ot_raw = self.check_expr(object);
                 let ot = self.solver.resolve_ty(&ot_raw);
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
@@ -1335,11 +1364,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     Expr::Ident {
                         ref_kind: RefKind::Value,
                         ..
-                    }
-                    | Expr::ContextRef { .. } => self.check_func_call(right, &[], pipe_left, *span),
+                    } => self.check_func_call(right, &[], pipe_left, *span),
                     _ => {
-                        let lt = self.check_expr(false, left);
-                        let rt = self.check_expr(false, right);
+                        let lt = self.check_expr(left);
+                        let rt = self.check_expr(right);
                         self.check_callable(
                             &rt,
                             &[],
@@ -1376,7 +1404,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 let outer_effect = self.body_effect;
                 self.body_effect = self.solver.fresh_effect_var();
-                let ret = self.check_expr(false, body);
+                let ret = self.check_expr(body);
                 let lambda_effect = self.body_effect;
                 self.body_effect = outer_effect;
 
@@ -1403,7 +1431,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             }
 
             Expr::Paren { id, inner, span: _ } => {
-                let ty = self.check_expr(false, inner);
+                let ty = self.check_expr(inner);
                 self.record_ret(*id, ty)
             }
 
@@ -1423,10 +1451,10 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     return self.record_ret(*id, ty);
                 }
 
-                let elem_ty = self.check_expr(false, all_elems[0]);
+                let elem_ty = self.check_expr(all_elems[0]);
 
                 for elem in all_elems.iter().skip(1) {
-                    let et = self.check_expr(false, elem);
+                    let et = self.check_expr(elem);
                     if self.unify_covariant(&et, &elem_ty, None).is_err() {
                         let resolved_elem = self.solver.resolve_ty(&elem_ty);
                         let resolved_et = self.solver.resolve_ty(&et);
@@ -1454,7 +1482,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             } => {
                 let mut field_types = FxHashMap::default();
                 for ObjectExprField { key, value, .. } in fields {
-                    let ft = self.check_expr(false, value);
+                    let ft = self.check_expr(value);
                     field_types.insert(*key, ft);
                 }
                 let ty = TyTerm::Object(field_types);
@@ -1469,7 +1497,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 let elem_types: Vec<InferTy> = elements
                     .iter()
                     .map(|elem| match elem {
-                        TupleElem::Expr(e) => self.check_expr(false, e),
+                        TupleElem::Expr(e) => self.check_expr(e),
                         TupleElem::Wildcard(_) => self.solver.fresh_ty_var(),
                     })
                     .collect();
@@ -1488,9 +1516,9 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     return TyTerm::Unit;
                 };
                 for e in &elements[..elements.len() - 1] {
-                    self.check_expr(false, e);
+                    self.check_expr(e);
                 }
-                let ty = self.check_expr(false, last);
+                let ty = self.check_expr(last);
                 self.record_ret(*id, ty)
             }
 
@@ -1517,7 +1545,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                                 );
                                 return Self::infer_error();
                             };
-                            let inner_ty = self.check_expr(false, inner_expr);
+                            let inner_ty = self.check_expr(inner_expr);
                             if self
                                 .unify_covariant(&type_params[*idx], &inner_ty, None)
                                 .is_err()
@@ -1555,7 +1583,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
                 let payload_ty = match payload {
                     Some(expr) => {
-                        let ty = self.check_expr(false, expr);
+                        let ty = self.check_expr(expr);
                         Some(Box::new(ty))
                     }
                     None => None,
@@ -1580,7 +1608,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 for stmt in stmts {
                     self.check_stmt(stmt);
                 }
-                let ty = self.check_expr(false, tail);
+                let ty = self.check_expr(tail);
                 self.pop_scope();
                 self.record_ret(*id, ty)
             }
@@ -1593,7 +1621,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 else_branch,
                 span,
             } => {
-                let cond_ty = self.check_expr(false, cond);
+                let cond_ty = self.check_expr(cond);
                 if self
                     .solver
                     .unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry)
@@ -1612,7 +1640,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     self.check_stmt(s);
                 }
                 let then_ty = match then_tail {
-                    Some(tail) => self.check_expr(false, tail),
+                    Some(tail) => self.check_expr(tail),
                     None => TyTerm::Unit,
                 };
                 self.pop_scope();
@@ -1648,7 +1676,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 else_branch,
                 span,
             } => {
-                let source_ty = self.check_expr(false, source);
+                let source_ty = self.check_expr(source);
                 let resolved = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
                 self.check_pattern(pattern, &resolved, *span);
@@ -1656,7 +1684,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     self.check_stmt(s);
                 }
                 let then_ty = match then_tail {
-                    Some(tail) => self.check_expr(false, tail),
+                    Some(tail) => self.check_expr(tail),
                     None => TyTerm::Unit,
                 };
                 self.pop_scope();
@@ -1687,14 +1715,14 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
     fn check_else_branch(&mut self, eb: &acvus_ast::ElseBranch) -> InferTy {
         match eb {
-            acvus_ast::ElseBranch::ElseIf(expr) => self.check_expr(false, expr),
+            acvus_ast::ElseBranch::ElseIf(expr) => self.check_expr(expr),
             acvus_ast::ElseBranch::Else { body, tail, .. } => {
                 self.push_scope();
                 for s in body {
                     self.check_stmt(s);
                 }
                 let ty = match tail {
-                    Some(tail) => self.check_expr(false, tail),
+                    Some(tail) => self.check_expr(tail),
                     None => TyTerm::Unit,
                 };
                 self.pop_scope();
@@ -1711,7 +1739,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         call_span: Span,
     ) -> InferTy {
         // Collect argument types, prepending pipe_left if present.
-        let pipe_ty = pipe_left.map(|e| self.check_expr(false, e));
+        let pipe_ty = pipe_left.map(|e| self.check_expr(e));
 
         // Try to resolve as a named function (builtin or extern).
         let Expr::Ident {
@@ -1721,8 +1749,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         } = func
         else {
             // Not a simple name - evaluate the function expression.
-            // allow_non_pure: function call position, non-pure types (extern fn) are OK.
-            let ft = self.check_expr(true, func);
+            let ft = self.check_expr(func);
             let resolved = self.solver.resolve_ty(&ft);
             let pipe_left_span = pipe_left.map(|e| e.span());
             let pipe_left_id = pipe_left.map(|e| e.id());
@@ -1742,7 +1769,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             let arg_types: Vec<InferTy> = pipe_ty
                 .iter()
                 .cloned()
-                .chain(args.iter().map(|a| self.check_expr(false, a)))
+                .chain(args.iter().map(|a| self.check_expr(a)))
                 .collect();
             let arg_spans: Vec<Span> = pipe_left
                 .iter()
@@ -1825,7 +1852,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
             TyTerm::Fn { .. } | TyTerm::Var(_) => {}
             TyTerm::Error(_) => {
                 for a in args {
-                    self.check_expr(false, a);
+                    self.check_expr(a);
                 }
                 return Self::infer_error();
             }
@@ -1841,7 +1868,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let arg_types: Vec<InferTy> = pipe_ty
             .iter()
             .cloned()
-            .chain(args.iter().map(|a| self.check_expr(false, a)))
+            .chain(args.iter().map(|a| self.check_expr(a)))
             .collect();
         let arg_spans: Vec<Span> = pipe_left_span
             .iter()
@@ -1908,7 +1935,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
         let source_resolved = self.solver.resolve_ty(source_ty);
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
-                // Context write allowed - mutability will be enforced later.
+                self.note_context_use(*qref, span);
                 let ctx_ty = self
                     .env
                     .contexts
@@ -2259,18 +2286,35 @@ mod tests {
         context: &FxHashMap<Astr, Ty>,
         interner: &Interner,
     ) -> Result<TypeMap, String> {
+        check_with_env(source, context, &FxHashMap::default(), interner)
+    }
+
+    fn check_with_env(
+        source: &str,
+        context: &FxHashMap<Astr, Ty>,
+        functions: &FxHashMap<Astr, Ty>,
+        interner: &Interner,
+    ) -> Result<TypeMap, String> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
         let mut solver = Solver::new();
         let registry = TypeRegistry::default();
-        // Convert Astr-keyed context map to QualifiedRef-keyed (root namespace).
         let qref_contexts: FxHashMap<QualifiedRef, InferTy> = context
             .iter()
             .map(|(&name, ty)| (QualifiedRef::root(name), crate::ty::lift_ty(ty)))
             .collect();
+        let qref_functions = functions
+            .iter()
+            .map(|(&name, ty)| {
+                (
+                    QualifiedRef::root(name),
+                    crate::ty::Scheme::unbounded(crate::ty::lift_ty(ty)),
+                )
+            })
+            .collect();
 
         let env = crate::ty::TypeEnv {
             contexts: qref_contexts,
-            functions: Default::default(),
+            functions: qref_functions,
         };
         let checker = TypeChecker::new(interner, &env, &registry, &mut solver);
         let resolution = checker.check_template(&template).map_err(|errs| {
@@ -2360,8 +2404,8 @@ mod tests {
                 effect: crate::ty::Effect::OPAQUE.into(),
             },
         )]);
-        let src = "{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}";
-        check_with_interner(src, &context, &i).unwrap();
+        let src = "{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}";
+        check_with_env(src, &FxHashMap::default(), &context, &i).unwrap();
     }
 
     #[test]
@@ -2437,31 +2481,25 @@ mod tests {
         assert!(check_with_interner(src, &context, &i).is_err());
     }
 
-    // -- Non-pure context type tests --
+    // -- Named extern functions --
 
-    fn extern_fn_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
-        FxHashMap::from_iter([
-            (
-                interner.intern("my_fn"),
-                Ty::Fn {
-                    params: vec![p(interner, Ty::String)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-                    effect: crate::ty::Effect::OPAQUE.into(),
-                },
-            ),
-            (interner.intern("name"), Ty::String),
-        ])
+    fn my_fn(interner: &Interner) -> FxHashMap<Astr, Ty> {
+        FxHashMap::from_iter([(
+            interner.intern("my_fn"),
+            Ty::Fn {
+                params: vec![p(interner, Ty::String)],
+                ret: Box::new(Ty::String),
+                captures: vec![],
+                effect: crate::ty::Effect::OPAQUE.into(),
+            },
+        )])
     }
 
     #[test]
     fn extern_fn_call_ok() {
-        // @my_fn("hello") - calling an extern fn is allowed.
         let i = Interner::new();
-        let ctx = extern_fn_context(&i);
-        let src = r#"{{ @my_fn("hello") }}"#;
-        check_with_interner(src, &ctx, &i).unwrap();
+        let src = r#"{{ my_fn("hello") }}"#;
+        check_with_env(src, &FxHashMap::default(), &my_fn(&i), &i).unwrap();
     }
 
     #[test]
@@ -2473,7 +2511,7 @@ mod tests {
             captures: vec![],
             effect: crate::ty::Effect::PURE.into(),
         };
-        let ctx = FxHashMap::from_iter([
+        let fns = FxHashMap::from_iter([
             (
                 i.intern("hof"),
                 Ty::Fn {
@@ -2493,62 +2531,49 @@ mod tests {
                 },
             ),
         ]);
-        let err = check_with_interner("{{ @hof(@io_fn) }}", &ctx, &i).unwrap_err();
+        let none = FxHashMap::default();
+        let err = check_with_env("{{ hof(|x| -> io_fn(x)) }}", &none, &fns, &i).unwrap_err();
         assert!(err.contains("with Opaque"), "{err}");
-        check_with_interner("{{ @hof(|x| -> x + 1) }}", &ctx, &i).unwrap();
-    }
-
-    #[test]
-    fn extern_fn_bare_ref_allowed() {
-        // f = @my_fn - Fn is Lazy tier, allowed in non-call position.
-        let i = Interner::new();
-        let ctx = extern_fn_context(&i);
-        let src = "{{ f = @my_fn }}{{_}}{{/}}";
-        check_with_interner(src, &ctx, &i)
-            .expect("bare reference to extern fn should be allowed (Lazy tier)");
+        check_with_env("{{ hof(|x| -> x + 1) }}", &none, &fns, &i).unwrap();
     }
 
     #[test]
     fn extern_fn_pipe_call_ok() {
-        // "hello" | @my_fn - pipe into extern fn is a call, should be allowed.
         let i = Interner::new();
-        let ctx = extern_fn_context(&i);
-        let src = r#"{{ "hello" | @my_fn }}"#;
-        check_with_interner(src, &ctx, &i).unwrap();
+        let src = r#"{{ "hello" | my_fn }}"#;
+        check_with_env(src, &FxHashMap::default(), &my_fn(&i), &i).unwrap();
     }
 
     #[test]
     fn extern_fn_pipe_with_args_ok() {
-        // "hello" | @my_fn - pipe with additional args.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(
+        let fns = FxHashMap::from_iter([(
             i.intern("my_fn"),
             Ty::Fn {
                 params: vec![p(&i, Ty::String), p(&i, Ty::Int)],
                 ret: Box::new(Ty::String),
-
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
             },
         )]);
-        let src = r#"{{ "hello" | @my_fn(42) }}"#;
-        check_with_interner(src, &ctx, &i).unwrap();
+        let src = r#"{{ "hello" | my_fn(42) }}"#;
+        check_with_env(src, &FxHashMap::default(), &fns, &i).unwrap();
     }
 
+    // -- A context holds data (RFC-0014) --
+
     #[test]
-    fn pure_context_ref_ok() {
-        // @name - bare reference to pure type (String) is fine.
+    fn context_fn_rejected() {
         let i = Interner::new();
-        let ctx = extern_fn_context(&i);
-        let src = "{{ @name }}";
-        check_with_interner(src, &ctx, &i).unwrap();
+        let ctx = my_fn(&i);
+        let err = check_with_interner("{{ f = @my_fn }}{{_}}{{/}}", &ctx, &i).unwrap_err();
+        assert!(err.contains("not data"), "{err}");
+        let err = check_with_interner(r#"{{ @my_fn("hello") }}"#, &ctx, &i).unwrap_err();
+        assert!(err.contains("not data"), "{err}");
     }
 
-    // -- 3-tier purity: Lazy context load tests --
-
     #[test]
-    fn lazy_list_context_load_ok() {
-        // @items : List<Int> - Lazy tier, allowed in non-call position.
+    fn context_data_load_ok() {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("items"),
@@ -2592,26 +2617,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_fn_context_load_and_call_ok() {
-        // f = @callback; f(42) - store Fn in variable, then call.
-        let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(
-            i.intern("callback"),
-            Ty::Fn {
-                params: vec![p(&i, Ty::Int)],
-                ret: Box::new(Ty::String),
-
-                captures: vec![],
-                effect: crate::ty::Effect::OPAQUE.into(),
-            },
-        )]);
-        let src = "{{ f = @callback }}{{ f(42) }}{{_}}{{/}}";
-        check_with_interner(src, &ctx, &i).unwrap();
-    }
-
-    #[test]
-    fn lazy_list_of_fn_context_load_ok() {
-        // @fns : List<Fn(Int)->Int> - Lazy tier (List is Lazy), allowed.
+    fn context_list_of_fn_rejected() {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("fns"),
@@ -2619,7 +2625,6 @@ mod tests {
                 Box::new(Ty::Fn {
                     params: vec![p(&i, Ty::Int)],
                     ret: Box::new(Ty::Int),
-
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
                 }),
@@ -2627,14 +2632,12 @@ mod tests {
             ),
         )]);
         let src = "{{ x = @fns }}{{_}}{{/}}";
-        check_with_interner(src, &ctx, &i).unwrap();
+        let err = check_with_interner(src, &ctx, &i).unwrap_err();
+        assert!(err.contains("not data"), "{err}");
     }
 
-    // -- Unpure context load tests (UserDefined - must be rejected) --
-
     #[test]
-    fn unpure_opaque_context_load_rejected() {
-        // @conn : UserDefined - Unpure tier, rejected in non-call position.
+    fn context_user_defined_ok() {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("conn"),
@@ -2646,18 +2649,11 @@ mod tests {
             },
         )]);
         let src = "{{ x = @conn }}{{_}}{{/}}";
-        let err = check_with_interner(src, &ctx, &i)
-            .expect_err("UserDefined context load should be rejected");
-        assert!(
-            err.contains("non-pure") || err.contains("NonPure"),
-            "expected NonPureContextLoad error, got: {err}"
-        );
+        check_with_interner(src, &ctx, &i).unwrap();
     }
 
     #[test]
-    fn unpure_opaque_in_argument_also_rejected() {
-        // @handler(@conn) - @conn is UserDefined, rejected even in argument position.
-        // Arguments are checked with allow_non_pure=false.
+    fn context_user_defined_as_argument_ok() {
         let i = Interner::new();
         let conn_ty = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("TestOpaque")),
@@ -2665,28 +2661,20 @@ mod tests {
             effect_args: vec![],
             identity_args: vec![],
         };
-        let ctx = FxHashMap::from_iter([
-            (i.intern("conn"), conn_ty.clone()),
-            (
-                i.intern("handler"),
-                Ty::Fn {
-                    params: vec![p(&i, conn_ty)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-                    effect: crate::ty::Effect::OPAQUE.into(),
-                },
-            ),
-        ]);
-        let src = "{{ @handler(@conn) }}";
-        let result = check_with_interner(src, &ctx, &i);
-        assert!(
-            result.is_err(),
-            "UserDefined in argument should be rejected"
-        );
+        let ctx = FxHashMap::from_iter([(i.intern("conn"), conn_ty.clone())]);
+        let fns = FxHashMap::from_iter([(
+            i.intern("handler"),
+            Ty::Fn {
+                params: vec![p(&i, conn_ty)],
+                ret: Box::new(Ty::String),
+                captures: vec![],
+                effect: crate::ty::Effect::OPAQUE.into(),
+            },
+        )]);
+        let src = "{{ handler(@conn) }}";
+        check_with_env(src, &ctx, &fns, &i).unwrap();
     }
 
-    // -- Pure context load tests (scalars - always ok) --
 
     #[test]
     fn pure_int_context_load_ok() {

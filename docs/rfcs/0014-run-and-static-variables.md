@@ -88,8 +88,13 @@ its consequence.
 
 - A run's context writes are applied by the host when the run ends, never
   before; the interpreter yields them as one result.
-- The type of a context is a data type or an extension type with a
-  declared codec; the checker rejects any other.
+- The type of a context is data: a scalar, a container of data, or an
+  extension type whose type arguments are data. The checker rejects a
+  function, a handle, an order, a reference, and any type holding one.
+  A context is never a function namespace: `@f(x)` is a call on a value
+  a context cannot hold, and an extern function is called by its name.
+- Whether an extension type in a context can be written down is the
+  host's declaration (the codec of the open question), not the checker's.
 - The Fn type and UserDefined type arguments carry the effect as a term
   with variables in the inference phases; a variable inference leaves open
   resolves to the join of what is constrained below it, Pure when nothing

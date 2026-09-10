@@ -227,6 +227,16 @@ pub fn compile_script_ir(
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
+    compile_script_ir_with(interner, source, context, &[])
+}
+
+/// Compile a script with both contexts and extern functions.
+pub fn compile_script_ir_with(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+    extern_fns: &[Function],
+) -> Result<String, String> {
     let contexts: Vec<Context> = context
         .iter()
         .map(|(name, ty)| Context {
@@ -250,6 +260,7 @@ pub fn compile_script_ir(
         let registered = registry.register(interner, &mut type_registry);
         functions.extend(registered.functions);
     }
+    functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),

@@ -74,24 +74,6 @@ mod tests {
     }
 
     #[test]
-    fn integration_extern_fn() {
-        let i = Interner::new();
-        let fn_ty = Ty::Fn {
-            params: vec![Param::new(i.intern("_"), Ty::Int)],
-            ret: Box::new(Ty::String),
-            captures: vec![],
-
-            effect: crate::ty::Effect::OPAQUE.into(),
-        };
-        compile_template(
-            &i,
-            r#"{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}"#,
-            &[("fetch_user", fn_ty)],
-        )
-        .unwrap();
-    }
-
-    #[test]
     fn integration_object_field_access() {
         let i = Interner::new();
         let user_ty = Ty::Object(FxHashMap::from_iter([
@@ -213,78 +195,6 @@ mod tests {
 
     // -- Extern fn tests ---------------------------------------------
 
-    fn extern_fn_ctx(i: &Interner) -> Vec<(&'static str, Ty)> {
-        vec![
-            (
-                "mapper",
-                Ty::Fn {
-                    params: vec![Param::new(i.intern("_"), Ty::Int)],
-                    ret: Box::new(Ty::String),
-
-                    captures: vec![],
-
-                    effect: crate::ty::Effect::OPAQUE.into(),
-                },
-            ),
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
-            ),
-        ]
-    }
-
-    #[test]
-    fn direct_extern_fn_call_ok() {
-        let i = Interner::new();
-        let ctx = extern_fn_ctx(&i);
-        compile_template(&i, "{{ @mapper(42) }}", &ctx).unwrap();
-    }
-
-    #[test]
-    fn bare_extern_fn_load_ok() {
-        let i = Interner::new();
-        let ctx = extern_fn_ctx(&i);
-        compile_template(&i, "{{ x = @mapper }}{{ x(1) }}{{_}}{{/}}", &ctx).unwrap();
-    }
-
-    #[test]
-    fn script_extern_fn_call_ok() {
-        let i = Interner::new();
-        let ctx = extern_fn_ctx(&i);
-        compile_script(&i, "@mapper(1)", &ctx).unwrap();
-    }
-
-    #[test]
-    fn script_bare_extern_fn_ok() {
-        let i = Interner::new();
-        let ctx = extern_fn_ctx(&i);
-        compile_script(&i, "@mapper", &ctx).unwrap();
-    }
-
-    #[test]
-    fn script_pipe_extern_fn_ok() {
-        let i = Interner::new();
-        let ctx = vec![
-            (
-                "mapper",
-                Ty::Fn {
-                    params: vec![Param::new(
-                        i.intern("_"),
-                        Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
-                    )],
-                    ret: Box::new(Ty::String),
-                    captures: vec![],
-
-                    effect: crate::ty::Effect::OPAQUE.into(),
-                },
-            ),
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
-            ),
-        ];
-        compile_script(&i, "@items | @mapper", &ctx).unwrap();
-    }
 
     // -- Context store tests -----------------------------------------
 
@@ -468,27 +378,22 @@ mod tests {
         }
     }
 
-    // -- Materiality: context store validation -------------------------
-    //
-    // Soundness: non-materializable types must be rejected.
-    // Completeness: materializable types must be accepted.
-
-    // -- Completeness: materializable types accepted --
+    // -- A context holds data (RFC-0014) ---------------------------------
 
     #[test]
-    fn materiality_store_int() {
+    fn context_data_int() {
         let i = Interner::new();
         assert!(compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).is_ok());
     }
 
     #[test]
-    fn materiality_store_string() {
+    fn context_data_string() {
         let i = Interner::new();
         assert!(compile_script(&i, r#"@x = "hello"; @x"#, &[("x", Ty::String)]).is_ok());
     }
 
     #[test]
-    fn materiality_store_object() {
+    fn context_data_object() {
         let i = Interner::new();
         let obj_ty = Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
@@ -498,15 +403,14 @@ mod tests {
     }
 
     #[test]
-    fn materiality_store_bool() {
+    fn context_data_bool() {
         let i = Interner::new();
         assert!(compile_script(&i, "@x = true; @x", &[("x", Ty::Bool)]).is_ok());
     }
 
-    // -- Soundness: non-materializable types rejected --
 
     #[test]
-    fn materiality_reject_fn_in_context() {
+    fn context_fn_rejected() {
         let i = Interner::new();
         let fn_ty = Ty::Fn {
             params: vec![Param::new(i.intern("x"), Ty::Int)],
@@ -519,13 +423,9 @@ mod tests {
         assert!(compile_script(&i, "@f = @f; @f", &[("f", fn_ty)]).is_err());
     }
 
-    // materiality_reject_iterator_in_context: migrated to acvus-mir-test
-    // (Iterator is now UserDefined, requires TypeRegistry + Interner).
-
-    // -- Soundness: nested non-materializable rejected --
 
     #[test]
-    fn materiality_reject_list_of_fn() {
+    fn context_list_of_fn_rejected() {
         let i = Interner::new();
         let fn_ty = Ty::Fn {
             params: vec![Param::new(i.intern("x"), Ty::Int)],
@@ -539,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn materiality_reject_object_with_fn_field() {
+    fn context_object_with_fn_field_rejected() {
         let i = Interner::new();
         let fn_ty = Ty::Fn {
             params: vec![Param::new(i.intern("x"), Ty::Int)],

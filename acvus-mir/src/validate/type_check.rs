@@ -63,10 +63,6 @@ pub enum ValidationErrorKind {
         moved_at: usize,
         ty: Ty,
     },
-    /// Attempt to store a non-materializable value to context.
-    NotMaterializable {
-        ty: Ty,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -236,21 +232,12 @@ impl CheckCtx {
             }
         }
 
-        // Build ref_target map: Ref dst -> RefTarget.
-        let mut ref_target: FxHashMap<ValueId, crate::ir::RefTarget> = FxHashMap::default();
-        for inst in &body.insts {
-            if let InstKind::Ref { dst, target, .. } = &inst.kind {
-                ref_target.insert(*dst, target.clone());
-            }
-        }
-
         for (pc, inst) in body.insts.iter().enumerate() {
             self.check_inst(
                 pc,
                 inst.span,
                 &inst.kind,
                 &body.val_types,
-                &ref_target,
                 &body.insts,
                 errors,
             );
@@ -408,7 +395,6 @@ impl CheckCtx {
         span: Span,
         kind: &InstKind,
         vt: &FxHashMap<ValueId, Ty>,
-        ref_target: &FxHashMap<ValueId, crate::ir::RefTarget>,
         insts: &[crate::ir::Inst],
         errors: &mut Vec<ValidationError>,
     ) {
@@ -785,19 +771,6 @@ impl CheckCtx {
                 if let Ty::Ref(inner) = dst_ty {
                     let val_ty = ty!(*value);
                     self.assert_match(pc, span, "Store", "value", inner.as_ref(), val_ty, errors);
-                    // Context materiality check: storing non-materializable to context is an error.
-                    if let Some(crate::ir::RefTarget::Context(_)) = ref_target.get(dst)
-                        && let Some(ty) = vt.get(value)
-                        && !matches!(ty, Ty::Error(_))
-                        && !ty.is_materializable()
-                    {
-                        errors.push(ValidationError {
-                            scope: self.scope_name.clone(),
-                            inst_index: pc,
-                            span,
-                            kind: ValidationErrorKind::NotMaterializable { ty: ty.clone() },
-                        });
-                    }
                 } else if !dst_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),

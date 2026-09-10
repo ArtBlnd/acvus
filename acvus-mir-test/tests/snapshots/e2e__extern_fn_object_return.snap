@@ -8,34 +8,30 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     4 |   r2 = ref @get_user
-     5 |   r3 = load r2
-     6 |   r4 = call r3(1 (r5)) [r6 -> r7]
-     8 |   r8 = T0 + T0
-     9 |   r9 = r4.name
-    10 |   r10 = r8 + r9
-    11 |   return r10 [r7]
+     4 |   r2 = call #0(1 (r3)) [r4 -> r5]
+     6 |   r6 = T0 + T0
+     7 |   r7 = r2.name
+     8 |   r8 = r6 + r7
+     9 |   return r8 [r5]
 
-    ; r0 (v24) : Order
-    ; r1 (v25) : {age: Int, name: String}
-    ; r2 (@get_user) : Ref<Fn(Int) -> {age: Int, name: String} with Opaque>
-    ; r3 (v8) : Fn(Int) -> {age: Int, name: String} with Opaque
-    ; r4 (<closure>(...)) : {age: Int, name: String}
-    ; r5 (v5) : Int
-    ; r6 (v1) : Order
-    ; r7 (v11) : Order
-    ; r8 (v16) : String
-    ; r9 (v18) : String
-    ; r10 (v19) : String
-    ; r11 (v22) : Ref<{age: Int, name: String}>
-    ; r12 (v3) : Ref<Order>
-    ; r13 (v14) : Ref<{age: Int, name: String}>
-    ; r14 (v9) : Ref<Order>
-    ; r15 (u.name) : Ref<String>
-    ; r16 (v4) : String
-    ; r17 (v23) : {age: Int, name: String}
-    ; r18 (v15) : String
-    ; r19 (v10) : Order
-    ; r20 (v21) : Order
-    ; r21 (v20) : Ref<Order>
-    ; r22 (v12) : Ref<Order>
+    ; r0 (v22) : Order
+    ; r1 (v23) : {age: Int, name: String}
+    ; r2 (get_user(...)) : {age: Int, name: String}
+    ; r3 (v5) : Int
+    ; r4 (v1) : Order
+    ; r5 (v9) : Order
+    ; r6 (v14) : String
+    ; r7 (v16) : String
+    ; r8 (v17) : String
+    ; r9 (v3) : Ref<Order>
+    ; r10 (v20) : Ref<{age: Int, name: String}>
+    ; r11 (u.name) : Ref<String>
+    ; r12 (v4) : String
+    ; r13 (v18) : Ref<Order>
+    ; r14 (v7) : Ref<Order>
+    ; r15 (v21) : {age: Int, name: String}
+    ; r16 (v10) : Ref<Order>
+    ; r17 (v13) : String
+    ; r18 (v12) : Ref<{age: Int, name: String}>
+    ; r19 (v8) : Order
+    ; r20 (v19) : Order

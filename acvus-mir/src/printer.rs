@@ -848,25 +848,6 @@ mod tests {
     }
 
     #[test]
-    fn print_extern_call() {
-        let interner = Interner::new();
-        let context = FxHashMap::from_iter([(
-            interner.intern("fetch"),
-            Ty::Fn {
-                params: vec![Param::new(interner.intern("x"), Ty::Int)],
-                ret: Box::new(Ty::String),
-                captures: vec![],
-                effect: crate::ty::Effect::OPAQUE.into(),
-            },
-        )]);
-        let out = compile_and_dump_ctx("{{ x = @fetch(1) }}{{ x }}{{_}}{{/}}", &context, &interner);
-        assert!(
-            out.contains("call"),
-            "expected call instruction, got:\n{out}"
-        );
-    }
-
-    #[test]
     fn print_object_field() {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(

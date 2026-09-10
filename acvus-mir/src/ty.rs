@@ -396,20 +396,6 @@ impl Polarity {
     }
 }
 
-/// 3-tier purity classification for types.
-///
-/// `Concrete` - scalars that can cross context boundaries as-is.
-/// `Composite` - containers, closures, iterators - need deep inspection to determine pureability.
-/// `Ephemeral` - opaque types that can never be purified.
-///
-/// `Ord` derive: `Concrete < Composite < Ephemeral`, so `max()` gives the least-pure tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Materiality {
-    Concrete,
-    Composite,
-    Ephemeral,
-}
-
 /// Whether a call may be issued again (RFC-0014). The
 /// derived order is the chain `Pure < Idempotent < Opaque`.
 #[derive(
@@ -668,62 +654,22 @@ impl TyTerm<Concrete> {
         }
     }
 
-    /// Returns the purity tier of this type (shallow - does not recurse into containers).
-    pub fn materiality(&self) -> Materiality {
+    /// Whether a value of this type is data: something a host can keep
+    /// from one run to the next (RFC-0014). A function, a spawn handle, an
+    /// order, or a reference is not data, and neither is a type that holds
+    /// one. An extension type is data; how it is written down is the
+    /// host's declaration, not the checker's.
+    pub fn is_data(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => {
-                Materiality::Concrete
-            }
-            Ty::Array(..)
-            | Ty::Object(_)
-            | Ty::Tuple(_)
-            | Ty::Fn { .. }
-            | Ty::Handle(..)
-            | Ty::Option(_)
-            | Ty::Enum { .. } => Materiality::Composite,
-            Ty::UserDefined { .. } => Materiality::Ephemeral,
-            Ty::Ref(..) => Materiality::Ephemeral,
-            Ty::Error(_) => Materiality::Ephemeral,
-            Ty::Var(v) => match *v {},
-        }
-    }
-
-    /// Returns true if this type can be deeply converted to a pure representation.
-    pub fn is_pureable(&self) -> bool {
-        match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => true,
-            Ty::Array(inner, _) => inner.is_pureable(),
-            Ty::Handle(inner) => inner.is_pureable(),
-            Ty::Option(inner) => inner.is_pureable(),
-            Ty::Tuple(elems) => elems.iter().all(|e| e.is_pureable()),
-            Ty::Object(fields) => fields.values().all(|v| v.is_pureable()),
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
+            Ty::Array(inner, _) | Ty::Option(inner) => inner.is_data(),
+            Ty::Tuple(elems) => elems.iter().all(Ty::is_data),
+            Ty::Object(fields) => fields.values().all(Ty::is_data),
             Ty::Enum { variants, .. } => variants
                 .values()
-                .all(|p| p.as_ref().is_none_or(|ty| ty.is_pureable())),
-            Ty::Fn { captures, ret, .. } => {
-                captures.iter().all(|c| c.is_pureable()) && ret.is_pureable()
-            }
-            Ty::UserDefined { .. } | Ty::Ref(..) | Ty::Error(_) => false,
-            Ty::Var(v) => match *v {},
-        }
-    }
-
-    /// Returns true if this type can be materialized.
-    pub fn is_materializable(&self) -> bool {
-        match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => true,
-            Ty::Array(inner, _) => inner.is_materializable(),
-            Ty::Option(inner) => inner.is_materializable(),
-            Ty::Tuple(elems) => elems.iter().all(|e| e.is_materializable()),
-            Ty::Object(fields) => fields.values().all(|v| v.is_materializable()),
-            Ty::Enum { variants, .. } => variants
-                .values()
-                .all(|p| p.as_ref().is_none_or(|ty| ty.is_materializable())),
-            Ty::Handle(..)
-            | Ty::Fn { .. }
-            | Ty::UserDefined { .. }
-            | Ty::Ref(..)
-            | Ty::Error(_) => false,
+                .all(|p| p.as_ref().is_none_or(|ty| ty.is_data())),
+            Ty::UserDefined { type_args, .. } => type_args.iter().all(Ty::is_data),
+            Ty::Fn { .. } | Ty::Handle(..) | Ty::Order | Ty::Ref(..) | Ty::Error(_) => false,
             Ty::Var(v) => match *v {},
         }
     }
@@ -2210,253 +2156,73 @@ mod tests {
         assert_eq!(reg.rules_from(id).len(), 2);
     }
 
-    // -- Purity tier tests ----------------------------------------------
+    // -- is_data ---------------------------------------------------------
 
     #[test]
-    fn purity_object_is_lazy() {
-        let i = Interner::new();
-        let obj = Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::Int)]));
-        assert_eq!(obj.materiality(), Materiality::Composite);
+    fn data_scalars_and_containers_of_scalars() {
+        assert!(Ty::Int.is_data());
+        assert!(Ty::String.is_data());
+        assert!(arr(Ty::Int, 3).is_data());
+        assert!(Ty::Option(Box::new(Ty::String)).is_data());
+        assert!(Ty::Tuple(vec![Ty::Int, Ty::String]).is_data());
+        assert!(arr(Ty::Option(Box::new(arr(Ty::Int, 2))), 3).is_data());
     }
 
     #[test]
-    fn purity_enum_is_lazy() {
-        let i = Interner::new();
-        let enum_ty = Ty::Enum {
-            name: i.intern("Color"),
-            variants: FxHashMap::from_iter([(i.intern("Red"), None), (i.intern("Green"), None)]),
+    fn data_user_defined_is_data() {
+        assert!(test_user_defined().is_data());
+        assert!(arr(test_user_defined(), 3).is_data());
+    }
+
+    #[test]
+    fn data_user_defined_over_fn_is_not_data() {
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Int),
+            captures: vec![],
+            effect: Effect::OPAQUE.into(),
         };
-        assert_eq!(enum_ty.materiality(), Materiality::Composite);
-    }
-
-    #[test]
-    fn purity_user_defined_is_unpure() {
-        assert_eq!(test_user_defined().materiality(), Materiality::Ephemeral);
-    }
-
-    #[test]
-    fn purity_special_types() {
-        // Unresolved types are conservatively Unpure.
-        assert_eq!(Ty::error().materiality(), Materiality::Ephemeral);
-    }
-
-    #[test]
-    fn purity_ord_pure_lt_lazy_lt_unpure() {
-        assert!(Materiality::Concrete < Materiality::Composite);
-        assert!(Materiality::Composite < Materiality::Ephemeral);
-        assert!(Materiality::Concrete < Materiality::Ephemeral);
-        // max() gives least-pure tier
-        assert_eq!(
-            std::cmp::max(Materiality::Concrete, Materiality::Composite),
-            Materiality::Composite
-        );
-        assert_eq!(
-            std::cmp::max(Materiality::Composite, Materiality::Ephemeral),
-            Materiality::Ephemeral
-        );
-        assert_eq!(
-            std::cmp::max(Materiality::Concrete, Materiality::Ephemeral),
-            Materiality::Ephemeral
-        );
-    }
-
-    // -- is_pureable() transitive tests ---------------------------------
-
-    #[test]
-    fn pureable_list_of_scalars() {
-        assert!(arr(Ty::Int, 3).is_pureable());
-        assert!(arr(Ty::String, 3).is_pureable());
-    }
-
-    #[test]
-    fn pureable_list_of_user_defined_is_not_pureable() {
-        let list_ud = arr(test_user_defined(), 3);
-        assert!(!list_ud.is_pureable());
-    }
-
-    #[test]
-    fn pureable_nested_list_of_scalars() {
-        // List<List<Int>> - pureable
-        let nested = arr(arr(Ty::Int, 3), 3);
-        assert!(nested.is_pureable());
-    }
-
-    #[test]
-    fn pureable_option_of_scalar() {
-        assert!(Ty::Option(Box::new(Ty::Int)).is_pureable());
-    }
-
-    #[test]
-    fn pureable_option_of_user_defined() {
-        assert!(!Ty::Option(Box::new(test_user_defined())).is_pureable());
-    }
-
-    #[test]
-    fn pureable_tuple_all_scalars() {
-        assert!(Ty::Tuple(vec![Ty::Int, Ty::String, Ty::Bool]).is_pureable());
-    }
-
-    #[test]
-    fn pureable_tuple_with_user_defined() {
-        assert!(!Ty::Tuple(vec![Ty::Int, test_user_defined()]).is_pureable());
-    }
-
-    #[test]
-    fn pureable_object_all_scalars() {
-        let i = Interner::new();
-        let obj = Ty::Object(FxHashMap::from_iter([
-            (i.intern("x"), Ty::Int),
-            (i.intern("y"), Ty::String),
-        ]));
-        assert!(obj.is_pureable());
-    }
-
-    #[test]
-    fn pureable_object_with_user_defined_value() {
-        let i = Interner::new();
-        let obj = Ty::Object(FxHashMap::from_iter([(
-            i.intern("handle"),
-            test_user_defined(),
-        )]));
-        assert!(!obj.is_pureable());
-    }
-
-    #[test]
-    fn pureable_enum_all_scalar_payloads() {
-        let i = Interner::new();
-        let enum_ty = Ty::Enum {
-            name: i.intern("Result"),
-            variants: FxHashMap::from_iter([
-                (i.intern("Ok"), Some(Box::new(Ty::Int))),
-                (i.intern("Err"), Some(Box::new(Ty::String))),
-            ]),
+        let Ty::UserDefined { id, effect_args, identity_args, .. } = test_user_defined() else {
+            unreachable!()
         };
-        assert!(enum_ty.is_pureable());
-    }
-
-    #[test]
-    fn pureable_enum_no_payload() {
-        let i = Interner::new();
-        let enum_ty = Ty::Enum {
-            name: i.intern("Color"),
-            variants: FxHashMap::from_iter([(i.intern("Red"), None), (i.intern("Green"), None)]),
+        let over_fn = Ty::UserDefined {
+            id,
+            type_args: vec![fn_ty],
+            effect_args,
+            identity_args,
         };
-        assert!(enum_ty.is_pureable());
+        assert!(!over_fn.is_data());
     }
 
     #[test]
-    fn pureable_enum_with_user_defined_payload() {
-        let i = Interner::new();
-        let enum_ty = Ty::Enum {
-            name: i.intern("Wrap"),
-            variants: FxHashMap::from_iter([(
-                i.intern("Some"),
-                Some(Box::new(test_user_defined())),
-            )]),
+    fn data_fn_handle_order_ref_are_not_data() {
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Int),
+            captures: vec![],
+            effect: Effect::PURE.into(),
         };
-        assert!(!enum_ty.is_pureable());
+        assert!(!fn_ty.is_data());
+        assert!(!Ty::Handle(Box::new(Ty::Int)).is_data());
+        assert!(!Ty::Order.is_data());
+        assert!(!Ty::Ref(Box::new(Ty::Int)).is_data());
+        assert!(!Ty::error().is_data());
     }
 
     #[test]
-    fn pureable_user_defined_never() {
-        assert!(!test_user_defined().is_pureable());
-        assert!(!test_user_defined().is_pureable());
+    fn data_container_holding_fn_is_not_data() {
+        let fn_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Int),
+            captures: vec![],
+            effect: Effect::PURE.into(),
+        };
+        assert!(!arr(fn_ty.clone(), 3).is_data());
+        assert!(!Ty::Option(Box::new(fn_ty.clone())).is_data());
+        assert!(!Ty::Tuple(vec![Ty::Int, fn_ty.clone()]).is_data());
+        let interner = Interner::new();
+        let obj = Ty::Object(FxHashMap::from_iter([(interner.intern("cb"), fn_ty)]));
+        assert!(!obj.is_data());
     }
 
-    #[test]
-    fn pureable_mixed_tuple_list_option() {
-        // (Int, List<String>, Option<Bool>) - all pureable
-        let ty = Ty::Tuple(vec![
-            Ty::Int,
-            arr(Ty::String, 3),
-            Ty::Option(Box::new(Ty::Bool)),
-        ]);
-        assert!(ty.is_pureable());
-    }
-
-    #[test]
-    fn pureable_mixed_tuple_list_user_defined() {
-        // (Int, List<UserDefined>) - not pureable
-        let ty = Ty::Tuple(vec![Ty::Int, arr(test_user_defined(), 3)]);
-        assert!(!ty.is_pureable());
-    }
-
-    #[test]
-    fn pureable_deeply_nested_containers() {
-        // List<Option<Tuple<(Int, List<String>)>>> - pureable
-        let inner = Ty::Tuple(vec![Ty::Int, arr(Ty::String, 3)]);
-        let ty = arr(Ty::Option(Box::new(inner)), 3);
-        assert!(ty.is_pureable());
-    }
-
-    #[test]
-    fn pureable_deeply_nested_with_user_defined_leaf() {
-        // List<Option<Tuple<(Int, UserDefined)>>> - not pureable
-        let inner = Ty::Tuple(vec![Ty::Int, test_user_defined()]);
-        let ty = arr(Ty::Option(Box::new(inner)), 3);
-        assert!(!ty.is_pureable());
-    }
-
-    // ================================================================
-    // is_storable tests
-    // ================================================================
-
-    // -- Pure scalars: always storable --
-
-    #[test]
-    fn storable_int() {
-        assert!(Ty::Int.is_materializable());
-    }
-    #[test]
-    fn storable_float() {
-        assert!(Ty::Float.is_materializable());
-    }
-    #[test]
-    fn storable_string() {
-        assert!(Ty::String.is_materializable());
-    }
-    #[test]
-    fn storable_bool() {
-        assert!(Ty::Bool.is_materializable());
-    }
-    #[test]
-    fn storable_unit() {
-        assert!(Ty::Unit.is_materializable());
-    }
-    #[test]
-    fn storable_byte() {
-        assert!(Ty::Byte.is_materializable());
-    }
-    // -- Lazy containers with pure contents: storable --
-
-    #[test]
-    fn storable_list_of_int() {
-        assert!(arr(Ty::Int, 3).is_materializable());
-    }
-    #[test]
-    fn storable_option_string() {
-        assert!(Ty::Option(Box::new(Ty::String)).is_materializable());
-    }
-    #[test]
-    fn storable_tuple() {
-        assert!(Ty::Tuple(vec![Ty::Int, Ty::String]).is_materializable());
-    }
-
-    // -- Iterator/Sequence: always Ephemeral, never materializable --
-
-    // -- Iterator/Sequence with Effectful: also NOT materializable --
-
-    // -- UserDefined: never storable --
-
-    #[test]
-    fn not_storable_user_defined() {
-        assert!(!test_user_defined().is_materializable());
-    }
-
-    // -- Recursive: container with non-storable inner --
-
-    #[test]
-    fn not_storable_list_of_user_defined() {
-        assert!(!arr(test_user_defined(), 3).is_materializable());
-    }
 }

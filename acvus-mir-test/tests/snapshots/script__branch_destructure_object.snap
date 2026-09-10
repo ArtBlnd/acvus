@@ -10,27 +10,24 @@ expression: ir
      4 |   r4 = ref @user
      5 |   r5 = load r4
      6 |   r6 = r5.name
-     7 |   r7 = ref @user
-     8 |   r8 = r5.age
-     9 |   r9 = ref @out
-    10 |   store r9 = r6
-    11 |   r10 = ref @out
-    12 |   return r6
+     7 |   r7 = r5.age
+     8 |   r8 = ref @out
+     9 |   store r8 = r6
+    10 |   r9 = ref @out
+    11 |   return r6
 
-    ; r0 (v17) : String
-    ; r1 (v18) : Int
-    ; r2 (v19) : Ref<String>
-    ; r3 (v16) : String
+    ; r0 (v15) : String
+    ; r1 (v16) : Int
+    ; r2 (v17) : Ref<String>
+    ; r3 (v14) : String
     ; r4 (@user) : Ref<{age: Int, name: String}>
     ; r5 (v2) : {age: Int, name: String}
     ; r6 (name) : String
-    ; r7 (@user) : Ref<{age: Int, name: String}>
-    ; r8 (age) : Int
+    ; r7 (age) : Int
+    ; r8 (@out) : Ref<String>
     ; r9 (@out) : Ref<String>
-    ; r10 (@out) : Ref<String>
-    ; r11 (v11) : Ref<String>
-    ; r12 (name) : String
-    ; r13 (v15) : String
-    ; r14 (v7) : {age: Int, name: String}
-    ; r15 (v10) : Ref<Int>
-    ; r16 (v5) : Ref<String>
+    ; r10 (v9) : Ref<String>
+    ; r11 (name) : String
+    ; r12 (v13) : String
+    ; r13 (v5) : Ref<String>
+    ; r14 (v8) : Ref<Int>

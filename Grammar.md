@@ -80,23 +80,6 @@ ExprStmt     = Expr ";"
 
 **ContextStore path**: In `@a.x.y = 0;`, path = `[x, y]`. Empty path means identity store (`@a = 0;`).
 
-### Destructure Projection
-
-`{ @x, } = @a { body };` — Inside the body scope, `@x` is a projection (alias) of `@a.x`.
-
-```
-{ @x, @y, } = @a {
-    // reading @x = reading @a.x
-    // @x = 0; = @a.x = 0;
-};
-// outside body, @x reverts to the original context @x (shadowing)
-```
-
-Conditions: source is `@ref` and pattern is Object with `@ref` sub-patterns.
-- `@ref` sub-pattern → projection (alias)
-- Other sub-pattern → copy (value extracted via ObjectGet)
-
----
 
 ## Expression Grammar
 
@@ -237,9 +220,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 
 **Wildcard `_` scope**: `_` is only available inside tuple patterns (not in general expressions). Separate from the `{{_}}` catch-all, which is detected at the lexer level.
 
-**ContextBind in destructure**: The meaning of `@name` sub-patterns inside Object patterns depends on the source:
-- Source is `@ref` → projection (alias, scoped to body)
-- Source is a value → copy (store into context)
+**ContextBind in destructure**: a `@name` sub-pattern stores the matched value into the context `@name`. No two names ever denote one storage (RFC-0015): `{ @x, } = @a { body }` copies `@a.x` into `@x`, and `@x` inside the body is the context `@x`.
 
 ---
 

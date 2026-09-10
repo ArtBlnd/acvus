@@ -309,6 +309,26 @@ fn lambda_in_filter() {
 
 // -- Extern functions ---------------------------------------------
 
+/// An opaque extern function of the given name and monomorphic signature.
+fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
+    Function {
+        qref: QualifiedRef::root(i.intern(name)),
+        kind: FnKind::Extern { bounds: vec![] },
+        ty: TyTerm::Fn {
+            params: params
+                .iter()
+                .enumerate()
+                .map(|(n, ty)| {
+                    ParamTerm::<Poly>::new(i.intern(&format!("_{n}")), lift_to_poly(ty))
+                })
+                .collect(),
+            ret: Box::new(lift_to_poly(&ret)),
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        },
+    }
+}
+
 #[test]
 fn extern_async_call() {
     let i = Interner::new();
@@ -1238,19 +1258,19 @@ fn filter_object_field_equality() {
 #[test]
 fn extern_fn_object_return() {
     let i = Interner::new();
-    let context = ctx(
+    let get_user = extern_fn(
         &i,
-        &[(
-            "get_user",
-            Ty::Fn {
-                params: vec![Param::new(i.intern("_0"), Ty::Int)],
-                ret: Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
-                captures: vec![],
-                effect: acvus_mir::ty::Effect::OPAQUE.into(),
-            },
-        )],
+        "get_user",
+        &[Ty::Int],
+        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
     );
-    let ir = compile_to_ir(&i, r#"{{ u = @get_user(1) }}{{ u.name }}"#, &context).unwrap();
+    let ir = compile_to_ir_with(
+        &i,
+        r#"{{ u = get_user(1) }}{{ u.name }}"#,
+        &FxHashMap::default(),
+        &[get_user],
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1742,28 +1762,12 @@ fn migrated_projection_chained_field_access() {
 #[test]
 fn migrated_pipe_extern_fn_ok() {
     let i = Interner::new();
-    let context = ctx(
+    let mapper = extern_fn(&i, "mapper", &[Ty::Int], Ty::String);
+    compile_to_ir_with(
         &i,
-        &[
-            (
-                "mapper",
-                Ty::Fn {
-                    params: vec![Param::new(i.intern("_"), Ty::Int)],
-                    ret: Box::new(Ty::String),
-                    captures: vec![],
-                    effect: acvus_mir::ty::Effect::OPAQUE.into(),
-                },
-            ),
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
-        ],
-    );
-    compile_to_ir(
-        &i,
-        r#"{{ x = @items | map(|i| -> @mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
-        &context,
+        r#"{{ x = @items | map(|i| -> mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        &items_context(&i),
+        &[mapper],
     )
     .unwrap();
 }
@@ -2318,14 +2322,9 @@ fn migrated_move_accept_iter_pipe_chain() {
 #[test]
 fn migrated_move_accept_fn_multiple_calls() {
     let i = Interner::new();
-    let fn_ty = Ty::Fn {
-        params: vec![Param::new(i.intern("_"), Ty::Int)],
-        ret: Box::new(Ty::Int),
-        captures: vec![],
-        effect: acvus_mir::ty::Effect::OPAQUE.into(),
-    };
-    let context = ctx(&i, &[("f", fn_ty)]);
-    let result = compile_script_ir(&i, "a = @f(1); b = @f(2); a + b", &context);
+    let f = extern_fn(&i, "f", &[Ty::Int], Ty::Int);
+    let result =
+        compile_script_ir_with(&i, "a = f(1); b = f(2); a + b", &FxHashMap::default(), &[f]);
     assert!(
         result.is_ok(),
         "fn without move-only captures should be callable multiple times: {result:?}"
@@ -3028,33 +3027,6 @@ fn var_field_store_1depth() {
     let i = Interner::new();
     let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::Int)]))]);
     let ir = compile_script_ir(&i, "a = @obj; a.x = 0; a.x", &context).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-// -- Destructure projection ------------------------------------------
-
-#[test]
-fn destructure_projection_read() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::Int), ("y", Ty::Int)]))]);
-    let ir = compile_script_ir(&i, "{ @x, } = @a { }; @a.x", &context).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[test]
-fn destructure_projection_write() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::Int)]))]);
-    let ir = compile_script_ir(&i, "{ @x, } = @a { @x = 42; }; @a.x", &context).unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-#[test]
-fn destructure_projection_shadowing() {
-    let i = Interner::new();
-    let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::Int)])), ("x", Ty::Int)]);
-    // @x exists as context, but inside body it's shadowed by projection @a.x
-    let ir = compile_script_ir(&i, "@x = 99; { @x, } = @a { @x = 42; }; @x", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
