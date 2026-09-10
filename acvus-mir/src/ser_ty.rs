@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, LenTerm, ParamMode, Ty};
+use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, LenTerm, ParamMode, Reissue, Ty};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
@@ -37,6 +37,33 @@ fn ser_to_qref(r: &SerQualifiedRef, interner: &Interner) -> QualifiedRef {
         namespace: r.namespace.as_ref().map(|ns| interner.intern(ns)),
         name: interner.intern(&r.name),
     }
+}
+
+/// An `Effect` with its context names written out.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerEffect {
+    pub reissue: Reissue,
+    pub commutes: bool,
+    pub reads: Vec<SerQualifiedRef>,
+    pub writes: Vec<SerQualifiedRef>,
+}
+
+fn effect_to_ser(e: &Effect, interner: &Interner) -> SerEffect {
+    SerEffect {
+        reissue: e.reissue,
+        commutes: e.commutes,
+        reads: e.reads.iter().map(|q| qref_to_ser(q, interner)).collect(),
+        writes: e.writes.iter().map(|q| qref_to_ser(q, interner)).collect(),
+    }
+}
+
+fn ser_to_effect(e: &SerEffect, interner: &Interner) -> Effect {
+    Effect::with_contexts(
+        e.reissue,
+        e.commutes,
+        e.reads.iter().map(|q| ser_to_qref(q, interner)).collect(),
+        e.writes.iter().map(|q| ser_to_qref(q, interner)).collect(),
+    )
 }
 
 /// A parameter of a serialized function type.
@@ -71,12 +98,12 @@ pub enum SerTy {
     Fn {
         params: Vec<SerParam>,
         ret: Box<SerTy>,
-        effect: Effect,
+        effect: SerEffect,
     },
     UserDefined {
         id: SerQualifiedRef,
         type_args: Vec<SerTy>,
-        effect_args: Vec<Effect>,
+        effect_args: Vec<SerEffect>,
         identity_args: Vec<u32>,
     },
     Option {
@@ -127,7 +154,7 @@ impl Ty {
                     })
                     .collect(),
                 ret: Box::new(ret.to_ser(interner)),
-                effect: effect.get(),
+                effect: effect_to_ser(effect.get(), interner),
             },
             Ty::UserDefined {
                 id,
@@ -137,7 +164,7 @@ impl Ty {
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
-                effect_args: effect_args.iter().map(|e| e.get()).collect(),
+                effect_args: effect_args.iter().map(|e| effect_to_ser(e.get(), interner)).collect(),
                 identity_args: identity_args
                     .iter()
                     .map(|i| i.get().to_raw() as u32)
@@ -201,7 +228,7 @@ impl SerTy {
                     .collect(),
                 ret: Box::new(ret.to_ty(interner)),
                 captures: vec![],
-                effect: EffectTerm::Known(*effect),
+                effect: EffectTerm::Known(ser_to_effect(effect, interner)),
             },
             SerTy::UserDefined {
                 id,
@@ -211,7 +238,7 @@ impl SerTy {
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
-                effect_args: effect_args.iter().map(|e| EffectTerm::Known(*e)).collect(),
+                effect_args: effect_args.iter().map(|e| EffectTerm::Known(ser_to_effect(e, interner))).collect(),
                 identity_args: identity_args
                     .iter()
                     .map(|i| IdentityTerm::Known(IdentityId::from_raw(*i as usize)))

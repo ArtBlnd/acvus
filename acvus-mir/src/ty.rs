@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::fmt;
 
@@ -82,7 +83,7 @@ impl Scheme {
 pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
     fn effect_matches(effect: &EffectTerm<Concrete>, pattern: &EffectTerm<Poly>) -> bool {
         match pattern {
-            EffectTerm::Known(p) => *effect == EffectTerm::Known(*p),
+            EffectTerm::Known(p) => *effect == EffectTerm::Known(p.clone()),
             EffectTerm::Var(_) => true,
         }
     }
@@ -407,65 +408,129 @@ pub enum Reissue {
     Opaque,
 }
 
-/// The effect of a call on two axes (RFC-0013): the reissue chain, and
-/// whether two calls commute. A Pure call commutes by definition, so
-/// `Effect::new` keeps that invariant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+/// The contexts a call may touch (RFC-0017), as a set of context names.
+pub type Contexts = BTreeSet<QualifiedRef>;
+
+/// The effect of a call (RFC-0013, RFC-0017): the reissue chain, whether
+/// two calls commute, and the contexts the call may read and write. A
+/// Pure call that writes nothing commutes by definition; a call that
+/// writes a context never commutes, since a second call may read it.
+/// Every constructor keeps both invariants.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {
     pub reissue: Reissue,
     pub commutes: bool,
+    pub reads: Contexts,
+    pub writes: Contexts,
 }
 
 impl Effect {
     pub const PURE: Effect = Effect {
         reissue: Reissue::Pure,
         commutes: true,
+        reads: BTreeSet::new(),
+        writes: BTreeSet::new(),
     };
     pub const IDEMPOTENT: Effect = Effect {
         reissue: Reissue::Idempotent,
         commutes: false,
+        reads: BTreeSet::new(),
+        writes: BTreeSet::new(),
     };
     pub const OPAQUE: Effect = Effect {
         reissue: Reissue::Opaque,
         commutes: false,
+        reads: BTreeSet::new(),
+        writes: BTreeSet::new(),
     };
 
     pub fn new(reissue: Reissue, commutes: bool) -> Effect {
+        Effect::with_contexts(reissue, commutes, Contexts::new(), Contexts::new())
+    }
+
+    pub fn with_contexts(
+        reissue: Reissue,
+        commutes: bool,
+        reads: Contexts,
+        writes: Contexts,
+    ) -> Effect {
         Effect {
             reissue,
-            commutes: commutes || reissue == Reissue::Pure,
+            commutes: (commutes || reissue == Reissue::Pure) && writes.is_empty(),
+            reads,
+            writes,
         }
     }
 
-    /// The same level, declared to commute.
-    pub fn commutative(self) -> Effect {
-        Effect::new(self.reissue, true)
+    /// The effect of reading one context: Pure, and a read of it.
+    pub fn read(context: QualifiedRef) -> Effect {
+        Effect::with_contexts(
+            Reissue::Pure,
+            true,
+            Contexts::from([context]),
+            Contexts::new(),
+        )
     }
 
-    pub fn is_pure(self) -> bool {
+    /// The effect of writing one context: Pure on the chain, and a write
+    /// of it, which does not commute.
+    pub fn write(context: QualifiedRef) -> Effect {
+        Effect::with_contexts(
+            Reissue::Pure,
+            true,
+            Contexts::new(),
+            Contexts::from([context]),
+        )
+    }
+
+    /// The same level, declared to commute.
+    pub fn commutative(&self) -> Effect {
+        Effect::with_contexts(self.reissue, true, self.reads.clone(), self.writes.clone())
+    }
+
+    pub fn is_pure(&self) -> bool {
         self.reissue == Reissue::Pure
     }
 
+    /// No level above Pure and no context touched: the effect a type
+    /// display leaves out.
+    pub fn is_empty(&self) -> bool {
+        self.is_pure() && self.reads.is_empty() && self.writes.is_empty()
+    }
+
+    /// Whether the call may touch `context` at all.
+    pub fn touches(&self, context: QualifiedRef) -> bool {
+        self.reads.contains(&context) || self.writes.contains(&context)
+    }
+
     /// The product order: `self` is no more effectful than `other` when it
-    /// is no higher on the chain and commutes whenever `other` does.
-    pub fn at_most(self, other: Effect) -> bool {
-        self.reissue <= other.reissue && (self.commutes || !other.commutes)
+    /// is no higher on the chain, commutes whenever `other` does, and
+    /// touches no context `other` does not.
+    pub fn at_most(&self, other: &Effect) -> bool {
+        self.reissue <= other.reissue
+            && (self.commutes || !other.commutes)
+            && self.reads.is_subset(&other.reads)
+            && self.writes.is_subset(&other.writes)
     }
 
     /// The least effect above both: the higher level, commutative only if
-    /// both are.
-    pub fn join(self, other: Effect) -> Effect {
-        Effect::new(
+    /// both are, touching what either does.
+    pub fn join(&self, other: &Effect) -> Effect {
+        Effect::with_contexts(
             self.reissue.max(other.reissue),
             self.commutes && other.commutes,
+            self.reads.union(&other.reads).copied().collect(),
+            self.writes.union(&other.writes).copied().collect(),
         )
     }
 
     /// The greatest effect below both.
-    pub fn meet(self, other: Effect) -> Effect {
-        Effect::new(
+    pub fn meet(&self, other: &Effect) -> Effect {
+        Effect::with_contexts(
             self.reissue.min(other.reissue),
             self.commutes || other.commutes,
+            self.reads.intersection(&other.reads).copied().collect(),
+            self.writes.intersection(&other.writes).copied().collect(),
         )
     }
 }
@@ -473,7 +538,7 @@ impl Effect {
 impl PartialOrd for Effect {
     fn partial_cmp(&self, other: &Effect) -> Option<std::cmp::Ordering> {
         use std::cmp::Ordering;
-        match (self.at_most(*other), other.at_most(*self)) {
+        match (self.at_most(other), other.at_most(self)) {
             (true, true) => Some(Ordering::Equal),
             (true, false) => Some(Ordering::Less),
             (false, true) => Some(Ordering::Greater),
@@ -493,13 +558,13 @@ impl fmt::Display for Effect {
 }
 
 /// A required effect level that exceeds the level allowed at that point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectConflict {
     pub required: Effect,
     pub allowed: Effect,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EffectTerm<V: Phase> {
     Known(Effect),
     Var(V::EffectVar),
@@ -517,7 +582,7 @@ impl<V: Phase> EffectTerm<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
     ) -> EffectTerm<W> {
         match self {
-            EffectTerm::Known(e) => EffectTerm::Known(*e),
+            EffectTerm::Known(e) => EffectTerm::Known(e.clone()),
             EffectTerm::Var(v) => on_effect(*v),
         }
     }
@@ -527,16 +592,16 @@ impl<V: Phase> EffectTerm<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
     ) -> Result<EffectTerm<W>, E> {
         match self {
-            EffectTerm::Known(e) => Ok(EffectTerm::Known(*e)),
+            EffectTerm::Known(e) => Ok(EffectTerm::Known(e.clone())),
             EffectTerm::Var(v) => on_effect(*v),
         }
     }
 }
 
 impl EffectTerm<Concrete> {
-    pub fn get(&self) -> Effect {
+    pub fn get(&self) -> &Effect {
         match self {
-            EffectTerm::Known(e) => *e,
+            EffectTerm::Known(e) => e,
             EffectTerm::Var(v) => match *v {},
         }
     }
@@ -641,7 +706,7 @@ impl TyTerm<Concrete> {
 
     pub fn effect(&self) -> Option<Effect> {
         match self {
-            Ty::Fn { effect, .. } => Some(effect.get()),
+            Ty::Fn { effect, .. } => Some(effect.get().clone()),
             _ => None,
         }
     }
@@ -736,11 +801,24 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 write!(f, ") -> {}", ret.display(self.interner))?;
                 let effect = effect.get();
-                if effect.is_pure() {
-                    Ok(())
-                } else {
-                    write!(f, " with {effect}")
+                if effect.is_empty() {
+                    return Ok(());
                 }
+                write!(f, " with {effect}")?;
+                for (label, set) in [("reads", &effect.reads), ("writes", &effect.writes)] {
+                    if set.is_empty() {
+                        continue;
+                    }
+                    write!(f, " {label} {{")?;
+                    for (i, ctx) in set.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "@{}", self.interner.resolve(ctx.name))?;
+                    }
+                    write!(f, "}}")?;
+                }
+                Ok(())
             }
             Ty::Array(inner, len) => {
                 write!(f, "Array<{}, {}>", inner.display(self.interner), len.get())
@@ -1431,22 +1509,22 @@ mod tests {
     #[test]
     fn effects_join_on_both_axes() {
         let c = Effect::IDEMPOTENT.commutative();
-        assert_eq!(c.join(Effect::IDEMPOTENT), Effect::IDEMPOTENT);
-        assert_eq!(c.join(Effect::PURE), c);
+        assert_eq!(c.join(&Effect::IDEMPOTENT), Effect::IDEMPOTENT);
+        assert_eq!(c.join(&Effect::PURE), c);
         assert_eq!(
-            c.join(Effect::OPAQUE.commutative()),
+            c.join(&Effect::OPAQUE.commutative()),
             Effect::OPAQUE.commutative()
         );
-        assert_eq!(Effect::OPAQUE.meet(c), c);
+        assert_eq!(Effect::OPAQUE.meet(&c), c);
     }
 
     #[test]
     fn the_product_order_leaves_the_axes_incomparable() {
         let c = Effect::OPAQUE.commutative();
-        assert!(Effect::PURE.at_most(c));
-        assert!(c.at_most(Effect::OPAQUE));
-        assert!(!Effect::IDEMPOTENT.at_most(c));
-        assert!(!c.at_most(Effect::IDEMPOTENT));
+        assert!(Effect::PURE.at_most(&c));
+        assert!(c.at_most(&Effect::OPAQUE));
+        assert!(!Effect::IDEMPOTENT.at_most(&c));
+        assert!(!c.at_most(&Effect::IDEMPOTENT));
         assert_eq!(Effect::IDEMPOTENT.partial_cmp(&c), None);
     }
 

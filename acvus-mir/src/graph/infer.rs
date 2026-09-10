@@ -521,7 +521,7 @@ pub fn infer_scc(
             params: fn_params.clone(),
             ret: fn_ret.clone(),
             captures: vec![],
-            effect: *fn_effect,
+            effect: fn_effect.clone(),
         };
         scc_fn_types.insert(func.qref, fn_ty);
     }
@@ -573,7 +573,7 @@ pub fn infer_scc(
         let checker = crate::typeck::TypeChecker::new(interner, &env, &registry, &mut solver)
             .with_analysis_mode()
             .with_declared_param_types(declared_types)
-            .with_body_effect(fn_effect_vars[&fid]);
+            .with_body_effect(fn_effect_vars[&fid].clone());
         let result = match parsed {
             ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
             ParsedSource::Template(template) => checker.check_template(template),
@@ -593,7 +593,7 @@ pub fn infer_scc(
                         );
                     }
                 }
-                let closed = EffectTerm::Known(unchecked.effect);
+                let closed = EffectTerm::Known(unchecked.effect.clone());
                 solver
                     .unify_effect(
                         &fn_effect_vars[&fid],
@@ -760,7 +760,7 @@ pub fn infer(
                     params: fn_params.clone(),
                     ret: fn_ret.clone(),
                     captures: vec![],
-                    effect: *fn_effect,
+                    effect: fn_effect.clone(),
                 },
             );
         }
@@ -814,7 +814,7 @@ pub fn infer(
                 crate::typeck::TypeChecker::new(interner, &env, registry_ref, &mut solver)
                     .with_analysis_mode()
                     .with_declared_param_types(declared_types)
-                    .with_body_effect(scc_effect_vars[&fid]);
+                    .with_body_effect(scc_effect_vars[&fid].clone());
             let result = match parsed {
                 ParsedSource::Script(script) => {
                     checker.check_script(script, expected_tail_ty.as_ref())
@@ -836,7 +836,7 @@ pub fn infer(
                             );
                         }
                     }
-                    let closed = EffectTerm::Known(unchecked.effect);
+                    let closed = EffectTerm::Known(unchecked.effect.clone());
                     solver
                         .unify_effect(
                             &scc_effect_vars[&fid],

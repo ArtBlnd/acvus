@@ -18,7 +18,7 @@ fn closures(
 ) -> ExternRegistry<AcvusRuntime> {
     ExternRegistry::new(move |i| ExternItems {
         types: vec![],
-        fns: fns(i).into_iter().map(|f| f.with_effect(effect)).collect(),
+        fns: fns(i).into_iter().map(|f| f.with_effect(effect.clone())).collect(),
     })
 }
 
@@ -758,7 +758,7 @@ impl Probe {
                             Ok::<i64, RuntimeError>(100)
                         }
                     })
-                    .with_effect(effect)
+                    .with_effect(effect.clone())
                 })
                 .collect();
             ExternItems { types: vec![], fns }

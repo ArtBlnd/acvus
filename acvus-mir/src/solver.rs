@@ -310,11 +310,11 @@ impl<'src> Solver<'src> {
 
     pub fn resolve_effect(&self, term: &EffectTerm<Infer>) -> EffectTerm<Infer> {
         match term {
-            EffectTerm::Known(e) => EffectTerm::Known(*e),
+            EffectTerm::Known(e) => EffectTerm::Known(e.clone()),
             EffectTerm::Var(id) => {
                 let root = self.find_effect_root(*id);
                 match &self.effect_vars[root.0 as usize] {
-                    EffectBound::Bound(e) => EffectTerm::Known(*e),
+                    EffectBound::Bound(e) => EffectTerm::Known(e.clone()),
                     EffectBound::Range { .. } => EffectTerm::Var(root),
                     EffectBound::Forward(_) => unreachable!("find_effect_root resolves forwards"),
                 }
@@ -324,8 +324,8 @@ impl<'src> Solver<'src> {
 
     fn range_of(&self, root: EffectVarId) -> (Effect, Effect) {
         match &self.effect_vars[root.0 as usize] {
-            EffectBound::Range { lower, upper } => (*lower, *upper),
-            EffectBound::Bound(e) => (*e, *e),
+            EffectBound::Range { lower, upper } => (lower.clone(), upper.clone()),
+            EffectBound::Bound(e) => (e.clone(), e.clone()),
             EffectBound::Forward(_) => unreachable!("find_effect_root resolves forwards"),
         }
     }
@@ -343,13 +343,13 @@ impl<'src> Solver<'src> {
     pub fn bind_effect(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
-        if !lower.at_most(effect) {
+        if !lower.at_most(&effect) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: effect,
             });
         }
-        if !effect.at_most(upper) {
+        if !effect.at_most(&upper) {
             return Err(EffectConflict {
                 required: effect,
                 allowed: upper,
@@ -362,8 +362,8 @@ impl<'src> Solver<'src> {
     fn raise_lower(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
-        let lower = lower.join(effect);
-        if !lower.at_most(upper) {
+        let lower = lower.join(&effect);
+        if !lower.at_most(&upper) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: upper,
@@ -376,8 +376,8 @@ impl<'src> Solver<'src> {
     fn lower_upper(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
-        let upper = upper.meet(effect);
-        if !lower.at_most(upper) {
+        let upper = upper.meet(&effect);
+        if !lower.at_most(&upper) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: upper,
@@ -395,9 +395,9 @@ impl<'src> Solver<'src> {
         }
         let (la, ua) = self.range_of(from_root);
         let (lb, ub) = self.range_of(to_root);
-        let lower = la.join(lb);
-        let upper = ua.meet(ub);
-        if !lower.at_most(upper) {
+        let lower = la.join(&lb);
+        let upper = ua.meet(&ub);
+        if !lower.at_most(&upper) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: upper,
@@ -419,11 +419,11 @@ impl<'src> Solver<'src> {
         match (a, b) {
             (EffectTerm::Known(ea), EffectTerm::Known(eb)) => {
                 let (required, allowed) = match pol {
-                    Polarity::Invariant => (ea.join(eb), ea.meet(eb)),
+                    Polarity::Invariant => (ea.join(&eb), ea.meet(&eb)),
                     Polarity::Covariant => (ea, eb),
                     Polarity::Contravariant => (eb, ea),
                 };
-                if required.at_most(allowed) {
+                if required.at_most(&allowed) {
                     Ok(())
                 } else {
                     Err(EffectConflict { required, allowed })
@@ -451,7 +451,7 @@ impl<'src> Solver<'src> {
         let a = self.resolve_effect(a);
         let b = self.resolve_effect(b);
         match (a, b) {
-            (EffectTerm::Known(ea), EffectTerm::Known(eb)) => Ok(EffectTerm::Known(ea.join(eb))),
+            (EffectTerm::Known(ea), EffectTerm::Known(eb)) => Ok(EffectTerm::Known(ea.join(&eb))),
             (EffectTerm::Var(v), EffectTerm::Known(e))
             | (EffectTerm::Known(e), EffectTerm::Var(v)) => {
                 self.raise_lower(v, e)?;

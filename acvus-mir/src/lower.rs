@@ -176,7 +176,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower_template(mut self, template: &Template) -> MirModule {
-        let effect = self.resolution.effect;
+        let effect = self.resolution.effect.clone();
         self.enter_body_order(effect, template.span);
         let result = self.lower_nodes(&template.body, template.span);
         self.emit_return(template.span, result);
@@ -184,7 +184,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower_script(mut self, script: &Script) -> MirModule {
-        let effect = self.resolution.effect;
+        let effect = self.resolution.effect.clone();
         self.enter_body_order(effect, script.span);
         for stmt in &script.stmts {
             self.lower_stmt(stmt);

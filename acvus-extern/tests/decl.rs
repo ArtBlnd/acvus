@@ -303,7 +303,7 @@ fn fn_ty(ty: &PolyTy) -> FnShape {
     FnShape {
         params: params.iter().map(|p| p.ty.clone()).collect(),
         ret: (**ret).clone(),
-        effect: *effect,
+        effect: effect.clone(),
     }
 }
 

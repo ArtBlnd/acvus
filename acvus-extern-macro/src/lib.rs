@@ -165,7 +165,7 @@ fn generate_extern_fn(
                         "`commutative` cannot be declared on an effect variable",
                     ));
                 }
-                quote! { __vars.effects[#k] }
+                quote! { __vars.effects[#k].clone() }
             }
             _ => {
                 return Err(syn::Error::new(

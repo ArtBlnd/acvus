@@ -21,7 +21,7 @@ pub enum Eff<const K: usize> {}
 
 impl<const K: usize> EffectArg for Eff<K> {
     fn poly_effect(vars: &PolyVars) -> EffectTerm<Poly> {
-        vars.effects[K]
+        vars.effects[K].clone()
     }
 }
 

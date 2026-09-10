@@ -176,7 +176,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     fn note_call_effect(&mut self, callee: &EffectTerm<Infer>, span: Span) {
-        let body = self.body_effect;
+        let body = self.body_effect.clone();
         if let Err(conflict) = self.solver.unify_effect(callee, &body, Polarity::Covariant) {
             self.error(MirErrorKind::EffectExceeded(conflict), span);
         }
@@ -395,7 +395,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             Polarity::Invariant,
                             self.registry,
                         );
-                        let effect = *effect;
+                        let effect = effect.clone();
                         self.note_call_effect(&effect, span);
                     }
                     let resolved = self.solver.resolve_ty(&inst);
@@ -1397,10 +1397,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     captures: Vec::new(),
                 });
 
-                let outer_effect = self.body_effect;
+                let outer_effect = self.body_effect.clone();
                 self.body_effect = self.solver.fresh_effect_var();
                 let ret = self.check_expr(body);
-                let lambda_effect = self.body_effect;
+                let lambda_effect = self.body_effect.clone();
                 self.body_effect = outer_effect;
 
                 // Pop this lambda's scope.
@@ -1791,7 +1791,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         return Self::infer_error();
                     }
                     self.check_arg_modes(name_str, pipe_left.is_some(), args, param_tys, call_span);
-                    let effect = *effect;
+                    let effect = effect.clone();
                     self.note_call_effect(&effect, call_span);
                     // Record callee's full Fn type on the callee's AstId.
                     self.record(func.id(), self.solver.resolve_ty(&fn_ty));
@@ -1895,7 +1895,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     return Self::infer_error();
                 }
                 self.check_arg_modes("<callable>", pipe_ty.is_some(), args, params, call_span);
-                let effect = *effect;
+                let effect = effect.clone();
                 self.note_call_effect(&effect, call_span);
                 self.solver.resolve_ty(ret)
             }
@@ -1910,7 +1910,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         .collect(),
                     ret: Box::new(ret.clone()),
                     captures: vec![],
-                    effect,
+                    effect: effect.clone(),
                 };
                 self.note_call_effect(&effect, call_span);
                 if self.unify_covariant(func_ty, &fn_ty, None).is_err() {

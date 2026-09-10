@@ -353,7 +353,7 @@ mod tests {
                 call(
                     &i,
                     "draw",
-                    c,
+                    c.clone(),
                     Slots {
                         dst: 1,
                         before: 0,
@@ -363,7 +363,7 @@ mod tests {
                 call(
                     &i,
                     "draw",
-                    c,
+                    c.clone(),
                     Slots {
                         dst: 3,
                         before: 2,
@@ -480,7 +480,7 @@ mod tests {
             call(
                 &i,
                 "draw",
-                c,
+                c.clone(),
                 Slots {
                     dst: 1,
                     before: 0,
@@ -490,7 +490,7 @@ mod tests {
             call(
                 &i,
                 "draw",
-                c,
+                c.clone(),
                 Slots {
                     dst: 3,
                     before: 2,
@@ -530,7 +530,7 @@ mod tests {
             call(
                 &i,
                 "draw",
-                c,
+                c.clone(),
                 Slots {
                     dst: 1,
                     before: 0,
@@ -540,7 +540,7 @@ mod tests {
             call(
                 &i,
                 "draw",
-                c,
+                c.clone(),
                 Slots {
                     dst: 3,
                     before: 2,
@@ -576,7 +576,7 @@ mod tests {
             call(
                 &i,
                 "draw",
-                c,
+                c.clone(),
                 Slots {
                     dst: 3,
                     before: 2,
@@ -600,7 +600,7 @@ mod tests {
                 call(
                     &i,
                     "draw",
-                    c,
+                    c.clone(),
                     Slots {
                         dst: 1,
                         before: 0,
@@ -620,7 +620,7 @@ mod tests {
                 call(
                     &i,
                     "draw",
-                    c,
+                    c.clone(),
                     Slots {
                         dst: 5,
                         before: 4,
@@ -651,7 +651,7 @@ mod tests {
                 call(
                     &i,
                     "draw",
-                    c,
+                    c.clone(),
                     Slots {
                         dst: 1,
                         before: 0,
@@ -661,7 +661,7 @@ mod tests {
                 call(
                     &i,
                     "draw",
-                    c,
+                    c.clone(),
                     Slots {
                         dst: 3,
                         before: 2,
