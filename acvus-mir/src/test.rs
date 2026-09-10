@@ -24,7 +24,7 @@ pub(crate) fn make_graph(
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            ty: crate::ty::lift_to_poly(ty),
+            ty: crate::ty::lift_declaration(ty, &mut pb),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));

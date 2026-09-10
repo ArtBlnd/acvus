@@ -96,7 +96,7 @@ mod tests {
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                ty: crate::ty::lift_to_poly(ty),
+                ty: crate::ty::lift_declaration(ty, &mut pb),
             })
             .collect();
         let fn_qref = QualifiedRef::root(interner.intern("test"));

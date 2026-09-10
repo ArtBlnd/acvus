@@ -72,6 +72,11 @@ solves in the same shape.
   that passes from one solver to another (an earlier SCC's result, a
   cached signature) still names the source it was frozen with, and no
   later solver mints that number again.
+- A declaration names no source. A host declaring a context or a
+  parameter from a concrete type lifts it with `lift_declaration`, which
+  turns every identity argument into a variable the compilation mints a
+  source for; a source number carried in from outside would collide with
+  the compilation's own.
 
 ## Open questions
 

@@ -958,7 +958,7 @@ pub fn infer(
 mod tests {
     use super::*;
     use crate::graph::extract;
-    use crate::ty::{ParamTerm, Poly, PolyBuilder, PolyParam, lift_to_poly};
+    use crate::ty::{ParamTerm, Poly, PolyBuilder, PolyParam, lift_declaration, lift_to_poly};
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
@@ -991,7 +991,7 @@ mod tests {
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_to_poly(ty),
+                ty: lift_declaration(ty, &mut pb),
             })
             .collect();
         let qref = QualifiedRef::root(interner.intern("test"));
@@ -1061,7 +1061,7 @@ mod tests {
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_to_poly(ty),
+                ty: lift_declaration(ty, &mut pb),
             })
             .collect();
         let mut functions = Vec::new();
@@ -1110,7 +1110,7 @@ mod tests {
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_to_poly(ty),
+                ty: lift_declaration(ty, &mut pb),
             })
             .collect();
 
@@ -1175,7 +1175,7 @@ mod tests {
             .iter()
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_to_poly(ty),
+                ty: lift_declaration(ty, &mut pb),
             })
             .collect();
 

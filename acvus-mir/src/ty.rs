@@ -1264,6 +1264,86 @@ pub fn lift_to_poly(ty: &Ty) -> PolyTy {
     lift_ty(ty)
 }
 
+/// Lift a concrete type as a declaration: a host that declares a context
+/// or a parameter names no source, so every identity argument becomes a
+/// variable the compilation mints a source for (RFC-0012). A source
+/// number in a `Ty` is meaningful only inside the compilation that
+/// minted it, never in a declaration.
+pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
+    fn go(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
+        match ty {
+            Ty::Int => TyTerm::Int,
+            Ty::Float => TyTerm::Float,
+            Ty::String => TyTerm::String,
+            Ty::Bool => TyTerm::Bool,
+            Ty::Unit => TyTerm::Unit,
+            Ty::Byte => TyTerm::Byte,
+            Ty::Order => TyTerm::Order,
+            Ty::Array(inner, len) => TyTerm::Array(Box::new(go(inner, builder)), lift_ty_len(len)),
+            Ty::Object(fields) => TyTerm::Object(
+                fields
+                    .iter()
+                    .map(|(k, v)| (*k, go(v, builder)))
+                    .collect(),
+            ),
+            Ty::Tuple(elems) => TyTerm::Tuple(elems.iter().map(|e| go(e, builder)).collect()),
+            Ty::Option(inner) => TyTerm::Option(Box::new(go(inner, builder))),
+            Ty::Fn {
+                params,
+                ret,
+                captures,
+                effect,
+            } => TyTerm::Fn {
+                params: params
+                    .iter()
+                    .map(|p| ParamTerm {
+                        name: p.name,
+                        ty: go(&p.ty, builder),
+                        mode: p.mode,
+                    })
+                    .collect(),
+                ret: Box::new(go(ret, builder)),
+                captures: captures.iter().map(|c| go(c, builder)).collect(),
+                effect: lift_ty_effect(effect),
+            },
+            Ty::UserDefined {
+                id,
+                type_args,
+                effect_args,
+                identity_args,
+            } => TyTerm::UserDefined {
+                id: *id,
+                type_args: type_args.iter().map(|t| go(t, builder)).collect(),
+                effect_args: effect_args.iter().map(lift_ty_effect).collect(),
+                identity_args: identity_args
+                    .iter()
+                    .map(|_| builder.fresh_identity_var())
+                    .collect(),
+            },
+            Ty::Enum { name, variants } => TyTerm::Enum {
+                name: *name,
+                variants: variants
+                    .iter()
+                    .map(|(k, v)| (*k, v.as_ref().map(|t| Box::new(go(t, builder)))))
+                    .collect(),
+            },
+            Ty::Handle(inner) => TyTerm::Handle(Box::new(go(inner, builder))),
+            Ty::Ref(inner) => TyTerm::Ref(Box::new(go(inner, builder))),
+            Ty::Error(token) => TyTerm::Error(*token),
+            Ty::Var(v) => match *v {},
+        }
+    }
+    go(ty, builder)
+}
+
+fn lift_ty_len(len: &LenTerm<Concrete>) -> LenTerm<Poly> {
+    len.map(&mut |v: Infallible| match v {})
+}
+
+fn lift_ty_effect(effect: &EffectTerm<Concrete>) -> EffectTerm<Poly> {
+    effect.map(&mut |v: Infallible| match v {})
+}
+
 /// Try to convert a `PolyTy` to a concrete `Ty`.
 /// Returns `None` if the poly type contains any Var placeholders.
 pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {

@@ -117,3 +117,35 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         "same(get(), mk()) joins two sources and must be rejected"
     );
 }
+
+/// A declared context names no source. Whatever number the declaration
+/// carries, the compilation mints the context's source itself, so a new
+/// source from `iter` never coincides with it.
+#[test]
+fn a_declared_context_never_shares_a_source_with_a_new_one() {
+    let i = Interner::new();
+    let declared = Ty::UserDefined {
+        id: QualifiedRef::root(i.intern("Iterator")),
+        type_args: vec![Ty::Int],
+        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        identity_args: vec![IdentityTerm::Known(
+            <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
+        )],
+    };
+    let ctx = rustc_hash::FxHashMap::from_iter([
+        (i.intern("src"), declared),
+        (
+            i.intern("items"),
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        ),
+    ]);
+    let result = acvus_mir_test::compile_script_ir(&i, "@src = @items | iter; 0", &ctx);
+    assert!(
+        result.is_err(),
+        "storing a new source into a context must be rejected: {result:?}"
+    );
+    assert!(
+        acvus_mir_test::compile_script_ir(&i, "a = @src; @src = a; 0", &ctx).is_ok(),
+        "storing the context's own source back must be accepted"
+    );
+}

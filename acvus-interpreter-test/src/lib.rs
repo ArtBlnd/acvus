@@ -9,7 +9,7 @@ use acvus_interpreter::{
 };
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower, optimize as graph_optimize};
-use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_to_poly, try_freeze_poly};
+use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -65,16 +65,16 @@ pub fn compile_source_with_externs(
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     mut type_registry: acvus_mir::ty::TypeRegistry,
 ) -> CompileResult {
+    let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context_types
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
 
     let entry_qref = QualifiedRef::root(interner.intern("test"));
-    let mut pb = PolyBuilder::new();
     let mut functions = Vec::new();
     functions.push(Function {
         qref: entry_qref,

@@ -3,7 +3,7 @@ use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
 use acvus_mir::printer::dump_with;
-use acvus_mir::ty::{PolyBuilder, PolyParam, PolyTy, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{PolyBuilder, PolyParam, Ty, TyTerm, lift_declaration};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -152,11 +152,12 @@ pub fn compile_to_ir_with(
         .iter()
         .map(|(name, ty)| (interner.resolve(*name), ty.clone()))
         .collect();
+    let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = ctx
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -237,11 +238,12 @@ pub fn compile_script_ir_with(
     context: &FxHashMap<Astr, Ty>,
     extern_fns: &[Function],
 ) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -275,11 +277,12 @@ pub fn compile_script_raw(
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -341,11 +344,12 @@ pub fn compile_script_mode_raw(
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -407,11 +411,12 @@ pub fn compile_script_optimized(
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -507,11 +512,12 @@ pub fn compile_inline_ir_with(
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
     let ctx_vec: Vec<Context> = contexts
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
 
@@ -606,11 +612,12 @@ pub fn compile_multi_fn_raw(
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
     let ctx_vec: Vec<Context> = contexts
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
 
@@ -706,11 +713,12 @@ pub fn compile_multi_fn_optimized(
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
     let ctx_vec: Vec<Context> = contexts
         .iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
-            ty: lift_to_poly(ty),
+            ty: lift_declaration(ty, &mut pb),
         })
         .collect();
 
