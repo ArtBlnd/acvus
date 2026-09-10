@@ -78,3 +78,9 @@ enum would make it unable to host the same extensions.
 
 - Whether a runtime should be allowed to refuse a shape it does not have
   at registration time rather than at the first call.
+- Whether the shape methods should also lend a view of a value without
+  taking it. Every shape method takes ownership, so a body that names a
+  nested container, `List<List<T>>`, takes each inner container apart and
+  puts it back once, even when it only reads. A borrowed view would let
+  it read in place, and a mutable one change in place, the way RFC-0015
+  lends a place to a call.
