@@ -43,11 +43,17 @@ impl FromValue<AcvusRuntime> for Value {
     fn from_value(value: Value, _: &Interner) -> Result<Self, RuntimeError> {
         Ok(value)
     }
+    fn from_value_seq(values: Vec<Value>, _: &Interner) -> Result<Vec<Value>, RuntimeError> {
+        Ok(values)
+    }
 }
 
 impl IntoValue<AcvusRuntime> for Value {
     fn into_value(self, _: &Interner) -> Value {
         self
+    }
+    fn into_value_seq(items: Vec<Value>, _: &Interner) -> Vec<Value> {
+        items
     }
 }
 

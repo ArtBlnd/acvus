@@ -7,10 +7,29 @@ use crate::runtime::Runtime;
 
 pub trait FromValue<R: Runtime>: Sized {
     fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error>;
+
+    /// A whole sequence of values. A container of a type variable crosses
+    /// the boundary as the runtime's own container: the runtime's value
+    /// type overrides this to hand the sequence back untouched, and only a
+    /// concrete element type converts each element (RFC-0010).
+    fn from_value_seq(values: Vec<R::Value>, interner: &Interner) -> Result<Vec<Self>, R::Error> {
+        values
+            .into_iter()
+            .map(|v| Self::from_value(v, interner))
+            .collect()
+    }
 }
 
 pub trait IntoValue<R: Runtime> {
     fn into_value(self, interner: &Interner) -> R::Value;
+
+    /// The inverse of `FromValue::from_value_seq`.
+    fn into_value_seq(items: Vec<Self>, interner: &Interner) -> Vec<R::Value>
+    where
+        Self: Sized,
+    {
+        items.into_iter().map(|v| v.into_value(interner)).collect()
+    }
 }
 
 /// A tuple of Rust values into the values a call gives back for the
@@ -104,11 +123,8 @@ where
             ))
             .into());
         }
-        let mut out = Vec::with_capacity(N);
-        for item in items {
-            out.push(T::from_value(item, interner)?);
-        }
-        out.try_into()
+        T::from_value_seq(items, interner)?
+            .try_into()
             .map_err(|_| ExternError::internal("array length changed during conversion").into())
     }
 }
@@ -119,7 +135,7 @@ where
     T: IntoValue<R>,
 {
     fn into_value(self, interner: &Interner) -> R::Value {
-        R::array(self.into_iter().map(|v| v.into_value(interner)).collect())
+        R::array(T::into_value_seq(self.into(), interner))
     }
 }
 

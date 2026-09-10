@@ -64,6 +64,11 @@ enum would make it unable to host the same extensions.
   objects are written once against the shape methods.
 - `Runtime::Value` converts to and from itself, so every generic body's
   crossing bounds hold at runtime without being restated by callers.
+- A container of a type variable crosses as the runtime's own container:
+  a sequence of the runtime's values converts to itself whole, and an
+  element is converted only where the body names a concrete type for it,
+  which only a `Monomorphize` member can. Nothing else materializes a
+  type variable.
 - A runtime's error type converts from `ExternError`, the only error a
   handler body can raise on its own.
 - A registry is registered for one runtime and yields that runtime's

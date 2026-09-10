@@ -81,11 +81,7 @@ where
             }
             PayloadMismatch::Shared(_) => ExternError::internal("into_cloned never reports Shared"),
         })?;
-        let mut out = Vec::with_capacity(items.len());
-        for item in items {
-            out.push(T::from_value(item, interner)?);
-        }
-        Ok(List(out))
+        Ok(List(T::from_value_seq(items, interner)?))
     }
 }
 
@@ -95,8 +91,10 @@ where
     T: TyVar + IntoValue<R>,
 {
     fn into_value(self, interner: &Interner) -> R::Value {
-        let items: Vec<R::Value> = self.0.into_iter().map(|v| v.into_value(interner)).collect();
-        R::extern_value(ExternValue::new(Self::TYPE_NAME, items))
+        R::extern_value(ExternValue::new(
+            Self::TYPE_NAME,
+            T::into_value_seq(self.0, interner),
+        ))
     }
 }
 

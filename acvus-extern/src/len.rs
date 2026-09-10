@@ -77,11 +77,7 @@ where
 {
     fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error> {
         let items = R::into_array(value)?;
-        let mut out = Vec::with_capacity(items.len());
-        for item in items {
-            out.push(T::from_value(item, interner)?);
-        }
-        Ok(Self::new(out))
+        Ok(Self::new(T::from_value_seq(items, interner)?))
     }
 }
 
@@ -92,6 +88,6 @@ where
     N: LenVar,
 {
     fn into_value(self, interner: &Interner) -> R::Value {
-        R::array(self.0.into_iter().map(|v| v.into_value(interner)).collect())
+        R::array(T::into_value_seq(self.0, interner))
     }
 }
