@@ -565,6 +565,26 @@ fn a_call_that_does_not_commute_keeps_source_order_mir() {
     assert!(!has_merge(&cr), "no run, no merge");
 }
 
+#[test]
+fn a_commutative_call_after_a_branch_is_issued_with_the_one_before_mir() {
+    let (i, cr) = compile_io_script_mode(
+        "@a = draw_a(); if @c { @x = 1; }; @b = draw_b(); @a + @b",
+        &[
+            ("a", Value::Int(0)),
+            ("b", Value::Int(0)),
+            ("c", Value::Bool(true)),
+            ("x", Value::Int(0)),
+        ],
+    );
+    let (spawns, evals) = dump_and_positions("run_across_branch", &i, &cr);
+    assert_eq!(spawns.len(), 2, "expected 2 spawns");
+    assert!(
+        spawns.iter().all(|&s| evals.iter().all(|&e| s < e)),
+        "the draw after the branch is issued with the one before it"
+    );
+    assert!(has_merge(&cr));
+}
+
 fn has_merge(cr: &CompileResult) -> bool {
     let Executable::Module(m) = cr.modules.get(&cr.entry_qref).unwrap() else {
         panic!("expected Module");
@@ -757,6 +777,29 @@ async fn an_anyorder_block_overlaps_its_calls() {
     .await;
     assert_eq!(v, Value::Int(200));
     assert_eq!(probe.max(), 2, "both calls are in flight at once");
+}
+
+#[tokio::test]
+async fn commutative_calls_overlap_across_a_branch() {
+    let probe = Probe::new();
+    let v = run_on_tokio(
+        "@a = probe_a(); if @c { @x = 1; }; @b = probe_b(); @a + @b",
+        true,
+        &[
+            ("a", Value::Int(0)),
+            ("b", Value::Int(0)),
+            ("c", Value::Bool(true)),
+            ("x", Value::Int(0)),
+        ],
+        probe.registry(Effect::IDEMPOTENT.commutative()),
+    )
+    .await;
+    assert_eq!(v, Value::Int(200));
+    assert_eq!(
+        probe.max(),
+        2,
+        "the branch between them does not keep them apart"
+    );
 }
 
 #[tokio::test]

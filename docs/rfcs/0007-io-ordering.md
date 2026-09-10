@@ -107,10 +107,14 @@ place where the intent lives, which none of them has.
   the compiler wires it.
 - No linear or region-typed `Order`. One type; the lowering alone decides
   where a value fans out.
-- No hoisting of a call's issue above a branch. The call is issued where
-  the spawn stands; moving it to a dominator would issue it on a path that
-  never reaches it, and `Order` says "after", not "only if". A pass may
-  still reorder within a block and move the wait toward the use.
+- No hoisting of a call's issue above a branch, with one exception. The
+  call is issued where the spawn stands; moving it to a dominator would
+  issue it on a path that never reaches it, and `Order` says "after", not
+  "only if". The exception is a commutative call whose block
+  post-dominates the block of the call it follows: every path through
+  that block reaches it, so issuing it there speculates nothing, and it
+  joins that call's run. A pass may still reorder within a block and move
+  the wait toward the use.
 
 ## Consequences
 
@@ -127,8 +131,3 @@ place where the intent lives, which none of them has.
 
 - Whether a block may also declare an order among its own sub-blocks, or
   nesting is the only composition.
-- Whether a commutative call may be issued earlier than its block, into a
-  dominator that its block post-dominates. Every path through that
-  dominator reaches the call, so issuing it there speculates nothing;
-  this is the one condition under which the ruling against hoisting a
-  call's issue does not apply. A run is read within one block today.
