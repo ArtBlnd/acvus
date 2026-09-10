@@ -233,6 +233,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         }
     }
 
@@ -412,7 +413,10 @@ mod tests {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(42),
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             val_types,
         );

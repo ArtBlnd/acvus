@@ -178,7 +178,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
     }
 
     fn close_body_effect(&self) -> Effect {
-        self.solver.effect_lower_bound(&self.body_effect)
+        self.solver.freeze_effect(&self.body_effect)
     }
 
     /// Pre-bind function parameters as local variables.

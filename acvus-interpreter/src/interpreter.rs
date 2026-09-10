@@ -626,8 +626,11 @@ async fn execute_inst(
             );
             return Ok(Flow::Jump(target));
         }
-        InstKind::Return(val) => {
-            return Ok(Flow::Return(frame.take(*val)));
+        InstKind::Return { value, .. } => {
+            return Ok(Flow::Return(frame.take(*value)));
+        }
+        InstKind::Merge { dst, .. } => {
+            frame.set(*dst, Value::Unit);
         }
         InstKind::Nop => {}
         InstKind::Undef { dst } => {
@@ -646,7 +649,11 @@ async fn execute_inst(
             callee,
             callee_ty,
             args,
+            order,
         } => {
+            if let Some(edge) = order {
+                frame.set(edge.after, Value::Unit);
+            }
             let result = match callee {
                 Callee::Direct(id) => {
                     let is_extern =
@@ -688,6 +695,7 @@ async fn execute_inst(
             callee,
             callee_ty,
             args,
+            order: _,
         } => {
             let callee_id = match callee {
                 Callee::Direct(id) => *id,
@@ -738,7 +746,10 @@ async fn execute_inst(
             };
             frame.set(*dst, Value::Handle(Box::new(handle)));
         }
-        InstKind::Eval { dst, src } => {
+        InstKind::Eval { dst, src, order } => {
+            if let Some(o) = order {
+                frame.set(*o, Value::Unit);
+            }
             let handle = match frame.take(*src) {
                 Value::Handle(h) => *h,
                 other => panic!("eval: expected Handle, got {other:?}"),
@@ -823,6 +834,9 @@ async fn execute_function(
     for ((_, reg), val) in m.main.params.iter().zip(args.iter()) {
         frame.set(*reg, val.clone());
     }
+    if let Some(order) = m.main.order_param {
+        frame.set(order, Value::Unit);
+    }
     let mut projection_map: FxHashMap<ValueId, RuntimeRef> = FxHashMap::default();
     run_loop(
         ctx,
@@ -856,6 +870,9 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
     }
     for ((_, reg), arg) in body.params.iter().zip(args) {
         frame.set(*reg, arg);
+    }
+    if let Some(order) = body.order_param {
+        frame.set(order, Value::Unit);
     }
 
     let empty_closures = FxHashMap::default();

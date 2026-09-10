@@ -301,7 +301,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                 worklist.push_back(BlockIdx(next));
             }
         }
-        Terminator::Return(_) => {}
+        Terminator::Return { .. } => {}
     }
 }
 
@@ -357,7 +357,7 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                 exit_state.join_from(&block_entry[next]);
             }
         }
-        Terminator::Return(_) => {}
+        Terminator::Return { .. } => {}
     }
 }
 

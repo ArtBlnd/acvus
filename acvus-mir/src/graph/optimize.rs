@@ -140,9 +140,9 @@ fn debug_validate(cfg: &CfgBody) {
     let mut def_loc: FxHashMap<ValueId, (usize, usize)> = FxHashMap::default();
 
     // Function params/captures: defined "before" block 0.
-    for (_, v) in cfg.params.iter().chain(cfg.captures.iter()) {
-        defs.insert(*v);
-        def_loc.insert(*v, (0, usize::MAX));
+    for v in cfg.entry_defs() {
+        defs.insert(v);
+        def_loc.insert(v, (0, usize::MAX));
     }
 
     for (bi, block) in cfg.blocks.iter().enumerate() {
@@ -208,7 +208,9 @@ fn debug_validate(cfg: &CfgBody) {
 
         // -- Check terminator uses --
         let term_uses = match &block.terminator {
-            crate::cfg::Terminator::Return(v) => vec![*v],
+            crate::cfg::Terminator::Return { value, order } => {
+                std::iter::once(*value).chain(*order).collect()
+            }
             crate::cfg::Terminator::Jump { args, .. } => args.clone(),
             crate::cfg::Terminator::JumpIf {
                 cond,

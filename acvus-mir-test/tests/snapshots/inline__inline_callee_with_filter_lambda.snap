@@ -20,8 +20,8 @@ expression: ir
     ; r4 (v4) : Int
     ; r5 (v9) : Ref<Array<Int, 3>>
     ; r6 ($xs) : Array<Int, 3>
-    ; r7 (v11) : Iterator<Int, Opaque, #IdentityId(1)>
-    ; r8 (v12) : Fn(Int) -> Bool with Opaque
-    ; r9 (filter(...)) : Iterator<Int, Opaque, #IdentityId(0)>
+    ; r7 (v11) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r8 (v12) : Fn(Int) -> Bool
+    ; r9 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r10 (collect(...)) : List<Int>
-    ; r11 (positives(...)) : Iterator<Int, Opaque, #IdentityId(0)>
+    ; r11 (positives(...)) : Iterator<Int, Pure, #IdentityId(0)>

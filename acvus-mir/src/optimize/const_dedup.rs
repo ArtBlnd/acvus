@@ -118,7 +118,12 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         | InstKind::Undef { .. } => {}
 
         // Single use
-        InstKind::Return(v) => remap_val(v, remap),
+        InstKind::Return { value, order } => {
+            remap_val(value, remap);
+            if let Some(o) = order {
+                remap_val(o, remap);
+            }
+        }
 
         // Load: src is a use.
         InstKind::Load { src, .. } => remap_val(src, remap),
@@ -161,12 +166,22 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         }
 
         // Vec uses
-        InstKind::FunctionCall { callee, args, .. } => {
+        InstKind::FunctionCall {
+            callee,
+            args,
+            order,
+            ..
+        } => {
             if let Callee::Indirect(val) = callee {
                 remap_val(val, remap);
             }
             remap_vec(args, remap);
+            if let Some(edge) = order {
+                remap_val(&mut edge.before, remap);
+            }
         }
+
+        InstKind::Merge { orders, .. } => remap_vec(orders, remap),
 
         InstKind::MakeArray { elements, .. } | InstKind::MakeTuple { elements, .. } => {
             remap_vec(elements, remap);
@@ -215,11 +230,19 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::Drop { src } => remap_val(src, remap),
 
-        InstKind::Spawn { callee, args, .. } => {
+        InstKind::Spawn {
+            callee,
+            args,
+            order,
+            ..
+        } => {
             if let Callee::Indirect(val) = callee {
                 remap_val(val, remap);
             }
             remap_vec(args, remap);
+            if let Some(o) = order {
+                remap_val(o, remap);
+            }
         }
 
         InstKind::Eval { src, .. } => remap_val(src, remap),
@@ -246,6 +269,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: LocalFactory::new(),
             label_count: 0,
+            order_param: None,
         }
     }
 
@@ -354,7 +378,10 @@ mod tests {
             },
             Inst {
                 span: span(),
-                kind: InstKind::Return(v0),
+                kind: InstKind::Return {
+                    value: v0,
+                    order: None,
+                },
             },
         ]);
 
@@ -384,14 +411,17 @@ mod tests {
             },
             Inst {
                 span: span(),
-                kind: InstKind::Return(v1),
+                kind: InstKind::Return {
+                    value: v1,
+                    order: None,
+                },
             },
         ]);
 
         let result = dedup_body(body);
         assert_eq!(result.insts.len(), 2);
         match &result.insts[1].kind {
-            InstKind::Return(v) => assert_eq!(*v, v0),
+            InstKind::Return { value: v, .. } => assert_eq!(*v, v0),
             other => panic!("expected Return, got {other:?}"),
         }
     }
@@ -412,7 +442,10 @@ mod tests {
             },
             Inst {
                 span: span(),
-                kind: InstKind::Return(v0),
+                kind: InstKind::Return {
+                    value: v0,
+                    order: None,
+                },
             },
             Inst {
                 span: span(),
@@ -430,7 +463,10 @@ mod tests {
             },
             Inst {
                 span: span(),
-                kind: InstKind::Return(v2),
+                kind: InstKind::Return {
+                    value: v2,
+                    order: None,
+                },
             },
         ]);
 

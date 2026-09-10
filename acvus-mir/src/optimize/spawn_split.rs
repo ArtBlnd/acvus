@@ -5,9 +5,9 @@
 //!   handle = Spawn { callee, args }
 //!   result = Eval { src: handle }
 //!
-//! The Spawn is pure (no side effects). Effects happen at Eval.
-//! Reordering is left to a separate pass that can move independent
-//! instructions between Spawn and Eval.
+//! The work starts at Spawn, so the Spawn takes the call's entry `Order`
+//! and the Eval yields the `Order` that follows. Reordering is left to a
+//! separate pass that can move independent instructions between them.
 
 use crate::cfg::CfgBody;
 use crate::ir::*;
@@ -25,6 +25,7 @@ pub fn run(cfg: &mut CfgBody) {
                     callee: Callee::Direct(ref callee_id),
                     ref callee_ty,
                     ref args,
+                    order,
                 } if is_io_call(callee_ty) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
@@ -41,11 +42,16 @@ pub fn run(cfg: &mut CfgBody) {
                             callee: Callee::Direct(*callee_id),
                             callee_ty: callee_ty.clone(),
                             args: args.clone(),
+                            order: order.map(|edge| edge.before),
                         },
                     });
                     new_insts.push(Inst {
                         span: inst.span,
-                        kind: InstKind::Eval { dst, src: handle },
+                        kind: InstKind::Eval {
+                            dst,
+                            src: handle,
+                            order: order.map(|edge| edge.after),
+                        },
                     });
                 }
                 // Everything else: pass through.
@@ -97,6 +103,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         })
     }
 
@@ -134,8 +141,12 @@ mod tests {
                     callee: Callee::Direct(fetch_id),
                     callee_ty: fetch_ty,
                     args: vec![v(0)],
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             2,
         );
@@ -194,6 +205,7 @@ mod tests {
                 callee: Callee::Direct(add_id),
                 callee_ty: Ty::error(),
                 args: vec![v(1), v(2)],
+                order: None,
             }],
             3,
         );
@@ -215,6 +227,7 @@ mod tests {
                 callee: Callee::Indirect(v(1)),
                 callee_ty: Ty::error(),
                 args: vec![],
+                order: None,
             }],
             2,
         );
@@ -254,12 +267,14 @@ mod tests {
                     callee: Callee::Direct(fetch_a),
                     callee_ty: io_fn_ty.clone(),
                     args: vec![],
+                    order: None,
                 },
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(fetch_b),
                     callee_ty: io_fn_ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -267,7 +282,10 @@ mod tests {
                     left: v(0),
                     right: v(1),
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
             ],
             3,
         );

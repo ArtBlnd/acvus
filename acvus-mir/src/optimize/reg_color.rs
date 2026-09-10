@@ -153,7 +153,7 @@ fn compute_coloring(
 
     // Params and captures are live simultaneously at entry - color them first.
     let mut entry_live = FxHashSet::default();
-    for &(_, v) in cfg.params.iter().chain(cfg.captures.iter()) {
+    for v in cfg.entry_defs() {
         let c = coloring.assign(&entry_live, v, cfg.val_types.get(&v), untyped_scalars);
         entry_live.insert(c);
     }
@@ -313,7 +313,7 @@ fn terminator_uses(term: &Terminator) -> smallvec::SmallVec<[ValueId; 4]> {
             v.extend(else_args.iter().copied());
             v
         }
-        Terminator::Return(val) => smallvec::smallvec![*val],
+        Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Fallthrough => smallvec::SmallVec::new(),
     }
 }
@@ -517,26 +517,48 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
         }
         InstKind::LoadFunction { dst, .. } => r(dst),
         InstKind::FunctionCall {
-            dst, callee, args, ..
+            dst,
+            callee,
+            args,
+            order,
+            ..
         } => {
             r(dst);
             if let Callee::Indirect(v) = callee {
                 r(v);
             }
             args.iter_mut().for_each(&r);
+            if let Some(edge) = order {
+                r(&mut edge.before);
+                r(&mut edge.after);
+            }
         }
         InstKind::Spawn {
-            dst, callee, args, ..
+            dst,
+            callee,
+            args,
+            order,
+            ..
         } => {
             r(dst);
             if let Callee::Indirect(v) = callee {
                 r(v);
             }
             args.iter_mut().for_each(&r);
+            if let Some(o) = order {
+                r(o);
+            }
         }
-        InstKind::Eval { dst, src } => {
+        InstKind::Eval { dst, src, order } => {
             r(dst);
             r(src);
+            if let Some(o) = order {
+                r(o);
+            }
+        }
+        InstKind::Merge { dst, orders } => {
+            r(dst);
+            orders.iter_mut().for_each(&r);
         }
         InstKind::MakeArray { dst, elements } => {
             r(dst);
@@ -610,7 +632,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
         InstKind::BlockLabel { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
-        | InstKind::Return(..) => {
+        | InstKind::Return { .. } => {
             unreachable!("CF instructions must not appear in CfgBody block.insts")
         }
     }
@@ -630,7 +652,12 @@ fn rewrite_terminator(term: &mut Terminator, remap: &impl Fn(ValueId) -> ValueId
             then_args.iter_mut().for_each(&r);
             else_args.iter_mut().for_each(&r);
         }
-        Terminator::Return(v) => r(v),
+        Terminator::Return { value, order } => {
+            r(value);
+            if let Some(o) = order {
+                r(o);
+            }
+        }
         Terminator::Fallthrough => {}
     }
 }
@@ -675,6 +702,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         }
     }
 
@@ -717,7 +745,10 @@ mod tests {
                 left: v(0),
                 right: v(1),
             },
-            InstKind::Return(v(2)),
+            InstKind::Return {
+                value: v(2),
+                order: None,
+            },
         ]);
         color_body(&mut cfg);
         let body = cfg::demote(cfg);
@@ -757,7 +788,10 @@ mod tests {
                 left: v(0),
                 right: v(1),
             },
-            InstKind::Return(v(2)),
+            InstKind::Return {
+                value: v(2),
+                order: None,
+            },
         ]);
         color_body(&mut cfg);
         let body = cfg::demote(cfg);
@@ -809,7 +843,10 @@ mod tests {
                 params: vec![v(4)],
                 merge_of: None,
             },
-            InstKind::Return(v(4)),
+            InstKind::Return {
+                value: v(4),
+                order: None,
+            },
         ]);
         color_body(&mut cfg);
         let body = cfg::demote(cfg);
@@ -845,7 +882,10 @@ mod tests {
                     dst: v(2),
                     value: acvus_ast::Literal::Bool(true),
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
             ],
             |body| {
                 body.val_types.insert(v(0), Ty::Int);
@@ -876,7 +916,10 @@ mod tests {
                     left: v(0),
                     right: v(0),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             |body| {
                 body.params = vec![(dummy_name(), v(0))];
@@ -904,7 +947,10 @@ mod tests {
                     left: v(0),
                     right: v(0),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             |body| {
                 body.captures = vec![(dummy_name(), v(0))];
@@ -930,7 +976,10 @@ mod tests {
                     dst: v(1),
                     value: acvus_ast::Literal::Int(42),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             |body| {
                 body.params = vec![(dummy_name(), v(0))];
@@ -963,13 +1012,19 @@ mod tests {
                 params: vec![v(2)],
                 merge_of: None,
             },
-            InstKind::Return(v(2)),
+            InstKind::Return {
+                value: v(2),
+                order: None,
+            },
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![v(3)],
                 merge_of: None,
             },
-            InstKind::Return(v(3)),
+            InstKind::Return {
+                value: v(3),
+                order: None,
+            },
         ]);
         color_body(&mut cfg);
         let body = cfg::demote(cfg);
@@ -1019,7 +1074,10 @@ mod tests {
                 left: v(1),
                 right: v(3),
             },
-            InstKind::Return(v(4)),
+            InstKind::Return {
+                value: v(4),
+                order: None,
+            },
         ]);
         let original_defs = collect_defs(&original_body);
         let mut cfg = cfg::promote(original_body);
@@ -1039,7 +1097,10 @@ mod tests {
                 dst: v(1),
                 value: acvus_ast::Literal::Int(2),
             },
-            InstKind::Return(v(1)),
+            InstKind::Return {
+                value: v(1),
+                order: None,
+            },
         ]);
         color_body(&mut cfg);
         let body = cfg::demote(cfg);
@@ -1066,6 +1127,7 @@ mod tests {
             captures: vec![],
             debug: DebugInfo::new(),
             val_factory: LocalFactory::<ValueId>::new(),
+            order_param: None,
         };
         color_body(&mut cfg);
     }
@@ -1077,11 +1139,14 @@ mod tests {
                 dst: v(0),
                 value: acvus_ast::Literal::Int(0),
             },
-            InstKind::Return(v(0)),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
         ]);
         color_body(&mut cfg);
         let body = cfg::demote(cfg);
-        if let (InstKind::Const { dst, .. }, InstKind::Return(val)) =
+        if let (InstKind::Const { dst, .. }, InstKind::Return { value: val, .. }) =
             (&body.insts[0].kind, &body.insts[1].kind)
         {
             assert_eq!(val, dst);
@@ -1102,7 +1167,10 @@ mod tests {
                     left: v(0),
                     right: v(0),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             |body| {
                 body.val_types.insert(v(0), Ty::Int);
@@ -1117,6 +1185,7 @@ mod tests {
                 defs.contains(vid)
                     || body.param_regs().contains(vid)
                     || body.capture_regs().contains(vid)
+                    || body.order_param == Some(*vid)
             );
         }
     }
@@ -1149,13 +1218,19 @@ mod tests {
                     params: vec![v(3)],
                     merge_of: None,
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![v(4)],
                     merge_of: None,
                 },
-                InstKind::Return(v(4)),
+                InstKind::Return {
+                    value: v(4),
+                    order: None,
+                },
             ],
             |body| {
                 body.val_types.insert(v(0), Ty::Bool);
@@ -1225,7 +1300,10 @@ mod tests {
                     left: v(0),
                     right: v(2),
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
             ],
             |body| {
                 body.val_types.insert(v(0), Ty::String);
@@ -1275,7 +1353,10 @@ mod tests {
                 left: v(1),
                 right: v(3),
             },
-            InstKind::Return(v(4)),
+            InstKind::Return {
+                value: v(4),
+                order: None,
+            },
         ]);
         color_body(&mut cfg);
         let next = cfg.val_factory.next();

@@ -33,7 +33,9 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
         // Primitives - always Copy
-        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => Some(false),
+        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => {
+            Some(false)
+        }
 
         // Handle - always move-only (deferred computation, must be consumed exactly once)
         Ty::Handle(..) => Some(true),
@@ -321,7 +323,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     worklist.push_back(BlockIdx(next));
                 }
             }
-            Terminator::Return(_) => {}
+            Terminator::Return { .. } => {}
         }
     }
 }
@@ -411,6 +413,9 @@ fn process_inst(
 
     match &inst.kind {
         // === No operands / define only ===
+        InstKind::Merge { dst, .. } => {
+            state.set_value(*dst, Liveness::Alive);
+        }
         InstKind::Const { dst, .. } | InstKind::Poison { dst } | InstKind::Undef { dst } => {
             state.set_value(*dst, Liveness::Alive);
         }
@@ -477,8 +482,8 @@ fn process_inst(
         InstKind::Nop => {}
 
         // === Consuming operations (move operands) ===
-        InstKind::Return(v) => {
-            try_consume_value(scope, inst_idx, span, *v, val_types, state, errors);
+        InstKind::Return { value, .. } => {
+            try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
         }
         InstKind::Clone { dst, src, .. } => {
             // Clone reads src (not consumed - it's being cloned)
@@ -658,6 +663,7 @@ mod tests {
                 debug: DebugInfo::new(),
                 val_factory: LocalFactory::new(),
                 label_count: 10,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }
@@ -761,12 +767,14 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v0],
+                    order: None,
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v2,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v0],
+                    order: None,
                 }),
             ],
             val_types,
@@ -799,6 +807,7 @@ mod tests {
                 callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                 callee_ty: Ty::error(),
                 args: vec![v0],
+                order: None,
             })],
             val_types,
         );
@@ -859,6 +868,7 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v1],
+                    order: None,
                 }),
                 // $a = v2 (new value) -> revives $a
                 inst(InstKind::Ref {
@@ -880,6 +890,7 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v3],
+                    order: None,
                 }),
             ],
             val_types,
@@ -938,6 +949,7 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v1],
+                    order: None,
                 }),
                 // Second load - $a already moved
                 inst(InstKind::Ref {
@@ -951,6 +963,7 @@ mod tests {
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v2],
+                    order: None,
                 }),
             ],
             val_types,
@@ -969,7 +982,16 @@ mod tests {
         val_types.insert(v0, Ty::error());
 
         let module = make_module(
-            vec![inst(InstKind::Return(v0)), inst(InstKind::Return(v0))],
+            vec![
+                inst(InstKind::Return {
+                    value: v0,
+                    order: None,
+                }),
+                inst(InstKind::Return {
+                    value: v0,
+                    order: None,
+                }),
+            ],
             val_types,
         );
 

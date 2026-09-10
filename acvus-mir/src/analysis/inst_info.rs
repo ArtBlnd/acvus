@@ -38,7 +38,17 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Poison { dst }
         | InstKind::Undef { dst } => smallvec![*dst],
 
-        InstKind::FunctionCall { dst, .. } | InstKind::Eval { dst, .. } => smallvec![*dst],
+        InstKind::FunctionCall { dst, order, .. } => {
+            let mut v: SmallVec<[ValueId; 2]> = smallvec![*dst];
+            v.extend(order.map(|edge| edge.after));
+            v
+        }
+        InstKind::Eval { dst, order, .. } => {
+            let mut v: SmallVec<[ValueId; 2]> = smallvec![*dst];
+            v.extend(*order);
+            v
+        }
+        InstKind::Merge { dst, .. } => smallvec![*dst],
 
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
 
@@ -46,7 +56,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
-        | InstKind::Return(_)
+        | InstKind::Return { .. }
         | InstKind::Nop => smallvec![],
     }
 }
@@ -70,7 +80,12 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::FieldGet { object, .. } => smallvec![*object],
         InstKind::FieldSet { object, value, .. } => smallvec![*object, *value],
         InstKind::Clone { src, .. } | InstKind::Drop { src } => smallvec![*src],
-        InstKind::Return(val) => smallvec![*val],
+        InstKind::Return { value, order } => {
+            let mut v: SmallVec<[ValueId; 4]> = smallvec![*value];
+            v.extend(*order);
+            v
+        }
+        InstKind::Merge { orders, .. } => orders.iter().copied().collect(),
         InstKind::TestLiteral { src, .. } => smallvec![*src],
         InstKind::TestVariant { src, .. } => smallvec![*src],
         InstKind::UnwrapVariant { src, .. } => smallvec![*src],
@@ -101,20 +116,32 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::MakeClosure { captures, .. } => captures.iter().copied().collect(),
 
         // Function calls
-        InstKind::FunctionCall { callee, args, .. } => {
+        InstKind::FunctionCall {
+            callee,
+            args,
+            order,
+            ..
+        } => {
             let mut v: SmallVec<[ValueId; 4]> = SmallVec::new();
             if let Callee::Indirect(f) = callee {
                 v.push(*f);
             }
             v.extend(args.iter().copied());
+            v.extend(order.map(|edge| edge.before));
             v
         }
-        InstKind::Spawn { callee, args, .. } => {
+        InstKind::Spawn {
+            callee,
+            args,
+            order,
+            ..
+        } => {
             let mut v: SmallVec<[ValueId; 4]> = SmallVec::new();
             if let Callee::Indirect(f) = callee {
                 v.push(*f);
             }
             v.extend(args.iter().copied());
+            v.extend(*order);
             v
         }
         InstKind::Eval { src, .. } => smallvec![*src],
@@ -144,7 +171,7 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
         InstKind::BlockLabel { .. }
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
-            | InstKind::Return(_)
+            | InstKind::Return { .. }
     )
 }
 
@@ -189,6 +216,7 @@ mod tests {
             callee: crate::ir::Callee::Direct(qref),
             callee_ty: Ty::error(),
             args: vec![v(0), v(1)],
+            order: None,
         };
         assert_eq!(defs(&inst).as_slice(), &[v(3)]);
         let u = uses(&inst);
@@ -206,6 +234,7 @@ mod tests {
             callee: crate::ir::Callee::Direct(qref),
             callee_ty: Ty::error(),
             args: vec![v(0)],
+            order: None,
         };
         assert_eq!(defs(&spawn).as_slice(), &[v(1)]);
         assert_eq!(uses(&spawn).as_slice(), &[v(0)]);
@@ -213,6 +242,7 @@ mod tests {
         let eval = InstKind::Eval {
             dst: v(2),
             src: v(1),
+            order: None,
         };
         assert_eq!(defs(&eval).as_slice(), &[v(2)]);
         assert_eq!(uses(&eval).as_slice(), &[v(1)]);
@@ -220,14 +250,20 @@ mod tests {
 
     #[test]
     fn return_uses_value() {
-        let inst = InstKind::Return(v(5));
+        let inst = InstKind::Return {
+            value: v(5),
+            order: None,
+        };
         assert!(defs(&inst).is_empty());
         assert_eq!(uses(&inst).as_slice(), &[v(5)]);
     }
 
     #[test]
     fn control_flow_detection() {
-        assert!(is_control_flow(&InstKind::Return(v(0))));
+        assert!(is_control_flow(&InstKind::Return {
+            value: v(0),
+            order: None
+        }));
         assert!(is_control_flow(&InstKind::Jump {
             label: crate::ir::Label(0),
             args: vec![],
@@ -245,6 +281,7 @@ mod tests {
             callee: crate::ir::Callee::Indirect(v(0)),
             callee_ty: Ty::error(),
             args: vec![v(1)],
+            order: None,
         };
         let u = uses(&inst);
         assert!(u.contains(&v(0)), "indirect callee must be in uses");

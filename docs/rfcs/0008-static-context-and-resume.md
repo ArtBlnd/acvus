@@ -83,8 +83,10 @@ harmless can be resumed by re-issuing it.
 ## Consequences
 
 - The Fn type and UserDefined type arguments carry the effect as a term with
-  variables in the inference phases; an unresolved variable resolves to
-  Opaque.
+  variables in the inference phases; a variable inference leaves open
+  resolves to the join of what is constrained below it, Pure when nothing
+  is. A body and the calls inside it share variables, and one reading
+  serves both.
 - The runtime value that wraps an extern Rust value is not called opaque; the
   word belongs to the effect level.
 - Deserialized state must carry the version it was produced by, and resume

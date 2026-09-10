@@ -7,18 +7,28 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     3 |   r1 = call #0(1 (r2))
-     5 |   r3 = T0 + T0
-     6 |   r4 = r3 + r1
-     7 |   return r4
+     1 |   r1 = undef
+     4 |   r2 = call #0(1 (r3)) [r4 -> r5]
+     6 |   r6 = T0 + T0
+     7 |   r7 = r6 + r2
+     8 |   return r7 [r5]
 
-    ; r0 (v11) : String
-    ; r1 (fetch_user(...)) : String
-    ; r2 (v2) : Int
-    ; r3 (v7) : String
-    ; r4 (v10) : String
-    ; r5 (v6) : String
-    ; r6 (user) : String
-    ; r7 (v5) : Ref<String>
-    ; r8 (v1) : String
-    ; r9 (v8) : Ref<String>
+    ; r0 (v20) : Order
+    ; r1 (v21) : String
+    ; r2 (fetch_user(...)) : String
+    ; r3 (v5) : Int
+    ; r4 (v1) : Order
+    ; r5 (v9) : Order
+    ; r6 (v14) : String
+    ; r7 (v17) : String
+    ; r8 (v3) : Ref<Order>
+    ; r9 (v12) : Ref<String>
+    ; r10 (v4) : String
+    ; r11 (v15) : Ref<String>
+    ; r12 (v7) : Ref<Order>
+    ; r13 (v18) : Ref<Order>
+    ; r14 (v10) : Ref<Order>
+    ; r15 (v13) : String
+    ; r16 (user) : String
+    ; r17 (v8) : Order
+    ; r18 (v19) : Order

@@ -299,6 +299,7 @@ mod tests {
                 debug: DebugInfo::new(),
                 val_factory: LocalFactory::new(),
                 label_count: 0,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }
@@ -416,7 +417,10 @@ mod tests {
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
             }),
-            inst(InstKind::Return(v2)),
+            inst(InstKind::Return {
+                value: v2,
+                order: None,
+            }),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
@@ -427,7 +431,10 @@ mod tests {
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
             }),
-            inst(InstKind::Return(v3)),
+            inst(InstKind::Return {
+                value: v3,
+                order: None,
+            }),
         ]);
 
         let known =
@@ -478,7 +485,10 @@ mod tests {
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
             }),
-            inst(InstKind::Return(v2)),
+            inst(InstKind::Return {
+                value: v2,
+                order: None,
+            }),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
@@ -489,7 +499,10 @@ mod tests {
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
             }),
-            inst(InstKind::Return(v3)),
+            inst(InstKind::Return {
+                value: v3,
+                order: None,
+            }),
         ]);
 
         let known =
@@ -539,7 +552,10 @@ mod tests {
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
             }),
-            inst(InstKind::Return(v2)),
+            inst(InstKind::Return {
+                value: v2,
+                order: None,
+            }),
             inst(InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
@@ -550,7 +566,10 @@ mod tests {
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
             }),
-            inst(InstKind::Return(v3)),
+            inst(InstKind::Return {
+                value: v3,
+                order: None,
+            }),
         ]);
 
         // mode is NOT known -> can't evaluate condition
@@ -750,6 +769,7 @@ mod tests {
                 debug: DebugInfo::new(),
                 val_factory: LocalFactory::new(),
                 label_count: 0,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }
@@ -904,7 +924,10 @@ mod tests {
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
                 }),
-                inst(InstKind::Return(v2)),
+                inst(InstKind::Return {
+                    value: v2,
+                    order: None,
+                }),
                 inst(InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
@@ -915,7 +938,10 @@ mod tests {
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
                 }),
-                inst(InstKind::Return(v3)),
+                inst(InstKind::Return {
+                    value: v3,
+                    order: None,
+                }),
             ],
             val_types,
         );
@@ -1269,7 +1295,10 @@ mod tests {
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
                 }),
-                inst(InstKind::Return(v2)),
+                inst(InstKind::Return {
+                    value: v2,
+                    order: None,
+                }),
                 inst(InstKind::BlockLabel {
                     label: Label(20),
                     params: vec![],
@@ -1280,7 +1309,10 @@ mod tests {
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
                 }),
-                inst(InstKind::Return(v3)),
+                inst(InstKind::Return {
+                    value: v3,
+                    order: None,
+                }),
             ],
             val_types,
         );
@@ -1396,7 +1428,10 @@ mod tests {
                     target: crate::ir::RefTarget::Context(id3),
                     path: vec![],
                 }),
-                inst(InstKind::Return(v4)),
+                inst(InstKind::Return {
+                    value: v4,
+                    order: None,
+                }),
             ],
             val_types,
         );
@@ -1544,7 +1579,10 @@ mod tests {
                     params: vec![],
                     merge_of: None,
                 }),
-                inst(InstKind::Return(v0)),
+                inst(InstKind::Return {
+                    value: v0,
+                    order: None,
+                }),
             ],
             val_types,
         );

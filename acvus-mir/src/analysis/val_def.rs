@@ -46,6 +46,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::Clone { dst, .. }
         | InstKind::Spawn { dst, .. }
         | InstKind::Eval { dst, .. }
+        | InstKind::Merge { dst, .. }
         | InstKind::Poison { dst }
         | InstKind::Undef { dst } => Some(*dst),
 
@@ -54,7 +55,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
-        | InstKind::Return(_)
+        | InstKind::Return { .. }
         | InstKind::Nop => None,
 
         // BlockLabel params are defined at the label site
@@ -66,6 +67,8 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
         InstKind::BlockLabel { params, .. } => params.clone(),
+        InstKind::FunctionCall { order, .. } => order.iter().map(|edge| edge.after).collect(),
+        InstKind::Eval { order, .. } => order.iter().copied().collect(),
         _ => vec![],
     }
 }
@@ -88,6 +91,7 @@ mod tests {
                 debug: crate::ir::DebugInfo::new(),
                 val_factory: LocalFactory::new(),
                 label_count: 0,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }
@@ -173,7 +177,10 @@ mod tests {
         }
         let v99 = vf.next();
         let module = make_module(vec![
-            inst(InstKind::Return(v99)),
+            inst(InstKind::Return {
+                value: v99,
+                order: None,
+            }),
             inst(InstKind::Store { dst: v0, value: v0 }),
             inst(InstKind::Nop),
         ]);

@@ -201,8 +201,9 @@ fn is_used_in_block(block: &crate::cfg::Block, val: ValueId) -> bool {
 fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
     let mut uses = FxHashSet::default();
     match term {
-        Terminator::Return(val) => {
-            uses.insert(*val);
+        Terminator::Return { value, order } => {
+            uses.insert(*value);
+            uses.extend(order.iter().copied());
         }
         Terminator::Jump { args, .. } => {
             uses.extend(args.iter().copied());
@@ -240,7 +241,7 @@ fn terminator_edges(term: &Terminator) -> Vec<(Label, FxHashSet<ValueId>)> {
                 (*else_label, else_args.iter().copied().collect()),
             ]
         }
-        Terminator::Return(_) | Terminator::Fallthrough => vec![],
+        Terminator::Return { .. } | Terminator::Fallthrough => vec![],
     }
 }
 
@@ -296,7 +297,8 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::ArrayIndex { .. }
         | InstKind::ArrayGet { .. }
         | InstKind::ObjectGet { .. }
-        | InstKind::TupleIndex { .. } => false,
+        | InstKind::TupleIndex { .. }
+        | InstKind::Merge { .. } => false,
 
         // These don't use values at all.
         InstKind::Const { .. }
@@ -308,7 +310,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::Nop => false,
 
         // Control flow - handled by terminator, not here.
-        InstKind::Jump { .. } | InstKind::JumpIf { .. } | InstKind::Return(_) => false,
+        InstKind::Jump { .. } | InstKind::JumpIf { .. } | InstKind::Return { .. } => false,
     }
 }
 
@@ -316,7 +318,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
 fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
     match term {
         // Return consumes the value (transferred to caller).
-        Terminator::Return(v) => *v == val,
+        Terminator::Return { value, order } => *value == val || *order == Some(val),
         // Jump args are transferred to the target block.
         Terminator::Jump { args, .. } => args.contains(&val),
         // JumpIf: args are transferred, cond is read-only.
@@ -376,6 +378,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         });
         (cfg, val_types)
     }
@@ -423,7 +426,10 @@ mod tests {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(42),
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             vec![(v(0), Ty::Int)],
         );
@@ -451,7 +457,10 @@ mod tests {
                     field: Interner::new().intern("x"),
                     rest: vec![],
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             vec![(v(0), user_defined_ty()), (v(1), Ty::Int)],
         );
@@ -471,7 +480,10 @@ mod tests {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(0),
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             vec![(v(0), user_defined_ty())],
         );
@@ -494,7 +506,10 @@ mod tests {
                     dst: v(1),
                     value: acvus_ast::Literal::Int(1),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             vec![(v(0), user_defined_ty()), (v(1), Ty::Int)],
         );
@@ -541,13 +556,19 @@ mod tests {
                     params: vec![v(3)],
                     merge_of: None,
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
                     merge_of: None,
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
             ],
             vec![
                 (v(0), user_defined_ty()),
@@ -603,13 +624,19 @@ mod tests {
                     params: vec![v(2)],
                     merge_of: None,
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![v(3)],
                     merge_of: None,
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
             ],
             vec![
                 (v(0), user_defined_ty()),
@@ -657,7 +684,10 @@ mod tests {
                     field: i.intern("y"),
                     rest: vec![],
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
             ],
             vec![
                 (v(0), user_defined_ty()),
@@ -702,7 +732,10 @@ mod tests {
                     field: i.intern("y"),
                     rest: vec![],
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
             ],
             vec![(v(0), user_defined_ty()), (v(1), Ty::Int), (v(2), Ty::Int)],
         );
@@ -728,7 +761,10 @@ mod tests {
                     dst: v(1),
                     value: acvus_ast::Literal::Int(1),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             vec![
                 (
@@ -758,7 +794,10 @@ mod tests {
                     dst: v(1),
                     value: acvus_ast::Literal::Int(1),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             vec![
                 (
@@ -807,13 +846,19 @@ mod tests {
                     params: vec![v(3)],
                     merge_of: None,
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![v(4)],
                     merge_of: None,
                 },
-                InstKind::Return(v(4)),
+                InstKind::Return {
+                    value: v(4),
+                    order: None,
+                },
             ],
             vec![
                 (v(0), user_defined_ty()),
@@ -860,7 +905,10 @@ mod tests {
                     field: Interner::new().intern("x"),
                     rest: vec![],
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             vec![(v(0), user_defined_ty()), (v(1), Ty::Int)],
         );

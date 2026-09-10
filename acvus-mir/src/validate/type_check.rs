@@ -41,6 +41,12 @@ pub enum ValidationErrorKind {
     MissingType {
         value_id: u32,
     },
+    /// A call's `Order` operand disagrees with its callee's effect: `pure`
+    /// says which side the callee is on.
+    OrderEdge {
+        inst_name: String,
+        pure: bool,
+    },
     ArityMismatch {
         inst_name: String,
         expected: usize,
@@ -114,6 +120,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Bool, Ty::Bool) => true,
         (Ty::Unit, Ty::Unit) => true,
         (Ty::Byte, Ty::Byte) => true,
+        (Ty::Order, Ty::Order) => true,
 
         // Containers (invariant inner)
         (Ty::Array(a, la), Ty::Array(b, lb)) => la == lb && types_match(a, b),
@@ -278,6 +285,49 @@ impl CheckCtx {
 
     /// Assert two types match.  Pushes a `TypeMismatch` error on failure.
     /// Returns `true` if they match.
+    /// `id` must be typed `Order`.
+    fn expect_order(
+        &self,
+        id: ValueId,
+        val_types: &FxHashMap<ValueId, Ty>,
+        span: Span,
+        pc: usize,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        if let Some(ty) = self.ty_of(id, val_types, span, pc, errors) {
+            self.assert_match(pc, span, "Order", "order", &Ty::Order, ty, errors);
+        }
+    }
+
+    /// A call takes an `Order` exactly when its callee's effect is not Pure.
+    fn expect_order_edge(
+        &self,
+        inst_name: &str,
+        callee_ty: &Ty,
+        before: Option<ValueId>,
+        val_types: &FxHashMap<ValueId, Ty>,
+        span: Span,
+        pc: usize,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        let Some(effect) = callee_ty.effect() else {
+            return;
+        };
+        match (effect == crate::ty::Effect::Pure, before) {
+            (false, Some(o)) => self.expect_order(o, val_types, span, pc, errors),
+            (true, None) => {}
+            (pure, _) => errors.push(ValidationError {
+                scope: self.scope_name.clone(),
+                inst_index: pc,
+                span,
+                kind: ValidationErrorKind::OrderEdge {
+                    inst_name: inst_name.to_string(),
+                    pure,
+                },
+            }),
+        }
+    }
+
     fn assert_match(
         &self,
         pc: usize,
@@ -1010,8 +1060,20 @@ impl CheckCtx {
                 callee,
                 callee_ty,
                 args,
-                ..
+                order,
             } => {
+                self.expect_order_edge(
+                    "FunctionCall",
+                    callee_ty,
+                    order.map(|edge| edge.before),
+                    vt,
+                    span,
+                    pc,
+                    errors,
+                );
+                if let Some(edge) = order {
+                    self.expect_order(edge.after, vt, span, pc, errors);
+                }
                 match callee {
                     Callee::Direct(_) => {
                         let _ = self.ty_of(*dst, vt, span, pc, errors);
@@ -1066,8 +1128,9 @@ impl CheckCtx {
                 callee,
                 callee_ty,
                 args,
-                ..
+                order,
             } => {
+                self.expect_order_edge("Spawn", callee_ty, *order, vt, span, pc, errors);
                 match callee {
                     Callee::Direct(_) => {
                         let dst_ty = ty!(*dst);
@@ -1129,7 +1192,17 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::Eval { dst, src, .. } => {
+            InstKind::Merge { dst, orders } => {
+                self.expect_order(*dst, vt, span, pc, errors);
+                for o in orders {
+                    self.expect_order(*o, vt, span, pc, errors);
+                }
+            }
+
+            InstKind::Eval { dst, src, order } => {
+                if let Some(o) = order {
+                    self.expect_order(*o, vt, span, pc, errors);
+                }
                 let src_ty = ty!(*src);
                 if let Ty::Handle(inner) = src_ty {
                     let dst_ty = ty!(*dst);
@@ -1249,8 +1322,11 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::Return(val) => {
-                let _ = self.ty_of(*val, vt, span, pc, errors);
+            InstKind::Return { value, order } => {
+                let _ = self.ty_of(*value, vt, span, pc, errors);
+                if let Some(o) = order {
+                    self.expect_order(*o, vt, span, pc, errors);
+                }
             }
         }
     }
@@ -1281,6 +1357,7 @@ mod tests {
                 debug: DebugInfo::new(),
                 val_factory: LocalFactory::new(),
                 label_count: 10,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }

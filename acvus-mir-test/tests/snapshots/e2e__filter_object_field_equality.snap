@@ -24,9 +24,9 @@ expression: ir
     ; r1 (@users) : Ref<Array<{active: Bool, name: String}, 3>>
     ; r2 (v3) : Array<{active: Bool, name: String}, 3>
     ; r3 (v4) : List<{active: Bool, name: String}>
-    ; r4 (iter(...)) : Iterator<{active: Bool, name: String}, Opaque, #IdentityId(0)>
-    ; r5 (v6) : Fn({active: Bool, name: String}) -> Bool with Opaque
-    ; r6 (filter(...)) : Iterator<{active: Bool, name: String}, Opaque, #IdentityId(0)>
+    ; r4 (iter(...)) : Iterator<{active: Bool, name: String}, Pure, #IdentityId(0)>
+    ; r5 (v6) : Fn({active: Bool, name: String}) -> Bool
+    ; r6 (filter(...)) : Iterator<{active: Bool, name: String}, Pure, #IdentityId(0)>
     ; r7 (collect(...)) : List<{active: Bool, name: String}>
     ; r8 (v12) : String
     ; r9 (len(...)) : Int

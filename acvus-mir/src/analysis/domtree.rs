@@ -231,7 +231,12 @@ impl PostDomTree {
 
         // Find exit blocks (blocks with Return terminator).
         let exits: Vec<usize> = (0..n)
-            .filter(|&bi| matches!(cfg.blocks[bi].terminator, crate::cfg::Terminator::Return(_)))
+            .filter(|&bi| {
+                matches!(
+                    cfg.blocks[bi].terminator,
+                    crate::cfg::Terminator::Return { .. }
+                )
+            })
             .collect();
 
         if exits.is_empty() {
@@ -436,6 +441,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         })
     }
 
@@ -468,7 +474,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             },
-            InstKind::Return(v(1)),
+            InstKind::Return {
+                value: v(1),
+                order: None,
+            },
         ]);
         let dom = DomTree::build(&cfg);
 
@@ -524,7 +533,10 @@ mod tests {
                 dst: v(1),
                 value: acvus_ast::Literal::Int(0),
             },
-            InstKind::Return(v(1)),
+            InstKind::Return {
+                value: v(1),
+                order: None,
+            },
         ]);
         let dom = DomTree::build(&cfg);
 
@@ -566,7 +578,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             },
-            InstKind::Return(v(1)),
+            InstKind::Return {
+                value: v(1),
+                order: None,
+            },
         ]);
         let dom = DomTree::build(&cfg);
 
@@ -604,7 +619,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             },
-            InstKind::Return(v(1)),
+            InstKind::Return {
+                value: v(1),
+                order: None,
+            },
         ]);
         let dom = DomTree::build(&cfg);
 
@@ -620,7 +638,10 @@ mod tests {
                 dst: v(0),
                 value: acvus_ast::Literal::Int(0),
             },
-            InstKind::Return(v(0)),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
         ]);
         let dom = DomTree::build(&cfg);
 

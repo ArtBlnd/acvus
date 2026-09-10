@@ -349,7 +349,11 @@ fn write_body(
                 ctx.fmt_fn_id(*id),
             )?,
             InstKind::FunctionCall {
-                dst, callee, args, ..
+                dst,
+                callee,
+                args,
+                order,
+                ..
             } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
@@ -362,34 +366,58 @@ fn write_body(
                     callee_str,
                     vn.fmt_uses(args, &consts, &texts)
                 )?;
+                if let Some(edge) = order {
+                    write!(
+                        f,
+                        " [{} -> {}]",
+                        vn.fmt_use(edge.before, &consts, &texts),
+                        vn.fmt_val(edge.after)
+                    )?;
+                }
                 writeln!(f)?
             }
+            InstKind::Merge { dst, orders } => writeln!(
+                f,
+                "{} = merge {}",
+                vn.fmt_val(*dst),
+                vn.fmt_uses(orders, &consts, &texts)
+            )?,
 
             // Spawn / Eval
             InstKind::Spawn {
-                dst, callee, args, ..
+                dst,
+                callee,
+                args,
+                order,
+                ..
             } => {
                 let callee_str = match callee {
                     Callee::Direct(id) => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => vn.fmt_use(*val, &consts, &texts),
                 };
-                let ctx_str = String::new();
-                writeln!(
+                write!(
                     f,
-                    "{} = spawn {}({}){ctx_str}",
+                    "{} = spawn {}({})",
                     vn.fmt_val(*dst),
                     callee_str,
                     vn.fmt_uses(args, &consts, &texts)
-                )?
+                )?;
+                if let Some(o) = order {
+                    write!(f, " [{} ->]", vn.fmt_use(*o, &consts, &texts))?;
+                }
+                writeln!(f)?
             }
-            InstKind::Eval { dst, src } => {
-                let ctx_str = String::new();
-                writeln!(
+            InstKind::Eval { dst, src, order } => {
+                write!(
                     f,
-                    "{} = eval {}{ctx_str}",
+                    "{} = eval {}",
                     vn.fmt_val(*dst),
                     vn.fmt_use(*src, &consts, &texts)
-                )?
+                )?;
+                if let Some(o) = order {
+                    write!(f, " [-> {}]", vn.fmt_val(*o))?;
+                }
+                writeln!(f)?
             }
 
             // Composite constructors
@@ -589,7 +617,13 @@ fn write_body(
                     else_str
                 )?
             }
-            InstKind::Return(r) => writeln!(f, "return {}", vn.fmt_use(*r, &consts, &texts))?,
+            InstKind::Return { value, order } => {
+                write!(f, "return {}", vn.fmt_use(*value, &consts, &texts))?;
+                if let Some(o) = order {
+                    write!(f, " [{}]", vn.fmt_use(*o, &consts, &texts))?;
+                }
+                writeln!(f)?
+            }
             InstKind::Nop => writeln!(f, "nop")?,
             InstKind::Clone { dst, src } => writeln!(
                 f,

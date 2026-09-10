@@ -93,62 +93,62 @@ expression: ir
     ; r0 (@outer) : Ref<Array<Array<Int, 3>, 3>>
     ; r1 (v2) : Array<Array<Int, 3>, 3>
     ; r2 (v3) : List<Array<Int, 3>>
-    ; r3 (iter(...)) : Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>
-    ; r4 (v6) : Ref<Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>>
-    ; r5 (v7) : Ref<Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>>
-    ; r6 (rows) : Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>
-    ; r7 (next(...)) : Option<(Array<Int, 3>, Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>)>
+    ; r3 (iter(...)) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
+    ; r4 (v6) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
+    ; r5 (v7) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
+    ; r6 (rows) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
+    ; r7 (next(...)) : Option<(Array<Int, 3>, Iterator<Array<Int, 3>, Pure, #IdentityId(0)>)>
     ; r8 (v10) : Bool
-    ; r9 (v11) : (Array<Int, 3>, Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>)
+    ; r9 (v11) : (Array<Int, 3>, Iterator<Array<Int, 3>, Pure, #IdentityId(0)>)
     ; r10 (v13) : Array<Int, 3>
     ; r11 (v15) : Bool
     ; r12 (v12) : Bool
     ; r13 (v14) : Bool
-    ; r14 (v16) : Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>
+    ; r14 (v16) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
     ; r15 (v18) : Bool
     ; r16 (v17) : Bool
     ; r17 (v20) : Bool
     ; r18 (v19) : Bool
-    ; r19 (v21) : (Array<Int, 3>, Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>)
+    ; r19 (v21) : (Array<Int, 3>, Iterator<Array<Int, 3>, Pure, #IdentityId(0)>)
     ; r20 (row) : Array<Int, 3>
     ; r21 (v24) : Ref<Array<Int, 3>>
-    ; r22 (r1) : Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>
-    ; r23 (v27) : Ref<Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>>
+    ; r22 (r1) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
+    ; r23 (v27) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
     ; r24 (v28) : Ref<Array<Int, 3>>
     ; r25 (row) : Array<Int, 3>
     ; r26 (v30) : List<Int>
-    ; r27 (iter(...)) : Iterator<Int, Opaque, #IdentityId(1)>
-    ; r28 (v33) : Ref<Iterator<Int, Opaque, #IdentityId(1)>>
-    ; r29 (v34) : Ref<Iterator<Int, Opaque, #IdentityId(1)>>
-    ; r30 (xs) : Iterator<Int, Opaque, #IdentityId(1)>
-    ; r31 (next(...)) : Option<(Int, Iterator<Int, Opaque, #IdentityId(1)>)>
+    ; r27 (iter(...)) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r28 (v33) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
+    ; r29 (v34) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
+    ; r30 (xs) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r31 (next(...)) : Option<(Int, Iterator<Int, Pure, #IdentityId(1)>)>
     ; r32 (v37) : Bool
-    ; r33 (v38) : (Int, Iterator<Int, Opaque, #IdentityId(1)>)
+    ; r33 (v38) : (Int, Iterator<Int, Pure, #IdentityId(1)>)
     ; r34 (v40) : Int
     ; r35 (v42) : Bool
     ; r36 (v39) : Bool
     ; r37 (v41) : Bool
-    ; r38 (v43) : Iterator<Int, Opaque, #IdentityId(1)>
+    ; r38 (v43) : Iterator<Int, Pure, #IdentityId(1)>
     ; r39 (v45) : Bool
     ; r40 (v44) : Bool
     ; r41 (v47) : Bool
     ; r42 (v46) : Bool
-    ; r43 (v48) : (Int, Iterator<Int, Opaque, #IdentityId(1)>)
+    ; r43 (v48) : (Int, Iterator<Int, Pure, #IdentityId(1)>)
     ; r44 (x) : Int
     ; r45 (v51) : Ref<Int>
-    ; r46 (r2) : Iterator<Int, Opaque, #IdentityId(1)>
-    ; r47 (v54) : Ref<Iterator<Int, Opaque, #IdentityId(1)>>
+    ; r46 (r2) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r47 (v54) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
     ; r48 (@total) : Ref<Int>
     ; r49 (v56) : Int
     ; r50 (v57) : Ref<Int>
     ; r51 (x) : Int
     ; r52 (v59) : Int
     ; r53 (@total) : Ref<Int>
-    ; r54 (v61) : Ref<Iterator<Int, Opaque, #IdentityId(1)>>
-    ; r55 (r2) : Iterator<Int, Opaque, #IdentityId(1)>
-    ; r56 (v63) : Ref<Iterator<Int, Opaque, #IdentityId(1)>>
-    ; r57 (v64) : Ref<Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>>
-    ; r58 (r1) : Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>
-    ; r59 (v66) : Ref<Iterator<Array<Int, 3>, Opaque, #IdentityId(0)>>
+    ; r54 (v61) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
+    ; r55 (r2) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r56 (v63) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
+    ; r57 (v64) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
+    ; r58 (r1) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
+    ; r59 (v66) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
     ; r60 (@total) : Ref<Int>
     ; r61 (v68) : Int

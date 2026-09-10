@@ -44,6 +44,7 @@ fn ser_to_qref(r: &SerQualifiedRef, interner: &Interner) -> QualifiedRef {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SerTy {
     Int,
+    Order,
     Float,
     String,
     Bool,
@@ -85,6 +86,7 @@ impl Ty {
     pub fn to_ser(&self, interner: &Interner) -> SerTy {
         match self {
             Ty::Int => SerTy::Int,
+            Ty::Order => SerTy::Order,
             Ty::Float => SerTy::Float,
             Ty::String => SerTy::String,
             Ty::Bool => SerTy::Bool,
@@ -155,6 +157,7 @@ impl SerTy {
     pub fn to_ty(&self, interner: &Interner) -> Ty {
         match self {
             SerTy::Int => Ty::Int,
+            SerTy::Order => Ty::Order,
             SerTy::Float => Ty::Float,
             SerTy::String => Ty::String,
             SerTy::Bool => Ty::Bool,

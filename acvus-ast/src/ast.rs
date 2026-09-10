@@ -60,7 +60,6 @@ pub enum Stmt {
     },
 
     // -- Script mode statements --------------------------------------
-
     /// `let x = expr;` - new binding (Script mode).
     LetBind {
         id: AstId,
@@ -276,7 +275,6 @@ pub enum Expr {
     },
 
     // -- Script mode expressions -------------------------------------
-
     /// `if cond { body; tail } else { ... }` - conditional expression (Script mode).
     If {
         id: AstId,

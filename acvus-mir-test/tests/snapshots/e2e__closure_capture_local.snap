@@ -28,10 +28,10 @@ expression: ir
     ; r3 (@items) : Ref<Array<Int, 3>>
     ; r4 (v8) : Array<Int, 3>
     ; r5 (v9) : List<Int>
-    ; r6 (iter(...)) : Iterator<Int, Opaque, #IdentityId(0)>
-    ; r7 (v13) : Fn(Int) -> Bool with Opaque
+    ; r6 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r7 (v13) : Fn(Int) -> Bool
     ; r8 (v2) : Int
-    ; r9 (filter(...)) : Iterator<Int, Opaque, #IdentityId(0)>
+    ; r9 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r10 (collect(...)) : List<Int>
     ; r11 (v19) : String
     ; r12 (len(...)) : Int

@@ -36,7 +36,7 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
     let mut map = FxHashMap::default();
 
     // Entry params and captures are always live.
-    for &(_, v) in cfg.params.iter().chain(cfg.captures.iter()) {
+    for v in cfg.entry_defs() {
         map.insert(v, DefLoc::EntryParam);
     }
 
@@ -88,7 +88,7 @@ fn is_root(kind: &InstKind) -> bool {
 /// Collect all uses from a terminator.
 fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
     match term {
-        Terminator::Return(val) => vec![*val],
+        Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Jump { args, .. } => args.clone(),
         Terminator::JumpIf {
             cond,

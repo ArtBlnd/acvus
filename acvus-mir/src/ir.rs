@@ -51,6 +51,13 @@ pub enum Callee {
     Indirect(ValueId),
 }
 
+/// The `Order` a call waits for and the `Order` it yields (RFC-0007).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrderEdge {
+    pub before: ValueId,
+    pub after: ValueId,
+}
+
 #[derive(Debug, Clone)]
 pub enum InstKind {
     // Constants
@@ -118,26 +125,37 @@ pub enum InstKind {
     },
     /// Unified function call. Callee can be a direct graph function or an indirect value.
     /// Semantically equivalent to Spawn + Eval (synchronous call = spawn then immediately eval).
+    /// A call whose effect is not Pure carries an `OrderEdge`; a Pure call carries none.
     FunctionCall {
         dst: ValueId,
         callee: Callee,
         callee_ty: Ty,
         args: Vec<ValueId>,
+        order: Option<OrderEdge>,
     },
-    /// Spawn a deferred computation. Creates a Handle<T> without executing.
-    /// Pure instruction - no side effects. The actual execution happens at Eval.
+    /// Issue a call and receive a Handle<T> for its result. The work starts
+    /// here; `order` is the `Order` it waits for when the call is effectful.
     /// `dst` receives a Handle whose type carries the callee's return type.
     Spawn {
         dst: ValueId,
         callee: Callee,
         callee_ty: Ty,
         args: Vec<ValueId>,
+        order: Option<ValueId>,
     },
     /// Evaluate (force) a Handle, consuming it.
-    /// `src` must be a Handle<T>. `dst` receives T.
+    /// `src` must be a Handle<T>. `dst` receives T; `order` receives the
+    /// `Order` that follows the call when the call is effectful.
     Eval {
         dst: ValueId,
         src: ValueId,
+        order: Option<ValueId>,
+    },
+    /// Join orders: `dst` follows every order in `orders`. Associative and
+    /// commutative; a value instruction, not control flow.
+    Merge {
+        dst: ValueId,
+        orders: Vec<ValueId>,
     },
 
     // Composite constructors
@@ -230,7 +248,12 @@ pub enum InstKind {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
-    Return(ValueId),
+    /// Leave the body with `value`; `order` is the `Order` the body yields
+    /// last when its effect is not Pure.
+    Return {
+        value: ValueId,
+        order: Option<ValueId>,
+    },
     /// Undefined value - valid to move/copy, UB to read as a concrete value.
     /// Used as initial value for SSA variables that are defined inside loops
     /// (iteration bindings, write-only contexts).
@@ -359,6 +382,8 @@ pub struct MirBody {
     pub params: Vec<(Astr, ValueId)>,
     /// Captured variables: (name, register). Register holds the captured value.
     pub captures: Vec<(Astr, ValueId)>,
+    /// The `Order` the body takes first when its effect is not Pure.
+    pub order_param: Option<ValueId>,
     pub debug: DebugInfo,
     pub val_factory: LocalFactory<ValueId>,
     pub label_count: u32,
@@ -377,6 +402,7 @@ impl MirBody {
             val_types: FxHashMap::default(),
             params: Vec::new(),
             captures: Vec::new(),
+            order_param: None,
             debug: DebugInfo::new(),
             val_factory: LocalFactory::new(),
             label_count: 0,

@@ -22,11 +22,11 @@ expression: ir
     ; r0 (@users) : Ref<Array<{name: String}, 3>>
     ; r1 (v3) : Array<{name: String}, 3>
     ; r2 (v4) : List<{name: String}>
-    ; r3 (iter(...)) : Iterator<{name: String}, Opaque, #IdentityId(0)>
-    ; r4 (v6) : Fn({name: String}) -> String with Opaque
-    ; r5 (map(...)) : Iterator<String, Opaque, #IdentityId(0)>
+    ; r3 (iter(...)) : Iterator<{name: String}, Pure, #IdentityId(0)>
+    ; r4 (v6) : Fn({name: String}) -> String
+    ; r5 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r6 (collect(...)) : List<String>
-    ; r7 (v9) : Iterator<String, Opaque, #IdentityId(2)>
+    ; r7 (v9) : Iterator<String, Pure, #IdentityId(2)>
     ; r8 (join(...)) : String
     ; r9 (v12) : String
     ; r10 (v10) : String

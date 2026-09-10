@@ -35,6 +35,13 @@ impl ValidationError {
             ValidationErrorKind::MissingType { value_id } => {
                 format!("Val({value_id}) has no type entry")
             }
+            ValidationErrorKind::OrderEdge { inst_name, pure } => {
+                if *pure {
+                    format!("{inst_name}: a Pure call carries an Order")
+                } else {
+                    format!("{inst_name}: an effectful call carries no Order")
+                }
+            }
             ValidationErrorKind::ArityMismatch {
                 inst_name,
                 expected,

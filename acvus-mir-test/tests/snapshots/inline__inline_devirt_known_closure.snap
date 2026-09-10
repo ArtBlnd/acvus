@@ -11,10 +11,10 @@ expression: ir
      6 |   r4 = call r3(5 (r5))
      7 |   return r4
 
-    ; r0 (v1) : Fn(Int) -> Int with Opaque
-    ; r1 (v3) : Ref<Fn(Int) -> Int with Opaque>
-    ; r2 (v6) : Ref<Fn(Int) -> Int with Opaque>
-    ; r3 (f) : Fn(Int) -> Int with Opaque
+    ; r0 (v1) : Fn(Int) -> Int
+    ; r1 (v3) : Ref<Fn(Int) -> Int>
+    ; r2 (v6) : Ref<Fn(Int) -> Int>
+    ; r3 (f) : Fn(Int) -> Int
     ; r4 (f(...)) : Int
     ; r5 (v4) : Int
 

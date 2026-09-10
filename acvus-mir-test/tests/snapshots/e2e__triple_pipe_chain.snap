@@ -28,13 +28,13 @@ expression: ir
     ; r1 (@items) : Ref<Array<Int, 3>>
     ; r2 (v3) : Array<Int, 3>
     ; r3 (v4) : List<Int>
-    ; r4 (iter(...)) : Iterator<Int, Opaque, #IdentityId(0)>
-    ; r5 (v6) : Fn(Int) -> Bool with Opaque
-    ; r6 (filter(...)) : Iterator<Int, Opaque, #IdentityId(0)>
-    ; r7 (v8) : Fn(Int) -> Int with Opaque
-    ; r8 (map(...)) : Iterator<Int, Opaque, #IdentityId(0)>
-    ; r9 (v10) : Fn(Int) -> Int with Opaque
-    ; r10 (map(...)) : Iterator<Int, Opaque, #IdentityId(0)>
+    ; r4 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r5 (v6) : Fn(Int) -> Bool
+    ; r6 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r7 (v8) : Fn(Int) -> Int
+    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r9 (v10) : Fn(Int) -> Int
+    ; r10 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r11 (collect(...)) : List<Int>
     ; r12 (v16) : String
     ; r13 (len(...)) : Int

@@ -63,7 +63,7 @@ fn analyze_block(
     let mut reads = BTreeSet::new();
     let mut kills = BTreeSet::new();
 
-    let has_return = matches!(block.terminator, Terminator::Return(_));
+    let has_return = matches!(block.terminator, Terminator::Return { .. });
 
     // If block has Return, ALL written contexts are "read" (externally observable).
     if has_return {
@@ -207,7 +207,7 @@ pub fn run(cfg: &mut CfgBody) {
         let mut live = live_out[bi].clone();
 
         // If this block has Return, all written contexts are live at the terminator.
-        if matches!(block.terminator, Terminator::Return(_)) {
+        if matches!(block.terminator, Terminator::Return { .. }) {
             live = written_contexts.clone();
         }
 
@@ -338,6 +338,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         }
     }
 
@@ -391,7 +392,10 @@ mod tests {
                     dst: v(2),
                     value: v(3),
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
             ],
             val_types,
         );
@@ -440,7 +444,10 @@ mod tests {
                     dst: v(3),
                     src: v(2),
                 },
-                InstKind::Return(v(3)),
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
             ],
             val_types,
         );
@@ -485,6 +492,7 @@ mod tests {
                     callee: crate::ir::Callee::Direct(f),
                     callee_ty: Ty::error(),
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Ref {
                     dst: v(3),
@@ -495,7 +503,10 @@ mod tests {
                     dst: v(3),
                     value: v(2),
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
             ],
             val_types,
         );
@@ -536,7 +547,10 @@ mod tests {
                     dst: v(0),
                     value: v(1),
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
             ],
             val_types,
         );
@@ -565,7 +579,10 @@ mod tests {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(42),
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             val_types,
         );

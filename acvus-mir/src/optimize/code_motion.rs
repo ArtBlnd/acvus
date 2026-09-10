@@ -1,15 +1,18 @@
 //! Cross-block code motion: hoist pure instructions above branch points.
 //!
-//! After SpawnSplit, IO calls are Spawn (async start) + Eval (blocking wait).
-//! This pass hoists Spawn and other pure instructions out of dominated blocks
-//! into their dominator ancestors, maximizing the distance between Spawn and Eval.
+//! After SpawnSplit, IO calls are Spawn (the call is issued) + Eval (the
+//! result is awaited). This pass hoists pure instructions out of dominated
+//! blocks into their dominator ancestors and sinks Evals toward their uses.
+//! A Spawn is never hoisted across a branch: the work starts at the Spawn,
+//! and issuing it on a path that would not have reached it speculates an
+//! effect (RFC-0007).
 //!
 //! # Algorithm
 //!
 //! Each iteration:
-//! 1. Build dominator tree + token liveness.
+//! 1. Build the dominator tree.
 //! 2. For each hoistable instruction, walk UP the dominator chain to find the
-//!    **highest ancestor** where all operands are available and no token conflict.
+//!    **highest ancestor** where all operands are available.
 //!    This eliminates the need for multi-iteration fixpoint on deep merge chains.
 //! 3. `def_block` is updated after each hoist decision, so later instructions
 //!    in the same block see their dependencies' new locations - operand chains
@@ -23,9 +26,9 @@
 //! default to "not hoistable" (soundness by construction).
 //!
 //! Pure: arithmetic, value construction, field access, test predicates,
-//! Spawn, LoadFunction, pure FunctionCall (no IO/tokens/context effects).
+//! LoadFunction.
 //!
-//! NOT hoisted: Eval, context ops, variable ops, indirect calls.
+//! NOT hoisted: Spawn, Eval, calls, context ops, variable ops.
 
 use rustc_hash::FxHashMap;
 
@@ -64,7 +67,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     // -- Collect hoists ---------------------------------------------
     //
     // For each instruction, find the highest dominator ancestor where
-    // all operands are available and no token conflicts exist.
+    // all operands are available.
     // def_block is updated after each decision so that operand chains
     // within a block are resolved in one pass.
 
@@ -140,7 +143,7 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
         }
     }
 
-    for &(_, v) in cfg.params.iter().chain(cfg.captures.iter()) {
+    for v in cfg.entry_defs() {
         def_block.entry(v).or_insert(BlockIdx(0));
     }
 
@@ -150,8 +153,7 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
 // -- Target finding -------------------------------------------------
 
 /// Walk up the dominator chain from `block_idx` to find the highest ancestor
-/// where all operands are available (before the ancestor's terminator) and
-/// no token conflicts exist.
+/// where all operands are available (before the ancestor's terminator).
 fn find_highest_target(
     block_idx: BlockIdx,
     uses: &[ValueId],
@@ -253,7 +255,7 @@ fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
 fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
     use crate::cfg::Terminator;
     match term {
-        Terminator::Return(val) => vec![*val],
+        Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Jump { args, .. } => args.clone(),
         Terminator::JumpIf {
             cond,
@@ -491,6 +493,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         })
     }
 
@@ -561,8 +564,12 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![v(0)],
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             10,
         );
@@ -630,8 +637,12 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![v(3)],
+                    order: None,
                 },
-                InstKind::Return(v(4)),
+                InstKind::Return {
+                    value: v(4),
+                    order: None,
+                },
             ],
             10,
         );
@@ -670,6 +681,7 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Const {
                     dst: v(5),
@@ -708,8 +720,12 @@ mod tests {
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             10,
         );
@@ -737,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn token_conflict_prevents_hoist() {
+    fn spawn_is_not_hoisted_across_a_branch() {
         let i = Interner::new();
         let (qref1, ty1) = io_fn_type(&i, "io1");
         let (qref2, ty2) = io_fn_type(&i, "io2");
@@ -749,6 +765,7 @@ mod tests {
                     callee: Callee::Direct(qref1),
                     callee_ty: ty1,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Const {
                     dst: v(5),
@@ -789,8 +806,12 @@ mod tests {
                     callee: Callee::Direct(qref2),
                     callee_ty: ty2,
                     args: vec![],
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             10,
         );
@@ -816,7 +837,7 @@ mod tests {
             .unwrap();
         assert!(
             spawn2_idx > merge_idx,
-            "token-conflicting spawn should stay in merge block"
+            "a Spawn stays in its block: hoisting it would issue the call on a path that skips it"
         );
     }
 
@@ -895,7 +916,10 @@ mod tests {
                     op: acvus_ast::UnaryOp::Not,
                     operand: v(0),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             10,
         );
@@ -961,7 +985,10 @@ mod tests {
                     left: v(0),
                     right: v(0),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             10,
         );
@@ -1006,10 +1033,12 @@ mod tests {
                     callee: Callee::Direct(fetch_id),
                     callee_ty: fetch_ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
+                    order: None,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1023,7 +1052,10 @@ mod tests {
                     left: v(1),
                     right: v(2),
                 },
-                InstKind::Return(v(4)),
+                InstKind::Return {
+                    value: v(4),
+                    order: None,
+                },
             ],
             10,
         );
@@ -1082,6 +1114,7 @@ mod tests {
                     callee: Callee::Direct(f),
                     callee_ty: Ty::error(),
                     args: vec![],
+                    order: None,
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1089,7 +1122,10 @@ mod tests {
                     left: v(1),
                     right: v(2),
                 },
-                InstKind::Return(v(6)),
+                InstKind::Return {
+                    value: v(6),
+                    order: None,
+                },
             ],
             10,
         );
@@ -1123,10 +1159,12 @@ mod tests {
                     callee: Callee::Direct(qref),
                     callee_ty: ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
+                    order: None,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1149,7 +1187,10 @@ mod tests {
                     left: v(1),
                     right: v(4),
                 },
-                InstKind::Return(v(6)),
+                InstKind::Return {
+                    value: v(6),
+                    order: None,
+                },
             ],
             10,
         );
@@ -1216,7 +1257,10 @@ mod tests {
                     left: v(1),
                     right: v(2),
                 },
-                InstKind::Return(v(6)),
+                InstKind::Return {
+                    value: v(6),
+                    order: None,
+                },
             ],
             10,
         );
@@ -1293,7 +1337,10 @@ mod tests {
                     left: v(4),
                     right: v(2),
                 },
-                InstKind::Return(v(6)),
+                InstKind::Return {
+                    value: v(6),
+                    order: None,
+                },
             ],
             10,
         );

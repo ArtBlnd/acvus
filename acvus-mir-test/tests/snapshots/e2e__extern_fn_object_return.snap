@@ -7,25 +7,35 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     3 |   r1 = ref @get_user
-     4 |   r2 = load r1
-     5 |   r3 = call r2(1 (r4))
-     7 |   r5 = T0 + T0
-     8 |   r6 = r3.name
-     9 |   r7 = r5 + r6
-    10 |   return r7
+     1 |   r1 = undef
+     4 |   r2 = ref @get_user
+     5 |   r3 = load r2
+     6 |   r4 = call r3(1 (r5)) [r6 -> r7]
+     8 |   r8 = T0 + T0
+     9 |   r9 = r4.name
+    10 |   r10 = r8 + r9
+    11 |   return r10 [r7]
 
-    ; r0 (v15) : {age: Int, name: String}
-    ; r1 (@get_user) : Ref<Fn(Int) -> {age: Int, name: String} with Opaque>
-    ; r2 (v5) : Fn(Int) -> {age: Int, name: String} with Opaque
-    ; r3 (<closure>(...)) : {age: Int, name: String}
-    ; r4 (v2) : Int
-    ; r5 (v9) : String
-    ; r6 (v11) : String
-    ; r7 (v12) : String
-    ; r8 (v7) : Ref<{age: Int, name: String}>
-    ; r9 (v14) : {age: Int, name: String}
-    ; r10 (u.name) : Ref<String>
-    ; r11 (v13) : Ref<{age: Int, name: String}>
-    ; r12 (v1) : String
-    ; r13 (v8) : String
+    ; r0 (v24) : Order
+    ; r1 (v25) : {age: Int, name: String}
+    ; r2 (@get_user) : Ref<Fn(Int) -> {age: Int, name: String} with Opaque>
+    ; r3 (v8) : Fn(Int) -> {age: Int, name: String} with Opaque
+    ; r4 (<closure>(...)) : {age: Int, name: String}
+    ; r5 (v5) : Int
+    ; r6 (v1) : Order
+    ; r7 (v11) : Order
+    ; r8 (v16) : String
+    ; r9 (v18) : String
+    ; r10 (v19) : String
+    ; r11 (v22) : Ref<{age: Int, name: String}>
+    ; r12 (v3) : Ref<Order>
+    ; r13 (v14) : Ref<{age: Int, name: String}>
+    ; r14 (v9) : Ref<Order>
+    ; r15 (u.name) : Ref<String>
+    ; r16 (v4) : String
+    ; r17 (v23) : {age: Int, name: String}
+    ; r18 (v15) : String
+    ; r19 (v10) : Order
+    ; r20 (v21) : Order
+    ; r21 (v20) : Ref<Order>
+    ; r22 (v12) : Ref<Order>

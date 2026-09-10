@@ -64,7 +64,12 @@ impl DataflowAnalysis for LivenessAnalysis {
 
     fn terminator_uses(&self, term: &Terminator, state: &mut DataflowState<ValueId, Liveness>) {
         match term {
-            Terminator::Return(val) => state.set(*val, Liveness::Live),
+            Terminator::Return { value, order } => {
+                state.set(*value, Liveness::Live);
+                if let Some(o) = order {
+                    state.set(*o, Liveness::Live);
+                }
+            }
             Terminator::JumpIf { cond, .. } => state.set(*cond, Liveness::Live),
             _ => {}
         }
@@ -177,6 +182,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         })
     }
 
@@ -199,7 +205,10 @@ mod tests {
                 left: v(0),
                 right: v(1),
             },
-            InstKind::Return(v(2)),
+            InstKind::Return {
+                value: v(2),
+                order: None,
+            },
         ]);
 
         let result = analyze(&cfg);
@@ -219,7 +228,10 @@ mod tests {
                 dst: v(1),
                 value: acvus_ast::Literal::Int(2),
             },
-            InstKind::Return(v(1)),
+            InstKind::Return {
+                value: v(1),
+                order: None,
+            },
         ]);
 
         let result = analyze(&cfg);
@@ -251,13 +263,19 @@ mod tests {
                 params: vec![v(2)],
                 merge_of: None,
             },
-            InstKind::Return(v(2)),
+            InstKind::Return {
+                value: v(2),
+                order: None,
+            },
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![v(3)],
                 merge_of: None,
             },
-            InstKind::Return(v(3)),
+            InstKind::Return {
+                value: v(3),
+                order: None,
+            },
         ]);
 
         let result = analyze(&cfg);
@@ -287,7 +305,10 @@ mod tests {
                 left: v(0),
                 right: v(0),
             },
-            InstKind::Return(v(1)),
+            InstKind::Return {
+                value: v(1),
+                order: None,
+            },
         ]);
 
         let result = analyze(&cfg);
@@ -337,7 +358,10 @@ mod tests {
                 params: vec![v(4)],
                 merge_of: None,
             },
-            InstKind::Return(v(4)),
+            InstKind::Return {
+                value: v(4),
+                order: None,
+            },
         ]);
 
         let result = analyze(&cfg);

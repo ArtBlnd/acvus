@@ -24,9 +24,9 @@ expression: ir
     ; r1 (@flags) : Ref<Array<Bool, 3>>
     ; r2 (v3) : Array<Bool, 3>
     ; r3 (v4) : List<Bool>
-    ; r4 (iter(...)) : Iterator<Bool, Opaque, #IdentityId(0)>
-    ; r5 (v6) : Fn(Bool) -> Bool with Opaque
-    ; r6 (map(...)) : Iterator<Bool, Opaque, #IdentityId(0)>
+    ; r4 (iter(...)) : Iterator<Bool, Pure, #IdentityId(0)>
+    ; r5 (v6) : Fn(Bool) -> Bool
+    ; r6 (map(...)) : Iterator<Bool, Pure, #IdentityId(0)>
     ; r7 (collect(...)) : List<Bool>
     ; r8 (v12) : String
     ; r9 (len(...)) : Int

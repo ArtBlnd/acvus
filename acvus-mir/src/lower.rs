@@ -8,9 +8,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::QualifiedRef;
 use crate::ir::{
-    Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValOrigin, ValueId,
+    Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, RefTarget, ValOrigin,
+    ValueId,
 };
-use crate::ty::Ty;
+use crate::ty::{Effect, Ty};
 use crate::typeck::TypeResolution;
 
 pub struct Lowerer<'a> {
@@ -34,6 +35,10 @@ pub struct Lowerer<'a> {
     /// Context projection alias stack: @x -> (@a, [x]) means @x is an alias for @a.x.
     /// Pushed/popped around match-bind bodies for destructure projection.
     context_aliases: Vec<FxHashMap<QualifiedRef, (QualifiedRef, Vec<Astr>)>>,
+    /// The storage slot holding the current `Order` of the body being lowered
+    /// (RFC-0007). `None` for a body whose effect is Pure. The SSA pass
+    /// promotes the slot, so branches and loops join orders through phis.
+    order_slot: Option<ValueId>,
 }
 
 /// Adjust indentation of a text string according to an `IndentModifier`.
@@ -127,24 +132,96 @@ impl<'a> Lowerer<'a> {
             closures: FxHashMap::default(),
             closure_label_count: 0,
             context_aliases: vec![],
+            order_slot: None,
         }
     }
 
     pub fn lower_template(mut self, template: &Template) -> MirModule {
+        let effect = self.resolution.effect;
+        self.enter_body_order(effect, template.span);
         let result = self.lower_nodes(&template.body, template.span);
-        self.emit_inst(template.span, InstKind::Return(result));
+        self.emit_return(template.span, result);
         self.build_module()
     }
 
     pub fn lower_script(mut self, script: &Script) -> MirModule {
+        let effect = self.resolution.effect;
+        self.enter_body_order(effect, script.span);
         for stmt in &script.stmts {
             self.lower_stmt(stmt);
         }
         if let Some(tail) = &script.tail {
             let val = self.lower_expr(tail);
-            self.emit_inst(script.span, InstKind::Return(val));
+            self.emit_return(script.span, val);
         }
         self.build_module()
+    }
+
+    /// Give the body being lowered its entry `Order` when its effect is not
+    /// Pure: an order parameter, stored into a fresh slot that every
+    /// effectful call reads and advances.
+    fn enter_body_order(&mut self, effect: Effect, span: Span) {
+        if effect == Effect::Pure {
+            self.order_slot = None;
+            return;
+        }
+        let order_param = self.alloc_val();
+        self.set_val_type(order_param, Ty::Order);
+        self.body.order_param = Some(order_param);
+        let slot = self.alloc_val();
+        self.set_origin(slot, ValOrigin::Named(self.interner.intern("$order")));
+        self.emit_ref_store(span, RefTarget::Var(slot), vec![], order_param);
+        self.order_slot = Some(slot);
+    }
+
+    /// Leave the body with `value`, yielding the current `Order` last.
+    fn emit_return(&mut self, span: Span, value: ValueId) {
+        let order = self.current_order(span);
+        self.emit_inst(span, InstKind::Return { value, order });
+    }
+
+    /// Read the current `Order` of the body, if it has one.
+    fn current_order(&mut self, span: Span) -> Option<ValueId> {
+        self.order_slot
+            .map(|slot| self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order))
+    }
+
+    /// Emit a call. A callee whose effect is not Pure takes the current
+    /// `Order` and the call advances it.
+    fn emit_call(
+        &mut self,
+        span: Span,
+        dst: ValueId,
+        callee: Callee,
+        callee_ty: Ty,
+        args: Vec<ValueId>,
+    ) {
+        let effectful = callee_ty.effect().is_some_and(|e| e != Effect::Pure);
+        let order = if effectful {
+            let slot = self.order_slot.unwrap_or_else(|| {
+                panic!("effectful call lowered inside a body whose effect is Pure")
+            });
+            let before = self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order);
+            let after = self.alloc_val();
+            self.set_val_type(after, Ty::Order);
+            Some(OrderEdge { before, after })
+        } else {
+            None
+        };
+        self.emit_inst(
+            span,
+            InstKind::FunctionCall {
+                dst,
+                callee,
+                callee_ty,
+                args,
+                order,
+            },
+        );
+        if let Some(edge) = order {
+            let slot = self.order_slot.expect("an order edge needs the slot");
+            self.emit_ref_store(span, RefTarget::Var(slot), vec![], edge.after);
+        }
     }
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
@@ -1178,14 +1255,12 @@ impl<'a> Lowerer<'a> {
                     };
                     let cast_dst = self.alloc_val();
                     self.set_val_type(cast_dst, ret_ty);
-                    self.emit_inst(
+                    self.emit_call(
                         span,
-                        InstKind::FunctionCall {
-                            dst: cast_dst,
-                            callee: Callee::Direct(*fn_ref),
-                            callee_ty: callee_ty.clone(),
-                            args: vec![val],
-                        },
+                        cast_dst,
+                        Callee::Direct(*fn_ref),
+                        callee_ty.clone(),
+                        vec![val],
                     );
                     cast_dst
                 }
@@ -1512,15 +1587,7 @@ impl<'a> Lowerer<'a> {
                             .expect("indirect callee must have val_type")
                             .clone();
                         let dst = self.alloc_typed(expr.id());
-                        self.emit_inst(
-                            *span,
-                            InstKind::FunctionCall {
-                                dst,
-                                callee: Callee::Indirect(r),
-                                callee_ty: fn_ty,
-                                args: vec![l],
-                            },
-                        );
+                        self.emit_call(*span, dst, Callee::Indirect(r), fn_ty, vec![l]);
                         dst
                     }
                 }
@@ -1597,6 +1664,9 @@ impl<'a> Lowerer<'a> {
                 let saved_body = std::mem::replace(&mut self.body, sub_body);
                 let saved_scopes = std::mem::replace(&mut self.scopes, sub_scopes);
                 let saved_var_slots = std::mem::replace(&mut self.var_slots, FxHashMap::default());
+                let saved_order_slot = self.order_slot;
+                let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::Opaque);
+                self.enter_body_order(lambda_effect, *span);
 
                 // Emit Ref+Store for captures so Ref+Load in body can find them.
                 for ((name, _, _), capture_reg) in free_vars.iter().zip(closure_capture_regs.iter())
@@ -1622,11 +1692,12 @@ impl<'a> Lowerer<'a> {
                     .get(&result_reg)
                     .cloned()
                     .unwrap_or(Ty::error());
-                self.emit_inst(*span, InstKind::Return(result_reg));
+                self.emit_return(*span, result_reg);
 
                 let mut closure_body_mir = std::mem::replace(&mut self.body, saved_body);
                 self.scopes = saved_scopes;
                 self.var_slots = saved_var_slots;
+                self.order_slot = saved_order_slot;
 
                 closure_body_mir.captures = free_vars
                     .iter()
@@ -1864,15 +1935,7 @@ impl<'a> Lowerer<'a> {
                     // 1. Direct call - typeck resolved this callee to a named function.
                     if let Some(&qref) = self.resolution.direct_calls.get(&func.id()) {
                         let callee_ty = self.type_of_id(func.id());
-                        self.emit_inst(
-                            call_span,
-                            InstKind::FunctionCall {
-                                dst,
-                                callee: Callee::Direct(qref),
-                                callee_ty,
-                                args: arg_regs,
-                            },
-                        );
+                        self.emit_call(call_span, dst, Callee::Direct(qref), callee_ty, arg_regs);
                         return dst;
                     }
 
@@ -1887,14 +1950,12 @@ impl<'a> Lowerer<'a> {
                             closure_ty.clone(),
                         );
                         self.set_origin(closure_reg, ValOrigin::Named(name.name));
-                        self.emit_inst(
+                        self.emit_call(
                             call_span,
-                            InstKind::FunctionCall {
-                                dst,
-                                callee: Callee::Indirect(closure_reg),
-                                callee_ty: closure_ty,
-                                args: arg_regs,
-                            },
+                            dst,
+                            Callee::Indirect(closure_reg),
+                            closure_ty,
+                            arg_regs,
                         );
                         return dst;
                     }
@@ -1916,15 +1977,7 @@ impl<'a> Lowerer<'a> {
             .get(&func_reg)
             .expect("indirect callee must have val_type")
             .clone();
-        self.emit_inst(
-            call_span,
-            InstKind::FunctionCall {
-                dst,
-                callee: Callee::Indirect(func_reg),
-                callee_ty: fn_ty,
-                args: arg_regs,
-            },
-        );
+        self.emit_call(call_span, dst, Callee::Indirect(func_reg), fn_ty, arg_regs);
         dst
     }
 
@@ -2601,7 +2654,7 @@ mod tests {
             .main
             .insts
             .iter()
-            .any(|i| matches!(&i.kind, InstKind::Return(_)));
+            .any(|i| matches!(&i.kind, InstKind::Return { .. }));
         assert!(has_text);
         assert!(has_return);
     }

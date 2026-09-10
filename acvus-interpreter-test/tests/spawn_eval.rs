@@ -61,7 +61,10 @@ async fn spawn_eval_basic() {
                 left: vids[0],
                 right: vids[1],
             }),
-            inst(InstKind::Return(vids[2])),
+            inst(InstKind::Return {
+                value: vids[2],
+                order: None,
+            }),
         ];
         MirModule {
             main: MirBody {
@@ -72,6 +75,7 @@ async fn spawn_eval_basic() {
                 debug: DebugInfo::new(),
                 val_factory: f,
                 label_count: 0,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }
@@ -91,12 +95,17 @@ async fn spawn_eval_basic() {
                 callee: Callee::Direct(callee_id),
                 callee_ty: acvus_mir::ty::Ty::error(),
                 args: vec![vids[0]],
+                order: None,
             }),
             inst(InstKind::Eval {
                 dst: vids[2],
                 src: vids[1],
+                order: None,
             }),
-            inst(InstKind::Return(vids[2])),
+            inst(InstKind::Return {
+                value: vids[2],
+                order: None,
+            }),
         ];
         MirModule {
             main: MirBody {
@@ -107,6 +116,7 @@ async fn spawn_eval_basic() {
                 debug: DebugInfo::new(),
                 val_factory: f,
                 label_count: 0,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }
@@ -143,7 +153,10 @@ async fn spawn_eval_multi_args() {
                 left: vids[0],
                 right: vids[1],
             }),
-            inst(InstKind::Return(vids[2])),
+            inst(InstKind::Return {
+                value: vids[2],
+                order: None,
+            }),
         ];
         MirModule {
             main: MirBody {
@@ -157,6 +170,7 @@ async fn spawn_eval_multi_args() {
                 debug: DebugInfo::new(),
                 val_factory: f,
                 label_count: 0,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }
@@ -180,12 +194,17 @@ async fn spawn_eval_multi_args() {
                 callee: Callee::Direct(callee_id),
                 callee_ty: acvus_mir::ty::Ty::error(),
                 args: vec![vids[0], vids[1]],
+                order: None,
             }),
             inst(InstKind::Eval {
                 dst: vids[3],
                 src: vids[2],
+                order: None,
             }),
-            inst(InstKind::Return(vids[3])),
+            inst(InstKind::Return {
+                value: vids[3],
+                order: None,
+            }),
         ];
         MirModule {
             main: MirBody {
@@ -196,6 +215,7 @@ async fn spawn_eval_multi_args() {
                 debug: DebugInfo::new(),
                 val_factory: f,
                 label_count: 0,
+                order_param: None,
             },
             closures: FxHashMap::default(),
         }

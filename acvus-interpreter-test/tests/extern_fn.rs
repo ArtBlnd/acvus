@@ -292,6 +292,24 @@ fn dump_and_positions(label: &str, i: &Interner, cr: &CompileResult) -> (Vec<usi
     (spawns, evals)
 }
 
+/// RFC-0007: with no `anyorder` block, effectful calls keep source order.
+/// Each call is issued after the previous one has completed: the k-th
+/// spawn follows the (k-1)-th eval, and each eval follows its own spawn.
+fn assert_source_order(spawns: &[usize], evals: &[usize]) {
+    assert_eq!(spawns.len(), evals.len(), "one eval per spawn");
+    for (k, (&s, &e)) in spawns.iter().zip(evals).enumerate() {
+        assert!(s < e, "spawn[{k}] at {s} must precede eval[{k}] at {e}");
+        if k > 0 {
+            let prev = evals[k - 1];
+            assert!(
+                prev < s,
+                "eval[{}] at {prev} must precede spawn[{k}] at {s}: calls keep source order",
+                k - 1
+            );
+        }
+    }
+}
+
 // -- 1. Two independent IO calls ------------------------------------
 
 /// fetch_a() + fetch_b() -> spawn both before eval either.
@@ -313,16 +331,12 @@ fn io_two_independent_mir() {
     let (i, cr) = compile_io_script("fetch_a() + fetch_b()");
     let (spawns, evals) = dump_and_positions("two_independent", &i, &cr);
     assert_eq!(spawns.len(), 2, "expected 2 spawns");
-    assert_eq!(evals.len(), 2, "expected 2 evals");
-    assert!(
-        spawns.iter().all(|&s| evals.iter().all(|&e| s < e)),
-        "all spawns must precede all evals"
-    );
+    assert_source_order(&spawns, &evals);
 }
 
-// -- 2. Four-way independent IO -------------------------------------
+// -- 2. Four independent IO calls -----------------------------------
 
-/// Maximum parallelism: 4 independent IO calls.
+/// Four IO calls with no data dependency still run in source order.
 #[tokio::test]
 async fn io_four_way_parallel() {
     let i = Interner::new();
@@ -341,11 +355,7 @@ fn io_four_way_parallel_mir() {
     let (i, cr) = compile_io_script("fetch_a() + fetch_b() + fetch_c() + fetch_d()");
     let (spawns, evals) = dump_and_positions("four_way_parallel", &i, &cr);
     assert_eq!(spawns.len(), 4, "expected 4 spawns");
-    assert_eq!(evals.len(), 4, "expected 4 evals");
-    assert!(
-        spawns.iter().all(|&s| evals.iter().all(|&e| s < e)),
-        "all spawns must precede all evals"
-    );
+    assert_source_order(&spawns, &evals);
 }
 
 // -- 3. Dependent chain + independent IO ----------------------------
@@ -355,8 +365,7 @@ fn io_four_way_parallel_mir() {
 // c = fetch_c()          // IO, independent of a and b
 // b + c
 //
-// Optimal: spawn fetch_a + spawn fetch_c in parallel,
-//          eval fetch_a, spawn fetch_by(a), eval fetch_c, eval fetch_by -> b+c
+// Source order: a, then by(a), then c; the data dependency adds nothing.
 
 #[tokio::test]
 async fn io_chain_with_independent() {
@@ -377,17 +386,8 @@ fn io_chain_with_independent_mir() {
     let (i, cr) = compile_io_script("a = fetch_a(); b = fetch_by(a); c = fetch_c(); b + c");
     let (spawns, evals) = dump_and_positions("chain_with_independent", &i, &cr);
 
-    // 3 IO calls -> 3 spawns, 3 evals.
     assert_eq!(spawns.len(), 3, "expected 3 spawns");
-    assert_eq!(evals.len(), 3, "expected 3 evals");
-
-    // fetch_a and fetch_c should be spawned before any eval.
-    // fetch_by depends on eval(fetch_a), so its spawn comes after first eval.
-    // At minimum: the first 2 spawns should precede the first eval.
-    assert!(
-        spawns[0] < evals[0] && spawns[1] < evals[0],
-        "fetch_a and fetch_c spawns should both precede first eval"
-    );
+    assert_source_order(&spawns, &evals);
 }
 
 // -- 4. Diamond dependency ------------------------------------------
@@ -397,7 +397,7 @@ fn io_chain_with_independent_mir() {
 // c = fetch_by(a)        // IO, depends on a (same dep as b, but independent of b)
 // b + c
 //
-// After eval(a), both fetch_by(a) calls can be spawned in parallel.
+// Both fetch_by(a) calls follow eval(a); the second follows the first.
 
 #[tokio::test]
 async fn io_diamond_dependency() {
@@ -419,16 +419,7 @@ fn io_diamond_dependency_mir() {
     let (spawns, evals) = dump_and_positions("diamond_dependency", &i, &cr);
 
     assert_eq!(spawns.len(), 3, "expected 3 spawns (fetch_a + 2x fetch_by)");
-    assert_eq!(evals.len(), 3, "expected 3 evals");
-
-    // fetch_by(a) spawns should both come after eval(fetch_a) but before eval(fetch_by).
-    // Spawn[0] = fetch_a (before any eval)
-    assert!(spawns[0] < evals[0], "fetch_a spawn before first eval");
-    // The two fetch_by spawns should both precede their evals.
-    assert!(
-        spawns[1] < evals[1] && spawns[2] < evals[1],
-        "both fetch_by spawns should precede second eval"
-    );
+    assert_source_order(&spawns, &evals);
 }
 
 // -- 5. Deep sequential chain ---------------------------------------
@@ -459,16 +450,7 @@ fn io_deep_chain_mir() {
     let (spawns, evals) = dump_and_positions("deep_chain", &i, &cr);
 
     assert_eq!(spawns.len(), 4, "4 IO calls in chain");
-    assert_eq!(evals.len(), 4, "4 evals");
-
-    // Each spawn[i+1] must come after eval[i] (strict dependency chain).
-    for i in 0..3 {
-        assert!(
-            evals[i] < spawns[i + 1],
-            "eval[{i}] must precede spawn[{}] in dependency chain",
-            i + 1
-        );
-    }
+    assert_source_order(&spawns, &evals);
 }
 
 // -- 6. Two independent chains --------------------------------------
@@ -477,7 +459,7 @@ fn io_deep_chain_mir() {
 // c = fetch_c(); d = fetch_by(c);    // chain 2: c -> d (independent of chain 1)
 // b + d
 //
-// Optimal: spawn a + spawn c, eval a, spawn b, eval c, spawn d, eval b, eval d
+// Source order: a, b, c, d. The chains are independent in data, not in order.
 
 #[tokio::test]
 async fn io_two_independent_chains() {
@@ -500,13 +482,7 @@ fn io_two_independent_chains_mir() {
     let (spawns, evals) = dump_and_positions("two_independent_chains", &i, &cr);
 
     assert_eq!(spawns.len(), 4, "4 IO calls");
-    assert_eq!(evals.len(), 4, "4 evals");
-
-    // The heads of both chains (fetch_a, fetch_c) should be spawned before any eval.
-    assert!(
-        spawns[0] < evals[0] && spawns[1] < evals[0],
-        "chain heads should be spawned before first eval"
-    );
+    assert_source_order(&spawns, &evals);
 }
 
 // -- 7. IO in iteration ---------------------------------------------
@@ -553,9 +529,7 @@ async fn io_in_iteration() {
 // extra   = fetch_c()           // "lint"            - independent of everything
 // checked + extra
 //
-// Optimal: spawn imports + spawn types + spawn extra (3-way parallel),
-//          eval imports, spawn refs, eval types + eval extra whenever,
-//          eval refs, compute result.
+// Source order: imports, types, refs, extra. Pure work between them moves freely.
 
 #[tokio::test]
 async fn io_compiler_pipeline() {
@@ -580,16 +554,7 @@ fn io_compiler_pipeline_mir() {
 
     // 4 IO calls: fetch_a, fetch_b, fetch_by, fetch_c
     assert_eq!(spawns.len(), 4, "expected 4 spawns");
-    assert_eq!(evals.len(), 4, "expected 4 evals");
-
-    // fetch_a, fetch_b, fetch_c are independent - all 3 should be spawned before any eval.
-    // fetch_by depends on eval(fetch_a).
-    // At minimum: 3 independent spawns before first eval.
-    let spawns_before_first_eval = spawns.iter().filter(|&&s| s < evals[0]).count();
-    assert!(
-        spawns_before_first_eval >= 3,
-        "at least 3 independent IO spawns should precede first eval, got {spawns_before_first_eval}"
-    );
+    assert_source_order(&spawns, &evals);
 }
 
 // =======================================================================

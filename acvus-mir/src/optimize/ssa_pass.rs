@@ -333,21 +333,38 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
             s(value);
         }
         InstKind::LoadFunction { .. } => {}
-        InstKind::FunctionCall { callee, args, .. } => {
+        InstKind::FunctionCall {
+            callee,
+            args,
+            order,
+            ..
+        } => {
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
             args.iter_mut().for_each(&s);
+            if let Some(edge) = order {
+                s(&mut edge.before);
+            }
         }
-        InstKind::Spawn { callee, args, .. } => {
+        InstKind::Spawn {
+            callee,
+            args,
+            order,
+            ..
+        } => {
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
             args.iter_mut().for_each(&s);
+            if let Some(o) = order {
+                s(o);
+            }
         }
         InstKind::Eval { src, .. } => {
             s(src);
         }
+        InstKind::Merge { orders, .. } => orders.iter_mut().for_each(&s),
         InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
         InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(&s),
@@ -384,7 +401,12 @@ fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
             then_args.iter_mut().for_each(&s);
             else_args.iter_mut().for_each(&s);
         }
-        InstKind::Return(v) => s(v),
+        InstKind::Return { value, order } => {
+            s(value);
+            if let Some(o) = order {
+                s(o);
+            }
+        }
         InstKind::Clone { src, .. } => s(src),
         InstKind::Drop { src } => s(src),
     }
@@ -409,7 +431,12 @@ fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, Valu
             then_args.iter_mut().for_each(&s);
             else_args.iter_mut().for_each(&s);
         }
-        Terminator::Return(v) => s(v),
+        Terminator::Return { value, order } => {
+            s(value);
+            if let Some(o) = order {
+                s(o);
+            }
+        }
         Terminator::Fallthrough => {}
     }
 }
@@ -1225,7 +1252,7 @@ mod tests {
             .blocks
             .iter()
             .find_map(|b| match &b.terminator {
-                Terminator::Return(v) => Some(*v),
+                Terminator::Return { value: v, .. } => Some(*v),
                 _ => None,
             })
             .expect("body returns")
@@ -1297,7 +1324,10 @@ mod tests {
             },
             Inst {
                 span: acvus_ast::Span::ZERO,
-                kind: InstKind::Return(v[3]),
+                kind: InstKind::Return {
+                    value: v[3],
+                    order: None,
+                },
             },
         ];
         let mut val_types = FxHashMap::default();
@@ -1315,6 +1345,7 @@ mod tests {
             debug: crate::ir::DebugInfo::new(),
             val_factory: f,
             label_count: 0,
+            order_param: None,
         };
         cfg::promote(body)
     }

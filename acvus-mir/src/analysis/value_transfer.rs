@@ -134,7 +134,6 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             InstKind::FieldGet { dst, .. }
             | InstKind::FieldSet { dst, .. }
             | InstKind::ObjectGet { dst, .. }
-            | InstKind::FunctionCall { dst, .. }
             | InstKind::LoadFunction { dst, .. }
             | InstKind::MakeArray { dst, .. }
             | InstKind::MakeObject { dst, .. }
@@ -145,10 +144,23 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::TestObjectKey { dst, .. }
             | InstKind::Clone { dst, .. }
             | InstKind::Spawn { dst, .. }
-            | InstKind::Eval { dst, .. }
+            | InstKind::Merge { dst, .. }
             | InstKind::Poison { dst }
             | InstKind::Undef { dst } => {
                 state.set(*dst, AbstractValue::Top);
+            }
+            InstKind::Eval { dst, order, .. } => {
+                state.set(*dst, AbstractValue::Top);
+                if let Some(o) = order {
+                    state.set(*o, AbstractValue::Top);
+                }
+            }
+
+            InstKind::FunctionCall { dst, order, .. } => {
+                state.set(*dst, AbstractValue::Top);
+                if let Some(edge) = order {
+                    state.set(edge.after, AbstractValue::Top);
+                }
             }
 
             InstKind::BinOp { dst, .. } => {
@@ -162,7 +174,7 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             // Instructions that don't produce values
             InstKind::Store { .. }
             | InstKind::Drop { .. }
-            | InstKind::Return(_)
+            | InstKind::Return { .. }
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
             | InstKind::BlockLabel { .. }

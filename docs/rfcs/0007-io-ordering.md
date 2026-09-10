@@ -107,6 +107,10 @@ place where the intent lives, which none of them has.
   the compiler wires it.
 - No linear or region-typed `Order`. One type; the lowering alone decides
   where a value fans out.
+- No hoisting of a call's issue above a branch. The call is issued where
+  the spawn stands; moving it to a dominator would issue it on a path that
+  never reaches it, and `Order` says "after", not "only if". A pass may
+  still reorder within a block and move the wait toward the use.
 
 ## Consequences
 

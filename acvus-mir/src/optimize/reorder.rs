@@ -222,6 +222,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         })
     }
 
@@ -269,20 +270,24 @@ mod tests {
                     callee: Callee::Direct(fa),
                     callee_ty: fa_ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
+                    order: None,
                 },
                 InstKind::Spawn {
                     dst: v(2),
                     callee: Callee::Direct(fb),
                     callee_ty: fb_ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Eval {
                     dst: v(3),
                     src: v(2),
+                    order: None,
                 },
                 InstKind::BinOp {
                     dst: v(4),
@@ -290,7 +295,10 @@ mod tests {
                     left: v(1),
                     right: v(3),
                 },
-                InstKind::Return(v(4)),
+                InstKind::Return {
+                    value: v(4),
+                    order: None,
+                },
             ],
             5,
         );
@@ -348,12 +356,17 @@ mod tests {
                     callee: Callee::Direct(fa),
                     callee_ty: fa_ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             2,
         );
@@ -390,10 +403,12 @@ mod tests {
                     callee: Callee::Direct(fa),
                     callee_ty: fa_ty,
                     args: vec![],
+                    order: None,
                 },
                 InstKind::Eval {
                     dst: v(1),
                     src: v(0),
+                    order: None,
                 },
                 InstKind::BinOp {
                     dst: v(7),
@@ -401,7 +416,10 @@ mod tests {
                     left: v(5),
                     right: v(6),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             8,
         );
@@ -437,7 +455,10 @@ mod tests {
                     left: v(0),
                     right: v(1),
                 },
-                InstKind::Return(v(2)),
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
             ],
             3,
         );
@@ -473,7 +494,10 @@ mod tests {
                     left: v(0),
                     right: v(0),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             2,
         );

@@ -54,7 +54,10 @@ pub enum Terminator {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
-    Return(ValueId),
+    Return {
+        value: ValueId,
+        order: Option<ValueId>,
+    },
     /// Implicit fallthrough to next block.
     Fallthrough,
 }
@@ -71,6 +74,8 @@ pub struct CfgBody {
     pub params: Vec<(Astr, ValueId)>,
     /// Captured variables: (name, register).
     pub captures: Vec<(Astr, ValueId)>,
+    /// The `Order` the body takes first when its effect is not Pure.
+    pub order_param: Option<ValueId>,
     pub debug: DebugInfo,
     pub val_factory: LocalFactory<ValueId>,
 }
@@ -104,12 +109,22 @@ impl CfgBody {
                     succs.push(BlockIdx(next));
                 }
             }
-            Terminator::Return(_) => {}
+            Terminator::Return { .. } => {}
         }
         succs
     }
 
     /// Build a predecessors map from the CFG.
+    /// The values defined before block 0 runs: params, captures, and the
+    /// entry `Order`.
+    pub fn entry_defs(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.params
+            .iter()
+            .chain(self.captures.iter())
+            .map(|(_, v)| *v)
+            .chain(self.order_param)
+    }
+
     pub fn predecessors(&self) -> FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>> {
         let mut preds: FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>> = FxHashMap::default();
         for i in 0..self.blocks.len() {
@@ -205,6 +220,7 @@ pub fn promote(body: MirBody) -> CfgBody {
         val_types: body.val_types,
         params: body.params,
         captures: body.captures,
+        order_param: body.order_param,
         debug: body.debug,
         val_factory: body.val_factory,
     }
@@ -239,8 +255,11 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 insts.pop();
                 return term;
             }
-            InstKind::Return(val) => {
-                let term = Terminator::Return(*val);
+            InstKind::Return { value, order } => {
+                let term = Terminator::Return {
+                    value: *value,
+                    order: *order,
+                };
                 insts.pop();
                 return term;
             }
@@ -297,10 +316,10 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     },
                 });
             }
-            Terminator::Return(val) => {
+            Terminator::Return { value, order } => {
                 insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
-                    kind: InstKind::Return(val),
+                    kind: InstKind::Return { value, order },
                 });
             }
             Terminator::Fallthrough => {
@@ -334,6 +353,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
         val_types: cfg.val_types,
         params: cfg.params,
         captures: cfg.captures,
+        order_param: cfg.order_param,
         debug: cfg.debug,
         val_factory: cfg.val_factory,
         label_count,
@@ -367,6 +387,7 @@ mod tests {
             val_types: FxHashMap::default(),
             params: Vec::new(),
             captures: Vec::new(),
+            order_param: None,
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
@@ -380,14 +401,20 @@ mod tests {
                 dst: v(0),
                 value: acvus_ast::Literal::Int(42),
             },
-            InstKind::Return(v(0)),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
         ]);
 
         let original_len = body.insts.len();
         let cfg = promote(body);
         assert_eq!(cfg.blocks.len(), 1);
         assert_eq!(cfg.blocks[0].insts.len(), 1); // Const
-        assert!(matches!(cfg.blocks[0].terminator, Terminator::Return(_)));
+        assert!(matches!(
+            cfg.blocks[0].terminator,
+            Terminator::Return { .. }
+        ));
 
         let body = demote(cfg);
         assert_eq!(body.insts.len(), original_len);
@@ -438,7 +465,10 @@ mod tests {
                 params: vec![v(3)],
                 merge_of: None,
             },
-            InstKind::Return(v(3)),
+            InstKind::Return {
+                value: v(3),
+                order: None,
+            },
         ]);
 
         let cfg = promote(body);
@@ -449,7 +479,10 @@ mod tests {
         ));
         assert!(matches!(cfg.blocks[1].terminator, Terminator::Jump { .. }));
         assert!(matches!(cfg.blocks[2].terminator, Terminator::Jump { .. }));
-        assert!(matches!(cfg.blocks[3].terminator, Terminator::Return(_)));
+        assert!(matches!(
+            cfg.blocks[3].terminator,
+            Terminator::Return { .. }
+        ));
 
         let body = demote(cfg);
         assert_eq!(body.insts.len(), 10);
@@ -471,7 +504,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             },
-            InstKind::Return(v(0)),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
         ]);
 
         let cfg = promote(body);
@@ -486,7 +522,10 @@ mod tests {
                 value: acvus_ast::Literal::Int(0),
             },
             InstKind::Nop,
-            InstKind::Return(v(0)),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
         ]);
 
         let cfg = promote(body);
@@ -531,7 +570,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             },
-            InstKind::Return(v(0)),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
         ]);
 
         let cfg = promote(body);
@@ -584,7 +626,10 @@ mod tests {
                 params: vec![],
                 merge_of: None,
             },
-            InstKind::Return(v(0)),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
         ]);
 
         let cfg = promote(body);

@@ -271,9 +271,9 @@ impl<'a> Lowerer<'a> {
                 } => {
                     self.lower_jump_if(*cond, *then_label, then_args, *else_label, else_args);
                 }
-                InstKind::Return(val) => {
+                InstKind::Return { value, .. } => {
                     // For now, just ensure the return value is somewhere accessible.
-                    let _ = self.reg(*val);
+                    let _ = self.reg(*value);
                     // Emit HALT - single function, no call stack yet.
                     self.pb.emit(encode(HALT, 0, 0, 0));
                 }

@@ -107,10 +107,17 @@ fn inline_body(
                     dst,
                     callee: Callee::Direct(callee_id),
                     args,
+                    order,
                     ..
                 } if !recursive_fns.contains(callee_id) && all_modules.contains_key(callee_id) => {
                     let callee_body = &all_modules[callee_id].main;
-                    Some((*dst, callee_body, args.clone(), Vec::new()))
+                    Some(InlineTarget {
+                        dst: *dst,
+                        callee_body,
+                        args: args.clone(),
+                        captures: Vec::new(),
+                        order: *order,
+                    })
                 }
 
                 // Indirect call - try devirtualization.
@@ -118,17 +125,32 @@ fn inline_body(
                     dst,
                     callee: Callee::Indirect(callee_val),
                     args,
+                    order,
                     ..
                 } => {
                     let callee_val = remap_one(*callee_val, &val_remap);
-                    try_devirt(&current.insts, &def_map, callee_val, closures)
-                        .map(|(callee_body, captures)| (*dst, callee_body, args.clone(), captures))
+                    try_devirt(&current.insts, &def_map, callee_val, closures).map(
+                        |(callee_body, captures)| InlineTarget {
+                            dst: *dst,
+                            callee_body,
+                            args: args.clone(),
+                            captures,
+                            order: *order,
+                        },
+                    )
                 }
 
                 _ => None,
             };
 
-            if let Some((dst, callee_body, args, captures)) = inline_target {
+            if let Some(InlineTarget {
+                dst,
+                callee_body,
+                args,
+                captures,
+                order,
+            }) = inline_target
+            {
                 // Apply val_remap to args: earlier inlinings may have replaced
                 // the original dst with a new value.
                 let args: Vec<ValueId> = captures
@@ -163,6 +185,18 @@ fn inline_body(
                     callee_remap.insert(*param_reg, *arg);
                     substituted_regs.insert(*param_reg);
                 }
+                // The callee's entry Order is the Order the call waited for.
+                match (callee_body.order_param, order) {
+                    (Some(order_param), Some(edge)) => {
+                        callee_remap.insert(order_param, remap_one(edge.before, &val_remap));
+                        substituted_regs.insert(order_param);
+                    }
+                    (None, None) => {}
+                    (has_param, has_edge) => panic!(
+                        "inline: callee order param {:?} does not match call order edge {:?}",
+                        has_param, has_edge
+                    ),
+                }
 
                 // Copy callee's val_types (remapped).
                 // Skip types for substituted regs - caller already has types for those.
@@ -188,9 +222,16 @@ fn inline_body(
                 // Emit callee instructions with remapped ids.
                 for callee_inst in &callee_body.insts {
                     match &callee_inst.kind {
-                        InstKind::Return(val) => {
-                            let remapped_val = remap_one(*val, &callee_remap);
+                        InstKind::Return {
+                            value,
+                            order: returned_order,
+                        } => {
+                            let remapped_val = remap_one(*value, &callee_remap);
                             val_remap.insert(dst, remapped_val);
+                            // The Order the call yields is the Order the callee returned.
+                            if let (Some(edge), Some(ret)) = (order, returned_order) {
+                                val_remap.insert(edge.after, remap_one(*ret, &callee_remap));
+                            }
                         }
 
                         _ => {
@@ -223,6 +264,15 @@ fn inline_body(
     }
 
     current
+}
+
+/// A call the inliner replaces with its callee's body.
+struct InlineTarget<'a> {
+    dst: ValueId,
+    callee_body: &'a MirBody,
+    args: Vec<ValueId>,
+    captures: Vec<ValueId>,
+    order: Option<OrderEdge>,
 }
 
 /// Try to devirtualize an indirect call: if the callee ValueId is defined by
@@ -356,6 +406,7 @@ fn remap_inst(
             callee,
             callee_ty,
             args,
+            order,
         } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
@@ -366,6 +417,10 @@ fn remap_inst(
                 callee,
                 callee_ty: callee_ty.clone(),
                 args: rv(args),
+                order: order.map(|edge| OrderEdge {
+                    before: r(edge.before),
+                    after: r(edge.after),
+                }),
             }
         }
         InstKind::Spawn {
@@ -373,6 +428,7 @@ fn remap_inst(
             callee,
             callee_ty,
             args,
+            order,
         } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
@@ -383,11 +439,17 @@ fn remap_inst(
                 callee,
                 callee_ty: callee_ty.clone(),
                 args: rv(args),
+                order: order.map(r),
             }
         }
-        InstKind::Eval { dst, src } => InstKind::Eval {
+        InstKind::Eval { dst, src, order } => InstKind::Eval {
             dst: r(*dst),
             src: r(*src),
+            order: order.map(r),
+        },
+        InstKind::Merge { dst, orders } => InstKind::Merge {
+            dst: r(*dst),
+            orders: rv(orders),
         },
 
         // Composite constructors
@@ -500,7 +562,10 @@ fn remap_inst(
             else_label: rl(*else_label),
             else_args: rv(else_args),
         },
-        InstKind::Return(v) => InstKind::Return(r(*v)),
+        InstKind::Return { value, order } => InstKind::Return {
+            value: r(*value),
+            order: order.map(r),
+        },
         InstKind::Nop => InstKind::Nop,
 
         // Cast
@@ -548,6 +613,7 @@ mod tests {
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
+            order_param: None,
         }
     }
 
@@ -577,7 +643,10 @@ mod tests {
                     left: v(0),
                     right: v(0),
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             2,
         );
@@ -594,8 +663,12 @@ mod tests {
                     callee: Callee::Direct(callee_id),
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             2,
         );
@@ -628,7 +701,7 @@ mod tests {
             .main
             .insts
             .iter()
-            .any(|i| matches!(i.kind, InstKind::Return(_)));
+            .any(|i| matches!(i.kind, InstKind::Return { .. }));
         assert!(has_yield, "Yield should remain");
     }
 
@@ -649,8 +722,12 @@ mod tests {
                     callee: Callee::Direct(extern_id),
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             2,
         );
@@ -682,7 +759,10 @@ mod tests {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(1),
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             1,
         );
@@ -694,8 +774,12 @@ mod tests {
                     callee: Callee::Direct(rec_id),
                     callee_ty: Ty::error(),
                     args: vec![],
+                    order: None,
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             1,
         );
@@ -736,7 +820,10 @@ mod tests {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(42),
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             1,
         );
@@ -748,8 +835,12 @@ mod tests {
                     callee: Callee::Direct(g_id),
                     callee_ty: Ty::error(),
                     args: vec![],
+                    order: None,
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             1,
         );
@@ -761,8 +852,12 @@ mod tests {
                     callee: Callee::Direct(f_id),
                     callee_ty: Ty::error(),
                     args: vec![],
+                    order: None,
                 },
-                InstKind::Return(v(0)),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
             ],
             1,
         );
@@ -800,8 +895,12 @@ mod tests {
                     callee: Callee::Indirect(v(0)),
                     callee_ty: Ty::error(),
                     args: vec![],
+                    order: None,
                 },
-                InstKind::Return(v(1)),
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
             ],
             2,
         );

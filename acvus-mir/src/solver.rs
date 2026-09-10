@@ -312,18 +312,10 @@ impl Solver {
         }
     }
 
-    /// RFC-0008: an effect variable that inference left open freezes to the
-    /// top of what its constraints allow, Opaque when nothing constrained it.
+    /// An effect variable inference left open freezes to the join of what
+    /// is constrained below it, Pure when nothing is (RFC-0008). A body and
+    /// the calls inside it share variables, so one reading serves both.
     pub fn freeze_effect(&self, term: &EffectTerm<Infer>) -> Effect {
-        match self.resolve_effect(term) {
-            EffectTerm::Known(e) => e,
-            EffectTerm::Var(root) => self.range_of(root).1,
-        }
-    }
-
-    /// The join of everything constrained below the variable. A function's
-    /// effect is defined as this join over its body.
-    pub fn effect_lower_bound(&self, term: &EffectTerm<Infer>) -> Effect {
         match self.resolve_effect(term) {
             EffectTerm::Known(e) => e,
             EffectTerm::Var(root) => self.range_of(root).0,

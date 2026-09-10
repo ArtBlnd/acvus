@@ -17,8 +17,8 @@ expression: ir
 
     ; r0 (@items) : Ref<Array<Int, 3>>
     ; r1 (v3) : Array<Int, 3>
-    ; r2 (v4) : Iterator<Int, Opaque, #IdentityId(1)>
-    ; r3 (v5) : Fn(Int) -> Bool with Opaque
+    ; r2 (v4) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r3 (v5) : Fn(Int) -> Bool
     ; r4 (all(...)) : Bool
     ; r5 (to_string(...)) : String
     ; r6 (v8) : String

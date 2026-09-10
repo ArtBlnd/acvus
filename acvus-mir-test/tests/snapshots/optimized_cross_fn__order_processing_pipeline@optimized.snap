@@ -71,32 +71,33 @@ expression: opt
     60 |   r13 = r15 + T4
     61 |   r14 = call #0(r10)
     62 |   r15 = r13 + r14
-    63 |   r20 = spawn #1(r15)
+    63 |   r20 = spawn #1(r15) [r21 ->]
     64 |   store r17 = r15
     65 |   store r16 = r10
-    66 |   r3 = eval r20
-    67 |   return r10
+    66 |   r3 = eval r20 [-> r21]
+    67 |   return r10 [r21]
 
     ; r0 (@shipping) : Ref<Int>
     ; r1 (@shipping) : Ref<Int>
     ; r2 (@default_ship) : Ref<Int>
     ; r3 (@default_ship) : Int
     ; r4 (@tax_rate) : Int
-    ; r5 (v6) : Int
-    ; r6 (v7) : Int
-    ; r7 (v8) : Int
-    ; r8 (v9) : Bool
-    ; r9 (v10) : Bool
-    ; r10 (v11) : Int
-    ; r11 (v12) : Bool
+    ; r5 (v7) : Int
+    ; r6 (v8) : Int
+    ; r7 (v9) : Int
+    ; r8 (v10) : Bool
+    ; r9 (v11) : Bool
+    ; r10 (v12) : Int
+    ; r11 (v13) : Bool
     ; r12 (@customer) : Ref<String>
     ; r13 (to_string(...)) : String
     ; r14 (to_string(...)) : String
-    ; r15 (v16) : String
+    ; r15 (v17) : String
     ; r16 (@total_out) : Ref<Int>
     ; r17 (@receipt_out) : Ref<String>
     ; r18 (@customer) : String
-    ; r19 (v22) : String
-    ; r20 (v23) : Handle<Int>
-    ; r21 (v17) : String
+    ; r19 (v23) : String
+    ; r20 (v24) : Handle<Int>
+    ; r21 (v1) : Order
     ; r22 (v18) : String
+    ; r23 (v19) : String

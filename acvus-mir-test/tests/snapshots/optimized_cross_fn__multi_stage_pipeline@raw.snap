@@ -53,95 +53,119 @@ expression: raw
 
 -- main --
 === main ===
-     0 |   r0 = ref @source_id
-     1 |   r1 = load r0
-     2 |   r2 = call #0(r1)
-     3 |   r3 = ref raw
-     4 |   store r3 = r2
-     5 |   r4 = ref raw
-     6 |   r5 = load r4
-     7 |   r6 = ref @scale
-     8 |   r7 = load r6
-     9 |   r8 = call #1(r5, r7)
-    10 |   r9 = ref s1
-    11 |   store r9 = r8
-    12 |   r10 = ref s1
-    13 |   r11 = load r10
-    14 |   r12 = ref @stage1
-    15 |   store r12 = r11
-    16 |   r13 = ref s1
-    17 |   r14 = load r13
-    18 |   r15 = ref @offset
-    19 |   r16 = load r15
-    20 |   r17 = call #2(r14, r16)
-    21 |   r18 = ref s2
-    22 |   store r18 = r17
-    23 |   r19 = ref s2
-    24 |   r20 = load r19
-    25 |   r21 = ref @stage2
-    26 |   store r21 = r20
-    27 |   r22 = ref s2
-    28 |   r23 = load r22
-    29 |   r24 = ref @precision
-    30 |   r25 = load r24
-    31 |   r26 = call #3(r23, r25)
-    32 |   r27 = ref s3
-    33 |   store r27 = r26
-    34 |   r28 = ref s3
-    35 |   r29 = load r28
-    36 |   r30 = ref @stage3
-    37 |   store r30 = r29
-    38 |   r31 = ref s1
-    39 |   r32 = load r31
-    40 |   r33 = ref s2
-    41 |   r34 = load r33
-    42 |   r35 = ref s3
-    43 |   r36 = load r35
-    44 |   r37 = call #4(r32, r34, r36)
-    45 |   r38 = ref s3
-    46 |   r39 = load r38
-    47 |   return r39
+     0 |   r0 = ref $order
+     1 |   store r0 = r1
+     2 |   r2 = ref @source_id
+     3 |   r3 = load r2
+     4 |   r4 = ref $order
+     5 |   r5 = load r4
+     6 |   r6 = call #0(r3) [r5 -> r7]
+     7 |   r8 = ref $order
+     8 |   store r8 = r7
+     9 |   r9 = ref raw
+    10 |   store r9 = r6
+    11 |   r10 = ref raw
+    12 |   r11 = load r10
+    13 |   r12 = ref @scale
+    14 |   r13 = load r12
+    15 |   r14 = call #1(r11, r13)
+    16 |   r15 = ref s1
+    17 |   store r15 = r14
+    18 |   r16 = ref s1
+    19 |   r17 = load r16
+    20 |   r18 = ref @stage1
+    21 |   store r18 = r17
+    22 |   r19 = ref s1
+    23 |   r20 = load r19
+    24 |   r21 = ref @offset
+    25 |   r22 = load r21
+    26 |   r23 = call #2(r20, r22)
+    27 |   r24 = ref s2
+    28 |   store r24 = r23
+    29 |   r25 = ref s2
+    30 |   r26 = load r25
+    31 |   r27 = ref @stage2
+    32 |   store r27 = r26
+    33 |   r28 = ref s2
+    34 |   r29 = load r28
+    35 |   r30 = ref @precision
+    36 |   r31 = load r30
+    37 |   r32 = call #3(r29, r31)
+    38 |   r33 = ref s3
+    39 |   store r33 = r32
+    40 |   r34 = ref s3
+    41 |   r35 = load r34
+    42 |   r36 = ref @stage3
+    43 |   store r36 = r35
+    44 |   r37 = ref s1
+    45 |   r38 = load r37
+    46 |   r39 = ref s2
+    47 |   r40 = load r39
+    48 |   r41 = ref s3
+    49 |   r42 = load r41
+    50 |   r43 = ref $order
+    51 |   r44 = load r43
+    52 |   r45 = call #4(r38, r40, r42) [r44 -> r46]
+    53 |   r47 = ref $order
+    54 |   store r47 = r46
+    55 |   r48 = ref s3
+    56 |   r49 = load r48
+    57 |   r50 = ref $order
+    58 |   r51 = load r50
+    59 |   return r49 [r51]
 
-    ; r0 (@source_id) : Ref<Int>
-    ; r1 (v2) : Int
-    ; r2 (fetch_data(...)) : Int
-    ; r3 (v5) : Ref<Int>
-    ; r4 (v6) : Ref<Int>
-    ; r5 (raw) : Int
-    ; r6 (@scale) : Ref<Int>
-    ; r7 (v9) : Int
-    ; r8 (normalize(...)) : Int
+    ; r0 (v3) : Ref<Order>
+    ; r1 (v1) : Order
+    ; r2 (@source_id) : Ref<Int>
+    ; r3 (v5) : Int
+    ; r4 (v7) : Ref<Order>
+    ; r5 (v8) : Order
+    ; r6 (fetch_data(...)) : Int
+    ; r7 (v9) : Order
+    ; r8 (v10) : Ref<Order>
     ; r9 (v12) : Ref<Int>
     ; r10 (v13) : Ref<Int>
-    ; r11 (s1) : Int
-    ; r12 (@stage1) : Ref<Int>
-    ; r13 (v16) : Ref<Int>
-    ; r14 (s1) : Int
-    ; r15 (@offset) : Ref<Int>
-    ; r16 (v19) : Int
-    ; r17 (enrich(...)) : Int
-    ; r18 (v22) : Ref<Int>
+    ; r11 (raw) : Int
+    ; r12 (@scale) : Ref<Int>
+    ; r13 (v16) : Int
+    ; r14 (normalize(...)) : Int
+    ; r15 (v19) : Ref<Int>
+    ; r16 (v20) : Ref<Int>
+    ; r17 (s1) : Int
+    ; r18 (@stage1) : Ref<Int>
     ; r19 (v23) : Ref<Int>
-    ; r20 (s2) : Int
-    ; r21 (@stage2) : Ref<Int>
-    ; r22 (v26) : Ref<Int>
-    ; r23 (s2) : Int
-    ; r24 (@precision) : Ref<Int>
-    ; r25 (v29) : Int
-    ; r26 (finalize(...)) : Int
-    ; r27 (v32) : Ref<Int>
+    ; r20 (s1) : Int
+    ; r21 (@offset) : Ref<Int>
+    ; r22 (v26) : Int
+    ; r23 (enrich(...)) : Int
+    ; r24 (v29) : Ref<Int>
+    ; r25 (v30) : Ref<Int>
+    ; r26 (s2) : Int
+    ; r27 (@stage2) : Ref<Int>
     ; r28 (v33) : Ref<Int>
-    ; r29 (s3) : Int
-    ; r30 (@stage3) : Ref<Int>
-    ; r31 (v36) : Ref<Int>
-    ; r32 (s1) : Int
-    ; r33 (v38) : Ref<Int>
-    ; r34 (s2) : Int
-    ; r35 (v40) : Ref<Int>
-    ; r36 (s3) : Int
-    ; r37 (log_pipeline(...)) : Int
-    ; r38 (v43) : Ref<Int>
-    ; r39 (s3) : Int
+    ; r29 (s2) : Int
+    ; r30 (@precision) : Ref<Int>
+    ; r31 (v36) : Int
+    ; r32 (finalize(...)) : Int
+    ; r33 (v39) : Ref<Int>
+    ; r34 (v40) : Ref<Int>
+    ; r35 (s3) : Int
+    ; r36 (@stage3) : Ref<Int>
+    ; r37 (v43) : Ref<Int>
+    ; r38 (s1) : Int
+    ; r39 (v45) : Ref<Int>
+    ; r40 (s2) : Int
+    ; r41 (v47) : Ref<Int>
+    ; r42 (s3) : Int
+    ; r43 (v50) : Ref<Order>
+    ; r44 (v51) : Order
+    ; r45 (log_pipeline(...)) : Int
+    ; r46 (v52) : Order
+    ; r47 (v53) : Ref<Order>
+    ; r48 (v54) : Ref<Int>
+    ; r49 (s3) : Int
+    ; r50 (v56) : Ref<Order>
+    ; r51 (v57) : Order
 
 -- normalize --
 === main ===

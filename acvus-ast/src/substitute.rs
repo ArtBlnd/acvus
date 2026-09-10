@@ -360,7 +360,11 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             span,
         },
         Stmt::ContextStore {
-            name, path, expr, span, ..
+            name,
+            path,
+            expr,
+            span,
+            ..
         } => Stmt::ContextStore {
             id: AstId::alloc(),
             name,
@@ -369,7 +373,11 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             span,
         },
         Stmt::VarFieldStore {
-            name, path, expr, span, ..
+            name,
+            path,
+            expr,
+            span,
+            ..
         } => Stmt::VarFieldStore {
             id: AstId::alloc(),
             name,
@@ -654,7 +662,9 @@ fn validate_splice_else_branch(
 
 fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(Astr, Span)>) {
     match stmt {
-        Stmt::Bind { expr, .. } | Stmt::ContextStore { expr, .. } | Stmt::VarFieldStore { expr, .. } => {
+        Stmt::Bind { expr, .. }
+        | Stmt::ContextStore { expr, .. }
+        | Stmt::VarFieldStore { expr, .. } => {
             validate_splice_expr(expr, false, splice_names, errors);
         }
         Stmt::Expr(expr) => {

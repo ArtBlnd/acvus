@@ -174,7 +174,7 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(&i.kind, InstKind::Return(_)))
+                .any(|i| matches!(&i.kind, InstKind::Return { .. }))
         );
     }
 
@@ -194,7 +194,7 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(&i.kind, InstKind::Return(_)))
+                .any(|i| matches!(&i.kind, InstKind::Return { .. }))
         );
     }
 
@@ -207,7 +207,7 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(&i.kind, InstKind::Return(_)))
+                .any(|i| matches!(&i.kind, InstKind::Return { .. }))
         );
     }
 
@@ -346,7 +346,7 @@ mod tests {
         // After SROA + SSA: field Ref is decomposed, then SSA promotes.
         // Result should have FieldGet (from SROA decomposition) or be fully promoted.
         assert!(
-            kinds.iter().any(|k| matches!(k, InstKind::Return(_))),
+            kinds.iter().any(|k| matches!(k, InstKind::Return { .. })),
             "should compile and return"
         );
     }
@@ -387,7 +387,7 @@ mod tests {
         let kinds = inst_kinds(&module);
         // After SSA promotion, Ref/Load/Store for local vars are eliminated.
         // The result should just be a Return of the SSA value.
-        assert!(kinds.iter().any(|k| matches!(k, InstKind::Return(_))));
+        assert!(kinds.iter().any(|k| matches!(k, InstKind::Return { .. })));
     }
 
     #[test]

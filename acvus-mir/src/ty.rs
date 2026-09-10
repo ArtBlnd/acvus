@@ -100,6 +100,7 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
             | (Ty::String, TyTerm::String)
             | (Ty::Bool, TyTerm::Bool)
             | (Ty::Unit, TyTerm::Unit)
+            | (Ty::Order, TyTerm::Order)
             | (Ty::Byte, TyTerm::Byte) => true,
             (Ty::Array(e, n), TyTerm::Array(pe, pn)) => {
                 let len_ok = match pn {
@@ -227,6 +228,7 @@ enum TyHead {
     Bool,
     Unit,
     Byte,
+    Order,
     Array,
     Object,
     Tuple,
@@ -246,6 +248,7 @@ fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
         TyTerm::String => TyHead::String,
         TyTerm::Bool => TyHead::Bool,
         TyTerm::Unit => TyHead::Unit,
+        TyTerm::Order => TyHead::Order,
         TyTerm::Byte => TyHead::Byte,
         TyTerm::Array(..) => TyHead::Array,
         TyTerm::Object(_) => TyHead::Object,
@@ -585,7 +588,7 @@ impl TyTerm<Concrete> {
     /// Returns the purity tier of this type (shallow - does not recurse into containers).
     pub fn materiality(&self) -> Materiality {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => {
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => {
                 Materiality::Concrete
             }
             Ty::Array(..)
@@ -605,7 +608,7 @@ impl TyTerm<Concrete> {
     /// Returns true if this type can be deeply converted to a pure representation.
     pub fn is_pureable(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => true,
             Ty::Array(inner, _) => inner.is_pureable(),
             Ty::Handle(inner) => inner.is_pureable(),
             Ty::Option(inner) => inner.is_pureable(),
@@ -625,7 +628,7 @@ impl TyTerm<Concrete> {
     /// Returns true if this type can be materialized.
     pub fn is_materializable(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
+            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => true,
             Ty::Array(inner, _) => inner.is_materializable(),
             Ty::Option(inner) => inner.is_materializable(),
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_materializable()),
@@ -656,6 +659,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.ty {
             Ty::Int => write!(f, "Int"),
+            Ty::Order => write!(f, "Order"),
             Ty::Float => write!(f, "Float"),
             Ty::String => write!(f, "String"),
             Ty::Bool => write!(f, "Bool"),
@@ -896,6 +900,9 @@ pub enum TyTerm<V: Phase> {
     Bool,
     Unit,
     Byte,
+    /// A dependency between effectful calls (RFC-0007). IR-only: no script
+    /// names it, and no value of it exists at runtime.
+    Order,
     // Containers
     Array(Box<TyTerm<V>>, LenTerm<V>),
     Object(FxHashMap<Astr, TyTerm<V>>),
@@ -966,6 +973,7 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::String => TyTerm::String,
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
+            TyTerm::Order => TyTerm::Order,
             TyTerm::Byte => TyTerm::Byte,
             TyTerm::Array(inner, len) => TyTerm::Array(
                 Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
@@ -1058,6 +1066,7 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::String => Ok(TyTerm::String),
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
+            TyTerm::Order => Ok(TyTerm::Order),
             TyTerm::Byte => Ok(TyTerm::Byte),
             TyTerm::Array(inner, len) => Ok(TyTerm::Array(
                 Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
