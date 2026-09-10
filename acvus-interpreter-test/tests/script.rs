@@ -223,3 +223,19 @@ async fn iter_with_to_string() {
     .await;
     assert_eq!(result, Value::string("123"));
 }
+
+/// A closure reads a context as it is when the closure runs, not as it
+/// was when the closure was made: the store before the call that runs
+/// it is visible, as it is to any call (RFC-0014).
+#[tokio::test]
+async fn closure_reads_context_at_call() {
+    let i = Interner::new();
+    let c = ctx(&i, &[("items", ints(&[1, 2])), ("x", Value::Int(1))]);
+    let result = run_script_mode(
+        &i,
+        "@x = 5; let f = |v| -> v + @x; @x = 9; iter(@items) | map(f) | fold(0, |a, b| -> a + b)",
+        c,
+    )
+    .await;
+    assert_eq!(result, Value::Int(21));
+}

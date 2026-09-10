@@ -62,11 +62,12 @@ pub struct VariantValue {
 
 /// A self-contained callable: execution context + body + captured values.
 ///
-/// Created at `MakeClosure` time with a fork of the current overlay.
-/// `call()` executes the body in an independent RunContext - no Interpreter needed.
+/// Created at `MakeClosure` time. It shares the run's live page: a
+/// context read in its body sees the store that precedes the call, as
+/// any call does (RFC-0014). Only captures are taken by value.
 pub struct FnValue {
     pub shared: InterpreterContext,
-    pub page: InMemoryContext,
+    pub page: Arc<InMemoryContext>,
     pub body: Arc<MirBody>,
     pub captures: Arc<[Value]>,
 }
@@ -75,7 +76,7 @@ impl Clone for FnValue {
     fn clone(&self) -> Self {
         Self {
             shared: self.shared.clone(),
-            page: self.page.fork(),
+            page: Arc::clone(&self.page),
             body: Arc::clone(&self.body),
             captures: Arc::clone(&self.captures),
         }

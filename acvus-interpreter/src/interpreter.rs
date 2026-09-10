@@ -364,7 +364,8 @@ impl InterpreterContext {
 /// Per-execution mutable state passed through the run_loop call chain.
 struct RunContext {
     shared: InterpreterContext,
-    page: InMemoryContext,
+    /// The run's page, shared with every closure the run makes.
+    page: Arc<InMemoryContext>,
     variables: FxHashMap<ValueId, Value>,
 }
 
@@ -564,7 +565,7 @@ async fn execute_inst(
                 *dst,
                 Value::closure(FnValue {
                     shared: ctx.shared.clone(),
-                    page: ctx.page.fork(),
+                    page: Arc::clone(&ctx.page),
                     body: Arc::new(closure_body.clone()),
                     captures: captured.into(),
                 }),
@@ -901,7 +902,7 @@ fn give_back(frame: &mut Frame, lent: &[ValueId], values: Vec<Value>) -> Result<
 pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut closure_ctx = RunContext {
         shared: f.shared.clone(),
-        page: f.page.fork(),
+        page: Arc::clone(&f.page),
         variables: FxHashMap::default(),
     };
 
@@ -970,16 +971,16 @@ impl Interpreter {
 
         let mut run_ctx = RunContext {
             shared: self.shared.clone(),
-            page: std::mem::replace(
+            page: Arc::new(std::mem::replace(
                 &mut self.page,
                 InMemoryContext::empty(self.shared.interner.clone()),
-            ),
+            )),
             variables: std::mem::take(&mut self.variables),
         };
 
         let value = execute_function(&mut run_ctx, &entry, &args).await?;
 
-        let writes = run_ctx.page.into_writes();
+        let writes = run_ctx.page.take_writes();
         Ok(ExecResult {
             value,
             writes,

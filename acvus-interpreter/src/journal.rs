@@ -36,14 +36,14 @@ pub enum ContextWrite {
 /// - `get` / `get_field`: read whole value or projected field.
 /// - `set` / `set_field`: write whole value or projected field.
 /// - `fork`: create an independent copy (for Spawn).
-/// - `into_writes`: extract accumulated context mutations.
+/// - `take_writes`: drain the accumulated context mutations.
 pub trait RuntimeContext: Send + Sync + Sized {
     fn get(&self, key: &str) -> Option<Value>;
     fn get_field(&self, key: &str, path: &[&str]) -> Option<Value>;
     fn set(&self, key: &str, value: Value);
     fn set_field(&self, key: &str, path: &[&str], value: Value);
     fn fork(&self) -> Self;
-    fn into_writes(self) -> Vec<ContextWrite>;
+    fn take_writes(&self) -> Vec<ContextWrite>;
 }
 
 // -- InMemoryContext -------------------------------------------------
@@ -113,8 +113,8 @@ impl RuntimeContext for InMemoryContext {
         }
     }
 
-    fn into_writes(self) -> Vec<ContextWrite> {
-        self.writes.into_inner().unwrap()
+    fn take_writes(&self) -> Vec<ContextWrite> {
+        std::mem::take(&mut *self.writes.lock().unwrap())
     }
 }
 
@@ -204,7 +204,7 @@ mod tests {
     fn set_records_write() {
         let ctx = make_ctx(&[]);
         ctx.set("x", Value::int(42));
-        let writes = ctx.into_writes();
+        let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
         assert!(matches!(&writes[0], ContextWrite::Set { key, .. } if key == "x"));
     }
@@ -270,7 +270,7 @@ mod tests {
         )]));
         let ctx = InMemoryContext::new(HashMap::from([("user".to_string(), obj)]), i);
         ctx.set_field("user", &["name"], Value::string("bob"));
-        let writes = ctx.into_writes();
+        let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
         assert!(matches!(
             &writes[0],
@@ -300,7 +300,7 @@ mod tests {
         let ctx = make_ctx(&[("x", Value::int(1))]);
         ctx.set_field("x", &[], Value::int(2));
         assert_eq!(ctx.get("x"), Some(Value::int(2)));
-        let writes = ctx.into_writes();
+        let writes = ctx.take_writes();
         // Empty path -> ContextWrite::Set, not FieldPatch.
         assert!(matches!(&writes[0], ContextWrite::Set { .. }));
     }
@@ -324,7 +324,7 @@ mod tests {
         let ctx = make_ctx(&[("x", Value::int(1))]);
         ctx.set("x", Value::int(2)); // parent has a write
         let forked = ctx.fork();
-        let writes = forked.into_writes();
+        let writes = forked.take_writes();
         assert!(writes.is_empty(), "forked context should have empty writes");
     }
 
