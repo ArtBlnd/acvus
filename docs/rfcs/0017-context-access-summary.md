@@ -1,6 +1,6 @@
 # RFC-0017: A function's type says which contexts it reads and writes
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-10
 Supersedes: none
 

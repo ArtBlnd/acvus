@@ -27,9 +27,9 @@ expression: ir
     ; r2 (v3) : Array<Int, 3>
     ; r3 (v4) : List<Int>
     ; r4 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r5 (v6) : Fn(Int) -> Int
+    ; r5 (v6) : Fn(Int) -> Int with reads {@offset, @items}
     ; r6 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r7 (v8) : Fn(Int) -> Bool
+    ; r7 (v8) : Fn(Int) -> Bool with reads {@offset, @items}
     ; r8 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r9 (collect(...)) : List<Int>
     ; r10 (v14) : String

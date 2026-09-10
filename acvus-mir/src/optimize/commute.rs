@@ -14,23 +14,32 @@
 //! after that call: every path through that block reaches the call, so
 //! issuing it there speculates nothing. Nothing else reads the commutes
 //! axis.
+//!
+//! A call is ordered against the run's own context accesses by its effect's
+//! read and write sets (RFC-0017): it joins a run only if no store between
+//! the run's first call and itself names a context it touches, and no load
+//! names one it writes; a call that touches any context is never moved
+//! across blocks.
 
 use rustc_hash::FxHashMap;
 
 use crate::analysis::domtree::{DomTree, PostDomTree};
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
+use crate::graph::QualifiedRef;
 use crate::ir::{Inst, InstKind, OrderEdge, ValueId};
-use crate::ty::Ty;
+use crate::optimize::context_ops::{context_of_load, context_of_store, ref_to_ctx};
+use crate::ty::{Effect, Ty};
 
 pub fn run(cfg: &mut CfgBody) {
     while let Some(m) = find_move(cfg) {
         let inst = cfg.blocks[m.from.0].insts.remove(m.at);
         cfg.blocks[m.to.0].insts.insert(m.after + 1, inst);
     }
+    let contexts = ref_to_ctx(cfg);
     let mut subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     for bi in 0..cfg.blocks.len() {
-        let runs = runs_in_block(&cfg.blocks[bi].insts);
+        let runs = runs_in_block(&cfg.blocks[bi].insts, &contexts);
         for run in runs.into_iter().rev() {
             let merge = release(cfg, bi, &run);
             subst.insert(run.last_after, merge);
@@ -121,12 +130,21 @@ fn find_move(cfg: &mut CfgBody) -> Option<Move> {
         } if callee_ty.effect().is_some_and(|e| e.commutes) => Some(*edge),
         _ => None,
     };
+    let touches_nothing = |inst: &Inst| match &inst.kind {
+        InstKind::FunctionCall { callee_ty, .. } => callee_ty
+            .effect()
+            .is_some_and(|e| e.reads.is_empty() && e.writes.is_empty()),
+        _ => false,
+    };
     for (bi, block) in cfg.blocks.iter().enumerate() {
         let from = BlockIdx(bi);
         for (ii, inst) in block.insts.iter().enumerate() {
             let Some(edge) = commutes(inst) else {
                 continue;
             };
+            if !touches_nothing(inst) {
+                continue;
+            }
             let Some(prev) = sites.get(&edge.before) else {
                 continue;
             };
@@ -172,7 +190,7 @@ struct Run {
 
 /// Find the runs of a block. A call joins the current run when its effect
 /// commutes and it takes the `Order` the run's last call yielded.
-fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
+fn runs_in_block(insts: &[Inst], contexts: &FxHashMap<ValueId, QualifiedRef>) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
     let mut open: Option<Run> = None;
     for (idx, inst) in insts.iter().enumerate() {
@@ -184,9 +202,16 @@ fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
         else {
             continue;
         };
-        let commutes = callee_ty.effect().is_some_and(|e| e.commutes);
+        let Some(effect) = callee_ty.effect() else {
+            continue;
+        };
+        let commutes = effect.commutes;
         match open.take() {
-            Some(mut run) if commutes && run.last_after == edge.before => {
+            Some(mut run)
+                if commutes
+                    && run.last_after == edge.before
+                    && !accesses_between(&insts[run.calls[0] + 1..idx], &effect, contexts) =>
+            {
                 run.calls.push(idx);
                 run.last_after = edge.after;
                 open = Some(run);
@@ -203,6 +228,20 @@ fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
     }
     runs.extend(open.filter(|r| r.calls.len() > 1));
     runs
+}
+
+/// Whether issuing a call of `effect` before `insts` would reorder it
+/// against a context access there: a store to a context it touches, or a
+/// load of a context it writes.
+fn accesses_between(
+    insts: &[Inst],
+    effect: &Effect,
+    contexts: &FxHashMap<ValueId, QualifiedRef>,
+) -> bool {
+    insts.iter().any(|inst| {
+        context_of_store(&inst.kind, contexts).is_some_and(|ctx| effect.touches(ctx))
+            || context_of_load(&inst.kind, contexts).is_some_and(|ctx| effect.writes.contains(&ctx))
+    })
 }
 
 /// Rewrite one run: every call takes the entry `Order`, and a `Merge` of
@@ -341,6 +380,77 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_store_to_a_read_context_breaks_a_run() {
+        use crate::ir::RefTarget;
+        let i = Interner::new();
+        let n = QualifiedRef::root(i.intern("n"));
+        // Two commutative calls that read @n, with a store to @n between
+        // them: o0 -> f -> o2 ; @n = _ ; o2 -> f -> o4. They do not merge.
+        let c = Effect::with_contexts(
+            crate::ty::Reissue::Idempotent,
+            true,
+            [n].into_iter().collect(),
+            Default::default(),
+        );
+        let mut cfg = body(
+            vec![
+                call(
+                    &i,
+                    "f",
+                    c.clone(),
+                    Slots {
+                        dst: 1,
+                        before: 0,
+                        after: 2,
+                    },
+                ),
+                InstKind::Ref {
+                    dst: v(5),
+                    target: RefTarget::Context(n),
+                    path: Vec::new(),
+                },
+                InstKind::Store {
+                    dst: v(5),
+                    value: v(6),
+                },
+                call(
+                    &i,
+                    "f",
+                    c.clone(),
+                    Slots {
+                        dst: 3,
+                        before: 2,
+                        after: 4,
+                    },
+                ),
+                InstKind::Return {
+                    value: v(1),
+                    order: Some(v(4)),
+                },
+            ],
+            7,
+            &[0, 2, 4],
+        );
+        run(&mut cfg);
+
+        assert_eq!(
+            edges(&cfg),
+            vec![
+                OrderEdge {
+                    before: v(0),
+                    after: v(2)
+                },
+                OrderEdge {
+                    before: v(2),
+                    after: v(4)
+                },
+            ],
+            "the store to @n keeps the second call on the chain after the first"
+        );
+        assert!(merges(&cfg).is_empty(), "no run formed, so no merge");
     }
 
     #[test]

@@ -25,7 +25,7 @@ expression: ir
     ; r2 (v3) : Array<{age: Int, name: String}, 3>
     ; r3 (v4) : List<{age: Int, name: String}>
     ; r4 (iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
-    ; r5 (v6) : Fn({age: Int, name: String}) -> (String, Int)
+    ; r5 (v6) : Fn({age: Int, name: String}) -> (String, Int) with reads {@users}
     ; r6 (map(...)) : Iterator<(String, Int), Pure, #IdentityId(0)>
     ; r7 (collect(...)) : List<(String, Int)>
     ; r8 (v12) : String

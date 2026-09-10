@@ -17,7 +17,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{InstKind, Label, ValueId};
-use crate::ty::Effect;
 
 // -- Def location ----------------------------------------------------
 
@@ -72,11 +71,12 @@ fn is_root(kind: &InstKind) -> bool {
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
 
-        // A Pure call has no effect (RFC-0007): dead if its result is unused.
-        // A call whose effect is unknown stays.
-        InstKind::FunctionCall { callee_ty, .. } => {
-            !callee_ty.effect().is_some_and(|e| e == Effect::PURE)
-        }
+        // A Pure call that writes no context has no effect (RFC-0007,
+        // RFC-0017): dead if its result is unused. A call whose effect is
+        // unknown stays.
+        InstKind::FunctionCall { callee_ty, .. } => !callee_ty
+            .effect()
+            .is_some_and(|e| e.is_pure() && e.writes.is_empty()),
 
         // Spawn: pure (deferred execution). The actual effect happens at Eval.
         // Dead if handle is unused (no Eval consumes it).
@@ -283,6 +283,7 @@ mod tests {
     use crate::cfg;
     use crate::graph::QualifiedRef;
     use crate::ir::{Callee, DebugInfo, Inst, MirBody};
+    use crate::ty::Effect;
     use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;

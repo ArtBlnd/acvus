@@ -18,7 +18,7 @@ expression: ir
     ; r0 (@items) : Ref<Array<Int, 3>>
     ; r1 (v3) : Array<Int, 3>
     ; r2 (v4) : Iterator<Int, Pure, #IdentityId(3)>
-    ; r3 (v5) : Fn(Int) -> Bool
+    ; r3 (v5) : Fn(Int) -> Bool with reads {@items}
     ; r4 (all(...)) : Bool
     ; r5 (to_string(...)) : String
     ; r6 (v8) : String

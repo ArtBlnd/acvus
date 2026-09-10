@@ -343,7 +343,7 @@ impl<'src> Solver<'src> {
     pub fn bind_effect(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
-        if !lower.at_most(&effect) {
+        if !lower.at_most(&effect) || !lower.touches_at_most(&effect) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: effect,
@@ -418,12 +418,14 @@ impl<'src> Solver<'src> {
         let b = self.resolve_effect(b);
         match (a, b) {
             (EffectTerm::Known(ea), EffectTerm::Known(eb)) => {
+                let same_contexts = pol != Polarity::Invariant
+                    || (ea.reads == eb.reads && ea.writes == eb.writes);
                 let (required, allowed) = match pol {
                     Polarity::Invariant => (ea.join(&eb), ea.meet(&eb)),
                     Polarity::Covariant => (ea, eb),
                     Polarity::Contravariant => (eb, ea),
                 };
-                if required.at_most(&allowed) {
+                if same_contexts && required.at_most(&allowed) {
                     Ok(())
                 } else {
                     Err(EffectConflict { required, allowed })

@@ -503,14 +503,18 @@ impl Effect {
         self.reads.contains(&context) || self.writes.contains(&context)
     }
 
-    /// The product order: `self` is no more effectful than `other` when it
-    /// is no higher on the chain, commutes whenever `other` does, and
-    /// touches no context `other` does not.
+    /// The product order on the chain and commutativity: `self` is no
+    /// more effectful than `other` when it is no higher on the chain and
+    /// commutes whenever `other` does. The context sets are not part of
+    /// this order: a bound on an effect bounds its level, and the sets
+    /// only accumulate through `join`. `touches_at_most` orders the sets.
     pub fn at_most(&self, other: &Effect) -> bool {
-        self.reissue <= other.reissue
-            && (self.commutes || !other.commutes)
-            && self.reads.is_subset(&other.reads)
-            && self.writes.is_subset(&other.writes)
+        self.reissue <= other.reissue && (self.commutes || !other.commutes)
+    }
+
+    /// Whether `self` touches no context `other` does not.
+    pub fn touches_at_most(&self, other: &Effect) -> bool {
+        self.reads.is_subset(&other.reads) && self.writes.is_subset(&other.writes)
     }
 
     /// The least effect above both: the higher level, commutative only if
@@ -804,7 +808,10 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 if effect.is_empty() {
                     return Ok(());
                 }
-                write!(f, " with {effect}")?;
+                write!(f, " with")?;
+                if !effect.is_pure() {
+                    write!(f, " {effect}")?;
+                }
                 for (label, set) in [("reads", &effect.reads), ("writes", &effect.writes)] {
                     if set.is_empty() {
                         continue;

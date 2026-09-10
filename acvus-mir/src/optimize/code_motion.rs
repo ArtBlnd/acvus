@@ -37,6 +37,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
+use crate::optimize::context_ops::{context_of_load, context_of_store, ref_to_ctx};
 
 // -- Entry point ----------------------------------------------------
 
@@ -274,46 +275,6 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
 
 // -- Sink infrastructure ---------------------------------------------
 
-/// Build ref_to_ctx: ValueId (Ref dst) -> QualifiedRef (context).
-fn build_ref_to_ctx(cfg: &CfgBody) -> FxHashMap<ValueId, QualifiedRef> {
-    let mut map = FxHashMap::default();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Ref {
-                dst,
-                target: crate::ir::RefTarget::Context(qref),
-                path,
-            } = &inst.kind
-                && path.is_empty()
-            {
-                map.insert(*dst, *qref);
-            }
-        }
-    }
-    map
-}
-
-/// Which context does this Load/Store access? None if not a context op.
-fn context_of_load(
-    kind: &InstKind,
-    ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
-) -> Option<QualifiedRef> {
-    match kind {
-        InstKind::Load { src, .. } => ref_to_ctx.get(src).copied(),
-        _ => None,
-    }
-}
-
-fn context_of_store(
-    kind: &InstKind,
-    ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
-) -> Option<QualifiedRef> {
-    match kind {
-        InstKind::Store { dst, .. } => ref_to_ctx.get(dst).copied(),
-        _ => None,
-    }
-}
-
 /// Run the sink pass - move Eval, Load, and Store
 /// as late as possible within their block.
 ///
@@ -338,7 +299,7 @@ fn sink_pass(cfg: &mut CfgBody) {
 
 /// Try to sink ONE instruction. Returns true if something moved.
 fn sink_one(cfg: &mut CfgBody) -> bool {
-    let ref_to_ctx = build_ref_to_ctx(cfg);
+    let ref_to_ctx = ref_to_ctx(cfg);
 
     for bi in 0..cfg.blocks.len() {
         for ii in 0..cfg.blocks[bi].insts.len() {

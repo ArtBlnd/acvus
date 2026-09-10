@@ -11,7 +11,7 @@
 
 use crate::cfg::CfgBody;
 use crate::ir::*;
-use crate::ty::{Effect, Ty};
+use crate::ty::Ty;
 
 /// Split IO FunctionCalls into Spawn + Eval pairs, in-place.
 pub fn run(cfg: &mut CfgBody) {
@@ -68,7 +68,7 @@ pub fn run(cfg: &mut CfgBody) {
 }
 
 fn is_io_call(callee_ty: &Ty) -> bool {
-    matches!(callee_ty.effect(), Some(e) if e != Effect::PURE)
+    matches!(callee_ty.effect(), Some(e) if !e.is_pure())
 }
 
 #[cfg(test)]

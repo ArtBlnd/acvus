@@ -1,6 +1,7 @@
 pub mod code_motion;
 pub mod commute;
 pub mod const_dedup;
+pub(crate) mod context_ops;
 pub mod dce;
 pub mod drop_insertion;
 pub mod dse;

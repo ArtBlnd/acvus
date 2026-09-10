@@ -25,7 +25,7 @@ expression: ir
     ; r2 (v3) : Array<String, 3>
     ; r3 (v4) : List<String>
     ; r4 (iter(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r5 (v6) : Fn(String) -> String
+    ; r5 (v6) : Fn(String) -> String with reads {@names}
     ; r6 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r7 (v11) : String
     ; r8 (join(...)) : String

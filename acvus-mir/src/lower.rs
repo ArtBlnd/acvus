@@ -201,7 +201,7 @@ impl<'a> Lowerer<'a> {
     /// effectful call reads and advances.
     fn enter_body_order(&mut self, effect: Effect, span: Span) {
         self.anyorder = None;
-        if effect == Effect::PURE {
+        if effect.is_pure() {
             self.order_slot = None;
             return;
         }
@@ -259,7 +259,7 @@ impl<'a> Lowerer<'a> {
                 v
             })
             .collect();
-        let effectful = callee_ty.effect().is_some_and(|e| e != Effect::PURE);
+        let effectful = callee_ty.effect().is_some_and(|e| !e.is_pure());
         let order = if effectful {
             let slot = self.order_slot.unwrap_or_else(|| {
                 panic!("effectful call lowered inside a body whose effect is Pure")

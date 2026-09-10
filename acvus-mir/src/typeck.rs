@@ -182,6 +182,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// A context access of the body: joined into its effect (RFC-0017).
+    fn note_access(&mut self, access: Effect, span: Span) {
+        self.note_call_effect(&EffectTerm::Known(access), span);
+    }
+
     fn close_body_effect(&self) -> Effect {
         self.solver.freeze_effect(&self.body_effect)
     }
@@ -626,6 +631,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 other => other,
             };
             if let Some(place) = place_of(place_expr) {
+                if got == ParamMode::BorrowMut
+                    && let PlaceRoot::Context(qref) = place.root
+                {
+                    self.note_access(Effect::write(qref), arg.span());
+                }
                 if named.contains(&place) {
                     self.error(
                         MirErrorKind::PlaceNamedTwice(place.display(self.interner)),
@@ -743,6 +753,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             } => {
                 let ty = self.check_expr(expr);
                 self.note_context_use(*name, *span);
+                self.note_access(Effect::write(*name), *span);
                 let ctx_ty = self
                     .env
                     .contexts
@@ -1046,6 +1057,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let ty = self.resolve_context_type(*qref, *span);
+                self.note_access(Effect::read(*qref), *span);
                 self.record_ret(*id, ty)
             }
 
@@ -1931,6 +1943,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
                 self.note_context_use(*qref, span);
+                self.note_access(Effect::write(*qref), span);
                 let ctx_ty = self
                     .env
                     .contexts

@@ -25,7 +25,7 @@ expression: ir
     ; r2 (v3) : Array<Float, 3>
     ; r3 (v4) : List<Float>
     ; r4 (iter(...)) : Iterator<Float, Pure, #IdentityId(0)>
-    ; r5 (v6) : Fn(Float) -> Float
+    ; r5 (v6) : Fn(Float) -> Float with reads {@vals}
     ; r6 (map(...)) : Iterator<Float, Pure, #IdentityId(0)>
     ; r7 (collect(...)) : List<Float>
     ; r8 (v12) : String
