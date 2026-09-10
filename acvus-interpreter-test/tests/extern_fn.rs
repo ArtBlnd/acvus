@@ -1,7 +1,10 @@
 //! Interpreter e2e tests for ExternFn: uses/defs, context reads/writes via handler.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use acvus_extern::{ExternFn, ExternItems, ExternRegistry, ExternType, extern_fn, extern_registry};
-use acvus_interpreter::{AcvusRuntime, Executable, Value};
+use acvus_interpreter::{AcvusRuntime, Executable, RuntimeError, TokioExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
 use acvus_mir::ty::{Effect, Ty, TypeRegistry};
@@ -640,6 +643,134 @@ fn a_loop_inside_anyorder_merges_per_iteration_mir() {
     let (spawns, _) = dump_and_positions("anyorder_loop", &i, &cr);
     assert_eq!(spawns.len(), 1, "one call in the loop body");
     assert!(has_merge(&cr), "each iteration merges into the accumulator");
+}
+
+// -- Concurrency on TokioExecutor -----------------------------------
+//
+// Work starts at Spawn as a task. Two calls the compiler placed before
+// their evals overlap; two calls on the chain do not. The probes count
+// how many of them are in flight at once.
+
+/// How long a probe stays in flight. Not a measurement: a window in which
+/// another probe can start, so the counter can see two at once.
+const PROBE_HOLD: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// How many probe calls were in flight at the same time.
+struct Probe {
+    in_flight: Arc<AtomicUsize>,
+    max: Arc<AtomicUsize>,
+}
+
+impl Probe {
+    fn new() -> Self {
+        Probe {
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            max: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn max(&self) -> usize {
+        self.max.load(Ordering::SeqCst)
+    }
+
+    /// `probe_a` and `probe_b`: each returns 100 after yielding once.
+    fn registry(&self, effect: Effect) -> ExternRegistry<AcvusRuntime> {
+        let in_flight = Arc::clone(&self.in_flight);
+        let max = Arc::clone(&self.max);
+        ExternRegistry::new(move |i| {
+            let fns = ["probe_a", "probe_b"]
+                .into_iter()
+                .map(|name| {
+                    let in_flight = Arc::clone(&in_flight);
+                    let max = Arc::clone(&max);
+                    ExternFn::r#async(i, name, move |_: Interner| {
+                        let in_flight = Arc::clone(&in_flight);
+                        let max = Arc::clone(&max);
+                        async move {
+                            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                            max.fetch_max(now, Ordering::SeqCst);
+                            tokio::time::sleep(PROBE_HOLD).await;
+                            in_flight.fetch_sub(1, Ordering::SeqCst);
+                            Ok::<i64, RuntimeError>(100)
+                        }
+                    })
+                    .with_effect(effect)
+                })
+                .collect();
+            ExternItems { types: vec![], fns }
+        })
+    }
+}
+
+async fn run_on_tokio(
+    source: &str,
+    script_mode: bool,
+    context: &[(&str, Value)],
+    registry: ExternRegistry<AcvusRuntime>,
+) -> Value {
+    let i = Interner::new();
+    let script = if script_mode {
+        acvus_ast::parse_script_mode(&i, source).expect("parse")
+    } else {
+        acvus_ast::parse_script(&i, source).expect("parse")
+    };
+    let ast = acvus_mir::graph::ParsedAst::Script(script);
+    run_parsed_on(
+        &i,
+        ast,
+        ctx(&i, context),
+        vec![registry],
+        TypeRegistry::new(),
+        Arc::new(TokioExecutor),
+    )
+    .await
+    .value
+}
+
+#[tokio::test]
+async fn calls_on_the_chain_do_not_overlap() {
+    let probe = Probe::new();
+    let v = run_on_tokio(
+        "@a = probe_a(); @b = probe_b(); @a + @b",
+        true,
+        &[("a", Value::Int(0)), ("b", Value::Int(0))],
+        probe.registry(Effect::OPAQUE),
+    )
+    .await;
+    assert_eq!(v, Value::Int(200));
+    assert_eq!(
+        probe.max(),
+        1,
+        "the second call starts after the first completes"
+    );
+}
+
+#[tokio::test]
+async fn an_anyorder_block_overlaps_its_calls() {
+    let probe = Probe::new();
+    let v = run_on_tokio(
+        "anyorder { @a = probe_a(); @b = probe_b(); } @a + @b",
+        true,
+        &[("a", Value::Int(0)), ("b", Value::Int(0))],
+        probe.registry(Effect::OPAQUE),
+    )
+    .await;
+    assert_eq!(v, Value::Int(200));
+    assert_eq!(probe.max(), 2, "both calls are in flight at once");
+}
+
+#[tokio::test]
+async fn commutative_calls_overlap_without_a_block() {
+    let probe = Probe::new();
+    let v = run_on_tokio(
+        "probe_a() + probe_b()",
+        false,
+        &[],
+        probe.registry(Effect::IDEMPOTENT.commutative()),
+    )
+    .await;
+    assert_eq!(v, Value::Int(200));
+    assert_eq!(probe.max(), 2, "a commutative run is in flight at once");
 }
 
 // -- 7. IO in iteration ---------------------------------------------

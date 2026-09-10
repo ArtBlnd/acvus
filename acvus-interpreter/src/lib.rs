@@ -7,7 +7,7 @@ mod value;
 
 pub use acvus_extern::{ExternTypeName, ExternValue, PayloadMismatch};
 pub use error::{RuntimeError, RuntimeErrorKind, ValueKind};
-pub use executor::{Executor, SequentialExecutor};
+pub use executor::{Executor, SequentialExecutor, TokioExecutor};
 pub use interpreter::{
     Args, ExecResult, Executable, Interpreter, InterpreterContext, fn_value_call,
 };

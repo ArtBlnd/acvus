@@ -342,6 +342,26 @@ pub async fn run_parsed_with_externs(
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
 ) -> ExecResult {
+    run_parsed_on(
+        interner,
+        ast,
+        context,
+        extern_registries,
+        type_registry,
+        Arc::new(SequentialExecutor),
+    )
+    .await
+}
+
+/// Run an already parsed script on the given executor.
+pub async fn run_parsed_on(
+    interner: &Interner,
+    ast: ParsedAst,
+    context: FxHashMap<Astr, Value>,
+    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
+    type_registry: acvus_mir::ty::TypeRegistry,
+    executor: Arc<dyn acvus_interpreter::Executor>,
+) -> ExecResult {
     let context_types: FxHashMap<Astr, Ty> =
         context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
 
@@ -363,7 +383,6 @@ pub async fn run_parsed_with_externs(
         .map(|(k, v)| (interner.resolve(k).to_string(), v))
         .collect();
 
-    let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, functions, executor)
         .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);

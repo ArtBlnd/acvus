@@ -92,3 +92,43 @@ impl Executor for SequentialExecutor {
         })
     }
 }
+
+// -- TokioExecutor ----------------------------------------------------
+
+/// Work starts at spawn as a tokio task and eval joins it. Two spawns
+/// that stand before their evals run concurrently; the schedule the
+/// compiler emitted (RFC-0007) is what decides that.
+pub struct TokioExecutor;
+
+type Joined = tokio::task::JoinHandle<Result<ExecResult, RuntimeError>>;
+
+impl Executor for TokioExecutor {
+    fn spawn_interpreter(&self, mut interpreter: Interpreter) -> HandleValue {
+        HandleValue::new(tokio::spawn(async move { interpreter.execute().await }))
+    }
+
+    fn spawn_blocking(
+        &self,
+        f: Box<dyn FnOnce() -> Result<ExecResult, RuntimeError> + Send + Sync>,
+    ) -> HandleValue {
+        HandleValue::new(tokio::task::spawn_blocking(f))
+    }
+
+    fn spawn_async(
+        &self,
+        f: Pin<Box<dyn Future<Output = Result<ExecResult, RuntimeError>> + Send>>,
+    ) -> HandleValue {
+        HandleValue::new(tokio::spawn(f))
+    }
+
+    fn eval(&self, handle: HandleValue) -> BoxFuture<'_, Result<ExecResult, RuntimeError>> {
+        Box::pin(async move {
+            let joined = handle
+                .try_downcast::<Joined>()
+                .unwrap_or_else(|_| panic!("eval: handle was not spawned by TokioExecutor"));
+            joined.await.unwrap_or_else(|e| {
+                Err(RuntimeError::internal(format!("spawned task failed: {e}")))
+            })
+        })
+    }
+}
