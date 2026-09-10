@@ -234,7 +234,7 @@ mod tests {
                 params: vec![],
                 ret: Box::new(Ty::String),
                 captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         )
     }

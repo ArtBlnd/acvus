@@ -37,6 +37,9 @@ struct ExternFnAttr {
     name: Option<LitStr>,
     ns: Option<LitStr>,
     effect: Option<Ident>,
+    /// `commutative`: two calls of this function in either order are the
+    /// same program (RFC-0013).
+    commutative: bool,
 }
 
 impl Parse for ExternFnAttr {
@@ -45,9 +48,17 @@ impl Parse for ExternFnAttr {
             name: None,
             ns: None,
             effect: None,
+            commutative: false,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
+            if key == "commutative" {
+                out.commutative = true;
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             input.parse::<Token![=]>()?;
             if key == "name" {
                 out.name = Some(input.parse()?);
@@ -58,7 +69,7 @@ impl Parse for ExternFnAttr {
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name`, `ns`, or `effect`",
+                    "expected `name`, `ns`, `effect`, or `commutative`",
                 ));
             }
             if !input.is_empty() {
@@ -102,19 +113,40 @@ fn generate_extern_fn(
     let qref = qref_expr(attr.ns.as_ref().map(LitStr::value).as_deref(), &acvus_name);
     let decl_ident = format_ident!("__extern_fn_{}", fn_ident);
 
+    let commutes = if attr.commutative {
+        quote! { .commutative() }
+    } else {
+        quote! {}
+    };
     let effect = match &attr.effect {
-        None => quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::Opaque) },
+        None => {
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes) }
+        }
         Some(e) if e == "pure" => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::Pure) }
+            if attr.commutative {
+                return Err(syn::Error::new(
+                    e.span(),
+                    "a pure function commutes by definition; drop `commutative`",
+                ));
+            }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE) }
         }
         Some(e) if e == "idempotent" => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::Idempotent) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::IDEMPOTENT #commutes) }
         }
         Some(e) if e == "opaque" => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::Opaque) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes) }
         }
         Some(e) => match vars.lookup(e) {
-            Some((VarKind::Effect, k)) => quote! { __vars.effects[#k] },
+            Some((VarKind::Effect, k)) => {
+                if attr.commutative {
+                    return Err(syn::Error::new(
+                        e.span(),
+                        "`commutative` cannot be declared on an effect variable",
+                    ));
+                }
+                quote! { __vars.effects[#k] }
+            }
             _ => {
                 return Err(syn::Error::new(
                     e.span(),

@@ -30,7 +30,7 @@ fn iter_ty(interner: &Interner, elem: Ty) -> Ty {
     Ty::UserDefined {
         id: iter_qref,
         type_args: vec![elem],
-        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
+        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
@@ -43,7 +43,7 @@ fn iter_ity(interner: &Interner, elem: InferTy) -> InferTy {
     InferTy::UserDefined {
         id: iter_qref,
         type_args: vec![elem],
-        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
+        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
@@ -56,7 +56,7 @@ fn iter_ity_open(interner: &Interner, s: &mut Solver, elem: InferTy) -> InferTy 
     InferTy::UserDefined {
         id: iter_qref,
         type_args: vec![elem],
-        effect_args: vec![acvus_mir::ty::Effect::Pure.into()],
+        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
         identity_args: vec![s.fresh_identity_var()],
     }
 }

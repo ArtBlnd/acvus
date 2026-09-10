@@ -48,8 +48,8 @@ pub enum EffectBound {
 impl EffectBound {
     fn free() -> Self {
         EffectBound::Range {
-            lower: Effect::Pure,
-            upper: Effect::Opaque,
+            lower: Effect::PURE,
+            upper: Effect::OPAQUE,
         }
     }
 }
@@ -325,13 +325,13 @@ impl Solver {
     pub fn bind_effect(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
-        if effect < lower {
+        if !lower.at_most(effect) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: effect,
             });
         }
-        if effect > upper {
+        if !effect.at_most(upper) {
             return Err(EffectConflict {
                 required: effect,
                 allowed: upper,
@@ -345,7 +345,7 @@ impl Solver {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
         let lower = lower.join(effect);
-        if lower > upper {
+        if !lower.at_most(upper) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: upper,
@@ -358,8 +358,8 @@ impl Solver {
     fn lower_upper(&mut self, id: EffectVarId, effect: Effect) -> Result<(), EffectConflict> {
         let root = self.find_effect_root(id);
         let (lower, upper) = self.range_of(root);
-        let upper = upper.min(effect);
-        if lower > upper {
+        let upper = upper.meet(effect);
+        if !lower.at_most(upper) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: upper,
@@ -378,8 +378,8 @@ impl Solver {
         let (la, ua) = self.range_of(from_root);
         let (lb, ub) = self.range_of(to_root);
         let lower = la.join(lb);
-        let upper = ua.min(ub);
-        if lower > upper {
+        let upper = ua.meet(ub);
+        if !lower.at_most(upper) {
             return Err(EffectConflict {
                 required: lower,
                 allowed: upper,
@@ -401,11 +401,11 @@ impl Solver {
         match (a, b) {
             (EffectTerm::Known(ea), EffectTerm::Known(eb)) => {
                 let (required, allowed) = match pol {
-                    Polarity::Invariant => (ea.join(eb), ea.min(eb)),
+                    Polarity::Invariant => (ea.join(eb), ea.meet(eb)),
                     Polarity::Covariant => (ea, eb),
                     Polarity::Contravariant => (eb, ea),
                 };
-                if required <= allowed {
+                if required.at_most(allowed) {
                     Ok(())
                 } else {
                     Err(EffectConflict { required, allowed })

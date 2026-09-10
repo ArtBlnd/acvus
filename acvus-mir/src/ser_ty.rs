@@ -230,17 +230,17 @@ mod tests {
             params: vec![],
             ret: Box::new(Ty::Int),
             captures: vec![],
-            effect: Effect::Idempotent.into(),
+            effect: Effect::IDEMPOTENT.into(),
         };
         assert_eq!(
             fn_ty.to_ser(&i).to_ty(&i).effect(),
-            Some(Effect::Idempotent)
+            Some(Effect::IDEMPOTENT)
         );
 
         let ud = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("Iterator")),
             type_args: vec![Ty::Int],
-            effect_args: vec![Effect::Opaque.into()],
+            effect_args: vec![Effect::OPAQUE.into()],
             identity_args: vec![],
         };
         assert_eq!(ud.to_ser(&i).to_ty(&i), ud);

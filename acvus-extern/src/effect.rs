@@ -31,18 +31,18 @@ pub struct Opaque;
 
 impl EffectArg for Pure {
     fn poly_effect(_: &PolyVars) -> EffectTerm<Poly> {
-        EffectTerm::Known(Effect::Pure)
+        EffectTerm::Known(Effect::PURE)
     }
 }
 
 impl EffectArg for Idempotent {
     fn poly_effect(_: &PolyVars) -> EffectTerm<Poly> {
-        EffectTerm::Known(Effect::Idempotent)
+        EffectTerm::Known(Effect::IDEMPOTENT)
     }
 }
 
 impl EffectArg for Opaque {
     fn poly_effect(_: &PolyVars) -> EffectTerm<Poly> {
-        EffectTerm::Known(Effect::Opaque)
+        EffectTerm::Known(Effect::OPAQUE)
     }
 }

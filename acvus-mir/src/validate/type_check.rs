@@ -313,7 +313,7 @@ impl CheckCtx {
         let Some(effect) = callee_ty.effect() else {
             return;
         };
-        match (effect == crate::ty::Effect::Pure, before) {
+        match (effect == crate::ty::Effect::PURE, before) {
             (false, Some(o)) => self.expect_order(o, val_types, span, pc, errors),
             (true, None) => {}
             (pure, _) => errors.push(ValidationError {

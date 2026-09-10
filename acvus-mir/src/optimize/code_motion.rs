@@ -505,7 +505,7 @@ mod tests {
                 params: vec![],
                 ret: Box::new(Ty::Int),
                 captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         )
     }

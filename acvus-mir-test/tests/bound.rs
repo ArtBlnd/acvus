@@ -24,7 +24,7 @@ fn add_fn(i: &Interner) -> Function {
             ],
             ret: Box::new(t),
             captures: vec![],
-            effect: acvus_mir::ty::Effect::Pure.into(),
+            effect: acvus_mir::ty::Effect::PURE.into(),
         },
     }
 }

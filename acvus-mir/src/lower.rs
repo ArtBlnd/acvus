@@ -161,7 +161,7 @@ impl<'a> Lowerer<'a> {
     /// Pure: an order parameter, stored into a fresh slot that every
     /// effectful call reads and advances.
     fn enter_body_order(&mut self, effect: Effect, span: Span) {
-        if effect == Effect::Pure {
+        if effect == Effect::PURE {
             self.order_slot = None;
             return;
         }
@@ -196,7 +196,7 @@ impl<'a> Lowerer<'a> {
         callee_ty: Ty,
         args: Vec<ValueId>,
     ) {
-        let effectful = callee_ty.effect().is_some_and(|e| e != Effect::Pure);
+        let effectful = callee_ty.effect().is_some_and(|e| e != Effect::PURE);
         let order = if effectful {
             let slot = self.order_slot.unwrap_or_else(|| {
                 panic!("effectful call lowered inside a body whose effect is Pure")
@@ -1665,7 +1665,7 @@ impl<'a> Lowerer<'a> {
                 let saved_scopes = std::mem::replace(&mut self.scopes, sub_scopes);
                 let saved_var_slots = std::mem::replace(&mut self.var_slots, FxHashMap::default());
                 let saved_order_slot = self.order_slot;
-                let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::Opaque);
+                let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
 
                 // Emit Ref+Store for captures so Ref+Load in body can find them.

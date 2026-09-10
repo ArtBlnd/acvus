@@ -2278,7 +2278,7 @@ mod tests {
                 ret: Box::new(Ty::String),
 
                 captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         )]);
         let src = "{{ x = @fetch_user(1) }}{{ x }}{{_}}{{/}}";
@@ -2369,7 +2369,7 @@ mod tests {
                     ret: Box::new(Ty::String),
 
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             ),
             (interner.intern("name"), Ty::String),
@@ -2392,7 +2392,7 @@ mod tests {
             params: vec![p(&i, Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![],
-            effect: crate::ty::Effect::Pure.into(),
+            effect: crate::ty::Effect::PURE.into(),
         };
         let ctx = FxHashMap::from_iter([
             (
@@ -2401,7 +2401,7 @@ mod tests {
                     params: vec![p(&i, pure_fn_ty.clone())],
                     ret: Box::new(Ty::String),
                     captures: vec![],
-                    effect: crate::ty::Effect::Pure.into(),
+                    effect: crate::ty::Effect::PURE.into(),
                 },
             ),
             (
@@ -2410,7 +2410,7 @@ mod tests {
                     params: vec![p(&i, Ty::Int)],
                     ret: Box::new(Ty::Int),
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             ),
         ]);
@@ -2449,7 +2449,7 @@ mod tests {
                 ret: Box::new(Ty::String),
 
                 captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         )]);
         let src = r#"{{ "hello" | @my_fn(42) }}"#;
@@ -2523,7 +2523,7 @@ mod tests {
                 ret: Box::new(Ty::String),
 
                 captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         )]);
         let src = "{{ f = @callback }}{{ f(42) }}{{_}}{{/}}";
@@ -2542,7 +2542,7 @@ mod tests {
                     ret: Box::new(Ty::Int),
 
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 }),
                 LenTerm::Known(3),
             ),
@@ -2595,7 +2595,7 @@ mod tests {
                     ret: Box::new(Ty::String),
 
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             ),
         ]);

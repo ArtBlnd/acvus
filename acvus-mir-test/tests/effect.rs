@@ -66,18 +66,18 @@ fn function_effect_is_the_join_of_its_calls() {
     let effects = infer_effects(
         &i,
         vec![
-            extern_fn(&i, "fetch", Effect::Opaque),
-            extern_fn(&i, "pure_fn", Effect::Pure),
+            extern_fn(&i, "fetch", Effect::OPAQUE),
+            extern_fn(&i, "pure_fn", Effect::PURE),
             local_fn(&i, "wrap_io", "fetch()"),
             local_fn(&i, "wrap_pure", "pure_fn()"),
             local_fn(&i, "both", "wrap_pure() + wrap_io()"),
             local_fn(&i, "none", "1 + 2"),
         ],
     );
-    assert_eq!(effects["wrap_io"], Effect::Opaque);
-    assert_eq!(effects["wrap_pure"], Effect::Pure);
-    assert_eq!(effects["both"], Effect::Opaque);
-    assert_eq!(effects["none"], Effect::Pure);
+    assert_eq!(effects["wrap_io"], Effect::OPAQUE);
+    assert_eq!(effects["wrap_pure"], Effect::PURE);
+    assert_eq!(effects["both"], Effect::OPAQUE);
+    assert_eq!(effects["none"], Effect::PURE);
 }
 
 #[test]
@@ -86,13 +86,13 @@ fn lambda_effect_counts_only_when_called() {
     let effects = infer_effects(
         &i,
         vec![
-            extern_fn(&i, "fetch", Effect::Opaque),
+            extern_fn(&i, "fetch", Effect::OPAQUE),
             local_fn(&i, "defines", "f = |_x| -> fetch(); 1"),
             local_fn(&i, "calls", "f = |_x| -> fetch(); f(1)"),
         ],
     );
-    assert_eq!(effects["defines"], Effect::Pure);
-    assert_eq!(effects["calls"], Effect::Opaque);
+    assert_eq!(effects["defines"], Effect::PURE);
+    assert_eq!(effects["calls"], Effect::OPAQUE);
 }
 
 fn params(i: &Interner, names: &[&str]) -> Vec<PolyParam> {
@@ -110,7 +110,7 @@ fn opaque_call_is_spawn_split_and_pure_call_is_not() {
         ("main", "wrap(1)"),
         &[("wrap", "fetch() + $x", params(&i, &["x"]))],
         &[],
-        &[extern_fn(&i, "fetch", Effect::Opaque)],
+        &[extern_fn(&i, "fetch", Effect::OPAQUE)],
     )
     .unwrap();
     assert!(io.contains("spawn"), "an Opaque call must be split:\n{io}");
@@ -120,7 +120,7 @@ fn opaque_call_is_spawn_split_and_pure_call_is_not() {
         ("main", "wrap(1)"),
         &[("wrap", "pure_fn() + $x", params(&i, &["x"]))],
         &[],
-        &[extern_fn(&i, "pure_fn", Effect::Pure)],
+        &[extern_fn(&i, "pure_fn", Effect::PURE)],
     )
     .unwrap();
     assert!(

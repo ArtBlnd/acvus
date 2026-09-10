@@ -106,7 +106,7 @@ fn cast_rule<R: Runtime>(f: &ExternFn<R>) -> CastRule {
     };
     assert_eq!(
         *effect,
-        EffectTerm::Known(Effect::Pure),
+        EffectTerm::Known(Effect::PURE),
         "cast {:?}: a cast is pure",
         f.qref
     );
@@ -158,7 +158,7 @@ macro_rules! impl_handlers {
                     interner,
                     vec![$($A::poly_ty(interner, &vars)),*],
                     Ret::poly_ty(interner, &vars),
-                    Effect::Opaque,
+                    Effect::OPAQUE,
                 )
             }
             fn into_handler(self) -> ExternHandler<R> {
@@ -180,7 +180,7 @@ macro_rules! impl_handlers {
                     interner,
                     vec![$($A::poly_ty(interner, &vars)),*],
                     Ret::poly_ty(interner, &vars),
-                    Effect::Opaque,
+                    Effect::OPAQUE,
                 )
             }
             fn into_handler(self) -> ExternHandler<R> {

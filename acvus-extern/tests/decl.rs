@@ -263,10 +263,16 @@ where
     t.0
 }
 
+/// A fresh draw: two draws in either order are the same program.
+#[extern_fn(effect = idempotent, commutative)]
+fn draw(_: &Interner) -> i64 {
+    4
+}
+
 fn registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         types: [Boxed<_, _, R>, Token<_>],
-        fns: [add, identity, apply, boxed, fetch, take_token],
+        fns: [add, identity, apply, boxed, fetch, take_token, draw],
     }
 }
 
@@ -309,15 +315,19 @@ fn concrete_signature_and_declared_effect() {
     let add = fn_ty(find(&reg.functions, &i, "add"));
     assert_eq!(add.params, vec![PolyTy::Int, PolyTy::Int]);
     assert_eq!(add.ret, PolyTy::Int);
-    assert_eq!(add.effect, EffectTerm::Known(Effect::Pure));
+    assert_eq!(add.effect, EffectTerm::Known(Effect::PURE));
 
     assert_eq!(
         fn_ty(find(&reg.functions, &i, "fetch")).effect,
-        EffectTerm::Known(Effect::Opaque)
+        EffectTerm::Known(Effect::OPAQUE)
     );
     assert_eq!(
         fn_ty(find(&reg.functions, &i, "take_token")).effect,
-        EffectTerm::Known(Effect::Idempotent)
+        EffectTerm::Known(Effect::IDEMPOTENT)
+    );
+    assert_eq!(
+        fn_ty(find(&reg.functions, &i, "draw")).effect,
+        EffectTerm::Known(Effect::IDEMPOTENT.commutative())
     );
 }
 
@@ -364,7 +374,7 @@ fn generic_parameters_become_positional_variables() {
         PolyTy::UserDefined {
             id: acvus_extern::QualifiedRef::root(i.intern("Box")),
             type_args: vec![PolyTy::Var(0)],
-            effect_args: vec![EffectTerm::Known(Effect::Pure)],
+            effect_args: vec![EffectTerm::Known(Effect::PURE)],
             identity_args: vec![],
         }
     );
@@ -508,7 +518,7 @@ fn closure_declaration_takes_its_type_from_the_closure() {
         types: vec![],
         fns: vec![
             ExternFn::sync(i, "shout", |_: &Interner, s: String| Ok(s.to_uppercase()))
-                .with_effect(Effect::Pure),
+                .with_effect(Effect::PURE),
         ],
     });
     let mut tr = TypeRegistry::new();
@@ -516,7 +526,7 @@ fn closure_declaration_takes_its_type_from_the_closure() {
     let shout = fn_ty(find(&reg.functions, &i, "shout"));
     assert_eq!(shout.params, vec![PolyTy::String]);
     assert_eq!(shout.ret, PolyTy::String);
-    assert_eq!(shout.effect, EffectTerm::Known(Effect::Pure));
+    assert_eq!(shout.effect, EffectTerm::Known(Effect::PURE));
 }
 
 #[test]
@@ -631,7 +641,7 @@ fn call_type(
             .collect(),
         ret: Box::new(ret),
         captures: vec![],
-        effect: EffectTerm::Known(Effect::Pure),
+        effect: EffectTerm::Known(Effect::PURE),
     }
 }
 
@@ -675,7 +685,7 @@ fn the_call_type_selects_the_instance() {
     let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![t],
-        effect_args: vec![EffectTerm::Known(Effect::Pure)],
+        effect_args: vec![EffectTerm::Known(Effect::PURE)],
         identity_args: vec![],
     };
     let ty = call_type(

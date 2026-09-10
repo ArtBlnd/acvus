@@ -66,7 +66,7 @@ pub fn run(cfg: &mut CfgBody) {
 }
 
 fn is_io_call(callee_ty: &Ty) -> bool {
-    matches!(callee_ty.effect(), Some(e) if e != Effect::Pure)
+    matches!(callee_ty.effect(), Some(e) if e != Effect::PURE)
 }
 
 #[cfg(test)]
@@ -125,7 +125,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
 
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         );
 
@@ -195,7 +195,7 @@ mod tests {
                 ret: Box::new(Ty::Int),
                 captures: vec![],
 
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         );
 
@@ -254,7 +254,7 @@ mod tests {
                     ret: Box::new(Ty::String),
                     captures: vec![],
 
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             );
         }

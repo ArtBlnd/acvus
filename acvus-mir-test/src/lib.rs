@@ -17,7 +17,7 @@ fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam>) -
             params,
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: acvus_mir::ty::Effect::Opaque.into(),
+            effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
     }
 }

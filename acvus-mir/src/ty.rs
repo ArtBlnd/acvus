@@ -407,19 +407,99 @@ pub enum Materiality {
     Ephemeral,
 }
 
-/// Effect level of a call. The derived order is the chain `Pure < Idempotent < Opaque`.
+/// Whether a call may be suspended and issued again (RFC-0008). The
+/// derived order is the chain `Pure < Idempotent < Opaque`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
-pub enum Effect {
+pub enum Reissue {
     Pure,
     Idempotent,
     Opaque,
 }
 
+/// The effect of a call on two axes (RFC-0013): the reissue chain, and
+/// whether two calls commute. A Pure call commutes by definition, so
+/// `Effect::new` keeps that invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Effect {
+    pub reissue: Reissue,
+    pub commutes: bool,
+}
+
 impl Effect {
+    pub const PURE: Effect = Effect {
+        reissue: Reissue::Pure,
+        commutes: true,
+    };
+    pub const IDEMPOTENT: Effect = Effect {
+        reissue: Reissue::Idempotent,
+        commutes: false,
+    };
+    pub const OPAQUE: Effect = Effect {
+        reissue: Reissue::Opaque,
+        commutes: false,
+    };
+
+    pub fn new(reissue: Reissue, commutes: bool) -> Effect {
+        Effect {
+            reissue,
+            commutes: commutes || reissue == Reissue::Pure,
+        }
+    }
+
+    /// The same level, declared to commute.
+    pub fn commutative(self) -> Effect {
+        Effect::new(self.reissue, true)
+    }
+
+    pub fn is_pure(self) -> bool {
+        self.reissue == Reissue::Pure
+    }
+
+    /// The product order: `self` is no more effectful than `other` when it
+    /// is no higher on the chain and commutes whenever `other` does.
+    pub fn at_most(self, other: Effect) -> bool {
+        self.reissue <= other.reissue && (self.commutes || !other.commutes)
+    }
+
+    /// The least effect above both: the higher level, commutative only if
+    /// both are.
     pub fn join(self, other: Effect) -> Effect {
-        self.max(other)
+        Effect::new(
+            self.reissue.max(other.reissue),
+            self.commutes && other.commutes,
+        )
+    }
+
+    /// The greatest effect below both.
+    pub fn meet(self, other: Effect) -> Effect {
+        Effect::new(
+            self.reissue.min(other.reissue),
+            self.commutes || other.commutes,
+        )
+    }
+}
+
+impl PartialOrd for Effect {
+    fn partial_cmp(&self, other: &Effect) -> Option<std::cmp::Ordering> {
+        use std::cmp::Ordering;
+        match (self.at_most(*other), other.at_most(*self)) {
+            (true, true) => Some(Ordering::Equal),
+            (true, false) => Some(Ordering::Less),
+            (false, true) => Some(Ordering::Greater),
+            (false, false) => None,
+        }
+    }
+}
+
+impl fmt::Display for Effect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.reissue)?;
+        if self.commutes && !self.is_pure() {
+            write!(f, "+commutative")?;
+        }
+        Ok(())
     }
 }
 
@@ -706,9 +786,11 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     write!(f, "{}", p.ty.display(self.interner))?;
                 }
                 write!(f, ") -> {}", ret.display(self.interner))?;
-                match effect.get() {
-                    Effect::Pure => Ok(()),
-                    other => write!(f, " with {other:?}"),
+                let effect = effect.get();
+                if effect.is_pure() {
+                    Ok(())
+                } else {
+                    write!(f, " with {effect}")
                 }
             }
             Ty::Array(inner, len) => {
@@ -741,7 +823,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                             write!(f, ", ")?;
                         }
                         first = false;
-                        write!(f, "{:?}", arg.get())?;
+                        write!(f, "{}", arg.get())?;
                     }
                     for arg in identity_args {
                         if !first {
@@ -1263,6 +1345,39 @@ mod tests {
     use acvus_utils::Interner;
 
     use Polarity::*;
+
+    #[test]
+    fn a_pure_effect_commutes_by_definition() {
+        assert_eq!(Effect::new(Reissue::Pure, false), Effect::PURE);
+        assert!(Effect::PURE.commutes);
+        assert_eq!(Effect::PURE.to_string(), "Pure");
+        assert_eq!(
+            Effect::IDEMPOTENT.commutative().to_string(),
+            "Idempotent+commutative"
+        );
+    }
+
+    #[test]
+    fn effects_join_on_both_axes() {
+        let c = Effect::IDEMPOTENT.commutative();
+        assert_eq!(c.join(Effect::IDEMPOTENT), Effect::IDEMPOTENT);
+        assert_eq!(c.join(Effect::PURE), c);
+        assert_eq!(
+            c.join(Effect::OPAQUE.commutative()),
+            Effect::OPAQUE.commutative()
+        );
+        assert_eq!(Effect::OPAQUE.meet(c), c);
+    }
+
+    #[test]
+    fn the_product_order_leaves_the_axes_incomparable() {
+        let c = Effect::OPAQUE.commutative();
+        assert!(Effect::PURE.at_most(c));
+        assert!(c.at_most(Effect::OPAQUE));
+        assert!(!Effect::IDEMPOTENT.at_most(c));
+        assert!(!c.at_most(Effect::IDEMPOTENT));
+        assert_eq!(Effect::IDEMPOTENT.partial_cmp(&c), None);
+    }
 
     fn arr<V: Phase>(elem: TyTerm<V>, n: usize) -> TyTerm<V> {
         TyTerm::Array(Box::new(elem), LenTerm::Known(n))

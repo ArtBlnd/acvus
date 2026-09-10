@@ -34,7 +34,7 @@ fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, 
 async fn extern_pure_add() {
     let i = Interner::new();
 
-    let registry = closures(Effect::Pure, |i| {
+    let registry = closures(Effect::PURE, |i| {
         vec![ExternFn::sync(
             i,
             "ext_add",
@@ -51,7 +51,7 @@ async fn extern_pure_add() {
 async fn extern_pure_string_transform() {
     let i = Interner::new();
 
-    let registry = closures(Effect::Pure, |i| {
+    let registry = closures(Effect::PURE, |i| {
         vec![ExternFn::sync(i, "shout", |_: &Interner, s: String| {
             Ok(s.to_uppercase())
         })]
@@ -71,7 +71,7 @@ async fn extern_captures_environment() {
     let i = Interner::new();
     let secret = 7i64;
 
-    let registry = closures(Effect::Pure, move |i| {
+    let registry = closures(Effect::PURE, move |i| {
         vec![ExternFn::sync(
             i,
             "multiply_secret",
@@ -138,7 +138,7 @@ async fn regex_find_via_extern() {
 fn ir_pure_function_call_no_context_bindings() {
     let i = Interner::new();
 
-    let registry = closures(Effect::Pure, |i| {
+    let registry = closures(Effect::PURE, |i| {
         vec![ExternFn::sync(
             i,
             "double",

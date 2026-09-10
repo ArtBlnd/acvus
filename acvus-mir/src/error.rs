@@ -145,11 +145,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::EffectExceeded(c) => {
-                write!(
-                    f,
-                    "effect {:?} exceeds the allowed {:?}",
-                    c.required, c.allowed
-                )
+                write!(f, "effect {} exceeds the allowed {}", c.required, c.allowed)
             }
             MirErrorKind::ArrayLengthMismatch {
                 pattern_min,

@@ -70,7 +70,7 @@ async fn run_ext_with_registry(
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: acvus_mir::ty::Effect::Opaque.into(),
+                effect: acvus_mir::ty::Effect::OPAQUE.into(),
             },
         });
     }

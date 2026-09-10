@@ -969,7 +969,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             }]),
             contexts: Freeze::new(vec![]),
@@ -1000,7 +1000,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -1070,7 +1070,7 @@ mod tests {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         });
         CompilationGraph {
@@ -1137,7 +1137,7 @@ mod tests {
                     params: poly_params,
                     ret: Box::new(ret),
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             });
         }
@@ -1202,7 +1202,7 @@ mod tests {
                     params: poly_params,
                     ret: Box::new(ret),
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             });
         }
@@ -1253,7 +1253,7 @@ mod tests {
                 params: named_params,
                 ret: Box::new(lift_to_poly(&ret)),
                 captures: vec![],
-                effect: crate::ty::Effect::Opaque.into(),
+                effect: crate::ty::Effect::OPAQUE.into(),
             },
         }
     }
@@ -2359,7 +2359,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),

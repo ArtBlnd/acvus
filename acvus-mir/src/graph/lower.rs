@@ -110,7 +110,7 @@ mod tests {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
-                    effect: crate::ty::Effect::Opaque.into(),
+                    effect: crate::ty::Effect::OPAQUE.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),

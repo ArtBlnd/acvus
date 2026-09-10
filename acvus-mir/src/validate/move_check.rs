@@ -724,7 +724,7 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![test_user_defined()],
-            effect: crate::ty::Effect::Opaque.into(),
+            effect: crate::ty::Effect::OPAQUE.into(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }
@@ -735,7 +735,7 @@ mod tests {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![Ty::Int, Ty::String],
-            effect: crate::ty::Effect::Opaque.into(),
+            effect: crate::ty::Effect::OPAQUE.into(),
         };
         assert_eq!(is_move_only(&ty), Some(false));
     }

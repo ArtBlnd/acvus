@@ -280,7 +280,7 @@ fn lower_block(interner: &Interner, block: &Block, ns_name: Astr) -> BlockLowerR
                 params: vec![],
                 ret: Box::new(ret),
                 captures: vec![],
-                effect: acvus_mir::ty::Effect::Opaque.into(),
+                effect: acvus_mir::ty::Effect::OPAQUE.into(),
             },
         },
         field_errors,
@@ -373,7 +373,7 @@ fn lower_llm(interner: &Interner, llm: &LlmSpec, ns_name: Astr) -> LlmLowerResul
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
-            effect: acvus_mir::ty::Effect::Opaque.into(),
+            effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
     };
 
@@ -472,7 +472,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                     params: vec![],
                     ret: Box::new(lift_to_poly(&Ty::String)),
                     captures: vec![],
-                    effect: acvus_mir::ty::Effect::Opaque.into(),
+                    effect: acvus_mir::ty::Effect::OPAQUE.into(),
                 },
             };
             DisplayLowerResult {
@@ -521,7 +521,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                     params: vec![], // param discovered by Infer via $bind
                     ret: Box::new(lift_to_poly(&Ty::String)),
                     captures: vec![],
-                    effect: acvus_mir::ty::Effect::Opaque.into(),
+                    effect: acvus_mir::ty::Effect::OPAQUE.into(),
                 },
             };
             functions.push(tpl_func);
@@ -558,7 +558,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                                 params: vec![],
                                 ret: Box::new(pb.fresh_ty_var()),
                                 captures: vec![],
-                                effect: acvus_mir::ty::Effect::Opaque.into(),
+                                effect: acvus_mir::ty::Effect::OPAQUE.into(),
                             },
                         });
                     }
@@ -602,7 +602,7 @@ fn lower_display(interner: &Interner, display: &DisplaySpec, ns_name: Astr) -> D
                                 params: vec![],
                                 ret: Box::new(pb.fresh_ty_var()),
                                 captures: vec![],
-                                effect: acvus_mir::ty::Effect::Opaque.into(),
+                                effect: acvus_mir::ty::Effect::OPAQUE.into(),
                             },
                         });
                     }
@@ -907,7 +907,7 @@ mod tests {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
-                effect: acvus_mir::ty::Effect::Opaque.into(),
+                effect: acvus_mir::ty::Effect::OPAQUE.into(),
             },
         };
         let ns = Namespace {
