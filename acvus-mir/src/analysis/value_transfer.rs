@@ -149,17 +149,27 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::Undef { dst } => {
                 state.set(*dst, AbstractValue::Top);
             }
-            InstKind::Eval { dst, order, .. } => {
+            InstKind::Eval {
+                dst, order, lent, ..
+            } => {
                 state.set(*dst, AbstractValue::Top);
                 if let Some(o) = order {
                     state.set(*o, AbstractValue::Top);
                 }
+                for l in lent {
+                    state.set(*l, AbstractValue::Top);
+                }
             }
 
-            InstKind::FunctionCall { dst, order, .. } => {
+            InstKind::FunctionCall {
+                dst, order, lent, ..
+            } => {
                 state.set(*dst, AbstractValue::Top);
                 if let Some(edge) = order {
                     state.set(edge.after, AbstractValue::Top);
+                }
+                for l in lent {
+                    state.set(*l, AbstractValue::Top);
                 }
             }
 

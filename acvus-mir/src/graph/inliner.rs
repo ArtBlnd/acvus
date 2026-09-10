@@ -407,6 +407,7 @@ fn remap_inst(
             callee_ty,
             args,
             order,
+            lent,
         } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
@@ -421,6 +422,7 @@ fn remap_inst(
                     before: r(edge.before),
                     after: r(edge.after),
                 }),
+                lent: rv(lent),
             }
         }
         InstKind::Spawn {
@@ -442,10 +444,16 @@ fn remap_inst(
                 order: order.map(r),
             }
         }
-        InstKind::Eval { dst, src, order } => InstKind::Eval {
+        InstKind::Eval {
+            dst,
+            src,
+            order,
+            lent,
+        } => InstKind::Eval {
             dst: r(*dst),
             src: r(*src),
             order: order.map(r),
+            lent: rv(lent),
         },
         InstKind::Merge { dst, orders } => InstKind::Merge {
             dst: r(*dst),
@@ -664,6 +672,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -723,6 +732,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -775,6 +785,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(0),
@@ -836,6 +847,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(0),
@@ -853,6 +865,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(0),
@@ -896,6 +909,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),

@@ -101,6 +101,7 @@ async fn spawn_eval_basic() {
                 dst: vids[2],
                 src: vids[1],
                 order: None,
+                lent: Vec::new(),
             }),
             inst(InstKind::Return {
                 value: vids[2],
@@ -200,6 +201,7 @@ async fn spawn_eval_multi_args() {
                 dst: vids[3],
                 src: vids[2],
                 order: None,
+                lent: Vec::new(),
             }),
             inst(InstKind::Return {
                 value: vids[3],

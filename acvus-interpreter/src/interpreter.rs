@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
+use acvus_extern::Returned;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
 use acvus_mir::ty::Ty;
@@ -288,6 +289,8 @@ use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub struct ExecResult {
     pub value: Value,
     pub writes: Vec<ContextWrite>,
+    /// The borrowed places' values after the call (RFC-0015).
+    pub lent: Vec<Value>,
 }
 
 /// A single executable unit - MIR module or extern function.
@@ -650,11 +653,12 @@ async fn execute_inst(
             callee_ty,
             args,
             order,
+            lent,
         } => {
             if let Some(edge) = order {
                 frame.set(edge.after, Value::Unit);
             }
-            let result = match callee {
+            let returned = match callee {
                 Callee::Direct(id) => {
                     let is_extern =
                         matches!(lookup_function(&ctx.shared, id), Executable::Extern(_));
@@ -678,17 +682,18 @@ async fn execute_inst(
                     } else {
                         let arg_vals: Args =
                             args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                        dispatch_call(ctx, id, arg_vals).await?
+                        Returned::value(dispatch_call(ctx, id, arg_vals).await?)
                     }
                 }
                 Callee::Indirect(val_id) => {
                     let fv = frame.take(*val_id).into_fn();
                     let call_args: Vec<Value> =
                         args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                    fn_value_call(&fv, call_args).await?
+                    Returned::value(fn_value_call(&fv, call_args).await?)
                 }
             };
-            frame.set(*dst, result);
+            frame.set(*dst, returned.value);
+            give_back(frame, lent, returned.lent)?;
         }
         InstKind::Spawn {
             dst,
@@ -714,20 +719,22 @@ async fn execute_inst(
                         crate::runtime::ExternHandler::Sync(f) => {
                             let f = Arc::clone(f);
                             ctx.shared.executor.spawn_blocking(Box::new(move || {
-                                let value = f(spawn_args, &interner)?;
+                                let returned = f(spawn_args, &interner)?;
                                 Ok(ExecResult {
-                                    value,
+                                    value: returned.value,
                                     writes: Vec::new(),
+                                    lent: returned.lent,
                                 })
                             }))
                         }
                         crate::runtime::ExternHandler::Async(f) => {
                             let f = Arc::clone(f);
                             ctx.shared.executor.spawn_async(Box::pin(async move {
-                                let value = f(spawn_args, interner).await?;
+                                let returned = f(spawn_args, interner).await?;
                                 Ok(ExecResult {
-                                    value,
+                                    value: returned.value,
                                     writes: Vec::new(),
+                                    lent: returned.lent,
                                 })
                             }))
                         }
@@ -746,7 +753,12 @@ async fn execute_inst(
             };
             frame.set(*dst, Value::Handle(Box::new(handle)));
         }
-        InstKind::Eval { dst, src, order } => {
+        InstKind::Eval {
+            dst,
+            src,
+            order,
+            lent,
+        } => {
             if let Some(o) = order {
                 frame.set(*o, Value::Unit);
             }
@@ -767,6 +779,7 @@ async fn execute_inst(
             }
 
             frame.set(*dst, result.value);
+            give_back(frame, lent, result.lent)?;
         }
 
         // -- Object/List dynamic access -------------------
@@ -847,6 +860,22 @@ async fn execute_function(
         &val_types,
     )
     .await
+}
+
+/// Put the values a call gave back for its borrowed places into the
+/// registers the instruction names for them.
+fn give_back(frame: &mut Frame, lent: &[ValueId], values: Vec<Value>) -> Result<(), RuntimeError> {
+    if lent.len() != values.len() {
+        return Err(RuntimeError::internal(format!(
+            "call lent {} places but gave back {}",
+            lent.len(),
+            values.len()
+        )));
+    }
+    for (reg, value) in lent.iter().zip(values) {
+        frame.set(*reg, value);
+    }
+    Ok(())
 }
 
 // -- Closure calling -------------------------------------------------
@@ -935,7 +964,11 @@ impl Interpreter {
         let value = execute_function(&mut run_ctx, &entry, &args).await?;
 
         let writes = run_ctx.page.into_writes();
-        Ok(ExecResult { value, writes })
+        Ok(ExecResult {
+            value,
+            writes,
+            lent: Vec::new(),
+        })
     }
 }
 

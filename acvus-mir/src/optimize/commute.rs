@@ -277,6 +277,7 @@ mod tests {
                 before: v(slots.before),
                 after: v(slots.after),
             }),
+            lent: Vec::new(),
         }
     }
 

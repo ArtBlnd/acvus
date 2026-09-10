@@ -38,14 +38,20 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Poison { dst }
         | InstKind::Undef { dst } => smallvec![*dst],
 
-        InstKind::FunctionCall { dst, order, .. } => {
+        InstKind::FunctionCall {
+            dst, order, lent, ..
+        } => {
             let mut v: SmallVec<[ValueId; 2]> = smallvec![*dst];
             v.extend(order.map(|edge| edge.after));
+            v.extend(lent.iter().copied());
             v
         }
-        InstKind::Eval { dst, order, .. } => {
+        InstKind::Eval {
+            dst, order, lent, ..
+        } => {
             let mut v: SmallVec<[ValueId; 2]> = smallvec![*dst];
             v.extend(*order);
+            v.extend(lent.iter().copied());
             v
         }
         InstKind::Merge { dst, .. } => smallvec![*dst],
@@ -217,6 +223,7 @@ mod tests {
             callee_ty: Ty::error(),
             args: vec![v(0), v(1)],
             order: None,
+            lent: Vec::new(),
         };
         assert_eq!(defs(&inst).as_slice(), &[v(3)]);
         let u = uses(&inst);
@@ -243,6 +250,7 @@ mod tests {
             dst: v(2),
             src: v(1),
             order: None,
+            lent: Vec::new(),
         };
         assert_eq!(defs(&eval).as_slice(), &[v(2)]);
         assert_eq!(uses(&eval).as_slice(), &[v(1)]);
@@ -282,6 +290,7 @@ mod tests {
             callee_ty: Ty::error(),
             args: vec![v(1)],
             order: None,
+            lent: Vec::new(),
         };
         let u = uses(&inst);
         assert!(u.contains(&v(0)), "indirect callee must be in uses");

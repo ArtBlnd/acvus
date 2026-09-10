@@ -353,6 +353,7 @@ fn write_body(
                 callee,
                 args,
                 order,
+                lent,
                 ..
             } => {
                 let callee_str = match callee {
@@ -366,6 +367,10 @@ fn write_body(
                     callee_str,
                     vn.fmt_uses(args, &consts, &texts)
                 )?;
+                if !lent.is_empty() {
+                    let back: Vec<String> = lent.iter().map(|l| vn.fmt_val(*l)).collect();
+                    write!(f, " lent {}", back.join(", "))?;
+                }
                 if let Some(edge) = order {
                     write!(
                         f,
@@ -407,13 +412,22 @@ fn write_body(
                 }
                 writeln!(f)?
             }
-            InstKind::Eval { dst, src, order } => {
+            InstKind::Eval {
+                dst,
+                src,
+                order,
+                lent,
+            } => {
                 write!(
                     f,
                     "{} = eval {}",
                     vn.fmt_val(*dst),
                     vn.fmt_use(*src, &consts, &texts)
                 )?;
+                if !lent.is_empty() {
+                    let back: Vec<String> = lent.iter().map(|l| vn.fmt_val(*l)).collect();
+                    write!(f, " lent {}", back.join(", "))?;
+                }
                 if let Some(o) = order {
                     write!(f, " [-> {}]", vn.fmt_val(*o))?;
                 }

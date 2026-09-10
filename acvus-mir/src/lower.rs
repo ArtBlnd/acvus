@@ -254,6 +254,7 @@ impl<'a> Lowerer<'a> {
                 callee_ty,
                 args,
                 order,
+                lent: Vec::new(),
             },
         );
         let Some(edge) = order else {

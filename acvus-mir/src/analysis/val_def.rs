@@ -67,8 +67,14 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
         InstKind::BlockLabel { params, .. } => params.clone(),
-        InstKind::FunctionCall { order, .. } => order.iter().map(|edge| edge.after).collect(),
-        InstKind::Eval { order, .. } => order.iter().copied().collect(),
+        InstKind::FunctionCall { order, lent, .. } => order
+            .iter()
+            .map(|edge| edge.after)
+            .chain(lent.iter().copied())
+            .collect(),
+        InstKind::Eval { order, lent, .. } => {
+            order.iter().copied().chain(lent.iter().copied()).collect()
+        }
         _ => vec![],
     }
 }

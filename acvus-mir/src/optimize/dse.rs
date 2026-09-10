@@ -493,6 +493,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Ref {
                     dst: v(3),

@@ -886,7 +886,7 @@ impl Solver {
                     ..
                 },
             ) => {
-                if pa.len() != pb.len() {
+                if pa.len() != pb.len() || pa.iter().zip(pb).any(|(x, y)| x.mode != y.mode) {
                     return Err((a.clone(), b.clone()));
                 }
                 let param_pol = pol.flip();
@@ -952,7 +952,7 @@ impl Solver {
                 Some(TyTerm::Fn {
                     params: pa
                         .iter()
-                        .map(|p| ParamTerm::new(p.name, self.resolve_ty(&p.ty)))
+                        .map(|p| p.retyped(self.resolve_ty(&p.ty)))
                         .collect(),
                     ret: Box::new(self.resolve_ty(ra)),
                     captures: vec![],
@@ -1229,8 +1229,7 @@ impl Solver {
                 params: params
                     .iter()
                     .map(|p| {
-                        ParamTerm::new(
-                            p.name,
+                        p.retyped(
                             self.instantiate_infer_inner(&p.ty, var_map, fresh_map, effect_map),
                         )
                     })

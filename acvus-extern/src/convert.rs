@@ -13,6 +13,18 @@ pub trait IntoValue<R: Runtime> {
     fn into_value(self, interner: &Interner) -> R::Value;
 }
 
+/// A tuple of Rust values into the values a call gives back for the
+/// places it borrowed, in order.
+pub trait IntoValues<R: Runtime> {
+    fn into_values(self, interner: &Interner) -> Vec<R::Value>;
+}
+
+impl<R: Runtime> IntoValues<R> for () {
+    fn into_values(self, _: &Interner) -> Vec<R::Value> {
+        Vec::new()
+    }
+}
+
 /// Call arguments into a tuple of Rust values.
 pub trait FromValues<R: Runtime>: Sized {
     fn from_values(values: Vec<R::Value>, interner: &Interner) -> Result<Self, R::Error>;
@@ -126,6 +138,16 @@ impl<R: Runtime> FromValues<R> for () {
 
 macro_rules! impl_tuple {
     ($n:literal; $($T:ident : $idx:tt),+) => {
+        impl<R, $($T),+> IntoValues<R> for ($($T,)+)
+        where
+            R: Runtime,
+            $($T: IntoValue<R>,)+
+        {
+            fn into_values(self, interner: &Interner) -> Vec<R::Value> {
+                vec![$( self.$idx.into_value(interner), )+]
+            }
+        }
+
         impl<R, $($T),+> FromValues<R> for ($($T,)+)
         where
             R: Runtime,

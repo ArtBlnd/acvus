@@ -521,6 +521,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             callee,
             args,
             order,
+            lent,
             ..
         } => {
             r(dst);
@@ -532,6 +533,7 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
                 r(&mut edge.before);
                 r(&mut edge.after);
             }
+            lent.iter_mut().for_each(&r);
         }
         InstKind::Spawn {
             dst,
@@ -549,12 +551,18 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
                 r(o);
             }
         }
-        InstKind::Eval { dst, src, order } => {
+        InstKind::Eval {
+            dst,
+            src,
+            order,
+            lent,
+        } => {
             r(dst);
             r(src);
             if let Some(o) = order {
                 r(o);
             }
+            lent.iter_mut().for_each(&r);
         }
         InstKind::Merge { dst, orders } => {
             r(dst);

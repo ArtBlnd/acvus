@@ -304,6 +304,7 @@ mod tests {
             },
             args: vec![],
             order: None,
+            lent: Vec::new(),
         }
     }
 

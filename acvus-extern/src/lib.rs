@@ -16,14 +16,14 @@ mod registry;
 mod runtime;
 mod ty_arg;
 
-pub use convert::{FromValue, FromValues, IntoValue};
+pub use convert::{FromValue, FromValues, IntoValue, IntoValues};
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use error::ExternError;
 pub use extern_value::{ExternTypeName, ExternValue, PayloadMismatch};
 pub use func::{Fn0, Fn1, Fn2};
 pub use handler::{
-    ExternEntry, ExternHandler, MonoHandler, MonoInstance, into_async_extern_handler,
-    into_sync_extern_handler,
+    ExternEntry, ExternHandler, MonoHandler, MonoInstance, Returned, into_async_extern_handler,
+    into_async_lending_handler, into_sync_extern_handler, into_sync_lending_handler,
 };
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};

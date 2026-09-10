@@ -721,6 +721,7 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -1039,6 +1040,7 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1115,6 +1117,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1165,6 +1168,7 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
+                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(2),

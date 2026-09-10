@@ -299,6 +299,41 @@ impl CheckCtx {
         }
     }
 
+    /// A call gives back one value per lending parameter, of that
+    /// parameter's type (RFC-0015).
+    fn expect_lent(
+        &self,
+        callee_ty: &Ty,
+        lent: &[ValueId],
+        val_types: &FxHashMap<ValueId, Ty>,
+        span: Span,
+        pc: usize,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        let Ty::Fn { params, .. } = callee_ty else {
+            return;
+        };
+        let lending: Vec<&crate::ty::Param> = params.iter().filter(|p| p.mode.lends()).collect();
+        if lending.len() != lent.len() {
+            errors.push(ValidationError {
+                scope: self.scope_name.clone(),
+                inst_index: pc,
+                span,
+                kind: ValidationErrorKind::ArityMismatch {
+                    inst_name: "FunctionCall(lent)".to_string(),
+                    expected: lending.len(),
+                    got: lent.len(),
+                },
+            });
+            return;
+        }
+        for (l, p) in lent.iter().zip(lending) {
+            if let Some(ty) = self.ty_of(*l, val_types, span, pc, errors) {
+                self.assert_match(pc, span, "FunctionCall", "lent", &p.ty, ty, errors);
+            }
+        }
+    }
+
     /// A call takes an `Order` exactly when its callee's effect is not Pure.
     fn expect_order_edge(
         &self,
@@ -1061,6 +1096,7 @@ impl CheckCtx {
                 callee_ty,
                 args,
                 order,
+                lent,
             } => {
                 self.expect_order_edge(
                     "FunctionCall",
@@ -1071,6 +1107,7 @@ impl CheckCtx {
                     pc,
                     errors,
                 );
+                self.expect_lent(callee_ty, lent, vt, span, pc, errors);
                 if let Some(edge) = order {
                     self.expect_order(edge.after, vt, span, pc, errors);
                 }
@@ -1199,9 +1236,17 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::Eval { dst, src, order } => {
+            InstKind::Eval {
+                dst,
+                src,
+                order,
+                lent,
+            } => {
                 if let Some(o) = order {
                     self.expect_order(*o, vt, span, pc, errors);
+                }
+                for l in lent {
+                    let _ = self.ty_of(*l, vt, span, pc, errors);
                 }
                 let src_ty = ty!(*src);
                 if let Ty::Handle(inner) = src_ty {

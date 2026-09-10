@@ -403,7 +403,7 @@ fn types_and_casts_reach_the_type_registry() {
 
 fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>, i: &Interner) -> Result<V, ExternError> {
     match handler {
-        ExternHandler::Sync(f) => f(args, i),
+        ExternHandler::Sync(f) => f(args, i).map(|r| r.value),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
     }
 }
@@ -414,7 +414,7 @@ async fn call_async(
     i: &Interner,
 ) -> Result<V, ExternError> {
     match handler {
-        ExternHandler::Async(f) => f(args, i.clone()).await,
+        ExternHandler::Async(f) => f(args, i.clone()).await.map(|r| r.value),
         ExternHandler::Sync(_) => panic!("expected an async handler"),
     }
 }

@@ -132,6 +132,9 @@ pub enum InstKind {
         callee_ty: Ty,
         args: Vec<ValueId>,
         order: Option<OrderEdge>,
+        /// The value of each borrowed place after the call, one per argument
+        /// whose parameter lends, in argument order (RFC-0015).
+        lent: Vec<ValueId>,
     },
     /// Issue a call and receive a Handle<T> for its result. The work starts
     /// here; `order` is the `Order` it waits for when the call is effectful.
@@ -150,6 +153,8 @@ pub enum InstKind {
         dst: ValueId,
         src: ValueId,
         order: Option<ValueId>,
+        /// The borrowed places' values, as on `FunctionCall`.
+        lent: Vec<ValueId>,
     },
     /// Join orders: `dst` follows every order in `orders`. Associative and
     /// commutative; a value instruction, not control flow.

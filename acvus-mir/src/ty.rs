@@ -137,7 +137,10 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
             ) => {
                 params.len() == pp.len()
                     && effect_matches(effect, pe)
-                    && params.iter().zip(pp).all(|(a, b)| go(&a.ty, &b.ty, seen))
+                    && params
+                        .iter()
+                        .zip(pp)
+                        .all(|(a, b)| a.mode == b.mode && go(&a.ty, &b.ty, seen))
                     && go(ret, pr, seen)
             }
             (
@@ -783,7 +786,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", p.ty.display(self.interner))?;
+                    write!(f, "{}{}", p.mode.prefix(), p.ty.display(self.interner))?;
                 }
                 write!(f, ") -> {}", ret.display(self.interner))?;
                 let effect = effect.get();
@@ -1019,15 +1022,59 @@ pub enum TyTerm<V: Phase> {
 }
 
 /// Named, typed function parameter - parameterized over phase.
+/// How a parameter takes its argument (RFC-0015). `Borrow` and
+/// `BorrowMut` lend a place to the call: the value is given to the callee
+/// and is back in the place when the call returns, unchanged after
+/// `Borrow`, as the callee left it after `BorrowMut`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ParamMode {
+    Value,
+    Borrow,
+    BorrowMut,
+}
+
+impl ParamMode {
+    pub fn lends(self) -> bool {
+        self != ParamMode::Value
+    }
+
+    pub fn prefix(self) -> &'static str {
+        match self {
+            ParamMode::Value => "",
+            ParamMode::Borrow => "&",
+            ParamMode::BorrowMut => "&mut ",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamTerm<V: Phase> {
     pub name: Astr,
     pub ty: TyTerm<V>,
+    pub mode: ParamMode,
 }
 
 impl<V: Phase> ParamTerm<V> {
     pub fn new(name: Astr, ty: TyTerm<V>) -> Self {
-        Self { name, ty }
+        Self {
+            name,
+            ty,
+            mode: ParamMode::Value,
+        }
+    }
+
+    pub fn with_mode(mut self, mode: ParamMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// The same parameter with another type.
+    pub fn retyped<W: Phase>(&self, ty: TyTerm<W>) -> ParamTerm<W> {
+        ParamTerm {
+            name: self.name,
+            ty,
+            mode: self.mode,
+        }
     }
 }
 
@@ -1084,9 +1131,7 @@ impl<V: Phase> TyTerm<V> {
             } => TyTerm::Fn {
                 params: params
                     .iter()
-                    .map(|p| {
-                        ParamTerm::new(p.name, p.ty.map(on_var, on_identity, on_effect, on_len))
-                    })
+                    .map(|p| p.retyped(p.ty.map(on_var, on_identity, on_effect, on_len)))
                     .collect(),
                 ret: Box::new(ret.map(on_var, on_identity, on_effect, on_len)),
                 captures: captures
@@ -1186,7 +1231,7 @@ impl<V: Phase> TyTerm<V> {
                     .iter()
                     .map(|p| {
                         p.ty.try_map(on_var, on_identity, on_effect, on_len)
-                            .map(|ty| ParamTerm::new(p.name, ty))
+                            .map(|ty| p.retyped(ty))
                     })
                     .collect::<Result<_, _>>()?,
                 ret: Box::new(ret.try_map(on_var, on_identity, on_effect, on_len)?),

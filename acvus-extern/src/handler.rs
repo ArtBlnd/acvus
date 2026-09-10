@@ -7,22 +7,41 @@ use std::sync::Arc;
 use acvus_mir::ty::{PolyTy, Ty, matches_poly};
 use acvus_utils::Interner;
 
-use crate::convert::{FromValues, IntoValue};
+use crate::convert::{FromValues, IntoValue, IntoValues};
 use crate::error::ExternError;
 use crate::runtime::Runtime;
+
+/// What a call gives back: its return value, and the value of every
+/// place it borrowed, in argument order (RFC-0015).
+pub struct Returned<V> {
+    pub value: V,
+    pub lent: Vec<V>,
+}
+
+impl<V> Returned<V> {
+    pub fn value(value: V) -> Self {
+        Returned {
+            value,
+            lent: Vec::new(),
+        }
+    }
+}
 
 type SyncFn<R> = dyn Fn(
         Vec<<R as Runtime>::Value>,
         &Interner,
-    ) -> Result<<R as Runtime>::Value, <R as Runtime>::Error>
+    ) -> Result<Returned<<R as Runtime>::Value>, <R as Runtime>::Error>
     + Send
     + Sync;
 type AsyncFn<R> = dyn Fn(
         Vec<<R as Runtime>::Value>,
         Interner,
-    )
-        -> Pin<Box<dyn Future<Output = Result<<R as Runtime>::Value, <R as Runtime>::Error>> + Send>>
-    + Send
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<Returned<<R as Runtime>::Value>, <R as Runtime>::Error>>
+                + Send,
+        >,
+    > + Send
     + Sync;
 
 /// `Sync` may run on a blocking thread pool; `Async` runs on the async
@@ -56,7 +75,7 @@ where
 {
     ExternHandler::Sync(Arc::new(move |args, interner| {
         let a = A::from_values(args, interner)?;
-        Ok(f(interner, a)?.into_value(interner))
+        Ok(Returned::value(f(interner, a)?.into_value(interner)))
     }))
 }
 
@@ -74,7 +93,52 @@ where
             Err(e) => return Box::pin(std::future::ready(Err(e))),
         };
         let fut = f(interner.clone(), a);
-        Box::pin(async move { Ok(fut.await?.into_value(&interner)) })
+        Box::pin(async move { Ok(Returned::value(fut.await?.into_value(&interner))) })
+    }))
+}
+
+/// A handler for a function that borrows: `f` returns its value and the
+/// borrowed values, which come back to the caller's places.
+pub fn into_sync_lending_handler<R, A, Ret, Lent, F>(f: F) -> ExternHandler<R>
+where
+    R: Runtime,
+    F: Fn(&Interner, A) -> Result<(Ret, Lent), R::Error> + Send + Sync + 'static,
+    A: FromValues<R> + 'static,
+    Ret: IntoValue<R> + 'static,
+    Lent: IntoValues<R> + 'static,
+{
+    ExternHandler::Sync(Arc::new(move |args, interner| {
+        let a = A::from_values(args, interner)?;
+        let (value, lent) = f(interner, a)?;
+        Ok(Returned {
+            value: value.into_value(interner),
+            lent: lent.into_values(interner),
+        })
+    }))
+}
+
+pub fn into_async_lending_handler<R, A, Ret, Lent, F, Fut>(f: F) -> ExternHandler<R>
+where
+    R: Runtime,
+    F: Fn(Interner, A) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(Ret, Lent), R::Error>> + Send + 'static,
+    A: FromValues<R> + 'static,
+    Ret: IntoValue<R> + 'static,
+    Lent: IntoValues<R> + 'static,
+{
+    ExternHandler::Async(Arc::new(move |args, interner| {
+        let a = match A::from_values(args, &interner) {
+            Ok(v) => v,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        };
+        let fut = f(interner.clone(), a);
+        Box::pin(async move {
+            let (value, lent) = fut.await?;
+            Ok(Returned {
+                value: value.into_value(&interner),
+                lent: lent.into_values(&interner),
+            })
+        })
     }))
 }
 

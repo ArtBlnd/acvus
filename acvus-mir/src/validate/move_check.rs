@@ -501,7 +501,11 @@ fn process_inst(
         }
         // Calls - all args are consumed; indirect callee is also consumed
         InstKind::FunctionCall {
-            dst, callee, args, ..
+            dst,
+            callee,
+            args,
+            lent,
+            ..
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
@@ -510,6 +514,9 @@ fn process_inst(
                 try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
+            for l in lent {
+                state.set_value(*l, Liveness::Alive);
+            }
         }
 
         // Constructors - elements are consumed
@@ -619,9 +626,12 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
         // Eval - consumes Handle (move-only), defines dst
-        InstKind::Eval { dst, src, .. } => {
+        InstKind::Eval { dst, src, lent, .. } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
+            for l in lent {
+                state.set_value(*l, Liveness::Alive);
+            }
         }
 
         // Control flow - handled at block level
@@ -770,6 +780,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v0],
                     order: None,
+                    lent: Vec::new(),
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v2,
@@ -777,6 +788,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v0],
                     order: None,
+                    lent: Vec::new(),
                 }),
             ],
             val_types,
@@ -810,6 +822,7 @@ mod tests {
                 callee_ty: Ty::error(),
                 args: vec![v0],
                 order: None,
+                lent: Vec::new(),
             })],
             val_types,
         );
@@ -871,6 +884,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v1],
                     order: None,
+                    lent: Vec::new(),
                 }),
                 // $a = v2 (new value) -> revives $a
                 inst(InstKind::Ref {
@@ -893,6 +907,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v3],
                     order: None,
+                    lent: Vec::new(),
                 }),
             ],
             val_types,
@@ -952,6 +967,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v1],
                     order: None,
+                    lent: Vec::new(),
                 }),
                 // Second load - $a already moved
                 inst(InstKind::Ref {
@@ -966,6 +982,7 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v2],
                     order: None,
+                    lent: Vec::new(),
                 }),
             ],
             val_types,
