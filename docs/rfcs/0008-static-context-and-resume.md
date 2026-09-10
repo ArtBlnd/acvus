@@ -6,8 +6,6 @@ Supersedes: none
 
 ## Ruling
 
-### Accepted
-
 A context reference is a static variable. Reading and writing it are plain
 loads and stores; the compiler may still thread those through SSA to expose
 order, but nothing else distinguishes a context from a global.
@@ -26,8 +24,6 @@ to see goes out through an ExternFn call. The compiler therefore treats
 every context load and store as ordinary, with calls as the only barrier,
 and a context carries no policy: not volatile, not read-only. A value a
 script only reads is a function argument, not a context.
-
-### Proposed
 
 An ExternFn author declares an effect level, and the levels form a chain:
 
