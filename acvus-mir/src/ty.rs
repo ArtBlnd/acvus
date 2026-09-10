@@ -913,7 +913,7 @@ pub struct LenVarId(pub u32);
 pub struct IdentityVarId(pub u32);
 
 // Re-export solver types - these were historically in ty.rs.
-pub use crate::solver::{FreezeError, Solver, SolverSnapshot, TypeBound};
+pub use crate::solver::{FreezeError, Solver, SolverSnapshot, Sources, TypeBound};
 
 /// Type alias - always concrete, no inference variables.
 pub type InferTy = TyTerm<Infer>;
@@ -1398,7 +1398,7 @@ mod tests {
 
     #[test]
     fn unify_same_concrete() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         assert!(
             s.unify_ty(&TyTerm::Int, &TyTerm::Int, Invariant, &registry)
@@ -1424,7 +1424,7 @@ mod tests {
 
     #[test]
     fn unify_different_concrete_fails() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         assert!(
             s.unify_ty(&TyTerm::Int, &TyTerm::Float, Invariant, &registry)
@@ -1438,7 +1438,7 @@ mod tests {
 
     #[test]
     fn unify_var_with_concrete() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let t = s.fresh_ty_var();
         assert!(s.unify_ty(&t, &TyTerm::Int, Invariant, &registry).is_ok());
@@ -1447,7 +1447,7 @@ mod tests {
 
     #[test]
     fn unify_object() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let interner = Interner::new();
         let t = s.fresh_ty_var();
@@ -1465,7 +1465,7 @@ mod tests {
 
     #[test]
     fn unify_object_key_mismatch() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let interner = Interner::new();
         let obj1 = TyTerm::Object(FxHashMap::from_iter([(
@@ -1481,7 +1481,7 @@ mod tests {
 
     #[test]
     fn transitive_resolution() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let t1 = s.fresh_ty_var();
         let t2 = s.fresh_ty_var();
@@ -1498,7 +1498,7 @@ mod tests {
     #[test]
     fn unify_object_disjoint_via_var() {
         // Var -> {a} then Var -> {b} should merge to {a, b}
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let i = Interner::new();
         let v = s.fresh_ty_var();
@@ -1520,7 +1520,7 @@ mod tests {
     #[test]
     fn unify_object_overlapping_via_var() {
         // Var -> {a, b} then Var -> {b, c} should merge to {a, b, c}
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let i = Interner::new();
         let v = s.fresh_ty_var();
@@ -1549,7 +1549,7 @@ mod tests {
     #[test]
     fn unify_object_overlap_type_conflict_fails() {
         // {b: Int} and {b: String} via same Var should fail
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let i = Interner::new();
         let v = s.fresh_ty_var();
@@ -1561,7 +1561,7 @@ mod tests {
 
     #[test]
     fn fresh_param_produces_unique_ids() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let o1 = s.fresh_ty_var();
         let o2 = s.fresh_ty_var();
@@ -1593,7 +1593,7 @@ mod tests {
     #[test]
     fn occurs_check_through_list_covariant() {
         // Var = List<Var> should fail (occurs) regardless of polarity.
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let v = s.fresh_ty_var();
         let cyclic = arr(v.clone(), 3);
@@ -1619,7 +1619,7 @@ mod tests {
     #[test]
     fn invariant_same_types_both_directions() {
         // Same concrete type: Invariant must succeed regardless of order.
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let l1 = arr(TyTerm::Int, 3);
         let l2 = arr(TyTerm::Int, 3);
@@ -1661,7 +1661,7 @@ mod tests {
 
     #[test]
     fn list_vs_tuple_fails_any_polarity() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let l = arr(TyTerm::Int, 3);
         let t = TyTerm::Tuple(vec![TyTerm::Int]);
@@ -1694,7 +1694,7 @@ mod tests {
 
     #[test]
     fn user_defined_same_id_empty_args_unifies() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         assert!(
@@ -1705,7 +1705,7 @@ mod tests {
 
     #[test]
     fn user_defined_same_id_concrete_type_args_unifies() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         assert!(
@@ -1721,7 +1721,7 @@ mod tests {
 
     #[test]
     fn user_defined_param_type_arg_resolved_via_unify() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         let p = s.fresh_ty_var();
@@ -1740,7 +1740,7 @@ mod tests {
     #[test]
     fn user_defined_nested_type_arg_unifies() {
         // UserDefined<List<Param>> vs UserDefined<List<Int>> -> resolves Param to Int
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         let p = s.fresh_ty_var();
@@ -1760,7 +1760,7 @@ mod tests {
 
     #[test]
     fn user_defined_different_id_fails() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id_a = fresh_qref();
         let id_b = fresh_qref();
@@ -1772,7 +1772,7 @@ mod tests {
 
     #[test]
     fn user_defined_type_arg_mismatch_fails() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         assert!(
@@ -1788,7 +1788,7 @@ mod tests {
 
     #[test]
     fn user_defined_vs_other_ty_fails() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         assert!(
@@ -1805,7 +1805,7 @@ mod tests {
 
     #[test]
     fn user_defined_inside_list_resolves() {
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         let p = s.fresh_ty_var();
@@ -1900,7 +1900,7 @@ mod tests {
             to,
             fn_ref: fn_id,
         });
-        let solver = Solver::new();
+        let solver = Solver::new(Sources::new());
         (id, fn_id, solver, reg)
     }
 
@@ -1978,7 +1978,7 @@ mod tests {
     fn extern_cast_no_rule_fails() {
         // No cast rules registered
         let id = fresh_qref();
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let registry = TypeRegistry::new();
 
         let from = TyTerm::UserDefined {
@@ -2022,7 +2022,7 @@ mod tests {
         let fn_id_b = QualifiedRef::root(i.intern("cast_b"));
 
         // Use a PolyBuilder for the CastRule variables, separate Solver for unification.
-        let mut s = Solver::new();
+        let mut s = Solver::new(Sources::new());
         let mut builder = PolyBuilder::new();
         let t1 = builder.fresh_ty_var();
         let rule_a = CastRule {

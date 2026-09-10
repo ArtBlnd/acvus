@@ -1,0 +1,117 @@
+//! A source number names one identity for the whole compilation. A frozen
+//! type that leaves one solver and enters another still names the source
+//! it was frozen with, and no solver mints that number again.
+
+use acvus_mir::graph::incremental::IncrementalGraph;
+use acvus_mir::graph::{FnKind, Function, ParsedAst, QualifiedRef};
+use acvus_mir::ty::{
+    IdentityTerm, ParamTerm, Poly, Polarity, PolyBuilder, PolyTy, Solver, Sources, Ty, TyTerm,
+    TypeRegistry, lift_to_poly,
+};
+use acvus_mir_test::inferred_function;
+use acvus_utils::Interner;
+
+fn iter_poly(i: &Interner, identity: IdentityTerm<Poly>) -> PolyTy {
+    TyTerm::UserDefined {
+        id: QualifiedRef::root(i.intern("Iterator")),
+        type_args: vec![TyTerm::Int],
+        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        identity_args: vec![identity],
+    }
+}
+
+fn source_of(ty: &Ty) -> acvus_mir::ty::IdentityId {
+    let Ty::UserDefined { identity_args, .. } = ty else {
+        panic!("expected a UserDefined type, got {ty:?}");
+    };
+    let [IdentityTerm::Known(id)] = identity_args.as_slice() else {
+        panic!("expected one known source, got {identity_args:?}");
+    };
+    *id
+}
+
+#[test]
+fn a_source_frozen_in_one_solver_is_never_minted_by_another() {
+    let i = Interner::new();
+    let reg = TypeRegistry::new();
+    let sources = Sources::new();
+
+    let mut a = Solver::new(sources.clone());
+    let mut pb = PolyBuilder::new();
+    let y = a.instantiate_poly(&iter_poly(&i, pb.fresh_identity_var()));
+    let frozen_y = a.freeze_ty(&y).unwrap();
+
+    let mut b = Solver::new(sources.clone());
+    let imported_y = b.instantiate_poly(&lift_to_poly(&frozen_y));
+    for _ in 0..8 {
+        let mut pb = PolyBuilder::new();
+        let fresh = b.instantiate_poly(&iter_poly(&i, pb.fresh_identity_var()));
+        assert!(
+            b.unify_ty(&imported_y, &fresh, Polarity::Invariant, &reg).is_err(),
+            "a source minted in solver B unified with a source imported from solver A"
+        );
+        assert_ne!(source_of(&b.freeze_ty(&fresh).unwrap()), source_of(&frozen_y));
+    }
+}
+
+/// `mk()` returns a new source at every call; `same(x, y)` accepts only two
+/// values of one source. A function in an earlier SCC returning `mk()`
+/// crosses into a later SCC's solver as a frozen type.
+#[test]
+fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
+    let i = Interner::new();
+    let mut graph = IncrementalGraph::new(&i);
+
+    let mut pb = PolyBuilder::new();
+    let mk = Function {
+        qref: QualifiedRef::root(i.intern("mk")),
+        kind: FnKind::Extern { bounds: vec![] },
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(iter_poly(&i, pb.fresh_identity_var())),
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::PURE.into(),
+        },
+    };
+    let mut pb = PolyBuilder::new();
+    let shared = pb.fresh_identity_var();
+    let same = Function {
+        qref: QualifiedRef::root(i.intern("same")),
+        kind: FnKind::Extern { bounds: vec![] },
+        ty: TyTerm::Fn {
+            params: vec![
+                ParamTerm::<Poly>::new(i.intern("x"), iter_poly(&i, shared.clone())),
+                ParamTerm::<Poly>::new(i.intern("y"), iter_poly(&i, shared)),
+            ],
+            ret: Box::new(TyTerm::Int),
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::PURE.into(),
+        },
+    };
+    let get = inferred_function(
+        QualifiedRef::root(i.intern("get")),
+        FnKind::Local(ParsedAst::Script(
+            acvus_ast::parse_script(&i, "mk()").expect("parse"),
+        )),
+        vec![],
+    );
+    let main = inferred_function(
+        QualifiedRef::root(i.intern("main")),
+        FnKind::Local(ParsedAst::Script(
+            acvus_ast::parse_script(&i, "x = get(); y = mk(); same(x, y)").expect("parse"),
+        )),
+        vec![],
+    );
+    graph.add_function(mk);
+    graph.add_function(same);
+    graph.add_function(get);
+    graph.add_function(main);
+
+    let get_diags = graph.diagnostics(QualifiedRef::root(i.intern("get")));
+    assert!(get_diags.is_empty(), "get: {get_diags:?}");
+    let main_diags = graph.diagnostics(QualifiedRef::root(i.intern("main")));
+    assert!(
+        !main_diags.is_empty(),
+        "same(get(), mk()) joins two sources and must be rejected"
+    );
+}

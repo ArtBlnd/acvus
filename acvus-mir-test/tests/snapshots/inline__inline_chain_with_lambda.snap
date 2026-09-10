@@ -23,15 +23,15 @@ expression: ir
     ; r3 (v3) : Int
     ; r4 (v9) : Ref<Array<Int, 3>>
     ; r5 ($xs) : Array<Int, 3>
-    ; r6 (v11) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r6 (v11) : Iterator<Int, Pure, #IdentityId(3)>
     ; r7 (v12) : Fn(Int) -> Int
-    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
     ; r9 (collect(...)) : List<Int>
     ; r10 (v15) : Ref<List<Int>>
     ; r11 ($xs) : List<Int>
-    ; r12 (v17) : Iterator<Int, Pure, #IdentityId(3)>
+    ; r12 (v17) : Iterator<Int, Pure, #IdentityId(6)>
     ; r13 (v19) : Fn(Int, Int) -> Int
     ; r14 (fold(...)) : Int
     ; r15 (v18) : Int
     ; r16 (sum_list(...)) : Int
-    ; r17 (double_all(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r17 (double_all(...)) : Iterator<Int, Pure, #IdentityId(2)>

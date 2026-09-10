@@ -16,7 +16,7 @@ expression: ir
 
     ; r0 (@items) : Ref<Array<Int, 3>>
     ; r1 (v3) : Array<Int, 3>
-    ; r2 (v4) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r2 (v4) : Iterator<Int, Pure, #IdentityId(3)>
     ; r3 (contains(...)) : Bool
     ; r4 (v5) : Int
     ; r5 (to_string(...)) : String

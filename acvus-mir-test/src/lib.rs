@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Build an inferred `Function` with the given qref, kind, and optional params.
-fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam>) -> Function {
+pub fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam>) -> Function {
     let mut pb = PolyBuilder::new();
     Function {
         qref,

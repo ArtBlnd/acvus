@@ -2296,7 +2296,7 @@ mod tests {
         interner: &Interner,
     ) -> Result<TypeMap, String> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
-        let mut solver = Solver::new();
+        let mut solver = Solver::new(crate::ty::Sources::new());
         let registry = TypeRegistry::default();
         let qref_contexts: FxHashMap<QualifiedRef, InferTy> = context
             .iter()

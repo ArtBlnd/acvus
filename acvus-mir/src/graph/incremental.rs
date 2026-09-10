@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::MirError;
-use crate::ty::{PolyTy, Ty, lift_to_poly};
+use crate::ty::{PolyTy, Sources, Ty, lift_to_poly};
 
 use super::extract::{ExtractResult, ParsedSource, extract_one};
 use super::infer::{SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
@@ -33,6 +33,8 @@ pub struct ContextInfo {
 
 pub struct IncrementalGraph {
     interner: Interner,
+    /// The sources of this compilation, shared by every solver it runs.
+    sources: Sources,
 
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
@@ -58,6 +60,7 @@ impl IncrementalGraph {
     pub fn new(interner: &Interner) -> Self {
         Self {
             interner: interner.clone(),
+            sources: Sources::new(),
             functions: FxHashMap::default(),
             contexts: FxHashMap::default(),
             extract_cache: FxHashMap::default(),
@@ -369,6 +372,7 @@ impl IncrementalGraph {
                 &known_ctx,
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
+                &self.sources,
             );
 
             resolved_fn_types.extend(
@@ -463,6 +467,7 @@ impl IncrementalGraph {
                 &known_ctx,
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
+                &self.sources,
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -552,7 +557,7 @@ impl IncrementalGraph {
             outcomes,
             context_types: {
                 // PolyTy -> InferTy (instantiate) -> Ty (freeze) at the output boundary.
-                let mut solver = crate::ty::Solver::new();
+                let mut solver = crate::ty::Solver::new(self.sources.clone());
                 Freeze::new(
                     self.known_context_types()
                         .into_iter()

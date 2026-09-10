@@ -16,7 +16,7 @@ expression: ir
 
     ; r0 (@names) : Ref<Array<String, 3>>
     ; r1 (v3) : Array<String, 3>
-    ; r2 (v4) : Iterator<String, Pure, #IdentityId(1)>
+    ; r2 (v4) : Iterator<String, Pure, #IdentityId(3)>
     ; r3 (join(...)) : String
     ; r4 (v7) : String
     ; r5 (v1) : String

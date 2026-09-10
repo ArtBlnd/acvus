@@ -67,6 +67,11 @@ solves in the same shape.
   by `IdentityVar`; its runtime conversion refuses a shared payload exactly
   when it has one.
 - Serialized types carry identity arguments as their source numbers.
+- A source number names one source for a whole compilation: every
+  solver a compilation runs mints from one `Sources`, so a frozen type
+  that passes from one solver to another (an earlier SCC's result, a
+  cached signature) still names the source it was frozen with, and no
+  later solver mints that number again.
 
 ## Open questions
 

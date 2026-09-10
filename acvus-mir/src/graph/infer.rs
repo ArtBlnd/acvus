@@ -10,7 +10,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ty::{
-    EffectTerm, Infer, InferTy, Param, PolyTy, Scheme, Solver, Ty, TyTerm, TyVarBound,
+    EffectTerm, Infer, InferTy, Param, PolyTy, Scheme, Solver, Sources, Ty, TyTerm, TyVarBound,
     TypeRegistry, lift_to_poly, lift_ty,
 };
 
@@ -478,8 +478,9 @@ pub fn infer_scc(
     known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
     declared: &FxHashMap<QualifiedRef, Vec<TyVarBound>>,
+    sources: &Sources,
 ) -> SccInferResult {
-    let mut solver = Solver::new();
+    let mut solver = Solver::new(sources.clone());
     let registry = TypeRegistry::default();
 
     // Instantiate context types into solver-scoped InferTy.
@@ -668,7 +669,7 @@ pub fn infer(
     user_context_types: &FxHashMap<QualifiedRef, PolyTy>,
     type_registry: Freeze<TypeRegistry>,
 ) -> InferResult {
-    let mut solver = Solver::new();
+    let mut solver = Solver::new(Sources::new());
     let registry_ref: &TypeRegistry = &type_registry;
 
     // Per-function state accumulated across SCCs.

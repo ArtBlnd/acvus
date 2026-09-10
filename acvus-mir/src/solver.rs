@@ -77,7 +77,27 @@ pub struct SolverSnapshot {
     effect_vars: Vec<EffectBound>,
     len_vars: Vec<LenBound>,
     identity_vars: Vec<IdentityBound>,
-    sources: acvus_utils::LocalFactory<IdentityId>,
+}
+
+/// The sources of one compilation. A source number names one identity
+/// for every solver of the compilation, so a frozen type may pass from
+/// one solver to another and still name the source it was frozen with.
+/// Every solver of a compilation mints from the same `Sources`.
+#[derive(Debug, Clone, Default)]
+pub struct Sources(std::sync::Arc<std::sync::Mutex<acvus_utils::LocalFactory<IdentityId>>>);
+
+impl Sources {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mint a source no solver of this compilation has minted before.
+    pub fn next(&self) -> IdentityId {
+        self.0
+            .lock()
+            .expect("sources mutex poisoned: a solver panicked while minting")
+            .next()
+    }
 }
 
 /// Pure type inference solver.
@@ -89,19 +109,24 @@ pub struct Solver {
     pub(crate) effect_vars: Vec<EffectBound>,
     pub(crate) len_vars: Vec<LenBound>,
     pub(crate) identity_vars: Vec<IdentityBound>,
-    /// Mints a new source for every identity a declaration introduces.
-    sources: acvus_utils::LocalFactory<IdentityId>,
+    /// Mints a new source for every identity a declaration introduces;
+    /// shared by every solver of the compilation.
+    sources: Sources,
 }
 
 impl Solver {
-    pub fn new() -> Self {
+    pub fn new(sources: Sources) -> Self {
         Self {
             ty_bounds: Vec::new(),
             effect_vars: Vec::new(),
             len_vars: Vec::new(),
             identity_vars: Vec::new(),
-            sources: acvus_utils::LocalFactory::new(),
+            sources,
         }
+    }
+
+    pub fn sources(&self) -> &Sources {
+        &self.sources
     }
 
     // -- Identity variables ------------------------------------------
@@ -462,7 +487,6 @@ impl Solver {
             effect_vars: self.effect_vars.clone(),
             len_vars: self.len_vars.clone(),
             identity_vars: self.identity_vars.clone(),
-            sources: self.sources.clone(),
         }
     }
 
@@ -472,7 +496,6 @@ impl Solver {
         self.effect_vars = snap.effect_vars;
         self.len_vars = snap.len_vars;
         self.identity_vars = snap.identity_vars;
-        self.sources = snap.sources;
     }
 
     // -- Resolution --------------------------------------------------
@@ -1297,12 +1320,6 @@ impl Solver {
     }
 }
 
-impl Default for Solver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Error when freezing an InferTy that still contains unresolved variables.
 #[derive(Debug)]
 pub enum FreezeError {
@@ -1373,7 +1390,7 @@ impl Solver {
         let effect_vars = &mut self.effect_vars;
         let len_vars = &mut self.len_vars;
         let identity_vars = &mut self.identity_vars;
-        let sources = &mut self.sources;
+        let sources = &self.sources;
         let from_params = Self::identity_vars_bound_by_params(ty);
         let mut identity_map: FxHashMap<u32, IdentityTerm<Infer>> = FxHashMap::default();
         ty.map(
@@ -1423,7 +1440,7 @@ impl Solver {
         let effect_vars = &mut self.effect_vars;
         let len_vars = &mut self.len_vars;
         let identity_vars = &mut self.identity_vars;
-        let sources = &mut self.sources;
+        let sources = &self.sources;
         let mut identity_map: FxHashMap<u32, IdentityTerm<Infer>> = FxHashMap::default();
         let mut on_len = |id: u32| {
             let var = *len_map

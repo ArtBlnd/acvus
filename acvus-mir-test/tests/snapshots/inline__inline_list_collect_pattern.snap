@@ -18,8 +18,8 @@ expression: ir
     ; r3 (v3) : Int
     ; r4 (v7) : Ref<Array<Int, 3>>
     ; r5 ($xs) : Array<Int, 3>
-    ; r6 (v9) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r6 (v9) : Iterator<Int, Pure, #IdentityId(3)>
     ; r7 (v10) : Fn(Int) -> Int
-    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
     ; r9 (collect(...)) : List<Int>
     ; r10 (to_list(...)) : List<Int>
