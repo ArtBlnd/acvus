@@ -5,20 +5,20 @@ expression: opt
 === main ===
      0 |   r0 = ref @a
      1 |   r1 = ref @b
-     2 |   r2 = load r1
-     3 |   r3 = load r0
-     4 |   r4 = r3 + r2
+     2 |   r2 = load r0
+     3 |   r3 = load r1
+     4 |   r4 = r2 + r3
      5 |   r0 = ref @scale
-     6 |   r2 = load r0
-     7 |   r5 = r4 * r2
-     8 |   r2 = r5 + r3
+     6 |   r3 = load r0
+     7 |   r5 = r4 * r3
+     8 |   r3 = r5 + r2
      9 |   r0 = ref @output
-    10 |   store r0 = r2
-    11 |   return r2
+    10 |   store r0 = r3
+    11 |   return r3
 
     ; r0 (@output) : Ref<Int>
     ; r1 (@b) : Ref<Int>
-    ; r2 (@scale) : Int
-    ; r3 (@a) : Int
+    ; r2 (@a) : Int
+    ; r3 (@scale) : Int
     ; r4 (v5) : Int
     ; r5 (v6) : Int

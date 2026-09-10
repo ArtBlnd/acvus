@@ -69,7 +69,7 @@ async fn if_let_refutable_no_match() {
 }
 
 // =======================================================================
-//  Iteration: the `while let Some((x, rest)) = next(it)` protocol
+//  Iteration: `while let Some(x) = next(&mut it)` (RFC-0015)
 //  (restored from the `for` tests cut in 69eac8d)
 // =======================================================================
 
@@ -83,7 +83,7 @@ async fn iter_sum() {
     let c = ctx(&i, &[("items", ints(&[1, 2, 3])), ("sum", Value::Int(0))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some((x, rest)) = next(it) { @sum = @sum + x; it = rest; } @sum",
+        "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
         c,
     )
     .await;
@@ -99,7 +99,7 @@ async fn iter_count() {
     );
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some((x, rest)) = next(it) { @count = @count + 1; it = rest; } @count",
+        "let it = iter(@items); while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
         c,
     )
     .await;
@@ -118,7 +118,7 @@ async fn iter_nested() {
     );
     let result = run_script_mode(
         &i,
-        "let rows = iter(@matrix); while let Some((row, r1)) = next(rows) { let xs = iter(row); while let Some((x, r2)) = next(xs) { @sum = @sum + x; xs = r2; } rows = r1; } @sum",
+        "let rows = iter(@matrix); while let Some(row) = next(&mut rows) { let xs = iter(row); while let Some(x) = next(&mut xs) { @sum = @sum + x; } } @sum",
         c,
     )
     .await;
@@ -131,7 +131,7 @@ async fn iter_empty_list() {
     let c = ctx(&i, &[("items", ints(&[])), ("sum", Value::Int(99))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some((x, rest)) = next(it) { @sum = @sum + x; it = rest; } @sum",
+        "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
         c,
     )
     .await;
@@ -151,7 +151,7 @@ async fn iter_sequential_loops() {
     );
     let result = run_script_mode(
         &i,
-        "let ia = iter(@a); while let Some((x, ra)) = next(ia) { @sum = @sum + x; ia = ra; } let ib = iter(@b); while let Some((y, rb)) = next(ib) { @sum = @sum + y; ib = rb; } @sum",
+        "let ia = iter(@a); while let Some(x) = next(&mut ia) { @sum = @sum + x; } let ib = iter(@b); while let Some(y) = next(&mut ib) { @sum = @sum + y; } @sum",
         c,
     )
     .await;
@@ -167,7 +167,7 @@ async fn iter_loop_with_conditional() {
     );
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some((x, rest)) = next(it) { if x == 0 { @count = @count + 1; }; it = rest; } @count",
+        "let it = iter(@items); while let Some(x) = next(&mut it) { if x == 0 { @count = @count + 1; }; } @count",
         c,
     )
     .await;
@@ -187,7 +187,7 @@ async fn iter_accumulate_product() {
     );
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some((x, rest)) = next(it) { @sum = @sum + x; @product = @product * x; it = rest; } @sum + @product",
+        "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; @product = @product * x; } @sum + @product",
         c,
     )
     .await;
@@ -201,7 +201,7 @@ async fn iter_field_then_loop() {
     let c = ctx(&i, &[("data", obj), ("sum", Value::Int(0))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@data.items); while let Some((x, rest)) = next(it) { @sum = @sum + x; it = rest; } @sum",
+        "let it = iter(@data.items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
         c,
     )
     .await;
@@ -217,7 +217,7 @@ async fn iter_with_to_string() {
     );
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some((x, rest)) = next(it) { @out = @out + to_string(x); it = rest; } @out",
+        "let it = iter(@items); while let Some(x) = next(&mut it) { @out = @out + to_string(x); } @out",
         c,
     )
     .await;

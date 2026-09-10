@@ -30,6 +30,8 @@ extern {
         "else" => Token::Else,
         "while" => Token::While,
         "anyorder" => Token::Anyorder,
+        "mut" => Token::Mut,
+        "&" => Token::Amp,
         "+" => Token::Plus,
         "-" => Token::Minus,
         "*" => Token::Star,
@@ -341,9 +343,18 @@ QualifiedExpr: Expr = {
 PostfixExpr: Expr = {
     <l:@L> <obj:PostfixExpr> "." <f:"ident"> <r:@R> =>
         Expr::FieldAccess { id: AstId::alloc(), object: Box::new(obj), field: f, span: Span::new(l, r) },
-    <l:@L> <func:PostfixExpr> "(" <args:CommaSep<Expr>> ")" <r:@R> =>
+    <l:@L> <func:PostfixExpr> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
         Expr::FuncCall { id: AstId::alloc(), func: Box::new(func), args, span: Span::new(l, r) },
     PrimaryExpr,
+};
+
+// A call argument: a value, or a place lent with `&` or `&mut` (RFC-0015).
+CallArg: Expr = {
+    Expr,
+    <l:@L> "&" "mut" <place:Expr> <r:@R> =>
+        Expr::Borrow { id: AstId::alloc(), mutable: true, place: Box::new(place), span: Span::new(l, r) },
+    <l:@L> "&" <place:Expr> <r:@R> =>
+        Expr::Borrow { id: AstId::alloc(), mutable: false, place: Box::new(place), span: Span::new(l, r) },
 };
 
 // Primary expressions

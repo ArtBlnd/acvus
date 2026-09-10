@@ -80,6 +80,17 @@ pub enum MirErrorKind {
         expected: usize,
         got: usize,
     },
+    /// An argument's mode (`&`, `&mut`, or a value) is not the parameter's.
+    ArgumentMode {
+        func: String,
+        index: usize,
+        expected: crate::ty::ParamMode,
+        got: crate::ty::ParamMode,
+    },
+    /// `&` or `&mut` on something that is not a place.
+    NotAPlace,
+    /// One call names the same place twice.
+    PlaceNamedTwice(String),
 
     // Validation errors (from MIR pass type checking)
     ValidationCheck {
@@ -167,6 +178,34 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::UndefinedVariable(name) => {
                 write!(f, "undefined variable `{name}`")
+            }
+            MirErrorKind::ArgumentMode {
+                func,
+                index,
+                expected,
+                got,
+            } => {
+                let show = |m: &crate::ty::ParamMode| match m {
+                    crate::ty::ParamMode::Value => "a value",
+                    crate::ty::ParamMode::Borrow => "`&`",
+                    crate::ty::ParamMode::BorrowMut => "`&mut`",
+                };
+                write!(
+                    f,
+                    "argument {} of `{func}` takes {}, got {}",
+                    index + 1,
+                    show(expected),
+                    show(got)
+                )
+            }
+            MirErrorKind::NotAPlace => {
+                write!(
+                    f,
+                    "only a variable, a context, or a field of one can be lent"
+                )
+            }
+            MirErrorKind::PlaceNamedTwice(place) => {
+                write!(f, "`{place}` is named twice in one call")
             }
             MirErrorKind::UndefinedFunction(name) => {
                 write!(f, "undefined function `{name}`")

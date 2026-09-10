@@ -229,6 +229,14 @@ pub enum Expr {
         inner: Box<Expr>,
         span: Span,
     },
+    /// A place lent to a call: `&place` or `&mut place` (RFC-0015). Only
+    /// a call argument.
+    Borrow {
+        id: AstId,
+        mutable: bool,
+        place: Box<Expr>,
+        span: Span,
+    },
     /// A list: `[a, b, c]`, `[a, b, ..]`, `[.., a, b]`, `[a, .., b]`.
     /// `rest` is `Some` if `..` is present. `head` is before `..`, `tail` is after.
     /// If no `..`, all elements are in `head` and `tail` is empty.
@@ -335,6 +343,7 @@ impl Expr {
             | Expr::Pipe { id, .. }
             | Expr::Lambda { id, .. }
             | Expr::Paren { id, .. }
+            | Expr::Borrow { id, .. }
             | Expr::List { id, .. }
             | Expr::Group { id, .. }
             | Expr::Object { id, .. }
@@ -358,6 +367,7 @@ impl Expr {
             | Expr::Pipe { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::Paren { span, .. }
+            | Expr::Borrow { span, .. }
             | Expr::List { span, .. }
             | Expr::Group { span, .. }
             | Expr::Object { span, .. }
@@ -671,7 +681,9 @@ fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
             walk_expr(left, refs);
             walk_expr(right, refs);
         }
-        Expr::UnaryOp { operand, .. } | Expr::Paren { inner: operand, .. } => {
+        Expr::UnaryOp { operand, .. }
+        | Expr::Paren { inner: operand, .. }
+        | Expr::Borrow { place: operand, .. } => {
             walk_expr(operand, refs);
         }
         Expr::FieldAccess { object, .. } => walk_expr(object, refs),

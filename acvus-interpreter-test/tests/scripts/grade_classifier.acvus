@@ -4,7 +4,7 @@ let fail = 0;
 let best = 0;
 
 let students = iter(@students);
-while let Some((s, rest)) = next(students) {
+while let Some(s) = next(&mut students) {
     let score = s.score;
     if score >= 90 {
         honor = honor + 1;
@@ -16,7 +16,6 @@ while let Some((s, rest)) = next(students) {
     } else {
         fail = fail + 1;
     };
-    students = rest;
 }
 
 let passing_total = @students

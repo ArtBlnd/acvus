@@ -214,9 +214,15 @@ impl Frame {
         self.share(id)
     }
 
-    fn jump(&mut self, insts: &[Inst], label: &Label, args: &[ValueId]) -> usize {
+    fn jump(
+        &mut self,
+        insts: &[Inst],
+        label: &Label,
+        args: &[ValueId],
+        val_types: &FxHashMap<ValueId, Ty>,
+    ) -> usize {
         let target = self.resolve_label(label);
-        self.bind_block_params(insts, target, args);
+        self.bind_block_params(insts, target, args, val_types);
         target
     }
 
@@ -226,13 +232,14 @@ impl Frame {
         cond: ValueId,
         then: (&Label, &[ValueId]),
         else_: (&Label, &[ValueId]),
+        val_types: &FxHashMap<ValueId, Ty>,
     ) -> usize {
         let cond_val = match self.get(cond) {
             Value::Bool(b) => *b,
             other => panic!("jump_if: expected Bool, got {other:?}"),
         };
         let (label, args) = if cond_val { then } else { else_ };
-        self.jump(insts, label, args)
+        self.jump(insts, label, args, val_types)
     }
 
     fn resolve_label(&self, label: &Label) -> usize {
@@ -242,9 +249,17 @@ impl Frame {
             .unwrap_or_else(|| panic!("unknown label {label:?}"))
     }
 
-    fn bind_block_params(&mut self, insts: &[Inst], target: usize, args: &[ValueId]) {
+    /// A jump moves its arguments into the params: a move-only argument
+    /// leaves its register, so one owner remains.
+    fn bind_block_params(
+        &mut self,
+        insts: &[Inst],
+        target: usize,
+        args: &[ValueId],
+        val_types: &FxHashMap<ValueId, Ty>,
+    ) {
         if let InstKind::BlockLabel { params, .. } = &insts[target].kind {
-            let values: Vec<Value> = args.iter().map(|a| self.share(*a)).collect();
+            let values: Vec<Value> = args.iter().map(|a| self.use_val(*a, val_types)).collect();
             for (param, val) in params.iter().zip(values) {
                 self.set(*param, val);
             }
@@ -611,7 +626,7 @@ async fn execute_inst(
         // -- Control flow ---------------------------------
         InstKind::BlockLabel { .. } => {}
         InstKind::Jump { label, args } => {
-            let target = frame.jump(insts, label, args);
+            let target = frame.jump(insts, label, args, val_types);
             return Ok(Flow::Jump(target));
         }
         InstKind::JumpIf {
@@ -626,6 +641,7 @@ async fn execute_inst(
                 *cond,
                 (then_label, then_args),
                 (else_label, else_args),
+                val_types,
             );
             return Ok(Flow::Jump(target));
         }

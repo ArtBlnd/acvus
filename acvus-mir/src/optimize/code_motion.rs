@@ -381,6 +381,16 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                     break;
                 }
 
+                // Another sinkable instruction is a barrier: sinking past it
+                // gains nothing, and two of them would leapfrog forever.
+                if matches!(other, InstKind::Eval { .. })
+                    || context_of_load(other, &ref_to_ctx).is_some()
+                    || context_of_store(other, &ref_to_ctx).is_some()
+                {
+                    barrier = jj;
+                    break;
+                }
+
                 if let SinkKind::Load(ctx) = &sink_kind {
                     if let Some(store_ctx) = context_of_store(other, &ref_to_ctx) {
                         if store_ctx == *ctx {

@@ -35,7 +35,7 @@ fn loop_context_write_phi() {
     );
     let ir = compile_script_mode_raw(
         &i,
-        "let it = @items | iter; while let Some((x, rest)) = next(it) { @count = @count + 1; it = rest; } @count",
+        "let it = @items | iter; while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
         &c,
     )
     .unwrap();
@@ -131,7 +131,7 @@ fn ssa_write_in_loop_phi() {
     );
     let ir = compile_script_mode_raw(
         &i,
-        "let it = @items | iter; while let Some((x, rest)) = next(it) { @acc = @acc + x; it = rest; } @acc",
+        "let it = @items | iter; while let Some(x) = next(&mut it) { @acc = @acc + x; } @acc",
         &c,
     )
     .unwrap();
@@ -208,7 +208,7 @@ fn combined_nested_loop_context() {
     );
     let ir = compile_script_mode_raw(
         &i,
-        "let rows = @outer | iter; while let Some((row, r1)) = next(rows) { let xs = row | iter; while let Some((x, r2)) = next(xs) { @total = @total + x; xs = r2; } rows = r1; } @total",
+        "let rows = @outer | iter; while let Some(row) = next(&mut rows) { let xs = row | iter; while let Some(x) = next(&mut xs) { @total = @total + x; } } @total",
         &c,
     )
     .unwrap();
@@ -238,4 +238,42 @@ fn reject_type_mismatch_context_store() {
         result.is_err(),
         "expected error for type mismatch on context store"
     );
+}
+
+// =======================================================================
+//  Lent places (RFC-0015): the mode is checked at the call
+// =======================================================================
+
+fn items_ctx(i: &Interner) -> rustc_hash::FxHashMap<acvus_utils::Astr, Ty> {
+    ctx(
+        &i,
+        &[(
+            "items",
+            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        )],
+    )
+}
+
+#[test]
+fn a_lending_parameter_rejects_a_value_argument() {
+    let i = Interner::new();
+    let err = compile_script_mode_raw(&i, "let it = @items | iter; next(it)", &items_ctx(&i))
+        .unwrap_err();
+    assert!(err.contains("takes `&mut`, got a value"), "{err}");
+}
+
+#[test]
+fn a_lending_parameter_rejects_the_other_mode() {
+    let i = Interner::new();
+    let err = compile_script_mode_raw(&i, "let it = @items | iter; next(&it)", &items_ctx(&i))
+        .unwrap_err();
+    assert!(err.contains("takes `&mut`, got `&`"), "{err}");
+}
+
+#[test]
+fn only_a_place_can_be_lent() {
+    let i = Interner::new();
+    let err =
+        compile_script_mode_raw(&i, "next(&mut (@items | iter))", &items_ctx(&i)).unwrap_err();
+    assert!(err.contains("can be lent"), "{err}");
 }

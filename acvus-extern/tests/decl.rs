@@ -269,10 +269,17 @@ fn draw(_: &Interner) -> i64 {
     4
 }
 
+/// Adds `by` to the lent place and returns the new value.
+#[extern_fn(effect = pure)]
+fn bump(_: &Interner, n: &mut i64, by: i64) -> i64 {
+    *n += by;
+    *n
+}
+
 fn registry<R: Runtime>() -> ExternRegistry<R> {
     extern_registry! {
         types: [Boxed<_, _, R>, Token<_>],
-        fns: [add, identity, apply, boxed, fetch, take_token, draw],
+        fns: [add, identity, apply, boxed, fetch, take_token, draw, bump],
     }
 }
 
@@ -402,10 +409,39 @@ fn types_and_casts_reach_the_type_registry() {
 }
 
 fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>, i: &Interner) -> Result<V, ExternError> {
+    call_sync_lending(handler, args, i).map(|r| r.value)
+}
+
+fn call_sync_lending(
+    handler: &ExternHandler<Tiny>,
+    args: Vec<V>,
+    i: &Interner,
+) -> Result<acvus_extern::Returned<V>, ExternError> {
     match handler {
-        ExternHandler::Sync(f) => f(args, i).map(|r| r.value),
+        ExternHandler::Sync(f) => f(args, i),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
     }
+}
+
+#[test]
+fn a_borrowed_parameter_is_declared_and_given_back() {
+    let i = Interner::new();
+    let mut tr = TypeRegistry::new();
+    let reg = registry::<Tiny>().register(&i, &mut tr);
+    let PolyTy::Fn { params, .. } = find(&reg.functions, &i, "bump") else {
+        panic!("bump is a function");
+    };
+    assert_eq!(params[0].mode, acvus_extern::ParamMode::BorrowMut);
+    assert_eq!(params[1].mode, acvus_extern::ParamMode::Value);
+
+    let h = handler(&reg, &i, "bump");
+    let r = call_sync_lending(h, vec![V::Int(40), V::Int(2)], &i).unwrap();
+    assert_eq!(r.value, V::Int(42));
+    assert_eq!(
+        r.lent,
+        vec![V::Int(42)],
+        "the lent place comes back changed"
+    );
 }
 
 async fn call_async(

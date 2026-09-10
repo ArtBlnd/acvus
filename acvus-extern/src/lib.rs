@@ -38,8 +38,8 @@ pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry};
 
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, IdentityTerm, LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Ty,
-    TyTerm, TyVarBound, TypeRegistry, UserDefinedDecl, try_freeze_poly,
+    CastRule, Effect, EffectTerm, IdentityTerm, LenTerm, ParamMode, ParamTerm, Poly, PolyBuilder,
+    PolyTy, Ty, TyTerm, TyVarBound, TypeRegistry, UserDefinedDecl, try_freeze_poly,
 };
 pub use acvus_utils::{Astr, Interner, QualifiedRef};
 pub use futures::future::BoxFuture;

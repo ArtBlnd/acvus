@@ -285,20 +285,14 @@ where
 }
 
 #[extern_fn(effect = E)]
-async fn next<T, E, I, Rt>(
-    i: Interner,
-    mut it: Iter<T, E, I, Rt>,
-) -> Result<Option<(T, Iter<T, E, I, Rt>)>, Rt::Error>
+async fn next<T, E, I, Rt>(i: Interner, it: &mut Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
 where
     T: TyVar + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    match it.next(&i).await? {
-        Some(item) => Ok(Some((item, it))),
-        None => Ok(None),
-    }
+    it.next(&i).await
 }
 
 #[extern_fn(effect = E)]

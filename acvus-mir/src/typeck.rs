@@ -9,8 +9,8 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Materiality, Param, ParamTerm, Polarity, Solver,
-    Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Materiality, Param, ParamMode, ParamTerm,
+    Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -536,6 +536,66 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
     /// Check arity and unify argument types against parameter types.
     /// Returns `true` if arity matched, `false` (with error emitted) if not.
+    /// The mode of each argument and the places a call names, checked
+    /// against the parameters (RFC-0015): a lent argument needs a lending
+    /// parameter of the same mode, and no place is named twice.
+    fn check_arg_modes(
+        &mut self,
+        func: &str,
+        piped: bool,
+        args: &[Expr],
+        params: &[ParamTerm<Infer>],
+        call_span: Span,
+    ) {
+        let offset = usize::from(piped);
+        if piped && params.first().is_some_and(|p| p.mode.lends()) {
+            self.error(
+                MirErrorKind::ArgumentMode {
+                    func: func.to_string(),
+                    index: 0,
+                    expected: params[0].mode,
+                    got: ParamMode::Value,
+                },
+                call_span,
+            );
+        }
+        let mut named: Vec<Place> = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            let Some(param) = params.get(i + offset) else {
+                break;
+            };
+            let got = match arg {
+                Expr::Borrow { mutable: true, .. } => ParamMode::BorrowMut,
+                Expr::Borrow { mutable: false, .. } => ParamMode::Borrow,
+                _ => ParamMode::Value,
+            };
+            if got != param.mode {
+                self.error(
+                    MirErrorKind::ArgumentMode {
+                        func: func.to_string(),
+                        index: i + offset,
+                        expected: param.mode,
+                        got,
+                    },
+                    arg.span(),
+                );
+            }
+            let place_expr = match arg {
+                Expr::Borrow { place, .. } => place.as_ref(),
+                other => other,
+            };
+            if let Some(place) = place_of(place_expr) {
+                if named.contains(&place) {
+                    self.error(
+                        MirErrorKind::PlaceNamedTwice(place.display(self.interner)),
+                        arg.span(),
+                    );
+                }
+                named.push(place);
+            }
+        }
+    }
+
     fn check_args(
         &mut self,
         func: &str,
@@ -881,6 +941,16 @@ impl<'a, 's> TypeChecker<'a, 's> {
 
     fn check_expr(&mut self, allow_non_pure: bool, expr: &Expr) -> InferTy {
         match expr {
+            // A lent place types as the place; the mode is checked at the call.
+            Expr::Borrow {
+                id, place, span, ..
+            } => {
+                if place_of(place).is_none() {
+                    self.error(MirErrorKind::NotAPlace, *span);
+                }
+                let ty = self.check_expr(true, place);
+                self.record_ret(*id, ty)
+            }
             Expr::Literal { id, value, span } => {
                 let ty = match value {
                     Literal::Int(_) => TyTerm::Int,
@@ -1698,6 +1768,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                     {
                         return Self::infer_error();
                     }
+                    self.check_arg_modes(name_str, pipe_left.is_some(), args, param_tys, call_span);
                     let effect = *effect;
                     self.note_call_effect(&effect, call_span);
                     // Record callee's full Fn type on the callee's AstId.
@@ -1801,6 +1872,7 @@ impl<'a, 's> TypeChecker<'a, 's> {
                 ) {
                     return Self::infer_error();
                 }
+                self.check_arg_modes("<callable>", pipe_ty.is_some(), args, params, call_span);
                 let effect = *effect;
                 self.note_call_effect(&effect, call_span);
                 self.solver.resolve_ty(ret)
@@ -2630,5 +2702,59 @@ mod tests {
         let ctx = FxHashMap::from_iter([(i.intern("msg"), Ty::String)]);
         let src = "{{ x = @msg }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
+    }
+}
+
+/// Where a lent argument points: a local, a context, or an extern
+/// parameter, and the field path below it (RFC-0015).
+#[derive(Clone, PartialEq, Eq)]
+struct Place {
+    root: PlaceRoot,
+    path: Vec<Astr>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum PlaceRoot {
+    Local(Astr),
+    Context(QualifiedRef),
+}
+
+impl Place {
+    fn display(&self, interner: &Interner) -> String {
+        let mut out = match &self.root {
+            PlaceRoot::Local(name) => interner.resolve(*name).to_string(),
+            PlaceRoot::Context(qref) => format!("@{}", interner.resolve(qref.name)),
+        };
+        for f in &self.path {
+            out.push('.');
+            out.push_str(interner.resolve(*f));
+        }
+        out
+    }
+}
+
+/// The place an expression denotes, if it denotes one. An extern
+/// parameter is a value, not a place.
+fn place_of(expr: &Expr) -> Option<Place> {
+    match expr {
+        Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            ..
+        } => Some(Place {
+            root: PlaceRoot::Local(name.name),
+            path: Vec::new(),
+        }),
+        Expr::ContextRef { name, .. } => Some(Place {
+            root: PlaceRoot::Context(*name),
+            path: Vec::new(),
+        }),
+        Expr::FieldAccess { object, field, .. } => {
+            let mut place = place_of(object)?;
+            place.path.push(*field);
+            Some(place)
+        }
+        Expr::Paren { inner, .. } => place_of(inner),
+        _ => None,
     }
 }

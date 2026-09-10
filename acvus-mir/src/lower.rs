@@ -52,6 +52,13 @@ struct AnyorderScope {
     acc: ValueId,
 }
 
+/// A place lent to a call: where it is, and the type of what it holds.
+struct LentPlace {
+    target: RefTarget,
+    path: Vec<Astr>,
+    ty: Ty,
+}
+
 /// A local variable binding: its type and the storage slot it owns.
 #[derive(Clone)]
 struct Local {
@@ -231,6 +238,29 @@ impl<'a> Lowerer<'a> {
         callee_ty: Ty,
         args: Vec<ValueId>,
     ) {
+        self.emit_call_lending(span, dst, callee, callee_ty, args, Vec::new());
+    }
+
+    /// Emit a call that was lent the places in `lent_places`, in argument
+    /// order (RFC-0015): the call yields one value per place, and each is
+    /// stored back into its place.
+    fn emit_call_lending(
+        &mut self,
+        span: Span,
+        dst: ValueId,
+        callee: Callee,
+        callee_ty: Ty,
+        args: Vec<ValueId>,
+        lent_places: Vec<LentPlace>,
+    ) {
+        let lent: Vec<ValueId> = lent_places
+            .iter()
+            .map(|p| {
+                let v = self.alloc_val();
+                self.set_val_type(v, p.ty.clone());
+                v
+            })
+            .collect();
         let effectful = callee_ty.effect().is_some_and(|e| e != Effect::PURE);
         let order = if effectful {
             let slot = self.order_slot.unwrap_or_else(|| {
@@ -254,9 +284,12 @@ impl<'a> Lowerer<'a> {
                 callee_ty,
                 args,
                 order,
-                lent: Vec::new(),
+                lent: lent.clone(),
             },
         );
+        for (place, value) in lent_places.into_iter().zip(lent) {
+            self.emit_ref_store(span, place.target, place.path, value);
+        }
         let Some(edge) = order else {
             return;
         };
@@ -885,6 +918,39 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Resolve a context alias. Returns (real_context, path) if aliased.
+    /// The storage a place expression names. Type checking admitted only a
+    /// local, a context, or a field path of one.
+    fn lent_place(&mut self, place: &Expr) -> LentPlace {
+        let ty = self.type_of_id(place.id());
+        let mut path: Vec<Astr> = Vec::new();
+        let mut root = place;
+        loop {
+            match root {
+                Expr::FieldAccess { object, field, .. } => {
+                    path.push(*field);
+                    root = object;
+                }
+                Expr::Paren { inner, .. } => root = inner,
+                _ => break,
+            }
+        }
+        path.reverse();
+        let target = match root {
+            Expr::Ident { name, .. } => RefTarget::Var(self.var_slot(name.name)),
+            Expr::ContextRef { name, .. } => match self.resolve_context_alias(name) {
+                Some((real, alias_path)) => {
+                    let mut full = alias_path;
+                    full.extend(path);
+                    path = full;
+                    RefTarget::Context(real)
+                }
+                None => RefTarget::Context(*name),
+            },
+            other => panic!("not a place: {other:?}; type checking admits only places here"),
+        };
+        LentPlace { target, path, ty }
+    }
+
     fn resolve_context_alias(&self, ctx: &QualifiedRef) -> Option<(QualifiedRef, Vec<Astr>)> {
         for scope in self.context_aliases.iter().rev() {
             if let Some((real_ctx, path)) = scope.get(ctx) {
@@ -1359,6 +1425,9 @@ impl<'a> Lowerer<'a> {
 
     fn lower_expr_inner(&mut self, expr: &Expr) -> ValueId {
         match expr {
+            Expr::Borrow { span, .. } => {
+                panic!("a lent place is lowered by its call; none stands alone at {span:?}")
+            }
             Expr::Literal { id, value, span } => {
                 let dst = self.alloc_expr(*id);
                 self.emit_inst(
@@ -1986,11 +2055,24 @@ impl<'a> Lowerer<'a> {
     ) -> ValueId {
         let mut arg_regs: Vec<ValueId> =
             Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
+        let mut lent_places: Vec<LentPlace> = Vec::new();
         if let Some(left) = pipe_left {
             let val = self.lower_expr(left);
             arg_regs.push(self.materialize(val, call_span));
         }
         for a in args {
+            if let Expr::Borrow { place, span, .. } = a {
+                let lent = self.lent_place(place);
+                let val = self.emit_ref_load(
+                    *span,
+                    lent.target.clone(),
+                    lent.path.clone(),
+                    lent.ty.clone(),
+                );
+                arg_regs.push(val);
+                lent_places.push(lent);
+                continue;
+            }
             let val = self.lower_expr(a);
             arg_regs.push(self.materialize(val, call_span));
         }
@@ -2012,7 +2094,14 @@ impl<'a> Lowerer<'a> {
                     // 1. Direct call - typeck resolved this callee to a named function.
                     if let Some(&qref) = self.resolution.direct_calls.get(&func.id()) {
                         let callee_ty = self.type_of_id(func.id());
-                        self.emit_call(call_span, dst, Callee::Direct(qref), callee_ty, arg_regs);
+                        self.emit_call_lending(
+                            call_span,
+                            dst,
+                            Callee::Direct(qref),
+                            callee_ty,
+                            arg_regs,
+                            lent_places,
+                        );
                         return dst;
                     }
 
@@ -2027,12 +2116,13 @@ impl<'a> Lowerer<'a> {
                             closure_ty.clone(),
                         );
                         self.set_origin(closure_reg, ValOrigin::Named(name.name));
-                        self.emit_call(
+                        self.emit_call_lending(
                             call_span,
                             dst,
                             Callee::Indirect(closure_reg),
                             closure_ty,
                             arg_regs,
+                            lent_places,
                         );
                         return dst;
                     }
@@ -2054,7 +2144,14 @@ impl<'a> Lowerer<'a> {
             .get(&func_reg)
             .expect("indirect callee must have val_type")
             .clone();
-        self.emit_call(call_span, dst, Callee::Indirect(func_reg), fn_ty, arg_regs);
+        self.emit_call_lending(
+            call_span,
+            dst,
+            Callee::Indirect(func_reg),
+            fn_ty,
+            arg_regs,
+            lent_places,
+        );
         dst
     }
 
@@ -2610,7 +2707,7 @@ impl<'a> Lowerer<'a> {
                 }
                 self.collect_free_vars(body, &inner_bound, free, seen);
             }
-            Expr::Paren { inner, .. } => {
+            Expr::Paren { inner, .. } | Expr::Borrow { place: inner, .. } => {
                 self.collect_free_vars(inner, bound, free, seen);
             }
             Expr::List { head, tail, .. } => {

@@ -13,60 +13,48 @@ expression: ir
      7 | L0:
      8 |   r5 = ref rows
      9 |   r6 = load r5
-    10 |   r7 = call #2(r6)
-    11 |   r8 = test r7 is Some
-    12 |   jump_if r8 then L1 else L2
-    13 | L1:
-    14 |   r9 = unwrap r7
-    15 |   r10 = r9.0
-    16 |   r11 = ref row
-    17 |   store r11 = r10
-    18 |   r12 = r9.1
-    19 |   r13 = ref r1
-    20 |   store r13 = r12
-    21 |   r14 = ref row
-    22 |   r15 = load r14
-    23 |   r16 = call #0(r15)
-    24 |   r17 = call #1(r16)
-    25 |   r18 = ref xs
-    26 |   store r18 = r17
-    27 |   jump L3
-    28 | L3:
-    29 |   r19 = ref xs
-    30 |   r20 = load r19
-    31 |   r21 = call #2(r20)
-    32 |   r22 = test r21 is Some
-    33 |   jump_if r22 then L4 else L5
+    10 |   r7 = call #2(r6) lent r8
+    11 |   r9 = ref rows
+    12 |   store r9 = r8
+    13 |   r10 = test r7 is Some
+    14 |   jump_if r10 then L1 else L2
+    15 | L1:
+    16 |   r11 = unwrap r7
+    17 |   r12 = ref row
+    18 |   store r12 = r11
+    19 |   r13 = ref row
+    20 |   r14 = load r13
+    21 |   r15 = call #0(r14)
+    22 |   r16 = call #1(r15)
+    23 |   r17 = ref xs
+    24 |   store r17 = r16
+    25 |   jump L3
+    26 | L3:
+    27 |   r18 = ref xs
+    28 |   r19 = load r18
+    29 |   r20 = call #2(r19) lent r21
+    30 |   r22 = ref xs
+    31 |   store r22 = r21
+    32 |   r23 = test r20 is Some
+    33 |   jump_if r23 then L4 else L5
     34 | L4:
-    35 |   r23 = unwrap r21
-    36 |   r24 = r23.0
-    37 |   r25 = ref x
-    38 |   store r25 = r24
-    39 |   r26 = r23.1
-    40 |   r27 = ref r2
-    41 |   store r27 = r26
-    42 |   r28 = ref @total
-    43 |   r29 = load r28
-    44 |   r30 = ref x
-    45 |   r31 = load r30
-    46 |   r32 = r29 + r31
-    47 |   r33 = ref @total
-    48 |   store r33 = r32
-    49 |   r34 = ref r2
-    50 |   r35 = load r34
-    51 |   r36 = ref xs
-    52 |   store r36 = r35
-    53 |   jump L3
-    54 | L5:
-    55 |   r37 = ref r1
-    56 |   r38 = load r37
-    57 |   r39 = ref rows
-    58 |   store r39 = r38
-    59 |   jump L0
-    60 | L2:
-    61 |   r40 = ref @total
-    62 |   r41 = load r40
-    63 |   return r41
+    35 |   r24 = unwrap r20
+    36 |   r25 = ref x
+    37 |   store r25 = r24
+    38 |   r26 = ref @total
+    39 |   r27 = load r26
+    40 |   r28 = ref x
+    41 |   r29 = load r28
+    42 |   r30 = r27 + r29
+    43 |   r31 = ref @total
+    44 |   store r31 = r30
+    45 |   jump L3
+    46 | L5:
+    47 |   jump L0
+    48 | L2:
+    49 |   r32 = ref @total
+    50 |   r33 = load r32
+    51 |   return r33
 
     ; r0 (@outer) : Ref<Array<Array<Int, 3>, 3>>
     ; r1 (v2) : Array<Array<Int, 3>, 3>
@@ -74,39 +62,31 @@ expression: ir
     ; r3 (iter(...)) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
     ; r4 (v6) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
     ; r5 (v7) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
-    ; r6 (rows) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
-    ; r7 (next(...)) : Option<(Array<Int, 3>, Iterator<Array<Int, 3>, Pure, #IdentityId(0)>)>
-    ; r8 (v10) : Bool
-    ; r9 (v11) : (Array<Int, 3>, Iterator<Array<Int, 3>, Pure, #IdentityId(0)>)
-    ; r10 (row) : Array<Int, 3>
-    ; r11 (v14) : Ref<Array<Int, 3>>
-    ; r12 (r1) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
-    ; r13 (v17) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
-    ; r14 (v18) : Ref<Array<Int, 3>>
-    ; r15 (row) : Array<Int, 3>
-    ; r16 (v20) : List<Int>
-    ; r17 (iter(...)) : Iterator<Int, Pure, #IdentityId(1)>
-    ; r18 (v23) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
-    ; r19 (v24) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
-    ; r20 (xs) : Iterator<Int, Pure, #IdentityId(1)>
-    ; r21 (next(...)) : Option<(Int, Iterator<Int, Pure, #IdentityId(1)>)>
-    ; r22 (v27) : Bool
-    ; r23 (v28) : (Int, Iterator<Int, Pure, #IdentityId(1)>)
+    ; r6 (v8) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
+    ; r7 (next(...)) : Option<Array<Int, 3>>
+    ; r8 (v10) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
+    ; r9 (v11) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
+    ; r10 (v12) : Bool
+    ; r11 (row) : Array<Int, 3>
+    ; r12 (v15) : Ref<Array<Int, 3>>
+    ; r13 (v16) : Ref<Array<Int, 3>>
+    ; r14 (row) : Array<Int, 3>
+    ; r15 (v18) : List<Int>
+    ; r16 (iter(...)) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r17 (v21) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
+    ; r18 (v22) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
+    ; r19 (v23) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r20 (next(...)) : Option<Int>
+    ; r21 (v25) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r22 (v26) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
+    ; r23 (v27) : Bool
     ; r24 (x) : Int
-    ; r25 (v31) : Ref<Int>
-    ; r26 (r2) : Iterator<Int, Pure, #IdentityId(1)>
-    ; r27 (v34) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
-    ; r28 (@total) : Ref<Int>
-    ; r29 (v36) : Int
-    ; r30 (v37) : Ref<Int>
-    ; r31 (x) : Int
-    ; r32 (v39) : Int
-    ; r33 (@total) : Ref<Int>
-    ; r34 (v41) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
-    ; r35 (r2) : Iterator<Int, Pure, #IdentityId(1)>
-    ; r36 (v43) : Ref<Iterator<Int, Pure, #IdentityId(1)>>
-    ; r37 (v44) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
-    ; r38 (r1) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
-    ; r39 (v46) : Ref<Iterator<Array<Int, 3>, Pure, #IdentityId(0)>>
-    ; r40 (@total) : Ref<Int>
-    ; r41 (v48) : Int
+    ; r25 (v30) : Ref<Int>
+    ; r26 (@total) : Ref<Int>
+    ; r27 (v32) : Int
+    ; r28 (v33) : Ref<Int>
+    ; r29 (x) : Int
+    ; r30 (v35) : Int
+    ; r31 (@total) : Ref<Int>
+    ; r32 (@total) : Ref<Int>
+    ; r33 (v38) : Int

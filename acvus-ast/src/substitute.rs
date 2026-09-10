@@ -156,6 +156,17 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             inner: Box::new(sub_expr(*inner, subs)),
             span,
         },
+        Expr::Borrow {
+            mutable,
+            place,
+            span,
+            ..
+        } => Expr::Borrow {
+            id: AstId::alloc(),
+            mutable,
+            place: Box::new(sub_expr(*place, subs)),
+            span,
+        },
 
         // List elements: sequence context (both head and tail).
         Expr::List {
@@ -566,7 +577,7 @@ fn validate_splice_expr(
         Expr::Lambda { body, .. } => {
             validate_splice_expr(body, false, splice_names, errors);
         }
-        Expr::Paren { inner, .. } => {
+        Expr::Paren { inner, .. } | Expr::Borrow { place: inner, .. } => {
             validate_splice_expr(inner, false, splice_names, errors);
         }
         Expr::List { head, tail, .. } => {

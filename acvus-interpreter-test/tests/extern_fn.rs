@@ -236,9 +236,16 @@ fn draw_b(_: &Interner) -> i64 {
     7
 }
 
+/// Adds `by` to the lent place and returns the new value (RFC-0015).
+#[extern_fn(effect = pure)]
+fn bump(_: &Interner, n: &mut i64, by: i64) -> i64 {
+    *n += by;
+    *n
+}
+
 fn io_registry() -> ExternRegistry<AcvusRuntime> {
     extern_registry! {
-        fns: [fetch_a, fetch_b, fetch_c, fetch_d, fetch_by, draw_a, draw_b],
+        fns: [fetch_a, fetch_b, fetch_c, fetch_d, fetch_by, draw_a, draw_b, bump],
     }
 }
 
@@ -284,6 +291,11 @@ fn compile_io_parsed(
 
 async fn run_io_script_mode(source: &str, context: &[(&str, Value)]) -> Value {
     let i = Interner::new();
+    run_io_script_mode_on(&i, source, context).await
+}
+
+async fn run_io_script_mode_on(i: &Interner, source: &str, context: &[(&str, Value)]) -> Value {
+    let i = i.clone();
     let ast = acvus_mir::graph::ParsedAst::Script(
         acvus_ast::parse_script_mode(&i, source).expect("parse"),
     );
@@ -527,6 +539,38 @@ fn io_two_independent_chains_mir() {
 
     assert_eq!(spawns.len(), 4, "4 IO calls");
     assert_source_order(&spawns, &evals);
+}
+
+// -- Lent places (RFC-0015) -----------------------------------------
+//
+// `f(&mut place)` loads the place, the callee changes what it received,
+// and the value it left is stored back. A context, a local, and a field
+// of a context are all places.
+
+#[tokio::test]
+async fn a_context_lent_mutably_comes_back_changed() {
+    let v = run_io_script_mode("bump(&mut @n, 5); @n", &[("n", Value::Int(10))]).await;
+    assert_eq!(v, Value::Int(15));
+}
+
+#[tokio::test]
+async fn a_local_lent_mutably_comes_back_changed() {
+    let v = run_io_script_mode("let x = 1; bump(&mut x, 2); bump(&mut x, 3); x", &[]).await;
+    assert_eq!(v, Value::Int(6));
+}
+
+#[tokio::test]
+async fn a_field_of_a_context_is_a_place() {
+    let i = Interner::new();
+    let a = Value::object(FxHashMap::from_iter([(i.intern("n"), Value::Int(1))]));
+    let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", &[("a", a)]).await;
+    assert_eq!(v, Value::Int(2));
+}
+
+#[tokio::test]
+async fn the_return_value_of_a_lending_call_is_free() {
+    let v = run_io_script_mode("let x = 40; let y = bump(&mut x, 2); x + y", &[]).await;
+    assert_eq!(v, Value::Int(84));
 }
 
 // -- Commutative runs (RFC-0013) ------------------------------------

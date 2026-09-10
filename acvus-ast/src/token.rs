@@ -54,6 +54,8 @@ pub enum Token {
     While,
     #[token("anyorder", priority = 3)]
     Anyorder,
+    #[token("mut", priority = 3)]
+    Mut,
 
     // -- Identifiers --
     #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(lex.slice()), priority = 2)]
@@ -108,6 +110,8 @@ pub enum Token {
     Percent,
     #[token("!")]
     Bang,
+    #[token("&")]
+    Amp,
     #[token("<")]
     Lt,
     #[token(">")]
@@ -164,6 +168,8 @@ impl fmt::Display for Token {
             Token::Else => write!(f, "else"),
             Token::While => write!(f, "while"),
             Token::Anyorder => write!(f, "anyorder"),
+            Token::Mut => write!(f, "mut"),
+            Token::Amp => write!(f, "&"),
             Token::DoubleColon => write!(f, "::"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),

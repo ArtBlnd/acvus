@@ -83,7 +83,27 @@ impl Parse for ExternFnAttr {
 /// An acvus parameter of the declared function.
 struct ExternParam {
     name: String,
+    /// The acvus type: for `&T` and `&mut T`, the `T`.
     ty: Type,
+    mode: Mode,
+}
+
+/// How the Rust parameter takes its argument (RFC-0015).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Value,
+    Borrow,
+    BorrowMut,
+}
+
+impl Mode {
+    fn acvus(self) -> proc_macro2::TokenStream {
+        match self {
+            Mode::Value => quote! { ::acvus_extern::ParamMode::Value },
+            Mode::Borrow => quote! { ::acvus_extern::ParamMode::Borrow },
+            Mode::BorrowMut => quote! { ::acvus_extern::ParamMode::BorrowMut },
+        }
+    }
 }
 
 /// The declared return: the acvus type, and whether the Rust function wraps
@@ -175,11 +195,13 @@ fn generate_extern_fn(
         let param_terms = params.iter().map(|p| {
             let name = &p.name;
             let comp_ty = vars.to_compile_time_instance(&p.ty, member);
+            let mode = p.mode.acvus();
             quote! {
                 ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
                     __i.intern(#name),
                     <#comp_ty as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
                 )
+                .with_mode(#mode)
             }
         });
         let comp_ret = vars.to_compile_time_instance(&ret.ty, member);
@@ -199,9 +221,77 @@ fn generate_extern_fn(
             .iter()
             .map(|p| vars.to_runtime_instance(&p.ty, member))
             .collect();
+        let rt_tys_lent: Vec<&Type> = params
+            .iter()
+            .zip(&rt_tys)
+            .filter(|(p, _)| p.mode != Mode::Value)
+            .map(|(_, t)| t)
+            .collect();
         let rt_ret = vars.to_runtime_instance(&ret.ty, member);
         let turbofish = vars.runtime_turbofish_instance(member);
-        let call = quote! { #fn_ident #turbofish (__i, #(#arg_idents),*) };
+        let passed: Vec<proc_macro2::TokenStream> = params
+            .iter()
+            .zip(&arg_idents)
+            .map(|(p, a)| match p.mode {
+                Mode::Value => quote! { #a },
+                Mode::Borrow => quote! { &#a },
+                Mode::BorrowMut => quote! { &mut #a },
+            })
+            .collect();
+        let lent: Vec<&Ident> = params
+            .iter()
+            .zip(&arg_idents)
+            .filter(|(p, _)| p.mode != Mode::Value)
+            .map(|(_, a)| a)
+            .collect();
+        let binds: Vec<proc_macro2::TokenStream> = params
+            .iter()
+            .zip(&arg_idents)
+            .map(|(p, a)| match p.mode {
+                Mode::BorrowMut => quote! { mut #a },
+                _ => quote! { #a },
+            })
+            .collect();
+        let call = quote! { #fn_ident #turbofish (__i, #(#passed),*) };
+        if !lent.is_empty() {
+            let give_back = quote! { (#(#lent,)*) };
+            return match (is_async, ret.is_result) {
+                (false, true) => quote! {
+                    ::acvus_extern::into_sync_lending_handler::<__R, _, _, _, _>(
+                        |__i: &::acvus_extern::Interner, (#(#binds,)*): (#(#rt_tys,)*)|
+                            -> ::core::result::Result<(#rt_ret, (#(#rt_tys_lent,)*)), <__R as ::acvus_extern::Runtime>::Error> {
+                                let __r = (#call).map_err(::core::convert::Into::<<__R as ::acvus_extern::Runtime>::Error>::into)?;
+                                Ok((__r, #give_back))
+                            }
+                    )
+                },
+                (false, false) => quote! {
+                    ::acvus_extern::into_sync_lending_handler::<__R, _, _, _, _>(
+                        |__i: &::acvus_extern::Interner, (#(#binds,)*): (#(#rt_tys,)*)|
+                            -> ::core::result::Result<(#rt_ret, (#(#rt_tys_lent,)*)), <__R as ::acvus_extern::Runtime>::Error> {
+                                let __r = #call;
+                                Ok((__r, #give_back))
+                            }
+                    )
+                },
+                (true, true) => quote! {
+                    ::acvus_extern::into_async_lending_handler::<__R, _, _, _, _, _>(
+                        |__i: ::acvus_extern::Interner, (#(#binds,)*): (#(#rt_tys,)*)| async move {
+                            let __r = (#call).await.map_err(::core::convert::Into::<<__R as ::acvus_extern::Runtime>::Error>::into)?;
+                            ::core::result::Result::<_, <__R as ::acvus_extern::Runtime>::Error>::Ok((__r, #give_back))
+                        }
+                    )
+                },
+                (true, false) => quote! {
+                    ::acvus_extern::into_async_lending_handler::<__R, _, _, _, _, _>(
+                        |__i: ::acvus_extern::Interner, (#(#binds,)*): (#(#rt_tys,)*)| async move {
+                            let __r = #call.await;
+                            ::core::result::Result::<_, <__R as ::acvus_extern::Runtime>::Error>::Ok((__r, #give_back))
+                        }
+                    )
+                },
+            };
+        }
         match (is_async, ret.is_result) {
             (false, true) => quote! {
                 ::acvus_extern::into_sync_extern_handler::<__R, _, _, _>(
@@ -311,10 +401,12 @@ fn parse_params(func: &ItemFn, is_async: bool) -> syn::Result<Vec<ExternParam>> 
             Pat::Ident(p) => p.ident.to_string(),
             _ => format!("_{i}"),
         };
-        params.push(ExternParam {
-            name,
-            ty: (*pat_type.ty).clone(),
-        });
+        let (ty, mode) = match pat_type.ty.as_ref() {
+            Type::Reference(r) if r.mutability.is_some() => ((*r.elem).clone(), Mode::BorrowMut),
+            Type::Reference(r) => ((*r.elem).clone(), Mode::Borrow),
+            ty => (ty.clone(), Mode::Value),
+        };
+        params.push(ExternParam { name, ty, mode });
     }
     Ok(params)
 }

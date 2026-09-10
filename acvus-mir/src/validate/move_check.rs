@@ -288,7 +288,11 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                         errors,
                         &mut block_entry[target_idx.0],
                     );
-                    if propagate_state(&block_exit[idx.0], &mut block_entry[target_idx.0]) {
+                    if propagate_state(
+                        &block_exit[idx.0],
+                        &cfg.blocks[target_idx.0].params,
+                        &mut block_entry[target_idx.0],
+                    ) {
                         worklist.push_back(target_idx);
                     }
                 }
@@ -311,7 +315,11 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                             errors,
                             &mut block_entry[target_idx.0],
                         );
-                        if propagate_state(&block_exit[idx.0], &mut block_entry[target_idx.0]) {
+                        if propagate_state(
+                            &block_exit[idx.0],
+                            &cfg.blocks[target_idx.0].params,
+                            &mut block_entry[target_idx.0],
+                        ) {
                             worklist.push_back(target_idx);
                         }
                     }
@@ -319,7 +327,13 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
             }
             Terminator::Fallthrough => {
                 let next = idx.0 + 1;
-                if next < n && propagate_state(&block_exit[idx.0], &mut block_entry[next]) {
+                if next < n
+                    && propagate_state(
+                        &block_exit[idx.0],
+                        &cfg.blocks[next].params,
+                        &mut block_entry[next],
+                    )
+                {
                     worklist.push_back(BlockIdx(next));
                 }
             }
@@ -328,8 +342,15 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
     }
 }
 
-fn propagate_state(source: &MoveState, target: &mut MoveState) -> bool {
-    target.join_from(source)
+/// Carry the predecessor's exit state into the successor's entry. The
+/// successor's params are defined by the jump's arguments, so their state
+/// comes from `propagate_args` alone and not from the predecessor.
+fn propagate_state(source: &MoveState, params: &[ValueId], target: &mut MoveState) -> bool {
+    let mut carried = source.clone();
+    for p in params {
+        carried.values.remove(p);
+    }
+    target.join_from(&carried)
 }
 
 fn propagate_args(
@@ -476,7 +497,7 @@ fn process_inst(
         }
         InstKind::BlockLabel { params, .. } => {
             for p in params {
-                state.values.entry(*p).or_insert(Liveness::Alive);
+                state.values.insert(*p, Liveness::Alive);
             }
         }
         InstKind::Nop => {}

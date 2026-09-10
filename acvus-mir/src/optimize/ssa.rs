@@ -233,16 +233,24 @@ impl SSABuilder {
             .filter(|&v| v != phi_val)
             .collect();
 
+        // A pending phi is resolved after the block was processed; a store in
+        // the block may have defined the variable since. The block's current
+        // definition changes only while it is still this phi.
+        let still_this_phi = self.current_defs.get(&(block, var)) == Some(&phi_val);
         if unique.len() == 1 {
             // Trivial - all predecessors provide the same value.
             let single = *unique.iter().next().unwrap();
-            self.current_defs.insert((block, var), single);
+            if still_this_phi {
+                self.current_defs.insert((block, var), single);
+            }
             // Record substitution so finish() can resolve references to this phi.
             self.trivial_subst.insert(phi_val, single);
             // No PHI insertion needed.
         } else {
             // Non-trivial PHI.
-            self.current_defs.insert((block, var), phi_val);
+            if still_this_phi {
+                self.current_defs.insert((block, var), phi_val);
+            }
             self.phi_results.push(PhiInsertion {
                 block,
                 var,
@@ -277,6 +285,40 @@ mod tests {
     }
 
     // -- Completeness: correct PHI insertion --
+
+    /// A loop header reads `x` (a pending phi) and then stores to it. A
+    /// block after the header, read once the header is sealed, must see
+    /// the store, not the phi the sealing resolved.
+    #[test]
+    fn sealing_a_pending_phi_keeps_a_later_definition() {
+        let i = Interner::new();
+        let x = make_ctx(&i, "x");
+        let mut ssa = SSABuilder::new();
+        let mut alloc = make_val_alloc();
+
+        // 0 -> 1 (header, back edge from 2) ; 1 -> 2 -> 1 ; 1 -> 3 (exit)
+        ssa.add_predecessor(label(1), label(0));
+        ssa.add_predecessor(label(1), label(2));
+        ssa.add_predecessor(label(2), label(1));
+        ssa.add_predecessor(label(3), label(1));
+        ssa.seal_block(label(0), &mut alloc);
+
+        let entry = alloc(x);
+        ssa.define(label(0), x, entry);
+        let phi = ssa.use_var(label(1), x, &mut alloc);
+        let stored = alloc(x);
+        ssa.define(label(1), x, stored);
+        ssa.seal_block(label(2), &mut alloc);
+        ssa.seal_block(label(1), &mut alloc);
+        ssa.seal_block(label(3), &mut alloc);
+
+        assert_ne!(phi, stored);
+        assert_eq!(
+            ssa.use_var(label(3), x, &mut alloc),
+            stored,
+            "a block read after the header is sealed sees the header's store"
+        );
+    }
 
     /// Single block, define then use - no PHI needed.
     #[test]
