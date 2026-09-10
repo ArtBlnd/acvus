@@ -17,6 +17,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{InstKind, ValueId};
+use crate::ty::Effect;
 
 // -- Def location ----------------------------------------------------
 
@@ -71,8 +72,11 @@ fn is_root(kind: &InstKind) -> bool {
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
 
-        // FunctionCall: conservatively root (pending identity-based purity).
-        InstKind::FunctionCall { .. } => true,
+        // A Pure call has no effect (RFC-0007): dead if its result is unused.
+        // A call whose effect is unknown stays.
+        InstKind::FunctionCall { callee_ty, .. } => {
+            !callee_ty.effect().is_some_and(|e| e == Effect::PURE)
+        }
 
         // Spawn: pure (deferred execution). The actual effect happens at Eval.
         // Dead if handle is unused (no Eval consumes it).
@@ -196,5 +200,120 @@ pub fn run(cfg: &mut CfgBody) {
             ii += 1;
             keep
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg;
+    use crate::graph::QualifiedRef;
+    use crate::ir::{Callee, DebugInfo, Inst, MirBody};
+    use crate::ty::Ty;
+    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
+    use rustc_hash::FxHashMap;
+
+    fn v(n: usize) -> ValueId {
+        ValueId::from_raw(n)
+    }
+
+    /// `dst = name()` with the given effect; its result is never used.
+    fn unused_call(i: &Interner, name: &str, effect: Effect, dst: usize) -> InstKind {
+        InstKind::FunctionCall {
+            dst: v(dst),
+            callee: Callee::Direct(QualifiedRef::root(i.intern(name))),
+            callee_ty: Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::Int),
+                captures: vec![],
+                effect: effect.into(),
+            },
+            args: vec![],
+            order: None,
+        }
+    }
+
+    fn body(insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+        let mut factory = LocalFactory::<ValueId>::new();
+        let mut val_types = FxHashMap::default();
+        for _ in 0..val_count {
+            val_types.insert(factory.next(), Ty::Int);
+        }
+        cfg::promote(MirBody {
+            insts: insts
+                .into_iter()
+                .map(|kind| Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind,
+                })
+                .collect(),
+            val_types,
+            params: Vec::new(),
+            captures: Vec::new(),
+            order_param: None,
+            debug: DebugInfo::new(),
+            val_factory: factory,
+            label_count: 0,
+        })
+    }
+
+    fn calls(cfg: &CfgBody) -> usize {
+        cfg.blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| matches!(i.kind, InstKind::FunctionCall { .. }))
+            .count()
+    }
+
+    #[test]
+    fn an_unused_pure_call_is_dead() {
+        let i = Interner::new();
+        let mut cfg = body(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                unused_call(&i, "len", Effect::PURE, 1),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
+            ],
+            2,
+        );
+        run(&mut cfg);
+        assert_eq!(
+            calls(&cfg),
+            0,
+            "a Pure call with an unused result is removed"
+        );
+    }
+
+    #[test]
+    fn an_unused_effectful_call_stays() {
+        let i = Interner::new();
+        for effect in [Effect::IDEMPOTENT.commutative(), Effect::OPAQUE] {
+            let mut cfg = body(
+                vec![
+                    InstKind::Const {
+                        dst: v(0),
+                        value: acvus_ast::Literal::Int(1),
+                    },
+                    unused_call(&i, "put", effect, 1),
+                    InstKind::Return {
+                        value: v(0),
+                        order: None,
+                    },
+                ],
+                2,
+            );
+            run(&mut cfg);
+            assert_eq!(
+                calls(&cfg),
+                1,
+                "an effectful call stays whether or not it commutes"
+            );
+        }
     }
 }
