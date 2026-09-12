@@ -19,6 +19,11 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     type Closure: Send + Sync + 'static;
     type Error: From<ExternError> + Send + Sync + 'static;
 
+    /// The host's own string layout: a rope, an inline buffer, an `Arc`.
+    type Str: AsRef<str> + Send + Sync + 'static;
+    /// The host's own array layout, chosen per element type.
+    type Array<T>: AsRef<[T]> + IntoIterator<Item = T> + FromIterator<T>;
+
     fn materialize<T>(value: Self::Value, interner: &Interner) -> Result<T, Self::Error>
     where
         T: FromValue<Self>,
@@ -36,10 +41,10 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     fn byte(b: u8) -> Self::Value;
     fn small_bits(value: Self::Value) -> u64;
     fn string(s: String) -> Self::Value;
-    fn into_string(value: Self::Value) -> Result<String, Self::Error>;
+    fn into_str(value: Self::Value) -> Result<Self::Str, Self::Error>;
 
-    fn array(items: Vec<Self::Value>) -> Self::Value;
-    fn into_array(value: Self::Value) -> Result<Vec<Self::Value>, Self::Error>;
+    fn array(items: Self::Array<Self::Value>) -> Self::Value;
+    fn into_array(value: Self::Value) -> Result<Self::Array<Self::Value>, Self::Error>;
     fn tuple(items: Vec<Self::Value>) -> Self::Value;
     fn into_tuple(value: Self::Value) -> Result<Vec<Self::Value>, Self::Error>;
     fn object(fields: FxHashMap<Astr, Self::Value>) -> Self::Value;
@@ -74,6 +79,8 @@ impl Runtime for TypesOnly {
     type Value = ();
     type Closure = ();
     type Error = ExternError;
+    type Str = String;
+    type Array<T> = Vec<T>;
 
     fn equals(_: &(), _: &()) -> bool {
         true
@@ -87,7 +94,7 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     fn string(_: String) {}
-    fn into_string(_: ()) -> Result<String, ExternError> {
+    fn into_str(_: ()) -> Result<String, ExternError> {
         no_values()
     }
     fn array(_: Vec<()>) {}

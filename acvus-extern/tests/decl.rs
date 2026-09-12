@@ -65,6 +65,8 @@ impl Runtime for Tiny {
     type Value = V;
     type Closure = Closure;
     type Error = ExternError;
+    type Str = String;
+    type Array<T> = Vec<T>;
 
     fn equals(a: &V, b: &V) -> bool {
         a == b
@@ -94,7 +96,7 @@ impl Runtime for Tiny {
     fn string(s: String) -> V {
         V::Str(s)
     }
-    fn into_string(value: V) -> Result<String, ExternError> {
+    fn into_str(value: V) -> Result<String, ExternError> {
         match value {
             V::Str(s) => Ok(s),
             other => Err(wrong("String", &other)),

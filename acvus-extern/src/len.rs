@@ -76,7 +76,7 @@ where
     N: LenVar,
 {
     fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error> {
-        let items = R::into_array(value)?;
+        let items: Vec<R::Value> = R::into_array(value)?.into_iter().collect();
         Ok(Self::new(T::from_value_seq(items, interner)?))
     }
 }
@@ -88,6 +88,6 @@ where
     N: LenVar,
 {
     fn into_value(self, interner: &Interner) -> R::Value {
-        R::array(T::into_value_seq(self.0, interner))
+        R::array(T::into_value_seq(self.0, interner).into_iter().collect())
     }
 }

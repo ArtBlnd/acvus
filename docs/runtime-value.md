@@ -17,6 +17,12 @@ contract.
   panics rather than returning an error.
 - The `into_*` family for the small values is gone: extracting them no longer
   names their type in the runtime contract.
+- The string and array composites are runtime associated types, not fixed Rust
+  shapes: `type Str: AsRef<str>` and the GAT `type Array<T>: AsRef<[T]> +
+  IntoIterator<Item = T> + FromIterator<T>`. The host chooses the layout;
+  `AcvusRuntime` declares `Str = String`, `Array<T> = Vec<T>`. `into_string`
+  became `into_str -> Self::Str`, and `array`/`into_array` speak
+  `Self::Array<Self::Value>`.
 
 ## Why only materialize
 
@@ -42,22 +48,31 @@ same decision seen twice.
   tag-dispatching operations, equality and display among them, to become fully
   typed rather than reading the value's tag.
 
-- **String, Array, and Object as runtime associated types.** Their layout drives
-  performance sharply, and fixing them to one Rust shape — `String`, `Vec`, a
-  hash map — serves no workload well. A runtime should choose: a rope, a small
-  inline vector, a sorted or perfect-hashed map. Making them associated types
-  abstracts the composites the way the value itself is already abstract, and it
-  subsumes the large `into_*` above, since those name exactly these composites.
-  It is a large change: every operation on a string, an array, or an object goes
-  through the runtime's type and the interface it exposes.
+- **Object's layout.** String and array are now associated types (above);
+  object is not. Object cannot simply be dropped from the contract — a Rust
+  struct crossing the boundary maps to an acvus object through
+  `#[derive(TyArg)]`, which emits `Runtime::object`/`into_object`, so the
+  `FxHashMap<Astr, _>` signature has real consumers. Its layout freedom is a
+  different question from string and array: acvus objects are fixed once
+  formed — an unnamed struct — so the right shape is not a map at all but a
+  projection over slots. That projection lives in the host, not the IR: the IR
+  carries no layout or size, and even the field identifier `Astr` is a host
+  handle (a `u64`) that a transpiling host like kovac would lower to its own
+  index. So object projection is a concern of MIR-executing hosts, not the
+  universal `Runtime` boundary the way string and array are. Deferred with
+  key = `Astr`.
 
 ## The order these land in
 
 Each change rests on the one before it:
 
-1. String, Array, and Object become runtime associated types, so their layout
-   is the runtime's choice.
+1. String and array become runtime associated types, so their layout is the
+   runtime's choice. **Done.** Object is held back: it needs projection, which
+   is host-tier work, not a boundary associated type.
 2. The Store trait fixes how it keeps the basic primitives directly, now that
    their representation is the runtime's own.
 3. The large `into_*` convert; with the composites abstracted and the Store in
    place, each is a single cast rather than a per-shape accessor.
+
+Object projection — an unnamed struct over slots, keyed today by `Astr` — is a
+separate line, belonging to MIR-executing hosts rather than the boundary.

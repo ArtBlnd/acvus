@@ -73,7 +73,7 @@ impl_scalar!(u8, byte, |bits| bits as u8);
 
 impl<R: Runtime> FromValue<R> for String {
     fn from_value(value: R::Value, _: &Interner) -> Result<Self, R::Error> {
-        R::into_string(value)
+        Ok(R::into_str(value)?.as_ref().to_owned())
     }
 }
 
@@ -128,14 +128,14 @@ where
     T: FromValue<R>,
 {
     fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error> {
-        let items = R::into_array(value)?;
-        if items.len() != N {
-            return Err(ExternError::internal(format!(
-                "array of length {N} expected, got {}",
-                items.len()
-            ))
-            .into());
+        let array = R::into_array(value)?;
+        let len = array.as_ref().len();
+        if len != N {
+            return Err(
+                ExternError::internal(format!("array of length {N} expected, got {len}")).into(),
+            );
         }
+        let items: Vec<R::Value> = array.into_iter().collect();
         T::from_value_seq(items, interner)?
             .try_into()
             .map_err(|_| ExternError::internal("array length changed during conversion").into())
@@ -148,7 +148,7 @@ where
     T: IntoValue<R>,
 {
     fn into_value(self, interner: &Interner) -> R::Value {
-        R::array(T::into_value_seq(self.into(), interner))
+        R::array(T::into_value_seq(self.into(), interner).into_iter().collect())
     }
 }
 

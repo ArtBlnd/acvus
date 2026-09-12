@@ -61,6 +61,8 @@ impl Runtime for AcvusRuntime {
     type Value = Value;
     type Closure = FnValue;
     type Error = RuntimeError;
+    type Str = String;
+    type Array<T> = Vec<T>;
 
     fn equals(a: &Value, b: &Value) -> bool {
         a.structural_eq(b)
@@ -93,10 +95,10 @@ impl Runtime for AcvusRuntime {
     fn string(s: String) -> Value {
         Value::string(s)
     }
-    fn into_string(value: Value) -> Result<String, RuntimeError> {
+    fn into_str(value: Value) -> Result<String, RuntimeError> {
         match value {
             Value::String(s) => Ok(unshare(s)),
-            other => Err(shape("into_string", ValueKind::String, &other)),
+            other => Err(shape("into_str", ValueKind::String, &other)),
         }
     }
 
