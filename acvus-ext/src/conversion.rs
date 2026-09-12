@@ -4,43 +4,12 @@ use acvus_extern::{
     ExternError, ExternRegistry, Interner, Monomorphize, Runtime, extern_fn, extern_registry,
 };
 
-/// The text of a scalar, as scripts see it.
-trait ScalarText {
-    fn text(self) -> String;
-}
-
-impl ScalarText for i64 {
-    fn text(self) -> String {
-        self.to_string()
-    }
-}
-impl ScalarText for f64 {
-    fn text(self) -> String {
-        self.to_string()
-    }
-}
-impl ScalarText for bool {
-    fn text(self) -> String {
-        self.to_string()
-    }
-}
-impl ScalarText for u8 {
-    fn text(self) -> String {
-        format!("0x{self:02x}")
-    }
-}
-impl ScalarText for String {
-    fn text(self) -> String {
-        self
-    }
-}
-
 #[extern_fn(effect = pure)]
 fn to_string<A>(_: &Interner, val: A) -> String
 where
-    A: Monomorphize<(i64, f64, bool, u8, String)> + ScalarText,
+    A: Monomorphize<(i64, f64, bool, u8, String)> + ToString,
 {
-    val.text()
+    val.to_string()
 }
 
 /// Whole-number reading of a scalar, as scripts see it.
