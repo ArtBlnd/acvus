@@ -175,6 +175,7 @@ where
         ExternItems {
             types: vec![],
             fns: vec![ExternFn::r#async(interner, "anthropic", handler)],
+            persist: vec![],
         }
     })
 }

@@ -50,10 +50,11 @@ pub trait FromValues<R: Runtime>: Sized {
 }
 
 macro_rules! impl_scalar {
-    ($T:ty, $build:ident, $open:ident) => {
+    ($T:ty, $build:ident, $reinterpret:expr) => {
         impl<R: Runtime> FromValue<R> for $T {
             fn from_value(value: R::Value, _: &Interner) -> Result<Self, R::Error> {
-                R::$open(value)
+                let reinterpret: fn(u64) -> $T = $reinterpret;
+                Ok(reinterpret(R::small_bits(value)))
             }
         }
 
@@ -65,11 +66,22 @@ macro_rules! impl_scalar {
     };
 }
 
-impl_scalar!(i64, int, into_int);
-impl_scalar!(f64, float, into_float);
-impl_scalar!(bool, bool, into_bool);
-impl_scalar!(u8, byte, into_byte);
-impl_scalar!(String, string, into_string);
+impl_scalar!(i64, int, |bits| bits as i64);
+impl_scalar!(f64, float, f64::from_bits);
+impl_scalar!(bool, bool, |bits| bits != 0);
+impl_scalar!(u8, byte, |bits| bits as u8);
+
+impl<R: Runtime> FromValue<R> for String {
+    fn from_value(value: R::Value, _: &Interner) -> Result<Self, R::Error> {
+        R::into_string(value)
+    }
+}
+
+impl<R: Runtime> IntoValue<R> for String {
+    fn into_value(self, _: &Interner) -> R::Value {
+        R::string(self)
+    }
+}
 
 impl<R: Runtime> FromValue<R> for () {
     fn from_value(value: R::Value, _: &Interner) -> Result<Self, R::Error> {

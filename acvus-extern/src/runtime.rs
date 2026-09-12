@@ -19,19 +19,23 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     type Closure: Send + Sync + 'static;
     type Error: From<ExternError> + Send + Sync + 'static;
 
+    fn materialize<T>(value: Self::Value, interner: &Interner) -> Result<T, Self::Error>
+    where
+        T: FromValue<Self>,
+    {
+        T::from_value(value, interner)
+    }
+
     /// The language's `==`.
     fn equals(a: &Self::Value, b: &Self::Value) -> bool;
 
     fn unit() -> Self::Value;
     fn into_unit(value: Self::Value) -> Result<(), Self::Error>;
     fn int(n: i64) -> Self::Value;
-    fn into_int(value: Self::Value) -> Result<i64, Self::Error>;
     fn float(f: f64) -> Self::Value;
-    fn into_float(value: Self::Value) -> Result<f64, Self::Error>;
     fn bool(b: bool) -> Self::Value;
-    fn into_bool(value: Self::Value) -> Result<bool, Self::Error>;
     fn byte(b: u8) -> Self::Value;
-    fn into_byte(value: Self::Value) -> Result<u8, Self::Error>;
+    fn small_bits(value: Self::Value) -> u64;
     fn string(s: String) -> Self::Value;
     fn into_string(value: Self::Value) -> Result<String, Self::Error>;
 
@@ -80,20 +84,11 @@ impl Runtime for TypesOnly {
         no_values()
     }
     fn int(_: i64) {}
-    fn into_int(_: ()) -> Result<i64, ExternError> {
-        no_values()
-    }
     fn float(_: f64) {}
-    fn into_float(_: ()) -> Result<f64, ExternError> {
-        no_values()
-    }
     fn bool(_: bool) {}
-    fn into_bool(_: ()) -> Result<bool, ExternError> {
-        no_values()
-    }
     fn byte(_: u8) {}
-    fn into_byte(_: ()) -> Result<u8, ExternError> {
-        no_values()
+    fn small_bits(_: ()) -> u64 {
+        panic!("TypesOnly runtime holds no values")
     }
     fn string(_: String) {}
     fn into_string(_: ()) -> Result<String, ExternError> {

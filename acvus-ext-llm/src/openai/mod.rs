@@ -218,6 +218,7 @@ where
         ExternItems {
             types: vec![],
             fns: vec![ExternFn::r#async(interner, "openai_chat", handler)],
+            persist: vec![],
         }
     })
 }

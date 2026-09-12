@@ -195,6 +195,7 @@ where
         ExternItems {
             types: vec![],
             fns: vec![ExternFn::r#async(interner, "google_llm", handler)],
+            persist: vec![],
         }
     })
 }

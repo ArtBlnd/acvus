@@ -1,6 +1,7 @@
 //! An ExternFn joined to its handler, and the registry that hands a set of
 //! them, with their types, to the compiler and a runtime.
 
+use std::any::Any;
 use std::future::Future;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
@@ -11,7 +12,9 @@ use acvus_mir::ty::{
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
+use crate::abi::{AcvusContextAbiUnsafeV1, ContextRestoreError};
 use crate::convert::{FromValue, IntoValue};
+use crate::extern_value::{ExternTypeName, ExternValue};
 use crate::handler::{
     ExternEntry, ExternHandler, into_async_extern_handler, into_sync_extern_handler,
 };
@@ -42,17 +45,47 @@ pub trait ExternTypeDecl {
 pub struct ExternItems<R: Runtime> {
     pub types: Vec<UserDefinedDecl>,
     pub fns: Vec<ExternFn<R>>,
+    pub persist: Vec<PersistEntry>,
+}
+
+/// A context keeps only a type name beside an erased payload, so the runtime
+/// dispatches persistence through a table of these entries keyed by that name.
+pub struct PersistEntry {
+    pub type_name: ExternTypeName,
+    pub dump: Box<dyn Fn(&ExternValue) -> Vec<u8> + Send + Sync>,
+    pub restore: Box<dyn Fn(&[u8]) -> Result<ExternValue, ContextRestoreError> + Send + Sync>,
+}
+
+impl PersistEntry {
+    pub fn of<T>(type_name: ExternTypeName) -> Self
+    where
+        T: AcvusContextAbiUnsafeV1 + Any + Send + Sync,
+    {
+        PersistEntry {
+            type_name,
+            dump: Box::new(|value: &ExternValue| {
+                value
+                    .downcast_ref::<T>()
+                    .expect("persist dump: payload is not the declared type")
+                    .dump()
+            }),
+            restore: Box::new(move |bytes: &[u8]| {
+                T::restore(bytes).map(|value| ExternValue::new(type_name, value))
+            }),
+        }
+    }
 }
 
 pub struct ExternRegistry<R: Runtime> {
     factory: Box<dyn FnOnce(&Interner) -> ExternItems<R>>,
 }
 
-/// The two halves of a registered registry: functions for the graph and
-/// handlers for the runtime.
+/// The parts of a registered registry: functions for the graph, and handlers
+/// with a persistence table for the runtime.
 pub struct Registered<R: Runtime> {
     pub functions: Vec<Function>,
     pub handlers: FxHashMap<QualifiedRef, ExternEntry<R>>,
+    pub persist: FxHashMap<ExternTypeName, PersistEntry>,
 }
 
 impl<R: Runtime> ExternRegistry<R> {
@@ -80,9 +113,14 @@ impl<R: Runtime> ExternRegistry<R> {
             });
             handlers.insert(f.qref, f.handler);
         }
+        let mut persist = FxHashMap::default();
+        for entry in items.persist {
+            persist.insert(entry.type_name, entry);
+        }
         Registered {
             functions,
             handlers,
+            persist,
         }
     }
 }

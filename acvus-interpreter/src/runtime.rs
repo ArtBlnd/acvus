@@ -77,37 +77,22 @@ impl Runtime for AcvusRuntime {
     fn int(n: i64) -> Value {
         Value::Int(n)
     }
-    fn into_int(value: Value) -> Result<i64, RuntimeError> {
-        match value {
-            Value::Int(n) => Ok(n),
-            other => Err(shape("into_int", ValueKind::Int, &other)),
-        }
-    }
     fn float(f: f64) -> Value {
         Value::Float(f)
-    }
-    fn into_float(value: Value) -> Result<f64, RuntimeError> {
-        match value {
-            Value::Float(f) => Ok(f),
-            other => Err(shape("into_float", ValueKind::Float, &other)),
-        }
     }
     fn bool(b: bool) -> Value {
         Value::Bool(b)
     }
-    fn into_bool(value: Value) -> Result<bool, RuntimeError> {
-        match value {
-            Value::Bool(b) => Ok(b),
-            other => Err(shape("into_bool", ValueKind::Bool, &other)),
-        }
-    }
     fn byte(b: u8) -> Value {
         Value::Byte(b)
     }
-    fn into_byte(value: Value) -> Result<u8, RuntimeError> {
+    fn small_bits(value: Value) -> u64 {
         match value {
-            Value::Byte(b) => Ok(b),
-            other => Err(shape("into_byte", ValueKind::Byte, &other)),
+            Value::Int(n) => n as u64,
+            Value::Float(f) => f.to_bits(),
+            Value::Bool(b) => b as u64,
+            Value::Byte(b) => b as u64,
+            other => panic!("small_bits on a non-scalar value: {other:?}"),
         }
     }
     fn string(s: String) -> Value {

@@ -4,6 +4,7 @@
 //! Nothing here names a runtime. A runtime implements `Runtime` and gets
 //! every declaration and every handler. See RFC-0009.
 
+mod abi;
 mod convert;
 mod effect;
 mod error;
@@ -16,6 +17,7 @@ mod registry;
 mod runtime;
 mod ty_arg;
 
+pub use abi::{AcvusContextAbiUnsafeV1, ContextRestoreError};
 pub use convert::{FromValue, FromValues, IntoValue, IntoValues};
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use error::ExternError;
@@ -28,8 +30,8 @@ pub use handler::{
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use registry::{
-    AsyncHandler, ExternFn, ExternFnDecl, ExternItems, ExternRegistry, ExternTypeDecl, Registered,
-    SyncHandler,
+    AsyncHandler, ExternFn, ExternFnDecl, ExternItems, ExternRegistry, ExternTypeDecl,
+    PersistEntry, Registered, SyncHandler,
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use ty_arg::{Monomorphize, PolyVars, TyArg, TyVar, Typeck, VarCounts};

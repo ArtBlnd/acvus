@@ -275,7 +275,7 @@ async fn run_ops<Rt: Runtime>(
             Op::Map(f) => val = Rt::call(f, vec![val]).await?,
             Op::Filter(f) => {
                 let keep = Rt::call(f, vec![val.clone()]).await?;
-                if !Rt::into_bool(keep)? {
+                if !Rt::materialize::<bool>(keep, interner)? {
                     return Ok(None);
                 }
             }

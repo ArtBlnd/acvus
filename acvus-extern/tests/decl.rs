@@ -81,29 +81,20 @@ impl Runtime for Tiny {
     fn int(n: i64) -> V {
         V::Int(n)
     }
-    fn into_int(value: V) -> Result<i64, ExternError> {
-        match value {
-            V::Int(n) => Ok(n),
-            other => Err(wrong("Int", &other)),
-        }
-    }
     fn float(_: f64) -> V {
         panic!("Tiny has no floats")
-    }
-    fn into_float(value: V) -> Result<f64, ExternError> {
-        Err(wrong("Float", &value))
     }
     fn bool(_: bool) -> V {
         panic!("Tiny has no bools")
     }
-    fn into_bool(value: V) -> Result<bool, ExternError> {
-        Err(wrong("Bool", &value))
-    }
     fn byte(_: u8) -> V {
         panic!("Tiny has no bytes")
     }
-    fn into_byte(value: V) -> Result<u8, ExternError> {
-        Err(wrong("Byte", &value))
+    fn small_bits(value: V) -> u64 {
+        match value {
+            V::Int(n) => n as u64,
+            _ => panic!("small_bits on a non-scalar Tiny value"),
+        }
     }
     fn string(s: String) -> V {
         V::Str(s)
@@ -522,17 +513,16 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 }
 
 #[test]
-fn wrong_argument_type_is_the_runtimes_error() {
+#[should_panic(expected = "small_bits on a non-scalar")]
+fn wrong_argument_type_panics_trusting_typeck() {
     let i = Interner::new();
     let mut tr = TypeRegistry::new();
     let reg = registry::<Tiny>().register(&i, &mut tr);
-    let err = call_sync(
+    let _ = call_sync(
         handler(&reg, &i, "add"),
         vec![V::Str("a".into()), V::Int(2)],
         &i,
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("expected Int"), "{err}");
+    );
 }
 
 #[test]
@@ -556,6 +546,7 @@ fn closure_declaration_takes_its_type_from_the_closure() {
             ExternFn::sync(i, "shout", |_: &Interner, s: String| Ok(s.to_uppercase()))
                 .with_effect(Effect::PURE),
         ],
+        persist: vec![],
     });
     let mut tr = TypeRegistry::new();
     let reg = registry.register(&i, &mut tr);

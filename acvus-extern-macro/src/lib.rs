@@ -794,16 +794,18 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
 
 // -- extern_registry! ------------------------------------------------
 
-/// `extern_registry! { types: [List<_>], fns: [len, reverse] }`.
+/// `extern_registry! { types: [List<_>], fns: [len, reverse], persist: [Deque] }`.
 struct RegistryInput {
     types: Vec<Type>,
     fns: Vec<Path>,
+    persist: Vec<Type>,
 }
 
 impl Parse for RegistryInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut types = Vec::new();
         let mut fns = Vec::new();
+        let mut persist = Vec::new();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             input.parse::<Token![:]>()?;
@@ -817,14 +819,25 @@ impl Parse for RegistryInput {
                 let list: Punctuated<Path, Token![,]> =
                     content.parse_terminated(Path::parse, Token![,])?;
                 fns.extend(list);
+            } else if key == "persist" {
+                let list: Punctuated<Type, Token![,]> =
+                    content.parse_terminated(Type::parse, Token![,])?;
+                persist.extend(list);
             } else {
-                return Err(syn::Error::new(key.span(), "expected `types` or `fns`"));
+                return Err(syn::Error::new(
+                    key.span(),
+                    "expected `types`, `fns`, or `persist`",
+                ));
             }
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
         }
-        Ok(Self { types, fns })
+        Ok(Self {
+            types,
+            fns,
+            persist,
+        })
     }
 }
 
@@ -832,6 +845,7 @@ impl Parse for RegistryInput {
 pub fn extern_registry(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as RegistryInput);
     let types: Vec<Type> = input.types.iter().map(subst::infer_to_unit).collect();
+    let persist: Vec<Type> = input.persist.iter().map(subst::infer_to_unit).collect();
     let fns: Vec<Path> = input
         .fns
         .into_iter()
@@ -846,6 +860,7 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
             ::acvus_extern::ExternItems {
                 types: vec![#(<#types as ::acvus_extern::ExternTypeDecl>::type_decl(__i)),*],
                 fns: vec![#(#fns(__i)),*],
+                persist: vec![#(::acvus_extern::PersistEntry::of::<#persist>(<#persist>::TYPE_NAME)),*],
             }
         })
     }

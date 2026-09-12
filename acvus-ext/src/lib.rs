@@ -1,5 +1,6 @@
 mod conversion;
 mod datetime;
+mod deque;
 mod encoding;
 mod iter_pipeline;
 mod iterator;
@@ -10,6 +11,7 @@ mod string;
 
 pub use conversion::conversion_registry;
 pub use datetime::datetime_registry;
+pub use deque::deque_registry;
 pub use encoding::encoding_registry;
 pub use iter_pipeline::Iter;
 pub use iterator::iterator_registry;
@@ -26,6 +28,7 @@ pub fn std_registries<R: Runtime>() -> Vec<ExternRegistry<R>> {
         string_registry(),
         conversion_registry(),
         list_registry(),
+        deque_registry(),
         option_registry(),
         iterator_registry(),
     ]
