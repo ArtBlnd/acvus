@@ -30,7 +30,6 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     fn equals(a: &Self::Value, b: &Self::Value) -> bool;
 
     fn unit() -> Self::Value;
-    fn into_unit(value: Self::Value) -> Result<(), Self::Error>;
     fn int(n: i64) -> Self::Value;
     fn float(f: f64) -> Self::Value;
     fn bool(b: bool) -> Self::Value;
@@ -80,9 +79,6 @@ impl Runtime for TypesOnly {
         true
     }
     fn unit() {}
-    fn into_unit(_: ()) -> Result<(), ExternError> {
-        no_values()
-    }
     fn int(_: i64) {}
     fn float(_: f64) {}
     fn bool(_: bool) {}

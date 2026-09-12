@@ -72,12 +72,6 @@ impl Runtime for Tiny {
     fn unit() -> V {
         V::Unit
     }
-    fn into_unit(value: V) -> Result<(), ExternError> {
-        match value {
-            V::Unit => Ok(()),
-            other => Err(wrong("Unit", &other)),
-        }
-    }
     fn int(n: i64) -> V {
         V::Int(n)
     }
@@ -92,6 +86,7 @@ impl Runtime for Tiny {
     }
     fn small_bits(value: V) -> u64 {
         match value {
+            V::Unit => 0,
             V::Int(n) => n as u64,
             _ => panic!("small_bits on a non-scalar Tiny value"),
         }

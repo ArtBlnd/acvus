@@ -68,12 +68,6 @@ impl Runtime for AcvusRuntime {
     fn unit() -> Value {
         Value::Unit
     }
-    fn into_unit(value: Value) -> Result<(), RuntimeError> {
-        match value {
-            Value::Unit => Ok(()),
-            other => Err(shape("into_unit", ValueKind::Unit, &other)),
-        }
-    }
     fn int(n: i64) -> Value {
         Value::Int(n)
     }
@@ -88,6 +82,7 @@ impl Runtime for AcvusRuntime {
     }
     fn small_bits(value: Value) -> u64 {
         match value {
+            Value::Unit => 0,
             Value::Int(n) => n as u64,
             Value::Float(f) => f.to_bits(),
             Value::Bool(b) => b as u64,

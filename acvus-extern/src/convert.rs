@@ -85,7 +85,8 @@ impl<R: Runtime> IntoValue<R> for String {
 
 impl<R: Runtime> FromValue<R> for () {
     fn from_value(value: R::Value, _: &Interner) -> Result<Self, R::Error> {
-        R::into_unit(value)
+        let _bits = R::small_bits(value);
+        Ok(())
     }
 }
 
