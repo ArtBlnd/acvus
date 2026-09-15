@@ -817,9 +817,9 @@ fn eval_binop(
         Ty::Int => {
             let (a, b) = (left.as_int(), right.as_int());
             Ok(match op {
-                BinOp::Add => Value::int(a.wrapping_add(b)),
-                BinOp::Sub => Value::int(a.wrapping_sub(b)),
-                BinOp::Mul => Value::int(a.wrapping_mul(b)),
+                BinOp::Add => Value::int(a.checked_add(b).ok_or_else(RuntimeError::integer_overflow)?),
+                BinOp::Sub => Value::int(a.checked_sub(b).ok_or_else(RuntimeError::integer_overflow)?),
+                BinOp::Mul => Value::int(a.checked_mul(b).ok_or_else(RuntimeError::integer_overflow)?),
                 BinOp::Div => {
                     if b == 0 {
                         return Err(RuntimeError::division_by_zero());
@@ -854,28 +854,13 @@ fn eval_binop(
                 BinOp::Mul => Value::float(a * b),
                 BinOp::Div => Value::float(a / b),
                 BinOp::Mod => Value::float(a % b),
-                BinOp::Eq => Value::bool_(a == b),
-                BinOp::Neq => Value::bool_(a != b),
-                BinOp::Lt => Value::bool_(a < b),
-                BinOp::Gt => Value::bool_(a > b),
-                BinOp::Lte => Value::bool_(a <= b),
-                BinOp::Gte => Value::bool_(a >= b),
+                BinOp::Eq => Value::bool_(a.to_bits() == b.to_bits()),
+                BinOp::Neq => Value::bool_(a.to_bits() != b.to_bits()),
+                BinOp::Lt => Value::bool_(a.total_cmp(&b).is_lt()),
+                BinOp::Gt => Value::bool_(a.total_cmp(&b).is_gt()),
+                BinOp::Lte => Value::bool_(a.total_cmp(&b).is_le()),
+                BinOp::Gte => Value::bool_(a.total_cmp(&b).is_ge()),
                 _ => panic!("unsupported float binop {op:?}"),
-            })
-        }
-        Ty::String => {
-            // SAFETY: the type checker admits only strings here.
-            let (a, b) = unsafe { (left.as_str(), right.as_str()) };
-            Ok(match op {
-                BinOp::Add => {
-                    let mut s = String::with_capacity(a.len() + b.len());
-                    s.push_str(a);
-                    s.push_str(b);
-                    Value::string(s)
-                }
-                BinOp::Eq => Value::bool_(a == b),
-                BinOp::Neq => Value::bool_(a != b),
-                _ => panic!("unsupported string binop {op:?}"),
             })
         }
         Ty::Bool => {
@@ -901,5 +886,49 @@ fn eval_unaryop(op: UnaryOp, ty: &Ty, val: &Value) -> Value {
         (UnaryOp::Neg, Ty::Float) => Value::float(-val.as_float()),
         (UnaryOp::Not, Ty::Bool) => Value::bool_(!val.as_bool()),
         (op, other) => panic!("unary {op:?} on {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod primitive_operator_tests {
+    use super::*;
+    use crate::error::RuntimeErrorKind;
+
+    fn int(op: BinOp, a: i64, b: i64) -> Result<Value, RuntimeError> {
+        eval_binop(op, &Ty::Int, &Value::int(a), &Value::int(b))
+    }
+
+    fn float(op: BinOp, a: f64, b: f64) -> bool {
+        eval_binop(op, &Ty::Float, &Value::float(a), &Value::float(b))
+            .expect("a float operator never fails")
+            .as_bool()
+    }
+
+    #[test]
+    fn int_arithmetic_is_checked() {
+        assert!(matches!(
+            int(BinOp::Add, i64::MAX, 1),
+            Err(RuntimeError { kind: RuntimeErrorKind::IntegerOverflow })
+        ));
+        assert!(matches!(
+            int(BinOp::Mul, i64::MIN, -1),
+            Err(RuntimeError { kind: RuntimeErrorKind::IntegerOverflow })
+        ));
+        assert_eq!(int(BinOp::Sub, 1, 2).unwrap().as_int(), -1);
+    }
+
+    #[test]
+    fn float_equality_is_bit_identity() {
+        assert!(float(BinOp::Eq, f64::NAN, f64::NAN));
+        assert!(float(BinOp::Neq, 0.0, -0.0));
+        assert!(float(BinOp::Eq, 1.5, 1.5));
+    }
+
+    #[test]
+    fn float_order_is_the_total_order() {
+        assert!(float(BinOp::Lt, -0.0, 0.0));
+        assert!(float(BinOp::Lt, f64::INFINITY, f64::NAN));
+        assert!(float(BinOp::Gt, -1.0, -f64::NAN));
+        assert!(float(BinOp::Lte, 2.0, 2.0));
     }
 }

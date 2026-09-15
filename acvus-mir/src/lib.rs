@@ -145,9 +145,10 @@ mod tests {
     }
 
     #[test]
-    fn integration_string_concat() {
+    fn string_addition_is_rejected() {
         let i = Interner::new();
-        compile_template(&i, r#"{{ "hello" + " " + "world" }}"#, &[]).unwrap();
+        let err = compile_template(&i, r#"{{ "hello" + " " + "world" }}"#, &[]).unwrap_err();
+        assert!(err.contains("`+`"), "{err}");
     }
 
     #[test]

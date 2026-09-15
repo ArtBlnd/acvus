@@ -4,20 +4,30 @@ expression: ir
 ---
 === literals ===
   T0 = ""
-  T1 = "hello"
-  T2 = " "
-  T3 = "world"
 
 === main ===
-     3 |   r0 = T1 + T2
-     5 |   r1 = r0 + T3
-     6 |   r2 = T0 + r1
-     7 |   return r2
+     0 |   r0 = fetch @hello
+     1 |   assign @hello = r0
+     2 |   r1 = fetch @world
+     3 |   assign @world = r1
+     5 |   r2 = ref &@hello
+     6 |   r3 = ref &@world
+     7 |   r4 = call #0(r2, r3)
+     8 |   r5 = T0 + r4
+     9 |   r6 = take @hello
+    10 |   commit @hello = r6
+    11 |   r7 = take @world
+    12 |   commit @world = r7
+    13 |   return r5
 
-    ; r0 (v4) : String
-    ; r1 (v6) : String
-    ; r2 (v7) : String
-    ; r3 (v3) : String
-    ; r4 (v1) : String
-    ; r5 (v5) : String
-    ; r6 (v2) : String
+    ; r0 (@hello) : String
+    ; r1 (@world) : String
+    ; r2 (@hello.) : &String
+    ; r3 (@world.) : &String
+    ; r4 (concat(...)) : String
+    ; r5 (v9) : String
+    ; r6 (v10) : String
+    ; r7 (v11) : String
+    ; r8 (@world) : String
+    ; r9 (v5) : String
+    ; r10 (@hello) : String

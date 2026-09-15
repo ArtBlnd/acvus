@@ -2491,7 +2491,7 @@ mod tests {
         assert_eq!(meta.params[0].ty, Ty::Int);
     }
 
-    /// Param used in string concat -> inferred as String.
+    /// Param matched against a string literal -> inferred as String.
     #[test]
     fn param_type_inferred_string() {
         let i = Interner::new();
@@ -2499,7 +2499,7 @@ mod tests {
             &i,
             &[(
                 "test",
-                r#"$x + "hello""#,
+                r#""hello" = $x { y = 1; }; 0"#,
                 Some(vec![("x", Ty::String)]),
                 None,
             )],

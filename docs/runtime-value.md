@@ -66,9 +66,9 @@ trait ClosureFn<Rt: Runtime> {
 - **No copy on the contract.** A host copies a word and nothing else. `use_from`
   in the interpreter copies a `Small` and moves a `Large` out of its
   register; sharing in the language is the extern `clone(&x)` (RFC-0019).
-- **No equality on the contract.** Comparing is the shared signature
-  `core::eq` (RFC-0019, RFC-0020); a type with no instance cannot be
-  compared.
+- **No equality on the contract.** A primitive compares as a word (RFC-0020);
+  anything else compares through the shared signature `core::eq` (RFC-0019),
+  and a type with no instance cannot be compared.
 - **`Send + Sync + 'static` is the contract.** `Runtime`, `Value`, `Error`,
   and `TyVar` carry it, and `materialize`/`erase` require it of `T`. Values
   cross `spawn_blocking`, sit in closure captures, and are pulled by spawned
@@ -78,9 +78,11 @@ trait ClosureFn<Rt: Runtime> {
 
 A registry contributes a manifest (types, shared signatures, function
 declarations) and a handler table (RFC-0021). `Externs::combine` joins every
-registry once: it rejects a name declared twice, collects each signature's
-instances into one function, lowers `T: HasInstance<sig>` to `OneOf`, and
-yields the compiler's `functions` and `types` and the runtime's `handlers`.
+registry once, always starting with `acvus_extern::core` (the `clone` and
+`eq` signatures and the `String` instances): it rejects a name declared
+twice, collects each signature's instances into one function, lowers `T:
+HasInstance<sig>` to `OneOf`, and yields the compiler's `functions` and
+`types` and the runtime's `handlers`.
 Every name lives under its registry's namespace (`std::len`, `llm::chat`); a
 script's bare name resolves to the one extern of that name.
 

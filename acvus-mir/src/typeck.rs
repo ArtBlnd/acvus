@@ -46,6 +46,7 @@ pub struct TypeResolution {
     /// Direct call resolution: callee AstId -> QualifiedRef.
     /// Only contains entries for calls resolved to named functions.
     pub direct_calls: DirectCallMap,
+    pub operator_calls: FxHashMap<AstId, (QualifiedRef, Ty)>,
     pub tail_ty: Ty,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
@@ -59,6 +60,7 @@ impl TypeResolution {
         type_map: TypeMap,
         coercion_map: CoercionMap,
         direct_calls: DirectCallMap,
+        operator_calls: FxHashMap<AstId, (QualifiedRef, Ty)>,
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
         effect: Effect,
@@ -68,6 +70,7 @@ impl TypeResolution {
             type_map,
             coercion_map,
             direct_calls,
+            operator_calls,
             tail_ty,
             extern_params,
             effect,
@@ -120,6 +123,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     coercion_map: CoercionMap,
     /// Direct call resolutions (callee AstId -> QualifiedRef).
     direct_calls: DirectCallMap,
+    operator_calls: FxHashMap<AstId, (QualifiedRef, InferTy)>,
     /// Accumulated errors.
     errors: Vec<MirError>,
     /// Every context the program names, at the span of its first use. A
@@ -163,6 +167,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             type_map: FxHashMap::default(),
             coercion_map: CoercionMap::default(),
             direct_calls: DirectCallMap::default(),
+            operator_calls: FxHashMap::default(),
             bound_sites: Vec::new(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
@@ -285,10 +290,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect();
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
+        let operator_calls = self.frozen_operator_calls();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
             self.direct_calls,
+            operator_calls,
             Ty::String,
             extern_params,
             effect,
@@ -354,10 +361,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let frozen_tail = self.freeze_or_error(&self.solver.resolve_ty(&tail_ty));
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
+        let operator_calls = self.frozen_operator_calls();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
             self.direct_calls,
+            operator_calls,
             frozen_tail,
             extern_params,
             effect,
@@ -641,6 +650,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.context_uses.entry(qref).or_insert(span);
     }
 
+    fn frozen_operator_calls(&self) -> FxHashMap<AstId, (QualifiedRef, Ty)> {
+        self.operator_calls
+            .iter()
+            .map(|(id, (qref, ty))| {
+                let resolved = self.solver.resolve_ty(ty);
+                (*id, (*qref, self.freeze_or_error(&resolved)))
+            })
+            .collect()
+    }
+
     fn named_context_types(&self) -> FxHashMap<QualifiedRef, Ty> {
         self.context_uses
             .keys()
@@ -680,6 +699,49 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             );
         }
+    }
+
+    /// An operator on a non-primitive is a call of its shared signature
+    /// (RFC-0020).
+    fn check_operator_call(
+        &mut self,
+        id: AstId,
+        op: &'static str,
+        operand: &InferTy,
+        operands: &[InferTy],
+        span: Span,
+    ) {
+        let qref = QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("eq"));
+        let Some(scheme) = self.env.functions.get(&qref).cloned() else {
+            self.error(
+                MirErrorKind::UndefinedFunction(format!("core::eq for {op}")),
+                span,
+            );
+            return;
+        };
+        let fn_ty = self.instantiate_at(&scheme, span);
+        let TyTerm::Fn { params, effect, .. } = &fn_ty else {
+            unreachable!("a shared signature is a function type");
+        };
+        let params: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
+        for (given, param) in operands.iter().zip(params.iter()) {
+            let borrowed = match given {
+                TyTerm::Ref(..) => given.clone(),
+                other => TyTerm::Ref(Mutability::Shared, Box::new(other.clone())),
+            };
+            if self
+                .solver
+                .unify_ty(&borrowed, param, Polarity::Invariant, self.registry)
+                .is_err()
+            {
+                let shown = self.freeze_or_error(operand);
+                self.error(MirErrorKind::NoOperatorInstance { op, ty: shown }, span);
+                return;
+            }
+        }
+        let effect = effect.clone();
+        self.note_call_effect(&effect, span);
+        self.operator_calls.insert(id, (qref, fn_ty));
     }
 
     fn binop_error(&mut self, op: &'static str, left: InferTy, right: InferTy, span: Span) {
@@ -1231,7 +1293,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let rl = self.solver.resolve_ty(&lt);
                         match &rl {
                             TyTerm::Int | TyTerm::Float | TyTerm::Var(_) => rl,
-                            TyTerm::String if *op == BinOp::Add => TyTerm::String,
                             _ => {
                                 self.binop_error(
                                     op_str(*op),
@@ -1250,6 +1311,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             .is_err()
                         {
                             self.binop_error(op_str(*op), lt, rt, *span);
+                            return self.record_ret(*id, TyTerm::Bool);
+                        }
+                        let operand = self.solver.resolve_ty(&lt);
+                        if !operand.is_primitive() && !matches!(operand, TyTerm::Var(_)) {
+                            self.check_operator_call(*id, op_str(*op), &operand, &[lt, rt], *span);
                         }
                         TyTerm::Bool
                     }
@@ -2806,7 +2872,7 @@ fn place_of(expr: &Expr) -> Option<Place> {
     match expr {
         Expr::Ident {
             name,
-            ref_kind: RefKind::Value,
+            ref_kind: RefKind::Value | RefKind::ExternParam,
             ..
         } => Some(Place {
             root: PlaceRoot::Local(name.name),

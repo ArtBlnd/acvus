@@ -7,12 +7,15 @@ expression: ir
   T1 = "Hello "
 
 === main ===
-     2 |   r0 = take $v1
-     3 |   r1 = T1 + r0
-     4 |   return r1
+     2 |   assign h = T1
+     3 |   r0 = ref &h
+     4 |   r1 = ref &$v1
+     5 |   r2 = call #0(r0, r1)
+     6 |   return r2
 
-    ; r0 ($name) : String
-    ; r1 (v6) : String
-    ; r2 (v1) : String
+    ; r0 (var_3.) : &String
+    ; r1 ($param_1.) : &String
+    ; r2 (concat(...)) : String
     ; r3 (v4) : String
-    ; r4 (greet(...)) : String
+    ; r4 (v1) : String
+    ; r5 (greet(...)) : String

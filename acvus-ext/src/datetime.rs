@@ -99,7 +99,8 @@ mod tests {
     fn registry_produces_functions() {
         let i = Interner::new();
         let registered = Externs::combine(vec![datetime_registry::<TypesOnly>()], &i).expect("registry combines");
-        assert_eq!(registered.functions.len(), 7);
+        let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
+        assert_eq!(registered.functions.len() - core.functions.len(), 7);
         assert_eq!(registered.functions.len(), registered.handlers.len());
     }
 }

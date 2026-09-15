@@ -952,6 +952,36 @@ impl<'a> Lowerer<'a> {
         Place { target, path, ty }
     }
 
+    /// An operator operand borrowed for the expression (RFC-0020).
+    fn lend_operand(&mut self, operand: &Expr) -> ValueId {
+        let ty = self.type_of_id(operand.id());
+        if matches!(ty, Ty::Ref(..)) {
+            return self.lower_expr(operand);
+        }
+        let mut path: Vec<Astr> = Vec::new();
+        let mut root = operand;
+        loop {
+            match root {
+                Expr::FieldAccess { object, field, .. } => {
+                    path.push(*field);
+                    root = object;
+                }
+                Expr::Paren { inner, .. } => root = inner,
+                _ => break,
+            }
+        }
+        path.reverse();
+        let span = operand.span();
+        if let Some(target) = self.storage_of(root) {
+            return self.emit_ref(span, target, path, Mutability::Shared, ty);
+        }
+        let value = self.lower_expr(operand);
+        let owned = self.alloc_val();
+        self.set_val_type(owned, ty.clone());
+        self.emit_assign(span, RefTarget::Var(owned), vec![], value);
+        self.emit_ref(span, RefTarget::Var(owned), vec![], Mutability::Shared, ty)
+    }
+
     /// The storage a root expression names, if it is a local, a parameter,
     /// or a context.
     fn storage_of(&mut self, root: &Expr) -> Option<RefTarget> {
@@ -1462,6 +1492,31 @@ impl<'a> Lowerer<'a> {
                 right,
                 span,
             } => {
+                if let Some((qref, fn_ty)) = self.resolution.operator_calls.get(id).cloned() {
+                    let l = self.lend_operand(left);
+                    let r = self.lend_operand(right);
+                    let dst = self.alloc_expr(*id);
+                    let (call_dst, negate) = match op {
+                        BinOp::Neq => {
+                            let v = self.alloc_val();
+                            self.set_val_type(v, Ty::Bool);
+                            (v, true)
+                        }
+                        _ => (dst, false),
+                    };
+                    self.emit_call(*span, call_dst, Callee::Direct(qref), fn_ty, vec![l, r]);
+                    if negate {
+                        self.emit_inst(
+                            *span,
+                            InstKind::UnaryOp {
+                                dst,
+                                op: UnaryOp::Not,
+                                operand: call_dst,
+                            },
+                        );
+                    }
+                    return dst;
+                }
                 let l = self.lower_expr(left);
                 let r = self.lower_expr(right);
                 let dst = self.alloc_expr(*id);
@@ -2708,11 +2763,11 @@ mod tests {
     #[test]
     fn lower_match_block() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
         // Use a non-binding pattern to trigger full match block (no iteration).
         let module = lower_with(
             &interner,
-            r#"{{ true = @name == "test" }}matched{{/}}"#,
+            r#"{{ true = @n == 1 }}matched{{/}}"#,
             &context,
         );
         // Should have pattern test and conditional jump.
@@ -2776,8 +2831,8 @@ mod tests {
     #[test]
     fn lower_match_block_indent_decrease() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
-        let source = "{{ true = @name == \"test\" }}\n    matched\n    here{{/-2}}";
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
+        let source = "{{ true = @n == 1 }}\n    matched\n    here{{/-2}}";
         let module = lower_with(&interner, source, &context);
         let texts: Vec<&str> = module
             .main
@@ -2797,8 +2852,8 @@ mod tests {
     #[test]
     fn lower_match_block_indent_increase() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
-        let source = "{{ true = @name == \"test\" }}\nmatched{{/+4}}";
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
+        let source = "{{ true = @n == 1 }}\nmatched{{/+4}}";
         let module = lower_with(&interner, source, &context);
         let texts: Vec<&str> = module
             .main

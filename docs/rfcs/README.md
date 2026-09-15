@@ -65,7 +65,7 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0017](0017-context-access-summary.md) | A function's type says which contexts it reads and writes | Accepted |
 | [RFC-0018](0018-references-are-types.md) | A reference is a type, and only a primitive copies | Accepted |
 | [RFC-0019](0019-shared-signatures.md) | A shared signature and its instances | Accepted |
-| [RFC-0020](0020-operators-borrow.md) | An operator is a shared signature and borrows its operands | Proposed |
+| [RFC-0020](0020-operators-borrow.md) | Operators on primitives are the type's operation; on everything else, a shared signature | Accepted |
 | [RFC-0021](0021-registry.md) | A registry is a manifest and a handler table, combined once | Accepted |
 | [RFC-0022](0022-thin-runtime-contract.md) | The runtime contract is erase, materialize, reference, and call | Accepted |
 | [RFC-0023](0023-extern-declaration.md) | Declaring an ExternFn | Accepted |

@@ -30,29 +30,53 @@ expression: raw
   T2 = ")"
 
 === main ===
-     1 |   r0 = take $v1
-     2 |   r1 = call #0(r0)
-     3 |   r2 = T0 + r1
-     5 |   r3 = r2 + T1
-     6 |   r4 = take $v2
-     7 |   r5 = call #0(r4)
-     8 |   r6 = r3 + r5
-    10 |   r7 = r6 + T2
-    11 |   return r7
+     1 |   assign a = T0
+     2 |   r0 = take $v1
+     3 |   r1 = call #0(r0)
+     4 |   assign b = r1
+     6 |   assign c = T1
+     7 |   r2 = take $v2
+     8 |   r3 = call #0(r2)
+     9 |   assign d = r3
+    11 |   assign e = T2
+    12 |   r4 = ref &a
+    13 |   r5 = ref &b
+    14 |   r6 = call #1(r4, r5)
+    15 |   assign ab = r6
+    16 |   r7 = ref &ab
+    17 |   r8 = ref &c
+    18 |   r9 = call #1(r7, r8)
+    19 |   assign abc = r9
+    20 |   r10 = ref &abc
+    21 |   r11 = ref &d
+    22 |   r12 = call #1(r10, r11)
+    23 |   assign abcd = r12
+    24 |   r13 = ref &abcd
+    25 |   r14 = ref &e
+    26 |   r15 = call #1(r13, r14)
+    27 |   return r15
 
     ; r0 ($profile) : Int
     ; r1 (to_string(...)) : String
-    ; r2 (v6) : String
-    ; r3 (v8) : String
-    ; r4 ($score) : Int
-    ; r5 (to_string(...)) : String
-    ; r6 (v11) : String
-    ; r7 (v13) : String
-    ; r8 (v7) : String
-    ; r9 (v3) : String
-    ; r10 (v2) : Int
-    ; r11 (v1) : Int
-    ; r12 (v12) : String
+    ; r2 ($score) : Int
+    ; r3 (to_string(...)) : String
+    ; r4 (a.) : &String
+    ; r5 (b.) : &String
+    ; r6 (concat(...)) : String
+    ; r7 (ab.) : &String
+    ; r8 (c.) : &String
+    ; r9 (concat(...)) : String
+    ; r10 (abc.) : &String
+    ; r11 (d.) : &String
+    ; r12 (concat(...)) : String
+    ; r13 (abcd.) : &String
+    ; r14 (e.) : &String
+    ; r15 (concat(...)) : String
+    ; r16 (v3) : String
+    ; r17 (v1) : Int
+    ; r18 (v2) : Int
+    ; r19 (v13) : String
+    ; r20 (v8) : String
 
 -- main --
 === main ===

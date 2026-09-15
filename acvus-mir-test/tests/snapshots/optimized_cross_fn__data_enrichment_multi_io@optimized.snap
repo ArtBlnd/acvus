@@ -24,41 +24,49 @@ expression: opt
     13 |   r9 = const 100
     14 |   r10 = r8 / r9
     15 |   r0 = const T0
-    16 |   r11 = call #2(r7)
-    17 |   r12 = r0 + r11
-    18 |   drop r11
-    19 |   drop r0
-    20 |   r0 = const T1
-    21 |   r11 = r12 + r0
-    22 |   drop r0
-    23 |   drop r12
-    24 |   r0 = call #2(r10)
-    25 |   r12 = r11 + r0
-    26 |   drop r0
-    27 |   drop r11
-    28 |   r0 = const T2
-    29 |   r11 = r12 + r0
-    30 |   drop r0
-    31 |   drop r12
-    32 |   r13 = r10 > r3
-    33 |   r14 = test r13 == true
-    34 |   r7 = const 1
-    35 |   r8 = r2 + r7
-    36 |   jump_if r14 then L0 else L1(r6, r2)
-    37 | L0:
-    38 |   r5 = spawn #3(r4, r10) [r6 ->]
-    39 |   r2 = eval r5 [-> r6]
-    40 |   jump L1(r6, r8)
-    41 | L1(r6: Order, r2: Int):
-    42 |   commit @result_label = r11
-    43 |   commit @weight = r1
-    44 |   commit @alert_count = r2
-    45 |   commit @result_score = r10
-    46 |   commit @threshold = r3
-    47 |   commit @user_id = r4
-    48 |   return r10 [r6]
+    16 |   assign v89 = r0
+    17 |   r0 = call #2(r7)
+    18 |   assign v92 = r0
+    19 |   r0 = const T1
+    20 |   assign v94 = r0
+    21 |   r0 = call #2(r10)
+    22 |   assign v97 = r0
+    23 |   r0 = const T2
+    24 |   assign v99 = r0
+    25 |   r11 = ref &v89
+    26 |   r12 = ref &v92
+    27 |   r0 = call #3(r11, r12)
+    28 |   assign v103 = r0
+    29 |   r11 = ref &v103
+    30 |   r12 = ref &v94
+    31 |   r0 = call #3(r11, r12)
+    32 |   assign v107 = r0
+    33 |   r11 = ref &v107
+    34 |   r12 = ref &v97
+    35 |   r0 = call #3(r11, r12)
+    36 |   assign v111 = r0
+    37 |   r11 = ref &v111
+    38 |   r12 = ref &v99
+    39 |   r0 = call #3(r11, r12)
+    40 |   r13 = r10 > r3
+    41 |   r14 = test r13 == true
+    42 |   r7 = const 1
+    43 |   r8 = r2 + r7
+    44 |   jump_if r14 then L0 else L1(r6, r2)
+    45 | L0:
+    46 |   r5 = spawn #4(r4, r10) [r6 ->]
+    47 |   r2 = eval r5 [-> r6]
+    48 |   jump L1(r6, r8)
+    49 | L1(r6: Order, r2: Int):
+    50 |   commit @result_label = r0
+    51 |   commit @weight = r1
+    52 |   commit @alert_count = r2
+    53 |   commit @result_score = r10
+    54 |   commit @threshold = r3
+    55 |   commit @user_id = r4
+    56 |   return r10 [r6]
 
-    ; r0 (to_string(...)) : String
+    ; r0 (concat(...)) : String
     ; r1 (@weight) : Int
     ; r2 (@alert_count) : Int
     ; r3 (@threshold) : Int
@@ -69,7 +77,7 @@ expression: opt
     ; r8 (v9) : Int
     ; r9 (v10) : Int
     ; r10 (v11) : Int
-    ; r11 (to_string(...)) : String
-    ; r12 (v13) : String
+    ; r11 (v12) : &String
+    ; r12 (v13) : &String
     ; r13 (v14) : Bool
     ; r14 (v15) : Bool

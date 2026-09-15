@@ -228,7 +228,7 @@ fn data_enrichment_multi_io() {
         ),
         (
             "format_label",
-            r#""User(" + to_string($profile) + " score:" + to_string($score) + ")""#,
+            r#"a = "User("; b = to_string($profile); c = " score:"; d = to_string($score); e = ")"; ab = concat(&a, &b); abc = concat(&ab, &c); abcd = concat(&abc, &d); concat(&abcd, &e)"#,
             sig(&i, &[("profile", Ty::Int), ("score", Ty::Int)]),
         ),
     ];

@@ -157,7 +157,8 @@ fn string_emit() {
 #[test]
 fn string_concat() {
     let i = Interner::new();
-    let ir = compile_simple(&i, r#"{{ "hello" + " " + "world" }}"#).unwrap();
+    let context = ctx(&i, &[("hello", Ty::String), ("world", Ty::String)]);
+    let ir = compile_to_ir(&i, r#"{{ concat(&@hello, &@world) }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 

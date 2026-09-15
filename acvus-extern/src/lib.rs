@@ -4,6 +4,9 @@
 //! Nothing here names a runtime. A runtime implements `Runtime` and gets
 //! every declaration and every handler. See RFC-0009.
 
+extern crate self as acvus_extern;
+
+pub mod core;
 mod effect;
 mod error;
 mod func;

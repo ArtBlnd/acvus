@@ -855,9 +855,9 @@ mod tests {
     #[test]
     fn print_match_block() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("name"), Ty::String)]);
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
         let out = compile_and_dump_ctx(
-            r#"{{ true = @name == "test" }}matched{{/}}"#,
+            r#"{{ true = @n == 1 }}matched{{/}}"#,
             &context,
             &interner,
         );
@@ -872,7 +872,7 @@ mod tests {
         let context = FxHashMap::from_iter([(
             interner.intern("user"),
             Ty::Object(FxHashMap::from_iter([
-                (interner.intern("name"), Ty::String),
+                (interner.intern("n"), Ty::Int),
                 (interner.intern("age"), Ty::Int),
             ])),
         )]);

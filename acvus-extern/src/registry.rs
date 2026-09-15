@@ -161,8 +161,8 @@ impl<R: Runtime> Externs<R> {
         let mut signatures: FxHashMap<QualifiedRef, Collected<R>> = FxHashMap::default();
         let mut plain: Vec<ExternFn<R>> = Vec::new();
 
-        let contributions: Vec<Contribution<R>> = registries
-            .into_iter()
+        let contributions: Vec<Contribution<R>> = std::iter::once(crate::core::core_registry())
+            .chain(registries)
             .map(|r| (r.factory)(interner))
             .collect();
 

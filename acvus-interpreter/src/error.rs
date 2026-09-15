@@ -38,8 +38,7 @@ pub struct RuntimeError {
 
 #[derive(Debug, Clone)]
 pub enum RuntimeErrorKind {
-    /// NaN encountered in ordered comparison.
-    NanComparison,
+    IntegerOverflow,
     /// Division by zero.
     DivisionByZero,
     /// Index out of bounds.
@@ -72,9 +71,9 @@ pub enum RuntimeErrorKind {
 // -- Constructors ----------------------------------------------------
 
 impl RuntimeError {
-    pub fn nan_comparison() -> Self {
+    pub fn integer_overflow() -> Self {
         Self {
-            kind: RuntimeErrorKind::NanComparison,
+            kind: RuntimeErrorKind::IntegerOverflow,
         }
     }
 
@@ -150,7 +149,7 @@ impl RuntimeError {
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            RuntimeErrorKind::NanComparison => write!(f, "NaN in ordered comparison"),
+            RuntimeErrorKind::IntegerOverflow => write!(f, "integer overflow"),
             RuntimeErrorKind::DivisionByZero => write!(f, "division by zero"),
             RuntimeErrorKind::IndexOutOfBounds { index, len } => {
                 write!(f, "index {index} out of bounds (len {len})")

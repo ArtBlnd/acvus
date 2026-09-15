@@ -517,14 +517,14 @@ fn inline_nested_three_levels() {
 
 #[test]
 fn inline_string_operations() {
-    // greet(name) = "Hello " + name; main = greet("world")
+    // greet(name) = concat("Hello ", name); main = greet("world")
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
         ("main", r#"greet("world")"#),
         &[(
             "greet",
-            r#""Hello " + $name"#,
+            r#"h = "Hello "; concat(&h, &$name)"#,
             sig(&i, &[("name", Ty::String)]),
         )],
         &[],

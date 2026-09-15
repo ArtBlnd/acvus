@@ -13,6 +13,17 @@ where
 }
 
 #[extern_fn(effect = pure)]
+fn concat<R>(_: &R, a: &String, b: &String) -> String
+where
+    R: Runtime,
+{
+    let mut s = String::with_capacity(a.len() + b.len());
+    s.push_str(a);
+    s.push_str(b);
+    s
+}
+
+#[extern_fn(effect = pure)]
 fn trim<R>(_: &R, s: String) -> String
 where
     R: Runtime,
@@ -142,7 +153,7 @@ pub fn string_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
         fns: [
-            len_str, trim, trim_start, trim_end, upper, lower, contains_str,
+            len_str, concat, trim, trim_start, trim_end, upper, lower, contains_str,
             starts_with_str, ends_with_str, replace_str, split_str, repeat_str,
             substring, to_bytes, to_utf8, to_utf8_lossy,
         ],
@@ -159,7 +170,8 @@ mod tests {
         let i = Interner::new();
         let reg = Externs::combine(vec![string_registry::<TypesOnly>()], &i)
             .expect("registry combines");
-        assert_eq!(reg.functions.len(), 16);
-        assert_eq!(reg.handlers.len(), 16);
+        let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
+        assert_eq!(reg.functions.len() - core.functions.len(), 17);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 17);
     }
 }

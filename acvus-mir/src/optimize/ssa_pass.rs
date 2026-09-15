@@ -717,8 +717,8 @@ mod tests {
         let i = Interner::new();
         let module = compile_template(
             &i,
-            r#"{{ true = @name == "test" }}{{ @x = 42 }}{{ _ }}noop{{/}}"#,
-            &[("x", Ty::Int), ("name", Ty::String)],
+            r#"{{ true = @n == 1 }}{{ @x = 42 }}{{ _ }}noop{{/}}"#,
+            &[("x", Ty::Int), ("n", Ty::Int)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -734,8 +734,8 @@ mod tests {
         let i = Interner::new();
         let module = compile_template(
             &i,
-            r#"{{ true = @name == "test" }}{{ @x = 1 }}{{ _ }}{{ @x = 2 }}{{/}}"#,
-            &[("x", Ty::Int), ("name", Ty::String)],
+            r#"{{ true = @n == 1 }}{{ @x = 1 }}{{ _ }}{{ @x = 2 }}{{/}}"#,
+            &[("x", Ty::Int), ("n", Ty::Int)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -750,8 +750,8 @@ mod tests {
         let i = Interner::new();
         let module = compile_template(
             &i,
-            r#"{{ true = @name == "test" }}yes{{ _ }}no{{/}}"#,
-            &[("name", Ty::String)],
+            r#"{{ true = @n == 1 }}yes{{ _ }}no{{/}}"#,
+            &[("n", Ty::Int)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);

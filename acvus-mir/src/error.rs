@@ -50,6 +50,10 @@ pub enum MirErrorKind {
     // Name errors
     UndefinedVariable(String),
     UndefinedFunction(String),
+    NoOperatorInstance {
+        op: &'static str,
+        ty: Ty,
+    },
     UndefinedField {
         object_ty: Ty,
         field: String,
@@ -216,6 +220,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::UndefinedFunction(name) => {
                 write!(f, "undefined function `{name}`")
+            }
+            MirErrorKind::NoOperatorInstance { op, ty } => {
+                write!(
+                    f,
+                    "`{op}` has no instance of core::eq for {}",
+                    ty.display(interner)
+                )
             }
             MirErrorKind::TypeOutOfBound { ty, bound } => {
                 write!(
