@@ -1,6 +1,6 @@
 # RFC-0015: A place may be lent to a call
 
-Status: Accepted
+Status: Superseded by RFC-0018
 Date: 2026-09-10
 Supersedes: none
 
