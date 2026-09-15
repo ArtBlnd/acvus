@@ -458,6 +458,32 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 span: *span,
             })
         }
+        // `Enum::Tag(inner)` parses as a qualified call (RFC-0030); as a
+        // pattern it is the variant.
+        Expr::FuncCall {
+            func, args, span, ..
+        } if matches!(
+            func.as_ref(),
+            Expr::Ident {
+                name: QualifiedRef {
+                    namespace: Some(_),
+                    ..
+                },
+                ..
+            }
+        ) && args.len() == 1 =>
+        {
+            let Expr::Ident { name, .. } = func.as_ref() else {
+                unreachable!("matched above")
+            };
+            Ok(Pattern::Variant {
+                id: AstId::alloc(),
+                enum_name: name.namespace,
+                tag: name.name,
+                payload: Some(Box::new(expr_to_pattern(&args[0])?)),
+                span: *span,
+            })
+        }
         Expr::Variant {
             enum_name,
             tag,

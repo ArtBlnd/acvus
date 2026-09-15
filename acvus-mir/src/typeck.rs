@@ -3,15 +3,15 @@ use acvus_ast::{
     RefKind, Span, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Freeze, Interner};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
-use crate::solver::{ChoiceFailure, ChoiceId};
 use crate::ir::CastKind;
+use crate::solver::{ChoiceFailure, ChoiceId};
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm,
-    Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Polarity, Solver,
+    Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -40,6 +40,25 @@ struct BoundSite {
     span: Span,
 }
 
+/// The first argument of a call that was checked before the callee's
+/// parameters were seen: a piped value or a method receiver.
+struct FirstArg {
+    ty: InferTy,
+    span: Span,
+    id: AstId,
+}
+
+/// The mutability of a function's first parameter when it is a reference.
+fn first_param_reference(ty: &crate::ty::PolyTy) -> Option<Mutability> {
+    let TyTerm::Fn { params, .. } = ty else {
+        return None;
+    };
+    match params.first().map(|p| &p.ty) {
+        Some(TyTerm::Ref(mutability, _)) => Some(*mutability),
+        _ => None,
+    }
+}
+
 /// A call that is an instruction of the language (RFC-0020).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intrinsic {
@@ -62,6 +81,8 @@ pub struct TypeResolution {
     pub direct_calls: DirectCallMap,
     pub operator_calls: FxHashMap<AstId, OperatorCall<Ty>>,
     pub intrinsic_calls: FxHashMap<AstId, Intrinsic>,
+    /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
+    pub structural_variant_calls: FxHashSet<AstId>,
     pub tail_ty: Ty,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
@@ -77,6 +98,7 @@ impl TypeResolution {
         direct_calls: DirectCallMap,
         operator_calls: FxHashMap<AstId, OperatorCall<Ty>>,
         intrinsic_calls: FxHashMap<AstId, Intrinsic>,
+        structural_variant_calls: FxHashSet<AstId>,
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
         effect: Effect,
@@ -88,6 +110,7 @@ impl TypeResolution {
             direct_calls,
             operator_calls,
             intrinsic_calls,
+            structural_variant_calls,
             tail_ty,
             extern_params,
             effect,
@@ -153,6 +176,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Bounded variables instantiated so far, each at the span that will
     /// report a violation.
     bound_sites: Vec<BoundSite>,
+    /// Calls `ns::tag(payload)` that resolved to a structural variant
+    /// (RFC-0030), for the lowering.
+    structural_variant_calls: FxHashSet<AstId>,
     /// Choices among instances instantiated so far, each at the span that
     /// will report a failure.
     choice_sites: FxHashMap<ChoiceId, Span>,
@@ -195,6 +221,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             pattern_through: false,
             in_borrow_place: false,
             bound_sites: Vec::new(),
+            structural_variant_calls: FxHashSet::default(),
             choice_sites: FxHashMap::default(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
@@ -324,6 +351,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.direct_calls,
             operator_calls,
             self.intrinsic_calls,
+            self.structural_variant_calls,
             Ty::String,
             extern_params,
             effect,
@@ -396,6 +424,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.direct_calls,
             operator_calls,
             self.intrinsic_calls,
+            self.structural_variant_calls,
             frozen_tail,
             extern_params,
             effect,
@@ -583,14 +612,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// meets its parameter as soon as it is checked, so a lambda later in
     /// the list is checked at parameter types the earlier arguments have
     /// already fixed. A mismatch is reported once, by `check_args`.
-    fn check_args_in_order(&mut self, fn_ty: &InferTy, pipe_ty: Option<&InferTy>, args: &[Expr]) -> Vec<InferTy> {
+    fn check_args_in_order(
+        &mut self,
+        fn_ty: &InferTy,
+        pipe_ty: Option<&InferTy>,
+        args: &[Expr],
+    ) -> Vec<InferTy> {
         let params: Vec<InferTy> = match fn_ty {
             TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
             _ => Vec::new(),
         };
         let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy| {
             if let Some(param) = param {
-                let _ = this.solver.unify_ty(param, arg, Polarity::Invariant, this.registry);
+                let _ = this
+                    .solver
+                    .unify_ty(param, arg, Polarity::Invariant, this.registry);
                 this.settle_choices();
             }
         };
@@ -608,7 +644,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         arg_types
     }
-
 
     /// A reference is never data (RFC-0018).
     fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span) {
@@ -770,7 +805,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// order, or a reference cannot be kept by a host from one run to the
     /// next. Checked after inference, at the first use of each context.
     fn check_contexts_are_data(&mut self) {
-        let uses: Vec<(QualifiedRef, Span)> = self.context_uses.iter().map(|(q, s)| (*q, *s)).collect();
+        let uses: Vec<(QualifiedRef, Span)> =
+            self.context_uses.iter().map(|(q, s)| (*q, *s)).collect();
         for (qref, span) in uses {
             let Some(ty) = self.context_type(qref) else {
                 continue;
@@ -792,24 +828,227 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn check_intrinsic_call(
         &mut self,
         qref: QualifiedRef,
-        func: &Expr,
+        callee_id: AstId,
+        first_ty: Option<&InferTy>,
         args: &[Expr],
-        pipe_ty: Option<&InferTy>,
     ) -> Option<InferTy> {
         let core_clone =
             QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("clone"));
-        if qref != core_clone || pipe_ty.is_some() || args.len() != 1 {
+        if qref != core_clone {
             return None;
         }
-        let arg_ty = self.check_expr(&args[0]);
+        let arg_ty = match (first_ty, args) {
+            (Some(first), []) => first.clone(),
+            (None, [arg]) => self.check_expr(arg),
+            _ => return None,
+        };
         let TyTerm::Ref(_, inner) = self.solver.resolve_ty(&arg_ty) else {
             return None;
         };
         if !matches!(self.solver.resolve_ty(&inner), TyTerm::String) {
             return None;
         }
-        self.intrinsic_calls.insert(func.id(), Intrinsic::StringClone);
+        self.intrinsic_calls
+            .insert(callee_id, Intrinsic::StringClone);
         Some(TyTerm::String)
+    }
+
+    /// `&place` / `&mut place`: the reference type, with the place checked
+    /// as a place.
+    fn check_borrow(&mut self, place: &Expr, mutable: bool, span: Span) -> InferTy {
+        if place_of(place).is_none() {
+            self.error(MirErrorKind::NotAPlace, span);
+        }
+        let mutability = if mutable {
+            Mutability::Mut
+        } else {
+            Mutability::Shared
+        };
+        let outer = std::mem::replace(&mut self.in_borrow_place, true);
+        let ty = self.check_expr(place);
+        self.in_borrow_place = outer;
+        if mutable
+            && let Some(Place {
+                root: PlaceRoot::Context(qref),
+                ..
+            }) = place_of(place)
+        {
+            self.note_access(Effect::write(qref), span);
+        }
+        // A borrow of a reference is a reborrow of what it names
+        // (RFC-0029).
+        let ty = match self.solver.resolve_ty(&ty) {
+            TyTerm::Ref(Mutability::Shared, inner) if mutable => {
+                self.error(MirErrorKind::MutableBorrowOfShared, span);
+                *inner
+            }
+            TyTerm::Ref(_, inner) => *inner,
+            other => other,
+        };
+        TyTerm::Ref(mutability, Box::new(ty))
+    }
+
+    /// `recv.f(args)` is `f(recv', args)`, `recv'` borrowed when `f`'s
+    /// first parameter is a reference (RFC-0030).
+    fn check_method_call(
+        &mut self,
+        callee_id: AstId,
+        receiver: &Expr,
+        name: Astr,
+        args: &[Expr],
+        call_span: Span,
+    ) -> InferTy {
+        let name_str = self.interner.resolve(name).to_string();
+        let resolved = match self.env.resolve_fn(QualifiedRef::root(name)) {
+            crate::ty::FnLookup::Found(qref, scheme) => Some((qref, scheme.clone())),
+            crate::ty::FnLookup::Ambiguous(candidates) => {
+                let shown = candidates
+                    .iter()
+                    .map(|q| match q.namespace {
+                        Some(ns) => format!("{}::{}", self.interner.resolve(ns), name_str),
+                        None => name_str.clone(),
+                    })
+                    .collect();
+                self.error(
+                    MirErrorKind::AmbiguousFunction {
+                        name: name_str,
+                        candidates: shown,
+                    },
+                    call_span,
+                );
+                return Self::infer_error();
+            }
+            crate::ty::FnLookup::Missing => None,
+        };
+        if let Some((resolved_qref, fn_sig)) = resolved {
+            let first = match first_param_reference(&fn_sig.ty) {
+                Some(mutability) => {
+                    self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span())
+                }
+                None => self.check_expr(receiver),
+            };
+            let first = FirstArg {
+                ty: first,
+                span: receiver.span(),
+                id: receiver.id(),
+            };
+            return self.check_resolved_call(
+                resolved_qref,
+                &fn_sig,
+                callee_id,
+                &name_str,
+                Some(first),
+                args,
+                call_span,
+            );
+        }
+        if let Some(var_ty) = self.lookup_var(name) {
+            let resolved = self.solver.resolve_ty(&var_ty);
+            self.record(callee_id, resolved.clone());
+            let recv_ty = self.check_expr(receiver);
+            return self.check_callable(
+                &resolved,
+                args,
+                &Some(recv_ty),
+                Some(receiver.span()),
+                Some(receiver.id()),
+                call_span,
+            );
+        }
+        self.error(MirErrorKind::UndefinedFunction(name_str), call_span);
+        Self::infer_error()
+    }
+
+    /// A resolved named call, once its first argument (piped or a method
+    /// receiver) has been checked.
+    #[allow(clippy::too_many_arguments)]
+    fn check_resolved_call(
+        &mut self,
+        resolved_qref: QualifiedRef,
+        fn_sig: &crate::ty::Scheme,
+        callee_id: AstId,
+        name_str: &str,
+        first: Option<FirstArg>,
+        args: &[Expr],
+        call_span: Span,
+    ) -> InferTy {
+        if let Some(ty) = self.check_intrinsic_call(
+            resolved_qref,
+            callee_id,
+            first.as_ref().map(|f| &f.ty),
+            args,
+        ) {
+            return ty;
+        }
+        let fn_ty = self.instantiate_at(fn_sig, call_span);
+        let first_ty = first.as_ref().map(|f| f.ty.clone());
+        let arg_types = self.check_args_in_order(&fn_ty, first_ty.as_ref(), args);
+        let arg_spans: Vec<Span> = first
+            .iter()
+            .map(|f| f.span)
+            .chain(args.iter().map(|a| a.span()))
+            .collect();
+        let arg_ids: Vec<AstId> = first
+            .iter()
+            .map(|f| f.id)
+            .chain(args.iter().map(|a| a.id()))
+            .collect();
+        match &fn_ty {
+            TyTerm::Fn {
+                params: param_tys,
+                ret,
+                effect,
+                ..
+            } => {
+                let tys: Vec<InferTy> = param_tys.iter().map(|p| p.ty.clone()).collect();
+                if !self.check_args(name_str, &arg_types, &arg_spans, &arg_ids, &tys, call_span) {
+                    return Self::infer_error();
+                }
+                let effect = effect.clone();
+                self.note_call_effect(&effect, call_span);
+                self.record(callee_id, self.solver.resolve_ty(&fn_ty));
+                self.direct_calls.insert(callee_id, resolved_qref);
+                self.solver.resolve_ty(ret)
+            }
+            _ => {
+                self.error(
+                    MirErrorKind::UndefinedFunction(name_str.to_string()),
+                    call_span,
+                );
+                Self::infer_error()
+            }
+        }
+    }
+
+    /// `ns::tag(payload)` where `ns` names no function: the structural
+    /// variant it was before namespaces (RFC-0030).
+    fn check_structural_variant(
+        &mut self,
+        id: AstId,
+        enum_name: Astr,
+        tag: Astr,
+        args: &[Expr],
+        span: Span,
+    ) -> InferTy {
+        let [payload] = args else {
+            self.error(
+                MirErrorKind::UndefinedFunction(format!(
+                    "{}::{}",
+                    self.interner.resolve(enum_name),
+                    self.interner.resolve(tag)
+                )),
+                span,
+            );
+            return Self::infer_error();
+        };
+        let payload_ty = self.check_expr(payload);
+        let mut variants = FxHashMap::default();
+        variants.insert(tag, Some(Box::new(payload_ty)));
+        self.structural_variant_calls.insert(id);
+        TyTerm::Enum {
+            name: enum_name,
+            variants,
+        }
     }
 
     /// An operator on a non-primitive is a call of its shared signature
@@ -822,7 +1061,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         operands: &[InferTy],
         span: Span,
     ) {
-        let qref = QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("eq"));
+        let qref =
+            QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("eq"));
         let Some(scheme) = self.env.functions.get(&qref).cloned() else {
             self.error(
                 MirErrorKind::UndefinedFunction(format!("core::eq for {op}")),
@@ -852,7 +1092,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let effect = effect.clone();
         self.note_call_effect(&effect, span);
-        self.operator_calls.insert(id, OperatorCall { callee: qref, ty: fn_ty });
+        self.operator_calls.insert(
+            id,
+            OperatorCall {
+                callee: qref,
+                ty: fn_ty,
+            },
+        );
     }
 
     fn binop_error(&mut self, op: &'static str, left: InferTy, right: InferTy, span: Span) {
@@ -1251,36 +1497,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 place,
                 span,
             } => {
-                if place_of(place).is_none() {
-                    self.error(MirErrorKind::NotAPlace, *span);
-                }
-                let mutability = if *mutable {
-                    Mutability::Mut
-                } else {
-                    Mutability::Shared
-                };
-                let outer = std::mem::replace(&mut self.in_borrow_place, true);
-                let ty = self.check_expr(place);
-                self.in_borrow_place = outer;
-                if *mutable
-                    && let Some(Place {
-                        root: PlaceRoot::Context(qref),
-                        ..
-                    }) = place_of(place)
-                {
-                    self.note_access(Effect::write(qref), *span);
-                }
-                // A borrow of a reference is a reborrow of what it names
-                // (RFC-0029).
-                let ty = match self.solver.resolve_ty(&ty) {
-                    TyTerm::Ref(Mutability::Shared, inner) if *mutable => {
-                        self.error(MirErrorKind::MutableBorrowOfShared, *span);
-                        *inner
-                    }
-                    TyTerm::Ref(_, inner) => *inner,
-                    other => other,
-                };
-                self.record_ret(*id, TyTerm::Ref(mutability, Box::new(ty)))
+                let ty = self.check_borrow(place, *mutable, *span);
+                self.record_ret(*id, ty)
             }
             Expr::Literal { id, value, span } => {
                 let ty = match value {
@@ -1560,13 +1778,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     acvus_ast::UnaryOp::Deref => match &ot {
                         TyTerm::Var(_) => {
                             let inner = self.solver.fresh_ty_var();
-                            let reference = TyTerm::Ref(Mutability::Shared, Box::new(inner.clone()));
-                            let _ = self.solver.unify_ty(&ot, &reference, Polarity::Invariant, self.registry);
+                            let reference =
+                                TyTerm::Ref(Mutability::Shared, Box::new(inner.clone()));
+                            let _ = self.solver.unify_ty(
+                                &ot,
+                                &reference,
+                                Polarity::Invariant,
+                                self.registry,
+                            );
                             inner
                         }
                         TyTerm::Ref(_, inner) => {
                             let inner = self.solver.resolve_ty(inner);
-                            if inner.is_primitive() || matches!(inner, TyTerm::Var(_) | TyTerm::Ref(..)) {
+                            if inner.is_primitive()
+                                || matches!(inner, TyTerm::Var(_) | TyTerm::Ref(..))
+                            {
                                 inner
                             } else {
                                 let shown = self.freeze_or_error(&inner);
@@ -1731,7 +1957,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 args,
                 span,
             } => {
-                let ty = self.check_func_call(func, args, None, *span);
+                let ty = self.check_func_call(*id, func, args, None, *span);
+                self.record_ret(*id, ty)
+            }
+
+            Expr::MethodCall {
+                id,
+                callee_id,
+                receiver,
+                name,
+                args,
+                span,
+            } => {
+                let ty = self.check_method_call(*callee_id, receiver, *name, args, *span);
                 self.record_ret(*id, ty)
             }
 
@@ -1746,12 +1984,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let pipe_left = Some(left.as_ref());
                 let ty = match right.as_ref() {
                     Expr::FuncCall { func, args, .. } => {
-                        self.check_func_call(func, args, pipe_left, *span)
+                        self.check_func_call(*id, func, args, pipe_left, *span)
                     }
                     Expr::Ident {
                         ref_kind: RefKind::Value,
                         ..
-                    } => self.check_func_call(right, &[], pipe_left, *span),
+                    } => self.check_func_call(*id, right, &[], pipe_left, *span),
                     _ => {
                         let lt = self.check_expr(left);
                         let rt = self.check_expr(right);
@@ -1774,7 +2012,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ty = self.check_expr(inner);
                 self.record_ret(*id, ty)
             }
-
 
             Expr::List {
                 id,
@@ -2080,6 +2317,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn check_func_call(
         &mut self,
+        call_id: AstId,
         func: &Expr,
         args: &[Expr],
         pipe_left: Option<&Expr>,
@@ -2134,50 +2372,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             crate::ty::FnLookup::Missing => None,
         };
         if let Some((resolved_qref, fn_sig)) = resolved {
-            if let Some(ty) = self.check_intrinsic_call(resolved_qref, func, args, pipe_ty.as_ref()) {
-                return ty;
-            }
-            let fn_ty = self.instantiate_at(&fn_sig, call_span);
-            let arg_types = self.check_args_in_order(&fn_ty, pipe_ty.as_ref(), args);
-            let arg_spans: Vec<Span> = pipe_left
-                .iter()
-                .map(|e| e.span())
-                .chain(args.iter().map(|a| a.span()))
-                .collect();
-            let arg_ids: Vec<AstId> = pipe_left
-                .iter()
-                .map(|e| e.id())
-                .chain(args.iter().map(|a| a.id()))
-                .collect();
-
-            match &fn_ty {
-                TyTerm::Fn {
-                    params: param_tys,
-                    ret,
-                    effect,
-                    ..
-                } => {
-                    let tys: Vec<InferTy> = param_tys.iter().map(|p| p.ty.clone()).collect();
-                    if !self.check_args(name_str, &arg_types, &arg_spans, &arg_ids, &tys, call_span)
-                    {
-                        return Self::infer_error();
-                    }
-                    let effect = effect.clone();
-                    self.note_call_effect(&effect, call_span);
-                    // Record callee's full Fn type on the callee's AstId.
-                    self.record(func.id(), self.solver.resolve_ty(&fn_ty));
-                    // Record direct call resolution.
-                    self.direct_calls.insert(func.id(), resolved_qref);
-                    return self.solver.resolve_ty(ret);
-                }
-                _ => {
-                    self.error(
-                        MirErrorKind::UndefinedFunction(name_str.to_string()),
-                        call_span,
-                    );
-                    return Self::infer_error();
-                }
-            }
+            let first = pipe_left.zip(pipe_ty).map(|(e, ty)| FirstArg {
+                ty,
+                span: e.span(),
+                id: e.id(),
+            });
+            return self.check_resolved_call(
+                resolved_qref,
+                &fn_sig,
+                func.id(),
+                name_str,
+                first,
+                args,
+                call_span,
+            );
+        }
+        if let Some(ns) = name.namespace {
+            return self.check_structural_variant(call_id, ns, name.name, args, call_span);
         }
 
         // Check local variable with function type (indirect call).
@@ -3058,7 +3269,6 @@ mod tests {
         let src = "{{ handler(@conn) }}";
         check_with_env(src, &ctx, &fns, &i).unwrap();
     }
-
 
     #[test]
     fn pure_int_context_load_ok() {

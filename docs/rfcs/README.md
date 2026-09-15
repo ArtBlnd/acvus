@@ -75,3 +75,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0027](0027-polymorphic-instances.md) | A polymorphic instance of a shared signature | Accepted |
 | [RFC-0028](0028-container-signatures.md) | A container is read through shared signatures; a reference is one carrier | Accepted |
 | [RFC-0029](0029-exclusion-as-written.md) | Exclusion is checked as the source wrote it, over every holder | Accepted |
+| [RFC-0030](0030-paths-and-method-calls.md) | A qualified call names a namespace; a method call is a call on its receiver | Accepted |

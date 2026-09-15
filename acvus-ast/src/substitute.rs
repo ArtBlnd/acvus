@@ -118,6 +118,24 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             span,
         },
 
+        Expr::MethodCall {
+            receiver,
+            name,
+            args,
+            span,
+            ..
+        } => Expr::MethodCall {
+            id: AstId::alloc(),
+            callee_id: AstId::alloc(),
+            receiver: Box::new(sub_expr(*receiver, subs)),
+            name,
+            args: args
+                .into_iter()
+                .flat_map(|a| sub_expr_seq(a, subs))
+                .collect(),
+            span,
+        },
+
         // Function args: sequence context.
         Expr::FuncCall {
             func, args, span, ..
@@ -578,6 +596,12 @@ fn validate_splice_expr(
         }
         Expr::FuncCall { func, args, .. } => {
             validate_splice_expr(func, false, splice_names, errors);
+            for arg in args {
+                validate_splice_expr(arg, true, splice_names, errors);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            validate_splice_expr(receiver, false, splice_names, errors);
             for arg in args {
                 validate_splice_expr(arg, true, splice_names, errors);
             }

@@ -66,3 +66,15 @@ async fn first_and_last_are_none_on_an_empty_container_and_references_otherwise(
         "4"
     );
 }
+
+#[tokio::test]
+async fn a_method_chain_runs_as_the_calls_it_stands_for() {
+    assert_eq!(
+        int("xs = [1, 2, 3]; ys = xs.as_iter().map(|x| -> *x * 10).collect(); ys.len() + *ys.get(2)").await,
+        33
+    );
+    assert_eq!(
+        int("d = deque(); d.push_back({ x: 4, }); d.push_front({ x: 3, }); d.get(0).x * 10 + container::len(&d)").await,
+        32
+    );
+}

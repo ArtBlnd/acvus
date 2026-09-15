@@ -265,6 +265,12 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
                 collect_value_refs_expr(a, refs);
             }
         }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_value_refs_expr(receiver, refs);
+            for a in args {
+                collect_value_refs_expr(a, refs);
+            }
+        }
         Expr::Lambda { body, .. } => collect_value_refs_expr(body, refs),
         Expr::Paren { inner, .. } | Expr::Borrow { place: inner, .. } => {
             collect_value_refs_expr(inner, refs)

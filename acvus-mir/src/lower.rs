@@ -1,8 +1,7 @@
 use acvus_ast::{
-    UnaryOp,
     AstId, BinOp, ElseBranch, Expr, IndentModifier, Literal, MatchBlock, Node, ObjectExprField,
     ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
-    TuplePatternElem,
+    TuplePatternElem, UnaryOp,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -216,7 +215,10 @@ impl<'a> Lowerer<'a> {
     pub fn lower_template(mut self, template: &Template) -> MirModule {
         let effect = self.resolution.effect.clone();
         self.enter_body_order(effect, template.span);
-        self.enter_contexts(acvus_ast::direct_template_context_refs(template), template.span);
+        self.enter_contexts(
+            acvus_ast::direct_template_context_refs(template),
+            template.span,
+        );
         let result = self.lower_nodes(&template.body, template.span);
         self.emit_return(template.span, result);
         self.build_module()
@@ -290,7 +292,13 @@ impl<'a> Lowerer<'a> {
         let fetched = self.alloc_val();
         self.set_val_type(fetched, ty);
         self.set_origin(fetched, ValOrigin::Context(context.name));
-        self.emit_inst(span, InstKind::Fetch { dst: fetched, context });
+        self.emit_inst(
+            span,
+            InstKind::Fetch {
+                dst: fetched,
+                context,
+            },
+        );
         self.emit_assign(span, RefTarget::Var(slot), vec![], fetched);
     }
 
@@ -977,13 +985,15 @@ impl<'a> Lowerer<'a> {
             }
         }
         path.reverse();
-        let target = self
-            .storage_through(root)
-            .unwrap_or_else(|| panic!("not a place: {root:?}; type checking admits only places here"));
+        let target = self.storage_through(root).unwrap_or_else(|| {
+            panic!("not a place: {root:?}; type checking admits only places here")
+        });
         // A place that is a reference names what the reference names
         // (RFC-0029).
         let ty = match ty {
-            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => *inner,
+            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => {
+                *inner
+            }
             ty => ty,
         };
         Place { target, path, ty }
@@ -1048,7 +1058,9 @@ impl<'a> Lowerer<'a> {
                 ..
             } => match self.try_param_slot(name.name) {
                 Some(param_reg) => Some(RefTarget::Param(param_reg)),
-                None if self.is_defined(name.name) => Some(RefTarget::Var(self.var_slot(name.name))),
+                None if self.is_defined(name.name) => {
+                    Some(RefTarget::Var(self.var_slot(name.name)))
+                }
                 None => None,
             },
             Expr::Ident {
@@ -1103,7 +1115,6 @@ impl<'a> Lowerer<'a> {
         );
         dst
     }
-
 
     fn alloc_val(&mut self) -> ValueId {
         self.body.val_factory.next()
@@ -1372,7 +1383,10 @@ impl<'a> Lowerer<'a> {
 
     /// Lower a sequence of template nodes into a single concatenated String value.
     fn lower_nodes(&mut self, nodes: &[Node], span: Span) -> ValueId {
-        let parts: Vec<ValueId> = nodes.iter().map(|node| self.lower_node(node, span)).collect();
+        let parts: Vec<ValueId> = nodes
+            .iter()
+            .map(|node| self.lower_node(node, span))
+            .collect();
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::String);
         self.emit_inst(span, InstKind::StringConcat { dst, parts });
@@ -1503,8 +1517,7 @@ impl<'a> Lowerer<'a> {
                     // lambda that captured this param as a regular variable), fall
                     // through to local variable lookup.
                     if let Some(param_reg) = self.try_param_slot(name.name) {
-                        let dst =
-                            self.emit_take(*span, RefTarget::Param(param_reg), vec![], ty);
+                        let dst = self.emit_take(*span, RefTarget::Param(param_reg), vec![], ty);
                         self.set_origin(dst, ValOrigin::ExternParam(name.name));
                         dst
                     } else if self.is_defined(name.name) {
@@ -1552,7 +1565,13 @@ impl<'a> Lowerer<'a> {
                     let dst = self.alloc_expr(*id);
                     match op {
                         BinOp::Add => {
-                            self.emit_inst(*span, InstKind::StringConcat { dst, parts: vec![l, r] });
+                            self.emit_inst(
+                                *span,
+                                InstKind::StringConcat {
+                                    dst,
+                                    parts: vec![l, r],
+                                },
+                            );
                         }
                         BinOp::Eq => {
                             self.emit_inst(*span, InstKind::StringEq { dst, a: l, b: r });
@@ -1560,7 +1579,14 @@ impl<'a> Lowerer<'a> {
                         _ => {
                             let eq = self.alloc_val();
                             self.set_val_type(eq, Ty::Bool);
-                            self.emit_inst(*span, InstKind::StringEq { dst: eq, a: l, b: r });
+                            self.emit_inst(
+                                *span,
+                                InstKind::StringEq {
+                                    dst: eq,
+                                    a: l,
+                                    b: r,
+                                },
+                            );
                             self.emit_inst(
                                 *span,
                                 InstKind::UnaryOp {
@@ -1692,6 +1718,15 @@ impl<'a> Lowerer<'a> {
                 span,
             } => self.lower_func_call(func, args, None, *id, *span),
 
+            Expr::MethodCall {
+                id,
+                callee_id,
+                receiver,
+                args,
+                span,
+                ..
+            } => self.lower_method_call(*callee_id, receiver, args, *id, *span),
+
             Expr::Pipe {
                 id,
                 left,
@@ -1742,18 +1777,13 @@ impl<'a> Lowerer<'a> {
                     .map(|(name, var_id, var_span)| {
                         let ty = self.type_of_id(*var_id);
                         if let Some(param_reg) = self.try_param_slot(*name) {
-                            let dst = self.emit_take(
-                                *var_span,
-                                RefTarget::Param(param_reg),
-                                vec![],
-                                ty,
-                            );
+                            let dst =
+                                self.emit_take(*var_span, RefTarget::Param(param_reg), vec![], ty);
                             self.set_origin(dst, ValOrigin::ExternParam(*name));
                             dst
                         } else {
                             let slot = self.var_slot(*name);
-                            let dst =
-                                self.emit_take(*var_span, RefTarget::Var(slot), vec![], ty);
+                            let dst = self.emit_take(*var_span, RefTarget::Var(slot), vec![], ty);
                             self.set_origin(dst, ValOrigin::Named(*name));
                             dst
                         }
@@ -2064,6 +2094,85 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The arguments of a call: a `&place` argument is lent, any other is
+    /// a value.
+    fn lower_call_args(&mut self, args: &[Expr]) -> Vec<ValueId> {
+        args.iter()
+            .map(|a| match a {
+                Expr::Borrow {
+                    place,
+                    mutable,
+                    span,
+                    ..
+                } => {
+                    let mutability = if *mutable {
+                        Mutability::Mut
+                    } else {
+                        Mutability::Shared
+                    };
+                    let place = self.place(place);
+                    self.emit_ref(*span, place.target, place.path, mutability, place.ty)
+                }
+                other => self.lower_expr(other),
+            })
+            .collect()
+    }
+
+    /// `recv.f(args)`: `f(recv', args)`, the receiver lent when `f`'s first
+    /// parameter is a reference (RFC-0030).
+    fn lower_method_call(
+        &mut self,
+        callee_id: AstId,
+        receiver: &Expr,
+        args: &[Expr],
+        call_id: AstId,
+        call_span: Span,
+    ) -> ValueId {
+        let callee_ty = self.type_of_id(callee_id);
+        let lent = match &callee_ty {
+            Ty::Fn { params, .. } => match params.first().map(|p| &p.ty) {
+                Some(Ty::Ref(mutability, _)) => Some(*mutability),
+                _ => None,
+            },
+            _ => None,
+        };
+        let first = match lent {
+            Some(mutability) => {
+                let place = self.place(receiver);
+                self.emit_ref(
+                    receiver.span(),
+                    place.target,
+                    place.path,
+                    mutability,
+                    place.ty,
+                )
+            }
+            None => self.lower_expr(receiver),
+        };
+        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&callee_id).copied() {
+            return match intrinsic {
+                crate::typeck::Intrinsic::StringClone => {
+                    let dst = self.alloc_expr(call_id);
+                    self.emit_inst(call_span, InstKind::StringClone { dst, src: first });
+                    dst
+                }
+            };
+        }
+        let mut arg_regs = vec![first];
+        arg_regs.extend(self.lower_call_args(args));
+        let dst = self.alloc_typed(call_id);
+        match self.resolution.direct_calls.get(&callee_id) {
+            Some(&qref) => {
+                self.set_origin(dst, ValOrigin::Call(qref.name));
+                self.emit_call(call_span, dst, Callee::Direct(qref), callee_ty, arg_regs);
+            }
+            None => {
+                self.emit_inst(call_span, InstKind::Poison { dst });
+            }
+        }
+        dst
+    }
+
     fn lower_func_call(
         &mut self,
         func: &Expr,
@@ -2075,34 +2184,31 @@ impl<'a> Lowerer<'a> {
         if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&func.id()).copied() {
             return self.lower_intrinsic_call(intrinsic, args, call_id, call_span);
         }
+        if self.resolution.structural_variant_calls.contains(&call_id)
+            && let [payload] = args
+        {
+            let Expr::Ident { name, .. } = func else {
+                unreachable!("a structural variant call is a qualified name");
+            };
+            let payload_val = self.lower_expr(payload);
+            let dst = self.alloc_expr(call_id);
+            self.emit_inst(
+                call_span,
+                InstKind::MakeVariant {
+                    dst,
+                    tag: name.name,
+                    payload: Some(payload_val),
+                },
+            );
+            return dst;
+        }
         let mut arg_regs: Vec<ValueId> =
             Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
         if let Some(left) = pipe_left {
             let val = self.lower_expr(left);
             arg_regs.push(val);
         }
-        for a in args {
-            if let Expr::Borrow {
-                place,
-                mutable,
-                span,
-                ..
-            } = a
-            {
-                let mutability = if *mutable {
-                    Mutability::Mut
-                } else {
-                    Mutability::Shared
-                };
-                let place = self.place(place);
-                let reference =
-                    self.emit_ref(*span, place.target, place.path, mutability, place.ty);
-                arg_regs.push(reference);
-                continue;
-            }
-            let val = self.lower_expr(a);
-            arg_regs.push(val);
-        }
+        arg_regs.extend(self.lower_call_args(args));
         let dst = self.alloc_typed(call_id);
 
         // Named function call (Ident).
@@ -2121,13 +2227,7 @@ impl<'a> Lowerer<'a> {
                     // 1. Direct call - typeck resolved this callee to a named function.
                     if let Some(&qref) = self.resolution.direct_calls.get(&func.id()) {
                         let callee_ty = self.type_of_id(func.id());
-                        self.emit_call(
-                            call_span,
-                            dst,
-                            Callee::Direct(qref),
-                            callee_ty,
-                            arg_regs,
-                        );
+                        self.emit_call(call_span, dst, Callee::Direct(qref), callee_ty, arg_regs);
                         return dst;
                     }
 
@@ -2170,13 +2270,7 @@ impl<'a> Lowerer<'a> {
             .get(&func_reg)
             .expect("indirect callee must have val_type")
             .clone();
-        self.emit_call(
-            call_span,
-            dst,
-            Callee::Indirect(func_reg),
-            fn_ty,
-            arg_regs,
-        );
+        self.emit_call(call_span, dst, Callee::Indirect(func_reg), fn_ty, arg_regs);
         dst
     }
 
@@ -2344,7 +2438,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn emit_part_ref(&mut self, span: Span, reference: ValueId, seg: PathSeg, ty: Ty) -> ValueId {
-        self.emit_ref(span, RefTarget::Through(reference), vec![seg], Mutability::Shared, ty)
+        self.emit_ref(
+            span,
+            RefTarget::Through(reference),
+            vec![seg],
+            Mutability::Shared,
+            ty,
+        )
     }
 
     fn payload_type(inner: &Ty, tag: Astr) -> Ty {
@@ -2371,7 +2471,11 @@ impl<'a> Lowerer<'a> {
         Self::pattern_parts_place(pattern, &[], inner)
             .into_iter()
             .map(|part| {
-                let seg = part.path.into_iter().next().expect("a part is one segment under the reference");
+                let seg = part
+                    .path
+                    .into_iter()
+                    .next()
+                    .expect("a part is one segment under the reference");
                 RefPart {
                     reference: self.emit_part_ref(span, reference, seg, part.ty),
                     pattern: part.pattern,
@@ -2388,7 +2492,9 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         match pattern {
-            Pattern::ContextBind { .. } | Pattern::Binding { .. } => self.emit_const_bool(span, true),
+            Pattern::ContextBind { .. } | Pattern::Binding { .. } => {
+                self.emit_const_bool(span, true)
+            }
             Pattern::Literal { value, .. } => {
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::Bool);
@@ -2595,7 +2701,9 @@ impl<'a> Lowerer<'a> {
                 Some(inner) => vec![part(PathSeg::Payload, Self::payload_type(ty, *tag), inner)],
                 None => Vec::new(),
             },
-            Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => Vec::new(),
+            Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => {
+                Vec::new()
+            }
         }
     }
 
@@ -2608,7 +2716,9 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         match pattern {
-            Pattern::ContextBind { .. } | Pattern::Binding { .. } => self.emit_const_bool(span, true),
+            Pattern::ContextBind { .. } | Pattern::Binding { .. } => {
+                self.emit_const_bool(span, true)
+            }
             Pattern::Literal { value, .. } => {
                 let read = self.emit_take(span, target.clone(), path.to_vec(), ty.clone());
                 let dst = self.alloc_val();
@@ -2626,13 +2736,25 @@ impl<'a> Lowerer<'a> {
             Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
                 let mut all_ok = self.emit_const_bool(span, true);
                 for part in Self::pattern_parts_place(pattern, path, ty) {
-                    let ok = self.lower_pattern_test_place(&part.pattern, target, &part.path, &part.ty, span);
+                    let ok = self.lower_pattern_test_place(
+                        &part.pattern,
+                        target,
+                        &part.path,
+                        &part.ty,
+                        span,
+                    );
                     all_ok = self.emit_and(span, all_ok, ok);
                 }
                 all_ok
             }
             Pattern::Variant { tag, payload, .. } => {
-                let reference = self.emit_ref(span, target.clone(), path.to_vec(), Mutability::Shared, ty.clone());
+                let reference = self.emit_ref(
+                    span,
+                    target.clone(),
+                    path.to_vec(),
+                    Mutability::Shared,
+                    ty.clone(),
+                );
                 let tag_ok = self.alloc_val();
                 self.set_val_type(tag_ok, Ty::Bool);
                 self.emit_inst(
@@ -2666,7 +2788,13 @@ impl<'a> Lowerer<'a> {
                     .into_iter()
                     .next()
                     .expect("a payload pattern names one part");
-                let inner_ok = self.lower_pattern_test_place(&part.pattern, target, &part.path, &part.ty, span);
+                let inner_ok = self.lower_pattern_test_place(
+                    &part.pattern,
+                    target,
+                    &part.path,
+                    &part.ty,
+                    span,
+                );
                 self.emit_fail_merge(span, inner_ok, fail_label)
             }
         }
@@ -2709,13 +2837,24 @@ impl<'a> Lowerer<'a> {
             | Pattern::Tuple { .. }
             | Pattern::Variant { .. } => {
                 for part in Self::pattern_parts_place(pattern, path, ty) {
-                    self.lower_pattern_bind_place(&part.pattern, target, &part.path, &part.ty, span);
+                    self.lower_pattern_bind_place(
+                        &part.pattern,
+                        target,
+                        &part.path,
+                        &part.ty,
+                        span,
+                    );
                 }
             }
         }
     }
 
-    fn lower_pattern_test_value(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) -> ValueId {
+    fn lower_pattern_test_value(
+        &mut self,
+        pattern: &Pattern,
+        src_reg: ValueId,
+        span: Span,
+    ) -> ValueId {
         if let Some(inner) = self.reference_inner(src_reg) {
             return self.lower_pattern_test_through(pattern, src_reg, &inner, span);
         }
@@ -3113,6 +3252,12 @@ impl<'a> Lowerer<'a> {
                     self.collect_free_vars(a, bound, free, seen);
                 }
             }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.collect_free_vars(receiver, bound, free, seen);
+                for a in args {
+                    self.collect_free_vars(a, bound, free, seen);
+                }
+            }
             Expr::Pipe { left, right, .. } => {
                 self.collect_free_vars(left, bound, free, seen);
                 self.collect_free_vars(right, bound, free, seen);
@@ -3276,11 +3421,7 @@ mod tests {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
         // Use a non-binding pattern to trigger full match block (no iteration).
-        let module = lower_with(
-            &interner,
-            r#"{{ true = @n == 1 }}matched{{/}}"#,
-            &context,
-        );
+        let module = lower_with(&interner, r#"{{ true = @n == 1 }}matched{{/}}"#, &context);
         // Should have pattern test and conditional jump.
         let has_jump_if = module
             .main

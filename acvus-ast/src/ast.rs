@@ -216,6 +216,16 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// `recv.f(args)`: the call `f(recv', args)` (RFC-0030). `callee_id`
+    /// is the id the checker records the callee's type under.
+    MethodCall {
+        id: AstId,
+        callee_id: AstId,
+        receiver: Box<Expr>,
+        name: Astr,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Pipe: `expr | func`.
     Pipe {
         id: AstId,
@@ -346,6 +356,7 @@ impl Expr {
             | Expr::UnaryOp { id, .. }
             | Expr::FieldAccess { id, .. }
             | Expr::FuncCall { id, .. }
+            | Expr::MethodCall { id, .. }
             | Expr::Pipe { id, .. }
             | Expr::Lambda { id, .. }
             | Expr::Paren { id, .. }
@@ -370,6 +381,7 @@ impl Expr {
             | Expr::UnaryOp { span, .. }
             | Expr::FieldAccess { span, .. }
             | Expr::FuncCall { span, .. }
+            | Expr::MethodCall { span, .. }
             | Expr::Pipe { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::Paren { span, .. }
@@ -735,6 +747,12 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
             walk_expr(operand, refs);
         }
         Expr::FieldAccess { object, .. } => walk_expr(object, refs),
+        Expr::MethodCall { receiver, args, .. } => {
+            walk_expr(receiver, refs);
+            for a in args {
+                walk_expr(a, refs);
+            }
+        }
         Expr::FuncCall { func, args, .. } => {
             walk_expr(func, refs);
             for arg in args {

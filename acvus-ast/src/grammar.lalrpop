@@ -343,9 +343,20 @@ UnaryExpr: Expr = {
 
 // Qualified variant: above PostfixExpr so "(" doesn't conflict with function call
 QualifiedExpr: Expr = {
-    // Qualified variant with payload: Enum::Tag(expr)
-    <l:@L> <ename:"ident"> "::" <tag:"ident"> "(" <inner:Expr> ")" <r:@R> =>
-        Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: Some(Box::new(inner)), span: Span::new(l, r) },
+    // Qualified call or variant with payload (RFC-0030): the checker tells
+    // a namespace from an enum name.
+    <l:@L> <ns:"ident"> "::" <name:"ident"> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
+        Expr::FuncCall {
+            id: AstId::alloc(),
+            func: Box::new(Expr::Ident {
+                id: AstId::alloc(),
+                name: QualifiedRef::qualified(ns, name),
+                ref_kind: RefKind::Value,
+                span: Span::new(l, r),
+            }),
+            args,
+            span: Span::new(l, r),
+        },
     // Qualified variant without payload: Enum::Tag
     <l:@L> <ename:"ident"> "::" <tag:"ident"> <r:@R> =>
         Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) },
@@ -353,10 +364,18 @@ QualifiedExpr: Expr = {
 };
 
 // Postfix: field access `.field` and function call `f(args)`
+// A field is never a callee: `recv.f(args)` is a method call, and a
+// closure held in a field is called as `(recv.f)(args)` (RFC-0030).
 PostfixExpr: Expr = {
     <l:@L> <obj:PostfixExpr> "." <f:"ident"> <r:@R> =>
         Expr::FieldAccess { id: AstId::alloc(), object: Box::new(obj), field: f, span: Span::new(l, r) },
-    <l:@L> <func:PostfixExpr> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
+    CalleeExpr,
+};
+
+CalleeExpr: Expr = {
+    <l:@L> <recv:PostfixExpr> "." <name:"ident"> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
+        Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver: Box::new(recv), name, args, span: Span::new(l, r) },
+    <l:@L> <func:CalleeExpr> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
         Expr::FuncCall { id: AstId::alloc(), func: Box::new(func), args, span: Span::new(l, r) },
     PrimaryExpr,
 };
