@@ -1,33 +1,34 @@
 //! SSA Pass (mem2reg for context and local variables)
 //!
-//! Promotes ContextProject/ContextLoad/ContextStore and VarStore/VarLoad/ParamLoad to SSA form.
+//! Promotes whole `Take`/`Assign` of locals and contexts to SSA form. A
+//! storage that is referenced or accessed by a field path stays in memory.
 //!
 //! ## Pipeline
 //!
-//! 1. **Collect SSA info** (`collect_ssa_info`): scan all blocks for context ops
-//!    (ContextProject/ContextLoad/ContextStore) and local variable ops
-//!    (VarStore/VarLoad/ParamLoad). Records written sets, types, and per-block ops.
+//! 1. **Collect SSA info** (`collect_ssa_info`): every whole `Take` of a
+//!    local or parameter is a read, every whole `Assign` a write; a storage
+//!    with a `Ref` or a field-path access is not promoted. A written context
+//!    is tracked for write-back; a whole `Take` of a context is folded by
+//!    store-load forwarding, not promoted.
 //!
-//! 2. **SSA builder** (`run_ssa_builder`): insert PHI nodes at merge points via
-//!    the standard SSA construction algorithm. Produces `var_subst` (VarLoad/ParamLoad
-//!    -> SSA value), `phi_insertions` (block params + jump args + write-back stores),
-//!    and the entry definitions: a local variable starts undefined, a written
-//!    context starts from a load of its value on entry.
+//! 2. **SSA builder** (`run_ssa_builder`): PHI insertion at merge points
+//!    (Braun et al.). Produces `var_subst` (read → SSA value), the PHI
+//!    insertions, and the entry definitions: a local starts `Undef`, a
+//!    written context starts from a `Take` of its value on entry.
 //!
-//! 3. **Forward context values** (`forward_context_values`): dominator-tree-scoped
-//!    store-load forwarding for context variables. Eliminates redundant ContextLoads
-//!    At merge points (>1 predecessor), written contexts are cleared from the
-//!    forwarding state; unwritten (immutable) contexts remain forwarded.
+//! 3. **Forward context values** (`forward_context_values`): dominator-tree
+//!    scoped forwarding of the last `Assign` to a later whole `Take` of the
+//!    same context. At a merge point, written contexts are cleared.
 //!
-//! 4. **Apply var substitutions** (`apply_var_subst`): rewrite all VarLoad/ParamLoad
-//!    uses with their SSA values, chained through the forwarding subst, then remove
-//!    dead VarLoad/VarStore/ParamLoad instructions.
+//! 4. **Apply var substitutions** (`apply_var_subst`): rewrite every use of
+//!    a promoted read with its SSA value and remove the promoted `Take`s and
+//!    `Assign`s.
 //!
 //! ## Write-back model (context only)
 //!
-//! Branch-internal ContextStores are removed; a single write-back ContextStore is
-//! inserted after each merge block. Local variables do NOT need write-back - they
-//! exist only in SSA form.
+//! Branch-internal context `Assign`s are removed; a single write-back
+//! `Assign` is inserted after each merge block. Local variables need no
+//! write-back — they exist only in SSA form.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;

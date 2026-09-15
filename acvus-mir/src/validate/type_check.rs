@@ -1,14 +1,15 @@
 //! MIR type-verification pass (error-collecting variant).
 //!
-//! Walks every instruction in a [`MirModule`] and checks that, **excluding
-//! `Cast`**, the types recorded in `val_types` are exactly consistent with
-//! what each instruction expects.  Any mismatch is collected as a
-//! [`ValidationError`] instead of panicking.
+//! Walks every instruction in a [`MirModule`] and checks that the types
+//! recorded in `val_types` are exactly consistent with what each instruction
+//! expects.  Any mismatch is collected as a [`ValidationError`] instead of
+//! panicking.
 //!
 //! Design:
 //! - `Ty::Error` unifies with anything (analysis mode may leave them
 //!   unresolved).  `Ty::Var(Infallible)` is uninhabitable for concrete types.
-//! - `Cast` is the *only* instruction allowed to change a value's type.
+//! - A cast is a pure `FunctionCall` of the cast ExternFn; no instruction
+//!   changes a value's type in place.
 //! - Generic variance is invariant: inner types must match recursively.
 
 use crate::graph::QualifiedRef;

@@ -92,23 +92,27 @@ fn build_dependency_graph(insts: &[Inst]) -> Vec<SmallVec<[usize; 4]>> {
         }
     }
 
-    // Store ordering: stores to the same context preserve original order.
-    let mut last_ctx_store: FxHashMap<QualifiedRef, usize> = FxHashMap::default();
+    // Context ordering: every take of and assign to one context keeps its
+    // original order against the others of that context.
+    let mut last_ctx_op: FxHashMap<QualifiedRef, usize> = FxHashMap::default();
     for (i, inst) in insts.iter().enumerate() {
-        if let InstKind::Store { dst, .. } = &inst.kind
-            && let Some(&def_idx) = def_map.get(dst)
-            && let InstKind::Ref {
+        let ctx = match &inst.kind {
+            InstKind::Take {
                 target: crate::ir::RefTarget::Context(ctx),
                 ..
-            } = &insts[def_idx].kind
-        {
-            if let Some(&prev) = last_ctx_store.get(ctx)
-                && prev != i
-            {
-                deps[i].push(prev);
             }
-            last_ctx_store.insert(*ctx, i);
+            | InstKind::Assign {
+                target: crate::ir::RefTarget::Context(ctx),
+                ..
+            } => *ctx,
+            _ => continue,
+        };
+        if let Some(&prev) = last_ctx_op.get(&ctx)
+            && prev != i
+        {
+            deps[i].push(prev);
         }
+        last_ctx_op.insert(ctx, i);
     }
 
     deps
@@ -224,6 +228,54 @@ mod tests {
             label_count: 0,
             order_param: None,
         })
+    }
+
+    /// `assign @x = v0; v1 = take @x; assign @x = v1`: the three keep their
+    /// order whatever priorities say.
+    #[test]
+    fn context_takes_and_assigns_keep_their_order() {
+        let i = Interner::new();
+        let x = QualifiedRef::root(i.intern("x"));
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Assign {
+                    target: crate::ir::RefTarget::Context(x),
+                    path: vec![],
+                    value: v(0),
+                },
+                InstKind::Take {
+                    dst: v(1),
+                    target: crate::ir::RefTarget::Context(x),
+                    path: vec![],
+                },
+                InstKind::Assign {
+                    target: crate::ir::RefTarget::Context(x),
+                    path: vec![],
+                    value: v(1),
+                },
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
+            ],
+            2,
+        );
+        run(&mut cfg);
+        let kinds: Vec<&str> = cfg.blocks[0]
+            .insts
+            .iter()
+            .map(|inst| match &inst.kind {
+                InstKind::Assign { .. } => "assign",
+                InstKind::Take { .. } => "take",
+                _ => "other",
+            })
+            .filter(|k| *k != "other")
+            .collect();
+        assert_eq!(kinds, ["assign", "take", "assign"]);
     }
 
     fn io_fn_ty(i: &Interner, name: &str) -> (QualifiedRef, Ty) {

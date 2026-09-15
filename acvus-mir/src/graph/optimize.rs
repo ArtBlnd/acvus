@@ -48,7 +48,7 @@ fn optimize_inner(
     recursive_fns: &FxHashSet<QualifiedRef>,
     untyped_scalars: bool,
 ) -> OptimizeResult {
-    // -- Pass 1: SROA -> SSA (per-module) -> Inline (cross-module) -----
+    // -- Pass 1: SSA (per-module) -> Inline (cross-module) -----
 
     let mut ssa_modules = modules;
     for module in ssa_modules.values_mut() {

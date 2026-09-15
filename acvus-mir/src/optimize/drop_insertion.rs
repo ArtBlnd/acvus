@@ -1,11 +1,10 @@
 //! Drop Insertion - insert `Drop` instructions for non-Copy values.
 //!
-//! Runs after all optimizations (DCE, SROA, etc.). Inserts `InstKind::Drop`
-//! at the point where a non-Copy value's live range ends.
+//! Runs after all optimizations. Inserts `InstKind::Drop` at the point where
+//! a move-only value's live range ends.
 //!
-//! Copy types (Int, Float, Bool, Byte, Unit, String, Identity) never need Drop.
-//! Only move-only values (UserDefined, containers with move-only elements, etc.)
-//! get Drop instructions.
+//! A primitive or a reference is a word and never needs a Drop; every other
+//! value is move-only (`is_move_only`, RFC-0018) and gets one.
 //!
 //! Two phases:
 //!
