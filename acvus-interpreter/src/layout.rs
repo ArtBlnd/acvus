@@ -226,6 +226,19 @@ pub fn decode(
     })
 }
 
+/// Whether a value of `ty` may hold an extension value anywhere inside:
+/// what a space has to walk before it encodes.
+pub fn holds_extension(ty: &Ty) -> bool {
+    match ty {
+        Ty::UserDefined { .. } => true,
+        Ty::Array(inner, _) | Ty::Option(inner) => holds_extension(inner),
+        Ty::Tuple(elems) => elems.iter().any(holds_extension),
+        Ty::Object(fields) => fields.values().any(holds_extension),
+        Ty::Enum { variants, .. } => variants.values().flatten().any(|t| holds_extension(t)),
+        _ => false,
+    }
+}
+
 /// The hooks of an extension type, with the type's arguments.
 pub fn extension<'a>(
     rt: &'a AcvusRuntime,

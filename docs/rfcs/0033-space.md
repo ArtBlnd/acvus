@@ -29,10 +29,12 @@ the result; a head that moved since the load refuses the commit and
 reports where it is. A state node is written when enough ops have
 accrued since the last one, so a load is bounded.
 
-A nested extension value has its own chain. Its parent's bytes name it by
-its head; committing the parent commits each nested value first, and a
-nested head that moved is a change of the parent, recorded as a new
-parent state. A log is therefore structural: `Deque<Deque<Int>>` is an
+A nested extension value has its own chain, wherever it sits: as an
+element of an extension type, or inside an object, array, tuple, option,
+or enum that is. Its parent's bytes name it by its head; committing the
+parent walks the language shapes by type down to each nested value and
+commits it first, and a nested head that moved is a change of the parent,
+recorded as a new parent state. A log is therefore structural: `Deque<Deque<Int>>` is an
 outer chain whose nodes name inner chains, and a push into an inner deque
 is one op on the inner chain and one state on the outer.
 

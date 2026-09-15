@@ -445,13 +445,11 @@ impl Space {
         // Children first: their heads are what the parent's bytes name,
         // and a child whose head moved is a change of the parent.
         let mut children_moved = false;
-        (hooks.children)(rt, value, args, &mut |child_ty, child| {
-            let child_hooks = layout::extension(rt, child_ty)?.0;
-            let before = (child_hooks.head)(rt, child);
-            let head = self.commit_value(rt, child_ty, child)?;
-            children_moved |= before != Some(head);
-            Ok(())
-        })?;
+        if args.iter().any(layout::holds_extension) {
+            (hooks.children)(rt, value, args, &mut |child_ty, child| {
+                self.commit_nested(rt, child_ty, child, &mut children_moved)
+            })?;
+        }
         let encode = |t: &Ty, v: &Value, out: &mut Vec<u8>| layout::encode(rt, self, t, v, out);
         let ops = (hooks.take_ops)(rt, value, args, &encode)?;
         let state = |parent: Option<NodeHash>| -> SpaceResult<Node> {
@@ -493,6 +491,65 @@ impl Space {
         }
         (hooks.set_head)(rt, value, head);
         Ok(head)
+    }
+
+    /// Commit every extension value inside `value`, walking the language
+    /// shapes by type down to each; `moved` records whether any head moved.
+    fn commit_nested(
+        &self,
+        rt: &AcvusRuntime,
+        ty: &Ty,
+        value: &mut Value,
+        moved: &mut bool,
+    ) -> SpaceResult<()> {
+        match ty {
+            Ty::UserDefined { .. } => {
+                let hooks = layout::extension(rt, ty)?.0;
+                let before = (hooks.head)(rt, value);
+                let head = self.commit_value(rt, ty, value)?;
+                *moved |= before != Some(head);
+                Ok(())
+            }
+            Ty::Array(elem, _) => {
+                // SAFETY (each composite): the type is the runtime's witness
+                // of the value's shape.
+                for v in unsafe { value.as_array_mut() }.0.iter_mut() {
+                    self.commit_nested(rt, elem, v, moved)?;
+                }
+                Ok(())
+            }
+            Ty::Tuple(elems) => {
+                for (v, t) in unsafe { value.as_tuple_mut() }.0.iter_mut().zip(elems) {
+                    self.commit_nested(rt, t, v, moved)?;
+                }
+                Ok(())
+            }
+            Ty::Object(fields) => {
+                let values = unsafe { value.as_object_mut() };
+                for (k, t) in fields {
+                    if let Some(v) = values.get_mut(k) {
+                        self.commit_nested(rt, t, v, moved)?;
+                    }
+                }
+                Ok(())
+            }
+            Ty::Option(inner) => {
+                if let Some(v) = unsafe { value.as_option_mut() } {
+                    self.commit_nested(rt, inner, v, moved)?;
+                }
+                Ok(())
+            }
+            Ty::Enum { variants, .. } => {
+                let variant = unsafe { value.as_variant_mut() };
+                if let (Some(payload), Some(Some(t))) =
+                    (&mut variant.payload, variants.get(&variant.tag))
+                {
+                    self.commit_nested(rt, t, payload, moved)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     fn ops_since_state(&self, mut at: NodeHash) -> SpaceResult<usize> {

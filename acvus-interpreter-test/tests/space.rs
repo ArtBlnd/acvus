@@ -365,3 +365,59 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
         [2, 3]
     );
 }
+
+#[test]
+fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
+    let i = Interner::new();
+    let rt = runtime(&i);
+    let space = Space::new(Mode::Log {
+        checkpoint_every: 100,
+    });
+    let inner_ty = deque_ty(&i, Ty::Int);
+    let obj_ty = Ty::Object(
+        [
+            (i.intern("name"), Ty::String),
+            (i.intern("log"), inner_ty.clone()),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let ty = deque_ty(&i, obj_ty);
+    let obj = Value::object(
+        [
+            (i.intern("name"), Value::string("a")),
+            (i.intern("log"), deque_of(&rt, [Value::int(1)])),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut outer = deque_of(&rt, [obj]);
+    space.commit(&rt, "o", &ty, &mut outer).unwrap();
+    assert_eq!(
+        space.node_count(),
+        2,
+        "the inner deque's state and the outer's"
+    );
+
+    let mut loaded = space.load(&rt, "o", &ty).unwrap().unwrap();
+    with_deque(&rt, &loaded, |outer| {
+        let obj = outer.get_mut(0).unwrap();
+        let log = unsafe { obj.as_object_mut() }
+            .get_mut(&i.intern("log"))
+            .unwrap();
+        with_deque(&rt, log, |inner| inner.push_back(Value::int(2)));
+    });
+    space.commit(&rt, "o", &ty, &mut loaded).unwrap();
+    assert_eq!(
+        space.node_count(),
+        4,
+        "one inner op and one outer state naming the inner's new head"
+    );
+
+    let again = space.load(&rt, "o", &ty).unwrap().unwrap();
+    let reference = unsafe { rt.reference(&again) };
+    let outer: &Deque<Value> = unsafe { rt.deref::<Deque<Value>>(&reference) };
+    let obj = unsafe { outer.get(0).unwrap().as_object() };
+    assert_eq!(unsafe { obj[&i.intern("name")].as_str() }, "a");
+    assert_eq!(ints(&rt, &obj[&i.intern("log")]), [1, 2]);
+}

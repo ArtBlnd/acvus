@@ -289,9 +289,6 @@ where
 
     fn children(&mut self, type_args: &[Ty], visit: &mut Visit<'_, Rt>) -> SpaceResult<()> {
         let ty = element_of(type_args)?;
-        if !matches!(ty, Ty::UserDefined { .. }) {
-            return Ok(());
-        }
         for item in self.items.iter_mut() {
             visit(ty, item)?;
         }
