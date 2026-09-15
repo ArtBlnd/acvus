@@ -31,6 +31,14 @@ pub enum CastKind {
 /// not by name. This ensures uniqueness after inlining - different functions'
 /// local variables have different ValueIds even if they share the same name.
 /// Names are stored in DebugInfo for human readability.
+/// One step of a path under a storage (RFC-0024).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PathSeg {
+    Field(Astr),
+    Index(usize),
+    Payload,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefTarget {
     /// A local variable, identified by its storage slot ValueId.
@@ -89,7 +97,7 @@ pub enum InstKind {
     Ref {
         dst: ValueId,
         target: RefTarget,
-        path: Vec<Astr>,
+        path: Vec<PathSeg>,
         mutability: Mutability,
     },
     /// Move the value out of a storage into `dst`; a primitive is copied
@@ -97,13 +105,13 @@ pub enum InstKind {
     Take {
         dst: ValueId,
         target: RefTarget,
-        path: Vec<Astr>,
+        path: Vec<PathSeg>,
     },
     /// Move `value` into a storage; the storage's old value is dropped. An
     /// assignment to a variable.
     Assign {
         target: RefTarget,
-        path: Vec<Astr>,
+        path: Vec<PathSeg>,
         value: ValueId,
     },
     /// Move a context's whole value out of the page into `dst` (RFC-0025).
@@ -322,7 +330,7 @@ pub enum ValOrigin {
     /// A field access on a scalar value: `user.name` -- (object val, field name).
     Field(ValueId, Astr),
     /// A field projection on named storage: `@ctx.field`, `x.a.b`.
-    RefField(RefTarget, Vec<Astr>),
+    RefField(RefTarget, Vec<PathSeg>),
     /// Result of a function call: `to_string(...)`, `fetch(...)`.
     Call(Astr),
     /// An intermediate/anonymous value (arithmetic, pattern test, etc.).
@@ -378,9 +386,13 @@ impl DebugInfo {
                     },
                     RefTarget::Through(r) => format!("(*r{})", r.0),
                 };
-                let fields: Vec<_> = path
+                let fields: Vec<String> = path
                     .iter()
-                    .map(|f| interner.resolve(*f).to_string())
+                    .map(|seg| match seg {
+                        PathSeg::Field(f) => interner.resolve(*f).to_string(),
+                        PathSeg::Index(i) => format!("[{i}]"),
+                        PathSeg::Payload => "payload".to_string(),
+                    })
                     .collect();
                 format!("{}.{}", base, fields.join("."))
             }

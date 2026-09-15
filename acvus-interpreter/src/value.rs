@@ -483,6 +483,12 @@ impl Value {
     pub fn is_object(&self) -> bool {
         self.composite() == Some(Composite::Object)
     }
+    pub fn is_array(&self) -> bool {
+        self.composite() == Some(Composite::Array)
+    }
+    pub fn is_tuple(&self) -> bool {
+        self.composite() == Some(Composite::Tuple)
+    }
     pub fn is_variant(&self) -> bool {
         self.composite() == Some(Composite::Variant)
     }

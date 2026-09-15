@@ -93,14 +93,13 @@ mod tests {
     }
 
     #[test]
-    fn a_string_field_read_out_of_a_context_is_rejected() {
+    fn a_string_field_read_out_of_a_context_is_a_copy() {
         let i = Interner::new();
         let user_ty = Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::Int),
         ]));
-        let err = compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).unwrap_err();
-        assert!(err.contains("UseAfterMove"), "{err}");
+        compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).unwrap();
     }
 
     #[test]

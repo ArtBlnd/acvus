@@ -179,7 +179,7 @@ fn fmt_place(
     ctx: &PrintCtx<'_>,
     vn: &mut ValNormalizer,
     target: &crate::ir::RefTarget,
-    path: &[Astr],
+    path: &[crate::ir::PathSeg],
 ) -> String {
     let base = match target {
         crate::ir::RefTarget::Var(slot) => body.debug.label(*slot, ctx.interner),
@@ -196,8 +196,15 @@ fn fmt_place(
     if path.is_empty() {
         base
     } else {
-        let suffix: Vec<&str> = path.iter().map(|p| ctx.interner.resolve(*p)).collect();
-        format!("{base}.{}", suffix.join("."))
+        let suffix: String = path
+            .iter()
+            .map(|seg| match seg {
+                crate::ir::PathSeg::Field(f) => format!(".{}", ctx.interner.resolve(*f)),
+                crate::ir::PathSeg::Index(i) => format!("[{i}]"),
+                crate::ir::PathSeg::Payload => ".payload".to_string(),
+            })
+            .collect();
+        format!("{base}{suffix}")
     }
 }
 

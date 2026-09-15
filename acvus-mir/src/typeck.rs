@@ -141,6 +141,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     direct_calls: DirectCallMap,
     operator_calls: FxHashMap<AstId, OperatorCall<InferTy>>,
     intrinsic_calls: FxHashMap<AstId, Intrinsic>,
+    pattern_through: bool,
     /// Accumulated errors.
     errors: Vec<MirError>,
     in_borrow_place: bool,
@@ -187,6 +188,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             direct_calls: DirectCallMap::default(),
             operator_calls: FxHashMap::default(),
             intrinsic_calls: FxHashMap::default(),
+            pattern_through: false,
             in_borrow_place: false,
             bound_sites: Vec::new(),
             errors: Vec::new(),
@@ -1566,7 +1568,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     let field_resolved = self.solver.resolve_ty(&field_ty);
                     if !self.in_borrow_place
                         && !field_resolved.is_primitive()
-                        && !matches!(field_resolved, TyTerm::Var(_) | TyTerm::Error(_))
+                        && !matches!(
+                            field_resolved,
+                            TyTerm::String | TyTerm::Var(_) | TyTerm::Error(_)
+                        )
                     {
                         let shown = self.freeze_or_error(&field_resolved);
                         self.error(MirErrorKind::DerefOfNonPrimitive(shown), *span);
@@ -2214,10 +2219,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// RFC-0024.
     fn check_pattern(&mut self, pattern: &Pattern, source_ty: &InferTy, span: Span) {
+        let resolved = self.solver.resolve_ty(source_ty);
+        if let TyTerm::Ref(_, inner) = &resolved {
+            let outer = std::mem::replace(&mut self.pattern_through, true);
+            self.check_pattern_inner(pattern, inner, span);
+            self.pattern_through = outer;
+        } else {
+            self.check_pattern_inner(pattern, source_ty, span);
+        }
+    }
+
+    fn check_pattern_inner(&mut self, pattern: &Pattern, source_ty: &InferTy, span: Span) {
         let source_resolved = self.solver.resolve_ty(source_ty);
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
+                if self.pattern_through {
+                    self.error(MirErrorKind::ReferenceInData, span);
+                    return;
+                }
                 self.note_context_use(*qref, span);
                 self.note_access(Effect::write(*qref), span);
                 let ctx_ty = self
@@ -2253,7 +2274,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                 }
                 RefKind::Value => {
-                    self.define_var(*name, source_resolved);
+                    let ty = if self.pattern_through {
+                        TyTerm::Ref(Mutability::Shared, Box::new(source_resolved))
+                    } else {
+                        source_resolved
+                    };
+                    self.define_var(*name, ty);
                 }
             },
 

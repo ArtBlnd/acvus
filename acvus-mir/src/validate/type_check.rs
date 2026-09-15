@@ -12,7 +12,7 @@
 //!   changes a value's type in place.
 //! - Generic variance is invariant: inner types must match recursively.
 
-use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
+use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::{Astr, LocalIdOps};
@@ -327,7 +327,7 @@ impl CheckCtx {
         span: Span,
         inst_name: &str,
         r: ValueId,
-        path: &[Astr],
+        path: &[PathSeg],
         vt: &FxHashMap<ValueId, Ty>,
         errors: &mut Vec<ValidationError>,
     ) -> Option<(Mutability, Ty)> {
@@ -347,24 +347,34 @@ impl CheckCtx {
             }
             return None;
         };
-        let mut at: &Ty = inner;
-        for field in path {
-            let Ty::Object(fields) = at else {
+        let mut at: Ty = inner.as_ref().clone();
+        for seg in path {
+            let next = match (seg, &at) {
+                (PathSeg::Field(field), Ty::Object(fields)) => fields.get(field).cloned(),
+                (PathSeg::Index(i), Ty::Array(elem, _)) => Some(elem.as_ref().clone()).filter(|_| *i < usize::MAX),
+                (PathSeg::Index(i), Ty::Tuple(elems)) => elems.get(*i).cloned(),
+                (PathSeg::Payload, Ty::Option(payload)) => Some(payload.as_ref().clone()),
+                // Enum payload: dst type comes from val_types, trust typechecker
+                (PathSeg::Payload, Ty::Enum { .. }) => Some(Ty::error()),
+                (_, Ty::Error(_)) => Some(Ty::error()),
+                _ => None,
+            };
+            let Some(next) = next else {
                 errors.push(ValidationError {
                     scope: self.scope_name.clone(),
                     inst_index: pc,
                     span,
                     kind: ValidationErrorKind::InvalidConstructor {
                         inst_name: inst_name.to_string(),
-                        expected_constructor: "Object".to_string(),
+                        expected_constructor: format!("a type with {seg:?}"),
                         actual: at.clone(),
                     },
                 });
                 return None;
             };
-            at = fields.get(field)?;
+            at = next;
         }
-        Some((*m, at.clone()))
+        Some((*m, at))
     }
 
     fn assert_match(
@@ -839,7 +849,7 @@ impl CheckCtx {
                         return;
                     };
                     self.assert_match(pc, span, "Take", "dst", &at, dst_ty, errors);
-                    if !at.is_primitive() && !at.is_error() {
+                    if !at.is_primitive() && !matches!(at, Ty::String) && !at.is_error() {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
@@ -1136,6 +1146,10 @@ impl CheckCtx {
 
             InstKind::TestObjectKey { dst, src, .. } => {
                 let src_ty = ty!(*src);
+                let src_ty = match src_ty {
+                    Ty::Ref(_, inner) => inner.as_ref(),
+                    other => other,
+                };
                 let src_ty = if matches!(src_ty, Ty::Object(_) | Ty::Error(_)) {
                     src_ty
                 } else {
@@ -1159,6 +1173,10 @@ impl CheckCtx {
 
             InstKind::TestVariant { dst, src, .. } => {
                 let src_ty = ty!(*src);
+                let src_ty = match src_ty {
+                    Ty::Ref(_, inner) => inner.as_ref(),
+                    other => other,
+                };
                 if !matches!(src_ty, Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_)) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ir::{Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
+use acvus_mir::ir::{PathSeg, Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec};
 use futures::future::BoxFuture;
@@ -31,31 +31,78 @@ fn field_mut<'a>(value: &'a mut Value, f: Astr, interner: &Interner) -> &'a mut 
         .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
 }
 
-fn walk_path<'a>(mut value: &'a Value, path: &[Astr], interner: &Interner) -> &'a Value {
-    for f in path {
-        value = field(value, *f, interner);
+fn walk_path<'a>(mut value: &'a Value, path: &[PathSeg], interner: &Interner) -> &'a Value {
+    for seg in path {
+        value = match seg {
+            PathSeg::Field(f) => field(value, *f, interner),
+            // SAFETY: the type checker admits an index only on an array or a tuple.
+            PathSeg::Index(i) => unsafe {
+                if value.is_array() {
+                    &value.as_array()[*i]
+                } else {
+                    &value.as_tuple()[*i]
+                }
+            },
+            // SAFETY: the type checker admits a payload only on a variant.
+            PathSeg::Payload => unsafe { value.as_variant() }
+                .payload
+                .as_deref()
+                .expect("a payload path names a variant that carries one"),
+        };
     }
     value
 }
 
-fn walk_path_mut<'a>(mut value: &'a mut Value, path: &[Astr], interner: &Interner) -> &'a mut Value {
-    for f in path {
-        value = field_mut(value, *f, interner);
+fn walk_path_mut<'a>(mut value: &'a mut Value, path: &[PathSeg], interner: &Interner) -> &'a mut Value {
+    for seg in path {
+        value = match seg {
+            PathSeg::Field(f) => field_mut(value, *f, interner),
+            // SAFETY: the type checker admits an index only on an array or a tuple.
+            PathSeg::Index(i) => unsafe {
+                if value.is_array() {
+                    &mut value.as_array_mut().0[*i]
+                } else {
+                    &mut value.as_tuple_mut().0[*i]
+                }
+            },
+            PathSeg::Payload => panic!("a payload is never assigned through a path"),
+        };
     }
     value
 }
 
 /// Move the value at `path` out of `root`: a word is copied, a `Large`
 /// leaves its slot `Empty`.
-fn take_at(root: &mut Value, path: &[Astr], interner: &Interner) -> Value {
+fn take_at(root: &mut Value, path: &[PathSeg], interner: &Interner) -> Value {
     Value::use_from(walk_path_mut(root, path, interner))
 }
 
+/// RFC-0026.
+fn read_at(root: &mut Value, path: &[PathSeg], ty: &Ty, interner: &Interner) -> Value {
+    let slot = walk_path_mut(root, path, interner);
+    if let Ty::String = ty {
+        // SAFETY: the type checker admits only a string here.
+        Value::string(unsafe { slot.as_str() }.to_string())
+    } else {
+        Value::use_from(slot)
+    }
+}
+
 /// Set a nested field path on an object value, in place.
-fn store_path(target: &mut Value, path: &[Astr], value: Value, interner: &Interner) {
+fn store_path(target: &mut Value, path: &[PathSeg], value: Value, interner: &Interner) {
     assert!(!path.is_empty(), "store_path called with empty path");
     let slot = walk_path_mut(target, path, interner);
     *slot = value;
+}
+
+fn read_place<'a>(frame: &'a Frame, val_types: &FxHashMap<ValueId, Ty>, id: ValueId) -> &'a Value {
+    let v = frame.get(id);
+    if let Ty::Ref(..) = type_of(val_types, id) {
+        // SAFETY: the type checker admits only a live reference here.
+        unsafe { v.target() }
+    } else {
+        v
+    }
 }
 
 /// The page key of a context.
@@ -357,13 +404,20 @@ async fn execute_inst(
         InstKind::Take { dst, target, path } => {
             let val = match target {
                 RefTarget::Var(slot) | RefTarget::Param(slot) => {
-                    take_at(frame.slot_mut(*slot), path, &ctx.shared.interner)
+                    let ty = type_of(val_types, *dst).clone();
+                    read_at(frame.slot_mut(*slot), path, &ty, &ctx.shared.interner)
                 }
                 RefTarget::Through(r) => {
+                    let ty = type_of(val_types, *dst);
                     // SAFETY: the type checker admits only a live reference to
-                    // a primitive at `path` here.
-                    let base = unsafe { frame.get(*r).target() };
-                    Value::Small(walk_path(base, path, &ctx.shared.interner).small())
+                    // a word or a `String` at `path` here.
+                    let at = walk_path(unsafe { frame.get(*r).target() }, path, &ctx.shared.interner);
+                    if let Ty::String = ty {
+                        // SAFETY: the type checker admits only a string here.
+                        Value::string(unsafe { at.as_str() }.to_string())
+                    } else {
+                        Value::Small(at.small())
+                    }
                 }
             };
             frame.set(*dst, val);
@@ -422,10 +476,9 @@ async fn execute_inst(
             field: f,
             rest,
         } => {
-            let mut path = Vec::with_capacity(1 + rest.len());
-            path.push(*f);
-            path.extend_from_slice(rest);
-            let val = take_at(frame.slot_mut(*object), &path, &ctx.shared.interner);
+            let path: Vec<PathSeg> = std::iter::once(*f).chain(rest.iter().copied()).map(PathSeg::Field).collect();
+            let ty = type_of(val_types, *dst).clone();
+            let val = read_at(frame.slot_mut(*object), &path, &ty, &ctx.shared.interner);
             frame.set(*dst, val);
         }
         InstKind::FieldSet {
@@ -437,15 +490,13 @@ async fn execute_inst(
         } => {
             let mut obj = frame.take(*object);
             let new_val = frame.use_val(*value);
-            let mut path = Vec::with_capacity(1 + rest.len());
-            path.push(*f);
-            path.extend_from_slice(rest);
+            let path: Vec<PathSeg> = std::iter::once(*f).chain(rest.iter().copied()).map(PathSeg::Field).collect();
             store_path(&mut obj, &path, new_val, &ctx.shared.interner);
             frame.set(*dst, obj);
         }
         InstKind::TupleIndex { dst, tuple, index } => {
-            // SAFETY: the type checker admits only a tuple value here.
-            let val = Value::use_from(&mut unsafe { frame.slot_mut(*tuple).as_tuple_mut() }.0[*index]);
+            let ty = type_of(val_types, *dst).clone();
+            let val = read_at(frame.slot_mut(*tuple), &[PathSeg::Index(*index)], &ty, &ctx.shared.interner);
             frame.set(*dst, val);
         }
 
@@ -523,7 +574,7 @@ async fn execute_inst(
             frame.set(*dst, Value::variant(*tag, p));
         }
         InstKind::TestVariant { dst, src, tag } => {
-            let src_val = frame.get(*src);
+            let src_val = read_place(frame, val_types, *src);
             // SAFETY: is_variant checked the vtable id.
             let matches = src_val.is_variant() && unsafe { src_val.as_variant() }.tag == *tag;
             frame.set(*dst, Value::bool_(matches));
@@ -542,7 +593,7 @@ async fn execute_inst(
 
         // -- Pattern testing ------------------------------
         InstKind::TestLiteral { dst, src, value } => {
-            let src_val = frame.get(*src);
+            let src_val = read_place(frame, val_types, *src);
             let matches = match value {
                 Literal::Int(b) => src_val.as_int() == *b,
                 Literal::Float(b) => src_val.as_float() == *b,
@@ -556,7 +607,7 @@ async fn execute_inst(
             frame.set(*dst, Value::bool_(matches));
         }
         InstKind::TestObjectKey { dst, src, key } => {
-            let src_val = frame.get(*src);
+            let src_val = read_place(frame, val_types, *src);
             // SAFETY: is_object checked the vtable id.
             let has = src_val.is_object() && unsafe { src_val.as_object() }.contains_key(key);
             frame.set(*dst, Value::bool_(has));
@@ -707,18 +758,19 @@ async fn execute_inst(
 
         // -- Object/List dynamic access -------------------
         InstKind::ObjectGet { dst, object, key } => {
-            let val = take_at(frame.slot_mut(*object), std::slice::from_ref(key), &ctx.shared.interner);
+            let ty = type_of(val_types, *dst).clone();
+            let val = read_at(frame.slot_mut(*object), &[PathSeg::Field(*key)], &ty, &ctx.shared.interner);
             frame.set(*dst, val);
         }
         InstKind::ArrayIndex { dst, array, index } => {
-            // SAFETY: the type checker admits only an array value here.
-            let val = Value::use_from(&mut unsafe { frame.slot_mut(*array).as_array_mut() }.0[*index]);
+            let ty = type_of(val_types, *dst).clone();
+            let val = read_at(frame.slot_mut(*array), &[PathSeg::Index(*index)], &ty, &ctx.shared.interner);
             frame.set(*dst, val);
         }
         InstKind::ArrayGet { dst, array, index } => {
             let idx = frame.get(*index).as_int() as usize;
-            // SAFETY: the type checker admits only an array value here.
-            let val = Value::use_from(&mut unsafe { frame.slot_mut(*array).as_array_mut() }.0[idx]);
+            let ty = type_of(val_types, *dst).clone();
+            let val = read_at(frame.slot_mut(*array), &[PathSeg::Index(idx)], &ty, &ctx.shared.interner);
             frame.set(*dst, val);
         }
     }

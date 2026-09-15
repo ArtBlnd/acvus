@@ -2,14 +2,17 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== literals ===
-  T0 = ""
-
 === main ===
-     1 |   r0 = take @user.name
-     2 |   r1 = T0 + r0
-     3 |   return r1
+     0 |   r0 = fetch @user
+     1 |   assign @user = r0
+     2 |   r1 = take @user.name
+     3 |   r2 = string_concat [r1]
+     4 |   r3 = take @user
+     5 |   commit @user = r3
+     6 |   return r2
 
-    ; r0 (@user.name) : String
-    ; r1 (v3) : String
-    ; r2 (v1) : String
+    ; r0 (@user) : {age: Int, email: String, name: String}
+    ; r1 (@user.name) : String
+    ; r2 (v4) : String
+    ; r3 (v5) : {age: Int, email: String, name: String}
+    ; r4 (@user) : {age: Int, email: String, name: String}

@@ -69,6 +69,6 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0021](0021-registry.md) | A registry is a manifest and a handler table, combined once | Accepted |
 | [RFC-0022](0022-thin-runtime-contract.md) | The runtime contract is erase, materialize, reference, and call | Accepted |
 | [RFC-0023](0023-extern-declaration.md) | Declaring an ExternFn | Accepted |
-| [RFC-0024](0024-patterns-through-a-reference.md) | A pattern matched against a reference binds references | Proposed |
+| [RFC-0024](0024-patterns-through-a-reference.md) | A pattern matched against a reference binds references | Accepted |
 | [RFC-0025](0025-context-is-a-variable.md) | A context is a variable of the body that touches it | Accepted |
 | [RFC-0026](0026-string-copies.md) | A String is an immutable value, copied by `StringClone` | Accepted |

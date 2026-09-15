@@ -60,6 +60,10 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Liveness {
     Alive,
+    /// A part moved out at instruction index `at`.
+    PartlyMoved {
+        at: usize,
+    },
     /// Moved at instruction index `at`.
     Moved {
         at: usize,
@@ -67,11 +71,14 @@ enum Liveness {
 }
 
 impl Liveness {
-    /// Conservative join: if either side is Moved, result is Moved.
+    /// Conservative join: the more moved side wins.
     fn join(self, other: Liveness) -> Liveness {
         match (self, other) {
             (Liveness::Alive, Liveness::Alive) => Liveness::Alive,
             (Liveness::Moved { at }, _) | (_, Liveness::Moved { at }) => Liveness::Moved { at },
+            (Liveness::PartlyMoved { at }, _) | (_, Liveness::PartlyMoved { at }) => {
+                Liveness::PartlyMoved { at }
+            }
         }
     }
 }
@@ -333,7 +340,7 @@ fn try_consume_value(
     };
 
     // Check if already moved
-    if let Some(Liveness::Moved { at }) = state.get_value(id) {
+    if let Some(Liveness::Moved { at } | Liveness::PartlyMoved { at }) = state.get_value(id) {
         errors.push(ValidationError {
             scope: scope.to_string(),
             inst_index: inst_idx,
@@ -350,6 +357,41 @@ fn try_consume_value(
     // Mark as moved
     state.set_value(id, Liveness::Moved { at: inst_idx });
     true
+}
+
+/// RFC-0026.
+fn moves_out(ty: &Ty) -> bool {
+    !matches!(ty, Ty::String) && is_move_only(ty) == Some(true)
+}
+
+fn extract_part(
+    scope: &str,
+    inst_idx: usize,
+    span: Span,
+    container: ValueId,
+    dst: ValueId,
+    val_types: &FxHashMap<ValueId, Ty>,
+    state: &mut MoveState,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(ty) = val_types.get(&dst)
+        && moves_out(ty)
+    {
+        match state.get_value(container) {
+            Some(Liveness::Moved { at }) => errors.push(ValidationError {
+                scope: scope.to_string(),
+                inst_index: inst_idx,
+                span,
+                kind: ValidationErrorKind::UseAfterMove {
+                    value_id: container.to_raw() as u32,
+                    moved_at: at,
+                    ty: ty.clone(),
+                },
+            }),
+            _ => state.set_value(container, Liveness::PartlyMoved { at: inst_idx }),
+        }
+    }
+    state.set_value(dst, Liveness::Alive);
 }
 
 /// Process a single instruction: check uses and update move state.
@@ -383,7 +425,7 @@ fn process_inst(
             };
             if let Some(Liveness::Moved { at }) = state.get_var(*name)
                 && let Some(ty) = val_types.get(dst)
-                && is_move_only(ty) == Some(true)
+                && moves_out(ty)
             {
                 errors.push(ValidationError {
                     scope: scope.to_string(),
@@ -397,7 +439,7 @@ fn process_inst(
                 });
             }
             if let Some(ty) = val_types.get(dst)
-                && is_move_only(ty) == Some(true)
+                && moves_out(ty)
             {
                 state.set_var(*name, Liveness::Moved { at: inst_idx });
             }
@@ -491,8 +533,8 @@ fn process_inst(
 
         // === Non-consuming operations (borrow operands) ===
         // These read the value but don't take ownership.
-        InstKind::FieldGet { dst, object: _, .. } => {
-            state.set_value(*dst, Liveness::Alive);
+        InstKind::FieldGet { dst, object, .. } => {
+            extract_part(scope, inst_idx, span, *object, *dst, val_types, state, errors);
         }
         InstKind::FieldSet {
             dst,
@@ -503,21 +545,21 @@ fn process_inst(
             try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::ObjectGet { dst, object: _, .. } => {
-            state.set_value(*dst, Liveness::Alive);
+        InstKind::ObjectGet { dst, object, .. } => {
+            extract_part(scope, inst_idx, span, *object, *dst, val_types, state, errors);
         }
-        InstKind::TupleIndex { dst, tuple: _, .. } => {
-            state.set_value(*dst, Liveness::Alive);
+        InstKind::TupleIndex { dst, tuple, .. } => {
+            extract_part(scope, inst_idx, span, *tuple, *dst, val_types, state, errors);
         }
-        InstKind::ArrayIndex { dst, array: _, .. } => {
-            state.set_value(*dst, Liveness::Alive);
+        InstKind::ArrayIndex { dst, array, .. } => {
+            extract_part(scope, inst_idx, span, *array, *dst, val_types, state, errors);
         }
         InstKind::ArrayGet {
             dst,
-            array: _,
+            array,
             index: _,
         } => {
-            state.set_value(*dst, Liveness::Alive);
+            extract_part(scope, inst_idx, span, *array, *dst, val_types, state, errors);
         }
         // Unwrap moves the payload out of the variant: the variant is consumed.
         InstKind::UnwrapVariant { dst, src } => {

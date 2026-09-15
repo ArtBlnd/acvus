@@ -53,10 +53,23 @@ fn a_primitive_field_is_read_through_a_reference() {
 }
 
 #[test]
-fn a_string_field_cannot_be_moved_out_through_a_reference() {
+fn a_string_field_is_copied_through_a_reference() {
     let i = Interner::new();
     let shared = Ty::Ref(Mutability::Shared, Box::new(user(&i)));
-    let err = with_closure(&i, shared, Ty::String, "u.name").unwrap_err();
+    let ir = with_closure(&i, shared, Ty::String, "u.name").unwrap();
+    assert!(ir.contains("take (*r"), "{ir}");
+}
+
+#[test]
+fn an_object_field_cannot_be_moved_out_through_a_reference() {
+    let i = Interner::new();
+    let nested = Ty::Object(FxHashMap::from_iter([(
+        i.intern("inner"),
+        Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)])),
+    )]));
+    let shared = Ty::Ref(Mutability::Shared, Box::new(nested.clone()));
+    let inner = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+    let err = with_closure(&i, shared, inner, "u.inner").unwrap_err();
     assert!(!err.is_empty(), "{err}");
 }
 

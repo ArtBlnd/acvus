@@ -14,7 +14,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::CfgBody;
-use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
+use crate::ir::{Callee, Inst, InstKind, PathSeg, RefTarget, ValueId};
 use crate::ty::Ty;
 use acvus_ast::Span;
 
@@ -91,11 +91,11 @@ fn build_value_fields(cfg: &CfgBody) -> ValueFields {
 /// field exists.
 fn collect_var_fields(cfg: &CfgBody) -> FxHashMap<RefTarget, FxHashSet<Astr>> {
     let mut target_fields: FxHashMap<RefTarget, FxHashSet<Astr>> = FxHashMap::default();
-    let mut note = |target: &RefTarget, path: &[Astr], whole: Option<&Ty>| match path.first() {
-        Some(field) => {
+    let mut note = |target: &RefTarget, path: &[PathSeg], whole: Option<&Ty>| match path.first() {
+        Some(PathSeg::Field(field)) => {
             target_fields.entry(*target).or_default().insert(*field);
         }
-        None => {
+        _ => {
             if let Some(Ty::Object(fields)) = whole {
                 target_fields
                     .entry(*target)
@@ -154,7 +154,7 @@ impl DataflowAnalysis for InitCheckAnalysis {
         else {
             return;
         };
-        if let Some(field) = path.first() {
+        if let Some(PathSeg::Field(field)) = path.first() {
             state.set((*target, *field), FieldInit::Init);
             return;
         }
@@ -234,7 +234,7 @@ pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
         for inst in &block.insts {
             match &inst.kind {
                 InstKind::Take { target, path, .. } | InstKind::Ref { target, path, .. } => {
-                    if let Some(field) = path.first()
+                    if let Some(PathSeg::Field(field)) = path.first()
                         && state.get((*target, *field)) == FieldInit::Uninit
                     {
                         errors.push(UninitError {

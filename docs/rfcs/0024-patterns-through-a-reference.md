@@ -1,54 +1,63 @@
 # RFC-0024: A pattern matched against a reference binds references
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-15
 Supersedes: none
 
 ## Ruling
 
-A match source of type `&T` is matched by the same patterns as a `T`. The
-`&` is written once, on the source — `[a, b, ..] = &@items`, `Some(v) =
-&@opt`, `{ name, } = &@user`, `"admin" = &@role` — and never inside the
-pattern. Every name the pattern binds is a reference into the source:
-`a: &Int`, `v: &T`, `name: &String`. A literal in the pattern is compared
-through the operator rule (RFC-0020): `"admin" = &@role` is
-`core::eq(&@role, &"admin")`. Nothing is moved out of the source, and the
-source is a place lent for the match.
+A pattern lives in one of two dimensions, and the dimension is the
+source's, never the pattern's.
 
-A match source of type `T` is matched as before: it is moved into the
-match, and every binding owns its part.
+- **Value.** A pattern matched against a value reads each part it names
+  as the part's type reads — a word copies, a `String` copies
+  (RFC-0026), anything else moves out. A value with a part moved out is
+  partly moved: its other parts may still be read, and a use of it whole
+  is a use after move.
+- **Reference.** A pattern matched against a `&T` is the same pattern
+  matched against `T`, and every name it binds is a `&part`:
+  `[a, b, ..] = &@items` binds `a: &Int`; `{ name, } = &@user` binds
+  `name: &String`; `Some(v) = &@opt` binds `v: &T`. The source is lent
+  for the match and nothing moves. A literal in the pattern is compared
+  through the reference.
+
+The `&` is written on the source and nowhere else: there is no `&[a, b]`
+and no `{ &name, .. }`. A binding through a reference is used as any
+reference: `*a` for a word, `{{ name }}` emits a `&String`, `clone(name)`
+owns it.
 
 ## Rationale
 
-Only a primitive copies and a context is never read out without being
-assigned back (RFC-0018), so the match that every template writes —
-`{{ "admin" = @role }}`, `{{ [a, ..] = @items }}` — must lend its source.
-With the `&` on the source, the pattern language does not change: a
-pattern already says which parts it names, and the source's type says
-whether those names own or borrow. Writing `&` inside patterns would say
-the same thing twice and open a way to write it inconsistently
-(`&[a, b, ..]` binding owned parts of a borrowed list has no meaning
-here).
+The two dimensions are the ones RFC-0018 already gives every expression:
+a place used as a value copies or moves by its type, and `&place` is a
+reference. A pattern is several such reads at once, so it takes the
+dimension of the one expression it is applied to. Letting a binding pick
+its own dimension (`{ &name, .. }`) or a pattern lift its source
+(`&[a, b]`) would put two dimensions in one expression and make the
+source's dimension depend on what the pattern says.
 
-A binding of type `&T` is used like any reference: `*a` for a primitive,
-`&`-taking functions for the rest, `clone(a)` to own it.
+Binding `&Int` rather than copying the word is the price of one
+dimension; `*a` names the copy. Copying words through a reference and
+borrowing the rest would be a third rule keyed on the type, and the
+owner declined it.
 
 ## Not built
 
 - No `&` in a pattern.
-- No mixed mode: a source is lent whole or moved whole; no pattern borrows
-  one part and moves another.
-- No `&mut` match source. A place changed by parts is changed by `&mut`
-  lends to functions, not by pattern.
+- No `&mut` match source. A place changed by parts is changed through
+  `&mut` lent to functions, not by pattern.
+- No context bind (`@x = ...`) through a reference: a context holds data,
+  never a reference (RFC-0014).
 
 ## Consequences
 
-- The type checker gives a pattern matched against `&T` the binding types
-  it would give against `T`, each wrapped in `&`; a literal pattern against
-  `&T` type-checks as an `eq` call.
-- Lowering matches a `&T` source through the reference: the test
-  instructions read through it, and each binding is a `Ref` into the
-  source (a `Ref` whose target is the storage the source reference names,
-  `RefTarget::Through`, with the part's path).
-- A match arm body sees the bindings as references; a body that needs an
-  owned part writes `clone(part)`.
+- `PathSeg::{Field, Index, Payload}` replaces the field-name path of
+  `Ref`/`Take`/`Assign`, so a reference can name an array element, a
+  tuple element, or a variant's payload.
+- The type checker checks a pattern against `&T` as against `T` with
+  every binding wrapped in `&`; a context bind there is a
+  `ReferenceInData` error.
+- Lowering, on a `&T` source, makes a `Ref` through the source for each
+  part the pattern names and matches the sub-pattern against that `&part`;
+  `TestLiteral`, `TestVariant`, and `TestObjectKey` read through a
+  reference source.
