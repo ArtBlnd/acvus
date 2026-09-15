@@ -24,7 +24,7 @@ pub struct ContextWrite {
 // -- Context trait ---------------------------------------------------
 
 /// Single snapshot of context state. Read/write via `&self`.
-pub trait RuntimeContext: Send + Sync + Sized {
+pub trait RuntimeContext: Send + Sync {
     /// Move the whole value out; the key is unset until `set`.
     fn take(&self, key: &str) -> Option<Value>;
     fn set(&self, key: &str, value: Value);

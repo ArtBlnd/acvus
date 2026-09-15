@@ -303,7 +303,7 @@ pub type OptionValue = Option<Value>;
 /// any call does (RFC-0014). Only captures are taken by value.
 pub struct FnValue {
     pub shared: InterpreterContext,
-    pub page: Arc<InMemoryContext>,
+    pub page: Arc<dyn crate::journal::RuntimeContext>,
     pub body: Arc<MirBody>,
     pub captures: Arc<[Value]>,
 }

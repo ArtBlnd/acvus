@@ -140,6 +140,7 @@ dependencies = [
  "libtest-mimic",
  "rustc-hash",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

@@ -130,3 +130,36 @@ fn check_and_mir_compile_without_running() {
     let out = acvus(dir.path(), &["frob"]);
     assert_eq!(out.status.code(), Some(64));
 }
+
+#[test]
+fn a_space_directory_keeps_contexts_between_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "bump.acvus", "@n = @n + 10;\n@n\n");
+    write(dir.path(), "seed.json", "{\"n\": 1}");
+    let out = acvus(
+        dir.path(),
+        &[
+            "run",
+            "bump.acvus",
+            "--space",
+            "store",
+            "--context",
+            "seed.json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "11\n");
+    assert!(
+        text(&out.stderr).contains("commit @n = "),
+        "{}",
+        text(&out.stderr)
+    );
+    let out = acvus(dir.path(), &["run", "bump.acvus", "--space", "store"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "21\n");
+    let out = acvus(dir.path(), &["space", "store"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let listing = text(&out.stdout);
+    assert!(listing.starts_with("@n: Int = "), "{listing}");
+    assert!(listing.contains("2 nodes"), "{listing}");
+}

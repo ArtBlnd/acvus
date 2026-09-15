@@ -56,11 +56,17 @@ per context the natural unit, with no aliasing to reconcile inside a run.
 ops at the two ends are counters, and a pop that would cross the other
 end's cursor is a conflict the replay detects rather than a value lost.
 
+A run's page may sit over a space: a context is loaded from the space at
+the run's first fetch and every context the run held is committed when
+the host asks. `acvus run --space <dir>` runs over a directory store —
+`nodes/<hex>` for nodes, `heads/<id>.json` for a head and its type — and
+`acvus space <dir>` lists what the directory holds.
+
 ## Not built
 
-- No `Space` on disk or over a network: the first instance is in memory.
-  Its four operations — `put`, `get`, `head`, `cmpxchg` — are what a
-  backing store implements.
+- No store shared between processes: the directory store moves heads
+  under one process-wide lock; two processes on one directory are not
+  coordinated. A store over a network implements the same five methods.
 - No merge of two chains from one head: a moved head refuses the commit;
   branching on refusal, and merging by the type's commutativity
   (RFC-0013), come later.
@@ -68,9 +74,10 @@ end's cursor is a conflict the replay detects rather than a value lost.
   declares `Deque`; a language-shape context (`String`, `Int`, objects)
   needs no hook.
 - No garbage collection of nodes no head reaches.
-- The interpreter's page still fetches and commits whole values; wiring
-  the page to a space, so that `fetch` loads and the run's end commits, is
-  the next step.
+- The deque's log is the net change of a run: a value pushed and popped
+  within one run leaves no op, because a popped value is the caller's and
+  cannot be copied into the log without a clone the element type may not
+  have. A per-event log needs that clone.
 
 ## Consequences
 
@@ -78,5 +85,8 @@ end's cursor is a conflict the replay detects rather than a value lost.
   `ExternTypeDecl::space`; `Externs.space` by type name.
 - `acvus-ext`: `Deque<Rt::Value>` implements `Journaled`, with its head.
 - `acvus-interpreter`: `layout` (a value as canonical bytes by its type),
-  `space` (`Space`, `Mode::{Plain, Log}`, nodes, heads, `cmpxchg`,
-  `load`, `commit`); `InterpreterContext::with_space`.
+  `space` (`Store` with `MemoryStore` and `DirStore`, `Space`,
+  `Mode::{Plain, Log}`, nodes, heads, `cmpxchg`, `load`, `commit`,
+  `SpacePage`); `InterpreterContext::with_space`; the interpreter's page
+  is a `RuntimeContext` trait object.
+- `acvus`: `--space <dir>`, `acvus space <dir>`.

@@ -277,3 +277,91 @@ async fn a_script_s_change_to_a_deque_context_is_committed_as_its_ops() {
         [2, 3]
     );
 }
+
+#[test]
+fn a_directory_store_holds_nodes_and_heads_across_openings() {
+    let i = Interner::new();
+    let rt = runtime(&i);
+    let dir = tempfile::tempdir().unwrap();
+    let ty = deque_ty(&i, Ty::Int);
+    {
+        let store = acvus_interpreter::DirStore::open(dir.path(), &i).unwrap();
+        let space = Space::over(
+            Mode::Log {
+                checkpoint_every: 100,
+            },
+            Box::new(store),
+        );
+        let mut d = deque_of(&rt, [Value::int(1)]);
+        space.commit(&rt, "d", &ty, &mut d).unwrap();
+        let mut loaded = space.load(&rt, "d", &ty).unwrap().unwrap();
+        with_deque(&rt, &loaded, |d| d.push_back(Value::int(2)));
+        space.commit(&rt, "d", &ty, &mut loaded).unwrap();
+    }
+    let store = acvus_interpreter::DirStore::open(dir.path(), &i).unwrap();
+    let space = Space::over(
+        Mode::Log {
+            checkpoint_every: 100,
+        },
+        Box::new(store),
+    );
+    assert_eq!(space.node_count(), 2);
+    let ids = space.identities().unwrap();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids[0].0, "d");
+    assert_eq!(ids[0].1, ty);
+    assert_eq!(
+        ints(&rt, &space.load(&rt, "d", &ty).unwrap().unwrap()),
+        [1, 2]
+    );
+}
+
+#[tokio::test]
+async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
+    use acvus_interpreter::{Interpreter, InterpreterContext, SpacePage};
+    let i = Interner::new();
+    let space = Arc::new(Space::new(Mode::Log {
+        checkpoint_every: 100,
+    }));
+    let ty = deque_ty(&i, Ty::Int);
+    let rt = runtime(&i);
+    let mut d = deque_of(&rt, [Value::int(1)]);
+    space.commit(&rt, "d", &ty, &mut d).unwrap();
+
+    let externs = Externs::combine(acvus_ext::std_registries(), &i).unwrap();
+    let compiled = compile_source_with_externs(
+        &i,
+        acvus_mir::graph::ParsedAst::Script(
+            acvus_ast::parse_script(
+                &i,
+                "push_back(&mut @d, 2); push_back(&mut @d, 3); pop_front(&mut @d); len(&@d)",
+            )
+            .unwrap(),
+        ),
+        &[(i.intern("d"), ty.clone())].into_iter().collect(),
+        acvus_ext::std_registries(),
+    );
+    let mut functions = compiled.modules;
+    functions.extend(compiled.extern_executables);
+    let shared = InterpreterContext::new(&i, functions, Arc::new(SequentialExecutor))
+        .with_fn_types(compiled.fn_types)
+        .with_context_names(compiled.context_names)
+        .with_space(externs.space);
+    let page =
+        Arc::new(SpacePage::new(Arc::clone(&space), shared.runtime(), Default::default()).unwrap());
+    let mut interp = Interpreter::on_page(
+        shared,
+        compiled.entry_qref,
+        Arc::clone(&page) as Arc<dyn acvus_interpreter::RuntimeContext>,
+    );
+    let value = interp.execute().await.unwrap();
+    assert_eq!(value.as_int(), 2);
+    let committed = page.commit().unwrap();
+    assert_eq!(committed.len(), 1);
+    assert_eq!(committed[0].0, "d");
+    assert_eq!(space.node_count(), 4, "the state and three ops");
+    assert_eq!(
+        ints(&rt, &space.load(&rt, "d", &ty).unwrap().unwrap()),
+        [2, 3]
+    );
+}

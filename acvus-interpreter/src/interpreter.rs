@@ -335,7 +335,7 @@ struct RunContext {
     shared: InterpreterContext,
     /// The run's page, shared with every closure and every spawn the run
     /// makes.
-    page: Arc<InMemoryContext>,
+    page: Arc<dyn RuntimeContext>,
 }
 
 // -- Standalone helpers (extracted from Interpreter methods) ----------
@@ -892,16 +892,22 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
 pub struct Interpreter {
     shared: InterpreterContext,
     entry: QualifiedRef,
-    page: Arc<InMemoryContext>,
+    page: Arc<dyn RuntimeContext>,
     spawn_args: Vec<Value>,
 }
 
 impl Interpreter {
     pub fn new(shared: InterpreterContext, entry: QualifiedRef, page: InMemoryContext) -> Self {
+        Self::on_page(shared, entry, Arc::new(page))
+    }
+
+    /// An interpreter over a page the caller keeps a handle to: a space's
+    /// page, committed after the run (RFC-0033).
+    pub fn on_page(shared: InterpreterContext, entry: QualifiedRef, page: Arc<dyn RuntimeContext>) -> Self {
         Self {
             shared,
             entry,
-            page: Arc::new(page),
+            page,
             spawn_args: Vec::new(),
         }
     }
