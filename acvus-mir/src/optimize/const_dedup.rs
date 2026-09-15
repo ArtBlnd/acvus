@@ -199,6 +199,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_val(a, remap);
             remap_val(b, remap);
         }
+        InstKind::StringClone { src, .. } => remap_val(src, remap),
 
         InstKind::MakeObject { fields, .. } => {
             for (_, v) in fields.iter_mut() {

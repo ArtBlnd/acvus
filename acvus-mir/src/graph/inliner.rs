@@ -485,6 +485,10 @@ fn remap_inst(
             a: r(*a),
             b: r(*b),
         },
+        InstKind::StringClone { dst, src } => InstKind::StringClone {
+            dst: r(*dst),
+            src: r(*src),
+        },
         InstKind::MakeObject { dst, fields } => InstKind::MakeObject {
             dst: r(*dst),
             fields: fields.iter().map(|(name, v)| (*name, r(*v))).collect(),

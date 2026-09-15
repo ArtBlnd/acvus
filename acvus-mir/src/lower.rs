@@ -1534,7 +1534,8 @@ impl<'a> Lowerer<'a> {
                     }
                     return dst;
                 }
-                if let Some((qref, fn_ty)) = self.resolution.operator_calls.get(id).cloned() {
+                if let Some(call) = self.resolution.operator_calls.get(id).cloned() {
+                    let (qref, fn_ty) = (call.callee, call.ty);
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
                     let dst = self.alloc_expr(*id);
@@ -2005,6 +2006,23 @@ impl<'a> Lowerer<'a> {
         self.emit_assign(span, RefTarget::Through(reference), vec![], val);
     }
 
+    fn lower_intrinsic_call(
+        &mut self,
+        intrinsic: crate::typeck::Intrinsic,
+        args: &[Expr],
+        call_id: AstId,
+        call_span: Span,
+    ) -> ValueId {
+        match intrinsic {
+            crate::typeck::Intrinsic::StringClone => {
+                let src = self.lower_expr(&args[0]);
+                let dst = self.alloc_expr(call_id);
+                self.emit_inst(call_span, InstKind::StringClone { dst, src });
+                dst
+            }
+        }
+    }
+
     fn lower_func_call(
         &mut self,
         func: &Expr,
@@ -2013,6 +2031,9 @@ impl<'a> Lowerer<'a> {
         call_id: AstId,
         call_span: Span,
     ) -> ValueId {
+        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&func.id()).copied() {
+            return self.lower_intrinsic_call(intrinsic, args, call_id, call_span);
+        }
         let mut arg_regs: Vec<ValueId> =
             Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
         if let Some(left) = pipe_left {

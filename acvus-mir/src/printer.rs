@@ -450,6 +450,12 @@ fn write_body(
             }
 
             // Composite constructors
+            InstKind::StringClone { dst, src } => writeln!(
+                f,
+                "{} = string_clone {}",
+                vn.fmt_val(*dst),
+                vn.fmt_use(*src, &consts, &texts)
+            )?,
             InstKind::StringEq { dst, a, b } => writeln!(
                 f,
                 "{} = string_eq {} {}",

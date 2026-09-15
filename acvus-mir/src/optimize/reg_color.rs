@@ -579,6 +579,10 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(a);
             r(b);
         }
+        InstKind::StringClone { dst, src } => {
+            r(dst);
+            r(src);
+        }
         InstKind::MakeObject { dst, fields } => {
             r(dst);
             fields.iter_mut().for_each(|(_, v)| r(v));

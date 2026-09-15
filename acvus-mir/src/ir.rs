@@ -76,6 +76,11 @@ pub enum InstKind {
         a: ValueId,
         b: ValueId,
     },
+    /// A new `String` with the bytes of the one `src` names.
+    StringClone {
+        dst: ValueId,
+        src: ValueId,
+    },
 
     // -- Storage (RFC-0018) -----------------------------------------
     /// A reference to a storage: `dst` is a `&T` or `&mut T` naming the

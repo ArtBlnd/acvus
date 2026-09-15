@@ -39,6 +39,19 @@ struct BoundSite {
     span: Span,
 }
 
+/// A call that is an instruction of the language (RFC-0020).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Intrinsic {
+    StringClone,
+}
+
+/// An operator resolved to a shared signature (RFC-0020).
+#[derive(Debug, Clone)]
+pub struct OperatorCall<T> {
+    pub callee: QualifiedRef,
+    pub ty: T,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeResolution {
     pub type_map: TypeMap,
@@ -46,7 +59,8 @@ pub struct TypeResolution {
     /// Direct call resolution: callee AstId -> QualifiedRef.
     /// Only contains entries for calls resolved to named functions.
     pub direct_calls: DirectCallMap,
-    pub operator_calls: FxHashMap<AstId, (QualifiedRef, Ty)>,
+    pub operator_calls: FxHashMap<AstId, OperatorCall<Ty>>,
+    pub intrinsic_calls: FxHashMap<AstId, Intrinsic>,
     pub tail_ty: Ty,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
@@ -60,7 +74,8 @@ impl TypeResolution {
         type_map: TypeMap,
         coercion_map: CoercionMap,
         direct_calls: DirectCallMap,
-        operator_calls: FxHashMap<AstId, (QualifiedRef, Ty)>,
+        operator_calls: FxHashMap<AstId, OperatorCall<Ty>>,
+        intrinsic_calls: FxHashMap<AstId, Intrinsic>,
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
         effect: Effect,
@@ -71,6 +86,7 @@ impl TypeResolution {
             coercion_map,
             direct_calls,
             operator_calls,
+            intrinsic_calls,
             tail_ty,
             extern_params,
             effect,
@@ -123,7 +139,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     coercion_map: CoercionMap,
     /// Direct call resolutions (callee AstId -> QualifiedRef).
     direct_calls: DirectCallMap,
-    operator_calls: FxHashMap<AstId, (QualifiedRef, InferTy)>,
+    operator_calls: FxHashMap<AstId, OperatorCall<InferTy>>,
+    intrinsic_calls: FxHashMap<AstId, Intrinsic>,
     /// Accumulated errors.
     errors: Vec<MirError>,
     in_borrow_place: bool,
@@ -169,6 +186,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             coercion_map: CoercionMap::default(),
             direct_calls: DirectCallMap::default(),
             operator_calls: FxHashMap::default(),
+            intrinsic_calls: FxHashMap::default(),
             in_borrow_place: false,
             bound_sites: Vec::new(),
             errors: Vec::new(),
@@ -298,6 +316,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.coercion_map,
             self.direct_calls,
             operator_calls,
+            self.intrinsic_calls,
             Ty::String,
             extern_params,
             effect,
@@ -369,6 +388,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.coercion_map,
             self.direct_calls,
             operator_calls,
+            self.intrinsic_calls,
             frozen_tail,
             extern_params,
             effect,
@@ -652,12 +672,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.context_uses.entry(qref).or_insert(span);
     }
 
-    fn frozen_operator_calls(&self) -> FxHashMap<AstId, (QualifiedRef, Ty)> {
+    fn frozen_operator_calls(&self) -> FxHashMap<AstId, OperatorCall<Ty>> {
         self.operator_calls
             .iter()
-            .map(|(id, (qref, ty))| {
-                let resolved = self.solver.resolve_ty(ty);
-                (*id, (*qref, self.freeze_or_error(&resolved)))
+            .map(|(id, call)| {
+                let resolved = self.solver.resolve_ty(&call.ty);
+                let ty = self.freeze_or_error(&resolved);
+                (
+                    *id,
+                    OperatorCall {
+                        callee: call.callee,
+                        ty,
+                    },
+                )
             })
             .collect()
     }
@@ -703,6 +730,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// A call that is an instruction of the language (RFC-0020).
+    fn check_intrinsic_call(
+        &mut self,
+        qref: QualifiedRef,
+        func: &Expr,
+        args: &[Expr],
+        pipe_ty: Option<&InferTy>,
+    ) -> Option<InferTy> {
+        let core_clone =
+            QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("clone"));
+        if qref != core_clone || pipe_ty.is_some() || args.len() != 1 {
+            return None;
+        }
+        let arg_ty = self.check_expr(&args[0]);
+        let TyTerm::Ref(_, inner) = self.solver.resolve_ty(&arg_ty) else {
+            return None;
+        };
+        if !matches!(self.solver.resolve_ty(&inner), TyTerm::String) {
+            return None;
+        }
+        self.intrinsic_calls.insert(func.id(), Intrinsic::StringClone);
+        Some(TyTerm::String)
+    }
+
     /// An operator on a non-primitive is a call of its shared signature
     /// (RFC-0020).
     fn check_operator_call(
@@ -743,7 +794,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let effect = effect.clone();
         self.note_call_effect(&effect, span);
-        self.operator_calls.insert(id, (qref, fn_ty));
+        self.operator_calls.insert(id, OperatorCall { callee: qref, ty: fn_ty });
     }
 
     fn binop_error(&mut self, op: &'static str, left: InferTy, right: InferTy, span: Span) {
@@ -1987,6 +2038,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             crate::ty::FnLookup::Missing => None,
         };
         if let Some((resolved_qref, fn_sig)) = resolved {
+            if let Some(ty) = self.check_intrinsic_call(resolved_qref, func, args, pipe_ty.as_ref()) {
+                return ty;
+            }
             let fn_ty = self.instantiate_at(&fn_sig, call_span);
             let expected = Self::expected_arg_types(&fn_ty, pipe_ty.is_some());
             let arg_types: Vec<InferTy> = pipe_ty

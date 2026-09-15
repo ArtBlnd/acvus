@@ -69,3 +69,11 @@ fn string_concatenation_is_a_named_function() {
     let i = Interner::new();
     compile_script_ir(&i, r#"concat(&@role, &@role)"#, &string_context(&i, "role")).unwrap();
 }
+
+#[test]
+fn clone_of_a_string_is_a_string_clone() {
+    let i = Interner::new();
+    let ir = compile_script_ir(&i, "x = clone(&@role); x", &string_context(&i, "role")).unwrap();
+    assert!(ir.contains("string_clone"), "{ir}");
+    assert!(!ir.contains("call"), "{ir}");
+}

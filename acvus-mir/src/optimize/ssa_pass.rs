@@ -150,6 +150,7 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
             s(a);
             s(b);
         }
+        InstKind::StringClone { src, .. } => s(src),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
         InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::TupleIndex { tuple, .. } => s(tuple),

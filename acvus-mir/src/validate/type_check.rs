@@ -447,6 +447,25 @@ impl CheckCtx {
             }
 
             // === Constructors ===
+            InstKind::StringClone { dst, src } => {
+                let dst_ty = ty!(*dst);
+                self.assert_match(pc, span, "StringClone", "dst", &Ty::String, dst_ty, errors);
+                let src_ty = ty!(*src);
+                let expected = Ty::Ref(Mutability::Shared, Box::new(Ty::String));
+                let is_string_ref = matches!(src_ty, Ty::Ref(_, inner) if matches!(inner.as_ref(), Ty::String));
+                if !is_string_ref && !src_ty.is_error() {
+                    errors.push(ValidationError {
+                        scope: self.scope_name.clone(),
+                        inst_index: pc,
+                        span,
+                        kind: ValidationErrorKind::InvalidConstructor {
+                            inst_name: "StringClone".to_string(),
+                            expected_constructor: format!("{expected:?}"),
+                            actual: src_ty.clone(),
+                        },
+                    });
+                }
+            }
             InstKind::StringEq { dst, a, b } => {
                 let dst_ty = ty!(*dst);
                 self.assert_match(pc, span, "StringEq", "dst", &Ty::Bool, dst_ty, errors);

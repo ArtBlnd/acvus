@@ -450,6 +450,11 @@ async fn execute_inst(
         }
 
         // -- Constructors ---------------------------------
+        InstKind::StringClone { dst, src } => {
+            // SAFETY: the type checker admits only a live `&String` here.
+            let s = unsafe { frame.get(*src).target().as_str() };
+            frame.set(*dst, Value::string(s.to_string()));
+        }
         InstKind::StringEq { dst, a, b } => {
             // SAFETY: the type checker admits only live `&String`s here.
             let (a, b) = unsafe { (frame.get(*a).target().as_str(), frame.get(*b).target().as_str()) };
