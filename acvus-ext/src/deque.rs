@@ -7,9 +7,14 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    ExternError, ExternTypeDecl, Interner, PolyTy, PolyVars, QualifiedRef, Registry, Runtime,
-    TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry,
+    EffectVar, ExternError, ExternTypeDecl, IdentityVar, Interner, Lent, PolyTy, PolyVars,
+    QualifiedRef, Ref, Registry, Runtime, TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn,
+    extern_registry,
 };
+
+use crate::iter_pipeline::Iter;
+use crate::iterator::{lent_iter, sig};
+use crate::list::{List, list};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Deque<T>
@@ -208,8 +213,7 @@ where
 }
 
 /// Consumes the deque: an extern fn returns no reference and no clone of an
-/// erased `T` exists yet (RFC-0027), so an element cannot leave a borrowed
-/// deque.
+/// erased `T` exists yet, so an element cannot leave a borrowed deque.
 #[extern_fn(effect = pure)]
 fn deque_get<T, R>(_: &R, d: Deque<T>, index: i64) -> Result<T, ExternError>
 where
@@ -224,11 +228,47 @@ where
     Ok(d.items.into_iter().nth(i).expect("index checked against len"))
 }
 
+/// A deque demotes to a list: the record is dropped with the deque.
+#[extern_fn(instance_of = list, effect = pure)]
+#[extern_cast]
+fn list_deque<T, R>(_: &R, d: Deque<T>) -> List<T>
+where
+    T: TyVar,
+    R: Runtime,
+{
+    List(d.items.into())
+}
+
+#[extern_fn(instance_of = sig::into_iter, effect = pure)]
+fn into_iter_deque<T, E, I, Rt>(_: &Rt, d: Deque<T>) -> Iter<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    Iter::from_items(d.items.into())
+}
+
+#[extern_fn(instance_of = sig::as_iter, effect = pure)]
+fn as_iter_deque<T, E, I, Rt>(_: &Rt, d: Lent<Deque<T>, Rt>) -> Iter<Ref<T>, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    lent_iter(d, Deque::get)
+}
+
 pub fn deque_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
         types: [Deque<_>],
-        fns: [deque, push_front, push_back, pop_front, pop_back, deque_len, deque_get],
+        fns: [
+            deque, push_front, push_back, pop_front, pop_back, deque_len, deque_get,
+            list_deque, into_iter_deque, as_iter_deque,
+        ],
     }
 }
 

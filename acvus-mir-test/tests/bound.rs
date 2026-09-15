@@ -15,7 +15,8 @@ fn add_fn(i: &Interner) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern("add")),
         kind: FnKind::Extern {
-            bounds: vec![TyVarBound::OneOf(vec![Ty::Int, Ty::Float])],
+            bounds: vec![TyVarBound::OneOf(vec![TyTerm::Int, TyTerm::Float])],
+            instances: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![

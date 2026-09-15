@@ -5,8 +5,8 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, PolyTy, Ty, TyVarBound, TypeRegistry, UserDefinedDecl,
-    matches_poly, try_freeze_poly,
+    CastRule, Effect, EffectTerm, PolyTy, TyVarBound, TypeRegistry, UserDefinedDecl,
+    matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -99,9 +99,10 @@ pub enum CombineError {
         instance: QualifiedRef,
         signature: QualifiedRef,
     },
+    /// Two instances of one signature whose types unify (RFC-0027).
     DuplicateInstance {
         signature: QualifiedRef,
-        ty: Ty,
+        ty: PolyTy,
     },
     RequiredSignatureUnknown {
         function: QualifiedRef,
@@ -150,8 +151,9 @@ pub struct Externs<R: Runtime> {
 /// The instances collected for one signature.
 struct Collected<R: Runtime> {
     decl: SignatureDecl,
-    instance_types: Vec<Ty>,
+    instance_types: Vec<PolyTy>,
     instances: Vec<MonoInstance<R>>,
+    casts: Vec<CastRule>,
 }
 
 impl<R: Runtime> Externs<R> {
@@ -173,10 +175,11 @@ impl<R: Runtime> Externs<R> {
                 }
             }
         }
+        let mut plain_manifests = Vec::new();
         for c in contributions {
             let Contribution {
                 manifest,
-                mut handlers,
+                handlers,
             } = c;
             for decl in manifest.types {
                 types.register(decl);
@@ -188,10 +191,14 @@ impl<R: Runtime> Externs<R> {
                         decl: sig,
                         instance_types: Vec::new(),
                         instances: Vec::new(),
+                        casts: Vec::new(),
                     },
                 );
             }
-            for decl in manifest.fns {
+            plain_manifests.push((manifest.fns, handlers));
+        }
+        for (fns, mut handlers) in plain_manifests {
+            for decl in fns {
                 let handler = handlers
                     .remove(&decl.qref)
                     .unwrap_or_else(|| panic!("no handler for declared {:?}", decl.qref));
@@ -230,6 +237,7 @@ impl<R: Runtime> Externs<R> {
                 qref: decl.qref,
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
+                    instances: vec![],
                 },
                 ty: decl.ty,
             });
@@ -242,9 +250,15 @@ impl<R: Runtime> Externs<R> {
             if let Some(first) = bounds.first_mut() {
                 *first = meet(first, &c.instance_types);
             }
+            for cast in c.casts {
+                types.register_cast(cast);
+            }
             functions.push(Function {
                 qref: c.decl.qref,
-                kind: FnKind::Extern { bounds },
+                kind: FnKind::Extern {
+                    bounds,
+                    instances: c.instances.iter().map(|i| i.signature.clone()).collect(),
+                },
                 ty: c.decl.ty,
             });
             handlers.insert(
@@ -262,14 +276,12 @@ impl<R: Runtime> Externs<R> {
     }
 }
 
-/// The bound a variable keeps when it must also lie in `allowed`.
-fn meet(bound: &TyVarBound, allowed: &[Ty]) -> TyVarBound {
-    match bound {
-        TyVarBound::Any => TyVarBound::OneOf(allowed.to_vec()),
-        TyVarBound::OneOf(tys) => {
-            TyVarBound::OneOf(tys.iter().filter(|t| allowed.contains(t)).cloned().collect())
-        }
-    }
+/// The bound a variable keeps when it must also have one of the shapes in
+/// `allowed`.
+fn meet(bound: &TyVarBound, allowed: &[PolyTy]) -> TyVarBound {
+    bound
+        .meet(&TyVarBound::OneOf(allowed.to_vec()))
+        .unwrap_or(TyVarBound::OneOf(Vec::new()))
 }
 
 fn add_instance<R: Runtime>(
@@ -284,29 +296,29 @@ fn add_instance<R: Runtime>(
             instance: decl.qref,
             signature: sig,
         })?;
-    let concrete = try_freeze_poly(&decl.ty).ok_or(CombineError::InstanceMismatch {
+    let mismatch = || CombineError::InstanceMismatch {
         instance: decl.qref,
         signature: sig,
-    })?;
-    if !matches_poly(&concrete, &collected.decl.ty) {
-        return Err(CombineError::InstanceMismatch {
-            instance: decl.qref,
-            signature: sig,
-        });
+    };
+    if !matches_pattern(&decl.ty, &collected.decl.ty) {
+        return Err(mismatch());
     }
-    let ty = instance_type(&collected.decl.ty, &concrete).ok_or(CombineError::InstanceMismatch {
-        instance: decl.qref,
-        signature: sig,
-    })?;
-    if collected.instance_types.contains(&ty) {
+    let ty = instance_type(&collected.decl.ty, &decl.ty).ok_or_else(mismatch)?;
+    if collected
+        .instance_types
+        .iter()
+        .any(|existing| unify_patterns(existing, &ty).is_some())
+    {
         return Err(CombineError::DuplicateInstance { signature: sig, ty });
     }
     let ExternEntry::Single(handler) = handler else {
-        return Err(CombineError::InstanceMismatch {
-            instance: decl.qref,
-            signature: sig,
-        });
+        return Err(mismatch());
     };
+    if decl.cast {
+        let mut rule = cast_rule(&decl)?;
+        rule.fn_ref = sig;
+        collected.casts.push(rule);
+    }
     collected.instance_types.push(ty);
     collected.instances.push(MonoInstance {
         signature: decl.ty,
@@ -315,16 +327,17 @@ fn add_instance<R: Runtime>(
     Ok(())
 }
 
-/// The type the signature's first variable takes in `concrete`: read off
+/// The type the signature's first variable takes in `instance`: read off
 /// the first parameter whose declared type is that variable, bare or
 /// behind a reference.
-fn instance_type(signature: &PolyTy, concrete: &Ty) -> Option<Ty> {
-    let (PolyTy::Fn { params: sp, .. }, Ty::Fn { params: cp, .. }) = (signature, concrete) else {
+fn instance_type(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
+    let (PolyTy::Fn { params: sp, .. }, PolyTy::Fn { params: ip, .. }) = (signature, instance)
+    else {
         return None;
     };
-    sp.iter().zip(cp).find_map(|(s, c)| match (&s.ty, &c.ty) {
+    sp.iter().zip(ip).find_map(|(s, i)| match (&s.ty, &i.ty) {
         (PolyTy::Var(0), t) => Some(t.clone()),
-        (PolyTy::Ref(_, inner), Ty::Ref(_, t)) if matches!(**inner, PolyTy::Var(0)) => {
+        (PolyTy::Ref(_, inner), PolyTy::Ref(_, t)) if matches!(**inner, PolyTy::Var(0)) => {
             Some((**t).clone())
         }
         _ => None,

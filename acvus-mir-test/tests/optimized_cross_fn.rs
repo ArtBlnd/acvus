@@ -25,7 +25,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
         .collect();
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: infer_params,
             ret: Box::new(lift_to_poly(&ret)),

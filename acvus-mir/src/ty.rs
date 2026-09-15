@@ -25,24 +25,28 @@ pub struct UserDefinedDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TyVarBound {
     Any,
-    /// The variable resolves to one of these concrete types.
-    OneOf(Vec<Ty>),
+    /// The variable resolves to a type of one of these shapes (RFC-0027).
+    OneOf(Vec<PolyTy>),
 }
 
 impl TyVarBound {
     pub fn admits(&self, ty: &Ty) -> bool {
         match self {
             Self::Any => true,
-            Self::OneOf(tys) => tys.contains(ty),
+            Self::OneOf(shapes) => shapes.iter().any(|s| matches_poly(ty, s)),
         }
     }
 
-    /// The bound both sides satisfy; `None` when no type does.
+    /// The bound both sides satisfy: the pairwise unifiers of their shapes.
+    /// `None` when no type does.
     pub fn meet(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (Self::Any, b) | (b, Self::Any) => Some(b.clone()),
             (Self::OneOf(a), Self::OneOf(b)) => {
-                let both: Vec<Ty> = a.iter().filter(|t| b.contains(t)).cloned().collect();
+                let both: Vec<PolyTy> = a
+                    .iter()
+                    .flat_map(|x| b.iter().filter_map(move |y| unify_patterns(x, y)))
+                    .collect();
                 if both.is_empty() {
                     None
                 } else {
@@ -55,10 +59,13 @@ impl TyVarBound {
 
 /// A polymorphic type with the bounds its variables were declared with.
 /// Variable `i` of `ty` has bound `bounds[i]`; a missing entry is `Any`.
+/// A shared signature also carries the types of its instances; the solver
+/// settles each instantiation on one of them (RFC-0027).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: PolyTy,
     pub bounds: Vec<TyVarBound>,
+    pub instances: Vec<PolyTy>,
 }
 
 impl Scheme {
@@ -66,6 +73,7 @@ impl Scheme {
         Self {
             ty,
             bounds: Vec::new(),
+            instances: Vec::new(),
         }
     }
 
@@ -77,53 +85,103 @@ impl Scheme {
     }
 }
 
-/// Whether a concrete type has the shape of a polymorphic pattern. A
-/// pattern variable stands for any one type, the same type wherever it
-/// recurs; effect and length variables stand for any effect or length.
+/// Whether a concrete type has the shape of a polymorphic pattern.
 pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
-    fn effect_matches(effect: &EffectTerm<Concrete>, pattern: &EffectTerm<Poly>) -> bool {
-        match pattern {
-            EffectTerm::Known(p) => *effect == EffectTerm::Known(p.clone()),
-            EffectTerm::Var(_) => true,
+    matches_pattern(ty, pattern)
+}
+
+/// Whether a type has the shape of a polymorphic pattern. A pattern
+/// variable stands for any one term, the same term wherever it recurs;
+/// effect, length, and identity variables of the pattern stand for any
+/// effect, length, or identity. A variable of `ty` matches only a pattern
+/// variable: the pattern is the more general of the two.
+pub fn matches_pattern<P>(ty: &TyTerm<P>, pattern: &PolyTy) -> bool
+where
+    P: Phase + PartialEq,
+{
+    matches_pattern_with(ty, pattern, Unknowns::Fixed)
+}
+
+/// Whether a type whose variables are still open could have the shape of
+/// a pattern.
+pub fn could_match_pattern<P>(ty: &TyTerm<P>, pattern: &PolyTy) -> bool
+where
+    P: Phase + PartialEq,
+{
+    matches_pattern_with(ty, pattern, Unknowns::Open)
+}
+
+/// What a variable of the matched type stands for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unknowns {
+    /// One term, not yet named: it matches only a pattern variable.
+    Fixed,
+    /// Anything: it matches every pattern.
+    Open,
+}
+
+fn matches_pattern_with<P>(ty: &TyTerm<P>, pattern: &PolyTy, unknowns: Unknowns) -> bool
+where
+    P: Phase + PartialEq,
+{
+    fn effect_matches<P>(effect: &EffectTerm<P>, pattern: &EffectTerm<Poly>, unknowns: Unknowns) -> bool
+    where
+        P: Phase + PartialEq,
+    {
+        match (effect, pattern) {
+            (_, EffectTerm::Var(_)) => true,
+            (EffectTerm::Var(_), _) => unknowns == Unknowns::Open,
+            (EffectTerm::Known(e), EffectTerm::Known(p)) => e == p,
         }
     }
-    fn go(ty: &Ty, pat: &PolyTy, seen: &mut FxHashMap<u32, Ty>) -> bool {
+    fn go<P>(
+        ty: &TyTerm<P>,
+        pat: &PolyTy,
+        seen: &mut FxHashMap<u32, TyTerm<P>>,
+        unknowns: Unknowns,
+    ) -> bool
+    where
+        P: Phase + PartialEq,
+    {
+        let open = |t: &TyTerm<P>| unknowns == Unknowns::Open && matches!(t, TyTerm::Var(_));
         match (ty, pat) {
             (_, TyTerm::Var(v)) => match seen.get(v) {
-                Some(bound) => bound == ty,
+                Some(bound) => bound == ty || open(bound) || open(ty),
                 None => {
                     seen.insert(*v, ty.clone());
                     true
                 }
             },
-            (Ty::Int, TyTerm::Int)
-            | (Ty::Float, TyTerm::Float)
-            | (Ty::String, TyTerm::String)
-            | (Ty::Bool, TyTerm::Bool)
-            | (Ty::Unit, TyTerm::Unit)
-            | (Ty::Order, TyTerm::Order)
-            | (Ty::Byte, TyTerm::Byte) => true,
-            (Ty::Array(e, n), TyTerm::Array(pe, pn)) => {
-                let len_ok = match pn {
-                    LenTerm::Known(k) => *n == LenTerm::Known(*k),
-                    LenTerm::Var(_) => true,
+            (TyTerm::Var(_), _) => unknowns == Unknowns::Open,
+            (TyTerm::Int, TyTerm::Int)
+            | (TyTerm::Float, TyTerm::Float)
+            | (TyTerm::String, TyTerm::String)
+            | (TyTerm::Bool, TyTerm::Bool)
+            | (TyTerm::Unit, TyTerm::Unit)
+            | (TyTerm::Order, TyTerm::Order)
+            | (TyTerm::Byte, TyTerm::Byte) => true,
+            (TyTerm::Array(e, n), TyTerm::Array(pe, pn)) => {
+                let len_ok = match (n, pn) {
+                    (_, LenTerm::Var(_)) => true,
+                    (LenTerm::Var(_), _) => unknowns == Unknowns::Open,
+                    (LenTerm::Known(n), LenTerm::Known(k)) => n == k,
                 };
-                len_ok && go(e, pe, seen)
+                len_ok && go(e, pe, seen, unknowns)
             }
-            (Ty::Option(i), TyTerm::Option(pi)) => go(i, pi, seen),
-            (Ty::Handle(i), TyTerm::Handle(pi)) => go(i, pi, seen),
-            (Ty::Ref(m, i), TyTerm::Ref(pm, pi)) => m == pm && go(i, pi, seen),
-            (Ty::Tuple(es), TyTerm::Tuple(ps)) => {
-                es.len() == ps.len() && es.iter().zip(ps).all(|(e, p)| go(e, p, seen))
+            (TyTerm::Option(i), TyTerm::Option(pi)) => go(i, pi, seen, unknowns),
+            (TyTerm::Handle(i), TyTerm::Handle(pi)) => go(i, pi, seen, unknowns),
+            (TyTerm::Ref(m, i), TyTerm::Ref(pm, pi)) => m == pm && go(i, pi, seen, unknowns),
+            (TyTerm::Tuple(es), TyTerm::Tuple(ps)) => {
+                es.len() == ps.len() && es.iter().zip(ps).all(|(e, p)| go(e, p, seen, unknowns))
             }
-            (Ty::Object(fs), TyTerm::Object(pfs)) => {
+            (TyTerm::Object(fs), TyTerm::Object(pfs)) => {
                 fs.len() == pfs.len()
                     && fs
                         .iter()
-                        .all(|(k, v)| pfs.get(k).is_some_and(|pv| go(v, pv, seen)))
+                        .all(|(k, v)| pfs.get(k).is_some_and(|pv| go(v, pv, seen, unknowns)))
             }
             (
-                Ty::Fn {
+                TyTerm::Fn {
                     params,
                     ret,
                     effect,
@@ -137,15 +195,15 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
                 },
             ) => {
                 params.len() == pp.len()
-                    && effect_matches(effect, pe)
+                    && effect_matches(effect, pe, unknowns)
                     && params
                         .iter()
                         .zip(pp)
-                        .all(|(a, b)| go(&a.ty, &b.ty, seen))
-                    && go(ret, pr, seen)
+                        .all(|(a, b)| go(&a.ty, &b.ty, seen, unknowns))
+                    && go(ret, pr, seen, unknowns)
             }
             (
-                Ty::UserDefined {
+                TyTerm::UserDefined {
                     id,
                     type_args,
                     effect_args,
@@ -165,15 +223,16 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
                     && effect_args
                         .iter()
                         .zip(peffects)
-                        .all(|(a, b)| effect_matches(a, b))
-                    && identity_args.iter().zip(pidentities).all(|(a, b)| match b {
-                        IdentityTerm::Known(k) => *a == IdentityTerm::Known(*k),
-                        IdentityTerm::Var(_) => true,
+                        .all(|(a, b)| effect_matches(a, b, unknowns))
+                    && identity_args.iter().zip(pidentities).all(|(a, b)| match (a, b) {
+                        (_, IdentityTerm::Var(_)) => true,
+                        (IdentityTerm::Var(_), _) => unknowns == Unknowns::Open,
+                        (IdentityTerm::Known(a), IdentityTerm::Known(k)) => a == k,
                     })
-                    && type_args.iter().zip(pargs).all(|(a, b)| go(a, b, seen))
+                    && type_args.iter().zip(pargs).all(|(a, b)| go(a, b, seen, unknowns))
             }
             (
-                Ty::Enum { name, variants },
+                TyTerm::Enum { name, variants },
                 TyTerm::Enum {
                     name: pn,
                     variants: pv,
@@ -182,7 +241,7 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
                 name == pn
                     && variants.len() == pv.len()
                     && variants.iter().all(|(k, v)| match (v, pv.get(k)) {
-                        (Some(v), Some(Some(p))) => go(v, p, seen),
+                        (Some(v), Some(Some(p))) => go(v, p, seen, unknowns),
                         (None, Some(None)) => true,
                         _ => false,
                     })
@@ -190,7 +249,251 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
             _ => false,
         }
     }
-    go(ty, pattern, &mut FxHashMap::default())
+    go(ty, pattern, &mut FxHashMap::default(), unknowns)
+}
+
+// -- Pattern unification ----------------------------------------------
+
+/// The variables of a pattern, numbered per kind, as the one past the
+/// highest of each.
+#[derive(Default, Clone, Copy)]
+struct VarSpan {
+    ty: u32,
+    identity: u32,
+    effect: u32,
+    len: u32,
+}
+
+fn var_span(pattern: &PolyTy) -> VarSpan {
+    let mut span = VarSpan::default();
+    let _ = pattern.map::<Poly>(
+        &mut |v| {
+            span.ty = span.ty.max(v + 1);
+            TyTerm::Var(v)
+        },
+        &mut |v| {
+            span.identity = span.identity.max(v + 1);
+            IdentityTerm::Var(v)
+        },
+        &mut |v| {
+            span.effect = span.effect.max(v + 1);
+            EffectTerm::Var(v)
+        },
+        &mut |v| {
+            span.len = span.len.max(v + 1);
+            LenTerm::Var(v)
+        },
+    );
+    span
+}
+
+fn shift_vars(pattern: &PolyTy, by: VarSpan) -> PolyTy {
+    pattern.map::<Poly>(
+        &mut |v| TyTerm::Var(v + by.ty),
+        &mut |v| IdentityTerm::Var(v + by.identity),
+        &mut |v| EffectTerm::Var(v + by.effect),
+        &mut |v| LenTerm::Var(v + by.len),
+    )
+}
+
+#[derive(Default)]
+struct PatternSubst {
+    ty: FxHashMap<u32, PolyTy>,
+    identity: FxHashMap<u32, IdentityTerm<Poly>>,
+    effect: FxHashMap<u32, EffectTerm<Poly>>,
+    len: FxHashMap<u32, LenTerm<Poly>>,
+}
+
+impl PatternSubst {
+    fn walk(&self, t: &PolyTy) -> PolyTy {
+        match t {
+            TyTerm::Var(v) => match self.ty.get(v) {
+                Some(bound) => self.walk(bound),
+                None => t.clone(),
+            },
+            other => other.clone(),
+        }
+    }
+
+    fn occurs(&self, v: u32, t: &PolyTy) -> bool {
+        let mut found = false;
+        let _ = t.map::<Poly>(
+            &mut |x| {
+                if x == v || self.ty.get(&x).is_some_and(|b| self.occurs(v, b)) {
+                    found = true;
+                }
+                TyTerm::Var(x)
+            },
+            &mut IdentityTerm::Var,
+            &mut EffectTerm::Var,
+            &mut LenTerm::Var,
+        );
+        found
+    }
+
+    fn unify_effect(&mut self, a: &EffectTerm<Poly>, b: &EffectTerm<Poly>) -> bool {
+        let resolve = |s: &Self, e: &EffectTerm<Poly>| match e {
+            EffectTerm::Var(v) => s.effect.get(v).cloned().unwrap_or(e.clone()),
+            known => known.clone(),
+        };
+        match (resolve(self, a), resolve(self, b)) {
+            (EffectTerm::Known(x), EffectTerm::Known(y)) => x == y,
+            (EffectTerm::Var(x), EffectTerm::Var(y)) if x == y => true,
+            (EffectTerm::Var(v), other) | (other, EffectTerm::Var(v)) => {
+                self.effect.insert(v, other);
+                true
+            }
+        }
+    }
+
+    fn unify_len(&mut self, a: &LenTerm<Poly>, b: &LenTerm<Poly>) -> bool {
+        let resolve = |s: &Self, l: &LenTerm<Poly>| match l {
+            LenTerm::Var(v) => s.len.get(v).copied().unwrap_or(*l),
+            known => *known,
+        };
+        match (resolve(self, a), resolve(self, b)) {
+            (LenTerm::Known(x), LenTerm::Known(y)) => x == y,
+            (LenTerm::Var(x), LenTerm::Var(y)) if x == y => true,
+            (LenTerm::Var(v), other) | (other, LenTerm::Var(v)) => {
+                self.len.insert(v, other);
+                true
+            }
+        }
+    }
+
+    fn unify_identity(&mut self, a: &IdentityTerm<Poly>, b: &IdentityTerm<Poly>) -> bool {
+        let resolve = |s: &Self, i: &IdentityTerm<Poly>| match i {
+            IdentityTerm::Var(v) => s.identity.get(v).copied().unwrap_or(*i),
+            known => *known,
+        };
+        match (resolve(self, a), resolve(self, b)) {
+            (IdentityTerm::Known(x), IdentityTerm::Known(y)) => x == y,
+            (IdentityTerm::Var(x), IdentityTerm::Var(y)) if x == y => true,
+            (IdentityTerm::Var(v), other) | (other, IdentityTerm::Var(v)) => {
+                self.identity.insert(v, other);
+                true
+            }
+        }
+    }
+
+    fn unify(&mut self, a: &PolyTy, b: &PolyTy) -> bool {
+        let (a, b) = (self.walk(a), self.walk(b));
+        match (&a, &b) {
+            (TyTerm::Var(x), TyTerm::Var(y)) if x == y => true,
+            (TyTerm::Var(v), other) | (other, TyTerm::Var(v)) => {
+                if self.occurs(*v, other) {
+                    return false;
+                }
+                self.ty.insert(*v, other.clone());
+                true
+            }
+            (TyTerm::Int, TyTerm::Int)
+            | (TyTerm::Float, TyTerm::Float)
+            | (TyTerm::String, TyTerm::String)
+            | (TyTerm::Bool, TyTerm::Bool)
+            | (TyTerm::Unit, TyTerm::Unit)
+            | (TyTerm::Order, TyTerm::Order)
+            | (TyTerm::Byte, TyTerm::Byte) => true,
+            (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => false,
+            (TyTerm::Array(ea, la), TyTerm::Array(eb, lb)) => {
+                self.unify_len(la, lb) && self.unify(ea, eb)
+            }
+            (TyTerm::Option(ia), TyTerm::Option(ib))
+            | (TyTerm::Handle(ia), TyTerm::Handle(ib)) => self.unify(ia, ib),
+            (TyTerm::Ref(ma, ia), TyTerm::Ref(mb, ib)) => ma == mb && self.unify(ia, ib),
+            (TyTerm::Tuple(ea), TyTerm::Tuple(eb)) => {
+                ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| self.unify(x, y))
+            }
+            (TyTerm::Object(fa), TyTerm::Object(fb)) => {
+                fa.len() == fb.len()
+                    && fa
+                        .iter()
+                        .all(|(k, v)| fb.get(k).is_some_and(|w| self.unify(v, w)))
+            }
+            (
+                TyTerm::Fn {
+                    params: pa,
+                    ret: ra,
+                    captures: ca,
+                    effect: ea,
+                },
+                TyTerm::Fn {
+                    params: pb,
+                    ret: rb,
+                    captures: cb,
+                    effect: eb,
+                },
+            ) => {
+                pa.len() == pb.len()
+                    && ca.len() == cb.len()
+                    && self.unify_effect(ea, eb)
+                    && pa.iter().zip(pb).all(|(x, y)| self.unify(&x.ty, &y.ty))
+                    && ca.iter().zip(cb).all(|(x, y)| self.unify(x, y))
+                    && self.unify(ra, rb)
+            }
+            (
+                TyTerm::UserDefined {
+                    id: ia,
+                    type_args: ta,
+                    effect_args: ea,
+                    identity_args: na,
+                },
+                TyTerm::UserDefined {
+                    id: ib,
+                    type_args: tb,
+                    effect_args: eb,
+                    identity_args: nb,
+                },
+            ) => {
+                ia == ib
+                    && ta.len() == tb.len()
+                    && ea.len() == eb.len()
+                    && na.len() == nb.len()
+                    && ea.iter().zip(eb).all(|(x, y)| self.unify_effect(x, y))
+                    && na.iter().zip(nb).all(|(x, y)| self.unify_identity(x, y))
+                    && ta.iter().zip(tb).all(|(x, y)| self.unify(x, y))
+            }
+            (
+                TyTerm::Enum {
+                    name: na,
+                    variants: va,
+                },
+                TyTerm::Enum {
+                    name: nb,
+                    variants: vb,
+                },
+            ) => {
+                na == nb
+                    && va.len() == vb.len()
+                    && va.iter().all(|(k, v)| match (v, vb.get(k)) {
+                        (Some(v), Some(Some(w))) => self.unify(v, w),
+                        (None, Some(None)) => true,
+                        _ => false,
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    fn apply(&self, t: &PolyTy) -> PolyTy {
+        t.map::<Poly>(
+            &mut |v| match self.ty.get(&v) {
+                Some(bound) => self.apply(bound),
+                None => TyTerm::Var(v),
+            },
+            &mut |v| self.identity.get(&v).copied().unwrap_or(IdentityTerm::Var(v)),
+            &mut |v| self.effect.get(&v).cloned().unwrap_or(EffectTerm::Var(v)),
+            &mut |v| self.len.get(&v).copied().unwrap_or(LenTerm::Var(v)),
+        )
+    }
+}
+
+/// The most general pattern that has the shape of both, with the two
+/// patterns' variables kept apart; `None` when no type has.
+pub fn unify_patterns(a: &PolyTy, b: &PolyTy) -> Option<PolyTy> {
+    let b = shift_vars(b, var_span(a));
+    let mut subst = PatternSubst::default();
+    subst.unify(a, &b).then(|| subst.apply(a))
 }
 
 /// Immutable registry of all UserDefined type declarations and ExternCast rules.
@@ -742,28 +1045,55 @@ impl TyTerm<Concrete> {
             Ty::Var(v) => match *v {},
         }
     }
+}
 
-    pub fn display<'a>(&'a self, interner: &'a Interner) -> TyDisplay<'a> {
+impl<V> TyTerm<V>
+where
+    V: Phase,
+{
+    pub fn display<'a>(&'a self, interner: &'a Interner) -> TyDisplay<'a, V> {
         TyDisplay { ty: self, interner }
     }
 }
 
-pub struct TyDisplay<'a> {
-    ty: &'a Ty,
+pub struct TyDisplay<'a, V>
+where
+    V: Phase,
+{
+    ty: &'a TyTerm<V>,
     interner: &'a Interner,
 }
 
-impl<'a> fmt::Display for TyDisplay<'a> {
+/// A variable of a displayed type: `'n` for the n-th of its kind.
+struct VarDisplay<T>(T);
+
+impl<T> fmt::Display for VarDisplay<T>
+where
+    T: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'{}", self.0)
+    }
+}
+
+impl<'a, V> fmt::Display for TyDisplay<'a, V>
+where
+    V: Phase,
+    V::TyVar: fmt::Display,
+    V::EffectVar: fmt::Display,
+    V::LenVar: fmt::Display,
+    V::IdentityVar: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.ty {
-            Ty::Int => write!(f, "Int"),
-            Ty::Order => write!(f, "Order"),
-            Ty::Float => write!(f, "Float"),
-            Ty::String => write!(f, "String"),
-            Ty::Bool => write!(f, "Bool"),
-            Ty::Unit => write!(f, "Unit"),
-            Ty::Byte => write!(f, "Byte"),
-            Ty::Object(fields) => {
+            TyTerm::Int => write!(f, "Int"),
+            TyTerm::Order => write!(f, "Order"),
+            TyTerm::Float => write!(f, "Float"),
+            TyTerm::String => write!(f, "String"),
+            TyTerm::Bool => write!(f, "Bool"),
+            TyTerm::Unit => write!(f, "Unit"),
+            TyTerm::Byte => write!(f, "Byte"),
+            TyTerm::Object(fields) => {
                 let mut sorted: Vec<_> = fields.iter().collect();
                 sorted.sort_by_key(|(k, _)| self.interner.resolve(**k).to_string());
                 write!(f, "{{")?;
@@ -780,7 +1110,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 write!(f, "}}")
             }
-            Ty::Tuple(elems) => {
+            TyTerm::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, e) in elems.iter().enumerate() {
                     if i > 0 {
@@ -790,7 +1120,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 write!(f, ")")
             }
-            Ty::Fn {
+            TyTerm::Fn {
                 params,
                 ret,
                 captures: _,
@@ -804,7 +1134,10 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     write!(f, "{}", p.ty.display(self.interner))?;
                 }
                 write!(f, ") -> {}", ret.display(self.interner))?;
-                let effect = effect.get();
+                let effect = match effect {
+                    EffectTerm::Known(effect) => effect,
+                    EffectTerm::Var(v) => return write!(f, " with {}", VarDisplay(v)),
+                };
                 if effect.is_empty() {
                     return Ok(());
                 }
@@ -827,14 +1160,18 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 }
                 Ok(())
             }
-            Ty::Array(inner, len) => {
-                write!(f, "Array<{}, {}>", inner.display(self.interner), len.get())
+            TyTerm::Array(inner, len) => {
+                write!(f, "Array<{}, ", inner.display(self.interner))?;
+                match len {
+                    LenTerm::Known(n) => write!(f, "{n}>"),
+                    LenTerm::Var(v) => write!(f, "{}>", VarDisplay(v)),
+                }
             }
-            Ty::Handle(inner) => {
+            TyTerm::Handle(inner) => {
                 write!(f, "Handle<{}>", inner.display(self.interner))
             }
-            Ty::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
-            Ty::UserDefined {
+            TyTerm::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
+            TyTerm::UserDefined {
                 id,
                 type_args,
                 effect_args,
@@ -857,28 +1194,38 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                             write!(f, ", ")?;
                         }
                         first = false;
-                        write!(f, "{}", arg.get())?;
+                        match arg {
+                            EffectTerm::Known(e) => write!(f, "{e}")?,
+                            EffectTerm::Var(v) => write!(f, "{}", VarDisplay(v))?,
+                        }
                     }
                     for arg in identity_args {
                         if !first {
                             write!(f, ", ")?;
                         }
                         first = false;
-                        write!(f, "#{:?}", arg.get())?;
+                        match arg {
+                            IdentityTerm::Known(id) => write!(f, "#{id:?}")?,
+                            IdentityTerm::Var(v) => write!(f, "#{}", VarDisplay(v))?,
+                        }
                     }
                     write!(f, ">")?;
                 }
                 Ok(())
             }
-            Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
-            Ty::Ref(m, inner) => write!(f, "{}{}", m.prefix(), inner.display(self.interner)),
-            Ty::Error(_) => write!(f, "<error>"),
-            Ty::Var(v) => match *v {},
+            TyTerm::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
+            TyTerm::Ref(m, inner) => write!(f, "{}{}", m.prefix(), inner.display(self.interner)),
+            TyTerm::Error(_) => write!(f, "<error>"),
+            TyTerm::Var(v) => write!(f, "{}", VarDisplay(v)),
         }
     }
 }
 
-impl<'a> fmt::Debug for TyDisplay<'a> {
+impl<'a, V> fmt::Debug for TyDisplay<'a, V>
+where
+    V: Phase,
+    TyDisplay<'a, V>: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }

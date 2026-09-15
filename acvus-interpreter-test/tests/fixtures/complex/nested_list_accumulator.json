@@ -1,7 +1,20 @@
 {
-  "template": "{{ result = @matrix | into_iter | flatten_arrays | fold(0, |acc, x| -> acc + x) }}{{ result | to_string }}",
+  "template": "{{ result = as_iter(&@matrix) | flat_map(|row| -> collect(as_iter(row))) | fold(0, |acc, x| -> acc + *x) }}{{ result | to_string }}",
   "context": {
-    "matrix": [[1, 2], [3, 4], [5, 6]]
+    "matrix": [
+      [
+        1,
+        2
+      ],
+      [
+        3,
+        4
+      ],
+      [
+        5,
+        6
+      ]
+    ]
   },
   "expected": "21"
 }

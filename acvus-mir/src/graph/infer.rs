@@ -450,25 +450,37 @@ pub struct SccInferResult {
 ///
 /// `resolved_fn_types`: all function types already resolved by prior SCCs + builtins.
 /// `known_ctx`: declared context types from the graph.
-/// The bounds every Extern in `functions` declared for its type variables.
+/// The declaration of every Extern in `functions`.
 pub fn declared_bounds<'a>(
     functions: impl Iterator<Item = &'a Function>,
-) -> FxHashMap<QualifiedRef, Vec<TyVarBound>> {
+) -> FxHashMap<QualifiedRef, Declared> {
     functions
         .filter_map(|f| match &f.kind {
-            FnKind::Extern { bounds } => Some((f.qref, bounds.clone())),
+            FnKind::Extern { bounds, instances } => Some((
+                f.qref,
+                Declared {
+                    bounds: bounds.clone(),
+                    instances: instances.clone(),
+                },
+            )),
             FnKind::Local(_) => None,
         })
         .collect()
 }
 
-/// The scheme a function's type is instantiated under: its declared bounds
-/// when it is an Extern, none otherwise.
-fn declared_scheme(bounds: Option<&Vec<TyVarBound>>, ty: PolyTy) -> Scheme {
-    match bounds {
-        Some(bounds) => Scheme {
+pub struct Declared {
+    pub bounds: Vec<TyVarBound>,
+    pub instances: Vec<PolyTy>,
+}
+
+/// The scheme a function's type is instantiated under: its declaration
+/// when it is an Extern, the bare type otherwise.
+fn declared_scheme(declared: Option<&Declared>, ty: PolyTy) -> Scheme {
+    match declared {
+        Some(declared) => Scheme {
             ty,
-            bounds: bounds.clone(),
+            bounds: declared.bounds.clone(),
+            instances: declared.instances.clone(),
         },
         None => Scheme::unbounded(ty),
     }
@@ -481,7 +493,7 @@ pub fn infer_scc(
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
     known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
-    declared: &FxHashMap<QualifiedRef, Vec<TyVarBound>>,
+    declared: &FxHashMap<QualifiedRef, Declared>,
     sources: &mut Sources,
 ) -> SccInferResult {
     let mut solver = Solver::new(sources);
@@ -1257,7 +1269,7 @@ mod tests {
             .collect();
         Function {
             qref: QualifiedRef::root(interner.intern(name)),
-            kind: FnKind::Extern { bounds: vec![] },
+            kind: FnKind::Extern { bounds: vec![], instances: vec![] },
             ty: TyTerm::Fn {
                 params: named_params,
                 ret: Box::new(lift_to_poly(&ret)),

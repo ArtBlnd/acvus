@@ -2,9 +2,18 @@
 //! the runtime boundary whole.
 
 use acvus_extern::{
-    Arr, Registry, ExternTypeDecl, Interner, LenVar, PolyTy, PolyVars, QualifiedRef, Runtime,
-    TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry,
+    Arr, ExternTypeDecl, Interner, LenVar, PolyTy, PolyVars, QualifiedRef, Registry, Runtime,
+    TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry, extern_signature,
 };
+
+// A container demotes to a list (RFC-0027).
+extern_signature! {
+    ns: "std",
+    fn list<C, T>(items: C) -> List<T>
+    where
+        C: TyVar,
+        T: TyVar;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct List<T>(pub Vec<T>)
@@ -61,28 +70,28 @@ pub fn list_ty(interner: &Interner, elem: acvus_mir::ty::Ty) -> acvus_mir::ty::T
 }
 
 #[extern_fn(effect = pure)]
-fn len<T, R>(_: &R, list: List<T>) -> i64
+fn len<T, R>(_: &R, items: List<T>) -> i64
 where
     T: TyVar,
     R: Runtime,
 {
-    list.0.len() as i64
+    items.0.len() as i64
 }
 
 #[extern_fn(effect = pure)]
-fn reverse<T, R>(_: &R, list: List<T>) -> List<T>
+fn reverse<T, R>(_: &R, items: List<T>) -> List<T>
 where
     T: TyVar,
     R: Runtime,
 {
-    let mut items = list.0;
+    let mut items = items.0;
     items.reverse();
     List(items)
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(instance_of = list, effect = pure)]
 #[extern_cast]
-fn list<T, N, R>(_: &R, items: Arr<T, N>) -> List<T>
+fn list_array<T, N, R>(_: &R, items: Arr<T, N>) -> List<T>
 where
     T: TyVar,
     N: LenVar,
@@ -95,6 +104,7 @@ pub fn list_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
         types: [List<_>],
-        fns: [len, reverse, list],
+        signatures: [list],
+        fns: [len, reverse, list_array],
     }
 }

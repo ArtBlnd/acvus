@@ -320,10 +320,7 @@ impl Vars {
                 None => quote! { ::acvus_extern::TyVarBound::Any },
                 Some(members) => quote! {
                     ::acvus_extern::TyVarBound::OneOf(vec![#(
-                        ::acvus_extern::try_freeze_poly(
-                            &<#members as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
-                        )
-                        .expect("Monomorphize members are concrete types")
+                        <#members as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)
                     ),*])
                 },
             })

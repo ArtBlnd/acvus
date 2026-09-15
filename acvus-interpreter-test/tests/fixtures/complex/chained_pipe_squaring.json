@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = iter_array(&@nums) | map(|n| -> *n) | filter(|n| -> *n > 0 && *n < 10) | map(|n| -> n * n) | collect }}{{ x | map(|i| -> (i | to_string)) | collect | join(\", \") }}",
+  "template": "{{ x = as_iter(&@nums) | map(|n| -> *n) | filter(|n| -> *n > 0 && *n < 10) | map(|n| -> n * n) | collect }}{{ x | map(|i| -> (i | to_string)) | collect | join(\", \") }}",
   "context": { "nums": [-5, 0, 3, 7, 12, 20] },
   "expected": "9, 49"
 }

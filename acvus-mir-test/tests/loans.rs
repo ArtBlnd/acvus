@@ -14,7 +14,7 @@ fn bump(i: &Interner, effect: Effect) -> Function {
     ];
     Function {
         qref: QualifiedRef::root(i.intern("bump")),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: params
                 .iter()

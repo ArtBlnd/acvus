@@ -597,20 +597,26 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
             .collect(),
     );
     let eq_fn = reg.functions.iter().find(|f| f.qref == qref(&i, "eq")).expect("eq");
-    let acvus_extern::FnKind::Extern { bounds } = &eq_fn.kind else {
+    let acvus_extern::FnKind::Extern { bounds, .. } = &eq_fn.kind else {
         panic!("eq is extern")
     };
     assert_eq!(
         bounds[0],
-        acvus_extern::TyVarBound::OneOf(vec![acvus_extern::Ty::Int, point.clone()])
+        acvus_extern::TyVarBound::OneOf(vec![
+            acvus_extern::PolyTy::Int,
+            acvus_extern::lift_to_poly(&point)
+        ])
     );
     let same = reg.functions.iter().find(|f| f.qref == qref(&i, "same")).expect("same");
-    let acvus_extern::FnKind::Extern { bounds } = &same.kind else {
+    let acvus_extern::FnKind::Extern { bounds, .. } = &same.kind else {
         panic!("same is extern")
     };
     assert_eq!(
         bounds[0],
-        acvus_extern::TyVarBound::OneOf(vec![acvus_extern::Ty::Int, point])
+        acvus_extern::TyVarBound::OneOf(vec![
+            acvus_extern::PolyTy::Int,
+            acvus_extern::lift_to_poly(&point)
+        ])
     );
     assert!(matches!(reg.handlers[&qref(&i, "eq")], acvus_extern::ExternEntry::Mono(_)));
 }
@@ -717,14 +723,14 @@ fn a_monomorphized_parameter_declares_its_members_as_the_bound() {
         .iter()
         .find(|f| i.resolve(f.qref.name) == "double")
         .expect("double");
-    let acvus_extern::FnKind::Extern { bounds } = &double.kind else {
+    let acvus_extern::FnKind::Extern { bounds, .. } = &double.kind else {
         panic!("double is extern");
     };
     assert_eq!(
         bounds,
         &vec![acvus_extern::TyVarBound::OneOf(vec![
-            acvus_extern::Ty::Int,
-            acvus_extern::Ty::String
+            acvus_extern::PolyTy::Int,
+            acvus_extern::PolyTy::String
         ])]
     );
     let shape = fn_ty(&double.ty);
@@ -819,4 +825,116 @@ fn the_call_type_selects_the_instance() {
         PhantomData,
     ));
     assert_eq!(open::<i64>(call_sync(fallback, vec![payload]).unwrap()), 3);
+}
+
+// -- Polymorphic instances (RFC-0027) ---------------------------------
+
+extern_signature! { ns: "t", fn first<C, T>(c: C) -> T where C: TyVar, T: TyVar; }
+
+#[extern_fn(instance_of = first, effect = pure)]
+fn first_arr<T, N, R>(_: &R, a: Arr<T, N>) -> Result<T, ExternError>
+where
+    T: TyVar,
+    N: LenVar,
+    R: Runtime,
+{
+    a.0.into_iter()
+        .next()
+        .ok_or_else(|| ExternError::call("first", "empty array"))
+}
+
+#[extern_fn(instance_of = first, effect = pure)]
+fn first_opt<T, R>(_: &R, v: Option<T>) -> Result<T, ExternError>
+where
+    T: TyVar,
+    R: Runtime,
+{
+    v.ok_or_else(|| ExternError::call("first", "none"))
+}
+
+#[extern_fn(instance_of = first, effect = pure)]
+fn first_arr_again<T, N, R>(_: &R, a: Arr<T, N>) -> Result<T, ExternError>
+where
+    T: TyVar,
+    N: LenVar,
+    R: Runtime,
+{
+    first_arr(&TypesOnly, a)
+}
+
+fn first_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        signatures: [first],
+        fns: [first_arr, first_opt],
+    }
+}
+
+fn overlapping_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t2",
+        fns: [first_arr_again],
+    }
+}
+
+#[test]
+fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![first_registry::<Tiny>()], &i).expect("registries combine");
+    let first_fn = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(&i, "first"))
+        .expect("first");
+    let acvus_extern::FnKind::Extern { bounds, instances } = &first_fn.kind else {
+        panic!("first is extern")
+    };
+    assert_eq!(instances.len(), 2);
+    let acvus_extern::TyVarBound::OneOf(shapes) = &bounds[0] else {
+        panic!("the instance variable is bounded")
+    };
+    assert!(shapes.iter().any(|s| matches!(s, PolyTy::Array(..))), "{shapes:?}");
+    assert!(shapes.iter().any(|s| matches!(s, PolyTy::Option(..))), "{shapes:?}");
+
+    let entry = &reg.handlers[&qref(&i, "first")];
+    let on_array = call_type(
+        vec![acvus_extern::Ty::Array(
+            Box::new(acvus_extern::Ty::Int),
+            acvus_extern::LenTerm::Known(2),
+        )],
+        acvus_extern::Ty::Int,
+        &i,
+    );
+    let arr = erased(Arr::<V, ()>::new(vec![erased(7i64), erased(8i64)]));
+    let h = entry.select(&on_array).unwrap();
+    assert_eq!(open::<i64>(call_sync(h, vec![arr]).unwrap()), 7);
+
+    let on_option = call_type(
+        vec![acvus_extern::Ty::Option(Box::new(acvus_extern::Ty::String))],
+        acvus_extern::Ty::String,
+        &i,
+    );
+    let h = entry.select(&on_option).unwrap();
+    assert_eq!(
+        open::<String>(call_sync(h, vec![erased(Some(erased(String::from("s"))))]).unwrap()),
+        "s"
+    );
+
+    let on_int = call_type(vec![acvus_extern::Ty::Int], acvus_extern::Ty::Int, &i);
+    assert!(entry.select(&on_int).is_err());
+}
+
+#[test]
+fn two_instances_whose_types_unify_are_refused() {
+    let i = Interner::new();
+    let err = Externs::combine(
+        vec![first_registry::<Tiny>(), overlapping_registry::<Tiny>()],
+        &i,
+    )
+    .err()
+    .expect("the second Array instance is refused");
+    assert!(
+        matches!(err, acvus_extern::CombineError::DuplicateInstance { .. }),
+        "{err:?}"
+    );
 }

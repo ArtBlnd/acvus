@@ -3,6 +3,7 @@
 Status: Accepted
 Date: 2026-09-15
 Supersedes: none
+Extended by: RFC-0027
 
 ## Ruling
 

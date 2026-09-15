@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = iter_array(&@items) | map(|i| -> *i) | filter(|i| -> *i > @threshold) | collect }}{{ x | map(|i| -> (i | to_string)) | collect | join(\", \") }}",
+  "template": "{{ x = as_iter(&@items) | map(|i| -> *i) | filter(|i| -> *i > @threshold) | collect }}{{ x | map(|i| -> (i | to_string)) | collect | join(\", \") }}",
   "context": { "items": [1, 5, 10], "threshold": 3 },
   "expected": "5, 10"
 }

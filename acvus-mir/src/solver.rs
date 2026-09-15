@@ -10,10 +10,9 @@ use rustc_hash::FxHashMap;
 use crate::graph::types::QualifiedRef;
 use crate::ty::{
     CastRule, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
-    IdentityVarId, Infer, InferTy, LenTerm, LenVarId, ParamTerm, Polarity, PolyTy, Scheme, Ty,
-    TyTerm, TyVarBound, TypeBoundId, TypeRegistry,
+    IdentityVarId, Infer, InferTy, LenTerm, LenVarId, Polarity, PolyTy, Scheme, Ty, TyTerm,
+    TyVarBound, TypeBoundId, TypeRegistry, could_match_pattern,
 };
-use acvus_utils::LocalIdOps;
 
 // -- Solver types ----------------------------------------------------
 
@@ -71,6 +70,33 @@ pub enum IdentityBound {
     Forward(IdentityVarId),
 }
 
+/// A call of a shared signature, settled on the one instance the call's
+/// type can still match (RFC-0027).
+#[derive(Debug, Clone)]
+pub struct Choice {
+    ty: InferTy,
+    state: ChoiceState,
+}
+
+#[derive(Debug, Clone)]
+enum ChoiceState {
+    Pending(Vec<PolyTy>),
+    Settled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChoiceId(pub u32);
+
+#[derive(Debug)]
+pub enum ChoiceFailure {
+    NoInstance { choice: ChoiceId, ty: InferTy },
+    Mismatch {
+        choice: ChoiceId,
+        expected: InferTy,
+        got: InferTy,
+    },
+}
+
 /// Snapshot for solver rollback during overload resolution.
 pub struct SolverSnapshot {
     ty_bounds: Vec<TypeBound>,
@@ -78,6 +104,7 @@ pub struct SolverSnapshot {
     effect_below: Vec<(EffectVarId, EffectVarId)>,
     len_vars: Vec<LenBound>,
     identity_vars: Vec<IdentityBound>,
+    choices: Vec<Choice>,
 }
 
 /// The sources of one compilation. A source number names one identity
@@ -109,6 +136,7 @@ pub struct Solver<'src> {
     effect_below: Vec<(EffectVarId, EffectVarId)>,
     pub(crate) len_vars: Vec<LenBound>,
     pub(crate) identity_vars: Vec<IdentityBound>,
+    choices: Vec<Choice>,
     /// Mints a new source for every identity a declaration introduces;
     /// lent by the compilation for this solver's lifetime.
     sources: &'src mut Sources,
@@ -122,8 +150,60 @@ impl<'src> Solver<'src> {
             effect_below: Vec::new(),
             len_vars: Vec::new(),
             identity_vars: Vec::new(),
+            choices: Vec::new(),
             sources,
         }
+    }
+
+    // -- Choices -----------------------------------------------------
+
+    /// Settle every pending choice whose call type excludes all instances
+    /// but one, while a settlement narrows another.
+    pub fn settle_choices(&mut self, registry: &TypeRegistry) -> Vec<ChoiceFailure> {
+        let mut failures = Vec::new();
+        let mut progressed = true;
+        while progressed {
+            progressed = false;
+            for index in 0..self.choices.len() {
+                let id = ChoiceId(index as u32);
+                let ChoiceState::Pending(candidates) = &self.choices[index].state else {
+                    continue;
+                };
+                let ty = self.resolve_ty(&self.choices[index].ty);
+                let remaining: Vec<PolyTy> = candidates
+                    .iter()
+                    .filter(|c| could_match_pattern(&ty, c))
+                    .cloned()
+                    .collect();
+                match remaining.as_slice() {
+                    [] => {
+                        failures.push(ChoiceFailure::NoInstance { choice: id, ty });
+                        self.choices[index].state = ChoiceState::Settled;
+                    }
+                    [only] => {
+                        let instance = self.instantiate_open(only);
+                        if self
+                            .unify_ty(&ty, &instance, Polarity::Invariant, registry)
+                            .is_err()
+                        {
+                            failures.push(ChoiceFailure::Mismatch {
+                                choice: id,
+                                expected: instance,
+                                got: ty,
+                            });
+                        }
+                        self.choices[index].state = ChoiceState::Settled;
+                        progressed = true;
+                    }
+                    _ => {
+                        if remaining.len() != candidates.len() {
+                            self.choices[index].state = ChoiceState::Pending(remaining);
+                        }
+                    }
+                }
+            }
+        }
+        failures
     }
 
     // -- Identity variables ------------------------------------------
@@ -531,6 +611,7 @@ impl<'src> Solver<'src> {
             effect_below: self.effect_below.clone(),
             len_vars: self.len_vars.clone(),
             identity_vars: self.identity_vars.clone(),
+            choices: self.choices.clone(),
         }
     }
 
@@ -541,6 +622,7 @@ impl<'src> Solver<'src> {
         self.effect_below = snap.effect_below;
         self.len_vars = snap.len_vars;
         self.identity_vars = snap.identity_vars;
+        self.choices = snap.choices;
     }
 
     // -- Resolution --------------------------------------------------
@@ -1387,11 +1469,24 @@ pub enum FreezeError {
     },
 }
 
-/// A scheme instantiated into the solver: the type, and the variables that
-/// carry a declared bound so the caller can verify them where it chose to.
+/// A scheme instantiated into the solver; the caller verifies the bounded
+/// variables where it chose to.
 pub struct Instantiated {
     pub ty: InferTy,
     pub bounded: Vec<TypeBoundId>,
+    pub choice: Option<ChoiceId>,
+}
+
+/// What an identity variable of a declaration becomes when the declaration
+/// is instantiated.
+#[derive(Clone, Copy)]
+enum Identities {
+    /// A parameter's identity is a variable the argument fixes; any other
+    /// is a new source (RFC-0012).
+    Declared,
+    /// Every identity is a variable: for unifying with a type whose
+    /// sources are already minted.
+    Open,
 }
 
 // -- Poly -> Infer instantiation (in Solver) --------------------------
@@ -1419,22 +1514,42 @@ impl Solver<'_> {
         self.instantiate_scheme(&Scheme::unbounded(ty.clone())).ty
     }
 
+    fn instantiate_open(&mut self, ty: &PolyTy) -> InferTy {
+        self.instantiate_with(ty, |_, _| TyVarBound::Any, Identities::Open)
+    }
+
     pub fn instantiate_scheme(&mut self, scheme: &Scheme) -> Instantiated {
         let mut bounded: Vec<TypeBoundId> = Vec::new();
-        let ty = self.instantiate_with(&scheme.ty, |var, fresh| {
-            let bound = scheme.bound_of(var);
-            if bound != TyVarBound::Any {
-                bounded.push(fresh);
-            }
-            bound
+        let ty = self.instantiate_with(
+            &scheme.ty,
+            |var, fresh| {
+                let bound = scheme.bound_of(var);
+                if bound != TyVarBound::Any {
+                    bounded.push(fresh);
+                }
+                bound
+            },
+            Identities::Declared,
+        );
+        let choice = (!scheme.instances.is_empty()).then(|| {
+            self.choices.push(Choice {
+                ty: ty.clone(),
+                state: ChoiceState::Pending(scheme.instances.clone()),
+            });
+            ChoiceId((self.choices.len() - 1) as u32)
         });
-        Instantiated { ty, bounded }
+        Instantiated {
+            ty,
+            bounded,
+            choice,
+        }
     }
 
     fn instantiate_with(
         &mut self,
         ty: &PolyTy,
         mut bound_for: impl FnMut(u32, TypeBoundId) -> TyVarBound,
+        identities: Identities,
     ) -> InferTy {
         let mut var_map: FxHashMap<u32, TypeBoundId> = FxHashMap::default();
         let mut effect_map: FxHashMap<u32, EffectVarId> = FxHashMap::default();
@@ -1461,7 +1576,11 @@ impl Solver<'_> {
             },
             &mut |id: u32| {
                 *identity_map.entry(id).or_insert_with(|| {
-                    if from_params.contains(&id) {
+                    let open = match identities {
+                        Identities::Declared => from_params.contains(&id),
+                        Identities::Open => true,
+                    };
+                    if open {
                         IdentityTerm::Var(Self::alloc_identity_var(identity_vars))
                     } else {
                         IdentityTerm::Known(sources.next())

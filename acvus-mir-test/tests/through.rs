@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: params
                 .iter()

@@ -67,7 +67,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
     let mut pb = PolyBuilder::new();
     let mk = Function {
         qref: QualifiedRef::root(i.intern("mk")),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(iter_poly(&i, pb.fresh_identity_var())),
@@ -79,7 +79,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
     let shared = pb.fresh_identity_var();
     let same = Function {
         qref: QualifiedRef::root(i.intern("same")),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: vec![
                 ParamTerm::<Poly>::new(i.intern("x"), iter_poly(&i, shared.clone())),

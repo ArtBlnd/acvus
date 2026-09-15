@@ -327,7 +327,7 @@ fn lambda_in_filter() {
 fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: params
                 .iter()
@@ -348,7 +348,7 @@ fn extern_async_call() {
     let i = Interner::new();
     let fetch_user = Function {
         qref: QualifiedRef::root(i.intern("fetch_user")),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
                 i.intern("id"),

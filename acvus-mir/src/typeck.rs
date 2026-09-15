@@ -7,6 +7,7 @@ use rustc_hash::FxHashMap;
 
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
+use crate::solver::{ChoiceFailure, ChoiceId};
 use crate::ir::CastKind;
 use crate::ty::{
     Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm,
@@ -152,6 +153,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Bounded variables instantiated so far, each at the span that will
     /// report a violation.
     bound_sites: Vec<BoundSite>,
+    /// Choices among instances instantiated so far, each at the span that
+    /// will report a failure.
+    choice_sites: FxHashMap<ChoiceId, Span>,
     /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
     analysis: Option<AnalysisState>,
     /// Stack of active lambda scopes. Each entry is (scope_depth, captures).
@@ -191,6 +195,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             pattern_through: false,
             in_borrow_place: false,
             bound_sites: Vec::new(),
+            choice_sites: FxHashMap::default(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
             analysis: None,
@@ -443,6 +448,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let effect = effect.clone();
                         self.note_call_effect(&effect, span);
                     }
+                    self.settle_choices();
                     let resolved = self.solver.resolve_ty(&inst);
                     self.solver
                         .freeze_ty(&resolved)
@@ -582,9 +588,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
             _ => Vec::new(),
         };
-        let mut meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy| {
+        let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy| {
             if let Some(param) = param {
                 let _ = this.solver.unify_ty(param, arg, Polarity::Invariant, this.registry);
+                this.settle_choices();
             }
         };
         let mut arg_types = Vec::with_capacity(args.len() + 1);
@@ -635,18 +642,50 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// Instantiate a scheme for a use at `span`; its bounded variables are
-    /// verified in `verify_bounds` once the whole body is checked.
+    /// verified in `verify_bounds` once the whole body is checked, and its
+    /// choice among instances in `settle_choices`.
     fn instantiate_at(&mut self, scheme: &crate::ty::Scheme, span: Span) -> InferTy {
         let inst = self.solver.instantiate_scheme(scheme);
         self.bound_sites
             .extend(inst.bounded.into_iter().map(|var| BoundSite { var, span }));
+        if let Some(choice) = inst.choice {
+            self.choice_sites.insert(choice, span);
+        }
         inst.ty
+    }
+
+    /// Settle the choices the types checked so far decide (RFC-0027).
+    fn settle_choices(&mut self) {
+        for failure in self.solver.settle_choices(self.registry) {
+            let (choice, kind) = match failure {
+                ChoiceFailure::NoInstance { choice, ty } => (
+                    choice,
+                    MirErrorKind::NoInstance {
+                        ty: self.freeze_or_error(&ty),
+                    },
+                ),
+                ChoiceFailure::Mismatch {
+                    choice,
+                    expected,
+                    got,
+                } => (
+                    choice,
+                    MirErrorKind::UnificationFailure {
+                        expected: self.freeze_or_error(&expected),
+                        got: self.freeze_or_error(&got),
+                    },
+                ),
+            };
+            let span = self.choice_sites[&choice];
+            self.error(kind, span);
+        }
     }
 
     /// Report every bounded variable that resolved outside its bound. An
     /// unresolved variable is not a bound violation; it is reported as such
     /// wherever its type is needed.
     fn verify_bounds(&mut self) {
+        self.settle_choices();
         let sites = std::mem::take(&mut self.bound_sites);
         for site in sites {
             if let Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) =

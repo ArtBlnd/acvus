@@ -948,9 +948,16 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     let ret = parse_return(&sig.output);
     let name = ident.to_string();
     let qref = qref_expr_in(Some(&input.ns.value()), &name);
+    let types_only = |ty: &Type| {
+        subst::substitute(ty, &|ident| {
+            (ident == "__R").then(|| syn::parse_quote! { ::acvus_extern::TypesOnly })
+        })
+    };
     let param_terms = params.iter().map(|p| {
         let pname = &p.name;
-        let comp_ty = p.mode.acvus_ty(&vars.to_compile_time_instance(&p.ty, None));
+        let comp_ty = p
+            .mode
+            .acvus_ty(&types_only(&vars.to_compile_time_instance(&p.ty, None)));
         quote! {
             ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
                 __i.intern(#pname),
@@ -958,7 +965,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             )
         }
     });
-    let comp_ret = vars.to_compile_time_instance(&ret.ty, None);
+    let comp_ret = types_only(&vars.to_compile_time_instance(&ret.ty, None));
     let bounds = vars.bound_exprs();
     let counts = vars.counts_expr();
     Ok(quote! {

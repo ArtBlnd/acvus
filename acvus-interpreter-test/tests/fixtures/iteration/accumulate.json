@@ -1,5 +1,5 @@
 {
-  "template": "{{ result = iter_array(&@items) | fold(0, |acc, x| -> acc + *x) }}{{ result | to_string }}",
+  "template": "{{ result = as_iter(&@items) | fold(0, |acc, x| -> acc + *x) }}{{ result | to_string }}",
   "context": { "items": [1, 2, 3] },
   "expected": "6"
 }

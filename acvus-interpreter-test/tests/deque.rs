@@ -25,3 +25,24 @@ async fn holds_enum_values() {
     let src = "d = deque(); push_back(&mut d, Some(7)); push_back(&mut d, None); deque_len(&d)";
     assert_eq!(run_script(&i, src, FxHashMap::default()).await.as_int(), 2);
 }
+
+#[tokio::test]
+async fn a_deque_is_iterated_in_place_through_as_iter() {
+    let i = Interner::new();
+    let src = "d = deque(); push_back(&mut d, 1); push_front(&mut d, 2); as_iter(&d) | fold(0, |acc, x| -> acc * 10 + *x)";
+    assert_eq!(run_script(&i, src, FxHashMap::default()).await.as_int(), 21);
+}
+
+#[tokio::test]
+async fn a_deque_is_consumed_through_into_iter() {
+    let i = Interner::new();
+    let src = "d = deque(); push_back(&mut d, 1); push_back(&mut d, 2); into_iter(d) | fold(0, |acc, x| -> acc * 10 + x)";
+    assert_eq!(run_script(&i, src, FxHashMap::default()).await.as_int(), 12);
+}
+
+#[tokio::test]
+async fn a_deque_demotes_to_a_list_where_one_is_expected() {
+    let i = Interner::new();
+    let src = "d = deque(); push_back(&mut d, 1); push_back(&mut d, 2); push_back(&mut d, 3); len(d)";
+    assert_eq!(run_script(&i, src, FxHashMap::default()).await.as_int(), 3);
+}

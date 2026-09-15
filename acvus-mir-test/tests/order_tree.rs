@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 fn commutative_io(i: &Interner, name: &str) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("x"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::Int)),
@@ -43,7 +43,7 @@ fn a_chain_of_calls_is_one_line() {
     let i = Interner::new();
     let io = Function {
         qref: QualifiedRef::root(i.intern("io")),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("x"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::Int)),
@@ -63,7 +63,7 @@ fn anyorder_in_a_script_merges_its_calls() {
     let i = Interner::new();
     let io = Function {
         qref: QualifiedRef::root(i.intern("io")),
-        kind: FnKind::Extern { bounds: vec![] },
+        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("x"), lift_to_poly(&Ty::Int))],
             ret: Box::new(lift_to_poly(&Ty::Int)),

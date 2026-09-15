@@ -54,6 +54,10 @@ pub enum MirErrorKind {
         op: &'static str,
         ty: Ty,
     },
+    /// A call of a shared signature that no instance matches (RFC-0027).
+    NoInstance {
+        ty: Ty,
+    },
     StoreThroughSharedReference(Ty),
     UndefinedField {
         object_ty: Ty,
@@ -224,6 +228,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::StoreThroughSharedReference(ty) => {
                 write!(f, "cannot store through {}: not a `&mut`", ty.display(interner))
+            }
+            MirErrorKind::NoInstance { ty } => {
+                write!(
+                    f,
+                    "no instance of the signature has the call type {}",
+                    ty.display(interner)
+                )
             }
             MirErrorKind::NoOperatorInstance { op, ty } => {
                 write!(

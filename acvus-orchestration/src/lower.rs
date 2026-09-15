@@ -902,7 +902,7 @@ mod tests {
         let mut pb = PolyBuilder::new();
         let extern_fn = Function {
             qref: QualifiedRef::root(i.intern("google_llm")),
-            kind: FnKind::Extern { bounds: vec![] },
+            kind: FnKind::Extern { bounds: vec![], instances: vec![] },
             ty: TyTerm::Fn {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),

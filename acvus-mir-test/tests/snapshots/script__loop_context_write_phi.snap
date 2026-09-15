@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/script.rs
-assertion_line: 42
 expression: ir
 ---
 === main ===
@@ -10,45 +9,43 @@ expression: ir
      3 |   assign @count = r1
      4 |   r2 = take @items
      5 |   r3 = call #0(r2)
-     6 |   r4 = call #1(r3)
-     7 |   assign it = r4
-     8 |   jump L0
-     9 | L0:
-    10 |   r5 = ref &mut it
-    11 |   r6 = call #2(r5)
-    12 |   r7 = test r6 is Some
-    13 |   jump_if r7 then L1 else L2
-    14 | L1:
-    15 |   r8 = unwrap r6
-    16 |   assign x = r8
-    17 |   r9 = take @count
-    19 |   r10 = r9 + 1 (r11)
-    20 |   assign @count = r10
-    21 |   jump L0
-    22 | L2:
-    23 |   r12 = take @count
-    24 |   r13 = take @items
-    25 |   commit @items = r13
-    26 |   r14 = take @count
-    27 |   commit @count = r14
-    28 |   return r12
+     6 |   assign it = r3
+     7 |   jump L0
+     8 | L0:
+     9 |   r4 = ref &mut it
+    10 |   r5 = call #1(r4)
+    11 |   r6 = test r5 is Some
+    12 |   jump_if r6 then L1 else L2
+    13 | L1:
+    14 |   r7 = unwrap r5
+    15 |   assign x = r7
+    16 |   r8 = take @count
+    18 |   r9 = r8 + 1 (r10)
+    19 |   assign @count = r9
+    20 |   jump L0
+    21 | L2:
+    22 |   r11 = take @count
+    23 |   r12 = take @items
+    24 |   commit @items = r12
+    25 |   r13 = take @count
+    26 |   commit @count = r13
+    27 |   return r11
 
     ; r0 (@items) : Array<Int, 3>
     ; r1 (@count) : Int
     ; r2 (@items) : Array<Int, 3>
-    ; r3 (v6) : List<Int>
-    ; r4 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r5 (it.) : &mut Iterator<Int, Pure, #IdentityId(0)>
-    ; r6 (next(...)) : Option<Int>
-    ; r7 (v11) : Bool
-    ; r8 (x) : Int
-    ; r9 (@count) : Int
-    ; r10 (v16) : Int
-    ; r11 (v15) : Int
-    ; r12 (@count) : Int
-    ; r13 (v18) : Array<Int, 3>
-    ; r14 (v19) : Int
-    ; r15 (@count) : Int
-    ; r16 (@items) : Array<Int, 3>
-    ; r17 (x) : Int
-    ; r18 (it) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r3 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r4 (it.) : &mut Iterator<Int, Pure, #IdentityId(0)>
+    ; r5 (next(...)) : Option<Int>
+    ; r6 (v10) : Bool
+    ; r7 (x) : Int
+    ; r8 (@count) : Int
+    ; r9 (v15) : Int
+    ; r10 (v14) : Int
+    ; r11 (@count) : Int
+    ; r12 (v17) : Array<Int, 3>
+    ; r13 (v18) : Int
+    ; r14 (@count) : Int
+    ; r15 (@items) : Array<Int, 3>
+    ; r16 (x) : Int
+    ; r17 (it) : Iterator<Int, Pure, #IdentityId(0)>

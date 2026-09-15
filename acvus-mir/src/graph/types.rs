@@ -24,8 +24,12 @@ pub enum FnKind {
     /// Has a parsed AST. MIR typechecks and compiles.
     Local(ParsedAst),
     /// Black box. Runtime provides the value. `bounds[i]` is the declared
-    /// bound of variable `i` of the function's type.
-    Extern { bounds: Vec<crate::ty::TyVarBound> },
+    /// bound of variable `i` of the function's type; `instances` are the
+    /// types of a shared signature's instances (RFC-0027).
+    Extern {
+        bounds: Vec<crate::ty::TyVarBound>,
+        instances: Vec<crate::ty::PolyTy>,
+    },
 }
 
 /// Parsed AST for local functions.
