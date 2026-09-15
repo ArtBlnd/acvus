@@ -34,6 +34,8 @@ impl fmt::Display for CollectionOp {
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
     pub kind: RuntimeErrorKind,
+    /// The instruction that failed, set by the run loop (RFC-0031).
+    pub span: Option<acvus_ast::Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,30 +75,35 @@ pub enum RuntimeErrorKind {
 impl RuntimeError {
     pub fn integer_overflow() -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::IntegerOverflow,
         }
     }
 
     pub fn division_by_zero() -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::DivisionByZero,
         }
     }
 
     pub fn index_out_of_bounds(index: i64, len: usize) -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::IndexOutOfBounds { index, len },
         }
     }
 
     pub fn empty_collection(op: CollectionOp) -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::EmptyCollection { op },
         }
     }
 
     pub fn missing_field(field: impl Into<std::string::String>) -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::MissingField {
                 field: field.into(),
             },
@@ -108,6 +115,7 @@ impl RuntimeError {
         source: impl Into<std::string::String>,
     ) -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::ExternCallFailed {
                 name: name.into(),
                 source: source.into(),
@@ -117,6 +125,7 @@ impl RuntimeError {
 
     pub fn fetch(source: impl Into<std::string::String>) -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::FetchFailed {
                 source: source.into(),
             },
@@ -125,18 +134,21 @@ impl RuntimeError {
 
     pub fn tool_call_limit(limit: usize) -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::ToolCallLimitExceeded { limit },
         }
     }
 
     pub fn assert_failed() -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::AssertFailed,
         }
     }
 
     pub fn internal(message: impl Into<std::string::String>) -> Self {
         Self {
+            span: None,
             kind: RuntimeErrorKind::Internal {
                 message: message.into(),
             },
@@ -184,6 +196,6 @@ impl From<ExternError> for RuntimeError {
             },
             ExternError::Internal { message } => RuntimeErrorKind::Internal { message },
         };
-        Self { kind }
+        Self { kind, span: None }
     }
 }

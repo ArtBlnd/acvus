@@ -258,7 +258,7 @@ acvus-ext-llm           LLM providers (OpenAI, Anthropic, Google)
 acvus-ext-net           Network IO (`http::fetch_get`)
 acvus-orchestration     Spec → CompilationGraph, incremental Session
 acvus-lsp               Language server — diagnostics, completions, context discovery
-acvus-mir-cli           CLI for MIR inspection
+acvus-cli               `acvus run|check|mir`, the script runner (RFC-0031)
 acvus-mir-test          MIR snapshot tests (insta)
 acvus-interpreter-test  Interpreter e2e tests
 pomollu-engine          WASM bindings (wasm-bindgen + tsify)

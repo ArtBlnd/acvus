@@ -6,7 +6,7 @@ members = [
     "acvus-interpreter-test",
     "acvus-ast",
     "acvus-mir",
-    "acvus-mir-cli",
+    "acvus-cli",
     "acvus-mir-test",
     "acvus-orchestration",
     "acvus-ext",

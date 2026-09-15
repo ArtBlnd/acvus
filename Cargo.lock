@@ -15,6 +15,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "acvus-cli"
+version = "0.1.0"
+dependencies = [
+ "acvus-ast",
+ "acvus-ext",
+ "acvus-ext-llm",
+ "acvus-ext-net",
+ "acvus-extern",
+ "acvus-interpreter",
+ "acvus-mir",
+ "acvus-utils",
+ "reqwest",
+ "rustc-hash",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "acvus-ext"
 version = "0.1.0"
 dependencies = [
@@ -147,20 +166,6 @@ dependencies = [
  "rustc-hash",
  "serde",
  "smallvec",
-]
-
-[[package]]
-name = "acvus-mir-cli"
-version = "0.1.0"
-dependencies = [
- "acvus-ast",
- "acvus-ext",
- "acvus-extern",
- "acvus-mir",
- "acvus-utils",
- "rustc-hash",
- "serde",
- "serde_json",
 ]
 
 [[package]]

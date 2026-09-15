@@ -1,0 +1,185 @@
+//! One file to one function, through the whole pipeline, with every
+//! diagnostic collected.
+
+use acvus_ast::Span;
+use acvus_extern::{Externs, Registry};
+use acvus_interpreter::{AcvusRuntime, Executable};
+use acvus_mir::graph::{
+    CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef, extract, infer, lower,
+    optimize,
+};
+use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
+use acvus_utils::{Astr, Freeze, Interner};
+use rustc_hash::{FxHashMap, FxHashSet};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Script,
+    Template,
+    Expr,
+}
+
+pub struct Diagnostic {
+    pub message: String,
+    pub span: Option<Span>,
+}
+
+pub struct Compiled {
+    pub entry: QualifiedRef,
+    pub functions: FxHashMap<QualifiedRef, Executable>,
+    pub fn_types: FxHashMap<QualifiedRef, Ty>,
+    pub context_names: FxHashMap<QualifiedRef, Astr>,
+    pub ret_ty: Ty,
+    mir: String,
+}
+
+impl Compiled {
+    pub fn mir_dump(&self, _: &Interner) -> &str {
+        &self.mir
+    }
+}
+
+fn span_of(span: Span) -> Option<Span> {
+    (span.start != 0 || span.end != 0).then_some(span)
+}
+
+pub fn compile(
+    interner: &Interner,
+    source: &str,
+    mode: Mode,
+    context_types: &FxHashMap<Astr, Ty>,
+    registries: Vec<Registry<AcvusRuntime>>,
+) -> Result<Compiled, Vec<Diagnostic>> {
+    let parsed = match mode {
+        Mode::Script => acvus_ast::parse_script_mode(interner, source).map(ParsedAst::Script),
+        Mode::Expr => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
+        Mode::Template => acvus_ast::parse(interner, source).map(ParsedAst::Template),
+    };
+    let parsed = parsed.map_err(|e| {
+        vec![Diagnostic {
+            message: e.kind.to_string(),
+            span: span_of(e.span),
+        }]
+    })?;
+
+    let mut pb = PolyBuilder::new();
+    let contexts: Vec<Context> = context_types
+        .iter()
+        .map(|(name, ty)| Context {
+            qref: QualifiedRef::root(*name),
+            ty: lift_declaration(ty, &mut pb),
+        })
+        .collect();
+    let entry = QualifiedRef::root(interner.intern("main"));
+    let mut functions = vec![Function {
+        qref: entry,
+        kind: FnKind::Local(parsed),
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        },
+    }];
+    let Externs {
+        functions: extern_fns,
+        types,
+        handlers,
+    } = Externs::combine(registries, interner).map_err(|e| {
+        vec![Diagnostic {
+            message: format!("the registries do not combine: {e}"),
+            span: None,
+        }]
+    })?;
+    let fn_types: FxHashMap<QualifiedRef, Ty> = extern_fns
+        .iter()
+        .filter_map(|f| try_freeze_poly(&f.ty).map(|ty| (f.qref, ty)))
+        .collect();
+    functions.extend(extern_fns);
+    let graph = CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(contexts),
+    };
+
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(
+        interner,
+        &graph,
+        &ext,
+        &FxHashMap::default(),
+        Freeze::new(types),
+    );
+    let mut diagnostics: Vec<Diagnostic> = inf
+        .errors()
+        .into_iter()
+        .flat_map(|(_, errs)| errs.iter())
+        .map(|e| Diagnostic {
+            message: e.display(interner).to_string(),
+            span: span_of(e.span),
+        })
+        .collect();
+    let lowered = lower::lower(interner, &graph, &ext, &inf);
+    diagnostics.extend(
+        lowered
+            .errors
+            .iter()
+            .flat_map(|le| le.errors.iter())
+            .map(|e| Diagnostic {
+                message: e.display(interner).to_string(),
+                span: span_of(e.span),
+            }),
+    );
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+    let ret_ty = match &inf.outcomes[&entry].meta().ty {
+        Ty::Fn { ret, .. } => (**ret).clone(),
+        other => other.clone(),
+    };
+
+    let optimized = optimize::optimize(lowered.modules, &inf.context_types, &FxHashSet::default());
+    diagnostics.extend(
+        optimized
+            .errors
+            .into_iter()
+            .flat_map(|(_, errs)| errs)
+            .map(|e| e.into_mir_error())
+            .map(|e| Diagnostic {
+                message: e.display(interner).to_string(),
+                span: span_of(e.span),
+            }),
+    );
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+    let mir = acvus_mir::printer::dump(
+        interner,
+        optimized
+            .modules
+            .get(&entry)
+            .expect("the entry function lowers to a module"),
+    );
+    let mut executables: FxHashMap<QualifiedRef, Executable> = optimized
+        .modules
+        .into_iter()
+        .map(|(q, m)| (q, Executable::Module(m)))
+        .collect();
+    executables.extend(
+        handlers
+            .into_iter()
+            .map(|(q, h)| (q, Executable::Extern(h))),
+    );
+    let context_names = graph
+        .contexts
+        .iter()
+        .map(|c| (c.qref, c.qref.name))
+        .collect();
+    Ok(Compiled {
+        entry,
+        functions: executables,
+        fn_types,
+        context_names,
+        ret_ty,
+        mir,
+    })
+}

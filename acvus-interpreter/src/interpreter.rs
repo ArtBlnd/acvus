@@ -373,7 +373,13 @@ async fn run_loop_inner(
 ) -> Result<Value, RuntimeError> {
     let mut pc = 0;
     while pc < insts.len() {
-        match execute_inst(ctx, insts, closures, pc, frame, val_types).await? {
+        let flow = execute_inst(ctx, insts, closures, pc, frame, val_types)
+            .await
+            .map_err(|mut e| {
+                e.span = e.span.or(Some(insts[pc].span));
+                e
+            })?;
+        match flow {
             Flow::Next => pc += 1,
             Flow::Jump(target) => pc = target,
             Flow::Return(val) => return Ok(val),
@@ -1029,11 +1035,17 @@ mod primitive_operator_tests {
     fn int_arithmetic_is_checked() {
         assert!(matches!(
             int(BinOp::Add, i64::MAX, 1),
-            Err(RuntimeError { kind: RuntimeErrorKind::IntegerOverflow })
+            Err(RuntimeError {
+                kind: RuntimeErrorKind::IntegerOverflow,
+                span: None,
+            })
         ));
         assert!(matches!(
             int(BinOp::Mul, i64::MIN, -1),
-            Err(RuntimeError { kind: RuntimeErrorKind::IntegerOverflow })
+            Err(RuntimeError {
+                kind: RuntimeErrorKind::IntegerOverflow,
+                span: None,
+            })
         ));
         assert_eq!(int(BinOp::Sub, 1, 2).unwrap().as_int(), -1);
     }
