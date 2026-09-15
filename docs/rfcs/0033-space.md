@@ -54,9 +54,12 @@ before, and Irmin and Noms have shown that typed values under a git-like
 store carry the whole design; identity (RFC-0012) is what makes a head
 per context the natural unit, with no aliasing to reconcile inside a run.
 
-`Deque`'s pops are tombstones on the log, not deletions of elements: the
-ops at the two ends are counters, and a pop that would cross the other
-end's cursor is a conflict the replay detects rather than a value lost.
+`Deque`'s pops are tombstones on the log, not deletions of elements: a
+pop records that an item at that end is gone, never the item. The ops at
+the two ends are counters, and a pop that would cross the other end's
+cursor is a conflict the replay detects rather than a value lost. A value
+pushed and popped within one run leaves no op: the final state is what
+the log reproduces, and the popped value is the caller's.
 
 A run's page may sit over a space: a context is loaded from the space at
 the run's first fetch and every context the run held is committed when
@@ -76,10 +79,6 @@ the host asks. `acvus run --space <dir>` runs over a directory store —
   declares `Deque`; a language-shape context (`String`, `Int`, objects)
   needs no hook.
 - No garbage collection of nodes no head reaches.
-- The deque's log is the net change of a run: a value pushed and popped
-  within one run leaves no op, because a popped value is the caller's and
-  cannot be copied into the log without a clone the element type may not
-  have. A per-event log needs that clone.
 
 ## Consequences
 
