@@ -37,6 +37,9 @@ the same population.
   and break the safety chain below acvus.
 - No JIT. Executable memory is never allocated, so generated code can never
   become code injection, and the interpreter keeps control of every execution.
+  This is a decision not to build, not a property the IR enforces: the MIR is
+  typed SSA over words and pointers, and a fork that wants a native backend
+  finds nothing in the way.
 
 ## Consequences
 
