@@ -1,15 +1,21 @@
 //! Base64 and URL encoding. All pure.
 
-use acvus_extern::{ExternError, ExternRegistry, Interner, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternError, ExternRegistry, Runtime, extern_fn, extern_registry};
 use base64::Engine;
 
 #[extern_fn(effect = pure)]
-fn base64_encode(_: &Interner, s: String) -> String {
+fn base64_encode<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     base64::engine::general_purpose::STANDARD.encode(&s)
 }
 
 #[extern_fn(effect = pure)]
-fn base64_decode(_: &Interner, s: String) -> Result<String, ExternError> {
+fn base64_decode<R>(_: &R, s: String) -> Result<String, ExternError>
+where
+    R: Runtime,
+{
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&s)
         .map_err(|e| ExternError::call("base64_decode", format!("invalid input: {e}")))?;
@@ -18,12 +24,18 @@ fn base64_decode(_: &Interner, s: String) -> Result<String, ExternError> {
 }
 
 #[extern_fn(effect = pure)]
-fn url_encode(_: &Interner, s: String) -> String {
+fn url_encode<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     percent_encoding::utf8_percent_encode(&s, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
 #[extern_fn(effect = pure)]
-fn url_decode(_: &Interner, s: String) -> String {
+fn url_decode<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     percent_encoding::percent_decode_str(&s)
         .decode_utf8_lossy()
         .into_owned()
@@ -38,7 +50,7 @@ pub fn encoding_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{TypeRegistry, TypesOnly};
+    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {

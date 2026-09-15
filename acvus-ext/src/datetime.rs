@@ -1,25 +1,32 @@
 //! The `DateTime` extension type. Every function but `now` is pure.
 
-use acvus_extern::{
-    ExternError, ExternRegistry, ExternType, Interner, Runtime, extern_fn, extern_registry,
-};
+use acvus_extern::{ExternError, ExternRegistry, ExternType, Runtime, extern_fn, extern_registry};
 
 #[derive(ExternType)]
 pub struct DateTime(chrono::DateTime<chrono::Utc>);
 
 #[cfg(not(target_arch = "wasm32"))]
 #[extern_fn]
-fn now(_: &Interner) -> DateTime {
+fn now<R>(_: &R) -> DateTime
+where
+    R: Runtime,
+{
     DateTime(chrono::Utc::now())
 }
 
 #[extern_fn(effect = pure)]
-fn format_date(_: &Interner, dt: DateTime, fmt: String) -> String {
+fn format_date<R>(_: &R, dt: DateTime, fmt: String) -> String
+where
+    R: Runtime,
+{
     dt.0.format(&fmt).to_string()
 }
 
 #[extern_fn(effect = pure)]
-fn parse_date(_: &Interner, s: String, fmt: String) -> Result<DateTime, ExternError> {
+fn parse_date<R>(_: &R, s: String, fmt: String) -> Result<DateTime, ExternError>
+where
+    R: Runtime,
+{
     chrono::NaiveDateTime::parse_from_str(&s, &fmt)
         .map(|ndt| DateTime(ndt.and_utc()))
         .map_err(|e| {
@@ -32,24 +39,36 @@ fn parse_date(_: &Interner, s: String, fmt: String) -> Result<DateTime, ExternEr
 
 /// Unix epoch seconds.
 #[extern_fn(effect = pure)]
-fn timestamp(_: &Interner, dt: DateTime) -> i64 {
+fn timestamp<R>(_: &R, dt: DateTime) -> i64
+where
+    R: Runtime,
+{
     dt.0.timestamp()
 }
 
 #[extern_fn(effect = pure)]
-fn from_timestamp(_: &Interner, epoch: i64) -> Result<DateTime, ExternError> {
+fn from_timestamp<R>(_: &R, epoch: i64) -> Result<DateTime, ExternError>
+where
+    R: Runtime,
+{
     chrono::DateTime::from_timestamp(epoch, 0)
         .map(DateTime)
         .ok_or_else(|| ExternError::call("from_timestamp", format!("invalid epoch {epoch}")))
 }
 
 #[extern_fn(effect = pure)]
-fn add_days(_: &Interner, dt: DateTime, n: i64) -> DateTime {
+fn add_days<R>(_: &R, dt: DateTime, n: i64) -> DateTime
+where
+    R: Runtime,
+{
     DateTime(dt.0 + chrono::Duration::days(n))
 }
 
 #[extern_fn(effect = pure)]
-fn add_hours(_: &Interner, dt: DateTime, n: i64) -> DateTime {
+fn add_hours<R>(_: &R, dt: DateTime, n: i64) -> DateTime
+where
+    R: Runtime,
+{
     DateTime(dt.0 + chrono::Duration::hours(n))
 }
 
@@ -72,7 +91,7 @@ pub fn datetime_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{TypeRegistry, TypesOnly};
+    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {

@@ -3,7 +3,7 @@ mod schema;
 use std::sync::Arc;
 
 use acvus_ext::List;
-use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Interner, Runtime, TyArg};
+use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Runtime, TyArg};
 
 use crate::extract::{input_messages, split_system};
 use crate::http::{Fetch, HttpRequest, RequestError};
@@ -152,10 +152,10 @@ fn first_message(resp: ModelResponse) -> Result<OutputMessage, ExternError> {
 pub fn google_registry<F, R>(fetch: Arc<F>) -> ExternRegistry<R>
 where
     F: Fetch + Send + Sync + 'static,
-    R: Runtime,
+    R: Runtime + Clone,
 {
     ExternRegistry::new(move |interner| {
-        let handler = move |_: Interner, messages: List<InputMessage>, config: GoogleConfig| {
+        let handler = move |_: R, messages: List<InputMessage>, config: GoogleConfig| {
             let fetch = Arc::clone(&fetch);
             async move {
                 let msgs = input_messages(messages.0);
@@ -195,7 +195,6 @@ where
         ExternItems {
             types: vec![],
             fns: vec![ExternFn::r#async(interner, "google_llm", handler)],
-            persist: vec![],
         }
     })
 }
@@ -346,7 +345,7 @@ mod tests {
         let fetch = Arc::new(MockFetch {
             response: serde_json::json!({}),
         });
-        let interner = Interner::new();
+        let interner = acvus_extern::Interner::new();
         let registry = google_registry::<_, acvus_extern::TypesOnly>(fetch);
         let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
         assert_eq!(registered.functions.len(), 1);

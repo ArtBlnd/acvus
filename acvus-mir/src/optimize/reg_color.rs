@@ -629,10 +629,6 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             r(src);
         }
-        InstKind::Clone { dst, src } => {
-            r(dst);
-            r(src);
-        }
         InstKind::Drop { src } => r(src),
         InstKind::Poison { dst, .. } => r(dst),
         InstKind::Undef { dst } => r(dst),

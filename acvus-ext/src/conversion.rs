@@ -1,13 +1,14 @@
 //! Type conversions. All pure.
 
 use acvus_extern::{
-    ExternError, ExternRegistry, Interner, Monomorphize, Runtime, extern_fn, extern_registry,
+    ExternError, ExternRegistry, Monomorphize, Runtime, extern_fn, extern_registry,
 };
 
 #[extern_fn(effect = pure)]
-fn to_string<A>(_: &Interner, val: A) -> String
+fn to_string<A, R>(_: &R, val: A) -> String
 where
     A: Monomorphize<(i64, f64, bool, u8, String)> + ToString,
+    R: Runtime,
 {
     val.to_string()
 }
@@ -45,20 +46,27 @@ impl ToInt for String {
 }
 
 #[extern_fn(effect = pure)]
-fn to_int<A>(_: &Interner, val: A) -> Result<i64, ExternError>
+fn to_int<A, R>(_: &R, val: A) -> Result<i64, ExternError>
 where
     A: Monomorphize<(i64, f64, bool, u8, String)> + ToInt,
+    R: Runtime,
 {
     val.to_int()
 }
 
 #[extern_fn(effect = pure)]
-fn to_float(_: &Interner, n: i64) -> f64 {
+fn to_float<R>(_: &R, n: i64) -> f64
+where
+    R: Runtime,
+{
     n as f64
 }
 
 #[extern_fn(effect = pure)]
-fn char_to_int(_: &Interner, s: String) -> Result<i64, ExternError> {
+fn char_to_int<R>(_: &R, s: String) -> Result<i64, ExternError>
+where
+    R: Runtime,
+{
     match s.chars().next() {
         Some(c) => Ok(c as i64),
         None => Err(ExternError::call("char_to_int", "empty string")),
@@ -66,7 +74,10 @@ fn char_to_int(_: &Interner, s: String) -> Result<i64, ExternError> {
 }
 
 #[extern_fn(effect = pure)]
-fn int_to_char(_: &Interner, n: i64) -> Result<String, ExternError> {
+fn int_to_char<R>(_: &R, n: i64) -> Result<String, ExternError>
+where
+    R: Runtime,
+{
     let code = u32::try_from(n)
         .map_err(|_| ExternError::call("int_to_char", format!("{n} is not a code point")))?;
     match char::from_u32(code) {
@@ -87,7 +98,7 @@ pub fn conversion_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{TypeRegistry, TypesOnly};
+    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {

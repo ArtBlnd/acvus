@@ -1,66 +1,102 @@
 //! String operations. All pure.
 
-use acvus_extern::{ExternError, ExternRegistry, Interner, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternError, ExternRegistry, Runtime, extern_fn, extern_registry};
 
 use crate::list::List;
 
 #[extern_fn(effect = pure)]
-fn len_str(_: &Interner, s: String) -> i64 {
+fn len_str<R>(_: &R, s: String) -> i64
+where
+    R: Runtime,
+{
     s.len() as i64
 }
 
 #[extern_fn(effect = pure)]
-fn trim(_: &Interner, s: String) -> String {
+fn trim<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     s.trim().to_owned()
 }
 
 #[extern_fn(effect = pure)]
-fn trim_start(_: &Interner, s: String) -> String {
+fn trim_start<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     s.trim_start().to_owned()
 }
 
 #[extern_fn(effect = pure)]
-fn trim_end(_: &Interner, s: String) -> String {
+fn trim_end<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     s.trim_end().to_owned()
 }
 
 #[extern_fn(effect = pure)]
-fn upper(_: &Interner, s: String) -> String {
+fn upper<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     s.to_uppercase()
 }
 
 #[extern_fn(effect = pure)]
-fn lower(_: &Interner, s: String) -> String {
+fn lower<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
     s.to_lowercase()
 }
 
 #[extern_fn(effect = pure)]
-fn contains_str(_: &Interner, s: String, pat: String) -> bool {
+fn contains_str<R>(_: &R, s: String, pat: String) -> bool
+where
+    R: Runtime,
+{
     s.contains(&*pat)
 }
 
 #[extern_fn(effect = pure)]
-fn starts_with_str(_: &Interner, s: String, pat: String) -> bool {
+fn starts_with_str<R>(_: &R, s: String, pat: String) -> bool
+where
+    R: Runtime,
+{
     s.starts_with(&*pat)
 }
 
 #[extern_fn(effect = pure)]
-fn ends_with_str(_: &Interner, s: String, pat: String) -> bool {
+fn ends_with_str<R>(_: &R, s: String, pat: String) -> bool
+where
+    R: Runtime,
+{
     s.ends_with(&*pat)
 }
 
 #[extern_fn(effect = pure)]
-fn replace_str(_: &Interner, s: String, from: String, to: String) -> String {
+fn replace_str<R>(_: &R, s: String, from: String, to: String) -> String
+where
+    R: Runtime,
+{
     s.replace(&*from, &to)
 }
 
 #[extern_fn(effect = pure)]
-fn split_str(_: &Interner, s: String, sep: String) -> List<String> {
+fn split_str<R>(_: &R, s: String, sep: String) -> List<String>
+where
+    R: Runtime,
+{
     List(s.split(&*sep).map(str::to_owned).collect())
 }
 
 #[extern_fn(effect = pure)]
-fn repeat_str(_: &Interner, s: String, n: i64) -> Result<String, ExternError> {
+fn repeat_str<R>(_: &R, s: String, n: i64) -> Result<String, ExternError>
+where
+    R: Runtime,
+{
     let n = usize::try_from(n)
         .map_err(|_| ExternError::call("repeat_str", format!("negative count {n}")))?;
     Ok(s.repeat(n))
@@ -68,7 +104,10 @@ fn repeat_str(_: &Interner, s: String, n: i64) -> Result<String, ExternError> {
 
 /// Byte range `[start, end)` clamped to the string; an inverted range is empty.
 #[extern_fn(effect = pure)]
-fn substring(_: &Interner, s: String, start: i64, end: i64) -> String {
+fn substring<R>(_: &R, s: String, start: i64, end: i64) -> String
+where
+    R: Runtime,
+{
     let start = start.max(0) as usize;
     let end = (end.max(0) as usize).min(s.len());
     let start = start.min(end);
@@ -76,17 +115,26 @@ fn substring(_: &Interner, s: String, start: i64, end: i64) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn to_bytes(_: &Interner, s: String) -> List<u8> {
+fn to_bytes<R>(_: &R, s: String) -> List<u8>
+where
+    R: Runtime,
+{
     List(s.into_bytes())
 }
 
 #[extern_fn(effect = pure)]
-fn to_utf8(_: &Interner, bytes: List<u8>) -> Option<String> {
+fn to_utf8<R>(_: &R, bytes: List<u8>) -> Option<String>
+where
+    R: Runtime,
+{
     String::from_utf8(bytes.0).ok()
 }
 
 #[extern_fn(effect = pure)]
-fn to_utf8_lossy(_: &Interner, bytes: List<u8>) -> String {
+fn to_utf8_lossy<R>(_: &R, bytes: List<u8>) -> String
+where
+    R: Runtime,
+{
     String::from_utf8_lossy(&bytes.0).into_owned()
 }
 
@@ -103,7 +151,7 @@ pub fn string_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{TypeRegistry, TypesOnly};
+    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {

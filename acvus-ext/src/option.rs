@@ -1,21 +1,21 @@
 //! Option operations. All pure, polymorphic.
 
-use acvus_extern::{
-    ExternError, ExternRegistry, Interner, Runtime, TyVar, extern_fn, extern_registry,
-};
+use acvus_extern::{ExternError, ExternRegistry, Runtime, TyVar, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
-fn unwrap<T>(_: &Interner, val: Option<T>) -> Result<T, ExternError>
+fn unwrap<T, R>(_: &R, val: Option<T>) -> Result<T, ExternError>
 where
     T: TyVar,
+    R: Runtime,
 {
     val.ok_or_else(|| ExternError::call("unwrap", "called on None"))
 }
 
 #[extern_fn(effect = pure)]
-fn unwrap_or<T>(_: &Interner, val: Option<T>, default: T) -> T
+fn unwrap_or<T, R>(_: &R, val: Option<T>, default: T) -> T
 where
     T: TyVar,
+    R: Runtime,
 {
     val.unwrap_or(default)
 }
@@ -29,7 +29,7 @@ pub fn option_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{TypeRegistry, TypesOnly};
+    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {

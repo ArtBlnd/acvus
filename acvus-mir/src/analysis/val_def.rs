@@ -43,7 +43,6 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
         | InstKind::MakeVariant { dst, .. }
         | InstKind::TestVariant { dst, .. }
         | InstKind::UnwrapVariant { dst, .. }
-        | InstKind::Clone { dst, .. }
         | InstKind::Spawn { dst, .. }
         | InstKind::Eval { dst, .. }
         | InstKind::Merge { dst, .. }

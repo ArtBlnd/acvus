@@ -1,26 +1,15 @@
-//! `List<T>`: the dynamic-length sequence, an extension type whose payload
-//! is the runtime's own values.
+//! `List<T>`: the dynamic-length sequence, an extension type that crosses
+//! the runtime boundary whole.
 
 use acvus_extern::{
-    Arr, ExternError, ExternRegistry, ExternTypeDecl, ExternTypeName, ExternValue, FromValue,
-    Interner, IntoValue, LenVar, PayloadMismatch, PolyTy, PolyVars, QualifiedRef, Runtime, TyArg,
-    TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry,
+    Arr, ExternRegistry, ExternTypeDecl, Interner, LenVar, PolyTy, PolyVars, QualifiedRef, Runtime,
+    TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct List<T>(pub Vec<T>)
 where
     T: TyVar;
-
-impl<T> List<T>
-where
-    T: TyVar,
-{
-    pub const TYPE_NAME: ExternTypeName = ExternTypeName {
-        ns: None,
-        name: "List",
-    };
-}
 
 impl<T> IntoIterator for List<T>
 where
@@ -61,43 +50,6 @@ where
     }
 }
 
-impl<R, T> FromValue<R> for List<T>
-where
-    R: Runtime,
-    T: TyVar + FromValue<R>,
-{
-    fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error> {
-        let o = R::into_extern(value)?;
-        if o.type_name != Self::TYPE_NAME {
-            return Err(ExternError::UnexpectedExtern {
-                expected: Self::TYPE_NAME,
-                got: o.type_name,
-            }
-            .into());
-        }
-        let items = o.into_cloned::<Vec<R::Value>>().map_err(|e| match e {
-            PayloadMismatch::OtherType => {
-                ExternError::internal("List payload is not the runtime's values")
-            }
-            PayloadMismatch::Shared(_) => ExternError::internal("into_cloned never reports Shared"),
-        })?;
-        Ok(List(T::from_value_seq(items, interner)?))
-    }
-}
-
-impl<R, T> IntoValue<R> for List<T>
-where
-    R: Runtime,
-    T: TyVar + IntoValue<R>,
-{
-    fn into_value(self, interner: &Interner) -> R::Value {
-        R::extern_value(ExternValue::new(
-            Self::TYPE_NAME,
-            T::into_value_seq(self.0, interner),
-        ))
-    }
-}
-
 /// `List<elem>` as a concrete type, for contexts declared outside a script.
 pub fn list_ty(interner: &Interner, elem: acvus_mir::ty::Ty) -> acvus_mir::ty::Ty {
     acvus_mir::ty::Ty::UserDefined {
@@ -109,17 +61,19 @@ pub fn list_ty(interner: &Interner, elem: acvus_mir::ty::Ty) -> acvus_mir::ty::T
 }
 
 #[extern_fn(effect = pure)]
-fn len<T>(_: &Interner, list: List<T>) -> i64
+fn len<T, R>(_: &R, list: List<T>) -> i64
 where
     T: TyVar,
+    R: Runtime,
 {
     list.0.len() as i64
 }
 
 #[extern_fn(effect = pure)]
-fn reverse<T>(_: &Interner, list: List<T>) -> List<T>
+fn reverse<T, R>(_: &R, list: List<T>) -> List<T>
 where
     T: TyVar,
+    R: Runtime,
 {
     let mut items = list.0;
     items.reverse();
@@ -128,10 +82,11 @@ where
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn list<T, N>(_: &Interner, items: Arr<T, N>) -> List<T>
+fn list<T, N, R>(_: &R, items: Arr<T, N>) -> List<T>
 where
     T: TyVar,
     N: LenVar,
+    R: Runtime,
 {
     List(items.0)
 }

@@ -9,8 +9,6 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{LenTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
-use crate::convert::{FromValue, IntoValue};
-use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
 pub trait LenArg: Send + Sync + 'static {
@@ -69,25 +67,3 @@ where
     }
 }
 
-impl<R, T, N> FromValue<R> for Arr<T, N>
-where
-    R: Runtime,
-    T: TyVar + FromValue<R>,
-    N: LenVar,
-{
-    fn from_value(value: R::Value, interner: &Interner) -> Result<Self, R::Error> {
-        let items: Vec<R::Value> = R::into_array(value)?.into_iter().collect();
-        Ok(Self::new(T::from_value_seq(items, interner)?))
-    }
-}
-
-impl<R, T, N> IntoValue<R> for Arr<T, N>
-where
-    R: Runtime,
-    T: TyVar + IntoValue<R>,
-    N: LenVar,
-{
-    fn into_value(self, interner: &Interner) -> R::Value {
-        R::array(T::into_value_seq(self.0, interner).into_iter().collect())
-    }
-}

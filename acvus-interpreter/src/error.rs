@@ -1,53 +1,6 @@
 use std::fmt;
 
-use acvus_ast::{BinOp, UnaryOp};
-
-use acvus_extern::{ExternError, ExternTypeName};
-
-// -- ValueKind - lightweight discriminant for error reporting ---------
-
-/// What kind of runtime value was encountered.
-///
-/// Used in error variants to report type mismatches without carrying
-/// the full `Value`. Derived from `Value` via `ValueKind::of`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueKind {
-    Int,
-    Float,
-    String,
-    Bool,
-    Unit,
-    Byte,
-    Array,
-    Object,
-    Tuple,
-    Variant,
-    Fn,
-    ExternFn,
-    Handle,
-    Extern,
-}
-
-impl fmt::Display for ValueKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ValueKind::Int => write!(f, "Int"),
-            ValueKind::Float => write!(f, "Float"),
-            ValueKind::String => write!(f, "String"),
-            ValueKind::Bool => write!(f, "Bool"),
-            ValueKind::Unit => write!(f, "Unit"),
-            ValueKind::Byte => write!(f, "Byte"),
-            ValueKind::Array => write!(f, "Array"),
-            ValueKind::Object => write!(f, "Object"),
-            ValueKind::Tuple => write!(f, "Tuple"),
-            ValueKind::Variant => write!(f, "Variant"),
-            ValueKind::Fn => write!(f, "Fn"),
-            ValueKind::ExternFn => write!(f, "ExternFn"),
-            ValueKind::Handle => write!(f, "Handle"),
-            ValueKind::Extern => write!(f, "Extern"),
-        }
-    }
-}
+use acvus_extern::ExternError;
 
 // -- CollectionOp - which collection operation failed ----------------
 
@@ -75,7 +28,9 @@ impl fmt::Display for CollectionOp {
 
 /// Runtime error during template/script execution.
 ///
-/// NOT recoverable by retry - indicates a bug or invalid data.
+/// NOT recoverable by retry - indicates a bug or invalid data. A type
+/// mismatch is never one of these: the type checker rules it out, and the
+/// interpreter panics where it would have been observed.
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
     pub kind: RuntimeErrorKind,
@@ -83,23 +38,6 @@ pub struct RuntimeError {
 
 #[derive(Debug, Clone)]
 pub enum RuntimeErrorKind {
-    /// Binary operator applied to incompatible types.
-    BinOpMismatch {
-        op: BinOp,
-        left: ValueKind,
-        right: ValueKind,
-    },
-    /// Unary operator applied to incompatible type.
-    UnaryOpMismatch { op: UnaryOp, operand: ValueKind },
-    /// Value was not the expected kind.
-    UnexpectedType {
-        /// What operation required this type (static label).
-        operation: &'static str,
-        /// What kind(s) were acceptable.
-        expected: &'static [ValueKind],
-        /// What was actually found.
-        got: ValueKind,
-    },
     /// NaN encountered in ordered comparison.
     NanComparison,
     /// Division by zero.
@@ -127,13 +65,6 @@ pub enum RuntimeErrorKind {
     ToolCallLimitExceeded { limit: usize },
     /// Assert expression evaluated to false.
     AssertFailed,
-    /// An extension value of another type reached a handler.
-    UnexpectedExtern {
-        expected: ExternTypeName,
-        got: ExternTypeName,
-    },
-    /// A move-only extension value was still shared when a handler took it.
-    SharedMoveOnly { type_name: ExternTypeName },
     /// Internal interpreter error (compiler bug or invalid state).
     Internal { message: std::string::String },
 }
@@ -141,32 +72,6 @@ pub enum RuntimeErrorKind {
 // -- Constructors ----------------------------------------------------
 
 impl RuntimeError {
-    pub fn bin_op_mismatch(op: BinOp, left: ValueKind, right: ValueKind) -> Self {
-        Self {
-            kind: RuntimeErrorKind::BinOpMismatch { op, left, right },
-        }
-    }
-
-    pub fn unary_op_mismatch(op: UnaryOp, operand: ValueKind) -> Self {
-        Self {
-            kind: RuntimeErrorKind::UnaryOpMismatch { op, operand },
-        }
-    }
-
-    pub fn unexpected_type(
-        operation: &'static str,
-        expected: &'static [ValueKind],
-        got: ValueKind,
-    ) -> Self {
-        Self {
-            kind: RuntimeErrorKind::UnexpectedType {
-                operation,
-                expected,
-                got,
-            },
-        }
-    }
-
     pub fn nan_comparison() -> Self {
         Self {
             kind: RuntimeErrorKind::NanComparison,
@@ -231,18 +136,6 @@ impl RuntimeError {
         }
     }
 
-    pub fn unexpected_extern(expected: ExternTypeName, got: ExternTypeName) -> Self {
-        Self {
-            kind: RuntimeErrorKind::UnexpectedExtern { expected, got },
-        }
-    }
-
-    pub fn shared_move_only(type_name: ExternTypeName) -> Self {
-        Self {
-            kind: RuntimeErrorKind::SharedMoveOnly { type_name },
-        }
-    }
-
     pub fn internal(message: impl Into<std::string::String>) -> Self {
         Self {
             kind: RuntimeErrorKind::Internal {
@@ -254,44 +147,9 @@ impl RuntimeError {
 
 // -- Display ---------------------------------------------------------
 
-fn fmt_expected(expected: &[ValueKind], f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match expected {
-        [] => write!(f, "(none)"),
-        [single] => write!(f, "{single}"),
-        [a, b] => write!(f, "{a} or {b}"),
-        many => {
-            for (i, k) in many.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?;
-                }
-                if i == many.len() - 1 {
-                    write!(f, "or ")?;
-                }
-                write!(f, "{k}")?;
-            }
-            Ok(())
-        }
-    }
-}
-
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            RuntimeErrorKind::BinOpMismatch { op, left, right } => {
-                write!(f, "{op:?}: incompatible types {left} and {right}")
-            }
-            RuntimeErrorKind::UnaryOpMismatch { op, operand } => {
-                write!(f, "{op:?}: incompatible type {operand}")
-            }
-            RuntimeErrorKind::UnexpectedType {
-                operation,
-                expected,
-                got,
-            } => {
-                write!(f, "{operation}: expected ")?;
-                fmt_expected(expected, f)?;
-                write!(f, ", got {got}")
-            }
             RuntimeErrorKind::NanComparison => write!(f, "NaN in ordered comparison"),
             RuntimeErrorKind::DivisionByZero => write!(f, "division by zero"),
             RuntimeErrorKind::IndexOutOfBounds { index, len } => {
@@ -311,15 +169,6 @@ impl fmt::Display for RuntimeError {
                 write!(f, "tool call limit exceeded ({limit} rounds)")
             }
             RuntimeErrorKind::AssertFailed => write!(f, "assert failed"),
-            RuntimeErrorKind::UnexpectedExtern { expected, got } => {
-                write!(f, "expected extension type {expected}, got {got}")
-            }
-            RuntimeErrorKind::SharedMoveOnly { type_name } => {
-                write!(
-                    f,
-                    "move-only extension value of type {type_name} is still shared"
-                )
-            }
             RuntimeErrorKind::Internal { message } => write!(f, "internal: {message}"),
         }
     }
@@ -334,13 +183,6 @@ impl From<ExternError> for RuntimeError {
                 name,
                 source: message,
             },
-            ExternError::UnexpectedExtern { expected, got } => {
-                RuntimeErrorKind::UnexpectedExtern { expected, got }
-            }
-            ExternError::SharedMoveOnly { type_name } => {
-                RuntimeErrorKind::SharedMoveOnly { type_name }
-            }
-            ExternError::MissingField { field } => RuntimeErrorKind::MissingField { field },
             ExternError::Internal { message } => RuntimeErrorKind::Internal { message },
         };
         Self { kind }

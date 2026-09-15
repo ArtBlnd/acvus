@@ -1,17 +1,16 @@
 //! The `Iterator` extension type: a lazy, move-only pipeline.
 //!
 //! The pipeline itself is erased: it moves the runtime's values and calls
-//! the runtime's closures. `Iter<T, E, Rt>` is the typed view on it. A
-//! typed source enters through `from_items` or `from_fn`, and a typed
+//! the runtime's closures. `Iter<T, E, I, Rt>` is the typed view on it. A
+//! typed source enters through `from_items` or `generate`, and a typed
 //! consumer pulls through `next`; those two edges and the closure calls are
-//! the only places a value changes representation.
+//! the only places a value crosses the runtime boundary, through the
+//! runtime's `erase`/`materialize`.
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-use acvus_extern::{
-    BoxFuture, EffectVar, ExternType, FromValue, IdentityVar, Interner, IntoValue, Runtime, TyVar,
-};
+use acvus_extern::{BoxFuture, ClosureFn, EffectVar, ExternType, Fn1, IdentityVar, Runtime, TyVar};
 use sync_wrapper::SyncWrapper;
 
 #[derive(ExternType)]
@@ -25,26 +24,23 @@ where
 
 /// How one item becomes many, for Flatten and FlatMap: the typed layer
 /// supplies it, since only the typed layer knows the item's shape.
-type Expand<Rt> = Box<
-    dyn Fn(
-            <Rt as Runtime>::Value,
-            &Interner,
-        ) -> Result<Vec<<Rt as Runtime>::Value>, <Rt as Runtime>::Error>
-        + Send
-        + Sync,
->;
+type Expand<Rt> =
+    Box<dyn Fn(&Rt, <Rt as Runtime>::Value) -> Vec<<Rt as Runtime>::Value> + Send + Sync>;
+
+/// A closure as the pipeline keeps it: its element types are erased with
+/// the pipeline's, so one op shape serves every `T`.
+type Lambda<Rt> = Fn1<<Rt as Runtime>::Value, <Rt as Runtime>::Value, (), Rt>;
 
 enum Op<Rt: Runtime> {
-    Map(Rt::Closure),
-    Filter(Rt::Closure),
+    Map(Lambda<Rt>),
+    Filter(Lambda<Rt>),
     Take { remaining: usize },
     Skip { remaining: usize },
     Flatten(Expand<Rt>),
-    FlatMap(Rt::Closure, Expand<Rt>),
+    FlatMap(Lambda<Rt>, Expand<Rt>),
 }
 
-type Generator<Rt> =
-    SyncWrapper<Box<dyn FnMut(&Interner) -> Option<<Rt as Runtime>::Value> + Send>>;
+type Generator<Rt> = SyncWrapper<Box<dyn FnMut(&Rt) -> Option<<Rt as Runtime>::Value> + Send>>;
 
 enum Source<Rt: Runtime> {
     Generator(Generator<Rt>),
@@ -121,34 +117,28 @@ where
         Self::erased(Pipeline::from_source(Source::Done))
     }
 
-    pub fn from_items(items: Vec<T>) -> Self
-    where
-        T: IntoValue<Rt>,
-    {
+    pub fn from_items(items: Vec<T>) -> Self {
         let mut items = items.into_iter();
-        Self::from_fn(move |i| items.next().map(|item| item.into_value(i)))
+        Self::generate(move || items.next())
     }
 
-    pub fn from_fn(f: impl FnMut(&Interner) -> Option<Rt::Value> + Send + 'static) -> Self {
+    pub fn from_fn(f: impl FnMut(&Rt) -> Option<Rt::Value> + Send + 'static) -> Self {
         Self::erased(Pipeline::from_source(Source::Generator(SyncWrapper::new(
             Box::new(f),
         ))))
     }
 
     /// A typed generator: each item crosses into the runtime as it is pulled.
-    pub fn generate(mut f: impl FnMut() -> Option<T> + Send + 'static) -> Self
-    where
-        T: IntoValue<Rt>,
-    {
-        Self::from_fn(move |i| f().map(|item| item.into_value(i)))
+    pub fn generate(mut f: impl FnMut() -> Option<T> + Send + 'static) -> Self {
+        Self::from_fn(move |rt| f().map(|item| unsafe { rt.erase::<T>(item) }))
     }
 
-    pub fn map<U: TyVar>(self, f: Rt::Closure) -> Iter<U, E, I, Rt> {
-        Self::erased(self.0.push_op(Op::Map(f))).retype()
+    pub fn map<U: TyVar>(self, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt> {
+        Self::erased(self.0.push_op(Op::Map(f.erased()))).retype()
     }
 
-    pub fn filter(self, f: Rt::Closure) -> Self {
-        Self::erased(self.0.push_op(Op::Filter(f)))
+    pub fn filter(self, f: Fn1<T, bool, E, Rt>) -> Self {
+        Self::erased(self.0.push_op(Op::Filter(f.erased())))
     }
 
     pub fn take(self, n: usize) -> Self {
@@ -177,27 +167,26 @@ where
     /// Flatten items that are themselves sequences of `U`.
     pub fn flatten<U>(self) -> Iter<U, E, I, Rt>
     where
-        T: FromValue<Rt> + IntoIterator<Item = U>,
-        U: TyVar + IntoValue<Rt>,
+        T: IntoIterator<Item = U>,
+        U: TyVar,
     {
         Self::erased(self.0.push_op(Op::Flatten(expand_as::<T, U, Rt>()))).retype()
     }
 
     /// Map each item to a sequence of `U` and flatten.
-    pub fn flat_map<S, U>(self, f: Rt::Closure) -> Iter<U, E, I, Rt>
+    pub fn flat_map<S, U>(self, f: Fn1<T, S, E, Rt>) -> Iter<U, E, I, Rt>
     where
-        S: FromValue<Rt> + IntoIterator<Item = U>,
-        U: TyVar + IntoValue<Rt>,
+        S: TyVar + IntoIterator<Item = U>,
+        U: TyVar,
     {
-        Self::erased(self.0.push_op(Op::FlatMap(f, expand_as::<S, U, Rt>()))).retype()
+        Self::erased(self.0.push_op(Op::FlatMap(f.erased(), expand_as::<S, U, Rt>()))).retype()
     }
 
-    pub async fn next(&mut self, interner: &Interner) -> Result<Option<T>, Rt::Error>
+    pub async fn next(&mut self, rt: &Rt) -> Result<Option<T>, Rt::Error>
     where
-        T: FromValue<Rt>,
     {
-        match pull(&mut self.0, interner).await? {
-            Some(value) => Ok(Some(T::from_value(value, interner)?)),
+        match pull(&mut self.0, rt).await? {
+            Some(value) => Ok(Some(unsafe { rt.materialize::<T>(value) })),
             None => Ok(None),
         }
     }
@@ -205,36 +194,45 @@ where
 
 fn expand_as<S, U, Rt>() -> Expand<Rt>
 where
-    S: FromValue<Rt> + IntoIterator<Item = U>,
-    U: IntoValue<Rt>,
+    S: TyVar + IntoIterator<Item = U>,
+    U: TyVar,
     Rt: Runtime,
 {
-    Box::new(|value, i| {
-        let items = S::from_value(value, i)?;
-        Ok(items.into_iter().map(|u| u.into_value(i)).collect())
+    Box::new(|rt, value| {
+        let items = unsafe { rt.materialize::<S>(value) };
+        items
+            .into_iter()
+            .map(|u| unsafe { rt.erase::<U>(u) })
+            .collect()
     })
 }
 
-fn pull<'a, Rt: Runtime>(
+fn pull<'a, Rt>(
     pipeline: &'a mut Pipeline<Rt>,
-    interner: &'a Interner,
-) -> BoxFuture<'a, Result<Option<Rt::Value>, Rt::Error>> {
+    rt: &'a Rt,
+) -> BoxFuture<'a, Result<Option<Rt::Value>, Rt::Error>>
+where
+    Rt: Runtime,
+{
     Box::pin(async move {
         loop {
-            let Some((start_op, val)) = next_input(pipeline, interner).await? else {
+            let Some((start_op, val)) = next_input(pipeline, rt).await? else {
                 return Ok(None);
             };
-            if let Some(out) = run_ops(pipeline, start_op, val, interner).await? {
+            if let Some(out) = run_ops(pipeline, start_op, val, rt).await? {
                 return Ok(Some(out));
             }
         }
     })
 }
 
-async fn next_input<Rt: Runtime>(
+async fn next_input<Rt>(
     pipeline: &mut Pipeline<Rt>,
-    interner: &Interner,
-) -> Result<Option<(usize, Rt::Value)>, Rt::Error> {
+    rt: &Rt,
+) -> Result<Option<(usize, Rt::Value)>, Rt::Error>
+where
+    Rt: Runtime,
+{
     while let Some(frame) = pipeline.expansions.last_mut() {
         if let Some(val) = frame.items.pop_front() {
             return Ok(Some((frame.next_op, val)));
@@ -246,13 +244,13 @@ async fn next_input<Rt: Runtime>(
     }
 
     let raw = match &mut pipeline.source {
-        Source::Generator(next_fn) => next_fn.get_mut()(interner),
+        Source::Generator(next_fn) => next_fn.get_mut()(rt),
         Source::Done => None,
         Source::Chain(parts) => loop {
             let Some(front) = parts.front_mut() else {
                 break None;
             };
-            match pull(front, interner).await? {
+            match pull(front, rt).await? {
                 Some(val) => break Some(val),
                 None => {
                     parts.pop_front();
@@ -267,15 +265,15 @@ async fn run_ops<Rt: Runtime>(
     pipeline: &mut Pipeline<Rt>,
     start_op: usize,
     mut val: Rt::Value,
-    interner: &Interner,
+    rt: &Rt,
 ) -> Result<Option<Rt::Value>, Rt::Error> {
     let mut i = start_op;
     while i < pipeline.ops.len() {
         match &mut pipeline.ops[i] {
-            Op::Map(f) => val = Rt::call(f, vec![val]).await?,
+            Op::Map(f) => val = f.call(rt, (&val,)).await?,
             Op::Filter(f) => {
-                let keep = Rt::call(f, vec![val.clone()]).await?;
-                if !Rt::materialize::<bool>(keep, interner)? {
+                let keep = f.call(rt, (&val,)).await?;
+                if !unsafe { rt.materialize::<bool>(keep) } {
                     return Ok(None);
                 }
             }
@@ -295,15 +293,15 @@ async fn run_ops<Rt: Runtime>(
                 }
             }
             Op::Flatten(expand) => {
-                let items = expand(val, interner)?;
+                let items = expand(rt, val);
                 let Some(first) = push_expansion(pipeline, i, items.into()) else {
                     return Ok(None);
                 };
                 val = first;
             }
             Op::FlatMap(f, expand) => {
-                let mapped = Rt::call(f, vec![val]).await?;
-                let items = expand(mapped, interner)?;
+                let mapped = f.call(rt, (&val,)).await?;
+                let items = expand(rt, mapped);
                 let Some(first) = push_expansion(pipeline, i, items.into()) else {
                     return Ok(None);
                 };

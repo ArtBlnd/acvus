@@ -226,8 +226,6 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::UnwrapVariant { src, .. } => remap_val(src, remap),
 
-        InstKind::Clone { src, .. } => remap_val(src, remap),
-
         InstKind::Drop { src } => remap_val(src, remap),
 
         InstKind::Spawn {

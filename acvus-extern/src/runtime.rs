@@ -4,71 +4,55 @@
 //! opens one shape of value; a shape that is not there is the runtime's
 //! own error.
 
-use acvus_utils::{Astr, Interner};
-use futures::future::BoxFuture;
-use rustc_hash::FxHashMap;
+use std::future::{Future, Ready};
 
-use crate::convert::{FromValue, IntoValue};
 use crate::error::ExternError;
-use crate::extern_value::ExternValue;
+use crate::func::CallToken;
 
-pub trait Runtime: Sized + Send + Sync + 'static {
-    /// The erased representation. A generic ExternFn's type variable is
-    /// this at runtime, so it converts to and from itself.
-    type Value: Clone + Send + Sync + 'static + FromValue<Self> + IntoValue<Self>;
-    type Closure: Send + Sync + 'static;
+/// The contract a host signs to run declared ExternFns. A `Value` is opaque;
+/// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
+/// run a value that is a closure. A host owns its `Value` representation.
+pub trait Runtime: Send + Sync + 'static {
+    type Value: Send + Sync + 'static;
     type Error: From<ExternError> + Send + Sync + 'static;
-
-    /// The host's own string layout: a rope, an inline buffer, an `Arc`.
-    type Str: AsRef<str> + Send + Sync + 'static;
-    /// The host's own array layout, chosen per element type.
-    type Array<T>: AsRef<[T]> + IntoIterator<Item = T> + FromIterator<T>;
-
-    fn materialize<T>(value: Self::Value, interner: &Interner) -> Result<T, Self::Error>
+    type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
     where
-        T: FromValue<Self>,
-    {
-        T::from_value(value, interner)
-    }
+        Self: 'a;
 
-    /// The language's `==`.
-    fn equals(a: &Self::Value, b: &Self::Value) -> bool;
+    /// # Safety
+    /// `T` must be the type the value was `erase`d from.
+    unsafe fn materialize<T>(&self, value: Self::Value) -> T
+    where
+        T: Send + Sync + 'static;
+    /// # Safety
+    /// The value may only be `materialize`d back to this same `T`.
+    unsafe fn erase<T>(&self, value: T) -> Self::Value
+    where
+        T: Send + Sync + 'static;
 
-    fn unit() -> Self::Value;
-    fn int(n: i64) -> Self::Value;
-    fn float(f: f64) -> Self::Value;
-    fn bool(b: bool) -> Self::Value;
-    fn byte(b: u8) -> Self::Value;
-    fn small_bits(value: Self::Value) -> u64;
-    fn string(s: String) -> Self::Value;
-    fn into_str(value: Self::Value) -> Result<Self::Str, Self::Error>;
-
-    fn array(items: Self::Array<Self::Value>) -> Self::Value;
-    fn into_array(value: Self::Value) -> Result<Self::Array<Self::Value>, Self::Error>;
-    fn tuple(items: Vec<Self::Value>) -> Self::Value;
-    fn into_tuple(value: Self::Value) -> Result<Vec<Self::Value>, Self::Error>;
-    fn object(fields: FxHashMap<Astr, Self::Value>) -> Self::Value;
-    fn into_object(value: Self::Value) -> Result<FxHashMap<Astr, Self::Value>, Self::Error>;
-    fn some(interner: &Interner, value: Self::Value) -> Self::Value;
-    fn none(interner: &Interner) -> Self::Value;
-    fn into_option(
-        interner: &Interner,
-        value: Self::Value,
-    ) -> Result<Option<Self::Value>, Self::Error>;
-
-    fn extern_value(value: ExternValue) -> Self::Value;
-    fn into_extern(value: Self::Value) -> Result<ExternValue, Self::Error>;
-
-    fn closure(closure: Self::Closure) -> Self::Value;
-    fn into_closure(value: Self::Value) -> Result<Self::Closure, Self::Error>;
-    fn call(
-        closure: &Self::Closure,
-        args: Vec<Self::Value>,
-    ) -> BoxFuture<'_, Result<Self::Value, Self::Error>>;
+    /// Run the closure `f` on lent arguments. A value in a handler's hands is
+    /// a name for storage the host owns; whether the callee takes a copy or
+    /// an alias is the host's own affair, decided by the closure's type. Only
+    /// `Fn0`/`Fn1`/… reach these: the token is theirs to mint. The `args`
+    /// slice of `call_n` is the caller's stack; the future does not keep it.
+    fn call_0<'a>(&'a self, f: &'a Self::Value, token: CallToken) -> Self::CallFuture<'a>;
+    fn call_1<'a>(
+        &'a self,
+        f: &'a Self::Value,
+        a: &'a Self::Value,
+        token: CallToken,
+    ) -> Self::CallFuture<'a>;
+    fn call_n<'a>(
+        &'a self,
+        f: &'a Self::Value,
+        args: &[&'a Self::Value],
+        token: CallToken,
+    ) -> Self::CallFuture<'a>;
 }
 
 /// A runtime that holds no values: for registering declarations where
 /// nothing will ever run.
+#[derive(Clone, Copy)]
 pub struct TypesOnly;
 
 fn no_values<T>() -> Result<T, ExternError> {
@@ -77,52 +61,27 @@ fn no_values<T>() -> Result<T, ExternError> {
 
 impl Runtime for TypesOnly {
     type Value = ();
-    type Closure = ();
     type Error = ExternError;
-    type Str = String;
-    type Array<T> = Vec<T>;
+    type CallFuture<'a> = Ready<Result<(), ExternError>>;
 
-    fn equals(_: &(), _: &()) -> bool {
-        true
-    }
-    fn unit() {}
-    fn int(_: i64) {}
-    fn float(_: f64) {}
-    fn bool(_: bool) {}
-    fn byte(_: u8) {}
-    fn small_bits(_: ()) -> u64 {
+    unsafe fn materialize<T>(&self, _: ()) -> T
+    where
+        T: Send + Sync + 'static,
+    {
         panic!("TypesOnly runtime holds no values")
     }
-    fn string(_: String) {}
-    fn into_str(_: ()) -> Result<String, ExternError> {
-        no_values()
+    unsafe fn erase<T>(&self, _: T)
+    where
+        T: Send + Sync + 'static,
+    {
     }
-    fn array(_: Vec<()>) {}
-    fn into_array(_: ()) -> Result<Vec<()>, ExternError> {
-        no_values()
+    fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(no_values())
     }
-    fn tuple(_: Vec<()>) {}
-    fn into_tuple(_: ()) -> Result<Vec<()>, ExternError> {
-        no_values()
+    fn call_1<'a>(&'a self, _: &'a (), _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(no_values())
     }
-    fn object(_: FxHashMap<Astr, ()>) {}
-    fn into_object(_: ()) -> Result<FxHashMap<Astr, ()>, ExternError> {
-        no_values()
-    }
-    fn some(_: &Interner, _: ()) {}
-    fn none(_: &Interner) {}
-    fn into_option(_: &Interner, _: ()) -> Result<Option<()>, ExternError> {
-        no_values()
-    }
-    fn extern_value(_: ExternValue) {}
-    fn into_extern(_: ()) -> Result<ExternValue, ExternError> {
-        no_values()
-    }
-    fn closure(_: ()) {}
-    fn into_closure(_: ()) -> Result<(), ExternError> {
-        no_values()
-    }
-    fn call(_: &(), _: Vec<()>) -> BoxFuture<'_, Result<(), ExternError>> {
-        Box::pin(std::future::ready(no_values()))
+    fn call_n<'a>(&'a self, _: &'a (), _: &[&'a ()], _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(no_values())
     }
 }

@@ -7,8 +7,9 @@
 //!   find, reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, EffectVar, ExternError, ExternRegistry, Fn1, Fn2, FromValue, IdentityVar, Interner,
-    IntoValue, LenVar, Runtime, TyVar, extern_fn, extern_registry,
+    Arr, ClosureFn, EffectVar, ExternError, ExternRegistry, Fn1, Fn2, IdentityVar, LenVar, Runtime,
+    TyVar,
+    extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -20,9 +21,9 @@ fn count(name: &'static str, n: i64) -> Result<usize, ExternError> {
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn iter<T, E, I, Rt>(_: &Interner, items: List<T>) -> Iter<T, E, I, Rt>
+fn iter<T, E, I, Rt>(_: &Rt, items: List<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + IntoValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -32,9 +33,9 @@ where
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn iter_array<T, N, E, I, Rt>(_: &Interner, items: Arr<T, N>) -> Iter<T, E, I, Rt>
+fn iter_array<T, N, E, I, Rt>(_: &Rt, items: Arr<T, N>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + IntoValue<Rt>,
+    T: TyVar,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,
@@ -44,9 +45,9 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn rev_iter<T, E, I, Rt>(_: &Interner, items: List<T>) -> Iter<T, E, I, Rt>
+fn rev_iter<T, E, I, Rt>(_: &Rt, items: List<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + IntoValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -57,11 +58,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map<T, U, E, I, Rt>(
-    _: &Interner,
-    it: Iter<T, E, I, Rt>,
-    f: Fn1<T, U, E, Rt>,
-) -> Iter<U, E, I, Rt>
+fn map<T, U, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -69,15 +66,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.map(f.0)
+    it.map(f)
 }
 
 #[extern_fn(effect = pure)]
-fn pmap<T, U, E, I, Rt>(
-    _: &Interner,
-    it: Iter<T, E, I, Rt>,
-    f: Fn1<T, U, E, Rt>,
-) -> Iter<U, E, I, Rt>
+fn pmap<T, U, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -85,30 +78,22 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.map(f.0)
+    it.map(f)
 }
 
 #[extern_fn(effect = pure)]
-fn filter<T, E, I, Rt>(
-    _: &Interner,
-    it: Iter<T, E, I, Rt>,
-    f: Fn1<T, bool, E, Rt>,
-) -> Iter<T, E, I, Rt>
+fn filter<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, bool, E, Rt>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.filter(f.0)
+    it.filter(f)
 }
 
 #[extern_fn(effect = pure)]
-fn take<T, E, I, Rt>(
-    _: &Interner,
-    it: Iter<T, E, I, Rt>,
-    n: i64,
-) -> Result<Iter<T, E, I, Rt>, Rt::Error>
+fn take<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
 where
     T: TyVar,
     E: EffectVar,
@@ -119,11 +104,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn skip<T, E, I, Rt>(
-    _: &Interner,
-    it: Iter<T, E, I, Rt>,
-    n: i64,
-) -> Result<Iter<T, E, I, Rt>, Rt::Error>
+fn skip<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
 where
     T: TyVar,
     E: EffectVar,
@@ -134,11 +115,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn chain<T, E, I, J, K, Rt>(
-    _: &Interner,
-    a: Iter<T, E, I, Rt>,
-    b: Iter<T, E, J, Rt>,
-) -> Iter<T, E, K, Rt>
+fn chain<T, E, I, J, K, Rt>(_: &Rt, a: Iter<T, E, I, Rt>, b: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -151,7 +128,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn pchain<T, E, I, K, Rt>(_: &Interner, parts: List<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
+fn pchain<T, E, I, K, Rt>(_: &Rt, parts: List<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -166,9 +143,9 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flatten<T, E, I, Rt>(_: &Interner, it: Iter<List<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
+fn flatten<T, E, I, Rt>(_: &Rt, it: Iter<List<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -177,9 +154,9 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flatten_arrays<T, N, E, I, Rt>(_: &Interner, it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
+fn flatten_arrays<T, N, E, I, Rt>(_: &Rt, it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: TyVar,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,
@@ -190,30 +167,30 @@ where
 
 #[extern_fn(effect = pure)]
 fn flat_map<T, U, E, I, Rt>(
-    _: &Interner,
+    _: &Rt,
     it: Iter<T, E, I, Rt>,
     f: Fn1<T, List<U>, E, Rt>,
 ) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
-    U: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    U: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.flat_map::<List<U>, U>(f.0)
+    it.flat_map::<List<U>, U>(f)
 }
 
 #[extern_fn(effect = E)]
-async fn collect<T, E, I, Rt>(i: Interner, mut it: Iter<T, E, I, Rt>) -> Result<List<T>, Rt::Error>
+async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<List<T>, Rt::Error>
 where
-    T: TyVar + FromValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
     let mut items = Vec::new();
-    while let Some(item) = it.next(&i).await? {
+    while let Some(item) = it.next(rt).await? {
         items.push(item);
     }
     Ok(List(items))
@@ -221,7 +198,7 @@ where
 
 #[extern_fn(effect = E)]
 async fn join<E, I, Rt>(
-    i: Interner,
+    rt: &Rt,
     mut it: Iter<String, E, I, Rt>,
     sep: String,
 ) -> Result<String, Rt::Error>
@@ -231,33 +208,33 @@ where
     Rt: Runtime,
 {
     let mut parts = Vec::new();
-    while let Some(part) = it.next(&i).await? {
+    while let Some(part) = it.next(rt).await? {
         parts.push(part);
     }
     Ok(parts.join(&sep))
 }
 
 #[extern_fn(effect = E)]
-async fn first<T, E, I, Rt>(i: Interner, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
+async fn first<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar + FromValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.next(&i).await
+    it.next(rt).await
 }
 
 #[extern_fn(effect = E)]
-async fn last<T, E, I, Rt>(i: Interner, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
+async fn last<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar + FromValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
     let mut last = None;
-    while let Some(item) = it.next(&i).await? {
+    while let Some(item) = it.next(rt).await? {
         last = Some(item);
     }
     Ok(last)
@@ -265,19 +242,18 @@ where
 
 #[extern_fn(effect = E)]
 async fn contains<T, E, I, Rt>(
-    i: Interner,
+    rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     needle: T,
 ) -> Result<bool, Rt::Error>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + PartialEq,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    let needle = needle.into_value(&i);
-    while let Some(item) = it.next(&i).await? {
-        if Rt::equals(&item.into_value(&i), &needle) {
+    while let Some(item) = it.next(rt).await? {
+        if item == needle {
             return Ok(true);
         }
     }
@@ -285,30 +261,33 @@ where
 }
 
 #[extern_fn(effect = E)]
-async fn next<T, E, I, Rt>(i: Interner, it: &mut Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
+async fn next<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar + FromValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.next(&i).await
+    it.next(rt).await
 }
 
 #[extern_fn(effect = E)]
 async fn find<T, E, I, Rt>(
-    i: Interner,
+    rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<T, bool, E, Rt>,
 ) -> Result<T, Rt::Error>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt> + Clone,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(&i).await? {
-        if f.call(&i, item.clone()).await? {
+    while let Some(item) = it.next(rt).await? {
+        let lent = unsafe { rt.erase::<T>(item) };
+        let keep = f.call(rt, (&lent,)).await;
+        let item = unsafe { rt.materialize::<T>(lent) };
+        if unsafe { rt.materialize::<bool>(keep?) } {
             return Ok(item);
         }
     }
@@ -317,60 +296,73 @@ where
 
 #[extern_fn(effect = E)]
 async fn reduce<T, E, I, Rt>(
-    i: Interner,
+    rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn2<T, T, T, E, Rt>,
 ) -> Result<T, Rt::Error>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    let Some(mut acc) = it.next(&i).await? else {
+    let Some(mut acc) = it.next(rt).await? else {
         return Err(ExternError::call("reduce", "empty iterator").into());
     };
-    while let Some(item) = it.next(&i).await? {
-        acc = f.call(&i, acc, item).await?;
+    while let Some(item) = it.next(rt).await? {
+        let lent_acc = unsafe { rt.erase::<T>(acc) };
+        let lent_item = unsafe { rt.erase::<T>(item) };
+        let out = f.call(rt, (&lent_acc, &lent_item)).await;
+        drop(unsafe { rt.materialize::<T>(lent_acc) });
+        drop(unsafe { rt.materialize::<T>(lent_item) });
+        acc = unsafe { rt.materialize::<T>(out?) };
     }
     Ok(acc)
 }
 
 #[extern_fn(effect = E)]
 async fn fold<T, U, E, I, Rt>(
-    i: Interner,
+    rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     init: U,
     f: Fn2<U, T, U, E, Rt>,
 ) -> Result<U, Rt::Error>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
-    U: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: TyVar,
+    U: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
     let mut acc = init;
-    while let Some(item) = it.next(&i).await? {
-        acc = f.call(&i, acc, item).await?;
+    while let Some(item) = it.next(rt).await? {
+        let lent_acc = unsafe { rt.erase::<U>(acc) };
+        let lent_item = unsafe { rt.erase::<T>(item) };
+        let out = f.call(rt, (&lent_acc, &lent_item)).await;
+        drop(unsafe { rt.materialize::<U>(lent_acc) });
+        drop(unsafe { rt.materialize::<T>(lent_item) });
+        acc = unsafe { rt.materialize::<U>(out?) };
     }
     Ok(acc)
 }
 
 #[extern_fn(effect = E)]
 async fn any<T, E, I, Rt>(
-    i: Interner,
+    rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<T, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(&i).await? {
-        if f.call(&i, item).await? {
+    while let Some(item) = it.next(rt).await? {
+        let lent = unsafe { rt.erase::<T>(item) };
+        let keep = f.call(rt, (&lent,)).await;
+        drop(unsafe { rt.materialize::<T>(lent) });
+        if unsafe { rt.materialize::<bool>(keep?) } {
             return Ok(true);
         }
     }
@@ -379,25 +371,31 @@ where
 
 #[extern_fn(effect = E)]
 async fn all<T, E, I, Rt>(
-    i: Interner,
+    rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<T, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(&i).await? {
-        if !f.call(&i, item).await? {
+    while let Some(item) = it.next(rt).await? {
+        let lent = unsafe { rt.erase::<T>(item) };
+        let keep = f.call(rt, (&lent,)).await;
+        drop(unsafe { rt.materialize::<T>(lent) });
+        if !unsafe { rt.materialize::<bool>(keep?) } {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-pub fn iterator_registry<Rt: Runtime>() -> ExternRegistry<Rt> {
+pub fn iterator_registry<Rt>() -> ExternRegistry<Rt>
+where
+    Rt: Runtime,
+{
     extern_registry! {
         types: [Iter<_, _, _, Rt>],
         fns: [

@@ -2,34 +2,39 @@
 //! a handler for any runtime. `Tiny` is a runtime written for this test
 //! alone, so nothing here depends on an interpreter.
 
+use std::any::Any;
+use std::future::Ready;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Arr, Astr, BoxFuture, Eff, Effect, EffectTerm, EffectVar, ExternError, ExternFn, ExternHandler,
-    ExternItems, ExternRegistry, ExternType, ExternValue, Fn1, FromValue, FxHashMap, Interner,
-    IntoValue, LenTerm, LenVar, PolyTy, Pure, Runtime, TyArg, TyVar, TypeRegistry, TypesOnly,
-    extern_fn, extern_registry,
+    Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, ExternError, ExternFn,
+    ExternHandler, ExternItems,
+    ExternRegistry, ExternType, Fn1, Interner, LenTerm, LenVar, PolyTy, Pure, Runtime, TyArg,
+    TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
 };
 
 // -- A runtime for this test ------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
+/// A value is either a Rust value boxed whole, or a closure. `Erased` never
+/// compares equal: the test runtime has no view into what it holds.
+#[derive(Debug)]
 enum V {
-    Unit,
-    Int(i64),
-    Str(String),
-    Array(Vec<V>),
-    Tuple(Vec<V>),
-    Object(Vec<(Astr, V)>),
-    Some(Box<V>),
-    None,
-    Extern(ExternValue),
+    Erased(Box<dyn Any + Send + Sync>),
     Closure(Closure),
 }
 
+impl PartialEq for V {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (V::Closure(a), V::Closure(b)) => Arc::ptr_eq(&a.0, &b.0),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone)]
-struct Closure(Arc<dyn Fn(Vec<V>) -> V + Send + Sync>);
+struct Closure(Arc<dyn Fn(&[&V]) -> V + Send + Sync>);
 
 impl std::fmt::Debug for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -37,131 +42,92 @@ impl std::fmt::Debug for Closure {
     }
 }
 
-impl PartialEq for Closure {
-    fn eq(&self, _: &Self) -> bool {
-        false
+fn erased<T>(value: T) -> V
+where
+    T: Send + Sync + 'static,
+{
+    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<V>() {
+        let boxed: Box<dyn std::any::Any> = Box::new(value);
+        return *boxed.downcast::<V>().expect("T is V");
+    }
+    V::Erased(Box::new(value))
+}
+
+/// A copy of the Rust value inside a lent `Erased`, or a panic naming the
+/// mismatch.
+fn peek<T>(value: &V) -> T
+where
+    T: Clone + Send + Sync + 'static,
+{
+    match value {
+        V::Erased(any) => any
+            .downcast_ref::<T>()
+            .unwrap_or_else(|| panic!("peek: value is not a {}", std::any::type_name::<T>()))
+            .clone(),
+        V::Closure(_) => panic!("peek: value is a closure, not a {}", std::any::type_name::<T>()),
     }
 }
 
+/// The Rust value inside an `Erased`, or a panic naming the mismatch.
+fn open<T>(value: V) -> T
+where
+    T: Send + Sync + 'static,
+{
+    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<V>() {
+        let boxed: Box<dyn std::any::Any> = Box::new(value);
+        return *boxed.downcast::<T>().expect("T is V");
+    }
+    match value {
+        V::Erased(any) => match any.downcast::<T>() {
+            Ok(v) => *v,
+            Err(_) => panic!("materialize: value is not a {}", std::any::type_name::<T>()),
+        },
+        V::Closure(_) => panic!(
+            "materialize: value is a closure, not a {}",
+            std::any::type_name::<T>()
+        ),
+    }
+}
+
+#[derive(Clone)]
 struct Tiny;
 
-fn wrong(shape: &str, got: &V) -> ExternError {
-    ExternError::internal(format!("expected {shape}, got {got:?}"))
-}
-
-impl FromValue<Tiny> for V {
-    fn from_value(value: V, _: &Interner) -> Result<Self, ExternError> {
-        Ok(value)
-    }
-}
-
-impl IntoValue<Tiny> for V {
-    fn into_value(self, _: &Interner) -> V {
-        self
+impl Tiny {
+    fn call(&self, f: &V, args: &[&V]) -> Result<V, ExternError> {
+        match f {
+            V::Closure(c) => Ok((c.0)(args)),
+            V::Erased(_) => Err(ExternError::internal(
+                "call on a value that is not a closure",
+            )),
+        }
     }
 }
 
 impl Runtime for Tiny {
     type Value = V;
-    type Closure = Closure;
     type Error = ExternError;
-    type Str = String;
-    type Array<T> = Vec<T>;
+    type CallFuture<'a> = Ready<Result<V, ExternError>>;
 
-    fn equals(a: &V, b: &V) -> bool {
-        a == b
+    unsafe fn materialize<T>(&self, value: V) -> T
+    where
+        T: Send + Sync + 'static,
+    {
+        open(value)
     }
-    fn unit() -> V {
-        V::Unit
+    unsafe fn erase<T>(&self, value: T) -> V
+    where
+        T: Send + Sync + 'static,
+    {
+        erased(value)
     }
-    fn int(n: i64) -> V {
-        V::Int(n)
+    fn call_0<'a>(&'a self, f: &'a V, _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(self.call(f, &[]))
     }
-    fn float(_: f64) -> V {
-        panic!("Tiny has no floats")
+    fn call_1<'a>(&'a self, f: &'a V, a: &'a V, _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(self.call(f, &[a]))
     }
-    fn bool(_: bool) -> V {
-        panic!("Tiny has no bools")
-    }
-    fn byte(_: u8) -> V {
-        panic!("Tiny has no bytes")
-    }
-    fn small_bits(value: V) -> u64 {
-        match value {
-            V::Unit => 0,
-            V::Int(n) => n as u64,
-            _ => panic!("small_bits on a non-scalar Tiny value"),
-        }
-    }
-    fn string(s: String) -> V {
-        V::Str(s)
-    }
-    fn into_str(value: V) -> Result<String, ExternError> {
-        match value {
-            V::Str(s) => Ok(s),
-            other => Err(wrong("String", &other)),
-        }
-    }
-    fn array(items: Vec<V>) -> V {
-        V::Array(items)
-    }
-    fn into_array(value: V) -> Result<Vec<V>, ExternError> {
-        match value {
-            V::Array(items) => Ok(items),
-            other => Err(wrong("Array", &other)),
-        }
-    }
-    fn tuple(items: Vec<V>) -> V {
-        V::Tuple(items)
-    }
-    fn into_tuple(value: V) -> Result<Vec<V>, ExternError> {
-        match value {
-            V::Tuple(items) => Ok(items),
-            other => Err(wrong("Tuple", &other)),
-        }
-    }
-    fn object(fields: FxHashMap<Astr, V>) -> V {
-        V::Object(fields.into_iter().collect())
-    }
-    fn into_object(value: V) -> Result<FxHashMap<Astr, V>, ExternError> {
-        match value {
-            V::Object(fields) => Ok(fields.into_iter().collect()),
-            other => Err(wrong("Object", &other)),
-        }
-    }
-    fn some(_: &Interner, value: V) -> V {
-        V::Some(Box::new(value))
-    }
-    fn none(_: &Interner) -> V {
-        V::None
-    }
-    fn into_option(_: &Interner, value: V) -> Result<Option<V>, ExternError> {
-        match value {
-            V::Some(v) => Ok(Some(*v)),
-            V::None => Ok(None),
-            other => Err(wrong("Option", &other)),
-        }
-    }
-    fn extern_value(value: ExternValue) -> V {
-        V::Extern(value)
-    }
-    fn into_extern(value: V) -> Result<ExternValue, ExternError> {
-        match value {
-            V::Extern(o) => Ok(o),
-            other => Err(wrong("Extern", &other)),
-        }
-    }
-    fn closure(closure: Closure) -> V {
-        V::Closure(closure)
-    }
-    fn into_closure(value: V) -> Result<Closure, ExternError> {
-        match value {
-            V::Closure(c) => Ok(c),
-            other => Err(wrong("Closure", &other)),
-        }
-    }
-    fn call(closure: &Closure, args: Vec<V>) -> BoxFuture<'_, Result<V, ExternError>> {
-        Box::pin(std::future::ready(Ok((closure.0)(args))))
+    fn call_n<'a>(&'a self, f: &'a V, args: &[&'a V], _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(self.call(f, args))
     }
 }
 
@@ -188,55 +154,65 @@ struct Point {
 }
 
 #[extern_fn(effect = pure)]
-fn add(_: &Interner, a: i64, b: i64) -> i64 {
+fn add<R>(_: &R, a: i64, b: i64) -> i64
+where
+    R: Runtime,
+{
     a + b
 }
 
 #[extern_fn(name = "id_any", effect = E)]
-fn identity<T, E>(_: &Interner, v: T) -> T
+fn identity<T, E, R>(_: &R, v: T) -> T
 where
     T: TyVar,
     E: EffectVar,
+    R: Runtime,
 {
     v
 }
 
 #[extern_fn(effect = pure)]
 async fn apply<T, U, E, Rt>(
-    i: Interner,
+    rt: &Rt,
     v: Boxed<T, E, Rt>,
     f: Fn1<T, U, E, Rt>,
 ) -> Result<Boxed<U, E, Rt>, Rt::Error>
 where
-    T: TyVar + FromValue<Rt> + IntoValue<Rt>,
-    U: TyVar + FromValue<Rt> + IntoValue<Rt>,
+    T: TyVar,
+    U: TyVar,
     E: EffectVar,
     Rt: Runtime,
 {
     let mut out = Vec::with_capacity(v.0.len());
-    for item in v.0 {
-        let mapped: U = f.call(&i, T::from_value(item, &i)?).await?;
-        out.push(mapped.into_value(&i));
+    for item in &v.0 {
+        out.push(f.call(rt, (item,)).await?);
     }
     Ok(Boxed(out, PhantomData))
 }
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn boxed<T, N, Rt>(i: &Interner, items: Arr<T, N>) -> Boxed<T, Pure, Rt>
+fn boxed<T, N, Rt>(rt: &Rt, items: Arr<T, N>) -> Boxed<T, Pure, Rt>
 where
-    T: TyVar + IntoValue<Rt>,
+    T: TyVar,
     N: LenVar,
     Rt: Runtime,
 {
     Boxed(
-        items.0.into_iter().map(|v| v.into_value(i)).collect(),
+        items
+            .0
+            .into_iter()
+            .map(|v| unsafe { rt.erase::<T>(v) })
+            .collect(),
         PhantomData,
     )
 }
 
 #[extern_fn]
-async fn fetch(_: Interner, p: Point) -> Result<Point, ExternError> {
+async fn fetch<R>(_: &R, p: Point) -> Result<Point, ExternError>
+where
+    R: Runtime,
+{
     Ok(Point {
         x: p.x * 2,
         label: p.label,
@@ -244,27 +220,37 @@ async fn fetch(_: Interner, p: Point) -> Result<Point, ExternError> {
 }
 
 #[extern_fn(effect = idempotent)]
-fn take_token<I>(_: &Interner, t: Token<I>) -> i64
+fn take_token<I, R>(_: &R, t: Token<I>) -> i64
 where
     I: acvus_extern::IdentityVar,
+    R: Runtime,
 {
     t.0
 }
 
 /// A fresh draw: two draws in either order are the same program.
 #[extern_fn(effect = idempotent, commutative)]
-fn draw(_: &Interner) -> i64 {
+fn draw<R>(_: &R) -> i64
+where
+    R: Runtime,
+{
     4
 }
 
 /// Adds `by` to the lent place and returns the new value.
 #[extern_fn(effect = pure)]
-fn bump(_: &Interner, n: &mut i64, by: i64) -> i64 {
+fn bump<R>(_: &R, n: &mut i64, by: i64) -> i64
+where
+    R: Runtime,
+{
     *n += by;
     *n
 }
 
-fn registry<R: Runtime>() -> ExternRegistry<R> {
+fn registry<R>() -> ExternRegistry<R>
+where
+    R: Runtime,
+{
     extern_registry! {
         types: [Boxed<_, _, R>, Token<_>],
         fns: [add, identity, apply, boxed, fetch, take_token, draw, bump],
@@ -396,17 +382,16 @@ fn types_and_casts_reach_the_type_registry() {
     );
 }
 
-fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>, i: &Interner) -> Result<V, ExternError> {
-    call_sync_lending(handler, args, i).map(|r| r.value)
+fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternError> {
+    call_sync_lending(handler, args).map(|r| r.value)
 }
 
 fn call_sync_lending(
     handler: &ExternHandler<Tiny>,
     args: Vec<V>,
-    i: &Interner,
 ) -> Result<acvus_extern::Returned<V>, ExternError> {
     match handler {
-        ExternHandler::Sync(f) => f(args, i),
+        ExternHandler::Sync(f) => f(&Tiny, args),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
     }
 }
@@ -423,22 +408,15 @@ fn a_borrowed_parameter_is_declared_and_given_back() {
     assert_eq!(params[1].mode, acvus_extern::ParamMode::Value);
 
     let h = handler(&reg, &i, "bump");
-    let r = call_sync_lending(h, vec![V::Int(40), V::Int(2)], &i).unwrap();
-    assert_eq!(r.value, V::Int(42));
-    assert_eq!(
-        r.lent,
-        vec![V::Int(42)],
-        "the lent place comes back changed"
-    );
+    let r = call_sync_lending(h, vec![erased(40i64), erased(2i64)]).unwrap();
+    assert_eq!(open::<i64>(r.value), 42);
+    let [lent] = <[V; 1]>::try_from(r.lent).expect("one lent place");
+    assert_eq!(open::<i64>(lent), 42, "the lent place comes back changed");
 }
 
-async fn call_async(
-    handler: &ExternHandler<Tiny>,
-    args: Vec<V>,
-    i: &Interner,
-) -> Result<V, ExternError> {
+async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternError> {
     match handler {
-        ExternHandler::Async(f) => f(args, i.clone()).await.map(|r| r.value),
+        ExternHandler::Async(f) => f(Tiny, args).await.map(|r| r.value),
         ExternHandler::Sync(_) => panic!("expected an async handler"),
     }
 }
@@ -463,45 +441,48 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let reg = registry::<Tiny>().register(&i, &mut tr);
 
     assert_eq!(
-        call_sync(handler(&reg, &i, "add"), vec![V::Int(40), V::Int(2)], &i).unwrap(),
-        V::Int(42)
+        open::<i64>(
+            call_sync(handler(&reg, &i, "add"), vec![erased(40i64), erased(2i64)]).unwrap()
+        ),
+        42
     );
     assert_eq!(
-        call_sync(handler(&reg, &i, "id_any"), vec![V::Str("x".into())], &i).unwrap(),
-        V::Str("x".into())
+        open::<&str>(open::<V>(
+            call_sync(handler(&reg, &i, "id_any"), vec![erased(erased("x"))]).unwrap()
+        )),
+        "x"
     );
 
-    let arr = V::Array(vec![V::Int(1), V::Int(2)]);
-    let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr], &i).unwrap();
-    let V::Extern(o) = &boxed else {
-        panic!("boxed returns an extension value")
+    let arr = erased(Arr::<V, ()>::new(vec![erased(1i64), erased(2i64)]));
+    let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]).unwrap();
+    let Boxed::<V, Pure, Tiny>(items, _) = open(boxed) else {
+        unreachable!("boxed returns a Box")
     };
-    assert_eq!(o.type_name.name, "Box");
+    assert_eq!(items.len(), 2);
+    let boxed = erased(Boxed::<V, (), Tiny>(items, PhantomData));
 
-    let double = V::Closure(Closure(Arc::new(|args| match args.as_slice() {
-        [V::Int(n)] => V::Int(n * 2),
-        other => panic!("double got {other:?}"),
+    let double = V::Closure(Closure(Arc::new(|args| {
+        let [n] = args else {
+            panic!("double takes one argument, got {}", args.len())
+        };
+        erased(peek::<i64>(n) * 2)
     })));
-    let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double], &i)
+    let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double])
         .await
         .unwrap();
-    let V::Extern(o) = out else {
-        panic!("apply returns an extension value")
-    };
-    assert_eq!(
-        o.downcast_ref::<Vec<V>>().expect("Box payload"),
-        &vec![V::Int(2), V::Int(4)]
-    );
+    let Boxed::<V, (), Tiny>(items, _) = open(out);
+    let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
+    assert_eq!(doubled, vec![2, 4]);
 
-    let point = V::Object(vec![
-        (i.intern("x"), V::Int(21)),
-        (i.intern("label"), V::Str("p".into())),
-    ]);
-    let out = call_async(handler(&reg, &i, "fetch"), vec![point], &i)
+    let point = erased(Point {
+        x: 21,
+        label: "p".to_owned(),
+    });
+    let out = call_async(handler(&reg, &i, "fetch"), vec![point])
         .await
         .unwrap();
     assert_eq!(
-        <Point as FromValue<Tiny>>::from_value(out, &i).unwrap(),
+        open::<Point>(out),
         Point {
             x: 42,
             label: "p".to_owned()
@@ -510,28 +491,12 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 }
 
 #[test]
-#[should_panic(expected = "small_bits on a non-scalar")]
+#[should_panic(expected = "materialize: value is not a i64")]
 fn wrong_argument_type_panics_trusting_typeck() {
     let i = Interner::new();
     let mut tr = TypeRegistry::new();
     let reg = registry::<Tiny>().register(&i, &mut tr);
-    let _ = call_sync(
-        handler(&reg, &i, "add"),
-        vec![V::Str("a".into()), V::Int(2)],
-        &i,
-    );
-}
-
-#[test]
-fn move_only_value_rejects_a_shared_payload() {
-    let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = registry::<Tiny>().register(&i, &mut tr);
-    let token = V::Extern(ExternValue::new(Token::<()>::TYPE_NAME, 5i64));
-    let shared = token.clone();
-    let err = call_sync(handler(&reg, &i, "take_token"), vec![token], &i).unwrap_err();
-    assert!(err.to_string().contains("still shared"), "{err}");
-    drop(shared);
+    let _ = call_sync(handler(&reg, &i, "add"), vec![erased("a"), erased(2i64)]);
 }
 
 #[test]
@@ -540,10 +505,9 @@ fn closure_declaration_takes_its_type_from_the_closure() {
     let registry = ExternRegistry::<TypesOnly>::new(|i| ExternItems {
         types: vec![],
         fns: vec![
-            ExternFn::sync(i, "shout", |_: &Interner, s: String| Ok(s.to_uppercase()))
+            ExternFn::sync(i, "shout", |_: &TypesOnly, s: String| Ok(s.to_uppercase()))
                 .with_effect(Effect::PURE),
         ],
-        persist: vec![],
     });
     let mut tr = TypeRegistry::new();
     let reg = registry.register(&i, &mut tr);
@@ -596,24 +560,26 @@ impl Twice for String {
 }
 
 #[extern_fn(effect = pure)]
-fn double<A>(_: &Interner, a: A) -> A
+fn double<A, R>(_: &R, a: A) -> A
 where
     A: acvus_extern::Monomorphize<(i64, String)> + Twice,
+    R: Runtime,
 {
     a.twice()
 }
 
 #[extern_fn(effect = pure)]
-fn first_or<A>(_: &Interner, v: Option<A>, fallback: A) -> A
+fn first_or<A, R>(_: &R, v: Option<A>, fallback: A) -> A
 where
     A: acvus_extern::Monomorphize<(i64, String)>,
+    R: Runtime,
 {
     v.unwrap_or(fallback)
 }
 
 /// The member type appears only inside an extension type here.
 #[extern_fn(effect = pure)]
-fn box_count<A, Rt>(_: &Interner, v: Boxed<A, Pure, Rt>) -> i64
+fn box_count<A, Rt>(_: &Rt, v: Boxed<A, Pure, Rt>) -> i64
 where
     A: acvus_extern::Monomorphize<(i64, String)>,
     Rt: Runtime,
@@ -678,13 +644,13 @@ fn the_call_type_selects_the_instance() {
 
     let on_int = call_type(vec![acvus_extern::Ty::Int], acvus_extern::Ty::Int, &i);
     let h = entry.select(&on_int).unwrap();
-    assert_eq!(call_sync(h, vec![V::Int(21)], &i).unwrap(), V::Int(42));
+    assert_eq!(open::<i64>(call_sync(h, vec![erased(21i64)]).unwrap()), 42);
 
     let on_str = call_type(vec![acvus_extern::Ty::String], acvus_extern::Ty::String, &i);
     let h = entry.select(&on_str).unwrap();
     assert_eq!(
-        call_sync(h, vec![V::Str("ab".into())], &i).unwrap(),
-        V::Str("abab".into())
+        open::<String>(call_sync(h, vec![erased(String::from("ab"))]).unwrap()),
+        "abab"
     );
 
     let on_float = call_type(vec![acvus_extern::Ty::Float], acvus_extern::Ty::Float, &i);
@@ -701,8 +667,14 @@ fn the_call_type_selects_the_instance() {
     );
     let h = nested.select(&ty).unwrap();
     assert_eq!(
-        call_sync(h, vec![V::None, V::Str("x".into())], &i).unwrap(),
-        V::Str("x".into())
+        open::<String>(
+            call_sync(
+                h,
+                vec![erased(Option::<String>::None), erased(String::from("x"))]
+            )
+            .unwrap()
+        ),
+        "x"
     );
 
     let inside = &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern("box_count"))];
@@ -718,15 +690,20 @@ fn the_call_type_selects_the_instance() {
         &i,
     );
     let h = inside.select(&ty).unwrap();
-    let payload = V::Extern(ExternValue::new(
-        Boxed::<String, Pure, Tiny>::TYPE_NAME,
-        vec![V::Str("a".into()), V::Str("b".into())],
+    let payload = erased(Boxed::<String, Pure, Tiny>(
+        vec![erased(String::from("a")), erased(String::from("b"))],
+        PhantomData,
     ));
-    assert_eq!(call_sync(h, vec![payload], &i).unwrap(), V::Int(2));
+    assert_eq!(open::<i64>(call_sync(h, vec![payload]).unwrap()), 2);
     let ty = call_type(
         vec![boxed_of(acvus_extern::Ty::Float)],
         acvus_extern::Ty::Int,
         &i,
     );
-    assert!(inside.select(&ty).is_err());
+    let fallback = inside.select(&ty).unwrap();
+    let payload = erased(Boxed::<V, Pure, Tiny>(
+        vec![erased(1.5f64), erased(2.5f64), erased(3.5f64)],
+        PhantomData,
+    ));
+    assert_eq!(open::<i64>(call_sync(fallback, vec![payload]).unwrap()), 3);
 }

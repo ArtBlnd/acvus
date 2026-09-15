@@ -9,9 +9,34 @@ use acvus_interpreter::{
 };
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower, optimize as graph_optimize};
-use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
+use acvus_mir::ty::{LenTerm, PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
+
+// -- Typed context values ------------------------------------------
+
+/// A context value with the type the compiler is told for it: the erased
+/// value carries none.
+pub struct TypedValue {
+    pub ty: Ty,
+    pub value: Value,
+}
+
+pub type Context = FxHashMap<Astr, TypedValue>;
+
+pub fn typed(ty: Ty, value: Value) -> TypedValue {
+    TypedValue { ty, value }
+}
+
+fn split_context(interner: &Interner, context: Context) -> (FxHashMap<Astr, Ty>, HashMap<String, Value>) {
+    let mut types = FxHashMap::default();
+    let mut snapshot = HashMap::new();
+    for (name, TypedValue { ty, value }) in context {
+        types.insert(name, ty);
+        snapshot.insert(interner.resolve(name).to_string(), value);
+    }
+    (types, snapshot)
+}
 
 // -- Core pipeline -----------------------------------------------
 
@@ -30,7 +55,7 @@ fn compile(
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
     let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse error"));
-    let mut tr = acvus_mir::ty::TypeRegistry::new();
+    let tr = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
@@ -41,7 +66,7 @@ fn compile_script(
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    let mut tr = acvus_mir::ty::TypeRegistry::new();
+    let tr = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
@@ -53,7 +78,7 @@ fn compile_script_mode(
 ) -> CompileResult {
     let ast =
         ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
-    let mut tr = acvus_mir::ty::TypeRegistry::new();
+    let tr = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
     compile_source_with_externs(interner, ast, context_types, std_regs, tr)
 }
@@ -66,9 +91,9 @@ pub fn compile_source_with_externs(
     mut type_registry: acvus_mir::ty::TypeRegistry,
 ) -> CompileResult {
     let mut pb = PolyBuilder::new();
-    let contexts: Vec<Context> = context_types
+    let contexts: Vec<acvus_mir::graph::Context> = context_types
         .iter()
-        .map(|(name, ty)| Context {
+        .map(|(name, ty)| acvus_mir::graph::Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
         })
@@ -196,11 +221,27 @@ pub fn compile_source_with_externs(
     }
 }
 
-/// Parse + compile + execute a template, returning the output string.
-pub async fn run(interner: &Interner, source: &str, context: FxHashMap<Astr, Value>) -> String {
-    let context_types: FxHashMap<Astr, Ty> =
-        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
+fn execute_compiled(
+    interner: &Interner,
+    cr: CompileResult,
+    snapshot: HashMap<String, Value>,
+    executor: Arc<dyn acvus_interpreter::Executor>,
+) -> (InterpreterContext, Interpreter) {
+    let mut functions = cr.modules;
+    for (id, exec) in cr.extern_executables {
+        functions.insert(id, exec);
+    }
+    let shared = InterpreterContext::new(interner, functions, executor)
+        .with_fn_types(cr.fn_types)
+        .with_context_names(cr.context_names);
+    let page = InMemoryContext::new(snapshot, interner.clone());
+    let interp = Interpreter::new(shared.clone(), cr.entry_qref, page);
+    (shared, interp)
+}
 
+/// Parse + compile + execute a template, returning the output string.
+pub async fn run(interner: &Interner, source: &str, context: Context) -> String {
+    let (context_types, snapshot) = split_context(interner, context);
     let cr = compile(interner, source, &context_types);
 
     // Debug: dump entry module IR + closures
@@ -215,30 +256,16 @@ pub async fn run(interner: &Interner, source: &str, context: FxHashMap<Astr, Val
         }
     }
 
-    let mut functions = cr.modules;
-    for (id, exec) in cr.extern_executables {
-        functions.insert(id, exec);
-    }
-
-    // Build context snapshot for page.
-    let snapshot: HashMap<String, Value> = context
-        .into_iter()
-        .map(|(k, v)| (interner.resolve(k).to_string(), v))
-        .collect();
-
-    let executor = Arc::new(SequentialExecutor);
-    let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
-        .with_context_names(cr.context_names);
-
-    let page = InMemoryContext::new(snapshot, interner.clone());
-    let mut interp = Interpreter::new(shared, cr.entry_qref, page);
+    let (shared, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
     let result = interp.execute().await.expect("execution failed");
 
-    // Template returns a String.
-    match result.value {
-        Value::String(s) => s.to_string(),
-        Value::Unit => String::new(),
+    // A template yields a String; an empty one yields unit.
+    match &result.value {
+        v if v.is_string() => {
+            // SAFETY: the witness is String.
+            unsafe { v.as_str() }.to_owned()
+        }
+        Value::Small(_) => String::new(),
         other => format!("{other:?}"),
     }
 }
@@ -246,78 +273,30 @@ pub async fn run(interner: &Interner, source: &str, context: FxHashMap<Astr, Val
 /// Simple: no context.
 pub async fn run_simple(source: &str) -> String {
     let interner = Interner::new();
-    run(&interner, source, FxHashMap::default()).await
+    run(&interner, source, Context::default()).await
 }
 
 /// Compile and execute a **script**, returning the result Value.
-pub async fn run_script(
-    interner: &Interner,
-    source: &str,
-    context: FxHashMap<Astr, Value>,
-) -> Value {
-    let context_types: FxHashMap<Astr, Ty> =
-        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
-
+pub async fn run_script(interner: &Interner, source: &str, context: Context) -> Value {
+    let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script(interner, source, &context_types);
-
-    let mut functions = cr.modules;
-    for (id, exec) in cr.extern_executables {
-        functions.insert(id, exec);
-    }
-
-    let snapshot: HashMap<String, Value> = context
-        .into_iter()
-        .map(|(k, v)| (interner.resolve(k).to_string(), v))
-        .collect();
-
-    let executor = Arc::new(SequentialExecutor);
-    let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
-        .with_context_names(cr.context_names);
-
-    let page = InMemoryContext::new(snapshot, interner.clone());
-    let mut interp = Interpreter::new(shared, cr.entry_qref, page);
-    let result = interp.execute().await.expect("execution failed");
-    result.value
+    let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
+    interp.execute().await.expect("execution failed").value
 }
 
 /// Compile and execute a **script-mode** (keyword syntax: let/for/while/if), returning the result Value.
-pub async fn run_script_mode(
-    interner: &Interner,
-    source: &str,
-    context: FxHashMap<Astr, Value>,
-) -> Value {
-    let context_types: FxHashMap<Astr, Ty> =
-        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
-
+pub async fn run_script_mode(interner: &Interner, source: &str, context: Context) -> Value {
+    let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script_mode(interner, source, &context_types);
-
-    let mut functions = cr.modules;
-    for (id, exec) in cr.extern_executables {
-        functions.insert(id, exec);
-    }
-
-    let snapshot: HashMap<String, Value> = context
-        .into_iter()
-        .map(|(k, v)| (interner.resolve(k).to_string(), v))
-        .collect();
-
-    let executor = Arc::new(SequentialExecutor);
-    let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
-        .with_context_names(cr.context_names);
-
-    let page = InMemoryContext::new(snapshot, interner.clone());
-    let mut interp = Interpreter::new(shared, cr.entry_qref, page);
-    let result = interp.execute().await.expect("execution failed");
-    result.value
+    let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
+    interp.execute().await.expect("execution failed").value
 }
 
 /// Compile and execute a script with ExternFn registries, returning (result, context writes).
 pub async fn run_script_with_externs(
     interner: &Interner,
     source: &str,
-    context: FxHashMap<Astr, Value>,
+    context: Context,
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
 ) -> ExecResult {
     run_script_with_externs_and_types(
@@ -333,7 +312,7 @@ pub async fn run_script_with_externs(
 pub async fn run_script_with_externs_and_types(
     interner: &Interner,
     source: &str,
-    context: FxHashMap<Astr, Value>,
+    context: Context,
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
 ) -> ExecResult {
@@ -345,7 +324,7 @@ pub async fn run_script_with_externs_and_types(
 pub async fn run_parsed_with_externs(
     interner: &Interner,
     ast: ParsedAst,
-    context: FxHashMap<Astr, Value>,
+    context: Context,
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
 ) -> ExecResult {
@@ -364,14 +343,12 @@ pub async fn run_parsed_with_externs(
 pub async fn run_parsed_on(
     interner: &Interner,
     ast: ParsedAst,
-    context: FxHashMap<Astr, Value>,
+    context: Context,
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
     executor: Arc<dyn acvus_interpreter::Executor>,
 ) -> ExecResult {
-    let context_types: FxHashMap<Astr, Ty> =
-        context.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
-
+    let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_source_with_externs(
         interner,
         ast,
@@ -379,91 +356,84 @@ pub async fn run_parsed_on(
         extern_registries,
         type_registry,
     );
-
-    let mut functions = cr.modules;
-    for (id, exec) in cr.extern_executables {
-        functions.insert(id, exec);
-    }
-
-    let snapshot: HashMap<String, Value> = context
-        .into_iter()
-        .map(|(k, v)| (interner.resolve(k).to_string(), v))
-        .collect();
-
-    let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(cr.fn_types)
-        .with_context_names(cr.context_names);
-
-    let page = InMemoryContext::new(snapshot, interner.clone());
-    let mut interp = Interpreter::new(shared, cr.entry_qref, page);
+    let (_, mut interp) = execute_compiled(interner, cr, snapshot, executor);
     interp.execute().await.expect("execution failed")
 }
 
 // -- JSON helpers -------------------------------------------------
 
-pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> Value {
+/// A JSON value with the type it names: the JSON shape is the type.
+pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue {
     match v {
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else {
-                Value::Float(n.as_f64().unwrap())
-            }
-        }
-        serde_json::Value::String(s) => Value::string(s.as_str()),
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Null => Value::Unit,
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => typed(Ty::Int, Value::int(i)),
+            None => typed(Ty::Float, Value::float(n.as_f64().expect("a JSON number is i64 or f64"))),
+        },
+        serde_json::Value::String(s) => typed(Ty::String, Value::string(s.as_str())),
+        serde_json::Value::Bool(b) => typed(Ty::Bool, Value::bool_(*b)),
+        serde_json::Value::Null => typed(Ty::Unit, Value::unit()),
         serde_json::Value::Array(items) => {
-            Value::array(items.iter().map(|v| value_from_json(interner, v)).collect())
+            let items: Vec<TypedValue> = items.iter().map(|v| value_from_json(interner, v)).collect();
+            let elem = items.first().map(|t| t.ty.clone()).unwrap_or(Ty::Int);
+            let len = items.len();
+            typed(
+                Ty::Array(Box::new(elem), LenTerm::Known(len)),
+                Value::array(items.into_iter().map(|t| t.value).collect()),
+            )
         }
-        serde_json::Value::Object(fields) => Value::object(
-            fields
-                .iter()
-                .map(|(k, v)| (interner.intern(k), value_from_json(interner, v)))
-                .collect(),
-        ),
-    }
-}
-
-/// Infer Ty from a runtime Value (shallow).
-fn infer_ty(v: &Value) -> Ty {
-    match v {
-        Value::Int(_) => Ty::Int,
-        Value::Float(_) => Ty::Float,
-        Value::Bool(_) => Ty::Bool,
-        Value::String(_) => Ty::String,
-        Value::Unit => Ty::Unit,
-        Value::Byte(_) => Ty::Byte,
-        Value::Array(items) => {
-            let elem = items.first().map(infer_ty).unwrap_or(Ty::Int);
-            Ty::Array(Box::new(elem), acvus_mir::ty::LenTerm::Known(items.len()))
+        serde_json::Value::Object(fields) => {
+            let mut tys = FxHashMap::default();
+            let mut values = FxHashMap::default();
+            for (k, v) in fields {
+                let key = interner.intern(k);
+                let TypedValue { ty, value } = value_from_json(interner, v);
+                tys.insert(key, ty);
+                values.insert(key, value);
+            }
+            typed(Ty::Object(tys), Value::object(values))
         }
-        Value::Object(fields) => {
-            let field_types = fields.iter().map(|(k, v)| (*k, infer_ty(v))).collect();
-            Ty::Object(field_types)
-        }
-        _ => Ty::Unit,
     }
 }
 
 // -- Context helpers ----------------------------------------------
 
-pub fn int_context(interner: &Interner, name: &str, value: i64) -> FxHashMap<Astr, Value> {
-    FxHashMap::from_iter([(interner.intern(name), Value::Int(value))])
+pub fn int_context(interner: &Interner, name: &str, value: i64) -> Context {
+    FxHashMap::from_iter([(interner.intern(name), typed(Ty::Int, Value::int(value)))])
 }
 
-pub fn string_context(interner: &Interner, name: &str, value: &str) -> FxHashMap<Astr, Value> {
-    FxHashMap::from_iter([(interner.intern(name), Value::string(value))])
+pub fn string_context(interner: &Interner, name: &str, value: &str) -> Context {
+    FxHashMap::from_iter([(interner.intern(name), typed(Ty::String, Value::string(value)))])
 }
 
-pub fn user_context(interner: &Interner) -> FxHashMap<Astr, Value> {
+pub fn user_context(interner: &Interner) -> Context {
+    let name = interner.intern("name");
+    let age = interner.intern("age");
+    let email = interner.intern("email");
     FxHashMap::from_iter([(
         interner.intern("user"),
-        Value::object(FxHashMap::from_iter([
-            (interner.intern("name"), Value::string("alice")),
-            (interner.intern("age"), Value::Int(30)),
-            (interner.intern("email"), Value::string("alice@example.com")),
-        ])),
+        typed(
+            Ty::Object(FxHashMap::from_iter([
+                (name, Ty::String),
+                (age, Ty::Int),
+                (email, Ty::String),
+            ])),
+            Value::object(FxHashMap::from_iter([
+                (name, Value::string("alice")),
+                (age, Value::int(30)),
+                (email, Value::string("alice@example.com")),
+            ])),
+        ),
+    )])
+}
+
+pub fn items_context(interner: &Interner, items: Vec<i64>) -> Context {
+    let len = items.len();
+    FxHashMap::from_iter([(
+        interner.intern("items"),
+        typed(
+            Ty::Array(Box::new(Ty::Int), LenTerm::Known(len)),
+            Value::array(items.into_iter().map(Value::int).collect()),
+        ),
     )])
 }
 
@@ -484,13 +454,13 @@ pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
         .as_str()
         .ok_or_else(|| format!("{}: missing 'expected'", path.display()))?;
 
-    let context: FxHashMap<Astr, Value> = match fixture.get("context") {
+    let context: Context = match fixture.get("context") {
         Some(serde_json::Value::Object(fields)) => fields
             .iter()
             .map(|(k, v)| (interner.intern(k), value_from_json(&interner, v)))
             .collect(),
         Some(_) => return Err(format!("{}: 'context' must be an object", path.display())),
-        None => FxHashMap::default(),
+        None => Context::default(),
     };
 
     let actual = run(&interner, template, context).await;
@@ -502,11 +472,4 @@ pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-pub fn items_context(interner: &Interner, items: Vec<i64>) -> FxHashMap<Astr, Value> {
-    FxHashMap::from_iter([(
-        interner.intern("items"),
-        Value::array(items.into_iter().map(Value::Int).collect()),
-    )])
 }

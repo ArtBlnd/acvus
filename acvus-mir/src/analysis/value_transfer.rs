@@ -142,7 +142,6 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::MakeClosure { dst, .. }
             | InstKind::UnwrapVariant { dst, .. }
             | InstKind::TestObjectKey { dst, .. }
-            | InstKind::Clone { dst, .. }
             | InstKind::Spawn { dst, .. }
             | InstKind::Merge { dst, .. }
             | InstKind::Poison { dst }

@@ -19,12 +19,15 @@ pub enum VarKind {
 
 /// One generic parameter, its kind, and its index among that kind. A type
 /// variable bounded by `Monomorphize<(..)>` also carries the member types
-/// its handler is compiled for.
+/// its handler is compiled for, and whether the runtime's value can stand in
+/// for it: it can unless the parameter carries a trait bound the erased
+/// value cannot satisfy.
 pub struct Var {
     pub ident: Ident,
     pub kind: VarKind,
     pub index: usize,
     pub mono: Option<Vec<Type>>,
+    pub mono_fallback: bool,
 }
 
 pub struct Vars(Vec<Var>);
@@ -110,6 +113,20 @@ impl Vars {
                 })
                 .collect();
             let mono = mono_members(bounds_of(generics, tp))?;
+            let has_extra_bounds = bounds_of(generics, tp).any(|b| {
+                matches!(b, TypeParamBound::Trait(_))
+                    && !bound_ident(b).is_some_and(|i| {
+                        matches!(
+                            i.to_string().as_str(),
+                            "TyVar"
+                                | "EffectVar"
+                                | "LenVar"
+                                | "IdentityVar"
+                                | "Runtime"
+                                | "Monomorphize"
+                        )
+                    })
+            });
             let kind = match (kinds.as_slice(), &mono) {
                 ([kind], _) => *kind,
                 ([], Some(_)) => VarKind::Ty,
@@ -127,11 +144,13 @@ impl Vars {
                 ));
             }
             let slot = kind as usize;
+            let mono_fallback = mono.is_some() && !has_extra_bounds;
             vars.push(Var {
                 ident: tp.ident.clone(),
                 kind,
                 index: counts[slot],
                 mono,
+                mono_fallback,
             });
             counts[slot] += 1;
         }
@@ -200,14 +219,6 @@ impl Vars {
         found.get()
     }
 
-    /// The declared runtime parameter, if the item names one.
-    pub fn runtime_param(&self) -> Option<&Ident> {
-        self.0
-            .iter()
-            .find(|v| v.kind == VarKind::Runtime)
-            .map(|v| &v.ident)
-    }
-
     fn compile_time_stand_in(v: &Var) -> Type {
         let k = v.index;
         match v.kind {
@@ -227,10 +238,6 @@ impl Vars {
         }
     }
 
-    pub fn to_compile_time(&self, ty: &Type) -> Type {
-        self.to_compile_time_instance(ty, None)
-    }
-
     /// Compile-time substitution with the Monomorphize variable set to `member`.
     pub fn to_compile_time_instance(&self, ty: &Type, member: Option<&Type>) -> Type {
         subst::substitute(ty, &|ident| {
@@ -240,10 +247,6 @@ impl Vars {
                 _ => Some(Self::compile_time_stand_in(v)),
             }
         })
-    }
-
-    pub fn to_runtime(&self, ty: &Type) -> Type {
-        self.to_runtime_instance(ty, None)
     }
 
     /// Runtime substitution with the Monomorphize variable set to `member`.
@@ -281,12 +284,9 @@ impl Vars {
             .collect()
     }
 
-    /// `::<<__R as Runtime>::Value, (), (), __R>` in declaration order; empty
-    /// when there are no generic parameters.
-    pub fn runtime_turbofish(&self) -> TokenStream {
-        self.runtime_turbofish_instance(None)
-    }
-
+    /// `::<<__R as Runtime>::Value, (), (), __R>` in declaration order, with the
+    /// Monomorphize variable set to `member`; empty when there are no generic
+    /// parameters.
     pub fn runtime_turbofish_instance(&self, member: Option<&Type>) -> TokenStream {
         if self.0.is_empty() {
             return TokenStream::new();

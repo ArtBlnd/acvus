@@ -578,11 +578,7 @@ fn remap_inst(
 
         // Cast
 
-        // Clone / Drop
-        InstKind::Clone { dst, src } => InstKind::Clone {
-            dst: r(*dst),
-            src: r(*src),
-        },
+        // Drop
         InstKind::Drop { src } => InstKind::Drop { src: r(*src) },
 
         // Poison / Undef

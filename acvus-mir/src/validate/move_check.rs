@@ -506,12 +506,6 @@ fn process_inst(
         InstKind::Return { value, .. } => {
             try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
         }
-        InstKind::Clone { dst, src, .. } => {
-            // Clone reads src (not consumed - it's being cloned)
-            // src remains alive after clone
-            state.set_value(*dst, Liveness::Alive);
-            let _ = src;
-        }
         InstKind::Drop { src } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
         }

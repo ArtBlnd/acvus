@@ -291,7 +291,6 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::BinOp { .. }
         | InstKind::UnaryOp { .. }
         | InstKind::Load { .. }
-        | InstKind::Clone { .. }
         | InstKind::TestLiteral { .. }
         | InstKind::TestVariant { .. }
         | InstKind::TestObjectKey { .. }

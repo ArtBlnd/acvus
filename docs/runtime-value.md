@@ -1,78 +1,181 @@
-# Runtime and Value: the extraction baseline
+# The Runtime boundary
 
-A runtime supplies the language's values, and the language extracts typed
-values back out. The baseline is one entry, `materialize::<T>`, dispatched by
-the target type through `FromValue`; a runtime supplies the raw bits of a small
-value and constructs values, and no more of the value taxonomy lives in the
-contract.
+A host runs the language by signing one thin contract. The contract carries
+no value taxonomy: a value is opaque to it, extraction and construction are a
+single `transmute`-based pair, and everything a host does to run a call is five
+methods and one future. The interpreter is one host; kovac and a GPU
+backend are others, each signing the same trait with its own representation.
 
-## What the baseline is
+## The contract
 
-- `Runtime::materialize::<T>(value)` is `<T as FromValue>::from_value(value)`.
-  Extraction is driven by the target type, not chosen from a menu of typed
-  accessors.
-- The small values — unit, int, float, bool, byte — are folded into one
-  accessor, `small_bits(value) -> u64`, and `FromValue` reinterprets those bits
-  per type. A type mismatch here is a bug the type checker prevents, so it
-  panics rather than returning an error.
-- The `into_*` family for the small values is gone: extracting them no longer
-  names their type in the runtime contract.
-- The string and array composites are runtime associated types, not fixed Rust
-  shapes: `type Str: AsRef<str>` and the GAT `type Array<T>: AsRef<[T]> +
-  IntoIterator<Item = T> + FromIterator<T>`. The host chooses the layout;
-  `AcvusRuntime` declares `Str = String`, `Array<T> = Vec<T>`. `into_string`
-  became `into_str -> Self::Str`, and `array`/`into_array` speak
-  `Self::Array<Self::Value>`.
+```rust
+trait Runtime: Send + Sync + 'static {
+    type Value: Send + Sync + 'static;
+    type Error: From<ExternError> + Send + Sync + 'static;
+    type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
+    where Self: 'a;
 
-## Why only materialize
+    unsafe fn materialize<T: Send + Sync + 'static>(&self, v: Self::Value) -> T;
+    unsafe fn erase<T: Send + Sync + 'static>(&self, t: T) -> Self::Value;
 
-The `into_*` menu names the language's value taxonomy in the runtime contract —
-one method per built-in shape. That is the interpreter's own taxonomy leaking
-into the contract. `materialize::<T>` lets the target type drive extraction, so
-the contract is agnostic to the taxonomy: a new extractable type is a
-`FromValue` impl, not a runtime method.
+    fn call_0<'a>(&'a self, f: &'a Self::Value, _: CallToken) -> Self::CallFuture<'a>;
+    fn call_1<'a>(&'a self, f: &'a Self::Value, a: &'a Self::Value, _: CallToken)
+        -> Self::CallFuture<'a>;
+    fn call_n<'a>(&'a self, f: &'a Self::Value, args: &[&'a Self::Value], _: CallToken)
+        -> Self::CallFuture<'a>;
+}
+```
 
-Materialize-only is the natural extraction for a uniform erased value: bits for
-a small value, a cast for a boxed one — two cases, no per-shape menu. The menu
-exists because the current value is a tagged enum whose per-shape variants force
-per-shape extraction. "Only materialize" and "an erased representation" are the
-same decision seen twice.
+And the side an extern sees, in `acvus_extern::func`:
 
-## Open decisions
+```rust
+trait ClosureFn<Rt: Runtime> {
+    type Args<'a> where Self: 'a;          // Fn0: ()  Fn1: (&Value,)  Fn2: (&Value, &Value)  Fn3: …
+    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args<'a>) -> Rt::CallFuture<'a>;
+}
+```
 
-- **The large `into_*`: string, array, tuple, object, option, extern.** They
-  are the tagged representation's residue. Removing them against the tagged enum
-  is lateral churn; they dissolve when the representation becomes erased — a
-  small-bits word and a boxed pointer — where materialize's large case is a
-  single cast. That representation change also requires the interpreter's
-  tag-dispatching operations, equality and display among them, to become fully
-  typed rather than reading the value's tag.
+- **`materialize` / `erase` are the whole extraction/construction story.** A host
+  reads its own `Value` (`match` on its tag), and once the branch is fixed the
+  payload and `T` share a layout, so it `transmute`s: `Small` carries bits (its
+  size asserted `<= 8`), `Large` carries a pointer. When `T` is the host's own
+  `Value` — a type variable at runtime — both are the identity: the value
+  passes through untouched (RFC-0010). A round trip is by Rust type, so an
+  extension type's effect, length, and identity parameters are `()` at
+  runtime — the macro's stand-in — and a value built by hand carries `()`
+  there too. They are `unsafe` because
+  that layout match is the caller's contract, and they return `T` — not
+  `Result<T>` — because a type mismatch here is a compiler bug, not a runtime
+  failure, so it panics.
+- **A value has no taxonomy at the boundary.** No `into_string` / `into_array` /
+  `into_object`, no `Str` / `Array` / `Object` associated types, no `FromValue`
+  / `IntoValue` / `small_bits`. Only a few user-defined types ever call
+  `materialize`; most values flow as `Self::Value` untouched.
+- **A closure is just a `Value`, and an extern names its arity.** There is no
+  `type Closure`, no `closure()` / `into_closure()`. An extern's signature says
+  `Fn1<T, U, E, Rt>` (or `Fn0`/`Fn2`/`Fn3`), which is what the type solver
+  reads the closure's type from, and the body calls it as
+  `f.call(rt, (&a,))` — the argument tuple's positions are the closure's
+  `_0`, `_1`, `_2`. `ClosureFn::call` is the only road to the host's
+  `call_0/1/n`: they take a `CallToken` only `func.rs` can mint, so a handler
+  never runs a raw value. `Fn0` and `Fn1` have their own host entry (the
+  `map` hot path); `Fn2`/`Fn3` go through `call_n` with a stack array of
+  references the host reads before its future is first polled. The future is
+  a GAT over the borrow of `&self` and the lent arguments, so a host need
+  not clone anything to make it `'static`.
+- **No equality on the contract.** Equality is a property of a type, not of
+  the erased value: a body that compares materializes both sides as the type
+  they are and uses that type's `==` — two regexes compare as `Regex`, and
+  `contains` is a `Monomorphize` instance per comparable member with no
+  fallback. The language's own `==` reads its operands by their MIR type.
+- **`Send + Sync + 'static` is the contract, not a workaround.** `Runtime`,
+  `Value`, and `Error` carry it, `TyVar` carries it, and `materialize`/`erase`
+  require it of `T` — the last is what makes a host's `unsafe impl Send + Sync`
+  for its erased value true. Values cross `spawn_blocking`, sit in closure
+  captures, and are pulled by spawned generators; a runtime is held by async
+  handlers. An attempt to place these bounds only "where needed" produced a
+  macro that copied each extern's runtime predicates onto its declaration and
+  the same requirement written twice per fn; it was removed.
+- **A `Monomorphize` extern falls back to the erased value.** Its instances are
+  one per member type, then one for `Value`, selected last; the fallback is
+  omitted when the parameter carries a trait bound the erased value cannot
+  satisfy.
 
-- **Object's layout.** String and array are now associated types (above);
-  object is not. Object cannot simply be dropped from the contract — a Rust
-  struct crossing the boundary maps to an acvus object through
-  `#[derive(TyArg)]`, which emits `Runtime::object`/`into_object`, so the
-  `FxHashMap<Astr, _>` signature has real consumers. Its layout freedom is a
-  different question from string and array: acvus objects are fixed once
-  formed — an unnamed struct — so the right shape is not a map at all but a
-  projection over slots. That projection lives in the host, not the IR: the IR
-  carries no layout or size, and even the field identifier `Astr` is a host
-  handle (a `u64`) that a transpiling host like kovac would lower to its own
-  index. So object projection is a concern of MIR-executing hosts, not the
-  universal `Runtime` boundary the way string and array are. Deferred with
-  key = `Astr`.
+## How the interpreter meets it
 
-## The order these land in
+Three seams, and no more:
 
-Each change rests on the one before it:
+1. **Extern dispatch.** The interpreter collects `Vec<Value>` arguments and hands
+   them, with `&Runtime`, to a handler. The handler — generated mechanically by
+   the macro — calls `rt.materialize::<Tᵢ>(argᵢ)` per argument and
+   `rt.erase::<Ret>(result)`. The old wrapper traits (`FromValues`, `IntoValue`)
+   dissolve into these calls.
+2. **Closure.** `Fn1` (and `Fn0`/`Fn2`/`Fn3`) holds a `Value`, not a closure
+   handle; `Fn1::call` is `rt.call_1(&value, arg, token)`. This is what
+   dissolves `type Closure` and its two conversions. The iterator pipeline
+   keeps its closures as `Fn1<Value, Value, (), Rt>` — the same value under
+   erased element types (`Fn1::erased`) — so one op shape serves every `T`.
+3. **Runtime instance.** `materialize`/`erase` are `&self`, so a host
+   instance must exist, and `Runtime: 'static` rules out a borrowing view. For
+   the interpreter it is `AcvusRuntime(InterpreterContext)` — the shared
+   context, all `Arc`s, cloned at the dispatch site (`ctx.shared.runtime()`)
+   and handed to the handler by reference (sync) or by value (async). `call_*`
+   borrow the `FnValue` out of the closure value for the future's lifetime,
+   copy each lent argument into the callee's frame (every closure parameter
+   is callee-owned until the type checker marks borrowed ones), and run
+   `fn_value_call`. The interpreter's body keeps handling `Value` directly.
 
-1. String and array become runtime associated types, so their layout is the
-   runtime's choice. **Done.** Object is held back: it needs projection, which
-   is host-tier work, not a boundary associated type.
-2. The Store trait fixes how it keeps the basic primitives directly, now that
-   their representation is the runtime's own.
-3. The large `into_*` convert; with the composites abstracted and the Store in
-   place, each is a single cast rather than a per-shape accessor.
+## Open
 
-Object projection — an unnamed struct over slots, keyed today by `Astr` — is a
-separate line, belonging to MIR-executing hosts rather than the boundary.
+- **`Pointee` for unsized `T`.** `materialize`/`erase` are `T: Sized` today, and
+  `Large` is a `Box`. When `core::ptr::Pointee` stabilizes, splitting a value
+  into (thin pointer, metadata) lifts the `Sized` bound — an `str`, a `[Value]`,
+  a `dyn` erases and rematerializes with no shape change to the contract. Held
+  until then.
+- **The interpreter's `Value`.** The first instance is
+  `Small(u64) | Large(NonNull<Header>)`, self-contained, non-`Clone`, 16
+  bytes. A `Large` allocation begins with its vtable — `type_id` (an assert
+  only; kovac drops it), `drop`, `clone`, `debug`, and which composite it is —
+  so the value reaches its own vtable without any runtime handle, and
+  `impl Drop for Value` releases the payload wherever Rust drops it: a frame
+  register, a `Vec<Value>` an extern lets go, an unwinding stack. The
+  interpreter's composites are process-wide static vtables; an extension
+  type's vtable is registered through the `VtableRegistry` on first `erase` and
+  leaked for the life of the process. A type rides in `Small` when it fits the word and owns nothing
+  (`size_of <= 8 && !needs_drop`); everything else is `Large`, allocated by
+  `Box::into_raw` and taken back by `Box::from_raw`, so allocation and release
+  are one pair. `Large` holds the composite in its current Rust shape
+  (`Vec<Value>`, `FxHashMap<Astr, Value>`, `VariantValue`, `FnValue`), read by
+  the MIR type the interpreter already carries per value (`val_types`). An
+  extension type's vtable knows only how to drop: it can be released and
+  materialized, but sharing one panics: the IR never asks for a copy, and
+  the interpreter's own copies on read go with the reference redesign. The host asserts
+  `unsafe impl Send + Sync for Value`: every payload entered through
+  `erase<T: Send + Sync>`, and vtables are shared statics. Other hosts may
+  use a richer tag; the contract permits it, never requires it.
+- **The journal and `Clone`.** The context page (`journal.rs`) sets, gets, and
+  snapshots by cloning. That belongs with context dump/restore, which is not
+  settled, so it is not redesigned here: the table carries an explicit `clone`
+  vtable the page calls by name, as a bridge. When dump/restore lands, a
+  snapshot is a dump and a branch is a head pointer, and the vtable goes.
+- **No copy primitive on the contract.** UB can only enter through an extern,
+  so an extern is given no way to make a second owner of a value: `call_*`
+  lend their arguments (`&Value`), a handler's `Value` is a name for storage
+  the host owns, and whether the callee takes a copy or an alias is the
+  host's decision from the closure's type. The IR has no copy instruction
+  either: a real copy is an extern that takes the value and returns a
+  second one — `map(|v| clone(v))`, as `v.clone()` in Rust — and that
+  extern's Rust `Clone` is where the copy is made. A closure that consumed
+  a lent argument would not type-check, so `filter`/`find` are never called
+  with one. What still copies today is the interpreter's own register read
+  (`use_val` shares every non-move-only value) and the lent argument
+  entering a callee frame: both stand in for the alias the reference
+  redesign will give them, and an extension type's vtable stays drop-only
+  until then.
+- **Persistence.** The `ExternValue` type and the `PersistEntry` table keyed on
+  it are removed — they existed for the boundary's removed `into_extern`. Per-type
+  dump/restore re-attaches to the vtable beside `drop` and `clone`.
+
+- **Container elements: real monomorphization, `Material` opt-in.**
+  `List<String>` stays `List<String>`; a generic extern is a `Monomorphize`
+  instance per `T`, and each instance `materialize`s/`erase`s the container
+  whole, as the same `T`. Nothing unifies layouts, so nothing clashes, and
+  Rust already copies per generic — the code growth is the price of speed.
+  `Material<T>` — an 8-byte typed handle into `Rt::MaterialPool`, an
+  allocator with fixed slots — is opt-in for pointer-shaped types (a linked
+  list), where the inline handle removes the double indirection and nodes
+  sit contiguous in the pool. Held until the pool exists.
+
+## The cut
+
+The current `Runtime` is thirty-odd methods accreted as patches — the small-value
+`into_*`, the large `into_*`, `Str`/`Array` associated types, `object`/`into_object`,
+`FromValue`/`IntoValue`/`FromValues`/`IntoValues`, `small_bits`, `type Closure`.
+The path to the contract above:
+
+1. Introduce `materialize`/`erase` as the interpreter's own (`transmute`-based),
+   and the thin `AcvusRuntime` view holding the interner.
+2. Rewrite the macro to emit `materialize`/`erase` per argument and return.
+3. Collapse `Fn0/1/2` onto `call_0/1/n` over `Value`; delete `type Closure`.
+4. Delete the whole extraction/construction taxonomy the contract no longer
+   names, letting the compile errors enumerate every dependent.

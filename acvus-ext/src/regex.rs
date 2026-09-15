@@ -1,8 +1,7 @@
 //! Regular expressions: the `Regex` extension type and its functions.
 
 use acvus_extern::{
-    ExternError, ExternRegistry, ExternType, IdentityVar, Interner, Pure, Runtime, extern_fn,
-    extern_registry,
+    ExternError, ExternRegistry, ExternType, IdentityVar, Pure, Runtime, extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -11,24 +10,33 @@ use crate::iter_pipeline::Iter;
 pub struct Regex(regex::Regex);
 
 #[extern_fn(effect = pure)]
-fn regex(_: &Interner, pattern: String) -> Result<Regex, ExternError> {
+fn regex<R>(_: &R, pattern: String) -> Result<Regex, ExternError>
+where
+    R: Runtime,
+{
     regex::Regex::new(&pattern)
         .map(Regex)
         .map_err(|e| ExternError::call("regex", format!("invalid pattern '{pattern}': {e}")))
 }
 
 #[extern_fn(effect = pure)]
-fn regex_match(_: &Interner, re: Regex, text: String) -> bool {
+fn regex_match<R>(_: &R, re: Regex, text: String) -> bool
+where
+    R: Runtime,
+{
     re.0.is_match(&text)
 }
 
 #[extern_fn(effect = pure)]
-fn regex_find(_: &Interner, re: Regex, text: String) -> Option<String> {
+fn regex_find<R>(_: &R, re: Regex, text: String) -> Option<String>
+where
+    R: Runtime,
+{
     re.0.find(&text).map(|m| m.as_str().to_owned())
 }
 
 #[extern_fn(effect = pure)]
-fn regex_find_all<I, Rt>(_: &Interner, re: Regex, text: String) -> Iter<String, Pure, I, Rt>
+fn regex_find_all<I, Rt>(_: &Rt, re: Regex, text: String) -> Iter<String, Pure, I, Rt>
 where
     I: IdentityVar,
     Rt: Runtime,
@@ -42,12 +50,15 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn regex_replace(_: &Interner, text: String, re: Regex, replacement: String) -> String {
+fn regex_replace<R>(_: &R, text: String, re: Regex, replacement: String) -> String
+where
+    R: Runtime,
+{
     re.0.replace_all(&text, replacement.as_str()).into_owned()
 }
 
 #[extern_fn(effect = pure)]
-fn regex_split<I, Rt>(_: &Interner, re: Regex, text: String) -> Iter<String, Pure, I, Rt>
+fn regex_split<I, Rt>(_: &Rt, re: Regex, text: String) -> Iter<String, Pure, I, Rt>
 where
     I: IdentityVar,
     Rt: Runtime,
@@ -74,7 +85,7 @@ where
 
 /// Capture group 1 of every match.
 #[extern_fn(effect = pure)]
-fn regex_extract<I, Rt>(_: &Interner, text: String, re: Regex) -> Iter<String, Pure, I, Rt>
+fn regex_extract<I, Rt>(_: &Rt, text: String, re: Regex) -> Iter<String, Pure, I, Rt>
 where
     I: IdentityVar,
     Rt: Runtime,
@@ -102,7 +113,7 @@ pub fn regex_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{TypeRegistry, TypesOnly};
+    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {

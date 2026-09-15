@@ -19,7 +19,6 @@ fn closures(
     ExternRegistry::new(move |i| ExternItems {
         types: vec![],
         fns: fns(i).into_iter().map(|f| f.with_effect(effect.clone())).collect(),
-        persist: vec![],
     })
 }
 
@@ -762,7 +761,7 @@ impl Probe {
                     .with_effect(effect.clone())
                 })
                 .collect();
-            ExternItems { types: vec![], fns, persist: vec![] }
+            ExternItems { types: vec![], fns }
         })
     }
 }

@@ -23,7 +23,10 @@ pub use string::string_registry;
 use acvus_extern::{ExternRegistry, Runtime};
 
 /// The standard registries. Each registers its own types when registered.
-pub fn std_registries<R: Runtime>() -> Vec<ExternRegistry<R>> {
+pub fn std_registries<R>() -> Vec<ExternRegistry<R>>
+where
+    R: Runtime,
+{
     vec![
         string_registry(),
         conversion_registry(),

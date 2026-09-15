@@ -1,26 +1,63 @@
 //! Function-typed parameters: `Fn0<R, E, Rt>`, `Fn1<A, R, E, Rt>`,
-//! `Fn2<A, B, R, E, Rt>`. Each names `Fn(...) -> R with E` and holds the
-//! runtime's closure. Calling one is the one place a generic body crosses
-//! back into the runtime.
+//! `Fn2<A, B, R, E, Rt>`, `Fn3<A, B, C, R, E, Rt>`. Each names
+//! `Fn(...) -> R with E` in an extern signature — the type solver reads the
+//! closure's type from it — and holds the runtime's closure as a plain
+//! value. Calling one is the one place a generic body crosses back into the
+//! runtime: `f.call(rt, (&a, &b))` lends runtime values and gets one back.
 
 use std::marker::PhantomData;
 
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
-use crate::convert::{FromValue, IntoValue};
 use crate::effect::{EffectArg, EffectVar};
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
+/// Proof that a call comes through `Fn0`/`Fn1`/…: only this module mints it,
+/// so a handler cannot reach the runtime's `call_*` directly.
+pub struct CallToken(());
+
+impl CallToken {
+    fn mint() -> Self {
+        CallToken(())
+    }
+}
+
+/// A closure value called with lent runtime values, arity fixed by the type.
+pub trait ClosureFn<Rt: Runtime> {
+    type Args<'a>
+    where
+        Self: 'a;
+    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args<'a>) -> Rt::CallFuture<'a>;
+}
+
 macro_rules! define_fn_arg {
     ($name:ident; $($A:ident : $slot:literal),*) => {
-        pub struct $name<$($A,)* R, E, Rt>(pub Rt::Closure, PhantomData<($($A,)* R, E)>)
+        pub struct $name<$($A,)* R, E, Rt>(Rt::Value, PhantomData<($($A,)* R, E)>)
         where
             $($A: TyVar,)*
             R: TyVar,
             E: EffectVar,
             Rt: Runtime;
+
+        impl<$($A,)* R, E, Rt> $name<$($A,)* R, E, Rt>
+        where
+            $($A: TyVar,)*
+            R: TyVar,
+            E: EffectVar,
+            Rt: Runtime,
+        {
+            pub fn new(value: Rt::Value) -> Self {
+                Self(value, PhantomData)
+            }
+
+            /// The same closure value under the erased types it has at run
+            /// time, for code that keeps closures past their declaration.
+            pub fn erased(self) -> $name<$(erased!($A),)* Rt::Value, (), Rt> {
+                $name(self.0, PhantomData)
+            }
+        }
 
         impl<$($A,)* R, E, Rt> TyArg for $name<$($A,)* R, E, Rt>
         where
@@ -38,76 +75,82 @@ macro_rules! define_fn_arg {
                 }
             }
         }
+    };
+}
 
-        impl<$($A,)* R, E, Rt> FromValue<Rt> for $name<$($A,)* R, E, Rt>
-        where
-            $($A: TyVar,)*
-            R: TyVar,
-            E: EffectVar,
-            Rt: Runtime,
-        {
-            fn from_value(value: Rt::Value, _: &Interner) -> Result<Self, Rt::Error> {
-                Ok(Self(Rt::into_closure(value)?, PhantomData))
-            }
-        }
-
-        impl<$($A,)* R, E, Rt> IntoValue<Rt> for $name<$($A,)* R, E, Rt>
-        where
-            $($A: TyVar,)*
-            R: TyVar,
-            E: EffectVar,
-            Rt: Runtime,
-        {
-            fn into_value(self, _: &Interner) -> Rt::Value {
-                Rt::closure(self.0)
-            }
-        }
+macro_rules! erased {
+    ($A:ident) => {
+        Rt::Value
     };
 }
 
 define_fn_arg!(Fn0;);
 define_fn_arg!(Fn1; A: "_0");
 define_fn_arg!(Fn2; A: "_0", B: "_1");
+define_fn_arg!(Fn3; A: "_0", B: "_1", C: "_2");
 
-impl<R, E, Rt> Fn0<R, E, Rt>
+impl<R, E, Rt> ClosureFn<Rt> for Fn0<R, E, Rt>
 where
-    R: TyVar + FromValue<Rt>,
+    R: TyVar,
     E: EffectVar,
     Rt: Runtime,
 {
-    pub async fn call(&self, interner: &Interner) -> Result<R, Rt::Error> {
-        let out = Rt::call(&self.0, vec![]).await?;
-        R::from_value(out, interner)
+    type Args<'a>
+        = ()
+    where
+        Self: 'a;
+    fn call<'a>(&'a self, rt: &'a Rt, _: ()) -> Rt::CallFuture<'a> {
+        rt.call_0(&self.0, CallToken::mint())
     }
 }
 
-impl<A, R, E, Rt> Fn1<A, R, E, Rt>
+impl<A, R, E, Rt> ClosureFn<Rt> for Fn1<A, R, E, Rt>
 where
-    A: TyVar + IntoValue<Rt>,
-    R: TyVar + FromValue<Rt>,
+    A: TyVar,
+    R: TyVar,
     E: EffectVar,
     Rt: Runtime,
 {
-    pub async fn call(&self, interner: &Interner, a: A) -> Result<R, Rt::Error> {
-        let out = Rt::call(&self.0, vec![a.into_value(interner)]).await?;
-        R::from_value(out, interner)
+    type Args<'a>
+        = (&'a Rt::Value,)
+    where
+        Self: 'a;
+    fn call<'a>(&'a self, rt: &'a Rt, (a,): Self::Args<'a>) -> Rt::CallFuture<'a> {
+        rt.call_1(&self.0, a, CallToken::mint())
     }
 }
 
-impl<A, B, R, E, Rt> Fn2<A, B, R, E, Rt>
+impl<A, B, R, E, Rt> ClosureFn<Rt> for Fn2<A, B, R, E, Rt>
 where
-    A: TyVar + IntoValue<Rt>,
-    B: TyVar + IntoValue<Rt>,
-    R: TyVar + FromValue<Rt>,
+    A: TyVar,
+    B: TyVar,
+    R: TyVar,
     E: EffectVar,
     Rt: Runtime,
 {
-    pub async fn call(&self, interner: &Interner, a: A, b: B) -> Result<R, Rt::Error> {
-        let out = Rt::call(
-            &self.0,
-            vec![a.into_value(interner), b.into_value(interner)],
-        )
-        .await?;
-        R::from_value(out, interner)
+    type Args<'a>
+        = (&'a Rt::Value, &'a Rt::Value)
+    where
+        Self: 'a;
+    fn call<'a>(&'a self, rt: &'a Rt, (a, b): Self::Args<'a>) -> Rt::CallFuture<'a> {
+        rt.call_n(&self.0, &[a, b], CallToken::mint())
+    }
+}
+
+impl<A, B, C, R, E, Rt> ClosureFn<Rt> for Fn3<A, B, C, R, E, Rt>
+where
+    A: TyVar,
+    B: TyVar,
+    C: TyVar,
+    R: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    type Args<'a>
+        = (&'a Rt::Value, &'a Rt::Value, &'a Rt::Value)
+    where
+        Self: 'a;
+    fn call<'a>(&'a self, rt: &'a Rt, (a, b, c): Self::Args<'a>) -> Rt::CallFuture<'a> {
+        rt.call_n(&self.0, &[a, b, c], CallToken::mint())
     }
 }

@@ -415,11 +415,6 @@ impl CheckCtx {
             | InstKind::Nop
             | InstKind::BlockLabel { .. } => {}
 
-            InstKind::Clone { dst, src } => {
-                let src_ty = ty!(*src);
-                let dst_ty = ty!(*dst);
-                self.assert_match(pc, span, "Clone", "dst == src", src_ty, dst_ty, errors);
-            }
             InstKind::Drop { src } => {
                 // Just validate src exists and has a type.
                 let _ = self.ty_of(*src, vt, span, pc, errors);

@@ -47,9 +47,9 @@ pub trait TyArg: 'static {
 }
 
 /// A generic parameter that is an acvus type variable. The body never opens
-/// it; a body that must cross the runtime boundary says so with `FromValue`
-/// or `IntoValue`. Filled by `Typeck<N>` while the type is built and by the
-/// runtime's value at runtime.
+/// it; a body that must cross the runtime boundary goes through the
+/// runtime's `materialize`/`erase`. Filled by `Typeck<N>` while the type is
+/// built and by the runtime's value at runtime.
 pub trait TyVar: Send + Sync + 'static {}
 
 impl<T: Send + Sync + 'static> TyVar for T {}
