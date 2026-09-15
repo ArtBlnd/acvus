@@ -1,3 +1,4 @@
+mod container;
 mod conversion;
 mod datetime;
 mod deque;
@@ -9,6 +10,7 @@ mod option;
 mod regex;
 mod string;
 
+pub use container::container_registry;
 pub use conversion::conversion_registry;
 pub use datetime::datetime_registry;
 pub use deque::deque_registry;
@@ -31,6 +33,7 @@ where
         string_registry(),
         conversion_registry(),
         list_registry(),
+        container_registry(),
         deque_registry(),
         option_registry(),
         iterator_registry(),

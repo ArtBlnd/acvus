@@ -1,0 +1,196 @@
+//! Reading a container (RFC-0028): the shared signatures `container::{len,
+//! get, get_mut, first, last}`, with instances for `List` and `Array` here
+//! and for `Deque` in `deque`.
+
+use acvus_extern::{
+    Arr, ExternError, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
+};
+
+use crate::list::List;
+
+pub mod sig {
+    use acvus_extern::{Ref, RefMut, extern_signature};
+
+    extern_signature! {
+        ns: "container",
+        fn len<C>(c: &C) -> i64
+        where
+            C: TyVar;
+    }
+
+    extern_signature! {
+        ns: "container",
+        fn get<C, T, Rt>(c: &C, index: i64) -> Ref<T, Rt>
+        where
+            C: TyVar,
+            T: TyVar,
+            Rt: Runtime;
+    }
+
+    extern_signature! {
+        ns: "container",
+        fn get_mut<C, T, Rt>(c: &mut C, index: i64) -> RefMut<T, Rt>
+        where
+            C: TyVar,
+            T: TyVar,
+            Rt: Runtime;
+    }
+
+    extern_signature! {
+        ns: "container",
+        fn first<C, T, Rt>(c: &C) -> Option<Ref<T, Rt>>
+        where
+            C: TyVar,
+            T: TyVar,
+            Rt: Runtime;
+    }
+
+    extern_signature! {
+        ns: "container",
+        fn last<C, T, Rt>(c: &C) -> Option<Ref<T, Rt>>
+        where
+            C: TyVar,
+            T: TyVar,
+            Rt: Runtime;
+    }
+}
+
+pub(crate) fn checked_index(
+    name: &'static str,
+    len: usize,
+    index: i64,
+) -> Result<usize, ExternError> {
+    usize::try_from(index)
+        .ok()
+        .filter(|i| *i < len)
+        .ok_or_else(|| ExternError::call(name, format!("index {index} out of {len}")))
+}
+
+// -- List ---------------------------------------------------------------
+
+#[extern_fn(instance_of = sig::len, effect = pure)]
+fn len_list<T, Rt>(_: &Rt, c: &List<T>) -> i64
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    c.0.len() as i64
+}
+
+#[extern_fn(instance_of = sig::get, effect = pure)]
+fn get_list<T, Rt>(rt: &Rt, c: Ref<List<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, ExternError>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    let i = c.with(rt, |c| checked_index("get", c.0.len(), index))?;
+    Ok(c.map(rt, |c| &c.0[i]))
+}
+
+#[extern_fn(instance_of = sig::get_mut, effect = pure)]
+fn get_mut_list<T, Rt>(
+    rt: &Rt,
+    c: RefMut<List<T>, Rt>,
+    index: i64,
+) -> Result<RefMut<T, Rt>, ExternError>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    let i = c.with_mut(rt, |c| checked_index("get_mut", c.0.len(), index))?;
+    Ok(c.map_mut(rt, |c| &mut c.0[i]))
+}
+
+#[extern_fn(instance_of = sig::first, effect = pure)]
+fn first_list<T, Rt>(rt: &Rt, c: Ref<List<T>, Rt>) -> Option<Ref<T, Rt>>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    c.try_map(rt, |c| c.0.first())
+}
+
+#[extern_fn(instance_of = sig::last, effect = pure)]
+fn last_list<T, Rt>(rt: &Rt, c: Ref<List<T>, Rt>) -> Option<Ref<T, Rt>>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    c.try_map(rt, |c| c.0.last())
+}
+
+// -- Array --------------------------------------------------------------
+
+#[extern_fn(instance_of = sig::len, effect = pure)]
+fn len_array<T, N, Rt>(_: &Rt, c: &Arr<T, N>) -> i64
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    c.0.len() as i64
+}
+
+#[extern_fn(instance_of = sig::get, effect = pure)]
+fn get_array<T, N, Rt>(
+    rt: &Rt,
+    c: Ref<Arr<T, N>, Rt>,
+    index: i64,
+) -> Result<Ref<T, Rt>, ExternError>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    let i = c.with(rt, |c| checked_index("get", c.0.len(), index))?;
+    Ok(c.map(rt, |c| &c.0[i]))
+}
+
+#[extern_fn(instance_of = sig::get_mut, effect = pure)]
+fn get_mut_array<T, N, Rt>(
+    rt: &Rt,
+    c: RefMut<Arr<T, N>, Rt>,
+    index: i64,
+) -> Result<RefMut<T, Rt>, ExternError>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    let i = c.with_mut(rt, |c| checked_index("get_mut", c.0.len(), index))?;
+    Ok(c.map_mut(rt, |c| &mut c.0[i]))
+}
+
+#[extern_fn(instance_of = sig::first, effect = pure)]
+fn first_array<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Option<Ref<T, Rt>>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    c.try_map(rt, |c| c.0.first())
+}
+
+#[extern_fn(instance_of = sig::last, effect = pure)]
+fn last_array<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Option<Ref<T, Rt>>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    c.try_map(rt, |c| c.0.last())
+}
+
+pub fn container_registry<Rt>() -> Registry<Rt>
+where
+    Rt: Runtime,
+{
+    extern_registry! {
+        ns: "std",
+        signatures: [sig::len, sig::get, sig::get_mut, sig::first, sig::last],
+        fns: [
+            len_list, get_list, get_mut_list, first_list, last_list,
+            len_array, get_array, get_mut_array, first_array, last_array,
+        ],
+    }
+}

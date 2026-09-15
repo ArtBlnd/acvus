@@ -650,14 +650,14 @@ fn inline_multiple_context_different_callees() {
 
 #[test]
 fn inline_callee_uses_builtin_len() {
-    // count(xs) = xs | len; main = count([1, 2, 3])
+    // count(xs) = len(&xs); main = count([1, 2, 3])
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
         ("main", "count([1, 2, 3])"),
         &[(
             "count",
-            "$xs | len",
+            "len(&$xs)",
             sig(
                 &i,
                 &[(

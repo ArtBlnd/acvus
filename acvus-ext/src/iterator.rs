@@ -6,12 +6,12 @@
 //!   rev_iter (consuming)
 //! - Lazy combinators: map, pmap, filter, take, skip, chain, pchain, flatten,
 //!   flatten_arrays, flat_map
-//! - Consumers (async, effect E): collect, join, first, last, contains, next,
-//!   find, reduce, fold, any, all
+//! - Consumers (async, effect E): collect, join, contains, next, find,
+//!   reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, ExternError, Fn1, Fn2, IdentityVar, LenVar, Lent, Ref, Registry,
-    Runtime, TyVar, extern_fn, extern_registry, value_of,
+    Arr, ClosureFn, EffectVar, ExternError, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry,
+    Runtime, TyVar, extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -36,7 +36,7 @@ pub mod sig {
 
     extern_signature! {
         ns: "iter",
-        fn as_iter<C, T, E, I, Rt>(items: &C) -> Iter<Ref<T>, E, I, Rt>
+        fn as_iter<C, T, E, I, Rt>(items: &C) -> Iter<Ref<T, Rt>, E, I, Rt>
         where
             C: TyVar,
             T: TyVar,
@@ -50,11 +50,11 @@ fn count(name: &'static str, n: i64) -> Result<usize, ExternError> {
     usize::try_from(n).map_err(|_| ExternError::call(name, format!("negative count {n}")))
 }
 
-/// An iterator over references into a lent container, read by `at`.
+/// An iterator over references into a borrowed container, read by `at`.
 pub(crate) fn lent_iter<C, T, E, I, Rt>(
-    items: Lent<C, Rt>,
+    items: Ref<C, Rt>,
     at: impl Fn(&C, usize) -> Option<&T> + Send + Sync + 'static,
-) -> Iter<Ref<T>, E, I, Rt>
+) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     C: TyVar,
     T: TyVar,
@@ -64,14 +64,9 @@ where
 {
     let mut index = 0;
     Iter::from_fn(move |rt| {
-        // SAFETY: the reference names a live container for as long as the
-        // iterator's region holds its loan.
-        let container = unsafe { items.get(rt) };
-        let item = at(container, index)?;
+        let item = items.try_map(rt, |container| at(container, index));
         index += 1;
-        // SAFETY: the element lives in the container's storage, which the
-        // loan keeps.
-        Some(unsafe { rt.reference(value_of::<T, Rt>(item)) })
+        item.map(Ref::into_value)
     })
 }
 
@@ -101,7 +96,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_list<T, E, I, Rt>(_: &Rt, items: Lent<List<T>, Rt>) -> Iter<Ref<T>, E, I, Rt>
+fn as_iter_list<T, E, I, Rt>(_: &Rt, items: Ref<List<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -112,7 +107,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_array<T, N, E, I, Rt>(_: &Rt, items: Lent<Arr<T, N>, Rt>) -> Iter<Ref<T>, E, I, Rt>
+fn as_iter_array<T, N, E, I, Rt>(_: &Rt, items: Ref<Arr<T, N>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     T: TyVar,
     N: LenVar,
@@ -161,7 +156,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn filter<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<Ref<T>, bool, E, Rt>) -> Iter<T, E, I, Rt>
+fn filter<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -294,32 +289,6 @@ where
 }
 
 #[extern_fn(effect = E)]
-async fn first<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    it.next(rt).await
-}
-
-#[extern_fn(effect = E)]
-async fn last<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    let mut last = None;
-    while let Some(item) = it.next(rt).await? {
-        last = Some(item);
-    }
-    Ok(last)
-}
-
-#[extern_fn(effect = E)]
 async fn contains<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
@@ -354,7 +323,7 @@ where
 async fn find<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T>, bool, E, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Result<T, Rt::Error>
 where
     T: TyVar,
@@ -425,7 +394,7 @@ where
 async fn any<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T>, bool, E, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
     T: TyVar,
@@ -448,7 +417,7 @@ where
 async fn all<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T>, bool, E, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
     T: TyVar,
@@ -478,7 +447,7 @@ where
         fns: [
             into_iter_list, into_iter_array, as_iter_list, as_iter_array, rev_iter,
             map, pmap, filter, take, skip, chain, pchain, flatten, flatten_arrays, flat_map,
-            collect, join, first, last, contains, next, find, reduce, fold, any, all,
+            collect, join, contains, next, find, reduce, fold, any, all,
         ],
     }
 }

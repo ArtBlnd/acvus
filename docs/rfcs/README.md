@@ -73,3 +73,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0025](0025-context-is-a-variable.md) | A context is a variable of the body that touches it | Accepted |
 | [RFC-0026](0026-string-copies.md) | A String is an immutable value, copied by `StringClone` | Accepted |
 | [RFC-0027](0027-polymorphic-instances.md) | A polymorphic instance of a shared signature | Accepted |
+| [RFC-0028](0028-container-signatures.md) | A container is read through shared signatures; a reference is one carrier | Accepted |

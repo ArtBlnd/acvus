@@ -291,7 +291,7 @@ fn pipe_filter_map() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -314,7 +314,7 @@ fn lambda_in_filter() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -648,7 +648,7 @@ fn pmap_builtin() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | pmap(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | pmap(|i| -> i + 1) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -718,7 +718,7 @@ fn closure_capture_context() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > @threshold) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > @threshold) | collect }}{{ len(&x) | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -734,7 +734,7 @@ fn list_literal_expression() {
     let i = Interner::new();
     let ir = compile_simple(
         &i,
-        r#"{{ x = [1, 2, 3] }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ x = [1, 2, 3] }}{{ len(&x) | to_string }}{{_}}{{/}}"#,
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -748,7 +748,7 @@ fn lambda_map_arithmetic() {
     // Lambda param type resolved via unification: map(List<Int>, |x| -> x + 1)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -761,7 +761,7 @@ fn lambda_filter_comparison() {
     // Lambda param type resolved via unification: filter(List<Int>, |x| -> *x > 0)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > 0) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -777,7 +777,7 @@ fn closure_capture_local() {
     // through a reference (RFC-0018).
     let ir = compile_to_ir(
         &i,
-        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *threshold) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *threshold) | collect }}{{ len(&x) | to_string }}{{_}}{{/}}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -891,7 +891,7 @@ fn triple_pipe_chain() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -939,7 +939,7 @@ fn lambda_negate_param() {
     // Lambda param has Ty::Var initially; -i must resolve via unification.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> -i) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> -i) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -955,7 +955,7 @@ fn lambda_not_param() {
     let context = list_context(&i, "flags", Ty::Bool);
     let ir = compile_to_ir(
         &i,
-        r#"{{ flags = @flags }}{{ @flags = list([]) }}{{ x = flags | into_iter | map(|i| -> !i) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ flags = @flags }}{{ @flags = list([]) }}{{ x = flags | into_iter | map(|i| -> !i) | collect }}{{ len(&x) | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -991,7 +991,7 @@ fn multiple_closures_same_capture() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ len(&x) | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1048,7 +1048,7 @@ fn pipe_map_to_string_then_filter() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ len(&x) | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -1066,7 +1066,7 @@ fn lambda_capture_local_var_ref() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *offset) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *offset) | collect }}{{ len(&x) | to_string }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1086,7 +1086,7 @@ fn lambda_multiple_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> (u.name, u.age)) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> (u.name, u.age)) | collect }}{{ len(&x) | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1174,7 +1174,7 @@ fn lambda_float_arithmetic() {
     let context = list_context(&i, "vals", Ty::Float);
     let ir = compile_to_ir(
         &i,
-        r#"{{ vals = @vals }}{{ @vals = list([]) }}{{ x = vals | into_iter | map(|v| -> v * 2.0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ vals = @vals }}{{ @vals = list([]) }}{{ x = vals | into_iter | map(|v| -> v * 2.0) | collect }}{{ len(&x) | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1199,7 +1199,7 @@ fn filter_object_field_equality() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String), ("active", Ty::Bool)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | filter(|u| -> u.active) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | filter(|u| -> u.active) | collect }}{{ len(&x) | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1235,7 +1235,7 @@ fn builtin_len() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ items | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ len(&items) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1596,7 +1596,7 @@ fn migrated_integration_pipe_with_lambda() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ len(&x) | to_string }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1624,7 +1624,7 @@ fn migrated_pipe_extern_fn_ok() {
     let mapper = extern_fn(&i, "mapper", &[Ty::Int], Ty::String);
     compile_to_ir_with(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | map(|i| -> mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | map(|i| -> mapper(i)) | collect }}{{ len(&x) | to_string }}{{_}}{{/}}"#,
         &items_list_context(&i),
         &[mapper],
     )
@@ -1652,7 +1652,7 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ items | filter(|x| -> *x > @threshold) | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ n1 = items | filter(|x| -> *x > @threshold) | collect }}{{ len(&n1) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1664,7 +1664,7 @@ fn migrated_typeck_lambda_type_check() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ len(&x) | to_string }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1676,7 +1676,7 @@ fn migrated_typeck_lambda_no_capture_local_params() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ items | map(|x| -> x + 1) | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ n2 = items | map(|x| -> x + 1) | collect }}{{ len(&n2) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1712,7 +1712,7 @@ fn migrated_typeck_nested_lambda_captures() {
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ items | map(|x| -> x * @factor) | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ n3 = items | map(|x| -> x * @factor) | collect }}{{ len(&n3) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1751,7 +1751,7 @@ fn migrated_print_closure() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ len(&x) | to_string }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1981,7 +1981,7 @@ fn migrated_move_reject_var_double_load() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | into_iter }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
+        "{{ a = @items | into_iter }}{{ n4 = a | collect }}{{ len(&n4) | to_string }}{{ n5 = a | collect }}{{ len(&n5) | to_string }}",
         &context,
     );
     assert!(result.is_err(), "should reject var double load of iterator");
@@ -2069,7 +2069,7 @@ fn migrated_move_accept_var_reassign() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ a | collect | len | to_string }}{{ items2 = @items2 }}{{ @items2 = list([]) }}{{ a = items2 | into_iter }}{{ a | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ n6 = a | collect }}{{ len(&n6) | to_string }}{{ items2 = @items2 }}{{ @items2 = list([]) }}{{ a = items2 | into_iter }}{{ n7 = a | collect }}{{ len(&n7) | to_string }}",
         &context,
     );
     assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
@@ -2116,7 +2116,7 @@ fn migrated_move_reject_list_of_iter_reuse() {
     let i = Interner::new();
     let ty = Ty::Array(Box::new(iter_int_ty(&i)), acvus_mir::ty::LenTerm::Known(3));
     let context = ctx(&i, &[("src", ty)]);
-    let result = compile_script_ir(&i, "x = @src; a = x | len; b = x | len; a + b", &context);
+    let result = compile_script_ir(&i, "x = @src; a = len(&x); b = len(&x); a + b", &context);
     assert!(
         result.is_err(),
         "List containing an Iterator should be move-only"
@@ -2151,7 +2151,7 @@ fn migrated_move_reject_branch_move_then_use() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | into_iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}{{ a | collect | len | to_string }}",
+        "{{ a = @items | into_iter }}{{ true = @flag }}{{ n8 = a | collect }}{{ len(&n8) | to_string }}{{_}}nothing{{/}}{{ n9 = a | collect }}{{ len(&n9) | to_string }}",
         &context,
     );
     assert!(
@@ -2170,7 +2170,7 @@ fn migrated_move_reject_both_branches_move_then_use() {
     let context = ctx(&i, &[("flag", Ty::Bool), ("src", iter_int_ty(&i))]);
     let result = compile_to_ir(
         &i,
-        "{{ a = @src }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}{{ a | collect | len | to_string }}{{/}}{{ a | collect | len | to_string }}",
+        "{{ a = @src }}{{ true = @flag }}{{ n10 = a | collect }}{{ len(&n10) | to_string }}{{_}}{{ n11 = a | collect }}{{ len(&n11) | to_string }}{{/}}{{ n12 = a | collect }}{{ len(&n12) | to_string }}",
         &context,
     );
     assert!(
@@ -2191,7 +2191,7 @@ fn migrated_move_accept_branch_move_no_use_after() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ true = @flag }}{{ n13 = a | collect }}{{ len(&n13) | to_string }}{{_}}nothing{{/}}",
         &context,
     );
     assert!(
@@ -2284,7 +2284,7 @@ fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let context = items_list_context(&i);
     let result = compile_to_ir(
         &i,
-        "{{ f = (|z| -> { items = @items; @items = list([]); collect(items | into_iter) }) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
+        "{{ f = (|z| -> { items = @items; @items = list([]); collect(items | into_iter) }) }}{{ n19 = f(0) }}{{ len(&n19) | to_string }}{{ n20 = f(0) }}{{ len(&n20) | to_string }}",
         &context,
     );
     assert!(
@@ -2329,7 +2329,7 @@ fn migrated_move_reject_iter_var_without_purify() {
     let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_to_ir(
         &i,
-        "{{ a = @src }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
+        "{{ a = @src }}{{ n14 = a | collect }}{{ len(&n14) | to_string }}{{ n15 = a | collect }}{{ len(&n15) | to_string }}",
         &context,
     );
     assert!(
@@ -2542,7 +2542,7 @@ fn projection_move_single_use() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ x | collect | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ n16 = x | collect }}{{ len(&n16) | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -2559,7 +2559,7 @@ fn projection_move_var_reassign_revives() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ x | collect | len | to_string }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ x | collect | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ n17 = x | collect }}{{ len(&n17) | to_string }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ n18 = x | collect }}{{ len(&n18) | to_string }}"#,
         &context,
     ).unwrap();
     assert!(

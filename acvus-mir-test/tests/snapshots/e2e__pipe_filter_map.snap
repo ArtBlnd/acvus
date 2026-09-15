@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 298
 expression: ir
 ---
 === literals ===
@@ -9,47 +8,47 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = undef
-     3 |   r3 = fetch @items
-     5 |   r4 = list []
-     6 |   r5 = call #0(r4)
-     8 |   r6 = call #1(r3)
-     9 |   r7 = closure L0 []
-    10 |   r8 = call #2(r6, r7)
-    11 |   r9 = closure L1 []
-    12 |   r10 = call #3(r8, r9)
-    13 |   r11 = call #4(r10)
-    15 |   r12 = call #5(r11)
-    16 |   r13 = call #6(r12)
-    17 |   r14 = string_concat [T0, T0, T0, r13]
-    18 |   commit @items = r5
-    19 |   return r14
+     2 |   r2 = fetch @items
+     4 |   r3 = list []
+     5 |   r4 = call #0(r3)
+     7 |   r5 = call #1(r2)
+     8 |   r6 = closure L0 []
+     9 |   r7 = call #2(r5, r6)
+    10 |   r8 = closure L1 []
+    11 |   r9 = call #3(r7, r8)
+    12 |   r10 = call #4(r9)
+    13 |   assign x = r10
+    15 |   r11 = ref &x
+    16 |   r12 = call #5(r11)
+    17 |   r13 = call #6(r12)
+    18 |   r14 = string_concat [T0, T0, T0, r13]
+    19 |   commit @items = r4
+    20 |   return r14
 
     ; r0 (v23) : List<Int>
     ; r1 (v24) : List<Int>
-    ; r2 (v25) : List<Int>
-    ; r3 (@items) : List<Int>
-    ; r4 (v6) : Array<Int, 0>
-    ; r5 (list(...)) : List<Int>
-    ; r6 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r7 (v11) : Fn(&Int) -> Bool
-    ; r8 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r9 (v13) : Fn(Int) -> Int
-    ; r10 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r11 (collect(...)) : List<Int>
+    ; r2 (@items) : List<Int>
+    ; r3 (v6) : Array<Int, 0>
+    ; r4 (list(...)) : List<Int>
+    ; r5 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r6 (v11) : Fn(&Int) -> Bool
+    ; r7 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r8 (v13) : Fn(Int) -> Int
+    ; r9 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r10 (collect(...)) : List<Int>
+    ; r11 (x.) : &List<Int>
     ; r12 (len(...)) : Int
     ; r13 (to_string(...)) : String
     ; r14 (v21) : String
     ; r15 (v22) : List<Int>
     ; r16 (@items) : List<Int>
-    ; r17 (items) : List<Int>
-    ; r18 (v17) : String
-    ; r19 (items) : List<Int>
-    ; r20 (x) : List<Int>
-    ; r21 (@items) : List<Int>
-    ; r22 (v5) : String
-    ; r23 (x) : List<Int>
-    ; r24 (v8) : String
+    ; r17 (v17) : String
+    ; r18 (items) : List<Int>
+    ; r19 (@items) : List<Int>
+    ; r20 (items) : List<Int>
+    ; r21 (v5) : String
+    ; r22 (x) : List<Int>
+    ; r23 (v8) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

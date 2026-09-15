@@ -1,29 +1,26 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 740
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     0 |   r0 = undef
-     4 |   r1 = list [1 (r2), 2 (r3), 3 (r4)]
-     6 |   r5 = call #0(r1)
-     7 |   r6 = call #1(r5)
-     8 |   r7 = call #2(r6)
-     9 |   r8 = string_concat [T0, r7]
-    10 |   return r8
+     3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
+     4 |   assign x = r0
+     6 |   r4 = ref &x
+     7 |   r5 = call #0(r4)
+     8 |   r6 = call #1(r5)
+     9 |   r7 = string_concat [T0, r6]
+    10 |   return r7
 
-    ; r0 (v12) : Array<Int, 3>
-    ; r1 (v4) : Array<Int, 3>
-    ; r2 (v1) : Int
-    ; r3 (v2) : Int
-    ; r4 (v3) : Int
-    ; r5 (v8) : List<Int>
-    ; r6 (len(...)) : Int
-    ; r7 (to_string(...)) : String
-    ; r8 (v11) : String
+    ; r0 (v4) : Array<Int, 3>
+    ; r1 (v1) : Int
+    ; r2 (v2) : Int
+    ; r3 (v3) : Int
+    ; r4 (x.) : &Array<Int, 3>
+    ; r5 (len(...)) : Int
+    ; r6 (to_string(...)) : String
+    ; r7 (v10) : String
+    ; r8 (v6) : String
     ; r9 (x) : Array<Int, 3>
-    ; r10 (v6) : String
-    ; r11 (x) : Array<Int, 3>

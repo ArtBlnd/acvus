@@ -31,7 +31,7 @@ fn chain_joins_two_sources_into_a_new_one() {
     let i = Interner::new();
     compile_script_ir(
         &i,
-        "a = [1, 2] | into_iter; b = [1, 2] | into_iter; chain(a, b) | collect | len",
+        "a = [1, 2] | into_iter; b = [1, 2] | into_iter; c = chain(a, b) | collect; len(&c)",
         &items(&i),
     )
     .unwrap();

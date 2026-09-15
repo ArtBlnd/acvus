@@ -98,12 +98,13 @@ enum Mode {
 }
 
 impl Mode {
-    /// The acvus type of a parameter whose Rust type is `ty` under this mode.
-    fn acvus_ty(self, ty: &Type) -> proc_macro2::TokenStream {
+    /// The acvus type of a parameter whose Rust type is `ty` under this
+    /// mode, with `rt` as the runtime a reference carrier names.
+    fn acvus_ty(self, ty: &Type, rt: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         match self {
             Mode::Value => quote! { #ty },
-            Mode::Borrow => quote! { ::acvus_extern::Ref<#ty> },
-            Mode::BorrowMut => quote! { ::acvus_extern::RefMut<#ty> },
+            Mode::Borrow => quote! { ::acvus_extern::Ref<#ty, #rt> },
+            Mode::BorrowMut => quote! { ::acvus_extern::RefMut<#ty, #rt> },
         }
     }
 }
@@ -229,7 +230,9 @@ fn generate_extern_fn(
     let signature = |member: Option<&Type>| -> proc_macro2::TokenStream {
         let param_terms = params.iter().map(|p| {
             let name = &p.name;
-            let comp_ty = p.mode.acvus_ty(&vars.to_compile_time_instance(&p.ty, member));
+            let comp_ty = p
+                .mode
+                .acvus_ty(&vars.to_compile_time_instance(&p.ty, member), &quote! { __R });
             quote! {
                 ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
                     __i.intern(#name),
@@ -305,6 +308,8 @@ fn generate_extern_fn(
         };
         let ret_value = if is_carrier(&rt_ret) {
             quote! { __r.into_value() }
+        } else if is_option_of_carrier(&rt_ret) {
+            quote! { ::acvus_extern::Carried::into_value(__r, __rt) }
         } else {
             quote! { unsafe { (&::acvus_extern::Crossing::<#rt_ret>::new()).erase(__rt, __r) } }
         };
@@ -435,10 +440,28 @@ fn is_carrier(ty: &Type) -> bool {
     let Type::Path(p) = ty else {
         return false;
     };
-    p.path
-        .segments
-        .last()
-        .is_some_and(|s| matches!(s.ident.to_string().as_str(), "Fn0" | "Fn1" | "Fn2" | "Fn3" | "Lent"))
+    p.path.segments.last().is_some_and(|s| {
+        matches!(
+            s.ident.to_string().as_str(),
+            "Fn0" | "Fn1" | "Fn2" | "Fn3" | "Ref" | "RefMut"
+        )
+    })
+}
+
+fn is_option_of_carrier(ty: &Type) -> bool {
+    let Type::Path(p) = ty else {
+        return false;
+    };
+    let Some(last) = p.path.segments.last() else {
+        return false;
+    };
+    if last.ident != "Option" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return false;
+    };
+    matches!(args.args.first(), Some(syn::GenericArgument::Type(inner)) if is_carrier(inner))
 }
 
 /// Remove `#[name]` from the attribute list; report whether it was there.
@@ -955,9 +978,10 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     };
     let param_terms = params.iter().map(|p| {
         let pname = &p.name;
-        let comp_ty = p
-            .mode
-            .acvus_ty(&types_only(&vars.to_compile_time_instance(&p.ty, None)));
+        let comp_ty = p.mode.acvus_ty(
+            &types_only(&vars.to_compile_time_instance(&p.ty, None)),
+            &quote! { ::acvus_extern::TypesOnly },
+        );
         quote! {
             ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
                 __i.intern(#pname),

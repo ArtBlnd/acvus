@@ -7,11 +7,12 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    EffectVar, ExternError, ExternTypeDecl, IdentityVar, Interner, Lent, PolyTy, PolyVars,
-    QualifiedRef, Ref, Registry, Runtime, TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn,
-    extern_registry,
+    EffectVar, ExternError, ExternTypeDecl, IdentityVar, Interner, PolyTy, PolyVars,
+    QualifiedRef, Ref, RefMut, Registry, Runtime, TyArg, TyVar, TyVarBound, UserDefinedDecl,
+    extern_fn, extern_registry,
 };
 
+use crate::container::{checked_index, sig as container};
 use crate::iter_pipeline::Iter;
 use crate::iterator::{lent_iter, sig};
 use crate::list::{List, list};
@@ -203,31 +204,6 @@ where
     d.pop_back()
 }
 
-#[extern_fn(effect = pure)]
-fn deque_len<T, R>(_: &R, d: &Deque<T>) -> i64
-where
-    T: TyVar,
-    R: Runtime,
-{
-    d.len() as i64
-}
-
-/// Consumes the deque: an extern fn returns no reference and no clone of an
-/// erased `T` exists yet, so an element cannot leave a borrowed deque.
-#[extern_fn(effect = pure)]
-fn deque_get<T, R>(_: &R, d: Deque<T>, index: i64) -> Result<T, ExternError>
-where
-    T: TyVar,
-    R: Runtime,
-{
-    let len = d.len();
-    let i = usize::try_from(index)
-        .ok()
-        .filter(|i| *i < len)
-        .ok_or_else(|| ExternError::call("deque_get", format!("index {index} out of {len}")))?;
-    Ok(d.items.into_iter().nth(i).expect("index checked against len"))
-}
-
 /// A deque demotes to a list: the record is dropped with the deque.
 #[extern_fn(instance_of = list, effect = pure)]
 #[extern_cast]
@@ -251,7 +227,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_deque<T, E, I, Rt>(_: &Rt, d: Lent<Deque<T>, Rt>) -> Iter<Ref<T>, E, I, Rt>
+fn as_iter_deque<T, E, I, Rt>(_: &Rt, d: Ref<Deque<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -261,13 +237,65 @@ where
     lent_iter(d, Deque::get)
 }
 
+#[extern_fn(instance_of = container::len, effect = pure)]
+fn len_deque<T, Rt>(_: &Rt, d: &Deque<T>) -> i64
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    d.len() as i64
+}
+
+#[extern_fn(instance_of = container::get, effect = pure)]
+fn get_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, ExternError>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    let i = d.with(rt, |d| checked_index("get", d.len(), index))?;
+    Ok(d.map(rt, |d| &d.items[i]))
+}
+
+#[extern_fn(instance_of = container::get_mut, effect = pure)]
+fn get_mut_deque<T, Rt>(
+    rt: &Rt,
+    d: RefMut<Deque<T>, Rt>,
+    index: i64,
+) -> Result<RefMut<T, Rt>, ExternError>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    let i = d.with_mut(rt, |d| checked_index("get_mut", d.len(), index))?;
+    Ok(d.map_mut(rt, |d| &mut d.items[i]))
+}
+
+#[extern_fn(instance_of = container::first, effect = pure)]
+fn first_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    d.try_map(rt, |d| d.items.front())
+}
+
+#[extern_fn(instance_of = container::last, effect = pure)]
+fn last_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    d.try_map(rt, |d| d.items.back())
+}
+
 pub fn deque_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
         types: [Deque<_>],
         fns: [
-            deque, push_front, push_back, pop_front, pop_back, deque_len, deque_get,
+            deque, push_front, push_back, pop_front, pop_back,
             list_deque, into_iter_deque, as_iter_deque,
+            len_deque, get_deque, get_mut_deque, first_deque, last_deque,
         ],
     }
 }

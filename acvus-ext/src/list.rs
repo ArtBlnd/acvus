@@ -70,15 +70,6 @@ pub fn list_ty(interner: &Interner, elem: acvus_mir::ty::Ty) -> acvus_mir::ty::T
 }
 
 #[extern_fn(effect = pure)]
-fn len<T, R>(_: &R, items: List<T>) -> i64
-where
-    T: TyVar,
-    R: Runtime,
-{
-    items.0.len() as i64
-}
-
-#[extern_fn(effect = pure)]
 fn reverse<T, R>(_: &R, items: List<T>) -> List<T>
 where
     T: TyVar,
@@ -105,6 +96,6 @@ pub fn list_registry<R: Runtime>() -> Registry<R> {
         ns: "std",
         types: [List<_>],
         signatures: [list],
-        fns: [len, reverse, list_array],
+        fns: [reverse, list_array],
     }
 }

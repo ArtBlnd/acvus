@@ -4,16 +4,14 @@ expression: ir
 ---
 === main ===
      3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     4 |   r4 = take $v4
+     4 |   r4 = ref &$v4
      5 |   r5 = call #0(r4)
-     6 |   r6 = call #1(r5)
-     7 |   return r6
+     6 |   return r5
 
     ; r0 (v4) : Array<Int, 3>
     ; r1 (v1) : Int
     ; r2 (v2) : Int
     ; r3 (v3) : Int
-    ; r4 ($xs) : Array<Int, 3>
-    ; r5 (v8) : List<Int>
-    ; r6 (len(...)) : Int
-    ; r7 (count(...)) : Int
+    ; r4 ($param_1.) : &Array<Int, 3>
+    ; r5 (len(...)) : Int
+    ; r6 (count(...)) : Int

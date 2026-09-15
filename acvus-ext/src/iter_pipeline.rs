@@ -151,7 +151,7 @@ where
         Self::erased(self.0.push_op(Op::Map(f.erased()))).retype()
     }
 
-    pub fn filter(self, f: Fn1<Ref<T>, bool, E, Rt>) -> Self {
+    pub fn filter(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
         Self::erased(self.0.push_op(Op::Filter(f.erased())))
     }
 

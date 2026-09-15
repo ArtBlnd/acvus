@@ -14,7 +14,10 @@ fn bump(i: &Interner, effect: Effect) -> Function {
     ];
     Function {
         qref: QualifiedRef::root(i.intern("bump")),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
             params: params
                 .iter()
@@ -32,13 +35,22 @@ fn optimized(i: &Interner, src: &str, effect: Effect) -> String {
 }
 
 fn main_body(ir: &str) -> &str {
-    ir.split("=== main ===").nth(1).unwrap().split("=== ").next().unwrap()
+    ir.split("=== main ===")
+        .nth(1)
+        .unwrap()
+        .split("=== ")
+        .next()
+        .unwrap()
 }
 
 #[test]
 fn a_pure_call_lent_a_place_mutably_is_kept_when_the_place_is_read_after() {
     let i = Interner::new();
-    let ir = optimized(&i, "x = 1; bump(&mut x, 2); bump(&mut x, 3); x", Effect::PURE);
+    let ir = optimized(
+        &i,
+        "x = 1; bump(&mut x, 2); bump(&mut x, 3); x",
+        Effect::PURE,
+    );
     let main = main_body(&ir);
     assert_eq!(main.matches("call #0").count(), 2, "{ir}");
     assert!(main.contains("take "), "{ir}");
@@ -66,4 +78,54 @@ fn an_eval_does_not_sink_past_a_read_of_what_its_spawn_holds() {
     let eval = main.find("eval ").expect("the eval");
     let read = main.find("take ").expect("the read of x");
     assert!(eval < read, "{ir}");
+}
+
+/// `peek(&mut Int) -> &Int`: a reference result holds its argument's loan
+/// (RFC-0028).
+fn peek(i: &Interner) -> Function {
+    Function {
+        qref: QualifiedRef::root(i.intern("peek")),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("n"),
+                lift_to_poly(&Ty::Ref(Mutability::Mut, Box::new(Ty::Int))),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::Ref(
+                Mutability::Shared,
+                Box::new(Ty::Int),
+            ))),
+            captures: vec![],
+            effect: Effect::PURE.into(),
+        },
+    }
+}
+
+#[test]
+fn a_reference_returned_by_a_call_keeps_the_place_it_was_lent() {
+    let i = Interner::new();
+    let externs = [peek(&i), bump(&i, Effect::PURE)];
+    let err = compile_multi_fn_optimized(
+        &i,
+        ("main", "x = 1; r = peek(&mut x); bump(&mut x, 1); *r"),
+        &[],
+        &[],
+        &externs,
+    )
+    .expect_err("x is lent again while r still names it");
+    assert!(err.contains("BorrowConflict"), "{err}");
+    compile_multi_fn_optimized(
+        &i,
+        (
+            "main",
+            "x = 1; r = peek(&mut x); y = *r; bump(&mut x, 1); y",
+        ),
+        &[],
+        &[],
+        &externs,
+    )
+    .expect("r is dead before x is lent again");
 }
