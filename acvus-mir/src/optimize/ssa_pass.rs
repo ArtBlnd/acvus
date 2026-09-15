@@ -77,11 +77,15 @@ pub fn run(cfg: &mut CfgBody) {
 
 /// Apply value substitutions to an instruction's operands.
 pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueId>) {
-    let s = |v: &mut ValueId| {
+    map_uses(kind, &mut |v: &mut ValueId| {
         if let Some(&new) = subst.get(v) {
             *v = new;
         }
-    };
+    });
+}
+
+/// Apply `s` to every use of `kind`, in operand order.
+pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
     match kind {
         InstKind::Const { .. }
         | InstKind::Fetch { .. }
@@ -121,7 +125,7 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
-            args.iter_mut().for_each(&s);
+            args.iter_mut().for_each(|v| s(v));
             if let Some(edge) = order {
                 s(&mut edge.before);
             }
@@ -135,7 +139,7 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
             if let Callee::Indirect(v) = callee {
                 s(v);
             }
-            args.iter_mut().for_each(&s);
+            args.iter_mut().for_each(|v| s(v));
             if let Some(o) = order {
                 s(o);
             }
@@ -143,16 +147,16 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
         InstKind::Eval { src, .. } => {
             s(src);
         }
-        InstKind::Merge { orders, .. } => orders.iter_mut().for_each(&s),
-        InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(&s),
-        InstKind::StringConcat { parts, .. } => parts.iter_mut().for_each(&s),
+        InstKind::Merge { orders, .. } => orders.iter_mut().for_each(|v| s(v)),
+        InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(|v| s(v)),
+        InstKind::StringConcat { parts, .. } => parts.iter_mut().for_each(|v| s(v)),
         InstKind::StringEq { a, b, .. } => {
             s(a);
             s(b);
         }
         InstKind::StringClone { src, .. } => s(src),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
-        InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(&s),
+        InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(|v| s(v)),
         InstKind::TupleIndex { tuple, .. } => s(tuple),
         InstKind::TestLiteral { src, .. } => s(src),
         InstKind::TestObjectKey { src, .. } => s(src),
@@ -164,7 +168,7 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
             s(index);
         }
         InstKind::ObjectGet { object, .. } => s(object),
-        InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(&s),
+        InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(|v| s(v)),
         InstKind::MakeVariant { payload, .. } => {
             if let Some(p) = payload {
                 s(p);
@@ -174,8 +178,8 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
         InstKind::UnwrapVariant { src, .. } => s(src),
         // BlockLabel, Jump, JumpIf, Return are terminators in CfgBody, not instructions.
         // But they may still exist as InstKind variants for demoted code paths.
-        InstKind::BlockLabel { params, .. } => params.iter_mut().for_each(&s),
-        InstKind::Jump { args, .. } => args.iter_mut().for_each(&s),
+        InstKind::BlockLabel { params, .. } => params.iter_mut().for_each(|v| s(v)),
+        InstKind::Jump { args, .. } => args.iter_mut().for_each(|v| s(v)),
         InstKind::JumpIf {
             cond,
             then_args,
@@ -183,8 +187,8 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
             ..
         } => {
             s(cond);
-            then_args.iter_mut().for_each(&s);
-            else_args.iter_mut().for_each(&s);
+            then_args.iter_mut().for_each(|v| s(v));
+            else_args.iter_mut().for_each(|v| s(v));
         }
         InstKind::Return { value, order } => {
             s(value);

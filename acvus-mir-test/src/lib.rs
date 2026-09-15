@@ -118,10 +118,12 @@ fn run_pipeline_with_registry(
     // SSA: promote whole reads and writes of locals to SSA form.
     let mut cfg_main = cfg::promote(std::mem::take(&mut module.main));
     acvus_mir::optimize::ssa_pass::run(&mut cfg_main);
+    acvus_mir::optimize::string_copy::run(&mut cfg_main);
     module.main = cfg::demote(cfg_main);
     for closure in module.closures.values_mut() {
         let mut cfg_closure = cfg::promote(std::mem::take(closure));
         acvus_mir::optimize::ssa_pass::run(&mut cfg_closure);
+        acvus_mir::optimize::string_copy::run(&mut cfg_closure);
         *closure = cfg::demote(cfg_closure);
     }
 

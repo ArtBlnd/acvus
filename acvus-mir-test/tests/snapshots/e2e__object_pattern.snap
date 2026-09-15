@@ -21,14 +21,17 @@ expression: ir
     15 | L3:
     16 |   r13 = r3.name
     17 |   r14 = r3.age
-    18 |   r15 = string_concat [r13]
-    19 |   jump L0(r15, r13, r14)
-    20 | L1:
-    22 |   jump L0(T0, r1, r2)
-    23 | L0(r16: String, r17: String, r18: Int):  ; merge_of L2
-    24 |   r19 = string_concat [r16]
-    25 |   commit @user = r3
-    26 |   return r19
+    18 |   r15 = string_clone r13
+    19 |   r16 = string_concat [r15]
+    20 |   r17 = string_clone r16
+    21 |   jump L0(r17, r13, r14)
+    22 | L1:
+    24 |   r18 = string_clone T0
+    25 |   jump L0(r18, r1, r2)
+    26 | L0(r19: String, r20: String, r21: Int):  ; merge_of L2
+    27 |   r22 = string_concat [r19]
+    28 |   commit @user = r3
+    29 |   return r22
 
     ; r0 (v23) : {age: Int, email: String, name: String}
     ; r1 (v24) : String
@@ -45,14 +48,17 @@ expression: ir
     ; r12 (v11) : Bool
     ; r13 (name) : String
     ; r14 (age) : Int
-    ; r15 (v18) : String
-    ; r16 (v20) : String
-    ; r17 (v27) : String
-    ; r18 (v28) : Int
-    ; r19 (v21) : String
-    ; r20 (v22) : {age: Int, email: String, name: String}
-    ; r21 (@user) : {age: Int, email: String, name: String}
-    ; r22 (name) : String
-    ; r23 (v26) : {age: Int, email: String, name: String}
-    ; r24 (@user) : {age: Int, email: String, name: String}
-    ; r25 (v19) : String
+    ; r15 (v29) : String
+    ; r16 (v18) : String
+    ; r17 (v30) : String
+    ; r18 (v31) : String
+    ; r19 (v20) : String
+    ; r20 (v27) : String
+    ; r21 (v28) : Int
+    ; r22 (v21) : String
+    ; r23 (@user) : {age: Int, email: String, name: String}
+    ; r24 (v22) : {age: Int, email: String, name: String}
+    ; r25 (name) : String
+    ; r26 (@user) : {age: Int, email: String, name: String}
+    ; r27 (v26) : {age: Int, email: String, name: String}
+    ; r28 (v19) : String

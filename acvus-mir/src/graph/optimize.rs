@@ -89,6 +89,7 @@ fn optimize_inner(
 fn run_pass1_body(body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
+    optimize::string_copy::run(&mut cfg);
     optimize::dse::run(&mut cfg);
     optimize::dce::run(&mut cfg);
     *body = cfg::demote(cfg);
@@ -110,6 +111,7 @@ fn run_pass2(cfg: &mut CfgBody, untyped_scalars: bool) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
     optimize::ssa_pass::run(cfg);
+    optimize::string_copy::run(cfg);
     optimize::dse::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);

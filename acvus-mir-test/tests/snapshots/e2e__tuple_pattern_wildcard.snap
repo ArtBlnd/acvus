@@ -15,14 +15,17 @@ expression: ir
      8 |   jump_if r4 then L3 else L1
      9 | L3:
     10 |   r7 = r2.0
-    11 |   r8 = string_concat [r7]
-    12 |   jump L0(r8, r7)
-    13 | L1:
-    15 |   jump L0(T0, r1)
-    16 | L0(r9: String, r10: String):  ; merge_of L2
-    17 |   r11 = string_concat [r9]
-    18 |   commit @pair = r2
-    19 |   return r11
+    11 |   r8 = string_clone r7
+    12 |   r9 = string_concat [r8]
+    13 |   r10 = string_clone r9
+    14 |   jump L0(r10, r7)
+    15 | L1:
+    17 |   r11 = string_clone T0
+    18 |   jump L0(r11, r1)
+    19 | L0(r12: String, r13: String):  ; merge_of L2
+    20 |   r14 = string_concat [r12]
+    21 |   commit @pair = r2
+    22 |   return r14
 
     ; r0 (v16) : (String, Int)
     ; r1 (v17) : String
@@ -32,13 +35,16 @@ expression: ir
     ; r5 (v4) : Bool
     ; r6 (v6) : Bool
     ; r7 (name) : String
-    ; r8 (v11) : String
-    ; r9 (v13) : String
-    ; r10 (v19) : String
-    ; r11 (v14) : String
-    ; r12 (@pair) : (String, Int)
-    ; r13 (@pair) : (String, Int)
-    ; r14 (v12) : String
-    ; r15 (v15) : (String, Int)
-    ; r16 (v18) : (String, Int)
-    ; r17 (name) : String
+    ; r8 (v20) : String
+    ; r9 (v11) : String
+    ; r10 (v21) : String
+    ; r11 (v22) : String
+    ; r12 (v13) : String
+    ; r13 (v19) : String
+    ; r14 (v14) : String
+    ; r15 (@pair) : (String, Int)
+    ; r16 (@pair) : (String, Int)
+    ; r17 (v15) : (String, Int)
+    ; r18 (name) : String
+    ; r19 (v18) : (String, Int)
+    ; r20 (v12) : String

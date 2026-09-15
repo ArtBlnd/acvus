@@ -25,24 +25,27 @@ expression: ir
     15 |   r12 = r4.0
     16 |   r13 = r4.1
     18 |   r14 = string_concat [T0]
-    19 |   jump L0(r14)
-    20 | L3:
-    22 |   r15 = r4.0
-    23 |   r16 = test r15 == 1
-    24 |   r17 = true (r18) && r16
-    25 |   jump_if r17 then L5 else L1
-    26 | L5:
-    27 |   r19 = r4.0
-    29 |   r20 = string_concat [T1]
-    30 |   jump L0(r20)
-    31 | L1:
-    33 |   r21 = string_concat [T2]
-    34 |   jump L0(r21)
-    35 | L0(r22: String):  ; merge_of L2
-    36 |   r23 = string_concat [r22]
-    37 |   commit @a = r2
-    38 |   commit @b = r3
-    39 |   return r23
+    19 |   r15 = string_clone r14
+    20 |   jump L0(r15)
+    21 | L3:
+    23 |   r16 = r4.0
+    24 |   r17 = test r16 == 1
+    25 |   r18 = true (r19) && r17
+    26 |   jump_if r18 then L5 else L1
+    27 | L5:
+    28 |   r20 = r4.0
+    30 |   r21 = string_concat [T1]
+    31 |   r22 = string_clone r21
+    32 |   jump L0(r22)
+    33 | L1:
+    35 |   r23 = string_concat [T2]
+    36 |   r24 = string_clone r23
+    37 |   jump L0(r24)
+    38 | L0(r25: String):  ; merge_of L2
+    39 |   r26 = string_concat [r25]
+    40 |   commit @a = r2
+    41 |   commit @b = r3
+    42 |   return r26
 
     ; r0 (v32) : Int
     ; r1 (v33) : Int
@@ -59,23 +62,26 @@ expression: ir
     ; r12 (v15) : Int
     ; r13 (v16) : Int
     ; r14 (v18) : String
-    ; r15 (v20) : Int
-    ; r16 (v21) : Bool
-    ; r17 (v22) : Bool
-    ; r18 (v19) : Bool
-    ; r19 (v23) : Int
-    ; r20 (v25) : String
-    ; r21 (v27) : String
-    ; r22 (v28) : String
-    ; r23 (v29) : String
-    ; r24 (@b) : Int
-    ; r25 (@b) : Int
-    ; r26 (v31) : Int
-    ; r27 (v30) : Int
-    ; r28 (v17) : String
-    ; r29 (@a) : Int
-    ; r30 (v34) : Int
-    ; r31 (v24) : String
-    ; r32 (@a) : Int
-    ; r33 (v26) : String
-    ; r34 (v35) : Int
+    ; r15 (v36) : String
+    ; r16 (v20) : Int
+    ; r17 (v21) : Bool
+    ; r18 (v22) : Bool
+    ; r19 (v19) : Bool
+    ; r20 (v23) : Int
+    ; r21 (v25) : String
+    ; r22 (v37) : String
+    ; r23 (v27) : String
+    ; r24 (v38) : String
+    ; r25 (v28) : String
+    ; r26 (v29) : String
+    ; r27 (@b) : Int
+    ; r28 (@b) : Int
+    ; r29 (v31) : Int
+    ; r30 (v30) : Int
+    ; r31 (v17) : String
+    ; r32 (v34) : Int
+    ; r33 (v24) : String
+    ; r34 (@a) : Int
+    ; r35 (@a) : Int
+    ; r36 (v26) : String
+    ; r37 (v35) : Int

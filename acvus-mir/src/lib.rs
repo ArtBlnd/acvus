@@ -70,7 +70,8 @@ mod tests {
     #[test]
     fn a_template_that_moves_a_context_out_is_rejected() {
         let i = Interner::new();
-        let err = compile_template(&i, r#"{{ x = @name }}{{ x }}"#, &[("name", Ty::String)])
+        let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+        let err = compile_template(&i, r#"{{ y = @user }}{{ z = y.age }}"#, &[("user", user)])
             .unwrap_err();
         assert!(err.contains("UseAfterMove"), "{err}");
     }
@@ -189,9 +190,10 @@ mod tests {
     #[test]
     fn a_context_moved_out_and_not_assigned_back_is_rejected() {
         let i = Interner::new();
-        let err = compile_script(&i, "@data", &[("data", Ty::String)]).unwrap_err();
+        let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+        let err = compile_script(&i, "@data", &[("data", user.clone())]).unwrap_err();
         assert!(err.contains("UseAfterMove"), "{err}");
-        let err = compile_script(&i, "x = @data; x", &[("data", Ty::String)]).unwrap_err();
+        let err = compile_script(&i, "x = @data; x", &[("data", user)]).unwrap_err();
         assert!(err.contains("UseAfterMove"), "{err}");
     }
 

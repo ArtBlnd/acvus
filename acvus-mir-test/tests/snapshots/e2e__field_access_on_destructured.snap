@@ -17,13 +17,15 @@ expression: ir
     10 |   assign obj = r6
     11 |   r7 = take obj.name
     12 |   r8 = string_concat [r7]
-    13 |   jump L0(r8)
-    14 | L1:
-    16 |   jump L0(T0)
-    17 | L0(r9: String):  ; merge_of L2
-    18 |   r10 = string_concat [r9]
-    19 |   commit @pair = r1
-    20 |   return r10
+    13 |   r9 = string_clone r8
+    14 |   jump L0(r9)
+    15 | L1:
+    17 |   r10 = string_clone T0
+    18 |   jump L0(r10)
+    19 | L0(r11: String):  ; merge_of L2
+    20 |   r12 = string_concat [r11]
+    21 |   commit @pair = r1
+    22 |   return r12
 
     ; r0 (v16) : ({name: String}, Int)
     ; r1 (@pair) : ({name: String}, Int)
@@ -34,10 +36,12 @@ expression: ir
     ; r6 (obj) : {name: String}
     ; r7 (obj.name) : String
     ; r8 (v11) : String
-    ; r9 (v13) : String
-    ; r10 (v14) : String
-    ; r11 (@pair) : ({name: String}, Int)
-    ; r12 (v17) : ({name: String}, Int)
+    ; r9 (v18) : String
+    ; r10 (v19) : String
+    ; r11 (v13) : String
+    ; r12 (v14) : String
     ; r13 (@pair) : ({name: String}, Int)
-    ; r14 (v12) : String
-    ; r15 (v15) : ({name: String}, Int)
+    ; r14 (v17) : ({name: String}, Int)
+    ; r15 (@pair) : ({name: String}, Int)
+    ; r16 (v12) : String
+    ; r17 (v15) : ({name: String}, Int)

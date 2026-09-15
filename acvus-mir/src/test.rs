@@ -107,12 +107,14 @@ fn run_pipeline(
     {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(&mut module.main, MirBody::new()));
         crate::optimize::ssa_pass::run(&mut cfg_body);
+        crate::optimize::string_copy::run(&mut cfg_body);
         crate::optimize::dce::run(&mut cfg_body);
         module.main = crate::cfg::demote(cfg_body);
     }
     for closure in module.closures.values_mut() {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(closure, MirBody::new()));
         crate::optimize::ssa_pass::run(&mut cfg_body);
+        crate::optimize::string_copy::run(&mut cfg_body);
         crate::optimize::dce::run(&mut cfg_body);
         *closure = crate::cfg::demote(cfg_body);
     }

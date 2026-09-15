@@ -10,3 +10,4 @@ pub mod reorder;
 pub mod spawn_split;
 pub mod ssa;
 pub mod ssa_pass;
+pub mod string_copy;

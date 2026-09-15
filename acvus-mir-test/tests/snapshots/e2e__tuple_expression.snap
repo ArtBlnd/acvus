@@ -2,57 +2,73 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== literals ===
-  T0 = ""
-
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     3 |   r2 = take @a
-     4 |   r3 = take @b
-     5 |   r4 = tuple (r2, r3)
-     6 | L2:
-     8 |   r5 = r4.0
-    10 |   r6 = true (r7) && true (r8)
-    11 |   r9 = r4.1
-    13 |   r10 = r6 && true (r11)
-    14 |   jump_if r10 then L3 else L1
-    15 | L3:
-    16 |   r12 = r4.0
-    17 |   r13 = r4.1
-    19 |   r14 = call #0(r12)
-    20 |   r15 = T0 + r14
-    21 |   r16 = r15 + r13
-    22 |   jump L0(r16, r12, r13)
-    23 | L1:
-    25 |   jump L0(T0, r0, r1)
-    26 | L0(r17: String, r18: Int, r19: String):  ; merge_of L2
-    27 |   r20 = T0 + r17
-    28 |   return r20
+     2 |   r2 = undef
+     3 |   r3 = undef
+     4 |   r4 = fetch @a
+     5 |   r5 = fetch @b
+     6 |   r6 = string_clone r5
+     7 |   r7 = tuple (r4, r6)
+     8 | L2:
+    10 |   r8 = r7.0
+    12 |   r9 = true (r10) && true (r11)
+    13 |   r12 = r7.1
+    15 |   r13 = r9 && true (r14)
+    16 |   jump_if r13 then L3 else L1
+    17 | L3:
+    18 |   r15 = r7.0
+    19 |   r16 = r7.1
+    20 |   r17 = call #0(r15)
+    21 |   r18 = string_clone r16
+    22 |   r19 = string_concat [r17, r18]
+    23 |   r20 = string_clone r19
+    24 |   jump L0(r20, r15, r16)
+    25 | L1:
+    26 |   r21 = string_concat []
+    27 |   r22 = string_clone r21
+    28 |   jump L0(r22, r2, r3)
+    29 | L0(r23: String, r24: Int, r25: String):  ; merge_of L2
+    30 |   r26 = string_concat [r23]
+    31 |   commit @a = r4
+    32 |   commit @b = r5
+    33 |   return r26
 
-    ; r0 (v25) : Int
-    ; r1 (v26) : String
-    ; r2 (@a) : Int
-    ; r3 (@b) : String
-    ; r4 (v4) : (Int, String)
-    ; r5 (v6) : Int
-    ; r6 (v8) : Bool
-    ; r7 (v5) : Bool
-    ; r8 (v7) : Bool
-    ; r9 (v9) : String
-    ; r10 (v11) : Bool
+    ; r0 (v28) : Int
+    ; r1 (v29) : String
+    ; r2 (v30) : Int
+    ; r3 (v31) : String
+    ; r4 (@a) : Int
+    ; r5 (@b) : String
+    ; r6 (v36) : String
+    ; r7 (v7) : (Int, String)
+    ; r8 (v9) : Int
+    ; r9 (v11) : Bool
+    ; r10 (v8) : Bool
     ; r11 (v10) : Bool
-    ; r12 (a) : Int
-    ; r13 (b) : String
-    ; r14 (to_string(...)) : String
-    ; r15 (v19) : String
-    ; r16 (v21) : String
-    ; r17 (v23) : String
-    ; r18 (v27) : Int
-    ; r19 (v28) : String
-    ; r20 (v24) : String
-    ; r21 (v22) : String
-    ; r22 (a) : Int
-    ; r23 (b) : String
-    ; r24 (v1) : String
-    ; r25 (v16) : String
+    ; r12 (v12) : String
+    ; r13 (v14) : Bool
+    ; r14 (v13) : Bool
+    ; r15 (a) : Int
+    ; r16 (b) : String
+    ; r17 (to_string(...)) : String
+    ; r18 (v37) : String
+    ; r19 (v22) : String
+    ; r20 (v38) : String
+    ; r21 (v23) : String
+    ; r22 (v39) : String
+    ; r23 (v24) : String
+    ; r24 (v34) : Int
+    ; r25 (v35) : String
+    ; r26 (v25) : String
+    ; r27 (@b) : String
+    ; r28 (@b) : String
+    ; r29 (v33) : String
+    ; r30 (b) : String
+    ; r31 (@a) : Int
+    ; r32 (v27) : String
+    ; r33 (@a) : Int
+    ; r34 (v26) : Int
+    ; r35 (v32) : Int
+    ; r36 (a) : Int

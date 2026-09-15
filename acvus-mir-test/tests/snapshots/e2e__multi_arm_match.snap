@@ -11,38 +11,48 @@ expression: ir
      0 |   r0 = undef
      1 |   r1 = fetch @role
      2 | L2:
-     3 |   r2 = test r1 == "admin"
-     4 |   jump_if r2 then L4 else L3
-     5 | L4:
-     7 |   r3 = string_concat [T0]
-     8 |   jump L0(r3)
-     9 | L3:
-    10 |   r4 = test r1 == "user"
-    11 |   jump_if r4 then L5 else L1
-    12 | L5:
-    14 |   r5 = string_concat [T1]
-    15 |   jump L0(r5)
-    16 | L1:
-    18 |   r6 = string_concat [T2]
-    19 |   jump L0(r6)
-    20 | L0(r7: String):  ; merge_of L2
-    21 |   r8 = string_concat [r7]
-    22 |   commit @role = r1
-    23 |   return r8
+     3 |   r2 = string_clone r1
+     4 |   r3 = test r2 == "admin"
+     5 |   jump_if r3 then L4 else L3
+     6 | L4:
+     8 |   r4 = string_concat [T0]
+     9 |   r5 = string_clone r4
+    10 |   jump L0(r5)
+    11 | L3:
+    12 |   r6 = string_clone r1
+    13 |   r7 = test r6 == "user"
+    14 |   jump_if r7 then L5 else L1
+    15 | L5:
+    17 |   r8 = string_concat [T1]
+    18 |   r9 = string_clone r8
+    19 |   jump L0(r9)
+    20 | L1:
+    22 |   r10 = string_concat [T2]
+    23 |   r11 = string_clone r10
+    24 |   jump L0(r11)
+    25 | L0(r12: String):  ; merge_of L2
+    26 |   r13 = string_concat [r12]
+    27 |   commit @role = r1
+    28 |   return r13
 
     ; r0 (v15) : String
     ; r1 (@role) : String
-    ; r2 (v4) : Bool
-    ; r3 (v6) : String
-    ; r4 (v7) : Bool
-    ; r5 (v9) : String
-    ; r6 (v11) : String
-    ; r7 (v12) : String
-    ; r8 (v13) : String
-    ; r9 (@role) : String
-    ; r10 (v14) : String
-    ; r11 (@role) : String
-    ; r12 (v10) : String
-    ; r13 (v5) : String
-    ; r14 (v16) : String
-    ; r15 (v8) : String
+    ; r2 (v17) : String
+    ; r3 (v4) : Bool
+    ; r4 (v6) : String
+    ; r5 (v18) : String
+    ; r6 (v19) : String
+    ; r7 (v7) : Bool
+    ; r8 (v9) : String
+    ; r9 (v20) : String
+    ; r10 (v11) : String
+    ; r11 (v21) : String
+    ; r12 (v12) : String
+    ; r13 (v13) : String
+    ; r14 (@role) : String
+    ; r15 (v14) : String
+    ; r16 (@role) : String
+    ; r17 (v10) : String
+    ; r18 (v5) : String
+    ; r19 (v16) : String
+    ; r20 (v8) : String

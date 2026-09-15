@@ -26,14 +26,17 @@ expression: ir
     22 |   r19 = r18.0
     23 |   r20 = r18.1
     24 |   r21 = r4.1
-    25 |   r22 = string_concat [r21]
-    26 |   jump L0(r22, r19, r20, r21)
-    27 | L1:
-    29 |   jump L0(T0, r1, r2, r3)
-    30 | L0(r23: String, r24: Int, r25: Int, r26: String):  ; merge_of L2
-    31 |   r27 = string_concat [r23]
-    32 |   commit @data = r4
-    33 |   return r27
+    25 |   r22 = string_clone r21
+    26 |   r23 = string_concat [r22]
+    27 |   r24 = string_clone r23
+    28 |   jump L0(r24, r19, r20, r21)
+    29 | L1:
+    31 |   r25 = string_clone T0
+    32 |   jump L0(r25, r1, r2, r3)
+    33 | L0(r26: String, r27: Int, r28: Int, r29: String):  ; merge_of L2
+    34 |   r30 = string_concat [r26]
+    35 |   commit @data = r4
+    36 |   return r30
 
     ; r0 (v30) : ((Int, Int), String)
     ; r1 (v31) : Int
@@ -57,15 +60,18 @@ expression: ir
     ; r19 (a) : Int
     ; r20 (b) : Int
     ; r21 (label) : String
-    ; r22 (v25) : String
-    ; r23 (v27) : String
-    ; r24 (v35) : Int
-    ; r25 (v36) : Int
-    ; r26 (v37) : String
-    ; r27 (v28) : String
-    ; r28 (@data) : ((Int, Int), String)
-    ; r29 (v34) : ((Int, Int), String)
-    ; r30 (label) : String
+    ; r22 (v38) : String
+    ; r23 (v25) : String
+    ; r24 (v39) : String
+    ; r25 (v40) : String
+    ; r26 (v27) : String
+    ; r27 (v35) : Int
+    ; r28 (v36) : Int
+    ; r29 (v37) : String
+    ; r30 (v28) : String
     ; r31 (@data) : ((Int, Int), String)
-    ; r32 (v26) : String
-    ; r33 (v29) : ((Int, Int), String)
+    ; r32 (v34) : ((Int, Int), String)
+    ; r33 (label) : String
+    ; r34 (@data) : ((Int, Int), String)
+    ; r35 (v26) : String
+    ; r36 (v29) : ((Int, Int), String)

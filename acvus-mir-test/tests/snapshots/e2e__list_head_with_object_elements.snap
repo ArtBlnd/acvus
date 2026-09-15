@@ -17,14 +17,16 @@ expression: ir
     10 |   assign first = r6
     11 |   r7 = take first.name
     12 |   r8 = string_concat [r7]
-    13 |   jump L0(r8)
-    14 | L1:
-    16 |   r9 = string_concat [T0]
-    17 |   jump L0(r9)
-    18 | L0(r10: String):  ; merge_of L2
-    19 |   r11 = string_concat [r10]
-    20 |   commit @users = r1
-    21 |   return r11
+    13 |   r9 = string_clone r8
+    14 |   jump L0(r9)
+    15 | L1:
+    17 |   r10 = string_concat [T0]
+    18 |   r11 = string_clone r10
+    19 |   jump L0(r11)
+    20 | L0(r12: String):  ; merge_of L2
+    21 |   r13 = string_concat [r12]
+    22 |   commit @users = r1
+    23 |   return r13
 
     ; r0 (v17) : Array<{name: String}, 3>
     ; r1 (@users) : Array<{name: String}, 3>
@@ -35,11 +37,13 @@ expression: ir
     ; r6 (first) : {name: String}
     ; r7 (first.name) : String
     ; r8 (v11) : String
-    ; r9 (v13) : String
-    ; r10 (v14) : String
-    ; r11 (v15) : String
-    ; r12 (@users) : Array<{name: String}, 3>
-    ; r13 (@users) : Array<{name: String}, 3>
-    ; r14 (v12) : String
-    ; r15 (v18) : Array<{name: String}, 3>
-    ; r16 (v16) : Array<{name: String}, 3>
+    ; r9 (v19) : String
+    ; r10 (v13) : String
+    ; r11 (v20) : String
+    ; r12 (v14) : String
+    ; r13 (v15) : String
+    ; r14 (@users) : Array<{name: String}, 3>
+    ; r15 (@users) : Array<{name: String}, 3>
+    ; r16 (v12) : String
+    ; r17 (v18) : Array<{name: String}, 3>
+    ; r18 (v16) : Array<{name: String}, 3>
