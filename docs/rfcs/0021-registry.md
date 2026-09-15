@@ -1,6 +1,6 @@
 # RFC-0021: A registry is a manifest and a handler table, combined once
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-15
 Supersedes: none
 

@@ -59,3 +59,10 @@ hidden at the expression.
   negation) through `core::eq` (RFC-0019). The other operators keep
   their primitive-only typing until their signatures are introduced;
   each introduction is one signature declared in the standard registry.
+
+## Open questions
+
+- Whether arithmetic follows the same rule — `add(&T, &T) -> T`, a
+  `String` concatenation making a new `String` — or consumes its
+  operands as `Fn(T, T) -> T`. The ruling above takes the first; it is
+  the one point of this RFC the owner has not yet confirmed.

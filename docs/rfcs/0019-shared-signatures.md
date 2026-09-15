@@ -1,6 +1,6 @@
 # RFC-0019: A shared signature and its instances
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-15
 Supersedes: none
 

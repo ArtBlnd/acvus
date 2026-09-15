@@ -130,6 +130,12 @@ call site and `*` at the read keeps every conversion in the program.
 - A context read hands the value out of the journal; the journal never
   copies a value on its own. A run that takes a context and ends on any
   path without assigning it is rejected.
+- A context lent to a call, `&@x` as much as `&mut @x`, lowers to a take
+  before the call and an assign after it. The function's context summary
+  (RFC-0017) still says read for `&@x` and write for `&mut @x`; an IR
+  pass that orders by `Assign` sees the store-back of a shared lend as a
+  write and orders conservatively. That costs parallelism, never
+  correctness.
 - An ExternFn's Rust `&T` and `&mut T` parameters declare `&T` and
   `&mut T` acvus types; `Fn1<&T, R>` in a signature declares a lambda that
   takes a reference. The iterator functions declare `Fn(&T) -> Bool` for

@@ -1044,6 +1044,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Mutability::Shared
                 };
                 let ty = self.check_expr(place);
+                if *mutable
+                    && let Some(Place {
+                        root: PlaceRoot::Context(qref),
+                        ..
+                    }) = place_of(place)
+                {
+                    self.note_access(Effect::write(qref), *span);
+                }
                 self.record_ret(*id, TyTerm::Ref(mutability, Box::new(ty)))
             }
             Expr::Literal { id, value, span } => {
