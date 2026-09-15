@@ -1270,6 +1270,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 {
                     self.note_access(Effect::write(qref), *span);
                 }
+                // A borrow of a reference is a reborrow of what it names
+                // (RFC-0029).
+                let ty = match self.solver.resolve_ty(&ty) {
+                    TyTerm::Ref(Mutability::Shared, inner) if *mutable => {
+                        self.error(MirErrorKind::MutableBorrowOfShared, *span);
+                        *inner
+                    }
+                    TyTerm::Ref(_, inner) => *inner,
+                    other => other,
+                };
                 self.record_ret(*id, TyTerm::Ref(mutability, Box::new(ty)))
             }
             Expr::Literal { id, value, span } => {

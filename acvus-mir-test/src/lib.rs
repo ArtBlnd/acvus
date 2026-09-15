@@ -476,6 +476,84 @@ pub fn compile_script_optimized(
     Ok(dump_with(interner, module))
 }
 
+/// Compile a script-mode source through the full pipeline; the printed IR, or every error.
+pub fn compile_script_mode_optimized(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+) -> Result<String, String> {
+    let mut pb = PolyBuilder::new();
+    let contexts: Vec<Context> = context
+        .iter()
+        .map(|(name, ty)| Context {
+            qref: QualifiedRef::root(*name),
+            ty: lift_declaration(ty, &mut pb),
+        })
+        .collect();
+    let test_qref = QualifiedRef::root(interner.intern("test"));
+    let ast = match acvus_ast::parse_script_mode(interner, source) {
+        Ok(ast) => ast,
+        Err(e) => return Err(format!("parse error: {e:?}")),
+    };
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Script(ast)),
+        vec![],
+    )];
+    let type_registry = extend_with_std(interner, &mut functions);
+    let graph = CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(contexts),
+    };
+
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(
+        interner,
+        &graph,
+        &ext,
+        &FxHashMap::default(),
+        Freeze::new(type_registry),
+    );
+
+    let mut errors: Vec<String> = Vec::new();
+    for (qref, errs) in inf.errors() {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!("[infer:{}] {}", fn_name, e.display(interner)));
+        }
+    }
+
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
+        errors.push(format!("[lower] {}", e.display(interner)));
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let opt_result = acvus_mir::graph::optimize::optimize(
+        result.modules,
+        &inf.context_types,
+        &FxHashSet::default(),
+    );
+
+    for (qref, errs) in &opt_result.errors {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!("[validate:{}] {:?}", fn_name, e));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let module = opt_result
+        .modules
+        .get(&test_qref)
+        .ok_or_else(|| "no module produced for target".to_string())?;
+    Ok(dump_with(interner, module))
+}
+
 // -- Inline pipeline -------------------------------------------------
 
 /// Compile multiple local functions, inline, and return the printed IR for the target.

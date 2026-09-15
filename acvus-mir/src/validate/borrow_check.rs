@@ -3,9 +3,9 @@
 //! Exclusion: while a `&mut` to a storage is live, no other name of that
 //! storage — the storage itself, a `&`, another `&mut` — is read or
 //! written; while a `&` is live, the storage is not assigned, moved out of,
-//! or mutably referenced. A reference is live from its `Ref` to its last
-//! use, by the body's liveness.
-
+//! or mutably referenced. A holder of a loan — a value, or a storage a
+//! reference was assigned into — is live from its definition to its last
+//! use, counted as liveness counts them (RFC-0029).
 
 use acvus_utils::LocalIdOps;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -55,7 +55,9 @@ fn take_moves(val_types: &FxHashMap<ValueId, Ty>, dst: &ValueId) -> bool {
 enum Touch {
     Reference(Mutability),
     /// A move out; `false` when the storage keeps a copy (a primitive).
-    Take { moves: bool },
+    Take {
+        moves: bool,
+    },
     Assign,
 }
 
@@ -64,14 +66,12 @@ fn touch(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Option<(RefTarg
         InstKind::Ref {
             target, mutability, ..
         } => Some((target.clone(), Touch::Reference(*mutability))),
-        InstKind::Take { dst, target, .. } => {
-            Some((
-                target.clone(),
-                Touch::Take {
-                    moves: take_moves(val_types, dst),
-                },
-            ))
-        }
+        InstKind::Take { dst, target, .. } => Some((
+            target.clone(),
+            Touch::Take {
+                moves: take_moves(val_types, dst),
+            },
+        )),
         InstKind::Assign { target, .. } => Some((target.clone(), Touch::Assign)),
         _ => None,
     }
@@ -125,7 +125,8 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
     for (bi, block) in cfg.blocks.iter().enumerate() {
         // Holders live before each instruction, by a backward walk from
         // the block's live-out set.
-        let mut live_before: Vec<FxHashSet<ValueId>> = vec![FxHashSet::default(); block.insts.len()];
+        let mut live_before: Vec<FxHashSet<ValueId>> =
+            vec![FxHashSet::default(); block.insts.len()];
         let mut current: FxHashSet<ValueId> = holders
             .iter()
             .filter(|v| live.is_live_out(BlockIdx(bi), **v))
@@ -140,7 +141,7 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
             for d in inst_info::defs(&inst.kind) {
                 current.remove(&d);
             }
-            for u in inst_info::uses(&inst.kind) {
+            for u in loans.uses_with_storage(&inst.kind) {
                 if holders.contains(&u) {
                     current.insert(u);
                 }
@@ -157,11 +158,10 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
                 if reach.via.contains(holder) {
                     continue;
                 }
-                let hit = loans
-                    .region(*holder)
-                    .loans
-                    .iter()
-                    .any(|loan| reach.storage.contains(&loan.storage) && conflicts(loan, &touch));
+                let hit =
+                    loans.region(*holder).loans.iter().any(|loan| {
+                        reach.storage.contains(&loan.storage) && conflicts(loan, &touch)
+                    });
                 if hit {
                     errors.push(ValidationError {
                         scope: scope.to_string(),
@@ -364,7 +364,11 @@ mod tests {
             ],
             types,
         );
-        assert_eq!(conflict_count(&errors(m)), 0, "a word copy does not move the storage");
+        assert_eq!(
+            conflict_count(&errors(m)),
+            0,
+            "a word copy does not move the storage"
+        );
     }
 
     // -- exclusion: rejected -------------------------------------------
@@ -454,7 +458,11 @@ mod tests {
             ],
             types,
         );
-        assert_eq!(conflict_count(&errors(m)), 1, "even a word copy reads through the &mut");
+        assert_eq!(
+            conflict_count(&errors(m)),
+            1,
+            "even a word copy reads through the &mut"
+        );
     }
 
     #[test]
@@ -482,5 +490,70 @@ mod tests {
             string_slot(),
         );
         assert_eq!(conflict_count(&errors(m)), 1);
+    }
+
+    // -- holders in storage and parameters (RFC-0029) ------------------
+
+    fn store(slot: usize, value: usize) -> InstKind {
+        InstKind::Assign {
+            target: RefTarget::Var(v(slot)),
+            path: vec![],
+            value: v(value),
+        }
+    }
+
+    fn take_slot(dst: usize, slot: usize) -> InstKind {
+        InstKind::Take {
+            dst: v(dst),
+            target: RefTarget::Var(v(slot)),
+            path: vec![],
+        }
+    }
+
+    #[test]
+    fn a_reference_assigned_into_a_storage_keeps_its_loan_live() {
+        let mut types = string_slot();
+        types.push((v(7), Ty::Ref(Mutability::Shared, Box::new(Ty::String))));
+        types.push((v(8), Ty::Ref(Mutability::Shared, Box::new(Ty::String))));
+        let m = body(
+            vec![
+                reference(1, Mutability::Shared),
+                store(7, 1),
+                assign(3),
+                take_slot(8, 7),
+                load(4, 8),
+                ret(4),
+            ],
+            types,
+        );
+        assert_eq!(conflict_count(&errors(m)), 1);
+    }
+
+    #[test]
+    fn a_reborrow_of_a_parameter_conflicts_with_a_write_through_it() {
+        let param = v(9);
+        let mut main = body(
+            vec![
+                InstKind::Ref {
+                    dst: v(1),
+                    target: RefTarget::Through(param),
+                    path: vec![],
+                    mutability: Mutability::Shared,
+                },
+                InstKind::Assign {
+                    target: RefTarget::Through(param),
+                    path: vec![],
+                    value: v(3),
+                },
+                load(4, 1),
+                ret(4),
+            ],
+            string_slot(),
+        );
+        main.params
+            .push((acvus_utils::Interner::new().intern("p"), param));
+        main.val_types
+            .insert(param, Ty::Ref(Mutability::Mut, Box::new(Ty::String)));
+        assert_eq!(conflict_count(&errors(main)), 1);
     }
 }

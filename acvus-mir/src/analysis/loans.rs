@@ -1,6 +1,7 @@
 //! Regions: the storage a value may name, as a trivial lifetime (RFC-0015,
 //! RFC-0018). A region is a set of loans; join is union; bottom names
-//! nothing. A `Ref` starts a region at its slot, and a value whose type
+//! nothing. A `Ref` starts a region at its slot, a parameter or capture of
+//! reference type starts one at itself (RFC-0029), and a value whose type
 //! contains a reference takes the join of the regions it is built from:
 //! a call's result from its arguments, a closure from its captures, a
 //! block parameter from the jump arguments that reach it, a slot from
@@ -142,9 +143,18 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
                     state.set(*dst, region);
                 }
             },
+            // A reference read out of a storage is the storage's own
+            // reference, not a second holder (RFC-0029).
             InstKind::Take { dst, target, .. } => {
-                if let Some(slot) = inst_info::storage(target) {
-                    self.flow(state, slot, *dst, false);
+                if let Some(slot) = inst_info::storage(target)
+                    && self.carries_ref(*dst)
+                {
+                    let mut region = state.get(slot);
+                    region.via.push(slot);
+                    let mut target = state.get(*dst);
+                    if target.join_mut(&region) {
+                        state.set(*dst, target);
+                    }
                 }
             }
             InstKind::Assign { target, value, .. } => {
@@ -215,7 +225,22 @@ impl Loans {
         let analysis = RegionAnalysis {
             val_types: &cfg.val_types,
         };
-        let result = forward_analysis(cfg, &analysis, DataflowState::new());
+        let mut entry = DataflowState::new();
+        for storage in cfg.entry_defs() {
+            if let Some(Ty::Ref(mutability, _)) = cfg.val_types.get(&storage) {
+                entry.set(
+                    storage,
+                    Region {
+                        loans: vec![Loan {
+                            storage,
+                            mutability: *mutability,
+                        }],
+                        via: vec![],
+                    },
+                );
+            }
+        }
+        let result = forward_analysis(cfg, &analysis, entry);
         let mut region: FxHashMap<ValueId, Region> = FxHashMap::default();
         for exit in &result.block_exit {
             for (v, r) in &exit.values {

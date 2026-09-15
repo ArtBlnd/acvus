@@ -38,11 +38,12 @@ fn optimize_inner(
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
-    // -- Pass 0: moves as the source wrote them, before any promotion ----
+    // -- Pass 0: moves and borrows as the source wrote them (RFC-0029) --
 
     let mut all_errors = Vec::new();
     for (qref, module) in &modules {
-        let errors = validate::move_check::check_moves(module);
+        let mut errors = validate::move_check::check_moves(module);
+        errors.extend(validate::borrow_check::check_borrows(module));
         if !errors.is_empty() {
             all_errors.push((*qref, errors));
         }

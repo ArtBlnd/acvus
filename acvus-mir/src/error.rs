@@ -59,6 +59,8 @@ pub enum MirErrorKind {
         ty: Ty,
     },
     StoreThroughSharedReference(Ty),
+    /// `&mut r` where `r: &T` (RFC-0029).
+    MutableBorrowOfShared,
     UndefinedField {
         object_ty: Ty,
         field: String,
@@ -228,6 +230,9 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::StoreThroughSharedReference(ty) => {
                 write!(f, "cannot store through {}: not a `&mut`", ty.display(interner))
+            }
+            MirErrorKind::MutableBorrowOfShared => {
+                write!(f, "a shared reference cannot be borrowed mutably")
             }
             MirErrorKind::NoInstance { ty } => {
                 write!(

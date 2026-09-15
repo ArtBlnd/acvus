@@ -980,6 +980,12 @@ impl<'a> Lowerer<'a> {
         let target = self
             .storage_through(root)
             .unwrap_or_else(|| panic!("not a place: {root:?}; type checking admits only places here"));
+        // A place that is a reference names what the reference names
+        // (RFC-0029).
+        let ty = match ty {
+            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => *inner,
+            ty => ty,
+        };
         Place { target, path, ty }
     }
 
