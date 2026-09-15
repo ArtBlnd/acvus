@@ -3,7 +3,7 @@ let pass = 0;
 let fail = 0;
 let best = 0;
 
-let students = iter(@students);
+let students = iter_array(&@students);
 while let Some(s) = next(&mut students) {
     let score = s.score;
     if score >= 90 {
@@ -18,8 +18,7 @@ while let Some(s) = next(&mut students) {
     };
 }
 
-let passing_total = @students
-    | iter
+let passing_total = iter_array(&@students)
     | map(|s| -> s.score)
     | filter(|s| -> *s >= 60)
     | fold(0, |acc, s| -> acc + s);

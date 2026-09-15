@@ -139,7 +139,7 @@ fn a_declared_context_never_shares_a_source_with_a_new_one() {
             Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
         ),
     ]);
-    let result = acvus_mir_test::compile_script_ir(&i, "@src = @items | iter; 0", &ctx);
+    let result = acvus_mir_test::compile_script_ir(&i, "@src = @items | into_iter; 0", &ctx);
     assert!(
         result.is_err(),
         "storing a new source into a context must be rejected: {result:?}"

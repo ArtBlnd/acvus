@@ -29,7 +29,7 @@ expression: ir
     ; r3 (@names) : Array<String, 3>
     ; r4 (v9) : Array<String, 3>
     ; r5 (v12) : List<String>
-    ; r6 (iter(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r7 (v14) : Fn(&String) -> Bool
     ; r8 (filter(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r9 (join(...)) : String

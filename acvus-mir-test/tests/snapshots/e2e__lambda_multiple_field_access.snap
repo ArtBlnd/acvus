@@ -29,7 +29,7 @@ expression: ir
     ; r3 (@users) : List<{age: Int, name: String}>
     ; r4 (v6) : Array<{age: Int, name: String}, 0>
     ; r5 (list(...)) : List<{age: Int, name: String}>
-    ; r6 (iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
     ; r7 (v11) : Fn({age: Int, name: String}) -> (String, Int)
     ; r8 (map(...)) : Iterator<(String, Int), Pure, #IdentityId(0)>
     ; r9 (collect(...)) : List<(String, Int)>

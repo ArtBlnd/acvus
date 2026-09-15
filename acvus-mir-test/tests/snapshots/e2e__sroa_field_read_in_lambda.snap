@@ -28,7 +28,7 @@ expression: ir
     ; r2 (@users) : List<{name: String}>
     ; r3 (v6) : Array<{name: String}, 0>
     ; r4 (list(...)) : List<{name: String}>
-    ; r5 (iter(...)) : Iterator<{name: String}, Pure, #IdentityId(0)>
+    ; r5 (into_iter(...)) : Iterator<{name: String}, Pure, #IdentityId(0)>
     ; r6 (v11) : Fn({name: String}) -> String
     ; r7 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r8 (collect(...)) : List<String>

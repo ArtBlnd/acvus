@@ -265,7 +265,7 @@ fn generate_extern_fn(
                 let next = quote! { __args.next().expect("arity checked by typeck") };
                 let lent = format_ident!("{a}_lent");
                 match p.mode {
-                    Mode::Value if is_closure_carrier(ty) => quote! { let #a = <#ty>::new(#next); },
+                    Mode::Value if is_carrier(ty) => quote! { let #a = <#ty>::new(#next); },
                     Mode::Value => quote! { let #a = unsafe { __rt.materialize::<#ty>(#next) }; },
                     Mode::Borrow => quote! {
                         let #lent = #next;
@@ -301,7 +301,7 @@ fn generate_extern_fn(
         let hold_state = quote! {
             #(let #state_idents = ::std::sync::Arc::clone(&#state_idents);)*
         };
-        let ret_value = if is_closure_carrier(&rt_ret) {
+        let ret_value = if is_carrier(&rt_ret) {
             quote! { __r.into_value() }
         } else {
             quote! { unsafe { __rt.erase::<#rt_ret>(__r) } }
@@ -428,14 +428,14 @@ fn generate_extern_fn(
 
 /// `Fn0`, `Fn1`, `Fn2` carry a closure value by name; they wrap it rather
 /// than materialize it.
-fn is_closure_carrier(ty: &Type) -> bool {
+fn is_carrier(ty: &Type) -> bool {
     let Type::Path(p) = ty else {
         return false;
     };
     p.path
         .segments
         .last()
-        .is_some_and(|s| matches!(s.ident.to_string().as_str(), "Fn0" | "Fn1" | "Fn2"))
+        .is_some_and(|s| matches!(s.ident.to_string().as_str(), "Fn0" | "Fn1" | "Fn2" | "Fn3" | "Lent"))
 }
 
 /// Remove `#[name]` from the attribute list; report whether it was there.

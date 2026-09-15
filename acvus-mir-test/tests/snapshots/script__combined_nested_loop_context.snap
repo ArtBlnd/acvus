@@ -53,14 +53,14 @@ expression: ir
     ; r1 (@total) : Int
     ; r2 (@outer) : Array<Array<Int, 3>, 3>
     ; r3 (v6) : List<Array<Int, 3>>
-    ; r4 (iter(...)) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
+    ; r4 (into_iter(...)) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
     ; r5 (rows.) : &mut Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
     ; r6 (next(...)) : Option<Array<Int, 3>>
     ; r7 (v11) : Bool
     ; r8 (row) : Array<Int, 3>
     ; r9 (row) : Array<Int, 3>
     ; r10 (v15) : List<Int>
-    ; r11 (iter(...)) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r11 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(1)>
     ; r12 (xs.) : &mut Iterator<Int, Pure, #IdentityId(1)>
     ; r13 (next(...)) : Option<Int>
     ; r14 (v20) : Bool

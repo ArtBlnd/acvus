@@ -934,7 +934,7 @@ async fn io_in_iteration() {
     regs.push(io_registry());
     let result = run_script_with_externs_and_types(
         &i,
-        "@items | iter | map(|x| -> fetch_by(x)) | fold(@sum, |a, b| -> a + b)",
+        "iter_array(&@items) | map(|x| -> fetch_by(*x)) | fold(@sum, |a, b| -> a + b)",
         c,
         regs,
         |_| {},
@@ -1038,7 +1038,7 @@ async fn io_inside_iterator_pipeline() {
     regs.push(io_registry());
     let result = run_script_with_externs_and_types(
         &i,
-        "@items | iter | map(|x| -> fetch_by(x)) | collect",
+        "iter_array(&@items) | map(|x| -> fetch_by(*x)) | collect",
         c,
         regs,
         |_| {},

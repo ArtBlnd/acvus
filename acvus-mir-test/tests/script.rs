@@ -35,7 +35,7 @@ fn loop_context_write_phi() {
     );
     let ir = compile_script_mode_raw(
         &i,
-        "let it = @items | iter; while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
+        "let it = @items | into_iter; while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
         &c,
     )
     .unwrap();
@@ -131,7 +131,7 @@ fn ssa_write_in_loop_phi() {
     );
     let ir = compile_script_mode_raw(
         &i,
-        "let it = @items | iter; while let Some(x) = next(&mut it) { @acc = @acc + x; } @acc",
+        "let it = @items | into_iter; while let Some(x) = next(&mut it) { @acc = @acc + x; } @acc",
         &c,
     )
     .unwrap();
@@ -202,7 +202,7 @@ fn combined_nested_loop_context() {
     );
     let ir = compile_script_mode_raw(
         &i,
-        "let rows = @outer | iter; while let Some(row) = next(&mut rows) { let xs = row | iter; while let Some(x) = next(&mut xs) { @total = @total + x; } } @total",
+        "let rows = @outer | into_iter; while let Some(row) = next(&mut rows) { let xs = row | into_iter; while let Some(x) = next(&mut xs) { @total = @total + x; } } @total",
         &c,
     )
     .unwrap();
@@ -251,7 +251,7 @@ fn items_ctx(i: &Interner) -> rustc_hash::FxHashMap<acvus_utils::Astr, Ty> {
 #[test]
 fn a_lending_parameter_rejects_a_value_argument() {
     let i = Interner::new();
-    let err = compile_script_mode_raw(&i, "let it = @items | iter; next(it)", &items_ctx(&i))
+    let err = compile_script_mode_raw(&i, "let it = @items | into_iter; next(it)", &items_ctx(&i))
         .unwrap_err();
     assert!(err.contains("type mismatch"), "{err}");
     assert!(err.contains(", got Iterator<"), "{err}");
@@ -260,7 +260,7 @@ fn a_lending_parameter_rejects_a_value_argument() {
 #[test]
 fn a_lending_parameter_rejects_the_other_mode() {
     let i = Interner::new();
-    let err = compile_script_mode_raw(&i, "let it = @items | iter; next(&it)", &items_ctx(&i))
+    let err = compile_script_mode_raw(&i, "let it = @items | into_iter; next(&it)", &items_ctx(&i))
         .unwrap_err();
     assert!(err.contains("type mismatch"), "{err}");
     assert!(err.contains(", got &Iterator<"), "{err}");
@@ -270,6 +270,6 @@ fn a_lending_parameter_rejects_the_other_mode() {
 fn only_a_place_can_be_lent() {
     let i = Interner::new();
     let err =
-        compile_script_mode_raw(&i, "next(&mut (@items | iter))", &items_ctx(&i)).unwrap_err();
+        compile_script_mode_raw(&i, "next(&mut (@items | into_iter))", &items_ctx(&i)).unwrap_err();
     assert!(err.contains("can be referenced"), "{err}");
 }

@@ -29,7 +29,7 @@ expression: ir
     ; r3 (@flags) : List<Bool>
     ; r4 (v6) : Array<Bool, 0>
     ; r5 (list(...)) : List<Bool>
-    ; r6 (iter(...)) : Iterator<Bool, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<Bool, Pure, #IdentityId(0)>
     ; r7 (v11) : Fn(Bool) -> Bool
     ; r8 (map(...)) : Iterator<Bool, Pure, #IdentityId(0)>
     ; r9 (collect(...)) : List<Bool>

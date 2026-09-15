@@ -102,7 +102,7 @@ async fn iter_sum() {
     let c = ctx(&i, vec![("items", ints(&[1, 2, 3])), ("sum", int(0))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
+        "let it = iter_array(&@items); while let Some(x) = next(&mut it) { @sum = @sum + *x; } @sum",
         c,
     )
     .await;
@@ -115,7 +115,7 @@ async fn iter_count() {
     let c = ctx(&i, vec![("items", ints(&[10, 20, 30])), ("count", int(0))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
+        "let it = iter_array(&@items); while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
         c,
     )
     .await;
@@ -132,7 +132,7 @@ async fn iter_nested() {
     let c = ctx(&i, vec![("matrix", matrix), ("sum", int(0))]);
     let result = run_script_mode(
         &i,
-        "let rows = iter(@matrix); while let Some(row) = next(&mut rows) { let xs = iter(row); while let Some(x) = next(&mut xs) { @sum = @sum + x; } } @sum",
+        "let rows = iter_array(&@matrix); while let Some(row) = next(&mut rows) { let xs = iter_array(row); while let Some(x) = next(&mut xs) { @sum = @sum + x; } } @sum",
         c,
     )
     .await;
@@ -145,7 +145,7 @@ async fn iter_empty_list() {
     let c = ctx(&i, vec![("items", ints(&[])), ("sum", int(99))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
+        "let it = iter_array(&@items); while let Some(x) = next(&mut it) { @sum = @sum + *x; } @sum",
         c,
     )
     .await;
@@ -161,7 +161,7 @@ async fn iter_sequential_loops() {
     );
     let result = run_script_mode(
         &i,
-        "let ia = iter(@a); while let Some(x) = next(&mut ia) { @sum = @sum + x; } let ib = iter(@b); while let Some(y) = next(&mut ib) { @sum = @sum + y; } @sum",
+        "let ia = iter_array(&@a); while let Some(x) = next(&mut ia) { @sum = @sum + *x; } let ib = iter_array(&@b); while let Some(y) = next(&mut ib) { @sum = @sum + y; } @sum",
         c,
     )
     .await;
@@ -174,7 +174,7 @@ async fn iter_loop_with_conditional() {
     let c = ctx(&i, vec![("items", ints(&[0, 1, 0, 2])), ("count", int(0))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some(x) = next(&mut it) { if x == 0 { @count = @count + 1; }; } @count",
+        "let it = iter_array(&@items); while let Some(x) = next(&mut it) { if *x == 0 { @count = @count + 1; }; } @count",
         c,
     )
     .await;
@@ -190,7 +190,7 @@ async fn iter_accumulate_product() {
     );
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; @product = @product * x; } @sum + @product",
+        "let it = iter_array(&@items); while let Some(x) = next(&mut it) { @sum = @sum + *x; @product = @product * *x; } @sum + @product",
         c,
     )
     .await;
@@ -208,7 +208,7 @@ async fn iter_field_then_loop() {
     let c = ctx(&i, vec![("data", data), ("sum", int(0))]);
     let result = run_script_mode(
         &i,
-        "let it = iter(@data.items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
+        "let it = iter_array(&@data.items); while let Some(x) = next(&mut it) { @sum = @sum + *x; } @sum",
         c,
     )
     .await;
@@ -227,7 +227,7 @@ async fn iter_with_to_string() {
     );
     let result = run_script_mode(
         &i,
-        "let it = iter(@items); while let Some(x) = next(&mut it) { @out = @out + to_string(x); } @out",
+        "let it = iter_array(&@items); while let Some(x) = next(&mut it) { @out = @out + to_string(*x); } @out",
         c,
     )
     .await;
@@ -243,7 +243,7 @@ async fn closure_reads_context_at_call() {
     let c = ctx(&i, vec![("items", ints(&[1, 2])), ("x", int(1))]);
     let result = run_script_mode(
         &i,
-        "@x = 5; let f = |v| -> v + @x; @x = 9; iter(@items) | map(f) | fold(0, |a, b| -> a + b)",
+        "@x = 5; let f = |v| -> *v + @x; @x = 9; iter_array(&@items) | map(f) | fold(0, |a, b| -> a + b)",
         c,
     )
     .await;

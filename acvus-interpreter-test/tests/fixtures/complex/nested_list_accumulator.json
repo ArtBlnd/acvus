@@ -1,5 +1,5 @@
 {
-  "template": "{{ result = @matrix | iter | flatten_arrays | fold(0, |acc, x| -> acc + x) }}{{ result | to_string }}",
+  "template": "{{ result = @matrix | into_iter | flatten_arrays | fold(0, |acc, x| -> acc + x) }}{{ result | to_string }}",
   "context": {
     "matrix": [[1, 2], [3, 4], [5, 6]]
   },

@@ -29,7 +29,7 @@ expression: ir
     ; r3 (@users) : List<{active: Bool, name: String}>
     ; r4 (v6) : Array<{active: Bool, name: String}, 0>
     ; r5 (list(...)) : List<{active: Bool, name: String}>
-    ; r6 (iter(...)) : Iterator<{active: Bool, name: String}, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<{active: Bool, name: String}, Pure, #IdentityId(0)>
     ; r7 (v11) : Fn(&{active: Bool, name: String}) -> Bool
     ; r8 (filter(...)) : Iterator<{active: Bool, name: String}, Pure, #IdentityId(0)>
     ; r9 (collect(...)) : List<{active: Bool, name: String}>

@@ -291,7 +291,7 @@ fn pipe_filter_map() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -314,7 +314,7 @@ fn lambda_in_filter() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -648,7 +648,7 @@ fn pmap_builtin() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | pmap(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | pmap(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -718,7 +718,7 @@ fn closure_capture_context() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > @threshold) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > @threshold) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -748,7 +748,7 @@ fn lambda_map_arithmetic() {
     // Lambda param type resolved via unification: map(List<Int>, |x| -> x + 1)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -761,7 +761,7 @@ fn lambda_filter_comparison() {
     // Lambda param type resolved via unification: filter(List<Int>, |x| -> *x > 0)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -777,7 +777,7 @@ fn closure_capture_local() {
     // through a reference (RFC-0018).
     let ir = compile_to_ir(
         &i,
-        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > *threshold) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *threshold) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -891,7 +891,7 @@ fn triple_pipe_chain() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -939,7 +939,7 @@ fn lambda_negate_param() {
     // Lambda param has Ty::Var initially; -i must resolve via unification.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> -i) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> -i) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -955,7 +955,7 @@ fn lambda_not_param() {
     let context = list_context(&i, "flags", Ty::Bool);
     let ir = compile_to_ir(
         &i,
-        r#"{{ flags = @flags }}{{ @flags = list([]) }}{{ x = flags | iter | map(|i| -> !i) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ flags = @flags }}{{ @flags = list([]) }}{{ x = flags | into_iter | map(|i| -> !i) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -991,7 +991,7 @@ fn multiple_closures_same_capture() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1012,7 +1012,7 @@ fn string_equality_in_filter() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = ["", "", ""] }}{{ x = names | iter | filter(|n| -> n != "admin") }}{{ x | join(",") }}"#,
+        r#"{{ names = @names }}{{ @names = ["", "", ""] }}{{ x = names | into_iter | filter(|n| -> n != "admin") }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1032,7 +1032,7 @@ fn lambda_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1048,7 +1048,7 @@ fn pipe_map_to_string_then_filter() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ x | len | to_string }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -1066,7 +1066,7 @@ fn lambda_capture_local_var_ref() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > *offset) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *offset) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1086,7 +1086,7 @@ fn lambda_multiple_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | map(|u| -> (u.name, u.age)) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> (u.name, u.age)) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1105,7 +1105,7 @@ fn lambda_chained_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | map(|u| -> u.address.city) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> u.address.city) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1121,7 +1121,7 @@ fn lambda_string_concat() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = list([]) }}{{ x = names | iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
+        r#"{{ names = @names }}{{ @names = list([]) }}{{ x = names | into_iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1136,7 +1136,7 @@ fn pipe_filter_then_map_field() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String), ("age", Ty::Int)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1174,7 +1174,7 @@ fn lambda_float_arithmetic() {
     let context = list_context(&i, "vals", Ty::Float);
     let ir = compile_to_ir(
         &i,
-        r#"{{ vals = @vals }}{{ @vals = list([]) }}{{ x = vals | iter | map(|v| -> v * 2.0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ vals = @vals }}{{ @vals = list([]) }}{{ x = vals | into_iter | map(|v| -> v * 2.0) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1199,7 +1199,7 @@ fn filter_object_field_equality() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String), ("active", Ty::Bool)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | filter(|u| -> u.active) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | filter(|u| -> u.active) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1776,7 +1776,7 @@ fn migrated_print_closure() {
 
 #[test]
 fn iter_map_reuse_rejected() {
-    // iter(list) | map(f) is an Iterator; reusing it is a use-after-move.
+    // into_iter(list) | map(f) is an Iterator; reusing it is a use-after-move.
     let i = Interner::new();
     let context = ctx(
         &i,
@@ -1790,7 +1790,7 @@ fn iter_map_reuse_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | iter | map(|x| -> { @counter = x; x }); it | collect; it | collect"#,
+        r#"it = @items | into_iter | map(|x| -> { @counter = x; x }); it | collect; it | collect"#,
         &context,
     );
     assert!(result.is_err(), "iter reuse should be rejected: {result:?}");
@@ -1812,7 +1812,7 @@ fn iter_map_single_use_ok() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; items | iter | map(|x| -> { @counter = x; x }) | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @counter = x; x }) | collect"#,
         &context,
     );
     assert!(
@@ -1838,7 +1838,7 @@ fn iter_chain_reuse_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = x; x > 0 }); it | collect; it | collect"#,
+        r#"it = @items | into_iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = x; x > 0 }); it | collect; it | collect"#,
         &context,
     );
     assert!(
@@ -1864,7 +1864,7 @@ fn iter_chain_single_use_ok() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; items | iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = *x; *x > 0 }) | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = *x; *x > 0 }) | collect"#,
         &context,
     );
     assert!(
@@ -1886,7 +1886,7 @@ fn iter_pure_map_reuse_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | iter | map(|x| -> x + 1); it | collect; it | collect"#,
+        r#"it = @items | into_iter | map(|x| -> x + 1); it | collect; it | collect"#,
         &context,
     );
     assert!(
@@ -1911,7 +1911,7 @@ fn iter_reuse_after_collect_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | iter | map(|x| -> { @counter = x; x }); collected = it | collect; it | collect"#,
+        r#"it = @items | into_iter | map(|x| -> { @counter = x; x }); collected = it | collect; it | collect"#,
         &context,
     );
     assert!(
@@ -1959,7 +1959,7 @@ fn migrated_move_reject_iter_reuse() {
     );
     let result = compile_script_ir(
         &i,
-        r#"x = @items | iter | map(|x| -> { @counter = x; x }); x | collect; x | collect"#,
+        r#"x = @items | into_iter | map(|x| -> { @counter = x; x }); x | collect; x | collect"#,
         &context,
     );
     assert!(result.is_err(), "should reject iter reuse");
@@ -1981,7 +1981,7 @@ fn migrated_move_reject_var_double_load() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | iter }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
+        "{{ a = @items | into_iter }}{{ a | collect | len | to_string }}{{ a | collect | len | to_string }}",
         &context,
     );
     assert!(result.is_err(), "should reject var double load of iterator");
@@ -2006,7 +2006,7 @@ fn migrated_move_reject_iter_pipe_reuse() {
     );
     let result = compile_script_ir(
         &i,
-        r#"x = @items | iter | map(|x| -> { @counter = x; x }); a = x | collect; b = x | collect; a"#,
+        r#"x = @items | into_iter | map(|x| -> { @counter = x; x }); a = x | collect; b = x | collect; a"#,
         &context,
     );
     assert!(result.is_err());
@@ -2048,7 +2048,7 @@ fn migrated_move_accept_iter_single_use() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; x = items | iter | map(|x| -> { @counter = x; x }); x | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; x = items | into_iter | map(|x| -> { @counter = x; x }); x | collect"#,
         &context,
     );
     assert!(
@@ -2069,7 +2069,7 @@ fn migrated_move_accept_var_reassign() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | iter }}{{ a | collect | len | to_string }}{{ items2 = @items2 }}{{ @items2 = list([]) }}{{ a = items2 | iter }}{{ a | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ a | collect | len | to_string }}{{ items2 = @items2 }}{{ @items2 = list([]) }}{{ a = items2 | into_iter }}{{ a | collect | len | to_string }}",
         &context,
     );
     assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
@@ -2090,7 +2090,7 @@ fn migrated_move_accept_iter_pipe_chain() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; items | iter | map(|x| -> { @counter = x; x }) | filter(|x| -> *x > 0) | map(|x| -> x * 2) | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @counter = x; x }) | filter(|x| -> *x > 0) | map(|x| -> x * 2) | collect"#,
         &context,
     );
     assert!(
@@ -2151,7 +2151,7 @@ fn migrated_move_reject_branch_move_then_use() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}{{ a | collect | len | to_string }}",
+        "{{ a = @items | into_iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}{{ a | collect | len | to_string }}",
         &context,
     );
     assert!(
@@ -2191,7 +2191,7 @@ fn migrated_move_accept_branch_move_no_use_after() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}",
         &context,
     );
     assert!(
@@ -2284,7 +2284,7 @@ fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let context = items_list_context(&i);
     let result = compile_to_ir(
         &i,
-        "{{ f = (|z| -> { items = @items; @items = list([]); collect(items | iter) }) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
+        "{{ f = (|z| -> { items = @items; @items = list([]); collect(items | into_iter) }) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
         &context,
     );
     assert!(
@@ -2542,7 +2542,7 @@ fn projection_move_single_use() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter }}{{ x | collect | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ x | collect | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -2559,7 +2559,7 @@ fn projection_move_var_reassign_revives() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter }}{{ x | collect | len | to_string }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter }}{{ x | collect | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ x | collect | len | to_string }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ x | collect | len | to_string }}"#,
         &context,
     ).unwrap();
     assert!(
@@ -2623,7 +2623,7 @@ fn sroa_field_read_in_lambda() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ users | iter | map(|u| -> u.name) | collect | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | join(",") }}"#,
         &context,
     )
     .unwrap();

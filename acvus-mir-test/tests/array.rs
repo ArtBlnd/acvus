@@ -80,5 +80,5 @@ fn array_flows_into_list_and_iterator() {
     let i = Interner::new();
     let ctx = FxHashMap::default();
     compile_script_ir(&i, "[1, 2] | len", &ctx).unwrap();
-    compile_script_ir(&i, "[1, 2] | iter | collect | iter | collect | len", &ctx).unwrap();
+    compile_script_ir(&i, "[1, 2] | into_iter | collect | into_iter | collect | len", &ctx).unwrap();
 }

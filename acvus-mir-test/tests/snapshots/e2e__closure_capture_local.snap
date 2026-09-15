@@ -31,7 +31,7 @@ expression: ir
     ; r4 (@items) : List<Int>
     ; r5 (v9) : Array<Int, 0>
     ; r6 (list(...)) : List<Int>
-    ; r7 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r7 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r8 (v15) : Fn(&Int) -> Bool
     ; r9 (v3) : Int
     ; r10 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>

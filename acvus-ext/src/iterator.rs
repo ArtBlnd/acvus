@@ -1,14 +1,15 @@
 //! Iterator functions.
 //!
-//! - Constructors: iter, iter_array, rev_iter
+//! - Constructors: iter, iter_array (over a borrowed container, yielding
+//!   references), into_iter, into_iter_array, rev_iter (consuming)
 //! - Lazy combinators: map, pmap, filter, take, skip, chain, pchain, flatten,
 //!   flatten_arrays, flat_map
 //! - Consumers (async, effect E): collect, join, first, last, contains, next,
 //!   find, reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, ExternError, Registry, Fn1, Fn2, IdentityVar, LenVar, Ref,
-    Runtime, TyVar,
+    Arr, ClosureFn, EffectVar, ExternError, Fn1, Fn2, IdentityVar, LenVar, Lent, Ref, Registry,
+    Runtime, TyVar, value_of,
     extern_fn, extern_registry,
 };
 
@@ -21,7 +22,7 @@ fn count(name: &'static str, n: i64) -> Result<usize, ExternError> {
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn iter<T, E, I, Rt>(_: &Rt, items: List<T>) -> Iter<T, E, I, Rt>
+fn into_iter<T, E, I, Rt>(_: &Rt, items: List<T>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -33,7 +34,7 @@ where
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn iter_array<T, N, E, I, Rt>(_: &Rt, items: Arr<T, N>) -> Iter<T, E, I, Rt>
+fn into_iter_array<T, N, E, I, Rt>(_: &Rt, items: Arr<T, N>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     N: LenVar,
@@ -42,6 +43,46 @@ where
     Rt: Runtime,
 {
     Iter::from_items(items.0)
+}
+
+#[extern_fn(effect = pure)]
+fn iter<T, E, I, Rt>(_: &Rt, items: Lent<List<T>, Rt>) -> Iter<Ref<T>, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut index = 0;
+    Iter::from_fn(move |rt| {
+        // SAFETY: the reference names a live `List<T>` for as long as the
+        // iterator's region holds its loan.
+        let list = unsafe { items.get(rt) };
+        let item = list.0.get(index)?;
+        index += 1;
+        // SAFETY: the element lives in the list's storage, which the loan keeps.
+        Some(unsafe { rt.reference(value_of::<T, Rt>(item)) })
+    })
+}
+
+#[extern_fn(effect = pure)]
+fn iter_array<T, N, E, I, Rt>(_: &Rt, items: Lent<Arr<T, N>, Rt>) -> Iter<Ref<T>, E, I, Rt>
+where
+    T: TyVar,
+    N: LenVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut index = 0;
+    Iter::from_fn(move |rt| {
+        // SAFETY: as in `iter`.
+        let array = unsafe { items.get(rt) };
+        let item = array.0.get(index)?;
+        index += 1;
+        // SAFETY: as in `iter`.
+        Some(unsafe { rt.reference(value_of::<T, Rt>(item)) })
+    })
 }
 
 #[extern_fn(effect = pure)]
@@ -396,7 +437,7 @@ where
         ns: "std",
         types: [Iter<_, _, _, Rt>],
         fns: [
-            iter, iter_array, rev_iter,
+            iter, iter_array, into_iter, into_iter_array, rev_iter,
             map, pmap, filter, take, skip, chain, pchain, flatten, flatten_arrays, flat_map,
             collect, join, first, last, contains, next, find, reduce, fold, any, all,
         ],

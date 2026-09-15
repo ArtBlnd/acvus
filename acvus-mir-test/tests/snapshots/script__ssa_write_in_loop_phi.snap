@@ -38,7 +38,7 @@ expression: ir
     ; r1 (@items) : Array<Int, 3>
     ; r2 (@items) : Array<Int, 3>
     ; r3 (v6) : List<Int>
-    ; r4 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r4 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r5 (it.) : &mut Iterator<Int, Pure, #IdentityId(0)>
     ; r6 (next(...)) : Option<Int>
     ; r7 (v11) : Bool

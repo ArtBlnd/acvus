@@ -24,7 +24,7 @@ pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{ExternEntry, ExternHandler, MonoHandler, MonoInstance};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
-pub use reference::{Ref, RefMut};
+pub use reference::{Lent, Ref, RefMut, value_of};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
     Manifest, Registry, SharedSignature, SignatureDecl,

@@ -28,7 +28,7 @@ expression: ir
     ; r3 (@users) : List<{address: {city: String}}>
     ; r4 (v6) : Array<{address: {city: String}}, 0>
     ; r5 (list(...)) : List<{address: {city: String}}>
-    ; r6 (iter(...)) : Iterator<{address: {city: String}}, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<{address: {city: String}}, Pure, #IdentityId(0)>
     ; r7 (v11) : Fn({address: {city: String}}) -> String
     ; r8 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r9 (join(...)) : String

@@ -279,7 +279,9 @@ impl PartialEq for Value {
 
 // -- The interpreter's own composites --------------------------------
 
-pub struct Array(pub Vec<Value>);
+/// The language's array is the extern contract's `Arr` at `T = Value`
+/// (RFC-0022): it crosses without a copy.
+pub type Array = acvus_extern::Arr<Value, ()>;
 pub struct Tuple(pub Vec<Value>);
 pub struct Object(pub FxHashMap<Astr, Value>);
 
@@ -456,7 +458,7 @@ impl Value {
         large(&STRING, s.into())
     }
     pub fn array(items: Vec<Value>) -> Self {
-        large(&ARRAY, Array(items))
+        large(&ARRAY, Array::new(items))
     }
     pub fn tuple(items: Vec<Value>) -> Self {
         large(&TUPLE, Tuple(items))
