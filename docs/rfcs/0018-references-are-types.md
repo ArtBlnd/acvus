@@ -35,14 +35,16 @@ type of each parameter, reference or value, is the type the function that
 receives the lambda declares — unification, from the extern signature
 that names `Fn(&T) -> Bool`, fixes it.
 
-A context place (`@x`, `@x.field`) has no take: nothing moves out of a
-context. A program does one of three things with it — lends it
-(`f(&@x)`, `push(&mut @x, v)`), assigns it (`@x = v`), or duplicates it
-(`clone(&@x)`). Reading a non-primitive `@x` as a value is a type error;
-reading a primitive one is the word copy every primitive gets. A lent
-context place is loaded, the call receives a reference to that temporary,
-and the temporary is stored back when the call returns: the journal is a
-version store and is never aliased.
+A context place (`@x`, `@x.field`) is a storage like a local: reading it
+takes its value, and the place is uninitialized until it is assigned
+again. `let a = @b` moves the value out; `@b = new` puts one back. A
+context differs from a local in outliving the run, so a run that takes a
+context must assign it on every path before it ends; the checker that
+tracks an uninitialized local tracks this. Lending a context place
+(`f(&@x)`, `push(&mut @x, v)`) is the same sequence written by the
+compiler: take into a temporary, give the call a reference to it, store
+the temporary back when the call returns. The journal is a version store
+and is never aliased.
 
 ## Rationale
 
@@ -87,8 +89,8 @@ call site and `*` at the read keeps every conversion in the program.
   is a type error; the copy is the extern `clone(r)`.
 - No copy instruction in the IR, and no clone in a runtime's vtable. A
   runtime copies a word and nothing else.
-- No aliasing of a context. A context place lent to a call is copy-in,
-  copy-out.
+- No aliasing of a context. A context place lent to a call is taken into
+  a temporary and stored back.
 
 ## Consequences
 
@@ -116,9 +118,9 @@ call site and `*` at the read keeps every conversion in the program.
   register by taking it; the only copy a host makes is of a word.
 - Sharing in the language is an extern: `clone(&x)` for a type whose
   author implemented it. A type without one cannot be duplicated.
-- A context read of a non-primitive type is rejected at the read; the
-  journal is read only through a lent place, and never copies a value
-  out on its own.
+- A context read hands the value out of the journal; the journal never
+  copies a value on its own. A run that takes a context and ends on any
+  path without assigning it is rejected.
 - An ExternFn's Rust `&T` and `&mut T` parameters declare `&T` and
   `&mut T` acvus types; `Fn1<&T, R>` in a signature declares a lambda that
   takes a reference. The iterator functions declare `Fn(&T) -> Bool` for
