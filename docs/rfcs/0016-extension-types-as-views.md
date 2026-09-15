@@ -1,6 +1,6 @@
 # RFC-0016: An extension type is a view over the runtime's value
 
-Status: Proposed
+Status: Superseded by RFC-0022
 Date: 2026-09-10
 Supersedes: none
 

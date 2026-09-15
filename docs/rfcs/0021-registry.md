@@ -70,3 +70,7 @@ acvus type does not mention it.
   = eq)]` declares an instance; `T: HasInstance<eq>` on a type parameter
   declares a requirement.
 - The interpreter's context and the test harnesses take an `Externs`.
+- A script's bare name resolves to its own function if it declares one,
+  else to the one extern of that name under any namespace; a name two
+  namespaces declare is an error at the call. A qualified call form in
+  the grammar is not part of this ruling.

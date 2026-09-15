@@ -1,6 +1,6 @@
 # RFC-0010: The runtime contract
 
-Status: Accepted
+Status: Superseded by RFC-0022
 Date: 2026-09-10
 Supersedes: none
 

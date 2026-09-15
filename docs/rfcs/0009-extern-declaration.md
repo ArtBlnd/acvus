@@ -1,6 +1,6 @@
 # RFC-0009: ExternFn declaration from a Rust function
 
-Status: Accepted
+Status: Superseded by RFC-0023
 Date: 2026-09-10
 Supersedes: none
 
