@@ -15,11 +15,9 @@ expression: ir
     14 | L4(r5: Int):
     15 |   jump L1(r5)
     16 | L1(r6: Int):
-    17 |   r7 = ref x
-    18 |   store r7 = r6
-    19 |   r8 = ref x
-    20 |   r9 = load r8
-    21 |   return r9
+    17 |   assign x = r6
+    18 |   r7 = take x
+    19 |   return r7
 
     ; r0 (v1) : Bool
     ; r1 (v2) : Int
@@ -28,6 +26,4 @@ expression: ir
     ; r4 (v5) : Int
     ; r5 (v6) : Int
     ; r6 (v7) : Int
-    ; r7 (v9) : Ref<Int>
-    ; r8 (v10) : Ref<Int>
-    ; r9 (x) : Int
+    ; r7 (x) : Int

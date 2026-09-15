@@ -122,8 +122,6 @@ fn forward_context_values(
 
     // -- Collect phase: walk dominator tree, gather forwarding results --
 
-    // Global state: projection ValueId -> QualifiedRef (accumulated across all blocks).
-    let mut val_to_ctx: FxHashMap<ValueId, QualifiedRef> = FxHashMap::default();
     // Collected results.
     let mut subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     let mut remove: FxHashSet<(usize, usize)> = FxHashSet::default();
@@ -150,7 +148,6 @@ fn forward_context_values(
         preds: &'a FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
         written_contexts: &'a BTreeSet<QualifiedRef>,
         dom_children: &'a [SmallVec<[usize; 4]>],
-        val_to_ctx: &'a mut FxHashMap<ValueId, QualifiedRef>,
         val_factory: &'a mut acvus_utils::LocalFactory<ValueId>,
         subst: &'a mut FxHashMap<ValueId, ValueId>,
         remove: &'a mut FxHashSet<(usize, usize)>,
@@ -210,43 +207,28 @@ fn forward_context_values(
         let block = &st.blocks[bi];
         for (ii, inst) in block.insts.iter().enumerate() {
             match &inst.kind {
-                // Identity Ref to context -> register in val_to_ctx for forwarding.
-                InstKind::Ref {
+                // A whole take of a context forwards the value last assigned
+                // on this dominator path, or records itself as that value.
+                InstKind::Take {
                     dst,
                     target: crate::ir::RefTarget::Context(ctx),
                     path,
                 } if path.is_empty() => {
-                    st.val_to_ctx.insert(*dst, *ctx);
-                }
-
-                // Load from context Ref -> context forwarding.
-                InstKind::Load { dst, src } => {
-                    let src_resolved = st.subst.get(src).copied().unwrap_or(*src);
-                    if let Some(&ctx_id) = st.val_to_ctx.get(&src_resolved) {
-                        if let Some(&known_val) = ctx_state.get(&ctx_id) {
-                            // Known value - substitute and mark for removal.
-                            st.subst.insert(*dst, known_val);
-                            st.remove.insert((bi, ii));
-                            // Don't remove the Ref here - it might be used by other
-                            // instructions (canonical Ref reuse). DCE will clean up
-                            // orphaned Refs after all passes complete.
-                        } else {
-                            // First load of this context in this dom-tree path - record it.
-                            ctx_state.insert(ctx_id, *dst);
-                        }
+                    if let Some(&known_val) = ctx_state.get(ctx) {
+                        st.subst.insert(*dst, known_val);
+                        st.remove.insert((bi, ii));
+                    } else {
+                        ctx_state.insert(*ctx, *dst);
                     }
                 }
-
-                // Store to context Ref -> update forwarding state.
-                InstKind::Store { dst, value } => {
-                    let dst_resolved = st.subst.get(dst).copied().unwrap_or(*dst);
+                InstKind::Assign {
+                    target: crate::ir::RefTarget::Context(ctx),
+                    path,
+                    value,
+                } if path.is_empty() => {
                     let value_resolved = st.subst.get(value).copied().unwrap_or(*value);
-                    if let Some(&ctx_id) = st.val_to_ctx.get(&dst_resolved) {
-                        ctx_state.insert(ctx_id, value_resolved);
-                    }
+                    ctx_state.insert(*ctx, value_resolved);
                 }
-
-                // (was Effect-based). Step 3 will re-populate via Identity analysis.
                 _ => {}
             }
         }
@@ -269,7 +251,6 @@ fn forward_context_values(
         preds: &preds,
         written_contexts,
         dom_children: &dom_children,
-        val_to_ctx: &mut val_to_ctx,
         val_factory: &mut val_factory,
         subst: &mut subst,
         remove: &mut remove,
@@ -314,9 +295,11 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
     match kind {
         InstKind::Const { .. }
         | InstKind::Ref { .. }
+        | InstKind::Take { .. }
         | InstKind::Nop
         | InstKind::Poison { .. }
         | InstKind::Undef { .. } => {}
+        InstKind::Assign { value, .. } => s(value),
         InstKind::Load { src, .. } => s(src),
         InstKind::Store { dst, value, .. } => {
             s(dst);
@@ -496,9 +479,8 @@ struct SsaInfo {
 fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
     use crate::ir::RefTarget;
 
-    // Maps Ref dst -> its RefTarget (for Load/Store to look up).
-    let mut ref_target: FxHashMap<ValueId, RefTarget> = FxHashMap::default();
-    // Variables that have field Refs - non-promotable (SROA not run or incomplete).
+    // A storage that is referenced, or read or written by field, stays in
+    // memory; only a storage read and written whole is promoted.
     let mut non_promotable_vars: std::collections::BTreeSet<ValueId> =
         std::collections::BTreeSet::new();
     let mut non_promotable_contexts: std::collections::BTreeSet<QualifiedRef> =
@@ -530,98 +512,107 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
         }
     }
 
-    // First pass: collect Ref targets and identify non-promotable storage.
+    // First pass: identify non-promotable storage.
     for block in &cfg.blocks {
         for inst in &block.insts {
-            if let InstKind::Ref { dst, target, path } = &inst.kind {
-                ref_target.insert(*dst, target.clone());
-                if !path.is_empty() {
-                    // Field Ref present -> this storage is non-promotable.
-                    match target {
-                        RefTarget::Var(slot) | RefTarget::Param(slot) => {
-                            non_promotable_vars.insert(*slot);
-                        }
-                        RefTarget::Context(qref) => {
-                            non_promotable_contexts.insert(*qref);
-                        }
-                    }
+            let pinned = match &inst.kind {
+                InstKind::Ref { target, .. } => Some(target),
+                InstKind::Take { target, path, .. } | InstKind::Assign { target, path, .. }
+                    if !path.is_empty() =>
+                {
+                    Some(target)
                 }
+                _ => None,
+            };
+            match pinned {
+                Some(RefTarget::Var(slot) | RefTarget::Param(slot)) => {
+                    non_promotable_vars.insert(*slot);
+                }
+                Some(RefTarget::Context(qref)) => {
+                    non_promotable_contexts.insert(*qref);
+                }
+                None => {}
             }
         }
     }
 
-    // Second pass: collect SSA ops (only for promotable identity Refs).
+    // Second pass: collect SSA ops for whole reads and writes of promotable storage.
     for (bi, block) in cfg.blocks.iter().enumerate() {
         let ops = block_ops.entry(BlockIdx(bi)).or_default();
 
         for (ii, inst) in block.insts.iter().enumerate() {
             match &inst.kind {
-                // Identity Ref -> register for ctx_types.
-                InstKind::Ref {
+                // A whole context take is not an op: it reads memory and
+                // store-load forwarding folds it. It names the context's type.
+                InstKind::Take {
                     dst,
                     target: RefTarget::Context(ctx),
                     path,
                 } if path.is_empty() => {
                     if !non_promotable_contexts.contains(ctx)
-                        && let Some(Ty::Ref(inner)) = cfg.val_types.get(dst)
+                        && let Some(ty) = cfg.val_types.get(dst)
                     {
-                        ctx_types.entry(*ctx).or_insert_with(|| *inner.clone());
+                        ctx_types.entry(*ctx).or_insert_with(|| ty.clone());
                     }
                 }
-
-                // Load from identity Ref -> SsaOp. A context load is not an
-                // op: it reads memory and store-load forwarding folds it.
-                InstKind::Load { dst, src } => {
-                    match ref_target.get(src) {
-                        Some(RefTarget::Var(slot)) if !non_promotable_vars.contains(slot) => {
-                            ops.ops.push(SsaOp::VarLoad {
-                                dst: *dst,
-                                slot: *slot,
-                            });
-                            read_vars.insert(*slot);
-                            if let Some(ty) = cfg.val_types.get(dst) {
-                                var_types.entry(*slot).or_insert_with(|| ty.clone());
-                            }
-                        }
-                        Some(RefTarget::Param(slot)) if !non_promotable_vars.contains(slot) => {
-                            // entry_param_defs already set from param_regs (LLVM-style).
-                            read_vars.insert(*slot);
-                            if let Some(ty) = cfg.val_types.get(dst) {
-                                var_types.entry(*slot).or_insert_with(|| ty.clone());
-                            }
-                            ops.ops.push(SsaOp::ParamLoad {
-                                dst: *dst,
-                                slot: *slot,
-                            });
-                        }
-                        _ => {}
+                InstKind::Take {
+                    dst,
+                    target: RefTarget::Var(slot),
+                    path,
+                } if path.is_empty() && !non_promotable_vars.contains(slot) => {
+                    ops.ops.push(SsaOp::VarLoad {
+                        dst: *dst,
+                        slot: *slot,
+                    });
+                    read_vars.insert(*slot);
+                    if let Some(ty) = cfg.val_types.get(dst) {
+                        var_types.entry(*slot).or_insert_with(|| ty.clone());
                     }
                 }
-
-                // Store to identity Ref -> SsaOp.
-                InstKind::Store { dst, value } => match ref_target.get(dst) {
-                    Some(RefTarget::Context(ctx)) if !non_promotable_contexts.contains(ctx) => {
-                        ops.ops.push(SsaOp::CtxStore {
-                            block_idx: bi,
-                            local_idx: ii,
-                            ctx: *ctx,
-                            value: *value,
-                        });
-                        written_contexts.insert(*ctx);
+                InstKind::Take {
+                    dst,
+                    target: RefTarget::Param(slot),
+                    path,
+                } if path.is_empty() && !non_promotable_vars.contains(slot) => {
+                    read_vars.insert(*slot);
+                    if let Some(ty) = cfg.val_types.get(dst) {
+                        var_types.entry(*slot).or_insert_with(|| ty.clone());
                     }
-                    Some(RefTarget::Var(slot)) if !non_promotable_vars.contains(slot) => {
-                        ops.ops.push(SsaOp::VarStore {
-                            slot: *slot,
-                            value: *value,
-                        });
-                        written_vars.insert(*slot);
-                        if let Some(ty) = cfg.val_types.get(value) {
-                            var_types.entry(*slot).or_insert_with(|| ty.clone());
-                        }
+                    ops.ops.push(SsaOp::ParamLoad {
+                        dst: *dst,
+                        slot: *slot,
+                    });
+                }
+                InstKind::Assign {
+                    target: RefTarget::Context(ctx),
+                    path,
+                    value,
+                } if path.is_empty() && !non_promotable_contexts.contains(ctx) => {
+                    ops.ops.push(SsaOp::CtxStore {
+                        block_idx: bi,
+                        local_idx: ii,
+                        ctx: *ctx,
+                        value: *value,
+                    });
+                    written_contexts.insert(*ctx);
+                    if let Some(ty) = cfg.val_types.get(value) {
+                        ctx_types.entry(*ctx).or_insert_with(|| ty.clone());
                     }
-                    _ => {}
-                },
-
+                }
+                InstKind::Assign {
+                    target: RefTarget::Var(slot),
+                    path,
+                    value,
+                } if path.is_empty() && !non_promotable_vars.contains(slot) => {
+                    ops.ops.push(SsaOp::VarStore {
+                        slot: *slot,
+                        value: *value,
+                    });
+                    written_vars.insert(*slot);
+                    if let Some(ty) = cfg.val_types.get(value) {
+                        var_types.entry(*slot).or_insert_with(|| ty.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -868,23 +859,13 @@ fn materialize_entry_defs(cfg: &mut CfgBody, entry_defs: EntryDefs) {
         })
         .collect();
     for EntryLoad { ctx, value: dst } in entry_defs.ctx_loads {
-        let ctx_ty = cfg.val_types[&dst].clone();
-        let ref_dst = alloc_val(
-            &mut cfg.val_factory,
-            &mut cfg.val_types,
-            Ty::Ref(Box::new(ctx_ty)),
-        );
         insts.push(Inst {
             span: acvus_ast::Span::ZERO,
-            kind: InstKind::Ref {
-                dst: ref_dst,
+            kind: InstKind::Take {
+                dst,
                 target: crate::ir::RefTarget::Context(ctx),
                 path: vec![],
             },
-        });
-        insts.push(Inst {
-            span: acvus_ast::Span::ZERO,
-            kind: InstKind::Load { dst, src: ref_dst },
         });
     }
     if !insts.is_empty() {
@@ -952,15 +933,6 @@ fn patch_instructions(
                     && phi_contexts.contains(ctx)
                 {
                     remove_positions.insert((*block_idx, *local_idx));
-                    // Remove preceding Ref if it exists.
-                    if *local_idx > 0
-                        && matches!(
-                            cfg.blocks[*block_idx].insts[*local_idx - 1].kind,
-                            InstKind::Ref { .. }
-                        )
-                    {
-                        remove_positions.insert((*block_idx, *local_idx - 1));
-                    }
                 }
             }
         }
@@ -978,36 +950,6 @@ fn patch_instructions(
                 .map(|(_, inst)| inst)
                 .collect();
         }
-    }
-
-    // Create ONE canonical Ref per written context in the entry block.
-    // These are never removed by forwarding (no associated Load).
-    // Write-back Stores reference these canonical Refs.
-    let mut ctx_ref_cache: FxHashMap<QualifiedRef, ValueId> = FxHashMap::default();
-    let mut canonical_ref_insts: Vec<Inst> = Vec::new();
-    for &ctx in &ssa_info.written_contexts {
-        let inner_ty = ssa_info
-            .ctx_types
-            .get(&ctx)
-            .expect("written context must have a type")
-            .clone();
-        let ref_dst = alloc_val(
-            &mut cfg.val_factory,
-            &mut cfg.val_types,
-            Ty::Ref(Box::new(inner_ty)),
-        );
-        canonical_ref_insts.push(Inst {
-            span: acvus_ast::Span::ZERO,
-            kind: InstKind::Ref {
-                dst: ref_dst,
-                target: crate::ir::RefTarget::Context(ctx),
-                path: vec![],
-            },
-        });
-        ctx_ref_cache.insert(ctx, ref_dst);
-    }
-    if !canonical_ref_insts.is_empty() {
-        cfg.blocks[0].insts.splice(0..0, canonical_ref_insts);
     }
 
     // Add PHI params to block params + insert write-back ContextStores.
@@ -1029,13 +971,11 @@ fn patch_instructions(
                     SsaVar::Local(_) => continue,
                 };
 
-                // Use canonical Ref from entry block (always exists for written contexts).
-                let ref_dst = ctx_ref_cache[&ctx];
-
                 write_back_insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
-                    kind: InstKind::Store {
-                        dst: ref_dst,
+                    kind: InstKind::Assign {
+                        target: crate::ir::RefTarget::Context(ctx),
+                        path: vec![],
                         value: phi.result,
                     },
                 });
@@ -1082,77 +1022,22 @@ fn patch_instructions(
 fn apply_var_subst(cfg: &mut CfgBody, var_subst: &FxHashMap<ValueId, ValueId>, ssa_info: &SsaInfo) {
     use crate::ir::RefTarget;
 
-    // Collect the set of substituted Load dsts - these Loads are dead.
-    let substituted_loads: FxHashSet<ValueId> = var_subst.keys().copied().collect();
-
-    // Collect all users of each Ref dst: which Load/Store instructions reference it.
-    let mut ref_users: FxHashMap<ValueId, Vec<ValueId>> = FxHashMap::default();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            match &inst.kind {
-                InstKind::Load { dst, src, .. } => {
-                    ref_users.entry(*src).or_default().push(*dst);
-                }
-                InstKind::Store { dst, .. } => {
-                    // Store's dst is the Ref ValueId. The Store itself is a "user".
-                    // Use a sentinel to distinguish from Load users.
-                    ref_users.entry(*dst).or_default();
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Collect Ref ValueIds that can be safely removed:
-    // - Points to a promoted Var/Param
-    // - ALL Loads through this Ref have been substituted (in substituted_loads)
-    // - ALL Stores through this Ref target a promoted variable
-    let mut promoted_refs: FxHashSet<ValueId> = FxHashSet::default();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Ref { dst, target, path } = &inst.kind
-                && path.is_empty()
-            {
-                let is_promoted = match target {
-                    RefTarget::Context(_) => false,
-                    RefTarget::Var(name) | RefTarget::Param(name) => {
-                        ssa_info.written_vars.contains(name)
-                            || ssa_info.entry_param_defs.contains_key(name)
-                            || ssa_info.read_vars.contains(name)
-                    }
-                };
-                if !is_promoted {
-                    continue;
-                }
-
-                // Check: all Load users of this Ref are substituted.
-                let all_loads_dead = ref_users
-                    .get(dst)
-                    .map(|users| users.iter().all(|u| substituted_loads.contains(u)))
-                    .unwrap_or(true);
-
-                if all_loads_dead {
-                    promoted_refs.insert(*dst);
-                }
-            }
-        }
-    }
-
-    // Apply substitutions to all instruction operands and terminators.
+    let substituted: FxHashSet<ValueId> = var_subst.keys().copied().collect();
     for block in &mut cfg.blocks {
         for inst in &mut block.insts {
             apply_subst(&mut inst.kind, var_subst);
         }
         apply_subst_terminator(&mut block.terminator, var_subst);
 
-        // Remove dead instructions for promoted storage:
-        // - Refs whose ALL users are dead (substituted Loads, promoted Stores)
-        // - Loads whose dst was substituted
-        // - Stores whose dst Ref is promoted
+        // A promoted read stands for its SSA value; a promoted write is the
+        // SSA definition itself.
         block.insts.retain(|inst| match &inst.kind {
-            InstKind::Ref { dst, .. } if promoted_refs.contains(dst) => false,
-            InstKind::Load { dst, .. } if substituted_loads.contains(dst) => false,
-            InstKind::Store { dst, .. } if promoted_refs.contains(dst) => false,
+            InstKind::Take { dst, .. } if substituted.contains(dst) => false,
+            InstKind::Assign {
+                target: RefTarget::Var(slot),
+                path,
+                ..
+            } if path.is_empty() && ssa_info.written_vars.contains(slot) => false,
             _ => true,
         });
     }
@@ -1182,7 +1067,15 @@ mod tests {
             .blocks
             .iter()
             .flat_map(|b| &b.insts)
-            .filter(|i| matches!(&i.kind, InstKind::Store { .. }))
+            .filter(|i| {
+                matches!(
+                    &i.kind,
+                    InstKind::Assign {
+                        target: crate::ir::RefTarget::Context(_),
+                        ..
+                    }
+                )
+            })
             .count()
     }
 
@@ -1314,20 +1207,13 @@ mod tests {
             .expect("body has a Const")
     }
 
-    /// Build a minimal CfgBody with: Ref -> Store -> Load -> Return.
-    /// A context store followed by a load of the same context.
+    /// A context assigned, then taken: `assign @history = 42; return take @history`.
     fn make_store_then_load() -> CfgBody {
         use acvus_utils::LocalFactory;
         let interner = Interner::new();
         let ctx_qref = QualifiedRef::root(interner.intern("history"));
         let mut f = LocalFactory::<ValueId>::new();
-        let v: Vec<ValueId> = (0..5).map(|_| f.next()).collect();
-        // v0 = const 42
-        // v1 = ref @history
-        // store v1, v0
-        // v2 = ref @history  (for the load)
-        // v3 = load v2
-        // return v3
+        let v: Vec<ValueId> = (0..2).map(|_| f.next()).collect();
         let insts = vec![
             Inst {
                 span: acvus_ast::Span::ZERO,
@@ -1338,38 +1224,24 @@ mod tests {
             },
             Inst {
                 span: acvus_ast::Span::ZERO,
-                kind: InstKind::Ref {
-                    dst: v[1],
+                kind: InstKind::Assign {
                     target: crate::ir::RefTarget::Context(ctx_qref),
                     path: vec![],
-                },
-            },
-            Inst {
-                span: acvus_ast::Span::ZERO,
-                kind: InstKind::Store {
-                    dst: v[1],
                     value: v[0],
                 },
             },
             Inst {
                 span: acvus_ast::Span::ZERO,
-                kind: InstKind::Ref {
-                    dst: v[2],
+                kind: InstKind::Take {
+                    dst: v[1],
                     target: crate::ir::RefTarget::Context(ctx_qref),
                     path: vec![],
                 },
             },
             Inst {
                 span: acvus_ast::Span::ZERO,
-                kind: InstKind::Load {
-                    dst: v[3],
-                    src: v[2],
-                },
-            },
-            Inst {
-                span: acvus_ast::Span::ZERO,
                 kind: InstKind::Return {
-                    value: v[3],
+                    value: v[1],
                     order: None,
                 },
             },
@@ -1377,9 +1249,6 @@ mod tests {
         let mut val_types = FxHashMap::default();
         for &vid in &v {
             val_types.insert(vid, Ty::Int);
-        }
-        for &r in &[v[1], v[2]] {
-            val_types.insert(r, Ty::Ref(Box::new(Ty::Int)));
         }
         let body = MirBody {
             insts,

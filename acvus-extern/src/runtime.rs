@@ -30,22 +30,40 @@ pub trait Runtime: Send + Sync + 'static {
     where
         T: Send + Sync + 'static;
 
-    /// Run the closure `f` on lent arguments. A value in a handler's hands is
-    /// a name for storage the host owns; whether the callee takes a copy or
-    /// an alias is the host's own affair, decided by the closure's type. Only
-    /// `Fn0`/`Fn1`/… reach these: the token is theirs to mint. The `args`
-    /// slice of `call_n` is the caller's stack; the future does not keep it.
+    /// Read the storage a reference names (RFC-0018).
+    ///
+    /// # Safety
+    /// `reference` is a `&T` / `&mut T` value and its storage holds a `T`
+    /// erased from that type.
+    unsafe fn deref<'a, T>(&self, reference: &'a Self::Value) -> &'a T
+    where
+        T: Send + Sync + 'static;
+    /// # Safety
+    /// `reference` is a `&mut T` value and its storage holds a `T` erased
+    /// from that type; the checker admits no other live name of the storage.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn deref_mut<'a, T>(&self, reference: &'a Self::Value) -> &'a mut T
+    where
+        T: Send + Sync + 'static;
+
+    /// A reference value naming `target`'s storage (RFC-0018): what a
+    /// handler passes to a closure whose parameter is `&T` / `&mut T`.
+    ///
+    /// # Safety
+    /// The reference is used only while `target` is live and unmoved; the
+    /// closure it is passed to keeps it no longer than the call.
+    unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
+
+    /// Run the closure `f`; each argument moves into the callee's
+    /// parameter. Only `Fn0`/`Fn1`/… reach these: the token is theirs to
+    /// mint.
     fn call_0<'a>(&'a self, f: &'a Self::Value, token: CallToken) -> Self::CallFuture<'a>;
-    fn call_1<'a>(
-        &'a self,
-        f: &'a Self::Value,
-        a: &'a Self::Value,
-        token: CallToken,
-    ) -> Self::CallFuture<'a>;
+    fn call_1<'a>(&'a self, f: &'a Self::Value, a: Self::Value, token: CallToken)
+    -> Self::CallFuture<'a>;
     fn call_n<'a>(
         &'a self,
         f: &'a Self::Value,
-        args: &[&'a Self::Value],
+        args: Vec<Self::Value>,
         token: CallToken,
     ) -> Self::CallFuture<'a>;
 }
@@ -75,13 +93,26 @@ impl Runtime for TypesOnly {
         T: Send + Sync + 'static,
     {
     }
+    unsafe fn deref<'a, T>(&self, _: &'a ()) -> &'a T
+    where
+        T: Send + Sync + 'static,
+    {
+        panic!("TypesOnly runtime holds no values")
+    }
+    unsafe fn deref_mut<'a, T>(&self, _: &'a ()) -> &'a mut T
+    where
+        T: Send + Sync + 'static,
+    {
+        panic!("TypesOnly runtime holds no values")
+    }
+    unsafe fn reference(&self, _: &()) {}
     fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(no_values())
     }
-    fn call_1<'a>(&'a self, _: &'a (), _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
+    fn call_1<'a>(&'a self, _: &'a (), _: (), _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(no_values())
     }
-    fn call_n<'a>(&'a self, _: &'a (), _: &[&'a ()], _: CallToken) -> Self::CallFuture<'a> {
+    fn call_n<'a>(&'a self, _: &'a (), _: Vec<()>, _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(no_values())
     }
 }

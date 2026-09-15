@@ -35,6 +35,11 @@ type of each parameter, reference or value, is the type the function that
 receives the lambda declares — unification, from the extern signature
 that names `Fn(&T) -> Bool`, fixes it.
 
+A closure owns what it captures, and a call borrows the closure: inside
+the lambda a captured name has type `&T`, and `f(x)` on a local `f` lends
+`f` for the call, so `f` may be called again. Passing `f` to a function
+by value moves it.
+
 A context place (`@x`, `@x.field`) is a storage like a local: reading it
 takes its value, and the place is uninitialized until it is assigned
 again. `let a = @b` moves the value out; `@b = new` puts one back. A
@@ -112,10 +117,14 @@ call site and `*` at the read keeps every conversion in the program.
   value is that name at runtime. A host represents a reference to a local
   as an alias to the register, and the runtime glue reads an argument of
   type `&T` by peeking the storage rather than taking it.
-- A host that receives a lent closure argument gives the callee's
-  reference parameter an alias to the lent value, not a copy. The
-  argument's borrow is exactly the call future's lifetime. A host reads a
-  register by taking it; the only copy a host makes is of a word.
+- A host's `call_0/1/n` take their arguments by value and move each into
+  the callee's parameter. An extern whose closure parameter is `&T` passes
+  `reference(&value)`: a reference word the host makes, used no longer
+  than the call. A host reads a register by taking it; the only copy a
+  host makes is of a word.
+- The captures a closure owns enter its body as references; the body's
+  types say so, and the host binds each capture register to a reference
+  into the closure value.
 - Sharing in the language is an extern: `clone(&x)` for a type whose
   author implemented it. A type without one cannot be duplicated.
 - A context read hands the value out of the journal; the journal never

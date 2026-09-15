@@ -273,6 +273,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::UnwrapVariant { src, .. } => *src == val,
         // Store consumes the value (not the dst Ref).
         InstKind::Store { value, .. } => *value == val,
+        InstKind::Assign { value, .. } => *value == val,
         // Cast consumes src (transforms it).
         // Container constructors consume their elements.
         InstKind::MakeArray { elements, .. } => elements.contains(&val),
@@ -303,6 +304,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         // These don't use values at all.
         InstKind::Const { .. }
         | InstKind::Ref { .. }
+        | InstKind::Take { .. }
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Undef { .. }
@@ -783,7 +785,7 @@ mod tests {
     // -- Container with copy element: no drop ------------------------
 
     #[test]
-    fn container_with_copy_no_drop() {
+    fn list_of_ints_moves_and_is_dropped() {
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -803,13 +805,13 @@ mod tests {
                 (
                     v(0),
                     Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
-                ), // List<Int> = copy
+                ),
                 (v(1), Ty::Int),
             ],
         );
 
         insert_drops(&mut cfg, &val_types);
-        assert_eq!(count_drops(&cfg), 0);
+        assert_eq!(count_drops(&cfg), 1);
     }
 
     // -- Both branches drop different values --------------------------

@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
 use crate::graph::QualifiedRef;
-use crate::ty::Ty;
+use crate::ty::{Mutability, Ty};
 
 acvus_utils::declare_local_id!(pub ValueId);
 
@@ -66,22 +66,38 @@ pub enum InstKind {
         value: Literal,
     },
 
-    // -- Projection (memory world) --------------------------------
-    /// Create a projection to named storage. No-op at runtime - produces a path.
-    /// `path: vec![]` = identity (root of the storage).
-    /// `path: vec![f]` = 1-depth field projection.
-    /// `path: vec![a, b]` = multi-depth field projection (a.b).
+    // -- Storage (RFC-0018) -----------------------------------------
+    /// A reference to a storage: `dst` is a `&T` or `&mut T` naming the
+    /// value at `path` under `target`. `path: vec![]` is the storage itself,
+    /// `vec![a, b]` the field `a.b` of it.
     Ref {
         dst: ValueId,
         target: RefTarget,
         path: Vec<Astr>,
+        mutability: Mutability,
     },
-    /// Materialize a projection into a value (copy). `src` must be `Ref<T>`.
+    /// Move the value out of a storage into `dst`; a primitive is copied
+    /// and the storage keeps it. A read of a variable or a context.
+    Take {
+        dst: ValueId,
+        target: RefTarget,
+        path: Vec<Astr>,
+    },
+    /// Move `value` into a storage; the storage's old value is dropped. An
+    /// assignment to a variable or a context.
+    Assign {
+        target: RefTarget,
+        path: Vec<Astr>,
+        value: ValueId,
+    },
+    /// `*r`: read through a reference. `src` is `&T` and `T` is a
+    /// primitive; `dst` receives the word.
     Load {
         dst: ValueId,
         src: ValueId,
     },
-    /// Write a value through a projection. `dst` must be `Ref<T>`.
+    /// Write through a reference. `dst` is `&mut T`; the storage's old
+    /// value is dropped and `value` moves in.
     Store {
         dst: ValueId,
         value: ValueId,
@@ -132,9 +148,6 @@ pub enum InstKind {
         callee_ty: Ty,
         args: Vec<ValueId>,
         order: Option<OrderEdge>,
-        /// The value of each borrowed place after the call, one per argument
-        /// whose parameter lends, in argument order (RFC-0015).
-        lent: Vec<ValueId>,
     },
     /// Issue a call and receive a Handle<T> for its result. The work starts
     /// here; `order` is the `Order` it waits for when the call is effectful.
@@ -153,8 +166,6 @@ pub enum InstKind {
         dst: ValueId,
         src: ValueId,
         order: Option<ValueId>,
-        /// The borrowed places' values, as on `FunctionCall`.
-        lent: Vec<ValueId>,
     },
     /// Join orders: `dst` follows every order in `orders`. Associative and
     /// commutative; a value instruction, not control flow.

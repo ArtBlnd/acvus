@@ -4,47 +4,31 @@ expression: ir
 ---
 === main ===
      1 |   r0 = variant Some(1 (r1))
-     2 |   r2 = ref x
-     3 |   store r2 = r0
-     5 |   r3 = ref result
-     6 |   store r3 = 0 (r4)
-     7 |   jump L0
-     8 | L0:
-     9 |   r5 = ref x
-    10 |   r6 = load r5
-    11 |   r7 = test r6 is Some
-    12 |   jump_if r7 then L1 else L2
-    13 | L1:
-    14 |   r8 = unwrap r6
-    15 |   r9 = ref v
-    16 |   store r9 = r8
-    17 |   r10 = ref v
-    18 |   r11 = load r10
-    19 |   r12 = ref result
-    20 |   store r12 = r11
-    21 |   r13 = variant None
-    22 |   r14 = ref x
-    23 |   store r14 = r13
-    24 |   jump L0
-    25 | L2:
-    26 |   r15 = ref result
-    27 |   r16 = load r15
-    28 |   return r16
+     2 |   assign x = r0
+     4 |   assign result = 0 (r2)
+     5 |   jump L0
+     6 | L0:
+     7 |   r3 = take x
+     8 |   r4 = test r3 is Some
+     9 |   jump_if r4 then L1 else L2
+    10 | L1:
+    11 |   r5 = unwrap r3
+    12 |   assign v = r5
+    13 |   r6 = take v
+    14 |   assign result = r6
+    15 |   r7 = variant None
+    16 |   assign x = r7
+    17 |   jump L0
+    18 | L2:
+    19 |   r8 = take result
+    20 |   return r8
 
     ; r0 (v2) : Option<Int>
     ; r1 (v1) : Int
-    ; r2 (v4) : Ref<Option<Int>>
-    ; r3 (v7) : Ref<Int>
-    ; r4 (v5) : Int
-    ; r5 (v8) : Ref<Option<Int>>
-    ; r6 (x) : Option<Int>
-    ; r7 (v10) : Bool
-    ; r8 (v) : Int
-    ; r9 (v13) : Ref<Int>
-    ; r10 (v14) : Ref<Int>
-    ; r11 (v) : Int
-    ; r12 (v16) : Ref<Int>
-    ; r13 (v17) : Option<Int>
-    ; r14 (v18) : Ref<Option<Int>>
-    ; r15 (v19) : Ref<Int>
-    ; r16 (result) : Int
+    ; r2 (v4) : Int
+    ; r3 (x) : Option<Int>
+    ; r4 (v7) : Bool
+    ; r5 (v) : Int
+    ; r6 (v) : Int
+    ; r7 (v11) : Option<Int>
+    ; r8 (result) : Int

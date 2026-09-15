@@ -3,21 +3,13 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @count
-     1 |   r1 = load r0
-     2 |   r2 = ref @count
-     4 |   r3 = r1 + 1 (r4)
-     5 |   r5 = ref @count
-     6 |   store r5 = r3
-     7 |   r6 = ref @count
-     8 |   return r3
+     0 |   r0 = take @count
+     2 |   r1 = r0 + 1 (r2)
+     3 |   assign @count = r1
+     4 |   return r1
 
-    ; r0 (v9) : Ref<Int>
-    ; r1 (v8) : Int
-    ; r2 (@count) : Ref<Int>
-    ; r3 (v4) : Int
-    ; r4 (v3) : Int
-    ; r5 (@count) : Ref<Int>
-    ; r6 (@count) : Ref<Int>
-    ; r7 (v7) : Int
-    ; r8 (v2) : Int
+    ; r0 (v5) : Int
+    ; r1 (v3) : Int
+    ; r2 (v2) : Int
+    ; r3 (@count) : Int
+    ; r4 (@count) : Int

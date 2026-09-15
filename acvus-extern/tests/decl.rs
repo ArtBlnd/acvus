@@ -16,25 +16,32 @@ use acvus_extern::{
 
 // -- A runtime for this test ------------------------------------------
 
-/// A value is either a Rust value boxed whole, or a closure. `Erased` never
-/// compares equal: the test runtime has no view into what it holds.
+/// A value is a Rust value boxed whole, a closure, or a reference to
+/// another value. `Erased` never compares equal: the test runtime has no
+/// view into what it holds.
 #[derive(Debug)]
 enum V {
     Erased(Box<dyn Any + Send + Sync>),
     Closure(Closure),
+    Reference(*const V),
 }
+
+// SAFETY: a `Reference` is used only while its target is live (RFC-0018).
+unsafe impl Send for V {}
+unsafe impl Sync for V {}
 
 impl PartialEq for V {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (V::Closure(a), V::Closure(b)) => Arc::ptr_eq(&a.0, &b.0),
+            (V::Reference(a), V::Reference(b)) => std::ptr::eq(*a, *b),
             _ => false,
         }
     }
 }
 
 #[derive(Clone)]
-struct Closure(Arc<dyn Fn(&[&V]) -> V + Send + Sync>);
+struct Closure(Arc<dyn Fn(Vec<V>) -> V + Send + Sync>);
 
 impl std::fmt::Debug for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -65,6 +72,7 @@ where
             .unwrap_or_else(|| panic!("peek: value is not a {}", std::any::type_name::<T>()))
             .clone(),
         V::Closure(_) => panic!("peek: value is a closure, not a {}", std::any::type_name::<T>()),
+        V::Reference(_) => panic!("peek: value is a reference, not a {}", std::any::type_name::<T>()),
     }
 }
 
@@ -86,6 +94,10 @@ where
             "materialize: value is a closure, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Reference(_) => panic!(
+            "materialize: value is a reference, not a {}",
+            std::any::type_name::<T>()
+        ),
     }
 }
 
@@ -93,13 +105,22 @@ where
 struct Tiny;
 
 impl Tiny {
-    fn call(&self, f: &V, args: &[&V]) -> Result<V, ExternError> {
+    fn call(&self, f: &V, args: Vec<V>) -> Result<V, ExternError> {
         match f {
             V::Closure(c) => Ok((c.0)(args)),
-            V::Erased(_) => Err(ExternError::internal(
+            V::Erased(_) | V::Reference(_) => Err(ExternError::internal(
                 "call on a value that is not a closure",
             )),
         }
+    }
+}
+
+/// The value a reference names.
+fn target(reference: &V) -> &V {
+    match reference {
+        // SAFETY: the target is live for as long as the reference is used.
+        V::Reference(p) => unsafe { &**p },
+        other => panic!("not a reference: {other:?}"),
     }
 }
 
@@ -120,13 +141,42 @@ impl Runtime for Tiny {
     {
         erased(value)
     }
+    unsafe fn deref<'a, T>(&self, reference: &'a V) -> &'a T
+    where
+        T: Send + Sync + 'static,
+    {
+        match target(reference) {
+            V::Erased(any) => any
+                .downcast_ref::<T>()
+                .unwrap_or_else(|| panic!("deref: target is not a {}", std::any::type_name::<T>())),
+            other => panic!("deref: target is not a value: {other:?}"),
+        }
+    }
+    unsafe fn deref_mut<'a, T>(&self, reference: &'a V) -> &'a mut T
+    where
+        T: Send + Sync + 'static,
+    {
+        let V::Reference(p) = reference else {
+            panic!("deref_mut: not a reference: {reference:?}")
+        };
+        // SAFETY: the target is live and, by the checker, exclusively named.
+        match unsafe { &mut *(*p as *mut V) } {
+            V::Erased(any) => any
+                .downcast_mut::<T>()
+                .unwrap_or_else(|| panic!("deref_mut: target is not a {}", std::any::type_name::<T>())),
+            other => panic!("deref_mut: target is not a value: {other:?}"),
+        }
+    }
+    unsafe fn reference(&self, target: &V) -> V {
+        V::Reference(target as *const V)
+    }
     fn call_0<'a>(&'a self, f: &'a V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(self.call(f, &[]))
+        std::future::ready(self.call(f, Vec::new()))
     }
-    fn call_1<'a>(&'a self, f: &'a V, a: &'a V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(self.call(f, &[a]))
+    fn call_1<'a>(&'a self, f: &'a V, a: V, _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(self.call(f, vec![a]))
     }
-    fn call_n<'a>(&'a self, f: &'a V, args: &[&'a V], _: CallToken) -> Self::CallFuture<'a> {
+    fn call_n<'a>(&'a self, f: &'a V, args: Vec<V>, _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(self.call(f, args))
     }
 }
@@ -184,7 +234,7 @@ where
     Rt: Runtime,
 {
     let mut out = Vec::with_capacity(v.0.len());
-    for item in &v.0 {
+    for item in v.0 {
         out.push(f.call(rt, (item,)).await?);
     }
     Ok(Boxed(out, PhantomData))
@@ -383,13 +433,6 @@ fn types_and_casts_reach_the_type_registry() {
 }
 
 fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternError> {
-    call_sync_lending(handler, args).map(|r| r.value)
-}
-
-fn call_sync_lending(
-    handler: &ExternHandler<Tiny>,
-    args: Vec<V>,
-) -> Result<acvus_extern::Returned<V>, ExternError> {
     match handler {
         ExternHandler::Sync(f) => f(&Tiny, args),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
@@ -397,26 +440,29 @@ fn call_sync_lending(
 }
 
 #[test]
-fn a_borrowed_parameter_is_declared_and_given_back() {
+fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     let i = Interner::new();
     let mut tr = TypeRegistry::new();
     let reg = registry::<Tiny>().register(&i, &mut tr);
     let PolyTy::Fn { params, .. } = find(&reg.functions, &i, "bump") else {
         panic!("bump is a function");
     };
-    assert_eq!(params[0].mode, acvus_extern::ParamMode::BorrowMut);
-    assert_eq!(params[1].mode, acvus_extern::ParamMode::Value);
+    assert_eq!(
+        params[0].ty,
+        PolyTy::Ref(acvus_extern::Mutability::Mut, Box::new(PolyTy::Int))
+    );
+    assert_eq!(params[1].ty, PolyTy::Int);
 
     let h = handler(&reg, &i, "bump");
-    let r = call_sync_lending(h, vec![erased(40i64), erased(2i64)]).unwrap();
-    assert_eq!(open::<i64>(r.value), 42);
-    let [lent] = <[V; 1]>::try_from(r.lent).expect("one lent place");
-    assert_eq!(open::<i64>(lent), 42, "the lent place comes back changed");
+    let place = erased(40i64);
+    let r = call_sync(h, vec![unsafe { Tiny.reference(&place) }, erased(2i64)]).unwrap();
+    assert_eq!(open::<i64>(r), 42);
+    assert_eq!(open::<i64>(place), 42, "the place the reference named was written");
 }
 
 async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternError> {
     match handler {
-        ExternHandler::Async(f) => f(Tiny, args).await.map(|r| r.value),
+        ExternHandler::Async(f) => f(Tiny, args).await,
         ExternHandler::Sync(_) => panic!("expected an async handler"),
     }
 }
@@ -462,10 +508,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let boxed = erased(Boxed::<V, (), Tiny>(items, PhantomData));
 
     let double = V::Closure(Closure(Arc::new(|args| {
-        let [n] = args else {
+        let [n] = <[V; 1]>::try_from(args).unwrap_or_else(|args| {
             panic!("double takes one argument, got {}", args.len())
-        };
-        erased(peek::<i64>(n) * 2)
+        });
+        erased(open::<i64>(n) * 2)
     })));
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double])
         .await

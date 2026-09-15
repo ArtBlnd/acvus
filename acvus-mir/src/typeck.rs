@@ -9,7 +9,7 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::CastKind;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Param, ParamMode, ParamTerm,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm,
     Polarity, Solver, Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
 };
 use crate::variant::VariantPayload;
@@ -436,6 +436,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// The type a name has where it is used. A name captured by the
+    /// innermost lambda is seen there through a shared reference: the
+    /// closure owns the value, and a call borrows the closure (RFC-0018).
     fn lookup_var(&mut self, name: Astr) -> Option<InferTy> {
         for (depth, scope) in self.scopes.iter().enumerate().rev() {
             if let Some(ty) = scope.get(&name) {
@@ -448,10 +451,106 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         ls.captures.push(ty.clone());
                     }
                 }
-                return Some(ty.clone());
+                let captured = self.lambda_stack.last().is_some_and(|ls| depth < ls.depth);
+                return Some(if captured {
+                    TyTerm::Ref(Mutability::Shared, Box::new(ty.clone()))
+                } else {
+                    ty.clone()
+                });
             }
         }
         None
+    }
+
+    /// A lambda's parameter types come from the parameter that receives it
+    /// (RFC-0018) when that is known; otherwise they are inference variables.
+    fn check_lambda(&mut self, expr: &Expr, expected_params: Option<&[InferTy]>) -> InferTy {
+        let Expr::Lambda {
+            id, params, body, ..
+        } = expr
+        else {
+            unreachable!("check_lambda takes a lambda");
+        };
+        self.push_scope();
+        let mut param_types = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let pt = match expected_params.and_then(|e| e.get(i)) {
+                Some(t) => t.clone(),
+                None => self.solver.fresh_ty_var(),
+            };
+            self.define_var(p.name, pt.clone());
+            self.record(p.id, pt.clone());
+            param_types.push(ParamTerm::new(p.name, pt));
+        }
+        // Push lambda scope for capture tracking.
+        self.lambda_stack.push(LambdaScope {
+            depth: self.scopes.len() - 1,
+            captures: Vec::new(),
+        });
+
+        let outer_effect = self.body_effect.clone();
+        self.body_effect = self.solver.fresh_effect_var();
+        let ret = self.check_expr(body);
+        let lambda_effect = self.body_effect.clone();
+        self.body_effect = outer_effect;
+
+        // Pop this lambda's scope.
+        let ls = self.lambda_stack.pop().unwrap();
+        let capture_types: Vec<InferTy> = ls
+            .captures
+            .into_iter()
+            .map(|t| self.solver.resolve_ty(&t))
+            .collect();
+        if capture_types.iter().any(|t| matches!(t, TyTerm::Ref(..))) {
+            self.error(MirErrorKind::ReferenceCaptured, body.span());
+        }
+        if matches!(self.solver.resolve_ty(&ret), TyTerm::Ref(..)) {
+            self.error(MirErrorKind::ReferenceReturned, body.span());
+        }
+
+        // Record body span so detect_fn_ret_coercion can register
+        // return-site coercions on the correct expression.
+        self.lambda_body_ids.insert(*id, body.id());
+
+        self.pop_scope();
+        let ty = TyTerm::Fn {
+            params: param_types,
+            ret: Box::new(ret),
+            captures: capture_types,
+            effect: lambda_effect,
+        };
+        self.record_ret(*id, ty)
+    }
+
+    /// A call argument, checked against the parameter that receives it.
+    fn check_arg(&mut self, arg: &Expr, expected: Option<&InferTy>) -> InferTy {
+        if let (Expr::Lambda { .. }, Some(expected)) = (arg, expected)
+            && let TyTerm::Fn { params, .. } = self.solver.resolve_ty(expected)
+        {
+            let tys: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
+            return self.check_lambda(arg, Some(&tys));
+        }
+        self.check_expr(arg)
+    }
+
+    /// The parameter types a call's positional arguments meet, after the
+    /// piped one.
+    fn expected_arg_types(fn_ty: &InferTy, piped: bool) -> Vec<InferTy> {
+        match fn_ty {
+            TyTerm::Fn { params, .. } => params
+                .iter()
+                .skip(usize::from(piped))
+                .map(|p| p.ty.clone())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A reference is never data (RFC-0018).
+    fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span) {
+        if matches!(self.solver.resolve_ty(ty), TyTerm::Ref(..)) {
+            self.error(MirErrorKind::ReferenceInData, span);
+        }
     }
 
     /// Walk a field path on a type, resolving each step.
@@ -582,71 +681,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// Check arity and unify argument types against parameter types.
     /// Returns `true` if arity matched, `false` (with error emitted) if not.
-    /// The mode of each argument and the places a call names, checked
-    /// against the parameters (RFC-0015): a lent argument needs a lending
-    /// parameter of the same mode, and no place is named twice.
-    fn check_arg_modes(
-        &mut self,
-        func: &str,
-        piped: bool,
-        args: &[Expr],
-        params: &[ParamTerm<Infer>],
-        call_span: Span,
-    ) {
-        let offset = usize::from(piped);
-        if piped && params.first().is_some_and(|p| p.mode.lends()) {
-            self.error(
-                MirErrorKind::ArgumentMode {
-                    func: func.to_string(),
-                    index: 0,
-                    expected: params[0].mode,
-                    got: ParamMode::Value,
-                },
-                call_span,
-            );
-        }
-        let mut named: Vec<Place> = Vec::new();
-        for (i, arg) in args.iter().enumerate() {
-            let Some(param) = params.get(i + offset) else {
-                break;
-            };
-            let got = match arg {
-                Expr::Borrow { mutable: true, .. } => ParamMode::BorrowMut,
-                Expr::Borrow { mutable: false, .. } => ParamMode::Borrow,
-                _ => ParamMode::Value,
-            };
-            if got != param.mode {
-                self.error(
-                    MirErrorKind::ArgumentMode {
-                        func: func.to_string(),
-                        index: i + offset,
-                        expected: param.mode,
-                        got,
-                    },
-                    arg.span(),
-                );
-            }
-            let place_expr = match arg {
-                Expr::Borrow { place, .. } => place.as_ref(),
-                other => other,
-            };
-            if let Some(place) = place_of(place_expr) {
-                if got == ParamMode::BorrowMut
-                    && let PlaceRoot::Context(qref) = place.root
-                {
-                    self.note_access(Effect::write(qref), arg.span());
-                }
-                if named.contains(&place) {
-                    self.error(
-                        MirErrorKind::PlaceNamedTwice(place.display(self.interner)),
-                        arg.span(),
-                    );
-                }
-                named.push(place);
-            }
-        }
-    }
-
     fn check_args(
         &mut self,
         func: &str,
@@ -994,15 +1028,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn check_expr(&mut self, expr: &Expr) -> InferTy {
         match expr {
-            // A lent place types as the place; the mode is checked at the call.
+            // `&place` / `&mut place`: a reference to the place's storage.
             Expr::Borrow {
-                id, place, span, ..
+                id,
+                mutable,
+                place,
+                span,
             } => {
                 if place_of(place).is_none() {
                     self.error(MirErrorKind::NotAPlace, *span);
                 }
+                let mutability = if *mutable {
+                    Mutability::Mut
+                } else {
+                    Mutability::Shared
+                };
                 let ty = self.check_expr(place);
-                self.record_ret(*id, ty)
+                self.record_ret(*id, TyTerm::Ref(mutability, Box::new(ty)))
             }
             Expr::Literal { id, value, span } => {
                 let ty = match value {
@@ -1250,13 +1292,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 // Early guard: if operand is Error, suppress cascading errors.
                 if Self::is_error(&ot) {
                     let ty = match op {
-                        acvus_ast::UnaryOp::Neg => Self::infer_error(),
+                        acvus_ast::UnaryOp::Neg | acvus_ast::UnaryOp::Deref => Self::infer_error(),
                         acvus_ast::UnaryOp::Not => TyTerm::Bool,
                     };
                     return self.record_ret(*id, ty);
                 }
 
                 let ty = match op {
+                    acvus_ast::UnaryOp::Deref => match &ot {
+                        TyTerm::Ref(_, inner) => {
+                            let inner = self.solver.resolve_ty(inner);
+                            if inner.is_primitive() || matches!(inner, TyTerm::Var(_)) {
+                                inner
+                            } else {
+                                let shown = self.freeze_or_error(&inner);
+                                self.error(MirErrorKind::DerefOfNonPrimitive(shown), *span);
+                                Self::infer_error()
+                            }
+                        }
+                        _ => {
+                            let shown = self.freeze_or_error(&ot);
+                            self.error(MirErrorKind::DerefOfNonReference(shown), *span);
+                            Self::infer_error()
+                        }
+                    },
                     acvus_ast::UnaryOp::Neg => match &ot {
                         TyTerm::Int => TyTerm::Int,
                         TyTerm::Float => TyTerm::Float,
@@ -1388,59 +1447,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.record_ret(*id, ty)
             }
 
-            Expr::Lambda {
-                id,
-                params,
-                body,
-                span: _,
-            } => {
-                self.push_scope();
-                let mut param_types = Vec::new();
-                for p in params {
-                    let pt = self.solver.fresh_ty_var();
-                    self.define_var(p.name, pt.clone());
-                    self.record(p.id, pt.clone());
-                    param_types.push(ParamTerm::new(p.name, pt));
-                }
-
-                // Push lambda scope for capture tracking.
-                self.lambda_stack.push(LambdaScope {
-                    depth: self.scopes.len() - 1,
-                    captures: Vec::new(),
-                });
-
-                let outer_effect = self.body_effect.clone();
-                self.body_effect = self.solver.fresh_effect_var();
-                let ret = self.check_expr(body);
-                let lambda_effect = self.body_effect.clone();
-                self.body_effect = outer_effect;
-
-                // Pop this lambda's scope.
-                let ls = self.lambda_stack.pop().unwrap();
-                let capture_types: Vec<InferTy> = ls
-                    .captures
-                    .into_iter()
-                    .map(|t| self.solver.resolve_ty(&t))
-                    .collect();
-
-                // Record body span so detect_fn_ret_coercion can register
-                // return-site coercions on the correct expression.
-                self.lambda_body_ids.insert(*id, body.id());
-
-                self.pop_scope();
-                let ty = TyTerm::Fn {
-                    params: param_types,
-                    ret: Box::new(ret),
-                    captures: capture_types,
-                    effect: lambda_effect,
-                };
-                self.record_ret(*id, ty)
-            }
+            Expr::Lambda { .. } => self.check_lambda(expr, None),
 
             Expr::Paren { id, inner, span: _ } => {
                 let ty = self.check_expr(inner);
                 self.record_ret(*id, ty)
             }
+
 
             Expr::List {
                 id,
@@ -1459,6 +1472,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
 
                 let elem_ty = self.check_expr(all_elems[0]);
+                self.reject_reference_in_data(&elem_ty, all_elems[0].span());
 
                 for elem in all_elems.iter().skip(1) {
                     let et = self.check_expr(elem);
@@ -1490,6 +1504,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let mut field_types = FxHashMap::default();
                 for ObjectExprField { key, value, .. } in fields {
                     let ft = self.check_expr(value);
+                    self.reject_reference_in_data(&ft, value.span());
                     field_types.insert(*key, ft);
                 }
                 let ty = TyTerm::Object(field_types);
@@ -1504,7 +1519,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let elem_types: Vec<InferTy> = elements
                     .iter()
                     .map(|elem| match elem {
-                        TupleElem::Expr(e) => self.check_expr(e),
+                        TupleElem::Expr(e) => {
+                            let et = self.check_expr(e);
+                            self.reject_reference_in_data(&et, e.span());
+                            et
+                        }
                         TupleElem::Wildcard(_) => self.solver.fresh_ty_var(),
                     })
                     .collect();
@@ -1772,11 +1791,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
         // Check named functions (builtins, externs, user-defined).
         let name_str = self.interner.resolve(name.name);
-        if let Some(fn_sig) = self.env.functions.get(name) {
+        if let Some(fn_sig) = self.env.functions.get(name).cloned() {
+            let fn_ty = self.instantiate_at(&fn_sig, call_span);
+            let expected = Self::expected_arg_types(&fn_ty, pipe_ty.is_some());
             let arg_types: Vec<InferTy> = pipe_ty
                 .iter()
                 .cloned()
-                .chain(args.iter().map(|a| self.check_expr(a)))
+                .chain(
+                    args.iter()
+                        .enumerate()
+                        .map(|(i, a)| self.check_arg(a, expected.get(i))),
+                )
                 .collect();
             let arg_spans: Vec<Span> = pipe_left
                 .iter()
@@ -1789,7 +1814,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .chain(args.iter().map(|a| a.id()))
                 .collect();
 
-            let fn_ty = self.instantiate_at(fn_sig, call_span);
             match &fn_ty {
                 TyTerm::Fn {
                     params: param_tys,
@@ -1802,7 +1826,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     {
                         return Self::infer_error();
                     }
-                    self.check_arg_modes(name_str, pipe_left.is_some(), args, param_tys, call_span);
                     let effect = effect.clone();
                     self.note_call_effect(&effect, call_span);
                     // Record callee's full Fn type on the callee's AstId.
@@ -1872,10 +1895,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
 
+        let expected = Self::expected_arg_types(func_ty, pipe_ty.is_some());
         let arg_types: Vec<InferTy> = pipe_ty
             .iter()
             .cloned()
-            .chain(args.iter().map(|a| self.check_expr(a)))
+            .chain(
+                args.iter()
+                    .enumerate()
+                    .map(|(i, a)| self.check_arg(a, expected.get(i))),
+            )
             .collect();
         let arg_spans: Vec<Span> = pipe_left_span
             .iter()
@@ -1906,7 +1934,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ) {
                     return Self::infer_error();
                 }
-                self.check_arg_modes("<callable>", pipe_ty.is_some(), args, params, call_span);
                 let effect = effect.clone();
                 self.note_call_effect(&effect, call_span);
                 self.solver.resolve_ty(ret)

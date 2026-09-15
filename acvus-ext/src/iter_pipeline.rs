@@ -10,7 +10,9 @@
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-use acvus_extern::{BoxFuture, ClosureFn, EffectVar, ExternType, Fn1, IdentityVar, Runtime, TyVar};
+use acvus_extern::{
+    BoxFuture, ClosureFn, EffectVar, ExternType, Fn1, IdentityVar, Ref, Runtime, TyVar,
+};
 use sync_wrapper::SyncWrapper;
 
 #[derive(ExternType)]
@@ -137,7 +139,7 @@ where
         Self::erased(self.0.push_op(Op::Map(f.erased()))).retype()
     }
 
-    pub fn filter(self, f: Fn1<T, bool, E, Rt>) -> Self {
+    pub fn filter(self, f: Fn1<Ref<T>, bool, E, Rt>) -> Self {
         Self::erased(self.0.push_op(Op::Filter(f.erased())))
     }
 
@@ -270,9 +272,9 @@ async fn run_ops<Rt: Runtime>(
     let mut i = start_op;
     while i < pipeline.ops.len() {
         match &mut pipeline.ops[i] {
-            Op::Map(f) => val = f.call(rt, (&val,)).await?,
+            Op::Map(f) => val = f.call(rt, (val,)).await?,
             Op::Filter(f) => {
-                let keep = f.call(rt, (&val,)).await?;
+                let keep = f.call(rt, (unsafe { rt.reference(&val) },)).await?;
                 if !unsafe { rt.materialize::<bool>(keep) } {
                     return Ok(None);
                 }
@@ -300,7 +302,7 @@ async fn run_ops<Rt: Runtime>(
                 val = first;
             }
             Op::FlatMap(f, expand) => {
-                let mapped = f.call(rt, (&val,)).await?;
+                let mapped = f.call(rt, (val,)).await?;
                 let items = expand(rt, mapped);
                 let Some(first) = push_expansion(pipeline, i, items.into()) else {
                     return Ok(None);

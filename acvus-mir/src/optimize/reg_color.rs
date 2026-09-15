@@ -399,7 +399,10 @@ fn reconstruct_debug(cfg: &CfgBody) -> crate::ir::DebugInfo {
         // Block params: no specific origin (SSA phi results).
         for inst in &block.insts {
             match &inst.kind {
-                InstKind::Ref { dst, target, path } => {
+                InstKind::Ref {
+                    dst, target, path, ..
+                }
+                | InstKind::Take { dst, target, path } => {
                     let origin = if !path.is_empty() {
                         ValOrigin::RefField(target.clone(), path.clone())
                     } else {
@@ -478,12 +481,19 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
     let r = |v: &mut ValueId| *v = remap(*v);
     match kind {
         InstKind::Const { dst, .. } => r(dst),
-        InstKind::Ref { dst, target, .. } => {
+        InstKind::Ref { dst, target, .. } | InstKind::Take { dst, target, .. } => {
             r(dst);
             match target {
                 crate::ir::RefTarget::Var(slot) | crate::ir::RefTarget::Param(slot) => r(slot),
                 crate::ir::RefTarget::Context(_) => {}
             }
+        }
+        InstKind::Assign { target, value, .. } => {
+            match target {
+                crate::ir::RefTarget::Var(slot) | crate::ir::RefTarget::Param(slot) => r(slot),
+                crate::ir::RefTarget::Context(_) => {}
+            }
+            r(value);
         }
         InstKind::Load { dst, src, .. } => {
             r(dst);
@@ -521,7 +531,6 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             callee,
             args,
             order,
-            lent,
             ..
         } => {
             r(dst);
@@ -533,7 +542,6 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
                 r(&mut edge.before);
                 r(&mut edge.after);
             }
-            lent.iter_mut().for_each(&r);
         }
         InstKind::Spawn {
             dst,
@@ -551,18 +559,12 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
                 r(o);
             }
         }
-        InstKind::Eval {
-            dst,
-            src,
-            order,
-            lent,
-        } => {
+        InstKind::Eval { dst, src, order } => {
             r(dst);
             r(src);
             if let Some(o) = order {
                 r(o);
             }
-            lent.iter_mut().for_each(&r);
         }
         InstKind::Merge { dst, orders } => {
             r(dst);

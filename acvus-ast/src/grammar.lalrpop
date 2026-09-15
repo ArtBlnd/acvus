@@ -319,12 +319,18 @@ MulExpr: Expr = {
     UnaryExpr,
 };
 
-// Unary: -x, !x
+// Unary: -x, !x, *r, &place, &mut place (RFC-0018)
 UnaryExpr: Expr = {
     <l:@L> "-" <e:UnaryExpr> <r:@R> =>
         Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
     <l:@L> "!" <e:UnaryExpr> <r:@R> =>
         Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Not, operand: Box::new(e), span: Span::new(l, r) },
+    <l:@L> "*" <e:UnaryExpr> <r:@R> =>
+        Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Deref, operand: Box::new(e), span: Span::new(l, r) },
+    <l:@L> "&" "mut" <place:UnaryExpr> <r:@R> =>
+        Expr::Borrow { id: AstId::alloc(), mutable: true, place: Box::new(place), span: Span::new(l, r) },
+    <l:@L> "&" <place:UnaryExpr> <r:@R> =>
+        Expr::Borrow { id: AstId::alloc(), mutable: false, place: Box::new(place), span: Span::new(l, r) },
     QualifiedExpr,
 };
 
@@ -348,13 +354,8 @@ PostfixExpr: Expr = {
     PrimaryExpr,
 };
 
-// A call argument: a value, or a place lent with `&` or `&mut` (RFC-0015).
 CallArg: Expr = {
     Expr,
-    <l:@L> "&" "mut" <place:Expr> <r:@R> =>
-        Expr::Borrow { id: AstId::alloc(), mutable: true, place: Box::new(place), span: Span::new(l, r) },
-    <l:@L> "&" <place:Expr> <r:@R> =>
-        Expr::Borrow { id: AstId::alloc(), mutable: false, place: Box::new(place), span: Span::new(l, r) },
 };
 
 // Primary expressions

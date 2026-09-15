@@ -52,9 +52,9 @@ fn optimize_inner(
 
     let mut ssa_modules = modules;
     for module in ssa_modules.values_mut() {
-        run_pass1_body(&mut module.main, context_types);
+        run_pass1_body(&mut module.main);
         for closure in module.closures.values_mut() {
-            run_pass1_body(closure, context_types);
+            run_pass1_body(closure);
         }
     }
 
@@ -85,9 +85,8 @@ fn optimize_inner(
     }
 }
 
-/// Pass 1: SROA -> SSA -> DSE -> DCE on a single body.
-fn run_pass1_body(body: &mut crate::ir::MirBody, context_types: &FxHashMap<QualifiedRef, Ty>) {
-    optimize::sroa::run_body(body, context_types);
+/// Pass 1: SSA -> DSE -> DCE on a single body.
+fn run_pass1_body(body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
     optimize::dse::run(&mut cfg);
@@ -101,7 +100,6 @@ fn run_pass2_body(
     context_types: &FxHashMap<QualifiedRef, Ty>,
     untyped_scalars: bool,
 ) {
-    optimize::sroa::run_body(body, context_types);
     let mut cfg = cfg::promote(std::mem::take(body));
     run_pass2(&mut cfg, untyped_scalars);
     *body = cfg::demote(cfg);

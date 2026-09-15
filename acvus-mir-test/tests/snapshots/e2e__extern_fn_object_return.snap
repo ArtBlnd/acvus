@@ -7,31 +7,22 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     1 |   r1 = undef
-     4 |   r2 = call #0(1 (r3)) [r4 -> r5]
-     6 |   r6 = T0 + T0
-     7 |   r7 = r2.name
-     8 |   r8 = r6 + r7
-     9 |   return r8 [r5]
+     3 |   r1 = call #0(1 (r2)) [r3 -> r4]
+     4 |   assign u = r1
+     6 |   r5 = T0 + T0
+     7 |   r6 = take u.name
+     8 |   r7 = r5 + r6
+     9 |   return r7 [r4]
 
-    ; r0 (v22) : Order
-    ; r1 (v23) : {age: Int, name: String}
-    ; r2 (get_user(...)) : {age: Int, name: String}
-    ; r3 (v5) : Int
-    ; r4 (v1) : Order
-    ; r5 (v9) : Order
-    ; r6 (v14) : String
-    ; r7 (v16) : String
-    ; r8 (v17) : String
-    ; r9 (v3) : Ref<Order>
-    ; r10 (v20) : Ref<{age: Int, name: String}>
-    ; r11 (u.name) : Ref<String>
-    ; r12 (v4) : String
-    ; r13 (v18) : Ref<Order>
-    ; r14 (v7) : Ref<Order>
-    ; r15 (v21) : {age: Int, name: String}
-    ; r16 (v10) : Ref<Order>
-    ; r17 (v13) : String
-    ; r18 (v12) : Ref<{age: Int, name: String}>
-    ; r19 (v8) : Order
-    ; r20 (v19) : Order
+    ; r0 (v14) : Order
+    ; r1 (get_user(...)) : {age: Int, name: String}
+    ; r2 (v4) : Int
+    ; r3 (v1) : Order
+    ; r4 (v7) : Order
+    ; r5 (v10) : String
+    ; r6 (u.name) : String
+    ; r7 (v12) : String
+    ; r8 (v3) : String
+    ; r9 (v6) : Order
+    ; r10 (v13) : Order
+    ; r11 (v9) : String

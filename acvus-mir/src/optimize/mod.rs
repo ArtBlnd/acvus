@@ -8,6 +8,5 @@ pub mod dse;
 pub mod reg_color;
 pub mod reorder;
 pub mod spawn_split;
-pub mod sroa;
 pub mod ssa;
 pub mod ssa_pass;

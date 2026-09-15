@@ -37,7 +37,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
-use crate::optimize::context_ops::{context_of_load, context_of_store, ref_to_ctx};
+use crate::optimize::context_ops::{context_read, context_written};
 
 // -- Entry point ----------------------------------------------------
 
@@ -299,16 +299,14 @@ fn sink_pass(cfg: &mut CfgBody) {
 
 /// Try to sink ONE instruction. Returns true if something moved.
 fn sink_one(cfg: &mut CfgBody) -> bool {
-    let ref_to_ctx = ref_to_ctx(cfg);
-
     for bi in 0..cfg.blocks.len() {
         for ii in 0..cfg.blocks[bi].insts.len() {
             let kind = &cfg.blocks[bi].insts[ii].kind;
 
             let sink_info = match kind {
                 InstKind::Eval { .. } => Some(SinkKind::Eval),
-                InstKind::Load { .. } => context_of_load(kind, &ref_to_ctx).map(SinkKind::Load),
-                InstKind::Store { .. } => context_of_store(kind, &ref_to_ctx).map(SinkKind::Store),
+                InstKind::Take { .. } => context_read(kind).map(SinkKind::Load),
+                InstKind::Assign { .. } => context_written(kind).map(SinkKind::Store),
                 _ => None,
             };
             let Some(sink_kind) = sink_info else {
@@ -335,8 +333,8 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                 }
 
                 if matches!(sink_kind, SinkKind::Eval)
-                    && (context_of_load(other, &ref_to_ctx).is_some()
-                        || context_of_store(other, &ref_to_ctx).is_some())
+                    && (context_read(other).is_some()
+                        || context_written(other).is_some())
                 {
                     barrier = jj;
                     break;
@@ -345,15 +343,15 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                 // Another sinkable instruction is a barrier: sinking past it
                 // gains nothing, and two of them would leapfrog forever.
                 if matches!(other, InstKind::Eval { .. })
-                    || context_of_load(other, &ref_to_ctx).is_some()
-                    || context_of_store(other, &ref_to_ctx).is_some()
+                    || context_read(other).is_some()
+                    || context_written(other).is_some()
                 {
                     barrier = jj;
                     break;
                 }
 
                 if let SinkKind::Load(ctx) = &sink_kind {
-                    if let Some(store_ctx) = context_of_store(other, &ref_to_ctx) {
+                    if let Some(store_ctx) = context_written(other) {
                         if store_ctx == *ctx {
                             barrier = jj;
                             break;
@@ -362,13 +360,13 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                 }
 
                 if let SinkKind::Store(ctx) = &sink_kind {
-                    if let Some(load_ctx) = context_of_load(other, &ref_to_ctx) {
+                    if let Some(load_ctx) = context_read(other) {
                         if load_ctx == *ctx {
                             barrier = jj;
                             break;
                         }
                     }
-                    if let Some(store_ctx) = context_of_store(other, &ref_to_ctx) {
+                    if let Some(store_ctx) = context_written(other) {
                         if store_ctx == *ctx {
                             barrier = jj;
                             break;
@@ -692,7 +690,6 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -1011,7 +1008,6 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1067,14 +1063,10 @@ mod tests {
         let f = QualifiedRef::root(i.intern("f"));
         let mut cfg = make_cfg(
             vec![
-                InstKind::Ref {
-                    dst: v(0),
+                InstKind::Take {
+                    dst: v(1),
                     target: crate::ir::RefTarget::Context(ctx),
                     path: vec![],
-                },
-                InstKind::Load {
-                    dst: v(1),
-                    src: v(0),
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1088,7 +1080,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1109,7 +1100,7 @@ mod tests {
         let k = kinds(&body);
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Load { .. }))
+            .position(|k| matches!(k, InstKind::Take { .. }))
             .unwrap();
         let call_idx = k
             .iter()
@@ -1139,7 +1130,6 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1147,14 +1137,10 @@ mod tests {
                     left: v(5),
                     right: v(5),
                 },
-                InstKind::Ref {
-                    dst: v(3),
+                InstKind::Take {
+                    dst: v(4),
                     target: crate::ir::RefTarget::Context(ctx),
                     path: vec![],
-                },
-                InstKind::Load {
-                    dst: v(4),
-                    src: v(3),
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1179,7 +1165,7 @@ mod tests {
             .unwrap();
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Load { .. }))
+            .position(|k| matches!(k, InstKind::Take { .. }))
             .unwrap();
         assert!(
             eval_idx < load_idx,
@@ -1187,29 +1173,23 @@ mod tests {
         );
     }
 
-    /// Load is sunk past independent computation but NOT past a Store to the same context.
+    /// Take is sunk past independent computation but NOT past an Assign to the same context.
     #[test]
     fn load_sunk_but_not_past_store() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
-        // v0 = Ref @x
-        // v1 = Load v0          <- should sink past v2 but not past v4 (store to @x)
+        // v1 = Take @x          <- should sink past v2 but not past the assign to @x
         // v2 = BinOp(v5, v5)   <- independent
-        // v3 = Ref @x
-        // v4 = Store v3 = v5   <- writes @x - barrier for load
+        // @x = v5              <- writes @x - barrier for the take
         // v6 = BinOp(v1, v2)   <- uses load result
         // Return v6
         let mut cfg = make_cfg(
             vec![
-                InstKind::Ref {
-                    dst: v(0),
+                InstKind::Take {
+                    dst: v(1),
                     target: crate::ir::RefTarget::Context(ctx),
                     path: vec![],
-                },
-                InstKind::Load {
-                    dst: v(1),
-                    src: v(0),
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1217,13 +1197,9 @@ mod tests {
                     left: v(5),
                     right: v(5),
                 },
-                InstKind::Ref {
-                    dst: v(3),
+                InstKind::Assign {
                     target: crate::ir::RefTarget::Context(ctx),
                     path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(3),
                     value: v(5),
                 },
                 InstKind::BinOp {
@@ -1246,11 +1222,11 @@ mod tests {
 
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Load { .. }))
+            .position(|k| matches!(k, InstKind::Take { .. }))
             .unwrap();
         let store_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Store { .. }))
+            .position(|k| matches!(k, InstKind::Assign { .. }))
             .unwrap();
         let independent_idx = k
             .iter()
@@ -1267,28 +1243,22 @@ mod tests {
         );
     }
 
-    /// Store is sunk past independent computation but NOT past Load of same context.
+    /// Assign is sunk past independent computation but NOT past a Take of the same context.
     #[test]
     fn store_sunk_but_not_past_load_of_same_context() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
-        // v0 = Ref @x
-        // v1 = Store v0 = v5       <- should sink past v2 but not past v4 (load @x)
+        // @x = v5                  <- should sink past v2 but not past v4 (take @x)
         // v2 = BinOp(v5, v5)       <- independent
-        // v3 = Ref @x
-        // v4 = Load v3             <- reads @x - barrier for store
+        // v4 = Take @x             <- reads @x - barrier for the assign
         // v6 = BinOp(v4, v2)
         // Return v6
         let mut cfg = make_cfg(
             vec![
-                InstKind::Ref {
-                    dst: v(0),
+                InstKind::Assign {
                     target: crate::ir::RefTarget::Context(ctx),
                     path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(0),
                     value: v(5),
                 },
                 InstKind::BinOp {
@@ -1297,14 +1267,10 @@ mod tests {
                     left: v(5),
                     right: v(5),
                 },
-                InstKind::Ref {
-                    dst: v(3),
+                InstKind::Take {
+                    dst: v(4),
                     target: crate::ir::RefTarget::Context(ctx),
                     path: vec![],
-                },
-                InstKind::Load {
-                    dst: v(4),
-                    src: v(3),
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1326,11 +1292,11 @@ mod tests {
 
         let store_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Store { .. }))
+            .position(|k| matches!(k, InstKind::Assign { .. }))
             .unwrap();
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Load { .. }))
+            .position(|k| matches!(k, InstKind::Take { .. }))
             .unwrap();
         let independent_idx = k
             .iter()

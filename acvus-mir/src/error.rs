@@ -79,15 +79,18 @@ pub enum MirErrorKind {
         expected: usize,
         got: usize,
     },
-    /// An argument's mode (`&`, `&mut`, or a value) is not the parameter's.
-    ArgumentMode {
-        func: String,
-        index: usize,
-        expected: crate::ty::ParamMode,
-        got: crate::ty::ParamMode,
-    },
     /// `&` or `&mut` on something that is not a place.
     NotAPlace,
+    /// `*r` where `r` is not a reference.
+    DerefOfNonReference(Ty),
+    /// `*r` where the reference names a value that is not a primitive.
+    DerefOfNonPrimitive(Ty),
+    /// A lambda captured a reference.
+    ReferenceCaptured,
+    /// A reference inside a list, object, or tuple.
+    ReferenceInData,
+    /// A lambda returned a reference.
+    ReferenceReturned,
     /// One call names the same place twice.
     PlaceNamedTwice(String),
 
@@ -178,30 +181,30 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::UndefinedVariable(name) => {
                 write!(f, "undefined variable `{name}`")
             }
-            MirErrorKind::ArgumentMode {
-                func,
-                index,
-                expected,
-                got,
-            } => {
-                let show = |m: &crate::ty::ParamMode| match m {
-                    crate::ty::ParamMode::Value => "a value",
-                    crate::ty::ParamMode::Borrow => "`&`",
-                    crate::ty::ParamMode::BorrowMut => "`&mut`",
-                };
-                write!(
-                    f,
-                    "argument {} of `{func}` takes {}, got {}",
-                    index + 1,
-                    show(expected),
-                    show(got)
-                )
-            }
             MirErrorKind::NotAPlace => {
                 write!(
                     f,
-                    "only a variable, a context, or a field of one can be lent"
+                    "only a variable, a context, or a field of one can be referenced"
                 )
+            }
+            MirErrorKind::DerefOfNonReference(ty) => {
+                write!(f, "`*` needs a reference, got {}", ty.display(interner))
+            }
+            MirErrorKind::DerefOfNonPrimitive(ty) => {
+                write!(
+                    f,
+                    "`*` reads only a primitive; {} is used through the reference or cloned",
+                    ty.display(interner)
+                )
+            }
+            MirErrorKind::ReferenceCaptured => {
+                write!(f, "a lambda cannot capture a reference")
+            }
+            MirErrorKind::ReferenceInData => {
+                write!(f, "a reference cannot be stored in a list, object, or tuple")
+            }
+            MirErrorKind::ReferenceReturned => {
+                write!(f, "a lambda cannot return a reference")
             }
             MirErrorKind::PlaceNamedTwice(place) => {
                 write!(f, "`{place}` is named twice in one call")

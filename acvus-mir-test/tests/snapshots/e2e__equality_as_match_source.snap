@@ -8,36 +8,32 @@ expression: ir
   T2 = "not equal"
 
 === main ===
-     1 |   r0 = ref @a
-     2 |   r1 = load r0
-     3 |   r2 = ref @b
-     4 |   r3 = load r2
-     5 |   r4 = r1 == r3
-     6 | L2:
-     7 |   r5 = test r4 == true
-     8 |   jump_if r5 then L3 else L1
-     9 | L3:
-    12 |   r6 = T0 + T1
-    13 |   jump L0(r6)
-    14 | L1:
-    17 |   r7 = T0 + T2
-    18 |   jump L0(r7)
-    19 | L0(r8: String):  ; merge_of L2
-    20 |   r9 = T0 + r8
-    21 |   return r9
+     1 |   r0 = take @a
+     2 |   r1 = take @b
+     3 |   r2 = r0 == r1
+     4 | L2:
+     5 |   r3 = test r2 == true
+     6 |   jump_if r3 then L3 else L1
+     7 | L3:
+    10 |   r4 = T0 + T1
+    11 |   jump L0(r4)
+    12 | L1:
+    15 |   r5 = T0 + T2
+    16 |   jump L0(r5)
+    17 | L0(r6: String):  ; merge_of L2
+    18 |   r7 = T0 + r6
+    19 |   return r7
 
-    ; r0 (@a) : Ref<Int>
-    ; r1 (v3) : Int
-    ; r2 (@b) : Ref<Int>
-    ; r3 (v5) : Int
-    ; r4 (v6) : Bool
-    ; r5 (v7) : Bool
-    ; r6 (v10) : String
+    ; r0 (@a) : Int
+    ; r1 (@b) : Int
+    ; r2 (v4) : Bool
+    ; r3 (v5) : Bool
+    ; r4 (v8) : String
+    ; r5 (v11) : String
+    ; r6 (v12) : String
     ; r7 (v13) : String
-    ; r8 (v14) : String
-    ; r9 (v15) : String
-    ; r10 (v11) : String
+    ; r8 (v7) : String
+    ; r9 (v10) : String
+    ; r10 (v6) : String
     ; r11 (v9) : String
     ; r12 (v1) : String
-    ; r13 (v12) : String
-    ; r14 (v8) : String

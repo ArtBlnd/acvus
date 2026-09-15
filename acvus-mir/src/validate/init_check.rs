@@ -2,6 +2,7 @@
 //!
 //! Runs on CfgBody (pre-SSA). Tracks which fields of each named storage
 //! (Var, Context, Param) are definitely initialized at each program point.
+//! A storage is written by `Assign` and read by `Take` and `Ref`.
 //!
 //! At function call sites, checks that arguments have all fields required
 //! by the callee's parameter type. Required fields come from the instruction's
@@ -38,17 +39,16 @@ impl SemiLattice for FieldInit {
 
     fn join_mut(&mut self, other: &Self) -> bool {
         match (*self, *other) {
-            (FieldInit::Uninit, _) => false,
             (FieldInit::Init, FieldInit::Uninit) => {
                 *self = FieldInit::Uninit;
                 true
             }
-            (FieldInit::Init, FieldInit::Init) => false,
+            _ => false,
         }
     }
 }
 
-// -- Error -----------------------------------------------------------
+// -- Errors ----------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct UninitError {
@@ -59,22 +59,14 @@ pub struct UninitError {
 
 // -- Pre-pass data ---------------------------------------------------
 
-/// Maps Ref dst ValueId -> (target, path).
-type RefMap = FxHashMap<ValueId, (RefTarget, Vec<Astr>)>;
-
 /// Maps ValueId -> set of field names that the value definitely contains.
 type ValueFields = FxHashMap<ValueId, FxHashSet<Astr>>;
 
-fn build_prepass(cfg: &CfgBody) -> (RefMap, ValueFields) {
-    let mut ref_map = RefMap::default();
+fn build_value_fields(cfg: &CfgBody) -> ValueFields {
     let mut value_fields = ValueFields::default();
-
     for block in &cfg.blocks {
         for inst in &block.insts {
             match &inst.kind {
-                InstKind::Ref { dst, target, path } => {
-                    ref_map.insert(*dst, (*target, path.clone()));
-                }
                 InstKind::MakeObject { dst, fields } => {
                     let names: FxHashSet<Astr> = fields.iter().map(|(k, _)| *k).collect();
                     value_fields.insert(*dst, names);
@@ -82,8 +74,6 @@ fn build_prepass(cfg: &CfgBody) -> (RefMap, ValueFields) {
                 InstKind::FieldSet {
                     dst, object, field, ..
                 } => {
-                    // FieldSet produces a new value with the same fields as object.
-                    // The field is modified but the set of field names stays the same.
                     if let Some(obj_fields) = value_fields.get(object) {
                         let mut fields = obj_fields.clone();
                         fields.insert(*field);
@@ -94,39 +84,59 @@ fn build_prepass(cfg: &CfgBody) -> (RefMap, ValueFields) {
             }
         }
     }
-
-    (ref_map, value_fields)
+    value_fields
 }
 
-/// Collect all (RefTarget, field) pairs from Ref instructions.
-/// Uses BOTH identity Refs (type's fields) and field Refs (path proves field exists).
-fn collect_var_fields(cfg: &CfgBody, ref_map: &RefMap) -> FxHashMap<RefTarget, FxHashSet<Astr>> {
+/// Every (storage, field) the body names: a whole-storage `Take`/`Assign`
+/// contributes the fields of its object type, a field path proves its first
+/// field exists.
+fn collect_var_fields(cfg: &CfgBody) -> FxHashMap<RefTarget, FxHashSet<Astr>> {
     let mut target_fields: FxHashMap<RefTarget, FxHashSet<Astr>> = FxHashMap::default();
-
-    for (val, (target, path)) in ref_map {
-        if path.is_empty() {
-            // Identity ref - extract fields from Ref<T>'s T.
-            if let Some(Ty::Ref(inner)) = cfg.val_types.get(val) {
-                if let Ty::Object(fields) = inner.as_ref() {
-                    target_fields
-                        .entry(*target)
-                        .or_default()
-                        .extend(fields.keys().copied());
-                }
-            }
-        } else if let Some(field) = path.first() {
-            // Field ref - this path proves the field exists on the target.
+    let mut note = |target: &RefTarget, path: &[Astr], whole: Option<&Ty>| match path.first() {
+        Some(field) => {
             target_fields.entry(*target).or_default().insert(*field);
         }
+        None => {
+            if let Some(Ty::Object(fields)) = whole {
+                target_fields
+                    .entry(*target)
+                    .or_default()
+                    .extend(fields.keys().copied());
+            }
+        }
+    };
+    for block in &cfg.blocks {
+        for inst in &block.insts {
+            match &inst.kind {
+                InstKind::Take { dst, target, path } => {
+                    note(target, path, cfg.val_types.get(dst));
+                }
+                InstKind::Assign {
+                    target,
+                    path,
+                    value,
+                } => {
+                    note(target, path, cfg.val_types.get(value));
+                }
+                InstKind::Ref {
+                    dst, target, path, ..
+                } => {
+                    let inner = match cfg.val_types.get(dst) {
+                        Some(Ty::Ref(_, inner)) => Some(inner.as_ref()),
+                        _ => None,
+                    };
+                    note(target, path, inner);
+                }
+                _ => {}
+            }
+        }
     }
-
     target_fields
 }
 
 // -- Analysis --------------------------------------------------------
 
 struct InitCheckAnalysis {
-    ref_map: RefMap,
     value_fields: ValueFields,
     /// val_types from CfgBody - for fallback field lookup.
     val_types: FxHashMap<ValueId, Ty>,
@@ -137,29 +147,28 @@ impl DataflowAnalysis for InitCheckAnalysis {
     type Domain = FieldInit;
 
     fn transfer_inst(&self, inst: &Inst, state: &mut DataflowState<(RefTarget, Astr), FieldInit>) {
-        if let InstKind::Store { dst, value, .. } = &inst.kind {
-            if let Some((target, path)) = self.ref_map.get(dst) {
-                if path.is_empty() {
-                    // Identity store: determine which fields the value actually has.
-                    let fields: Option<Vec<Astr>> =
-                        if let Some(known) = self.value_fields.get(value) {
-                            // MakeObject/FieldSet - known exact fields.
-                            Some(known.iter().copied().collect())
-                        } else if let Some(ty) = self.val_types.get(value) {
-                            // Fallback: use type's fields (function return, Load, etc. - assume complete).
-                            extract_object_fields(ty)
-                        } else {
-                            None
-                        };
-                    if let Some(fields) = fields {
-                        for f in fields {
-                            state.set((*target, f), FieldInit::Init);
-                        }
-                    }
-                } else if let Some(field) = path.first() {
-                    // Field store: mark this specific field as Init.
-                    state.set((*target, *field), FieldInit::Init);
-                }
+        let InstKind::Assign {
+            target,
+            path,
+            value,
+        } = &inst.kind
+        else {
+            return;
+        };
+        if let Some(field) = path.first() {
+            state.set((*target, *field), FieldInit::Init);
+            return;
+        }
+        let fields: Option<Vec<Astr>> = if let Some(known) = self.value_fields.get(value) {
+            Some(known.iter().copied().collect())
+        } else if let Some(ty) = self.val_types.get(value) {
+            extract_object_fields(ty)
+        } else {
+            None
+        };
+        if let Some(fields) = fields {
+            for f in fields {
+                state.set((*target, f), FieldInit::Init);
             }
         }
     }
@@ -193,8 +202,8 @@ impl DataflowAnalysis for InitCheckAnalysis {
 /// `external_contexts`: contexts provided by the host - these start as Init.
 ///   Script-created contexts (not in this set) start as Uninit.
 pub fn check_init(cfg: &CfgBody, external_contexts: &FxHashSet<QualifiedRef>) -> Vec<UninitError> {
-    let (ref_map, value_fields) = build_prepass(cfg);
-    let var_fields = collect_var_fields(cfg, &ref_map);
+    let value_fields = build_value_fields(cfg);
+    let var_fields = collect_var_fields(cfg);
 
     // Build initial state: Var fields start Uninit, Context/Param start Init.
     let mut initial = DataflowState::new();
@@ -217,36 +226,30 @@ pub fn check_init(cfg: &CfgBody, external_contexts: &FxHashSet<QualifiedRef>) ->
     }
 
     let analysis = InitCheckAnalysis {
-        ref_map: ref_map.clone(),
         value_fields,
         val_types: cfg.val_types.clone(),
     };
     let result = forward_analysis(cfg, &analysis, initial);
 
-    // Post-pass: replay transfer per block and check at FunctionCall/Spawn sites.
+    // Post-pass: replay transfer per block and check at reads and call sites.
     let mut errors = Vec::new();
 
     for (bi, block) in cfg.blocks.iter().enumerate() {
         let mut state = result.block_entry[bi].clone();
 
         for inst in &block.insts {
-            // Check before transfer (state reflects point before this inst).
             match &inst.kind {
-                // Check field loads: loading a possibly-uninit field.
-                InstKind::Load { src, .. } => {
-                    if let Some((target, path)) = ref_map.get(src) {
-                        if let Some(field) = path.first() {
-                            if state.get((*target, *field)) == FieldInit::Uninit {
-                                errors.push(UninitError {
-                                    span: inst.span,
-                                    target: *target,
-                                    uninit_fields: vec![*field],
-                                });
-                            }
-                        }
+                InstKind::Take { target, path, .. } | InstKind::Ref { target, path, .. } => {
+                    if let Some(field) = path.first()
+                        && state.get((*target, *field)) == FieldInit::Uninit
+                    {
+                        errors.push(UninitError {
+                            span: inst.span,
+                            target: *target,
+                            uninit_fields: vec![*field],
+                        });
                     }
                 }
-                // Check function calls: all required fields of args must be init.
                 InstKind::FunctionCall {
                     callee,
                     callee_ty,
@@ -259,21 +262,10 @@ pub fn check_init(cfg: &CfgBody, external_contexts: &FxHashSet<QualifiedRef>) ->
                     args,
                     ..
                 } => {
-                    check_call_args(
-                        &state,
-                        &ref_map,
-                        cfg,
-                        callee,
-                        callee_ty,
-                        args,
-                        inst.span,
-                        &mut errors,
-                    );
+                    check_call_args(&state, cfg, callee, callee_ty, args, inst.span, &mut errors);
                 }
                 _ => {}
             }
-
-            // Apply transfer.
             analysis.transfer_inst(inst, &mut state);
         }
     }
@@ -285,7 +277,6 @@ pub fn check_init(cfg: &CfgBody, external_contexts: &FxHashSet<QualifiedRef>) ->
 /// are initialized for each argument.
 fn check_call_args(
     state: &DataflowState<(RefTarget, Astr), FieldInit>,
-    ref_map: &RefMap,
     cfg: &CfgBody,
     callee: &Callee,
     callee_ty: &Ty,
@@ -297,15 +288,11 @@ fn check_call_args(
     if matches!(callee, Callee::Indirect(_)) {
         return;
     }
-    let fn_ty = callee_ty;
-
-    // Extract parameter types from function type.
-    let param_types = match fn_ty {
+    let param_types = match callee_ty {
         Ty::Fn { params, .. } => params,
         _ => return,
     };
 
-    // For each argument, trace back to its source storage and check fields.
     for (arg, param) in args.iter().zip(param_types.iter()) {
         let required_fields = match &param.ty {
             Ty::Object(fields) => fields.keys().copied().collect::<Vec<_>>(),
@@ -314,22 +301,14 @@ fn check_call_args(
         if required_fields.is_empty() {
             continue;
         }
-
-        // Trace arg back to its source storage.
-        // Pattern: Load { dst: arg, src: ref_val } where ref_val -> (target, path)
-        let source_target = find_arg_source(arg, ref_map, cfg);
-        let target = match source_target {
-            Some(t) => t,
-            None => continue, // Can't trace - skip check (conservative).
+        let Some(target) = find_arg_source(arg, cfg) else {
+            continue;
         };
 
-        let mut uninit_fields = Vec::new();
-        for f in &required_fields {
-            if state.get((target, *f)) == FieldInit::Uninit {
-                uninit_fields.push(*f);
-            }
-        }
-
+        let uninit_fields: Vec<Astr> = required_fields
+            .into_iter()
+            .filter(|f| state.get((target, *f)) == FieldInit::Uninit)
+            .collect();
         if !uninit_fields.is_empty() {
             errors.push(UninitError {
                 span,
@@ -348,26 +327,15 @@ fn extract_object_fields(ty: &Ty) -> Option<Vec<Astr>> {
     }
 }
 
-/// Trace a ValueId back to its source RefTarget.
-/// Looks for the pattern: `arg` was defined by `Load { dst: arg, src }`,
-/// and `src` was defined by `Ref { dst: src, target, path: [] }`.
-fn find_arg_source(arg: &ValueId, ref_map: &RefMap, cfg: &CfgBody) -> Option<RefTarget> {
-    // Find the Load that defined arg.
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Load { dst, src, .. } = &inst.kind {
-                if dst == arg {
-                    // Found the Load. Now check if src is an identity Ref.
-                    if let Some((target, path)) = ref_map.get(src) {
-                        if path.is_empty() {
-                            return Some(*target);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
+/// The storage `arg` was taken whole from, if it was.
+fn find_arg_source(arg: &ValueId, cfg: &CfgBody) -> Option<RefTarget> {
+    cfg.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .find_map(|inst| match &inst.kind {
+            InstKind::Take { dst, target, path } if dst == arg && path.is_empty() => Some(*target),
+            _ => None,
+        })
 }
 
 // -- Tests -----------------------------------------------------------

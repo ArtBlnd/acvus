@@ -101,6 +101,7 @@ fn fmt_unaryop(op: UnaryOp) -> &'static str {
     match op {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "!",
+        UnaryOp::Deref => "*",
     }
 }
 
@@ -172,6 +173,35 @@ fn collect_texts_from_body(
     }
 }
 
+/// A storage and a field path under it, as `Ref`, `Take`, and `Assign` name one.
+fn fmt_place(
+    body: &MirBody,
+    ctx: &PrintCtx<'_>,
+    target: &crate::ir::RefTarget,
+    path: &[Astr],
+) -> String {
+    let base = match target {
+        crate::ir::RefTarget::Var(slot) => body.debug.label(*slot, ctx.interner),
+        crate::ir::RefTarget::Param(slot) => {
+            let name = body.debug.label(*slot, ctx.interner);
+            if name.starts_with('$') {
+                name
+            } else {
+                format!("${name}")
+            }
+        }
+        crate::ir::RefTarget::Context(qref) => {
+            format!("@{}", ctx.interner.resolve(qref.name))
+        }
+    };
+    if path.is_empty() {
+        base
+    } else {
+        let suffix: Vec<&str> = path.iter().map(|p| ctx.interner.resolve(*p)).collect();
+        format!("{base}.{}", suffix.join("."))
+    }
+}
+
 fn write_body(
     f: &mut fmt::Formatter<'_>,
     body: &MirBody,
@@ -236,34 +266,34 @@ fn write_body(
                 writeln!(f, "{} = const {}", vn.fmt_val(*dst), shown)?
             }
             // Projection
-            InstKind::Ref { dst, target, path } => {
-                let base = match target {
-                    crate::ir::RefTarget::Var(slot) => body.debug.label(*slot, ctx.interner),
-                    crate::ir::RefTarget::Param(slot) => {
-                        let name = body.debug.label(*slot, ctx.interner);
-                        if name.starts_with('$') {
-                            name
-                        } else {
-                            format!("${name}")
-                        }
-                    }
-                    crate::ir::RefTarget::Context(qref) => {
-                        format!("@{}", ctx.interner.resolve(qref.name))
-                    }
-                };
-                if path.is_empty() {
-                    writeln!(f, "{} = ref {}", vn.fmt_val(*dst), base)?
-                } else {
-                    let suffix: Vec<&str> = path.iter().map(|p| ctx.interner.resolve(*p)).collect();
-                    writeln!(
-                        f,
-                        "{} = ref {}.{}",
-                        vn.fmt_val(*dst),
-                        base,
-                        suffix.join(".")
-                    )?
-                }
-            }
+            InstKind::Ref {
+                dst,
+                target,
+                path,
+                mutability,
+            } => writeln!(
+                f,
+                "{} = ref {}{}",
+                vn.fmt_val(*dst),
+                mutability.prefix(),
+                fmt_place(body, ctx, target, path)
+            )?,
+            InstKind::Take { dst, target, path } => writeln!(
+                f,
+                "{} = take {}",
+                vn.fmt_val(*dst),
+                fmt_place(body, ctx, target, path)
+            )?,
+            InstKind::Assign {
+                target,
+                path,
+                value,
+            } => writeln!(
+                f,
+                "assign {} = {}",
+                fmt_place(body, ctx, target, path),
+                vn.fmt_use(*value, &consts, &texts)
+            )?,
             InstKind::Load { dst, src } => writeln!(
                 f,
                 "{} = load {}",
@@ -353,7 +383,6 @@ fn write_body(
                 callee,
                 args,
                 order,
-                lent,
                 ..
             } => {
                 let callee_str = match callee {
@@ -367,10 +396,6 @@ fn write_body(
                     callee_str,
                     vn.fmt_uses(args, &consts, &texts)
                 )?;
-                if !lent.is_empty() {
-                    let back: Vec<String> = lent.iter().map(|l| vn.fmt_val(*l)).collect();
-                    write!(f, " lent {}", back.join(", "))?;
-                }
                 if let Some(edge) = order {
                     write!(
                         f,
@@ -412,22 +437,13 @@ fn write_body(
                 }
                 writeln!(f)?
             }
-            InstKind::Eval {
-                dst,
-                src,
-                order,
-                lent,
-            } => {
+            InstKind::Eval { dst, src, order } => {
                 write!(
                     f,
                     "{} = eval {}",
                     vn.fmt_val(*dst),
                     vn.fmt_use(*src, &consts, &texts)
                 )?;
-                if !lent.is_empty() {
-                    let back: Vec<String> = lent.iter().map(|l| vn.fmt_val(*l)).collect();
-                    write!(f, " lent {}", back.join(", "))?;
-                }
                 if let Some(o) = order {
                     write!(f, " [-> {}]", vn.fmt_val(*o))?;
                 }

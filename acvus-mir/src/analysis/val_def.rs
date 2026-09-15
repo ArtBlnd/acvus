@@ -23,6 +23,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
     match kind {
         InstKind::Const { dst, .. }
         | InstKind::Ref { dst, .. }
+        | InstKind::Take { dst, .. }
         | InstKind::Load { dst, .. }
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
@@ -51,6 +52,7 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 
         // These don't define a new Val
         InstKind::Store { .. }
+        | InstKind::Assign { .. }
         | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
@@ -66,14 +68,8 @@ fn dst_of(kind: &InstKind) -> Option<ValueId> {
 fn extra_dsts(kind: &InstKind) -> Vec<ValueId> {
     match kind {
         InstKind::BlockLabel { params, .. } => params.clone(),
-        InstKind::FunctionCall { order, lent, .. } => order
-            .iter()
-            .map(|edge| edge.after)
-            .chain(lent.iter().copied())
-            .collect(),
-        InstKind::Eval { order, lent, .. } => {
-            order.iter().copied().chain(lent.iter().copied()).collect()
-        }
+        InstKind::FunctionCall { order, .. } => order.iter().map(|edge| edge.after).collect(),
+        InstKind::Eval { order, .. } => order.iter().copied().collect(),
         _ => vec![],
     }
 }
@@ -121,6 +117,7 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: crate::ty::Mutability::Shared,
             }),
             inst(InstKind::Load { dst: v1, src: v0 }),
         ]);

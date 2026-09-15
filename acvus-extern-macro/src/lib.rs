@@ -97,11 +97,12 @@ enum Mode {
 }
 
 impl Mode {
-    fn acvus(self) -> proc_macro2::TokenStream {
+    /// The acvus type of a parameter whose Rust type is `ty` under this mode.
+    fn acvus_ty(self, ty: &Type) -> proc_macro2::TokenStream {
         match self {
-            Mode::Value => quote! { ::acvus_extern::ParamMode::Value },
-            Mode::Borrow => quote! { ::acvus_extern::ParamMode::Borrow },
-            Mode::BorrowMut => quote! { ::acvus_extern::ParamMode::BorrowMut },
+            Mode::Value => quote! { #ty },
+            Mode::Borrow => quote! { ::acvus_extern::Ref<#ty> },
+            Mode::BorrowMut => quote! { ::acvus_extern::RefMut<#ty> },
         }
     }
 }
@@ -194,14 +195,12 @@ fn generate_extern_fn(
     let signature = |member: Option<&Type>| -> proc_macro2::TokenStream {
         let param_terms = params.iter().map(|p| {
             let name = &p.name;
-            let comp_ty = vars.to_compile_time_instance(&p.ty, member);
-            let mode = p.mode.acvus();
+            let comp_ty = p.mode.acvus_ty(&vars.to_compile_time_instance(&p.ty, member));
             quote! {
                 ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
                     __i.intern(#name),
                     <#comp_ty as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
                 )
-                .with_mode(#mode)
             }
         });
         let comp_ret = vars.to_compile_time_instance(&ret.ty, member);
@@ -221,47 +220,27 @@ fn generate_extern_fn(
             .iter()
             .map(|p| vars.to_runtime_instance(&p.ty, member))
             .collect();
-        let rt_tys_lent: Vec<&Type> = params
-            .iter()
-            .zip(&rt_tys)
-            .filter(|(p, _)| p.mode != Mode::Value)
-            .map(|(_, t)| t)
-            .collect();
         let rt_ret = vars.to_runtime_instance(&ret.ty, member);
         let turbofish = vars.runtime_turbofish_instance(member);
-        let passed: Vec<proc_macro2::TokenStream> = params
-            .iter()
-            .zip(&arg_idents)
-            .map(|(p, a)| match p.mode {
-                Mode::Value => quote! { #a },
-                Mode::Borrow => quote! { &#a },
-                Mode::BorrowMut => quote! { &mut #a },
-            })
-            .collect();
-        let lent: Vec<&Ident> = params
-            .iter()
-            .zip(&arg_idents)
-            .filter(|(p, _)| p.mode != Mode::Value)
-            .map(|(_, a)| a)
-            .collect();
-        let binds: Vec<proc_macro2::TokenStream> = params
-            .iter()
-            .zip(&arg_idents)
-            .map(|(p, a)| match p.mode {
-                Mode::BorrowMut => quote! { mut #a },
-                _ => quote! { #a },
-            })
-            .collect();
         let error_ty = quote! { <__R as ::acvus_extern::Runtime>::Error };
-        let unpack_stmts: Vec<proc_macro2::TokenStream> = binds
+        let unpack_stmts: Vec<proc_macro2::TokenStream> = params
             .iter()
+            .zip(&arg_idents)
             .zip(&rt_tys)
-            .map(|(bind, ty)| {
+            .map(|((p, a), ty)| {
                 let next = quote! { __args.next().expect("arity checked by typeck") };
-                if is_closure_carrier(ty) {
-                    quote! { let #bind = <#ty>::new(#next); }
-                } else {
-                    quote! { let #bind = unsafe { __rt.materialize::<#ty>(#next) }; }
+                let lent = format_ident!("{a}_lent");
+                match p.mode {
+                    Mode::Value if is_closure_carrier(ty) => quote! { let #a = <#ty>::new(#next); },
+                    Mode::Value => quote! { let #a = unsafe { __rt.materialize::<#ty>(#next) }; },
+                    Mode::Borrow => quote! {
+                        let #lent = #next;
+                        let #a: &#ty = unsafe { __rt.deref::<#ty>(&#lent) };
+                    },
+                    Mode::BorrowMut => quote! {
+                        let #lent = #next;
+                        let #a: &mut #ty = unsafe { __rt.deref_mut::<#ty>(&#lent) };
+                    },
                 }
             })
             .collect();
@@ -270,19 +249,14 @@ fn generate_extern_fn(
             #(#unpack_stmts)*
             debug_assert!(__args.next().is_none(), "arity checked by typeck");
         };
-        let give_back = quote! {
-            vec![#(unsafe { __rt.erase::<#rt_tys_lent>(#lent) }),*]
-        };
+        let passed: Vec<&Ident> = arg_idents.iter().collect();
         let ret_value = if is_closure_carrier(&rt_ret) {
-            quote! { __r.0 }
+            quote! { __r.into_value() }
         } else {
             quote! { unsafe { __rt.erase::<#rt_ret>(__r) } }
         };
         let returned = quote! {
-            ::core::result::Result::<_, #error_ty>::Ok(::acvus_extern::Returned {
-                value: #ret_value,
-                lent: #give_back,
-            })
+            ::core::result::Result::<_, #error_ty>::Ok(#ret_value)
         };
         if is_async {
             let call = quote! { #fn_ident #turbofish (&__rt, #(#passed),*) };
@@ -294,8 +268,8 @@ fn generate_extern_fn(
             quote! {
                 ::acvus_extern::ExternHandler::Async(::std::sync::Arc::new(
                     move |__rt: __R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
-                        #unpack
                         ::std::boxed::Box::pin(async move {
+                            #unpack
                             let __r = #awaited;
                             #returned
                         })

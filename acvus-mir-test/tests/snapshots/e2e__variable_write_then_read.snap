@@ -12,13 +12,11 @@ expression: ir
      6 |   r4 = r1 + r2
      7 |   return r4
 
-    ; r0 (v11) : Int
-    ; r1 (v6) : String
+    ; r0 (v9) : Int
+    ; r1 (v5) : String
     ; r2 (to_string(...)) : String
     ; r3 (v2) : Int
-    ; r4 (v10) : String
-    ; r5 (v7) : Ref<Int>
-    ; r6 (v5) : String
-    ; r7 (v1) : String
-    ; r8 (x) : Int
-    ; r9 (v4) : Ref<Int>
+    ; r4 (v8) : String
+    ; r5 (x) : Int
+    ; r6 (v1) : String
+    ; r7 (v4) : String

@@ -26,92 +26,23 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 // is_move_only
 // ---------------------------------------------------------------------------
 
-/// Determine whether a type requires move semantics.
-///
-/// Returns `Some(true)` for move-only, `Some(false)` for copyable,
-/// `None` for unknown (skip - analysis mode).
+/// Whether a type moves (RFC-0018): a primitive and a reference are words
+/// and copy; everything else moves. `None` for a type the analysis cannot
+/// classify.
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
-        // Primitives - always Copy
-        Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order => {
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order | Ty::Ref(..) => {
             Some(false)
         }
-
-        // Handle - always move-only (deferred computation, must be consumed exactly once)
-        Ty::Handle(..) => Some(true),
-
-        // A user-defined value moves when it is a source of its own or holds
-        // one; otherwise it is a plain value and copies.
-        Ty::UserDefined {
-            identity_args,
-            type_args,
-            ..
-        } => {
-            if !identity_args.is_empty() {
-                return Some(true);
-            }
-            let mut any_move = false;
-            for arg in type_args {
-                match is_move_only(arg) {
-                    Some(true) => any_move = true,
-                    None => return None,
-                    Some(false) => {}
-                }
-            }
-            Some(any_move)
-        }
-
-        // Containers - transitive
-        Ty::Array(inner, _) | Ty::Option(inner) => is_move_only(inner),
-        Ty::Tuple(elems) => {
-            let mut any_move = false;
-            for e in elems {
-                match is_move_only(e) {
-                    Some(true) => any_move = true,
-                    None => return None,
-                    Some(false) => {}
-                }
-            }
-            Some(any_move)
-        }
-        Ty::Object(fields) => {
-            let mut any_move = false;
-            for v in fields.values() {
-                match is_move_only(v) {
-                    Some(true) => any_move = true,
-                    None => return None,
-                    Some(false) => {}
-                }
-            }
-            Some(any_move)
-        }
-        Ty::Enum { variants, .. } => {
-            let mut any_move = false;
-            for payload in variants.values().flatten() {
-                match is_move_only(payload) {
-                    Some(true) => any_move = true,
-                    None => return None,
-                    Some(false) => {}
-                }
-            }
-            Some(any_move)
-        }
-
-        // Fn - move-only if any capture is move-only (FnOnce)
-        Ty::Fn { captures, .. } => {
-            let mut any_move = false;
-            for c in captures {
-                match is_move_only(c) {
-                    Some(true) => any_move = true,
-                    None => return None,
-                    Some(false) => {}
-                }
-            }
-            Some(any_move)
-        }
-
-        // Ref - ephemeral, always immediately consumed. Skip (not subject to move analysis).
-        Ty::Ref(..) => None,
+        Ty::String
+        | Ty::Handle(..)
+        | Ty::UserDefined { .. }
+        | Ty::Array(..)
+        | Ty::Option(..)
+        | Ty::Tuple(..)
+        | Ty::Object(..)
+        | Ty::Enum { .. }
+        | Ty::Fn { .. } => Some(true),
 
         // Unknown - skip
         Ty::Error(_) => None,
@@ -237,16 +168,6 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
         return;
     }
 
-    // Build ref_target map: Ref dst -> RefTarget.
-    let mut ref_target: FxHashMap<ValueId, crate::ir::RefTarget> = FxHashMap::default();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Ref { dst, target, .. } = &inst.kind {
-                ref_target.insert(*dst, target.clone());
-            }
-        }
-    }
-
     let n = cfg.blocks.len();
     let mut block_entry: Vec<MoveState> = (0..n).map(|_| MoveState::new()).collect();
     let mut block_exit: Vec<MoveState> = (0..n).map(|_| MoveState::new()).collect();
@@ -267,7 +188,6 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                 i,
                 inst,
                 &cfg.val_types,
-                &ref_target,
                 &mut state,
                 errors,
             );
@@ -426,7 +346,6 @@ fn process_inst(
     inst_idx: usize,
     inst: &Inst,
     val_types: &FxHashMap<ValueId, Ty>,
-    ref_target: &FxHashMap<ValueId, crate::ir::RefTarget>,
     state: &mut MoveState,
     errors: &mut Vec<ValidationError>,
 ) {
@@ -440,60 +359,55 @@ fn process_inst(
         InstKind::Const { dst, .. } | InstKind::Poison { dst } | InstKind::Undef { dst } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        // Ref: register target for subsequent Load/Store lookup, define dst as alive.
-        InstKind::Ref { dst, target, .. } => {
-            // Note: ref_target is pre-built; just mark dst alive.
-            let _ = target;
+        InstKind::Ref { dst, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        // Load: src is a Ref (not consumed as move-only - Refs are ephemeral).
-        // Define dst. Track variable liveness by name.
-        InstKind::Load { dst, src, .. } => {
-            // Note: do NOT try_consume_value on src - it's a Ref type which
-            // is ephemeral and not subject to move checking.
-            // Variable name tracking: if src points to a Var/Param, check var liveness.
-            if let Some(target) = ref_target.get(src) {
-                let name = match target {
-                    crate::ir::RefTarget::Var(n) | crate::ir::RefTarget::Param(n) => Some(*n),
-                    crate::ir::RefTarget::Context(_) => None,
-                };
-                if let Some(name) = name {
-                    // Check if variable has been moved
-                    if let Some(Liveness::Moved { at }) = state.get_var(name)
-                        && let Some(ty) = val_types.get(dst)
-                        && is_move_only(ty) == Some(true)
-                    {
-                        errors.push(ValidationError {
-                            scope: scope.to_string(),
-                            inst_index: inst_idx,
-                            span,
-                            kind: ValidationErrorKind::UseAfterMove {
-                                value_id: dst.to_raw() as u32,
-                                moved_at: at,
-                                ty: ty.clone(),
-                            },
-                        });
-                    }
-                    // Loading move-only -> var is now moved
-                    if let Some(ty) = val_types.get(dst)
-                        && is_move_only(ty) == Some(true)
-                    {
-                        state.set_var(name, Liveness::Moved { at: inst_idx });
-                    }
+        // Take: a move-only value leaves its storage; a second take is a use
+        // after move.
+        InstKind::Take { dst, target, .. } => {
+            let name = match target {
+                crate::ir::RefTarget::Var(n) | crate::ir::RefTarget::Param(n) => Some(*n),
+                crate::ir::RefTarget::Context(_) => None,
+            };
+            if let Some(name) = name {
+                if let Some(Liveness::Moved { at }) = state.get_var(name)
+                    && let Some(ty) = val_types.get(dst)
+                    && is_move_only(ty) == Some(true)
+                {
+                    errors.push(ValidationError {
+                        scope: scope.to_string(),
+                        inst_index: inst_idx,
+                        span,
+                        kind: ValidationErrorKind::UseAfterMove {
+                            value_id: dst.to_raw() as u32,
+                            moved_at: at,
+                            ty: ty.clone(),
+                        },
+                    });
+                }
+                if let Some(ty) = val_types.get(dst)
+                    && is_move_only(ty) == Some(true)
+                {
+                    state.set_var(name, Liveness::Moved { at: inst_idx });
                 }
             }
             state.set_value(*dst, Liveness::Alive);
         }
-        // Store: dst is a Ref (ephemeral, not move-checked). Consume value. Revive variable.
-        InstKind::Store { dst, value, .. } => {
-            // Note: do NOT try_consume_value on dst - it's a Ref type.
+        // Assign consumes the value and revives the storage.
+        InstKind::Assign { target, value, .. } => {
             try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
-            // Variable name tracking: Store revives the variable.
-            if let Some(target) = ref_target.get(dst)
-                && let crate::ir::RefTarget::Var(name) = target
-            {
+            if let crate::ir::RefTarget::Var(name) = target {
                 state.set_var(*name, Liveness::Alive);
             }
+        }
+        // Load copies a word out through a reference; Store moves a value
+        // in through one. The reference itself is a word and is never
+        // consumed.
+        InstKind::Load { dst, .. } => {
+            state.set_value(*dst, Liveness::Alive);
+        }
+        InstKind::Store { value, .. } => {
+            try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
         }
         InstKind::BlockLabel { params, .. } => {
             for p in params {
@@ -516,11 +430,7 @@ fn process_inst(
         }
         // Calls - all args are consumed; indirect callee is also consumed
         InstKind::FunctionCall {
-            dst,
-            callee,
-            args,
-            lent,
-            ..
+            dst, callee, args, ..
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(scope, inst_idx, span, *closure, val_types, state, errors);
@@ -529,9 +439,6 @@ fn process_inst(
                 try_consume_value(scope, inst_idx, span, *arg, val_types, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
-            for l in lent {
-                state.set_value(*l, Liveness::Alive);
-            }
         }
 
         // Constructors - elements are consumed
@@ -641,12 +548,9 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
         // Eval - consumes Handle (move-only), defines dst
-        InstKind::Eval { dst, src, lent, .. } => {
+        InstKind::Eval { dst, src, .. } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
             state.set_value(*dst, Liveness::Alive);
-            for l in lent {
-                state.set_value(*l, Liveness::Alive);
-            }
         }
 
         // Control flow - handled at block level
@@ -712,18 +616,22 @@ mod tests {
     }
 
     #[test]
-    fn pure_types_are_copy() {
+    fn only_primitives_copy() {
         assert_eq!(is_move_only(&Ty::Int), Some(false));
-        assert_eq!(is_move_only(&Ty::String), Some(false));
         assert_eq!(is_move_only(&Ty::Bool), Some(false));
         assert_eq!(
-            is_move_only(&Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
+            is_move_only(&Ty::Ref(crate::ty::Mutability::Shared, Box::new(Ty::String))),
             Some(false)
+        );
+        assert_eq!(is_move_only(&Ty::String), Some(true));
+        assert_eq!(
+            is_move_only(&Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
+            Some(true)
         );
     }
 
     #[test]
-    fn user_defined_without_identity_copies() {
+    fn user_defined_without_identity_moves() {
         let i = Interner::new();
         let plain = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("Plain")),
@@ -731,7 +639,7 @@ mod tests {
             effect_args: vec![],
             identity_args: vec![],
         };
-        assert_eq!(is_move_only(&plain), Some(false));
+        assert_eq!(is_move_only(&plain), Some(true));
     }
 
     #[test]
@@ -757,14 +665,14 @@ mod tests {
     }
 
     #[test]
-    fn fn_with_pure_captures_is_copy() {
+    fn fn_moves() {
         let ty = Ty::Fn {
             params: vec![param(Ty::Int)],
             ret: Box::new(Ty::Int),
             captures: vec![Ty::Int, Ty::String],
             effect: crate::ty::Effect::OPAQUE.into(),
         };
-        assert_eq!(is_move_only(&ty), Some(false));
+        assert_eq!(is_move_only(&ty), Some(true));
     }
 
     // -- move check integration tests --
@@ -795,7 +703,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v0],
                     order: None,
-                    lent: Vec::new(),
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v2,
@@ -803,7 +710,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v0],
                     order: None,
-                    lent: Vec::new(),
                 }),
             ],
             val_types,
@@ -837,7 +743,6 @@ mod tests {
                 callee_ty: Ty::error(),
                 args: vec![v0],
                 order: None,
-                lent: Vec::new(),
             })],
             val_types,
         );
@@ -855,12 +760,8 @@ mod tests {
         let v3 = vf.next();
         let v4 = vf.next();
         let v5 = vf.next();
-        let r0 = vf.next(); // ref for first Store
-        let r1 = vf.next(); // ref for first Load
-        let r2 = vf.next(); // ref for second Store
-        let r3 = vf.next(); // ref for second Load
         let a = vf.next(); // storage slot for variable "a"
-        // $a = move-only (v0), Load (v1) -> moved, $a = new value (v2) -> alive, Load (v3) -> OK
+        // $a = move-only (v0), Take (v1) -> moved, $a = new value (v2) -> alive, Take (v3) -> OK
         let mut val_types = FxHashMap::default();
         let move_ty = test_user_defined();
         val_types.insert(v0, move_ty.clone());
@@ -879,19 +780,17 @@ mod tests {
         let module = make_module(
             vec![
                 // $a = v0 (move-only)
-                inst(InstKind::Ref {
-                    dst: r0,
+                inst(InstKind::Assign {
                     target: RefTarget::Var(a),
                     path: vec![],
+                    value: v0,
                 }),
-                inst(InstKind::Store { dst: r0, value: v0 }),
                 // v1 = $a -> moves $a
-                inst(InstKind::Ref {
-                    dst: r1,
+                inst(InstKind::Take {
+                    dst: v1,
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Load { dst: v1, src: r1 }),
                 // use v1
                 inst(InstKind::FunctionCall {
                     dst: v4,
@@ -899,22 +798,19 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v1],
                     order: None,
-                    lent: Vec::new(),
                 }),
                 // $a = v2 (new value) -> revives $a
-                inst(InstKind::Ref {
-                    dst: r2,
+                inst(InstKind::Assign {
                     target: RefTarget::Var(a),
                     path: vec![],
+                    value: v2,
                 }),
-                inst(InstKind::Store { dst: r2, value: v2 }),
                 // v3 = $a -> OK (new value)
-                inst(InstKind::Ref {
-                    dst: r3,
+                inst(InstKind::Take {
+                    dst: v3,
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Load { dst: v3, src: r3 }),
                 // use v3
                 inst(InstKind::FunctionCall {
                     dst: v5,
@@ -922,7 +818,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v3],
                     order: None,
-                    lent: Vec::new(),
                 }),
             ],
             val_types,
@@ -943,11 +838,8 @@ mod tests {
         let v2 = vf.next();
         let v3 = vf.next();
         let v4 = vf.next();
-        let r0 = vf.next(); // ref for Store
-        let r1 = vf.next(); // ref for first Load
-        let r2 = vf.next(); // ref for second Load
         let a = vf.next(); // storage slot for variable "a"
-        // $a = move-only, Load -> moved, Load again -> ERROR
+        // $a = move-only, Take -> moved, Take again -> ERROR
         let mut val_types = FxHashMap::default();
         let move_ty = test_user_defined();
         val_types.insert(v0, move_ty.clone());
@@ -964,40 +856,35 @@ mod tests {
 
         let module = make_module(
             vec![
-                inst(InstKind::Ref {
-                    dst: r0,
+                inst(InstKind::Assign {
+                    target: RefTarget::Var(a),
+                    path: vec![],
+                    value: v0,
+                }),
+                inst(InstKind::Take {
+                    dst: v1,
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Store { dst: r0, value: v0 }),
-                inst(InstKind::Ref {
-                    dst: r1,
-                    target: RefTarget::Var(a),
-                    path: vec![],
-                }),
-                inst(InstKind::Load { dst: v1, src: r1 }),
                 inst(InstKind::FunctionCall {
                     dst: v3,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v1],
                     order: None,
-                    lent: Vec::new(),
                 }),
-                // Second load - $a already moved
-                inst(InstKind::Ref {
-                    dst: r2,
+                // Second take - $a already moved
+                inst(InstKind::Take {
+                    dst: v2,
                     target: RefTarget::Var(a),
                     path: vec![],
                 }),
-                inst(InstKind::Load { dst: v2, src: r2 }),
                 inst(InstKind::FunctionCall {
                     dst: v4,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
                     callee_ty: Ty::error(),
                     args: vec![v2],
                     order: None,
-                    lent: Vec::new(),
                 }),
             ],
             val_types,

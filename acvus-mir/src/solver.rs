@@ -585,7 +585,7 @@ impl<'src> Solver<'src> {
                     _ => false,
                 }
             }
-            TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Ref(inner) => {
+            TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Ref(_, inner) => {
                 self.occurs_in(id, inner)
             }
             TyTerm::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
@@ -904,7 +904,7 @@ impl<'src> Solver<'src> {
                     ..
                 },
             ) => {
-                if pa.len() != pb.len() || pa.iter().zip(pb).any(|(x, y)| x.mode != y.mode) {
+                if pa.len() != pb.len() {
                     return Err((a.clone(), b.clone()));
                 }
                 let param_pol = pol.flip();
@@ -1307,9 +1307,10 @@ impl<'src> Solver<'src> {
             TyTerm::Handle(inner) => TyTerm::Handle(Box::new(
                 self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
             )),
-            TyTerm::Ref(inner) => TyTerm::Ref(Box::new(
-                self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
-            )),
+            TyTerm::Ref(m, inner) => TyTerm::Ref(
+                *m,
+                Box::new(self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map)),
+            ),
             other => other.clone(),
         }
     }

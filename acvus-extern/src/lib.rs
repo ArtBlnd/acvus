@@ -10,6 +10,7 @@ mod func;
 mod handler;
 mod identity;
 mod len;
+mod reference;
 mod registry;
 mod runtime;
 mod ty_arg;
@@ -17,9 +18,10 @@ mod ty_arg;
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use error::ExternError;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
-pub use handler::{ExternEntry, ExternHandler, MonoHandler, MonoInstance, Returned};
+pub use handler::{ExternEntry, ExternHandler, MonoHandler, MonoInstance};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
+pub use reference::{Ref, RefMut};
 pub use registry::{
     AsyncHandler, ExternFn, ExternFnDecl, ExternItems, ExternRegistry, ExternTypeDecl, Registered,
     SyncHandler,
@@ -31,7 +33,7 @@ pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry};
 
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, IdentityTerm, LenTerm, ParamMode, ParamTerm, Poly, PolyBuilder,
+    CastRule, Effect, EffectTerm, IdentityTerm, LenTerm, Mutability, ParamTerm, Poly, PolyBuilder,
     PolyTy, Ty, TyTerm, TyVarBound, TypeRegistry, UserDefinedDecl, try_freeze_poly,
 };
 pub use acvus_utils::{Astr, Interner, QualifiedRef};

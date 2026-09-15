@@ -7,8 +7,8 @@
 //! before another store overwrites it. A store is **dead** if on every path
 //! from the store, the context is written again before being read.
 //!
-//! "Read" includes: Load from context Ref,
-//! and Return (contexts are externally observable after return).
+//! A read is a whole `Take` of the context, a call, or a Return (contexts
+//! are externally observable after return); a write is a whole `Assign`.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeSet;
@@ -16,27 +16,7 @@ use std::collections::BTreeSet;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{InstKind, RefTarget, ValueId};
-
-// -- ref_to_ctx: ValueId -> QualifiedRef mapping ---------------------
-
-/// Build a map from Ref dst ValueId -> QualifiedRef for all identity context Refs.
-fn build_ref_to_ctx(cfg: &CfgBody) -> FxHashMap<ValueId, QualifiedRef> {
-    let mut map = FxHashMap::default();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Ref {
-                dst,
-                target: RefTarget::Context(qref),
-                path,
-            } = &inst.kind
-                && path.is_empty()
-            {
-                map.insert(*dst, *qref);
-            }
-        }
-    }
-    map
-}
+use crate::optimize::context_ops::{context_read, context_written};
 
 // -- Per-block context gen/kill sets ---------------------------------
 
@@ -57,7 +37,6 @@ struct BlockContextInfo {
 
 fn analyze_block(
     block: &crate::cfg::Block,
-    ref_to_ctx: &FxHashMap<ValueId, QualifiedRef>,
     written_contexts: &BTreeSet<QualifiedRef>,
 ) -> BlockContextInfo {
     let mut reads = BTreeSet::new();
@@ -72,33 +51,18 @@ fn analyze_block(
 
     // Walk instructions backwards.
     for inst in block.insts.iter().rev() {
-        match &inst.kind {
-            // Load from context Ref -> read.
-            InstKind::Load { src, .. } => {
-                if let Some(&qref) = ref_to_ctx.get(src) {
-                    // This is a read. Remove from kills (if written later was tracked),
-                    // add to reads.
-                    kills.remove(&qref);
-                    reads.insert(qref);
-                }
-            }
-
-            // Store to context Ref -> write (kill).
-            InstKind::Store { dst, .. } => {
-                if let Some(&qref) = ref_to_ctx.get(dst) {
-                    // This is a write. Remove from reads (if read later was tracked),
-                    // add to kills.
-                    reads.remove(&qref);
-                    kills.insert(qref);
-                }
-            }
-
-            InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. } => {
-                kills.clear();
-                reads.extend(written_contexts.iter().copied());
-            }
-
-            _ => {}
+        if let Some(qref) = context_read(&inst.kind) {
+            kills.remove(&qref);
+            reads.insert(qref);
+        } else if let Some(qref) = context_written(&inst.kind) {
+            reads.remove(&qref);
+            kills.insert(qref);
+        } else if matches!(
+            &inst.kind,
+            InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
+        ) {
+            kills.clear();
+            reads.extend(written_contexts.iter().copied());
         }
     }
 
@@ -164,31 +128,24 @@ fn compute_context_liveness(
 
 /// Run Dead Store Elimination on a CfgBody.
 ///
-/// Removes context Store instructions (and their preceding Ref) that are
-/// dead - the stored value is guaranteed to be overwritten before being read.
+/// Removes context `Assign` instructions that are dead - the assigned value
+/// is guaranteed to be overwritten before being read.
 pub fn run(cfg: &mut CfgBody) {
-    let ref_to_ctx = build_ref_to_ctx(cfg);
-    if ref_to_ctx.is_empty() {
+    let written_contexts: BTreeSet<QualifiedRef> = cfg
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter_map(|inst| context_written(&inst.kind))
+        .collect();
+    if written_contexts.is_empty() {
         return;
-    }
-
-    // Collect all written contexts.
-    let mut written_contexts = BTreeSet::new();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Store { dst, .. } = &inst.kind {
-                if let Some(&qref) = ref_to_ctx.get(dst) {
-                    written_contexts.insert(qref);
-                }
-            }
-        }
     }
 
     // Build per-block info.
     let block_infos: Vec<BlockContextInfo> = cfg
         .blocks
         .iter()
-        .map(|block| analyze_block(block, &ref_to_ctx, &written_contexts))
+        .map(|block| analyze_block(block, &written_contexts))
         .collect();
 
     // Compute backward liveness.
@@ -212,65 +169,24 @@ pub fn run(cfg: &mut CfgBody) {
         }
 
         for (ii, inst) in block.insts.iter().enumerate().rev() {
-            match &inst.kind {
-                InstKind::Load { src, .. } => {
-                    if let Some(&qref) = ref_to_ctx.get(src) {
-                        live.insert(qref);
-                    }
+            if let Some(qref) = context_read(&inst.kind) {
+                live.insert(qref);
+            } else if let Some(qref) = context_written(&inst.kind) {
+                if !live.contains(&qref) {
+                    dead_insts.insert((bi, ii));
                 }
-
-                InstKind::Store { dst, .. } => {
-                    if let Some(&qref) = ref_to_ctx.get(dst) {
-                        if !live.contains(&qref) {
-                            // Dead store - context will be overwritten before read.
-                            dead_insts.insert((bi, ii));
-                            // Also mark the Ref instruction if it immediately precedes.
-                            if ii > 0 {
-                                if let InstKind::Ref {
-                                    dst: ref_dst,
-                                    target: RefTarget::Context(_),
-                                    ..
-                                } = &block.insts[ii - 1].kind
-                                {
-                                    if ref_dst == dst {
-                                        dead_insts.insert((bi, ii - 1));
-                                    }
-                                }
-                            }
-                        }
-                        // After processing this store (backward), remove from live.
-                        // (The store kills liveness of previous stores to same context.)
-                        live.remove(&qref);
-                    }
-                }
-
-                InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. } => {
-                    live.extend(written_contexts.iter().copied());
-                }
-
-                _ => {}
+                live.remove(&qref);
+            } else if matches!(
+                &inst.kind,
+                InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
+            ) {
+                live.extend(written_contexts.iter().copied());
             }
         }
     }
 
     if dead_insts.is_empty() {
         return;
-    }
-
-    // Mark orphaned Refs: context Ref whose dst has no live use in ANY block.
-    for (bi, block) in cfg.blocks.iter().enumerate() {
-        for (ii, inst) in block.insts.iter().enumerate() {
-            if let InstKind::Ref {
-                dst,
-                target: RefTarget::Context(_),
-                ..
-            } = &inst.kind
-            {
-                if !ref_has_live_use(&cfg.blocks, *dst, &dead_insts) {
-                    dead_insts.insert((bi, ii));
-                }
-            }
-        }
     }
 
     // Remove dead instructions.
@@ -282,27 +198,6 @@ pub fn run(cfg: &mut CfgBody) {
             keep
         });
     }
-}
-
-/// Check if a Ref's dst ValueId is used by any non-dead Load or Store in any block.
-fn ref_has_live_use(
-    blocks: &[crate::cfg::Block],
-    ref_dst: ValueId,
-    dead_insts: &FxHashSet<(usize, usize)>,
-) -> bool {
-    for (bi, block) in blocks.iter().enumerate() {
-        for (ii, inst) in block.insts.iter().enumerate() {
-            if dead_insts.contains(&(bi, ii)) {
-                continue;
-            }
-            match &inst.kind {
-                InstKind::Load { src, .. } if *src == ref_dst => return true,
-                InstKind::Store { dst, .. } if *dst == ref_dst => return true,
-                _ => {}
-            }
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -342,230 +237,135 @@ mod tests {
         }
     }
 
-    fn count_stores(cfg: &CfgBody) -> usize {
+    fn count_assigns(cfg: &CfgBody) -> usize {
         cfg.blocks
             .iter()
             .flat_map(|b| &b.insts)
-            .filter(|i| matches!(i.kind, InstKind::Store { .. }))
+            .filter(|i| matches!(i.kind, InstKind::Assign { .. }))
             .count()
     }
 
-    fn count_refs(cfg: &CfgBody) -> usize {
-        cfg.blocks
-            .iter()
-            .flat_map(|b| &b.insts)
-            .filter(|i| matches!(i.kind, InstKind::Ref { .. }))
-            .count()
+    fn assign(ctx: QualifiedRef, value: ValueId) -> InstKind {
+        InstKind::Assign {
+            target: RefTarget::Context(ctx),
+            path: vec![],
+            value,
+        }
     }
 
-    /// Consecutive stores to the same context: first is dead.
-    /// Ref @x -> Store @x = v1 -> Ref @x -> Store @x = v2 -> Return v2
-    /// After DSE: first Ref+Store removed.
+    fn take(ctx: QualifiedRef, dst: ValueId) -> InstKind {
+        InstKind::Take {
+            dst,
+            target: RefTarget::Context(ctx),
+            path: vec![],
+        }
+    }
+
+    /// `assign @x = v0; assign @x = v1; return v1`: the first assign is dead.
     #[test]
-    fn consecutive_stores_first_dead() {
+    fn consecutive_assigns_first_dead() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
-
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
+        val_types.insert(v(0), Ty::Int);
         val_types.insert(v(1), Ty::Int);
-        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int)));
-        val_types.insert(v(3), Ty::Int);
-
         let body = make_body(
             vec![
-                InstKind::Ref {
-                    dst: v(0),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(0),
-                    value: v(1),
-                },
-                InstKind::Ref {
-                    dst: v(2),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(2),
-                    value: v(3),
-                },
+                assign(ctx, v(0)),
+                assign(ctx, v(1)),
                 InstKind::Return {
-                    value: v(3),
+                    value: v(1),
                     order: None,
                 },
             ],
             val_types,
         );
-
         let mut cfg = cfg::promote(body);
-        assert_eq!(count_stores(&cfg), 2);
-        assert_eq!(count_refs(&cfg), 2);
-
+        assert_eq!(count_assigns(&cfg), 2);
         run(&mut cfg);
-
-        assert_eq!(count_stores(&cfg), 1, "first dead store should be removed");
-        assert_eq!(count_refs(&cfg), 1, "orphaned ref should be removed");
+        assert_eq!(count_assigns(&cfg), 1, "first dead assign should be removed");
     }
 
-    /// Store followed by Load: store is live (needed by load).
-    /// Ref @x -> Store @x = v1 -> Ref @x -> Load @x -> Return loaded
-    /// After DSE: nothing removed.
+    /// `assign @x = v0; v1 = take @x; return v1`: the assign is read.
     #[test]
-    fn store_then_load_is_live() {
+    fn assign_then_take_is_live() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
-
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
+        val_types.insert(v(0), Ty::Int);
         val_types.insert(v(1), Ty::Int);
-        val_types.insert(v(2), Ty::Ref(Box::new(Ty::Int)));
-        val_types.insert(v(3), Ty::Int);
-
         let body = make_body(
             vec![
-                InstKind::Ref {
-                    dst: v(0),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(0),
-                    value: v(1),
-                },
-                InstKind::Ref {
-                    dst: v(2),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Load {
-                    dst: v(3),
-                    src: v(2),
-                },
+                assign(ctx, v(0)),
+                take(ctx, v(1)),
                 InstKind::Return {
-                    value: v(3),
+                    value: v(1),
                     order: None,
                 },
             ],
             val_types,
         );
-
         let mut cfg = cfg::promote(body);
-        let stores_before = count_stores(&cfg);
-
         run(&mut cfg);
-
-        assert_eq!(
-            count_stores(&cfg),
-            stores_before,
-            "store before load must not be removed"
-        );
+        assert_eq!(count_assigns(&cfg), 1, "assign before take must not be removed");
     }
 
     #[test]
-    fn store_then_call_then_store_keeps_first() {
+    fn assign_then_call_then_assign_keeps_first() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let f = QualifiedRef::root(i.intern("f"));
-
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
+        val_types.insert(v(0), Ty::Int);
         val_types.insert(v(1), Ty::Int);
-        val_types.insert(v(2), Ty::Int);
-        val_types.insert(v(3), Ty::Ref(Box::new(Ty::Int)));
-
         let body = make_body(
             vec![
-                InstKind::Ref {
-                    dst: v(0),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(0),
-                    value: v(1),
-                },
+                assign(ctx, v(0)),
                 InstKind::FunctionCall {
-                    dst: v(2),
+                    dst: v(1),
                     callee: crate::ir::Callee::Direct(f),
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
-                InstKind::Ref {
-                    dst: v(3),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(3),
-                    value: v(2),
-                },
+                assign(ctx, v(1)),
                 InstKind::Return {
-                    value: v(2),
+                    value: v(1),
                     order: None,
                 },
             ],
             val_types,
         );
-
         let mut cfg = cfg::promote(body);
-        assert_eq!(count_stores(&cfg), 2);
-
         run(&mut cfg);
-
         assert_eq!(
-            count_stores(&cfg),
+            count_assigns(&cfg),
             2,
-            "the call may read @x, so the first store stays"
+            "the call may read @x, so the first assign stays"
         );
     }
 
-    /// Store to context before return is live (externally observable).
-    /// Ref @x -> Store @x = v1 -> Return v2
-    /// Store is live because return exposes context state.
+    /// An assign before return is externally observable.
     #[test]
-    fn store_before_return_is_live() {
+    fn assign_before_return_is_live() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
-
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Ref(Box::new(Ty::Int)));
+        val_types.insert(v(0), Ty::Int);
         val_types.insert(v(1), Ty::Int);
-        val_types.insert(v(2), Ty::Int);
-
         let body = make_body(
             vec![
-                InstKind::Ref {
-                    dst: v(0),
-                    target: RefTarget::Context(ctx),
-                    path: vec![],
-                },
-                InstKind::Store {
-                    dst: v(0),
-                    value: v(1),
-                },
+                assign(ctx, v(0)),
                 InstKind::Return {
-                    value: v(2),
+                    value: v(1),
                     order: None,
                 },
             ],
             val_types,
         );
-
         let mut cfg = cfg::promote(body);
-        let stores_before = count_stores(&cfg);
-
         run(&mut cfg);
-
-        assert_eq!(
-            count_stores(&cfg),
-            stores_before,
-            "store before return is externally observable"
-        );
+        assert_eq!(count_assigns(&cfg), 1, "assign before return is externally observable");
     }
 
     /// No context stores -> DSE is a no-op.

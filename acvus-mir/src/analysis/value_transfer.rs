@@ -40,6 +40,22 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
                 state.set(*dst, AbstractValue::Top);
             }
 
+            InstKind::Take {
+                dst,
+                target: crate::ir::RefTarget::Context(ctx),
+                ..
+            } => {
+                let val = if let Some(kv) = self.known_context.get(ctx) {
+                    AbstractValue::from_known_value(kv)
+                } else {
+                    AbstractValue::Top
+                };
+                state.set(*dst, val);
+            }
+            InstKind::Take { dst, .. } => {
+                state.set(*dst, AbstractValue::Top);
+            }
+
             InstKind::Load { dst, src, .. } => {
                 state.set(*dst, state.get(*src));
             }
@@ -148,27 +164,17 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
             | InstKind::Undef { dst } => {
                 state.set(*dst, AbstractValue::Top);
             }
-            InstKind::Eval {
-                dst, order, lent, ..
-            } => {
+            InstKind::Eval { dst, order, .. } => {
                 state.set(*dst, AbstractValue::Top);
                 if let Some(o) = order {
                     state.set(*o, AbstractValue::Top);
                 }
-                for l in lent {
-                    state.set(*l, AbstractValue::Top);
-                }
             }
 
-            InstKind::FunctionCall {
-                dst, order, lent, ..
-            } => {
+            InstKind::FunctionCall { dst, order, .. } => {
                 state.set(*dst, AbstractValue::Top);
                 if let Some(edge) = order {
                     state.set(edge.after, AbstractValue::Top);
-                }
-                for l in lent {
-                    state.set(*l, AbstractValue::Top);
                 }
             }
 
@@ -182,6 +188,7 @@ impl<'a> DataflowAnalysis for ValueDomainTransfer<'a> {
 
             // Instructions that don't produce values
             InstKind::Store { .. }
+            | InstKind::Assign { .. }
             | InstKind::Drop { .. }
             | InstKind::Return { .. }
             | InstKind::Jump { .. }

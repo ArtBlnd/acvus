@@ -6,23 +6,21 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 |   r0 = ref @items
-     2 |   r1 = load r0
-     3 |   r2 = call #0(r1)
-     4 |   r3 = closure L0 []
-     5 |   r4 = call #1(r2, r3)
-     6 |   r5 = call #2(r4)
-     7 |   r6 = T0 + r5
-     8 |   return r6
+     1 |   r0 = take @items
+     2 |   r1 = call #0(r0)
+     3 |   r2 = closure L0 []
+     4 |   r3 = call #1(r1, r2)
+     5 |   r4 = call #2(r3)
+     6 |   r5 = T0 + r4
+     7 |   return r5
 
-    ; r0 (@items) : Ref<Array<Int, 3>>
-    ; r1 (v3) : Array<Int, 3>
-    ; r2 (v4) : Iterator<Int, Pure, #IdentityId(3)>
-    ; r3 (v5) : Fn(Int, Int) -> Int with reads {@items}
-    ; r4 (reduce(...)) : Int
-    ; r5 (to_string(...)) : String
-    ; r6 (v8) : String
-    ; r7 (v1) : String
+    ; r0 (@items) : Array<Int, 3>
+    ; r1 (v3) : Iterator<Int, Pure, #IdentityId(3)>
+    ; r2 (v4) : Fn(Int, Int) -> Int with reads {@items}
+    ; r3 (reduce(...)) : Int
+    ; r4 (to_string(...)) : String
+    ; r5 (v7) : String
+    ; r6 (v1) : String
 
 === closure L0 (ValueId(0), ValueId(1)) ===
      0 |   r0 = undef
@@ -30,14 +28,10 @@ expression: ir
      2 |   r2 = r3 + r4
      3 |   return r2
 
-    ; r0 (v12) : Int
-    ; r1 (v13) : Int
-    ; r2 (v11) : Int
+    ; r0 (v8) : Int
+    ; r1 (v9) : Int
+    ; r2 (v7) : Int
     ; r3 (v1) : Int
     ; r4 (v2) : Int
-    ; r5 (v7) : Ref<Int>
+    ; r5 (a) : Int
     ; r6 (b) : Int
-    ; r7 (v6) : Ref<Int>
-    ; r8 (v9) : Ref<Int>
-    ; r9 (a) : Int
-    ; r10 (v4) : Ref<Int>

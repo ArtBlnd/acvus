@@ -8,29 +8,21 @@ expression: ir
      3 |   jump_if r2 then L0 else L2
      4 | L0:
      5 |   r3 = unwrap r0
-     6 |   r4 = ref v
-     7 |   store r4 = r3
-     8 |   r5 = ref v
-     9 |   r6 = load r5
-    10 |   jump L1(r6)
-    11 | L2:
-    13 |   jump L1(0 (r7))
-    14 | L1(r8: Int):
-    15 |   r9 = ref x
-    16 |   store r9 = r8
-    17 |   r10 = ref x
-    18 |   r11 = load r10
-    19 |   return r11
+     6 |   assign v = r3
+     7 |   r4 = take v
+     8 |   jump L1(r4)
+     9 | L2:
+    11 |   jump L1(0 (r5))
+    12 | L1(r6: Int):
+    13 |   assign x = r6
+    14 |   r7 = take x
+    15 |   return r7
 
     ; r0 (v2) : Option<Int>
     ; r1 (v1) : Int
     ; r2 (v3) : Bool
     ; r3 (v) : Int
-    ; r4 (v6) : Ref<Int>
-    ; r5 (v7) : Ref<Int>
-    ; r6 (v) : Int
-    ; r7 (v9) : Int
-    ; r8 (v10) : Int
-    ; r9 (v12) : Ref<Int>
-    ; r10 (v13) : Ref<Int>
-    ; r11 (x) : Int
+    ; r4 (v) : Int
+    ; r5 (v7) : Int
+    ; r6 (v8) : Int
+    ; r7 (x) : Int

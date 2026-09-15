@@ -112,7 +112,7 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
             }
             (Ty::Option(i), TyTerm::Option(pi)) => go(i, pi, seen),
             (Ty::Handle(i), TyTerm::Handle(pi)) => go(i, pi, seen),
-            (Ty::Ref(i), TyTerm::Ref(pi)) => go(i, pi, seen),
+            (Ty::Ref(m, i), TyTerm::Ref(pm, pi)) => m == pm && go(i, pi, seen),
             (Ty::Tuple(es), TyTerm::Tuple(ps)) => {
                 es.len() == ps.len() && es.iter().zip(ps).all(|(e, p)| go(e, p, seen))
             }
@@ -141,7 +141,7 @@ pub fn matches_poly(ty: &Ty, pattern: &PolyTy) -> bool {
                     && params
                         .iter()
                         .zip(pp)
-                        .all(|(a, b)| a.mode == b.mode && go(&a.ty, &b.ty, seen))
+                        .all(|(a, b)| go(&a.ty, &b.ty, seen))
                     && go(ret, pr, seen)
             }
             (
@@ -801,7 +801,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}{}", p.mode.prefix(), p.ty.display(self.interner))?;
+                    write!(f, "{}", p.ty.display(self.interner))?;
                 }
                 write!(f, ") -> {}", ret.display(self.interner))?;
                 let effect = effect.get();
@@ -871,7 +871,7 @@ impl<'a> fmt::Display for TyDisplay<'a> {
                 Ok(())
             }
             Ty::Enum { name, .. } => write!(f, "{}", self.interner.resolve(*name)),
-            Ty::Ref(inner) => write!(f, "Ref<{}>", inner.display(self.interner)),
+            Ty::Ref(m, inner) => write!(f, "{}{}", m.prefix(), inner.display(self.interner)),
             Ty::Error(_) => write!(f, "<error>"),
             Ty::Var(v) => match *v {},
         }
@@ -1044,7 +1044,9 @@ pub enum TyTerm<V: Phase> {
     },
     // Resources
     Handle(Box<TyTerm<V>>),
-    Ref(Box<TyTerm<V>>),
+    /// `&T` or `&mut T`: a second name for a storage holding a `T`
+    /// (RFC-0018). A word at runtime; never data.
+    Ref(Mutability, Box<TyTerm<V>>),
     // Special
     Error(ErrorToken),
     /// Inference variable - only inhabitable when `V = Infer`.
@@ -1052,51 +1054,33 @@ pub enum TyTerm<V: Phase> {
     Var(V::TyVar),
 }
 
-/// Named, typed function parameter - parameterized over phase.
-/// How a parameter takes its argument (RFC-0015). `Borrow` and
-/// `BorrowMut` lend a place to the call: the value is given to the callee
-/// and is back in the place when the call returns, unchanged after
-/// `Borrow`, as the callee left it after `BorrowMut`.
+/// Whether a reference may write through to its storage (RFC-0018).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum ParamMode {
-    Value,
-    Borrow,
-    BorrowMut,
+pub enum Mutability {
+    Shared,
+    Mut,
 }
 
-impl ParamMode {
-    pub fn lends(self) -> bool {
-        self != ParamMode::Value
-    }
-
+impl Mutability {
     pub fn prefix(self) -> &'static str {
         match self {
-            ParamMode::Value => "",
-            ParamMode::Borrow => "&",
-            ParamMode::BorrowMut => "&mut ",
+            Mutability::Shared => "&",
+            Mutability::Mut => "&mut ",
         }
     }
 }
 
+/// Named, typed function parameter - parameterized over phase. A parameter
+/// that borrows has a reference type; there is no mode beside the type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamTerm<V: Phase> {
     pub name: Astr,
     pub ty: TyTerm<V>,
-    pub mode: ParamMode,
 }
 
 impl<V: Phase> ParamTerm<V> {
     pub fn new(name: Astr, ty: TyTerm<V>) -> Self {
-        Self {
-            name,
-            ty,
-            mode: ParamMode::Value,
-        }
-    }
-
-    pub fn with_mode(mut self, mode: ParamMode) -> Self {
-        self.mode = mode;
-        self
+        Self { name, ty }
     }
 
     /// The same parameter with another type.
@@ -1104,7 +1088,6 @@ impl<V: Phase> ParamTerm<V> {
         ParamTerm {
             name: self.name,
             ty,
-            mode: self.mode,
         }
     }
 }
@@ -1116,6 +1099,14 @@ impl<V: Phase> ParamTerm<V> {
 // resolve, instantiate) are specializations of these two operations.
 
 impl<V: Phase> TyTerm<V> {
+    /// A word-sized type the runtime copies (RFC-0018); everything else moves.
+    pub fn is_primitive(&self) -> bool {
+        matches!(
+            self,
+            TyTerm::Int | TyTerm::Float | TyTerm::Bool | TyTerm::Unit | TyTerm::Byte | TyTerm::Order
+        )
+    }
+
     /// Map this type term from phase `V` to phase `W`.
     ///
     /// Structural recursion is automatic - only variable slots and
@@ -1202,8 +1193,8 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Handle(inner) => {
                 TyTerm::Handle(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
             }
-            TyTerm::Ref(inner) => {
-                TyTerm::Ref(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
+            TyTerm::Ref(m, inner) => {
+                TyTerm::Ref(*m, Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
             }
             TyTerm::Error(token) => TyTerm::Error(*token),
             TyTerm::Var(v) => on_var(*v),
@@ -1319,12 +1310,10 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
             )?))),
-            TyTerm::Ref(inner) => Ok(TyTerm::Ref(Box::new(inner.try_map(
-                on_var,
-                on_identity,
-                on_effect,
-                on_len,
-            )?))),
+            TyTerm::Ref(m, inner) => Ok(TyTerm::Ref(
+                *m,
+                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
+            )),
             TyTerm::Error(token) => Ok(TyTerm::Error(*token)),
             TyTerm::Var(v) => on_var(*v),
         }
@@ -1384,7 +1373,6 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
                     .map(|p| ParamTerm {
                         name: p.name,
                         ty: go(&p.ty, builder),
-                        mode: p.mode,
                     })
                     .collect(),
                 ret: Box::new(go(ret, builder)),
@@ -1413,7 +1401,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
                     .collect(),
             },
             Ty::Handle(inner) => TyTerm::Handle(Box::new(go(inner, builder))),
-            Ty::Ref(inner) => TyTerm::Ref(Box::new(go(inner, builder))),
+            Ty::Ref(m, inner) => TyTerm::Ref(*m, Box::new(go(inner, builder))),
             Ty::Error(token) => TyTerm::Error(*token),
             Ty::Var(v) => match *v {},
         }
@@ -2407,7 +2395,7 @@ mod tests {
         assert!(!fn_ty.is_data());
         assert!(!Ty::Handle(Box::new(Ty::Int)).is_data());
         assert!(!Ty::Order.is_data());
-        assert!(!Ty::Ref(Box::new(Ty::Int)).is_data());
+        assert!(!Ty::Ref(Mutability::Shared, Box::new(Ty::Int)).is_data());
         assert!(!Ty::error().is_data());
     }
 

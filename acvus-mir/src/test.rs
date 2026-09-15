@@ -103,11 +103,7 @@ fn run_pipeline(
         .map(|(_, m)| m)
         .ok_or_else(|| "no module produced for target".to_string())?;
 
-    // SROA -> SSA -> DCE.
-    crate::optimize::sroa::run_body(&mut module.main, &inf.context_types);
-    for closure in module.closures.values_mut() {
-        crate::optimize::sroa::run_body(closure, &inf.context_types);
-    }
+    // SSA -> DCE.
     {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(&mut module.main, MirBody::new()));
         crate::optimize::ssa_pass::run(&mut cfg_body);

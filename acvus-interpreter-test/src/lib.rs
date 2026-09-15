@@ -4,9 +4,16 @@ use std::sync::Arc;
 use acvus_extern::ExternRegistry;
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::{
-    ExecResult, Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
+    ContextWrite, Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
     Value,
 };
+
+/// What a run produced: its value, and the final value of every context it
+/// assigned.
+pub struct Ran {
+    pub value: Value,
+    pub writes: Vec<ContextWrite>,
+}
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower, optimize as graph_optimize};
 use acvus_mir::ty::{LenTerm, PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
@@ -260,7 +267,7 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
     let result = interp.execute().await.expect("execution failed");
 
     // A template yields a String; an empty one yields unit.
-    match &result.value {
+    match &result {
         v if v.is_string() => {
             // SAFETY: the witness is String.
             unsafe { v.as_str() }.to_owned()
@@ -281,7 +288,7 @@ pub async fn run_script(interner: &Interner, source: &str, context: Context) -> 
     let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script(interner, source, &context_types);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    interp.execute().await.expect("execution failed").value
+    interp.execute().await.expect("execution failed")
 }
 
 /// Compile and execute a **script-mode** (keyword syntax: let/for/while/if), returning the result Value.
@@ -289,7 +296,7 @@ pub async fn run_script_mode(interner: &Interner, source: &str, context: Context
     let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script_mode(interner, source, &context_types);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    interp.execute().await.expect("execution failed").value
+    interp.execute().await.expect("execution failed")
 }
 
 /// Compile and execute a script with ExternFn registries, returning (result, context writes).
@@ -298,7 +305,7 @@ pub async fn run_script_with_externs(
     source: &str,
     context: Context,
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
-) -> ExecResult {
+) -> Ran {
     run_script_with_externs_and_types(
         interner,
         source,
@@ -315,7 +322,7 @@ pub async fn run_script_with_externs_and_types(
     context: Context,
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
-) -> ExecResult {
+) -> Ran {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     run_parsed_with_externs(interner, ast, context, extern_registries, type_registry).await
 }
@@ -327,7 +334,7 @@ pub async fn run_parsed_with_externs(
     context: Context,
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
-) -> ExecResult {
+) -> Ran {
     run_parsed_on(
         interner,
         ast,
@@ -347,7 +354,7 @@ pub async fn run_parsed_on(
     extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
     type_registry: acvus_mir::ty::TypeRegistry,
     executor: Arc<dyn acvus_interpreter::Executor>,
-) -> ExecResult {
+) -> Ran {
     let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_source_with_externs(
         interner,
@@ -357,7 +364,9 @@ pub async fn run_parsed_on(
         type_registry,
     );
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, executor);
-    interp.execute().await.expect("execution failed")
+    let value = interp.execute().await.expect("execution failed");
+    let writes = interp.take_writes();
+    Ran { value, writes }
 }
 
 // -- JSON helpers -------------------------------------------------

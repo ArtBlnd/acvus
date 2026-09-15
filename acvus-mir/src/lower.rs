@@ -1,4 +1,5 @@
 use acvus_ast::{
+    UnaryOp,
     AstId, BinOp, ElseBranch, Expr, IndentModifier, Literal, MatchBlock, Node, ObjectExprField,
     ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
     TuplePatternElem,
@@ -11,7 +12,7 @@ use crate::ir::{
     Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, RefTarget, ValOrigin,
     ValueId,
 };
-use crate::ty::{Effect, Ty};
+use crate::ty::{Effect, Mutability, Ty};
 use crate::typeck::TypeResolution;
 
 pub struct Lowerer<'a> {
@@ -49,10 +50,18 @@ struct AnyorderScope {
     acc: ValueId,
 }
 
-/// A place lent to a call: where it is, and the type of what it holds.
-struct LentPlace {
+/// A place a program names: where it is, and the type of what it holds.
+struct Place {
     target: RefTarget,
     path: Vec<Astr>,
+    ty: Ty,
+}
+
+/// A context place lent to a call through a temporary local.
+struct LentContext {
+    qref: QualifiedRef,
+    path: Vec<Astr>,
+    temporary: ValueId,
     ty: Ty,
 }
 
@@ -210,7 +219,7 @@ impl<'a> Lowerer<'a> {
         self.body.order_param = Some(order_param);
         let slot = self.alloc_val();
         self.set_origin(slot, ValOrigin::Named(self.interner.intern("$order")));
-        self.emit_ref_store(span, RefTarget::Var(slot), vec![], order_param);
+        self.emit_assign(span, RefTarget::Var(slot), vec![], order_param);
         self.order_slot = Some(slot);
     }
 
@@ -223,7 +232,7 @@ impl<'a> Lowerer<'a> {
     /// Read the current `Order` of the body, if it has one.
     fn current_order(&mut self, span: Span) -> Option<ValueId> {
         self.order_slot
-            .map(|slot| self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order))
+            .map(|slot| self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order))
     }
 
     /// Emit a call. A callee whose effect is not Pure takes the current
@@ -239,9 +248,10 @@ impl<'a> Lowerer<'a> {
         self.emit_call_lending(span, dst, callee, callee_ty, args, Vec::new());
     }
 
-    /// Emit a call that was lent the places in `lent_places`, in argument
-    /// order (RFC-0015): the call yields one value per place, and each is
-    /// stored back into its place.
+    /// Emit a call. A callee whose effect is not Pure takes the current
+    /// `Order` and the call advances it. A context place lent to the call
+    /// was taken into a temporary before it; each such temporary is stored
+    /// back into its context after the call (RFC-0018).
     fn emit_call_lending(
         &mut self,
         span: Span,
@@ -249,16 +259,8 @@ impl<'a> Lowerer<'a> {
         callee: Callee,
         callee_ty: Ty,
         args: Vec<ValueId>,
-        lent_places: Vec<LentPlace>,
+        lent_contexts: Vec<LentContext>,
     ) {
-        let lent: Vec<ValueId> = lent_places
-            .iter()
-            .map(|p| {
-                let v = self.alloc_val();
-                self.set_val_type(v, p.ty.clone());
-                v
-            })
-            .collect();
         let effectful = callee_ty.effect().is_some_and(|e| !e.is_pure());
         let order = if effectful {
             let slot = self.order_slot.unwrap_or_else(|| {
@@ -266,7 +268,7 @@ impl<'a> Lowerer<'a> {
             });
             let before = match self.anyorder {
                 Some(scope) => scope.entry,
-                None => self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order),
+                None => self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order),
             };
             let after = self.alloc_val();
             self.set_val_type(after, Ty::Order);
@@ -282,18 +284,18 @@ impl<'a> Lowerer<'a> {
                 callee_ty,
                 args,
                 order,
-                lent: lent.clone(),
             },
         );
-        for (place, value) in lent_places.into_iter().zip(lent) {
-            self.emit_ref_store(span, place.target, place.path, value);
+        for lent in lent_contexts {
+            let back = self.emit_take(span, RefTarget::Var(lent.temporary), vec![], lent.ty);
+            self.emit_assign(span, RefTarget::Context(lent.qref), lent.path, back);
         }
         let Some(edge) = order else {
             return;
         };
         match self.anyorder {
             Some(scope) => {
-                let acc = self.emit_ref_load(span, RefTarget::Var(scope.acc), vec![], Ty::Order);
+                let acc = self.emit_take(span, RefTarget::Var(scope.acc), vec![], Ty::Order);
                 let merged = self.alloc_val();
                 self.set_val_type(merged, Ty::Order);
                 self.emit_inst(
@@ -303,11 +305,11 @@ impl<'a> Lowerer<'a> {
                         orders: vec![acc, edge.after],
                     },
                 );
-                self.emit_ref_store(span, RefTarget::Var(scope.acc), vec![], merged);
+                self.emit_assign(span, RefTarget::Var(scope.acc), vec![], merged);
             }
             None => {
                 let slot = self.order_slot.expect("an order edge needs the slot");
-                self.emit_ref_store(span, RefTarget::Var(slot), vec![], edge.after);
+                self.emit_assign(span, RefTarget::Var(slot), vec![], edge.after);
             }
         }
     }
@@ -327,10 +329,10 @@ impl<'a> Lowerer<'a> {
         };
         let outer = self.anyorder;
         if outer.is_none() {
-            let entry = self.emit_ref_load(span, RefTarget::Var(slot), vec![], Ty::Order);
+            let entry = self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order);
             let acc = self.alloc_val();
             self.set_origin(acc, ValOrigin::Named(self.interner.intern("$anyorder")));
-            self.emit_ref_store(span, RefTarget::Var(acc), vec![], entry);
+            self.emit_assign(span, RefTarget::Var(acc), vec![], entry);
             self.anyorder = Some(AnyorderScope { entry, acc });
         }
         self.push_scope();
@@ -340,8 +342,8 @@ impl<'a> Lowerer<'a> {
         self.pop_scope();
         if outer.is_none() {
             let scope = self.anyorder.take().expect("the block opened above");
-            let exit = self.emit_ref_load(span, RefTarget::Var(scope.acc), vec![], Ty::Order);
-            self.emit_ref_store(span, RefTarget::Var(slot), vec![], exit);
+            let exit = self.emit_take(span, RefTarget::Var(scope.acc), vec![], Ty::Order);
+            self.emit_assign(span, RefTarget::Var(slot), vec![], exit);
         }
     }
 
@@ -358,7 +360,7 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or(Ty::error());
                 let slot = self.define_var(*name, ty);
-                self.emit_ref_store(*span, RefTarget::Var(slot), vec![], val);
+                self.emit_assign(*span, RefTarget::Var(slot), vec![], val);
             }
             Stmt::ContextStore {
                 name,
@@ -403,7 +405,7 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or(Ty::error());
                 let slot = self.define_var(*name, ty);
-                self.emit_ref_store(*span, RefTarget::Var(slot), vec![], val);
+                self.emit_assign(*span, RefTarget::Var(slot), vec![], val);
             }
             Stmt::LetUninit { id, name, .. } => {
                 // Type from typeck (fresh variable, unified later).
@@ -419,7 +421,7 @@ impl<'a> Lowerer<'a> {
                 let slot = self
                     .lookup_var_slot(*name)
                     .expect("Assign to undefined variable - should have been caught by typeck");
-                self.emit_ref_store(*span, RefTarget::Var(slot), vec![], val);
+                self.emit_assign(*span, RefTarget::Var(slot), vec![], val);
             }
             Stmt::While {
                 cond, body, span, ..
@@ -845,23 +847,9 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// If `val` is a Ref<T>, emit Load to materialize it into T.
-    /// If it's already a scalar value, return as-is.
-    fn ensure_loaded(&mut self, span: Span, val: ValueId) -> ValueId {
-        if let Some(Ty::Ref(inner)) = self.body.val_types.get(&val).cloned() {
-            let dst = self.alloc_val();
-            self.set_val_type(dst, *inner);
-            self.emit_inst(span, InstKind::Load { dst, src: val });
-            dst
-        } else {
-            val
-        }
-    }
-
-    /// Resolve a context alias. Returns (real_context, path) if aliased.
     /// The storage a place expression names. Type checking admitted only a
     /// local, a context, or a field path of one.
-    fn lent_place(&mut self, place: &Expr) -> LentPlace {
+    fn place(&mut self, place: &Expr) -> Place {
         let ty = self.type_of_id(place.id());
         let mut path: Vec<Astr> = Vec::new();
         let mut root = place;
@@ -876,93 +864,82 @@ impl<'a> Lowerer<'a> {
             }
         }
         path.reverse();
-        let target = match root {
-            Expr::Ident { name, .. } => RefTarget::Var(self.var_slot(name.name)),
-            Expr::ContextRef { name, .. } => RefTarget::Context(*name),
-            other => panic!("not a place: {other:?}; type checking admits only places here"),
-        };
-        LentPlace { target, path, ty }
+        let target = self
+            .storage_of(root)
+            .unwrap_or_else(|| panic!("not a place: {root:?}; type checking admits only places here"));
+        Place { target, path, ty }
     }
 
-    /// Emit Ref + Store: write `value` to the given storage target.
-    fn emit_ref_store(&mut self, span: Span, target: RefTarget, path: Vec<Astr>, value: ValueId) {
-        let val_ty = self
-            .body
-            .val_types
-            .get(&value)
-            .cloned()
-            .unwrap_or(Ty::error());
-        let ref_dst = self.alloc_val();
-        self.set_val_type(ref_dst, Ty::Ref(Box::new(val_ty)));
-        // Set origin on Ref dst for printer context name resolution.
-        match &target {
-            RefTarget::Context(qref) => self.set_origin(ref_dst, ValOrigin::Context(qref.name)),
-            RefTarget::Var(_) | RefTarget::Param(_) => {
-                // Origin is already set on the slot by the caller before calling emit_ref_store.
-                // The Ref dst inherits from the target, but the slot's debug name is
-                // set separately via set_origin on the slot ValueId.
-            }
+    /// The storage a root expression names, if it is a local, a parameter,
+    /// or a context.
+    fn storage_of(&mut self, root: &Expr) -> Option<RefTarget> {
+        match root {
+            Expr::ContextRef { name, .. } => Some(RefTarget::Context(*name)),
+            Expr::Ident {
+                name,
+                ref_kind: RefKind::ExternParam,
+                ..
+            } => match self.try_param_slot(name.name) {
+                Some(param_reg) => Some(RefTarget::Param(param_reg)),
+                None if self.is_defined(name.name) => Some(RefTarget::Var(self.var_slot(name.name))),
+                None => None,
+            },
+            Expr::Ident {
+                name,
+                ref_kind: RefKind::Value,
+                ..
+            } if self.is_defined(name.name) => Some(RefTarget::Var(self.var_slot(name.name))),
+            _ => None,
         }
+    }
+
+    /// Move `value` into a storage.
+    fn emit_assign(&mut self, span: Span, target: RefTarget, path: Vec<Astr>, value: ValueId) {
         self.emit_inst(
             span,
-            InstKind::Ref {
-                dst: ref_dst,
+            InstKind::Assign {
                 target,
                 path,
-            },
-        );
-        self.emit_inst(
-            span,
-            InstKind::Store {
-                dst: ref_dst,
                 value,
             },
         );
     }
 
-    /// Emit Ref + Load: read a value from the given storage target.
-    fn emit_ref_load(
+    /// Move the value of a storage out into a fresh value of `ty`.
+    fn emit_take(&mut self, span: Span, target: RefTarget, path: Vec<Astr>, ty: Ty) -> ValueId {
+        let dst = self.alloc_val();
+        self.set_val_type(dst, ty);
+        if let RefTarget::Context(qref) = &target {
+            self.set_origin(dst, ValOrigin::Context(qref.name));
+        }
+        self.emit_inst(span, InstKind::Take { dst, target, path });
+        dst
+    }
+
+    /// A reference to a storage: a fresh `&T` / `&mut T` value.
+    fn emit_ref(
         &mut self,
         span: Span,
         target: RefTarget,
         path: Vec<Astr>,
-        result_ty: Ty,
+        mutability: Mutability,
+        inner_ty: Ty,
     ) -> ValueId {
-        let ref_dst = self.alloc_val();
-        self.set_val_type(ref_dst, Ty::Ref(Box::new(result_ty.clone())));
-        // Set origin on Ref dst for printer context name resolution.
-        match &target {
-            RefTarget::Context(qref) => self.set_origin(ref_dst, ValOrigin::Context(qref.name)),
-            RefTarget::Var(_) | RefTarget::Param(_) => {
-                // Origin set separately on the slot ValueId.
-            }
-        }
+        let dst = self.alloc_val();
+        self.set_val_type(dst, Ty::Ref(mutability, Box::new(inner_ty)));
+        self.set_origin(dst, ValOrigin::RefField(target.clone(), path.clone()));
         self.emit_inst(
             span,
             InstKind::Ref {
-                dst: ref_dst,
+                dst,
                 target,
                 path,
+                mutability,
             },
         );
-        let dst = self.alloc_val();
-        self.set_val_type(dst, result_ty);
-        self.emit_inst(span, InstKind::Load { dst, src: ref_dst });
         dst
     }
 
-    /// If val is a Ref<T>, emit Load to materialize it.
-    /// Otherwise return val unchanged.
-    fn materialize(&mut self, val: ValueId, span: Span) -> ValueId {
-        if let Some(Ty::Ref(inner)) = self.body.val_types.get(&val).cloned() {
-            let dst = self.alloc_val();
-            self.set_val_type(dst, *inner);
-            self.emit_inst(span, InstKind::Load { dst, src: val });
-            dst
-        } else {
-            val
-        }
-    }
 
     fn alloc_val(&mut self) -> ValueId {
         self.body.val_factory.next()
@@ -1291,7 +1268,6 @@ impl<'a> Lowerer<'a> {
     /// If the coercion map indicates this span needs a cast, emit a Cast
     /// instruction and return the new ValueId. Otherwise return `val` as-is.
     fn maybe_cast(&mut self, id: AstId, span: Span, val: ValueId) -> ValueId {
-        let val = self.materialize(val, span);
         if let Some(kind) = self.coercion_lookup.get(&id).cloned() {
             match &kind {
                 CastKind::Extern { fn_ref, callee_ty } => {
@@ -1320,12 +1296,10 @@ impl<'a> Lowerer<'a> {
 
     // --- Expression lowering ---
 
-    /// Lower an expression to a **value** (not a projection).
-    /// If the result is a Ref<T>, it is materialized via Load.
+    /// Lower an expression to a value.
     fn lower_expr(&mut self, expr: &Expr) -> ValueId {
         let val = self.lower_expr_inner(expr);
-        let val = self.maybe_cast(expr.id(), expr.span(), val);
-        self.ensure_loaded(expr.span(), val)
+        self.maybe_cast(expr.id(), expr.span(), val)
     }
 
     fn lower_expr_inner(&mut self, expr: &Expr) -> ValueId {
@@ -1351,18 +1325,7 @@ impl<'a> Lowerer<'a> {
                 span,
             } => {
                 let inner_ty = self.type_of_id(*id);
-                let dst = self.alloc_val();
-                self.set_val_type(dst, Ty::Ref(Box::new(inner_ty)));
-                self.set_origin(dst, ValOrigin::Context(qref.name));
-                self.emit_inst(
-                    *span,
-                    InstKind::Ref {
-                        dst,
-                        target: RefTarget::Context(*qref),
-                        path: vec![],
-                    },
-                );
-                dst
+                self.emit_take(*span, RefTarget::Context(*qref), vec![], inner_ty)
             }
 
             Expr::Ident {
@@ -1378,12 +1341,12 @@ impl<'a> Lowerer<'a> {
                     // through to local variable lookup.
                     if let Some(param_reg) = self.try_param_slot(name.name) {
                         let dst =
-                            self.emit_ref_load(*span, RefTarget::Param(param_reg), vec![], ty);
+                            self.emit_take(*span, RefTarget::Param(param_reg), vec![], ty);
                         self.set_origin(dst, ValOrigin::ExternParam(name.name));
                         dst
                     } else if self.is_defined(name.name) {
                         let slot = self.var_slot(name.name);
-                        let dst = self.emit_ref_load(*span, RefTarget::Var(slot), vec![], ty);
+                        let dst = self.emit_take(*span, RefTarget::Var(slot), vec![], ty);
                         self.set_origin(dst, ValOrigin::Named(name.name));
                         dst
                     } else {
@@ -1404,7 +1367,7 @@ impl<'a> Lowerer<'a> {
                     }
                     let ty = self.var_type(name.name);
                     let slot = self.var_slot(name.name);
-                    let dst = self.emit_ref_load(*span, RefTarget::Var(slot), vec![], ty);
+                    let dst = self.emit_take(*span, RefTarget::Var(slot), vec![], ty);
                     self.set_origin(dst, ValOrigin::Named(name.name));
                     dst
                 }
@@ -1440,14 +1403,15 @@ impl<'a> Lowerer<'a> {
             } => {
                 let o = self.lower_expr(operand);
                 let dst = self.alloc_expr(*id);
-                self.emit_inst(
-                    *span,
-                    InstKind::UnaryOp {
+                let kind = match op {
+                    UnaryOp::Deref => InstKind::Load { dst, src: o },
+                    UnaryOp::Neg | UnaryOp::Not => InstKind::UnaryOp {
                         dst,
                         op: *op,
                         operand: o,
                     },
-                );
+                };
+                self.emit_inst(*span, kind);
                 dst
             }
 
@@ -1474,120 +1438,25 @@ impl<'a> Lowerer<'a> {
                 let (root, mut path) = collect_field_chain(object);
                 path.push(*field);
 
-                match root {
-                    Expr::ContextRef { name: qref, .. } => {
-                        let dst = self.alloc_val();
-                        self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
-                        self.set_origin(
+                if let Some(target) = self.storage_of(root) {
+                    let dst = self.emit_take(*span, target.clone(), path.clone(), field_ty);
+                    self.set_origin(dst, ValOrigin::RefField(target, path));
+                    dst
+                } else {
+                    let obj = self.lower_expr(object);
+                    let dst = self.alloc_val();
+                    self.set_val_type(dst, field_ty);
+                    self.set_origin(dst, ValOrigin::Field(obj, *field));
+                    self.emit_inst(
+                        *span,
+                        InstKind::FieldGet {
                             dst,
-                            ValOrigin::RefField(RefTarget::Context(*qref), path.clone()),
-                        );
-                        self.emit_inst(
-                            *span,
-                            InstKind::Ref {
-                                dst,
-                                target: RefTarget::Context(*qref),
-                                path,
-                            },
-                        );
-                        dst
-                    }
-                    Expr::Ident {
-                        name,
-                        ref_kind: RefKind::Value,
-                        ..
-                    } if self.is_defined(name.name) => {
-                        let slot = self.var_slot(name.name);
-                        let dst = self.alloc_val();
-                        self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
-                        self.set_origin(
-                            dst,
-                            ValOrigin::RefField(RefTarget::Var(slot), path.clone()),
-                        );
-                        self.emit_inst(
-                            *span,
-                            InstKind::Ref {
-                                dst,
-                                target: RefTarget::Var(slot),
-                                path,
-                            },
-                        );
-                        dst
-                    }
-                    Expr::Ident {
-                        name,
-                        ref_kind: RefKind::ExternParam,
-                        ..
-                    } => {
-                        if let Some(param_reg) = self.try_param_slot(name.name) {
-                            let dst = self.alloc_val();
-                            self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
-                            self.set_origin(
-                                dst,
-                                ValOrigin::RefField(RefTarget::Param(param_reg), path.clone()),
-                            );
-                            self.emit_inst(
-                                *span,
-                                InstKind::Ref {
-                                    dst,
-                                    target: RefTarget::Param(param_reg),
-                                    path,
-                                },
-                            );
-                            dst
-                        } else if self.is_defined(name.name) {
-                            // Captured param - treat as local variable.
-                            let slot = self.var_slot(name.name);
-                            let dst = self.alloc_val();
-                            self.set_val_type(dst, Ty::Ref(Box::new(field_ty)));
-                            self.set_origin(
-                                dst,
-                                ValOrigin::RefField(RefTarget::Var(slot), path.clone()),
-                            );
-                            self.emit_inst(
-                                *span,
-                                InstKind::Ref {
-                                    dst,
-                                    target: RefTarget::Var(slot),
-                                    path,
-                                },
-                            );
-                            dst
-                        } else {
-                            // Fallback: lower as scalar FieldGet.
-                            let obj = self.lower_expr(object);
-                            let dst = self.alloc_val();
-                            self.set_val_type(dst, field_ty);
-                            self.set_origin(dst, ValOrigin::Field(obj, *field));
-                            self.emit_inst(
-                                *span,
-                                InstKind::FieldGet {
-                                    dst,
-                                    object: obj,
-                                    field: *field,
-                                    rest: vec![],
-                                },
-                            );
-                            dst
-                        }
-                    }
-                    // Otherwise: lower object to scalar, then FieldGet.
-                    _ => {
-                        let obj = self.lower_expr(object);
-                        let dst = self.alloc_val();
-                        self.set_val_type(dst, field_ty);
-                        self.set_origin(dst, ValOrigin::Field(obj, *field));
-                        self.emit_inst(
-                            *span,
-                            InstKind::FieldGet {
-                                dst,
-                                object: obj,
-                                field: *field,
-                                rest: vec![],
-                            },
-                        );
-                        dst
-                    }
+                            object: obj,
+                            field: *field,
+                            rest: vec![],
+                        },
+                    );
+                    dst
                 }
             }
 
@@ -1648,7 +1517,7 @@ impl<'a> Lowerer<'a> {
                     .map(|(name, var_id, var_span)| {
                         let ty = self.type_of_id(*var_id);
                         if let Some(param_reg) = self.try_param_slot(*name) {
-                            let dst = self.emit_ref_load(
+                            let dst = self.emit_take(
                                 *var_span,
                                 RefTarget::Param(param_reg),
                                 vec![],
@@ -1659,7 +1528,7 @@ impl<'a> Lowerer<'a> {
                         } else {
                             let slot = self.var_slot(*name);
                             let dst =
-                                self.emit_ref_load(*var_span, RefTarget::Var(slot), vec![], ty);
+                                self.emit_take(*var_span, RefTarget::Var(slot), vec![], ty);
                             self.set_origin(dst, ValOrigin::Named(*name));
                             dst
                         }
@@ -1711,12 +1580,12 @@ impl<'a> Lowerer<'a> {
                     .zip(capture_tys)
                 {
                     let slot = self.define_var(*name, cap_ty);
-                    self.emit_ref_store(*span, RefTarget::Var(slot), vec![], *capture_reg);
+                    self.emit_assign(*span, RefTarget::Var(slot), vec![], *capture_reg);
                 }
                 for (p, param_reg) in params.iter().zip(closure_param_regs.iter()) {
                     let ty = self.type_of_id(p.id);
                     let slot = self.define_var(p.name, ty);
-                    self.emit_ref_store(p.span, RefTarget::Var(slot), vec![], *param_reg);
+                    self.emit_assign(p.span, RefTarget::Var(slot), vec![], *param_reg);
                 }
 
                 // lower_expr calls maybe_cast(body.span(), val) which will
@@ -1919,7 +1788,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         let val = self.lower_expr(value_expr);
-        self.emit_ref_store(span, RefTarget::Context(qref), path.to_vec(), val);
+        self.emit_assign(span, RefTarget::Context(qref), path.to_vec(), val);
         val
     }
 
@@ -1932,7 +1801,7 @@ impl<'a> Lowerer<'a> {
     ) -> ValueId {
         let val = self.lower_expr(value_expr);
         let slot = self.var_slot(name);
-        self.emit_ref_store(span, RefTarget::Var(slot), path.to_vec(), val);
+        self.emit_assign(span, RefTarget::Var(slot), path.to_vec(), val);
         val
     }
 
@@ -1946,26 +1815,51 @@ impl<'a> Lowerer<'a> {
     ) -> ValueId {
         let mut arg_regs: Vec<ValueId> =
             Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
-        let mut lent_places: Vec<LentPlace> = Vec::new();
+        let mut lent_places: Vec<LentContext> = Vec::new();
         if let Some(left) = pipe_left {
             let val = self.lower_expr(left);
-            arg_regs.push(self.materialize(val, call_span));
+            arg_regs.push(val);
         }
         for a in args {
-            if let Expr::Borrow { place, span, .. } = a {
-                let lent = self.lent_place(place);
-                let val = self.emit_ref_load(
-                    *span,
-                    lent.target.clone(),
-                    lent.path.clone(),
-                    lent.ty.clone(),
-                );
-                arg_regs.push(val);
-                lent_places.push(lent);
+            if let Expr::Borrow {
+                place,
+                mutable,
+                span,
+                ..
+            } = a
+            {
+                let mutability = if *mutable {
+                    Mutability::Mut
+                } else {
+                    Mutability::Shared
+                };
+                let place = self.place(place);
+                let reference = match place.target {
+                    RefTarget::Context(qref) => {
+                        let taken = self.emit_take(
+                            *span,
+                            RefTarget::Context(qref),
+                            place.path.clone(),
+                            place.ty.clone(),
+                        );
+                        let temporary = self.alloc_val();
+                        self.set_val_type(temporary, place.ty.clone());
+                        self.emit_assign(*span, RefTarget::Var(temporary), vec![], taken);
+                        lent_places.push(LentContext {
+                            qref,
+                            path: place.path,
+                            temporary,
+                            ty: place.ty.clone(),
+                        });
+                        self.emit_ref(*span, RefTarget::Var(temporary), vec![], mutability, place.ty)
+                    }
+                    target => self.emit_ref(*span, target, place.path, mutability, place.ty),
+                };
+                arg_regs.push(reference);
                 continue;
             }
             let val = self.lower_expr(a);
-            arg_regs.push(self.materialize(val, call_span));
+            arg_regs.push(val);
         }
         let dst = self.alloc_typed(call_id);
 
@@ -2000,10 +1894,11 @@ impl<'a> Lowerer<'a> {
                     if self.is_defined(name.name) {
                         let closure_ty = self.var_type(name.name);
                         let slot = self.var_slot(name.name);
-                        let closure_reg = self.emit_ref_load(
+                        let closure_reg = self.emit_ref(
                             *ident_span,
                             RefTarget::Var(slot),
                             vec![],
+                            Mutability::Shared,
                             closure_ty.clone(),
                         );
                         self.set_origin(closure_reg, ValOrigin::Named(name.name));
@@ -2059,7 +1954,7 @@ impl<'a> Lowerer<'a> {
             } = &mb.arms[0].pattern
         {
             let src = self.lower_expr(&mb.source);
-            self.emit_ref_store(*pat_span, RefTarget::Context(*qref), vec![], src);
+            self.emit_assign(*pat_span, RefTarget::Context(*qref), vec![], src);
             return self.emit_empty_string(mb.span);
         }
 
@@ -2089,7 +1984,7 @@ impl<'a> Lowerer<'a> {
                         .cloned()
                         .unwrap_or(Ty::error());
                     let slot = self.define_var(*name, ty);
-                    self.emit_ref_store(*pat_span, RefTarget::Var(slot), vec![], src);
+                    self.emit_assign(*pat_span, RefTarget::Var(slot), vec![], src);
                 }
             }
             return self.emit_empty_string(mb.span);
@@ -2382,7 +2277,7 @@ impl<'a> Lowerer<'a> {
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
-                self.emit_ref_store(span, RefTarget::Context(*qref), vec![], src_reg);
+                self.emit_assign(span, RefTarget::Context(*qref), vec![], src_reg);
             }
             Pattern::Binding {
                 name,
@@ -2397,7 +2292,7 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or(Ty::error());
                 let slot = self.define_var(*name, ty);
-                self.emit_ref_store(span, RefTarget::Var(slot), vec![], src_reg);
+                self.emit_assign(span, RefTarget::Var(slot), vec![], src_reg);
             }
             Pattern::Binding {
                 name: _,

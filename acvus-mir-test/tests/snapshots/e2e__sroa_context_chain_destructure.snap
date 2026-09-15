@@ -3,35 +3,14 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @a
-     1 |   r1 = load r0
-     2 |   r2 = ref @c
-     3 |   r3 = load r2
-     4 |   r4 = ref @b
-     5 |   r5 = load r4
-     6 |   r6 = r5.a
-     7 |   r7 = ref @a
-     8 |   store r7 = r6
-     9 |   r8 = ref @a
-    10 |   r9 = r6.val
-    11 |   r10 = ref @c
-    12 |   store r10 = r9
-    13 |   r11 = ref @c
-    14 |   return r9
+     0 |   r0 = take @c
+     1 |   r1 = take @b.a
+     2 |   assign @a = r1
+     3 |   r2 = take @a.val
+     4 |   assign @c = r2
+     5 |   return r2
 
-    ; r0 (v15) : Ref<{val: Int}>
-    ; r1 (v13) : {val: Int}
-    ; r2 (v16) : Ref<Int>
-    ; r3 (v14) : Int
-    ; r4 (v9) : Ref<{a: {val: Int}}>
-    ; r5 (v10) : {a: {val: Int}}
-    ; r6 (v2) : {val: Int}
-    ; r7 (@a) : Ref<{val: Int}>
-    ; r8 (v11) : Ref<{val: Int}>
-    ; r9 (v5) : Int
-    ; r10 (@c) : Ref<Int>
-    ; r11 (@c) : Ref<Int>
-    ; r12 (@b.a) : Ref<{val: Int}>
-    ; r13 (v12) : {val: Int}
-    ; r14 (@a.val) : Ref<Int>
-    ; r15 (v8) : Int
+    ; r0 (v4) : Int
+    ; r1 (@b.a) : {val: Int}
+    ; r2 (@a.val) : Int
+    ; r3 (@c) : Int

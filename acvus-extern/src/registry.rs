@@ -12,7 +12,7 @@ use acvus_mir::ty::{
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-use crate::handler::{ExternEntry, ExternHandler, Returned};
+use crate::handler::{ExternEntry, ExternHandler};
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
@@ -167,7 +167,7 @@ macro_rules! impl_handlers {
                     };)*
                     debug_assert!(args.next().is_none(), "arity checked by typeck");
                     let ret = self(rt, $($a),*)?;
-                    Ok(Returned::value(unsafe { rt.erase::<Ret>(ret) }))
+                    Ok(unsafe { rt.erase::<Ret>(ret) })
                 }))
             }
         }
@@ -199,7 +199,7 @@ macro_rules! impl_handlers {
                     let fut = self(rt.clone(), $($a),*);
                     Box::pin(async move {
                         let ret = fut.await?;
-                        Ok(Returned::value(unsafe { rt.erase::<Ret>(ret) }))
+                        Ok(unsafe { rt.erase::<Ret>(ret) })
                     })
                 }))
             }

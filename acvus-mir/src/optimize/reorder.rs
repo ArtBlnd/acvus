@@ -276,7 +276,6 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Spawn {
                     dst: v(2),
@@ -289,7 +288,6 @@ mod tests {
                     dst: v(3),
                     src: v(2),
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(4),
@@ -364,7 +362,6 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -412,7 +409,6 @@ mod tests {
                     dst: v(1),
                     src: v(0),
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(7),

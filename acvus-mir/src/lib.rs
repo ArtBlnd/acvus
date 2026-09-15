@@ -169,7 +169,7 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(&i.kind, InstKind::Load { .. }))
+                .any(|i| matches!(&i.kind, InstKind::Take { .. }))
         );
         assert!(
             module
@@ -213,7 +213,7 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|inst| matches!(&inst.kind, InstKind::Store { .. }))
+                .any(|inst| matches!(&inst.kind, InstKind::Assign { .. }))
         );
     }
 
@@ -239,12 +239,14 @@ mod tests {
         let i = Interner::new();
         let module = compile_script(&i, "@x", &[("x", Ty::Int)]).unwrap();
         let kinds = inst_kinds(&module);
-        let ref_idx = kinds.iter().position(|k| matches!(k, InstKind::Ref { .. }));
-        let load_idx = kinds
+        let take_idx = kinds
             .iter()
-            .position(|k| matches!(k, InstKind::Load { .. }));
-        assert!(ref_idx.is_some() && load_idx.is_some());
-        assert!(ref_idx.unwrap() < load_idx.unwrap());
+            .position(|k| matches!(k, InstKind::Take { .. }));
+        let ret_idx = kinds
+            .iter()
+            .position(|k| matches!(k, InstKind::Return { .. }));
+        assert!(take_idx.is_some() && ret_idx.is_some());
+        assert!(take_idx.unwrap() < ret_idx.unwrap());
     }
 
     #[test]
@@ -253,8 +255,6 @@ mod tests {
         let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
         let module = compile_script(&i, "@obj.name", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
-        // After SROA + SSA: field Ref is decomposed, then SSA promotes.
-        // Result should have FieldGet (from SROA decomposition) or be fully promoted.
         assert!(
             kinds.iter().any(|k| matches!(k, InstKind::Return { .. })),
             "should compile and return"
@@ -267,15 +267,15 @@ mod tests {
         let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("val"), Ty::Int)]));
         let module = compile_script(&i, "@obj.val + 1", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
-        let load = kinds
+        let take = kinds
             .iter()
-            .position(|k| matches!(k, InstKind::Load { .. }))
+            .position(|k| matches!(k, InstKind::Take { .. }))
             .unwrap();
         let binop = kinds
             .iter()
             .position(|k| matches!(k, InstKind::BinOp { .. }))
             .unwrap();
-        assert!(load < binop);
+        assert!(take < binop);
     }
 
     #[test]
@@ -283,11 +283,7 @@ mod tests {
         let i = Interner::new();
         let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).unwrap();
         let kinds = inst_kinds(&module);
-        let store_i = kinds
-            .iter()
-            .position(|k| matches!(k, InstKind::Store { .. }))
-            .unwrap();
-        assert!(store_i > 0 && matches!(kinds[store_i - 1], InstKind::Ref { .. }));
+        assert!(kinds.iter().any(|k| matches!(k, InstKind::Assign { .. })));
     }
 
     #[test]
@@ -295,8 +291,6 @@ mod tests {
         let i = Interner::new();
         let module = compile_script(&i, "x = @data; x", &[("data", Ty::String)]).unwrap();
         let kinds = inst_kinds(&module);
-        // After SSA promotion, Ref/Load/Store for local vars are eliminated.
-        // The result should just be a Return of the SSA value.
         assert!(kinds.iter().any(|k| matches!(k, InstKind::Return { .. })));
     }
 
@@ -308,14 +302,7 @@ mod tests {
         assert_eq!(
             kinds
                 .iter()
-                .filter(|k| matches!(k, InstKind::Ref { .. }))
-                .count(),
-            2
-        );
-        assert_eq!(
-            kinds
-                .iter()
-                .filter(|k| matches!(k, InstKind::Load { .. }))
+                .filter(|k| matches!(k, InstKind::Take { .. }))
                 .count(),
             2
         );

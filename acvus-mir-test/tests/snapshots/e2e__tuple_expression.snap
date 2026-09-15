@@ -8,59 +8,51 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     3 |   r2 = ref @a
-     4 |   r3 = load r2
-     5 |   r4 = ref @b
-     6 |   r5 = load r4
-     7 |   r6 = tuple (r3, r5)
-     8 | L2:
-    10 |   r7 = r6.0
-    12 |   r8 = true (r9) && true (r10)
-    13 |   r11 = r6.1
-    15 |   r12 = r8 && true (r13)
-    16 |   jump_if r12 then L3 else L1
-    17 | L3:
-    18 |   r14 = r6.0
-    19 |   r15 = r6.1
-    21 |   r16 = call #0(r14)
-    22 |   r17 = T0 + r16
-    23 |   r18 = r17 + r15
-    24 |   jump L0(r18, r14, r15)
-    25 | L1:
-    27 |   jump L0(T0, r0, r1)
-    28 | L0(r19: String, r20: Int, r21: String):  ; merge_of L2
-    29 |   r22 = T0 + r19
-    30 |   return r22
+     3 |   r2 = take @a
+     4 |   r3 = take @b
+     5 |   r4 = tuple (r2, r3)
+     6 | L2:
+     8 |   r5 = r4.0
+    10 |   r6 = true (r7) && true (r8)
+    11 |   r9 = r4.1
+    13 |   r10 = r6 && true (r11)
+    14 |   jump_if r10 then L3 else L1
+    15 | L3:
+    16 |   r12 = r4.0
+    17 |   r13 = r4.1
+    19 |   r14 = call #0(r12)
+    20 |   r15 = T0 + r14
+    21 |   r16 = r15 + r13
+    22 |   jump L0(r16, r12, r13)
+    23 | L1:
+    25 |   jump L0(T0, r0, r1)
+    26 | L0(r17: String, r18: Int, r19: String):  ; merge_of L2
+    27 |   r20 = T0 + r17
+    28 |   return r20
 
-    ; r0 (v31) : Int
-    ; r1 (v32) : String
-    ; r2 (@a) : Ref<Int>
-    ; r3 (v3) : Int
-    ; r4 (@b) : Ref<String>
-    ; r5 (v5) : String
-    ; r6 (v6) : (Int, String)
-    ; r7 (v8) : Int
-    ; r8 (v10) : Bool
-    ; r9 (v7) : Bool
-    ; r10 (v9) : Bool
-    ; r11 (v11) : String
-    ; r12 (v13) : Bool
-    ; r13 (v12) : Bool
-    ; r14 (a) : Int
-    ; r15 (b) : String
-    ; r16 (to_string(...)) : String
-    ; r17 (v24) : String
-    ; r18 (v27) : String
-    ; r19 (v29) : String
-    ; r20 (v33) : Int
-    ; r21 (v34) : String
-    ; r22 (v30) : String
-    ; r23 (a) : Int
-    ; r24 (v25) : Ref<String>
-    ; r25 (v28) : String
-    ; r26 (v1) : String
-    ; r27 (v20) : String
-    ; r28 (v21) : Ref<Int>
-    ; r29 (b) : String
-    ; r30 (v16) : Ref<Int>
-    ; r31 (v19) : Ref<String>
+    ; r0 (v25) : Int
+    ; r1 (v26) : String
+    ; r2 (@a) : Int
+    ; r3 (@b) : String
+    ; r4 (v4) : (Int, String)
+    ; r5 (v6) : Int
+    ; r6 (v8) : Bool
+    ; r7 (v5) : Bool
+    ; r8 (v7) : Bool
+    ; r9 (v9) : String
+    ; r10 (v11) : Bool
+    ; r11 (v10) : Bool
+    ; r12 (a) : Int
+    ; r13 (b) : String
+    ; r14 (to_string(...)) : String
+    ; r15 (v19) : String
+    ; r16 (v21) : String
+    ; r17 (v23) : String
+    ; r18 (v27) : Int
+    ; r19 (v28) : String
+    ; r20 (v24) : String
+    ; r21 (v22) : String
+    ; r22 (a) : Int
+    ; r23 (b) : String
+    ; r24 (v1) : String
+    ; r25 (v16) : String

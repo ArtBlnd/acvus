@@ -194,21 +194,54 @@ impl Value {
         matches!(self, Value::Empty)
     }
 
-    /// An explicit copy, through the vtable; the bridge until context
-    /// dump/restore replaces sharing.
-    pub fn deep_clone(&self) -> Value {
-        match self {
-            Value::Empty => panic!("clone: accessed moved-out value"),
-            Value::Undef => Value::Undef,
+    /// The word copy a primitive gets (RFC-0018); a `Large` value moves out
+    /// of its storage, which is left `Empty`.
+    #[inline]
+    pub fn use_from(slot: &mut Value) -> Value {
+        match slot {
             Value::Small(bits) => Value::Small(*bits),
-            Value::Large(p) => {
-                let vtable = self.header().vtable;
-                let clone = vtable
-                    .clone
-                    .unwrap_or_else(|| panic!("clone: type {} is not clonable", vtable.name));
-                // SAFETY: the payload is a live value of the witnessed type.
-                Value::Large(unsafe { clone(*p) })
-            }
+            Value::Undef => Value::Undef,
+            Value::Empty => panic!("use: accessed moved-out value"),
+            Value::Large(_) => slot.take(),
+        }
+    }
+
+    // -- References (RFC-0018) ------------------------------------
+
+    /// A reference: the word that names `target`'s storage.
+    pub fn reference(target: &Value) -> Value {
+        Value::Small(target as *const Value as usize as u64)
+    }
+
+    /// The storage a reference names.
+    ///
+    /// # Safety
+    /// `self` is a reference made by `Value::reference` whose target is
+    /// still live and unmoved.
+    pub unsafe fn target<'a>(&self) -> &'a Value {
+        unsafe { &*(self.small() as usize as *const Value) }
+    }
+
+    /// # Safety
+    /// As `target`, and no other name of the storage is used meanwhile.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn target_mut<'a>(&self) -> &'a mut Value {
+        unsafe { &mut *(self.small() as usize as *mut Value) }
+    }
+
+    /// The bits of a `Small`, in place.
+    pub fn small_ref(&self) -> &u64 {
+        match self {
+            Value::Small(bits) => bits,
+            other => panic!("small_ref: not a small value: {other:?}"),
+        }
+    }
+
+    /// The bits of a `Small`, in place.
+    pub fn small_mut(&mut self) -> &mut u64 {
+        match self {
+            Value::Small(bits) => bits,
+            other => panic!("small_mut: not a small value: {other:?}"),
         }
     }
 }
@@ -331,32 +364,17 @@ impl fmt::Debug for HandleValue {
 fn vtable<T: 'static>(
     name: &'static str,
     composite: Composite,
-    clone: Option<crate::vtable::CloneFn>,
     debug: Option<crate::vtable::DebugFn>,
 ) -> Vtable {
     Vtable {
         composite: Some(composite),
-        clone,
         debug,
         ..Vtable::drop_only::<T>(name)
     }
 }
 
-macro_rules! typed_vtable_fns {
-    ($T:ty; $cl:ident = |$c:ident| $cl_body:expr;
-             $dg:ident = |$d:ident, $f:ident| $dg_body:expr;) => {
-        unsafe fn $cl(p: NonNull<Header>) -> NonNull<Header> {
-            // SAFETY: p is the header of a live Slot<$T>.
-            let slot = unsafe { p.cast::<Slot<$T>>().as_ref() };
-            let $c = &slot.value;
-            let copy = Box::new(Slot {
-                header: Header {
-                    vtable: slot.header.vtable,
-                },
-                value: $cl_body,
-            });
-            NonNull::from(Box::leak(copy)).cast::<Header>()
-        }
+macro_rules! typed_debug_fn {
+    ($T:ty; $dg:ident = |$d:ident, $f:ident| $dg_body:expr;) => {
         unsafe fn $dg(p: NonNull<Header>, $f: &mut fmt::Formatter<'_>) -> fmt::Result {
             // SAFETY: p is the header of a live Slot<$T>.
             let $d = unsafe { &p.cast::<Slot<$T>>().as_ref().value };
@@ -365,20 +383,9 @@ macro_rules! typed_vtable_fns {
     };
 }
 
-fn seq_clone(a: &[Value]) -> Vec<Value> {
-    a.iter().map(Value::deep_clone).collect()
-}
-
-typed_vtable_fns! { String;
-    clone_string = |c| c.clone();
-    dbg_string = |d, f| write!(f, "{d:?}");
-}
-typed_vtable_fns! { Array;
-    clone_array = |c| Array(seq_clone(&c.0));
-    dbg_array = |d, f| f.debug_list().entries(d.0.iter()).finish();
-}
-typed_vtable_fns! { Tuple;
-    clone_tuple = |c| Tuple(seq_clone(&c.0));
+typed_debug_fn! { String; dbg_string = |d, f| write!(f, "{d:?}"); }
+typed_debug_fn! { Array; dbg_array = |d, f| f.debug_list().entries(d.0.iter()).finish(); }
+typed_debug_fn! { Tuple;
     dbg_tuple = |d, f| {
         let mut dt = f.debug_tuple("");
         for v in d.0.iter() {
@@ -387,37 +394,28 @@ typed_vtable_fns! { Tuple;
         dt.finish()
     };
 }
-typed_vtable_fns! { Object;
-    clone_object = |c| Object(c.0.iter().map(|(k, v)| (*k, v.deep_clone())).collect());
-    dbg_object = |d, f| f.debug_map().entries(d.0.iter()).finish();
-}
-typed_vtable_fns! { VariantValue;
-    clone_variant = |c| VariantValue { tag: c.tag, payload: c.payload.as_ref().map(|p| Box::new(p.deep_clone())) };
+typed_debug_fn! { Object; dbg_object = |d, f| f.debug_map().entries(d.0.iter()).finish(); }
+typed_debug_fn! { VariantValue;
     dbg_variant = |d, f| match &d.payload {
         Some(p) => write!(f, "{:?}({:?})", d.tag, p),
         None => write!(f, "{:?}", d.tag),
     };
 }
-typed_vtable_fns! { FnValue;
-    clone_fn = |c| c.clone();
-    dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len());
-}
+typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len()); }
 
 static STRING: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<String>("String", Composite::String, Some(clone_string), Some(dbg_string)));
+    LazyLock::new(|| vtable::<String>("String", Composite::String, Some(dbg_string)));
 static ARRAY: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<Array>("Array", Composite::Array, Some(clone_array), Some(dbg_array)));
+    LazyLock::new(|| vtable::<Array>("Array", Composite::Array, Some(dbg_array)));
 static TUPLE: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<Tuple>("Tuple", Composite::Tuple, Some(clone_tuple), Some(dbg_tuple)));
+    LazyLock::new(|| vtable::<Tuple>("Tuple", Composite::Tuple, Some(dbg_tuple)));
 static OBJECT: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<Object>("Object", Composite::Object, Some(clone_object), Some(dbg_object)));
-static VARIANT: LazyLock<Vtable> = LazyLock::new(|| {
-    vtable::<VariantValue>("Variant", Composite::Variant, Some(clone_variant), Some(dbg_variant))
-});
-static FN: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<FnValue>("Fn", Composite::Fn, Some(clone_fn), Some(dbg_fn)));
+    LazyLock::new(|| vtable::<Object>("Object", Composite::Object, Some(dbg_object)));
+static VARIANT: LazyLock<Vtable> =
+    LazyLock::new(|| vtable::<VariantValue>("Variant", Composite::Variant, Some(dbg_variant)));
+static FN: LazyLock<Vtable> = LazyLock::new(|| vtable::<FnValue>("Fn", Composite::Fn, Some(dbg_fn)));
 static HANDLE: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None, None));
+    LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None));
 
 /// Every composite vtable, in the order of `Composite`.
 pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 7]> =
@@ -513,6 +511,16 @@ impl Value {
         unsafe { &self.peek::<Object>().0 }
     }
     /// # Safety
+    /// The value is an `Array`.
+    pub unsafe fn as_array_mut(&mut self) -> &mut Array {
+        unsafe { self.peek_mut::<Array>() }
+    }
+    /// # Safety
+    /// The value is a `Tuple`.
+    pub unsafe fn as_tuple_mut(&mut self) -> &mut Tuple {
+        unsafe { self.peek_mut::<Tuple>() }
+    }
+    /// # Safety
     /// The value is an `Object`.
     pub unsafe fn as_object_mut(&mut self) -> &mut FxHashMap<Astr, Value> {
         unsafe { &mut self.peek_mut::<Object>().0 }
@@ -556,9 +564,8 @@ mod tests {
         let v = unsafe { Value::erase(&table, String::from("hi")) };
         assert!(v.is_string());
         assert_eq!(unsafe { v.as_str() }, "hi");
-        let copy = v.deep_clone();
-        assert!(copy.is_string());
-        assert_eq!(unsafe { copy.as_str() }, "hi");
+        let r = Value::reference(&v);
+        assert_eq!(unsafe { r.target().as_str() }, "hi");
     }
 
     #[test]
@@ -576,17 +583,6 @@ mod tests {
         assert_eq!(unsafe { v.materialize::<i64>() }, 7);
         let v = unsafe { Value::erase(&table, String::from("hi")) };
         assert_eq!(unsafe { v.materialize::<String>() }, "hi");
-    }
-
-    #[test]
-    fn clone_through_the_witness_is_a_second_value() {
-        let a = Value::array(vec![Value::int(1), Value::string("x")]);
-        let b = a.deep_clone();
-        assert_ne!(a, b);
-        let (a, b) = unsafe { (a.as_array(), b.as_array()) };
-        assert_eq!(a[0].as_int(), b[0].as_int());
-        assert_eq!(unsafe { a[1].as_str() }, unsafe { b[1].as_str() });
-        assert_ne!(a[1], b[1]);
     }
 
     #[test]

@@ -13,7 +13,7 @@
 
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
-use crate::ty::Ty;
+use crate::ty::{Mutability, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::LocalIdOps;
 use rustc_hash::FxHashMap;
@@ -283,41 +283,6 @@ impl CheckCtx {
     ) {
         if let Some(ty) = self.ty_of(id, val_types, span, pc, errors) {
             self.assert_match(pc, span, "Order", "order", &Ty::Order, ty, errors);
-        }
-    }
-
-    /// A call gives back one value per lending parameter, of that
-    /// parameter's type (RFC-0015).
-    fn expect_lent(
-        &self,
-        callee_ty: &Ty,
-        lent: &[ValueId],
-        val_types: &FxHashMap<ValueId, Ty>,
-        span: Span,
-        pc: usize,
-        errors: &mut Vec<ValidationError>,
-    ) {
-        let Ty::Fn { params, .. } = callee_ty else {
-            return;
-        };
-        let lending: Vec<&crate::ty::Param> = params.iter().filter(|p| p.mode.lends()).collect();
-        if lending.len() != lent.len() {
-            errors.push(ValidationError {
-                scope: self.scope_name.clone(),
-                inst_index: pc,
-                span,
-                kind: ValidationErrorKind::ArityMismatch {
-                    inst_name: "FunctionCall(lent)".to_string(),
-                    expected: lending.len(),
-                    got: lent.len(),
-                },
-            });
-            return;
-        }
-        for (l, p) in lent.iter().zip(lending) {
-            if let Some(ty) = self.ty_of(*l, val_types, span, pc, errors) {
-                self.assert_match(pc, span, "FunctionCall", "lent", &p.ty, ty, errors);
-            }
         }
     }
 
@@ -702,6 +667,16 @@ impl CheckCtx {
                 let operand_ty = ty!(*operand);
                 let dst_ty = ty!(*dst);
                 match op {
+                    UnaryOp::Deref => errors.push(ValidationError {
+                        scope: self.scope_name.clone(),
+                        inst_index: pc,
+                        span,
+                        kind: ValidationErrorKind::InvalidConstructor {
+                            inst_name: "UnaryOp(Deref)".to_string(),
+                            expected_constructor: "Load".to_string(),
+                            actual: operand_ty.clone(),
+                        },
+                    }),
                     UnaryOp::Not => {
                         self.assert_match(
                             pc,
@@ -737,16 +712,48 @@ impl CheckCtx {
             }
 
             // === Projection ===
-            InstKind::Ref { dst, .. } => {
-                // Ref produces Ty::Ref(_). Just verify the dst has a type.
+            InstKind::Take { dst, .. } => {
                 let _ = self.ty_of(*dst, vt, span, pc, errors);
             }
+            InstKind::Assign { value, .. } => {
+                let _ = self.ty_of(*value, vt, span, pc, errors);
+            }
+            InstKind::Ref {
+                dst, mutability, ..
+            } => {
+                let dst_ty = ty!(*dst);
+                match dst_ty {
+                    Ty::Ref(m, _) if m == mutability => {}
+                    Ty::Error(_) => {}
+                    other => errors.push(ValidationError {
+                        scope: self.scope_name.clone(),
+                        inst_index: pc,
+                        span,
+                        kind: ValidationErrorKind::InvalidConstructor {
+                            inst_name: "Ref".to_string(),
+                            expected_constructor: format!("Ref({mutability:?})"),
+                            actual: other.clone(),
+                        },
+                    }),
+                }
+            }
             InstKind::Load { dst, src, .. } => {
-                // src must be Ty::Ref(T), dst must be T.
                 let src_ty = ty!(*src);
-                if let Ty::Ref(inner) = src_ty {
+                if let Ty::Ref(_, inner) = src_ty {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "Load", "dst", inner.as_ref(), dst_ty, errors);
+                    if !inner.is_primitive() && !inner.is_error() {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::InvalidConstructor {
+                                inst_name: "Load".to_string(),
+                                expected_constructor: "Ref(primitive)".to_string(),
+                                actual: src_ty.clone(),
+                            },
+                        });
+                    }
                 } else if !src_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
@@ -761,9 +768,8 @@ impl CheckCtx {
                 }
             }
             InstKind::Store { dst, value, .. } => {
-                // dst must be Ty::Ref(T), value must be T.
                 let dst_ty = ty!(*dst);
-                if let Ty::Ref(inner) = dst_ty {
+                if let Ty::Ref(Mutability::Mut, inner) = dst_ty {
                     let val_ty = ty!(*value);
                     self.assert_match(pc, span, "Store", "value", inner.as_ref(), val_ty, errors);
                 } else if !dst_ty.is_error() {
@@ -773,7 +779,7 @@ impl CheckCtx {
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
                             inst_name: "Store".to_string(),
-                            expected_constructor: "Ref".to_string(),
+                            expected_constructor: "Ref(Mut)".to_string(),
                             actual: dst_ty.clone(),
                         },
                     });
@@ -1064,7 +1070,6 @@ impl CheckCtx {
                 callee_ty,
                 args,
                 order,
-                lent,
             } => {
                 self.expect_order_edge(
                     "FunctionCall",
@@ -1075,7 +1080,6 @@ impl CheckCtx {
                     pc,
                     errors,
                 );
-                self.expect_lent(callee_ty, lent, vt, span, pc, errors);
                 if let Some(edge) = order {
                     self.expect_order(edge.after, vt, span, pc, errors);
                 }
@@ -1204,17 +1208,9 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::Eval {
-                dst,
-                src,
-                order,
-                lent,
-            } => {
+            InstKind::Eval { dst, src, order } => {
                 if let Some(o) = order {
                     self.expect_order(*o, vt, span, pc, errors);
-                }
-                for l in lent {
-                    let _ = self.ty_of(*l, vt, span, pc, errors);
                 }
                 let src_ty = ty!(*src);
                 if let Ty::Handle(inner) = src_ty {

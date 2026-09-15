@@ -6,14 +6,12 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 |   r0 = ref @n
-     2 |   r1 = load r0
-     3 |   r2 = call #0(r1)
-     4 |   r3 = T0 + r2
-     5 |   return r3
+     1 |   r0 = take @n
+     2 |   r1 = call #0(r0)
+     3 |   r2 = T0 + r1
+     4 |   return r2
 
-    ; r0 (@n) : Ref<Int>
-    ; r1 (v3) : Int
-    ; r2 (to_string(...)) : String
-    ; r3 (v5) : String
-    ; r4 (v1) : String
+    ; r0 (@n) : Int
+    ; r1 (to_string(...)) : String
+    ; r2 (v4) : String
+    ; r3 (v1) : String

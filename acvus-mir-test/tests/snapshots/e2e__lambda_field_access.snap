@@ -8,43 +8,34 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = ref @users
-     3 |   r2 = load r1
-     4 |   r3 = call #0(r2)
-     5 |   r4 = call #1(r3)
-     6 |   r5 = closure L0 []
-     7 |   r6 = call #2(r4, r5)
-     9 |   r7 = T0 + T0
-    11 |   r8 = call #3(r6, T1)
-    12 |   r9 = r7 + r8
-    13 |   return r9
+     2 |   r1 = take @users
+     3 |   r2 = call #0(r1)
+     4 |   r3 = call #1(r2)
+     5 |   r4 = closure L0 []
+     6 |   r5 = call #2(r3, r4)
+     8 |   r6 = T0 + T0
+    10 |   r7 = call #3(r5, T1)
+    11 |   r8 = r6 + r7
+    12 |   return r8
 
-    ; r0 (v17) : Iterator<String, Pure, #IdentityId(0)>
-    ; r1 (@users) : Ref<Array<{age: Int, name: String}, 3>>
-    ; r2 (v3) : Array<{age: Int, name: String}, 3>
-    ; r3 (v4) : List<{age: Int, name: String}>
-    ; r4 (iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
-    ; r5 (v6) : Fn({age: Int, name: String}) -> String with reads {@users}
-    ; r6 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r7 (v11) : String
-    ; r8 (join(...)) : String
-    ; r9 (v16) : String
-    ; r10 (v14) : String
-    ; r11 (v9) : Ref<Iterator<String, Pure, #IdentityId(0)>>
-    ; r12 (v1) : String
-    ; r13 (v12) : Ref<Iterator<String, Pure, #IdentityId(0)>>
-    ; r14 (v10) : String
-    ; r15 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r0 (v14) : Iterator<String, Pure, #IdentityId(0)>
+    ; r1 (@users) : Array<{age: Int, name: String}, 3>
+    ; r2 (v3) : List<{age: Int, name: String}>
+    ; r3 (iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
+    ; r4 (v5) : Fn({age: Int, name: String}) -> String with reads {@users}
+    ; r5 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r6 (v9) : String
+    ; r7 (join(...)) : String
+    ; r8 (v13) : String
+    ; r9 (v11) : String
+    ; r10 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r11 (v1) : String
+    ; r12 (v8) : String
 
 === closure L0 (ValueId(0)) ===
-     0 |   r0 = undef
-     1 |   r1 = r2.name
+     0 |   assign u = r0
+     1 |   r1 = take u.name
      2 |   return r1
 
-    ; r0 (v8) : {age: Int, name: String}
-    ; r1 (v5) : String
-    ; r2 (v1) : {age: Int, name: String}
-    ; r3 (v3) : Ref<{age: Int, name: String}>
-    ; r4 (v7) : {age: Int, name: String}
-    ; r5 (v6) : Ref<{age: Int, name: String}>
-    ; r6 (u.name) : Ref<String>
+    ; r0 (v1) : {age: Int, name: String}
+    ; r1 (u.name) : String

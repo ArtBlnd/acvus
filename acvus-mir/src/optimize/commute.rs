@@ -28,7 +28,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::{Inst, InstKind, OrderEdge, ValueId};
-use crate::optimize::context_ops::{context_of_load, context_of_store, ref_to_ctx};
+use crate::optimize::context_ops::{context_read, context_written};
 use crate::ty::{Effect, Ty};
 
 pub fn run(cfg: &mut CfgBody) {
@@ -36,10 +36,9 @@ pub fn run(cfg: &mut CfgBody) {
         let inst = cfg.blocks[m.from.0].insts.remove(m.at);
         cfg.blocks[m.to.0].insts.insert(m.after + 1, inst);
     }
-    let contexts = ref_to_ctx(cfg);
     let mut subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     for bi in 0..cfg.blocks.len() {
-        let runs = runs_in_block(&cfg.blocks[bi].insts, &contexts);
+        let runs = runs_in_block(&cfg.blocks[bi].insts);
         for run in runs.into_iter().rev() {
             let merge = release(cfg, bi, &run);
             subst.insert(run.last_after, merge);
@@ -190,7 +189,7 @@ struct Run {
 
 /// Find the runs of a block. A call joins the current run when its effect
 /// commutes and it takes the `Order` the run's last call yielded.
-fn runs_in_block(insts: &[Inst], contexts: &FxHashMap<ValueId, QualifiedRef>) -> Vec<Run> {
+fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
     let mut open: Option<Run> = None;
     for (idx, inst) in insts.iter().enumerate() {
@@ -210,7 +209,7 @@ fn runs_in_block(insts: &[Inst], contexts: &FxHashMap<ValueId, QualifiedRef>) ->
             Some(mut run)
                 if commutes
                     && run.last_after == edge.before
-                    && !accesses_between(&insts[run.calls[0] + 1..idx], &effect, contexts) =>
+                    && !accesses_between(&insts[run.calls[0] + 1..idx], &effect) =>
             {
                 run.calls.push(idx);
                 run.last_after = edge.after;
@@ -233,14 +232,10 @@ fn runs_in_block(insts: &[Inst], contexts: &FxHashMap<ValueId, QualifiedRef>) ->
 /// Whether issuing a call of `effect` before `insts` would reorder it
 /// against a context access there: a store to a context it touches, or a
 /// load of a context it writes.
-fn accesses_between(
-    insts: &[Inst],
-    effect: &Effect,
-    contexts: &FxHashMap<ValueId, QualifiedRef>,
-) -> bool {
+fn accesses_between(insts: &[Inst], effect: &Effect) -> bool {
     insts.iter().any(|inst| {
-        context_of_store(&inst.kind, contexts).is_some_and(|ctx| effect.touches(ctx))
-            || context_of_load(&inst.kind, contexts).is_some_and(|ctx| effect.writes.contains(&ctx))
+        context_written(&inst.kind).is_some_and(|ctx| effect.touches(ctx))
+            || context_read(&inst.kind).is_some_and(|ctx| effect.writes.contains(&ctx))
     })
 }
 
@@ -316,7 +311,6 @@ mod tests {
                 before: v(slots.before),
                 after: v(slots.after),
             }),
-            lent: Vec::new(),
         }
     }
 
@@ -407,14 +401,10 @@ mod tests {
                         after: 2,
                     },
                 ),
-                InstKind::Ref {
-                    dst: v(5),
+                InstKind::Assign {
                     target: RefTarget::Context(n),
                     path: Vec::new(),
-                },
-                InstKind::Store {
-                    dst: v(5),
-                    value: v(6),
+                    value: v(5),
                 },
                 call(
                     &i,
@@ -431,7 +421,7 @@ mod tests {
                     order: Some(v(4)),
                 },
             ],
-            7,
+            6,
             &[0, 2, 4],
         );
         run(&mut cfg);

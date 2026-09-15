@@ -8,7 +8,7 @@ use acvus_extern::{CallToken, Runtime};
 
 use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
-use crate::value::Value;
+use crate::value::{Value, is_small};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 pub type ExternEntry = acvus_extern::ExternEntry<AcvusRuntime>;
@@ -35,26 +35,55 @@ impl Runtime for AcvusRuntime {
         unsafe { Value::erase(&self.0.vtables, value) }
     }
 
+    unsafe fn deref<'a, T>(&self, reference: &'a Value) -> &'a T
+    where
+        T: Send + Sync + 'static,
+    {
+        // SAFETY: the caller's contract: a live reference to a `T`.
+        let target = unsafe { reference.target() };
+        if const { is_small::<T>() } {
+            // SAFETY: a small `T` was written into the word by `erase`.
+            unsafe { &*(target.small_ref() as *const u64 as *const T) }
+        } else {
+            unsafe { target.peek::<T>() }
+        }
+    }
+
+    unsafe fn deref_mut<'a, T>(&self, reference: &'a Value) -> &'a mut T
+    where
+        T: Send + Sync + 'static,
+    {
+        // SAFETY: the caller's contract: a live, exclusively named `T`.
+        let target = unsafe { reference.target_mut() };
+        if const { is_small::<T>() } {
+            // SAFETY: a small `T` was written into the word by `erase`.
+            unsafe { &mut *(target.small_mut() as *mut u64 as *mut T) }
+        } else {
+            unsafe { target.peek_mut::<T>() }
+        }
+    }
+
+    unsafe fn reference(&self, target: &Value) -> Value {
+        Value::reference(target)
+    }
+
     fn call_0<'a>(&'a self, f: &'a Value, _: CallToken) -> Self::CallFuture<'a> {
         self.run(f, Vec::new())
     }
 
-    fn call_1<'a>(&'a self, f: &'a Value, a: &'a Value, _: CallToken) -> Self::CallFuture<'a> {
-        self.run(f, vec![a.deep_clone()])
+    fn call_1<'a>(&'a self, f: &'a Value, a: Value, _: CallToken) -> Self::CallFuture<'a> {
+        self.run(f, vec![a])
     }
 
-    fn call_n<'a>(&'a self, f: &'a Value, args: &[&'a Value], _: CallToken) -> Self::CallFuture<'a> {
-        self.run(f, args.iter().map(|a| a.deep_clone()).collect())
+    fn call_n<'a>(&'a self, f: &'a Value, args: Vec<Value>, _: CallToken) -> Self::CallFuture<'a> {
+        self.run(f, args)
     }
 }
 
 impl AcvusRuntime {
-    /// Every closure parameter is owned by the callee today, so a lent
-    /// argument enters the frame as the callee's own copy; a parameter the
-    /// type checker marks as borrowed will enter as an alias instead.
-    fn run<'a>(&'a self, f: &'a Value, owned: Vec<Value>) -> <Self as Runtime>::CallFuture<'a> {
+    fn run<'a>(&'a self, f: &'a Value, args: Vec<Value>) -> <Self as Runtime>::CallFuture<'a> {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        Box::pin(async move { crate::interpreter::fn_value_call(closure, owned).await })
+        Box::pin(async move { crate::interpreter::fn_value_call(closure, args).await })
     }
 }

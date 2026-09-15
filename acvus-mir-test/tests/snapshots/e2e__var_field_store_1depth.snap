@@ -3,24 +3,12 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = undef
-     1 |   r1 = ref @obj
-     2 |   r2 = load r1
-     4 |   r3 = field_set r2.x = 0 (r4)
-     5 |   r5 = r3.x
-     6 |   return r5
+     0 |   r0 = take @obj
+     1 |   assign a = r0
+     3 |   assign a.x = 0 (r1)
+     4 |   r2 = take a.x
+     5 |   return r2
 
-    ; r0 (v15) : {x: Int}
-    ; r1 (@obj) : Ref<{x: Int}>
-    ; r2 (v2) : {x: Int}
-    ; r3 (v11) : {x: Int}
-    ; r4 (v5) : Int
-    ; r5 (v8) : Int
-    ; r6 (a.x) : Ref<Int>
-    ; r7 (v14) : {x: Int}
-    ; r8 (v10) : {x: Int}
-    ; r9 (v6) : Ref<Int>
-    ; r10 (v9) : Ref<{x: Int}>
-    ; r11 (v13) : Ref<{x: Int}>
-    ; r12 (v12) : Ref<{x: Int}>
-    ; r13 (v4) : Ref<{x: Int}>
+    ; r0 (@obj) : {x: Int}
+    ; r1 (v3) : Int
+    ; r2 (a.x) : Int

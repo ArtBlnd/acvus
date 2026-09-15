@@ -9,38 +9,34 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = ref @role
-     3 |   r2 = load r1
-     4 | L2:
-     5 |   r3 = test r2 == "admin"
-     6 |   jump_if r3 then L3 else L1
-     7 | L3:
-    10 |   r4 = T0 + T1
-    11 |   jump L0(r4, r0)
-    12 | L1:
-    16 |   r5 = T0 + T0
-    17 |   r6 = r5 + T2
-    18 |   jump L0(r6, T2)
-    19 | L0(r7: String, r8: String):  ; merge_of L2
-    20 |   r9 = T0 + r7
-    21 |   return r9
+     2 |   r1 = take @role
+     3 | L2:
+     4 |   r2 = test r1 == "admin"
+     5 |   jump_if r2 then L3 else L1
+     6 | L3:
+     9 |   r3 = T0 + T1
+    10 |   jump L0(r3, r0)
+    11 | L1:
+    15 |   r4 = T0 + T0
+    16 |   r5 = r4 + T2
+    17 |   jump L0(r5, T2)
+    18 | L0(r6: String, r7: String):  ; merge_of L2
+    19 |   r8 = T0 + r6
+    20 |   return r8
 
-    ; r0 (v19) : String
-    ; r1 (@role) : Ref<String>
-    ; r2 (v3) : String
-    ; r3 (v4) : Bool
-    ; r4 (v7) : String
+    ; r0 (v16) : String
+    ; r1 (@role) : String
+    ; r2 (v3) : Bool
+    ; r3 (v6) : String
+    ; r4 (v11) : String
     ; r5 (v13) : String
-    ; r6 (v16) : String
+    ; r6 (v14) : String
     ; r7 (v17) : String
-    ; r8 (v20) : String
-    ; r9 (v18) : String
-    ; r10 (v11) : Ref<String>
-    ; r11 (v14) : Ref<String>
-    ; r12 (v6) : String
-    ; r13 (v9) : String
-    ; r14 (v1) : String
-    ; r15 (v12) : String
-    ; r16 (fallback) : String
-    ; r17 (v5) : String
-    ; r18 (v8) : String
+    ; r8 (v15) : String
+    ; r9 (v1) : String
+    ; r10 (fallback) : String
+    ; r11 (v4) : String
+    ; r12 (v7) : String
+    ; r13 (v10) : String
+    ; r14 (v5) : String
+    ; r15 (v8) : String

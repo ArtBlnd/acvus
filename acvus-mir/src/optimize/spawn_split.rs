@@ -26,7 +26,6 @@ pub fn run(cfg: &mut CfgBody) {
                     ref callee_ty,
                     ref args,
                     order,
-                    ref lent,
                 } if is_io_call(callee_ty) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
@@ -52,7 +51,6 @@ pub fn run(cfg: &mut CfgBody) {
                             dst,
                             src: handle,
                             order: order.map(|edge| edge.after),
-                            lent: lent.clone(),
                         },
                     });
                 }
@@ -144,7 +142,6 @@ mod tests {
                     callee_ty: fetch_ty,
                     args: vec![v(0)],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -209,7 +206,6 @@ mod tests {
                 callee_ty: Ty::error(),
                 args: vec![v(1), v(2)],
                 order: None,
-                lent: Vec::new(),
             }],
             3,
         );
@@ -232,7 +228,6 @@ mod tests {
                 callee_ty: Ty::error(),
                 args: vec![],
                 order: None,
-                lent: Vec::new(),
             }],
             2,
         );
@@ -273,7 +268,6 @@ mod tests {
                     callee_ty: io_fn_ty.clone(),
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::FunctionCall {
                     dst: v(1),
@@ -281,7 +275,6 @@ mod tests {
                     callee_ty: io_fn_ty,
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::BinOp {
                     dst: v(2),

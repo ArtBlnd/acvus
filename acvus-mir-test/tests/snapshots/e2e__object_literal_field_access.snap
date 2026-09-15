@@ -6,25 +6,18 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 |   r0 = undef
-     2 |   r1 = ref @name
-     3 |   r2 = load r1
-     4 |   r3 = object {name: r2}
-     6 |   r4 = T0 + T0
-     7 |   r5 = r3.name
-     8 |   r6 = r4 + r5
-     9 |   return r6
+     1 |   r0 = take @name
+     2 |   r1 = object {name: r0}
+     3 |   assign o = r1
+     5 |   r2 = T0 + T0
+     6 |   r3 = take o.name
+     7 |   r4 = r2 + r3
+     8 |   return r4
 
-    ; r0 (v14) : {name: String}
-    ; r1 (@name) : Ref<String>
-    ; r2 (v3) : String
-    ; r3 (v4) : {name: String}
+    ; r0 (@name) : String
+    ; r1 (v3) : {name: String}
+    ; r2 (v6) : String
+    ; r3 (o.name) : String
     ; r4 (v8) : String
-    ; r5 (v10) : String
-    ; r6 (v11) : String
-    ; r7 (v7) : String
-    ; r8 (v6) : Ref<{name: String}>
-    ; r9 (o.name) : Ref<String>
-    ; r10 (v13) : {name: String}
-    ; r11 (v1) : String
-    ; r12 (v12) : Ref<{name: String}>
+    ; r5 (v1) : String
+    ; r6 (v5) : String

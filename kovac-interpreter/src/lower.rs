@@ -455,6 +455,7 @@ impl<'a> Lowerer<'a> {
             UnaryOp::Not => {
                 todo!("Not not yet implemented in kovac")
             }
+            UnaryOp::Deref => unreachable!("Deref lowers to Load; validated MIR carries none"),
         };
         // Cross-move if needed.
         let src_reg = if src_bank != bank {

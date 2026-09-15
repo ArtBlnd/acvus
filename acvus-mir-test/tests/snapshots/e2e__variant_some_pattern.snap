@@ -8,38 +8,34 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = ref @opt
-     3 |   r2 = load r1
-     4 | L2:
-     5 |   r3 = test r2 is Some
-     6 |   jump_if r3 then L3 else L1
-     7 | L3:
-     8 |   r4 = unwrap r2
-    10 |   r5 = call #0(r4)
-    11 |   r6 = T0 + r5
-    12 |   jump L0(r6, r4)
-    13 | L1:
-    16 |   r7 = T0 + T1
-    17 |   jump L0(r7, r0)
-    18 | L0(r8: String, r9: Int):  ; merge_of L2
-    19 |   r10 = T0 + r8
-    20 |   return r10
+     2 |   r1 = take @opt
+     3 | L2:
+     4 |   r2 = test r1 is Some
+     5 |   jump_if r2 then L3 else L1
+     6 | L3:
+     7 |   r3 = unwrap r1
+     9 |   r4 = call #0(r3)
+    10 |   r5 = T0 + r4
+    11 |   jump L0(r5, r3)
+    12 | L1:
+    15 |   r6 = T0 + T1
+    16 |   jump L0(r6, r0)
+    17 | L0(r7: String, r8: Int):  ; merge_of L2
+    18 |   r9 = T0 + r7
+    19 |   return r9
 
-    ; r0 (v18) : Int
-    ; r1 (@opt) : Ref<Option<Int>>
-    ; r2 (v3) : Option<Int>
-    ; r3 (v4) : Bool
-    ; r4 (v) : Int
-    ; r5 (to_string(...)) : String
+    ; r0 (v15) : Int
+    ; r1 (@opt) : Option<Int>
+    ; r2 (v3) : Bool
+    ; r3 (v) : Int
+    ; r4 (to_string(...)) : String
+    ; r5 (v9) : String
     ; r6 (v12) : String
-    ; r7 (v15) : String
-    ; r8 (v16) : String
-    ; r9 (v19) : Int
-    ; r10 (v17) : String
-    ; r11 (v14) : String
-    ; r12 (v9) : Ref<Int>
-    ; r13 (v1) : String
-    ; r14 (v7) : Ref<Int>
-    ; r15 (v) : Int
-    ; r16 (v13) : String
-    ; r17 (v8) : String
+    ; r7 (v13) : String
+    ; r8 (v16) : Int
+    ; r9 (v14) : String
+    ; r10 (v11) : String
+    ; r11 (v6) : String
+    ; r12 (v1) : String
+    ; r13 (v) : Int
+    ; r14 (v10) : String

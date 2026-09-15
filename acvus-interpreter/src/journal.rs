@@ -1,16 +1,12 @@
 //! Context - runtime context storage for the interpreter.
 //!
 //! `Context` is a single snapshot of context state. Read/write via `&self`
-//! (interior mutability via RwLock). Projection-aware: `set_field` writes to
-//! a nested path directly, enabling precise diff computation without
-//! object-level dirty tracking.
-//!
-//! Values are copied in and out through the vtable table's explicit
-//! `clone`: the bridge until context dump/restore replaces sharing.
-//!
-//! `ContextWrite` describes a single context mutation (diff output).
+//! (interior mutability via RwLock). A context place is a storage like a
+//! local (RFC-0018): `take` moves its value out and `set` moves one in;
+//! nothing is copied. The page remembers which keys a run assigned, and
+//! `take_writes` hands their final values out.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, RwLock};
 
 use acvus_utils::Interner;
@@ -19,33 +15,25 @@ use crate::value::Value;
 
 // -- ContextWrite -----------------------------------------------------
 
-/// A single context mutation recorded during execution.
+/// The final value of a context a run assigned.
 #[derive(Debug)]
-pub enum ContextWrite {
-    /// Whole-value replacement (scalar, list, etc.)
-    Set { key: String, value: Value },
-    /// Nested object field patch.
-    FieldPatch {
-        key: String,
-        path: Vec<String>,
-        value: Value,
-    },
+pub struct ContextWrite {
+    pub key: String,
+    pub value: Value,
 }
 
 // -- Context trait ---------------------------------------------------
 
 /// Single snapshot of context state. Read/write via `&self`.
-///
-/// - `get` / `get_field`: read whole value or projected field.
-/// - `set` / `set_field`: write whole value or projected field.
-/// - `fork`: create an independent copy (for Spawn).
-/// - `take_writes`: drain the accumulated context mutations.
 pub trait RuntimeContext: Send + Sync + Sized {
-    fn get(&self, key: &str) -> Option<Value>;
-    fn get_field(&self, key: &str, path: &[&str]) -> Option<Value>;
+    /// Move the whole value out; the key is unset until `set`.
+    fn take(&self, key: &str) -> Option<Value>;
+    /// Move a field out of the stored object, leaving that field empty; a
+    /// primitive field is copied.
+    fn take_field(&self, key: &str, path: &[&str]) -> Option<Value>;
     fn set(&self, key: &str, value: Value);
     fn set_field(&self, key: &str, path: &[&str], value: Value);
-    fn fork(&self) -> Self;
+    /// The final value of every key `set` since the last drain, moved out.
     fn take_writes(&self) -> Vec<ContextWrite>;
 }
 
@@ -55,7 +43,7 @@ pub trait RuntimeContext: Send + Sync + Sized {
 /// Suitable for tests and the sequential executor.
 pub struct InMemoryContext {
     data: RwLock<HashMap<String, Value>>,
-    writes: Mutex<Vec<ContextWrite>>,
+    assigned: Mutex<BTreeSet<String>>,
     interner: Interner,
 }
 
@@ -63,7 +51,7 @@ impl InMemoryContext {
     pub fn new(initial: HashMap<String, Value>, interner: Interner) -> Self {
         Self {
             data: RwLock::new(initial),
-            writes: Mutex::new(Vec::new()),
+            assigned: Mutex::new(BTreeSet::new()),
             interner,
         }
     }
@@ -74,25 +62,18 @@ impl InMemoryContext {
 }
 
 impl RuntimeContext for InMemoryContext {
-    fn get(&self, key: &str) -> Option<Value> {
-        self.data
-            .read()
-            .unwrap()
-            .get(key)
-            .map(|v| v.deep_clone())
+    fn take(&self, key: &str) -> Option<Value> {
+        self.data.write().unwrap().remove(key)
     }
 
-    fn get_field(&self, key: &str, path: &[&str]) -> Option<Value> {
-        let data = self.data.read().unwrap();
-        let root = data.get(key)?;
-        navigate_field(&self.interner, root, path).map(|v| v.deep_clone())
+    fn take_field(&self, key: &str, path: &[&str]) -> Option<Value> {
+        let mut data = self.data.write().unwrap();
+        let root = data.get_mut(key)?;
+        navigate_field_mut(&self.interner, root, path).map(Value::use_from)
     }
 
     fn set(&self, key: &str, value: Value) {
-        self.writes.lock().unwrap().push(ContextWrite::Set {
-            key: key.to_string(),
-            value: value.deep_clone(),
-        });
+        self.assigned.lock().unwrap().insert(key.to_string());
         if let Some(old) = self.data.write().unwrap().insert(key.to_string(), value) {
             drop(old);
         }
@@ -103,39 +84,34 @@ impl RuntimeContext for InMemoryContext {
             self.set(key, value);
             return;
         }
-        self.writes.lock().unwrap().push(ContextWrite::FieldPatch {
-            key: key.to_string(),
-            path: path.iter().map(|s| s.to_string()).collect(),
-            value: value.deep_clone(),
-        });
+        self.assigned.lock().unwrap().insert(key.to_string());
         let mut data = self.data.write().unwrap();
         let root = data.entry(key.to_string()).or_insert_with(Value::unit);
         deep_set_field(&self.interner, root, path, value);
     }
 
-    fn fork(&self) -> Self {
-        let data = self
-            .data
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.deep_clone()))
-            .collect();
-        Self {
-            data: RwLock::new(data),
-            writes: Mutex::new(Vec::new()),
-            interner: self.interner.clone(),
-        }
-    }
-
     fn take_writes(&self) -> Vec<ContextWrite> {
-        std::mem::take(&mut *self.writes.lock().unwrap())
+        let assigned = std::mem::take(&mut *self.assigned.lock().unwrap());
+        let mut data = self.data.write().unwrap();
+        assigned
+            .into_iter()
+            .map(|key| {
+                let value = data.remove(&key).unwrap_or_else(|| {
+                    panic!("context '{key}' was assigned but holds no value at the end of the run")
+                });
+                ContextWrite { key, value }
+            })
+            .collect()
     }
 }
 
 // -- Helpers ---------------------------------------------------------
 
-fn navigate_field<'a>(interner: &Interner, root: &'a Value, path: &[&str]) -> Option<&'a Value> {
+fn navigate_field_mut<'a>(
+    interner: &Interner,
+    root: &'a mut Value,
+    path: &[&str],
+) -> Option<&'a mut Value> {
     if path.is_empty() {
         return Some(root);
     }
@@ -143,9 +119,9 @@ fn navigate_field<'a>(interner: &Interner, root: &'a Value, path: &[&str]) -> Op
         return None;
     }
     // SAFETY: is_object checked the vtable.
-    let map = unsafe { root.as_object() };
-    let child = map.get(&interner.intern(path[0]))?;
-    navigate_field(interner, child, &path[1..])
+    let map = unsafe { root.as_object_mut() };
+    let child = map.get_mut(&interner.intern(path[0]))?;
+    navigate_field_mut(interner, child, &path[1..])
 }
 
 /// Deep-set a nested field in place; a non-object on the path is replaced
@@ -182,182 +158,143 @@ mod tests {
         InMemoryContext::new(data, i)
     }
 
-    /// Same bits for a `Small`, same text for a string: what the tests store.
-    fn eq(_: &InMemoryContext, a: Option<Value>, b: Value) -> bool {
-        let Some(a) = a else {
+    fn is_int(v: Option<Value>, n: i64) -> bool {
+        matches!(v, Some(Value::Small(bits)) if bits == n as u64)
+    }
+
+    fn is_str(v: Option<Value>, s: &str) -> bool {
+        let Some(v) = v else {
             return false;
         };
-        match (&a, &b) {
-            (Value::Small(x), Value::Small(y)) => x == y,
-            // SAFETY: both are strings by the vtable check.
-            (Value::Large(..), Value::Large(..)) if a.is_string() && b.is_string() => unsafe {
-                a.as_str() == b.as_str()
-            },
-            _ => false,
-        }
-    }
-
-    // -- get / set ----------------------------------------------
-
-    #[test]
-    fn get_returns_stored_value() {
-        let ctx = make_ctx(vec![("x", Value::int(42))]);
-        assert!(eq(&ctx, ctx.get("x"), Value::int(42)));
+        // SAFETY: is_string checked the vtable.
+        v.is_string() && unsafe { v.as_str() } == s
     }
 
     #[test]
-    fn get_missing_returns_none() {
+    fn take_moves_the_value_out() {
+        let ctx = make_ctx(vec![("x", Value::string("hi"))]);
+        assert!(is_str(ctx.take("x"), "hi"));
+        assert!(ctx.take("x").is_none());
+    }
+
+    #[test]
+    fn take_missing_returns_none() {
         let ctx = make_ctx(vec![]);
-        assert!(ctx.get("x").is_none());
+        assert!(ctx.take("x").is_none());
     }
 
     #[test]
-    fn set_overwrites_value() {
+    fn set_after_take_restores_the_key() {
         let ctx = make_ctx(vec![("x", Value::int(1))]);
+        assert!(is_int(ctx.take("x"), 1));
         ctx.set("x", Value::int(2));
-        assert!(eq(&ctx, ctx.get("x"), Value::int(2)));
+        assert!(is_int(ctx.take("x"), 2));
     }
 
     #[test]
-    fn set_records_write() {
-        let ctx = make_ctx(vec![]);
-        ctx.set("x", Value::int(42));
+    fn take_writes_hands_out_final_values() {
+        let ctx = make_ctx(vec![("x", Value::int(1)), ("y", Value::int(9))]);
+        ctx.set("x", Value::int(2));
+        ctx.set("x", Value::int(3));
         let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
-        assert!(matches!(&writes[0], ContextWrite::Set { key, .. } if key == "x"));
+        assert_eq!(writes[0].key, "x");
+        assert!(is_int(Some(Value::use_from(&mut { writes.into_iter().next().unwrap().value })), 3));
+        assert!(ctx.take("x").is_none(), "the drained value left the page");
+        assert!(is_int(ctx.take("y"), 9), "an unassigned key stays");
     }
-
-    // -- get_field / set_field ----------------------------------
 
     fn user(i: &Interner) -> Value {
         Value::object(FxHashMap::from_iter([
-            (i.intern("name"), Value::string("alice")),
+            (i.intern("name"), Value::string("Alice")),
             (i.intern("age"), Value::int(30)),
         ]))
     }
 
     fn nested_user(i: &Interner) -> Value {
-        let inner = Value::object(FxHashMap::from_iter([(
-            i.intern("city"),
-            Value::string("seoul"),
-        )]));
-        Value::object(FxHashMap::from_iter([(i.intern("address"), inner)]))
+        Value::object(FxHashMap::from_iter([(
+            i.intern("profile"),
+            Value::object(FxHashMap::from_iter([(i.intern("city"), Value::string("Seoul"))])),
+        )]))
     }
 
     fn ctx_with(i: Interner, key: &str, value: Value) -> InMemoryContext {
-        InMemoryContext::new(HashMap::from([(key.to_string(), value)]), i)
+        let mut data = HashMap::new();
+        data.insert(key.to_string(), value);
+        InMemoryContext::new(data, i)
     }
 
     #[test]
-    fn get_field_navigates_object() {
+    fn take_field_moves_a_field_out() {
         let i = Interner::new();
         let ctx = ctx_with(i.clone(), "user", user(&i));
-        assert!(eq(&ctx, ctx.get_field("user", &["name"]), Value::string("alice")));
-        assert!(eq(&ctx, ctx.get_field("user", &["age"]), Value::int(30)));
+        assert!(is_str(ctx.take_field("user", &["name"]), "Alice"));
+        assert!(is_int(ctx.take_field("user", &["age"]), 30));
+        assert!(is_int(ctx.take_field("user", &["age"]), 30), "a primitive field is copied");
     }
 
     #[test]
-    fn get_field_nested() {
+    fn take_field_nested() {
         let i = Interner::new();
         let ctx = ctx_with(i.clone(), "user", nested_user(&i));
-        assert!(eq(
-            &ctx,
-            ctx.get_field("user", &["address", "city"]),
-            Value::string("seoul")
-        ));
+        assert!(is_str(ctx.take_field("user", &["profile", "city"]), "Seoul"));
     }
 
     #[test]
-    fn get_field_missing_returns_none() {
-        let ctx = make_ctx(vec![("x", Value::int(42))]);
-        assert!(ctx.get_field("x", &["name"]).is_none());
+    fn take_field_missing_returns_none() {
+        let i = Interner::new();
+        let ctx = ctx_with(i.clone(), "user", user(&i));
+        assert!(ctx.take_field("user", &["missing"]).is_none());
     }
 
     #[test]
     fn set_field_updates_nested() {
         let i = Interner::new();
         let ctx = ctx_with(i.clone(), "user", user(&i));
-        ctx.set_field("user", &["name"], Value::string("bob"));
-        assert!(eq(&ctx, ctx.get_field("user", &["name"]), Value::string("bob")));
-        assert!(eq(&ctx, ctx.get_field("user", &["age"]), Value::int(30)));
+        ctx.set_field("user", &["age"], Value::int(31));
+        assert!(is_int(ctx.take_field("user", &["age"]), 31));
     }
 
     #[test]
-    fn set_field_records_field_patch() {
+    fn set_field_records_the_key() {
         let i = Interner::new();
         let ctx = ctx_with(i.clone(), "user", user(&i));
-        ctx.set_field("user", &["name"], Value::string("bob"));
+        ctx.set_field("user", &["age"], Value::int(31));
         let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
-        assert!(matches!(
-            &writes[0],
-            ContextWrite::FieldPatch { key, path, .. }
-            if key == "user" && path == &["name"]
-        ));
+        assert_eq!(writes[0].key, "user");
     }
 
     #[test]
     fn set_field_deep_nested() {
         let i = Interner::new();
         let ctx = ctx_with(i.clone(), "user", nested_user(&i));
-        ctx.set_field("user", &["address", "city"], Value::string("busan"));
-        assert!(eq(
-            &ctx,
-            ctx.get_field("user", &["address", "city"]),
-            Value::string("busan")
-        ));
+        ctx.set_field("user", &["profile", "city"], Value::string("Busan"));
+        assert!(is_str(ctx.take_field("user", &["profile", "city"]), "Busan"));
     }
 
     #[test]
     fn set_field_empty_path_is_set() {
         let ctx = make_ctx(vec![("x", Value::int(1))]);
         ctx.set_field("x", &[], Value::int(2));
-        assert!(eq(&ctx, ctx.get("x"), Value::int(2)));
-        let writes = ctx.take_writes();
-        assert!(matches!(&writes[0], ContextWrite::Set { .. }));
-    }
-
-    // -- fork ---------------------------------------------------
-
-    #[test]
-    fn fork_creates_independent_copy() {
-        let ctx = make_ctx(vec![("x", Value::int(1))]);
-        let forked = ctx.fork();
-        assert!(eq(&forked, forked.get("x"), Value::int(1)));
-        forked.set("x", Value::int(2));
-        assert!(eq(&forked, forked.get("x"), Value::int(2)));
-        assert!(eq(&ctx, ctx.get("x"), Value::int(1)));
+        assert!(is_int(ctx.take("x"), 2));
     }
 
     #[test]
-    fn fork_has_empty_writes() {
-        let ctx = make_ctx(vec![("x", Value::int(1))]);
-        ctx.set("x", Value::int(2));
-        let forked = ctx.fork();
-        assert!(forked.take_writes().is_empty());
-    }
-
-    // -- concurrent read/write ----------------------------------
-
-    #[test]
-    fn concurrent_read_write() {
-        use std::thread;
-        let ctx = make_ctx(vec![("counter", Value::int(0))]);
-        let ctx_ref = &ctx;
-
-        thread::scope(|s| {
-            s.spawn(|| {
-                for i in 1..=100 {
+    fn concurrent_set_and_take() {
+        use std::sync::Arc;
+        let ctx = Arc::new(make_ctx(vec![("counter", Value::int(0))]));
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let ctx_ref = Arc::clone(&ctx);
+                std::thread::spawn(move || {
                     ctx_ref.set("counter", Value::int(i));
-                }
-            });
-            s.spawn(|| {
-                for _ in 0..100 {
-                    let _ = ctx_ref.get("counter");
-                }
-            });
-        });
-
-        assert!(eq(&ctx, ctx.get("counter"), Value::int(100)));
+                    let _ = ctx_ref.take("counter");
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 }

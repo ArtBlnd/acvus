@@ -7,37 +7,33 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = ref @pair
-     3 |   r2 = load r1
-     4 | L2:
-     6 |   r3 = r2.0
-     8 |   r4 = true (r5) && true (r6)
-     9 |   jump_if r4 then L3 else L1
-    10 | L3:
-    11 |   r7 = r2.0
-    13 |   r8 = T0 + r7
-    14 |   jump L0(r8, r7)
-    15 | L1:
-    17 |   jump L0(T0, r0)
-    18 | L0(r9: String, r10: String):  ; merge_of L2
-    19 |   r11 = T0 + r9
-    20 |   return r11
+     2 |   r1 = take @pair
+     3 | L2:
+     5 |   r2 = r1.0
+     7 |   r3 = true (r4) && true (r5)
+     8 |   jump_if r3 then L3 else L1
+     9 | L3:
+    10 |   r6 = r1.0
+    12 |   r7 = T0 + r6
+    13 |   jump L0(r7, r6)
+    14 | L1:
+    16 |   jump L0(T0, r0)
+    17 | L0(r8: String, r9: String):  ; merge_of L2
+    18 |   r10 = T0 + r8
+    19 |   return r10
 
-    ; r0 (v18) : String
-    ; r1 (@pair) : Ref<(String, Int)>
-    ; r2 (v3) : (String, Int)
-    ; r3 (v5) : String
-    ; r4 (v7) : Bool
-    ; r5 (v4) : Bool
-    ; r6 (v6) : Bool
-    ; r7 (name) : String
-    ; r8 (v14) : String
+    ; r0 (v15) : String
+    ; r1 (@pair) : (String, Int)
+    ; r2 (v4) : String
+    ; r3 (v6) : Bool
+    ; r4 (v3) : Bool
+    ; r5 (v5) : Bool
+    ; r6 (name) : String
+    ; r7 (v11) : String
+    ; r8 (v13) : String
     ; r9 (v16) : String
-    ; r10 (v19) : String
-    ; r11 (v17) : String
-    ; r12 (v11) : String
-    ; r13 (v1) : String
-    ; r14 (v12) : Ref<String>
-    ; r15 (v15) : String
-    ; r16 (v10) : Ref<String>
-    ; r17 (name) : String
+    ; r10 (v14) : String
+    ; r11 (v9) : String
+    ; r12 (v1) : String
+    ; r13 (v12) : String
+    ; r14 (name) : String

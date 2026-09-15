@@ -9,7 +9,7 @@ mod value;
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use executor::{Executor, SequentialExecutor, TokioExecutor};
 pub use interpreter::{
-    Args, ExecResult, Executable, Interpreter, InterpreterContext, fn_value_call,
+    Args, Executable, Interpreter, InterpreterContext, fn_value_call,
 };
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub use runtime::{AcvusRuntime, ExternEntry, ExternHandler};

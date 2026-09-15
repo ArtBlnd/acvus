@@ -1,5 +1,5 @@
 //! The vtable a `Large` value carries in its allocation header: how to
-//! drop, clone, and print the payload behind the pointer. The interpreter's
+//! drop and print the payload behind the pointer. The interpreter's
 //! own composites are process-wide statics the `VtableRegistry` starts
 //! with; an extension type erased for the first time registers a drop-only
 //! vtable there, leaked for the life of the process.
@@ -35,7 +35,6 @@ pub enum Composite {
 }
 
 pub type DropFn = unsafe fn(NonNull<Header>);
-pub type CloneFn = unsafe fn(NonNull<Header>) -> NonNull<Header>;
 pub type DebugFn = unsafe fn(NonNull<Header>, &mut fmt::Formatter<'_>) -> fmt::Result;
 
 pub struct Vtable {
@@ -43,7 +42,6 @@ pub struct Vtable {
     pub name: &'static str,
     pub composite: Option<Composite>,
     pub drop: DropFn,
-    pub clone: Option<CloneFn>,
     pub debug: Option<DebugFn>,
 }
 
@@ -54,7 +52,6 @@ impl Vtable {
             name,
             composite: None,
             drop: drop_slot::<T>,
-            clone: None,
             debug: None,
         }
     }

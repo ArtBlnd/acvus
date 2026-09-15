@@ -305,6 +305,17 @@ fn remap_value_ids(vals: &[ValueId], remap: &FxHashMap<ValueId, ValueId>) -> Vec
 }
 
 /// Remap a Label with an offset.
+fn remap_target(
+    target: &crate::ir::RefTarget,
+    remap: &FxHashMap<ValueId, ValueId>,
+) -> crate::ir::RefTarget {
+    match target {
+        crate::ir::RefTarget::Var(slot) => crate::ir::RefTarget::Var(remap_one(*slot, remap)),
+        crate::ir::RefTarget::Param(slot) => crate::ir::RefTarget::Param(remap_one(*slot, remap)),
+        crate::ir::RefTarget::Context(qref) => crate::ir::RefTarget::Context(*qref),
+    }
+}
+
 fn remap_label(label: Label, offset: u32) -> Label {
     if offset == 0 {
         label
@@ -331,18 +342,31 @@ fn remap_inst(
         },
 
         // Projection
-        InstKind::Ref { dst, target, path } => {
-            let new_target = match target {
-                crate::ir::RefTarget::Var(slot) => crate::ir::RefTarget::Var(r(*slot)),
-                crate::ir::RefTarget::Param(slot) => crate::ir::RefTarget::Param(r(*slot)),
-                crate::ir::RefTarget::Context(qref) => crate::ir::RefTarget::Context(*qref),
-            };
-            InstKind::Ref {
-                dst: r(*dst),
-                target: new_target,
-                path: path.clone(),
-            }
-        }
+        InstKind::Ref {
+            dst,
+            target,
+            path,
+            mutability,
+        } => InstKind::Ref {
+            dst: r(*dst),
+            target: remap_target(target, val_remap),
+            path: path.clone(),
+            mutability: *mutability,
+        },
+        InstKind::Take { dst, target, path } => InstKind::Take {
+            dst: r(*dst),
+            target: remap_target(target, val_remap),
+            path: path.clone(),
+        },
+        InstKind::Assign {
+            target,
+            path,
+            value,
+        } => InstKind::Assign {
+            target: remap_target(target, val_remap),
+            path: path.clone(),
+            value: r(*value),
+        },
         InstKind::Load { dst, src } => InstKind::Load {
             dst: r(*dst),
             src: r(*src),
@@ -407,7 +431,6 @@ fn remap_inst(
             callee_ty,
             args,
             order,
-            lent,
         } => {
             let callee = match callee {
                 Callee::Direct(id) => Callee::Direct(*id),
@@ -422,7 +445,6 @@ fn remap_inst(
                     before: r(edge.before),
                     after: r(edge.after),
                 }),
-                lent: rv(lent),
             }
         }
         InstKind::Spawn {
@@ -444,16 +466,10 @@ fn remap_inst(
                 order: order.map(r),
             }
         }
-        InstKind::Eval {
-            dst,
-            src,
-            order,
-            lent,
-        } => InstKind::Eval {
+        InstKind::Eval { dst, src, order } => InstKind::Eval {
             dst: r(*dst),
             src: r(*src),
             order: order.map(r),
-            lent: rv(lent),
         },
         InstKind::Merge { dst, orders } => InstKind::Merge {
             dst: r(*dst),
@@ -668,7 +684,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -728,7 +743,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![v(0)],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),
@@ -781,7 +795,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(0),
@@ -843,7 +856,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(0),
@@ -861,7 +873,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(0),
@@ -905,7 +916,6 @@ mod tests {
                     callee_ty: Ty::error(),
                     args: vec![],
                     order: None,
-                    lent: Vec::new(),
                 },
                 InstKind::Return {
                     value: v(1),

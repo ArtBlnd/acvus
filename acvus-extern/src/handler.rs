@@ -9,37 +9,14 @@ use acvus_mir::ty::{PolyTy, Ty, matches_poly};
 use crate::error::ExternError;
 use crate::runtime::Runtime;
 
-/// What a call gives back: its return value, and the value of every
-/// place it borrowed, in argument order (RFC-0015).
-pub struct Returned<V> {
-    pub value: V,
-    pub lent: Vec<V>,
-}
-
-impl<V> Returned<V> {
-    pub fn value(value: V) -> Self {
-        Returned {
-            value,
-            lent: Vec::new(),
-        }
-    }
-}
-
-type SyncFn<R> = dyn Fn(
-        &R,
-        Vec<<R as Runtime>::Value>,
-    ) -> Result<Returned<<R as Runtime>::Value>, <R as Runtime>::Error>
+type SyncFn<R> = dyn Fn(&R, Vec<<R as Runtime>::Value>) -> Result<<R as Runtime>::Value, <R as Runtime>::Error>
     + Send
     + Sync;
 type AsyncFn<R> = dyn Fn(
         R,
         Vec<<R as Runtime>::Value>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<Returned<<R as Runtime>::Value>, <R as Runtime>::Error>>
-                + Send,
-        >,
-    > + Send
+    ) -> Pin<Box<dyn Future<Output = Result<<R as Runtime>::Value, <R as Runtime>::Error>> + Send>>
+    + Send
     + Sync;
 
 /// `Sync` may run on a blocking thread pool; `Async` runs on the async

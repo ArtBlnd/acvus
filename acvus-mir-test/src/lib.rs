@@ -104,13 +104,7 @@ fn run_pipeline_with_registry(
         }
     }
 
-    // SROA: decompose field Refs into identity Refs + FieldGet/FieldSet.
-    acvus_mir::optimize::sroa::run_body(&mut module.main, &inf.context_types);
-    for closure in module.closures.values_mut() {
-        acvus_mir::optimize::sroa::run_body(closure, &inf.context_types);
-    }
-
-    // SSA: promote identity Refs to SSA form.
+    // SSA: promote whole reads and writes of locals to SSA form.
     let mut cfg_main = cfg::promote(std::mem::take(&mut module.main));
     acvus_mir::optimize::ssa_pass::run(&mut cfg_main);
     module.main = cfg::demote(cfg_main);

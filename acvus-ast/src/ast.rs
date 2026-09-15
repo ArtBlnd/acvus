@@ -229,8 +229,7 @@ pub enum Expr {
         inner: Box<Expr>,
         span: Span,
     },
-    /// A place lent to a call: `&place` or `&mut place` (RFC-0015). Only
-    /// a call argument.
+    /// A reference to a place: `&place` or `&mut place` (RFC-0018).
     Borrow {
         id: AstId,
         mutable: bool,
@@ -533,6 +532,8 @@ pub enum BinOp {
 pub enum UnaryOp {
     Neg,
     Not,
+    /// `*r`: the primitive a reference names (RFC-0018).
+    Deref,
 }
 
 /// The kind of reference for an identifier.

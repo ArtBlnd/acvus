@@ -65,8 +65,8 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 /// be removed. Only provably pure instructions can be dead.
 fn is_root(kind: &InstKind) -> bool {
     match kind {
-        // Context store - externally observable.
-        InstKind::Store { .. } => true,
+        // A write to storage is observable; a take leaves its storage empty.
+        InstKind::Store { .. } | InstKind::Assign { .. } | InstKind::Take { .. } => true,
 
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
@@ -305,7 +305,6 @@ mod tests {
             },
             args: vec![],
             order: None,
-            lent: Vec::new(),
         }
     }
 

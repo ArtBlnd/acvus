@@ -9,16 +9,12 @@ expression: ir
      5 | L2:
      7 |   jump L1(2 (r2))
      8 | L1(r3: Int):
-     9 |   r4 = ref x
-    10 |   store r4 = r3
-    11 |   r5 = ref x
-    12 |   r6 = load r5
-    13 |   return r6
+     9 |   assign x = r3
+    10 |   r4 = take x
+    11 |   return r4
 
     ; r0 (v1) : Bool
     ; r1 (v2) : Int
     ; r2 (v3) : Int
     ; r3 (v4) : Int
-    ; r4 (v6) : Ref<Int>
-    ; r5 (v7) : Ref<Int>
-    ; r6 (x) : Int
+    ; r4 (x) : Int

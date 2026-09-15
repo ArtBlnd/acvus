@@ -3,7 +3,9 @@
 //! `Fn(...) -> R with E` in an extern signature — the type solver reads the
 //! closure's type from it — and holds the runtime's closure as a plain
 //! value. Calling one is the one place a generic body crosses back into the
-//! runtime: `f.call(rt, (&a, &b))` lends runtime values and gets one back.
+//! runtime: `f.call(rt, (a, b))` moves runtime values into the callee's
+//! parameters and gets one back; a parameter declared `Ref<T>` is passed
+//! `rt.reference(&a)`.
 
 use std::marker::PhantomData;
 
@@ -24,12 +26,10 @@ impl CallToken {
     }
 }
 
-/// A closure value called with lent runtime values, arity fixed by the type.
+/// A closure value called with runtime values, arity fixed by the type.
 pub trait ClosureFn<Rt: Runtime> {
-    type Args<'a>
-    where
-        Self: 'a;
-    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args<'a>) -> Rt::CallFuture<'a>;
+    type Args;
+    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args) -> Rt::CallFuture<'a>;
 }
 
 macro_rules! define_fn_arg {
@@ -50,6 +50,10 @@ macro_rules! define_fn_arg {
         {
             pub fn new(value: Rt::Value) -> Self {
                 Self(value, PhantomData)
+            }
+
+            pub fn into_value(self) -> Rt::Value {
+                self.0
             }
 
             /// The same closure value under the erased types it has at run
@@ -95,10 +99,7 @@ where
     E: EffectVar,
     Rt: Runtime,
 {
-    type Args<'a>
-        = ()
-    where
-        Self: 'a;
+    type Args = ();
     fn call<'a>(&'a self, rt: &'a Rt, _: ()) -> Rt::CallFuture<'a> {
         rt.call_0(&self.0, CallToken::mint())
     }
@@ -111,11 +112,8 @@ where
     E: EffectVar,
     Rt: Runtime,
 {
-    type Args<'a>
-        = (&'a Rt::Value,)
-    where
-        Self: 'a;
-    fn call<'a>(&'a self, rt: &'a Rt, (a,): Self::Args<'a>) -> Rt::CallFuture<'a> {
+    type Args = (Rt::Value,);
+    fn call<'a>(&'a self, rt: &'a Rt, (a,): Self::Args) -> Rt::CallFuture<'a> {
         rt.call_1(&self.0, a, CallToken::mint())
     }
 }
@@ -128,12 +126,9 @@ where
     E: EffectVar,
     Rt: Runtime,
 {
-    type Args<'a>
-        = (&'a Rt::Value, &'a Rt::Value)
-    where
-        Self: 'a;
-    fn call<'a>(&'a self, rt: &'a Rt, (a, b): Self::Args<'a>) -> Rt::CallFuture<'a> {
-        rt.call_n(&self.0, &[a, b], CallToken::mint())
+    type Args = (Rt::Value, Rt::Value);
+    fn call<'a>(&'a self, rt: &'a Rt, (a, b): Self::Args) -> Rt::CallFuture<'a> {
+        rt.call_n(&self.0, vec![a, b], CallToken::mint())
     }
 }
 
@@ -146,11 +141,8 @@ where
     E: EffectVar,
     Rt: Runtime,
 {
-    type Args<'a>
-        = (&'a Rt::Value, &'a Rt::Value, &'a Rt::Value)
-    where
-        Self: 'a;
-    fn call<'a>(&'a self, rt: &'a Rt, (a, b, c): Self::Args<'a>) -> Rt::CallFuture<'a> {
-        rt.call_n(&self.0, &[a, b, c], CallToken::mint())
+    type Args = (Rt::Value, Rt::Value, Rt::Value);
+    fn call<'a>(&'a self, rt: &'a Rt, (a, b, c): Self::Args) -> Rt::CallFuture<'a> {
+        rt.call_n(&self.0, vec![a, b, c], CallToken::mint())
     }
 }

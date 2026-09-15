@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::Returned;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
 use acvus_mir::ty::Ty;
@@ -16,29 +15,19 @@ use crate::runtime::{AcvusRuntime, ExternHandler};
 use crate::vtable::VtableRegistry;
 use crate::value::{FnValue, HandleValue, Value, VariantValue};
 
-/// Runtime representation of a Ref instruction's target.
-#[derive(Debug, Clone)]
-enum RuntimeRef {
-    Var { slot: ValueId, path: Vec<Astr> },
-    Param { slot: ValueId, path: Vec<Astr> },
-    Context { qref: QualifiedRef, path: Vec<Astr> },
-}
-
-impl RuntimeRef {
-    fn from_target(target: &RefTarget, path: Vec<Astr>) -> Self {
-        match target {
-            RefTarget::Var(slot) => RuntimeRef::Var { slot: *slot, path },
-            RefTarget::Param(slot) => RuntimeRef::Param { slot: *slot, path },
-            RefTarget::Context(qref) => RuntimeRef::Context { qref: *qref, path },
-        }
-    }
-}
-
 fn field<'a>(value: &'a Value, f: Astr, interner: &Interner) -> &'a Value {
     assert!(value.is_object(), "field load on non-object: {value:?}");
     // SAFETY: is_object checked the vtable id.
     unsafe { value.as_object() }
         .get(&f)
+        .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
+}
+
+fn field_mut<'a>(value: &'a mut Value, f: Astr, interner: &Interner) -> &'a mut Value {
+    assert!(value.is_object(), "field access on non-object: {value:?}");
+    // SAFETY: is_object checked the vtable id.
+    unsafe { value.as_object_mut() }
+        .get_mut(&f)
         .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
 }
 
@@ -49,95 +38,55 @@ fn walk_path<'a>(mut value: &'a Value, path: &[Astr], interner: &Interner) -> &'
     value
 }
 
-/// Load a value from a RuntimeRef.
-fn load_ref(rt_ref: &RuntimeRef, ctx: &RunContext) -> Value {
-    let interner = &ctx.shared.interner;
-    match rt_ref {
-        RuntimeRef::Var { slot, path } | RuntimeRef::Param { slot, path } => {
-            let root = ctx
-                .variables
-                .get(slot)
-                .unwrap_or_else(|| panic!("undefined variable slot {:?}", slot));
-            walk_path(root, path, interner).deep_clone()
-        }
-        RuntimeRef::Context { qref, path } => {
-            let name = ctx
-                .shared
-                .context_names
-                .get(qref)
-                .unwrap_or_else(|| panic!("context load: no name for {:?}", qref));
-            let key = interner.resolve(*name);
-            let root = ctx
-                .page
-                .get(key)
-                .unwrap_or_else(|| panic!("context load: undefined context '{}'", key));
-            let out = walk_path(&root, path, interner).deep_clone();
-            drop(root);
-            out
-        }
+fn walk_path_mut<'a>(mut value: &'a mut Value, path: &[Astr], interner: &Interner) -> &'a mut Value {
+    for f in path {
+        value = field_mut(value, *f, interner);
     }
+    value
+}
+
+/// Move the value at `path` out of `root`: a word is copied, a `Large`
+/// leaves its slot `Empty`.
+fn take_at(root: &mut Value, path: &[Astr], interner: &Interner) -> Value {
+    Value::use_from(walk_path_mut(root, path, interner))
 }
 
 /// Set a nested field path on an object value, in place.
 fn store_path(target: &mut Value, path: &[Astr], value: Value, interner: &Interner) {
     assert!(!path.is_empty(), "store_path called with empty path");
-    assert!(target.is_object(), "field store on non-object: {target:?}");
-    // SAFETY: is_object checked the vtable id.
-    let map = unsafe { target.as_object_mut() };
-    if path.len() == 1 {
-        if let Some(old) = map.insert(path[0], value) {
-            drop(old);
-        }
-        return;
-    }
-    let inner = map
-        .get_mut(&path[0])
-        .unwrap_or_else(|| panic!("missing field {}", interner.resolve(path[0])));
-    store_path(inner, &path[1..], value, interner);
+    let slot = walk_path_mut(target, path, interner);
+    *slot = value;
 }
 
-/// Store a value through a RuntimeRef.
-fn store_ref(rt_ref: &RuntimeRef, ctx: &mut RunContext, value: Value) {
-    let interner = ctx.shared.interner.clone();
-    match rt_ref {
-        RuntimeRef::Var { slot, path } if path.is_empty() => {
-            if let Some(old) = ctx.variables.insert(*slot, value) {
-                drop(old);
-            }
-        }
-        RuntimeRef::Var { slot, path } => {
-            let entry = ctx
-                .variables
-                .get_mut(slot)
-                .unwrap_or_else(|| panic!("undefined variable slot {:?}", slot));
-            store_path(entry, path, value, &interner);
-        }
-        RuntimeRef::Param { slot, .. } => {
-            panic!("cannot store to param slot {:?}", slot);
-        }
-        RuntimeRef::Context { qref, path } => {
-            let name = ctx
-                .shared
-                .context_names
-                .get(qref)
-                .unwrap_or_else(|| panic!("context store: no name for {:?}", qref));
-            let key = interner.resolve(*name);
-            if path.is_empty() {
-                ctx.page.set(key, value);
-            } else {
-                let mut current = ctx
-                    .page
-                    .get(key)
-                    .unwrap_or_else(|| panic!("context store: undefined context '{}'", key));
-                store_path(&mut current, path, value, &interner);
-                ctx.page.set(key, current);
-            }
-        }
-    }
+/// The page key of a context.
+fn context_key<'a>(shared: &'a InterpreterContext, qref: &QualifiedRef) -> &'a str {
+    let name = shared
+        .context_names
+        .get(qref)
+        .unwrap_or_else(|| panic!("context: no name for {qref:?}"));
+    shared.interner.resolve(*name)
 }
 
-/// Call arguments. Stack-allocated for <=4 args.
-pub type Args = SmallVec<[Value; 4]>;
+fn take_context(ctx: &RunContext, qref: &QualifiedRef, path: &[Astr]) -> Value {
+    let key = context_key(&ctx.shared, qref);
+    let taken = if path.is_empty() {
+        ctx.page.take(key)
+    } else {
+        let path: Vec<&str> = path.iter().map(|f| ctx.shared.interner.resolve(*f)).collect();
+        ctx.page.take_field(key, &path)
+    };
+    taken.unwrap_or_else(|| panic!("context take: '{key}' holds no value"))
+}
+
+fn assign_context(ctx: &RunContext, qref: &QualifiedRef, path: &[Astr], value: Value) {
+    let key = context_key(&ctx.shared, qref);
+    if path.is_empty() {
+        ctx.page.set(key, value);
+    } else {
+        let path: Vec<&str> = path.iter().map(|f| ctx.shared.interner.resolve(*f)).collect();
+        ctx.page.set_field(key, &path, value);
+    }
+}
 
 // -- Frame ------------------------------------------------------------
 
@@ -174,20 +123,15 @@ impl Frame {
         v
     }
 
-    /// An explicit copy through the value's vtable.
+    /// A word is copied; a `Large` value leaves the register (RFC-0018).
     #[inline]
-    fn share(&self, id: ValueId) -> Value {
-        self.get(id).deep_clone()
+    fn use_val(&mut self, id: ValueId) -> Value {
+        Value::use_from(&mut self.regs[id])
     }
 
     #[inline]
-    fn use_val(&mut self, id: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> Value {
-        if let Some(ty) = val_types.get(&id)
-            && acvus_mir::validate::move_check::is_move_only(ty) == Some(true)
-        {
-            return self.take(id);
-        }
-        self.share(id)
+    fn slot_mut(&mut self, id: ValueId) -> &mut Value {
+        &mut self.regs[id]
     }
 
     fn jump(
@@ -195,10 +139,9 @@ impl Frame {
         insts: &[Inst],
         label: &Label,
         args: &[ValueId],
-        val_types: &FxHashMap<ValueId, Ty>,
     ) -> usize {
         let target = self.resolve_label(label);
-        self.bind_block_params(insts, target, args, val_types);
+        self.bind_block_params(insts, target, args);
         target
     }
 
@@ -208,10 +151,9 @@ impl Frame {
         cond: ValueId,
         then: (&Label, &[ValueId]),
         else_: (&Label, &[ValueId]),
-        val_types: &FxHashMap<ValueId, Ty>,
     ) -> usize {
         let (label, args) = if self.get(cond).as_bool() { then } else { else_ };
-        self.jump(insts, label, args, val_types)
+        self.jump(insts, label, args)
     }
 
     fn resolve_label(&self, label: &Label) -> usize {
@@ -223,15 +165,9 @@ impl Frame {
 
     /// A jump moves its arguments into the params: a move-only argument
     /// leaves its register, so one owner remains.
-    fn bind_block_params(
-        &mut self,
-        insts: &[Inst],
-        target: usize,
-        args: &[ValueId],
-        val_types: &FxHashMap<ValueId, Ty>,
-    ) {
+    fn bind_block_params(&mut self, insts: &[Inst], target: usize, args: &[ValueId]) {
         if let InstKind::BlockLabel { params, .. } = &insts[target].kind {
-            let values: Vec<Value> = args.iter().map(|a| self.use_val(*a, val_types)).collect();
+            let values: Vec<Value> = args.iter().map(|a| self.use_val(*a)).collect();
             for (param, val) in params.iter().zip(values) {
                 self.set(*param, val);
             }
@@ -261,6 +197,9 @@ enum SpawnKind {
     Module,
 }
 
+/// Call arguments. Stack-allocated for <=4 args.
+pub type Args = SmallVec<[Value; 4]>;
+
 /// Control flow after executing one instruction.
 enum Flow {
     Next,
@@ -269,14 +208,6 @@ enum Flow {
 }
 
 // -- Public types ----------------------------------------------------
-
-/// Result of execution - return value + context mutations.
-pub struct ExecResult {
-    pub value: Value,
-    pub writes: Vec<ContextWrite>,
-    /// The borrowed places' values after the call (RFC-0015).
-    pub lent: Vec<Value>,
-}
 
 /// A single executable unit - MIR module or extern function.
 pub enum Executable {
@@ -340,9 +271,9 @@ impl InterpreterContext {
 /// Per-execution mutable state passed through the run_loop call chain.
 struct RunContext {
     shared: InterpreterContext,
-    /// The run's page, shared with every closure the run makes.
+    /// The run's page, shared with every closure and every spawn the run
+    /// makes.
     page: Arc<InMemoryContext>,
-    variables: FxHashMap<ValueId, Value>,
 }
 
 // -- Standalone helpers (extracted from Interpreter methods) ----------
@@ -368,7 +299,6 @@ fn run_loop<'s>(
     insts: &'s [Inst],
     closures: &'s FxHashMap<Label, MirBody>,
     frame: &'s mut Frame,
-    projection_map: &'s mut FxHashMap<ValueId, RuntimeRef>,
     val_types: &'s FxHashMap<ValueId, Ty>,
 ) -> BoxFuture<'s, Result<Value, RuntimeError>> {
     Box::pin(run_loop_inner(
@@ -376,7 +306,6 @@ fn run_loop<'s>(
         insts,
         closures,
         frame,
-        projection_map,
         val_types,
     ))
 }
@@ -386,12 +315,11 @@ async fn run_loop_inner(
     insts: &[Inst],
     closures: &FxHashMap<Label, MirBody>,
     frame: &mut Frame,
-    projection_map: &mut FxHashMap<ValueId, RuntimeRef>,
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> Result<Value, RuntimeError> {
     let mut pc = 0;
     while pc < insts.len() {
-        match execute_inst(ctx, insts, closures, pc, frame, projection_map, val_types).await? {
+        match execute_inst(ctx, insts, closures, pc, frame, val_types).await? {
             Flow::Next => pc += 1,
             Flow::Jump(target) => pc = target,
             Flow::Return(val) => return Ok(val),
@@ -412,7 +340,6 @@ async fn execute_inst(
     closures: &FxHashMap<Label, MirBody>,
     pc: usize,
     frame: &mut Frame,
-    projection_map: &mut FxHashMap<ValueId, RuntimeRef>,
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> Result<Flow, RuntimeError> {
     match &insts[pc].kind {
@@ -421,26 +348,54 @@ async fn execute_inst(
             frame.set(*dst, literal_to_value(value));
         }
 
-        // -- Projection ----------------------------------
-        InstKind::Ref { dst, target, path } => {
-            projection_map.insert(*dst, RuntimeRef::from_target(target, path.clone()));
-            frame.set(*dst, Value::unit());
+        // -- Storage (RFC-0018) ----------------------------
+        InstKind::Ref {
+            dst, target, path, ..
+        } => {
+            let reference = match target {
+                RefTarget::Var(slot) | RefTarget::Param(slot) => {
+                    Value::reference(walk_path(frame.get(*slot), path, &ctx.shared.interner))
+                }
+                RefTarget::Context(qref) => panic!("a context is never referenced: {qref:?}"),
+            };
+            frame.set(*dst, reference);
         }
-        InstKind::Load { dst, src, .. } => {
-            let rt_ref = projection_map
-                .get(src)
-                .unwrap_or_else(|| panic!("Load: no RuntimeRef for src {:?}", src))
-                .clone();
-            let val = load_ref(&rt_ref, ctx);
+        InstKind::Take { dst, target, path } => {
+            let val = match target {
+                RefTarget::Var(slot) | RefTarget::Param(slot) => {
+                    take_at(frame.slot_mut(*slot), path, &ctx.shared.interner)
+                }
+                RefTarget::Context(qref) => take_context(ctx, qref, path),
+            };
             frame.set(*dst, val);
         }
-        InstKind::Store { dst, value, .. } => {
-            let rt_ref = projection_map
-                .get(dst)
-                .unwrap_or_else(|| panic!("Store: no RuntimeRef for dst {:?}", dst))
-                .clone();
-            let val = frame.share(*value);
-            store_ref(&rt_ref, ctx, val);
+        InstKind::Assign {
+            target,
+            path,
+            value,
+        } => {
+            let val = frame.use_val(*value);
+            match target {
+                RefTarget::Var(slot) | RefTarget::Param(slot) if path.is_empty() => {
+                    frame.set(*slot, val);
+                }
+                RefTarget::Var(slot) | RefTarget::Param(slot) => {
+                    store_path(frame.slot_mut(*slot), path, val, &ctx.shared.interner);
+                }
+                RefTarget::Context(qref) => assign_context(ctx, qref, path, val),
+            }
+        }
+        InstKind::Load { dst, src } => {
+            // SAFETY: the type checker admits only a live reference here.
+            let word = unsafe { frame.get(*src).target() }.small();
+            frame.set(*dst, Value::Small(word));
+        }
+        InstKind::Store { dst, value } => {
+            let val = frame.use_val(*value);
+            // SAFETY: the type checker admits only a live `&mut` here, with
+            // no other name of its storage in use.
+            let storage = unsafe { frame.get(*dst).target_mut() };
+            *storage = val;
         }
 
         // -- Arithmetic / Logic ---------------------------
@@ -467,9 +422,10 @@ async fn execute_inst(
             field: f,
             rest,
         } => {
-            let interner = &ctx.shared.interner;
-            let root = field(frame.get(*object), *f, interner);
-            let val = walk_path(root, rest, interner).deep_clone();
+            let mut path = Vec::with_capacity(1 + rest.len());
+            path.push(*f);
+            path.extend_from_slice(rest);
+            let val = take_at(frame.slot_mut(*object), &path, &ctx.shared.interner);
             frame.set(*dst, val);
         }
         InstKind::FieldSet {
@@ -479,8 +435,8 @@ async fn execute_inst(
             rest,
             value,
         } => {
-            let mut obj = frame.share(*object);
-            let new_val = frame.share(*value);
+            let mut obj = frame.take(*object);
+            let new_val = frame.use_val(*value);
             let mut path = Vec::with_capacity(1 + rest.len());
             path.push(*f);
             path.extend_from_slice(rest);
@@ -489,22 +445,22 @@ async fn execute_inst(
         }
         InstKind::TupleIndex { dst, tuple, index } => {
             // SAFETY: the type checker admits only a tuple value here.
-            let val = unsafe { frame.get(*tuple).as_tuple() }[*index].deep_clone();
+            let val = Value::use_from(&mut unsafe { frame.slot_mut(*tuple).as_tuple_mut() }.0[*index]);
             frame.set(*dst, val);
         }
 
         // -- Constructors ---------------------------------
         InstKind::MakeArray { dst, elements } => {
-            let items: Vec<Value> = elements.iter().map(|e| frame.share(*e)).collect();
+            let items: Vec<Value> = elements.iter().map(|e| frame.use_val(*e)).collect();
             frame.set(*dst, Value::array(items));
         }
         InstKind::MakeObject { dst, fields } => {
             let obj: FxHashMap<Astr, Value> =
-                fields.iter().map(|(k, v)| (*k, frame.share(*v))).collect();
+                fields.iter().map(|(k, v)| (*k, frame.use_val(*v))).collect();
             frame.set(*dst, Value::object(obj));
         }
         InstKind::MakeTuple { dst, elements } => {
-            let items: Vec<Value> = elements.iter().map(|e| frame.share(*e)).collect();
+            let items: Vec<Value> = elements.iter().map(|e| frame.use_val(*e)).collect();
             frame.set(*dst, Value::tuple(items));
         }
         InstKind::MakeClosure {
@@ -512,7 +468,7 @@ async fn execute_inst(
             body,
             captures,
         } => {
-            let captured: Vec<Value> = captures.iter().map(|c| frame.share(*c)).collect();
+            let captured: Vec<Value> = captures.iter().map(|c| frame.use_val(*c)).collect();
             let closure_body = closures
                 .get(body)
                 .unwrap_or_else(|| panic!("closure body not found: {body:?}"));
@@ -529,7 +485,7 @@ async fn execute_inst(
 
         // -- Variant --------------------------------------
         InstKind::MakeVariant { dst, tag, payload } => {
-            let p = payload.map(|v| frame.share(v));
+            let p = payload.map(|v| frame.use_val(v));
             frame.set(*dst, Value::variant(*tag, p));
         }
         InstKind::TestVariant { dst, src, tag } => {
@@ -579,7 +535,7 @@ async fn execute_inst(
         // -- Control flow ---------------------------------
         InstKind::BlockLabel { .. } => {}
         InstKind::Jump { label, args } => {
-            let target = frame.jump(insts, label, args, val_types);
+            let target = frame.jump(insts, label, args);
             return Ok(Flow::Jump(target));
         }
         InstKind::JumpIf {
@@ -594,7 +550,6 @@ async fn execute_inst(
                 *cond,
                 (then_label, then_args),
                 (else_label, else_args),
-                val_types,
             );
             return Ok(Flow::Jump(target));
         }
@@ -622,7 +577,6 @@ async fn execute_inst(
             callee_ty,
             args,
             order,
-            lent,
         } => {
             if let Some(edge) = order {
                 frame.set(edge.after, Value::unit());
@@ -637,28 +591,32 @@ async fn execute_inst(
                             _ => unreachable!(),
                         };
                         let handler = entry.select(callee_ty)?.clone();
-                        let arg_vals: Vec<Value> =
-                            args.iter().map(|a| frame.use_val(*a, val_types)).collect();
+                        let arg_vals: Vec<Value> = args.iter().map(|a| frame.use_val(*a)).collect();
                         match &handler {
                             ExternHandler::Sync(f) => f(&ctx.shared.runtime(), arg_vals)?,
                             ExternHandler::Async(f) => f(ctx.shared.runtime(), arg_vals).await?,
                         }
                     } else {
-                        let arg_vals: Args =
-                            args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                        Returned::value(dispatch_call(ctx, id, arg_vals).await?)
+                        let arg_vals: Args = args.iter().map(|a| frame.use_val(*a)).collect();
+                        dispatch_call(ctx, id, arg_vals).await?
                     }
                 }
                 Callee::Indirect(val_id) => {
-                    // SAFETY: the type checker admits only a closure value here.
-                    let fv = unsafe { frame.take(*val_id).materialize::<FnValue>() };
-                    let call_args: Vec<Value> =
-                        args.iter().map(|a| frame.use_val(*a, val_types)).collect();
-                    Returned::value(fn_value_call(&fv, call_args).await?)
+                    let call_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a)).collect();
+                    if matches!(type_of(val_types, *val_id), Ty::Ref(..)) {
+                        // SAFETY: the type checker admits only a live reference to a
+                        // closure here, and the closure's register is not written
+                        // during the call.
+                        let fv: *const FnValue = unsafe { frame.get(*val_id).target().as_fn() };
+                        fn_value_call(unsafe { &*fv }, call_args).await?
+                    } else {
+                        // SAFETY: the type checker admits only a closure value here.
+                        let fv = unsafe { frame.take(*val_id).materialize::<FnValue>() };
+                        fn_value_call(&fv, call_args).await?
+                    }
                 }
             };
-            frame.set(*dst, returned.value);
-            give_back(frame, lent, returned.lent)?;
+            frame.set(*dst, returned);
         }
         InstKind::Spawn {
             dst,
@@ -676,32 +634,18 @@ async fn execute_inst(
                 Executable::Module(_) => SpawnKind::Module,
             };
             let spawn_args: Vec<Value> =
-                args.iter().map(|a| frame.use_val(*a, val_types)).collect();
+                args.iter().map(|a| frame.use_val(*a)).collect();
             let handle = match spawn_kind {
                 SpawnKind::Extern(handler) => {
                     let rt = ctx.shared.runtime();
                     match &handler {
                         ExternHandler::Sync(f) => {
                             let f = Arc::clone(f);
-                            ctx.shared.executor.spawn_blocking(Box::new(move || {
-                                let returned = f(&rt, spawn_args)?;
-                                Ok(ExecResult {
-                                    value: returned.value,
-                                    writes: Vec::new(),
-                                    lent: returned.lent,
-                                })
-                            }))
+                            ctx.shared.executor.spawn_blocking(Box::new(move || f(&rt, spawn_args)))
                         }
                         ExternHandler::Async(f) => {
                             let f = Arc::clone(f);
-                            ctx.shared.executor.spawn_async(Box::pin(async move {
-                                let returned = f(rt, spawn_args).await?;
-                                Ok(ExecResult {
-                                    value: returned.value,
-                                    writes: Vec::new(),
-                                    lent: returned.lent,
-                                })
-                            }))
+                            ctx.shared.executor.spawn_async(Box::pin(async move { f(rt, spawn_args).await }))
                         }
                     }
                 }
@@ -709,8 +653,7 @@ async fn execute_inst(
                     let child = Interpreter {
                         shared: ctx.shared.clone(),
                         entry: callee_id,
-                        page: ctx.page.fork(),
-                        variables: FxHashMap::default(),
+                        page: Arc::clone(&ctx.page),
                         spawn_args,
                     };
                     ctx.shared.executor.spawn_interpreter(child)
@@ -718,47 +661,30 @@ async fn execute_inst(
             };
             frame.set(*dst, Value::handle(handle));
         }
-        InstKind::Eval {
-            dst,
-            src,
-            order,
-            lent,
-        } => {
+        InstKind::Eval { dst, src, order } => {
             if let Some(o) = order {
                 frame.set(*o, Value::unit());
             }
             // SAFETY: the type checker admits only a handle value here.
             let handle = unsafe { frame.take(*src).materialize::<HandleValue>() };
-            let result = ctx.shared.executor.eval(handle).await?;
-
-            for w in result.writes {
-                match w {
-                    ContextWrite::Set { key, value } => ctx.page.set(&key, value),
-                    ContextWrite::FieldPatch { key, path, value } => {
-                        let path_refs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
-                        ctx.page.set_field(&key, &path_refs, value);
-                    }
-                }
-            }
-
-            frame.set(*dst, result.value);
-            give_back(frame, lent, result.lent)?;
+            let value = ctx.shared.executor.eval(handle).await?;
+            frame.set(*dst, value);
         }
 
         // -- Object/List dynamic access -------------------
         InstKind::ObjectGet { dst, object, key } => {
-            let val = field(frame.get(*object), *key, &ctx.shared.interner).deep_clone();
+            let val = take_at(frame.slot_mut(*object), std::slice::from_ref(key), &ctx.shared.interner);
             frame.set(*dst, val);
         }
         InstKind::ArrayIndex { dst, array, index } => {
             // SAFETY: the type checker admits only an array value here.
-            let val = unsafe { frame.get(*array).as_array() }[*index].deep_clone();
+            let val = Value::use_from(&mut unsafe { frame.slot_mut(*array).as_array_mut() }.0[*index]);
             frame.set(*dst, val);
         }
         InstKind::ArrayGet { dst, array, index } => {
             let idx = frame.get(*index).as_int() as usize;
             // SAFETY: the type checker admits only an array value here.
-            let val = unsafe { frame.get(*array).as_array() }[idx].deep_clone();
+            let val = Value::use_from(&mut unsafe { frame.slot_mut(*array).as_array_mut() }.0[idx]);
             frame.set(*dst, val);
         }
     }
@@ -800,32 +726,7 @@ async fn execute_function(
     if let Some(order) = m.main.order_param {
         frame.set(order, Value::unit());
     }
-    let mut projection_map: FxHashMap<ValueId, RuntimeRef> = FxHashMap::default();
-    run_loop(
-        ctx,
-        &insts,
-        &closures,
-        &mut frame,
-        &mut projection_map,
-        &val_types,
-    )
-    .await
-}
-
-/// Put the values a call gave back for its borrowed places into the
-/// registers the instruction names for them.
-fn give_back(frame: &mut Frame, lent: &[ValueId], values: Vec<Value>) -> Result<(), RuntimeError> {
-    if lent.len() != values.len() {
-        return Err(RuntimeError::internal(format!(
-            "call lent {} places but gave back {}",
-            lent.len(),
-            values.len()
-        )));
-    }
-    for (reg, value) in lent.iter().zip(values) {
-        frame.set(*reg, value);
-    }
-    Ok(())
+    run_loop(ctx, &insts, &closures, &mut frame, &val_types).await
 }
 
 // -- Closure calling -------------------------------------------------
@@ -834,16 +735,16 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
     let mut closure_ctx = RunContext {
         shared: f.shared.clone(),
         page: Arc::clone(&f.page),
-        variables: FxHashMap::default(),
     };
 
     let body = &f.body;
     let label_map = build_label_map_from_insts(&body.insts);
     let mut frame = Frame::new(&body.val_factory, label_map);
-    let mut projection_map = FxHashMap::default();
 
+    // The closure owns its captures; the body sees each through a
+    // reference (RFC-0018).
     for ((_, reg), cap) in body.captures.iter().zip(f.captures.iter()) {
-        frame.set(*reg, cap.deep_clone());
+        frame.set(*reg, Value::reference(cap));
     }
     for ((_, reg), arg) in body.params.iter().zip(args) {
         frame.set(*reg, arg);
@@ -853,15 +754,7 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
     }
 
     let empty_closures = FxHashMap::default();
-    run_loop(
-        &mut closure_ctx,
-        &body.insts,
-        &empty_closures,
-        &mut frame,
-        &mut projection_map,
-        &body.val_types,
-    )
-    .await
+    run_loop(&mut closure_ctx, &body.insts, &empty_closures, &mut frame, &body.val_types).await
 }
 
 // -- Interpreter - thin entry point ----------------------------------
@@ -869,8 +762,7 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
 pub struct Interpreter {
     shared: InterpreterContext,
     entry: QualifiedRef,
-    page: InMemoryContext,
-    variables: FxHashMap<ValueId, Value>,
+    page: Arc<InMemoryContext>,
     spawn_args: Vec<Value>,
 }
 
@@ -879,42 +771,25 @@ impl Interpreter {
         Self {
             shared,
             entry,
-            page,
-            variables: FxHashMap::default(),
+            page: Arc::new(page),
             spawn_args: Vec::new(),
         }
     }
 
-    pub fn fork(&self, entry: QualifiedRef, args: Vec<Value>) -> Self {
-        Self {
-            shared: self.shared.clone(),
-            entry,
-            page: self.page.fork(),
-            variables: FxHashMap::default(),
-            spawn_args: args,
-        }
-    }
-
-    /// Execute the entry module. Returns value + accumulated context writes.
-    pub async fn execute(&mut self) -> Result<ExecResult, RuntimeError> {
+    /// Execute the entry module and return its value. The page keeps every
+    /// context the run assigned; `take_writes` hands them out.
+    pub async fn execute(&mut self) -> Result<Value, RuntimeError> {
         let entry = self.entry;
         let args = std::mem::take(&mut self.spawn_args);
-
-        let empty = InMemoryContext::empty(self.shared.interner.clone());
         let mut run_ctx = RunContext {
             shared: self.shared.clone(),
-            page: Arc::new(std::mem::replace(&mut self.page, empty)),
-            variables: std::mem::take(&mut self.variables),
+            page: Arc::clone(&self.page),
         };
+        execute_function(&mut run_ctx, &entry, args).await
+    }
 
-        let value = execute_function(&mut run_ctx, &entry, args).await?;
-
-        let writes = run_ctx.page.take_writes();
-        Ok(ExecResult {
-            value,
-            writes,
-            lent: Vec::new(),
-        })
+    pub fn take_writes(&self) -> Vec<ContextWrite> {
+        self.page.take_writes()
     }
 }
 

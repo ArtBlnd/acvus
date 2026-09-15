@@ -6,41 +6,33 @@ expression: ir
   T0 = ""
 
 === main ===
-     0 |   r0 = undef
-     2 |   r1 = ref @pair
-     3 |   r2 = load r1
-     4 | L2:
-     6 |   r3 = r2.0
-     8 |   r4 = true (r5) && true (r6)
-     9 |   jump_if r4 then L3 else L1
-    10 | L3:
-    11 |   r7 = r2.0
-    13 |   r8 = r7.name
-    14 |   r9 = T0 + r8
-    15 |   jump L0(r9, r7)
-    16 | L1:
-    18 |   jump L0(T0, r0)
-    19 | L0(r10: String, r11: {name: String}):  ; merge_of L2
-    20 |   r12 = T0 + r10
-    21 |   return r12
+     1 |   r0 = take @pair
+     2 | L2:
+     4 |   r1 = r0.0
+     6 |   r2 = true (r3) && true (r4)
+     7 |   jump_if r2 then L3 else L1
+     8 | L3:
+     9 |   r5 = r0.0
+    10 |   assign obj = r5
+    12 |   r6 = take obj.name
+    13 |   r7 = T0 + r6
+    14 |   jump L0(r7)
+    15 | L1:
+    17 |   jump L0(T0)
+    18 | L0(r8: String):  ; merge_of L2
+    19 |   r9 = T0 + r8
+    20 |   return r9
 
-    ; r0 (v20) : {name: String}
-    ; r1 (@pair) : Ref<({name: String}, Int)>
-    ; r2 (v3) : ({name: String}, Int)
-    ; r3 (v5) : {name: String}
-    ; r4 (v7) : Bool
-    ; r5 (v4) : Bool
-    ; r6 (v6) : Bool
-    ; r7 (obj) : {name: String}
+    ; r0 (@pair) : ({name: String}, Int)
+    ; r1 (v4) : {name: String}
+    ; r2 (v6) : Bool
+    ; r3 (v3) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (obj) : {name: String}
+    ; r6 (obj.name) : String
+    ; r7 (v11) : String
     ; r8 (v13) : String
     ; r9 (v14) : String
-    ; r10 (v16) : String
-    ; r11 (v21) : {name: String}
-    ; r12 (v17) : String
-    ; r13 (v11) : String
-    ; r14 (v1) : String
-    ; r15 (obj.name) : Ref<String>
-    ; r16 (v15) : String
-    ; r17 (v18) : Ref<{name: String}>
-    ; r18 (v10) : Ref<{name: String}>
-    ; r19 (v19) : {name: String}
+    ; r10 (v9) : String
+    ; r11 (v1) : String
+    ; r12 (v12) : String

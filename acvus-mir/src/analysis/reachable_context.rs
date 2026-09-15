@@ -85,15 +85,11 @@ pub fn partition_context_keys(
     // (closures may be called from any reachable point).
     for closure in module.closures.values() {
         for inst in &closure.insts {
-            if let InstKind::Ref {
-                target: crate::ir::RefTarget::Context(ctx),
-                ..
-            } = &inst.kind
-            {
-                if known.contains_key(ctx) {
-                    partition.reachable_known.insert(*ctx);
+            if let Some(ctx) = context_of(&inst.kind) {
+                if known.contains_key(&ctx) {
+                    partition.reachable_known.insert(ctx);
                 } else {
-                    partition.lazy.insert(*ctx);
+                    partition.lazy.insert(ctx);
                 }
             }
         }
@@ -239,6 +235,25 @@ fn propagate_to(
 
 // -- Context key collection -----------------------------------------
 
+/// The context an instruction names: a take, an assign, or a reference.
+fn context_of(kind: &InstKind) -> Option<QualifiedRef> {
+    match kind {
+        InstKind::Take {
+            target: crate::ir::RefTarget::Context(ctx),
+            ..
+        }
+        | InstKind::Assign {
+            target: crate::ir::RefTarget::Context(ctx),
+            ..
+        }
+        | InstKind::Ref {
+            target: crate::ir::RefTarget::Context(ctx),
+            ..
+        } => Some(*ctx),
+        _ => None,
+    }
+}
+
 /// Walk all blocks, classify each Ref(Context) by its block's reach level.
 fn collect_context_keys(
     cfg: &CfgBody,
@@ -250,13 +265,10 @@ fn collect_context_keys(
         let block_reach = reach[bi];
 
         for inst in &block.insts {
-            let InstKind::Ref {
-                target: crate::ir::RefTarget::Context(ctx),
-                ..
-            } = &inst.kind
-            else {
+            let Some(ctx) = context_of(&inst.kind) else {
                 continue;
             };
+            let ctx = &ctx;
 
             match block_reach {
                 Reach::Unreachable => {
@@ -285,7 +297,7 @@ mod tests {
     use super::*;
     use crate::graph::QualifiedRef;
     use crate::ir::{DebugInfo, Inst, Label, MirBody};
-    use crate::ty::Ty;
+    use crate::ty::{Mutability, Ty};
     use acvus_ast::{Literal, Span};
     use acvus_utils::{Interner, LocalFactory};
 
@@ -341,11 +353,13 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Ref {
                 dst: v1,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
         ]);
         let needed = reachable_context_keys(&module, &FxHashMap::default());
@@ -365,11 +379,13 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Ref {
                 dst: v1,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
         ]);
         let known =
@@ -394,6 +410,7 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::TestLiteral {
                 dst: v1,
@@ -416,6 +433,7 @@ mod tests {
                 dst: v2,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Return {
                 value: v2,
@@ -430,6 +448,7 @@ mod tests {
                 dst: v3,
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Return {
                 value: v3,
@@ -462,6 +481,7 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::TestLiteral {
                 dst: v1,
@@ -484,6 +504,7 @@ mod tests {
                 dst: v2,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Return {
                 value: v2,
@@ -498,6 +519,7 @@ mod tests {
                 dst: v3,
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Return {
                 value: v3,
@@ -529,6 +551,7 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::TestLiteral {
                 dst: v1,
@@ -551,6 +574,7 @@ mod tests {
                 dst: v2,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Return {
                 value: v2,
@@ -565,6 +589,7 @@ mod tests {
                 dst: v3,
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Return {
                 value: v3,
@@ -596,6 +621,7 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::TestLiteral {
                 dst: v1,
@@ -618,6 +644,7 @@ mod tests {
                 dst: v2,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(0),
@@ -632,6 +659,7 @@ mod tests {
                 dst: v3,
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(0),
@@ -671,6 +699,7 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::TestLiteral {
                 dst: v1,
@@ -693,6 +722,7 @@ mod tests {
                 dst: v2,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -724,6 +754,7 @@ mod tests {
                 dst: v4,
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -738,6 +769,7 @@ mod tests {
                 dst: v5,
                 target: crate::ir::RefTarget::Context(id3),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -810,6 +842,7 @@ mod tests {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 // %1 = TestVariant(%0, "D")  -- D not in {A,B,C} -> always false
                 inst(InstKind::TestVariant {
@@ -834,6 +867,7 @@ mod tests {
                     dst: v2,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -849,6 +883,7 @@ mod tests {
                     dst: v3,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -901,6 +936,7 @@ mod tests {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::TestVariant {
                     dst: v1,
@@ -923,6 +959,7 @@ mod tests {
                     dst: v2,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Return {
                     value: v2,
@@ -937,6 +974,7 @@ mod tests {
                     dst: v3,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Return {
                     value: v3,
@@ -993,6 +1031,7 @@ mod tests {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 // TestVariant A
                 inst(InstKind::TestVariant {
@@ -1017,6 +1056,7 @@ mod tests {
                     dst: v2,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1050,6 +1090,7 @@ mod tests {
                     dst: v4,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1065,6 +1106,7 @@ mod tests {
                     dst: v5,
                     target: crate::ir::RefTarget::Context(id3),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1127,6 +1169,7 @@ mod tests {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 // Test A
                 inst(InstKind::TestVariant {
@@ -1151,6 +1194,7 @@ mod tests {
                     dst: v2,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1184,6 +1228,7 @@ mod tests {
                     dst: v4,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1199,6 +1244,7 @@ mod tests {
                     dst: v5,
                     target: crate::ir::RefTarget::Context(id3),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1267,11 +1313,13 @@ mod tests {
                     dst: v_pre,
                     target: crate::ir::RefTarget::Context(id10),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Ref {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::TestVariant {
                     dst: v1,
@@ -1294,6 +1342,7 @@ mod tests {
                     dst: v2,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Return {
                     value: v2,
@@ -1308,6 +1357,7 @@ mod tests {
                     dst: v3,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Return {
                     value: v3,
@@ -1364,6 +1414,7 @@ mod tests {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(1),
@@ -1397,6 +1448,7 @@ mod tests {
                     dst: v2,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1412,6 +1464,7 @@ mod tests {
                     dst: v3,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1427,6 +1480,7 @@ mod tests {
                     dst: v4,
                     target: crate::ir::RefTarget::Context(id3),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Return {
                     value: v4,
@@ -1492,6 +1546,7 @@ mod tests {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::TestLiteral {
                     dst: v1,
@@ -1515,6 +1570,7 @@ mod tests {
                     dst: v10,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::TestVariant {
                     dst: v11,
@@ -1538,6 +1594,7 @@ mod tests {
                     dst: v12,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1553,6 +1610,7 @@ mod tests {
                     dst: v13,
                     target: crate::ir::RefTarget::Context(id3),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1568,6 +1626,7 @@ mod tests {
                     dst: v14,
                     target: crate::ir::RefTarget::Context(id4),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(50),
@@ -1639,6 +1698,7 @@ mod tests {
                     dst: v0,
                     target: crate::ir::RefTarget::Context(id0),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 // Test Normal
                 inst(InstKind::TestVariant {
@@ -1663,6 +1723,7 @@ mod tests {
                     dst: v2,
                     target: crate::ir::RefTarget::Context(id1),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1678,6 +1739,7 @@ mod tests {
                     dst: v3,
                     target: crate::ir::RefTarget::Context(id2),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
                 inst(InstKind::Jump {
                     label: Label(99),
@@ -1693,6 +1755,7 @@ mod tests {
                     dst: v4,
                     target: crate::ir::RefTarget::Context(id3),
                     path: vec![],
+                    mutability: Mutability::Shared,
                 }),
             ],
             val_types,
@@ -1746,11 +1809,13 @@ mod tests {
                 dst: v0,
                 target: crate::ir::RefTarget::Context(id0),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Ref {
                 dst: v1,
                 target: crate::ir::RefTarget::Context(id1),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::MakeTuple {
                 dst: v2,
@@ -1785,6 +1850,7 @@ mod tests {
                 dst: v10,
                 target: crate::ir::RefTarget::Context(id2),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -1818,6 +1884,7 @@ mod tests {
                 dst: v11,
                 target: crate::ir::RefTarget::Context(id3),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(99),
@@ -1833,6 +1900,7 @@ mod tests {
                 dst: v12,
                 target: crate::ir::RefTarget::Context(id4),
                 path: vec![],
+                mutability: Mutability::Shared,
             }),
             inst(InstKind::Jump {
                 label: Label(99),

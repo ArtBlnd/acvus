@@ -7,8 +7,8 @@
 //!   find, reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, ExternError, ExternRegistry, Fn1, Fn2, IdentityVar, LenVar, Runtime,
-    TyVar,
+    Arr, ClosureFn, EffectVar, ExternError, ExternRegistry, Fn1, Fn2, IdentityVar, LenVar, Ref,
+    Runtime, TyVar,
     extern_fn, extern_registry,
 };
 
@@ -82,7 +82,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn filter<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, bool, E, Rt>) -> Iter<T, E, I, Rt>
+fn filter<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<Ref<T>, bool, E, Rt>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -275,7 +275,7 @@ where
 async fn find<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<T, bool, E, Rt>,
+    f: Fn1<Ref<T>, bool, E, Rt>,
 ) -> Result<T, Rt::Error>
 where
     T: TyVar,
@@ -285,7 +285,7 @@ where
 {
     while let Some(item) = it.next(rt).await? {
         let lent = unsafe { rt.erase::<T>(item) };
-        let keep = f.call(rt, (&lent,)).await;
+        let keep = f.call(rt, (unsafe { rt.reference(&lent) },)).await;
         let item = unsafe { rt.materialize::<T>(lent) };
         if unsafe { rt.materialize::<bool>(keep?) } {
             return Ok(item);
@@ -310,12 +310,10 @@ where
         return Err(ExternError::call("reduce", "empty iterator").into());
     };
     while let Some(item) = it.next(rt).await? {
-        let lent_acc = unsafe { rt.erase::<T>(acc) };
-        let lent_item = unsafe { rt.erase::<T>(item) };
-        let out = f.call(rt, (&lent_acc, &lent_item)).await;
-        drop(unsafe { rt.materialize::<T>(lent_acc) });
-        drop(unsafe { rt.materialize::<T>(lent_item) });
-        acc = unsafe { rt.materialize::<T>(out?) };
+        let out = f
+            .call(rt, (unsafe { rt.erase::<T>(acc) }, unsafe { rt.erase::<T>(item) }))
+            .await?;
+        acc = unsafe { rt.materialize::<T>(out) };
     }
     Ok(acc)
 }
@@ -336,12 +334,10 @@ where
 {
     let mut acc = init;
     while let Some(item) = it.next(rt).await? {
-        let lent_acc = unsafe { rt.erase::<U>(acc) };
-        let lent_item = unsafe { rt.erase::<T>(item) };
-        let out = f.call(rt, (&lent_acc, &lent_item)).await;
-        drop(unsafe { rt.materialize::<U>(lent_acc) });
-        drop(unsafe { rt.materialize::<T>(lent_item) });
-        acc = unsafe { rt.materialize::<U>(out?) };
+        let out = f
+            .call(rt, (unsafe { rt.erase::<U>(acc) }, unsafe { rt.erase::<T>(item) }))
+            .await?;
+        acc = unsafe { rt.materialize::<U>(out) };
     }
     Ok(acc)
 }
@@ -350,7 +346,7 @@ where
 async fn any<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<T, bool, E, Rt>,
+    f: Fn1<Ref<T>, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
     T: TyVar,
@@ -360,7 +356,7 @@ where
 {
     while let Some(item) = it.next(rt).await? {
         let lent = unsafe { rt.erase::<T>(item) };
-        let keep = f.call(rt, (&lent,)).await;
+        let keep = f.call(rt, (unsafe { rt.reference(&lent) },)).await;
         drop(unsafe { rt.materialize::<T>(lent) });
         if unsafe { rt.materialize::<bool>(keep?) } {
             return Ok(true);
@@ -373,7 +369,7 @@ where
 async fn all<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<T, bool, E, Rt>,
+    f: Fn1<Ref<T>, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
     T: TyVar,
@@ -383,7 +379,7 @@ where
 {
     while let Some(item) = it.next(rt).await? {
         let lent = unsafe { rt.erase::<T>(item) };
-        let keep = f.call(rt, (&lent,)).await;
+        let keep = f.call(rt, (unsafe { rt.reference(&lent) },)).await;
         drop(unsafe { rt.materialize::<T>(lent) });
         if !unsafe { rt.materialize::<bool>(keep?) } {
             return Ok(false);

@@ -14,6 +14,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
     match kind {
         InstKind::Const { dst, .. }
         | InstKind::Ref { dst, .. }
+        | InstKind::Take { dst, .. }
         | InstKind::Load { dst, .. }
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
@@ -37,20 +38,14 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Poison { dst }
         | InstKind::Undef { dst } => smallvec![*dst],
 
-        InstKind::FunctionCall {
-            dst, order, lent, ..
-        } => {
+        InstKind::FunctionCall { dst, order, .. } => {
             let mut v: SmallVec<[ValueId; 2]> = smallvec![*dst];
             v.extend(order.map(|edge| edge.after));
-            v.extend(lent.iter().copied());
             v
         }
-        InstKind::Eval {
-            dst, order, lent, ..
-        } => {
+        InstKind::Eval { dst, order, .. } => {
             let mut v: SmallVec<[ValueId; 2]> = smallvec![*dst];
             v.extend(*order);
-            v.extend(lent.iter().copied());
             v
         }
         InstKind::Merge { dst, .. } => smallvec![*dst],
@@ -58,6 +53,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
 
         InstKind::Store { .. }
+        | InstKind::Assign { .. }
         | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
@@ -72,6 +68,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // No uses
         InstKind::Const { .. }
         | InstKind::Ref { .. }
+        | InstKind::Take { .. }
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop
@@ -81,6 +78,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // Single use
         InstKind::Load { src, .. } => smallvec![*src],
         InstKind::Store { dst, value, .. } => smallvec![*dst, *value],
+        InstKind::Assign { value, .. } => smallvec![*value],
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
         InstKind::FieldGet { object, .. } => smallvec![*object],
         InstKind::FieldSet { object, value, .. } => smallvec![*object, *value],
@@ -222,7 +220,6 @@ mod tests {
             callee_ty: Ty::error(),
             args: vec![v(0), v(1)],
             order: None,
-            lent: Vec::new(),
         };
         assert_eq!(defs(&inst).as_slice(), &[v(3)]);
         let u = uses(&inst);
@@ -249,7 +246,6 @@ mod tests {
             dst: v(2),
             src: v(1),
             order: None,
-            lent: Vec::new(),
         };
         assert_eq!(defs(&eval).as_slice(), &[v(2)]);
         assert_eq!(uses(&eval).as_slice(), &[v(1)]);
@@ -289,7 +285,6 @@ mod tests {
             callee_ty: Ty::error(),
             args: vec![v(1)],
             order: None,
-            lent: Vec::new(),
         };
         let u = uses(&inst);
         assert!(u.contains(&v(0)), "indirect callee must be in uses");

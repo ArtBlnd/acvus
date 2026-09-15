@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, LenTerm, ParamMode, Reissue, Ty};
+use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, LenTerm, Reissue, Ty};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
@@ -69,7 +69,6 @@ fn ser_to_effect(e: &SerEffect, interner: &Interner) -> Effect {
 /// A parameter of a serialized function type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerParam {
-    pub mode: ParamMode,
     pub ty: SerTy,
 }
 
@@ -149,7 +148,6 @@ impl Ty {
                 params: params
                     .iter()
                     .map(|p| SerParam {
-                        mode: p.mode,
                         ty: p.ty.to_ser(interner),
                     })
                     .collect(),
@@ -221,10 +219,7 @@ impl SerTy {
             } => Ty::Fn {
                 params: params
                     .iter()
-                    .map(|p| {
-                        crate::ty::Param::new(interner.intern("_"), p.ty.to_ty(interner))
-                            .with_mode(p.mode)
-                    })
+                    .map(|p| crate::ty::Param::new(interner.intern("_"), p.ty.to_ty(interner)))
                     .collect(),
                 ret: Box::new(ret.to_ty(interner)),
                 captures: vec![],
