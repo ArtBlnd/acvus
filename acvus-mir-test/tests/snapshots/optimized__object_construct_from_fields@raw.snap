@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
-assertion_line: 145
 expression: raw
 ---
 === literals ===
@@ -23,7 +22,7 @@ expression: raw
     14 |   r8 = string_concat [r6, r7]
     15 |   assign v16 = r8
     16 |   r9 = ref &v16
-    17 |   r10 = take score
+    17 |   r10 = ref &score
     18 |   r11 = call #0(r10)
     19 |   assign v20 = r11
     20 |   r12 = ref &v20
@@ -62,7 +61,7 @@ expression: raw
     ; r7 (var_13.) : &String
     ; r8 (v15) : String
     ; r9 (var_16.) : &String
-    ; r10 (score) : Int
+    ; r10 (score.) : &Int
     ; r11 (to_string(...)) : String
     ; r12 (var_20.) : &String
     ; r13 (v22) : String

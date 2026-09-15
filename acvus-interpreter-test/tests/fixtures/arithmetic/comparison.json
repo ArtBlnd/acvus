@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = @a > @b }}{{ x | to_string }}{{_}}{{/}}",
+  "template": "{{ x = @a > @b }}{{ x.to_string() }}{{_}}{{/}}",
   "context": { "a": 10, "b": 5 },
   "expected": "true"
 }

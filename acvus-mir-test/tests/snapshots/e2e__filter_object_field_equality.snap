@@ -18,13 +18,15 @@ expression: ir
     11 |   assign x = r8
     13 |   r9 = ref &x
     14 |   r10 = call #4(r9)
-    15 |   r11 = call #5(r10)
-    16 |   r12 = string_concat [T0, T0, T0, r11]
-    17 |   commit @users = r4
-    18 |   return r12
+    15 |   assign out = r10
+    17 |   r11 = ref &out
+    18 |   r12 = call #5(r11)
+    19 |   r13 = string_concat [T0, T0, T0, T0, r12]
+    20 |   commit @users = r4
+    21 |   return r13
 
-    ; r0 (v21) : List<{active: Bool, name: String}>
-    ; r1 (v22) : List<{active: Bool, name: String}>
+    ; r0 (v24) : List<{active: Bool, name: String}>
+    ; r1 (v25) : List<{active: Bool, name: String}>
     ; r2 (@users) : List<{active: Bool, name: String}>
     ; r3 (v6) : Array<{active: Bool, name: String}, 0>
     ; r4 (list(...)) : List<{active: Bool, name: String}>
@@ -34,17 +36,20 @@ expression: ir
     ; r8 (collect(...)) : List<{active: Bool, name: String}>
     ; r9 (x.) : &List<{active: Bool, name: String}>
     ; r10 (len(...)) : Int
-    ; r11 (to_string(...)) : String
-    ; r12 (v19) : String
-    ; r13 (@users) : List<{active: Bool, name: String}>
-    ; r14 (x) : List<{active: Bool, name: String}>
-    ; r15 (v20) : List<{active: Bool, name: String}>
+    ; r11 (out.) : &Int
+    ; r12 (to_string(...)) : String
+    ; r13 (v22) : String
+    ; r14 (@users) : List<{active: Bool, name: String}>
+    ; r15 (x) : List<{active: Bool, name: String}>
     ; r16 (users) : List<{active: Bool, name: String}>
     ; r17 (v15) : String
-    ; r18 (v5) : String
-    ; r19 (@users) : List<{active: Bool, name: String}>
-    ; r20 (users) : List<{active: Bool, name: String}>
-    ; r21 (v8) : String
+    ; r18 (users) : List<{active: Bool, name: String}>
+    ; r19 (out) : Int
+    ; r20 (@users) : List<{active: Bool, name: String}>
+    ; r21 (v23) : List<{active: Bool, name: String}>
+    ; r22 (v5) : String
+    ; r23 (v8) : String
+    ; r24 (v19) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

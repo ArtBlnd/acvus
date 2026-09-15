@@ -3,17 +3,18 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = undef
-     1 |   r1 = fetch @n
-     2 |   r2 = call #0(r1)
-     3 |   r3 = string_concat [r2]
-     4 |   commit @n = r1
-     5 |   return r3
+     0 |   r0 = fetch @n
+     1 |   assign @n = r0
+     2 |   r1 = ref &@n
+     3 |   r2 = call #0(r1)
+     4 |   r3 = string_concat [r2]
+     5 |   r4 = take @n
+     6 |   commit @n = r4
+     7 |   return r3
 
-    ; r0 (v7) : Int
-    ; r1 (@n) : Int
+    ; r0 (@n) : Int
+    ; r1 (@n.) : &Int
     ; r2 (to_string(...)) : String
     ; r3 (v5) : String
-    ; r4 (@n) : Int
+    ; r4 (v6) : Int
     ; r5 (@n) : Int
-    ; r6 (v6) : Int

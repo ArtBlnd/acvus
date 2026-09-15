@@ -52,16 +52,15 @@ async fn first_and_last_are_none_on_an_empty_container_and_references_otherwise(
     let i = Interner::new();
     let text = |src: &'static str| run(&i, src, FxHashMap::default());
     assert_eq!(
-        text("{{ d = deque() }}{{ pushed = push_back(&mut d, 1) }}{{ popped = pop_back(&mut d) }}{{ Some(x) = first(&d) }}{{ *x | to_string }}{{_}}none{{/}}").await,
+        text("{{ d = deque() }}{{ pushed = push_back(&mut d, 1) }}{{ popped = pop_back(&mut d) }}{{ Some(x) = first(&d) }}{{ to_string(x) }}{{_}}none{{/}}").await,
         "none"
     );
     assert_eq!(
-        text("{{ xs = [4, 5, 6] }}{{ Some(x) = last(&xs) }}{{ *x | to_string }}{{_}}none{{/}}")
-            .await,
+        text("{{ xs = [4, 5, 6] }}{{ Some(x) = last(&xs) }}{{ to_string(x) }}{{_}}none{{/}}").await,
         "6"
     );
     assert_eq!(
-        text("{{ xs = [4, 5, 6] }}{{ Some(x) = first(&xs) }}{{ *x | to_string }}{{_}}none{{/}}")
+        text("{{ xs = [4, 5, 6] }}{{ Some(x) = first(&xs) }}{{ to_string(x) }}{{_}}none{{/}}")
             .await,
         "4"
     );
@@ -70,7 +69,10 @@ async fn first_and_last_are_none_on_an_empty_container_and_references_otherwise(
 #[tokio::test]
 async fn a_method_chain_runs_as_the_calls_it_stands_for() {
     assert_eq!(
-        int("xs = [1, 2, 3]; ys = xs.as_iter().map(|x| -> *x * 10).collect(); ys.len() + *ys.get(2)").await,
+        int(
+            "xs = [1, 2, 3]; ys = xs.as_iter().map(|x| -> *x * 10).collect(); ys.len() + *ys.get(2)"
+        )
+        .await,
         33
     );
     assert_eq!(

@@ -42,7 +42,7 @@ async fn context_read_string() {
 async fn context_read_int() {
     let i = Interner::new();
     let ctx = int_context(&i, "x", 42);
-    let result = run(&i, "{{ @x | to_string }}", ctx).await;
+    let result = run(&i, "{{ @x.to_string() }}", ctx).await;
     assert_eq!(result, "42");
 }
 

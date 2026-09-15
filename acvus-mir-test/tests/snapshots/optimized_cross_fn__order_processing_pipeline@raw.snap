@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
-assertion_line: 174
 expression: raw
 ---
 -- calc_discount --
@@ -50,7 +49,7 @@ expression: raw
      4 |   r2 = string_concat [r0, r1]
      5 |   assign v12 = r2
      6 |   r3 = ref &v12
-     7 |   r4 = take $v2
+     7 |   r4 = ref &$v2
      8 |   r5 = call #0(r4)
      9 |   assign v16 = r5
     10 |   r6 = ref &v16
@@ -62,7 +61,7 @@ expression: raw
     17 |   r10 = string_concat [r8, r9]
     18 |   assign v25 = r10
     19 |   r11 = ref &v25
-    20 |   r12 = take $v3
+    20 |   r12 = ref &$v3
     21 |   r13 = call #0(r12)
     22 |   assign v29 = r13
     23 |   r14 = ref &v29
@@ -74,7 +73,7 @@ expression: raw
     30 |   r18 = string_concat [r16, r17]
     31 |   assign v38 = r18
     32 |   r19 = ref &v38
-    33 |   r20 = take $v4
+    33 |   r20 = ref &$v4
     34 |   r21 = call #0(r20)
     35 |   assign v42 = r21
     36 |   r22 = ref &v42
@@ -86,7 +85,7 @@ expression: raw
     43 |   r26 = string_concat [r24, r25]
     44 |   assign v51 = r26
     45 |   r27 = ref &v51
-    46 |   r28 = take $v5
+    46 |   r28 = ref &$v5
     47 |   r29 = call #0(r28)
     48 |   assign v55 = r29
     49 |   r30 = ref &v55
@@ -98,7 +97,7 @@ expression: raw
     56 |   r34 = string_concat [r32, r33]
     57 |   assign v64 = r34
     58 |   r35 = ref &v64
-    59 |   r36 = take $v6
+    59 |   r36 = ref &$v6
     60 |   r37 = call #0(r36)
     61 |   assign v68 = r37
     62 |   r38 = ref &v68
@@ -109,7 +108,7 @@ expression: raw
     ; r1 (var_9.) : &String
     ; r2 (v11) : String
     ; r3 (var_12.) : &String
-    ; r4 ($sub) : Int
+    ; r4 ($param_2.) : &Int
     ; r5 (to_string(...)) : String
     ; r6 (var_16.) : &String
     ; r7 (v18) : String
@@ -117,7 +116,7 @@ expression: raw
     ; r9 (var_22.) : &String
     ; r10 (v24) : String
     ; r11 (var_25.) : &String
-    ; r12 ($disc) : Int
+    ; r12 ($param_3.) : &Int
     ; r13 (to_string(...)) : String
     ; r14 (var_29.) : &String
     ; r15 (v31) : String
@@ -125,7 +124,7 @@ expression: raw
     ; r17 (var_35.) : &String
     ; r18 (v37) : String
     ; r19 (var_38.) : &String
-    ; r20 ($tax) : Int
+    ; r20 ($param_4.) : &Int
     ; r21 (to_string(...)) : String
     ; r22 (var_42.) : &String
     ; r23 (v44) : String
@@ -133,7 +132,7 @@ expression: raw
     ; r25 (var_48.) : &String
     ; r26 (v50) : String
     ; r27 (var_51.) : &String
-    ; r28 ($ship) : Int
+    ; r28 ($param_5.) : &Int
     ; r29 (to_string(...)) : String
     ; r30 (var_55.) : &String
     ; r31 (v57) : String
@@ -141,7 +140,7 @@ expression: raw
     ; r33 (var_61.) : &String
     ; r34 (v63) : String
     ; r35 (var_64.) : &String
-    ; r36 ($total) : Int
+    ; r36 ($param_6.) : &Int
     ; r37 (to_string(...)) : String
     ; r38 (var_68.) : &String
     ; r39 (v70) : String

@@ -108,7 +108,7 @@ fn no_errors_simple_template() {
 fn valid_multi_context_equivalence() {
     let i = Interner::new();
     let ctx = [("name", Ty::String), ("count", Ty::Int)];
-    let source = "{{ @name }} and {{ @count | to_string }}";
+    let source = "{{ @name }} and {{ @count.to_string() }}";
     let batch = batch_errors(&i, source, &ctx);
     let lsp = lsp_errors(&i, source, &ctx);
     assert_eq!(batch, lsp);
@@ -120,7 +120,7 @@ fn type_error_equivalence() {
     let i = Interner::new();
     let ctx = [("name", Ty::String), ("count", Ty::Int)];
     // String + Int is a type error.
-    let source = "{{ @name + @count | to_string }}";
+    let source = "{{ out = @name + @count }}{{ out.to_string() }}";
     let batch = batch_errors(&i, source, &ctx);
     let lsp = lsp_errors(&i, source, &ctx);
     assert_eq!(batch, lsp, "batch and lsp should agree on type errors");
@@ -141,8 +141,8 @@ fn incremental_update_fixes_error() {
         "should have emit error for Int in template"
     );
 
-    // Fix: pipe to_string.
-    session.update_source(doc, "{{ @x | to_string }}");
+    // Fix: call to_string on it.
+    session.update_source(doc, "{{ @x.to_string() }}");
     let errs = session.diagnostics(doc);
     assert!(
         errs.is_empty(),

@@ -3,8 +3,12 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = call #0(42 (r1))
-     2 |   return r0
+     1 |   assign n = 42 (r0)
+     2 |   r1 = ref &n
+     3 |   r2 = call #0(r1)
+     4 |   return r2
 
-    ; r0 (to_string(...)) : String
-    ; r1 (v1) : Int
+    ; r0 (v1) : Int
+    ; r1 (n.) : &Int
+    ; r2 (to_string(...)) : String
+    ; r3 (n) : Int

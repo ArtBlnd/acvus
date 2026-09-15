@@ -1,21 +1,20 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 678
 expression: ir
 ---
 === literals ===
   T0 = ""
 
 === main ===
-     0 |   r0 = undef
-     3 |   r1 = call #0(42 (r2))
-     4 |   r3 = string_concat [T0, r1]
-     5 |   return r3
+     1 |   assign x = 42 (r0)
+     3 |   r1 = ref &x
+     4 |   r2 = call #0(r1)
+     5 |   r3 = string_concat [T0, r2]
+     6 |   return r3
 
-    ; r0 (v7) : Int
-    ; r1 (to_string(...)) : String
-    ; r2 (v1) : Int
+    ; r0 (v1) : Int
+    ; r1 (x.) : &Int
+    ; r2 (to_string(...)) : String
     ; r3 (v6) : String
     ; r4 (v3) : String
     ; r5 (x) : Int
-    ; r6 (x) : Int

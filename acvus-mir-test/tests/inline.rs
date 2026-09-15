@@ -151,19 +151,19 @@ fn inline_pipe_with_extra_args() {
 fn inline_preserves_extern_call() {
     // main calls to_string (ExternFn) - should remain as FunctionCall
     let i = Interner::new();
-    let ir = compile_inline_ir(&i, ("main", "42 | to_string"), &[], &[]).unwrap();
+    let ir = compile_inline_ir(&i, ("main", "n = 42; n.to_string()"), &[], &[]).unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn inline_local_around_extern() {
-    // wrap(x) = x | to_string; main = wrap(42)
+    // wrap(x) = x.to_string(); main = wrap(42)
     // After inline: to_string call remains, wrap is inlined.
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
         ("main", "wrap(42)"),
-        &[("wrap", "$x | to_string", sig(&i, &[("x", Ty::Int)]))],
+        &[("wrap", "$x.to_string()", sig(&i, &[("x", Ty::Int)]))],
         &[],
     )
     .unwrap();
@@ -172,7 +172,7 @@ fn inline_local_around_extern() {
 
 #[test]
 fn inline_extern_chain_preserved() {
-    // process(s) = s | len_str | to_string; main = process("hello")
+    // process(s) = n = s | len_str; n.to_string(); main = process("hello")
     // After inline: both len_str and to_string remain as calls.
     let i = Interner::new();
     let ir = compile_inline_ir(
@@ -180,7 +180,7 @@ fn inline_extern_chain_preserved() {
         ("main", r#"process("hello")"#),
         &[(
             "process",
-            "$s | len_str | to_string",
+            "n = $s | len_str; n.to_string()",
             sig(&i, &[("s", Ty::String)]),
         )],
         &[],
@@ -191,12 +191,12 @@ fn inline_extern_chain_preserved() {
 
 #[test]
 fn inline_mixed_local_extern() {
-    // double(x) = x + x; main = double(3) | to_string
+    // double(x) = x + x; main = n = double(3); n.to_string()
     // double is inlined, to_string remains.
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
-        ("main", "double(3) | to_string"),
+        ("main", "n = double(3); n.to_string()"),
         &[("double", "$x + $x", sig(&i, &[("x", Ty::Int)]))],
         &[],
     )
@@ -439,7 +439,10 @@ fn inline_io_extern_inside() {
     use acvus_mir::ty::TyTerm;
     let fetch = Function {
         qref: QualifiedRef::root(i.intern("fetch")),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
                 i.intern("id"),

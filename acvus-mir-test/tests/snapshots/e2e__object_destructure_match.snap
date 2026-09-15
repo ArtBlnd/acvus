@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 977
 expression: ir
 ---
 === literals ===
@@ -8,51 +7,50 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     1 |   r1 = undef
-     2 |   r2 = fetch @user
-     3 |   assign @user = r2
-     4 | L2:
-     7 |   r3 = true (r4) && true (r5)
-     9 |   r6 = r3 && true (r7)
-    10 |   jump_if r6 then L3 else L1
-    11 | L3:
-    12 |   r8 = take @user.name
-    13 |   r9 = take @user.age
-    14 |   r10 = call #0(r9)
-    15 |   r11 = string_clone r8
-    16 |   r12 = string_concat [r11, r10]
-    17 |   jump L0(r12, r8, r9)
-    18 | L1:
-    20 |   r13 = string_concat [T0]
-    21 |   jump L0(r13, r0, r1)
-    22 | L0(r14: String, r15: String, r16: Int):  ; merge_of L2
-    23 |   r17 = string_concat [r14]
-    24 |   r18 = take @user
-    25 |   commit @user = r18
-    26 |   return r17
+     1 |   r1 = fetch @user
+     2 |   assign @user = r1
+     3 | L2:
+     6 |   r2 = true (r3) && true (r4)
+     8 |   r5 = r2 && true (r6)
+     9 |   jump_if r5 then L3 else L1
+    10 | L3:
+    11 |   r7 = take @user.name
+    12 |   r8 = take @user.age
+    13 |   assign age = r8
+    14 |   r9 = ref &age
+    15 |   r10 = call #0(r9)
+    16 |   r11 = string_clone r7
+    17 |   r12 = string_concat [r11, r10]
+    18 |   jump L0(r12, r7)
+    19 | L1:
+    21 |   r13 = string_concat [T0]
+    22 |   jump L0(r13, r0)
+    23 | L0(r14: String, r15: String):  ; merge_of L2
+    24 |   r16 = string_concat [r14]
+    25 |   r17 = take @user
+    26 |   commit @user = r17
+    27 |   return r16
 
     ; r0 (v21) : String
-    ; r1 (v22) : Int
-    ; r2 (@user) : {age: Int, email: String, name: String}
-    ; r3 (v5) : Bool
-    ; r4 (v3) : Bool
-    ; r5 (v4) : Bool
-    ; r6 (v7) : Bool
-    ; r7 (v6) : Bool
-    ; r8 (name) : String
-    ; r9 (age) : Int
+    ; r1 (@user) : {age: Int, email: String, name: String}
+    ; r2 (v5) : Bool
+    ; r3 (v3) : Bool
+    ; r4 (v4) : Bool
+    ; r5 (v7) : Bool
+    ; r6 (v6) : Bool
+    ; r7 (name) : String
+    ; r8 (age) : Int
+    ; r9 (age.) : &Int
     ; r10 (to_string(...)) : String
-    ; r11 (v25) : String
+    ; r11 (v23) : String
     ; r12 (v15) : String
     ; r13 (v17) : String
     ; r14 (v18) : String
-    ; r15 (v23) : String
-    ; r16 (v24) : Int
-    ; r17 (v19) : String
-    ; r18 (v20) : {age: Int, email: String, name: String}
-    ; r19 (age) : Int
-    ; r20 (name) : String
-    ; r21 (age) : Int
-    ; r22 (@user) : {age: Int, email: String, name: String}
-    ; r23 (name) : String
-    ; r24 (v16) : String
+    ; r15 (v22) : String
+    ; r16 (v19) : String
+    ; r17 (v20) : {age: Int, email: String, name: String}
+    ; r18 (age) : Int
+    ; r19 (name) : String
+    ; r20 (@user) : {age: Int, email: String, name: String}
+    ; r21 (name) : String
+    ; r22 (v16) : String

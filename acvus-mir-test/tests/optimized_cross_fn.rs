@@ -25,7 +25,10 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
         .collect();
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
             params: infer_params,
             ret: Box::new(lift_to_poly(&ret)),
@@ -81,7 +84,7 @@ fn order_processing_pipeline() {
             ),
             (
                 "format_receipt",
-                r#"$name + " sub:" + to_string($sub) + " disc:" + to_string($disc) + " tax:" + to_string($tax) + " ship:" + to_string($ship) + " total:" + to_string($total)"#,
+                r#"$name + " sub:" + $sub.to_string() + " disc:" + $disc.to_string() + " tax:" + $tax.to_string() + " ship:" + $ship.to_string() + " total:" + $total.to_string()"#,
                 sig(
                     &i,
                     &[
@@ -140,7 +143,7 @@ fn order_processing_pipeline() {
             ),
             (
                 "format_receipt",
-                r#"$name + " sub:" + to_string($sub) + " disc:" + to_string($disc) + " tax:" + to_string($tax) + " ship:" + to_string($ship) + " total:" + to_string($total)"#,
+                r#"$name + " sub:" + $sub.to_string() + " disc:" + $disc.to_string() + " tax:" + $tax.to_string() + " ship:" + $ship.to_string() + " total:" + $total.to_string()"#,
                 sig(
                     &i,
                     &[
@@ -228,7 +231,7 @@ fn data_enrichment_multi_io() {
         ),
         (
             "format_label",
-            r#"a = "User("; b = to_string($profile); c = " score:"; d = to_string($score); e = ")"; ab = concat(&a, &b); abc = concat(&ab, &c); abcd = concat(&abc, &d); concat(&abcd, &e)"#,
+            r#"a = "User("; b = $profile.to_string(); c = " score:"; d = $score.to_string(); e = ")"; ab = concat(&a, &b); abc = concat(&ab, &c); abcd = concat(&abc, &d); concat(&abcd, &e)"#,
             sig(&i, &[("profile", Ty::Int), ("score", Ty::Int)]),
         ),
     ];

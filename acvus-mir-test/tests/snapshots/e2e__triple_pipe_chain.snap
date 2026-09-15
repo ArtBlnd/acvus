@@ -22,13 +22,15 @@ expression: ir
     15 |   assign x = r12
     17 |   r13 = ref &x
     18 |   r14 = call #5(r13)
-    19 |   r15 = call #6(r14)
-    20 |   r16 = string_concat [T0, T0, T0, r15]
-    21 |   commit @items = r4
-    22 |   return r16
+    19 |   assign out = r14
+    21 |   r15 = ref &out
+    22 |   r16 = call #6(r15)
+    23 |   r17 = string_concat [T0, T0, T0, T0, r16]
+    24 |   commit @items = r4
+    25 |   return r17
 
-    ; r0 (v25) : List<Int>
-    ; r1 (v26) : List<Int>
+    ; r0 (v28) : List<Int>
+    ; r1 (v29) : List<Int>
     ; r2 (@items) : List<Int>
     ; r3 (v6) : Array<Int, 0>
     ; r4 (list(...)) : List<Int>
@@ -42,17 +44,20 @@ expression: ir
     ; r12 (collect(...)) : List<Int>
     ; r13 (x.) : &List<Int>
     ; r14 (len(...)) : Int
-    ; r15 (to_string(...)) : String
-    ; r16 (v23) : String
-    ; r17 (@items) : List<Int>
-    ; r18 (items) : List<Int>
-    ; r19 (x) : List<Int>
-    ; r20 (@items) : List<Int>
-    ; r21 (items) : List<Int>
-    ; r22 (v24) : List<Int>
-    ; r23 (v5) : String
-    ; r24 (v8) : String
-    ; r25 (v19) : String
+    ; r15 (out.) : &Int
+    ; r16 (to_string(...)) : String
+    ; r17 (v26) : String
+    ; r18 (@items) : List<Int>
+    ; r19 (out) : Int
+    ; r20 (items) : List<Int>
+    ; r21 (v8) : String
+    ; r22 (@items) : List<Int>
+    ; r23 (items) : List<Int>
+    ; r24 (v23) : String
+    ; r25 (x) : List<Int>
+    ; r26 (v5) : String
+    ; r27 (v27) : List<Int>
+    ; r28 (v19) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

@@ -16,15 +16,15 @@ fn assert_str(v: &Value, expected: &str) {
 async fn to_string_runs_the_instance_for_the_argument_type() {
     let i = Interner::new();
     assert_str(
-        &run_script(&i, "to_string(1.5)", FxHashMap::default()).await,
+        &run_script(&i, "x = 1.5; to_string(&x)", FxHashMap::default()).await,
         "1.5",
     );
     assert_str(
-        &run_script(&i, "to_string(42)", FxHashMap::default()).await,
+        &run_script(&i, "x = 42; to_string(&x)", FxHashMap::default()).await,
         "42",
     );
     assert_str(
-        &run_script(&i, "to_string(true)", FxHashMap::default()).await,
+        &run_script(&i, "x = true; to_string(&x)", FxHashMap::default()).await,
         "true",
     );
 }
@@ -33,9 +33,13 @@ async fn to_string_runs_the_instance_for_the_argument_type() {
 async fn to_int_reads_a_string_through_its_own_instance() {
     let i = Interner::new();
     assert_eq!(
-        run_script(&i, "to_int(\"42\") + to_int(1.9)", FxHashMap::default())
-            .await
-            .as_int(),
+        run_script(
+            &i,
+            "s = \"42\"; f = 1.9; to_int(&s) + to_int(&f)",
+            FxHashMap::default()
+        )
+        .await
+        .as_int(),
         43
     );
 }

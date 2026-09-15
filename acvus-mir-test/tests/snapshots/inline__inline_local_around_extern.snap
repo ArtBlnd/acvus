@@ -3,11 +3,11 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = take $v1
+     1 |   r0 = ref &$v1
      2 |   r1 = call #0(r0)
      3 |   return r1
 
-    ; r0 ($x) : Int
+    ; r0 ($param_1.) : &Int
     ; r1 (to_string(...)) : String
     ; r2 (v1) : Int
     ; r3 (wrap(...)) : String

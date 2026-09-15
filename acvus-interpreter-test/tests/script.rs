@@ -157,7 +157,11 @@ async fn iter_sequential_loops() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        vec![("a", ints(&[1, 2])), ("b", ints(&[10, 20])), ("sum", int(0))],
+        vec![
+            ("a", ints(&[1, 2])),
+            ("b", ints(&[10, 20])),
+            ("sum", int(0)),
+        ],
     );
     let result = run_script_mode(
         &i,
@@ -186,7 +190,11 @@ async fn iter_accumulate_product() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        vec![("items", ints(&[2, 3, 4])), ("sum", int(0)), ("product", int(1))],
+        vec![
+            ("items", ints(&[2, 3, 4])),
+            ("sum", int(0)),
+            ("product", int(1)),
+        ],
     );
     let result = run_script_mode(
         &i,
@@ -227,7 +235,7 @@ async fn iter_with_to_string() {
     );
     let result = run_script_mode(
         &i,
-        "let it = as_iter(&@items); while let Some(x) = next(&mut it) { @out = @out + to_string(*x); } @out",
+        "let it = as_iter(&@items); while let Some(x) = next(&mut it) { @out = @out + to_string(x); } @out",
         c,
     )
     .await;

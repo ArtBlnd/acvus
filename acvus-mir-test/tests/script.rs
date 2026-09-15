@@ -172,7 +172,7 @@ fn func_pipe_chain() {
 fn func_to_string_in_bind() {
     let i = Interner::new();
     let c = ctx(&i, &[("val", Ty::Int)]);
-    let ir = compile_script_ir(&i, "to_string(@val)", &c).unwrap();
+    let ir = compile_script_ir(&i, "@val.to_string()", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 

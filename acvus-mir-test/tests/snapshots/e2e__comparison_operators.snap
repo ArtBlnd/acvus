@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 587
 expression: ir
 ---
 === literals ===
@@ -9,22 +8,23 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = undef
-     3 |   r3 = fetch @a
-     4 |   r4 = fetch @b
-     5 |   r5 = r3 > r4
-     7 |   r6 = call #0(r5)
-     8 |   r7 = string_concat [T0, r6]
-     9 |   commit @a = r3
-    10 |   commit @b = r4
-    11 |   return r7
+     2 |   r2 = fetch @a
+     3 |   r3 = fetch @b
+     4 |   r4 = r2 > r3
+     5 |   assign x = r4
+     7 |   r5 = ref &x
+     8 |   r6 = call #0(r5)
+     9 |   r7 = string_concat [T0, r6]
+    10 |   commit @a = r2
+    11 |   commit @b = r3
+    12 |   return r7
 
     ; r0 (v15) : Int
     ; r1 (v16) : Int
-    ; r2 (v17) : Bool
-    ; r3 (@a) : Int
-    ; r4 (@b) : Int
-    ; r5 (v7) : Bool
+    ; r2 (@a) : Int
+    ; r3 (@b) : Int
+    ; r4 (v7) : Bool
+    ; r5 (x.) : &Bool
     ; r6 (to_string(...)) : String
     ; r7 (v12) : String
     ; r8 (@b) : Int
@@ -32,7 +32,6 @@ expression: ir
     ; r10 (@b) : Int
     ; r11 (v9) : String
     ; r12 (@a) : Int
-    ; r13 (x) : Bool
-    ; r14 (v13) : Int
-    ; r15 (@a) : Int
-    ; r16 (x) : Bool
+    ; r13 (v13) : Int
+    ; r14 (@a) : Int
+    ; r15 (x) : Bool

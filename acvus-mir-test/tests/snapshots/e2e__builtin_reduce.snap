@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 1294
 expression: ir
 ---
 === literals ===
@@ -15,28 +14,33 @@ expression: ir
      7 |   r5 = call #1(r2)
      8 |   r6 = closure L0 []
      9 |   r7 = call #2(r5, r6)
-    10 |   r8 = call #3(r7)
-    11 |   r9 = string_concat [T0, T0, r8]
-    12 |   commit @items = r4
-    13 |   return r9
+    10 |   assign out = r7
+    12 |   r8 = ref &out
+    13 |   r9 = call #3(r8)
+    14 |   r10 = string_concat [T0, T0, T0, r9]
+    15 |   commit @items = r4
+    16 |   return r10
 
-    ; r0 (v16) : List<Int>
-    ; r1 (v17) : List<Int>
+    ; r0 (v19) : List<Int>
+    ; r1 (v20) : List<Int>
     ; r2 (@items) : List<Int>
     ; r3 (v6) : Array<Int, 0>
     ; r4 (list(...)) : List<Int>
     ; r5 (v10) : Iterator<Int, Pure, #IdentityId(2)>
     ; r6 (v11) : Fn(Int, Int) -> Int
     ; r7 (reduce(...)) : Int
-    ; r8 (to_string(...)) : String
-    ; r9 (v14) : String
-    ; r10 (@items) : List<Int>
-    ; r11 (items) : List<Int>
-    ; r12 (@items) : List<Int>
+    ; r8 (out.) : &Int
+    ; r9 (to_string(...)) : String
+    ; r10 (v17) : String
+    ; r11 (@items) : List<Int>
+    ; r12 (v14) : String
     ; r13 (items) : List<Int>
-    ; r14 (v15) : List<Int>
-    ; r15 (v5) : String
-    ; r16 (v8) : String
+    ; r14 (@items) : List<Int>
+    ; r15 (items) : List<Int>
+    ; r16 (v18) : List<Int>
+    ; r17 (out) : Int
+    ; r18 (v5) : String
+    ; r19 (v8) : String
 
 === closure L0 (ValueId(0), ValueId(1)) ===
      0 |   r0 = undef

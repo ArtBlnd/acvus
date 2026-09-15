@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
-assertion_line: 256
 expression: raw
 ---
 -- compute_score --
@@ -32,11 +31,11 @@ expression: raw
 
 === main ===
      1 |   assign a = T0
-     2 |   r0 = take $v1
+     2 |   r0 = ref &$v1
      3 |   r1 = call #0(r0)
      4 |   assign b = r1
      6 |   assign c = T1
-     7 |   r2 = take $v2
+     7 |   r2 = ref &$v2
      8 |   r3 = call #0(r2)
      9 |   assign d = r3
     11 |   assign e = T2
@@ -57,9 +56,9 @@ expression: raw
     26 |   r15 = call #1(r13, r14)
     27 |   return r15
 
-    ; r0 ($profile) : Int
+    ; r0 ($param_1.) : &Int
     ; r1 (to_string(...)) : String
-    ; r2 ($score) : Int
+    ; r2 ($param_2.) : &Int
     ; r3 (to_string(...)) : String
     ; r4 (a.) : &String
     ; r5 (b.) : &String

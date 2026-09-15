@@ -10,9 +10,11 @@ expression: ir
      4 |   assign x = r0
      6 |   r4 = ref &x
      7 |   r5 = call #0(r4)
-     8 |   r6 = call #1(r5)
-     9 |   r7 = string_concat [T0, r6]
-    10 |   return r7
+     8 |   assign out = r5
+    10 |   r6 = ref &out
+    11 |   r7 = call #1(r6)
+    12 |   r8 = string_concat [T0, T0, r7]
+    13 |   return r8
 
     ; r0 (v4) : Array<Int, 3>
     ; r1 (v1) : Int
@@ -20,7 +22,10 @@ expression: ir
     ; r3 (v3) : Int
     ; r4 (x.) : &Array<Int, 3>
     ; r5 (len(...)) : Int
-    ; r6 (to_string(...)) : String
-    ; r7 (v10) : String
-    ; r8 (v6) : String
-    ; r9 (x) : Array<Int, 3>
+    ; r6 (out.) : &Int
+    ; r7 (to_string(...)) : String
+    ; r8 (v13) : String
+    ; r9 (v10) : String
+    ; r10 (v6) : String
+    ; r11 (out) : Int
+    ; r12 (x) : Array<Int, 3>

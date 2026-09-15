@@ -1,5 +1,5 @@
 {
-  "template": "{{ @count | to_string }}",
+  "template": "{{ @count.to_string() }}",
   "context": { "count": 42 },
   "expected": "42"
 }

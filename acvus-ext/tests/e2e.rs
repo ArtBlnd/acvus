@@ -292,7 +292,7 @@ async fn mixed_regex_and_encoding() {
     let i = Interner::new();
     let result = run_ext(
         &i,
-        r#"base64_encode("hello") + " " + to_string(regex_match(regex("\\d+"), "abc123"))"#,
+        r#"m = regex_match(regex("\\d+"), "abc123"); base64_encode("hello") + " " + m.to_string()"#,
         TypedContext::default(),
         vec![
             regex_registry::<AcvusRuntime>(),

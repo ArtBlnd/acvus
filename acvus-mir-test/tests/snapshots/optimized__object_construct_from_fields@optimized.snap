@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
-assertion_line: 146
 expression: opt
 ---
 === literals ===
@@ -15,36 +14,40 @@ expression: opt
      4 |   assign @user = r2
      5 |   r3 = take @user.age
      7 |   r4 = r3 * 2 (r5)
-     8 |   r6 = ref &@user.name
-    10 |   assign v13 = T0
-    11 |   r7 = ref &v13
-    12 |   r8 = string_concat [r6, r7]
-    13 |   drop r9
-    14 |   assign v16 = r8
-    15 |   r10 = ref &v16
-    16 |   r11 = call #0(r4)
-    17 |   assign v20 = r11
-    18 |   r12 = ref &v20
-    19 |   r13 = string_concat [r10, r12]
-    20 |   drop r14
-    21 |   drop r15
-    22 |   assign v23 = r13
-    23 |   r16 = ref &v23
-    25 |   assign v26 = T1
-    26 |   r17 = ref &v26
-    27 |   r18 = string_concat [r16, r17]
-    28 |   drop r19
-    29 |   drop r20
-    30 |   r21 = r4 > r1
-    31 |   r22 = object {label: r18, score: r4, eligible: r21}
-    32 |   assign @output = r22
-    33 |   r23 = take @output.score
-    34 |   r24 = take @output
-    35 |   commit @output = r24
-    36 |   commit @min_score = r1
-    37 |   r25 = take @user
-    38 |   commit @user = r25
-    39 |   return r23
+     8 |   assign score = r4
+     9 |   r6 = ref &@user.name
+    11 |   assign v13 = T0
+    12 |   r7 = ref &v13
+    13 |   r8 = string_concat [r6, r7]
+    14 |   drop r9
+    15 |   assign v16 = r8
+    16 |   r10 = ref &v16
+    17 |   r11 = ref &score
+    18 |   r12 = call #0(r11)
+    19 |   assign v20 = r12
+    20 |   r13 = ref &v20
+    21 |   r14 = string_concat [r10, r13]
+    22 |   drop r15
+    23 |   drop r16
+    24 |   assign v23 = r14
+    25 |   r17 = ref &v23
+    27 |   assign v26 = T1
+    28 |   r18 = ref &v26
+    29 |   r19 = string_concat [r17, r18]
+    30 |   drop r20
+    31 |   drop r21
+    32 |   r22 = take score
+    33 |   r23 = r22 > r1
+    34 |   r24 = take score
+    35 |   r25 = object {label: r19, score: r24, eligible: r23}
+    36 |   assign @output = r25
+    37 |   r26 = take @output.score
+    38 |   r27 = take @output
+    39 |   commit @output = r27
+    40 |   commit @min_score = r1
+    41 |   r28 = take @user
+    42 |   commit @user = r28
+    43 |   return r26
 
     ; r0 (@output) : {eligible: Bool, label: String, score: Int}
     ; r1 (@min_score) : Int
@@ -57,37 +60,36 @@ expression: opt
     ; r8 (v15) : String
     ; r9 (v13) : String
     ; r10 (var_16.) : &String
-    ; r11 (to_string(...)) : String
-    ; r12 (var_20.) : &String
-    ; r13 (v22) : String
-    ; r14 (v20) : String
-    ; r15 (v16) : String
-    ; r16 (var_23.) : &String
-    ; r17 (var_26.) : &String
-    ; r18 (v28) : String
-    ; r19 (v26) : String
-    ; r20 (v23) : String
-    ; r21 (v32) : Bool
-    ; r22 (v37) : {eligible: Bool, label: String, score: Int}
-    ; r23 (@output.score) : Int
-    ; r24 (v39) : {eligible: Bool, label: String, score: Int}
-    ; r25 (v41) : {age: Int, name: String}
-    ; r26 (v44) : String
-    ; r27 (@min_score) : Int
-    ; r28 (v25) : String
-    ; r29 (@min_score) : Int
-    ; r30 (@user) : {age: Int, name: String}
-    ; r31 (score) : Int
-    ; r32 (eligible) : Bool
-    ; r33 (v12) : String
-    ; r34 (label) : String
-    ; r35 (score) : Int
-    ; r36 (v40) : Int
-    ; r37 (v43) : Int
-    ; r38 (eligible) : Bool
-    ; r39 (v42) : Int
-    ; r40 (@output) : {eligible: Bool, label: String, score: Int}
-    ; r41 (v45) : Bool
-    ; r42 (score) : Int
-    ; r43 (label) : String
-    ; r44 (score) : Int
+    ; r11 (score.) : &Int
+    ; r12 (to_string(...)) : String
+    ; r13 (var_20.) : &String
+    ; r14 (v22) : String
+    ; r15 (v20) : String
+    ; r16 (v16) : String
+    ; r17 (var_23.) : &String
+    ; r18 (var_26.) : &String
+    ; r19 (v28) : String
+    ; r20 (v26) : String
+    ; r21 (v23) : String
+    ; r22 (score) : Int
+    ; r23 (v32) : Bool
+    ; r24 (score) : Int
+    ; r25 (v37) : {eligible: Bool, label: String, score: Int}
+    ; r26 (@output.score) : Int
+    ; r27 (v39) : {eligible: Bool, label: String, score: Int}
+    ; r28 (v41) : {age: Int, name: String}
+    ; r29 (v44) : Bool
+    ; r30 (@min_score) : Int
+    ; r31 (v25) : String
+    ; r32 (@min_score) : Int
+    ; r33 (@user) : {age: Int, name: String}
+    ; r34 (eligible) : Bool
+    ; r35 (v12) : String
+    ; r36 (label) : String
+    ; r37 (v40) : Int
+    ; r38 (v43) : String
+    ; r39 (eligible) : Bool
+    ; r40 (v42) : Int
+    ; r41 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r42 (label) : String
+    ; r43 (score) : Int

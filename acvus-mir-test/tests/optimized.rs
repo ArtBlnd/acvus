@@ -136,7 +136,7 @@ fn object_construct_from_fields() {
     );
     let src = r#"
         score = @user.age * 2;
-        label = @user.name + " (score: " + to_string(score) + ")";
+        label = @user.name + " (score: " + score.to_string() + ")";
         eligible = score > @min_score;
         @output = { label: label, score: score, eligible: eligible, };
         @output.score
