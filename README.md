@@ -255,6 +255,7 @@ acvus-mir               Type system, inference, MIR lowering, analysis, optimiza
 acvus-interpreter       Register-based VM, ExternFn registry, sync/async handlers
 acvus-ext               Standard library (10 ExternFn registries)
 acvus-ext-llm           LLM providers (OpenAI, Anthropic, Google)
+acvus-ext-net           Network IO (`http::fetch_get`)
 acvus-orchestration     Spec → CompilationGraph, incremental Session
 acvus-lsp               Language server — diagnostics, completions, context discovery
 acvus-mir-cli           CLI for MIR inspection

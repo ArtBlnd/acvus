@@ -11,6 +11,7 @@ members = [
     "acvus-orchestration",
     "acvus-ext",
     "acvus-ext-llm",
+    "acvus-ext-net",
     "acvus-lsp",
     "kovac-interpreter"
 , "acvus-extern", "acvus-extern-macro"]
