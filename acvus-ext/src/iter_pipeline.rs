@@ -17,6 +17,7 @@ use sync_wrapper::SyncWrapper;
 
 #[derive(ExternType)]
 #[extern_type(name = "Iterator")]
+#[repr(transparent)]
 pub struct Iter<T, E, I, Rt>(Pipeline<Rt>, PhantomData<(T, E, I)>)
 where
     T: TyVar,
@@ -98,6 +99,17 @@ impl<Rt: Runtime> Pipeline<Rt> {
             first => Self::from_source(Source::Chain(VecDeque::from([first, other]))),
         }
     }
+}
+
+// SAFETY: `Iter` is `repr(transparent)` over its pipeline; the phantoms are ZSTs.
+unsafe impl<T, E, I, Rt> acvus_extern::HasRepr for Iter<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    type Repr = Pipeline<Rt>;
 }
 
 impl<T, E, I, Rt> Iter<T, E, I, Rt>

@@ -7,6 +7,7 @@
 extern crate self as acvus_extern;
 
 pub mod core;
+pub mod repr;
 mod effect;
 mod error;
 mod func;
@@ -25,6 +26,7 @@ pub use handler::{ExternEntry, ExternHandler, MonoHandler, MonoInstance};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use reference::{Lent, Ref, RefMut, value_of};
+pub use repr::{AsIs, Crossing, HasRepr};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
     Manifest, Registry, SharedSignature, SignatureDecl,

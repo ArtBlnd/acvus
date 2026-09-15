@@ -14,4 +14,4 @@ pub use interpreter::{
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub use runtime::{AcvusRuntime, ExternEntry, ExternHandler};
 pub use vtable::{Composite, VtableRegistry, Vtable};
-pub use value::{Array, FnValue, HandleValue, Object, Tuple, Value, VariantValue};
+pub use value::{Array, FnValue, HandleValue, Object, OptionValue, Tuple, Value, VariantValue};

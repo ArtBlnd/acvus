@@ -290,6 +290,10 @@ pub struct VariantValue {
     pub payload: Option<Box<Value>>,
 }
 
+/// The language's `Option<T>` is Rust's `Option` at `T = Value`, so it
+/// crosses the extern boundary as itself (RFC-0022).
+pub type OptionValue = Option<Value>;
+
 /// A self-contained callable: execution context + body + captured values.
 ///
 /// Created at `MakeClosure` time. It shares the run's live page: a
@@ -403,6 +407,12 @@ typed_debug_fn! { VariantValue;
         None => write!(f, "{:?}", d.tag),
     };
 }
+typed_debug_fn! { OptionValue;
+    dbg_option = |d, f| match d {
+        Some(p) => write!(f, "Some({p:?})"),
+        None => write!(f, "None"),
+    };
+}
 typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len()); }
 
 static STRING: LazyLock<Vtable> =
@@ -415,13 +425,15 @@ static OBJECT: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<Object>("Object", Composite::Object, Some(dbg_object)));
 static VARIANT: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<VariantValue>("Variant", Composite::Variant, Some(dbg_variant)));
+static OPTION: LazyLock<Vtable> =
+    LazyLock::new(|| vtable::<OptionValue>("Option", Composite::Option, Some(dbg_option)));
 static FN: LazyLock<Vtable> = LazyLock::new(|| vtable::<FnValue>("Fn", Composite::Fn, Some(dbg_fn)));
 static HANDLE: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None));
 
 /// Every composite vtable, in the order of `Composite`.
-pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 7]> =
-    LazyLock::new(|| [&STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &FN, &HANDLE]);
+pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 8]> =
+    LazyLock::new(|| [&STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &OPTION, &FN, &HANDLE]);
 
 // -- Constructors -----------------------------------------------------
 
@@ -475,6 +487,9 @@ impl Value {
             },
         )
     }
+    pub fn option(payload: OptionValue) -> Self {
+        large(&OPTION, payload)
+    }
     pub fn closure(fv: FnValue) -> Self {
         large(&FN, fv)
     }
@@ -496,6 +511,19 @@ impl Value {
     }
     pub fn is_string(&self) -> bool {
         self.composite() == Some(Composite::String)
+    }
+    pub fn is_option(&self) -> bool {
+        self.composite() == Some(Composite::Option)
+    }
+    /// # Safety
+    /// The value is an `Option`.
+    pub unsafe fn as_option(&self) -> &OptionValue {
+        unsafe { self.peek::<OptionValue>() }
+    }
+    /// # Safety
+    /// The value is an `Option`.
+    pub unsafe fn as_option_mut(&mut self) -> &mut OptionValue {
+        unsafe { self.peek_mut::<OptionValue>() }
     }
 
     /// # Safety

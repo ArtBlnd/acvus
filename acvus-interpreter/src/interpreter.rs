@@ -13,7 +13,7 @@ use crate::error::RuntimeError;
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::runtime::{AcvusRuntime, ExternHandler};
 use crate::vtable::VtableRegistry;
-use crate::value::{FnValue, HandleValue, Value, VariantValue};
+use crate::value::{FnValue, HandleValue, OptionValue, Value, VariantValue};
 
 fn field<'a>(value: &'a Value, f: Astr, interner: &Interner) -> &'a Value {
     assert!(value.is_object(), "field load on non-object: {value:?}");
@@ -43,11 +43,15 @@ fn walk_path<'a>(mut value: &'a Value, path: &[PathSeg], interner: &Interner) ->
                     &value.as_tuple()[*i]
                 }
             },
-            // SAFETY: the type checker admits a payload only on a variant.
-            PathSeg::Payload => unsafe { value.as_variant() }
-                .payload
-                .as_deref()
-                .expect("a payload path names a variant that carries one"),
+            // SAFETY: the type checker admits a payload only on an option or a variant.
+            PathSeg::Payload => unsafe {
+                if value.is_option() {
+                    value.as_option().as_ref()
+                } else {
+                    value.as_variant().payload.as_deref()
+                }
+            }
+            .expect("a payload path names a variant that carries one"),
         };
     }
     value
@@ -65,11 +69,15 @@ fn walk_path_mut<'a>(mut value: &'a mut Value, path: &[PathSeg], interner: &Inte
                     &mut value.as_tuple_mut().0[*i]
                 }
             },
-            // SAFETY: the type checker admits a payload only on a variant.
-            PathSeg::Payload => unsafe { value.as_variant_mut() }
-                .payload
-                .as_deref_mut()
-                .expect("a payload path names a variant that carries one"),
+            // SAFETY: the type checker admits a payload only on an option or a variant.
+            PathSeg::Payload => unsafe {
+                if value.is_option() {
+                    value.as_option_mut().as_mut()
+                } else {
+                    value.as_variant_mut().payload.as_deref_mut()
+                }
+            }
+            .expect("a payload path names a variant that carries one"),
         };
     }
     value
@@ -107,6 +115,11 @@ fn read_place<'a>(frame: &'a Frame, val_types: &FxHashMap<ValueId, Ty>, id: Valu
     } else {
         v
     }
+}
+
+/// The tag `Some` of the language's `Option`; the other is `None`.
+fn option_tag_is_some(interner: &Interner, tag: Astr) -> bool {
+    interner.resolve(tag) == "Some"
 }
 
 /// The page key of a context.
@@ -575,24 +588,37 @@ async fn execute_inst(
         // -- Variant --------------------------------------
         InstKind::MakeVariant { dst, tag, payload } => {
             let p = payload.map(|v| frame.use_val(v));
-            frame.set(*dst, Value::variant(*tag, p));
+            let value = if let Ty::Option(_) = type_of(val_types, *dst) {
+                Value::option(p)
+            } else {
+                Value::variant(*tag, p)
+            };
+            frame.set(*dst, value);
         }
         InstKind::TestVariant { dst, src, tag } => {
             let src_val = read_place(frame, val_types, *src);
-            // SAFETY: is_variant checked the vtable id.
-            let matches = src_val.is_variant() && unsafe { src_val.as_variant() }.tag == *tag;
+            // SAFETY: the composite check precedes each read.
+            let matches = unsafe {
+                if src_val.is_option() {
+                    src_val.as_option().is_some() == option_tag_is_some(&ctx.shared.interner, *tag)
+                } else {
+                    src_val.is_variant() && src_val.as_variant().tag == *tag
+                }
+            };
             frame.set(*dst, Value::bool_(matches));
         }
         InstKind::UnwrapVariant { dst, src } => {
             let src_val = frame.take(*src);
-            assert!(src_val.is_variant(), "UnwrapVariant on non-variant: {src_val:?}");
-            // SAFETY: is_variant checked the vtable id.
-            let variant = unsafe { src_val.materialize::<VariantValue>() };
-            let val = match variant.payload {
-                Some(p) => *p,
-                None => Value::unit(),
+            // SAFETY: the composite check precedes each materialize.
+            let payload = unsafe {
+                if src_val.is_option() {
+                    src_val.materialize::<OptionValue>()
+                } else {
+                    assert!(src_val.is_variant(), "UnwrapVariant on non-variant: {src_val:?}");
+                    src_val.materialize::<VariantValue>().payload.map(|p| *p)
+                }
             };
-            frame.set(*dst, val);
+            frame.set(*dst, payload.unwrap_or_else(Value::unit));
         }
 
         // -- Pattern testing ------------------------------

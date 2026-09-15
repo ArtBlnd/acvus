@@ -266,19 +266,21 @@ fn generate_extern_fn(
                 let lent = format_ident!("{a}_lent");
                 match p.mode {
                     Mode::Value if is_carrier(ty) => quote! { let #a = <#ty>::new(#next); },
-                    Mode::Value => quote! { let #a = unsafe { __rt.materialize::<#ty>(#next) }; },
+                    Mode::Value => quote! { let #a = unsafe { (&::acvus_extern::Crossing::<#ty>::new()).materialize(__rt, #next) }; },
                     Mode::Borrow => quote! {
                         let #lent = #next;
-                        let #a: &#ty = unsafe { __rt.deref::<#ty>(&#lent) };
+                        let #a: &#ty = unsafe { (&::acvus_extern::Crossing::<#ty>::new()).deref(__rt, &#lent) };
                     },
                     Mode::BorrowMut => quote! {
                         let #lent = #next;
-                        let #a: &mut #ty = unsafe { __rt.deref_mut::<#ty>(&#lent) };
+                        let #a: &mut #ty = unsafe { (&::acvus_extern::Crossing::<#ty>::new()).deref_mut(__rt, &#lent) };
                     },
                 }
             })
             .collect();
         let unpack = quote! {
+            #[allow(unused_imports)]
+            use ::acvus_extern::AsIs as _;
             let mut __args = __args.into_iter();
             #(#unpack_stmts)*
             debug_assert!(__args.next().is_none(), "arity checked by typeck");
@@ -304,13 +306,13 @@ fn generate_extern_fn(
         let ret_value = if is_carrier(&rt_ret) {
             quote! { __r.into_value() }
         } else {
-            quote! { unsafe { __rt.erase::<#rt_ret>(__r) } }
+            quote! { unsafe { (&::acvus_extern::Crossing::<#rt_ret>::new()).erase(__rt, __r) } }
         };
         let returned = quote! {
             ::core::result::Result::<_, #error_ty>::Ok(#ret_value)
         };
         if is_async {
-            let call = quote! { #fn_ident #turbofish (&__rt, #(#passed),*) };
+            let call = quote! { #fn_ident #turbofish (__rt, #(#passed),*) };
             let awaited = if ret.is_result {
                 quote! { (#call).await.map_err(::core::convert::Into::<#error_ty>::into)? }
             } else {
@@ -322,6 +324,7 @@ fn generate_extern_fn(
                     move |__rt: __R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
                         #hold_state
                         ::std::boxed::Box::pin(async move {
+                            let __rt = &__rt;
                             #unpack
                             let __r = #awaited;
                             #returned
