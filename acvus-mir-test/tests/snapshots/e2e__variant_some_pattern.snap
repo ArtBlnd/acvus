@@ -3,39 +3,44 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "nope"
+  T0 = "nope"
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = take @opt
-     3 | L2:
-     4 |   r2 = test r1 is Some
-     5 |   jump_if r2 then L3 else L1
-     6 | L3:
-     7 |   r3 = unwrap r1
-     9 |   r4 = call #0(r3)
-    10 |   r5 = T0 + r4
-    11 |   jump L0(r5, r3)
-    12 | L1:
-    15 |   r6 = T0 + T1
-    16 |   jump L0(r6, r0)
-    17 | L0(r7: String, r8: Int):  ; merge_of L2
-    18 |   r9 = T0 + r7
-    19 |   return r9
+     1 |   r1 = fetch @opt
+     2 |   assign @opt = r1
+     3 |   r2 = ref &@opt
+     4 | L2:
+     5 |   r3 = test r2 is Some
+     6 |   jump_if r3 then L3 else L1
+     7 | L3:
+     8 |   r4 = ref &(*r2).payload
+     9 |   r5 = take (*r4)
+    10 |   r6 = call #0(r5)
+    11 |   r7 = string_concat [r6]
+    12 |   jump L0(r7, r4)
+    13 | L1:
+    15 |   r8 = string_concat [T0]
+    16 |   jump L0(r8, r0)
+    17 | L0(r9: String, r10: &Int):  ; merge_of L2
+    18 |   r11 = string_concat [r9]
+    19 |   r12 = take @opt
+    20 |   commit @opt = r12
+    21 |   return r11
 
-    ; r0 (v15) : Int
+    ; r0 (v16) : &Int
     ; r1 (@opt) : Option<Int>
-    ; r2 (v3) : Bool
-    ; r3 (v) : Int
-    ; r4 (to_string(...)) : String
-    ; r5 (v9) : String
-    ; r6 (v12) : String
-    ; r7 (v13) : String
-    ; r8 (v16) : Int
-    ; r9 (v14) : String
-    ; r10 (v11) : String
-    ; r11 (v6) : String
-    ; r12 (v1) : String
-    ; r13 (v) : Int
-    ; r14 (v10) : String
+    ; r2 (@opt.) : &Option<Int>
+    ; r3 (v4) : Bool
+    ; r4 (v) : &Int
+    ; r5 (v8) : Int
+    ; r6 (to_string(...)) : String
+    ; r7 (v10) : String
+    ; r8 (v12) : String
+    ; r9 (v13) : String
+    ; r10 (v17) : &Int
+    ; r11 (v14) : String
+    ; r12 (v15) : Option<Int>
+    ; r13 (v11) : String
+    ; r14 (@opt) : Option<Int>
+    ; r15 (v) : &Int

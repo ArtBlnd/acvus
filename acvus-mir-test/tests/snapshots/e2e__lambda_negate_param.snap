@@ -7,32 +7,42 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = take @items
-     3 |   r2 = call #0(r1)
-     4 |   r3 = call #1(r2)
-     5 |   r4 = closure L0 []
-     6 |   r5 = call #2(r3, r4)
-     7 |   r6 = call #3(r5)
-     9 |   r7 = T0 + T0
-    10 |   r8 = call #4(r6)
-    11 |   r9 = call #5(r8)
-    12 |   r10 = r7 + r9
-    13 |   return r10
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @items
+     5 |   r4 = list []
+     6 |   r5 = call #0(r4)
+     8 |   r6 = call #1(r3)
+     9 |   r7 = closure L0 []
+    10 |   r8 = call #2(r6, r7)
+    11 |   r9 = call #3(r8)
+    13 |   r10 = call #4(r9)
+    14 |   r11 = call #5(r10)
+    15 |   r12 = string_concat [T0, T0, T0, r11]
+    16 |   commit @items = r5
+    17 |   return r12
 
-    ; r0 (v15) : List<Int>
-    ; r1 (@items) : Array<Int, 3>
-    ; r2 (v3) : List<Int>
-    ; r3 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r4 (v5) : Fn(Int) -> Int with reads {@items}
-    ; r5 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r6 (collect(...)) : List<Int>
-    ; r7 (v10) : String
-    ; r8 (len(...)) : Int
-    ; r9 (to_string(...)) : String
-    ; r10 (v14) : String
-    ; r11 (x) : List<Int>
-    ; r12 (v9) : String
-    ; r13 (v1) : String
+    ; r0 (v21) : List<Int>
+    ; r1 (v22) : List<Int>
+    ; r2 (v23) : List<Int>
+    ; r3 (@items) : List<Int>
+    ; r4 (v6) : Array<Int, 0>
+    ; r5 (list(...)) : List<Int>
+    ; r6 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r7 (v11) : Fn(Int) -> Int
+    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r9 (collect(...)) : List<Int>
+    ; r10 (len(...)) : Int
+    ; r11 (to_string(...)) : String
+    ; r12 (v19) : String
+    ; r13 (@items) : List<Int>
+    ; r14 (items) : List<Int>
+    ; r15 (@items) : List<Int>
+    ; r16 (v20) : List<Int>
+    ; r17 (v15) : String
+    ; r18 (v5) : String
+    ; r19 (x) : List<Int>
+    ; r20 (v8) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

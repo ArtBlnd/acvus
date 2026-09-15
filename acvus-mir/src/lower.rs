@@ -59,6 +59,17 @@ struct Place {
     ty: Ty,
 }
 
+struct PlacePart {
+    path: Vec<PathSeg>,
+    ty: Ty,
+    pattern: Pattern,
+}
+
+struct RefPart {
+    reference: ValueId,
+    pattern: Pattern,
+}
+
 /// What a pattern is applied to (RFC-0024).
 #[derive(Clone)]
 enum PatSrc {
@@ -2342,66 +2353,17 @@ impl<'a> Lowerer<'a> {
         reference: ValueId,
         inner: &Ty,
         span: Span,
-    ) -> Vec<(ValueId, Pattern)> {
-        match pattern {
-            Pattern::List { head, tail, .. } => {
-                let (Ty::Array(elem, len)) = inner else {
-                    return Vec::new();
-                };
-                let len = len.get();
-                let elem = elem.as_ref().clone();
-                head.iter()
-                    .enumerate()
-                    .map(|(i, p)| (i, p))
-                    .chain(tail.iter().enumerate().map(|(i, p)| (len - tail.len() + i, p)))
-                    .map(|(i, p)| {
-                        let part = self.emit_part_ref(span, reference, PathSeg::Index(i), elem.clone());
-                        (part, p.clone())
-                    })
-                    .collect()
-            }
-            Pattern::Object { fields: pats, .. } => {
-                let Ty::Object(field_tys) = inner else {
-                    return Vec::new();
-                };
-                pats.iter()
-                    .map(|ObjectPatternField { key, pattern, .. }| {
-                        let ty = field_tys.get(key).cloned().unwrap_or(Ty::error());
-                        let part = self.emit_part_ref(span, reference, PathSeg::Field(*key), ty);
-                        (part, pattern.clone())
-                    })
-                    .collect()
-            }
-            Pattern::Tuple { elements, .. } => {
-                let Ty::Tuple(elem_tys) = inner else {
-                    return Vec::new();
-                };
-                elements
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, elem)| match elem {
-                        TuplePatternElem::Pattern(pat) => Some((i, pat)),
-                        _ => None,
-                    })
-                    .map(|(i, pat)| {
-                        let ty = elem_tys.get(i).cloned().unwrap_or(Ty::error());
-                        let part = self.emit_part_ref(span, reference, PathSeg::Index(i), ty);
-                        (part, pat.clone())
-                    })
-                    .collect()
-            }
-            Pattern::Variant { tag, payload, .. } => match payload {
-                Some(inner_pat) => {
-                    let ty = Self::payload_type(inner, *tag);
-                    let part = self.emit_part_ref(span, reference, PathSeg::Payload, ty);
-                    vec![(part, (**inner_pat).clone())]
+    ) -> Vec<RefPart> {
+        Self::pattern_parts_place(pattern, &[], inner)
+            .into_iter()
+            .map(|part| {
+                let seg = part.path.into_iter().next().expect("a part is one segment under the reference");
+                RefPart {
+                    reference: self.emit_part_ref(span, reference, seg, part.ty),
+                    pattern: part.pattern,
                 }
-                None => Vec::new(),
-            },
-            Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => {
-                Vec::new()
-            }
-        }
+            })
+            .collect()
     }
 
     fn lower_pattern_test_through(
@@ -2427,10 +2389,9 @@ impl<'a> Lowerer<'a> {
                 dst
             }
             Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
-                let parts = self.pattern_parts_through(pattern, reference, inner, span);
                 let mut all_ok = self.emit_const_bool(span, true);
-                for (part, sub) in parts {
-                    let ok = self.lower_pattern_test_value(&sub, part, span);
+                for part in self.pattern_parts_through(pattern, reference, inner, span) {
+                    let ok = self.lower_pattern_test_value(&part.pattern, part.reference, span);
                     all_ok = self.emit_and(span, all_ok, ok);
                 }
                 all_ok
@@ -2465,9 +2426,12 @@ impl<'a> Lowerer<'a> {
                     },
                 );
                 self.emit_label(span, check_inner_label);
-                let parts = self.pattern_parts_through(pattern, reference, inner, span);
-                let (part, sub) = parts.into_iter().next().expect("a payload pattern names one part");
-                let inner_ok = self.lower_pattern_test_value(&sub, part, span);
+                let part = self
+                    .pattern_parts_through(pattern, reference, inner, span)
+                    .into_iter()
+                    .next()
+                    .expect("a payload pattern names one part");
+                let inner_ok = self.lower_pattern_test_value(&part.pattern, part.reference, span);
                 self.emit_fail_merge(span, inner_ok, fail_label)
             }
         }
@@ -2504,9 +2468,8 @@ impl<'a> Lowerer<'a> {
             | Pattern::Object { .. }
             | Pattern::Tuple { .. }
             | Pattern::Variant { .. } => {
-                let parts = self.pattern_parts_through(pattern, reference, inner, span);
-                for (part, sub) in parts {
-                    self.lower_pattern_bind_value(&sub, part, span);
+                for part in self.pattern_parts_through(pattern, reference, inner, span) {
+                    self.lower_pattern_bind_value(&part.pattern, part.reference, span);
                 }
             }
         }
@@ -2559,55 +2522,63 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn pattern_parts_place(pattern: &Pattern, path: &[PathSeg], ty: &Ty) -> Vec<(Vec<PathSeg>, Ty, Pattern)> {
-        let sub = |seg: PathSeg| {
+    fn pattern_parts_place(pattern: &Pattern, path: &[PathSeg], ty: &Ty) -> Vec<PlacePart> {
+        let part = |seg: PathSeg, ty: Ty, pattern: &Pattern| {
             let mut p = path.to_vec();
             p.push(seg);
-            p
+            PlacePart {
+                path: p,
+                ty,
+                pattern: pattern.clone(),
+            }
         };
         match pattern {
             Pattern::List { head, tail, .. } => {
-                let Ty::Array(elem, len) = ty else {
-                    return Vec::new();
+                let (elem, len) = match ty {
+                    Ty::Array(elem, len) => (elem.as_ref().clone(), Some(len.get())),
+                    _ => (Ty::error(), None),
                 };
-                let len = len.get();
-                head.iter()
-                    .enumerate()
-                    .map(|(i, p)| (i, p))
-                    .chain(tail.iter().enumerate().map(|(i, p)| (len - tail.len() + i, p)))
-                    .map(|(i, p)| (sub(PathSeg::Index(i)), elem.as_ref().clone(), p.clone()))
-                    .collect()
-            }
-            Pattern::Object { fields: pats, .. } => {
-                let Ty::Object(field_tys) = ty else {
-                    return Vec::new();
-                };
-                pats.iter()
-                    .map(|ObjectPatternField { key, pattern, .. }| {
-                        let fty = field_tys.get(key).cloned().unwrap_or(Ty::error());
-                        (sub(PathSeg::Field(*key)), fty, pattern.clone())
-                    })
-                    .collect()
-            }
-            Pattern::Tuple { elements, .. } => {
-                let Ty::Tuple(elem_tys) = ty else {
-                    return Vec::new();
-                };
-                elements
+                let head_parts = head
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, elem)| match elem {
-                        TuplePatternElem::Pattern(pat) => Some((i, pat)),
-                        _ => None,
-                    })
-                    .map(|(i, pat)| {
-                        let ety = elem_tys.get(i).cloned().unwrap_or(Ty::error());
-                        (sub(PathSeg::Index(i)), ety, pat.clone())
-                    })
+                    .map(|(i, p)| part(PathSeg::Index(i), elem.clone(), p));
+                let tail_parts = len.into_iter().flat_map(|len| {
+                    tail.iter()
+                        .enumerate()
+                        .map(move |(i, p)| (len - tail.len() + i, p))
+                        .collect::<Vec<_>>()
+                });
+                head_parts
+                    .chain(tail_parts.map(|(i, p)| part(PathSeg::Index(i), elem.clone(), p)))
                     .collect()
             }
+            Pattern::Object { fields: pats, .. } => pats
+                .iter()
+                .map(|ObjectPatternField { key, pattern, .. }| {
+                    let fty = match ty {
+                        Ty::Object(field_tys) => field_tys.get(key).cloned().unwrap_or(Ty::error()),
+                        _ => Ty::error(),
+                    };
+                    part(PathSeg::Field(*key), fty, pattern)
+                })
+                .collect(),
+            Pattern::Tuple { elements, .. } => elements
+                .iter()
+                .enumerate()
+                .filter_map(|(i, elem)| match elem {
+                    TuplePatternElem::Pattern(pat) => Some((i, pat)),
+                    _ => None,
+                })
+                .map(|(i, pat)| {
+                    let ety = match ty {
+                        Ty::Tuple(elem_tys) => elem_tys.get(i).cloned().unwrap_or(Ty::error()),
+                        _ => Ty::error(),
+                    };
+                    part(PathSeg::Index(i), ety, pat)
+                })
+                .collect(),
             Pattern::Variant { tag, payload, .. } => match payload {
-                Some(inner) => vec![(sub(PathSeg::Payload), Self::payload_type(ty, *tag), (**inner).clone())],
+                Some(inner) => vec![part(PathSeg::Payload, Self::payload_type(ty, *tag), inner)],
                 None => Vec::new(),
             },
             Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => Vec::new(),
@@ -2640,8 +2611,8 @@ impl<'a> Lowerer<'a> {
             }
             Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
                 let mut all_ok = self.emit_const_bool(span, true);
-                for (sub_path, sub_ty, sub) in Self::pattern_parts_place(pattern, path, ty) {
-                    let ok = self.lower_pattern_test_place(&sub, target, &sub_path, &sub_ty, span);
+                for part in Self::pattern_parts_place(pattern, path, ty) {
+                    let ok = self.lower_pattern_test_place(&part.pattern, target, &part.path, &part.ty, span);
                     all_ok = self.emit_and(span, all_ok, ok);
                 }
                 all_ok
@@ -2677,11 +2648,11 @@ impl<'a> Lowerer<'a> {
                     },
                 );
                 self.emit_label(span, check_inner_label);
-                let (sub_path, sub_ty, sub) = Self::pattern_parts_place(pattern, path, ty)
+                let part = Self::pattern_parts_place(pattern, path, ty)
                     .into_iter()
                     .next()
                     .expect("a payload pattern names one part");
-                let inner_ok = self.lower_pattern_test_place(&sub, target, &sub_path, &sub_ty, span);
+                let inner_ok = self.lower_pattern_test_place(&part.pattern, target, &part.path, &part.ty, span);
                 self.emit_fail_merge(span, inner_ok, fail_label)
             }
         }
@@ -2723,8 +2694,8 @@ impl<'a> Lowerer<'a> {
             | Pattern::Object { .. }
             | Pattern::Tuple { .. }
             | Pattern::Variant { .. } => {
-                for (sub_path, sub_ty, sub) in Self::pattern_parts_place(pattern, path, ty) {
-                    self.lower_pattern_bind_place(&sub, target, &sub_path, &sub_ty, span);
+                for part in Self::pattern_parts_place(pattern, path, ty) {
+                    self.lower_pattern_bind_place(&part.pattern, target, &part.path, &part.ty, span);
                 }
             }
         }

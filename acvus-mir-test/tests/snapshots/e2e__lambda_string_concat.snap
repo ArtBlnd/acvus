@@ -9,37 +9,51 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = take @names
-     3 |   r2 = call #0(r1)
-     4 |   r3 = call #1(r2)
-     5 |   r4 = closure L0 []
-     6 |   r5 = call #2(r3, r4)
-     8 |   r6 = T0 + T0
-    10 |   r7 = call #3(r5, T1)
-    11 |   r8 = r6 + r7
-    12 |   return r8
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @names
+     5 |   r4 = list []
+     6 |   r5 = call #0(r4)
+     8 |   r6 = call #1(r3)
+     9 |   r7 = closure L0 []
+    10 |   r8 = call #2(r6, r7)
+    13 |   r9 = call #3(r8, T1)
+    14 |   r10 = string_concat [T0, T0, T0, r9]
+    15 |   commit @names = r5
+    16 |   return r10
 
-    ; r0 (v14) : Iterator<String, Pure, #IdentityId(0)>
-    ; r1 (@names) : Array<String, 3>
-    ; r2 (v3) : List<String>
-    ; r3 (iter(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r4 (v5) : Fn(String) -> String with reads {@names}
-    ; r5 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r6 (v9) : String
-    ; r7 (join(...)) : String
-    ; r8 (v13) : String
-    ; r9 (v11) : String
-    ; r10 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r11 (v1) : String
-    ; r12 (v8) : String
+    ; r0 (v20) : List<String>
+    ; r1 (v21) : List<String>
+    ; r2 (v22) : Iterator<String, Pure, #IdentityId(0)>
+    ; r3 (@names) : List<String>
+    ; r4 (v6) : Array<String, 0>
+    ; r5 (list(...)) : List<String>
+    ; r6 (iter(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r7 (v11) : Fn(String) -> String
+    ; r8 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r9 (join(...)) : String
+    ; r10 (v18) : String
+    ; r11 (@names) : List<String>
+    ; r12 (v14) : String
+    ; r13 (names) : List<String>
+    ; r14 (@names) : List<String>
+    ; r15 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r16 (v5) : String
+    ; r17 (v16) : String
+    ; r18 (v8) : String
+    ; r19 (v19) : List<String>
 
 === closure L0 (ValueId(0)) ===
-     0 |   r0 = undef
-     2 |   r1 = r2 + T2
-     3 |   return r1
+     0 |   assign n = r0
+     1 |   r1 = ref &n
+     3 |   assign v5 = T2
+     4 |   r2 = ref &v5
+     5 |   r3 = string_concat [r1, r2]
+     6 |   return r3
 
-    ; r0 (v6) : String
-    ; r1 (v5) : String
-    ; r2 (v1) : String
-    ; r3 (n) : String
-    ; r4 (v4) : String
+    ; r0 (v1) : String
+    ; r1 (n.) : &String
+    ; r2 (var_5.) : &String
+    ; r3 (v7) : String
+    ; r4 (v5) : String
+    ; r5 (v4) : String

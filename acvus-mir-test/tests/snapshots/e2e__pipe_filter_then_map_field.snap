@@ -8,63 +8,61 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = ref @users
-     3 |   r2 = load r1
-     4 |   r3 = call #0(r2)
-     5 |   r4 = call #1(r3)
-     6 |   r5 = closure L0 []
-     7 |   r6 = call #2(r4, r5)
-     8 |   r7 = closure L1 []
-     9 |   r8 = call #3(r6, r7)
-    11 |   r9 = T0 + T0
-    13 |   r10 = call #4(r8, T1)
-    14 |   r11 = r9 + r10
-    15 |   return r11
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @users
+     5 |   r4 = list []
+     6 |   r5 = call #0(r4)
+     8 |   r6 = call #1(r3)
+     9 |   r7 = closure L0 []
+    10 |   r8 = call #2(r6, r7)
+    11 |   r9 = closure L1 []
+    12 |   r10 = call #3(r8, r9)
+    15 |   r11 = call #4(r10, T1)
+    16 |   r12 = string_concat [T0, T0, T0, r11]
+    17 |   commit @users = r5
+    18 |   return r12
 
-    ; r0 (v19) : Iterator<String, Pure, #IdentityId(0)>
-    ; r1 (@users) : Ref<Array<{age: Int, name: String}, 3>>
-    ; r2 (v3) : Array<{age: Int, name: String}, 3>
-    ; r3 (v4) : List<{age: Int, name: String}>
-    ; r4 (iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
-    ; r5 (v6) : Fn({age: Int, name: String}) -> Bool with reads {@users}
-    ; r6 (filter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
-    ; r7 (v8) : Fn({age: Int, name: String}) -> String with reads {@users}
-    ; r8 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r9 (v13) : String
-    ; r10 (join(...)) : String
-    ; r11 (v18) : String
-    ; r12 (v11) : Ref<Iterator<String, Pure, #IdentityId(0)>>
-    ; r13 (v14) : Ref<Iterator<String, Pure, #IdentityId(0)>>
-    ; r14 (v1) : String
-    ; r15 (v12) : String
-    ; r16 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r17 (v16) : String
+    ; r0 (v22) : List<{age: Int, name: String}>
+    ; r1 (v23) : List<{age: Int, name: String}>
+    ; r2 (v24) : Iterator<String, Pure, #IdentityId(0)>
+    ; r3 (@users) : List<{age: Int, name: String}>
+    ; r4 (v6) : Array<{age: Int, name: String}, 0>
+    ; r5 (list(...)) : List<{age: Int, name: String}>
+    ; r6 (iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
+    ; r7 (v11) : Fn(&{age: Int, name: String}) -> Bool
+    ; r8 (filter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
+    ; r9 (v13) : Fn({age: Int, name: String}) -> String
+    ; r10 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r11 (join(...)) : String
+    ; r12 (v20) : String
+    ; r13 (@users) : List<{age: Int, name: String}>
+    ; r14 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r15 (users) : List<{age: Int, name: String}>
+    ; r16 (v18) : String
+    ; r17 (v21) : List<{age: Int, name: String}>
+    ; r18 (v5) : String
+    ; r19 (@users) : List<{age: Int, name: String}>
+    ; r20 (v16) : String
+    ; r21 (v8) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef
-     1 |   r1 = r2.age
+     1 |   r1 = take (*r2).age
      3 |   r3 = r1 > 18 (r4)
      4 |   return r3
 
-    ; r0 (v10) : {age: Int, name: String}
-    ; r1 (v5) : Int
-    ; r2 (v1) : {age: Int, name: String}
-    ; r3 (v7) : Bool
-    ; r4 (v6) : Int
-    ; r5 (v3) : Ref<{age: Int, name: String}>
-    ; r6 (v9) : {age: Int, name: String}
-    ; r7 (v8) : Ref<{age: Int, name: String}>
-    ; r8 (u.age) : Ref<Int>
+    ; r0 (v7) : &{age: Int, name: String}
+    ; r1 ((*r3).age) : Int
+    ; r2 (v1) : &{age: Int, name: String}
+    ; r3 (v6) : Bool
+    ; r4 (v5) : Int
+    ; r5 (v3) : &{age: Int, name: String}
 
 === closure L1 (ValueId(0)) ===
-     0 |   r0 = undef
-     1 |   r1 = r2.name
+     0 |   assign u = r0
+     1 |   r1 = take u.name
      2 |   return r1
 
-    ; r0 (v8) : {age: Int, name: String}
-    ; r1 (v5) : String
-    ; r2 (v1) : {age: Int, name: String}
-    ; r3 (v3) : Ref<{age: Int, name: String}>
-    ; r4 (v7) : {age: Int, name: String}
-    ; r5 (v6) : Ref<{age: Int, name: String}>
-    ; r6 (u.name) : Ref<String>
+    ; r0 (v1) : {age: Int, name: String}
+    ; r1 (u.name) : String

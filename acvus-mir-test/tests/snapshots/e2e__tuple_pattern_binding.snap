@@ -8,53 +8,43 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = undef
-     3 |   r3 = fetch @pair
+     2 |   r2 = fetch @pair
+     3 |   assign @pair = r2
      4 | L2:
-     6 |   r4 = r3.0
-     8 |   r5 = true (r6) && true (r7)
-     9 |   r8 = r3.1
-    11 |   r9 = r5 && true (r10)
-    12 |   jump_if r9 then L3 else L1
-    13 | L3:
-    14 |   r11 = r3.0
-    15 |   r12 = r3.1
-    16 |   r13 = string_clone r11
-    17 |   r14 = string_concat [r13]
-    18 |   r15 = string_clone r14
-    19 |   jump L0(r15, r11, r12)
-    20 | L1:
-    22 |   r16 = string_clone T0
-    23 |   jump L0(r16, r1, r2)
-    24 | L0(r17: String, r18: String, r19: Int):  ; merge_of L2
-    25 |   r20 = string_concat [r17]
-    26 |   commit @pair = r3
-    27 |   return r20
+     7 |   r3 = true (r4) && true (r5)
+     9 |   r6 = r3 && true (r7)
+    10 |   jump_if r6 then L3 else L1
+    11 | L3:
+    12 |   r8 = take @pair[0]
+    13 |   r9 = take @pair[1]
+    14 |   r10 = string_clone r8
+    15 |   r11 = string_concat [r10]
+    16 |   jump L0(r11, r8, r9)
+    17 | L1:
+    19 |   jump L0(T0, r0, r1)
+    20 | L0(r12: String, r13: String, r14: Int):  ; merge_of L2
+    21 |   r15 = string_concat [r12]
+    22 |   r16 = take @pair
+    23 |   commit @pair = r16
+    24 |   return r15
 
-    ; r0 (v21) : (String, Int)
-    ; r1 (v22) : String
-    ; r2 (v23) : Int
-    ; r3 (@pair) : (String, Int)
-    ; r4 (v5) : String
-    ; r5 (v7) : Bool
-    ; r6 (v4) : Bool
+    ; r0 (v18) : String
+    ; r1 (v19) : Int
+    ; r2 (@pair) : (String, Int)
+    ; r3 (v5) : Bool
+    ; r4 (v3) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (v7) : Bool
     ; r7 (v6) : Bool
-    ; r8 (v8) : Int
-    ; r9 (v10) : Bool
-    ; r10 (v9) : Bool
-    ; r11 (name) : String
-    ; r12 (age) : Int
-    ; r13 (v27) : String
-    ; r14 (v16) : String
-    ; r15 (v28) : String
-    ; r16 (v29) : String
-    ; r17 (v18) : String
-    ; r18 (v25) : String
-    ; r19 (v26) : Int
-    ; r20 (v19) : String
-    ; r21 (@pair) : (String, Int)
-    ; r22 (v17) : String
-    ; r23 (v20) : (String, Int)
-    ; r24 (@pair) : (String, Int)
-    ; r25 (name) : String
-    ; r26 (v24) : (String, Int)
+    ; r8 (name) : String
+    ; r9 (age) : Int
+    ; r10 (v22) : String
+    ; r11 (v13) : String
+    ; r12 (v15) : String
+    ; r13 (v20) : String
+    ; r14 (v21) : Int
+    ; r15 (v16) : String
+    ; r16 (v17) : (String, Int)
+    ; r17 (v14) : String
+    ; r18 (@pair) : (String, Int)
+    ; r19 (name) : String

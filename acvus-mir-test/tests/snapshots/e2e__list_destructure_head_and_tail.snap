@@ -8,55 +8,45 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = undef
-     3 |   r3 = fetch @items
+     2 |   r2 = fetch @items
+     3 |   assign @items = r2
      4 | L2:
-     6 |   r4 = r3[0]
-     8 |   r5 = true (r6) && true (r7)
-     9 |   r8 = r3[2]
-    11 |   r9 = r5 && true (r10)
-    12 |   jump_if r9 then L3 else L1
-    13 | L3:
-    14 |   r11 = r3[0]
-    15 |   r12 = r3[2]
-    16 |   r13 = call #0(r11)
-    17 |   r14 = string_concat [r13]
-    18 |   r15 = string_clone r14
-    19 |   jump L0(r15, r11, r12)
-    20 | L1:
-    22 |   r16 = string_concat [T0]
-    23 |   r17 = string_clone r16
-    24 |   jump L0(r17, r1, r2)
-    25 | L0(r18: String, r19: Int, r20: Int):  ; merge_of L2
-    26 |   r21 = string_concat [r18]
-    27 |   commit @items = r3
-    28 |   return r21
+     7 |   r3 = true (r4) && true (r5)
+     9 |   r6 = r3 && true (r7)
+    10 |   jump_if r6 then L3 else L1
+    11 | L3:
+    12 |   r8 = take @items[0]
+    13 |   r9 = take @items[2]
+    14 |   r10 = call #0(r8)
+    15 |   r11 = string_concat [r10]
+    16 |   jump L0(r11, r8, r9)
+    17 | L1:
+    19 |   r12 = string_concat [T0]
+    20 |   jump L0(r12, r0, r1)
+    21 | L0(r13: String, r14: Int, r15: Int):  ; merge_of L2
+    22 |   r16 = string_concat [r13]
+    23 |   r17 = take @items
+    24 |   commit @items = r17
+    25 |   return r16
 
-    ; r0 (v23) : Array<Int, 3>
-    ; r1 (v24) : Int
-    ; r2 (v25) : Int
-    ; r3 (@items) : Array<Int, 3>
-    ; r4 (v5) : Int
-    ; r5 (v7) : Bool
-    ; r6 (v4) : Bool
+    ; r0 (v20) : Int
+    ; r1 (v21) : Int
+    ; r2 (@items) : Array<Int, 3>
+    ; r3 (v5) : Bool
+    ; r4 (v3) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (v7) : Bool
     ; r7 (v6) : Bool
-    ; r8 (v8) : Int
-    ; r9 (v10) : Bool
-    ; r10 (v9) : Bool
-    ; r11 (first) : Int
-    ; r12 (last) : Int
-    ; r13 (to_string(...)) : String
-    ; r14 (v17) : String
-    ; r15 (v29) : String
-    ; r16 (v19) : String
-    ; r17 (v30) : String
-    ; r18 (v20) : String
-    ; r19 (v27) : Int
-    ; r20 (v28) : Int
-    ; r21 (v21) : String
-    ; r22 (v22) : Array<Int, 3>
-    ; r23 (@items) : Array<Int, 3>
-    ; r24 (v18) : String
-    ; r25 (@items) : Array<Int, 3>
-    ; r26 (first) : Int
-    ; r27 (v26) : Array<Int, 3>
+    ; r8 (first) : Int
+    ; r9 (last) : Int
+    ; r10 (to_string(...)) : String
+    ; r11 (v14) : String
+    ; r12 (v16) : String
+    ; r13 (v17) : String
+    ; r14 (v22) : Int
+    ; r15 (v23) : Int
+    ; r16 (v18) : String
+    ; r17 (v19) : Array<Int, 3>
+    ; r18 (first) : Int
+    ; r19 (@items) : Array<Int, 3>
+    ; r20 (v15) : String

@@ -75,6 +75,7 @@ pub enum IdentityBound {
 pub struct SolverSnapshot {
     ty_bounds: Vec<TypeBound>,
     effect_vars: Vec<EffectBound>,
+    effect_below: Vec<(EffectVarId, EffectVarId)>,
     len_vars: Vec<LenBound>,
     identity_vars: Vec<IdentityBound>,
 }
@@ -104,6 +105,8 @@ impl Sources {
 pub struct Solver<'src> {
     pub(crate) ty_bounds: Vec<TypeBound>,
     pub(crate) effect_vars: Vec<EffectBound>,
+    /// `a <= b` (RFC-0017).
+    effect_below: Vec<(EffectVarId, EffectVarId)>,
     pub(crate) len_vars: Vec<LenBound>,
     pub(crate) identity_vars: Vec<IdentityBound>,
     /// Mints a new source for every identity a declaration introduces;
@@ -116,6 +119,7 @@ impl<'src> Solver<'src> {
         Self {
             ty_bounds: Vec::new(),
             effect_vars: Vec::new(),
+            effect_below: Vec::new(),
             len_vars: Vec::new(),
             identity_vars: Vec::new(),
             sources,
@@ -323,6 +327,28 @@ impl<'src> Solver<'src> {
     }
 
     fn range_of(&self, root: EffectVarId) -> (Effect, Effect) {
+        let (own_lower, upper) = self.own_range(root);
+        let mut lower = own_lower;
+        let mut seen: Vec<EffectVarId> = vec![root];
+        let mut stack: Vec<EffectVarId> = vec![root];
+        while let Some(above) = stack.pop() {
+            for (b, a) in &self.effect_below {
+                if self.find_effect_root(*a) != above {
+                    continue;
+                }
+                let b = self.find_effect_root(*b);
+                if seen.contains(&b) {
+                    continue;
+                }
+                seen.push(b);
+                stack.push(b);
+                lower = lower.join(&self.own_range(b).0);
+            }
+        }
+        (lower, upper)
+    }
+
+    fn own_range(&self, root: EffectVarId) -> (Effect, Effect) {
         match &self.effect_vars[root.0 as usize] {
             EffectBound::Range { lower, upper } => (lower.clone(), upper.clone()),
             EffectBound::Bound(e) => (e.clone(), e.clone()),
@@ -441,8 +467,30 @@ impl<'src> Solver<'src> {
                 Polarity::Covariant => self.raise_lower(vb, ea),
                 Polarity::Contravariant => self.lower_upper(vb, ea),
             },
-            (EffectTerm::Var(va), EffectTerm::Var(vb)) => self.forward_effect(va, vb),
+            (EffectTerm::Var(va), EffectTerm::Var(vb)) => match pol {
+                Polarity::Invariant => self.forward_effect(va, vb),
+                Polarity::Covariant => self.effect_at_least(va, vb),
+                Polarity::Contravariant => self.effect_at_least(vb, va),
+            },
         }
+    }
+
+    fn effect_at_least(&mut self, below: EffectVarId, above: EffectVarId) -> Result<(), EffectConflict> {
+        let below = self.find_effect_root(below);
+        let above = self.find_effect_root(above);
+        if below == above {
+            return Ok(());
+        }
+        let (lower, _) = self.range_of(below);
+        let (_, upper) = self.range_of(above);
+        if !lower.at_most(&upper) {
+            return Err(EffectConflict {
+                required: lower,
+                allowed: upper,
+            });
+        }
+        self.effect_below.push((below, above));
+        Ok(())
     }
 
     pub fn lub_effect(
@@ -480,6 +528,7 @@ impl<'src> Solver<'src> {
         SolverSnapshot {
             ty_bounds: self.ty_bounds.clone(),
             effect_vars: self.effect_vars.clone(),
+            effect_below: self.effect_below.clone(),
             len_vars: self.len_vars.clone(),
             identity_vars: self.identity_vars.clone(),
         }
@@ -489,6 +538,7 @@ impl<'src> Solver<'src> {
     pub fn rollback(&mut self, snap: SolverSnapshot) {
         self.ty_bounds = snap.ty_bounds;
         self.effect_vars = snap.effect_vars;
+        self.effect_below = snap.effect_below;
         self.len_vars = snap.len_vars;
         self.identity_vars = snap.identity_vars;
     }

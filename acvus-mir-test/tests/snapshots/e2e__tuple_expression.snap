@@ -23,17 +23,15 @@ expression: ir
     20 |   r17 = call #0(r15)
     21 |   r18 = string_clone r16
     22 |   r19 = string_concat [r17, r18]
-    23 |   r20 = string_clone r19
-    24 |   jump L0(r20, r15, r16)
-    25 | L1:
-    26 |   r21 = string_concat []
-    27 |   r22 = string_clone r21
-    28 |   jump L0(r22, r2, r3)
-    29 | L0(r23: String, r24: Int, r25: String):  ; merge_of L2
-    30 |   r26 = string_concat [r23]
-    31 |   commit @a = r4
-    32 |   commit @b = r5
-    33 |   return r26
+    23 |   jump L0(r19, r15, r16)
+    24 | L1:
+    25 |   r20 = string_concat []
+    26 |   jump L0(r20, r2, r3)
+    27 | L0(r21: String, r22: Int, r23: String):  ; merge_of L2
+    28 |   r24 = string_concat [r21]
+    29 |   commit @a = r4
+    30 |   commit @b = r5
+    31 |   return r24
 
     ; r0 (v28) : Int
     ; r1 (v29) : String
@@ -55,20 +53,18 @@ expression: ir
     ; r17 (to_string(...)) : String
     ; r18 (v37) : String
     ; r19 (v22) : String
-    ; r20 (v38) : String
-    ; r21 (v23) : String
-    ; r22 (v39) : String
-    ; r23 (v24) : String
-    ; r24 (v34) : Int
-    ; r25 (v35) : String
-    ; r26 (v25) : String
-    ; r27 (@b) : String
-    ; r28 (@b) : String
-    ; r29 (v33) : String
-    ; r30 (b) : String
+    ; r20 (v23) : String
+    ; r21 (v24) : String
+    ; r22 (v34) : Int
+    ; r23 (v35) : String
+    ; r24 (v25) : String
+    ; r25 (@b) : String
+    ; r26 (@b) : String
+    ; r27 (v33) : String
+    ; r28 (b) : String
+    ; r29 (@a) : Int
+    ; r30 (v27) : String
     ; r31 (@a) : Int
-    ; r32 (v27) : String
-    ; r33 (@a) : Int
-    ; r34 (v26) : Int
-    ; r35 (v32) : Int
-    ; r36 (a) : Int
+    ; r32 (v26) : Int
+    ; r33 (v32) : Int
+    ; r34 (a) : Int

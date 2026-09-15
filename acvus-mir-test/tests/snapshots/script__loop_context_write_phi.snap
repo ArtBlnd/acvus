@@ -14,31 +14,23 @@ expression: ir
      8 |   jump L0
      9 | L0:
     10 |   r5 = ref &mut it
-    11 |   r6 = take @items
-    12 |   commit @items = r6
-    13 |   r7 = take @count
-    14 |   commit @count = r7
-    15 |   r8 = call #2(r5)
-    16 |   r9 = fetch @items
-    17 |   assign @items = r9
-    18 |   r10 = fetch @count
-    19 |   assign @count = r10
-    20 |   r11 = test r8 is Some
-    21 |   jump_if r11 then L1 else L2
-    22 | L1:
-    23 |   r12 = unwrap r8
-    24 |   assign x = r12
-    25 |   r13 = take @count
-    27 |   r14 = r13 + 1 (r15)
-    28 |   assign @count = r14
-    29 |   jump L0
-    30 | L2:
-    31 |   r16 = take @count
-    32 |   r17 = take @items
-    33 |   commit @items = r17
-    34 |   r18 = take @count
-    35 |   commit @count = r18
-    36 |   return r16
+    11 |   r6 = call #2(r5)
+    12 |   r7 = test r6 is Some
+    13 |   jump_if r7 then L1 else L2
+    14 | L1:
+    15 |   r8 = unwrap r6
+    16 |   assign x = r8
+    17 |   r9 = take @count
+    19 |   r10 = r9 + 1 (r11)
+    20 |   assign @count = r10
+    21 |   jump L0
+    22 | L2:
+    23 |   r12 = take @count
+    24 |   r13 = take @items
+    25 |   commit @items = r13
+    26 |   r14 = take @count
+    27 |   commit @count = r14
+    28 |   return r12
 
     ; r0 (@items) : Array<Int, 3>
     ; r1 (@count) : Int
@@ -46,18 +38,14 @@ expression: ir
     ; r3 (v6) : List<Int>
     ; r4 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r5 (it.) : &mut Iterator<Int, Pure, #IdentityId(0)>
-    ; r6 (v11) : Array<Int, 3>
-    ; r7 (v12) : Int
-    ; r8 (next(...)) : Option<Int>
-    ; r9 (@items) : Array<Int, 3>
-    ; r10 (@count) : Int
-    ; r11 (v15) : Bool
-    ; r12 (x) : Int
-    ; r13 (@count) : Int
-    ; r14 (v20) : Int
-    ; r15 (v19) : Int
-    ; r16 (@count) : Int
-    ; r17 (v22) : Array<Int, 3>
-    ; r18 (v23) : Int
-    ; r19 (@count) : Int
-    ; r20 (@items) : Array<Int, 3>
+    ; r6 (next(...)) : Option<Int>
+    ; r7 (v11) : Bool
+    ; r8 (x) : Int
+    ; r9 (@count) : Int
+    ; r10 (v16) : Int
+    ; r11 (v15) : Int
+    ; r12 (@count) : Int
+    ; r13 (v18) : Array<Int, 3>
+    ; r14 (v19) : Int
+    ; r15 (@count) : Int
+    ; r16 (@items) : Array<Int, 3>

@@ -3,14 +3,38 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = take @c
-     1 |   r1 = take @b.a
+     0 |   r0 = undef
+     1 |   r1 = fetch @a
      2 |   assign @a = r1
-     3 |   r2 = take @a.val
-     4 |   assign @c = r2
-     5 |   return r2
+     3 |   r2 = fetch @b
+     4 |   assign @b = r2
+     5 |   r3 = fetch @c
+     6 |   r4 = take @b.a
+     7 |   assign @a = r4
+     9 |   r6 = object {val: 0 (r5)}
+    10 |   r7 = object {a: r6}
+    11 |   assign @b = r7
+    12 |   r8 = take @a.val
+    13 |   r9 = take @a
+    14 |   commit @a = r9
+    15 |   r10 = take @b
+    16 |   commit @b = r10
+    17 |   commit @c = r8
+    18 |   return r8
 
-    ; r0 (v4) : Int
-    ; r1 (@b.a) : {val: Int}
-    ; r2 (@a.val) : Int
+    ; r0 (v16) : Int
+    ; r1 (@a) : {val: Int}
+    ; r2 (@b) : {a: {val: Int}}
     ; r3 (@c) : Int
+    ; r4 (@b.a) : {val: Int}
+    ; r5 (v8) : Int
+    ; r6 (v9) : {val: Int}
+    ; r7 (v10) : {a: {val: Int}}
+    ; r8 (@a.val) : Int
+    ; r9 (v13) : {val: Int}
+    ; r10 (v14) : {a: {val: Int}}
+    ; r11 (@b) : {a: {val: Int}}
+    ; r12 (@a) : {val: Int}
+    ; r13 (@c) : Int
+    ; r14 (v15) : Int
+    ; r15 (@c) : Int

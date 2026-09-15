@@ -7,80 +7,82 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = ref @items
-     3 |   r2 = load r1
-     4 |   r3 = call #0(r2)
-     5 |   r4 = call #1(r3)
-     6 |   r5 = closure L0 []
-     7 |   r6 = call #2(r4, r5)
-     8 |   r7 = closure L1 []
-     9 |   r8 = call #3(r6, r7)
-    10 |   r9 = closure L2 []
-    11 |   r10 = call #3(r8, r9)
-    12 |   r11 = call #4(r10)
-    14 |   r12 = T0 + T0
-    15 |   r13 = call #5(r11)
-    16 |   r14 = call #6(r13)
-    17 |   r15 = r12 + r14
-    18 |   return r15
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @items
+     5 |   r4 = list []
+     6 |   r5 = call #0(r4)
+     8 |   r6 = call #1(r3)
+     9 |   r7 = closure L0 []
+    10 |   r8 = call #2(r6, r7)
+    11 |   r9 = closure L1 []
+    12 |   r10 = call #3(r8, r9)
+    13 |   r11 = closure L2 []
+    14 |   r12 = call #3(r10, r11)
+    15 |   r13 = call #4(r12)
+    17 |   r14 = call #5(r13)
+    18 |   r15 = call #6(r14)
+    19 |   r16 = string_concat [T0, T0, T0, r15]
+    20 |   commit @items = r5
+    21 |   return r16
 
-    ; r0 (v22) : List<Int>
-    ; r1 (@items) : Ref<Array<Int, 3>>
-    ; r2 (v3) : Array<Int, 3>
-    ; r3 (v4) : List<Int>
-    ; r4 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r5 (v6) : Fn(Int) -> Bool with reads {@items}
-    ; r6 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r7 (v8) : Fn(Int) -> Int with reads {@items}
-    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r9 (v10) : Fn(Int) -> Int with reads {@items}
+    ; r0 (v25) : List<Int>
+    ; r1 (v26) : List<Int>
+    ; r2 (v27) : List<Int>
+    ; r3 (@items) : List<Int>
+    ; r4 (v6) : Array<Int, 0>
+    ; r5 (list(...)) : List<Int>
+    ; r6 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r7 (v11) : Fn(&Int) -> Bool
+    ; r8 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r9 (v13) : Fn(Int) -> Int
     ; r10 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r11 (collect(...)) : List<Int>
-    ; r12 (v16) : String
-    ; r13 (len(...)) : Int
-    ; r14 (to_string(...)) : String
-    ; r15 (v21) : String
-    ; r16 (v14) : Ref<List<Int>>
-    ; r17 (v17) : Ref<List<Int>>
-    ; r18 (v15) : String
-    ; r19 (x) : List<Int>
-    ; r20 (v1) : String
+    ; r11 (v15) : Fn(Int) -> Int
+    ; r12 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
+    ; r13 (collect(...)) : List<Int>
+    ; r14 (len(...)) : Int
+    ; r15 (to_string(...)) : String
+    ; r16 (v23) : String
+    ; r17 (@items) : List<Int>
+    ; r18 (items) : List<Int>
+    ; r19 (v24) : List<Int>
+    ; r20 (x) : List<Int>
+    ; r21 (@items) : List<Int>
+    ; r22 (v5) : String
+    ; r23 (v8) : String
+    ; r24 (v19) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef
-     2 |   r1 = r2 != 0 (r3)
-     3 |   return r1
+     1 |   r1 = take (*r2)
+     3 |   r3 = r1 != 0 (r4)
+     4 |   return r3
 
-    ; r0 (v8) : Int
-    ; r1 (v7) : Bool
-    ; r2 (v1) : Int
-    ; r3 (v6) : Int
-    ; r4 (v3) : Ref<Int>
-    ; r5 (i) : Int
-    ; r6 (v4) : Ref<Int>
+    ; r0 (v7) : &Int
+    ; r1 (v4) : Int
+    ; r2 (v1) : &Int
+    ; r3 (v6) : Bool
+    ; r4 (v5) : Int
+    ; r5 (i) : &Int
 
 === closure L1 (ValueId(0)) ===
      0 |   r0 = undef
      2 |   r1 = r2 + 1 (r3)
      3 |   return r1
 
-    ; r0 (v8) : Int
-    ; r1 (v7) : Int
+    ; r0 (v6) : Int
+    ; r1 (v5) : Int
     ; r2 (v1) : Int
-    ; r3 (v6) : Int
-    ; r4 (v3) : Ref<Int>
-    ; r5 (i) : Int
-    ; r6 (v4) : Ref<Int>
+    ; r3 (v4) : Int
+    ; r4 (i) : Int
 
 === closure L2 (ValueId(0)) ===
      0 |   r0 = undef
      2 |   r1 = r2 * 2 (r3)
      3 |   return r1
 
-    ; r0 (v8) : Int
-    ; r1 (v7) : Int
+    ; r0 (v6) : Int
+    ; r1 (v5) : Int
     ; r2 (v1) : Int
-    ; r3 (v6) : Int
-    ; r4 (v3) : Ref<Int>
-    ; r5 (i) : Int
-    ; r6 (v4) : Ref<Int>
+    ; r3 (v4) : Int
+    ; r4 (i) : Int

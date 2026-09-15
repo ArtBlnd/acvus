@@ -7,28 +7,40 @@ expression: ir
   T1 = ","
 
 === main ===
-     1 |   r0 = take @users
-     2 |   r1 = call #0(r0)
-     3 |   r2 = call #1(r1)
-     4 |   r3 = closure L0 []
-     5 |   r4 = call #2(r2, r3)
-     6 |   r5 = call #3(r4)
-     7 |   r6 = call #1(r5)
-     9 |   r7 = call #4(r6, T1)
-    10 |   r8 = T0 + r7
-    11 |   return r8
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = fetch @users
+     4 |   r3 = list []
+     5 |   r4 = call #0(r3)
+     7 |   r5 = call #1(r2)
+     8 |   r6 = closure L0 []
+     9 |   r7 = call #2(r5, r6)
+    10 |   r8 = call #3(r7)
+    11 |   r9 = call #1(r8)
+    13 |   r10 = call #4(r9, T1)
+    14 |   r11 = string_concat [T0, T0, r10]
+    15 |   commit @users = r4
+    16 |   return r11
 
-    ; r0 (@users) : Array<{name: String}, 3>
-    ; r1 (v3) : List<{name: String}>
-    ; r2 (iter(...)) : Iterator<{name: String}, Pure, #IdentityId(0)>
-    ; r3 (v5) : Fn({name: String}) -> String with reads {@users}
-    ; r4 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r5 (collect(...)) : List<String>
-    ; r6 (v8) : Iterator<String, Pure, #IdentityId(3)>
-    ; r7 (join(...)) : String
-    ; r8 (v11) : String
-    ; r9 (v9) : String
-    ; r10 (v1) : String
+    ; r0 (v19) : List<{name: String}>
+    ; r1 (v20) : List<{name: String}>
+    ; r2 (@users) : List<{name: String}>
+    ; r3 (v6) : Array<{name: String}, 0>
+    ; r4 (list(...)) : List<{name: String}>
+    ; r5 (iter(...)) : Iterator<{name: String}, Pure, #IdentityId(0)>
+    ; r6 (v11) : Fn({name: String}) -> String
+    ; r7 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r8 (collect(...)) : List<String>
+    ; r9 (v14) : Iterator<String, Pure, #IdentityId(3)>
+    ; r10 (join(...)) : String
+    ; r11 (v17) : String
+    ; r12 (@users) : List<{name: String}>
+    ; r13 (users) : List<{name: String}>
+    ; r14 (@users) : List<{name: String}>
+    ; r15 (v15) : String
+    ; r16 (v18) : List<{name: String}>
+    ; r17 (v5) : String
+    ; r18 (v8) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   assign u = r0

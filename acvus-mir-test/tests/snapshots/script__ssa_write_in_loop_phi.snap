@@ -14,32 +14,24 @@ expression: ir
      8 |   jump L0
      9 | L0:
     10 |   r5 = ref &mut it
-    11 |   r6 = take @acc
-    12 |   commit @acc = r6
-    13 |   r7 = take @items
-    14 |   commit @items = r7
-    15 |   r8 = call #2(r5)
-    16 |   r9 = fetch @acc
-    17 |   assign @acc = r9
-    18 |   r10 = fetch @items
-    19 |   assign @items = r10
-    20 |   r11 = test r8 is Some
-    21 |   jump_if r11 then L1 else L2
-    22 | L1:
-    23 |   r12 = unwrap r8
-    24 |   assign x = r12
-    25 |   r13 = take @acc
-    26 |   r14 = take x
-    27 |   r15 = r13 + r14
-    28 |   assign @acc = r15
-    29 |   jump L0
-    30 | L2:
-    31 |   r16 = take @acc
-    32 |   r17 = take @acc
-    33 |   commit @acc = r17
-    34 |   r18 = take @items
-    35 |   commit @items = r18
-    36 |   return r16
+    11 |   r6 = call #2(r5)
+    12 |   r7 = test r6 is Some
+    13 |   jump_if r7 then L1 else L2
+    14 | L1:
+    15 |   r8 = unwrap r6
+    16 |   assign x = r8
+    17 |   r9 = take @acc
+    18 |   r10 = take x
+    19 |   r11 = r9 + r10
+    20 |   assign @acc = r11
+    21 |   jump L0
+    22 | L2:
+    23 |   r12 = take @acc
+    24 |   r13 = take @acc
+    25 |   commit @acc = r13
+    26 |   r14 = take @items
+    27 |   commit @items = r14
+    28 |   return r12
 
     ; r0 (@acc) : Int
     ; r1 (@items) : Array<Int, 3>
@@ -47,18 +39,14 @@ expression: ir
     ; r3 (v6) : List<Int>
     ; r4 (iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r5 (it.) : &mut Iterator<Int, Pure, #IdentityId(0)>
-    ; r6 (v11) : Int
-    ; r7 (v12) : Array<Int, 3>
-    ; r8 (next(...)) : Option<Int>
+    ; r6 (next(...)) : Option<Int>
+    ; r7 (v11) : Bool
+    ; r8 (x) : Int
     ; r9 (@acc) : Int
-    ; r10 (@items) : Array<Int, 3>
-    ; r11 (v15) : Bool
-    ; r12 (x) : Int
-    ; r13 (@acc) : Int
-    ; r14 (x) : Int
-    ; r15 (v20) : Int
+    ; r10 (x) : Int
+    ; r11 (v16) : Int
+    ; r12 (@acc) : Int
+    ; r13 (v18) : Int
+    ; r14 (v19) : Array<Int, 3>
+    ; r15 (@items) : Array<Int, 3>
     ; r16 (@acc) : Int
-    ; r17 (v22) : Int
-    ; r18 (v23) : Array<Int, 3>
-    ; r19 (@items) : Array<Int, 3>
-    ; r20 (@acc) : Int

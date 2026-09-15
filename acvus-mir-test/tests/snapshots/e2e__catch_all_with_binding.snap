@@ -12,41 +12,35 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = fetch @role
      3 | L2:
-     4 |   r3 = string_clone r2
-     5 |   r4 = test r3 == "admin"
-     6 |   jump_if r4 then L3 else L1
-     7 | L3:
-     9 |   r5 = string_concat [T0]
-    10 |   r6 = string_clone r5
-    11 |   jump L0(r6, r1)
-    12 | L1:
-    15 |   r7 = string_clone T1
-    16 |   r8 = string_concat [T2, r7]
-    17 |   r9 = string_clone r8
-    18 |   jump L0(r9, T1)
-    19 | L0(r10: String, r11: String):  ; merge_of L2
-    20 |   r12 = string_concat [r10]
-    21 |   commit @role = r2
-    22 |   return r12
+     4 |   r3 = test r2 == "admin"
+     5 |   jump_if r3 then L3 else L1
+     6 | L3:
+     8 |   r4 = string_concat [T0]
+     9 |   jump L0(r4, r1)
+    10 | L1:
+    13 |   r5 = string_clone T1
+    14 |   r6 = string_concat [T2, r5]
+    15 |   jump L0(r6, T1)
+    16 | L0(r7: String, r8: String):  ; merge_of L2
+    17 |   r9 = string_concat [r7]
+    18 |   commit @role = r2
+    19 |   return r9
 
     ; r0 (v15) : String
     ; r1 (v16) : String
     ; r2 (@role) : String
-    ; r3 (v19) : String
-    ; r4 (v4) : Bool
-    ; r5 (v6) : String
-    ; r6 (v20) : String
-    ; r7 (v21) : String
-    ; r8 (v11) : String
-    ; r9 (v22) : String
-    ; r10 (v12) : String
-    ; r11 (v18) : String
-    ; r12 (v13) : String
-    ; r13 (@role) : String
-    ; r14 (v14) : String
-    ; r15 (v17) : String
-    ; r16 (v9) : String
-    ; r17 (v7) : String
-    ; r18 (fallback) : String
-    ; r19 (@role) : String
-    ; r20 (v5) : String
+    ; r3 (v4) : Bool
+    ; r4 (v6) : String
+    ; r5 (v19) : String
+    ; r6 (v11) : String
+    ; r7 (v12) : String
+    ; r8 (v18) : String
+    ; r9 (v13) : String
+    ; r10 (v3) : String
+    ; r11 (v14) : String
+    ; r12 (v17) : String
+    ; r13 (v9) : String
+    ; r14 (@role) : String
+    ; r15 (v7) : String
+    ; r16 (fallback) : String
+    ; r17 (v5) : String

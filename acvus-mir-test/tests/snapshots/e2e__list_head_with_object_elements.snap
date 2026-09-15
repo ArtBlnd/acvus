@@ -8,42 +8,41 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @users
-     2 | L2:
-     4 |   r2 = r1[0]
-     6 |   r3 = true (r4) && true (r5)
-     7 |   jump_if r3 then L3 else L1
-     8 | L3:
-     9 |   r6 = r1[0]
-    10 |   assign first = r6
-    11 |   r7 = take first.name
-    12 |   r8 = string_concat [r7]
-    13 |   r9 = string_clone r8
-    14 |   jump L0(r9)
+     2 |   assign @users = r1
+     3 |   r2 = ref &@users
+     4 | L2:
+     6 |   r3 = ref &(*r2)[0]
+     8 |   r4 = true (r5) && true (r6)
+     9 |   jump_if r4 then L3 else L1
+    10 | L3:
+    11 |   r7 = ref &(*r2)[0]
+    12 |   r8 = take (*r7).name
+    13 |   r9 = string_concat [r8]
+    14 |   jump L0(r9, r7)
     15 | L1:
     17 |   r10 = string_concat [T0]
-    18 |   r11 = string_clone r10
-    19 |   jump L0(r11)
-    20 | L0(r12: String):  ; merge_of L2
-    21 |   r13 = string_concat [r12]
-    22 |   commit @users = r1
+    18 |   jump L0(r10, r0)
+    19 | L0(r11: String, r12: &{name: String}):  ; merge_of L2
+    20 |   r13 = string_concat [r11]
+    21 |   r14 = take @users
+    22 |   commit @users = r14
     23 |   return r13
 
-    ; r0 (v17) : Array<{name: String}, 3>
+    ; r0 (v18) : &{name: String}
     ; r1 (@users) : Array<{name: String}, 3>
-    ; r2 (v5) : {name: String}
-    ; r3 (v7) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v6) : Bool
-    ; r6 (first) : {name: String}
-    ; r7 (first.name) : String
-    ; r8 (v11) : String
-    ; r9 (v19) : String
-    ; r10 (v13) : String
-    ; r11 (v20) : String
-    ; r12 (v14) : String
-    ; r13 (v15) : String
-    ; r14 (@users) : Array<{name: String}, 3>
+    ; r2 (@users.) : &Array<{name: String}, 3>
+    ; r3 ((*r3).[0]) : &{name: String}
+    ; r4 (v7) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (v6) : Bool
+    ; r7 (first) : &{name: String}
+    ; r8 ((*r10).name) : String
+    ; r9 (v12) : String
+    ; r10 (v14) : String
+    ; r11 (v15) : String
+    ; r12 (v19) : &{name: String}
+    ; r13 (v16) : String
+    ; r14 (v17) : Array<{name: String}, 3>
     ; r15 (@users) : Array<{name: String}, 3>
-    ; r16 (v12) : String
-    ; r17 (v18) : Array<{name: String}, 3>
-    ; r18 (v16) : Array<{name: String}, 3>
+    ; r16 (v10) : &{name: String}
+    ; r17 (v13) : String

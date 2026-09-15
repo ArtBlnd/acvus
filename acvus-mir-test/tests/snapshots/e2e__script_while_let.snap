@@ -8,11 +8,11 @@ expression: ir
      4 |   assign result = 0 (r2)
      5 |   jump L0
      6 | L0:
-     7 |   r3 = take x
+     7 |   r3 = ref &x
      8 |   r4 = test r3 is Some
      9 |   jump_if r4 then L1 else L2
     10 | L1:
-    11 |   r5 = unwrap r3
+    11 |   r5 = take x.payload
     12 |   assign v = r5
     13 |   r6 = take v
     14 |   assign result = r6
@@ -26,7 +26,7 @@ expression: ir
     ; r0 (v2) : Option<Int>
     ; r1 (v1) : Int
     ; r2 (v4) : Int
-    ; r3 (x) : Option<Int>
+    ; r3 (x.) : &Option<Int>
     ; r4 (v7) : Bool
     ; r5 (v) : Int
     ; r6 (v) : Int

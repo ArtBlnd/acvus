@@ -1345,6 +1345,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.in_borrow_place = outer;
                 let lt = self.solver.resolve_ty(&lt);
                 let rt = self.solver.resolve_ty(&rt);
+                let through = |ty: TyTerm<Infer>| match ty {
+                    TyTerm::Ref(_, inner) => *inner,
+                    other => other,
+                };
+                let (lt, rt) = if operands_are_lent {
+                    (
+                        self.solver.resolve_ty(&through(lt)),
+                        self.solver.resolve_ty(&through(rt)),
+                    )
+                } else {
+                    (lt, rt)
+                };
 
                 // Early guard: if either operand is Error, suppress cascading errors.
                 if Self::is_error(&lt) || Self::is_error(&rt) {
@@ -1530,7 +1542,28 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
                 if let TyTerm::Ref(_, inner) = &ot {
+                    let inner_raw = inner.as_ref().clone();
                     let inner = self.solver.resolve_ty(inner);
+                    if matches!(inner, TyTerm::Var(_)) {
+                        let fresh = self.solver.fresh_ty_var();
+                        let partial =
+                            TyTerm::Object(FxHashMap::from_iter([(field_key, fresh.clone())]));
+                        if self
+                            .solver
+                            .unify_ty(&inner_raw, &partial, Polarity::Invariant, self.registry)
+                            .is_err()
+                        {
+                            self.error(
+                                MirErrorKind::UndefinedField {
+                                    object_ty: self.freeze_or_error(&ot),
+                                    field: field_str(),
+                                },
+                                *span,
+                            );
+                            return self.record_ret(*id, Self::infer_error());
+                        }
+                        return self.record_ret(*id, fresh);
+                    }
                     let TyTerm::Object(fields) = &inner else {
                         self.error(
                             MirErrorKind::UndefinedField {

@@ -8,40 +8,39 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @pair
-     2 | L2:
-     4 |   r2 = r1.0
-     6 |   r3 = true (r4) && true (r5)
-     7 |   jump_if r3 then L3 else L1
-     8 | L3:
-     9 |   r6 = r1.0
-    10 |   assign obj = r6
-    11 |   r7 = take obj.name
-    12 |   r8 = string_concat [r7]
-    13 |   r9 = string_clone r8
-    14 |   jump L0(r9)
+     2 |   assign @pair = r1
+     3 |   r2 = ref &@pair
+     4 | L2:
+     6 |   r3 = ref &(*r2)[0]
+     8 |   r4 = true (r5) && true (r6)
+     9 |   jump_if r4 then L3 else L1
+    10 | L3:
+    11 |   r7 = ref &(*r2)[0]
+    12 |   r8 = take (*r7).name
+    13 |   r9 = string_concat [r8]
+    14 |   jump L0(r9, r7)
     15 | L1:
-    17 |   r10 = string_clone T0
-    18 |   jump L0(r10)
-    19 | L0(r11: String):  ; merge_of L2
-    20 |   r12 = string_concat [r11]
-    21 |   commit @pair = r1
+    17 |   jump L0(T0, r0)
+    18 | L0(r10: String, r11: &{name: String}):  ; merge_of L2
+    19 |   r12 = string_concat [r10]
+    20 |   r13 = take @pair
+    21 |   commit @pair = r13
     22 |   return r12
 
-    ; r0 (v16) : ({name: String}, Int)
+    ; r0 (v17) : &{name: String}
     ; r1 (@pair) : ({name: String}, Int)
-    ; r2 (v5) : {name: String}
-    ; r3 (v7) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v6) : Bool
-    ; r6 (obj) : {name: String}
-    ; r7 (obj.name) : String
-    ; r8 (v11) : String
-    ; r9 (v18) : String
-    ; r10 (v19) : String
-    ; r11 (v13) : String
-    ; r12 (v14) : String
-    ; r13 (@pair) : ({name: String}, Int)
-    ; r14 (v17) : ({name: String}, Int)
-    ; r15 (@pair) : ({name: String}, Int)
-    ; r16 (v12) : String
-    ; r17 (v15) : ({name: String}, Int)
+    ; r2 (@pair.) : &({name: String}, Int)
+    ; r3 ((*r3).[0]) : &{name: String}
+    ; r4 (v7) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (v6) : Bool
+    ; r7 (obj) : &{name: String}
+    ; r8 ((*r10).name) : String
+    ; r9 (v12) : String
+    ; r10 (v14) : String
+    ; r11 (v18) : &{name: String}
+    ; r12 (v15) : String
+    ; r13 (v16) : ({name: String}, Int)
+    ; r14 (@pair) : ({name: String}, Int)
+    ; r15 (v10) : &{name: String}
+    ; r16 (v13) : String

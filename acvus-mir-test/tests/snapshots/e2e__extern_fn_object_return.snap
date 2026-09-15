@@ -13,6 +13,9 @@ expression: ir
      6 |   r6 = string_concat [T0, r5]
      7 |   return r6 [r4]
 
+    ; orders: what the body's yielded Order waits for
+    ;   call@2 #0 <- r3(entry)
+
     ; r0 (v12) : Order
     ; r1 (get_user(...)) : {age: Int, name: String}
     ; r2 (v3) : Int

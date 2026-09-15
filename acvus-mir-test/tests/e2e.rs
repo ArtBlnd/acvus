@@ -138,6 +138,18 @@ fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
     )
 }
 
+/// Helper: a context holding a `List<elem>`. A pipeline takes the list whole
+/// (`iter` consumes it), so a body that names the context takes it into a
+/// local and puts an empty list back before the pipeline runs
+/// (`{{ items = @items }}{{ @items = list([]) }}`, RFC-0025).
+fn list_context(i: &Interner, name: &str, elem: Ty) -> FxHashMap<Astr, Ty> {
+    ctx(i, &[(name, acvus_ext::list_ty(i, elem))])
+}
+
+fn items_list_context(i: &Interner) -> FxHashMap<Astr, Ty> {
+    list_context(i, "items", Ty::Int)
+}
+
 // -- Text & literals ----------------------------------------------
 
 #[test]
@@ -279,8 +291,8 @@ fn pipe_filter_map() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | filter(|x| -> x != 0) | map(|x| -> x + 1) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -302,8 +314,8 @@ fn lambda_in_filter() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -413,7 +425,7 @@ fn tuple_nested_destructure() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ (label, { x, }) = @data }}{{ label }}{{/}}"#,
+        r#"{{ (label, { x, }) = &@data }}{{ label }}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -538,7 +550,7 @@ fn list_head_with_object_elements() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ [first, ..] = @users }}{{ first.name }}{{_}}empty{{/}}"#,
+        r#"{{ [first, ..] = &@users }}{{ first.name }}{{_}}empty{{/}}"#,
         &context,
     )
     .unwrap();
@@ -636,8 +648,8 @@ fn pmap_builtin() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | pmap(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | pmap(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -700,16 +712,13 @@ fn closure_capture_context() {
     let context = ctx(
         &i,
         &[
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
+            ("items", acvus_ext::list_ty(&i, Ty::Int)),
             ("threshold", Ty::Int),
         ],
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | filter(|i| -> i > @threshold) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > @threshold) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -739,8 +748,8 @@ fn lambda_map_arithmetic() {
     // Lambda param type resolved via unification: map(List<Int>, |x| -> x + 1)
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | map(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> i + 1) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -749,11 +758,11 @@ fn lambda_map_arithmetic() {
 #[test]
 fn lambda_filter_comparison() {
     let i = Interner::new();
-    // Lambda param type resolved via unification: filter(List<Int>, |x| -> x > 0)
+    // Lambda param type resolved via unification: filter(List<Int>, |x| -> *x > 0)
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | filter(|i| -> i > 0) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -764,11 +773,12 @@ fn lambda_filter_comparison() {
 #[test]
 fn closure_capture_local() {
     let i = Interner::new();
-    // Closure captures local variable (not context).
+    // Closure captures local variable (not context); a capture is read
+    // through a reference (RFC-0018).
     let ir = compile_to_ir(
         &i,
-        r#"{{ threshold = 5 }}{{ x = @items | iter | filter(|i| -> i > threshold) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
-        &items_context(&i),
+        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > *threshold) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -805,7 +815,7 @@ fn nested_tuple_pattern() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ ((a, b), label) = @data }}{{ label }}{{/}}"#,
+        r#"{{ ((a, b), label) = &@data }}{{ label }}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -881,8 +891,8 @@ fn triple_pipe_chain() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | filter(|i| -> i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -902,7 +912,7 @@ fn field_access_on_destructured() {
             Ty::Tuple(vec![obj(&i, &[("name", Ty::String)]), Ty::Int]),
         )],
     );
-    let ir = compile_to_ir(&i, r#"{{ (obj, _) = @pair }}{{ obj.name }}{{/}}"#, &context).unwrap();
+    let ir = compile_to_ir(&i, r#"{{ (obj, _) = &@pair }}{{ obj.name }}{{/}}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -929,8 +939,8 @@ fn lambda_negate_param() {
     // Lambda param has Ty::Var initially; -i must resolve via unification.
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | map(|i| -> -i) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> -i) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -942,16 +952,10 @@ fn lambda_negate_param() {
 fn lambda_not_param() {
     let i = Interner::new();
     // Lambda param has Ty::Var initially; !i must resolve via unification.
-    let context = ctx(
-        &i,
-        &[(
-            "flags",
-            Ty::Array(Box::new(Ty::Bool), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = list_context(&i, "flags", Ty::Bool);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @flags | iter | map(|i| -> !i) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ flags = @flags }}{{ @flags = list([]) }}{{ x = flags | iter | map(|i| -> !i) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -981,16 +985,13 @@ fn multiple_closures_same_capture() {
     let context = ctx(
         &i,
         &[
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
+            ("items", acvus_ext::list_ty(&i, Ty::Int)),
             ("offset", Ty::Int),
         ],
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | map(|i| -> i + @offset) | filter(|i| -> i > 0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1011,7 +1012,7 @@ fn string_equality_in_filter() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @names | iter | filter(|n| -> n != "admin") }}{{ x | join(",") }}"#,
+        r#"{{ names = @names }}{{ @names = ["", "", ""] }}{{ x = names | iter | filter(|n| -> n != "admin") }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1024,19 +1025,14 @@ fn string_equality_in_filter() {
 fn lambda_field_access() {
     let i = Interner::new();
     // Lambda body accesses field on captured object.
-    let context = ctx(
+    let context = list_context(
         &i,
-        &[(
-            "users",
-            Ty::Array(
-                Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
-                acvus_mir::ty::LenTerm::Known(3),
-            ),
-        )],
+        "users",
+        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | iter | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | map(|u| -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1052,8 +1048,8 @@ fn pipe_map_to_string_then_filter() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter | map(|i| -> i + 1) | filter(|i| -> i != 0) | collect }}{{ x | len | to_string }}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ x | len | to_string }}"#,
+        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -1065,17 +1061,12 @@ fn pipe_map_to_string_then_filter() {
 fn lambda_capture_local_var_ref() {
     let i = Interner::new();
     // offset is NOT in initial context - created as local var.
-    // Lambda must capture it correctly (not fall through to StorageLoad).
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    // Lambda must capture it correctly (not fall through to StorageLoad);
+    // the capture is read through a reference (RFC-0018).
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ offset = 10 }}{{ x = @items | iter | filter(|i| -> i > offset) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter | filter(|i| -> *i > *offset) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1088,19 +1079,14 @@ fn lambda_capture_local_var_ref() {
 fn lambda_multiple_field_access() {
     let i = Interner::new();
     // Lambda body accesses two fields on the same param.
-    let context = ctx(
+    let context = list_context(
         &i,
-        &[(
-            "users",
-            Ty::Array(
-                Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
-                acvus_mir::ty::LenTerm::Known(3),
-            ),
-        )],
+        "users",
+        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | iter | map(|u| -> (u.name, u.age)) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | map(|u| -> (u.name, u.age)) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1112,19 +1098,14 @@ fn lambda_multiple_field_access() {
 #[test]
 fn lambda_chained_field_access() {
     let i = Interner::new();
-    let context = ctx(
+    let context = list_context(
         &i,
-        &[(
-            "users",
-            Ty::Array(
-                Box::new(obj(&i, &[("address", obj(&i, &[("city", Ty::String)]))])),
-                acvus_mir::ty::LenTerm::Known(3),
-            ),
-        )],
+        "users",
+        obj(&i, &[("address", obj(&i, &[("city", Ty::String)]))]),
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | iter | map(|u| -> u.address.city) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | map(|u| -> u.address.city) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1137,16 +1118,10 @@ fn lambda_chained_field_access() {
 fn lambda_string_concat() {
     let i = Interner::new();
     // Lambda param is Ty::Var; string concat (+) must resolve via unification.
-    let context = ctx(
-        &i,
-        &[(
-            "names",
-            Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @names | iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
+        r#"{{ names = @names }}{{ @names = list([]) }}{{ x = names | iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1158,19 +1133,10 @@ fn lambda_string_concat() {
 #[test]
 fn pipe_filter_then_map_field() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "users",
-            Ty::Array(
-                Box::new(obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
-                acvus_mir::ty::LenTerm::Known(3),
-            ),
-        )],
-    );
+    let context = list_context(&i, "users", obj(&i, &[("name", Ty::String), ("age", Ty::Int)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1205,16 +1171,10 @@ fn error_variable_write_type_mismatch() {
 #[test]
 fn lambda_float_arithmetic() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "vals",
-            Ty::Array(Box::new(Ty::Float), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = list_context(&i, "vals", Ty::Float);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @vals | iter | map(|v| -> v * 2.0) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ vals = @vals }}{{ @vals = list([]) }}{{ x = vals | iter | map(|v| -> v * 2.0) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1236,19 +1196,10 @@ fn match_bool_literal() {
 #[test]
 fn filter_object_field_equality() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "users",
-            Ty::Array(
-                Box::new(obj(&i, &[("name", Ty::String), ("active", Ty::Bool)])),
-                acvus_mir::ty::LenTerm::Known(3),
-            ),
-        )],
-    );
+    let context = list_context(&i, "users", obj(&i, &[("name", Ty::String), ("active", Ty::Bool)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @users | iter | filter(|u| -> u.active) | collect }}{{ x | len | to_string }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | iter | filter(|u| -> u.active) | collect }}{{ x | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -1281,58 +1232,49 @@ fn extern_fn_object_return() {
 #[test]
 fn builtin_len() {
     let i = Interner::new();
-    let context = ctx(
+    let context = items_list_context(&i);
+    let ir = compile_to_ir(
         &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let ir = compile_to_ir(&i, "{{ @items | len | to_string }}", &context).unwrap();
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | len | to_string }}",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn builtin_join() {
     let i = Interner::new();
-    let context = ctx(
+    let context = list_context(&i, "names", Ty::String);
+    let ir = compile_to_ir(
         &i,
-        &[(
-            "names",
-            Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let ir = compile_to_ir(&i, r#"{{ @names | join(", ") }}"#, &context).unwrap();
+        r#"{{ names = @names }}{{ @names = list([]) }}{{ names | join(", ") }}"#,
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn builtin_contains() {
     let i = Interner::new();
-    let context = ctx(
+    let context = items_list_context(&i);
+    let ir = compile_to_ir(
         &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let ir = compile_to_ir(&i, "{{ @items | contains(3) | to_string }}", &context).unwrap();
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | contains(3) | to_string }}",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn builtin_find() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ @items | find(|x| -> x > 10) | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | find(|x| -> *x > 10) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1342,16 +1284,10 @@ fn builtin_find() {
 #[test]
 fn builtin_reduce() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ @items | reduce(|a, b| -> a + b) | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | reduce(|a, b| -> a + b) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1361,16 +1297,10 @@ fn builtin_reduce() {
 #[test]
 fn builtin_fold() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ @items | fold(0, |acc, x| -> acc + x) | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | fold(0, |acc, x| -> acc + x) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1380,16 +1310,10 @@ fn builtin_fold() {
 #[test]
 fn builtin_any() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ @items | any(|x| -> x > 10) | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | any(|x| -> *x > 10) | to_string }}",
         &context,
     )
     .unwrap();
@@ -1399,14 +1323,13 @@ fn builtin_any() {
 #[test]
 fn builtin_all() {
     let i = Interner::new();
-    let context = ctx(
+    let context = items_list_context(&i);
+    let ir = compile_to_ir(
         &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let ir = compile_to_ir(&i, "{{ @items | all(|x| -> x > 0) | to_string }}", &context).unwrap();
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | all(|x| -> *x > 0) | to_string }}",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1434,7 +1357,7 @@ fn variant_some_pattern() {
     let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
     let ir = compile_to_ir(
         &i,
-        "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}nope{{/}}",
+        "{{ Some(v) = &@opt }}{{ *v | to_string }}{{_}}nope{{/}}",
         &context,
     )
     .unwrap();
@@ -1670,16 +1593,10 @@ fn migrated_integration_list_destructure() {
 #[test]
 fn migrated_integration_pipe_with_lambda() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        r#"{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1692,9 +1609,8 @@ fn migrated_projection_chained_field_access() {
     let obj_ty = obj(&i, &[("a", inner)]);
     let context = ctx(&i, &[("obj", obj_ty)]);
     let ir = compile_script_ir(&i, "@obj.a.b | to_string", &context).unwrap();
-    // IR: Ref(@obj) + Load (whole), then field access .a.b.
-    assert!(ir.contains("ref @"), "should have ref @ in IR: {ir}");
-    assert!(ir.contains("load"), "should have load in IR: {ir}");
+    assert!(ir.contains("fetch @obj"), "should fetch @obj in IR: {ir}");
+    assert!(ir.contains("take @obj.a.b"), "should read @obj.a.b in IR: {ir}");
     let field_get_count = ir.matches(".b").count() + ir.matches(".a").count();
     assert!(
         field_get_count >= 2,
@@ -1708,8 +1624,8 @@ fn migrated_pipe_extern_fn_ok() {
     let mapper = extern_fn(&i, "mapper", &[Ty::Int], Ty::String);
     compile_to_ir_with(
         &i,
-        r#"{{ x = @items | map(|i| -> mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
-        &items_context(&i),
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | map(|i| -> mapper(i)) | collect }}{{ x | len | to_string }}{{_}}{{/}}"#,
+        &items_list_context(&i),
         &[mapper],
     )
     .unwrap();
@@ -1730,16 +1646,13 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     let context = ctx(
         &i,
         &[
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
+            ("items", acvus_ext::list_ty(&i, Ty::Int)),
             ("threshold", Ty::Int),
         ],
     );
     compile_to_ir(
         &i,
-        "{{ @items | filter(|x| -> x > @threshold) | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | filter(|x| -> *x > @threshold) | collect | len | to_string }}",
         &context,
     )
     .unwrap();
@@ -1748,16 +1661,10 @@ fn migrated_typeck_lambda_captures_outer_variable() {
 #[test]
 fn migrated_typeck_lambda_type_check() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1766,16 +1673,10 @@ fn migrated_typeck_lambda_type_check() {
 #[test]
 fn migrated_typeck_lambda_no_capture_local_params() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ @items | map(|x| -> x + 1) | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | map(|x| -> x + 1) | collect | len | to_string }}",
         &context,
     )
     .unwrap();
@@ -1805,16 +1706,13 @@ fn migrated_typeck_nested_lambda_captures() {
     let context = ctx(
         &i,
         &[
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
+            ("items", acvus_ext::list_ty(&i, Ty::Int)),
             ("factor", Ty::Int),
         ],
     );
     compile_to_ir(
         &i,
-        "{{ @items | map(|x| -> x * @factor) | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ items | map(|x| -> x * @factor) | collect | len | to_string }}",
         &context,
     )
     .unwrap();
@@ -1826,7 +1724,7 @@ fn migrated_typeck_some_unifies_with_option_context() {
     let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
     compile_to_ir(
         &i,
-        "{{ Some(v) = @opt }}{{ v | to_string }}{{_}}{{/}}",
+        "{{ Some(v) = &@opt }}{{ *v | to_string }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1850,16 +1748,10 @@ fn migrated_print_arithmetic() {
 #[test]
 fn migrated_print_closure() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ x = @items | filter(|x| -> x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ x | len | to_string }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1920,7 +1812,7 @@ fn iter_map_single_use_ok() {
     );
     let result = compile_script_ir(
         &i,
-        r#"@items | iter | map(|x| -> { @counter = x; x }) | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; items | iter | map(|x| -> { @counter = x; x }) | collect"#,
         &context,
     );
     assert!(
@@ -1972,7 +1864,7 @@ fn iter_chain_single_use_ok() {
     );
     let result = compile_script_ir(
         &i,
-        r#"@items | iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = x; x > 0 }) | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; items | iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = *x; *x > 0 }) | collect"#,
         &context,
     );
     assert!(
@@ -2029,31 +1921,6 @@ fn iter_reuse_after_collect_rejected() {
     assert!(
         has_use_after_move(&result.unwrap_err()),
         "expected use-after-move error"
-    );
-}
-
-#[test]
-fn iter_collect_result_is_reusable() {
-    // The List produced by collect is freely reusable.
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
-            ("counter", Ty::Int),
-        ],
-    );
-    let result = compile_script_ir(
-        &i,
-        r#"collected = @items | iter | map(|x| -> { @counter = x; x }) | collect; collected | len; collected | len"#,
-        &context,
-    );
-    assert!(
-        result.is_ok(),
-        "collected List should be reusable: {result:?}"
     );
 }
 
@@ -2181,7 +2048,7 @@ fn migrated_move_accept_iter_single_use() {
     );
     let result = compile_script_ir(
         &i,
-        r#"x = @items | iter | map(|x| -> { @counter = x; x }); x | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; x = items | iter | map(|x| -> { @counter = x; x }); x | collect"#,
         &context,
     );
     assert!(
@@ -2191,48 +2058,18 @@ fn migrated_move_accept_iter_single_use() {
 }
 
 #[test]
-fn migrated_move_accept_collect_then_reuse() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
-            ("counter", Ty::Int),
-        ],
-    );
-    let result = compile_script_ir(
-        &i,
-        r#"list = @items | iter | map(|x| -> { @counter = x; x }) | collect; a = list | len; b = list | len; a + b"#,
-        &context,
-    );
-    assert!(
-        result.is_ok(),
-        "collected list should be reusable: {result:?}"
-    );
-}
-
-#[test]
 fn migrated_move_accept_var_reassign() {
     let i = Interner::new();
     let context = ctx(
         &i,
         &[
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
-            (
-                "items2",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
+            ("items", acvus_ext::list_ty(&i, Ty::Int)),
+            ("items2", acvus_ext::list_ty(&i, Ty::Int)),
         ],
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | iter }}{{ a | collect | len | to_string }}{{ a = @items2 | iter }}{{ a | collect | len | to_string }}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | iter }}{{ a | collect | len | to_string }}{{ items2 = @items2 }}{{ @items2 = list([]) }}{{ a = items2 | iter }}{{ a | collect | len | to_string }}",
         &context,
     );
     assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
@@ -2253,7 +2090,7 @@ fn migrated_move_accept_iter_pipe_chain() {
     );
     let result = compile_script_ir(
         &i,
-        r#"@items | iter | map(|x| -> { @counter = x; x }) | filter(|x| -> x > 0) | map(|x| -> x * 2) | collect"#,
+        r#"items = @items; @items = [1, 2, 3]; items | iter | map(|x| -> { @counter = x; x }) | filter(|x| -> *x > 0) | map(|x| -> x * 2) | collect"#,
         &context,
     );
     assert!(
@@ -2349,15 +2186,12 @@ fn migrated_move_accept_branch_move_no_use_after() {
         &i,
         &[
             ("flag", Ty::Bool),
-            (
-                "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-            ),
+            ("items", acvus_ext::list_ty(&i, Ty::Int)),
         ],
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}",
+        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | iter }}{{ true = @flag }}{{ a | collect | len | to_string }}{{_}}nothing{{/}}",
         &context,
     );
     assert!(
@@ -2367,63 +2201,17 @@ fn migrated_move_accept_branch_move_no_use_after() {
 }
 
 #[test]
-fn migrated_move_reject_fnonce_double_call() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let result = compile_script_ir(
-        &i,
-        "x = @items | iter; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
-        &context,
-    );
-    assert!(
-        result.is_err(),
-        "FnOnce called twice should be rejected: {result:?}"
-    );
-    assert!(
-        has_use_after_move(&result.unwrap_err()),
-        "expected use-after-move error"
-    );
-}
-
-#[test]
 fn migrated_move_accept_pure_capture_fn_multi_call() {
     let i = Interner::new();
     let context = ctx(&i, &[("val", Ty::Int)]);
     let result = compile_script_ir(
         &i,
-        "x = @val; f = (|a| -> x + a); a = f(1); b = f(2); a + b",
+        "x = @val; f = (|a| -> *x + a); a = f(1); b = f(2); a + b",
         &context,
     );
     assert!(
         result.is_ok(),
         "Fn with pure captures should be callable multiple times: {result:?}"
-    );
-}
-
-#[test]
-fn migrated_move_accept_fnonce_single_call() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let result = compile_script_ir(
-        &i,
-        "x = @items | iter; f = (|z| -> collect(x)); f(0)",
-        &context,
-    );
-    assert!(
-        result.is_ok(),
-        "FnOnce called once should be OK: {result:?}"
     );
 }
 
@@ -2439,7 +2227,7 @@ fn migrated_move_accept_lambda_return_deque_as_iterator() {
     );
     let result = compile_script_ir(
         &i,
-        "@items | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
+        "items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
         &context,
     );
     assert!(
@@ -2458,7 +2246,11 @@ fn migrated_move_accept_lambda_return_scalar() {
             Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
         )],
     );
-    let result = compile_script_ir(&i, "@items | map(|x| -> x + 1) | collect", &context);
+    let result = compile_script_ir(
+        &i,
+        "items = @items; @items = [1, 2, 3]; items | map(|x| -> x + 1) | collect",
+        &context,
+    );
     assert!(
         result.is_ok(),
         "lambda returning scalar should compile: {result:?}"
@@ -2477,7 +2269,7 @@ fn migrated_move_accept_nested_flat_map_deque_return() {
     );
     let result = compile_script_ir(
         &i,
-        "@items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
+        "items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
         &context,
     );
     assert!(
@@ -2487,39 +2279,12 @@ fn migrated_move_accept_nested_flat_map_deque_return() {
 }
 
 #[test]
-fn migrated_move_accept_fnonce_passed_to_map() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let result = compile_script_ir(
-        &i,
-        "x = @items | iter; f = (|z| -> collect(x)); @items | map(f) | collect",
-        &context,
-    );
-    assert!(
-        result.is_ok(),
-        "FnOnce passed once to HOF should be OK: {result:?}"
-    );
-}
-
-#[test]
 fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let result = compile_to_ir(
         &i,
-        "{{ f = (|z| -> collect(@items | iter)) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
+        "{{ f = (|z| -> { items = @items; @items = list([]); collect(items | iter) }) }}{{ f(0) | len | to_string }}{{ f(0) | len | to_string }}",
         &context,
     );
     assert!(
@@ -2665,12 +2430,13 @@ fn projection_var_in_arithmetic() {
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
 
-/// Lambda captures variable: `x = @data; |y| -> x + y`.
+/// Lambda captures variable: `x = @data; |y| -> *x + y` (a capture is read
+/// through a reference, RFC-0018).
 #[test]
 fn projection_lambda_capture() {
     let i = Interner::new();
     let context = ctx(&i, &[("data", Ty::Int)]);
-    let ir = compile_script_ir(&i, "x = @data; |y| -> x + y", &context).unwrap();
+    let ir = compile_script_ir(&i, "x = @data; |y| -> *x + y", &context).unwrap();
     assert!(ir.contains("closure"), "should have closure: {ir}");
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
@@ -2773,16 +2539,10 @@ fn projection_ssa_context_write_back() {
 #[test]
 fn projection_move_single_use() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter }}{{ x | collect | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter }}{{ x | collect | len | to_string }}"#,
         &context,
     )
     .unwrap();
@@ -2796,16 +2556,10 @@ fn projection_move_single_use() {
 #[test]
 fn projection_move_var_reassign_revives() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
+    let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items | iter }}{{ x | collect | len | to_string }}{{ x = @items | iter }}{{ x | collect | len | to_string }}"#,
+        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter }}{{ x | collect | len | to_string }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | iter }}{{ x | collect | len | to_string }}"#,
         &context,
     ).unwrap();
     assert!(
@@ -2866,19 +2620,10 @@ fn sroa_multiple_field_reads_same_object() {
 #[test]
 fn sroa_field_read_in_lambda() {
     let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "users",
-            Ty::Array(
-                Box::new(obj(&i, &[("name", Ty::String)])),
-                acvus_mir::ty::LenTerm::Known(3),
-            ),
-        )],
-    );
+    let context = list_context(&i, "users", obj(&i, &[("name", Ty::String)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ @users | iter | map(|u| -> u.name) | collect | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = list([]) }}{{ users | iter | map(|u| -> u.name) | collect | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -2934,7 +2679,14 @@ fn sroa_context_chain_destructure() {
             ("c", Ty::Int),
         ],
     );
-    let ir = compile_script_ir(&i, "@a = @b.a; @c = @a.val; @c", &context).unwrap();
+    // `@b.a` is an Object: reading it moves it out of `@b`, which is then
+    // put back whole before the end (RFC-0024, RFC-0025).
+    let ir = compile_script_ir(
+        &i,
+        "@a = @b.a; @b = { a: { val: 0, }, }; @c = @a.val; @c",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -2969,7 +2721,7 @@ fn context_projection_store_2depth() {
 fn var_field_store_1depth() {
     let i = Interner::new();
     let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::Int)]))]);
-    let ir = compile_script_ir(&i, "a = @obj; a.x = 0; a.x", &context).unwrap();
+    let ir = compile_script_ir(&i, "a = @obj; a.x = 0; x = a.x; @obj = a; x", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 

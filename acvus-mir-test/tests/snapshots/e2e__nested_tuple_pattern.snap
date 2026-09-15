@@ -9,69 +9,63 @@ expression: ir
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = undef
-     3 |   r3 = undef
-     4 |   r4 = fetch @data
-     5 | L2:
-     7 |   r5 = r4.0
-     9 |   r6 = r5.0
-    11 |   r7 = true (r8) && true (r9)
-    12 |   r10 = r5.1
-    14 |   r11 = r7 && true (r12)
-    15 |   r13 = true (r14) && r11
-    16 |   r15 = r4.1
-    18 |   r16 = r13 && true (r17)
-    19 |   jump_if r16 then L3 else L1
-    20 | L3:
-    21 |   r18 = r4.0
-    22 |   r19 = r18.0
-    23 |   r20 = r18.1
-    24 |   r21 = r4.1
-    25 |   r22 = string_clone r21
-    26 |   r23 = string_concat [r22]
-    27 |   r24 = string_clone r23
-    28 |   jump L0(r24, r19, r20, r21)
-    29 | L1:
-    31 |   r25 = string_clone T0
-    32 |   jump L0(r25, r1, r2, r3)
-    33 | L0(r26: String, r27: Int, r28: Int, r29: String):  ; merge_of L2
-    34 |   r30 = string_concat [r26]
-    35 |   commit @data = r4
-    36 |   return r30
+     3 |   r3 = fetch @data
+     4 |   assign @data = r3
+     5 |   r4 = ref &@data
+     6 | L2:
+     8 |   r5 = ref &(*r4)[0]
+     9 |   r6 = ref &(*r4)[1]
+    11 |   r7 = ref &(*r5)[0]
+    12 |   r8 = ref &(*r5)[1]
+    14 |   r9 = true (r10) && true (r11)
+    16 |   r12 = r9 && true (r13)
+    17 |   r14 = true (r15) && r12
+    19 |   r16 = r14 && true (r17)
+    20 |   jump_if r16 then L3 else L1
+    21 | L3:
+    22 |   r18 = ref &(*r4)[0]
+    23 |   r19 = ref &(*r4)[1]
+    24 |   r20 = ref &(*r18)[0]
+    25 |   r21 = ref &(*r18)[1]
+    26 |   r22 = string_concat [r19]
+    27 |   jump L0(r22, r20, r21, r19)
+    28 | L1:
+    30 |   jump L0(T0, r0, r1, r2)
+    31 | L0(r23: String, r24: &Int, r25: &Int, r26: &String):  ; merge_of L2
+    32 |   r27 = string_concat [r23]
+    33 |   r28 = take @data
+    34 |   commit @data = r28
+    35 |   return r27
 
-    ; r0 (v30) : ((Int, Int), String)
-    ; r1 (v31) : Int
-    ; r2 (v32) : Int
-    ; r3 (v33) : String
-    ; r4 (@data) : ((Int, Int), String)
-    ; r5 (v5) : (Int, Int)
-    ; r6 (v7) : Int
-    ; r7 (v9) : Bool
-    ; r8 (v6) : Bool
-    ; r9 (v8) : Bool
-    ; r10 (v10) : Int
-    ; r11 (v12) : Bool
-    ; r12 (v11) : Bool
-    ; r13 (v13) : Bool
-    ; r14 (v4) : Bool
-    ; r15 (v14) : String
+    ; r0 (v30) : &Int
+    ; r1 (v31) : &Int
+    ; r2 (v32) : &String
+    ; r3 (@data) : ((Int, Int), String)
+    ; r4 (@data.) : &((Int, Int), String)
+    ; r5 ((*r3).[0]) : &(Int, Int)
+    ; r6 ((*r3).[1]) : &String
+    ; r7 ((*r5).[0]) : &Int
+    ; r8 ((*r5).[1]) : &Int
+    ; r9 (v11) : Bool
+    ; r10 (v7) : Bool
+    ; r11 (v10) : Bool
+    ; r12 (v13) : Bool
+    ; r13 (v12) : Bool
+    ; r14 (v14) : Bool
+    ; r15 (v4) : Bool
     ; r16 (v16) : Bool
     ; r17 (v15) : Bool
-    ; r18 (v17) : (Int, Int)
-    ; r19 (a) : Int
-    ; r20 (b) : Int
-    ; r21 (label) : String
-    ; r22 (v38) : String
-    ; r23 (v25) : String
-    ; r24 (v39) : String
-    ; r25 (v40) : String
-    ; r26 (v27) : String
-    ; r27 (v35) : Int
-    ; r28 (v36) : Int
-    ; r29 (v37) : String
-    ; r30 (v28) : String
-    ; r31 (@data) : ((Int, Int), String)
-    ; r32 (v34) : ((Int, Int), String)
-    ; r33 (label) : String
-    ; r34 (@data) : ((Int, Int), String)
-    ; r35 (v26) : String
-    ; r36 (v29) : ((Int, Int), String)
+    ; r18 ((*r3).[0]) : &(Int, Int)
+    ; r19 (label) : &String
+    ; r20 (a) : &Int
+    ; r21 (b) : &Int
+    ; r22 (v25) : String
+    ; r23 (v27) : String
+    ; r24 (v33) : &Int
+    ; r25 (v34) : &Int
+    ; r26 (v35) : &String
+    ; r27 (v28) : String
+    ; r28 (v29) : ((Int, Int), String)
+    ; r29 (@data) : ((Int, Int), String)
+    ; r30 (v26) : String
+    ; r31 (label) : &String

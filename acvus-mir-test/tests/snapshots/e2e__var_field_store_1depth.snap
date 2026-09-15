@@ -3,12 +3,23 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = take @obj
-     1 |   assign a = r0
-     3 |   assign a.x = 0 (r1)
-     4 |   r2 = take a.x
-     5 |   return r2
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = fetch @obj
+     3 |   assign a = r2
+     5 |   assign a.x = 0 (r3)
+     6 |   r4 = take a.x
+     7 |   r5 = take a
+     8 |   commit @obj = r5
+     9 |   return r4
 
-    ; r0 (@obj) : {x: Int}
-    ; r1 (v3) : Int
-    ; r2 (a.x) : Int
+    ; r0 (v11) : {x: Int}
+    ; r1 (v12) : Int
+    ; r2 (@obj) : {x: Int}
+    ; r3 (v5) : Int
+    ; r4 (a.x) : Int
+    ; r5 (a) : {x: Int}
+    ; r6 (@obj) : {x: Int}
+    ; r7 (v10) : {x: Int}
+    ; r8 (x) : Int
+    ; r9 (@obj) : {x: Int}

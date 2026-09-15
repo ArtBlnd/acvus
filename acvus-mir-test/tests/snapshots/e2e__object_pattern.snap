@@ -8,57 +8,43 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = undef
-     3 |   r3 = fetch @user
+     2 |   r2 = fetch @user
+     3 |   assign @user = r2
      4 | L2:
-     6 |   r4 = test has_key(r3, "name")
-     7 |   r5 = r3.name
-     9 |   r6 = true (r7) && true (r8)
-    10 |   r9 = test has_key(r3, "age")
-    11 |   r10 = r3.age
-    13 |   r11 = r6 && true (r12)
-    14 |   jump_if r11 then L3 else L1
-    15 | L3:
-    16 |   r13 = r3.name
-    17 |   r14 = r3.age
-    18 |   r15 = string_clone r13
-    19 |   r16 = string_concat [r15]
-    20 |   r17 = string_clone r16
-    21 |   jump L0(r17, r13, r14)
-    22 | L1:
-    24 |   r18 = string_clone T0
-    25 |   jump L0(r18, r1, r2)
-    26 | L0(r19: String, r20: String, r21: Int):  ; merge_of L2
-    27 |   r22 = string_concat [r19]
-    28 |   commit @user = r3
-    29 |   return r22
+     7 |   r3 = true (r4) && true (r5)
+     9 |   r6 = r3 && true (r7)
+    10 |   jump_if r6 then L3 else L1
+    11 | L3:
+    12 |   r8 = take @user.name
+    13 |   r9 = take @user.age
+    14 |   r10 = string_clone r8
+    15 |   r11 = string_concat [r10]
+    16 |   jump L0(r11, r8, r9)
+    17 | L1:
+    19 |   jump L0(T0, r0, r1)
+    20 | L0(r12: String, r13: String, r14: Int):  ; merge_of L2
+    21 |   r15 = string_concat [r12]
+    22 |   r16 = take @user
+    23 |   commit @user = r16
+    24 |   return r15
 
-    ; r0 (v23) : {age: Int, email: String, name: String}
-    ; r1 (v24) : String
-    ; r2 (v25) : Int
-    ; r3 (@user) : {age: Int, email: String, name: String}
-    ; r4 (v5) : Bool
-    ; r5 (v6) : String
-    ; r6 (v8) : Bool
-    ; r7 (v4) : Bool
-    ; r8 (v7) : Bool
-    ; r9 (v9) : Bool
-    ; r10 (v10) : Int
-    ; r11 (v12) : Bool
-    ; r12 (v11) : Bool
-    ; r13 (name) : String
-    ; r14 (age) : Int
-    ; r15 (v29) : String
-    ; r16 (v18) : String
-    ; r17 (v30) : String
-    ; r18 (v31) : String
-    ; r19 (v20) : String
-    ; r20 (v27) : String
-    ; r21 (v28) : Int
-    ; r22 (v21) : String
-    ; r23 (@user) : {age: Int, email: String, name: String}
-    ; r24 (v22) : {age: Int, email: String, name: String}
-    ; r25 (name) : String
-    ; r26 (@user) : {age: Int, email: String, name: String}
-    ; r27 (v26) : {age: Int, email: String, name: String}
-    ; r28 (v19) : String
+    ; r0 (v18) : String
+    ; r1 (v19) : Int
+    ; r2 (@user) : {age: Int, email: String, name: String}
+    ; r3 (v5) : Bool
+    ; r4 (v3) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (v7) : Bool
+    ; r7 (v6) : Bool
+    ; r8 (name) : String
+    ; r9 (age) : Int
+    ; r10 (v22) : String
+    ; r11 (v13) : String
+    ; r12 (v15) : String
+    ; r13 (v20) : String
+    ; r14 (v21) : Int
+    ; r15 (v16) : String
+    ; r16 (v17) : {age: Int, email: String, name: String}
+    ; r17 (v14) : String
+    ; r18 (@user) : {age: Int, email: String, name: String}
+    ; r19 (name) : String

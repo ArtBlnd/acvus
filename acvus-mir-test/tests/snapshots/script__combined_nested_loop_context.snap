@@ -14,55 +14,39 @@ expression: ir
      8 |   jump L0
      9 | L0:
     10 |   r5 = ref &mut rows
-    11 |   r6 = take @outer
-    12 |   commit @outer = r6
-    13 |   r7 = take @total
-    14 |   commit @total = r7
-    15 |   r8 = call #2(r5)
-    16 |   r9 = fetch @outer
-    17 |   assign @outer = r9
-    18 |   r10 = fetch @total
-    19 |   assign @total = r10
-    20 |   r11 = test r8 is Some
-    21 |   jump_if r11 then L1 else L2
-    22 | L1:
-    23 |   r12 = unwrap r8
-    24 |   assign row = r12
-    25 |   r13 = take row
-    26 |   r14 = call #0(r13)
-    27 |   r15 = call #1(r14)
-    28 |   assign xs = r15
-    29 |   jump L3
-    30 | L3:
-    31 |   r16 = ref &mut xs
-    32 |   r17 = take @outer
-    33 |   commit @outer = r17
-    34 |   r18 = take @total
-    35 |   commit @total = r18
-    36 |   r19 = call #2(r16)
-    37 |   r20 = fetch @outer
-    38 |   assign @outer = r20
-    39 |   r21 = fetch @total
-    40 |   assign @total = r21
-    41 |   r22 = test r19 is Some
-    42 |   jump_if r22 then L4 else L5
-    43 | L4:
-    44 |   r23 = unwrap r19
-    45 |   assign x = r23
-    46 |   r24 = take @total
-    47 |   r25 = take x
-    48 |   r26 = r24 + r25
-    49 |   assign @total = r26
-    50 |   jump L3
-    51 | L5:
-    52 |   jump L0
-    53 | L2:
-    54 |   r27 = take @total
-    55 |   r28 = take @outer
-    56 |   commit @outer = r28
-    57 |   r29 = take @total
-    58 |   commit @total = r29
-    59 |   return r27
+    11 |   r6 = call #2(r5)
+    12 |   r7 = test r6 is Some
+    13 |   jump_if r7 then L1 else L2
+    14 | L1:
+    15 |   r8 = unwrap r6
+    16 |   assign row = r8
+    17 |   r9 = take row
+    18 |   r10 = call #0(r9)
+    19 |   r11 = call #1(r10)
+    20 |   assign xs = r11
+    21 |   jump L3
+    22 | L3:
+    23 |   r12 = ref &mut xs
+    24 |   r13 = call #2(r12)
+    25 |   r14 = test r13 is Some
+    26 |   jump_if r14 then L4 else L5
+    27 | L4:
+    28 |   r15 = unwrap r13
+    29 |   assign x = r15
+    30 |   r16 = take @total
+    31 |   r17 = take x
+    32 |   r18 = r16 + r17
+    33 |   assign @total = r18
+    34 |   jump L3
+    35 | L5:
+    36 |   jump L0
+    37 | L2:
+    38 |   r19 = take @total
+    39 |   r20 = take @outer
+    40 |   commit @outer = r20
+    41 |   r21 = take @total
+    42 |   commit @total = r21
+    43 |   return r19
 
     ; r0 (@outer) : Array<Array<Int, 3>, 3>
     ; r1 (@total) : Int
@@ -70,29 +54,21 @@ expression: ir
     ; r3 (v6) : List<Array<Int, 3>>
     ; r4 (iter(...)) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
     ; r5 (rows.) : &mut Iterator<Array<Int, 3>, Pure, #IdentityId(0)>
-    ; r6 (v11) : Array<Array<Int, 3>, 3>
-    ; r7 (v12) : Int
-    ; r8 (next(...)) : Option<Array<Int, 3>>
-    ; r9 (@outer) : Array<Array<Int, 3>, 3>
-    ; r10 (@total) : Int
-    ; r11 (v15) : Bool
-    ; r12 (row) : Array<Int, 3>
-    ; r13 (row) : Array<Int, 3>
-    ; r14 (v19) : List<Int>
-    ; r15 (iter(...)) : Iterator<Int, Pure, #IdentityId(1)>
-    ; r16 (xs.) : &mut Iterator<Int, Pure, #IdentityId(1)>
-    ; r17 (v24) : Array<Array<Int, 3>, 3>
+    ; r6 (next(...)) : Option<Array<Int, 3>>
+    ; r7 (v11) : Bool
+    ; r8 (row) : Array<Int, 3>
+    ; r9 (row) : Array<Int, 3>
+    ; r10 (v15) : List<Int>
+    ; r11 (iter(...)) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r12 (xs.) : &mut Iterator<Int, Pure, #IdentityId(1)>
+    ; r13 (next(...)) : Option<Int>
+    ; r14 (v20) : Bool
+    ; r15 (x) : Int
+    ; r16 (@total) : Int
+    ; r17 (x) : Int
     ; r18 (v25) : Int
-    ; r19 (next(...)) : Option<Int>
-    ; r20 (@outer) : Array<Array<Int, 3>, 3>
-    ; r21 (@total) : Int
-    ; r22 (v28) : Bool
-    ; r23 (x) : Int
-    ; r24 (@total) : Int
-    ; r25 (x) : Int
-    ; r26 (v33) : Int
-    ; r27 (@total) : Int
-    ; r28 (v35) : Array<Array<Int, 3>, 3>
-    ; r29 (v36) : Int
-    ; r30 (@total) : Int
-    ; r31 (@outer) : Array<Array<Int, 3>, 3>
+    ; r19 (@total) : Int
+    ; r20 (v27) : Array<Array<Int, 3>, 3>
+    ; r21 (v28) : Int
+    ; r22 (@total) : Int
+    ; r23 (@outer) : Array<Array<Int, 3>, 3>
