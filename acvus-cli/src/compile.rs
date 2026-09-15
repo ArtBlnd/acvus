@@ -27,6 +27,7 @@ pub struct Diagnostic {
 pub struct Compiled {
     pub entry: QualifiedRef,
     pub functions: FxHashMap<QualifiedRef, Executable>,
+    pub space: acvus_interpreter::SpaceHooksByType,
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub context_names: FxHashMap<QualifiedRef, Astr>,
     pub ret_ty: Ty,
@@ -85,6 +86,7 @@ pub fn compile(
         functions: extern_fns,
         types,
         handlers,
+        space,
     } = Externs::combine(registries, interner).map_err(|e| {
         vec![Diagnostic {
             message: format!("the registries do not combine: {e}"),
@@ -177,6 +179,7 @@ pub fn compile(
     Ok(Compiled {
         entry,
         functions: executables,
+        space,
         fn_types,
         context_names,
         ret_ty,

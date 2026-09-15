@@ -30,6 +30,7 @@ fn extend_with_std(interner: &Interner, functions: &mut Vec<Function>) -> TypeRe
         functions: std_fns,
         types,
         handlers: _,
+        ..
     } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
         .expect("standard registries combine");
     functions.extend(std_fns);

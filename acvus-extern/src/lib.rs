@@ -16,6 +16,7 @@ mod identity;
 mod len;
 mod obj;
 mod reference;
+mod space;
 mod registry;
 mod runtime;
 mod ty_arg;
@@ -28,6 +29,7 @@ pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{Cross, Obj, erase_field, materialize_field};
 pub use reference::{Carried, Ref, RefMut};
+pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use repr::{AsCross, AsIs, Crossing, HasRepr};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,

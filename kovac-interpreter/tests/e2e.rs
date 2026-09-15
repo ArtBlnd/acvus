@@ -32,6 +32,7 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
         functions: std_fns,
         types: type_registry,
         handlers: _,
+        ..
     } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
         .expect("standard registries combine");
     functions.extend(std_fns);

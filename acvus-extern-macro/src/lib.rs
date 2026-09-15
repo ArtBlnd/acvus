@@ -933,6 +933,17 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
                 __handlers.insert(__f.decl.qref, __f.handler);
                 __fns.push(__f.decl);
             }
+            let mut __space = ::acvus_extern::FxHashMap::default();
+            #(
+                if let ::core::option::Option::Some(__hooks) =
+                    <#types as ::acvus_extern::ExternTypeDecl>::space()
+                {
+                    __space.insert(
+                        <#types as ::acvus_extern::ExternTypeDecl>::type_decl(__i).qref,
+                        __hooks,
+                    );
+                }
+            )*
             ::acvus_extern::Contribution {
                 manifest: ::acvus_extern::Manifest {
                     types: vec![#(<#types as ::acvus_extern::ExternTypeDecl>::type_decl(__i)),*],
@@ -942,6 +953,7 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
                     fns: __fns,
                 },
                 handlers: __handlers,
+                space: __space,
             }
         })
     }

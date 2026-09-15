@@ -12,6 +12,7 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::handler::{ExternEntry, MonoHandler, MonoInstance};
+use crate::space::SpaceHooks;
 use crate::runtime::Runtime;
 
 // -- Declarations ------------------------------------------------------
@@ -53,6 +54,14 @@ pub struct ExternFn<R: Runtime> {
 
 pub trait ExternTypeDecl {
     fn type_decl(interner: &Interner) -> UserDefinedDecl;
+    /// The type's space hooks (RFC-0033); a type without them cannot be a
+    /// context a space holds.
+    fn space<R>() -> Option<SpaceHooks<R>>
+    where
+        R: Runtime,
+    {
+        None
+    }
 }
 
 /// The marker type `extern_signature!` declares.
@@ -72,6 +81,7 @@ pub type Handlers<R> = FxHashMap<QualifiedRef, ExternEntry<R>>;
 pub struct Contribution<R: Runtime> {
     pub manifest: Manifest,
     pub handlers: Handlers<R>,
+    pub space: FxHashMap<QualifiedRef, SpaceHooks<R>>,
 }
 
 pub struct Registry<R: Runtime> {
@@ -146,6 +156,7 @@ pub struct Externs<R: Runtime> {
     pub functions: Vec<Function>,
     pub types: TypeRegistry,
     pub handlers: Handlers<R>,
+    pub space: FxHashMap<QualifiedRef, SpaceHooks<R>>,
 }
 
 /// The instances collected for one signature.
@@ -176,14 +187,17 @@ impl<R: Runtime> Externs<R> {
             }
         }
         let mut plain_manifests = Vec::new();
+        let mut space: FxHashMap<QualifiedRef, SpaceHooks<R>> = FxHashMap::default();
         for c in contributions {
             let Contribution {
                 manifest,
                 handlers,
+                space: hooks,
             } = c;
             for decl in manifest.types {
                 types.register(decl);
             }
+            space.extend(hooks);
             for sig in manifest.signatures {
                 signatures.insert(
                     sig.qref,
@@ -272,6 +286,7 @@ impl<R: Runtime> Externs<R> {
             functions,
             types,
             handlers,
+            space,
         })
     }
 }

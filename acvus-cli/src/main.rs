@@ -214,11 +214,13 @@ async fn run(
         fn_types,
         context_names,
         ret_ty,
+        space,
         ..
     } = compiled;
     let shared = InterpreterContext::new(interner, functions, executor)
         .with_fn_types(fn_types)
-        .with_context_names(context_names);
+        .with_context_names(context_names)
+        .with_space(space);
     let mut interp = Interpreter::new(shared, entry, InMemoryContext::new(loaded.snapshot));
     let value = match interp.execute().await {
         Ok(v) => v,

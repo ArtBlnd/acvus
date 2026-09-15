@@ -28,6 +28,7 @@ async fn run_ext(
         mut functions,
         types: type_registry,
         handlers,
+        ..
     } = Externs::combine(all_registries, interner).expect("registries combine");
 
     let contexts: Vec<Context> = context

@@ -287,6 +287,8 @@ pub struct InterpreterContext {
     pub context_names: Freeze<FxHashMap<QualifiedRef, Astr>>,
     pub executor: Arc<dyn crate::executor::Executor>,
     pub vtables: Arc<VtableRegistry>,
+    /// Space hooks by extension type (RFC-0033).
+    pub space: Arc<crate::layout::Hooks>,
 }
 
 impl InterpreterContext {
@@ -302,6 +304,7 @@ impl InterpreterContext {
             context_names: Freeze::new(FxHashMap::default()),
             executor,
             vtables: Arc::new(VtableRegistry::default()),
+            space: Arc::new(crate::layout::Hooks::default()),
         }
     }
 
@@ -315,7 +318,12 @@ impl InterpreterContext {
         self
     }
 
-    fn runtime(&self) -> AcvusRuntime {
+    pub fn with_space(mut self, hooks: crate::layout::Hooks) -> Self {
+        self.space = Arc::new(hooks);
+        self
+    }
+
+    pub fn runtime(&self) -> AcvusRuntime {
         AcvusRuntime(self.clone())
     }
 }

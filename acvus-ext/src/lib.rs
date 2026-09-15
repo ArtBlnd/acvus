@@ -13,7 +13,7 @@ mod string;
 pub use container::container_registry;
 pub use conversion::conversion_registry;
 pub use datetime::datetime_registry;
-pub use deque::deque_registry;
+pub use deque::{Deque, deque_registry};
 pub use encoding::encoding_registry;
 pub use iter_pipeline::Iter;
 pub use iterator::iterator_registry;

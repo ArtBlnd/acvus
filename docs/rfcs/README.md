@@ -78,3 +78,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0030](0030-paths-and-method-calls.md) | A qualified call names a namespace; a method call is a call on its receiver | Accepted |
 | [RFC-0031](0031-script-runner.md) | `acvus`, the script runner | Accepted |
 | [RFC-0032](0032-objects-across-the-boundary.md) | An object crosses the boundary as its fields | Accepted |
+| [RFC-0033](0033-space.md) | A space holds a context as its type lays it out and its ops change it | Accepted (first instance) |

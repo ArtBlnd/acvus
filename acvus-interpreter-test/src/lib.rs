@@ -134,6 +134,7 @@ where
         functions: extern_fns,
         types: mut type_registry,
         handlers,
+        ..
     } = Externs::combine(extern_registries, interner).expect("registries combine");
     declare_types(&mut type_registry);
     // Polymorphic ExternFns (with Var placeholders) are skipped - only fully concrete ones get metadata.

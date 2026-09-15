@@ -7,10 +7,12 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    EffectVar, ExternError, ExternTypeDecl, IdentityVar, Interner, PolyTy, PolyVars,
-    QualifiedRef, Ref, RefMut, Registry, Runtime, TyArg, TyVar, TyVarBound, UserDefinedDecl,
-    extern_fn, extern_registry,
+    Decode, EffectVar, Encode, ExternError, ExternTypeDecl, IdentityVar, Interner, Journaled,
+    NodeHash, PolyTy, PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SpaceError,
+    SpaceHooks, SpaceResult, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
+    extern_registry,
 };
+use acvus_mir::ty::Ty;
 
 use crate::container::{checked_index, sig as container};
 use crate::iter_pipeline::Iter;
@@ -28,6 +30,9 @@ where
     settled: usize,
     dropped_front: usize,
     dropped_back: usize,
+    /// The log node this deque was loaded from or last committed as
+    /// (RFC-0033).
+    head: Option<NodeHash>,
 }
 
 /// The net change since the last `settle`.
@@ -50,6 +55,7 @@ where
             settled: 0,
             dropped_front: 0,
             dropped_back: 0,
+            head: None,
         }
     }
 }
@@ -108,6 +114,10 @@ where
         self.items.get(index)
     }
 
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.items.get_mut(index)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.items.iter()
     }
@@ -156,6 +166,144 @@ where
             effect_params: 0,
             identity_params: 0,
         }
+    }
+
+    fn space<R>() -> Option<SpaceHooks<R>>
+    where
+        R: Runtime,
+    {
+        Some(SpaceHooks::of::<Deque<R::Value>>())
+    }
+}
+
+/// The deque's op tags in its log (RFC-0033).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Op {
+    PushFront = 0,
+    PushBack = 1,
+    PopFront = 2,
+    PopBack = 3,
+}
+
+impl Op {
+    fn from_byte(b: u8) -> SpaceResult<Self> {
+        Ok(match b {
+            0 => Op::PushFront,
+            1 => Op::PushBack,
+            2 => Op::PopFront,
+            3 => Op::PopBack,
+            other => return Err(SpaceError::new(format!("Deque: unknown op tag {other}"))),
+        })
+    }
+}
+
+fn element_of<'a>(type_args: &'a [Ty]) -> SpaceResult<&'a Ty> {
+    match type_args {
+        [elem] => Ok(elem),
+        other => Err(SpaceError::new(format!(
+            "Deque has one type argument, got {}",
+            other.len()
+        ))),
+    }
+}
+
+fn read_u64(input: &mut &[u8]) -> SpaceResult<u64> {
+    let (head, rest) = input
+        .split_first_chunk::<8>()
+        .ok_or_else(|| SpaceError::new("Deque: truncated count"))?;
+    *input = rest;
+    Ok(u64::from_le_bytes(*head))
+}
+
+/// State: `u64` count, then the items front to back. Op: one tag byte,
+/// then the element for a push. Pushes at one end are recorded in push
+/// order; a pop of a settled item is a pop op, a pop of an item pushed
+/// since the last take cancels that push.
+impl<Rt> Journaled<Rt> for Deque<Rt::Value>
+where
+    Rt: Runtime,
+{
+    fn encode_state(&self, _: &Rt, type_args: &[Ty], elem: &Encode<'_, Rt>, out: &mut Vec<u8>) -> SpaceResult<()> {
+        let ty = element_of(type_args)?;
+        out.extend_from_slice(&(self.items.len() as u64).to_le_bytes());
+        for item in &self.items {
+            elem(ty, item, out)?;
+        }
+        Ok(())
+    }
+
+    fn decode_state(_: &Rt, type_args: &[Ty], elem: &Decode<'_, Rt>, input: &mut &[u8]) -> SpaceResult<Self> {
+        let ty = element_of(type_args)?;
+        let count = read_u64(input)?;
+        let mut d = Deque::default();
+        for _ in 0..count {
+            d.items.push_back(elem(ty, input)?);
+        }
+        d.settle();
+        Ok(d)
+    }
+
+    fn take_ops(&mut self, _: &Rt, type_args: &[Ty], elem: &Encode<'_, Rt>) -> SpaceResult<Vec<Vec<u8>>> {
+        let ty = element_of(type_args)?;
+        let mut ops = Vec::new();
+        for _ in 0..self.dropped_front {
+            ops.push(vec![Op::PopFront as u8]);
+        }
+        for _ in 0..self.dropped_back {
+            ops.push(vec![Op::PopBack as u8]);
+        }
+        {
+            let record = self.record();
+            for item in record.pushed_front {
+                let mut op = vec![Op::PushFront as u8];
+                elem(ty, item, &mut op)?;
+                ops.push(op);
+            }
+            for item in record.pushed_back {
+                let mut op = vec![Op::PushBack as u8];
+                elem(ty, item, &mut op)?;
+                ops.push(op);
+            }
+        }
+        self.settle();
+        Ok(ops)
+    }
+
+    fn apply_op(&mut self, _: &Rt, type_args: &[Ty], elem: &Decode<'_, Rt>, op: &mut &[u8]) -> SpaceResult<()> {
+        let ty = element_of(type_args)?;
+        let (tag, rest) = op
+            .split_first()
+            .ok_or_else(|| SpaceError::new("Deque: empty op"))?;
+        *op = rest;
+        let empty = || SpaceError::new("Deque: a pop on an empty deque in the log");
+        match Op::from_byte(*tag)? {
+            Op::PushFront => self.items.push_front(elem(ty, op)?),
+            Op::PushBack => self.items.push_back(elem(ty, op)?),
+            Op::PopFront => drop(self.items.pop_front().ok_or_else(empty)?),
+            Op::PopBack => drop(self.items.pop_back().ok_or_else(empty)?),
+        }
+        self.settle();
+        Ok(())
+    }
+
+    fn children(&mut self, type_args: &[Ty], visit: &mut Visit<'_, Rt>) -> SpaceResult<()> {
+        let ty = element_of(type_args)?;
+        if !matches!(ty, Ty::UserDefined { .. }) {
+            return Ok(());
+        }
+        for item in self.items.iter_mut() {
+            visit(ty, item)?;
+        }
+        Ok(())
+    }
+
+    fn head(&self) -> Option<NodeHash> {
+        self.head
+    }
+
+    fn set_head(&mut self, head: NodeHash) {
+        self.head = Some(head);
     }
 }
 
