@@ -307,11 +307,10 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::TupleIndex { .. }
         | InstKind::Merge { .. } => false,
 
-        // These don't consume a value; Ref and Take only read the
-        // reference a place goes through.
+        // These don't consume a value; a Ref only reads the reference a
+        // place goes through.
         InstKind::Const { .. }
         | InstKind::Ref { .. }
-        | InstKind::Take { .. }
         | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }

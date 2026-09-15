@@ -10,6 +10,7 @@
 use acvus_utils::LocalIdOps;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::loans::{Loan, Loans};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{InstKind, MirBody, MirModule, RefTarget, ValueId};
@@ -35,34 +36,6 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
 }
 
 // -- Exclusion ---------------------------------------------------------
-
-/// A reference value: the storage it names, whether it may write, and the
-/// references it reborrows through.
-#[derive(Clone)]
-struct Borrow {
-    target: RefTarget,
-    mutability: Mutability,
-    chain: Vec<ValueId>,
-}
-
-/// The storage a target names once every `Through` is followed to a
-/// reference defined in the body, with the references passed on the way.
-/// A `Through` of a reference not defined here stays as it is.
-fn resolve(target: &RefTarget, raw: &FxHashMap<ValueId, (RefTarget, Mutability)>) -> (RefTarget, Vec<ValueId>) {
-    let mut chain = Vec::new();
-    let mut current = target.clone();
-    while let RefTarget::Through(r) = current {
-        let Some((base, _)) = raw.get(&r) else {
-            break;
-        };
-        if chain.contains(&r) {
-            break;
-        }
-        chain.push(r);
-        current = base.clone();
-    }
-    (current, chain)
-}
 
 /// A `Take` whose result has no type entry is checked as a move: the
 /// stricter reading, so a missing type never hides a conflict. A result
@@ -104,8 +77,8 @@ fn touch(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Option<(RefTarg
     }
 }
 
-/// Whether `touch` on a storage conflicts with a live borrow of it.
-fn conflicts(live: &Borrow, touch: &Touch) -> bool {
+/// Whether `touch` on a storage conflicts with a live loan of it.
+fn conflicts(live: &Loan, touch: &Touch) -> bool {
     match (live.mutability, touch) {
         (Mutability::Mut, _) => true,
         (Mutability::Shared, Touch::Reference(Mutability::Shared)) => false,
@@ -115,51 +88,51 @@ fn conflicts(live: &Borrow, touch: &Touch) -> bool {
     }
 }
 
-fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>) {
-    let mut raw: FxHashMap<ValueId, (RefTarget, Mutability)> = FxHashMap::default();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            if let InstKind::Ref {
-                dst,
-                target,
-                mutability,
-                ..
-            } = &inst.kind
-            {
-                raw.insert(*dst, (target.clone(), *mutability));
+struct Reached {
+    storage: Vec<ValueId>,
+    via: Vec<ValueId>,
+}
+
+fn reached(target: &RefTarget, loans: &Loans) -> Reached {
+    match target {
+        RefTarget::Var(s) | RefTarget::Param(s) => Reached {
+            storage: vec![*s],
+            via: vec![],
+        },
+        RefTarget::Through(r) => {
+            let region = loans.region(*r);
+            Reached {
+                storage: region.loans.iter().map(|l| l.storage).collect(),
+                via: region.via.iter().copied().chain([*r]).collect(),
             }
         }
     }
-    if raw.is_empty() {
+}
+
+fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>) {
+    let loans = Loans::build(cfg);
+    let holders: FxHashSet<ValueId> = cfg
+        .val_types
+        .keys()
+        .filter(|v| !loans.region(**v).loans.is_empty())
+        .copied()
+        .collect();
+    if holders.is_empty() {
         return;
     }
-    let borrows: FxHashMap<ValueId, Borrow> = raw
-        .iter()
-        .map(|(dst, (target, mutability))| {
-            let (root, chain) = resolve(target, &raw);
-            (
-                *dst,
-                Borrow {
-                    target: root,
-                    mutability: *mutability,
-                    chain,
-                },
-            )
-        })
-        .collect();
     let live = liveness::analyze(cfg);
 
     for (bi, block) in cfg.blocks.iter().enumerate() {
-        // Borrows live before each instruction, by a backward walk from
+        // Holders live before each instruction, by a backward walk from
         // the block's live-out set.
         let mut live_before: Vec<FxHashSet<ValueId>> = vec![FxHashSet::default(); block.insts.len()];
-        let mut current: FxHashSet<ValueId> = borrows
-            .keys()
+        let mut current: FxHashSet<ValueId> = holders
+            .iter()
             .filter(|v| live.is_live_out(BlockIdx(bi), **v))
             .copied()
             .collect();
         for v in terminator_uses(&block.terminator) {
-            if borrows.contains_key(&v) {
+            if holders.contains(&v) {
                 current.insert(v);
             }
         }
@@ -168,7 +141,7 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
                 current.remove(&d);
             }
             for u in inst_info::uses(&inst.kind) {
-                if borrows.contains_key(&u) {
+                if holders.contains(&u) {
                     current.insert(u);
                 }
             }
@@ -179,20 +152,24 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
             let Some((target, touch)) = touch(&inst.kind, &cfg.val_types) else {
                 continue;
             };
-            let (root, chain) = resolve(&target, &raw);
-            for reference in &live_before[ii] {
-                let borrow = &borrows[reference];
-                if chain.contains(reference) {
+            let reach = reached(&target, &loans);
+            for holder in &live_before[ii] {
+                if reach.via.contains(holder) {
                     continue;
                 }
-                if borrow.target == root && conflicts(borrow, &touch) {
+                let hit = loans
+                    .region(*holder)
+                    .loans
+                    .iter()
+                    .any(|loan| reach.storage.contains(&loan.storage) && conflicts(loan, &touch));
+                if hit {
                     errors.push(ValidationError {
                         scope: scope.to_string(),
                         inst_index: ii,
                         span: inst.span,
                         kind: ValidationErrorKind::BorrowConflict {
                             storage: format!("{target:?}"),
-                            reference: reference.to_raw() as u32,
+                            reference: holder.to_raw() as u32,
                         },
                     });
                 }

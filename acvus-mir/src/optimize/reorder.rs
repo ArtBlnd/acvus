@@ -36,11 +36,9 @@ use crate::ty::Ty;
 
 /// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
 pub fn run(cfg: &mut CfgBody) {
-    let CfgBody {
-        blocks, val_types, ..
-    } = cfg;
-    for block in blocks {
-        reorder_block(&mut block.insts, val_types);
+    let loans = Loans::build(cfg);
+    for block in &mut cfg.blocks {
+        reorder_block(&mut block.insts, &cfg.val_types, &loans);
     }
 }
 
@@ -64,13 +62,13 @@ enum Priority {
 }
 
 /// Reorder instructions within a single basic block, in-place.
-fn reorder_block(insts: &mut Vec<Inst>, val_types: &FxHashMap<ValueId, Ty>) {
+fn reorder_block(insts: &mut Vec<Inst>, val_types: &FxHashMap<ValueId, Ty>, loans: &Loans) {
     let n = insts.len();
     if n <= 1 {
         return;
     }
 
-    let deps = build_dependency_graph(insts, val_types);
+    let deps = build_dependency_graph(insts, val_types, loans);
     let priorities = compute_priorities(insts);
 
     *insts = priority_topo_sort(insts, &deps, &priorities);
@@ -155,6 +153,7 @@ fn touches(insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> Vec<Option<Tou
 fn build_dependency_graph(
     insts: &[Inst],
     val_types: &FxHashMap<ValueId, Ty>,
+    loans: &Loans,
 ) -> Vec<SmallVec<[usize; 4]>> {
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
@@ -174,7 +173,6 @@ fn build_dependency_graph(
 
     // Storage order (RFC-0015): a touch of a slot follows its last write,
     // and a write follows every touch since the previous write.
-    let loans = Loans::build_from_insts(insts);
     let mut last_write: FxHashMap<ValueId, usize> = FxHashMap::default();
     let mut reads_since: FxHashMap<ValueId, Vec<usize>> = FxHashMap::default();
     for (i, inst) in insts.iter().enumerate() {
