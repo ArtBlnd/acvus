@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
+assertion_line: 145
 expression: raw
 ---
 === literals ===
@@ -83,9 +84,12 @@ expression: raw
     ; r29 (v25) : String
     ; r30 (v12) : String
     ; r31 (@user) : {age: Int, name: String}
-    ; r32 (v20) : String
-    ; r33 (@output) : {eligible: Bool, label: String, score: Int}
-    ; r34 (v23) : String
-    ; r35 (v26) : String
-    ; r36 (v13) : String
-    ; r37 (v16) : String
+    ; r32 (eligible) : Bool
+    ; r33 (v20) : String
+    ; r34 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r35 (v23) : String
+    ; r36 (v26) : String
+    ; r37 (score) : Int
+    ; r38 (label) : String
+    ; r39 (v13) : String
+    ; r40 (v16) : String

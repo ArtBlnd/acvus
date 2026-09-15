@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use acvus_interpreter::{
-    Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor, Value,
+    Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
 };
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::{Interner, LocalFactory};
 use rustc_hash::FxHashMap;
 
@@ -13,6 +14,10 @@ use rustc_hash::FxHashMap;
 /// Allocate N sequential ValueIds from a factory.
 fn alloc_n(factory: &mut LocalFactory<ValueId>, n: usize) -> Vec<ValueId> {
     (0..n).map(|_| factory.next()).collect()
+}
+
+fn types(entries: Vec<(ValueId, Ty)>) -> FxHashMap<ValueId, Ty> {
+    entries.into_iter().collect()
 }
 
 fn inst(kind: InstKind) -> Inst {
@@ -69,7 +74,7 @@ async fn spawn_eval_basic() {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: FxHashMap::default(),
+                val_types: types(vec![(vids[0], Ty::Int), (vids[1], Ty::Int), (vids[2], Ty::Int)]),
                 params: vec![(interner.intern("p0"), vids[0])],
                 captures: vec![],
                 debug: DebugInfo::new(),
@@ -101,7 +106,6 @@ async fn spawn_eval_basic() {
                 dst: vids[2],
                 src: vids[1],
                 order: None,
-                lent: Vec::new(),
             }),
             inst(InstKind::Return {
                 value: vids[2],
@@ -111,7 +115,11 @@ async fn spawn_eval_basic() {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: FxHashMap::default(),
+                val_types: types(vec![
+                    (vids[0], Ty::Int),
+                    (vids[1], Ty::Handle(Box::new(Ty::Int))),
+                    (vids[2], Ty::Int),
+                ]),
                 params: vec![],
                 captures: vec![],
                 debug: DebugInfo::new(),
@@ -132,7 +140,7 @@ async fn spawn_eval_basic() {
     let mut interp = Interpreter::new(shared, entry_id, page);
     let result = interp.execute().await.expect("execution failed");
 
-    assert_eq!(result.value, Value::Int(42));
+    assert_eq!(result.as_int(), 42);
 }
 
 /// Spawn with multiple args - callee receives two params and returns their sum.
@@ -162,7 +170,7 @@ async fn spawn_eval_multi_args() {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: FxHashMap::default(),
+                val_types: types(vec![(vids[0], Ty::Int), (vids[1], Ty::Int), (vids[2], Ty::Int)]),
                 params: vec![
                     (interner.intern("p0"), vids[0]),
                     (interner.intern("p1"), vids[1]),
@@ -201,7 +209,6 @@ async fn spawn_eval_multi_args() {
                 dst: vids[3],
                 src: vids[2],
                 order: None,
-                lent: Vec::new(),
             }),
             inst(InstKind::Return {
                 value: vids[3],
@@ -211,7 +218,12 @@ async fn spawn_eval_multi_args() {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: FxHashMap::default(),
+                val_types: types(vec![
+                    (vids[0], Ty::Int),
+                    (vids[1], Ty::Int),
+                    (vids[2], Ty::Handle(Box::new(Ty::Int))),
+                    (vids[3], Ty::Int),
+                ]),
                 params: vec![],
                 captures: vec![],
                 debug: DebugInfo::new(),
@@ -232,5 +244,5 @@ async fn spawn_eval_multi_args() {
     let mut interp = Interpreter::new(shared, entry_id, page);
     let result = interp.execute().await.expect("execution failed");
 
-    assert_eq!(result.value, Value::Int(42));
+    assert_eq!(result.as_int(), 42);
 }

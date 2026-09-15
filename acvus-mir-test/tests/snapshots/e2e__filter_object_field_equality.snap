@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1206
 expression: ir
 ---
 === literals ===
@@ -36,13 +37,15 @@ expression: ir
     ; r11 (to_string(...)) : String
     ; r12 (v19) : String
     ; r13 (@users) : List<{active: Bool, name: String}>
-    ; r14 (users) : List<{active: Bool, name: String}>
-    ; r15 (@users) : List<{active: Bool, name: String}>
-    ; r16 (v20) : List<{active: Bool, name: String}>
+    ; r14 (x) : List<{active: Bool, name: String}>
+    ; r15 (v20) : List<{active: Bool, name: String}>
+    ; r16 (users) : List<{active: Bool, name: String}>
     ; r17 (v15) : String
-    ; r18 (v5) : String
-    ; r19 (x) : List<{active: Bool, name: String}>
-    ; r20 (v8) : String
+    ; r18 (users) : List<{active: Bool, name: String}>
+    ; r19 (@users) : List<{active: Bool, name: String}>
+    ; r20 (v5) : String
+    ; r21 (x) : List<{active: Bool, name: String}>
+    ; r22 (v8) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef
@@ -53,3 +56,4 @@ expression: ir
     ; r1 ((*r3).active) : Bool
     ; r2 (v1) : &{active: Bool, name: String}
     ; r3 (v3) : &{active: Bool, name: String}
+    ; r4 (u) : &{active: Bool, name: String}

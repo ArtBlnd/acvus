@@ -16,6 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator};
+use crate::analysis::loans::Loans;
 use crate::ir::{InstKind, Label, ValueId};
 
 // -- Def location ----------------------------------------------------
@@ -63,7 +64,10 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 ///
 /// An instruction with ANY effect (read, write, IO) must not
 /// be removed. Only provably pure instructions can be dead.
-fn is_root(kind: &InstKind) -> bool {
+fn is_root(kind: &InstKind, loans: &Loans) -> bool {
+    if !loans.storage_effect(kind).writes.is_empty() {
+        return true;
+    }
     match kind {
         // A write to storage is observable; a take leaves its storage empty.
         InstKind::Assign { .. }
@@ -107,6 +111,7 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
 /// to observable behavior (Return, Store, Eval, effectful calls).
 pub fn run(cfg: &mut CfgBody) {
     let def_map = build_def_map(cfg);
+    let loans = Loans::build(cfg);
 
     // Live instruction set: (block_idx, inst_idx).
     let mut live_insts: FxHashSet<(usize, usize)> = FxHashSet::default();
@@ -118,7 +123,7 @@ pub fn run(cfg: &mut CfgBody) {
     // Phase 1: seed roots.
     for (bi, block) in cfg.blocks.iter().enumerate() {
         for (ii, inst) in block.insts.iter().enumerate() {
-            if is_root(&inst.kind) {
+            if is_root(&inst.kind, &loans) {
                 live_insts.insert((bi, ii));
                 worklist.extend(inst_info::uses(&inst.kind));
             }

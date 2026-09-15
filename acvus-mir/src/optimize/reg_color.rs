@@ -25,6 +25,7 @@
 
 use crate::analysis::inst_info;
 use crate::analysis::liveness::{self, LivenessResult};
+use crate::analysis::loans::Loans;
 use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{Callee, InstKind, ValueId};
 use crate::ty::Ty;
@@ -49,9 +50,10 @@ fn color_body_inner(cfg: &mut CfgBody, untyped_scalars: bool) {
     }
 
     let liveness = liveness::analyze(cfg);
-    let last_use = LastUseMap::build(cfg, &liveness);
+    let loans = Loans::build(cfg);
+    let last_use = LastUseMap::build(cfg, &liveness, &loans);
 
-    let coloring = compute_coloring(cfg, &liveness, &last_use, untyped_scalars);
+    let coloring = compute_coloring(cfg, &liveness, &last_use, &loans, untyped_scalars);
 
     if !coloring.is_improvement() {
         return;
@@ -147,6 +149,7 @@ fn compute_coloring(
     cfg: &CfgBody,
     liveness: &LivenessResult,
     last_use: &LastUseMap,
+    loans: &Loans,
     untyped_scalars: bool,
 ) -> Coloring {
     let mut coloring = Coloring::new();
@@ -169,7 +172,7 @@ fn compute_coloring(
         // Body instructions.
         for (i, inst) in block.insts.iter().enumerate() {
             let defs = inst_info::defs(&inst.kind);
-            let uses = inst_info::uses(&inst.kind);
+            let uses = loans.uses_with_storage(&inst.kind);
 
             // 1. Color defs (while uses still occupy their colors).
             for d in &defs {
@@ -259,7 +262,7 @@ struct LastUseMap {
 }
 
 impl LastUseMap {
-    fn build(cfg: &CfgBody, liveness: &LivenessResult) -> Self {
+    fn build(cfg: &CfgBody, liveness: &LivenessResult, loans: &Loans) -> Self {
         let blocks = cfg
             .blocks
             .iter()
@@ -268,7 +271,7 @@ impl LastUseMap {
                 let mut last = FxHashMap::default();
 
                 for (i, inst) in block.insts.iter().enumerate() {
-                    for u in inst_info::uses(&inst.kind) {
+                    for u in loans.uses_with_storage(&inst.kind) {
                         last.insert(u, UsePoint::Inst(i));
                     }
                 }
@@ -334,6 +337,17 @@ fn apply_coloring(cfg: &mut CfgBody, coloring: &Coloring) {
             .unwrap_or(v)
     };
 
+    let mut slot_origins = crate::ir::DebugInfo::new();
+    for inst in cfg.blocks.iter().flat_map(|b| b.insts.iter()) {
+        if let InstKind::Ref { target, .. } | InstKind::Take { target, .. } | InstKind::Assign { target, .. } =
+            &inst.kind
+            && let Some(slot) = inst_info::storage(target)
+            && let Some(origin) = cfg.debug.get(slot)
+        {
+            slot_origins.set(remap(slot), origin.clone());
+        }
+    }
+
     // Rewrite blocks.
     for block in &mut cfg.blocks {
         for v in &mut block.params {
@@ -363,20 +377,17 @@ fn apply_coloring(cfg: &mut CfgBody, coloring: &Coloring) {
         }
     }
 
-    // Reconstruct debug info from the final CFG - no remap needed.
-    // This is authoritative: each ValueId's origin is determined by the
-    // instruction that defines it in the final IR.
-    cfg.debug = reconstruct_debug(cfg);
+    cfg.debug = reconstruct_debug(cfg, slot_origins);
 
     cfg.val_factory = new_factory;
 }
 
 /// Reconstruct DebugInfo by scanning the final CFG instructions.
 /// Each ValueId gets its origin from the instruction that defines it.
-fn reconstruct_debug(cfg: &CfgBody) -> crate::ir::DebugInfo {
-    use crate::ir::{DebugInfo, RefTarget, ValOrigin};
+fn reconstruct_debug(cfg: &CfgBody, slot_origins: crate::ir::DebugInfo) -> crate::ir::DebugInfo {
+    use crate::ir::{RefTarget, ValOrigin};
 
-    let mut debug = DebugInfo::new();
+    let mut debug = slot_origins;
 
     // Build slot -> name lookup from params and captures.
     let mut slot_name: FxHashMap<ValueId, (acvus_utils::Astr, bool)> = FxHashMap::default();

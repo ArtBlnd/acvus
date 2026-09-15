@@ -1132,6 +1132,7 @@ impl<'a> Lowerer<'a> {
     fn define_var(&mut self, name: Astr, ty: Ty) -> ValueId {
         let slot = self.body.val_factory.next();
         self.set_origin(slot, ValOrigin::Named(name));
+        self.set_val_type(slot, ty.clone());
         let scope = self.scopes.last_mut().expect("a scope to define in");
         scope.insert(name, Local { ty, slot });
         slot

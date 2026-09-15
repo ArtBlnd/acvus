@@ -75,14 +75,21 @@ fn optimize_inner(
     let mut result_modules = FxHashMap::default();
 
     for (qref, mut module) in inlined.modules {
-        run_pass2_body(&mut module.main, context_types, untyped_scalars);
+        run_pass2_body(&mut module.main);
         for closure in module.closures.values_mut() {
-            run_pass2_body(closure, context_types, untyped_scalars);
+            run_pass2_body(closure);
         }
 
+        // Validated in SSA form: a register the coloring reuses would look
+        // like one value defined twice.
         let errors = validate::validate(&module);
         if !errors.is_empty() {
             all_errors.push((qref, errors));
+        }
+
+        color_body(&mut module.main, untyped_scalars);
+        for closure in module.closures.values_mut() {
+            color_body(closure, untyped_scalars);
         }
 
         result_modules.insert(qref, module);
@@ -105,18 +112,24 @@ fn run_pass1_body(body: &mut crate::ir::MirBody) {
 }
 
 /// Pass 2: Full optimization pipeline on a single body.
-fn run_pass2_body(
-    body: &mut crate::ir::MirBody,
-    context_types: &FxHashMap<QualifiedRef, Ty>,
-    untyped_scalars: bool,
-) {
+fn run_pass2_body(body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
-    run_pass2(&mut cfg, untyped_scalars);
+    run_pass2(&mut cfg);
+    *body = cfg::demote(cfg);
+}
+
+fn color_body(body: &mut crate::ir::MirBody, untyped_scalars: bool) {
+    let mut cfg = cfg::promote(std::mem::take(body));
+    if untyped_scalars {
+        optimize::reg_color::color_body_untyped(&mut cfg);
+    } else {
+        optimize::reg_color::color_body(&mut cfg);
+    }
     *body = cfg::demote(cfg);
 }
 
 /// Pass 2 pipeline on CfgBody.
-fn run_pass2(cfg: &mut CfgBody, untyped_scalars: bool) {
+fn run_pass2(cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
     optimize::ssa_pass::run(cfg);
@@ -127,11 +140,6 @@ fn run_pass2(cfg: &mut CfgBody, untyped_scalars: bool) {
     optimize::reorder::run(cfg);
     debug_validate(cfg);
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
-    if untyped_scalars {
-        optimize::reg_color::color_body_untyped(cfg);
-    } else {
-        optimize::reg_color::color_body(cfg);
-    }
 }
 
 /// Validate CfgBody after optimization: check use-def integrity, SSA dominance, and type coverage.

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 199
 expression: ir
 ---
 === literals ===
@@ -15,3 +16,4 @@ expression: ir
     ; r1 (v1) : Int
     ; r2 (v4) : String
     ; r3 (v3) : String
+    ; r4 (count) : Int

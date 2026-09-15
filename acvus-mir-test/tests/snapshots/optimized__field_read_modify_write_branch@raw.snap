@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
+assertion_line: 75
 expression: raw
 ---
 === main ===
@@ -36,4 +37,5 @@ expression: raw
     ; r9 (v12) : Bool
     ; r10 (@stats.count) : Int
     ; r11 (v14) : {count: Int, exceeded: Bool, threshold: Int}
-    ; r12 (@stats) : {count: Int, exceeded: Bool, threshold: Int}
+    ; r12 (count) : Int
+    ; r13 (@stats) : {count: Int, exceeded: Bool, threshold: Int}

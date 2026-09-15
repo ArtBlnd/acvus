@@ -27,6 +27,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::analysis::inst_info;
+use crate::analysis::loans::Loans;
 use crate::cfg::CfgBody;
 use crate::graph::QualifiedRef;
 use crate::ir::*;
@@ -158,22 +159,35 @@ fn build_dependency_graph(
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
 
-    // def_map: ValueId -> defining instruction index in this block.
+    // Use-def: a use follows the nearest preceding def of the value.
     let mut def_map: FxHashMap<ValueId, usize> = FxHashMap::default();
     for (i, inst) in insts.iter().enumerate() {
+        for u in inst_info::uses(&inst.kind) {
+            if let Some(&def_idx) = def_map.get(&u) {
+                deps[i].push(def_idx);
+            }
+        }
         for d in inst_info::defs(&inst.kind) {
             def_map.insert(d, i);
         }
     }
 
-    // SSA use-def: if B uses a value defined by A, then A -> B.
+    // Storage order (RFC-0015): a touch of a slot follows its last write,
+    // and a write follows every touch since the previous write.
+    let loans = Loans::build_from_insts(insts);
+    let mut last_write: FxHashMap<ValueId, usize> = FxHashMap::default();
+    let mut reads_since: FxHashMap<ValueId, Vec<usize>> = FxHashMap::default();
     for (i, inst) in insts.iter().enumerate() {
-        for u in inst_info::uses(&inst.kind) {
-            if let Some(&def_idx) = def_map.get(&u)
-                && def_idx != i
-            {
-                deps[i].push(def_idx);
-            }
+        let effect = loans.storage_effect(&inst.kind);
+        for s in effect.reads.iter().chain(&effect.writes) {
+            deps[i].extend(last_write.get(s).copied().filter(|&w| w != i));
+        }
+        for s in &effect.writes {
+            deps[i].extend(reads_since.remove(s).into_iter().flatten().filter(|&r| r != i));
+            last_write.insert(*s, i);
+        }
+        for s in &effect.reads {
+            reads_since.entry(*s).or_default().push(i);
         }
     }
 

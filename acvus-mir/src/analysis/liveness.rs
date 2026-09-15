@@ -13,6 +13,7 @@ use crate::analysis::dataflow::{
 };
 use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
+use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, ValueId};
 
@@ -45,7 +46,9 @@ impl SemiLattice for Liveness {
 // -- Transfer function -----------------------------------------------
 
 /// Backward liveness: kill defs, gen uses.
-struct LivenessAnalysis;
+struct LivenessAnalysis {
+    loans: Loans,
+}
 
 impl DataflowAnalysis for LivenessAnalysis {
     type Key = ValueId;
@@ -57,7 +60,7 @@ impl DataflowAnalysis for LivenessAnalysis {
             state.values.remove(&d);
         }
         // Gen: uses make the value live (before this point).
-        for u in inst_info::uses(&inst.kind) {
+        for u in self.loans.uses_with_storage(&inst.kind) {
             state.set(u, Liveness::Live);
         }
     }
@@ -131,7 +134,10 @@ pub fn analyze(cfg: &CfgBody) -> LivenessResult {
         };
     }
 
-    let result = backward_analysis(cfg, &LivenessAnalysis);
+    let analysis = LivenessAnalysis {
+        loans: Loans::build(cfg),
+    };
+    let result = backward_analysis(cfg, &analysis);
 
     let live_in = result.block_entry.iter().map(extract_live_set).collect();
     let live_out = result.block_exit.iter().map(extract_live_set).collect();

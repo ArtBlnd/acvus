@@ -19,6 +19,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::loans::Loans;
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
@@ -28,6 +29,7 @@ use crate::validate::move_check::is_move_only;
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
 pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     let liveness = liveness::analyze(cfg);
+    let loans = Loans::build(cfg);
 
     // Build label -> block index mapping.
     let label_to_block: FxHashMap<Label, usize> = cfg
@@ -46,9 +48,9 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         let mut drops_after: Vec<(usize, ValueId)> = Vec::new();
 
         for (ii, inst) in block.insts.iter().enumerate() {
-            for u in inst_info::uses(&inst.kind) {
+            for u in loans.uses_with_storage(&inst.kind) {
                 if !liveness.is_live_out(block_idx, u)
-                    && is_last_use_in_block(block, ii, u)
+                    && is_last_use_in_block(block, ii, u, &loans)
                     && needs_drop(u, val_types)
                     && !is_consumed_by_inst(&inst.kind, u)
                 {
@@ -92,7 +94,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                     continue;
                 }
 
-                if !is_used_in_block(block, v) {
+                if !is_used_in_block(block, v, &loans) {
                     // Unused def - insert drop right after definition.
                     let idx = block
                         .insts
@@ -173,9 +175,9 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 }
 
 /// Check if `val` is used after `at_idx` within the block (instructions + terminator).
-fn is_last_use_in_block(block: &crate::cfg::Block, at_idx: usize, val: ValueId) -> bool {
+fn is_last_use_in_block(block: &crate::cfg::Block, at_idx: usize, val: ValueId, loans: &Loans) -> bool {
     for inst in &block.insts[at_idx + 1..] {
-        if inst_info::uses(&inst.kind).contains(&val) {
+        if loans.uses_with_storage(&inst.kind).contains(&val) {
             return false;
         }
     }
@@ -186,9 +188,9 @@ fn is_last_use_in_block(block: &crate::cfg::Block, at_idx: usize, val: ValueId) 
 }
 
 /// Check if `val` is used by any instruction or terminator in the block.
-fn is_used_in_block(block: &crate::cfg::Block, val: ValueId) -> bool {
+fn is_used_in_block(block: &crate::cfg::Block, val: ValueId, loans: &Loans) -> bool {
     for inst in &block.insts {
-        if inst_info::uses(&inst.kind).contains(&val) {
+        if loans.uses_with_storage(&inst.kind).contains(&val) {
             return true;
         }
     }
@@ -267,6 +269,11 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         }
         // Eval consumes the Handle.
         InstKind::Eval { src, .. } => *src == val,
+        // A whole Take moves the value out of its slot (RFC-0018); a Take
+        // of a part leaves the rest for a Drop.
+        InstKind::Take { target, path, .. } => {
+            path.is_empty() && inst_info::storage(target) == Some(val)
+        }
         // Unwrap moves the payload out of the variant.
         InstKind::UnwrapVariant { src, .. } => *src == val,
         // Assign and Commit consume the value; the reference an Assign

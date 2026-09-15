@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1112
 expression: ir
 ---
 === literals ===
@@ -35,12 +36,14 @@ expression: ir
     ; r11 (@users) : List<{address: {city: String}}>
     ; r12 (v14) : String
     ; r13 (users) : List<{address: {city: String}}>
-    ; r14 (@users) : List<{address: {city: String}}>
-    ; r15 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r16 (v5) : String
-    ; r17 (v16) : String
-    ; r18 (v8) : String
-    ; r19 (v19) : List<{address: {city: String}}>
+    ; r14 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r15 (v5) : String
+    ; r16 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r17 (@users) : List<{address: {city: String}}>
+    ; r18 (users) : List<{address: {city: String}}>
+    ; r19 (v16) : String
+    ; r20 (v8) : String
+    ; r21 (v19) : List<{address: {city: String}}>
 
 === closure L0 (ValueId(0)) ===
      0 |   assign u = r0
@@ -49,3 +52,4 @@ expression: ir
 
     ; r0 (v1) : {address: {city: String}}
     ; r1 (u.address.city) : String
+    ; r2 (u) : {address: {city: String}}

@@ -21,7 +21,7 @@ while let Some(s) = next(&mut students) {
 let passing_total = @students
     | iter
     | map(|s| -> s.score)
-    | filter(|s| -> s >= 60)
+    | filter(|s| -> *s >= 60)
     | fold(0, |acc, s| -> acc + s);
 
 if fail > 0 {

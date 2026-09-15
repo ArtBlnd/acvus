@@ -3,92 +3,121 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::{ExternFn, ExternItems, ExternRegistry, ExternType, extern_fn, extern_registry};
-use acvus_interpreter::{AcvusRuntime, Executable, RuntimeError, TokioExecutor, Value};
+use acvus_extern::{ExternType, Registry, Runtime, extern_fn, extern_registry};
+use acvus_interpreter::{AcvusRuntime, Executable, TokioExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
-use acvus_mir::ty::{Effect, Ty, TypeRegistry};
+use acvus_mir::ty::{LenTerm, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-/// A registry of stateless, concrete closures with one effect.
-fn closures(
-    effect: Effect,
-    fns: impl Fn(&Interner) -> Vec<ExternFn<AcvusRuntime>> + 'static,
-) -> ExternRegistry<AcvusRuntime> {
-    ExternRegistry::new(move |i| ExternItems {
-        types: vec![],
-        fns: fns(i).into_iter().map(|f| f.with_effect(effect.clone())).collect(),
-    })
+fn ctx(i: &Interner, entries: Vec<(&str, TypedValue)>) -> Context {
+    entries
+        .into_iter()
+        .map(|(name, val)| (i.intern(name), val))
+        .collect()
 }
 
-fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, Value> {
-    entries
-        .iter()
-        .map(|(name, val)| (i.intern(name), val.clone()))
-        .collect()
+fn int(n: i64) -> TypedValue {
+    typed(Ty::Int, Value::int(n))
+}
+
+fn bool_(b: bool) -> TypedValue {
+    typed(Ty::Bool, Value::bool_(b))
+}
+
+fn string(s: &str) -> TypedValue {
+    typed(Ty::String, Value::string(s))
+}
+
+fn ints(xs: &[i64]) -> TypedValue {
+    typed(
+        Ty::Array(Box::new(Ty::Int), LenTerm::Known(xs.len())),
+        Value::array(xs.iter().map(|&x| Value::int(x)).collect()),
+    )
+}
+
+fn assert_str(v: &Value, expected: &str) {
+    assert!(v.is_string(), "expected a String, got {v:?}");
+    // SAFETY: the witness is String.
+    assert_eq!(unsafe { v.as_str() }, expected);
 }
 
 // =======================================================================
 //  Pure ExternFn
 // =======================================================================
 
+#[extern_fn(effect = pure)]
+fn ext_add<R>(_: &R, a: i64, b: i64) -> i64
+where
+    R: Runtime,
+{
+    a + b
+}
+
 #[tokio::test]
 async fn extern_pure_add() {
     let i = Interner::new();
+    let registry: Registry<AcvusRuntime> = extern_registry! {
+        ns: "t",
+        fns: [ext_add],
+    };
 
-    let registry = closures(Effect::PURE, |i| {
-        vec![ExternFn::sync(
-            i,
-            "ext_add",
-            |_: &Interner, a: i64, b: i64| Ok(a + b),
-        )]
-    });
-
-    let c = ctx(&i, &[]);
+    let c = ctx(&i, vec![]);
     let result = run_script_with_externs(&i, "ext_add(10, 32)", c, vec![registry]).await;
-    assert_eq!(result.value, Value::Int(42));
+    assert_eq!(result.value.as_int(), 42);
+}
+
+#[extern_fn(effect = pure)]
+fn shout<R>(_: &R, s: String) -> String
+where
+    R: Runtime,
+{
+    s.to_uppercase()
 }
 
 #[tokio::test]
 async fn extern_pure_string_transform() {
     let i = Interner::new();
+    let registry: Registry<AcvusRuntime> = extern_registry! {
+        ns: "t",
+        fns: [shout],
+    };
 
-    let registry = closures(Effect::PURE, |i| {
-        vec![ExternFn::sync(i, "shout", |_: &Interner, s: String| {
-            Ok(s.to_uppercase())
-        })]
-    });
-
-    let c = ctx(&i, &[("msg", Value::string("hello"))]);
+    let c = ctx(&i, vec![("msg", string("hello"))]);
     let result = run_script_with_externs(&i, "shout(@msg)", c, vec![registry]).await;
-    assert_eq!(result.value, Value::string("HELLO"));
+    assert_str(&result.value, "HELLO");
 }
 
 // =======================================================================
-//  ExternFn capturing Rust environment
+//  ExternFn holding Rust state (RFC-0021)
 // =======================================================================
+
+#[extern_fn(effect = pure)]
+fn multiply_secret<R>(_: &R, #[state] secret: &i64, x: i64) -> i64
+where
+    R: Runtime,
+{
+    x * secret
+}
 
 #[tokio::test]
 async fn extern_captures_environment() {
     let i = Interner::new();
     let secret = 7i64;
 
-    let registry = closures(Effect::PURE, move |i| {
-        vec![ExternFn::sync(
-            i,
-            "multiply_secret",
-            move |_: &Interner, x: i64| Ok(x * secret),
-        )]
-    });
+    let registry: Registry<AcvusRuntime> = extern_registry! {
+        ns: "t",
+        fns: [multiply_secret(secret)],
+    };
 
-    let c = ctx(&i, &[]);
+    let c = ctx(&i, vec![]);
     let result = run_script_with_externs(&i, "multiply_secret(6)", c, vec![registry]).await;
-    assert_eq!(result.value, Value::Int(42));
+    assert_eq!(result.value.as_int(), 42);
 }
 
 // =======================================================================
-//  Regex ExternFn (legacy sync_handler, Builtin path)
+//  Regex ExternFn
 // =======================================================================
 
 #[tokio::test]
@@ -96,7 +125,7 @@ async fn regex_match_via_extern() {
     let i = Interner::new();
 
     let registry = acvus_ext::regex_registry();
-    let c = ctx(&i, &[("text", Value::string("hello world 42"))]);
+    let c = ctx(&i, vec![("text", string("hello world 42"))]);
     let result = run_script_with_externs(
         &i,
         r#"re = regex("[0-9]+"); regex_match(re, @text)"#,
@@ -104,7 +133,7 @@ async fn regex_match_via_extern() {
         vec![registry],
     )
     .await;
-    assert_eq!(result.value, Value::Bool(true));
+    assert!(result.value.as_bool());
 }
 
 #[tokio::test]
@@ -112,7 +141,7 @@ async fn regex_find_via_extern() {
     let i = Interner::new();
 
     let registry = acvus_ext::regex_registry();
-    let c = ctx(&i, &[("text", Value::string("price is 42 dollars"))]);
+    let c = ctx(&i, vec![("text", string("price is 42 dollars"))]);
     let result = run_script_with_externs(
         &i,
         r#"re = regex("[0-9]+"); regex_find(re, @text)"#,
@@ -120,34 +149,32 @@ async fn regex_find_via_extern() {
         vec![registry],
     )
     .await;
-    // regex_find returns a Variant (Some/None). Check it contains "42".
-    match &result.value {
-        Value::Variant(v) => {
-            assert_eq!(i.resolve(v.tag), "Some");
-            let inner = v.payload.as_ref().expect("Some should have payload");
-            assert_eq!(**inner, Value::string("42"));
-        }
-        Value::String(s) => assert_eq!(&**s, "42"),
-        other => panic!("expected String or Variant(Some), got {other:?}"),
-    }
+    // SAFETY: `regex_find` returns `Option<String>`, erased whole.
+    let found: Option<String> = unsafe { result.value.materialize() };
+    assert_eq!(found.as_deref(), Some("42"));
 }
 
 // =======================================================================
 //  IR verification: FunctionCall has correct context_uses/context_defs
 // =======================================================================
 
+#[extern_fn(effect = pure)]
+fn double<R>(_: &R, x: i64) -> i64
+where
+    R: Runtime,
+{
+    x * 2
+}
+
 /// Pure ExternFn should have empty context_uses/context_defs in IR.
 #[test]
 fn ir_pure_function_call_no_context_bindings() {
     let i = Interner::new();
 
-    let registry = closures(Effect::PURE, |i| {
-        vec![ExternFn::sync(
-            i,
-            "double",
-            |_: &Interner, x: i64| Ok(x * 2),
-        )]
-    });
+    let registry: Registry<AcvusRuntime> = extern_registry! {
+        ns: "t",
+        fns: [double],
+    };
 
     let context_types: FxHashMap<acvus_utils::Astr, Ty> = FxHashMap::default();
 
@@ -159,7 +186,6 @@ fn ir_pure_function_call_no_context_bindings() {
         ),
         &context_types,
         vec![registry],
-        acvus_mir::ty::TypeRegistry::new(),
     );
 
     let entry_module = cr.modules.get(&cr.entry_qref).unwrap();
@@ -178,7 +204,7 @@ fn ir_pure_function_call_no_context_bindings() {
                 InstKind::FunctionCall {
                     callee: acvus_mir::ir::Callee::Direct(id),
                     ..
-                } if cr.extern_executables.contains_key(&id)
+                } if cr.extern_executables.contains_key(id)
             )
         })
         .collect();
@@ -200,77 +226,96 @@ fn ir_pure_function_call_no_context_bindings() {
 // Each test dumps the optimized MIR to stderr (--nocapture) for inspection.
 
 #[extern_fn]
-fn fetch_a(_: &Interner) -> i64 {
+fn fetch_a<R>(_: &R) -> i64
+where
+    R: Runtime,
+{
     100
 }
 
 #[extern_fn]
-fn fetch_b(_: &Interner) -> i64 {
+fn fetch_b<R>(_: &R) -> i64
+where
+    R: Runtime,
+{
     200
 }
 
 #[extern_fn]
-fn fetch_c(_: &Interner) -> i64 {
+fn fetch_c<R>(_: &R) -> i64
+where
+    R: Runtime,
+{
     300
 }
 
 #[extern_fn]
-fn fetch_d(_: &Interner) -> i64 {
+fn fetch_d<R>(_: &R) -> i64
+where
+    R: Runtime,
+{
     400
 }
 
 #[extern_fn]
-fn fetch_by(_: &Interner, x: i64) -> i64 {
+fn fetch_by<R>(_: &R, x: i64) -> i64
+where
+    R: Runtime,
+{
     x * 10
 }
 
 /// Four independent Opaque fetches and one parameterized.
 /// A fresh draw: two draws in either order are the same program.
 #[extern_fn(effect = idempotent, commutative)]
-fn draw_a(_: &Interner) -> i64 {
+fn draw_a<R>(_: &R) -> i64
+where
+    R: Runtime,
+{
     5
 }
 
 #[extern_fn(effect = idempotent, commutative)]
-fn draw_b(_: &Interner) -> i64 {
+fn draw_b<R>(_: &R) -> i64
+where
+    R: Runtime,
+{
     7
 }
 
 /// Adds `by` to the lent place and returns the new value (RFC-0015).
 #[extern_fn(effect = pure)]
-fn bump(_: &Interner, n: &mut i64, by: i64) -> i64 {
+fn bump<R>(_: &R, n: &mut i64, by: i64) -> i64
+where
+    R: Runtime,
+{
     *n += by;
     *n
 }
 
-fn io_registry() -> ExternRegistry<AcvusRuntime> {
+fn io_registry() -> Registry<AcvusRuntime> {
     extern_registry! {
+        ns: "io",
         fns: [fetch_a, fetch_b, fetch_c, fetch_d, fetch_by, draw_a, draw_b, bump],
     }
 }
 
 /// Compile a script with io_registry, return (CompileResult, entry MirModule ref).
 fn compile_io_script(source: &str) -> (Interner, CompileResult) {
-    compile_io_script_with_ctx(source, &[])
-}
-
-fn compile_io_script_with_ctx(
-    source: &str,
-    context: &[(&str, Value)],
-) -> (Interner, CompileResult) {
     let i = Interner::new();
     let ast =
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
-    let cr = compile_io_parsed(&i, ast, context);
+    let cr = compile_io_parsed(&i, ast, Context::default());
     (i, cr)
 }
 
 /// Script mode (`anyorder`, `while`, `let`) with io_registry.
-fn compile_io_script_mode(source: &str, context: &[(&str, Value)]) -> (Interner, CompileResult) {
+fn compile_io_script_mode(source: &str, context: Vec<(&str, TypedValue)>) -> (Interner, CompileResult) {
     let i = Interner::new();
     let ast = acvus_mir::graph::ParsedAst::Script(
         acvus_ast::parse_script_mode(&i, source).expect("parse"),
     );
+    let context = ctx(&i, context);
     let cr = compile_io_parsed(&i, ast, context);
     (i, cr)
 }
@@ -278,46 +323,32 @@ fn compile_io_script_mode(source: &str, context: &[(&str, Value)]) -> (Interner,
 fn compile_io_parsed(
     i: &Interner,
     ast: acvus_mir::graph::ParsedAst,
-    context: &[(&str, Value)],
+    context: Context,
 ) -> CompileResult {
     let context_types: FxHashMap<acvus_utils::Astr, Ty> = context
-        .iter()
-        .map(|(name, val)| (i.intern(name), infer_ty(val)))
+        .into_iter()
+        .map(|(name, val)| (name, val.ty))
         .collect();
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
-    compile_source_with_externs(i, ast, &context_types, regs, TypeRegistry::new())
+    compile_source_with_externs(i, ast, &context_types, regs)
 }
 
-async fn run_io_script_mode(source: &str, context: &[(&str, Value)]) -> Value {
+async fn run_io_script_mode(source: &str, context: Vec<(&str, TypedValue)>) -> Value {
     let i = Interner::new();
     run_io_script_mode_on(&i, source, context).await
 }
 
-async fn run_io_script_mode_on(i: &Interner, source: &str, context: &[(&str, Value)]) -> Value {
+async fn run_io_script_mode_on(i: &Interner, source: &str, context: Vec<(&str, TypedValue)>) -> Value {
     let i = i.clone();
     let ast = acvus_mir::graph::ParsedAst::Script(
         acvus_ast::parse_script_mode(&i, source).expect("parse"),
     );
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
-    run_parsed_with_externs(&i, ast, ctx(&i, context), regs, TypeRegistry::new())
+    run_parsed_with_externs(&i, ast, ctx(&i, context), regs, |_| {})
         .await
         .value
-}
-
-fn infer_ty(v: &Value) -> Ty {
-    match v {
-        Value::Int(_) => Ty::Int,
-        Value::Float(_) => Ty::Float,
-        Value::Bool(_) => Ty::Bool,
-        Value::String(_) => Ty::String,
-        Value::Array(items) => {
-            let elem = items.first().map(infer_ty).unwrap_or(Ty::Int);
-            Ty::Array(Box::new(elem), acvus_mir::ty::LenTerm::Known(items.len()))
-        }
-        _ => Ty::Unit,
-    }
 }
 
 /// Dump MIR and return (spawn_positions, eval_positions) for assertion.
@@ -375,11 +406,11 @@ async fn io_two_independent() {
     let result = run_script_with_externs(
         &i,
         "fetch_a() + fetch_b()",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![io_registry()],
     )
     .await;
-    assert_eq!(result.value, Value::Int(300));
+    assert_eq!(result.value.as_int(), 300);
 }
 
 #[test]
@@ -399,11 +430,11 @@ async fn io_four_way_parallel() {
     let result = run_script_with_externs(
         &i,
         "fetch_a() + fetch_b() + fetch_c() + fetch_d()",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![io_registry()],
     )
     .await;
-    assert_eq!(result.value, Value::Int(1000));
+    assert_eq!(result.value.as_int(), 1000);
 }
 
 #[test]
@@ -430,11 +461,11 @@ async fn io_chain_with_independent() {
     let result = run_script_with_externs(
         &i,
         "a = fetch_a(); b = fetch_by(a); c = fetch_c(); b + c",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![io_registry()],
     )
     .await;
-    assert_eq!(result.value, Value::Int(1300));
+    assert_eq!(result.value.as_int(), 1300);
 }
 
 #[test]
@@ -462,11 +493,11 @@ async fn io_diamond_dependency() {
     let result = run_script_with_externs(
         &i,
         "a = fetch_a(); b = fetch_by(a); c = fetch_by(a); b + c",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![io_registry()],
     )
     .await;
-    assert_eq!(result.value, Value::Int(2000));
+    assert_eq!(result.value.as_int(), 2000);
 }
 
 #[test]
@@ -492,11 +523,11 @@ async fn io_deep_chain() {
     let result = run_script_with_externs(
         &i,
         "a = fetch_a(); b = fetch_by(a); c = fetch_by(b); d = fetch_by(c); d",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![io_registry()],
     )
     .await;
-    assert_eq!(result.value, Value::Int(100000));
+    assert_eq!(result.value.as_int(), 100000);
 }
 
 #[test]
@@ -524,11 +555,11 @@ async fn io_two_independent_chains() {
     let result = run_script_with_externs(
         &i,
         "a = fetch_a(); b = fetch_by(a); c = fetch_c(); d = fetch_by(c); b + d",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![io_registry()],
     )
     .await;
-    assert_eq!(result.value, Value::Int(4000));
+    assert_eq!(result.value.as_int(), 4000);
 }
 
 #[test]
@@ -549,28 +580,32 @@ fn io_two_independent_chains_mir() {
 
 #[tokio::test]
 async fn a_context_lent_mutably_comes_back_changed() {
-    let v = run_io_script_mode("bump(&mut @n, 5); @n", &[("n", Value::Int(10))]).await;
-    assert_eq!(v, Value::Int(15));
+    let v = run_io_script_mode("bump(&mut @n, 5); @n", vec![("n", int(10))]).await;
+    assert_eq!(v.as_int(), 15);
 }
 
 #[tokio::test]
 async fn a_local_lent_mutably_comes_back_changed() {
-    let v = run_io_script_mode("let x = 1; bump(&mut x, 2); bump(&mut x, 3); x", &[]).await;
-    assert_eq!(v, Value::Int(6));
+    let v = run_io_script_mode("let x = 1; bump(&mut x, 2); bump(&mut x, 3); x", vec![]).await;
+    assert_eq!(v.as_int(), 6);
 }
 
 #[tokio::test]
 async fn a_field_of_a_context_is_a_place() {
     let i = Interner::new();
-    let a = Value::object(FxHashMap::from_iter([(i.intern("n"), Value::Int(1))]));
-    let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", &[("a", a)]).await;
-    assert_eq!(v, Value::Int(2));
+    let n = i.intern("n");
+    let a = typed(
+        Ty::Object(FxHashMap::from_iter([(n, Ty::Int)])),
+        Value::object(FxHashMap::from_iter([(n, Value::int(1))])),
+    );
+    let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", vec![("a", a)]).await;
+    assert_eq!(v.as_int(), 2);
 }
 
 #[tokio::test]
 async fn the_return_value_of_a_lending_call_is_free() {
-    let v = run_io_script_mode("let x = 40; let y = bump(&mut x, 2); x + y", &[]).await;
-    assert_eq!(v, Value::Int(84));
+    let v = run_io_script_mode("let x = 40; let y = bump(&mut x, 2); x + y", vec![]).await;
+    assert_eq!(v.as_int(), 84);
 }
 
 // -- Commutative runs (RFC-0013) ------------------------------------
@@ -584,8 +619,9 @@ async fn the_return_value_of_a_lending_call_is_free() {
 async fn commutative_draws_add_up() {
     let i = Interner::new();
     let result =
-        run_script_with_externs(&i, "draw_a() + draw_b()", ctx(&i, &[]), vec![io_registry()]).await;
-    assert_eq!(result.value, Value::Int(12));
+        run_script_with_externs(&i, "draw_a() + draw_b()", ctx(&i, vec![]), vec![io_registry()])
+            .await;
+    assert_eq!(result.value.as_int(), 12);
 }
 
 #[test]
@@ -613,11 +649,11 @@ fn a_call_that_does_not_commute_keeps_source_order_mir() {
 fn a_commutative_call_after_a_branch_is_issued_with_the_one_before_mir() {
     let (i, cr) = compile_io_script_mode(
         "@a = draw_a(); if @c { @x = 1; }; @b = draw_b(); @a + @b",
-        &[
-            ("a", Value::Int(0)),
-            ("b", Value::Int(0)),
-            ("c", Value::Bool(true)),
-            ("x", Value::Int(0)),
+        vec![
+            ("a", int(0)),
+            ("b", int(0)),
+            ("c", bool_(true)),
+            ("x", int(0)),
         ],
     );
     let (spawns, evals) = dump_and_positions("run_across_branch", &i, &cr);
@@ -649,17 +685,17 @@ fn has_merge(cr: &CompileResult) -> bool {
 async fn anyorder_block_computes_the_same_value() {
     let v = run_io_script_mode(
         "anyorder { @a = fetch_a(); @b = fetch_b(); } @a + @b",
-        &[("a", Value::Int(0)), ("b", Value::Int(0))],
+        vec![("a", int(0)), ("b", int(0))],
     )
     .await;
-    assert_eq!(v, Value::Int(300));
+    assert_eq!(v.as_int(), 300);
 }
 
 #[test]
 fn anyorder_block_issues_its_calls_together_mir() {
     let (i, cr) = compile_io_script_mode(
         "anyorder { @a = fetch_a(); @b = fetch_b(); } @a + @b",
-        &[("a", Value::Int(0)), ("b", Value::Int(0))],
+        vec![("a", int(0)), ("b", int(0))],
     );
     let (spawns, evals) = dump_and_positions("anyorder", &i, &cr);
     assert_eq!(spawns.len(), 2, "expected 2 spawns");
@@ -674,11 +710,7 @@ fn anyorder_block_issues_its_calls_together_mir() {
 fn source_order_resumes_after_an_anyorder_block_mir() {
     let (i, cr) = compile_io_script_mode(
         "anyorder { @a = fetch_a(); @b = fetch_b(); } @c = fetch_c(); @a + @b + @c",
-        &[
-            ("a", Value::Int(0)),
-            ("b", Value::Int(0)),
-            ("c", Value::Int(0)),
-        ],
+        vec![("a", int(0)), ("b", int(0)), ("c", int(0))],
     );
     let (spawns, evals) = dump_and_positions("anyorder_then", &i, &cr);
     assert_eq!(spawns.len(), 3, "expected 3 spawns");
@@ -692,17 +724,17 @@ fn source_order_resumes_after_an_anyorder_block_mir() {
 async fn a_loop_inside_anyorder_accumulates() {
     let v = run_io_script_mode(
         "anyorder { while @n > 0 { @s = @s + fetch_a(); @n = @n - 1; } } @s",
-        &[("n", Value::Int(3)), ("s", Value::Int(0))],
+        vec![("n", int(3)), ("s", int(0))],
     )
     .await;
-    assert_eq!(v, Value::Int(300));
+    assert_eq!(v.as_int(), 300);
 }
 
 #[test]
 fn a_loop_inside_anyorder_merges_per_iteration_mir() {
     let (i, cr) = compile_io_script_mode(
         "anyorder { while @n > 0 { @s = @s + fetch_a(); @n = @n - 1; } } @s",
-        &[("n", Value::Int(3)), ("s", Value::Int(0))],
+        vec![("n", int(3)), ("s", int(0))],
     );
     let (spawns, _) = dump_and_positions("anyorder_loop", &i, &cr);
     assert_eq!(spawns.len(), 1, "one call in the loop body");
@@ -721,56 +753,84 @@ const PROBE_HOLD: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// How many probe calls were in flight at the same time.
 struct Probe {
-    in_flight: Arc<AtomicUsize>,
-    max: Arc<AtomicUsize>,
+    in_flight: AtomicUsize,
+    max: AtomicUsize,
 }
 
 impl Probe {
-    fn new() -> Self {
-        Probe {
-            in_flight: Arc::new(AtomicUsize::new(0)),
-            max: Arc::new(AtomicUsize::new(0)),
-        }
+    fn new() -> Arc<Self> {
+        Arc::new(Probe {
+            in_flight: AtomicUsize::new(0),
+            max: AtomicUsize::new(0),
+        })
     }
 
     fn max(&self) -> usize {
         self.max.load(Ordering::SeqCst)
     }
 
-    /// `probe_a` and `probe_b`: each returns 100 after yielding once.
-    fn registry(&self, effect: Effect) -> ExternRegistry<AcvusRuntime> {
-        let in_flight = Arc::clone(&self.in_flight);
-        let max = Arc::clone(&self.max);
-        ExternRegistry::new(move |i| {
-            let fns = ["probe_a", "probe_b"]
-                .into_iter()
-                .map(|name| {
-                    let in_flight = Arc::clone(&in_flight);
-                    let max = Arc::clone(&max);
-                    ExternFn::r#async(i, name, move |_: Interner| {
-                        let in_flight = Arc::clone(&in_flight);
-                        let max = Arc::clone(&max);
-                        async move {
-                            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                            max.fetch_max(now, Ordering::SeqCst);
-                            tokio::time::sleep(PROBE_HOLD).await;
-                            in_flight.fetch_sub(1, Ordering::SeqCst);
-                            Ok::<i64, RuntimeError>(100)
-                        }
-                    })
-                    .with_effect(effect.clone())
-                })
-                .collect();
-            ExternItems { types: vec![], fns }
-        })
+    async fn hold(&self) -> i64 {
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(PROBE_HOLD).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        100
+    }
+}
+
+#[extern_fn(name = "probe_a", effect = opaque)]
+async fn probe_a_opaque<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
+where
+    R: Runtime,
+{
+    p.hold().await
+}
+
+#[extern_fn(name = "probe_b", effect = opaque)]
+async fn probe_b_opaque<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
+where
+    R: Runtime,
+{
+    p.hold().await
+}
+
+#[extern_fn(name = "probe_a", effect = idempotent, commutative)]
+async fn probe_a_commutative<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
+where
+    R: Runtime,
+{
+    p.hold().await
+}
+
+#[extern_fn(name = "probe_b", effect = idempotent, commutative)]
+async fn probe_b_commutative<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
+where
+    R: Runtime,
+{
+    p.hold().await
+}
+
+fn opaque_probes(p: &Arc<Probe>) -> Registry<AcvusRuntime> {
+    let p = Arc::clone(p);
+    extern_registry! {
+        ns: "probe",
+        fns: [probe_a_opaque(Arc::clone(&p)), probe_b_opaque(Arc::clone(&p))],
+    }
+}
+
+fn commutative_probes(p: &Arc<Probe>) -> Registry<AcvusRuntime> {
+    let p = Arc::clone(p);
+    extern_registry! {
+        ns: "probe",
+        fns: [probe_a_commutative(Arc::clone(&p)), probe_b_commutative(Arc::clone(&p))],
     }
 }
 
 async fn run_on_tokio(
     source: &str,
     script_mode: bool,
-    context: &[(&str, Value)],
-    registry: ExternRegistry<AcvusRuntime>,
+    context: Vec<(&str, TypedValue)>,
+    registry: Registry<AcvusRuntime>,
 ) -> Value {
     let i = Interner::new();
     let script = if script_mode {
@@ -784,7 +844,7 @@ async fn run_on_tokio(
         ast,
         ctx(&i, context),
         vec![registry],
-        TypeRegistry::new(),
+        |_| {},
         Arc::new(TokioExecutor),
     )
     .await
@@ -797,11 +857,11 @@ async fn calls_on_the_chain_do_not_overlap() {
     let v = run_on_tokio(
         "@a = probe_a(); @b = probe_b(); @a + @b",
         true,
-        &[("a", Value::Int(0)), ("b", Value::Int(0))],
-        probe.registry(Effect::OPAQUE),
+        vec![("a", int(0)), ("b", int(0))],
+        opaque_probes(&probe),
     )
     .await;
-    assert_eq!(v, Value::Int(200));
+    assert_eq!(v.as_int(), 200);
     assert_eq!(
         probe.max(),
         1,
@@ -815,11 +875,11 @@ async fn an_anyorder_block_overlaps_its_calls() {
     let v = run_on_tokio(
         "anyorder { @a = probe_a(); @b = probe_b(); } @a + @b",
         true,
-        &[("a", Value::Int(0)), ("b", Value::Int(0))],
-        probe.registry(Effect::OPAQUE),
+        vec![("a", int(0)), ("b", int(0))],
+        opaque_probes(&probe),
     )
     .await;
-    assert_eq!(v, Value::Int(200));
+    assert_eq!(v.as_int(), 200);
     assert_eq!(probe.max(), 2, "both calls are in flight at once");
 }
 
@@ -829,16 +889,16 @@ async fn commutative_calls_overlap_across_a_branch() {
     let v = run_on_tokio(
         "@a = probe_a(); if @c { @x = 1; }; @b = probe_b(); @a + @b",
         true,
-        &[
-            ("a", Value::Int(0)),
-            ("b", Value::Int(0)),
-            ("c", Value::Bool(true)),
-            ("x", Value::Int(0)),
+        vec![
+            ("a", int(0)),
+            ("b", int(0)),
+            ("c", bool_(true)),
+            ("x", int(0)),
         ],
-        probe.registry(Effect::IDEMPOTENT.commutative()),
+        commutative_probes(&probe),
     )
     .await;
-    assert_eq!(v, Value::Int(200));
+    assert_eq!(v.as_int(), 200);
     assert_eq!(
         probe.max(),
         2,
@@ -852,11 +912,11 @@ async fn commutative_calls_overlap_without_a_block() {
     let v = run_on_tokio(
         "probe_a() + probe_b()",
         false,
-        &[],
-        probe.registry(Effect::IDEMPOTENT.commutative()),
+        vec![],
+        commutative_probes(&probe),
     )
     .await;
-    assert_eq!(v, Value::Int(200));
+    assert_eq!(v.as_int(), 200);
     assert_eq!(probe.max(), 2, "a commutative run is in flight at once");
 }
 
@@ -869,16 +929,7 @@ async fn commutative_calls_overlap_without_a_block() {
 async fn io_in_iteration() {
     let i = Interner::new();
     // fetch_by(1)=10, fetch_by(2)=20, fetch_by(3)=30 -> sum=60
-    let c = ctx(
-        &i,
-        &[
-            (
-                "items",
-                Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
-            ),
-            ("sum", Value::Int(0)),
-        ],
-    );
+    let c = ctx(&i, vec![("items", ints(&[1, 2, 3])), ("sum", int(0))]);
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
     let result = run_script_with_externs_and_types(
@@ -886,10 +937,10 @@ async fn io_in_iteration() {
         "@items | iter | map(|x| -> fetch_by(x)) | fold(@sum, |a, b| -> a + b)",
         c,
         regs,
-        TypeRegistry::new(),
+        |_| {},
     )
     .await;
-    assert_eq!(result.value, Value::Int(60));
+    assert_eq!(result.value.as_int(), 60);
 }
 
 // -- 8. Compiler pipeline pattern -----------------------------------
@@ -914,10 +965,10 @@ async fn io_compiler_pipeline() {
     let result = run_script_with_externs(
         &i,
         "imports = fetch_a(); types = fetch_b(); refs = fetch_by(imports); checked = refs + types; extra = fetch_c(); checked + extra",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![io_registry()],
     ).await;
-    assert_eq!(result.value, Value::Int(1500));
+    assert_eq!(result.value.as_int(), 1500);
 }
 
 #[test]
@@ -942,17 +993,19 @@ where
     I: acvus_extern::IdentityVar;
 
 #[extern_fn(effect = pure)]
-fn mk_tok<I>(_: &Interner) -> Tok<I>
+fn mk_tok<I, R>(_: &R) -> Tok<I>
 where
     I: acvus_extern::IdentityVar,
+    R: Runtime,
 {
     Tok(7, std::marker::PhantomData)
 }
 
 #[extern_fn]
-fn consume_tok<I>(_: &Interner, tok: Tok<I>) -> i64
+fn consume_tok<I, R>(_: &R, tok: Tok<I>) -> i64
 where
     I: acvus_extern::IdentityVar,
+    R: Runtime,
 {
     tok.0
 }
@@ -960,7 +1013,8 @@ where
 #[tokio::test]
 async fn io_extern_consumes_move_only_opaque() {
     let i = Interner::new();
-    let registry: ExternRegistry<AcvusRuntime> = extern_registry! {
+    let registry: Registry<AcvusRuntime> = extern_registry! {
+        ns: "tok",
         types: [Tok<_>],
         fns: [mk_tok, consume_tok],
     };
@@ -968,24 +1022,18 @@ async fn io_extern_consumes_move_only_opaque() {
     let result = run_script_with_externs_and_types(
         &i,
         "t = mk_tok(); consume_tok(t)",
-        ctx(&i, &[]),
+        ctx(&i, vec![]),
         vec![registry],
-        TypeRegistry::new(),
+        |_| {},
     )
     .await;
-    assert_eq!(result.value, Value::Int(7));
+    assert_eq!(result.value.as_int(), 7);
 }
 
 #[tokio::test]
 async fn io_inside_iterator_pipeline() {
     let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[(
-            "items",
-            Value::array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
-        )],
-    );
+    let c = ctx(&i, vec![("items", ints(&[1, 2, 3]))]);
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
     let result = run_script_with_externs_and_types(
@@ -993,14 +1041,11 @@ async fn io_inside_iterator_pipeline() {
         "@items | iter | map(|x| -> fetch_by(x)) | collect",
         c,
         regs,
-        TypeRegistry::new(),
+        |_| {},
     )
     .await;
-    let Value::Extern(list) = result.value else {
-        panic!("collect returns a List, got {:?}", result.value);
-    };
-    assert_eq!(
-        list.downcast_ref::<Vec<Value>>().expect("List payload"),
-        &vec![Value::Int(10), Value::Int(20), Value::Int(30)]
-    );
+    // SAFETY: `collect` returns a `List<T>` and `T` is erased as `Value`.
+    let list: acvus_ext::List<Value> = unsafe { result.value.materialize() };
+    let items: Vec<i64> = list.0.iter().map(Value::as_int).collect();
+    assert_eq!(items, vec![10, 20, 30]);
 }

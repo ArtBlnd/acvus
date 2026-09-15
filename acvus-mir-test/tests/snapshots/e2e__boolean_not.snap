@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 613
 expression: ir
 ---
 === literals ===
@@ -25,4 +26,5 @@ expression: ir
     ; r7 (@flag) : Bool
     ; r8 (v10) : Bool
     ; r9 (v6) : String
-    ; r10 (@flag) : Bool
+    ; r10 (x) : Bool
+    ; r11 (@flag) : Bool

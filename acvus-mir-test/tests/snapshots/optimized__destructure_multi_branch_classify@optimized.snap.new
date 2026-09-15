@@ -1,0 +1,91 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+assertion_line: 255
+expression: opt
+---
+=== literals ===
+  T0 = "unknown"
+  T1 = "senior"
+  T2 = "adult"
+  T3 = "minor"
+  T4 = " ("
+  T5 = ")"
+
+=== main ===
+     0 |   r0 = fetch @output
+     1 |   assign @output = r0
+     2 |   r1 = fetch @user
+     3 |   assign @user = r1
+     4 |   r2 = take @user.age
+     5 |   r0 = const T0
+     6 |   assign @output = r0
+     7 |   r3 = const 65
+     8 |   r4 = r2 >= r3
+     9 |   r5 = test r4 == true
+    10 |   r3 = const 18
+    11 |   r4 = r2 >= r3
+    12 |   r6 = test r4 == true
+    13 |   r3 = const 18
+    14 |   r4 = r2 < r3
+    15 |   r7 = test r4 == true
+    16 |   jump_if r5 then L0 else L1
+    17 | L0:
+    18 |   drop r8
+    19 |   r0 = const T1
+    20 |   assign @output = r0
+    21 |   jump L1
+    22 | L1:
+    23 |   jump_if r6 then L2 else L3
+    24 | L2:
+    25 |   drop r8
+    26 |   r0 = const T2
+    27 |   assign @output = r0
+    28 |   jump L3
+    29 | L3:
+    30 |   jump_if r7 then L4 else L5
+    31 | L4:
+    32 |   drop r8
+    33 |   r0 = const T3
+    34 |   assign @output = r0
+    35 |   jump L5
+    36 | L5:
+    37 |   r9 = ref &@user.name
+    38 |   r0 = const T4
+    39 |   assign @output = r0
+    40 |   r10 = ref &@output
+    41 |   r0 = string_concat [r9, r10]
+    42 |   drop r8
+    43 |   assign @output = r0
+    44 |   r9 = ref &@output
+    45 |   r10 = ref &@output
+    46 |   r0 = string_concat [r9, r10]
+    47 |   drop r8
+    48 |   assign @output = r0
+    49 |   r9 = ref &@output
+    50 |   r0 = const T5
+    51 |   assign @output = r0
+    52 |   r10 = ref &@output
+    53 |   r0 = string_concat [r9, r10]
+    54 |   drop r11
+    55 |   drop r8
+    56 |   assign @output = r0
+    57 |   r0 = take @output
+    58 |   r11 = take @output
+    59 |   commit @output = r11
+    60 |   r1 = take @user
+    61 |   commit @user = r1
+    62 |   return r0
+
+    ; r0 (@output) : String
+    ; r1 (@user) : {age: Int, name: String}
+    ; r2 (@user.age) : Int
+    ; r3 (v7) : Int
+    ; r4 (v8) : Bool
+    ; r5 (v9) : Bool
+    ; r6 (v10) : Bool
+    ; r7 (v11) : Bool
+    ; r8 (@output) : String
+    ; r9 (@output) : &String
+    ; r10 (v13) : &String
+    ; r11 (@output) : String
+    ; r12 (@user) : {age: Int, name: String}

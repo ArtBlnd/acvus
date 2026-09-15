@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 2824
 expression: ir
 ---
 === main ===
@@ -17,3 +18,4 @@ expression: ir
     ; r2 (v4) : Int
     ; r3 (x) : Int
     ; r4 (v5) : Unit
+    ; r5 (x) : Int

@@ -1,0 +1,35 @@
+---
+source: acvus-mir-test/tests/script.rs
+assertion_line: 168
+expression: ir
+---
+=== main ===
+     3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
+     4 |   r4 = call #0(r0)
+     5 |   r5 = closure L0 []
+     6 |   r6 = call #1(r4, r5)
+     7 |   r7 = call #2(r6)
+     8 |   return r7
+
+    ; r0 (v4) : Array<Int, 3>
+    ; r1 (v1) : Int
+    ; r2 (v2) : Int
+    ; r3 (v3) : Int
+    ; r4 (v5) : Iterator<Int, Pure, #IdentityId(3)>
+    ; r5 (v6) : Fn(&Int) -> Bool
+    ; r6 (filter(...)) : Iterator<Int, Pure, #IdentityId(2)>
+    ; r7 (collect(...)) : List<Int>
+
+=== closure L0 (ValueId(0)) ===
+     0 |   r0 = undef
+     1 |   r1 = take (*r2)
+     3 |   r3 = r1 > 0 (r4)
+     4 |   return r3
+
+    ; r0 (v7) : &Int
+    ; r1 (v4) : Int
+    ; r2 (v1) : &Int
+    ; r3 (v6) : Bool
+    ; r4 (v5) : Int
+    ; r5 (x) : &Int
+    ; r6 (x) : &Int

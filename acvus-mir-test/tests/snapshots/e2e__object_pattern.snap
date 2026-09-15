@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 281
 expression: ir
 ---
 === literals ===
@@ -45,6 +46,8 @@ expression: ir
     ; r14 (v21) : Int
     ; r15 (v16) : String
     ; r16 (v17) : {age: Int, email: String, name: String}
-    ; r17 (v14) : String
-    ; r18 (@user) : {age: Int, email: String, name: String}
+    ; r17 (age) : Int
+    ; r18 (v14) : String
     ; r19 (name) : String
+    ; r20 (@user) : {age: Int, email: String, name: String}
+    ; r21 (name) : String

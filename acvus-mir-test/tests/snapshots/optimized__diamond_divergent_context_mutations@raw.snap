@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
+assertion_line: 180
 expression: raw
 ---
 === main ===
@@ -84,3 +85,4 @@ expression: raw
     ; r31 (@output) : Int
     ; r32 (@low) : Int
     ; r33 (@high) : Int
+    ; r34 (x) : Int

@@ -34,6 +34,7 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
+use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::*;
 use crate::optimize::context_ops::{context_read, context_written};
@@ -291,12 +292,14 @@ fn sink_pass(cfg: &mut CfgBody) {
 
 /// Try to sink ONE Eval. Returns true if something moved.
 fn sink_one(cfg: &mut CfgBody) -> bool {
+    let loans = Loans::build(cfg);
     for bi in 0..cfg.blocks.len() {
         for ii in 0..cfg.blocks[bi].insts.len() {
             let kind = &cfg.blocks[bi].insts[ii].kind;
-            if !matches!(kind, InstKind::Eval { .. }) {
+            let InstKind::Eval { .. } = kind else {
                 continue;
-            }
+            };
+            let effect = loans.storage_effect(kind);
 
             let defs: Vec<ValueId> = inst_info::defs(kind).to_vec();
 
@@ -312,7 +315,7 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                     break;
                 }
 
-                if is_call(other) || is_page_op(other) {
+                if is_call(other) || is_page_op(other) || effect.conflicts(&loans.storage_effect(other)) {
                     barrier = jj;
                     break;
                 }

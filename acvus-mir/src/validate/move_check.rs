@@ -445,11 +445,13 @@ fn process_inst(
             }
             state.set_value(*dst, Liveness::Alive);
         }
-        // Assign consumes the value and revives the storage.
+        // Assign consumes the value and revives the storage, as a place and
+        // as the slot value a Drop consumes.
         InstKind::Assign { target, value, .. } => {
             try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
-            if let crate::ir::RefTarget::Var(name) = target {
-                state.set_var(*name, Liveness::Alive);
+            if let crate::ir::RefTarget::Var(slot) | crate::ir::RefTarget::Param(slot) = target {
+                state.set_var(*slot, Liveness::Alive);
+                state.set_value(*slot, Liveness::Alive);
             }
         }
         InstKind::Fetch { dst, .. } => {

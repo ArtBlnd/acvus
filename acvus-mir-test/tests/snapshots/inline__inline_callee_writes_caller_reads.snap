@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/inline.rs
+assertion_line: 264
 expression: ir
 ---
 === main ===
@@ -40,4 +41,5 @@ expression: ir
     ; r12 (v10) : Int
     ; r13 (bump(...)) : Int
     ; r14 (@count) : Int
-    ; r15 (@count) : Int
+    ; r15 (x) : Int
+    ; r16 (@count) : Int

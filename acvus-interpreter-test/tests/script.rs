@@ -2,14 +2,25 @@
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
+use acvus_mir::ty::{LenTerm, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, Value> {
+fn ctx(i: &Interner, entries: Vec<(&str, TypedValue)>) -> Context {
     entries
-        .iter()
-        .map(|(name, val)| (i.intern(name), val.clone()))
+        .into_iter()
+        .map(|(name, val)| (i.intern(name), val))
         .collect()
+}
+
+fn int(n: i64) -> TypedValue {
+    typed(Ty::Int, Value::int(n))
+}
+
+fn assert_str(v: &Value, expected: &str) {
+    assert!(v.is_string(), "expected a String, got {v:?}");
+    // SAFETY: the witness is String.
+    assert_eq!(unsafe { v.as_str() }, expected);
 }
 
 // =======================================================================
@@ -19,25 +30,25 @@ fn ctx(i: &Interner, entries: &[(&str, Value)]) -> FxHashMap<acvus_utils::Astr, 
 #[tokio::test]
 async fn let_simple_bind() {
     let i = Interner::new();
-    let c = ctx(&i, &[("x", Value::Int(10))]);
+    let c = ctx(&i, vec![("x", int(10))]);
     let result = run_script(&i, "y = @x + 1; y", c).await;
-    assert_eq!(result, Value::Int(11));
+    assert_eq!(result.as_int(), 11);
 }
 
 #[tokio::test]
 async fn let_multiple_binds() {
     let i = Interner::new();
-    let c = ctx(&i, &[("x", Value::Int(5))]);
+    let c = ctx(&i, vec![("x", int(5))]);
     let result = run_script(&i, "a = @x; b = a + a; b", c).await;
-    assert_eq!(result, Value::Int(10));
+    assert_eq!(result.as_int(), 10);
 }
 
 #[tokio::test]
 async fn let_context_store_then_read() {
     let i = Interner::new();
-    let c = ctx(&i, &[("x", Value::Int(0))]);
+    let c = ctx(&i, vec![("x", int(0))]);
     let result = run_script(&i, "@x = 42; @x", c).await;
-    assert_eq!(result, Value::Int(42));
+    assert_eq!(result.as_int(), 42);
 }
 
 // =======================================================================
@@ -47,25 +58,25 @@ async fn let_context_store_then_read() {
 #[tokio::test]
 async fn if_let_irrefutable() {
     let i = Interner::new();
-    let c = ctx(&i, &[("data", Value::Int(5)), ("out", Value::Int(0))]);
+    let c = ctx(&i, vec![("data", int(5)), ("out", int(0))]);
     let result = run_script(&i, "x = @data { @out = x * 2; }; @out", c).await;
-    assert_eq!(result, Value::Int(10));
+    assert_eq!(result.as_int(), 10);
 }
 
 #[tokio::test]
 async fn if_let_refutable_match() {
     let i = Interner::new();
-    let c = ctx(&i, &[("val", Value::Int(42)), ("out", Value::Int(0))]);
+    let c = ctx(&i, vec![("val", int(42)), ("out", int(0))]);
     let result = run_script(&i, "42 = @val { @out = 1; }; @out", c).await;
-    assert_eq!(result, Value::Int(1));
+    assert_eq!(result.as_int(), 1);
 }
 
 #[tokio::test]
 async fn if_let_refutable_no_match() {
     let i = Interner::new();
-    let c = ctx(&i, &[("val", Value::Int(99)), ("out", Value::Int(0))]);
+    let c = ctx(&i, vec![("val", int(99)), ("out", int(0))]);
     let result = run_script(&i, "42 = @val { @out = 1; }; @out", c).await;
-    assert_eq!(result, Value::Int(0)); // body not executed
+    assert_eq!(result.as_int(), 0);
 }
 
 // =======================================================================
@@ -73,69 +84,72 @@ async fn if_let_refutable_no_match() {
 //  (restored from the `for` tests cut in 69eac8d)
 // =======================================================================
 
-fn ints(xs: &[i64]) -> Value {
-    Value::array(xs.iter().map(|&x| Value::Int(x)).collect())
+fn ints_ty(len: usize) -> Ty {
+    Ty::Array(Box::new(Ty::Int), LenTerm::Known(len))
+}
+
+fn ints_value(xs: &[i64]) -> Value {
+    Value::array(xs.iter().map(|&x| Value::int(x)).collect())
+}
+
+fn ints(xs: &[i64]) -> TypedValue {
+    typed(ints_ty(xs.len()), ints_value(xs))
 }
 
 #[tokio::test]
 async fn iter_sum() {
     let i = Interner::new();
-    let c = ctx(&i, &[("items", ints(&[1, 2, 3])), ("sum", Value::Int(0))]);
+    let c = ctx(&i, vec![("items", ints(&[1, 2, 3])), ("sum", int(0))]);
     let result = run_script_mode(
         &i,
         "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(6));
+    assert_eq!(result.as_int(), 6);
 }
 
 #[tokio::test]
 async fn iter_count() {
     let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[("items", ints(&[10, 20, 30])), ("count", Value::Int(0))],
-    );
+    let c = ctx(&i, vec![("items", ints(&[10, 20, 30])), ("count", int(0))]);
     let result = run_script_mode(
         &i,
         "let it = iter(@items); while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(3));
+    assert_eq!(result.as_int(), 3);
 }
 
 #[tokio::test]
 async fn iter_nested() {
     let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[
-            ("matrix", Value::array(vec![ints(&[1, 2]), ints(&[3, 4])])),
-            ("sum", Value::Int(0)),
-        ],
+    let matrix = typed(
+        Ty::Array(Box::new(ints_ty(2)), LenTerm::Known(2)),
+        Value::array(vec![ints_value(&[1, 2]), ints_value(&[3, 4])]),
     );
+    let c = ctx(&i, vec![("matrix", matrix), ("sum", int(0))]);
     let result = run_script_mode(
         &i,
         "let rows = iter(@matrix); while let Some(row) = next(&mut rows) { let xs = iter(row); while let Some(x) = next(&mut xs) { @sum = @sum + x; } } @sum",
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(10));
+    assert_eq!(result.as_int(), 10);
 }
 
 #[tokio::test]
 async fn iter_empty_list() {
     let i = Interner::new();
-    let c = ctx(&i, &[("items", ints(&[])), ("sum", Value::Int(99))]);
+    let c = ctx(&i, vec![("items", ints(&[])), ("sum", int(99))]);
     let result = run_script_mode(
         &i,
         "let it = iter(@items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(99));
+    assert_eq!(result.as_int(), 99);
 }
 
 #[tokio::test]
@@ -143,11 +157,7 @@ async fn iter_sequential_loops() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[
-            ("a", ints(&[1, 2])),
-            ("b", ints(&[10, 20])),
-            ("sum", Value::Int(0)),
-        ],
+        vec![("a", ints(&[1, 2])), ("b", ints(&[10, 20])), ("sum", int(0))],
     );
     let result = run_script_mode(
         &i,
@@ -155,23 +165,20 @@ async fn iter_sequential_loops() {
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(33));
+    assert_eq!(result.as_int(), 33);
 }
 
 #[tokio::test]
 async fn iter_loop_with_conditional() {
     let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[("items", ints(&[0, 1, 0, 2])), ("count", Value::Int(0))],
-    );
+    let c = ctx(&i, vec![("items", ints(&[0, 1, 0, 2])), ("count", int(0))]);
     let result = run_script_mode(
         &i,
         "let it = iter(@items); while let Some(x) = next(&mut it) { if x == 0 { @count = @count + 1; }; } @count",
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(2));
+    assert_eq!(result.as_int(), 2);
 }
 
 #[tokio::test]
@@ -179,11 +186,7 @@ async fn iter_accumulate_product() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[
-            ("items", ints(&[2, 3, 4])),
-            ("sum", Value::Int(0)),
-            ("product", Value::Int(1)),
-        ],
+        vec![("items", ints(&[2, 3, 4])), ("sum", int(0)), ("product", int(1))],
     );
     let result = run_script_mode(
         &i,
@@ -191,21 +194,25 @@ async fn iter_accumulate_product() {
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(33));
+    assert_eq!(result.as_int(), 33);
 }
 
 #[tokio::test]
 async fn iter_field_then_loop() {
     let i = Interner::new();
-    let obj = Value::object(FxHashMap::from_iter([(i.intern("items"), ints(&[10, 20]))]));
-    let c = ctx(&i, &[("data", obj), ("sum", Value::Int(0))]);
+    let items = i.intern("items");
+    let data = typed(
+        Ty::Object(FxHashMap::from_iter([(items, ints_ty(2))])),
+        Value::object(FxHashMap::from_iter([(items, ints_value(&[10, 20]))])),
+    );
+    let c = ctx(&i, vec![("data", data), ("sum", int(0))]);
     let result = run_script_mode(
         &i,
         "let it = iter(@data.items); while let Some(x) = next(&mut it) { @sum = @sum + x; } @sum",
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(30));
+    assert_eq!(result.as_int(), 30);
 }
 
 #[tokio::test]
@@ -213,7 +220,10 @@ async fn iter_with_to_string() {
     let i = Interner::new();
     let c = ctx(
         &i,
-        &[("items", ints(&[1, 2, 3])), ("out", Value::string(""))],
+        vec![
+            ("items", ints(&[1, 2, 3])),
+            ("out", typed(Ty::String, Value::string(""))),
+        ],
     );
     let result = run_script_mode(
         &i,
@@ -221,7 +231,7 @@ async fn iter_with_to_string() {
         c,
     )
     .await;
-    assert_eq!(result, Value::string("123"));
+    assert_str(&result, "123");
 }
 
 /// A closure reads a context as it is when the closure runs, not as it
@@ -230,12 +240,12 @@ async fn iter_with_to_string() {
 #[tokio::test]
 async fn closure_reads_context_at_call() {
     let i = Interner::new();
-    let c = ctx(&i, &[("items", ints(&[1, 2])), ("x", Value::Int(1))]);
+    let c = ctx(&i, vec![("items", ints(&[1, 2])), ("x", int(1))]);
     let result = run_script_mode(
         &i,
         "@x = 5; let f = |v| -> v + @x; @x = 9; iter(@items) | map(f) | fold(0, |a, b| -> a + b)",
         c,
     )
     .await;
-    assert_eq!(result, Value::Int(21));
+    assert_eq!(result.as_int(), 21);
 }

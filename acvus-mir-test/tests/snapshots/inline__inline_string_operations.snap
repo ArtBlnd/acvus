@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/inline.rs
+assertion_line: 533
 expression: ir
 ---
 === literals ===
@@ -17,5 +18,6 @@ expression: ir
     ; r1 ($param_1.) : &String
     ; r2 (concat(...)) : String
     ; r3 (v4) : String
-    ; r4 (v1) : String
-    ; r5 (greet(...)) : String
+    ; r4 (h) : String
+    ; r5 (v1) : String
+    ; r6 (greet(...)) : String

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1364
 expression: ir
 ---
 === literals ===
@@ -42,5 +43,6 @@ expression: ir
     ; r11 (v14) : String
     ; r12 (v15) : Option<Int>
     ; r13 (v11) : String
-    ; r14 (@opt) : Option<Int>
-    ; r15 (v) : &Int
+    ; r14 (v) : &Int
+    ; r15 (@opt) : Option<Int>
+    ; r16 (v) : &Int

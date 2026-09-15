@@ -55,8 +55,9 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
 
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
 
-        InstKind::Assign { .. }
-        | InstKind::Commit { .. }
+        InstKind::Assign { target, .. } => storage(target).into_iter().collect(),
+
+        InstKind::Commit { .. }
         | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
@@ -77,7 +78,8 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         | InstKind::Poison { .. }
         | InstKind::Undef { .. } => smallvec![],
 
-        // A place through a reference uses the reference.
+        // A place through a reference uses the reference; the storage a
+        // place names directly is not a value (`loans::Loans` counts it).
         InstKind::Ref { target, .. } | InstKind::Take { target, .. } => {
             through(target).into_iter().collect()
         }
@@ -181,7 +183,14 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
     }
 }
 
-/// The reference a place is named through, if any.
+/// The storage slot a place names directly, if any.
+pub fn storage(target: &RefTarget) -> Option<ValueId> {
+    match target {
+        RefTarget::Var(s) | RefTarget::Param(s) => Some(*s),
+        RefTarget::Through(_) => None,
+    }
+}
+
 fn through(target: &RefTarget) -> Option<ValueId> {
     match target {
         RefTarget::Through(r) => Some(*r),

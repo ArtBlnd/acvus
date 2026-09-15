@@ -1,0 +1,64 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+assertion_line: 146
+expression: opt
+---
+=== literals ===
+  T0 = " (score: "
+  T1 = ")"
+
+=== main ===
+     0 |   r0 = fetch @output
+     1 |   assign @output = r0
+     2 |   r1 = fetch @min_score
+     3 |   r2 = fetch @user
+     4 |   assign @user = r2
+     5 |   r3 = take @user.age
+     7 |   r4 = r3 * 2 (r5)
+     8 |   r6 = ref &@user.name
+     9 |   r7 = const T0
+    10 |   assign v11 = r7
+    11 |   r8 = ref &v11
+    12 |   r7 = string_concat [r6, r8]
+    13 |   drop r9
+    14 |   assign v11 = r7
+    15 |   r6 = ref &v11
+    16 |   r7 = call #0(r4)
+    17 |   assign v13 = r7
+    18 |   r8 = ref &v13
+    19 |   r7 = string_concat [r6, r8]
+    20 |   drop r10
+    21 |   drop r9
+    22 |   assign v11 = r7
+    23 |   r6 = ref &v11
+    24 |   r7 = const T1
+    25 |   assign v13 = r7
+    26 |   r8 = ref &v13
+    27 |   r7 = string_concat [r6, r8]
+    28 |   drop r10
+    29 |   drop r9
+    30 |   r11 = r4 > r1
+    31 |   r0 = object {label: r7, score: r4, eligible: r11}
+    32 |   assign @output = r0
+    33 |   r3 = take @output.score
+    34 |   r0 = take @output
+    35 |   commit @output = r0
+    36 |   commit @min_score = r1
+    37 |   r2 = take @user
+    38 |   commit @user = r2
+    39 |   return r3
+
+    ; r0 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r1 (@min_score) : Int
+    ; r2 (@user) : {age: Int, name: String}
+    ; r3 (@output.score) : Int
+    ; r4 (v8) : Int
+    ; r5 (v7) : Int
+    ; r6 (v9) : &String
+    ; r7 (to_string(...)) : String
+    ; r8 (v12) : &String
+    ; r9 (v11) : String
+    ; r10 (v13) : String
+    ; r11 (v14) : Bool
+    ; r12 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r13 (@user) : {age: Int, name: String}

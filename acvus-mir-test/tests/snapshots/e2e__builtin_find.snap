@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1281
 expression: ir
 ---
 === literals ===
@@ -32,9 +33,10 @@ expression: ir
     ; r10 (@items) : List<Int>
     ; r11 (items) : List<Int>
     ; r12 (@items) : List<Int>
-    ; r13 (v15) : List<Int>
-    ; r14 (v5) : String
-    ; r15 (v8) : String
+    ; r13 (items) : List<Int>
+    ; r14 (v15) : List<Int>
+    ; r15 (v5) : String
+    ; r16 (v8) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef
@@ -48,3 +50,4 @@ expression: ir
     ; r3 (v6) : Bool
     ; r4 (v5) : Int
     ; r5 (x) : &Int
+    ; r6 (x) : &Int

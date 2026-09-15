@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
+assertion_line: 224
 expression: opt
 ---
 === main ===
@@ -18,12 +19,14 @@ expression: opt
     12 |   r4 = r1 >= r2
     13 |   assign @state.done = r4
     14 |   r1 = take @state.value
-    15 |   r0 = take @state
-    16 |   commit @state = r0
+    15 |   r5 = take @state
+    16 |   commit @state = r5
     17 |   return r1
 
     ; r0 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
     ; r1 (@state.value) : Int
     ; r2 (@state.max_steps) : Int
-    ; r3 (v4) : Int
-    ; r4 (v5) : Bool
+    ; r3 (v5) : Int
+    ; r4 (v7) : Bool
+    ; r5 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
+    ; r6 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}

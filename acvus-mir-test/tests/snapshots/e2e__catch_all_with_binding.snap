@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 884
 expression: ir
 ---
 === literals ===
@@ -44,3 +45,4 @@ expression: ir
     ; r15 (v7) : String
     ; r16 (fallback) : String
     ; r17 (v5) : String
+    ; r18 (fallback) : String

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 384
 expression: ir
 ---
 === main ===
@@ -60,11 +61,13 @@ expression: ir
     ; r24 (v25) : String
     ; r25 (@b) : String
     ; r26 (@b) : String
-    ; r27 (v33) : String
-    ; r28 (b) : String
-    ; r29 (@a) : Int
-    ; r30 (v27) : String
+    ; r27 (v27) : String
+    ; r28 (v33) : String
+    ; r29 (b) : String
+    ; r30 (b) : String
     ; r31 (@a) : Int
-    ; r32 (v26) : Int
-    ; r33 (v32) : Int
-    ; r34 (a) : Int
+    ; r32 (@a) : Int
+    ; r33 (v26) : Int
+    ; r34 (v32) : Int
+    ; r35 (a) : Int
+    ; r36 (a) : Int

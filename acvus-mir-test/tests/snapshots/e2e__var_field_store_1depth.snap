@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 2725
 expression: ir
 ---
 === main ===
@@ -19,7 +20,9 @@ expression: ir
     ; r3 (v5) : Int
     ; r4 (a.x) : Int
     ; r5 (a) : {x: Int}
-    ; r6 (@obj) : {x: Int}
-    ; r7 (v10) : {x: Int}
-    ; r8 (x) : Int
-    ; r9 (@obj) : {x: Int}
+    ; r6 (x) : Int
+    ; r7 (@obj) : {x: Int}
+    ; r8 (v10) : {x: Int}
+    ; r9 (x) : Int
+    ; r10 (@obj) : {x: Int}
+    ; r11 (a) : {x: Int}
