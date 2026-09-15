@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/script.rs
+assertion_line: 168
 expression: ir
 ---
 === main ===
@@ -31,3 +32,4 @@ expression: ir
     ; r3 (v6) : Bool
     ; r4 (v5) : Int
     ; r5 (x) : &Int
+    ; r6 (x) : &Int

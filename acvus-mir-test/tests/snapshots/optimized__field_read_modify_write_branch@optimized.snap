@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
+assertion_line: 76
 expression: opt
 ---
 === main ===
@@ -7,24 +8,33 @@ expression: opt
      1 |   assign @stats = r0
      2 |   r1 = take @stats.count
      4 |   r2 = r1 + 1 (r3)
-     5 |   r1 = take @stats.threshold
-     6 |   r4 = r2 > r1
-     7 |   r5 = test r4 == true
-     8 |   r4 = const true
-     9 |   jump_if r5 then L0 else L1
+     5 |   r4 = take @stats.threshold
+     6 |   r5 = r2 > r4
+     7 |   r6 = test r5 == true
+     9 |   jump_if r6 then L0 else L1
     10 | L0:
     11 |   assign @stats.count = r2
-    12 |   assign @stats.exceeded = r4
+    12 |   assign @stats.exceeded = true (r7)
     13 |   jump L1
     14 | L1:
-    15 |   r1 = take @stats.count
-    16 |   r0 = take @stats
-    17 |   commit @stats = r0
-    18 |   return r1
+    15 |   r8 = take @stats.count
+    16 |   r9 = take @stats
+    17 |   commit @stats = r9
+    18 |   return r8
 
     ; r0 (@stats) : {count: Int, exceeded: Bool, threshold: Int}
     ; r1 (@stats.count) : Int
-    ; r2 (v4) : Int
-    ; r3 (v3) : Int
-    ; r4 (v5) : Bool
-    ; r5 (v6) : Bool
+    ; r2 (v5) : Int
+    ; r3 (v4) : Int
+    ; r4 (@stats.threshold) : Int
+    ; r5 (v9) : Bool
+    ; r6 (v10) : Bool
+    ; r7 (v12) : Bool
+    ; r8 (@stats.count) : Int
+    ; r9 (v14) : {count: Int, exceeded: Bool, threshold: Int}
+    ; r10 (count) : Int
+    ; r11 (count) : Int
+    ; r12 (@stats) : {count: Int, exceeded: Bool, threshold: Int}
+    ; r13 (v15) : Int
+    ; r14 (count) : Int
+    ; r15 (v16) : Int

@@ -1,23 +1,49 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
+assertion_line: 106
 expression: opt
 ---
 === main ===
      0 |   r0 = fetch @output
-     1 |   r0 = fetch @a
-     2 |   r1 = fetch @scale
-     3 |   r2 = fetch @b
-     4 |   r3 = r0 + r2
-     5 |   r4 = r3 * r1
-     6 |   r3 = r4 + r0
-     7 |   commit @output = r3
-     8 |   commit @a = r0
-     9 |   commit @scale = r1
-    10 |   commit @b = r2
-    11 |   return r3
+     1 |   r1 = fetch @a
+     2 |   r2 = fetch @scale
+     3 |   r3 = fetch @b
+     4 |   r4 = r1 + r3
+     5 |   r5 = r4 * r2
+     6 |   r6 = r5 + r1
+     7 |   commit @output = r6
+     8 |   commit @a = r1
+     9 |   commit @scale = r2
+    10 |   commit @b = r3
+    11 |   return r6
 
-    ; r0 (@a) : Int
-    ; r1 (@scale) : Int
-    ; r2 (@b) : Int
-    ; r3 (v4) : Int
-    ; r4 (v5) : Int
+    ; r0 (@output) : Int
+    ; r1 (@a) : Int
+    ; r2 (@scale) : Int
+    ; r3 (@b) : Int
+    ; r4 (v11) : Int
+    ; r5 (v15) : Int
+    ; r6 (v19) : Int
+    ; r7 (@a) : Int
+    ; r8 (v22) : Int
+    ; r9 (v25) : Int
+    ; r10 (@a) : Int
+    ; r11 (v28) : Int
+    ; r12 (sum) : Int
+    ; r13 (v30) : Int
+    ; r14 (scaled) : Int
+    ; r15 (@scale) : Int
+    ; r16 (@output) : Int
+    ; r17 (@output) : Int
+    ; r18 (v23) : Int
+    ; r19 (@a) : Int
+    ; r20 (v21) : Int
+    ; r21 (v24) : Int
+    ; r22 (@scale) : Int
+    ; r23 (v27) : Int
+    ; r24 (v26) : Int
+    ; r25 (@b) : Int
+    ; r26 (v29) : Int
+    ; r27 (@b) : Int
+    ; r28 (sum) : Int
+    ; r29 (scaled) : Int

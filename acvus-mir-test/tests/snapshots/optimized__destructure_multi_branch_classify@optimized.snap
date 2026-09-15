@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
+assertion_line: 255
 expression: opt
 ---
 === literals ===
@@ -14,68 +15,99 @@ expression: opt
      0 |   r0 = fetch @output
      1 |   assign @output = r0
      2 |   r1 = fetch @user
-     3 |   assign var_3.age = r1
-     4 |   r2 = take var_3.age.age
-     5 |   r0 = const T0
-     6 |   assign @output = r0
-     7 |   r3 = const 65
-     8 |   r4 = r2 >= r3
-     9 |   r5 = test r4 == true
-    10 |   r3 = const 18
-    11 |   r4 = r2 >= r3
-    12 |   r6 = test r4 == true
-    13 |   r3 = const 18
-    14 |   r4 = r2 < r3
-    15 |   r7 = test r4 == true
+     3 |   assign @user = r1
+     4 |   r2 = take @user.age
+     6 |   assign @output = T0
+     8 |   r3 = r2 >= 65 (r4)
+     9 |   r5 = test r3 == true
+    11 |   r6 = r2 >= 18 (r7)
+    12 |   r8 = test r6 == true
+    14 |   r9 = r2 < 18 (r10)
+    15 |   r11 = test r9 == true
     16 |   jump_if r5 then L0 else L1
     17 | L0:
-    18 |   r0 = const T1
-    19 |   assign @output = r0
-    20 |   jump L1
-    21 | L1:
-    22 |   jump_if r6 then L2 else L3
-    23 | L2:
-    24 |   r0 = const T2
-    25 |   assign @output = r0
-    26 |   jump L3
-    27 | L3:
-    28 |   jump_if r7 then L4 else L5
-    29 | L4:
-    30 |   r0 = const T3
-    31 |   assign @output = r0
-    32 |   jump L5
-    33 | L5:
-    34 |   r8 = ref &var_3.age.name
-    35 |   r0 = const T4
-    36 |   assign v25 = r0
-    37 |   r9 = ref &v25
-    38 |   r0 = string_concat [r8, r9]
-    39 |   assign v28 = r0
-    40 |   r8 = ref &v28
-    41 |   r9 = ref &@output
-    42 |   r0 = string_concat [r8, r9]
-    43 |   assign v32 = r0
-    44 |   r8 = ref &v32
-    45 |   r0 = const T5
-    46 |   assign v35 = r0
-    47 |   r9 = ref &v35
-    48 |   r0 = string_concat [r8, r9]
-    49 |   assign @output = r0
-    50 |   r0 = take @output
-    51 |   r10 = take @output
-    52 |   commit @output = r10
-    53 |   r1 = take var_3.age
-    54 |   commit @user = r1
-    55 |   return r0
+    18 |   drop r12
+    20 |   assign @output = T1
+    21 |   jump L1
+    22 | L1:
+    23 |   jump_if r8 then L2 else L3
+    24 | L2:
+    25 |   drop r12
+    27 |   assign @output = T2
+    28 |   jump L3
+    29 | L3:
+    30 |   jump_if r11 then L4 else L5
+    31 | L4:
+    32 |   drop r12
+    34 |   assign @output = T3
+    35 |   jump L5
+    36 | L5:
+    37 |   r13 = ref &@user.name
+    39 |   assign v25 = T4
+    40 |   r14 = ref &v25
+    41 |   r15 = string_concat [r13, r14]
+    42 |   drop r16
+    43 |   assign v28 = r15
+    44 |   r17 = ref &v28
+    45 |   r18 = ref &@output
+    46 |   r19 = string_concat [r17, r18]
+    47 |   drop r20
+    48 |   assign v32 = r19
+    49 |   r21 = ref &v32
+    51 |   assign v35 = T5
+    52 |   r22 = ref &v35
+    53 |   r23 = string_concat [r21, r22]
+    54 |   drop r24
+    55 |   drop r25
+    56 |   assign @output = r23
+    57 |   r26 = take @output
+    58 |   r27 = take @output
+    59 |   commit @output = r27
+    60 |   r28 = take @user
+    61 |   commit @user = r28
+    62 |   return r26
 
     ; r0 (@output) : String
-    ; r1 (var_3.age) : {age: Int, name: String}
-    ; r2 (var_3.age) : Int
-    ; r3 (v4) : Int
-    ; r4 (v5) : Bool
-    ; r5 (v6) : Bool
-    ; r6 (v7) : Bool
-    ; r7 (v8) : Bool
-    ; r8 (v9) : &String
-    ; r9 (v10) : &String
-    ; r10 (@output) : String
+    ; r1 (@user) : {age: Int, name: String}
+    ; r2 (@user.age) : Int
+    ; r3 (v10) : Bool
+    ; r4 (v9) : Int
+    ; r5 (v11) : Bool
+    ; r6 (v15) : Bool
+    ; r7 (v14) : Int
+    ; r8 (v16) : Bool
+    ; r9 (v20) : Bool
+    ; r10 (v19) : Int
+    ; r11 (v21) : Bool
+    ; r12 (@output) : String
+    ; r13 (@user.name) : &String
+    ; r14 (var_25.) : &String
+    ; r15 (v27) : String
+    ; r16 (v25) : String
+    ; r17 (var_28.) : &String
+    ; r18 (@output.) : &String
+    ; r19 (v31) : String
+    ; r20 (v28) : String
+    ; r21 (var_32.) : &String
+    ; r22 (var_35.) : &String
+    ; r23 (v37) : String
+    ; r24 (v35) : String
+    ; r25 (v32) : String
+    ; r26 (@output) : String
+    ; r27 (v39) : String
+    ; r28 (v40) : {age: Int, name: String}
+    ; r29 (v44) : Int
+    ; r30 (v22) : String
+    ; r31 (@user) : {age: Int, name: String}
+    ; r32 (age) : Int
+    ; r33 (v24) : String
+    ; r34 (age) : Int
+    ; r35 (v12) : String
+    ; r36 (v34) : String
+    ; r37 (age) : Int
+    ; r38 (v43) : Int
+    ; r39 (v17) : String
+    ; r40 (v42) : Int
+    ; r41 (v7) : String
+    ; r42 (age) : Int
+    ; r43 (v41) : Int

@@ -139,8 +139,10 @@ pub fn forward_analysis<A: DataflowAnalysis>(
     block_entry[0] = initial;
     let mut worklist = VecDeque::new();
     worklist.push_back(BlockIdx(0));
+    let mut visited = vec![false; n];
 
     while let Some(idx) = worklist.pop_front() {
+        visited[idx.0] = true;
         let block = &cfg.blocks[idx.0];
         let mut state = block_entry[idx.0].clone();
 
@@ -160,6 +162,7 @@ pub fn forward_analysis<A: DataflowAnalysis>(
             &block_exit[idx.0],
             analysis,
             &mut block_entry,
+            &visited,
             &mut worklist,
         );
     }
@@ -239,6 +242,13 @@ pub fn backward_analysis<A: DataflowAnalysis>(
 
 // -- Edge propagation helpers ---------------------------------------
 
+/// One branch of a `JumpIf`, with whether the condition can take it.
+struct Edge<'a> {
+    taken: bool,
+    label: &'a crate::ir::Label,
+    args: &'a [ValueId],
+}
+
 /// Forward: propagate block_exit to each successor via the terminator's edges.
 fn propagate_to_successors<A: DataflowAnalysis>(
     cfg: &CfgBody,
@@ -247,21 +257,23 @@ fn propagate_to_successors<A: DataflowAnalysis>(
     exit_state: &DataflowState<A::Key, A::Domain>,
     analysis: &A,
     block_entry: &mut [DataflowState<A::Key, A::Domain>],
+    visited: &[bool],
     worklist: &mut VecDeque<BlockIdx>,
 ) {
     let n = block_entry.len();
 
     match term {
         Terminator::Jump { label, args } => {
-            if let Some(&t) = cfg.label_to_block.get(label)
-                && analysis.propagate_forward(
+            if let Some(&t) = cfg.label_to_block.get(label) {
+                let changed = analysis.propagate_forward(
                     exit_state,
                     &cfg.blocks[t.0].params,
                     args,
                     &mut block_entry[t.0],
-                )
-            {
-                worklist.push_back(t);
+                );
+                if changed || !visited[t.0] {
+                    worklist.push_back(t);
+                }
             }
         }
         Terminator::JumpIf {
@@ -272,32 +284,35 @@ fn propagate_to_successors<A: DataflowAnalysis>(
             else_args,
         } => {
             let definite = analysis.eval_branch_cond(exit_state, cond);
-            if definite != Some(false)
-                && let Some(&t) = cfg.label_to_block.get(then_label)
-                && analysis.propagate_forward(
-                    exit_state,
-                    &cfg.blocks[t.0].params,
-                    then_args,
-                    &mut block_entry[t.0],
-                )
-            {
-                worklist.push_back(t);
-            }
-            if definite != Some(true)
-                && let Some(&t) = cfg.label_to_block.get(else_label)
-                && analysis.propagate_forward(
-                    exit_state,
-                    &cfg.blocks[t.0].params,
-                    else_args,
-                    &mut block_entry[t.0],
-                )
-            {
-                worklist.push_back(t);
+            let edges = [
+                Edge {
+                    taken: definite != Some(false),
+                    label: then_label,
+                    args: then_args,
+                },
+                Edge {
+                    taken: definite != Some(true),
+                    label: else_label,
+                    args: else_args,
+                },
+            ];
+            for Edge { taken, label, args } in edges {
+                if taken && let Some(&t) = cfg.label_to_block.get(label) {
+                    let changed = analysis.propagate_forward(
+                        exit_state,
+                        &cfg.blocks[t.0].params,
+                        args,
+                        &mut block_entry[t.0],
+                    );
+                    if changed || !visited[t.0] {
+                        worklist.push_back(t);
+                    }
+                }
             }
         }
         Terminator::Fallthrough => {
             let next = idx.0 + 1;
-            if next < n && block_entry[next].join_from(exit_state) {
+            if next < n && (block_entry[next].join_from(exit_state) || !visited[next]) {
                 worklist.push_back(BlockIdx(next));
             }
         }

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
+assertion_line: 174
 expression: raw
 ---
 -- calc_discount --
@@ -343,11 +344,17 @@ expression: raw
     ; r61 (v78) : Int
     ; r62 (v79) : Order
     ; r63 (@item_count) : Int
-    ; r64 (@tax_rate) : Int
-    ; r65 (@discount_rate) : Int
-    ; r66 (@shipping) : Int
-    ; r67 (@receipt_out) : String
-    ; r68 (@free_ship_min) : Int
-    ; r69 (@total_out) : Int
-    ; r70 (@default_ship) : Int
-    ; r71 (@customer) : String
+    ; r64 (receipt) : String
+    ; r65 (subtotal) : Int
+    ; r66 (@total_out) : Int
+    ; r67 (@default_ship) : Int
+    ; r68 (@customer) : String
+    ; r69 (final_total) : Int
+    ; r70 (discount) : Int
+    ; r71 (@tax_rate) : Int
+    ; r72 (tax) : Int
+    ; r73 (@discount_rate) : Int
+    ; r74 (total) : Int
+    ; r75 (@shipping) : Int
+    ; r76 (@receipt_out) : String
+    ; r77 (@free_ship_min) : Int

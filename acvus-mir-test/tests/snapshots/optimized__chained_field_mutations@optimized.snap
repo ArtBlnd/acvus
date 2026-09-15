@@ -7,26 +7,31 @@ expression: opt
      0 |   r0 = fetch @state
      1 |   assign @state = r0
      2 |   r1 = take @state.step
-     3 |   r2 = const 1
-     4 |   r3 = r1 + r2
-     5 |   assign @state.step = r3
-     6 |   r1 = take @state.value
-     7 |   r2 = take @state.multiplier
-     8 |   r3 = r1 * r2
-     9 |   assign @state.value = r3
-    10 |   r1 = take @state.step
-    11 |   r2 = take @state.max_steps
-    12 |   r4 = r1 >= r2
-    13 |   assign @state.done = r4
-    14 |   r1 = take @state.value
-    15 |   r5 = take @state
-    16 |   commit @state = r5
-    17 |   return r1
+     4 |   r2 = r1 + 1 (r3)
+     5 |   assign @state.step = r2
+     6 |   r4 = take @state.value
+     7 |   r5 = take @state.multiplier
+     8 |   r6 = r4 * r5
+     9 |   assign @state.value = r6
+    10 |   r7 = take @state.step
+    11 |   r8 = take @state.max_steps
+    12 |   r9 = r7 >= r8
+    13 |   assign @state.done = r9
+    14 |   r10 = take @state.value
+    15 |   r11 = take @state
+    16 |   commit @state = r11
+    17 |   return r10
 
     ; r0 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
-    ; r1 (@state.value) : Int
-    ; r2 (@state.max_steps) : Int
-    ; r3 (v5) : Int
-    ; r4 (v7) : Bool
-    ; r5 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
-    ; r6 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
+    ; r1 (@state.step) : Int
+    ; r2 (v5) : Int
+    ; r3 (v4) : Int
+    ; r4 (@state.value) : Int
+    ; r5 (@state.multiplier) : Int
+    ; r6 (v8) : Int
+    ; r7 (@state.step) : Int
+    ; r8 (@state.max_steps) : Int
+    ; r9 (v11) : Bool
+    ; r10 (@state.value) : Int
+    ; r11 (v13) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
+    ; r12 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}

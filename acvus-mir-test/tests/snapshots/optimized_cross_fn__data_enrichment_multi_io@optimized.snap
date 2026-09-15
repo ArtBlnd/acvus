@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
+assertion_line: 255
 expression: opt
 ---
 === literals ===
@@ -13,74 +14,173 @@ expression: opt
      2 |   r1 = fetch @weight
      3 |   r2 = fetch @alert_count
      4 |   r3 = fetch @result_score
-     5 |   r3 = fetch @threshold
-     6 |   r4 = fetch @user_id
-     7 |   r5 = spawn #0(r4) [r6 ->]
-     8 |   r7 = eval r5 [-> r6]
-     9 |   r5 = spawn #1(r4) [r6 ->]
-    10 |   r8 = eval r5 [-> r6]
-    11 |   r9 = r7 + r8
-    12 |   r8 = r9 * r1
-    13 |   r9 = const 100
-    14 |   r10 = r8 / r9
-    15 |   r0 = const T0
-    16 |   assign v89 = r0
-    17 |   r0 = call #2(r7)
-    18 |   assign v92 = r0
-    19 |   r0 = const T1
-    20 |   assign v94 = r0
-    21 |   r0 = call #2(r10)
-    22 |   assign v97 = r0
-    23 |   r0 = const T2
-    24 |   assign v99 = r0
-    25 |   r11 = ref &v89
-    26 |   r12 = ref &v92
-    27 |   r0 = call #3(r11, r12)
-    28 |   assign v103 = r0
-    29 |   r11 = ref &v103
-    30 |   r12 = ref &v94
-    31 |   r0 = call #3(r11, r12)
-    32 |   assign v107 = r0
-    33 |   r11 = ref &v107
-    34 |   r12 = ref &v97
-    35 |   r0 = call #3(r11, r12)
-    36 |   assign v111 = r0
-    37 |   r11 = ref &v111
-    38 |   r12 = ref &v99
-    39 |   r0 = call #3(r11, r12)
-    40 |   r13 = r10 > r3
-    41 |   r14 = test r13 == true
-    42 |   r7 = const 1
-    43 |   r8 = r2 + r7
-    44 |   jump_if r14 then L0 else L1(r6, r2)
-    45 | L0:
-    46 |   r5 = spawn #4(r4, r10) [r6 ->]
-    47 |   r2 = eval r5 [-> r6]
-    48 |   jump L1(r6, r8)
-    49 | L1(r6: Order, r2: Int):
-    50 |   commit @result_label = r0
-    51 |   commit @weight = r1
-    52 |   commit @alert_count = r2
-    53 |   commit @result_score = r10
-    54 |   commit @threshold = r3
-    55 |   commit @user_id = r4
-    56 |   return r10 [r6]
+     5 |   r4 = fetch @threshold
+     6 |   r5 = fetch @user_id
+     7 |   r6 = spawn #0(r5) [r7 ->]
+     8 |   r8 = eval r6 [-> r9]
+     9 |   r10 = spawn #1(r5) [r9 ->]
+    10 |   r11 = eval r10 [-> r12]
+    11 |   r13 = r8 + r11
+    12 |   r14 = r13 * r1
+    14 |   r15 = r14 / 100 (r16)
+    16 |   assign a = T0
+    17 |   r17 = call #2(r8)
+    18 |   assign b = r17
+    20 |   assign c = T1
+    21 |   r18 = call #2(r15)
+    22 |   assign d = r18
+    24 |   assign e = T2
+    25 |   r19 = ref &a
+    26 |   r20 = ref &b
+    27 |   r21 = call #3(r19, r20)
+    28 |   drop r22
+    29 |   drop r23
+    30 |   assign ab = r21
+    31 |   r24 = ref &ab
+    32 |   r25 = ref &c
+    33 |   r26 = call #3(r24, r25)
+    34 |   drop r27
+    35 |   drop r28
+    36 |   assign abc = r26
+    37 |   r29 = ref &abc
+    38 |   r30 = ref &d
+    39 |   r31 = call #3(r29, r30)
+    40 |   drop r32
+    41 |   drop r33
+    42 |   assign abcd = r31
+    43 |   r34 = ref &abcd
+    44 |   r35 = ref &e
+    45 |   r36 = call #3(r34, r35)
+    46 |   drop r37
+    47 |   drop r38
+    48 |   r39 = r15 > r4
+    49 |   r40 = test r39 == true
+    51 |   r41 = r2 + 1 (r42)
+    52 |   jump_if r40 then L0 else L1(r12, r2)
+    53 | L0:
+    54 |   r43 = spawn #4(r5, r15) [r12 ->]
+    55 |   r44 = eval r43 [-> r45]
+    56 |   jump L1(r45, r41)
+    57 | L1(r46: Order, r47: Int):
+    58 |   commit @result_label = r36
+    59 |   commit @weight = r1
+    60 |   commit @alert_count = r47
+    61 |   commit @result_score = r15
+    62 |   commit @threshold = r4
+    63 |   commit @user_id = r5
+    64 |   return r15 [r46]
 
     ; orders: what the body's yielded Order waits for
-    ;   eval@47 <- spawn@46 #4 <- eval@10 <- spawn@9 #1 <- eval@8 <- spawn@7 #0 <- r6(entry)
+    ;   r46(entry)
 
-    ; r0 (concat(...)) : String
+    ; r0 (@result_label) : String
     ; r1 (@weight) : Int
     ; r2 (@alert_count) : Int
-    ; r3 (@threshold) : Int
-    ; r4 (@user_id) : Int
-    ; r5 (v7) : Handle<Int>
-    ; r6 (v1) : Order
-    ; r7 (v8) : Int
-    ; r8 (v9) : Int
-    ; r9 (v10) : Int
-    ; r10 (v11) : Int
-    ; r11 (v12) : &String
-    ; r12 (v13) : &String
-    ; r13 (v14) : Bool
-    ; r14 (v15) : Bool
+    ; r3 (@result_score) : Int
+    ; r4 (@threshold) : Int
+    ; r5 (@user_id) : Int
+    ; r6 (v115) : Handle<Int>
+    ; r7 (v1) : Order
+    ; r8 (fetch_profile(...)) : Int
+    ; r9 (v18) : Order
+    ; r10 (v116) : Handle<Int>
+    ; r11 (fetch_history(...)) : Int
+    ; r12 (v23) : Order
+    ; r13 (v81) : Int
+    ; r14 (v83) : Int
+    ; r15 (v85) : Int
+    ; r16 (v84) : Int
+    ; r17 (to_string(...)) : String
+    ; r18 (to_string(...)) : String
+    ; r19 (@result_label.) : &String
+    ; r20 (@alert_count.) : &String
+    ; r21 (concat(...)) : String
+    ; r22 (b) : String
+    ; r23 (a) : String
+    ; r24 (var_18.) : &String
+    ; r25 (@result_score.) : &String
+    ; r26 (concat(...)) : String
+    ; r27 (ab) : String
+    ; r28 (c) : String
+    ; r29 (var_22.) : &String
+    ; r30 (@threshold.) : &String
+    ; r31 (concat(...)) : String
+    ; r32 (abc) : String
+    ; r33 (d) : String
+    ; r34 (history.) : &String
+    ; r35 (@user_id.) : &String
+    ; r36 (concat(...)) : String
+    ; r37 (abcd) : String
+    ; r38 (e) : String
+    ; r39 (v36) : Bool
+    ; r40 (v37) : Bool
+    ; r41 (v45) : Int
+    ; r42 (v44) : Int
+    ; r43 (v117) : Handle<Int>
+    ; r44 (notify_alert(...)) : Int
+    ; r45 (v42) : Order
+    ; r46 (v73) : Order
+    ; r47 (v70) : Int
+    ; r48 (v88) : String
+    ; r49 (profile) : Int
+    ; r50 (v69) : Int
+    ; r51 (v66) : String
+    ; r52 (v64) : Int
+    ; r53 (@alert_count) : Int
+    ; r54 (v50) : Int
+    ; r55 (score) : Int
+    ; r56 (v75) : Int
+    ; r57 (v56) : Order
+    ; r58 (v62) : Int
+    ; r59 (@alert_count) : Int
+    ; r60 (history) : Int
+    ; r61 (v68) : Int
+    ; r62 (@weight) : Int
+    ; r63 (v49) : String
+    ; r64 (v93) : String
+    ; r65 (profile) : Int
+    ; r66 (v74) : Int
+    ; r67 (@threshold) : Int
+    ; r68 (v55) : Order
+    ; r69 ($history) : Int
+    ; r70 (v17) : Order
+    ; r71 (v61) : Int
+    ; r72 (v67) : String
+    ; r73 (score) : Int
+    ; r74 (score) : Int
+    ; r75 (v54) : Int
+    ; r76 (v98) : String
+    ; r77 (@threshold) : Int
+    ; r78 ($profile) : Int
+    ; r79 (v60) : Int
+    ; r80 (v41) : Order
+    ; r81 (v22) : Order
+    ; r82 (@result_label) : String
+    ; r83 (score) : Int
+    ; r84 (compute_score(...)) : Int
+    ; r85 (v72) : Int
+    ; r86 (@result_score) : Int
+    ; r87 (v53) : Int
+    ; r88 (score) : Int
+    ; r89 (@user_id) : Int
+    ; r90 (v59) : Int
+    ; r91 (v65) : Int
+    ; r92 (label) : String
+    ; r93 ($profile) : Int
+    ; r94 (@weight) : Int
+    ; r95 (v71) : Int
+    ; r96 (v52) : Int
+    ; r97 (label) : String
+    ; r98 (v58) : Int
+    ; r99 (score) : Int
+    ; r100 (@user_id) : Int
+    ; r101 (history) : Int
+    ; r102 (v51) : Int
+    ; r103 ($score) : Int
+    ; r104 (format_label(...)) : String
+    ; r105 (@user_id) : Int
+    ; r106 (v57) : String
+    ; r107 (@user_id) : Int
+    ; r108 ($weight) : Int
+    ; r109 (profile) : Int
+    ; r110 (v63) : Int

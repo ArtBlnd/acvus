@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
+assertion_line: 173
 expression: opt
 ---
 === literals ===
@@ -12,133 +13,322 @@ expression: opt
 === main ===
      0 |   r0 = fetch @item_count
      1 |   r1 = fetch @total_out
-     2 |   r1 = fetch @shipping
-     3 |   r2 = fetch @tax_rate
-     4 |   r3 = fetch @default_ship
-     5 |   r4 = fetch @receipt_out
-     6 |   drop r4
-     7 |   r5 = fetch @discount_rate
-     8 |   r4 = fetch @customer
-     9 |   r6 = fetch @free_ship_min
-    10 |   r7 = const 100
-    11 |   r8 = r0 * r7
-    12 |   r7 = r8 * r5
-    13 |   r9 = const 100
-    14 |   r10 = r7 / r9
-    15 |   r7 = r8 - r10
-    16 |   r9 = r7 * r2
-    17 |   r7 = const 100
-    18 |   r11 = r9 / r7
-    19 |   r7 = r8 - r10
-    20 |   r9 = r7 + r11
-    21 |   r12 = r9 > r6
-    22 |   r13 = test r12 == true
-    23 |   r7 = const 0
-    24 |   r12 = r9 <= r6
-    25 |   r14 = test r12 == true
-    26 |   jump_if r13 then L0 else L1(r1)
+     2 |   r2 = fetch @shipping
+     3 |   r3 = fetch @tax_rate
+     4 |   r4 = fetch @default_ship
+     5 |   r5 = fetch @receipt_out
+     6 |   drop r5
+     7 |   r6 = fetch @discount_rate
+     8 |   r7 = fetch @customer
+     9 |   r8 = fetch @free_ship_min
+    11 |   r9 = r0 * 100 (r10)
+    12 |   r11 = r9 * r6
+    14 |   r12 = r11 / 100 (r13)
+    15 |   r14 = r9 - r12
+    16 |   r15 = r14 * r3
+    18 |   r16 = r15 / 100 (r17)
+    19 |   r18 = r9 - r12
+    20 |   r19 = r18 + r16
+    21 |   r20 = r19 > r8
+    22 |   r21 = test r20 == true
+    24 |   r22 = r19 <= r8
+    25 |   r23 = test r22 == true
+    26 |   jump_if r21 then L0 else L1(r2)
     27 | L0:
-    28 |   jump L1(r7)
-    29 | L1(r1: Int):
-    30 |   jump_if r14 then L2 else L3(r1)
+    28 |   jump L1(0 (r24))
+    29 | L1(r25: Int):
+    30 |   jump_if r23 then L2 else L3(r25)
     31 | L2:
-    32 |   jump L3(r3)
-    33 | L3(r1: Int):
-    34 |   r7 = r9 + r1
-    35 |   r15 = ref &$v124
-    36 |   r16 = const T0
-    37 |   assign v148 = r16
-    38 |   r17 = ref &v148
-    39 |   r16 = string_concat [r15, r17]
-    40 |   assign v151 = r16
-    41 |   r15 = ref &v151
-    42 |   r16 = call #0(r8)
-    43 |   assign v155 = r16
-    44 |   r17 = ref &v155
-    45 |   r16 = string_concat [r15, r17]
-    46 |   assign v158 = r16
-    47 |   r15 = ref &v158
-    48 |   r16 = const T1
-    49 |   assign v161 = r16
-    50 |   r17 = ref &v161
-    51 |   r16 = string_concat [r15, r17]
-    52 |   assign v164 = r16
-    53 |   r15 = ref &v164
-    54 |   r16 = call #0(r10)
-    55 |   assign v168 = r16
-    56 |   r17 = ref &v168
-    57 |   r16 = string_concat [r15, r17]
-    58 |   assign v171 = r16
-    59 |   r15 = ref &v171
-    60 |   r16 = const T2
-    61 |   assign v174 = r16
-    62 |   r17 = ref &v174
-    63 |   r16 = string_concat [r15, r17]
-    64 |   assign v177 = r16
-    65 |   r15 = ref &v177
-    66 |   r16 = call #0(r11)
-    67 |   assign v181 = r16
-    68 |   r17 = ref &v181
-    69 |   r16 = string_concat [r15, r17]
-    70 |   assign v184 = r16
-    71 |   r15 = ref &v184
-    72 |   r16 = const T3
-    73 |   assign v187 = r16
-    74 |   r17 = ref &v187
-    75 |   r16 = string_concat [r15, r17]
-    76 |   assign v190 = r16
-    77 |   r15 = ref &v190
-    78 |   r16 = call #0(r1)
-    79 |   assign v194 = r16
-    80 |   r17 = ref &v194
-    81 |   r16 = string_concat [r15, r17]
-    82 |   assign v197 = r16
-    83 |   r15 = ref &v197
-    84 |   r16 = const T4
-    85 |   assign v200 = r16
-    86 |   r17 = ref &v200
-    87 |   r16 = string_concat [r15, r17]
-    88 |   assign v203 = r16
-    89 |   r15 = ref &v203
-    90 |   r16 = call #0(r7)
-    91 |   assign v207 = r16
-    92 |   r17 = ref &v207
-    93 |   r16 = string_concat [r15, r17]
-    94 |   r18 = string_clone r16
-    95 |   r19 = spawn #1(r18) [r20 ->]
-    96 |   commit @item_count = r0
-    97 |   commit @total_out = r7
-    98 |   commit @shipping = r1
-    99 |   commit @tax_rate = r2
-   100 |   commit @default_ship = r3
-   101 |   commit @receipt_out = r16
-   102 |   commit @discount_rate = r5
-   103 |   commit @customer = r4
-   104 |   commit @free_ship_min = r6
-   105 |   r0 = eval r19 [-> r20]
-   106 |   return r7 [r20]
+    32 |   jump L3(r4)
+    33 | L3(r26: Int):
+    34 |   r27 = r19 + r26
+    35 |   r28 = ref &$v124
+    37 |   assign v148 = T0
+    38 |   r29 = ref &v148
+    39 |   r30 = string_concat [r28, r29]
+    40 |   drop r31
+    41 |   drop r32
+    42 |   assign v151 = r30
+    43 |   r33 = ref &v151
+    44 |   r34 = call #0(r9)
+    45 |   assign v155 = r34
+    46 |   r35 = ref &v155
+    47 |   r36 = string_concat [r33, r35]
+    48 |   drop r37
+    49 |   drop r38
+    50 |   assign v158 = r36
+    51 |   r39 = ref &v158
+    53 |   assign v161 = T1
+    54 |   r40 = ref &v161
+    55 |   r41 = string_concat [r39, r40]
+    56 |   drop r42
+    57 |   drop r43
+    58 |   assign v164 = r41
+    59 |   r44 = ref &v164
+    60 |   r45 = call #0(r12)
+    61 |   assign v168 = r45
+    62 |   r46 = ref &v168
+    63 |   r47 = string_concat [r44, r46]
+    64 |   drop r48
+    65 |   drop r49
+    66 |   assign v171 = r47
+    67 |   r50 = ref &v171
+    69 |   assign v174 = T2
+    70 |   r51 = ref &v174
+    71 |   r52 = string_concat [r50, r51]
+    72 |   drop r53
+    73 |   drop r54
+    74 |   assign v177 = r52
+    75 |   r55 = ref &v177
+    76 |   r56 = call #0(r16)
+    77 |   assign v181 = r56
+    78 |   r57 = ref &v181
+    79 |   r58 = string_concat [r55, r57]
+    80 |   drop r59
+    81 |   drop r60
+    82 |   assign v184 = r58
+    83 |   r61 = ref &v184
+    85 |   assign v187 = T3
+    86 |   r62 = ref &v187
+    87 |   r63 = string_concat [r61, r62]
+    88 |   drop r64
+    89 |   drop r65
+    90 |   assign v190 = r63
+    91 |   r66 = ref &v190
+    92 |   r67 = call #0(r26)
+    93 |   assign v194 = r67
+    94 |   r68 = ref &v194
+    95 |   r69 = string_concat [r66, r68]
+    96 |   drop r70
+    97 |   drop r71
+    98 |   assign v197 = r69
+    99 |   r72 = ref &v197
+   101 |   assign v200 = T4
+   102 |   r73 = ref &v200
+   103 |   r74 = string_concat [r72, r73]
+   104 |   drop r75
+   105 |   drop r76
+   106 |   assign v203 = r74
+   107 |   r77 = ref &v203
+   108 |   r78 = call #0(r27)
+   109 |   assign v207 = r78
+   110 |   r79 = ref &v207
+   111 |   r80 = string_concat [r77, r79]
+   112 |   drop r81
+   113 |   drop r82
+   114 |   r83 = string_clone r80
+   115 |   r84 = spawn #1(r83) [r85 ->]
+   116 |   commit @item_count = r0
+   117 |   commit @total_out = r27
+   118 |   commit @shipping = r26
+   119 |   commit @tax_rate = r3
+   120 |   commit @default_ship = r4
+   121 |   commit @receipt_out = r80
+   122 |   commit @discount_rate = r6
+   123 |   commit @customer = r7
+   124 |   commit @free_ship_min = r8
+   125 |   r86 = eval r84 [-> r87]
+   126 |   return r27 [r87]
 
     ; orders: what the body's yielded Order waits for
-    ;   eval@105 <- spawn@95 #1 <- r20(entry)
+    ;   eval@125 <- spawn@115 #1 <- r85(entry)
 
     ; r0 (@item_count) : Int
-    ; r1 (@shipping) : Int
-    ; r2 (@tax_rate) : Int
-    ; r3 (@default_ship) : Int
-    ; r4 (@customer) : String
-    ; r5 (@discount_rate) : Int
-    ; r6 (@free_ship_min) : Int
-    ; r7 (v9) : Int
-    ; r8 (v10) : Int
-    ; r9 (v11) : Int
-    ; r10 (v12) : Int
-    ; r11 (v13) : Int
-    ; r12 (v14) : Bool
-    ; r13 (v15) : Bool
-    ; r14 (v16) : Bool
-    ; r15 (v17) : &String
-    ; r16 (to_string(...)) : String
-    ; r17 (v19) : &String
-    ; r18 (v20) : String
-    ; r19 (v21) : Handle<Int>
-    ; r20 (v1) : Order
+    ; r1 (@total_out) : Int
+    ; r2 (@shipping) : Int
+    ; r3 (@tax_rate) : Int
+    ; r4 (@default_ship) : Int
+    ; r5 (@receipt_out) : String
+    ; r6 (@discount_rate) : Int
+    ; r7 (@customer) : String
+    ; r8 (@free_ship_min) : Int
+    ; r9 (v23) : Int
+    ; r10 (v22) : Int
+    ; r11 (v130) : Int
+    ; r12 (v132) : Int
+    ; r13 (v131) : Int
+    ; r14 (v31) : Int
+    ; r15 (v137) : Int
+    ; r16 (v139) : Int
+    ; r17 (v138) : Int
+    ; r18 (v37) : Int
+    ; r19 (v39) : Int
+    ; r20 (v43) : Bool
+    ; r21 (v44) : Bool
+    ; r22 (v48) : Bool
+    ; r23 (v49) : Bool
+    ; r24 (v45) : Int
+    ; r25 (v101) : Int
+    ; r26 (v100) : Int
+    ; r27 (v53) : Int
+    ; r28 ($param_1.) : &String
+    ; r29 (@tax_rate.) : &String
+    ; r30 (v150) : String
+    ; r31 (v148) : String
+    ; r32 (v124) : String
+    ; r33 (@default_ship.) : &String
+    ; r34 (to_string(...)) : String
+    ; r35 (@discount_rate.) : &String
+    ; r36 (v157) : String
+    ; r37 (v155) : String
+    ; r38 (v151) : String
+    ; r39 (@free_ship_min.) : &String
+    ; r40 (var_22.) : &String
+    ; r41 (v163) : String
+    ; r42 (v161) : String
+    ; r43 (v158) : String
+    ; r44 (subtotal.) : &String
+    ; r45 (to_string(...)) : String
+    ; r46 (subtotal.) : &String
+    ; r47 (v170) : String
+    ; r48 (v168) : String
+    ; r49 (v164) : String
+    ; r50 (@tax_rate.) : &String
+    ; r51 (subtotal.) : &String
+    ; r52 (v176) : String
+    ; r53 (v174) : String
+    ; r54 (v171) : String
+    ; r55 (tax.) : &String
+    ; r56 (to_string(...)) : String
+    ; r57 (@free_ship_min.) : &String
+    ; r58 (v183) : String
+    ; r59 (v181) : String
+    ; r60 (v177) : String
+    ; r61 (var_45.) : &String
+    ; r62 (var_48.) : &String
+    ; r63 (v189) : String
+    ; r64 (v187) : String
+    ; r65 (v184) : String
+    ; r66 (total.) : &String
+    ; r67 (to_string(...)) : String
+    ; r68 (@customer.) : &String
+    ; r69 (v196) : String
+    ; r70 (v194) : String
+    ; r71 (v190) : String
+    ; r72 (tax.) : &String
+    ; r73 (var_61.) : &String
+    ; r74 (v202) : String
+    ; r75 (v200) : String
+    ; r76 (v197) : String
+    ; r77 (receipt.) : &String
+    ; r78 (to_string(...)) : String
+    ; r79 (var_68.) : &String
+    ; r80 (v209) : String
+    ; r81 (v207) : String
+    ; r82 (v203) : String
+    ; r83 (v125) : String
+    ; r84 (v210) : Handle<Int>
+    ; r85 (v1) : Order
+    ; r86 (send_email(...)) : Int
+    ; r87 (v68) : Order
+    ; r88 (v88) : String
+    ; r89 (subtotal) : Int
+    ; r90 (v147) : String
+    ; r91 (v84) : Int
+    ; r92 (@item_count) : Int
+    ; r93 (v80) : Order
+    ; r94 (@customer) : String
+    ; r95 (receipt) : String
+    ; r96 (total) : Int
+    ; r97 (v113) : Int
+    ; r98 (@default_ship) : Int
+    ; r99 (v75) : String
+    ; r100 (receipt) : String
+    ; r101 (v87) : Int
+    ; r102 (subtotal) : Int
+    ; r103 (v112) : Int
+    ; r104 (v74) : Int
+    ; r105 (@default_ship) : Int
+    ; r106 (v99) : Int
+    ; r107 (discount) : Int
+    ; r108 (format_receipt(...)) : String
+    ; r109 (v86) : String
+    ; r110 (v111) : Order
+    ; r111 (v199) : String
+    ; r112 ($rate) : Int
+    ; r113 (v73) : Int
+    ; r114 (v98) : Int
+    ; r115 (subtotal) : Int
+    ; r116 (v186) : String
+    ; r117 (v123) : String
+    ; r118 (final_total) : Int
+    ; r119 (v85) : Int
+    ; r120 (v173) : String
+    ; r121 (v110) : Order
+    ; r122 (@free_ship_min) : Int
+    ; r123 ($amount) : Int
+    ; r124 (v72) : Int
+    ; r125 (@tax_rate) : Int
+    ; r126 (v160) : String
+    ; r127 (v97) : Int
+    ; r128 (tax) : Int
+    ; r129 (v122) : Int
+    ; r130 (@shipping) : Int
+    ; r131 (v109) : Int
+    ; r132 (total) : Int
+    ; r133 (v71) : Int
+    ; r134 (v96) : Int
+    ; r135 (calc_tax(...)) : Int
+    ; r136 (v121) : String
+    ; r137 (tax) : Int
+    ; r138 (v83) : Int
+    ; r139 (v108) : Int
+    ; r140 (v70) : Int
+    ; r141 (@shipping) : Int
+    ; r142 (v95) : String
+    ; r143 (@tax_rate) : Int
+    ; r144 (v120) : Int
+    ; r145 (discount) : Int
+    ; r146 (v82) : Int
+    ; r147 (@free_ship_min) : Int
+    ; r148 (v107) : Int
+    ; r149 (final_total) : Int
+    ; r150 (v94) : Int
+    ; r151 (v119) : Int
+    ; r152 (subtotal) : Int
+    ; r153 (v81) : Int
+    ; r154 (v106) : Int
+    ; r155 (@total_out) : Int
+    ; r156 (v93) : Int
+    ; r157 (discount) : Int
+    ; r158 (v118) : Int
+    ; r159 (@customer) : String
+    ; r160 (v105) : Int
+    ; r161 (@free_ship_min) : Int
+    ; r162 (v67) : Order
+    ; r163 (v92) : Int
+    ; r164 (subtotal) : Int
+    ; r165 (v117) : Int
+    ; r166 (final_total) : Int
+    ; r167 ($total) : Int
+    ; r168 (v79) : Order
+    ; r169 (v104) : Int
+    ; r170 (total) : Int
+    ; r171 ($ship) : Int
+    ; r172 ($rate) : Int
+    ; r173 (@item_count) : Int
+    ; r174 (v91) : Int
+    ; r175 (discount) : Int
+    ; r176 ($tax) : Int
+    ; r177 (v116) : Int
+    ; r178 (v78) : Int
+    ; r179 (@discount_rate) : Int
+    ; r180 ($disc) : Int
+    ; r181 (v103) : String
+    ; r182 (total) : Int
+    ; r183 ($subtotal) : Int
+    ; r184 ($sub) : Int
+    ; r185 (v90) : Int
+    ; r186 (calc_discount(...)) : Int
+    ; r187 (v115) : Int
+    ; r188 (@shipping) : Int
+    ; r189 (v77) : String
+    ; r190 (v102) : String
+    ; r191 (receipt) : String
+    ; r192 (v89) : Int
+    ; r193 (@discount_rate) : Int
+    ; r194 (v114) : Int
+    ; r195 (v76) : Int
+    ; r196 (@receipt_out) : String
+    ; r197 (tax) : Int
+    ; r198 (final_total) : Int

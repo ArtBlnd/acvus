@@ -24,7 +24,7 @@ acvus-mir            Compiler core: type system, IR, analysis, optimization
   |           |
   |           +-- acvus-orchestration  Multi-source compilation, incremental rebuild
   |
-  +-- kovac-interpreter    Second runtime over the same MIR (untyped scalar coloring)
+  +-- kovac-interpreter    Second runtime over the same MIR (concept only)
   |
 acvus-lsp            Language server (shares exact same pipeline as compiler)
 ```
@@ -299,7 +299,6 @@ CompilationGraph { functions, contexts }
     |  │    Reorder        Spawn early, Eval late within blocks   │
     |  │    (debug build)  use-def / dominance / type coverage    │
     |  │    DropInsertion  Drop at last use of a move-only value  │
-    |  │    RegColor       SSA-aware greedy register coloring     │
     |  │    demote(CfgBody) → MirBody                            │
     |  │  Then, per module:                                       │
     |  │    Validate (type check + move check on final MirBody)  │
@@ -387,21 +386,6 @@ Priority (topological sort with `BinaryHeap`):
 - Phase 1, within a block: at a value's last use, if it is not live-out and the instruction does not consume it, a `Drop` follows the instruction. An unused definition is dropped right after it.
 - Phase 2, on edges: a value live-out of A that is neither forwarded to B nor live-in to B is dropped at the start of B.
 
-### 7. RegColor (`optimize/reg_color.rs`)
-
-**Input:** CfgBody in SSA form.
-**Output:** ValueIds compacted — non-overlapping lifetimes share slots.
-
-- SSA-aware set-based greedy coloring (not interval-based linear scan).
-- Backward dataflow liveness over CFG.
-- Kill order within an instruction: color defs → kill dying uses → kill dead defs.
-- Entry params/captures colored with a shared `entry_live` set.
-- `color_body` reuses a slot only across the same type; `color_body_untyped` (kovac) colours scalars regardless of type.
-
----
-
-## Pass 1 — SSA, DSE, DCE
-
 ### SSA Pass (`optimize/ssa_pass.rs`)
 
 **Input:** CfgBody with `Take` / `Assign` on storages.
@@ -464,7 +448,7 @@ Backward dataflow: which ValueIds are live at each block entry/exit.
 - `analyze(&CfgBody) → LivenessResult`.
 - `is_live_in(block, val)`, `is_live_out(block, val)`.
 - `Return { value, order }` marks both live; `JumpIf` marks its condition live.
-- Used by: RegColor, DropInsertion.
+- Used by: DropInsertion.
 
 ### Reachable Context (`analysis/reachable_context.rs`)
 
@@ -695,18 +679,6 @@ If one branch has `Alive` and the other has `Moved(at: 3)`, the merge result is 
 **Pruned keys are type-inject only.** Code in a dead branch has already passed type checking and still carries the context's type; the caller injects the type and does not fetch the value.
 
 ---
-
-## Register Coloring: SSA-Aware Greedy
-
-The implementation uses **set-based greedy coloring** over CFG-aware liveness, not interval-based linear scan.
-
-- `Coloring` struct: `assign()`, `color_of()`, `is_colored()`, `is_improvement()`.
-- `LiveColors` struct: tracks which colors are currently live at a program point.
-- `LastUseMap` struct: precomputes where each value's last use is within a block.
-- Kill order within an instruction: color defs → kill dying uses → kill dead defs.
-- Entry params/captures: colored with a shared `entry_live` set to prevent conflicts.
-
-**Why not interval-based linear scan?** SSA produces a chordal interference graph, where greedy coloring on a perfect elimination ordering is optimal. The set-based approach naturally handles cross-block liveness without constructing intervals.
 
 ---
 

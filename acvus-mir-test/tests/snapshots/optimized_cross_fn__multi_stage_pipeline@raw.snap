@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
+assertion_line: 334
 expression: raw
 ---
 -- enrich --
@@ -146,12 +147,16 @@ expression: raw
     ; r37 (v50) : Int
     ; r38 (v51) : Order
     ; r39 (@offset) : Int
-    ; r40 (@stage3) : Int
-    ; r41 (@stage2) : Int
-    ; r42 (@source_id) : Int
-    ; r43 (@precision) : Int
-    ; r44 (@stage1) : Int
-    ; r45 (@scale) : Int
+    ; r40 (s1) : Int
+    ; r41 (raw) : Int
+    ; r42 (@stage2) : Int
+    ; r43 (@stage3) : Int
+    ; r44 (@precision) : Int
+    ; r45 (s2) : Int
+    ; r46 (@source_id) : Int
+    ; r47 (@scale) : Int
+    ; r48 (@stage1) : Int
+    ; r49 (s3) : Int
 
 -- normalize --
 === main ===

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/script.rs
+assertion_line: 76
 expression: ir
 ---
 === main ===
@@ -27,7 +28,9 @@ expression: ir
     ; r7 (v11) : {age: Int, name: String}
     ; r8 (v16) : String
     ; r9 (@out) : String
-    ; r10 (@out) : String
+    ; r10 (name) : String
     ; r11 (name) : String
     ; r12 (@user) : {age: Int, name: String}
     ; r13 (v12) : String
+    ; r14 (@out) : String
+    ; r15 (age) : Int

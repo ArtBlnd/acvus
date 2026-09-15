@@ -80,7 +80,7 @@ The pipeline is split into four phases not because it's architecturally elegant,
 
 **Optimize** is the final phase. Two passes (`graph/optimize.rs`):
 - **Pass 1** (per body, then cross-module): SSA → DSE → DCE on every body, then inlining across modules. Inline must see all modules because it resolves cross-function calls and devirtualizes closures.
-- **Pass 2** (per body): Commute → SpawnSplit → SSA → DSE → DCE → CodeMotion → Reorder → DropInsertion → RegColor. Then, per module, **Validate** (type check + move check) on the demoted `MirBody`.
+- **Pass 2** (per body): Commute → SpawnSplit → SSA → DSE → DCE → CodeMotion → Reorder → DropInsertion. Then, per module, **Validate** (type check + move check) on the demoted `MirBody`.
 
 ### Why validate at the end, not after lower?
 
@@ -177,25 +177,9 @@ Devirtualization and inlining share the same machinery — both need to trace va
 
 ---
 
-## Register Coloring: Why Liveness-Based
+## Register allocation lives in the runtime
 
-Register coloring compacts ValueId allocation by reusing slots for values with non-overlapping lifetimes. The key decision: **CFG-aware liveness analysis** rather than flat linear scan.
-
-### Why CFG-aware?
-
-A value defined in block A and used in block B has a live range that spans the control-flow path between them, which a flat instruction-order scan cannot see. Backward dataflow liveness over the CFG handles:
-- **Cross-block liveness** — values live across block boundaries
-- **Loop back-edges** — loop-carried values stay live through the entire loop
-- **Terminator uses** — values used in `Jump`/`JumpIf` args and `Return` (which aren't in the instruction array)
-
-### Type-compatible slot reuse
-
-Slots are only reused if the types match. This isn't strictly necessary for correctness, but it preserves type information through `val_types` and makes the output IR easier to validate and debug. A second entry point, `color_body_untyped`, colours scalars without regard to type for the kovac interpreter.
-
-### What we don't do
-
-- **Graph coloring.** SSA produces a chordal interference graph, where greedy coloring in definition order is optimal; Chaitin-style graph coloring would add complexity for no gain.
-- **Spilling.** We always have enough "registers" (ValueIds are virtual). There's no physical register limit to spill for.
+MIR values stay as the optimizer left them: one `ValueId` per definition. A runtime that needs physical registers allocates them itself (kovac plans a DAG-based selector); the compiler holds no coloring pass, so a checker never sees one value defined twice.
 
 ---
 

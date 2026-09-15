@@ -5,7 +5,6 @@ pub(crate) mod context_ops;
 pub mod dce;
 pub mod drop_insertion;
 pub mod dse;
-pub mod reg_color;
 pub mod reorder;
 pub mod spawn_split;
 pub mod ssa;

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/script.rs
+assertion_line: 209
 expression: ir
 ---
 === main ===
@@ -70,5 +71,9 @@ expression: ir
     ; r19 (@total) : Int
     ; r20 (v27) : Array<Array<Int, 3>, 3>
     ; r21 (v28) : Int
-    ; r22 (@total) : Int
-    ; r23 (@outer) : Array<Array<Int, 3>, 3>
+    ; r22 (x) : Int
+    ; r23 (@total) : Int
+    ; r24 (xs) : Iterator<Int, Pure, #IdentityId(1)>
+    ; r25 (row) : Array<Int, 3>
+    ; r26 (@outer) : Array<Array<Int, 3>, 3>
+    ; r27 (rows) : Iterator<Array<Int, 3>, Pure, #IdentityId(0)>

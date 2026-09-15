@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
+assertion_line: 256
 expression: raw
 ---
 -- compute_score --
@@ -73,10 +74,18 @@ expression: raw
     ; r14 (e.) : &String
     ; r15 (concat(...)) : String
     ; r16 (v3) : String
-    ; r17 (v1) : Int
-    ; r18 (v2) : Int
-    ; r19 (v13) : String
+    ; r17 (abc) : String
+    ; r18 (c) : String
+    ; r19 (d) : String
     ; r20 (v8) : String
+    ; r21 (e) : String
+    ; r22 (v1) : Int
+    ; r23 (a) : String
+    ; r24 (ab) : String
+    ; r25 (v2) : Int
+    ; r26 (abcd) : String
+    ; r27 (b) : String
+    ; r28 (v13) : String
 
 -- main --
 === main ===
@@ -196,8 +205,12 @@ expression: raw
     ; r42 (v54) : Int
     ; r43 (v55) : Order
     ; r44 (@result_label) : String
-    ; r45 (@weight) : Int
-    ; r46 (@result_score) : Int
-    ; r47 (@threshold) : Int
-    ; r48 (@user_id) : Int
-    ; r49 (@alert_count) : Int
+    ; r45 (history) : Int
+    ; r46 (@weight) : Int
+    ; r47 (@result_score) : Int
+    ; r48 (@threshold) : Int
+    ; r49 (label) : String
+    ; r50 (score) : Int
+    ; r51 (@user_id) : Int
+    ; r52 (@alert_count) : Int
+    ; r53 (profile) : Int

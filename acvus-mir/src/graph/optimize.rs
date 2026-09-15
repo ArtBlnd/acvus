@@ -30,23 +30,13 @@ pub fn optimize(
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
-    optimize_inner(modules, context_types, recursive_fns, false)
-}
-
-/// Optimize with untyped scalar register coloring (for kovac).
-pub fn optimize_untyped(
-    modules: FxHashMap<QualifiedRef, MirModule>,
-    context_types: &FxHashMap<QualifiedRef, Ty>,
-    recursive_fns: &FxHashSet<QualifiedRef>,
-) -> OptimizeResult {
-    optimize_inner(modules, context_types, recursive_fns, true)
+    optimize_inner(modules, context_types, recursive_fns)
 }
 
 fn optimize_inner(
     modules: FxHashMap<QualifiedRef, MirModule>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
-    untyped_scalars: bool,
 ) -> OptimizeResult {
     // -- Pass 0: moves as the source wrote them, before any promotion ----
 
@@ -80,16 +70,9 @@ fn optimize_inner(
             run_pass2_body(closure);
         }
 
-        // Validated in SSA form: a register the coloring reuses would look
-        // like one value defined twice.
         let errors = validate::validate(&module);
         if !errors.is_empty() {
             all_errors.push((qref, errors));
-        }
-
-        color_body(&mut module.main, untyped_scalars);
-        for closure in module.closures.values_mut() {
-            color_body(closure, untyped_scalars);
         }
 
         result_modules.insert(qref, module);
@@ -118,15 +101,6 @@ fn run_pass2_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-fn color_body(body: &mut crate::ir::MirBody, untyped_scalars: bool) {
-    let mut cfg = cfg::promote(std::mem::take(body));
-    if untyped_scalars {
-        optimize::reg_color::color_body_untyped(&mut cfg);
-    } else {
-        optimize::reg_color::color_body(&mut cfg);
-    }
-    *body = cfg::demote(cfg);
-}
 
 /// Pass 2 pipeline on CfgBody.
 fn run_pass2(cfg: &mut CfgBody) {
