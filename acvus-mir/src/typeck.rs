@@ -921,9 +921,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             crate::ty::FnLookup::Missing => None,
         };
         if let Some((resolved_qref, fn_sig)) = resolved {
+            // A receiver that is a place is lent as the parameter asks; a
+            // receiver that is already a reference value is passed as it
+            // is (RFC-0030).
             let first = match first_param_reference(&fn_sig.ty) {
-                Some(mutability) => {
+                Some(mutability) if place_of(receiver).is_some() => {
                     self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span())
+                }
+                Some(_) => {
+                    let ty = self.check_expr(receiver);
+                    if !matches!(self.solver.resolve_ty(&ty), TyTerm::Ref(..) | TyTerm::Error(_)) {
+                        self.error(MirErrorKind::NotAPlace, receiver.span());
+                    }
+                    ty
                 }
                 None => self.check_expr(receiver),
             };
@@ -3317,6 +3327,11 @@ impl Place {
 
 /// The place an expression denotes, if it denotes one. An extern
 /// parameter is a value, not a place.
+/// Whether an expression denotes a place.
+pub(crate) fn is_place(expr: &Expr) -> bool {
+    place_of(expr).is_some()
+}
+
 fn place_of(expr: &Expr) -> Option<Place> {
     match expr {
         Expr::Ident {

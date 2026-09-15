@@ -79,3 +79,10 @@ fn a_method_call_of_a_signature_picks_the_instance_by_the_receiver() {
     assert!(ir.contains("call "), "{ir}");
     assert_eq!(tail_ty("s = \"ab\"; s.clone()"), Ty::String);
 }
+
+#[test]
+fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
+    let ir = check("xs = [\"a\", \"b\"]; xs.get(1).clone()").expect("`get` gives `&String`, `clone` takes `&T`");
+    assert_eq!(ir.matches("ref &").count(), 1, "only xs is lent, for `get`:\n{ir}");
+    assert_eq!(tail_ty("xs = [\"a\", \"b\"]; xs.get(1).clone()"), Ty::String);
+}

@@ -2137,6 +2137,9 @@ impl<'a> Lowerer<'a> {
             _ => None,
         };
         let first = match lent {
+            // A receiver that is already a reference value is passed as it
+            // is (RFC-0030).
+            Some(_) if !crate::typeck::is_place(receiver) => self.lower_expr(receiver),
             Some(mutability) => {
                 let place = self.place(receiver);
                 self.emit_ref(
