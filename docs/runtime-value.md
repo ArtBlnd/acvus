@@ -17,11 +17,14 @@ trait Runtime: Send + Sync + 'static {
 
     unsafe fn materialize<T: Send + Sync + 'static>(&self, v: Self::Value) -> T;
     unsafe fn erase<T: Send + Sync + 'static>(&self, t: T) -> Self::Value;
+    unsafe fn deref<'a, T: Send + Sync + 'static>(&self, r: &'a Self::Value) -> &'a T;
+    unsafe fn deref_mut<'a, T: Send + Sync + 'static>(&self, r: &'a Self::Value) -> &'a mut T;
+    unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
 
     fn call_0<'a>(&'a self, f: &'a Self::Value, _: CallToken) -> Self::CallFuture<'a>;
-    fn call_1<'a>(&'a self, f: &'a Self::Value, a: &'a Self::Value, _: CallToken)
+    fn call_1<'a>(&'a self, f: &'a Self::Value, a: Self::Value, _: CallToken)
         -> Self::CallFuture<'a>;
-    fn call_n<'a>(&'a self, f: &'a Self::Value, args: &[&'a Self::Value], _: CallToken)
+    fn call_n<'a>(&'a self, f: &'a Self::Value, args: Vec<Self::Value>, _: CallToken)
         -> Self::CallFuture<'a>;
 }
 ```
@@ -30,10 +33,15 @@ And the side an extern sees, in `acvus_extern::func`:
 
 ```rust
 trait ClosureFn<Rt: Runtime> {
-    type Args<'a> where Self: 'a;          // Fn0: ()  Fn1: (&Value,)  Fn2: (&Value, &Value)  Fn3: …
-    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args<'a>) -> Rt::CallFuture<'a>;
+    type Args;          // Fn0: ()  Fn1: (Value,)  Fn2: (Value, Value)  Fn3: …
+    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args) -> Rt::CallFuture<'a>;
 }
 ```
+
+A reference is a value (RFC-0018): an extern whose closure parameter is
+`Ref<T>` passes `rt.reference(&lent)`, and an extern parameter `&T` /
+`&mut T` is read through `deref` / `deref_mut` from the reference the
+caller passed.
 
 - **`materialize` / `erase` are the whole extraction/construction story.** A host
   reads its own `Value` (`match` on its tag), and once the branch is fixed the
