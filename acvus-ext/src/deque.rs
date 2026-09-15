@@ -4,7 +4,7 @@
 //! whole re-dump. The first concrete instance of the context model.
 
 use acvus_extern::{
-    ExternError, ExternRegistry, ExternTypeDecl, Interner, PolyTy, PolyVars, QualifiedRef, Runtime,
+    ExternError, Registry, ExternTypeDecl, Interner, PolyTy, PolyVars, QualifiedRef, Runtime,
     TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry,
 };
 
@@ -82,8 +82,9 @@ where
     Ok(d.0.into_iter().nth(i).expect("index checked against len"))
 }
 
-pub fn deque_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn deque_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         types: [Deque<_>],
         fns: [deque, append, deque_len, deque_get],
     }

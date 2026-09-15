@@ -1,7 +1,7 @@
 //! Regular expressions: the `Regex` extension type and its functions.
 
 use acvus_extern::{
-    ExternError, ExternRegistry, ExternType, IdentityVar, Pure, Runtime, extern_fn, extern_registry,
+    ExternError, Registry, ExternType, IdentityVar, Pure, Runtime, extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -103,8 +103,9 @@ where
     })
 }
 
-pub fn regex_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn regex_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         types: [Regex],
         fns: [regex, regex_match, regex_find, regex_find_all, regex_replace, regex_split, regex_extract],
     }
@@ -113,12 +114,12 @@ pub fn regex_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
+    use acvus_extern::{Externs, Interner, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let registered = regex_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
+        let registered = Externs::combine(vec![regex_registry::<TypesOnly>()], &i).expect("registry combines");
         assert_eq!(registered.functions.len(), 7);
         assert_eq!(registered.handlers.len(), 7);
     }

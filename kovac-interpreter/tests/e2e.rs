@@ -1,5 +1,6 @@
 //! End-to-end: Script source -> MIR -> optimize -> kovac bytecode -> execute -> assert.
 
+use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower, optimize};
 use acvus_mir::ir::MirModule;
@@ -27,12 +28,13 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
         },
     }];
 
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let Externs {
+        functions: std_fns,
+        types: type_registry,
+        handlers: _,
+    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
+        .expect("standard registries combine");
+    functions.extend(std_fns);
 
     let graph = CompilationGraph {
         functions: Freeze::new(functions),

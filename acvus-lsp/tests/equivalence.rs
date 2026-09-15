@@ -1,6 +1,7 @@
 //! Equivalence tests: LSP session must produce the same diagnostics
 //! as the batch compilation pipeline.
 
+use acvus_extern::{Externs, TypesOnly};
 use acvus_lsp::LspSession;
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
@@ -30,12 +31,13 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
     }];
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let Externs {
+        functions: std_fns,
+        types: type_registry,
+        handlers: _,
+    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
+        .expect("standard registries combine");
+    functions.extend(std_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
@@ -69,13 +71,10 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
 /// Register standard library functions into an LspSession.
 fn register_std(session: &mut LspSession) {
     let interner = session.interner().clone();
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(&interner, &mut type_registry);
-        for func in registered.functions {
-            session.graph_mut().add_function(func);
-        }
+    let externs = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), &interner)
+        .expect("standard registries combine");
+    for func in externs.functions {
+        session.graph_mut().add_function(func);
     }
 }
 

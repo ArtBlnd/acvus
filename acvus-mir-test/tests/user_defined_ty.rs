@@ -17,11 +17,12 @@ use Polarity::*;
 /// Create an Interner and TypeRegistry with Iterator registered.
 fn setup() -> (Interner, TypeRegistry) {
     let interner = Interner::new();
-    let mut type_registry = TypeRegistry::new();
-    for registry in acvus_ext::std_registries::<acvus_extern::TypesOnly>() {
-        registry.register(&interner, &mut type_registry);
-    }
-    (interner, type_registry)
+    let externs = acvus_extern::Externs::combine(
+        acvus_ext::std_registries::<acvus_extern::TypesOnly>(),
+        &interner,
+    )
+    .expect("standard registries combine");
+    (interner, externs.types)
 }
 
 /// Build Iterator<T> as concrete Ty.

@@ -3,10 +3,10 @@ mod schema;
 use std::sync::Arc;
 
 use acvus_ext::List;
-use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Runtime, TyArg};
+use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
 
 use crate::extract::{input_messages, split_system};
-use crate::http::{Fetch, HttpRequest, RequestError};
+use crate::http::{Fetch, FetchClient, HttpRequest, RequestError};
 use crate::message::{
     Content, ContentItem, InputMessage, Message, ModelResponse, OutputMessage, ToolCall, Usage,
 };
@@ -121,62 +121,67 @@ fn response_messages(resp: ModelResponse) -> Result<List<OutputMessage>, ExternE
     }
 }
 
-pub fn anthropic_registry<F, R>(fetch: Arc<F>) -> ExternRegistry<R>
+#[extern_fn]
+async fn anthropic<R>(
+    _: &R,
+    #[state] fetch: &FetchClient,
+    messages: List<InputMessage>,
+    config: AnthropicConfig,
+) -> Result<List<OutputMessage>, ExternError>
+where
+    R: Runtime,
+{
+    let messages = input_messages(messages.0);
+    let (system, rest) = split_system(&messages);
+    let max_tokens = u32::try_from(config.max_tokens).map_err(|_| {
+        ExternError::call(
+            "anthropic",
+            format!("max_tokens {} out of range", config.max_tokens),
+        )
+    })?;
+
+    let request_body = schema::Request {
+        model: config.model,
+        messages: rest.iter().map(|m| convert_message(m)).collect(),
+        max_tokens,
+        system,
+        tools: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        thinking: None,
+    };
+
+    let http_request = HttpRequest {
+        url: config.endpoint,
+        headers: vec![
+            ("x-api-key".into(), config.api_key),
+            ("anthropic-version".into(), ANTHROPIC_API_VERSION.into()),
+            ("Content-Type".into(), "application/json".into()),
+        ],
+        body: serde_json::to_value(&request_body).map_err(|e| {
+            ExternError::call("anthropic", format!("serialization failed: {e}"))
+        })?,
+    };
+
+    let response_json = fetch
+        .fetch(&http_request)
+        .await
+        .map_err(|e| ExternError::call("anthropic", e))?;
+    let (response, _usage) = parse_response(response_json)
+        .map_err(|e| ExternError::call("anthropic", e.to_string()))?;
+    response_messages(response)
+}
+
+pub fn anthropic_registry<F, R>(fetch: Arc<F>) -> Registry<R>
 where
     F: Fetch + Send + Sync + 'static,
     R: Runtime + Clone,
 {
-    ExternRegistry::new(move |interner| {
-        let handler = move |_: R, messages: List<InputMessage>, config: AnthropicConfig| {
-            let fetch = Arc::clone(&fetch);
-            async move {
-                let messages = input_messages(messages.0);
-                let (system, rest) = split_system(&messages);
-                let max_tokens = u32::try_from(config.max_tokens).map_err(|_| {
-                    ExternError::call(
-                        "anthropic",
-                        format!("max_tokens {} out of range", config.max_tokens),
-                    )
-                })?;
-
-                let request_body = schema::Request {
-                    model: config.model,
-                    messages: rest.iter().map(|m| convert_message(m)).collect(),
-                    max_tokens,
-                    system,
-                    tools: None,
-                    temperature: None,
-                    top_p: None,
-                    top_k: None,
-                    thinking: None,
-                };
-
-                let http_request = HttpRequest {
-                    url: config.endpoint,
-                    headers: vec![
-                        ("x-api-key".into(), config.api_key),
-                        ("anthropic-version".into(), ANTHROPIC_API_VERSION.into()),
-                        ("Content-Type".into(), "application/json".into()),
-                    ],
-                    body: serde_json::to_value(&request_body).map_err(|e| {
-                        ExternError::call("anthropic", format!("serialization failed: {e}"))
-                    })?,
-                };
-
-                let response_json = fetch
-                    .fetch(&http_request)
-                    .await
-                    .map_err(|e| ExternError::call("anthropic", e))?;
-                let (response, _usage) = parse_response(response_json)
-                    .map_err(|e| ExternError::call("anthropic", e.to_string()))?;
-                response_messages(response).map_err(R::Error::from)
-            }
-        };
-        ExternItems {
-            types: vec![],
-            fns: vec![ExternFn::r#async(interner, "anthropic", handler)],
-        }
-    })
+    extern_registry! {
+        ns: "llm",
+        fns: [anthropic(FetchClient::new(fetch))],
+    }
 }
 
 #[cfg(test)]
@@ -330,7 +335,8 @@ mod tests {
         });
         let interner = acvus_extern::Interner::new();
         let registry = anthropic_registry::<_, acvus_extern::TypesOnly>(fetch);
-        let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
+        let registered = acvus_extern::Externs::combine(vec![registry], &interner)
+            .expect("registry combines");
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.handlers.len(), 1);
 

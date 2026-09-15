@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::{env, fs, process};
 
+use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::printer::dump;
@@ -161,13 +162,14 @@ fn main() {
     };
 
     let fn_qref = QualifiedRef::root(interner.intern("main"));
-    let mut functions = Vec::new();
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(&interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let Externs {
+        mut functions,
+        types: type_registry,
+        handlers: _,
+    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), &interner).unwrap_or_else(|e| {
+        eprintln!("error: standard registries do not combine: {e}");
+        process::exit(1);
+    });
     let mut pb = PolyBuilder::new();
     functions.push(Function {
         qref: fn_qref,

@@ -1,14 +1,14 @@
-//! OpenAI provider - ExternFn handler for chat completions.
+//! OpenAI provider - the `openai_chat` extern for chat completions.
 
 pub mod schema;
 
 use std::sync::Arc;
 
 use acvus_ext::List;
-use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Runtime, TyArg};
+use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
 
 use crate::extract::input_messages;
-use crate::http::{Fetch, HttpRequest, RequestError};
+use crate::http::{Fetch, FetchClient, HttpRequest, RequestError};
 use crate::message::{
     Content, ContentItem, InputMessage, Message, ModelResponse, OutputMessage, ToolCall, Usage,
 };
@@ -174,52 +174,57 @@ fn chat_response(resp: ModelResponse, usage: Usage) -> ChatResponse {
     }
 }
 
-/// Create an ExternRegistry for the OpenAI chat completion handler.
-pub fn openai_registry<F, R>(fetch: Arc<F>) -> ExternRegistry<R>
+#[extern_fn]
+async fn openai_chat<R>(
+    _: &R,
+    #[state] fetch: &FetchClient,
+    messages: List<InputMessage>,
+    config: OpenAiConfig,
+) -> Result<ChatResponse, ExternError>
+where
+    R: Runtime,
+{
+    let messages = input_messages(messages.0);
+    let request_body = schema::Request {
+        model: config.model,
+        messages: messages.iter().map(convert_message).collect(),
+        tools: None,
+        temperature: None,
+        top_p: None,
+        max_tokens: None,
+        reasoning_effort: None,
+    };
+
+    let http_request = HttpRequest {
+        url: config.endpoint,
+        headers: vec![
+            ("Authorization".into(), format!("Bearer {}", config.api_key)),
+            ("Content-Type".into(), "application/json".into()),
+        ],
+        body: serde_json::to_value(&request_body).map_err(|e| {
+            ExternError::call("openai_chat", format!("serialization failed: {e}"))
+        })?,
+    };
+
+    let response_json = fetch
+        .fetch(&http_request)
+        .await
+        .map_err(|e| ExternError::call("openai_chat", e))?;
+    let (response, usage) = parse_response(response_json)
+        .map_err(|e| ExternError::call("openai_chat", e.to_string()))?;
+    Ok(chat_response(response, usage))
+}
+
+/// The registry holding the OpenAI chat completion extern.
+pub fn openai_registry<F, R>(fetch: Arc<F>) -> Registry<R>
 where
     F: Fetch + Send + Sync + 'static,
     R: Runtime + Clone,
 {
-    ExternRegistry::new(move |interner| {
-        let handler = move |_: R, messages: List<InputMessage>, config: OpenAiConfig| {
-            let fetch = Arc::clone(&fetch);
-            async move {
-                let messages = input_messages(messages.0);
-                let request_body = schema::Request {
-                    model: config.model,
-                    messages: messages.iter().map(convert_message).collect(),
-                    tools: None,
-                    temperature: None,
-                    top_p: None,
-                    max_tokens: None,
-                    reasoning_effort: None,
-                };
-
-                let http_request = HttpRequest {
-                    url: config.endpoint,
-                    headers: vec![
-                        ("Authorization".into(), format!("Bearer {}", config.api_key)),
-                        ("Content-Type".into(), "application/json".into()),
-                    ],
-                    body: serde_json::to_value(&request_body).map_err(|e| {
-                        ExternError::call("openai_chat", format!("serialization failed: {e}"))
-                    })?,
-                };
-
-                let response_json = fetch
-                    .fetch(&http_request)
-                    .await
-                    .map_err(|e| ExternError::call("openai_chat", e))?;
-                let (response, usage) = parse_response(response_json)
-                    .map_err(|e| ExternError::call("openai_chat", e.to_string()))?;
-                Ok::<_, R::Error>(chat_response(response, usage))
-            }
-        };
-        ExternItems {
-            types: vec![],
-            fns: vec![ExternFn::r#async(interner, "openai_chat", handler)],
-        }
-    })
+    extern_registry! {
+        ns: "llm",
+        fns: [openai_chat(FetchClient::new(fetch))],
+    }
 }
 
 #[cfg(test)]
@@ -358,7 +363,8 @@ mod tests {
         });
         let interner = acvus_extern::Interner::new();
         let registry = openai_registry::<_, acvus_extern::TypesOnly>(fetch);
-        let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
+        let registered = acvus_extern::Externs::combine(vec![registry], &interner)
+            .expect("registry combines");
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.handlers.len(), 1);
 

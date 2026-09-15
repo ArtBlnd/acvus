@@ -1791,7 +1791,28 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
         // Check named functions (builtins, externs, user-defined).
         let name_str = self.interner.resolve(name.name);
-        if let Some(fn_sig) = self.env.functions.get(name).cloned() {
+        let resolved = match self.env.resolve_fn(*name) {
+            crate::ty::FnLookup::Found(qref, scheme) => Some((qref, scheme.clone())),
+            crate::ty::FnLookup::Ambiguous(candidates) => {
+                let shown = candidates
+                    .iter()
+                    .map(|q| match q.namespace {
+                        Some(ns) => format!("{}::{}", self.interner.resolve(ns), name_str),
+                        None => name_str.to_string(),
+                    })
+                    .collect();
+                self.error(
+                    MirErrorKind::AmbiguousFunction {
+                        name: name_str.to_string(),
+                        candidates: shown,
+                    },
+                    call_span,
+                );
+                return Self::infer_error();
+            }
+            crate::ty::FnLookup::Missing => None,
+        };
+        if let Some((resolved_qref, fn_sig)) = resolved {
             let fn_ty = self.instantiate_at(&fn_sig, call_span);
             let expected = Self::expected_arg_types(&fn_ty, pipe_ty.is_some());
             let arg_types: Vec<InferTy> = pipe_ty
@@ -1831,7 +1852,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     // Record callee's full Fn type on the callee's AstId.
                     self.record(func.id(), self.solver.resolve_ty(&fn_ty));
                     // Record direct call resolution.
-                    self.direct_calls.insert(func.id(), *name);
+                    self.direct_calls.insert(func.id(), resolved_qref);
                     return self.solver.resolve_ty(ret);
                 }
                 _ => {

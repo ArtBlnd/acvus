@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use acvus_extern::{
     Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, ExternError, ExternFn,
-    ExternHandler, ExternItems,
-    ExternRegistry, ExternType, Fn1, Interner, LenTerm, LenVar, PolyTy, Pure, Runtime, TyArg,
+    ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure,
+    Registry, Runtime, TyArg, extern_signature,
     TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
 };
 
@@ -297,14 +297,72 @@ where
     *n
 }
 
-fn registry<R>() -> ExternRegistry<R>
+extern_signature! { ns: "t", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }
+
+#[extern_fn(instance_of = eq, effect = pure)]
+fn eq_int<R>(_: &R, a: &i64, b: &i64) -> bool
+where
+    R: Runtime,
+{
+    a == b
+}
+
+#[extern_fn(instance_of = eq, effect = pure)]
+fn eq_point<R>(_: &R, a: &Point, b: &Point) -> bool
+where
+    R: Runtime,
+{
+    a == b
+}
+
+/// Requires `eq` of its element type.
+#[extern_fn(effect = pure)]
+fn same<T, R>(rt: &R, a: T, b: T) -> Boxed<T, Pure, R>
+where
+    T: TyVar + HasInstance<eq>,
+    R: Runtime,
+{
+    Boxed(
+        vec![unsafe { rt.erase::<T>(a) }, unsafe { rt.erase::<T>(b) }],
+        PhantomData,
+    )
+}
+
+/// A greeting held by the handler: what a `#[state]` parameter carries.
+struct Greeting(String);
+
+#[extern_fn(effect = pure)]
+fn greet<R>(_: &R, #[state] greeting: &Greeting, name: String) -> String
+where
+    R: Runtime,
+{
+    format!("{}, {name}", greeting.0)
+}
+
+fn registry<R>() -> Registry<R>
 where
     R: Runtime,
 {
     extern_registry! {
+        ns: "t",
         types: [Boxed<_, _, R>, Token<_>],
-        fns: [add, identity, apply, boxed, fetch, take_token, draw, bump],
+        signatures: [eq],
+        fns: [add, identity, apply, boxed, fetch, take_token, draw, bump, eq_int, eq_point, same,
+              greet(Greeting("hello".to_string()))],
     }
+}
+
+fn combined<R>() -> (Interner, Externs<R>)
+where
+    R: Runtime,
+{
+    let i = Interner::new();
+    let reg = Externs::combine(vec![registry::<R>()], &i).expect("registries combine");
+    (i, reg)
+}
+
+fn qref(i: &Interner, name: &str) -> acvus_extern::QualifiedRef {
+    acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern(name))
 }
 
 /// The three parts of a function type this file asserts on.
@@ -340,9 +398,7 @@ fn find<'a>(reg: &'a [acvus_extern::Function], i: &Interner, name: &str) -> &'a 
 
 #[test]
 fn concrete_signature_and_declared_effect() {
-    let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = registry::<TypesOnly>().register(&i, &mut tr);
+    let (i, reg) = combined::<TypesOnly>();
     let add = fn_ty(find(&reg.functions, &i, "add"));
     assert_eq!(add.params, vec![PolyTy::Int, PolyTy::Int]);
     assert_eq!(add.ret, PolyTy::Int);
@@ -364,9 +420,7 @@ fn concrete_signature_and_declared_effect() {
 
 #[test]
 fn generic_parameters_become_positional_variables() {
-    let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = registry::<TypesOnly>().register(&i, &mut tr);
+    let (i, reg) = combined::<TypesOnly>();
 
     let id = fn_ty(find(&reg.functions, &i, "id_any"));
     assert_eq!(id.params, vec![PolyTy::Var(0)]);
@@ -413,9 +467,8 @@ fn generic_parameters_become_positional_variables() {
 
 #[test]
 fn types_and_casts_reach_the_type_registry() {
-    let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    registry::<TypesOnly>().register(&i, &mut tr);
+    let (i, reg) = combined::<TypesOnly>();
+    let tr = &reg.types;
     let decl = tr.get(acvus_extern::QualifiedRef::root(i.intern("Box")));
     assert_eq!(decl.type_params.len(), 1);
     assert_eq!(decl.effect_params, 1);
@@ -441,9 +494,7 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternErr
 
 #[test]
 fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
-    let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = registry::<Tiny>().register(&i, &mut tr);
+    let (i, reg) = combined::<Tiny>();
     let PolyTy::Fn { params, .. } = find(&reg.functions, &i, "bump") else {
         panic!("bump is a function");
     };
@@ -467,12 +518,8 @@ async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, Ex
     }
 }
 
-fn handler<'a>(
-    reg: &'a acvus_extern::Registered<Tiny>,
-    i: &Interner,
-    name: &str,
-) -> &'a ExternHandler<Tiny> {
-    match &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern(name))] {
+fn handler<'a>(reg: &'a Externs<Tiny>, i: &Interner, name: &str) -> &'a ExternHandler<Tiny> {
+    match &reg.handlers[&qref(i, name)] {
         acvus_extern::ExternEntry::Single(h) => h,
         acvus_extern::ExternEntry::Mono(_) => {
             panic!("{name} is monomorphized; select by call type")
@@ -482,9 +529,7 @@ fn handler<'a>(
 
 #[tokio::test]
 async fn handlers_run_the_rust_body_on_the_test_runtime() {
-    let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = registry::<Tiny>().register(&i, &mut tr);
+    let (i, reg) = combined::<Tiny>();
 
     assert_eq!(
         open::<i64>(
@@ -539,28 +584,51 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 #[test]
 #[should_panic(expected = "materialize: value is not a i64")]
 fn wrong_argument_type_panics_trusting_typeck() {
-    let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = registry::<Tiny>().register(&i, &mut tr);
+    let (i, reg) = combined::<Tiny>();
     let _ = call_sync(handler(&reg, &i, "add"), vec![erased("a"), erased(2i64)]);
 }
 
 #[test]
-fn closure_declaration_takes_its_type_from_the_closure() {
+fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
+    let (i, reg) = combined::<TypesOnly>();
+    let point = acvus_extern::Ty::Object(
+        [(i.intern("x"), acvus_extern::Ty::Int), (i.intern("label"), acvus_extern::Ty::String)]
+            .into_iter()
+            .collect(),
+    );
+    let eq_fn = reg.functions.iter().find(|f| f.qref == qref(&i, "eq")).expect("eq");
+    let acvus_extern::FnKind::Extern { bounds } = &eq_fn.kind else {
+        panic!("eq is extern")
+    };
+    assert_eq!(
+        bounds[0],
+        acvus_extern::TyVarBound::OneOf(vec![acvus_extern::Ty::Int, point.clone()])
+    );
+    let same = reg.functions.iter().find(|f| f.qref == qref(&i, "same")).expect("same");
+    let acvus_extern::FnKind::Extern { bounds } = &same.kind else {
+        panic!("same is extern")
+    };
+    assert_eq!(
+        bounds[0],
+        acvus_extern::TyVarBound::OneOf(vec![acvus_extern::Ty::Int, point])
+    );
+    assert!(matches!(reg.handlers[&qref(&i, "eq")], acvus_extern::ExternEntry::Mono(_)));
+}
+
+#[test]
+fn a_state_parameter_is_held_by_the_handler() {
+    let (i, reg) = combined::<Tiny>();
+    let out = call_sync(handler(&reg, &i, "greet"), vec![erased("bob".to_string())]).unwrap();
+    assert_eq!(open::<String>(out), "hello, bob");
+}
+
+#[test]
+fn a_second_instance_for_one_type_is_refused() {
     let i = Interner::new();
-    let registry = ExternRegistry::<TypesOnly>::new(|i| ExternItems {
-        types: vec![],
-        fns: vec![
-            ExternFn::sync(i, "shout", |_: &TypesOnly, s: String| Ok(s.to_uppercase()))
-                .with_effect(Effect::PURE),
-        ],
-    });
-    let mut tr = TypeRegistry::new();
-    let reg = registry.register(&i, &mut tr);
-    let shout = fn_ty(find(&reg.functions, &i, "shout"));
-    assert_eq!(shout.params, vec![PolyTy::String]);
-    assert_eq!(shout.ret, PolyTy::String);
-    assert_eq!(shout.effect, EffectTerm::Known(Effect::PURE));
+    let err = Externs::combine(vec![registry::<TypesOnly>(), registry::<TypesOnly>()], &i)
+        .err()
+        .expect("two registries declare the same names");
+    assert!(matches!(err, acvus_extern::CombineError::DuplicateName(_)));
 }
 
 #[test]
@@ -633,8 +701,9 @@ where
     v.0.len() as i64
 }
 
-fn mono_registry<R: Runtime>() -> ExternRegistry<R> {
+fn mono_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "t",
         fns: [double, first_or, box_count],
     }
 }
@@ -642,8 +711,7 @@ fn mono_registry<R: Runtime>() -> ExternRegistry<R> {
 #[test]
 fn a_monomorphized_parameter_declares_its_members_as_the_bound() {
     let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = mono_registry::<TypesOnly>().register(&i, &mut tr);
+    let reg = Externs::combine(vec![mono_registry::<TypesOnly>()], &i).expect("registries combine");
     let double = reg
         .functions
         .iter()
@@ -684,9 +752,8 @@ fn call_type(
 #[test]
 fn the_call_type_selects_the_instance() {
     let i = Interner::new();
-    let mut tr = TypeRegistry::new();
-    let reg = mono_registry::<Tiny>().register(&i, &mut tr);
-    let entry = &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern("double"))];
+    let reg = Externs::combine(vec![mono_registry::<Tiny>()], &i).expect("registries combine");
+    let entry = &reg.handlers[&qref(&i, "double")];
 
     let on_int = call_type(vec![acvus_extern::Ty::Int], acvus_extern::Ty::Int, &i);
     let h = entry.select(&on_int).unwrap();
@@ -702,7 +769,7 @@ fn the_call_type_selects_the_instance() {
     let on_float = call_type(vec![acvus_extern::Ty::Float], acvus_extern::Ty::Float, &i);
     assert!(entry.select(&on_float).is_err());
 
-    let nested = &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern("first_or"))];
+    let nested = &reg.handlers[&qref(&i, "first_or")];
     let ty = call_type(
         vec![
             acvus_extern::Ty::Option(Box::new(acvus_extern::Ty::String)),
@@ -723,7 +790,7 @@ fn the_call_type_selects_the_instance() {
         "x"
     );
 
-    let inside = &reg.handlers[&acvus_extern::QualifiedRef::root(i.intern("box_count"))];
+    let inside = &reg.handlers[&qref(&i, "box_count")];
     let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![t],

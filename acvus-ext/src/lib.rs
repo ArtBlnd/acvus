@@ -20,10 +20,10 @@ pub use option::option_registry;
 pub use regex::regex_registry;
 pub use string::string_registry;
 
-use acvus_extern::{ExternRegistry, Runtime};
+use acvus_extern::{Registry, Runtime};
 
 /// The standard registries. Each registers its own types when registered.
-pub fn std_registries<R>() -> Vec<ExternRegistry<R>>
+pub fn std_registries<R>() -> Vec<Registry<R>>
 where
     R: Runtime,
 {

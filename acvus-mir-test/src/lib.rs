@@ -3,7 +3,8 @@ use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
 use acvus_mir::printer::dump_with;
-use acvus_mir::ty::{PolyBuilder, PolyParam, Ty, TyTerm, lift_declaration};
+use acvus_extern::{Externs, TypesOnly};
+use acvus_mir::ty::{PolyBuilder, PolyParam, Ty, TyTerm, TypeRegistry, lift_declaration};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -22,20 +23,33 @@ pub fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam
     }
 }
 
+/// Combine the standard registries: their functions join `functions`, and
+/// the combined type registry is returned for the checker.
+fn extend_with_std(interner: &Interner, functions: &mut Vec<Function>) -> TypeRegistry {
+    let Externs {
+        functions: std_fns,
+        types,
+        handlers: _,
+    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
+        .expect("standard registries combine");
+    functions.extend(std_fns);
+    types
+}
+
 /// Run extract -> infer -> lower, collecting errors from all passes.
 fn run_pipeline(
     interner: &Interner,
     graph: &CompilationGraph,
     target: QualifiedRef,
 ) -> Result<MirModule, String> {
-    run_pipeline_with_registry(interner, graph, target, acvus_mir::ty::TypeRegistry::new())
+    run_pipeline_with_registry(interner, graph, target, TypeRegistry::new())
 }
 
 fn run_pipeline_with_registry(
     interner: &Interner,
     graph: &CompilationGraph,
     target: QualifiedRef,
-    type_registry: acvus_mir::ty::TypeRegistry,
+    type_registry: TypeRegistry,
 ) -> Result<MirModule, String> {
     let ext = extract::extract(interner, graph);
     let inf = infer::infer(
@@ -164,12 +178,7 @@ pub fn compile_to_ir_with(
         FnKind::Local(ParsedAst::Template(ast)),
         vec![],
     )];
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
@@ -250,12 +259,7 @@ pub fn compile_script_ir_with(
         FnKind::Local(ParsedAst::Script(ast)),
         vec![],
     )];
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
@@ -289,12 +293,7 @@ pub fn compile_script_raw(
         FnKind::Local(ParsedAst::Script(ast)),
         vec![],
     )];
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
@@ -356,12 +355,7 @@ pub fn compile_script_mode_raw(
         FnKind::Local(ParsedAst::Script(ast)),
         vec![],
     )];
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
@@ -423,12 +417,7 @@ pub fn compile_script_optimized(
         FnKind::Local(ParsedAst::Script(ast)),
         vec![],
     )];
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
@@ -536,12 +525,7 @@ pub fn compile_inline_ir_with(
         ));
     }
 
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     functions.extend_from_slice(extern_fns);
 
     let graph = CompilationGraph {
@@ -636,12 +620,7 @@ pub fn compile_multi_fn_raw(
         ));
     }
 
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     functions.extend_from_slice(extern_fns);
 
     let graph = CompilationGraph {
@@ -737,12 +716,7 @@ pub fn compile_multi_fn_optimized(
         ));
     }
 
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let type_registry = extend_with_std(interner, &mut functions);
     functions.extend_from_slice(extern_fns);
 
     let graph = CompilationGraph {

@@ -7,7 +7,7 @@
 //!   find, reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, ExternError, ExternRegistry, Fn1, Fn2, IdentityVar, LenVar, Ref,
+    Arr, ClosureFn, EffectVar, ExternError, Registry, Fn1, Fn2, IdentityVar, LenVar, Ref,
     Runtime, TyVar,
     extern_fn, extern_registry,
 };
@@ -388,11 +388,12 @@ where
     Ok(true)
 }
 
-pub fn iterator_registry<Rt>() -> ExternRegistry<Rt>
+pub fn iterator_registry<Rt>() -> Registry<Rt>
 where
     Rt: Runtime,
 {
     extern_registry! {
+        ns: "std",
         types: [Iter<_, _, _, Rt>],
         fns: [
             iter, iter_array, rev_iter,

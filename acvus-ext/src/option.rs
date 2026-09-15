@@ -1,6 +1,6 @@
 //! Option operations. All pure, polymorphic.
 
-use acvus_extern::{ExternError, ExternRegistry, Runtime, TyVar, extern_fn, extern_registry};
+use acvus_extern::{ExternError, Registry, Runtime, TyVar, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
 fn unwrap<T, R>(_: &R, val: Option<T>) -> Result<T, ExternError>
@@ -20,8 +20,9 @@ where
     val.unwrap_or(default)
 }
 
-pub fn option_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn option_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         fns: [unwrap, unwrap_or],
     }
 }
@@ -29,12 +30,12 @@ pub fn option_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
+    use acvus_extern::{Externs, Interner, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let reg = option_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
+        let reg = Externs::combine(vec![option_registry::<TypesOnly>()], &i).expect("registry combines");
         assert_eq!(reg.functions.len(), 2);
         assert_eq!(reg.handlers.len(), 2);
     }

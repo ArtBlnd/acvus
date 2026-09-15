@@ -900,7 +900,37 @@ pub struct TypeEnv {
     pub functions: FxHashMap<QualifiedRef, Scheme>,
 }
 
+/// What a name resolves to among the environment's functions.
+pub enum FnLookup<'a> {
+    Found(QualifiedRef, &'a Scheme),
+    Ambiguous(Vec<QualifiedRef>),
+    Missing,
+}
+
 impl TypeEnv {
+    /// A script's bare name is its own function if it has one, else the one
+    /// function of that name under any namespace (RFC-0021).
+    pub fn resolve_fn(&self, name: QualifiedRef) -> FnLookup<'_> {
+        if let Some(scheme) = self.functions.get(&name) {
+            return FnLookup::Found(name, scheme);
+        }
+        if name.namespace.is_some() {
+            return FnLookup::Missing;
+        }
+        let mut candidates: Vec<QualifiedRef> = self
+            .functions
+            .keys()
+            .filter(|q| q.name == name.name && q.namespace.is_some())
+            .copied()
+            .collect();
+        candidates.sort();
+        match candidates.as_slice() {
+            [] => FnLookup::Missing,
+            [one] => FnLookup::Found(*one, &self.functions[one]),
+            _ => FnLookup::Ambiguous(candidates),
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             contexts: FxHashMap::default(),

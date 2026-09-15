@@ -1,6 +1,6 @@
 //! The `DateTime` extension type. Every function but `now` is pure.
 
-use acvus_extern::{ExternError, ExternRegistry, ExternType, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternError, Registry, ExternType, Runtime, extern_fn, extern_registry};
 
 #[derive(ExternType)]
 pub struct DateTime(chrono::DateTime<chrono::Utc>);
@@ -73,16 +73,18 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn datetime_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn datetime_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         types: [DateTime],
         fns: [now, format_date, parse_date, timestamp, from_timestamp, add_days, add_hours],
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn datetime_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn datetime_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         types: [DateTime],
         fns: [format_date, parse_date, timestamp, from_timestamp, add_days, add_hours],
     }
@@ -91,12 +93,12 @@ pub fn datetime_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
+    use acvus_extern::{Externs, Interner, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let registered = datetime_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
+        let registered = Externs::combine(vec![datetime_registry::<TypesOnly>()], &i).expect("registry combines");
         assert_eq!(registered.functions.len(), 7);
         assert_eq!(registered.functions.len(), registered.handlers.len());
     }

@@ -23,13 +23,13 @@ pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use reference::{Ref, RefMut};
 pub use registry::{
-    AsyncHandler, ExternFn, ExternFnDecl, ExternItems, ExternRegistry, ExternTypeDecl, Registered,
-    SyncHandler,
+    CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
+    Manifest, Registry, SharedSignature, SignatureDecl,
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use ty_arg::{Monomorphize, PolyVars, TyArg, TyVar, Typeck, VarCounts};
 
-pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry};
+pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, extern_signature};
 
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{

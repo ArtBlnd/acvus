@@ -2,7 +2,7 @@
 //! the runtime boundary whole.
 
 use acvus_extern::{
-    Arr, ExternRegistry, ExternTypeDecl, Interner, LenVar, PolyTy, PolyVars, QualifiedRef, Runtime,
+    Arr, Registry, ExternTypeDecl, Interner, LenVar, PolyTy, PolyVars, QualifiedRef, Runtime,
     TyArg, TyVar, TyVarBound, UserDefinedDecl, extern_fn, extern_registry,
 };
 
@@ -91,8 +91,9 @@ where
     List(items.0)
 }
 
-pub fn list_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn list_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         types: [List<_>],
         fns: [len, reverse, list],
     }

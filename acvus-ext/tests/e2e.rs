@@ -4,47 +4,35 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_ext::*;
-use acvus_extern::{ExternRegistry, ExternType, Registered, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Externs, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
-use acvus_mir::ty::{Ty, TypeRegistry, lift_to_poly};
+use acvus_mir::ty::{Ty, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
-/// Compile + execute a script with ext registries.
+/// Compile + execute a script with the std registries and `registries`.
 async fn run_ext(
     interner: &Interner,
     source: &str,
     context: FxHashMap<Astr, Value>,
-    registries: Vec<ExternRegistry<AcvusRuntime>>,
-) -> Value {
-    run_ext_with_registry(interner, source, context, registries, TypeRegistry::new()).await
-}
-
-/// Compile + execute with a custom TypeRegistry (for ExternCast tests).
-async fn run_ext_with_registry(
-    interner: &Interner,
-    source: &str,
-    context: FxHashMap<Astr, Value>,
-    registries: Vec<ExternRegistry<AcvusRuntime>>,
-    mut type_registry: TypeRegistry,
+    registries: Vec<Registry<AcvusRuntime>>,
 ) -> Value {
     let context_types: FxHashMap<Astr, Ty> = context
         .iter()
         .map(|(k, v)| (*k, infer_value_ty(interner, v)))
         .collect();
 
-    // Register all ext functions (stdlib + caller-provided).
     let mut all_registries = std_registries::<AcvusRuntime>();
     all_registries.extend(registries);
-    let registered: Vec<Registered<AcvusRuntime>> = all_registries
-        .into_iter()
-        .map(|r| r.register(interner, &mut type_registry))
-        .collect();
+    let Externs {
+        functions: mut functions,
+        types: type_registry,
+        handlers,
+    } = Externs::combine(all_registries, interner).expect("registries combine");
 
-    // Build contexts.
     let contexts: Vec<Context> = context_types
         .iter()
         .map(|(name, ty)| Context {
@@ -53,12 +41,7 @@ async fn run_ext_with_registry(
         })
         .collect();
 
-    // Build function list: builtins + ext + entry.
     let entry_qref = QualifiedRef::root(interner.intern("test"));
-    let mut functions = Vec::new();
-    for reg in &registered {
-        functions.extend(reg.functions.iter().cloned());
-    }
     {
         let mut pb = acvus_mir::ty::PolyBuilder::new();
         functions.push(Function {
@@ -80,7 +63,6 @@ async fn run_ext_with_registry(
         contexts: Freeze::new(contexts),
     };
 
-    // Compile.
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(
         interner,
@@ -106,15 +88,12 @@ async fn run_ext_with_registry(
         .into_iter()
         .map(|(qref, module)| (qref, Executable::Module(module)))
         .collect();
-    for reg in registered {
-        exec_fns.extend(
-            reg.handlers
-                .into_iter()
-                .map(|(q, h)| (q, Executable::Extern(h))),
-        );
-    }
+    exec_fns.extend(
+        handlers
+            .into_iter()
+            .map(|(q, h)| (q, Executable::Extern(h))),
+    );
 
-    // Execute.
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
         .contexts
         .iter()
@@ -363,23 +342,33 @@ async fn mixed_regex_and_encoding() {
 struct MyNum(i64);
 
 #[extern_fn(effect = pure)]
-fn make_num(_: &Interner) -> MyNum {
+fn make_num<R>(_: &R) -> MyNum
+where
+    R: Runtime,
+{
     MyNum(42)
 }
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn num_to_int(_: &Interner, n: MyNum) -> i64 {
+fn num_to_int<R>(_: &R, n: MyNum) -> i64
+where
+    R: Runtime,
+{
     n.0
 }
 
 #[extern_fn(effect = pure)]
-fn double(_: &Interner, n: i64) -> i64 {
+fn double<R>(_: &R, n: i64) -> i64
+where
+    R: Runtime,
+{
     n * 2
 }
 
-fn extern_cast_registry() -> ExternRegistry<AcvusRuntime> {
+fn extern_cast_registry() -> Registry<AcvusRuntime> {
     extern_registry! {
+        ns: "t",
         types: [MyNum],
         fns: [make_num, num_to_int, double],
     }

@@ -35,7 +35,8 @@ pub fn extern_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `#[extern_fn(name = "...", ns = "...", effect = pure | idempotent | E)]`.
 struct ExternFnAttr {
     name: Option<LitStr>,
-    ns: Option<LitStr>,
+    /// The shared signature this function is an instance of (RFC-0019).
+    instance_of: Option<Path>,
     effect: Option<Ident>,
     /// `commutative`: two calls of this function in either order are the
     /// same program (RFC-0013).
@@ -46,7 +47,7 @@ impl Parse for ExternFnAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut out = ExternFnAttr {
             name: None,
-            ns: None,
+            instance_of: None,
             effect: None,
             commutative: false,
         };
@@ -62,14 +63,14 @@ impl Parse for ExternFnAttr {
             input.parse::<Token![=]>()?;
             if key == "name" {
                 out.name = Some(input.parse()?);
-            } else if key == "ns" {
-                out.ns = Some(input.parse()?);
+            } else if key == "instance_of" {
+                out.instance_of = Some(input.parse()?);
             } else if key == "effect" {
                 out.effect = Some(input.parse()?);
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name`, `ns`, `effect`, or `commutative`",
+                    "expected `name`, `instance_of`, `effect`, or `commutative`",
                 ));
             }
             if !input.is_empty() {
@@ -107,6 +108,19 @@ impl Mode {
     }
 }
 
+/// A parameter marked `#[state]`: supplied when the registry is built,
+/// held by the handler, and absent from the acvus type (RFC-0021).
+struct StateParam {
+    ident: Ident,
+    ty: Type,
+}
+
+/// One Rust parameter after the runtime, in declaration order.
+enum RustParam {
+    Acvus(ExternParam),
+    State(StateParam),
+}
+
 /// The declared return: the acvus type, and whether the Rust function wraps
 /// it in `Result`.
 struct ExternReturn {
@@ -121,7 +135,21 @@ fn generate_extern_fn(
     let is_cast = take_marker_attr(&mut func.attrs, "extern_cast");
     let is_async = func.sig.asyncness.is_some();
     let vars = Vars::from_generics(&func.sig.generics)?;
-    let params = parse_params(func, is_async)?;
+    let rust_params = parse_params(&mut func.sig, true)?;
+    let params: Vec<&ExternParam> = rust_params
+        .iter()
+        .filter_map(|p| match p {
+            RustParam::Acvus(a) => Some(a),
+            RustParam::State(_) => None,
+        })
+        .collect();
+    let states: Vec<&StateParam> = rust_params
+        .iter()
+        .filter_map(|p| match p {
+            RustParam::State(st) => Some(st),
+            RustParam::Acvus(_) => None,
+        })
+        .collect();
     let ret = parse_return(&func.sig.output);
 
     let fn_ident = &func.sig.ident;
@@ -131,8 +159,14 @@ fn generate_extern_fn(
         .as_ref()
         .map(LitStr::value)
         .unwrap_or_else(|| fn_ident.to_string());
-    let qref = qref_expr(attr.ns.as_ref().map(LitStr::value).as_deref(), &acvus_name);
+    let qref = qref_expr(&acvus_name);
     let decl_ident = format_ident!("__extern_fn_{}", fn_ident);
+    let instance_of = match &attr.instance_of {
+        Some(sig) => quote! {
+            ::core::option::Option::Some(<#sig as ::acvus_extern::SharedSignature>::qref(__i))
+        },
+        None => quote! { ::core::option::Option::None },
+    };
 
     let commutes = if attr.commutative {
         quote! { .commutative() }
@@ -249,7 +283,24 @@ fn generate_extern_fn(
             #(#unpack_stmts)*
             debug_assert!(__args.next().is_none(), "arity checked by typeck");
         };
-        let passed: Vec<&Ident> = arg_idents.iter().collect();
+        let mut acvus_args = arg_idents.iter();
+        let passed: Vec<proc_macro2::TokenStream> = rust_params
+            .iter()
+            .map(|p| match p {
+                RustParam::Acvus(_) => {
+                    let a = acvus_args.next().expect("one ident per acvus parameter");
+                    quote! { #a }
+                }
+                RustParam::State(st) => {
+                    let ident = &st.ident;
+                    quote! { &*#ident }
+                }
+            })
+            .collect();
+        let state_idents: Vec<&Ident> = states.iter().map(|st| &st.ident).collect();
+        let hold_state = quote! {
+            #(let #state_idents = ::std::sync::Arc::clone(&#state_idents);)*
+        };
         let ret_value = if is_closure_carrier(&rt_ret) {
             quote! { __r.into_value() }
         } else {
@@ -265,9 +316,11 @@ fn generate_extern_fn(
             } else {
                 quote! { (#call).await }
             };
-            quote! {
+            quote! {{
+                #hold_state
                 ::acvus_extern::ExternHandler::Async(::std::sync::Arc::new(
                     move |__rt: __R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
+                        #hold_state
                         ::std::boxed::Box::pin(async move {
                             #unpack
                             let __r = #awaited;
@@ -275,7 +328,7 @@ fn generate_extern_fn(
                         })
                     }
                 ))
-            }
+            }}
         } else {
             let call = quote! { #fn_ident #turbofish (__rt, #(#passed),*) };
             let result = if ret.is_result {
@@ -283,7 +336,8 @@ fn generate_extern_fn(
             } else {
                 quote! { #call }
             };
-            quote! {
+            quote! {{
+                #hold_state
                 ::acvus_extern::ExternHandler::Sync(::std::sync::Arc::new(
                     move |__rt: &__R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
                         #unpack
@@ -291,7 +345,7 @@ fn generate_extern_fn(
                         #returned
                     }
                 ))
-            }
+            }}
         }
     };
 
@@ -335,25 +389,38 @@ fn generate_extern_fn(
         }
     };
     let bounds = vars.bound_exprs();
+    let requires = vars.requires_exprs();
     let declared_ty = signature(None);
 
     let counts = vars.counts_expr();
     let rt_bounds = quote! { __R: ::acvus_extern::Runtime, };
+    let state_idents: Vec<&Ident> = states.iter().map(|st| &st.ident).collect();
+    let state_tys: Vec<&Type> = states.iter().map(|st| &st.ty).collect();
     Ok(quote! {
         #func
 
         #[doc(hidden)]
-        #vis fn #decl_ident<__R>(__i: &::acvus_extern::Interner) -> ::acvus_extern::ExternFn<__R>
+        #vis fn #decl_ident<__R>(
+            __i: &::acvus_extern::Interner,
+            __ns: ::core::option::Option<&str>,
+            #(#state_idents: #state_tys,)*
+        ) -> ::acvus_extern::ExternFn<__R>
         where
             #rt_bounds
+            #(#state_tys: ::core::marker::Send + ::core::marker::Sync + 'static,)*
         {
             let __vars = ::acvus_extern::PolyVars::fresh(#counts);
+            #(let #state_idents = ::std::sync::Arc::new(#state_idents);)*
             ::acvus_extern::ExternFn {
-                qref: #qref,
-                ty: #declared_ty,
-                bounds: vec![#(#bounds),*],
+                decl: ::acvus_extern::FnDecl {
+                    qref: #qref,
+                    ty: #declared_ty,
+                    bounds: vec![#(#bounds),*],
+                    cast: #is_cast,
+                    instance_of: #instance_of,
+                    requires: vec![#(#requires),*],
+                },
                 handler: #handler,
-                cast: #is_cast,
             }
         }
     })
@@ -378,15 +445,19 @@ fn take_marker_attr(attrs: &mut Vec<Attribute>, name: &str) -> bool {
     attrs.len() != before
 }
 
-fn parse_params(func: &ItemFn, _is_async: bool) -> syn::Result<Vec<ExternParam>> {
-    let mut inputs = func.sig.inputs.iter();
-    let Some(first) = inputs.next() else {
-        return Err(syn::Error::new(
-            func.sig.ident.span(),
-            "an extern_fn takes its runtime, `&R`, as its first parameter",
-        ));
-    };
-    check_runtime_param(first)?;
+/// The parameters of a signature after the runtime one (skipped when
+/// `has_runtime`), `#[state]` markers taken off.
+fn parse_params(sig: &mut syn::Signature, has_runtime: bool) -> syn::Result<Vec<RustParam>> {
+    let mut inputs = sig.inputs.iter_mut();
+    if has_runtime {
+        let Some(first) = inputs.next() else {
+            return Err(syn::Error::new(
+                sig.ident.span(),
+                "an extern_fn takes its runtime, `&R`, as its first parameter",
+            ));
+        };
+        check_runtime_param(first)?;
+    }
 
     let mut params = Vec::new();
     for (i, arg) in inputs.enumerate() {
@@ -396,16 +467,34 @@ fn parse_params(func: &ItemFn, _is_async: bool) -> syn::Result<Vec<ExternParam>>
                 "an extern_fn has no self parameter",
             ));
         };
-        let name = match pat_type.pat.as_ref() {
-            Pat::Ident(p) => p.ident.to_string(),
-            _ => format!("_{i}"),
+        let is_state = take_marker_attr(&mut pat_type.attrs, "state");
+        let ident = match pat_type.pat.as_ref() {
+            Pat::Ident(p) => p.ident.clone(),
+            _ => format_ident!("_{i}"),
         };
+        if is_state {
+            let Type::Reference(r) = pat_type.ty.as_ref() else {
+                return Err(syn::Error::new_spanned(
+                    &pat_type.ty,
+                    "a `#[state]` parameter is taken by shared reference",
+                ));
+            };
+            params.push(RustParam::State(StateParam {
+                ident,
+                ty: (*r.elem).clone(),
+            }));
+            continue;
+        }
         let (ty, mode) = match pat_type.ty.as_ref() {
             Type::Reference(r) if r.mutability.is_some() => ((*r.elem).clone(), Mode::BorrowMut),
             Type::Reference(r) => ((*r.elem).clone(), Mode::Borrow),
             ty => (ty.clone(), Mode::Value),
         };
-        params.push(ExternParam { name, ty, mode });
+        params.push(RustParam::Acvus(ExternParam {
+            name: ident.to_string(),
+            ty,
+            mode,
+        }));
     }
     Ok(params)
 }
@@ -457,7 +546,18 @@ fn parse_return(output: &ReturnType) -> ExternReturn {
     }
 }
 
-fn qref_expr(ns: Option<&str>, name: &str) -> proc_macro2::TokenStream {
+/// The name under the namespace the registry passes as `__ns`.
+fn qref_expr(name: &str) -> proc_macro2::TokenStream {
+    quote! {
+        ::acvus_extern::QualifiedRef {
+            namespace: __ns.map(|__n| __i.intern(__n)),
+            name: __i.intern(#name),
+        }
+    }
+}
+
+/// The name under a namespace fixed at the declaration.
+fn qref_expr_in(ns: Option<&str>, name: &str) -> proc_macro2::TokenStream {
     match ns {
         Some(ns) => quote! {
             ::acvus_extern::QualifiedRef::qualified(__i.intern(#ns), __i.intern(#name))
@@ -578,7 +678,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         ));
     }
 
-    let qref = qref_expr(attr.ns.as_deref(), &name);
+    let qref = qref_expr_in(attr.ns.as_deref(), &name);
 
     Ok(quote! {
         impl #arg_impl_generics ::acvus_extern::TyArg for #ident #ty_generics #where_clause {
@@ -669,65 +769,218 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
 
 // -- extern_registry! ------------------------------------------------
 
-/// `extern_registry! { types: [List<_>], fns: [len, reverse] }`.
+/// `extern_registry! { ns: "core", types: [List<_>], signatures: [eq],
+/// fns: [len, chat(client)] }` (RFC-0021).
 struct RegistryInput {
+    ns: LitStr,
     types: Vec<Type>,
-    fns: Vec<Path>,
+    signatures: Vec<Path>,
+    fns: Vec<RegistryFn>,
+}
+
+/// One listed function and the state values its declaration takes.
+struct RegistryFn {
+    path: Path,
+    state: Vec<syn::Expr>,
+}
+
+impl Parse for RegistryFn {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let path: Path = input.parse()?;
+        let state = if input.peek(syn::token::Paren) {
+            let content;
+            syn::parenthesized!(content in input);
+            content
+                .parse_terminated(syn::Expr::parse, Token![,])?
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(Self { path, state })
+    }
 }
 
 impl Parse for RegistryInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut ns = None;
         let mut types = Vec::new();
+        let mut signatures = Vec::new();
         let mut fns = Vec::new();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             input.parse::<Token![:]>()?;
-            let content;
-            syn::bracketed!(content in input);
-            if key == "types" {
-                let list: Punctuated<Type, Token![,]> =
-                    content.parse_terminated(Type::parse, Token![,])?;
-                types.extend(list);
-            } else if key == "fns" {
-                let list: Punctuated<Path, Token![,]> =
-                    content.parse_terminated(Path::parse, Token![,])?;
-                fns.extend(list);
+            if key == "ns" {
+                ns = Some(input.parse::<LitStr>()?);
             } else {
-                return Err(syn::Error::new(
-                    key.span(),
-                    "expected `types` or `fns`",
-                ));
+                let content;
+                syn::bracketed!(content in input);
+                if key == "types" {
+                    let list: Punctuated<Type, Token![,]> =
+                        content.parse_terminated(Type::parse, Token![,])?;
+                    types.extend(list);
+                } else if key == "signatures" {
+                    let list: Punctuated<Path, Token![,]> =
+                        content.parse_terminated(Path::parse, Token![,])?;
+                    signatures.extend(list);
+                } else if key == "fns" {
+                    let list: Punctuated<RegistryFn, Token![,]> =
+                        content.parse_terminated(RegistryFn::parse, Token![,])?;
+                    fns.extend(list);
+                } else {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "expected `ns`, `types`, `signatures`, or `fns`",
+                    ));
+                }
             }
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
         }
-        Ok(Self { types, fns })
+        let Some(ns) = ns else {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                "a registry declares its namespace: `ns: \"...\"`",
+            ));
+        };
+        Ok(Self {
+            ns,
+            types,
+            signatures,
+            fns,
+        })
     }
 }
 
 #[proc_macro]
 pub fn extern_registry(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as RegistryInput);
+    let ns = input.ns;
     let types: Vec<Type> = input.types.iter().map(subst::infer_to_unit).collect();
-    let fns: Vec<Path> = input
-        .fns
-        .into_iter()
-        .map(|mut path| {
-            let last = path.segments.last_mut().expect("path has a segment");
-            last.ident = format_ident!("__extern_fn_{}", last.ident);
-            path
-        })
-        .collect();
+    let signatures = input.signatures;
+    let fns = input.fns.into_iter().map(|f| {
+        let mut path = f.path;
+        let last = path.segments.last_mut().expect("path has a segment");
+        last.ident = format_ident!("__extern_fn_{}", last.ident);
+        let state = f.state;
+        quote! { #path(__i, __ns, #(#state),*) }
+    });
     quote! {
-        ::acvus_extern::ExternRegistry::new(|__i: &::acvus_extern::Interner| {
-            ::acvus_extern::ExternItems {
-                types: vec![#(<#types as ::acvus_extern::ExternTypeDecl>::type_decl(__i)),*],
-                fns: vec![#(#fns(__i)),*],
+        ::acvus_extern::Registry::new(move |__i: &::acvus_extern::Interner| {
+            let __ns: ::core::option::Option<&str> = ::core::option::Option::Some(#ns);
+            let mut __fns: ::std::vec::Vec<::acvus_extern::FnDecl> = ::std::vec::Vec::new();
+            let mut __handlers: ::acvus_extern::Handlers<_> = ::acvus_extern::FxHashMap::default();
+            for __f in [#(#fns),*] {
+                __handlers.insert(__f.decl.qref, __f.handler);
+                __fns.push(__f.decl);
+            }
+            ::acvus_extern::Contribution {
+                manifest: ::acvus_extern::Manifest {
+                    types: vec![#(<#types as ::acvus_extern::ExternTypeDecl>::type_decl(__i)),*],
+                    signatures: vec![#(
+                        <#signatures as ::acvus_extern::SharedSignature>::signature_decl(__i)
+                    ),*],
+                    fns: __fns,
+                },
+                handlers: __handlers,
             }
         })
     }
     .into()
+}
+
+// -- extern_signature! -----------------------------------------------
+
+/// `extern_signature! { ns: "core", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }`
+/// declares a shared signature (RFC-0019) and a marker type named after it.
+struct SignatureInput {
+    ns: LitStr,
+    sig: syn::Signature,
+}
+
+impl Parse for SignatureInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let key: Ident = input.parse()?;
+        if key != "ns" {
+            return Err(syn::Error::new(key.span(), "expected `ns`"));
+        }
+        input.parse::<Token![:]>()?;
+        let ns: LitStr = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let sig: syn::Signature = input.parse()?;
+        if input.peek(Token![;]) {
+            input.parse::<Token![;]>()?;
+        }
+        Ok(Self { ns, sig })
+    }
+}
+
+#[proc_macro]
+pub fn extern_signature(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as SignatureInput);
+    match generate_signature(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenStream> {
+    let mut sig = input.sig;
+    let ident = sig.ident.clone();
+    let vars = Vars::from_generics(&sig.generics)?;
+    let rust_params = parse_params(&mut sig, false)?;
+    let mut params = Vec::new();
+    for p in rust_params {
+        match p {
+            RustParam::Acvus(a) => params.push(a),
+            RustParam::State(st) => {
+                return Err(syn::Error::new(
+                    st.ident.span(),
+                    "a signature declares no state",
+                ));
+            }
+        }
+    }
+    let ret = parse_return(&sig.output);
+    let name = ident.to_string();
+    let qref = qref_expr_in(Some(&input.ns.value()), &name);
+    let param_terms = params.iter().map(|p| {
+        let pname = &p.name;
+        let comp_ty = p.mode.acvus_ty(&vars.to_compile_time_instance(&p.ty, None));
+        quote! {
+            ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
+                __i.intern(#pname),
+                <#comp_ty as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
+            )
+        }
+    });
+    let comp_ret = vars.to_compile_time_instance(&ret.ty, None);
+    let bounds = vars.bound_exprs();
+    let counts = vars.counts_expr();
+    Ok(quote! {
+        #[allow(non_camel_case_types)]
+        pub struct #ident;
+
+        impl ::acvus_extern::SharedSignature for #ident {
+            fn qref(__i: &::acvus_extern::Interner) -> ::acvus_extern::QualifiedRef {
+                #qref
+            }
+            fn signature_decl(__i: &::acvus_extern::Interner) -> ::acvus_extern::SignatureDecl {
+                let __vars = ::acvus_extern::PolyVars::fresh(#counts);
+                ::acvus_extern::SignatureDecl {
+                    qref: #qref,
+                    ty: ::acvus_extern::PolyTy::Fn {
+                        params: vec![#(#param_terms),*],
+                        ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
+                        captures: vec![],
+                        effect: ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE),
+                    },
+                    bounds: vec![#(#bounds),*],
+                }
+            }
+        }
+    })
 }
 
 // -- shared helpers --------------------------------------------------

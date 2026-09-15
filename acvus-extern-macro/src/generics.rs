@@ -28,6 +28,8 @@ pub struct Var {
     pub index: usize,
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
+    /// The shared signature a `HasInstance<sig>` bound requires (RFC-0019).
+    pub requires: Option<syn::Path>,
 }
 
 pub struct Vars(Vec<Var>);
@@ -51,6 +53,31 @@ fn bounds_of<'a>(
         })
         .flat_map(|pt| pt.bounds.iter());
     tp.bounds.iter().chain(from_where)
+}
+
+/// The signature of a `HasInstance<sig>` bound, if present.
+fn required_signature<'a>(
+    bounds: impl Iterator<Item = &'a TypeParamBound>,
+) -> syn::Result<Option<syn::Path>> {
+    for bound in bounds {
+        let TypeParamBound::Trait(t) = bound else {
+            continue;
+        };
+        let Some(seg) = t.path.segments.last() else {
+            continue;
+        };
+        if seg.ident != "HasInstance" {
+            continue;
+        }
+        let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+            return Err(syn::Error::new_spanned(seg, "HasInstance takes a signature"));
+        };
+        let Some(syn::GenericArgument::Type(Type::Path(sig))) = args.args.first() else {
+            return Err(syn::Error::new_spanned(seg, "HasInstance takes a signature"));
+        };
+        return Ok(Some(sig.path.clone()));
+    }
+    Ok(None)
 }
 
 /// The member types of a `Monomorphize<(T0, T1, ..)>` bound, if present.
@@ -113,6 +140,7 @@ impl Vars {
                 })
                 .collect();
             let mono = mono_members(bounds_of(generics, tp))?;
+            let requires = required_signature(bounds_of(generics, tp))?;
             let has_extra_bounds = bounds_of(generics, tp).any(|b| {
                 matches!(b, TypeParamBound::Trait(_))
                     && !bound_ident(b).is_some_and(|i| {
@@ -124,12 +152,13 @@ impl Vars {
                                 | "IdentityVar"
                                 | "Runtime"
                                 | "Monomorphize"
+                                | "HasInstance"
                         )
                     })
             });
-            let kind = match (kinds.as_slice(), &mono) {
-                ([kind], _) => *kind,
-                ([], Some(_)) => VarKind::Ty,
+            let kind = match (kinds.as_slice(), &mono, &requires) {
+                ([kind], _, _) => *kind,
+                ([], Some(_), _) | ([], None, Some(_)) => VarKind::Ty,
                 _ => {
                     return Err(syn::Error::new(
                         tp.ident.span(),
@@ -151,6 +180,7 @@ impl Vars {
                 index: counts[slot],
                 mono,
                 mono_fallback,
+                requires,
             });
             counts[slot] += 1;
         }
@@ -263,6 +293,22 @@ impl Vars {
     /// The Monomorphize variable, if any.
     pub fn mono_var(&self) -> Option<&Var> {
         self.0.iter().find(|v| v.mono.is_some())
+    }
+
+    /// The required signature of every type variable, by position.
+    pub fn requires_exprs(&self) -> Vec<TokenStream> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Ty)
+            .map(|v| match &v.requires {
+                None => quote! { ::core::option::Option::None },
+                Some(sig) => quote! {
+                    ::core::option::Option::Some(
+                        <#sig as ::acvus_extern::SharedSignature>::qref(__i),
+                    )
+                },
+            })
+            .collect()
     }
 
     /// `TyVarBound` of every type variable, by position.

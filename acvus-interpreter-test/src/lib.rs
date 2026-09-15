@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use acvus_extern::ExternRegistry;
+use acvus_extern::{Externs, Registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::{
     ContextWrite, Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
@@ -62,9 +62,8 @@ fn compile(
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
     let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse error"));
-    let tr = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
-    compile_source_with_externs(interner, ast, context_types, std_regs, tr)
+    compile_source_with_externs(interner, ast, context_types, std_regs)
 }
 
 fn compile_script(
@@ -73,9 +72,8 @@ fn compile_script(
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    let tr = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
-    compile_source_with_externs(interner, ast, context_types, std_regs, tr)
+    compile_source_with_externs(interner, ast, context_types, std_regs)
 }
 
 fn compile_script_mode(
@@ -85,18 +83,31 @@ fn compile_script_mode(
 ) -> CompileResult {
     let ast =
         ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
-    let tr = acvus_mir::ty::TypeRegistry::new();
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
-    compile_source_with_externs(interner, ast, context_types, std_regs, tr)
+    compile_source_with_externs(interner, ast, context_types, std_regs)
 }
 
 pub fn compile_source_with_externs(
     interner: &Interner,
     ast: ParsedAst,
     context_types: &FxHashMap<Astr, Ty>,
-    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
-    mut type_registry: acvus_mir::ty::TypeRegistry,
+    extern_registries: Vec<Registry<AcvusRuntime>>,
 ) -> CompileResult {
+    compile_source_with_externs_and_types(interner, ast, context_types, extern_registries, |_| {})
+}
+
+/// Compile with the given registries; `declare_types` registers the caller's
+/// own type declarations into the combined type registry.
+pub fn compile_source_with_externs_and_types<D>(
+    interner: &Interner,
+    ast: ParsedAst,
+    context_types: &FxHashMap<Astr, Ty>,
+    extern_registries: Vec<Registry<AcvusRuntime>>,
+    declare_types: D,
+) -> CompileResult
+where
+    D: FnOnce(&mut acvus_mir::ty::TypeRegistry),
+{
     let mut pb = PolyBuilder::new();
     let contexts: Vec<acvus_mir::graph::Context> = context_types
         .iter()
@@ -119,26 +130,22 @@ pub fn compile_source_with_externs(
         },
     });
 
-    // Register ExternFns.
-    let mut extern_executables: FxHashMap<QualifiedRef, Executable> = FxHashMap::default();
-    let mut fn_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
-    for registry in extern_registries {
-        let registered = registry.register(interner, &mut type_registry);
-        for func in &registered.functions {
-            // Extract concrete Ty from the function's polymorphic type.
-            // Polymorphic ExternFns (with Var placeholders) are skipped - only fully concrete ones get metadata.
-            if let Some(ty) = try_freeze_poly(&func.ty) {
-                fn_types.insert(func.qref, ty);
-            }
-        }
-        functions.extend(registered.functions);
-        extern_executables.extend(
-            registered
-                .handlers
-                .into_iter()
-                .map(|(qref, h)| (qref, Executable::Extern(h))),
-        );
-    }
+    let Externs {
+        functions: extern_fns,
+        types: mut type_registry,
+        handlers,
+    } = Externs::combine(extern_registries, interner).expect("registries combine");
+    declare_types(&mut type_registry);
+    // Polymorphic ExternFns (with Var placeholders) are skipped - only fully concrete ones get metadata.
+    let fn_types: FxHashMap<QualifiedRef, Ty> = extern_fns
+        .iter()
+        .filter_map(|func| try_freeze_poly(&func.ty).map(|ty| (func.qref, ty)))
+        .collect();
+    functions.extend(extern_fns);
+    let extern_executables: FxHashMap<QualifiedRef, Executable> = handlers
+        .into_iter()
+        .map(|(qref, h)| (qref, Executable::Extern(h)))
+        .collect();
 
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
@@ -304,64 +311,68 @@ pub async fn run_script_with_externs(
     interner: &Interner,
     source: &str,
     context: Context,
-    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
+    extern_registries: Vec<Registry<AcvusRuntime>>,
 ) -> Ran {
-    run_script_with_externs_and_types(
-        interner,
-        source,
-        context,
-        extern_registries,
-        acvus_mir::ty::TypeRegistry::new(),
-    )
-    .await
+    run_script_with_externs_and_types(interner, source, context, extern_registries, |_| {}).await
 }
 
-pub async fn run_script_with_externs_and_types(
+/// Run a script with the given registries; `declare_types` registers the
+/// caller's own type declarations into the combined type registry.
+pub async fn run_script_with_externs_and_types<D>(
     interner: &Interner,
     source: &str,
     context: Context,
-    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
-    type_registry: acvus_mir::ty::TypeRegistry,
-) -> Ran {
+    extern_registries: Vec<Registry<AcvusRuntime>>,
+    declare_types: D,
+) -> Ran
+where
+    D: FnOnce(&mut acvus_mir::ty::TypeRegistry),
+{
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    run_parsed_with_externs(interner, ast, context, extern_registries, type_registry).await
+    run_parsed_with_externs(interner, ast, context, extern_registries, declare_types).await
 }
 
 /// Run an already parsed script against `context` with the given registries.
-pub async fn run_parsed_with_externs(
+pub async fn run_parsed_with_externs<D>(
     interner: &Interner,
     ast: ParsedAst,
     context: Context,
-    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
-    type_registry: acvus_mir::ty::TypeRegistry,
-) -> Ran {
+    extern_registries: Vec<Registry<AcvusRuntime>>,
+    declare_types: D,
+) -> Ran
+where
+    D: FnOnce(&mut acvus_mir::ty::TypeRegistry),
+{
     run_parsed_on(
         interner,
         ast,
         context,
         extern_registries,
-        type_registry,
+        declare_types,
         Arc::new(SequentialExecutor),
     )
     .await
 }
 
 /// Run an already parsed script on the given executor.
-pub async fn run_parsed_on(
+pub async fn run_parsed_on<D>(
     interner: &Interner,
     ast: ParsedAst,
     context: Context,
-    extern_registries: Vec<ExternRegistry<AcvusRuntime>>,
-    type_registry: acvus_mir::ty::TypeRegistry,
+    extern_registries: Vec<Registry<AcvusRuntime>>,
+    declare_types: D,
     executor: Arc<dyn acvus_interpreter::Executor>,
-) -> Ran {
+) -> Ran
+where
+    D: FnOnce(&mut acvus_mir::ty::TypeRegistry),
+{
     let (context_types, snapshot) = split_context(interner, context);
-    let cr = compile_source_with_externs(
+    let cr = compile_source_with_externs_and_types(
         interner,
         ast,
         &context_types,
         extern_registries,
-        type_registry,
+        declare_types,
     );
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, executor);
     let value = interp.execute().await.expect("execution failed");

@@ -91,6 +91,8 @@ pub enum MirErrorKind {
     ReferenceInData,
     /// A lambda returned a reference.
     ReferenceReturned,
+    /// A bare name that two namespaces both declare.
+    AmbiguousFunction { name: String, candidates: Vec<String> },
     /// One call names the same place twice.
     PlaceNamedTwice(String),
 
@@ -205,6 +207,9 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::ReferenceReturned => {
                 write!(f, "a lambda cannot return a reference")
+            }
+            MirErrorKind::AmbiguousFunction { name, candidates } => {
+                write!(f, "`{name}` is declared by {}", candidates.join(" and "))
             }
             MirErrorKind::PlaceNamedTwice(place) => {
                 write!(f, "`{place}` is named twice in one call")

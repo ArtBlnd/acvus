@@ -3,10 +3,10 @@ mod schema;
 use std::sync::Arc;
 
 use acvus_ext::List;
-use acvus_extern::{ExternError, ExternFn, ExternItems, ExternRegistry, Runtime, TyArg};
+use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
 
 use crate::extract::{input_messages, split_system};
-use crate::http::{Fetch, HttpRequest, RequestError};
+use crate::http::{Fetch, FetchClient, HttpRequest, RequestError};
 use crate::message::*;
 
 // -- Message conversion ----------------------------------------------
@@ -143,60 +143,64 @@ fn first_message(resp: ModelResponse) -> Result<OutputMessage, ExternError> {
     }
 }
 
-/// Create an `ExternRegistry` for the Google/Gemini chat completion handler.
-///
 /// Gemini specifics:
 /// - API key goes in URL query param: `{endpoint}/models/{model}:generateContent?key={api_key}`
 /// - System messages are extracted into the `system_instruction` field (separate from `contents`)
 /// - Role `"assistant"` is mapped to `"model"` for the Gemini API
-pub fn google_registry<F, R>(fetch: Arc<F>) -> ExternRegistry<R>
+#[extern_fn]
+async fn google_llm<R>(
+    _: &R,
+    #[state] fetch: &FetchClient,
+    messages: List<InputMessage>,
+    config: GoogleConfig,
+) -> Result<OutputMessage, ExternError>
+where
+    R: Runtime,
+{
+    let msgs = input_messages(messages.0);
+    let (system, rest) = split_system(&msgs);
+
+    let request_body = schema::Request {
+        contents: rest.iter().map(|m| convert_message(m)).collect(),
+        system_instruction: system.map(|s| schema::SystemInstruction {
+            parts: vec![schema::TextPart { text: s }],
+        }),
+        tools: None,
+        generation_config: None,
+    };
+
+    let url = format!(
+        "{}/models/{}:generateContent?key={}",
+        config.endpoint, config.model, config.api_key
+    );
+    let body = serde_json::to_value(&request_body).map_err(|e| {
+        ExternError::call("google_llm", format!("serialization failed: {e}"))
+    })?;
+    let http_request = HttpRequest {
+        url,
+        headers: vec![("Content-Type".into(), "application/json".into())],
+        body,
+    };
+
+    let response_json = fetch
+        .fetch(&http_request)
+        .await
+        .map_err(|e| ExternError::call("google_llm", e))?;
+    let (response, _usage) = parse_response(response_json)
+        .map_err(|e| ExternError::call("google_llm", e.to_string()))?;
+    first_message(response)
+}
+
+/// The registry holding the Google/Gemini chat completion extern.
+pub fn google_registry<F, R>(fetch: Arc<F>) -> Registry<R>
 where
     F: Fetch + Send + Sync + 'static,
     R: Runtime + Clone,
 {
-    ExternRegistry::new(move |interner| {
-        let handler = move |_: R, messages: List<InputMessage>, config: GoogleConfig| {
-            let fetch = Arc::clone(&fetch);
-            async move {
-                let msgs = input_messages(messages.0);
-                let (system, rest) = split_system(&msgs);
-
-                let request_body = schema::Request {
-                    contents: rest.iter().map(|m| convert_message(m)).collect(),
-                    system_instruction: system.map(|s| schema::SystemInstruction {
-                        parts: vec![schema::TextPart { text: s }],
-                    }),
-                    tools: None,
-                    generation_config: None,
-                };
-
-                let url = format!(
-                    "{}/models/{}:generateContent?key={}",
-                    config.endpoint, config.model, config.api_key
-                );
-                let body = serde_json::to_value(&request_body).map_err(|e| {
-                    ExternError::call("google_llm", format!("serialization failed: {e}"))
-                })?;
-                let http_request = HttpRequest {
-                    url,
-                    headers: vec![("Content-Type".into(), "application/json".into())],
-                    body,
-                };
-
-                let response_json = fetch
-                    .fetch(&http_request)
-                    .await
-                    .map_err(|e| ExternError::call("google_llm", e))?;
-                let (response, _usage) = parse_response(response_json)
-                    .map_err(|e| ExternError::call("google_llm", e.to_string()))?;
-                first_message(response).map_err(R::Error::from)
-            }
-        };
-        ExternItems {
-            types: vec![],
-            fns: vec![ExternFn::r#async(interner, "google_llm", handler)],
-        }
-    })
+    extern_registry! {
+        ns: "llm",
+        fns: [google_llm(FetchClient::new(fetch))],
+    }
 }
 
 #[cfg(test)]
@@ -347,7 +351,8 @@ mod tests {
         });
         let interner = acvus_extern::Interner::new();
         let registry = google_registry::<_, acvus_extern::TypesOnly>(fetch);
-        let registered = registry.register(&interner, &mut acvus_extern::TypeRegistry::new());
+        let registered = acvus_extern::Externs::combine(vec![registry], &interner)
+            .expect("registry combines");
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.handlers.len(), 1);
 

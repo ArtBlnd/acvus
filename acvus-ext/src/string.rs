@@ -1,6 +1,6 @@
 //! String operations. All pure.
 
-use acvus_extern::{ExternError, ExternRegistry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternError, Registry, Runtime, extern_fn, extern_registry};
 
 use crate::list::List;
 
@@ -138,8 +138,9 @@ where
     String::from_utf8_lossy(&bytes.0).into_owned()
 }
 
-pub fn string_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn string_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         fns: [
             len_str, trim, trim_start, trim_end, upper, lower, contains_str,
             starts_with_str, ends_with_str, replace_str, split_str, repeat_str,
@@ -151,14 +152,13 @@ pub fn string_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
+    use acvus_extern::{Externs, Interner, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let mut tr = TypeRegistry::new();
-        crate::list::list_registry::<TypesOnly>().register(&i, &mut tr);
-        let reg = string_registry::<TypesOnly>().register(&i, &mut tr);
+        let reg = Externs::combine(vec![string_registry::<TypesOnly>()], &i)
+            .expect("registry combines");
         assert_eq!(reg.functions.len(), 16);
         assert_eq!(reg.handlers.len(), 16);
     }

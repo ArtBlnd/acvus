@@ -1,6 +1,6 @@
 //! Base64 and URL encoding. All pure.
 
-use acvus_extern::{ExternError, ExternRegistry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternError, Registry, Runtime, extern_fn, extern_registry};
 use base64::Engine;
 
 #[extern_fn(effect = pure)]
@@ -41,8 +41,9 @@ where
         .into_owned()
 }
 
-pub fn encoding_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn encoding_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         fns: [base64_encode, base64_decode, url_encode, url_decode],
     }
 }
@@ -50,12 +51,12 @@ pub fn encoding_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
+    use acvus_extern::{Externs, Interner, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let reg = encoding_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
+        let reg = Externs::combine(vec![encoding_registry::<TypesOnly>()], &i).expect("registry combines");
         assert_eq!(reg.functions.len(), 4);
         assert_eq!(reg.handlers.len(), 4);
     }

@@ -1,7 +1,7 @@
 //! Type conversions. All pure.
 
 use acvus_extern::{
-    ExternError, ExternRegistry, Monomorphize, Runtime, extern_fn, extern_registry,
+    ExternError, Registry, Monomorphize, Runtime, extern_fn, extern_registry,
 };
 
 #[extern_fn(effect = pure)]
@@ -89,8 +89,9 @@ where
     }
 }
 
-pub fn conversion_registry<R: Runtime>() -> ExternRegistry<R> {
+pub fn conversion_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
+        ns: "std",
         fns: [to_string, to_int, to_float, char_to_int, int_to_char],
     }
 }
@@ -98,12 +99,12 @@ pub fn conversion_registry<R: Runtime>() -> ExternRegistry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Interner, TypeRegistry, TypesOnly};
+    use acvus_extern::{Externs, Interner, TypesOnly};
 
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let reg = conversion_registry::<TypesOnly>().register(&i, &mut TypeRegistry::new());
+        let reg = Externs::combine(vec![conversion_registry::<TypesOnly>()], &i).expect("registry combines");
         assert_eq!(reg.functions.len(), 5);
         assert_eq!(reg.handlers.len(), 5);
     }

@@ -58,12 +58,13 @@ fn compile_analysis(
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
     }];
-    let mut type_registry = acvus_mir::ty::TypeRegistry::new();
-    let std_regs = acvus_ext::std_registries::<acvus_extern::TypesOnly>();
-    for registry in std_regs {
-        let registered = registry.register(interner, &mut type_registry);
-        functions.extend(registered.functions);
-    }
+    let externs = acvus_extern::Externs::combine(
+        acvus_ext::std_registries::<acvus_extern::TypesOnly>(),
+        interner,
+    )
+    .expect("the standard registries combine");
+    functions.extend(externs.functions);
+    let type_registry = externs.types;
 
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
