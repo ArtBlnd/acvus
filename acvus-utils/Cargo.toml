@@ -13,6 +13,4 @@ serde_json = "1"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 serde_json = "1"
-acvus-macro = { path = "../acvus-macro" }
-acvus-ast = { path = "../acvus-ast" }
 rustc-hash = { workspace = true }

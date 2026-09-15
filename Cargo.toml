@@ -12,7 +12,6 @@ members = [
     "acvus-ext",
     "acvus-ext-llm",
     "acvus-lsp",
-    "acvus-macro",
     "kovac-interpreter"
 , "acvus-extern", "acvus-extern-macro"]
 
