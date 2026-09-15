@@ -124,7 +124,13 @@ fn target(reference: &V) -> &V {
     }
 }
 
+static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
+
 impl Runtime for Tiny {
+    fn symbol(&self, name: &str) -> acvus_extern::Astr {
+        SYMBOLS.intern(name)
+    }
+
     type Value = V;
     type Error = ExternError;
     type CallFuture<'a> = Ready<Result<V, ExternError>>;
@@ -565,20 +571,23 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
     assert_eq!(doubled, vec![2, 4]);
 
-    let point = erased(Point {
-        x: 21,
-        label: "p".to_owned(),
-    });
+    // An object crosses as its fields (RFC-0032): the handler receives
+    // `Obj<V>` and returns one.
+    let point = erased(acvus_extern::Obj(
+        [
+            (Tiny.symbol("x"), erased(21i64)),
+            (Tiny.symbol("label"), erased("p".to_owned())),
+        ]
+        .into_iter()
+        .collect::<acvus_extern::FxHashMap<_, _>>(),
+    ));
     let out = call_async(handler(&reg, &i, "fetch"), vec![point])
         .await
         .unwrap();
-    assert_eq!(
-        open::<Point>(out),
-        Point {
-            x: 42,
-            label: "p".to_owned()
-        }
-    );
+    let acvus_extern::Obj(mut fields) = open::<acvus_extern::Obj<V>>(out);
+    assert_eq!(open::<i64>(fields.remove(&Tiny.symbol("x")).unwrap()), 42);
+    assert_eq!(open::<String>(fields.remove(&Tiny.symbol("label")).unwrap()), "p");
+    assert!(fields.is_empty());
 }
 
 #[test]

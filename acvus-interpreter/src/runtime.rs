@@ -67,6 +67,10 @@ impl Runtime for AcvusRuntime {
         Value::reference(target)
     }
 
+    fn symbol(&self, name: &str) -> acvus_utils::Astr {
+        self.0.interner.intern(name)
+    }
+
     fn call_0<'a>(&'a self, f: &'a Value, _: CallToken) -> Self::CallFuture<'a> {
         self.run(f, Vec::new())
     }

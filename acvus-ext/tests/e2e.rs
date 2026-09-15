@@ -355,3 +355,142 @@ async fn extern_cast_auto_coercion() {
     .await;
     assert_eq!(result.as_int(), 84);
 }
+
+// =======================================================================
+//  Objects across the boundary (RFC-0032)
+// =======================================================================
+
+#[derive(acvus_extern::TyArg)]
+struct Pt {
+    x: i64,
+    label: String,
+}
+
+#[extern_fn(effect = pure)]
+fn make_pt<R>(_: &R) -> Pt
+where
+    R: Runtime,
+{
+    Pt {
+        x: 1,
+        label: "one".to_owned(),
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn shift<R>(_: &R, p: Pt) -> Pt
+where
+    R: Runtime,
+{
+    Pt {
+        x: p.x + 1,
+        label: format!("{}!", p.label),
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn pts<R>(_: &R) -> List<Pt>
+where
+    R: Runtime,
+{
+    List(vec![
+        Pt {
+            x: 10,
+            label: "a".to_owned(),
+        },
+        Pt {
+            x: 20,
+            label: "b".to_owned(),
+        },
+    ])
+}
+
+#[extern_fn(effect = pure)]
+fn total<R>(_: &R, ps: List<Pt>) -> i64
+where
+    R: Runtime,
+{
+    ps.0.iter().map(|p| p.x).sum()
+}
+
+#[extern_fn(effect = pure)]
+fn maybe_pt<R>(_: &R, some: bool) -> Option<Pt>
+where
+    R: Runtime,
+{
+    some.then(|| Pt {
+        x: 7,
+        label: "seven".to_owned(),
+    })
+}
+
+fn object_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [make_pt, shift, pts, total, maybe_pt],
+    }
+}
+
+#[tokio::test]
+async fn an_object_returned_by_an_extern_fn_is_the_script_s_object() {
+    let i = Interner::new();
+    let regs = || vec![object_registry()];
+    let v = run_ext(&i, "make_pt().x", TypedContext::default(), regs()).await;
+    assert_eq!(v.as_int(), 1);
+    let v = run_ext(
+        &i,
+        "shift({ x: 41, label: \"a\", }).x",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 42);
+    let v = run_ext(
+        &i,
+        "shift(make_pt()).label",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "one!");
+}
+
+#[tokio::test]
+async fn a_container_of_objects_converts_each_element() {
+    let i = Interner::new();
+    let regs = || vec![object_registry()];
+    let v = run_ext(&i, "total(pts())", TypedContext::default(), regs()).await;
+    assert_eq!(v.as_int(), 30);
+    let v = run_ext(
+        &i,
+        "ps = pts(); ps.get(1).x + ps.len()",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 22);
+    let v = run_ext(
+        &i,
+        "ps = pts(); ps.as_iter().map(|p| -> p.x).fold(0, |a, x| -> a + x)",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 30);
+    let v = run_ext(
+        &i,
+        "unwrap(maybe_pt(true)).label",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "seven");
+    let v = run_ext(
+        &i,
+        "unwrap_or(maybe_pt(false), make_pt()).x",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 1);
+}

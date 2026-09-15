@@ -283,7 +283,9 @@ impl PartialEq for Value {
 /// (RFC-0022): it crosses without a copy.
 pub type Array = acvus_extern::Arr<Value, ()>;
 pub struct Tuple(pub Vec<Value>);
-pub struct Object(pub FxHashMap<Astr, Value>);
+/// The language's object is the extern contract's `Obj` at `V = Value`
+/// (RFC-0032).
+pub type Object = acvus_extern::Obj<Value>;
 
 pub struct VariantValue {
     pub tag: Astr,
@@ -476,7 +478,7 @@ impl Value {
         large(&TUPLE, Tuple(items))
     }
     pub fn object(fields: FxHashMap<Astr, Value>) -> Self {
-        large(&OBJECT, Object(fields))
+        large(&OBJECT, acvus_extern::Obj(fields))
     }
     pub fn variant(tag: Astr, payload: Option<Value>) -> Self {
         large(

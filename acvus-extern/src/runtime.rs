@@ -46,6 +46,9 @@ pub trait Runtime: Send + Sync + 'static {
     where
         T: Send + Sync + 'static;
 
+    /// The name a field key is at run time (RFC-0032).
+    fn symbol(&self, name: &str) -> acvus_utils::Astr;
+
     /// A reference value naming `target`'s storage (RFC-0018): what a
     /// handler passes to a closure whose parameter is `&T` / `&mut T`.
     ///
@@ -106,6 +109,9 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     unsafe fn reference(&self, _: &()) {}
+    fn symbol(&self, _: &str) -> acvus_utils::Astr {
+        panic!("TypesOnly runtime holds no values")
+    }
     fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(no_values())
     }

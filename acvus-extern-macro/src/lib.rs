@@ -269,21 +269,21 @@ fn generate_extern_fn(
                 let lent = format_ident!("{a}_lent");
                 match p.mode {
                     Mode::Value if is_carrier(ty) => quote! { let #a = <#ty>::new(#next); },
-                    Mode::Value => quote! { let #a = unsafe { (&::acvus_extern::Crossing::<#ty>::new()).materialize(__rt, #next) }; },
+                    Mode::Value => quote! { let #a = unsafe { (&::acvus_extern::Crossing::<#ty, __R>::new()).materialize(__rt, #next) }; },
                     Mode::Borrow => quote! {
                         let #lent = #next;
-                        let #a: &#ty = unsafe { (&::acvus_extern::Crossing::<#ty>::new()).deref(__rt, &#lent) };
+                        let #a: &#ty = unsafe { (&::acvus_extern::Crossing::<#ty, __R>::new()).deref(__rt, &#lent) };
                     },
                     Mode::BorrowMut => quote! {
                         let #lent = #next;
-                        let #a: &mut #ty = unsafe { (&::acvus_extern::Crossing::<#ty>::new()).deref_mut(__rt, &#lent) };
+                        let #a: &mut #ty = unsafe { (&::acvus_extern::Crossing::<#ty, __R>::new()).deref_mut(__rt, &#lent) };
                     },
                 }
             })
             .collect();
         let unpack = quote! {
             #[allow(unused_imports)]
-            use ::acvus_extern::AsIs as _;
+            use ::acvus_extern::{AsCross as _, AsIs as _};
             let mut __args = __args.into_iter();
             #(#unpack_stmts)*
             debug_assert!(__args.next().is_none(), "arity checked by typeck");
@@ -311,7 +311,7 @@ fn generate_extern_fn(
         } else if is_option_of_carrier(&rt_ret) {
             quote! { ::acvus_extern::Carried::into_value(__r, __rt) }
         } else {
-            quote! { unsafe { (&::acvus_extern::Crossing::<#rt_ret>::new()).erase(__rt, __r) } }
+            quote! { unsafe { (&::acvus_extern::Crossing::<#rt_ret, __R>::new()).erase(__rt, __r) } }
         };
         let returned = quote! {
             ::core::result::Result::<_, #error_ty>::Ok(#ret_value)
@@ -790,6 +790,38 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             }
         }
 
+        impl<__R> ::acvus_extern::Cross<__R> for #ident
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
+                let mut __fields = ::acvus_extern::FxHashMap::default();
+                #(
+                    __fields.insert(
+                        __rt.symbol(#field_names),
+                        ::acvus_extern::erase_field::<#field_tys, __R>(__rt, self.#field_idents),
+                    );
+                )*
+                // SAFETY: the language's object is `Obj<Value>` (RFC-0032).
+                unsafe {
+                    __rt.erase::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(
+                        ::acvus_extern::Obj(__fields),
+                    )
+                }
+            }
+
+            fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+                // SAFETY: as in `erase`.
+                let ::acvus_extern::Obj(mut __fields) = unsafe {
+                    __rt.materialize::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(__value)
+                };
+                Self {
+                    #(#field_idents: ::acvus_extern::materialize_field::<#field_tys, __R>(
+                        __rt, &mut __fields, #field_names,
+                    ),)*
+                }
+            }
+        }
     })
 }
 

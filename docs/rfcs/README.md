@@ -77,3 +77,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0029](0029-exclusion-as-written.md) | Exclusion is checked as the source wrote it, over every holder | Accepted |
 | [RFC-0030](0030-paths-and-method-calls.md) | A qualified call names a namespace; a method call is a call on its receiver | Accepted |
 | [RFC-0031](0031-script-runner.md) | `acvus`, the script runner | Accepted |
+| [RFC-0032](0032-objects-across-the-boundary.md) | An object crosses the boundary as its fields | Accepted |

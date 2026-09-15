@@ -31,6 +31,24 @@ where
     }
 }
 
+impl<T, Rt> acvus_extern::Cross<Rt> for List<T>
+where
+    T: acvus_extern::Cross<Rt> + TyVar,
+    Rt: Runtime,
+{
+    fn erase(self, rt: &Rt) -> Rt::Value {
+        let items: Vec<Rt::Value> = self.0.into_iter().map(|v| v.erase(rt)).collect();
+        // SAFETY: `List<T>` is stored as `List<Value>` (RFC-0022).
+        unsafe { rt.erase::<List<Rt::Value>>(List(items)) }
+    }
+
+    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: as in `erase`.
+        let items = unsafe { rt.materialize::<List<Rt::Value>>(value) };
+        List(items.0.into_iter().map(|v| T::materialize(rt, v)).collect())
+    }
+}
+
 impl<T> TyArg for List<T>
 where
     T: TyArg + TyVar,

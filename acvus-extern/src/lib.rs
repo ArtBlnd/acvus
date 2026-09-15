@@ -14,6 +14,7 @@ mod func;
 mod handler;
 mod identity;
 mod len;
+mod obj;
 mod reference;
 mod registry;
 mod runtime;
@@ -25,8 +26,9 @@ pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{ExternEntry, ExternHandler, MonoHandler, MonoInstance};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
+pub use obj::{Cross, Obj, erase_field, materialize_field};
 pub use reference::{Carried, Ref, RefMut};
-pub use repr::{AsIs, Crossing, HasRepr};
+pub use repr::{AsCross, AsIs, Crossing, HasRepr};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
     Manifest, Registry, SharedSignature, SignatureDecl,
