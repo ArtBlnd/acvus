@@ -7,11 +7,12 @@ Supersedes: none
 ## Ruling
 
 A shared signature is a name with one polymorphic function type and no
-body: `core::clone<T>(&T) -> T`, `core::eq<T>(&T, &T) -> Bool`. An
-instance is an ExternFn declared for one concrete `T` whose type is the
-signature's type at that `T`; whoever declares an extension type may
-declare its instances, in any registry. A type has at most one instance
-of a signature.
+body: `core::clone<T>(&T) -> T`, `core::eq<T>(&T, &T) -> Bool`. Any
+registry declares any signature it wants, under its own namespace; the
+language fixes none. An instance is an ExternFn declared for one
+concrete `T` whose type is the signature's type at that `T`; whoever
+declares an extension type may declare its instances, in any registry. A
+type has at most one instance of a signature.
 
 A script calls the signature by name; the call resolves like a
 `Monomorphize` function (RFC-0011): the instance whose type matches the
@@ -62,11 +63,10 @@ runtime never asks a value.
 ## Consequences
 
 - A registry item kind for a signature declaration: the name, its
-  polymorphic type, and its namespace. The standard registry declares
-  `core::clone`, `core::eq`, `core::ne`, `core::lt`, `core::le`,
-  `core::gt`, `core::ge`, `core::add`, `core::sub`, `core::mul`,
-  `core::div`, `core::rem`, `core::not`, `core::neg`, and instances for
-  the primitives and `String`.
+  polymorphic type, and its namespace, declarable by any registry. The
+  first two, and the only ones introduced with this ruling, are
+  `core::clone` and `core::eq`, with instances for the primitives and
+  `String` in the standard registry.
 - An ExternFn attribute naming the signature it instantiates; registration
   checks the Rust signature against the declaration at the instance's
   type and rejects a second instance for the same type.

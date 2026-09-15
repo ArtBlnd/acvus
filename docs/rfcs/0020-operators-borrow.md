@@ -55,6 +55,7 @@ hidden at the expression.
   register the expression owns) and a call to the signature's function;
   for primitive operands it emits the existing `BinOp` / `UnaryOp` on
   words, reading a `&P` operand with `Load`.
-- The standard registry provides instances of the comparison signatures
-  for every primitive and `String`, of the arithmetic signatures for
-  `Int`, `Float`, and `String` (`add` only), and of `not` for `Bool`.
+- The first operator wired to a signature is `==` (and `!=` as its
+  negation) through `core::eq` (RFC-0019). The other operators keep
+  their primitive-only typing until their signatures are introduced;
+  each introduction is one signature declared in the standard registry.
