@@ -1015,14 +1015,20 @@ impl<'a> Lowerer<'a> {
 
     /// The storage a root expression names, through the reference it holds
     /// when it holds one.
+    /// The place a root names: its storage, or, when the root is a
+    /// reference (a storage holding one, or any expression of `&T`), the
+    /// storage through that reference (RFC-0024).
     fn storage_through(&mut self, root: &Expr) -> Option<RefTarget> {
-        let target = self.storage_of(root)?;
         let ty = self.type_of_id(root.id());
-        if !matches!(ty, Ty::Ref(..)) {
-            return Some(target);
+        match (self.storage_of(root), matches!(ty, Ty::Ref(..))) {
+            (Some(target), false) => Some(target),
+            (Some(target), true) => {
+                let reference = self.emit_take(root.span(), target, vec![], ty);
+                Some(RefTarget::Through(reference))
+            }
+            (None, true) => Some(RefTarget::Through(self.lower_expr(root))),
+            (None, false) => None,
         }
-        let reference = self.emit_take(root.span(), target, vec![], ty);
-        Some(RefTarget::Through(reference))
     }
 
     /// The storage a root expression names, if it is a local, a parameter,
@@ -1641,6 +1647,7 @@ impl<'a> Lowerer<'a> {
                             path.push(*field);
                             (root, path)
                         }
+                        Expr::Paren { inner, .. } => collect_field_chain(inner),
                         other => (other, vec![]),
                     }
                 }

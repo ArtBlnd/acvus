@@ -849,7 +849,7 @@ impl CheckCtx {
                         return;
                     };
                     self.assert_match(pc, span, "Take", "dst", &at, dst_ty, errors);
-                    if !at.is_primitive() && !matches!(at, Ty::String) && !at.is_error() {
+                    if !at.is_primitive() && !matches!(at, Ty::String | Ty::Ref(..)) && !at.is_error() {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
