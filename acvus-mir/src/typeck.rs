@@ -573,18 +573,35 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_expr(arg)
     }
 
-    /// The parameter types a call's positional arguments meet, after the
-    /// piped one.
-    fn expected_arg_types(fn_ty: &InferTy, piped: bool) -> Vec<InferTy> {
-        match fn_ty {
-            TyTerm::Fn { params, .. } => params
-                .iter()
-                .skip(usize::from(piped))
-                .map(|p| p.ty.clone())
-                .collect(),
+    /// Every argument, the piped one first, checked left to right; each
+    /// meets its parameter as soon as it is checked, so a lambda later in
+    /// the list is checked at parameter types the earlier arguments have
+    /// already fixed. A mismatch is reported once, by `check_args`.
+    fn check_args_in_order(&mut self, fn_ty: &InferTy, pipe_ty: Option<&InferTy>, args: &[Expr]) -> Vec<InferTy> {
+        let params: Vec<InferTy> = match fn_ty {
+            TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
             _ => Vec::new(),
+        };
+        let mut meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy| {
+            if let Some(param) = param {
+                let _ = this.solver.unify_ty(param, arg, Polarity::Invariant, this.registry);
+            }
+        };
+        let mut arg_types = Vec::with_capacity(args.len() + 1);
+        if let Some(piped) = pipe_ty {
+            meet(self, params.first(), piped);
+            arg_types.push(piped.clone());
         }
+        let offset = usize::from(pipe_ty.is_some());
+        for (i, arg) in args.iter().enumerate() {
+            let expected = params.get(i + offset);
+            let ty = self.check_arg(arg, expected);
+            meet(self, expected, &ty);
+            arg_types.push(ty);
+        }
+        arg_types
     }
+
 
     /// A reference is never data (RFC-0018).
     fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span) {
@@ -1492,9 +1509,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
                 let ty = match op {
                     acvus_ast::UnaryOp::Deref => match &ot {
+                        TyTerm::Var(_) => {
+                            let inner = self.solver.fresh_ty_var();
+                            let reference = TyTerm::Ref(Mutability::Shared, Box::new(inner.clone()));
+                            let _ = self.solver.unify_ty(&ot, &reference, Polarity::Invariant, self.registry);
+                            inner
+                        }
                         TyTerm::Ref(_, inner) => {
                             let inner = self.solver.resolve_ty(inner);
-                            if inner.is_primitive() || matches!(inner, TyTerm::Var(_)) {
+                            if inner.is_primitive() || matches!(inner, TyTerm::Var(_) | TyTerm::Ref(..)) {
                                 inner
                             } else {
                                 let shown = self.freeze_or_error(&inner);
@@ -2066,16 +2089,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return ty;
             }
             let fn_ty = self.instantiate_at(&fn_sig, call_span);
-            let expected = Self::expected_arg_types(&fn_ty, pipe_ty.is_some());
-            let arg_types: Vec<InferTy> = pipe_ty
-                .iter()
-                .cloned()
-                .chain(
-                    args.iter()
-                        .enumerate()
-                        .map(|(i, a)| self.check_arg(a, expected.get(i))),
-                )
-                .collect();
+            let arg_types = self.check_args_in_order(&fn_ty, pipe_ty.as_ref(), args);
             let arg_spans: Vec<Span> = pipe_left
                 .iter()
                 .map(|e| e.span())
@@ -2168,16 +2182,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
 
-        let expected = Self::expected_arg_types(func_ty, pipe_ty.is_some());
-        let arg_types: Vec<InferTy> = pipe_ty
-            .iter()
-            .cloned()
-            .chain(
-                args.iter()
-                    .enumerate()
-                    .map(|(i, a)| self.check_arg(a, expected.get(i))),
-            )
-            .collect();
+        let arg_types = self.check_args_in_order(func_ty, pipe_ty.as_ref(), args);
         let arg_spans: Vec<Span> = pipe_left_span
             .iter()
             .copied()

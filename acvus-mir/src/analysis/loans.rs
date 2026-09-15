@@ -234,8 +234,13 @@ impl Loans {
     pub fn storage_effect(&self, kind: &InstKind) -> StorageEffect {
         let mut effect = StorageEffect::default();
         match kind {
-            InstKind::Ref { target, .. } | InstKind::Take { target, .. } => {
+            InstKind::Ref { target, .. } => {
                 self.touch(&mut effect, target, Mutability::Shared);
+            }
+            // A take empties the slot of a heap value: a write, whatever
+            // the type.
+            InstKind::Take { target, .. } => {
+                self.touch(&mut effect, target, Mutability::Mut);
             }
             InstKind::Assign { target, path, .. } => {
                 if !path.is_empty() {
@@ -302,7 +307,9 @@ pub fn contains_ref(ty: &Ty) -> bool {
         Ty::Object(fields) => fields.values().any(contains_ref),
         Ty::Tuple(items) => items.iter().any(contains_ref),
         Ty::Fn { captures, ret, .. } => captures.iter().any(contains_ref) || contains_ref(ret),
-        Ty::UserDefined { type_args, .. } => type_args.iter().any(contains_ref),
+        // The compiler cannot see inside an extension type: a value of one
+        // may hold any reference it was built from.
+        Ty::UserDefined { .. } => true,
         Ty::Enum { variants, .. } => variants.values().flatten().any(|t| contains_ref(t)),
         _ => false,
     }

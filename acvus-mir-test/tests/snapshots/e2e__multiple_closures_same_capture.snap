@@ -34,7 +34,7 @@ expression: ir
     ; r6 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r7 (v11) : Fn(Int) -> Int with reads {@offset}
     ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r9 (v13) : Fn(&Int) -> Bool
+    ; r9 (v13) : Fn(&Int) -> Bool with reads {@offset}
     ; r10 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r11 (collect(...)) : List<Int>
     ; r12 (len(...)) : Int

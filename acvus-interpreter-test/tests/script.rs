@@ -132,7 +132,7 @@ async fn iter_nested() {
     let c = ctx(&i, vec![("matrix", matrix), ("sum", int(0))]);
     let result = run_script_mode(
         &i,
-        "let rows = iter_array(&@matrix); while let Some(row) = next(&mut rows) { let xs = iter_array(row); while let Some(x) = next(&mut xs) { @sum = @sum + x; } } @sum",
+        "let rows = iter_array(&@matrix); while let Some(row) = next(&mut rows) { let xs = iter_array(row); while let Some(x) = next(&mut xs) { @sum = @sum + *x; } } @sum",
         c,
     )
     .await;
@@ -161,7 +161,7 @@ async fn iter_sequential_loops() {
     );
     let result = run_script_mode(
         &i,
-        "let ia = iter_array(&@a); while let Some(x) = next(&mut ia) { @sum = @sum + *x; } let ib = iter_array(&@b); while let Some(y) = next(&mut ib) { @sum = @sum + y; } @sum",
+        "let ia = iter_array(&@a); while let Some(x) = next(&mut ia) { @sum = @sum + *x; } let ib = iter_array(&@b); while let Some(y) = next(&mut ib) { @sum = @sum + *y; } @sum",
         c,
     )
     .await;

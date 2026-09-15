@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = @users | map(|u| -> u.name) | collect }}{{ x | join(\", \") }}",
+  "template": "{{ x = iter_array(&@users) | map(|u| -> clone(&u.name)) | collect }}{{ x | join(\", \") }}",
   "context": {
     "users": [
       { "name": "alice", "age": 30 },
