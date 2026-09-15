@@ -1,8 +1,8 @@
 //! The vtable a `Large` value carries in its allocation header: how to
 //! drop, clone, and print the payload behind the pointer. The interpreter's
-//! own composites are process-wide statics; an extension type erased for
-//! the first time registers a drop-only vtable through the `VtableRegistry`, which
-//! leaks it for the life of the process.
+//! own composites are process-wide statics the `VtableRegistry` starts
+//! with; an extension type erased for the first time registers a drop-only
+//! vtable there, leaked for the life of the process.
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -66,10 +66,23 @@ pub unsafe fn drop_slot<T>(p: NonNull<Header>) {
     drop(unsafe { Box::from_raw(p.cast::<Slot<T>>().as_ptr()) });
 }
 
-/// Witnesses of extension types, one per Rust type, leaked on registration.
-#[derive(Default)]
+/// The vtable of every Rust type a value may be erased from: the
+/// interpreter's composites from the start, an extension type on its first
+/// `erase`, leaked for the life of the process.
 pub struct VtableRegistry {
     by_type: Mutex<HashMap<TypeId, &'static Vtable>>,
+}
+
+impl Default for VtableRegistry {
+    fn default() -> Self {
+        let by_type = crate::value::COMPOSITE_VTABLES
+            .iter()
+            .map(|vtable| (vtable.type_id, *vtable))
+            .collect();
+        Self {
+            by_type: Mutex::new(by_type),
+        }
+    }
 }
 
 impl VtableRegistry {

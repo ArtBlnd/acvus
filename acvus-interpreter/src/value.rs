@@ -419,6 +419,10 @@ static FN: LazyLock<Vtable> =
 static HANDLE: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None, None));
 
+/// Every composite vtable, in the order of `Composite`.
+pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 7]> =
+    LazyLock::new(|| [&STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &FN, &HANDLE]);
+
 // -- Constructors -----------------------------------------------------
 
 impl Value {
@@ -544,6 +548,17 @@ mod tests {
         assert!(is_small::<()>());
         assert!(!is_small::<String>());
         assert!(!is_small::<Box<u8>>());
+    }
+
+    #[test]
+    fn erased_string_is_the_composite_string() {
+        let table = VtableRegistry::default();
+        let v = unsafe { Value::erase(&table, String::from("hi")) };
+        assert!(v.is_string());
+        assert_eq!(unsafe { v.as_str() }, "hi");
+        let copy = v.deep_clone();
+        assert!(copy.is_string());
+        assert_eq!(unsafe { copy.as_str() }, "hi");
     }
 
     #[test]
