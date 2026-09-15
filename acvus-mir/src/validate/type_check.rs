@@ -63,6 +63,15 @@ pub enum ValidationErrorKind {
         moved_at: usize,
         ty: Ty,
     },
+    /// A storage touched while a reference to it excludes that (RFC-0018).
+    BorrowConflict {
+        storage: String,
+        reference: u32,
+    },
+    /// A context taken by the run and not assigned before it ends.
+    ContextLeftTaken {
+        context: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

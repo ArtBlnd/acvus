@@ -1,3 +1,4 @@
+pub mod borrow_check;
 pub mod init_check;
 pub mod move_check;
 mod type_check;
@@ -15,6 +16,7 @@ use rustc_hash::FxHashMap;
 pub fn validate(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = type_check::check_types(module);
     errors.extend(move_check::check_moves(module));
+    errors.extend(borrow_check::check_borrows(module));
     errors
 }
 
@@ -64,6 +66,12 @@ impl ValidationError {
                 format!(
                     "use of move-only value Val({value_id}) after move (moved at inst #{moved_at}), type: {ty:?}"
                 )
+            }
+            ValidationErrorKind::BorrowConflict { storage, reference } => {
+                format!("{storage} is used while reference Val({reference}) to it is live")
+            }
+            ValidationErrorKind::ContextLeftTaken { context } => {
+                format!("{context} was taken and not assigned before the run ends")
             }
         };
 
