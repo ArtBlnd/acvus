@@ -23,6 +23,29 @@ where
     fn materialize(rt: &Rt, value: Rt::Value) -> Self;
 }
 
+/// A scalar is its own runtime value, so a container of scalars crosses
+/// as the runtime's container of values.
+macro_rules! scalar_crosses_as_itself {
+    ($($t:ty),*) => {$(
+        impl<Rt> Cross<Rt> for $t
+        where
+            Rt: Runtime,
+        {
+            fn erase(self, rt: &Rt) -> Rt::Value {
+                // SAFETY: a scalar erased as itself (RFC-0022).
+                unsafe { rt.erase::<$t>(self) }
+            }
+
+            fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+                // SAFETY: as in `erase`.
+                unsafe { rt.materialize::<$t>(value) }
+            }
+        }
+    )*};
+}
+
+scalar_crosses_as_itself!(i64, f64, bool, u8, String, ());
+
 impl<T, Rt> Cross<Rt> for Option<T>
 where
     T: Cross<Rt> + Send + Sync + 'static,

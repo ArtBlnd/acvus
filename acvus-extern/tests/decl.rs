@@ -798,7 +798,7 @@ fn the_call_type_selects_the_instance() {
         open::<String>(
             call_sync(
                 h,
-                vec![erased(Option::<String>::None), erased(String::from("x"))]
+                vec![erased(Option::<V>::None), erased(String::from("x"))]
             )
             .unwrap()
         ),

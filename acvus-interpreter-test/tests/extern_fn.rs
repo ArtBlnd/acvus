@@ -149,9 +149,10 @@ async fn regex_find_via_extern() {
         vec![registry],
     )
     .await;
-    // SAFETY: `regex_find` returns `Option<String>`, erased whole.
-    let found: Option<String> = unsafe { result.value.materialize() };
-    assert_eq!(found.as_deref(), Some("42"));
+    // SAFETY: `regex_find` returns `Option<String>`, which crosses as the
+    // language's `Option` of a String value (RFC-0032).
+    let found = unsafe { result.value.as_option() };
+    assert_eq!(found.as_ref().map(|v| unsafe { v.as_str() }), Some("42"));
 }
 
 // =======================================================================
@@ -310,7 +311,10 @@ fn compile_io_script(source: &str) -> (Interner, CompileResult) {
 }
 
 /// Script mode (`anyorder`, `while`, `let`) with io_registry.
-fn compile_io_script_mode(source: &str, context: Vec<(&str, TypedValue)>) -> (Interner, CompileResult) {
+fn compile_io_script_mode(
+    source: &str,
+    context: Vec<(&str, TypedValue)>,
+) -> (Interner, CompileResult) {
     let i = Interner::new();
     let ast = acvus_mir::graph::ParsedAst::Script(
         acvus_ast::parse_script_mode(&i, source).expect("parse"),
@@ -339,7 +343,11 @@ async fn run_io_script_mode(source: &str, context: Vec<(&str, TypedValue)>) -> V
     run_io_script_mode_on(&i, source, context).await
 }
 
-async fn run_io_script_mode_on(i: &Interner, source: &str, context: Vec<(&str, TypedValue)>) -> Value {
+async fn run_io_script_mode_on(
+    i: &Interner,
+    source: &str,
+    context: Vec<(&str, TypedValue)>,
+) -> Value {
     let i = i.clone();
     let ast = acvus_mir::graph::ParsedAst::Script(
         acvus_ast::parse_script_mode(&i, source).expect("parse"),
@@ -618,9 +626,13 @@ async fn the_return_value_of_a_lending_call_is_free() {
 #[tokio::test]
 async fn commutative_draws_add_up() {
     let i = Interner::new();
-    let result =
-        run_script_with_externs(&i, "draw_a() + draw_b()", ctx(&i, vec![]), vec![io_registry()])
-            .await;
+    let result = run_script_with_externs(
+        &i,
+        "draw_a() + draw_b()",
+        ctx(&i, vec![]),
+        vec![io_registry()],
+    )
+    .await;
     assert_eq!(result.value.as_int(), 12);
 }
 

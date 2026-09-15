@@ -48,11 +48,16 @@ value with the runtime's own shape crosses for free.
   runtime error at the crossing until the boundary can lend a converted
   view.
 
+A scalar — `Int`, `Float`, `Bool`, `Byte`, `String`, `Unit` — converts as
+itself, so a container of scalars declared in Rust (`List<u8>`,
+`Option<String>`) crosses as the runtime's container of values, which is
+what a script's `List<Byte>` or `Option<String>` is.
+
 ## Consequences
 
-- `acvus-extern`: `Obj<V>`, the `Cross<Rt>` trait with impls for
-  `Option<T>` and `Arr<T, N>`, `Crossing<T, Rt>` with the conversion tier
-  between `Repr` and as-is, `Runtime::symbol`.
+- `acvus-extern`: `Obj<V>`, the `Cross<Rt>` trait with impls for the
+  scalars, `Option<T>`, and `Arr<T, N>`, `Crossing<T, Rt>` with the
+  conversion tier between `Repr` and as-is, `Runtime::symbol`.
 - `#[derive(TyArg)]` also derives `Cross<Rt>`; the macro's glue names the
   runtime in every `Crossing`.
 - `acvus-ext`: `List<T>` converts when `T` does.

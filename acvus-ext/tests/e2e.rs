@@ -70,13 +70,14 @@ async fn run_ext(
     );
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
 
-    if result.has_errors() {
-        let errs: Vec<String> = result
-            .errors
-            .iter()
-            .flat_map(|e| e.errors.iter())
-            .map(|e| format!("{}", e.display(interner)))
-            .collect();
+    let errs: Vec<String> = inf
+        .errors()
+        .into_iter()
+        .flat_map(|(_, errs)| errs.iter())
+        .chain(result.errors.iter().flat_map(|e| e.errors.iter()))
+        .map(|e| format!("{}", e.display(interner)))
+        .collect();
+    if !errs.is_empty() {
         panic!("compile failed: {}", errs.join("; "));
     }
 
@@ -493,4 +494,33 @@ async fn a_container_of_objects_converts_each_element() {
     )
     .await;
     assert_eq!(v.as_int(), 1);
+}
+
+#[tokio::test]
+async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
+    let i = Interner::new();
+    let v = run_ext(
+        &i,
+        "s = \"ab\"; b = to_bytes(s); first = b.get(0); b.len() * 1000 + to_int(first)",
+        TypedContext::default(),
+        vec![],
+    )
+    .await;
+    assert_eq!(v.as_int(), 2097);
+    let v = run_ext(
+        &i,
+        "s = \"héllo\"; to_utf8_lossy(to_bytes(s))",
+        TypedContext::default(),
+        vec![],
+    )
+    .await;
+    assert_str(&v, "héllo");
+    let v = run_ext(
+        &i,
+        "re = regex(\"[0-9]+\"); unwrap_or(regex_find(re, \"ab42cd\"), \"none\")",
+        TypedContext::default(),
+        vec![regex_registry()],
+    )
+    .await;
+    assert_str(&v, "42");
 }
