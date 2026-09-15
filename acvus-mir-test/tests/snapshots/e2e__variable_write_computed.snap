@@ -11,29 +11,26 @@ expression: ir
      2 |   r2 = undef
      3 |   r3 = fetch @a
      4 |   r4 = fetch @b
-     6 |   r5 = r3 + r4
-     8 |   r6 = T0 + T0
-     9 |   r7 = call #0(r5)
-    10 |   r8 = r6 + r7
-    11 |   commit @a = r3
-    12 |   commit @b = r4
-    13 |   return r8
+     5 |   r5 = r3 + r4
+     7 |   r6 = call #0(r5)
+     8 |   r7 = string_concat [T0, r6]
+     9 |   commit @a = r3
+    10 |   commit @b = r4
+    11 |   return r7
 
-    ; r0 (v17) : Int
-    ; r1 (v18) : Int
-    ; r2 (v19) : Int
+    ; r0 (v15) : Int
+    ; r1 (v16) : Int
+    ; r2 (v17) : Int
     ; r3 (@a) : Int
     ; r4 (@b) : Int
-    ; r5 (v8) : Int
-    ; r6 (v11) : String
-    ; r7 (to_string(...)) : String
-    ; r8 (v14) : String
-    ; r9 (@b) : Int
-    ; r10 (@a) : Int
-    ; r11 (@a) : Int
-    ; r12 (result) : Int
-    ; r13 (v15) : Int
-    ; r14 (@b) : Int
-    ; r15 (v10) : String
-    ; r16 (v5) : String
-    ; r17 (v16) : Int
+    ; r5 (v7) : Int
+    ; r6 (to_string(...)) : String
+    ; r7 (v12) : String
+    ; r8 (@b) : Int
+    ; r9 (v14) : Int
+    ; r10 (@b) : Int
+    ; r11 (v9) : String
+    ; r12 (@a) : Int
+    ; r13 (result) : Int
+    ; r14 (v13) : Int
+    ; r15 (@a) : Int

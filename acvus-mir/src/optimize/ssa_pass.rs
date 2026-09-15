@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::ssa::{ENTRY_BLOCK, SSABuilder, SsaVar};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Callee, Inst, InstKind, Label, ValueId};
+use crate::ir::{Callee, Inst, InstKind, Label, RefTarget, ValueId};
 use crate::ty::Ty;
 
 /// Run the SSA pass on a CfgBody.
@@ -84,19 +84,23 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
     };
     match kind {
         InstKind::Const { .. }
-        | InstKind::Ref { .. }
-        | InstKind::Take { .. }
         | InstKind::Fetch { .. }
         | InstKind::Nop
         | InstKind::Poison { .. }
         | InstKind::Undef { .. } => {}
-        InstKind::Assign { value, .. } => s(value),
-        InstKind::Commit { value, .. } => s(value),
-        InstKind::Load { src, .. } => s(src),
-        InstKind::Store { dst, value, .. } => {
-            s(dst);
+        // A place through a reference uses the reference.
+        InstKind::Ref { target, .. } | InstKind::Take { target, .. } => {
+            if let RefTarget::Through(r) = target {
+                s(r);
+            }
+        }
+        InstKind::Assign { target, value, .. } => {
+            if let RefTarget::Through(r) = target {
+                s(r);
+            }
             s(value);
         }
+        InstKind::Commit { value, .. } => s(value),
         InstKind::BinOp { left, right, .. } => {
             s(left);
             s(right);
@@ -141,6 +145,11 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
         }
         InstKind::Merge { orders, .. } => orders.iter_mut().for_each(&s),
         InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(&s),
+        InstKind::StringConcat { parts, .. } => parts.iter_mut().for_each(&s),
+        InstKind::StringEq { a, b, .. } => {
+            s(a);
+            s(b);
+        }
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
         InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(&s),
         InstKind::TupleIndex { tuple, .. } => s(tuple),
@@ -245,8 +254,6 @@ struct SsaInfo {
 }
 
 fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
-    use crate::ir::RefTarget;
-
     // A storage that is referenced, or read or written by field, stays in
     // memory; only a storage read and written whole is promoted.
     let mut non_promotable_vars: BTreeSet<ValueId> = BTreeSet::new();

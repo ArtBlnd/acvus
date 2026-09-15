@@ -3,51 +3,46 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "admin"
-  T2 = "user"
-  T3 = "guest"
+  T0 = "admin"
+  T1 = "user"
+  T2 = "guest"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @role
-     3 | L2:
-     4 |   r2 = test r1 == "admin"
-     5 |   jump_if r2 then L4 else L3
-     6 | L4:
-     9 |   r3 = T0 + T1
-    10 |   jump L0(r3)
-    11 | L3:
-    12 |   r4 = test r1 == "user"
-    13 |   jump_if r4 then L5 else L1
-    14 | L5:
-    17 |   r5 = T0 + T2
-    18 |   jump L0(r5)
-    19 | L1:
-    22 |   r6 = T0 + T3
-    23 |   jump L0(r6)
-    24 | L0(r7: String):  ; merge_of L2
-    25 |   r8 = T0 + r7
-    26 |   commit @role = r1
-    27 |   return r8
+     2 | L2:
+     3 |   r2 = test r1 == "admin"
+     4 |   jump_if r2 then L4 else L3
+     5 | L4:
+     7 |   r3 = string_concat [T0]
+     8 |   jump L0(r3)
+     9 | L3:
+    10 |   r4 = test r1 == "user"
+    11 |   jump_if r4 then L5 else L1
+    12 | L5:
+    14 |   r5 = string_concat [T1]
+    15 |   jump L0(r5)
+    16 | L1:
+    18 |   r6 = string_concat [T2]
+    19 |   jump L0(r6)
+    20 | L0(r7: String):  ; merge_of L2
+    21 |   r8 = string_concat [r7]
+    22 |   commit @role = r1
+    23 |   return r8
 
-    ; r0 (v19) : String
+    ; r0 (v15) : String
     ; r1 (@role) : String
-    ; r2 (v5) : Bool
-    ; r3 (v8) : String
-    ; r4 (v9) : Bool
-    ; r5 (v12) : String
-    ; r6 (v15) : String
-    ; r7 (v16) : String
-    ; r8 (v17) : String
-    ; r9 (v3) : String
-    ; r10 (v11) : String
-    ; r11 (v14) : String
-    ; r12 (v6) : String
-    ; r13 (v20) : String
-    ; r14 (@role) : String
-    ; r15 (@role) : String
-    ; r16 (v7) : String
-    ; r17 (v18) : String
-    ; r18 (v10) : String
-    ; r19 (v13) : String
+    ; r2 (v4) : Bool
+    ; r3 (v6) : String
+    ; r4 (v7) : Bool
+    ; r5 (v9) : String
+    ; r6 (v11) : String
+    ; r7 (v12) : String
+    ; r8 (v13) : String
+    ; r9 (@role) : String
+    ; r10 (v14) : String
+    ; r11 (@role) : String
+    ; r12 (v10) : String
+    ; r13 (v5) : String
+    ; r14 (v16) : String
+    ; r15 (v8) : String

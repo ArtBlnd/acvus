@@ -377,7 +377,10 @@ fn process_inst(
         // Take: a move-only value leaves its storage; a second take is a use
         // after move.
         InstKind::Take { dst, target, .. } => {
-            let (crate::ir::RefTarget::Var(name) | crate::ir::RefTarget::Param(name)) = target;
+            let (crate::ir::RefTarget::Var(name) | crate::ir::RefTarget::Param(name)) = target else {
+                state.set_value(*dst, Liveness::Alive);
+                return;
+            };
             if let Some(Liveness::Moved { at }) = state.get_var(*name)
                 && let Some(ty) = val_types.get(dst)
                 && is_move_only(ty) == Some(true)
@@ -413,15 +416,6 @@ fn process_inst(
         InstKind::Commit { value, .. } => {
             try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
         }
-        // Load copies a word out through a reference; Store moves a value
-        // in through one. The reference itself is a word and is never
-        // consumed.
-        InstKind::Load { dst, .. } => {
-            state.set_value(*dst, Liveness::Alive);
-        }
-        InstKind::Store { value, .. } => {
-            try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
-        }
         InstKind::BlockLabel { params, .. } => {
             for p in params {
                 state.values.insert(*p, Liveness::Alive);
@@ -455,6 +449,15 @@ fn process_inst(
         }
 
         // Constructors - elements are consumed
+        InstKind::StringEq { dst, .. } => {
+            state.set_value(*dst, Liveness::Alive);
+        }
+        InstKind::StringConcat { dst, parts } => {
+            for p in parts {
+                try_consume_value(scope, inst_idx, span, *p, val_types, state, errors);
+            }
+            state.set_value(*dst, Liveness::Alive);
+        }
         InstKind::MakeArray { dst, elements } => {
             for e in elements {
                 try_consume_value(scope, inst_idx, span, *e, val_types, state, errors);

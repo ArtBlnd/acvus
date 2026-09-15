@@ -3,32 +3,28 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "outer"
+  T0 = "outer"
+  T1 = ""
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = undef
-     3 |   r3 = fetch @name
-     7 |   r4 = T0 + T0
-     9 |   r5 = r4 + T0
-    10 |   r6 = r5 + r3
-    11 |   commit @name = r3
-    12 |   return r6
+     2 |   r2 = fetch @name
+     3 |   assign @name = r2
+     6 |   r3 = ref &@name
+     8 |   r4 = string_concat [T1, T1, r3]
+     9 |   r5 = take @name
+    10 |   commit @name = r5
+    11 |   return r4
 
-    ; r0 (v15) : String
-    ; r1 (v16) : String
-    ; r2 (v17) : String
-    ; r3 (@name) : String
-    ; r4 (v7) : String
+    ; r0 (v12) : String
+    ; r1 (v13) : &String
+    ; r2 (@name) : String
+    ; r3 (@name.) : &String
+    ; r4 (v10) : String
     ; r5 (v11) : String
-    ; r6 (v13) : String
-    ; r7 (v3) : String
-    ; r8 (v14) : String
-    ; r9 (v6) : String
-    ; r10 (@name) : String
-    ; r11 (x) : String
-    ; r12 (v4) : String
-    ; r13 (v10) : String
-    ; r14 (@name) : String
+    ; r6 (v3) : String
+    ; r7 (x) : &String
+    ; r8 (v5) : String
+    ; r9 (@name) : String
+    ; r10 (v8) : String

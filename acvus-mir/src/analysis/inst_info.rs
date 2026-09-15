@@ -7,7 +7,7 @@
 
 use smallvec::{SmallVec, smallvec};
 
-use crate::ir::{Callee, InstKind, ValueId};
+use crate::ir::{Callee, InstKind, RefTarget, ValueId};
 
 /// ValueIds defined by this instruction.
 pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
@@ -16,13 +16,14 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Ref { dst, .. }
         | InstKind::Take { dst, .. }
         | InstKind::Fetch { dst, .. }
-        | InstKind::Load { dst, .. }
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
         | InstKind::FieldGet { dst, .. }
         | InstKind::FieldSet { dst, .. }
         | InstKind::LoadFunction { dst, .. }
         | InstKind::MakeArray { dst, .. }
+        | InstKind::StringConcat { dst, .. }
+        | InstKind::StringEq { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeTuple { dst, .. }
         | InstKind::TupleIndex { dst, .. }
@@ -53,8 +54,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
 
         InstKind::BlockLabel { params, .. } => params.iter().copied().collect(),
 
-        InstKind::Store { .. }
-        | InstKind::Assign { .. }
+        InstKind::Assign { .. }
         | InstKind::Commit { .. }
         | InstKind::Drop { .. }
         | InstKind::Jump { .. }
@@ -69,8 +69,6 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
     match kind {
         // No uses
         InstKind::Const { .. }
-        | InstKind::Ref { .. }
-        | InstKind::Take { .. }
         | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }
@@ -78,10 +76,18 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         | InstKind::Poison { .. }
         | InstKind::Undef { .. } => smallvec![],
 
+        // A place through a reference uses the reference.
+        InstKind::Ref { target, .. } | InstKind::Take { target, .. } => {
+            through(target).into_iter().collect()
+        }
+        InstKind::Assign { target, value, .. } => {
+            let mut v: SmallVec<[ValueId; 4]> = SmallVec::new();
+            v.extend(through(target));
+            v.push(*value);
+            v
+        }
+
         // Single use
-        InstKind::Load { src, .. } => smallvec![*src],
-        InstKind::Store { dst, value, .. } => smallvec![*dst, *value],
-        InstKind::Assign { value, .. } => smallvec![*value],
         InstKind::Commit { value, .. } => smallvec![*value],
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
         InstKind::FieldGet { object, .. } => smallvec![*object],
@@ -109,6 +115,8 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
 
         // Composite constructors
         InstKind::MakeArray { elements, .. } => elements.iter().copied().collect(),
+        InstKind::StringConcat { parts, .. } => parts.iter().copied().collect(),
+        InstKind::StringEq { a, b, .. } => smallvec![*a, *b],
         InstKind::MakeObject { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),
         InstKind::MakeTuple { elements, .. } => elements.iter().copied().collect(),
         InstKind::TupleIndex { tuple, .. } => smallvec![*tuple],
@@ -168,6 +176,14 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             v.extend(else_args.iter().copied());
             v
         }
+    }
+}
+
+/// The reference a place is named through, if any.
+fn through(target: &RefTarget) -> Option<ValueId> {
+    match target {
+        RefTarget::Through(r) => Some(*r),
+        RefTarget::Var(_) | RefTarget::Param(_) => None,
     }
 }
 

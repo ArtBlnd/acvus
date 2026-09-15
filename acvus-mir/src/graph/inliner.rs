@@ -307,6 +307,7 @@ fn remap_target(
     match target {
         crate::ir::RefTarget::Var(slot) => crate::ir::RefTarget::Var(remap_one(*slot, remap)),
         crate::ir::RefTarget::Param(slot) => crate::ir::RefTarget::Param(remap_one(*slot, remap)),
+        crate::ir::RefTarget::Through(r) => crate::ir::RefTarget::Through(remap_one(*r, remap)),
     }
 }
 
@@ -367,14 +368,6 @@ fn remap_inst(
         },
         InstKind::Commit { context, value } => InstKind::Commit {
             context: *context,
-            value: r(*value),
-        },
-        InstKind::Load { dst, src } => InstKind::Load {
-            dst: r(*dst),
-            src: r(*src),
-        },
-        InstKind::Store { dst, value } => InstKind::Store {
-            dst: r(*dst),
             value: r(*value),
         },
 
@@ -482,6 +475,15 @@ fn remap_inst(
         InstKind::MakeArray { dst, elements } => InstKind::MakeArray {
             dst: r(*dst),
             elements: rv(elements),
+        },
+        InstKind::StringConcat { dst, parts } => InstKind::StringConcat {
+            dst: r(*dst),
+            parts: rv(parts),
+        },
+        InstKind::StringEq { dst, a, b } => InstKind::StringEq {
+            dst: r(*dst),
+            a: r(*a),
+            b: r(*b),
         },
         InstKind::MakeObject { dst, fields } => InstKind::MakeObject {
             dst: r(*dst),

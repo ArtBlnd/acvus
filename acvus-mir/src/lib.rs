@@ -36,7 +36,7 @@ pub fn build_context_ids(
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::{InstKind, MirModule};
+    use crate::ir::{InstKind, MirModule, RefTarget};
     use crate::test::{compile_script, compile_template};
     use crate::ty::{Param, Ty};
     use acvus_utils::Interner;
@@ -61,16 +61,24 @@ mod tests {
         let i = Interner::new();
         compile_template(
             &i,
-            r#"{{ x = @name }}{{ x }}{{_}}default{{/}}"#,
-            &[("name", Ty::String)],
+            r#"{{ x = @n }}{{ "v" }}{{_}}default{{/}}"#,
+            &[("n", Ty::Int)],
         )
         .unwrap();
     }
 
     #[test]
+    fn a_template_that_moves_a_context_out_is_rejected() {
+        let i = Interner::new();
+        let err = compile_template(&i, r#"{{ x = @name }}{{ x }}"#, &[("name", Ty::String)])
+            .unwrap_err();
+        assert!(err.contains("UseAfterMove"), "{err}");
+    }
+
+    #[test]
     fn integration_variable_binding() {
         let i = Interner::new();
-        compile_template(&i, r#"{{ x = @name }}{{ x }}"#, &[("name", Ty::String)]).unwrap();
+        compile_template(&i, r#"{{ x = @n }}{{ "v" }}"#, &[("n", Ty::Int)]).unwrap();
     }
 
     #[test]
@@ -145,10 +153,16 @@ mod tests {
     }
 
     #[test]
-    fn string_addition_is_rejected() {
+    fn string_addition_is_a_string_concat() {
         let i = Interner::new();
-        let err = compile_template(&i, r#"{{ "hello" + " " + "world" }}"#, &[]).unwrap_err();
-        assert!(err.contains("`+`"), "{err}");
+        let module = compile_template(&i, r#"{{ "hello" + " " + "world" }}"#, &[]).unwrap();
+        assert!(
+            module
+                .main
+                .insts
+                .iter()
+                .any(|i| matches!(&i.kind, InstKind::StringConcat { .. }))
+        );
     }
 
     #[test]
@@ -346,11 +360,15 @@ mod tests {
                 InstKind::Ref { dst, .. } => {
                     ref_dsts.insert(*dst);
                 }
-                InstKind::Load { src, .. } => {
-                    consumed.insert(*src);
+                InstKind::Take {
+                    target: RefTarget::Through(r),
+                    ..
                 }
-                InstKind::Store { dst, .. } => {
-                    consumed.insert(*dst);
+                | InstKind::Assign {
+                    target: RefTarget::Through(r),
+                    ..
+                } => {
+                    consumed.insert(*r);
                 }
                 InstKind::FieldGet { object, .. } => {
                     consumed.insert(*object);
@@ -378,11 +396,15 @@ mod tests {
                 InstKind::FieldGet { object, .. } => {
                     consumed.insert(*object);
                 }
-                InstKind::Load { src, .. } => {
-                    consumed.insert(*src);
+                InstKind::Take {
+                    target: RefTarget::Through(r),
+                    ..
                 }
-                InstKind::Store { dst, .. } => {
-                    consumed.insert(*dst);
+                | InstKind::Assign {
+                    target: RefTarget::Through(r),
+                    ..
+                } => {
+                    consumed.insert(*r);
                 }
                 _ => {}
             }

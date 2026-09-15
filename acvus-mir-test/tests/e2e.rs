@@ -166,7 +166,7 @@ fn string_concat() {
 fn mixed_text_and_expr() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
-    let ir = compile_to_ir(&i, "Hello, {{ @name }}!", &context).unwrap();
+    let ir = compile_to_ir(&i, "Hello, {{ &@name }}!", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -211,7 +211,7 @@ fn simple_match_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
     // Variable binding is body-less - defines x in current scope.
-    let ir = compile_to_ir(&i, r#"{{ x = @name }}{{ x }}"#, &context).unwrap();
+    let ir = compile_to_ir(&i, r#"{{ x = &@name }}{{ x }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -502,7 +502,7 @@ fn variable_new_ref_binding() {
     let i = Interner::new();
     // result is not in initial context - dynamically created via binding.
     let context = ctx(&i, &[("name", Ty::String)]);
-    let ir = compile_to_ir(&i, r#"{{ result = @name }}{{ result }}"#, &context).unwrap();
+    let ir = compile_to_ir(&i, r#"{{ result = &@name }}{{ result }}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -850,7 +850,7 @@ fn variable_shadowing() {
     let context = ctx(&i, &[("name", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = "outer" }}{{ x = @name }}{{ x }}{{_}}{{/}}"#,
+        r#"{{ x = "outer" }}{{ x = &@name }}{{ x }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();

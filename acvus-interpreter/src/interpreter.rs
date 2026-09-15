@@ -346,6 +346,11 @@ async fn execute_inst(
                 RefTarget::Var(slot) | RefTarget::Param(slot) => {
                     Value::reference(walk_path(frame.get(*slot), path, &ctx.shared.interner))
                 }
+                RefTarget::Through(r) => {
+                    // SAFETY: the type checker admits only a live reference here.
+                    let base = unsafe { frame.get(*r).target() };
+                    Value::reference(walk_path(base, path, &ctx.shared.interner))
+                }
             };
             frame.set(*dst, reference);
         }
@@ -353,6 +358,12 @@ async fn execute_inst(
             let val = match target {
                 RefTarget::Var(slot) | RefTarget::Param(slot) => {
                     take_at(frame.slot_mut(*slot), path, &ctx.shared.interner)
+                }
+                RefTarget::Through(r) => {
+                    // SAFETY: the type checker admits only a live reference to
+                    // a primitive at `path` here.
+                    let base = unsafe { frame.get(*r).target() };
+                    Value::Small(walk_path(base, path, &ctx.shared.interner).small())
                 }
             };
             frame.set(*dst, val);
@@ -378,19 +389,13 @@ async fn execute_inst(
                 RefTarget::Var(slot) | RefTarget::Param(slot) => {
                     store_path(frame.slot_mut(*slot), path, val, &ctx.shared.interner);
                 }
+                RefTarget::Through(r) => {
+                    let reference = Value::Small(frame.get(*r).small());
+                    // SAFETY: the type checker admits only a live `&mut` here.
+                    let base = unsafe { reference.target_mut() };
+                    *walk_path_mut(base, path, &ctx.shared.interner) = val;
+                }
             }
-        }
-        InstKind::Load { dst, src } => {
-            // SAFETY: the type checker admits only a live reference here.
-            let word = unsafe { frame.get(*src).target() }.small();
-            frame.set(*dst, Value::Small(word));
-        }
-        InstKind::Store { dst, value } => {
-            let val = frame.use_val(*value);
-            // SAFETY: the type checker admits only a live `&mut` here, with
-            // no other name of its storage in use.
-            let storage = unsafe { frame.get(*dst).target_mut() };
-            *storage = val;
         }
 
         // -- Arithmetic / Logic ---------------------------
@@ -445,6 +450,27 @@ async fn execute_inst(
         }
 
         // -- Constructors ---------------------------------
+        InstKind::StringEq { dst, a, b } => {
+            // SAFETY: the type checker admits only live `&String`s here.
+            let (a, b) = unsafe { (frame.get(*a).target().as_str(), frame.get(*b).target().as_str()) };
+            frame.set(*dst, Value::bool_(a == b));
+        }
+        InstKind::StringConcat { dst, parts } => {
+            let mut out = String::new();
+            for part in parts {
+                if let Ty::Ref(..) = type_of(val_types, *part) {
+                    // SAFETY: the type checker admits only a live `&String` here.
+                    let target = unsafe { frame.get(*part).target() };
+                    // SAFETY: the type checker admits only a string here.
+                    out.push_str(unsafe { target.as_str() });
+                } else {
+                    let s = frame.use_val(*part);
+                    // SAFETY: the type checker admits only a string here.
+                    out.push_str(unsafe { s.as_str() });
+                }
+            }
+            frame.set(*dst, Value::string(out));
+        }
         InstKind::MakeArray { dst, elements } => {
             let items: Vec<Value> = elements.iter().map(|e| frame.use_val(*e)).collect();
             frame.set(*dst, Value::array(items));

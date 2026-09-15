@@ -49,6 +49,13 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    /// Store through a `&mut`: `*r = 0;`.
+    DerefStore {
+        id: AstId,
+        target: Box<Expr>,
+        expr: Expr,
+        span: Span,
+    },
     Expr(Expr),
     /// Match-bind (if-let): `pattern = source { body };`
     MatchBind {
@@ -606,6 +613,10 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
                 walk_expr(expr, refs);
             }
             Stmt::VarFieldStore { expr, .. } => walk_expr(expr, refs),
+            Stmt::DerefStore { target, expr, .. } => {
+                walk_expr(target, refs);
+                walk_expr(expr, refs);
+            }
             Stmt::Expr(expr) => walk_expr(expr, refs),
             Stmt::MatchBind {
                 pattern,

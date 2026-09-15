@@ -3,47 +3,43 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "empty"
+  T0 = "empty"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @users
-     3 | L2:
-     5 |   r2 = r1[0]
-     7 |   r3 = true (r4) && true (r5)
-     8 |   jump_if r3 then L3 else L1
-     9 | L3:
-    10 |   r6 = r1[0]
-    11 |   assign first = r6
-    13 |   r7 = take first.name
-    14 |   r8 = T0 + r7
-    15 |   jump L0(r8)
-    16 | L1:
-    19 |   r9 = T0 + T1
-    20 |   jump L0(r9)
-    21 | L0(r10: String):  ; merge_of L2
-    22 |   r11 = T0 + r10
-    23 |   commit @users = r1
-    24 |   return r11
+     2 | L2:
+     4 |   r2 = r1[0]
+     6 |   r3 = true (r4) && true (r5)
+     7 |   jump_if r3 then L3 else L1
+     8 | L3:
+     9 |   r6 = r1[0]
+    10 |   assign first = r6
+    11 |   r7 = take first.name
+    12 |   r8 = string_concat [r7]
+    13 |   jump L0(r8)
+    14 | L1:
+    16 |   r9 = string_concat [T0]
+    17 |   jump L0(r9)
+    18 | L0(r10: String):  ; merge_of L2
+    19 |   r11 = string_concat [r10]
+    20 |   commit @users = r1
+    21 |   return r11
 
-    ; r0 (v20) : Array<{name: String}, 3>
+    ; r0 (v17) : Array<{name: String}, 3>
     ; r1 (@users) : Array<{name: String}, 3>
-    ; r2 (v6) : {name: String}
-    ; r3 (v8) : Bool
-    ; r4 (v5) : Bool
-    ; r5 (v7) : Bool
+    ; r2 (v5) : {name: String}
+    ; r3 (v7) : Bool
+    ; r4 (v4) : Bool
+    ; r5 (v6) : Bool
     ; r6 (first) : {name: String}
     ; r7 (first.name) : String
-    ; r8 (v13) : String
-    ; r9 (v16) : String
-    ; r10 (v17) : String
-    ; r11 (v18) : String
-    ; r12 (v3) : String
-    ; r13 (v11) : String
-    ; r14 (v14) : String
-    ; r15 (@users) : Array<{name: String}, 3>
-    ; r16 (@users) : Array<{name: String}, 3>
-    ; r17 (v15) : String
-    ; r18 (v21) : Array<{name: String}, 3>
-    ; r19 (v19) : Array<{name: String}, 3>
+    ; r8 (v11) : String
+    ; r9 (v13) : String
+    ; r10 (v14) : String
+    ; r11 (v15) : String
+    ; r12 (@users) : Array<{name: String}, 3>
+    ; r13 (@users) : Array<{name: String}, 3>
+    ; r14 (v12) : String
+    ; r15 (v18) : Array<{name: String}, 3>
+    ; r16 (v16) : Array<{name: String}, 3>

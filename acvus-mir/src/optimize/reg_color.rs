@@ -425,18 +425,16 @@ fn reconstruct_debug(cfg: &CfgBody) -> crate::ir::DebugInfo {
                                     ValOrigin::Expr
                                 }
                             }
+                            // Inherit the origin of the reference gone through.
+                            RefTarget::Through(r) => {
+                                debug.get(*r).cloned().unwrap_or(ValOrigin::Expr)
+                            }
                         }
                     };
                     debug.set(*dst, origin);
                 }
                 InstKind::Fetch { dst, context } => {
                     debug.set(*dst, ValOrigin::Context(context.name));
-                }
-                InstKind::Load { dst, src, .. } => {
-                    // Inherit origin from the Ref it loads from.
-                    if let Some(origin) = debug.get(*src) {
-                        debug.set(*dst, origin.clone());
-                    }
                 }
                 InstKind::FieldGet {
                     dst, object, field, ..
@@ -486,25 +484,21 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
         InstKind::Ref { dst, target, .. } | InstKind::Take { dst, target, .. } => {
             r(dst);
             match target {
-                crate::ir::RefTarget::Var(slot) | crate::ir::RefTarget::Param(slot) => r(slot),
+                crate::ir::RefTarget::Var(slot)
+                | crate::ir::RefTarget::Param(slot)
+                | crate::ir::RefTarget::Through(slot) => r(slot),
             }
         }
         InstKind::Assign { target, value, .. } => {
             match target {
-                crate::ir::RefTarget::Var(slot) | crate::ir::RefTarget::Param(slot) => r(slot),
+                crate::ir::RefTarget::Var(slot)
+                | crate::ir::RefTarget::Param(slot)
+                | crate::ir::RefTarget::Through(slot) => r(slot),
             }
             r(value);
         }
         InstKind::Fetch { dst, .. } => r(dst),
         InstKind::Commit { value, .. } => r(value),
-        InstKind::Load { dst, src, .. } => {
-            r(dst);
-            r(src);
-        }
-        InstKind::Store { dst, value, .. } => {
-            r(dst);
-            r(value);
-        }
         InstKind::BinOp {
             dst, left, right, ..
         } => {
@@ -575,6 +569,15 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
         InstKind::MakeArray { dst, elements } => {
             r(dst);
             elements.iter_mut().for_each(&r);
+        }
+        InstKind::StringConcat { dst, parts } => {
+            r(dst);
+            parts.iter_mut().for_each(&r);
+        }
+        InstKind::StringEq { dst, a, b } => {
+            r(dst);
+            r(a);
+            r(b);
         }
         InstKind::MakeObject { dst, fields } => {
             r(dst);

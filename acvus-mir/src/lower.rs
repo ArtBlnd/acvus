@@ -462,6 +462,11 @@ impl<'a> Lowerer<'a> {
             } => {
                 self.lower_var_field_store(*name, path, expr, *span);
             }
+            Stmt::DerefStore {
+                target, expr, span, ..
+            } => {
+                self.lower_deref_store(target, expr, *span);
+            }
             Stmt::Expr(expr) => {
                 self.lower_expr(expr);
             }
@@ -947,7 +952,7 @@ impl<'a> Lowerer<'a> {
         }
         path.reverse();
         let target = self
-            .storage_of(root)
+            .storage_through(root)
             .unwrap_or_else(|| panic!("not a place: {root:?}; type checking admits only places here"));
         Place { target, path, ty }
     }
@@ -972,7 +977,7 @@ impl<'a> Lowerer<'a> {
         }
         path.reverse();
         let span = operand.span();
-        if let Some(target) = self.storage_of(root) {
+        if let Some(target) = self.storage_through(root) {
             return self.emit_ref(span, target, path, Mutability::Shared, ty);
         }
         let value = self.lower_expr(operand);
@@ -980,6 +985,18 @@ impl<'a> Lowerer<'a> {
         self.set_val_type(owned, ty.clone());
         self.emit_assign(span, RefTarget::Var(owned), vec![], value);
         self.emit_ref(span, RefTarget::Var(owned), vec![], Mutability::Shared, ty)
+    }
+
+    /// The storage a root expression names, through the reference it holds
+    /// when it holds one.
+    fn storage_through(&mut self, root: &Expr) -> Option<RefTarget> {
+        let target = self.storage_of(root)?;
+        let ty = self.type_of_id(root.id());
+        if !matches!(ty, Ty::Ref(..)) {
+            return Some(target);
+        }
+        let reference = self.emit_take(root.span(), target, vec![], ty);
+        Some(RefTarget::Through(reference))
     }
 
     /// The storage a root expression names, if it is a local, a parameter,
@@ -1316,12 +1333,11 @@ impl<'a> Lowerer<'a> {
 
     /// Lower a sequence of template nodes into a single concatenated String value.
     fn lower_nodes(&mut self, nodes: &[Node], span: Span) -> ValueId {
-        let mut acc = self.emit_empty_string(span);
-        for node in nodes {
-            let val = self.lower_node(node, span);
-            acc = self.emit_concat(span, acc, val);
-        }
-        acc
+        let parts: Vec<ValueId> = nodes.iter().map(|node| self.lower_node(node, span)).collect();
+        let dst = self.alloc_val();
+        self.set_val_type(dst, Ty::String);
+        self.emit_inst(span, InstKind::StringConcat { dst, parts });
+        dst
     }
 
     /// Lower a single template node, returning a String-typed ValueId.
@@ -1354,21 +1370,6 @@ impl<'a> Lowerer<'a> {
             InstKind::Const {
                 dst,
                 value: Literal::String(String::new()),
-            },
-        );
-        dst
-    }
-
-    fn emit_concat(&mut self, span: Span, left: ValueId, right: ValueId) -> ValueId {
-        let dst = self.alloc_val();
-        self.set_val_type(dst, Ty::String);
-        self.emit_inst(
-            span,
-            InstKind::BinOp {
-                dst,
-                op: BinOp::Add,
-                left,
-                right,
             },
         );
         dst
@@ -1413,8 +1414,19 @@ impl<'a> Lowerer<'a> {
 
     fn lower_expr_inner(&mut self, expr: &Expr) -> ValueId {
         match expr {
-            Expr::Borrow { span, .. } => {
-                panic!("a lent place is lowered by its call; none stands alone at {span:?}")
+            Expr::Borrow {
+                place,
+                mutable,
+                span,
+                ..
+            } => {
+                let mutability = if *mutable {
+                    Mutability::Mut
+                } else {
+                    Mutability::Shared
+                };
+                let place = self.place(place);
+                self.emit_ref(*span, place.target, place.path, mutability, place.ty)
             }
             Expr::Literal { id, value, span } => {
                 let dst = self.alloc_expr(*id);
@@ -1492,6 +1504,36 @@ impl<'a> Lowerer<'a> {
                 right,
                 span,
             } => {
+                let left_ty = self.type_of_id(left.id());
+                let on_string = matches!(&left_ty, Ty::String)
+                    || matches!(&left_ty, Ty::Ref(_, inner) if matches!(inner.as_ref(), Ty::String));
+                if on_string && matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Add) {
+                    let l = self.lend_operand(left);
+                    let r = self.lend_operand(right);
+                    let dst = self.alloc_expr(*id);
+                    match op {
+                        BinOp::Add => {
+                            self.emit_inst(*span, InstKind::StringConcat { dst, parts: vec![l, r] });
+                        }
+                        BinOp::Eq => {
+                            self.emit_inst(*span, InstKind::StringEq { dst, a: l, b: r });
+                        }
+                        _ => {
+                            let eq = self.alloc_val();
+                            self.set_val_type(eq, Ty::Bool);
+                            self.emit_inst(*span, InstKind::StringEq { dst: eq, a: l, b: r });
+                            self.emit_inst(
+                                *span,
+                                InstKind::UnaryOp {
+                                    dst,
+                                    op: UnaryOp::Not,
+                                    operand: eq,
+                                },
+                            );
+                        }
+                    }
+                    return dst;
+                }
                 if let Some((qref, fn_ty)) = self.resolution.operator_calls.get(id).cloned() {
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
@@ -1541,7 +1583,11 @@ impl<'a> Lowerer<'a> {
                 let o = self.lower_expr(operand);
                 let dst = self.alloc_expr(*id);
                 let kind = match op {
-                    UnaryOp::Deref => InstKind::Load { dst, src: o },
+                    UnaryOp::Deref => InstKind::Take {
+                        dst,
+                        target: RefTarget::Through(o),
+                        path: vec![],
+                    },
                     UnaryOp::Neg | UnaryOp::Not => InstKind::UnaryOp {
                         dst,
                         op: *op,
@@ -1575,7 +1621,7 @@ impl<'a> Lowerer<'a> {
                 let (root, mut path) = collect_field_chain(object);
                 path.push(*field);
 
-                if let Some(target) = self.storage_of(root) {
+                if let Some(target) = self.storage_through(root) {
                     let dst = self.emit_take(*span, target.clone(), path.clone(), field_ty);
                     self.set_origin(dst, ValOrigin::RefField(target, path));
                     dst
@@ -1942,8 +1988,21 @@ impl<'a> Lowerer<'a> {
     ) -> ValueId {
         let val = self.lower_expr(value_expr);
         let slot = self.var_slot(name);
-        self.emit_assign(span, RefTarget::Var(slot), path.to_vec(), val);
+        let var_ty = self.var_type(name);
+        let target = if matches!(var_ty, Ty::Ref(..)) {
+            let reference = self.emit_take(span, RefTarget::Var(slot), vec![], var_ty);
+            RefTarget::Through(reference)
+        } else {
+            RefTarget::Var(slot)
+        };
+        self.emit_assign(span, target, path.to_vec(), val);
         val
+    }
+
+    fn lower_deref_store(&mut self, target: &Expr, value_expr: &Expr, span: Span) {
+        let val = self.lower_expr(value_expr);
+        let reference = self.lower_expr(target);
+        self.emit_assign(span, RefTarget::Through(reference), vec![], val);
     }
 
     fn lower_func_call(
@@ -2515,6 +2574,10 @@ impl<'a> Lowerer<'a> {
                 Stmt::Bind { name, expr, .. } => {
                     self.collect_free_vars(expr, bound, free, seen);
                     bound.insert(*name);
+                }
+                Stmt::DerefStore { target, expr, .. } => {
+                    self.collect_free_vars(target, bound, free, seen);
+                    self.collect_free_vars(expr, bound, free, seen);
                 }
                 Stmt::ContextStore { expr, .. }
                 | Stmt::VarFieldStore { expr, .. }

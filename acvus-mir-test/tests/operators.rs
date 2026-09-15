@@ -17,20 +17,28 @@ fn equality_on_primitives_is_a_word_operation() {
 }
 
 #[test]
-fn equality_on_strings_calls_core_eq_with_both_operands_lent() {
+fn equality_on_strings_is_a_string_eq_with_both_operands_lent() {
     let i = Interner::new();
     let ir = compile_script_ir(&i, r#"@role == "admin""#, &string_context(&i, "role")).unwrap();
     assert!(ir.contains("ref &@role"), "{ir}");
-    assert!(ir.contains("call"), "{ir}");
+    assert!(ir.contains("string_eq"), "{ir}");
+    assert!(!ir.contains("call"), "{ir}");
     assert!(ir.contains("commit @role"), "{ir}");
 }
 
 #[test]
-fn inequality_on_strings_is_the_negated_call() {
+fn inequality_on_strings_is_the_negated_string_eq() {
     let i = Interner::new();
     let ir = compile_script_ir(&i, r#"@role != "admin""#, &string_context(&i, "role")).unwrap();
-    assert!(ir.contains("call"), "{ir}");
+    assert!(ir.contains("string_eq"), "{ir}");
     assert!(ir.contains("!"), "{ir}");
+}
+
+#[test]
+fn a_string_has_no_instance_of_eq() {
+    let i = Interner::new();
+    let err = compile_script_ir(&i, "eq(&@role, &@role)", &string_context(&i, "role")).unwrap_err();
+    assert!(!err.is_empty(), "{err}");
 }
 
 #[test]
@@ -41,10 +49,19 @@ fn a_primitive_has_no_instance_of_eq() {
 }
 
 #[test]
-fn string_addition_is_a_type_error() {
+fn string_addition_is_a_string_concat_of_lent_operands() {
     let i = Interner::new();
-    let err = compile_script_ir(&i, r#""a" + "b""#, &FxHashMap::default()).unwrap_err();
-    assert!(err.contains("+"), "{err}");
+    let ir = compile_script_ir(&i, r#""a" + "b""#, &FxHashMap::default()).unwrap();
+    assert!(ir.contains("string_concat"), "{ir}");
+    assert!(!ir.contains("call"), "{ir}");
+}
+
+#[test]
+fn a_template_joins_its_parts_with_a_string_concat() {
+    let i = Interner::new();
+    let ir = compile_to_ir(&i, "Hello, {{ &@role }}!", &string_context(&i, "role")).unwrap();
+    assert!(ir.contains("string_concat"), "{ir}");
+    assert!(ir.contains("ref &@role"), "{ir}");
 }
 
 #[test]

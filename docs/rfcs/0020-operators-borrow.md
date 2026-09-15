@@ -1,4 +1,4 @@
-# RFC-0020: Operators on primitives are the type's operation; on everything else, a shared signature
+# RFC-0020: Operators on language-owned types are instructions; on extension types, a shared signature
 
 Status: Accepted
 Date: 2026-09-15
@@ -8,17 +8,20 @@ Supersedes: none
 
 The compiler holds one operator table. Each operator has two entries:
 
-- **Primitive operands** (`Int`, `Float`, `Bool`, `Byte`, `Unit`): the
-  operator is an IR `BinOp`/`UnaryOp` on words, defined by this RFC and
-  implemented once per host. No shared signature, no instance, no call.
-- **Any other operand type**: the operator is a call of a shared signature
+- **Language-owned operands** — the word primitives (`Int`, `Float`,
+  `Bool`, `Byte`, `Unit`) and `String`: the operator is an IR instruction
+  defined by this RFC and implemented once per host. On words it is
+  `BinOp`/`UnaryOp`; on `String` it is a named string instruction
+  (`StringEq`, `StringConcat`), never an overloaded `BinOp`. No shared
+  signature, no instance, no call.
+- **Extension-type operands**: the operator is a call of a shared signature
   (RFC-0019) with a fixed name, and the operands are borrowed for the
   expression. Today only `==` and `!=` have a signature, `core::eq<T>(&T,
   &T) -> Bool`; `!=` is the negation of `eq`. An operator with no
   signature entry, or a signature with no instance for the operand type,
   is a type error at the expression.
 
-The meaning on primitives:
+The meaning on words:
 
 - `==` / `!=` is identity of the representation: the two words are equal.
   On `Float` this is bit equality: `NaN == NaN`, `0.0 != -0.0`.
@@ -30,16 +33,19 @@ The meaning on primitives:
   value, not an error.
 - `/`, `%` on `Int` are a runtime error at zero.
 
-Every other meaning is a named function in a registry, called by name:
-`ieee_eq`, `ieee_lt`, `wrapping_add`, `saturating_add`, `concat`. A
-primitive has no instance of any shared signature; `eq(&1, &2)` by name
-is a type error, `1 == 2` is the operator.
+The meaning on `String`: `==` is byte equality (`StringEq`), `+` is
+concatenation (`StringConcat`), and a template's output is one
+`StringConcat` of its parts. Both take their operands by reference: a
+place is lent, a `&String` passes as it is, a temporary is owned by the
+expression; a `&String` part of a template is read through.
 
-Borrowing the operands: an operand that is a place is lent; an operand
-that is already a reference is passed as it is; any other operand is a
-temporary the expression owns and lends. This is the operator's rule and
-reaches no function call: `f(x)` with `f: Fn(&T)` stays a type error
-(RFC-0018).
+Every other meaning is a named function in a registry, called by name:
+`ieee_eq`, `ieee_lt`, `wrapping_add`, `saturating_add`. A language-owned
+type has no instance of any shared signature; `eq(&1, &2)` and `eq(&s,
+&t)` by name are type errors, `1 == 2` and `s == t` are the operators.
+
+Borrowing the operands is the operator's rule and reaches no function
+call: `f(x)` with `f: Fn(&T)` stays a type error (RFC-0018).
 
 ## Rationale
 
@@ -52,41 +58,49 @@ prior state, where the interpreter compared `Float` by IEEE and wrapped
 `Int` on overflow while the language said nothing, was two unnamed
 definitions hiding behind one symbol.
 
-Defining primitive operators in the compiler rather than as `core::add`
-instances that a host inlines keeps one definition per operation. A Rust
-body that is the specification plus a fast path that reimplements it is
-two definitions of one thing, and the fast path wins silently when they
-drift.
+Defining the language's own operators in the compiler rather than as
+`core::add` instances that a host inlines keeps one definition per
+operation. A Rust body that is the specification plus a fast path that
+reimplements it is two definitions of one thing, and the fast path wins
+silently when they drift.
 
-For a non-primitive, comparing is a function of two references, as
+`String` is language-owned because its literals are: a type the compiler
+constructs is the compiler's, and a language that hands half of its
+string to a library keeps the other half anyway. Its operators are named
+instructions rather than a `BinOp` that dispatches on the operand type,
+so the IR says what it does and the interpreter has one arm per meaning.
+
+For an extension type, comparing is a function of two references, as
 `PartialEq::eq(&self, &other)` is, and once it is a function it is a
-shared signature: `String` compares by its own instance, `Regex` by its
-own. Borrowing the operands is what a reader expects of `a == b`, and
-making it the operator's rule rather than a coercion keeps calls exact.
+shared signature: `Regex` compares by its own instance. Borrowing the
+operands is what a reader expects of `a == b`, and making it the
+operator's rule rather than a coercion keeps calls exact.
 
 ## Not built
 
-- No instance of a shared signature for a primitive.
-- No signature for ordering or arithmetic yet. `a + b` on `String` is a
-  type error; `concat(&a, &b)` is the function. When a composite type
-  needs an operator, one signature (`core::cmp`, `core::add`) is
-  declared and the primitive entry of the table does not change.
+- No instance of a shared signature for a language-owned type.
+- No signature for ordering or arithmetic yet. When an extension type
+  needs one, a signature (`core::cmp`, `core::add`) is declared and the
+  language-owned entries of the table do not change.
+- No string view type. `&String` is the borrow; a sub-string is a new
+  `String`. A fat-pointer view would change the host's value layout and
+  is held until a need for it exists.
 - No user-declared operators. The names are fixed; a type joins one by
   declaring an instance.
 - No coercion of a `&P` operand: `*r == 1`, not `r == 1`.
 
 ## Consequences
 
-- The type checker, at `==`/`!=`, unifies the operand types; a primitive
-  result types as `BinOp`, anything else resolves `core::eq`,
-  instantiates it at the operand type, and records the call on the
-  expression (`TypeResolution::operator_calls`).
-- Lowering emits `BinOp` for a primitive operand pair, and for a recorded
-  call a `Ref` of each operand (a temporary first assigned to a register
-  the expression owns) and the call; `!=` adds `UnaryOp::Not`.
-- `core::eq` and `core::clone` are declared in `acvus_extern::core`, with
-  the `String` instances; `Externs::combine` always includes that
-  registry.
+- The type checker, at `==`/`!=`/`+`, unifies the operand types; a word
+  result types as `BinOp`, `String` as a string instruction, anything
+  else resolves `core::eq`, instantiates it at the operand type, and
+  records the call on the expression (`TypeResolution::operator_calls`).
+- Lowering emits `BinOp` for a word pair; for `String` and for a recorded
+  call, a `Ref` of each operand (a temporary first assigned to a register
+  the expression owns) and the instruction or call; `!=` adds
+  `UnaryOp::Not`. A template body lowers to one `StringConcat`.
+- `core::eq` and `core::clone` are declared in `acvus_extern::core` with
+  no instances; `Externs::combine` always includes that registry.
 - The interpreter's `Int` arithmetic is checked (`IntegerOverflow`), its
-  `Float` comparisons are bit equality and `total_cmp`, and it has no
-  `String` operator arm.
+  `Float` comparisons are bit equality and `total_cmp`, and `BinOp` has
+  no `String` arm.

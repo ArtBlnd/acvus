@@ -68,9 +68,10 @@ MirModule                        Terminator
 | Category | Instructions | Notes |
 |----------|-------------|-------|
 | Constants | `Const`, `Undef`, `Poison` | Undef = SSA placeholder (valid to move, UB to read), Poison = type error marker |
-| Storage | `Ref`, `Take`, `Assign`, `Load`, `Store` | `RefTarget` is `Var(slot)`, `Param(slot)`, or `Context(qref)`; `path` names a field chain, empty = the storage itself |
+| Storage | `Ref`, `Take`, `Assign`, `Fetch`, `Commit` | `RefTarget` is `Var(slot)`, `Param(slot)`, or `Through(reference)`; `path` names a field chain, empty = the storage itself |
 | Scalar field | `FieldGet`, `FieldSet` | On a value, not a storage; `FieldSet` produces a new value |
-| Arithmetic | `BinOp`, `UnaryOp` | `UnaryOp::Deref` is lowered to `Load`, not `UnaryOp` |
+| Arithmetic | `BinOp`, `UnaryOp` | Words only; `UnaryOp::Deref` is lowered to `Take` through the reference |
+| String | `StringConcat`, `StringEq` | The language-owned string operators (RFC-0020); a template body is one `StringConcat` |
 | Functions | `LoadFunction`, `FunctionCall` | `FunctionCall { callee: Direct \| Indirect, callee_ty, args, order: Option<OrderEdge> }` |
 | Async | `Spawn`, `Eval`, `Merge` | Spawn takes the order before, Eval yields the order after; Merge joins orders |
 | Construction | `MakeArray`, `MakeObject`, `MakeTuple`, `MakeVariant`, `MakeClosure` | All pure |
@@ -87,8 +88,7 @@ The five storage instructions (RFC-0018):
 - `Assign { target, path, value }` — move `value` into a storage; the old value is dropped. An assignment to a variable.
 - `Fetch { dst, context }` — move a context's whole value out of the page into `dst` (RFC-0025).
 - `Commit { context, value }` — move `value` into the page as the context's whole value (RFC-0025).
-- `Load { dst, src }` — `*r`: read through a `&T`; `T` must be a primitive.
-- `Store { dst, value }` — write through a `&mut T`.
+- `RefTarget::Through(r)` — the storage a reference `r` names: `*r` is `Take { Through(r), [] }` (a primitive only), `r.f` is `Take { Through(r), [f] }`, `&r.f` is `Ref { Through(r), [f] }`, `*r = v` and `r.f = v` are `Assign` through `r`, which must be a `&mut`.
 
 A context is a variable of the body that names it (RFC-0025): the lowering fetches every named context into a slot at entry, commits each slot at every return, and brackets each call whose summary (RFC-0017, joined with the summaries of its function-typed arguments) touches the context with a `Commit` before and a `Fetch` after (`lower.rs`, `enter_contexts`, `emit_call`, `emit_return`). `@x`, `&@x`, and `@x = v` are then the variable rules on that slot; a context left moved out at a return is a use-after-move at the exit `Take`. The reorder pass keeps a `Fetch`/`Commit` in order against the page ops and the summary-touching calls of the same context.
 
@@ -271,7 +271,7 @@ CompilationGraph { functions, contexts }
     v
 [Phase 2: Lower]  graph/lower.rs → lower.rs
     |    Typed AST → flat MIR instructions (pre-SSA).
-    |    Variable read → Take; assignment → Assign; &place → Ref; *r → Load.
+    |    Variable read → Take; assignment → Assign; &place → Ref; *r → Take through.
     |    Context: Fetch at entry, Commit at return, Commit/Fetch around a call by summary.
     |    Effectful call → FunctionCall with an OrderEdge on the body's order slot.
     |    Pattern matching → TestXxx + JumpIf chains.
@@ -372,7 +372,7 @@ Sink pass: one instruction at a time, `Eval` and whole context `Take`/`Assign` m
 
 Dependency chains:
 1. **SSA use-def** — use must follow def. An `Order` operand is an ordinary operand, so effectful calls stay in chain order.
-2. **Context store ordering** — `Store` instructions whose `dst` is a `Ref` to the same context preserve original order.
+2. **Page-op ordering** — a `Fetch`/`Commit` of a context keeps its order against the page ops and summary-touching calls of that context (RFC-0025).
 
 Priority (topological sort with `BinaryHeap`):
 - `Spawn` → earliest.
@@ -421,7 +421,7 @@ Backward context liveness per block. A read is a whole context `Take`, any call 
 
 ### DCE (`optimize/dce.rs`)
 
-Mark-sweep. Roots: `Store`, `Assign`, `Take` (a take leaves its storage empty, so it is observable), `Eval`, and a `FunctionCall` whose effect is not (Pure and writes nothing). `Spawn` is not a root — a handle no `Eval` consumes is dead. Terminator operands are roots.
+Mark-sweep. Roots: `Fetch`, `Commit`, `Assign`, `Take` (a take leaves its storage empty, so it is observable), `Eval`, and a `FunctionCall` whose effect is not (Pure and writes nothing). `Spawn` is not a root — a handle no `Eval` consumes is dead. Terminator operands are roots.
 
 ---
 

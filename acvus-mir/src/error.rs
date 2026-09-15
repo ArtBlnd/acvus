@@ -54,6 +54,7 @@ pub enum MirErrorKind {
         op: &'static str,
         ty: Ty,
     },
+    StoreThroughSharedReference(Ty),
     UndefinedField {
         object_ty: Ty,
         field: String,
@@ -220,6 +221,9 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::UndefinedFunction(name) => {
                 write!(f, "undefined function `{name}`")
+            }
+            MirErrorKind::StoreThroughSharedReference(ty) => {
+                write!(f, "cannot store through {}: not a `&mut`", ty.display(interner))
             }
             MirErrorKind::NoOperatorInstance { op, ty } => {
                 write!(

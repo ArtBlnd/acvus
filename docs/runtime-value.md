@@ -66,9 +66,10 @@ trait ClosureFn<Rt: Runtime> {
 - **No copy on the contract.** A host copies a word and nothing else. `use_from`
   in the interpreter copies a `Small` and moves a `Large` out of its
   register; sharing in the language is the extern `clone(&x)` (RFC-0019).
-- **No equality on the contract.** A primitive compares as a word (RFC-0020);
-  anything else compares through the shared signature `core::eq` (RFC-0019),
-  and a type with no instance cannot be compared.
+- **No equality on the contract.** A word compares as a word and a `String`
+  by `StringEq` (RFC-0020); an extension type compares through the shared
+  signature `core::eq` (RFC-0019), and one with no instance cannot be
+  compared.
 - **`Send + Sync + 'static` is the contract.** `Runtime`, `Value`, `Error`,
   and `TyVar` carry it, and `materialize`/`erase` require it of `T`. Values
   cross `spawn_blocking`, sit in closure captures, and are pulled by spawned
@@ -79,7 +80,7 @@ trait ClosureFn<Rt: Runtime> {
 A registry contributes a manifest (types, shared signatures, function
 declarations) and a handler table (RFC-0021). `Externs::combine` joins every
 registry once, always starting with `acvus_extern::core` (the `clone` and
-`eq` signatures and the `String` instances): it rejects a name declared
+`eq` signatures): it rejects a name declared
 twice, collects each signature's instances into one function, lowers `T:
 HasInstance<sig>` to `OneOf`, and yields the compiler's `functions` and
 `types` and the runtime's `handlers`.
@@ -120,8 +121,8 @@ first `erase` and leaked for the life of the process. The host asserts
 
 Every storage is a register: a variable slot, a temporary, a parameter. A
 `Take` moves out of one (`use_from`), an `Assign` moves in, a `Ref` makes
-the word naming one, `Load` copies a word through a reference, `Store` moves
-a value in through a `&mut`. A context is a variable of the body that names
+the word naming one; through a reference (`RefTarget::Through`) a `Take`
+copies a word and an `Assign` moves a value in. A context is a variable of the body that names
 it (RFC-0025): `Fetch` moves its whole value out of the run's page into a
 register (a page with no value for it is a panic) and `Commit` moves one
 back; a body fetches at entry, commits at return, and commits and fetches

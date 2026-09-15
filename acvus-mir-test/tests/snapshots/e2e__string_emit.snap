@@ -3,13 +3,11 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "hello"
+  T0 = "hello"
 
 === main ===
-     2 |   r0 = T0 + T1
-     3 |   return r0
+     1 |   r0 = string_concat [T0]
+     2 |   return r0
 
-    ; r0 (v3) : String
-    ; r1 (v2) : String
-    ; r2 (v1) : String
+    ; r0 (v2) : String
+    ; r1 (v1) : String

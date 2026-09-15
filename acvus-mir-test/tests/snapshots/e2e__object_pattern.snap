@@ -10,51 +10,49 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @user
-     5 | L2:
-     7 |   r4 = test has_key(r3, "name")
-     8 |   r5 = r3.name
-    10 |   r6 = true (r7) && true (r8)
-    11 |   r9 = test has_key(r3, "age")
-    12 |   r10 = r3.age
-    14 |   r11 = r6 && true (r12)
-    15 |   jump_if r11 then L3 else L1
-    16 | L3:
-    17 |   r13 = r3.name
-    18 |   r14 = r3.age
-    20 |   r15 = T0 + r13
-    21 |   jump L0(r15, r13, r14)
-    22 | L1:
-    24 |   jump L0(T0, r1, r2)
-    25 | L0(r16: String, r17: String, r18: Int):  ; merge_of L2
-    26 |   r19 = T0 + r16
-    27 |   commit @user = r3
-    28 |   return r19
+     4 | L2:
+     6 |   r4 = test has_key(r3, "name")
+     7 |   r5 = r3.name
+     9 |   r6 = true (r7) && true (r8)
+    10 |   r9 = test has_key(r3, "age")
+    11 |   r10 = r3.age
+    13 |   r11 = r6 && true (r12)
+    14 |   jump_if r11 then L3 else L1
+    15 | L3:
+    16 |   r13 = r3.name
+    17 |   r14 = r3.age
+    18 |   r15 = string_concat [r13]
+    19 |   jump L0(r15, r13, r14)
+    20 | L1:
+    22 |   jump L0(T0, r1, r2)
+    23 | L0(r16: String, r17: String, r18: Int):  ; merge_of L2
+    24 |   r19 = string_concat [r16]
+    25 |   commit @user = r3
+    26 |   return r19
 
-    ; r0 (v25) : {age: Int, email: String, name: String}
-    ; r1 (v26) : String
-    ; r2 (v27) : Int
+    ; r0 (v23) : {age: Int, email: String, name: String}
+    ; r1 (v24) : String
+    ; r2 (v25) : Int
     ; r3 (@user) : {age: Int, email: String, name: String}
-    ; r4 (v6) : Bool
-    ; r5 (v7) : String
-    ; r6 (v9) : Bool
-    ; r7 (v5) : Bool
-    ; r8 (v8) : Bool
-    ; r9 (v10) : Bool
-    ; r10 (v11) : Int
-    ; r11 (v13) : Bool
-    ; r12 (v12) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (v6) : String
+    ; r6 (v8) : Bool
+    ; r7 (v4) : Bool
+    ; r8 (v7) : Bool
+    ; r9 (v9) : Bool
+    ; r10 (v10) : Int
+    ; r11 (v12) : Bool
+    ; r12 (v11) : Bool
     ; r13 (name) : String
     ; r14 (age) : Int
-    ; r15 (v20) : String
-    ; r16 (v22) : String
-    ; r17 (v29) : String
-    ; r18 (v30) : Int
-    ; r19 (v23) : String
-    ; r20 (v3) : String
-    ; r21 (v28) : {age: Int, email: String, name: String}
-    ; r22 (v18) : String
-    ; r23 (v21) : String
-    ; r24 (v24) : {age: Int, email: String, name: String}
-    ; r25 (@user) : {age: Int, email: String, name: String}
-    ; r26 (@user) : {age: Int, email: String, name: String}
-    ; r27 (name) : String
+    ; r15 (v18) : String
+    ; r16 (v20) : String
+    ; r17 (v27) : String
+    ; r18 (v28) : Int
+    ; r19 (v21) : String
+    ; r20 (v22) : {age: Int, email: String, name: String}
+    ; r21 (@user) : {age: Int, email: String, name: String}
+    ; r22 (name) : String
+    ; r23 (v26) : {age: Int, email: String, name: String}
+    ; r24 (@user) : {age: Int, email: String, name: String}
+    ; r25 (v19) : String

@@ -3,60 +3,56 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "empty"
+  T0 = "empty"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @items
-     5 | L2:
-     7 |   r4 = r3[1]
-     9 |   r5 = true (r6) && true (r7)
-    10 |   r8 = r3[2]
-    12 |   r9 = r5 && true (r10)
-    13 |   jump_if r9 then L3 else L1
-    14 | L3:
-    15 |   r11 = r3[1]
-    16 |   r12 = r3[2]
-    18 |   r13 = call #0(r11)
-    19 |   r14 = T0 + r13
-    20 |   jump L0(r14, r11, r12)
-    21 | L1:
-    24 |   r15 = T0 + T1
-    25 |   jump L0(r15, r1, r2)
-    26 | L0(r16: String, r17: Int, r18: Int):  ; merge_of L2
-    27 |   r19 = T0 + r16
-    28 |   commit @items = r3
-    29 |   return r19
+     4 | L2:
+     6 |   r4 = r3[1]
+     8 |   r5 = true (r6) && true (r7)
+     9 |   r8 = r3[2]
+    11 |   r9 = r5 && true (r10)
+    12 |   jump_if r9 then L3 else L1
+    13 | L3:
+    14 |   r11 = r3[1]
+    15 |   r12 = r3[2]
+    16 |   r13 = call #0(r11)
+    17 |   r14 = string_concat [r13]
+    18 |   jump L0(r14, r11, r12)
+    19 | L1:
+    21 |   r15 = string_concat [T0]
+    22 |   jump L0(r15, r1, r2)
+    23 | L0(r16: String, r17: Int, r18: Int):  ; merge_of L2
+    24 |   r19 = string_concat [r16]
+    25 |   commit @items = r3
+    26 |   return r19
 
-    ; r0 (v26) : Array<Int, 3>
-    ; r1 (v27) : Int
-    ; r2 (v28) : Int
+    ; r0 (v23) : Array<Int, 3>
+    ; r1 (v24) : Int
+    ; r2 (v25) : Int
     ; r3 (@items) : Array<Int, 3>
-    ; r4 (v6) : Int
-    ; r5 (v8) : Bool
-    ; r6 (v5) : Bool
-    ; r7 (v7) : Bool
-    ; r8 (v9) : Int
-    ; r9 (v11) : Bool
-    ; r10 (v10) : Bool
+    ; r4 (v5) : Int
+    ; r5 (v7) : Bool
+    ; r6 (v4) : Bool
+    ; r7 (v6) : Bool
+    ; r8 (v8) : Int
+    ; r9 (v10) : Bool
+    ; r10 (v9) : Bool
     ; r11 (a) : Int
     ; r12 (b) : Int
     ; r13 (to_string(...)) : String
-    ; r14 (v19) : String
-    ; r15 (v22) : String
-    ; r16 (v23) : String
-    ; r17 (v30) : Int
-    ; r18 (v31) : Int
-    ; r19 (v24) : String
-    ; r20 (v3) : String
-    ; r21 (v25) : Array<Int, 3>
-    ; r22 (v20) : String
-    ; r23 (a) : Int
+    ; r14 (v17) : String
+    ; r15 (v19) : String
+    ; r16 (v20) : String
+    ; r17 (v27) : Int
+    ; r18 (v28) : Int
+    ; r19 (v21) : String
+    ; r20 (v22) : Array<Int, 3>
+    ; r21 (@items) : Array<Int, 3>
+    ; r22 (v26) : Array<Int, 3>
+    ; r23 (v18) : String
     ; r24 (@items) : Array<Int, 3>
-    ; r25 (v21) : String
-    ; r26 (@items) : Array<Int, 3>
-    ; r27 (v29) : Array<Int, 3>
-    ; r28 (v16) : String
+    ; r25 (a) : Int

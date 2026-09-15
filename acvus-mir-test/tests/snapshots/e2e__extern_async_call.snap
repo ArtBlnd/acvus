@@ -8,21 +8,18 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     4 |   r2 = call #0(1 (r3)) [r4 -> r5]
-     6 |   r6 = T0 + T0
-     7 |   r7 = r6 + r2
-     8 |   return r7 [r5]
+     3 |   r2 = call #0(1 (r3)) [r4 -> r5]
+     5 |   r6 = string_concat [T0, r2]
+     6 |   return r6 [r5]
 
-    ; r0 (v14) : Order
-    ; r1 (v15) : String
+    ; r0 (v12) : Order
+    ; r1 (v13) : String
     ; r2 (fetch_user(...)) : String
-    ; r3 (v4) : Int
+    ; r3 (v3) : Int
     ; r4 (v1) : Order
-    ; r5 (v7) : Order
+    ; r5 (v6) : Order
     ; r6 (v10) : String
-    ; r7 (v12) : String
+    ; r7 (v11) : Order
     ; r8 (user) : String
-    ; r9 (v3) : String
-    ; r10 (v6) : Order
-    ; r11 (v13) : Order
-    ; r12 (v9) : String
+    ; r9 (v5) : Order
+    ; r10 (v8) : String

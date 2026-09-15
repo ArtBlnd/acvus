@@ -10,47 +10,45 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @pair
-     5 | L2:
-     7 |   r4 = r3.0
-     9 |   r5 = true (r6) && true (r7)
-    10 |   r8 = r3.1
-    12 |   r9 = r5 && true (r10)
-    13 |   jump_if r9 then L3 else L1
-    14 | L3:
-    15 |   r11 = r3.0
-    16 |   r12 = r3.1
-    18 |   r13 = T0 + r11
-    19 |   jump L0(r13, r11, r12)
-    20 | L1:
-    22 |   jump L0(T0, r1, r2)
-    23 | L0(r14: String, r15: String, r16: Int):  ; merge_of L2
-    24 |   r17 = T0 + r14
-    25 |   commit @pair = r3
-    26 |   return r17
+     4 | L2:
+     6 |   r4 = r3.0
+     8 |   r5 = true (r6) && true (r7)
+     9 |   r8 = r3.1
+    11 |   r9 = r5 && true (r10)
+    12 |   jump_if r9 then L3 else L1
+    13 | L3:
+    14 |   r11 = r3.0
+    15 |   r12 = r3.1
+    16 |   r13 = string_concat [r11]
+    17 |   jump L0(r13, r11, r12)
+    18 | L1:
+    20 |   jump L0(T0, r1, r2)
+    21 | L0(r14: String, r15: String, r16: Int):  ; merge_of L2
+    22 |   r17 = string_concat [r14]
+    23 |   commit @pair = r3
+    24 |   return r17
 
-    ; r0 (v23) : (String, Int)
-    ; r1 (v24) : String
-    ; r2 (v25) : Int
+    ; r0 (v21) : (String, Int)
+    ; r1 (v22) : String
+    ; r2 (v23) : Int
     ; r3 (@pair) : (String, Int)
-    ; r4 (v6) : String
-    ; r5 (v8) : Bool
-    ; r6 (v5) : Bool
-    ; r7 (v7) : Bool
-    ; r8 (v9) : Int
-    ; r9 (v11) : Bool
-    ; r10 (v10) : Bool
+    ; r4 (v5) : String
+    ; r5 (v7) : Bool
+    ; r6 (v4) : Bool
+    ; r7 (v6) : Bool
+    ; r8 (v8) : Int
+    ; r9 (v10) : Bool
+    ; r10 (v9) : Bool
     ; r11 (name) : String
     ; r12 (age) : Int
-    ; r13 (v18) : String
-    ; r14 (v20) : String
-    ; r15 (v27) : String
-    ; r16 (v28) : Int
-    ; r17 (v21) : String
-    ; r18 (v22) : (String, Int)
-    ; r19 (v3) : String
-    ; r20 (name) : String
-    ; r21 (v26) : (String, Int)
+    ; r13 (v16) : String
+    ; r14 (v18) : String
+    ; r15 (v25) : String
+    ; r16 (v26) : Int
+    ; r17 (v19) : String
+    ; r18 (@pair) : (String, Int)
+    ; r19 (v17) : String
+    ; r20 (v20) : (String, Int)
+    ; r21 (v24) : (String, Int)
     ; r22 (@pair) : (String, Int)
-    ; r23 (@pair) : (String, Int)
-    ; r24 (v16) : String
-    ; r25 (v19) : String
+    ; r23 (name) : String

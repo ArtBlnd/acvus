@@ -7,22 +7,19 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     3 |   r1 = call #0(1 (r2)) [r3 -> r4]
-     4 |   assign u = r1
-     6 |   r5 = T0 + T0
-     7 |   r6 = take u.name
-     8 |   r7 = r5 + r6
-     9 |   return r7 [r4]
+     2 |   r1 = call #0(1 (r2)) [r3 -> r4]
+     3 |   assign u = r1
+     5 |   r5 = take u.name
+     6 |   r6 = string_concat [T0, r5]
+     7 |   return r6 [r4]
 
-    ; r0 (v14) : Order
+    ; r0 (v12) : Order
     ; r1 (get_user(...)) : {age: Int, name: String}
-    ; r2 (v4) : Int
+    ; r2 (v3) : Int
     ; r3 (v1) : Order
-    ; r4 (v7) : Order
-    ; r5 (v10) : String
-    ; r6 (u.name) : String
-    ; r7 (v12) : String
-    ; r8 (v3) : String
-    ; r9 (v6) : Order
-    ; r10 (v13) : Order
-    ; r11 (v9) : String
+    ; r4 (v6) : Order
+    ; r5 (u.name) : String
+    ; r6 (v10) : String
+    ; r7 (v11) : Order
+    ; r8 (v5) : Order
+    ; r9 (v8) : String

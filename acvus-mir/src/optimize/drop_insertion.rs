@@ -269,12 +269,14 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::Eval { src, .. } => *src == val,
         // Unwrap moves the payload out of the variant.
         InstKind::UnwrapVariant { src, .. } => *src == val,
-        // Store consumes the value (not the dst Ref).
-        InstKind::Store { value, .. } => *value == val,
+        // Assign and Commit consume the value; the reference an Assign
+        // goes through is only read.
         InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => *value == val,
         // Cast consumes src (transforms it).
         // Container constructors consume their elements.
         InstKind::MakeArray { elements, .. } => elements.contains(&val),
+        InstKind::StringConcat { parts, .. } => parts.contains(&val),
+        InstKind::StringEq { .. } => false,
         InstKind::MakeTuple { elements, .. } => elements.contains(&val),
         InstKind::MakeObject { fields, .. } => fields.iter().any(|(_, v)| *v == val),
         InstKind::MakeVariant { payload, .. } => payload.as_ref() == Some(&val),
@@ -289,7 +291,6 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::FieldGet { .. }
         | InstKind::BinOp { .. }
         | InstKind::UnaryOp { .. }
-        | InstKind::Load { .. }
         | InstKind::TestLiteral { .. }
         | InstKind::TestVariant { .. }
         | InstKind::TestObjectKey { .. }
@@ -299,7 +300,8 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::TupleIndex { .. }
         | InstKind::Merge { .. } => false,
 
-        // These don't use values at all.
+        // These don't consume a value; Ref and Take only read the
+        // reference a place goes through.
         InstKind::Const { .. }
         | InstKind::Ref { .. }
         | InstKind::Take { .. }

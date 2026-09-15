@@ -12,10 +12,10 @@
 //!   changes a value's type in place.
 //! - Generic variance is invariant: inner types must match recursively.
 
-use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
-use acvus_utils::LocalIdOps;
+use acvus_utils::{Astr, LocalIdOps};
 use rustc_hash::FxHashMap;
 
 // ---------------------------------------------------------------------------
@@ -126,6 +126,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         // Containers (invariant inner)
         (Ty::Array(a, la), Ty::Array(b, lb)) => la == lb && types_match(a, b),
         (Ty::Option(a), Ty::Option(b)) => types_match(a, b),
+        (Ty::Ref(ma, a), Ty::Ref(mb, b)) => ma == mb && types_match(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_match(x, y))
         }
@@ -320,6 +321,52 @@ impl CheckCtx {
         }
     }
 
+    fn through(
+        &self,
+        pc: usize,
+        span: Span,
+        inst_name: &str,
+        r: ValueId,
+        path: &[Astr],
+        vt: &FxHashMap<ValueId, Ty>,
+        errors: &mut Vec<ValidationError>,
+    ) -> Option<(Mutability, Ty)> {
+        let r_ty = self.ty_of(r, vt, span, pc, errors)?;
+        let Ty::Ref(m, inner) = r_ty else {
+            if !r_ty.is_error() {
+                errors.push(ValidationError {
+                    scope: self.scope_name.clone(),
+                    inst_index: pc,
+                    span,
+                    kind: ValidationErrorKind::InvalidConstructor {
+                        inst_name: inst_name.to_string(),
+                        expected_constructor: "Ref".to_string(),
+                        actual: r_ty.clone(),
+                    },
+                });
+            }
+            return None;
+        };
+        let mut at: &Ty = inner;
+        for field in path {
+            let Ty::Object(fields) = at else {
+                errors.push(ValidationError {
+                    scope: self.scope_name.clone(),
+                    inst_index: pc,
+                    span,
+                    kind: ValidationErrorKind::InvalidConstructor {
+                        inst_name: inst_name.to_string(),
+                        expected_constructor: "Object".to_string(),
+                        actual: at.clone(),
+                    },
+                });
+                return None;
+            };
+            at = fields.get(field)?;
+        }
+        Some((*m, at.clone()))
+    }
+
     fn assert_match(
         &self,
         pc: usize,
@@ -400,6 +447,52 @@ impl CheckCtx {
             }
 
             // === Constructors ===
+            InstKind::StringEq { dst, a, b } => {
+                let dst_ty = ty!(*dst);
+                self.assert_match(pc, span, "StringEq", "dst", &Ty::Bool, dst_ty, errors);
+                for operand in [a, b] {
+                    let operand_ty = ty!(*operand);
+                    let is_string_ref = matches!(operand_ty, Ty::Ref(_, inner) if matches!(inner.as_ref(), Ty::String))
+                        || operand_ty.is_error();
+                    if !is_string_ref {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::InvalidConstructor {
+                                inst_name: "StringEq".to_string(),
+                                expected_constructor: "&String".to_string(),
+                                actual: operand_ty.clone(),
+                            },
+                        });
+                    }
+                }
+            }
+            InstKind::StringConcat { dst, parts } => {
+                let dst_ty = ty!(*dst);
+                self.assert_match(pc, span, "StringConcat", "dst", &Ty::String, dst_ty, errors);
+                for part in parts {
+                    let part_ty = ty!(*part);
+                    let is_string = match part_ty {
+                        Ty::String => true,
+                        Ty::Ref(_, inner) => matches!(inner.as_ref(), Ty::String),
+                        Ty::Error(_) => true,
+                        _ => false,
+                    };
+                    if !is_string {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::InvalidConstructor {
+                                inst_name: "StringConcat".to_string(),
+                                expected_constructor: "String or &String".to_string(),
+                                actual: part_ty.clone(),
+                            },
+                        });
+                    }
+                }
+            }
             InstKind::MakeArray { dst, elements } => {
                 let dst_ty = ty!(*dst);
                 if let Ty::Array(inner, len) = dst_ty {
@@ -717,11 +810,52 @@ impl CheckCtx {
             }
 
             // === Projection ===
-            InstKind::Take { dst, .. } => {
-                let _ = self.ty_of(*dst, vt, span, pc, errors);
+            InstKind::Take { dst, target, path } => {
+                let dst_ty = ty!(*dst);
+                if let RefTarget::Through(r) = target {
+                    let Some((_, at)) = self.through(pc, span, "Take", *r, path, vt, errors) else {
+                        return;
+                    };
+                    self.assert_match(pc, span, "Take", "dst", &at, dst_ty, errors);
+                    if !at.is_primitive() && !at.is_error() {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::InvalidConstructor {
+                                inst_name: "Take".to_string(),
+                                expected_constructor: "a primitive through a reference".to_string(),
+                                actual: at.clone(),
+                            },
+                        });
+                    }
+                }
             }
-            InstKind::Assign { value, .. } => {
-                let _ = self.ty_of(*value, vt, span, pc, errors);
+            InstKind::Assign {
+                value,
+                target,
+                path,
+            } => {
+                let val_ty = ty!(*value);
+                if let RefTarget::Through(r) = target {
+                    let Some((m, at)) = self.through(pc, span, "Assign", *r, path, vt, errors) else {
+                        return;
+                    };
+                    if m != Mutability::Mut {
+                        let r_ty = ty!(*r).clone();
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::InvalidConstructor {
+                                inst_name: "Assign".to_string(),
+                                expected_constructor: "Ref(Mut)".to_string(),
+                                actual: r_ty,
+                            },
+                        });
+                    }
+                    self.assert_match(pc, span, "Assign", "value", &at, val_ty, errors);
+                }
             }
             InstKind::Fetch { dst, .. } => {
                 let _ = self.ty_of(*dst, vt, span, pc, errors);
@@ -730,9 +864,33 @@ impl CheckCtx {
                 let _ = self.ty_of(*value, vt, span, pc, errors);
             }
             InstKind::Ref {
-                dst, mutability, ..
+                dst,
+                mutability,
+                target,
+                path,
             } => {
                 let dst_ty = ty!(*dst);
+                if let RefTarget::Through(r) = target {
+                    let Some((m, at)) = self.through(pc, span, "Ref", *r, path, vt, errors) else {
+                        return;
+                    };
+                    if *mutability == Mutability::Mut && m != Mutability::Mut {
+                        let r_ty = ty!(*r).clone();
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::InvalidConstructor {
+                                inst_name: "Ref".to_string(),
+                                expected_constructor: "Ref(Mut) to reborrow mutably".to_string(),
+                                actual: r_ty,
+                            },
+                        });
+                    }
+                    let expected = Ty::Ref(*mutability, Box::new(at));
+                    self.assert_match(pc, span, "Ref", "dst", &expected, dst_ty, errors);
+                    return;
+                }
                 match dst_ty {
                     Ty::Ref(m, _) if m == mutability => {}
                     Ty::Error(_) => {}
@@ -748,55 +906,6 @@ impl CheckCtx {
                     }),
                 }
             }
-            InstKind::Load { dst, src, .. } => {
-                let src_ty = ty!(*src);
-                if let Ty::Ref(_, inner) = src_ty {
-                    let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "Load", "dst", inner.as_ref(), dst_ty, errors);
-                    if !inner.is_primitive() && !inner.is_error() {
-                        errors.push(ValidationError {
-                            scope: self.scope_name.clone(),
-                            inst_index: pc,
-                            span,
-                            kind: ValidationErrorKind::InvalidConstructor {
-                                inst_name: "Load".to_string(),
-                                expected_constructor: "Ref(primitive)".to_string(),
-                                actual: src_ty.clone(),
-                            },
-                        });
-                    }
-                } else if !src_ty.is_error() {
-                    errors.push(ValidationError {
-                        scope: self.scope_name.clone(),
-                        inst_index: pc,
-                        span,
-                        kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "Load".to_string(),
-                            expected_constructor: "Ref".to_string(),
-                            actual: src_ty.clone(),
-                        },
-                    });
-                }
-            }
-            InstKind::Store { dst, value, .. } => {
-                let dst_ty = ty!(*dst);
-                if let Ty::Ref(Mutability::Mut, inner) = dst_ty {
-                    let val_ty = ty!(*value);
-                    self.assert_match(pc, span, "Store", "value", inner.as_ref(), val_ty, errors);
-                } else if !dst_ty.is_error() {
-                    errors.push(ValidationError {
-                        scope: self.scope_name.clone(),
-                        inst_index: pc,
-                        span,
-                        kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "Store".to_string(),
-                            expected_constructor: "Ref(Mut)".to_string(),
-                            actual: dst_ty.clone(),
-                        },
-                    });
-                }
-            }
-
             // === Scalar field access ===
             InstKind::FieldGet {
                 dst,

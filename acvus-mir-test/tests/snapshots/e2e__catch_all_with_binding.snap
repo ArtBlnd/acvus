@@ -3,47 +3,42 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "admin"
-  T2 = "guest"
+  T0 = "admin"
+  T1 = "guest"
+  T2 = ""
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @role
-     4 | L2:
-     5 |   r3 = test r2 == "admin"
-     6 |   jump_if r3 then L3 else L1
-     7 | L3:
-    10 |   r4 = T0 + T1
-    11 |   jump L0(r4, r1)
-    12 | L1:
-    16 |   r5 = T0 + T0
-    17 |   r6 = r5 + T2
-    18 |   jump L0(r6, T2)
-    19 | L0(r7: String, r8: String):  ; merge_of L2
-    20 |   r9 = T0 + r7
-    21 |   commit @role = r2
-    22 |   return r9
+     3 | L2:
+     4 |   r3 = test r2 == "admin"
+     5 |   jump_if r3 then L3 else L1
+     6 | L3:
+     8 |   r4 = string_concat [T0]
+     9 |   jump L0(r4, r1)
+    10 | L1:
+    13 |   r5 = string_concat [T2, T1]
+    14 |   jump L0(r5, T1)
+    15 | L0(r6: String, r7: String):  ; merge_of L2
+    16 |   r8 = string_concat [r6]
+    17 |   commit @role = r2
+    18 |   return r8
 
-    ; r0 (v19) : String
-    ; r1 (v20) : String
+    ; r0 (v15) : String
+    ; r1 (v16) : String
     ; r2 (@role) : String
-    ; r3 (v5) : Bool
-    ; r4 (v8) : String
-    ; r5 (v13) : String
-    ; r6 (v15) : String
-    ; r7 (v16) : String
-    ; r8 (v22) : String
-    ; r9 (v17) : String
-    ; r10 (v3) : String
-    ; r11 (fallback) : String
-    ; r12 (v6) : String
-    ; r13 (v9) : String
-    ; r14 (@role) : String
-    ; r15 (v7) : String
-    ; r16 (v10) : String
-    ; r17 (v18) : String
-    ; r18 (v21) : String
-    ; r19 (v12) : String
-    ; r20 (@role) : String
+    ; r3 (v4) : Bool
+    ; r4 (v6) : String
+    ; r5 (v11) : String
+    ; r6 (v12) : String
+    ; r7 (v18) : String
+    ; r8 (v13) : String
+    ; r9 (@role) : String
+    ; r10 (v14) : String
+    ; r11 (v17) : String
+    ; r12 (v9) : String
+    ; r13 (@role) : String
+    ; r14 (v7) : String
+    ; r15 (fallback) : String
+    ; r16 (v5) : String

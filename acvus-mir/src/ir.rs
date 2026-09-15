@@ -37,6 +37,8 @@ pub enum RefTarget {
     Var(ValueId),
     /// An extern parameter, identified by its param_reg ValueId.
     Param(ValueId),
+    /// The storage a reference value names (RFC-0018).
+    Through(ValueId),
 }
 
 /// Target of a function call.
@@ -61,6 +63,18 @@ pub enum InstKind {
     Const {
         dst: ValueId,
         value: Literal,
+    },
+    /// A template's output: the parts joined into one `String`. A part is a
+    /// `String`, moved in, or a `&String`, read through.
+    StringConcat {
+        dst: ValueId,
+        parts: Vec<ValueId>,
+    },
+    /// Whether the two strings `a` and `b` name hold the same bytes.
+    StringEq {
+        dst: ValueId,
+        a: ValueId,
+        b: ValueId,
     },
 
     // -- Storage (RFC-0018) -----------------------------------------
@@ -97,19 +111,6 @@ pub enum InstKind {
         context: QualifiedRef,
         value: ValueId,
     },
-    /// `*r`: read through a reference. `src` is `&T` and `T` is a
-    /// primitive; `dst` receives the word.
-    Load {
-        dst: ValueId,
-        src: ValueId,
-    },
-    /// Write through a reference. `dst` is `&mut T`; the storage's old
-    /// value is dropped and `value` moves in.
-    Store {
-        dst: ValueId,
-        value: ValueId,
-    },
-
     // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
     FieldGet {
@@ -370,6 +371,7 @@ impl DebugInfo {
                         Some(ValOrigin::ExternParam(n)) => format!("${}", interner.resolve(*n)),
                         _ => format!("$param_{}", slot.0),
                     },
+                    RefTarget::Through(r) => format!("(*r{})", r.0),
                 };
                 let fields: Vec<_> = path
                     .iter()

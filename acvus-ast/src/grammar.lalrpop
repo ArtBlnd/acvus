@@ -173,6 +173,8 @@ ScriptModeStmt: Stmt = {
             }
             Expr::ContextRef { name, .. } =>
                 Ok(Stmt::ContextStore { id: AstId::alloc(), name: *name, path, expr: rhs, span }),
+            Expr::UnaryOp { op: UnaryOp::Deref, operand, .. } if path.is_empty() =>
+                Ok(Stmt::DerefStore { id: AstId::alloc(), target: operand.clone(), expr: rhs, span }),
             _ => Err(lalrpop_util::ParseError::User {
                 error: ParseError { kind: ParseErrorKind::InvalidAssignTarget, span },
             }),
@@ -217,6 +219,8 @@ ScriptStmt: Stmt = {
             }
             Expr::ContextRef { name, .. } =>
                 Ok(Stmt::ContextStore { id: AstId::alloc(), name: *name, path, expr: rhs, span }),
+            Expr::UnaryOp { op: UnaryOp::Deref, operand, .. } if path.is_empty() =>
+                Ok(Stmt::DerefStore { id: AstId::alloc(), target: operand.clone(), expr: rhs, span }),
             _ => Err(lalrpop_util::ParseError::User {
                 error: ParseError { kind: ParseErrorKind::InvalidAssignTarget, span },
             }),

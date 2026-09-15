@@ -36,11 +36,32 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
 
 // -- Exclusion ---------------------------------------------------------
 
-/// A reference value: the storage it names and whether it may write.
-#[derive(Clone, Copy)]
+/// A reference value: the storage it names, whether it may write, and the
+/// references it reborrows through.
+#[derive(Clone)]
 struct Borrow {
     target: RefTarget,
     mutability: Mutability,
+    chain: Vec<ValueId>,
+}
+
+/// The storage a target names once every `Through` is followed to a
+/// reference defined in the body, with the references passed on the way.
+/// A `Through` of a reference not defined here stays as it is.
+fn resolve(target: &RefTarget, raw: &FxHashMap<ValueId, (RefTarget, Mutability)>) -> (RefTarget, Vec<ValueId>) {
+    let mut chain = Vec::new();
+    let mut current = target.clone();
+    while let RefTarget::Through(r) = current {
+        let Some((base, _)) = raw.get(&r) else {
+            break;
+        };
+        if chain.contains(&r) {
+            break;
+        }
+        chain.push(r);
+        current = base.clone();
+    }
+    (current, chain)
 }
 
 /// A `Take` whose result has no type entry is checked as a move: the
@@ -95,7 +116,7 @@ fn conflicts(live: &Borrow, touch: &Touch) -> bool {
 }
 
 fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>) {
-    let mut borrows: FxHashMap<ValueId, Borrow> = FxHashMap::default();
+    let mut raw: FxHashMap<ValueId, (RefTarget, Mutability)> = FxHashMap::default();
     for block in &cfg.blocks {
         for inst in &block.insts {
             if let InstKind::Ref {
@@ -105,19 +126,27 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
                 ..
             } = &inst.kind
             {
-                borrows.insert(
-                    *dst,
-                    Borrow {
-                        target: target.clone(),
-                        mutability: *mutability,
-                    },
-                );
+                raw.insert(*dst, (target.clone(), *mutability));
             }
         }
     }
-    if borrows.is_empty() {
+    if raw.is_empty() {
         return;
     }
+    let borrows: FxHashMap<ValueId, Borrow> = raw
+        .iter()
+        .map(|(dst, (target, mutability))| {
+            let (root, chain) = resolve(target, &raw);
+            (
+                *dst,
+                Borrow {
+                    target: root,
+                    mutability: *mutability,
+                    chain,
+                },
+            )
+        })
+        .collect();
     let live = liveness::analyze(cfg);
 
     for (bi, block) in cfg.blocks.iter().enumerate() {
@@ -150,9 +179,13 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
             let Some((target, touch)) = touch(&inst.kind, &cfg.val_types) else {
                 continue;
             };
+            let (root, chain) = resolve(&target, &raw);
             for reference in &live_before[ii] {
-                let borrow = borrows[reference];
-                if borrow.target == target && conflicts(&borrow, &touch) {
+                let borrow = &borrows[reference];
+                if chain.contains(reference) {
+                    continue;
+                }
+                if borrow.target == root && conflicts(borrow, &touch) {
                     errors.push(ValidationError {
                         scope: scope.to_string(),
                         inst_index: ii,
@@ -279,9 +312,10 @@ mod tests {
     }
 
     fn load(dst: usize, src: usize) -> InstKind {
-        InstKind::Load {
+        InstKind::Take {
             dst: v(dst),
-            src: v(src),
+            target: RefTarget::Through(v(src)),
+            path: vec![],
         }
     }
 
@@ -326,8 +360,9 @@ mod tests {
         let m = body(
             vec![
                 reference(2, Mutability::Mut),
-                InstKind::Store {
-                    dst: v(2),
+                InstKind::Assign {
+                    target: RefTarget::Through(v(2)),
+                    path: vec![],
                     value: v(3),
                 },
                 take(7),

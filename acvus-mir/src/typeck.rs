@@ -126,6 +126,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     operator_calls: FxHashMap<AstId, (QualifiedRef, InferTy)>,
     /// Accumulated errors.
     errors: Vec<MirError>,
+    in_borrow_place: bool,
     /// Every context the program names, at the span of its first use. A
     /// context's type must be data (RFC-0014); the check runs once the
     /// types are known.
@@ -168,6 +169,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             coercion_map: CoercionMap::default(),
             direct_calls: DirectCallMap::default(),
             operator_calls: FxHashMap::default(),
+            in_borrow_place: false,
             bound_sites: Vec::new(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
@@ -809,6 +811,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let resolved = self.solver.resolve_ty(&ty);
                 match &resolved {
                     TyTerm::String | TyTerm::Error(_) => {}
+                    TyTerm::Ref(_, inner)
+                        if matches!(self.solver.resolve_ty(inner), TyTerm::String) => {}
                     TyTerm::Var(_) => {
                         if self
                             .unify_covariant(
@@ -902,7 +906,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                     Self::infer_error()
                 });
-                let target_ty = self.resolve_field_path(&var_ty, path);
+                let base = match self.solver.resolve_ty(&var_ty) {
+                    TyTerm::Ref(Mutability::Mut, inner) => *inner,
+                    TyTerm::Ref(Mutability::Shared, _) => {
+                        let shown = self.freeze_or_error(&var_ty);
+                        self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
+                        Self::infer_error()
+                    }
+                    _ => var_ty,
+                };
+                let target_ty = self.resolve_field_path(&base, path);
                 if self
                     .solver
                     .unify_ty(&ty, &target_ty, Polarity::Invariant, self.registry)
@@ -911,6 +924,38 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&target_ty),
+                            got: self.freeze_or_error(&ty),
+                        },
+                        *span,
+                    );
+                }
+                self.record(*id, ty);
+            }
+            acvus_ast::Stmt::DerefStore {
+                id,
+                target,
+                expr,
+                span,
+            } => {
+                let ty = self.check_expr(expr);
+                let tt = self.check_expr(target);
+                let inner = match self.solver.resolve_ty(&tt) {
+                    TyTerm::Ref(Mutability::Mut, inner) => *inner,
+                    TyTerm::Error(_) => Self::infer_error(),
+                    other => {
+                        let shown = self.freeze_or_error(&other);
+                        self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
+                        Self::infer_error()
+                    }
+                };
+                if self
+                    .solver
+                    .unify_ty(&ty, &inner, Polarity::Invariant, self.registry)
+                    .is_err()
+                {
+                    self.error(
+                        MirErrorKind::UnificationFailure {
+                            expected: self.freeze_or_error(&inner),
                             got: self.freeze_or_error(&ty),
                         },
                         *span,
@@ -1119,7 +1164,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 } else {
                     Mutability::Shared
                 };
+                let outer = std::mem::replace(&mut self.in_borrow_place, true);
                 let ty = self.check_expr(place);
+                self.in_borrow_place = outer;
                 if *mutable
                     && let Some(Place {
                         root: PlaceRoot::Context(qref),
@@ -1252,8 +1299,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 right,
                 span,
             } => {
+                let operands_are_lent = matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Add);
+                let outer = std::mem::replace(&mut self.in_borrow_place, operands_are_lent);
                 let lt = self.check_expr(left);
                 let rt = self.check_expr(right);
+                self.in_borrow_place = outer;
                 let lt = self.solver.resolve_ty(&lt);
                 let rt = self.solver.resolve_ty(&rt);
 
@@ -1293,6 +1343,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let rl = self.solver.resolve_ty(&lt);
                         match &rl {
                             TyTerm::Int | TyTerm::Float | TyTerm::Var(_) => rl,
+                            TyTerm::String if *op == BinOp::Add => TyTerm::String,
                             _ => {
                                 self.binop_error(
                                     op_str(*op),
@@ -1314,7 +1365,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             return self.record_ret(*id, TyTerm::Bool);
                         }
                         let operand = self.solver.resolve_ty(&lt);
-                        if !operand.is_primitive() && !matches!(operand, TyTerm::Var(_)) {
+                        if !operand.is_primitive()
+                            && !matches!(operand, TyTerm::Var(_) | TyTerm::String)
+                        {
                             self.check_operator_call(*id, op_str(*op), &operand, &[lt, rt], *span);
                         }
                         TyTerm::Bool
@@ -1437,6 +1490,39 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ot = self.solver.resolve_ty(&ot_raw);
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
+                if let TyTerm::Ref(_, inner) = &ot {
+                    let inner = self.solver.resolve_ty(inner);
+                    let TyTerm::Object(fields) = &inner else {
+                        self.error(
+                            MirErrorKind::UndefinedField {
+                                object_ty: self.freeze_or_error(&ot),
+                                field: field_str(),
+                            },
+                            *span,
+                        );
+                        return self.record_ret(*id, Self::infer_error());
+                    };
+                    let Some(field_ty) = fields.get(&field_key).cloned() else {
+                        self.error(
+                            MirErrorKind::UndefinedField {
+                                object_ty: self.freeze_or_error(&ot),
+                                field: field_str(),
+                            },
+                            *span,
+                        );
+                        return self.record_ret(*id, Self::infer_error());
+                    };
+                    let field_resolved = self.solver.resolve_ty(&field_ty);
+                    if !self.in_borrow_place
+                        && !field_resolved.is_primitive()
+                        && !matches!(field_resolved, TyTerm::Var(_) | TyTerm::Error(_))
+                    {
+                        let shown = self.freeze_or_error(&field_resolved);
+                        self.error(MirErrorKind::DerefOfNonPrimitive(shown), *span);
+                        return self.record_ret(*id, Self::infer_error());
+                    }
+                    return self.record_ret(*id, field_ty);
+                }
                 let ty = match &ot {
                     TyTerm::Error(_) => Self::infer_error(),
                     TyTerm::Object(fields) if fields.contains_key(&field_key) => {

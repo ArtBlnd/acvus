@@ -205,7 +205,7 @@ pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
     for (target, fields) in &var_fields {
         let is_external = match target {
             RefTarget::Var(_) => false,
-            RefTarget::Param(_) => true,
+            RefTarget::Param(_) | RefTarget::Through(_) => true,
         };
         for f in fields {
             initial.set(

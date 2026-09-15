@@ -2,22 +2,18 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== literals ===
-  T0 = ""
-
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @count
-     3 |   r2 = call #0(r1)
-     4 |   r3 = T0 + r2
-     5 |   commit @count = r1
-     6 |   return r3
+     2 |   r2 = call #0(r1)
+     3 |   r3 = string_concat [r2]
+     4 |   commit @count = r1
+     5 |   return r3
 
-    ; r0 (v8) : Int
+    ; r0 (v7) : Int
     ; r1 (@count) : Int
     ; r2 (to_string(...)) : String
-    ; r3 (v6) : String
-    ; r4 (v3) : String
-    ; r5 (v7) : Int
-    ; r6 (@count) : Int
-    ; r7 (@count) : Int
+    ; r3 (v5) : String
+    ; r4 (@count) : Int
+    ; r5 (@count) : Int
+    ; r6 (v6) : Int

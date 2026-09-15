@@ -59,8 +59,8 @@ the same fact had no type: a lambda's parameter was always a value, so a
 host had to copy every lent argument into the callee's frame — a copy the
 IR never asked for — and an extern iterating a `&mut` collection could
 not hand the loop body a reference to an element. The gap was one missing
-type, not a missing mechanism — the IR already carries `Ref`, `Load`, and
-`Store`, and the checker already knows each value's last use.
+type, not a missing mechanism — the IR already carries `Ref`, and the
+checker already knows each value's last use.
 
 RFC-0015 kept references out of the type system because no two names ever
 denoted one storage, so nothing needed checking. It paid for that with a

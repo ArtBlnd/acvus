@@ -1,4 +1,4 @@
-use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
+use crate::ir::{Callee, InstKind, MirBody, MirModule, RefTarget, ValueId};
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
@@ -101,6 +101,13 @@ fn remap_val(v: &mut ValueId, remap: &FxHashMap<ValueId, ValueId>) {
     }
 }
 
+/// Remap the reference a place goes through, if any.
+fn remap_through(target: &mut RefTarget, remap: &FxHashMap<ValueId, ValueId>) {
+    if let RefTarget::Through(r) = target {
+        remap_val(r, remap);
+    }
+}
+
 fn remap_vec(vs: &mut Vec<ValueId>, remap: &FxHashMap<ValueId, ValueId>) {
     for v in vs.iter_mut() {
         remap_val(v, remap);
@@ -111,8 +118,6 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
     match kind {
         // No uses
         InstKind::Const { .. }
-        | InstKind::Ref { .. }
-        | InstKind::Take { .. }
         | InstKind::Fetch { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop
@@ -127,17 +132,15 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             }
         }
 
-        // Load: src is a use.
-        InstKind::Load { src, .. } => remap_val(src, remap),
-
-        // Store: dst is a projection use, value is a value use.
-        InstKind::Store { dst, value, .. } => {
-            remap_val(dst, remap);
+        // A place through a reference uses the reference.
+        InstKind::Ref { target, .. } | InstKind::Take { target, .. } => {
+            remap_through(target, remap)
+        }
+        InstKind::Assign { target, value, .. } => {
+            remap_through(target, remap);
             remap_val(value, remap);
         }
-        InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => {
-            remap_val(value, remap)
-        }
+        InstKind::Commit { value, .. } => remap_val(value, remap),
 
         InstKind::UnaryOp { operand, .. } => remap_val(operand, remap),
 
@@ -190,6 +193,11 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
         InstKind::MakeArray { elements, .. } | InstKind::MakeTuple { elements, .. } => {
             remap_vec(elements, remap);
+        }
+        InstKind::StringConcat { parts, .. } => remap_vec(parts, remap),
+        InstKind::StringEq { a, b, .. } => {
+            remap_val(a, remap);
+            remap_val(b, remap);
         }
 
         InstKind::MakeObject { fields, .. } => {

@@ -3,40 +3,36 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = ""
-  T1 = "none"
-  T2 = "has value"
+  T0 = "none"
+  T1 = "has value"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @opt
-     3 | L2:
-     4 |   r2 = test r1 is None
-     5 |   jump_if r2 then L3 else L1
-     6 | L3:
-     9 |   r3 = T0 + T1
-    10 |   jump L0(r3)
-    11 | L1:
-    14 |   r4 = T0 + T2
-    15 |   jump L0(r4)
-    16 | L0(r5: String):  ; merge_of L2
-    17 |   r6 = T0 + r5
-    18 |   commit @opt = r1
-    19 |   return r6
+     2 | L2:
+     3 |   r2 = test r1 is None
+     4 |   jump_if r2 then L3 else L1
+     5 | L3:
+     7 |   r3 = string_concat [T0]
+     8 |   jump L0(r3)
+     9 | L1:
+    11 |   r4 = string_concat [T1]
+    12 |   jump L0(r4)
+    13 | L0(r5: String):  ; merge_of L2
+    14 |   r6 = string_concat [r5]
+    15 |   commit @opt = r1
+    16 |   return r6
 
-    ; r0 (v15) : Option<Int>
+    ; r0 (v12) : Option<Int>
     ; r1 (@opt) : Option<Int>
-    ; r2 (v5) : Bool
-    ; r3 (v8) : String
-    ; r4 (v11) : String
-    ; r5 (v12) : String
-    ; r6 (v13) : String
-    ; r7 (v3) : String
-    ; r8 (v14) : Option<Int>
-    ; r9 (v6) : String
-    ; r10 (v9) : String
-    ; r11 (@opt) : Option<Int>
+    ; r2 (v4) : Bool
+    ; r3 (v6) : String
+    ; r4 (v8) : String
+    ; r5 (v9) : String
+    ; r6 (v10) : String
+    ; r7 (v7) : String
+    ; r8 (v11) : Option<Int>
+    ; r9 (@opt) : Option<Int>
+    ; r10 (v13) : Option<Int>
+    ; r11 (v5) : String
     ; r12 (@opt) : Option<Int>
-    ; r13 (v7) : String
-    ; r14 (v10) : String
-    ; r15 (v16) : Option<Int>

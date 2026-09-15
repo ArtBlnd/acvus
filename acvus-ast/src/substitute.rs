@@ -396,6 +396,14 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             expr: sub_expr(expr, subs),
             span,
         },
+        Stmt::DerefStore {
+            target, expr, span, ..
+        } => Stmt::DerefStore {
+            id: AstId::alloc(),
+            target: Box::new(sub_expr(*target, subs)),
+            expr: sub_expr(expr, subs),
+            span,
+        },
         Stmt::Expr(expr) => Stmt::Expr(sub_expr(expr, subs)),
         Stmt::MatchBind {
             pattern,
@@ -681,6 +689,10 @@ fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(As
         Stmt::Bind { expr, .. }
         | Stmt::ContextStore { expr, .. }
         | Stmt::VarFieldStore { expr, .. } => {
+            validate_splice_expr(expr, false, splice_names, errors);
+        }
+        Stmt::DerefStore { target, expr, .. } => {
+            validate_splice_expr(target, false, splice_names, errors);
             validate_splice_expr(expr, false, splice_names, errors);
         }
         Stmt::Expr(expr) => {

@@ -204,8 +204,10 @@ fn is_hoistable(kind: &InstKind) -> bool {
         | InstKind::MakeVariant { .. }
         | InstKind::MakeClosure { .. } => true,
 
-        // Projection path (no-op, pure).
-        InstKind::Ref { .. } => true,
+        // A place under a variable is an address (no-op, pure); one through
+        // a reference is a memory op and stays in order with the other ops
+        // through it.
+        InstKind::Ref { target, .. } => !matches!(target, RefTarget::Through(_)),
 
         // Field / element access (scalar, pure). UnwrapVariant assumes the
         // tag its test established and ArrayGet assumes an index in range,
@@ -230,7 +232,7 @@ fn is_hoistable(kind: &InstKind) -> bool {
 
 // -- Sink pass -----------------------------------------------------
 //
-// Moves Eval and Load as late as possible - just before
+// Moves Eval as late as possible - just before
 // their result is first needed. This maximizes the distance between
 // Spawn (hoisted up) and Eval (sunk down).
 //

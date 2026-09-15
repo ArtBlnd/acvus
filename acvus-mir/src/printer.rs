@@ -177,6 +177,7 @@ fn collect_texts_from_body(
 fn fmt_place(
     body: &MirBody,
     ctx: &PrintCtx<'_>,
+    vn: &mut ValNormalizer,
     target: &crate::ir::RefTarget,
     path: &[Astr],
 ) -> String {
@@ -190,6 +191,7 @@ fn fmt_place(
                 format!("${name}")
             }
         }
+        crate::ir::RefTarget::Through(r) => format!("(*{})", vn.fmt_val(*r)),
     };
     if path.is_empty() {
         base
@@ -273,13 +275,13 @@ fn write_body(
                 "{} = ref {}{}",
                 vn.fmt_val(*dst),
                 mutability.prefix(),
-                fmt_place(body, ctx, target, path)
+                fmt_place(body, ctx, &mut vn, target, path)
             )?,
             InstKind::Take { dst, target, path } => writeln!(
                 f,
                 "{} = take {}",
                 vn.fmt_val(*dst),
-                fmt_place(body, ctx, target, path)
+                fmt_place(body, ctx, &mut vn, target, path)
             )?,
             InstKind::Assign {
                 target,
@@ -288,7 +290,7 @@ fn write_body(
             } => writeln!(
                 f,
                 "assign {} = {}",
-                fmt_place(body, ctx, target, path),
+                fmt_place(body, ctx, &mut vn, target, path),
                 vn.fmt_use(*value, &consts, &texts)
             )?,
             InstKind::Fetch { dst, context } => writeln!(
@@ -301,18 +303,6 @@ fn write_body(
                 f,
                 "commit @{} = {}",
                 ctx.interner.resolve(context.name),
-                vn.fmt_use(*value, &consts, &texts)
-            )?,
-            InstKind::Load { dst, src } => writeln!(
-                f,
-                "{} = load {}",
-                vn.fmt_val(*dst),
-                vn.fmt_use(*src, &consts, &texts)
-            )?,
-            InstKind::Store { dst, value } => writeln!(
-                f,
-                "store {} = {}",
-                vn.fmt_use(*dst, &consts, &texts),
                 vn.fmt_use(*value, &consts, &texts)
             )?,
 
@@ -460,6 +450,19 @@ fn write_body(
             }
 
             // Composite constructors
+            InstKind::StringEq { dst, a, b } => writeln!(
+                f,
+                "{} = string_eq {} {}",
+                vn.fmt_val(*dst),
+                vn.fmt_use(*a, &consts, &texts),
+                vn.fmt_use(*b, &consts, &texts)
+            )?,
+            InstKind::StringConcat { dst, parts } => writeln!(
+                f,
+                "{} = string_concat [{}]",
+                vn.fmt_val(*dst),
+                vn.fmt_uses(parts, &consts, &texts)
+            )?,
             InstKind::MakeArray { dst, elements } => writeln!(
                 f,
                 "{} = list [{}]",

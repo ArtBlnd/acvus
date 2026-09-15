@@ -7,16 +7,13 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     4 |   r1 = T0 + T0
-     5 |   r2 = call #0(42 (r3))
-     6 |   r4 = r1 + r2
-     7 |   return r4
+     3 |   r1 = call #0(42 (r2))
+     4 |   r3 = string_concat [T0, r1]
+     5 |   return r3
 
-    ; r0 (v9) : Int
-    ; r1 (v5) : String
-    ; r2 (to_string(...)) : String
-    ; r3 (v2) : Int
-    ; r4 (v8) : String
+    ; r0 (v7) : Int
+    ; r1 (to_string(...)) : String
+    ; r2 (v1) : Int
+    ; r3 (v6) : String
+    ; r4 (v3) : String
     ; r5 (x) : Int
-    ; r6 (v1) : String
-    ; r7 (v4) : String

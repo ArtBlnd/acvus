@@ -2,32 +2,28 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
-=== literals ===
-  T0 = ""
-
 === main ===
      0 |   r0 = fetch @hello
      1 |   assign @hello = r0
      2 |   r1 = fetch @world
      3 |   assign @world = r1
-     5 |   r2 = ref &@hello
-     6 |   r3 = ref &@world
-     7 |   r4 = call #0(r2, r3)
-     8 |   r5 = T0 + r4
-     9 |   r6 = take @hello
-    10 |   commit @hello = r6
-    11 |   r7 = take @world
-    12 |   commit @world = r7
-    13 |   return r5
+     4 |   r2 = ref &@hello
+     5 |   r3 = ref &@world
+     6 |   r4 = call #0(r2, r3)
+     7 |   r5 = string_concat [r4]
+     8 |   r6 = take @hello
+     9 |   commit @hello = r6
+    10 |   r7 = take @world
+    11 |   commit @world = r7
+    12 |   return r5
 
     ; r0 (@hello) : String
     ; r1 (@world) : String
     ; r2 (@hello.) : &String
     ; r3 (@world.) : &String
     ; r4 (concat(...)) : String
-    ; r5 (v9) : String
-    ; r6 (v10) : String
-    ; r7 (v11) : String
+    ; r5 (v8) : String
+    ; r6 (v9) : String
+    ; r7 (v10) : String
     ; r8 (@world) : String
-    ; r9 (v5) : String
-    ; r10 (@hello) : String
+    ; r9 (@hello) : String

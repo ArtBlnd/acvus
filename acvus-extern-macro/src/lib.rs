@@ -871,7 +871,7 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
             let __ns: ::core::option::Option<&str> = ::core::option::Option::Some(#ns);
             let mut __fns: ::std::vec::Vec<::acvus_extern::FnDecl> = ::std::vec::Vec::new();
             let mut __handlers: ::acvus_extern::Handlers<_> = ::acvus_extern::FxHashMap::default();
-            for __f in [#(#fns),*] {
+            for __f in ::std::vec::Vec::<::acvus_extern::ExternFn<_>>::from([#(#fns),*]) {
                 __handlers.insert(__f.decl.qref, __f.handler);
                 __fns.push(__f.decl);
             }

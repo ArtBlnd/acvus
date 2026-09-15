@@ -66,8 +66,7 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 fn is_root(kind: &InstKind) -> bool {
     match kind {
         // A write to storage is observable; a take leaves its storage empty.
-        InstKind::Store { .. }
-        | InstKind::Assign { .. }
+        InstKind::Assign { .. }
         | InstKind::Take { .. }
         | InstKind::Fetch { .. }
         | InstKind::Commit { .. } => true,
