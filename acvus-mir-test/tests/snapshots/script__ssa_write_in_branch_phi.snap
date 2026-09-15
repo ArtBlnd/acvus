@@ -3,28 +3,30 @@ source: acvus-mir-test/tests/script.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @x
-     1 |   r1 = load r0
-     2 |   r2 = ref @x
-     3 |   r3 = ref @cond
-     4 |   r4 = load r3
-     5 |   r5 = test r4 == 42
-     6 |   jump_if r5 then L0 else L1(r1)
-     7 | L0:
-     9 |   jump L1(1 (r6))
-    10 | L1(r7: Int):
-    11 |   store r2 = r7
-    12 |   r8 = ref @x
-    13 |   return r7
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = fetch @x
+     3 |   r3 = fetch @cond
+     4 |   r4 = test r3 == 42
+     5 |   jump_if r4 then L0 else L1(r2)
+     6 | L0:
+     8 |   jump L1(1 (r5))
+     9 | L1(r6: Int):
+    10 |   commit @x = r6
+    11 |   commit @cond = r3
+    12 |   return r6
 
-    ; r0 (v11) : Ref<Int>
-    ; r1 (v8) : Int
-    ; r2 (v10) : Ref<Int>
-    ; r3 (@cond) : Ref<Int>
-    ; r4 (v2) : Int
-    ; r5 (v3) : Bool
-    ; r6 (v4) : Int
-    ; r7 (v9) : Int
-    ; r8 (@x) : Ref<Int>
-    ; r9 (v7) : Int
-    ; r10 (@x) : Ref<Int>
+    ; r0 (v11) : Int
+    ; r1 (v12) : Int
+    ; r2 (@x) : Int
+    ; r3 (@cond) : Int
+    ; r4 (v6) : Bool
+    ; r5 (v7) : Int
+    ; r6 (v13) : Int
+    ; r7 (@cond) : Int
+    ; r8 (v14) : Int
+    ; r9 (v10) : Int
+    ; r10 (v9) : Int
+    ; r11 (@cond) : Int
+    ; r12 (@x) : Int
+    ; r13 (@x) : Int

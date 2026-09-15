@@ -1,23 +1,17 @@
-//! The two storage rules of RFC-0018, checked over a body's CFG.
+//! The exclusion rule of RFC-0018, checked over a body's CFG.
 //!
 //! Exclusion: while a `&mut` to a storage is live, no other name of that
 //! storage — the storage itself, a `&`, another `&mut` — is read or
 //! written; while a `&` is live, the storage is not assigned, moved out of,
 //! or mutably referenced. A reference is live from its `Ref` to its last
 //! use, by the body's liveness.
-//!
-//! Context return: a context a run takes is assigned again on every path
-//! before the run ends.
 
-use std::collections::VecDeque;
 
-use acvus_ast::Span;
 use acvus_utils::LocalIdOps;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
-use crate::graph::QualifiedRef;
 use crate::ir::{InstKind, MirBody, MirModule, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
 use crate::validate::move_check::is_move_only;
@@ -38,7 +32,6 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
         return;
     }
     check_exclusion(scope, &cfg, errors);
-    check_contexts_returned(scope, &cfg, errors);
 }
 
 // -- Exclusion ---------------------------------------------------------
@@ -198,79 +191,13 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
     }
 }
 
-// -- Contexts returned -------------------------------------------------
-
-/// Forward dataflow: the contexts moved out of and not yet assigned back.
-/// A primitive `Take` copies and takes nothing. Taken on any path is taken;
-/// each context is reported once per body.
-fn check_contexts_returned(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>) {
-    let n = cfg.blocks.len();
-    let mut entry: Vec<FxHashSet<QualifiedRef>> = vec![FxHashSet::default(); n];
-    let mut worklist: VecDeque<BlockIdx> = VecDeque::from([BlockIdx(0)]);
-    let mut visited = vec![false; n];
-    let mut reported: FxHashSet<QualifiedRef> = FxHashSet::default();
-
-    while let Some(idx) = worklist.pop_front() {
-        visited[idx.0] = true;
-        let mut taken = entry[idx.0].clone();
-        let block = &cfg.blocks[idx.0];
-        for inst in &block.insts {
-            match &inst.kind {
-                InstKind::Take {
-                    dst,
-                    target: RefTarget::Context(c),
-                    ..
-                } => {
-                    if take_moves(&cfg.val_types, dst) {
-                        taken.insert(*c);
-                    }
-                }
-                InstKind::Assign {
-                    target: RefTarget::Context(c),
-                    ..
-                } => {
-                    taken.remove(c);
-                }
-                _ => {}
-            }
-        }
-        if let Terminator::Return { .. } = block.terminator {
-            let mut left: Vec<QualifiedRef> = taken.iter().copied().collect();
-            left.sort();
-            for c in left {
-                if !reported.insert(c) {
-                    continue;
-                }
-                errors.push(ValidationError {
-                    scope: scope.to_string(),
-                    inst_index: block.insts.len(),
-                    span: block
-                        .insts
-                        .last()
-                        .map(|i| i.span)
-                        .unwrap_or(Span::ZERO),
-                    kind: ValidationErrorKind::ContextLeftTaken {
-                        context: format!("{c:?}"),
-                    },
-                });
-            }
-        }
-        for succ in cfg.successors(idx) {
-            let before = entry[succ.0].len();
-            entry[succ.0].extend(taken.iter().copied());
-            if entry[succ.0].len() != before || !visited[succ.0] {
-                worklist.push_back(succ);
-            }
-        }
-    }
-}
-
 // -- Tests -------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::{DebugInfo, Inst, Label};
+    use acvus_ast::Span;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
@@ -319,13 +246,6 @@ mod tests {
         kinds
             .iter()
             .filter(|k| matches!(k, ValidationErrorKind::BorrowConflict { .. }))
-            .count()
-    }
-
-    fn left_taken_count(kinds: &[ValidationErrorKind]) -> usize {
-        kinds
-            .iter()
-            .filter(|k| matches!(k, ValidationErrorKind::ContextLeftTaken { .. }))
             .count()
     }
 
@@ -550,87 +470,5 @@ mod tests {
             string_slot(),
         );
         assert_eq!(conflict_count(&errors(m)), 1);
-    }
-
-    // -- contexts returned ---------------------------------------------
-
-    fn ctx(i: &Interner) -> QualifiedRef {
-        QualifiedRef::root(i.intern("history"))
-    }
-
-    fn take_ctx(i: &Interner, dst: usize) -> InstKind {
-        InstKind::Take {
-            dst: v(dst),
-            target: RefTarget::Context(ctx(i)),
-            path: vec![],
-        }
-    }
-
-    fn assign_ctx(i: &Interner, value: usize) -> InstKind {
-        InstKind::Assign {
-            target: RefTarget::Context(ctx(i)),
-            path: vec![],
-            value: v(value),
-        }
-    }
-
-    #[test]
-    fn a_context_taken_and_assigned_back_is_accepted() {
-        let i = Interner::new();
-        let m = body(
-            vec![take_ctx(&i, 3), assign_ctx(&i, 3), ret(4)],
-            vec![(v(3), Ty::String), (v(4), Ty::Int)],
-        );
-        assert_eq!(left_taken_count(&errors(m)), 0);
-    }
-
-    #[test]
-    fn a_primitive_context_read_takes_nothing() {
-        let i = Interner::new();
-        let m = body(vec![take_ctx(&i, 4), ret(4)], vec![(v(4), Ty::Int)]);
-        assert_eq!(left_taken_count(&errors(m)), 0);
-    }
-
-    #[test]
-    fn a_context_taken_and_not_assigned_is_rejected() {
-        let i = Interner::new();
-        let m = body(
-            vec![take_ctx(&i, 3), ret(3)],
-            vec![(v(3), Ty::String)],
-        );
-        assert_eq!(left_taken_count(&errors(m)), 1);
-    }
-
-    #[test]
-    fn a_context_assigned_on_one_path_only_is_rejected() {
-        let i = Interner::new();
-        // take; jump_if c then L1 else L2; L1: assign; ret; L2: ret
-        let m = body(
-            vec![
-                take_ctx(&i, 3),
-                InstKind::JumpIf {
-                    cond: v(5),
-                    then_label: Label(0),
-                    then_args: vec![],
-                    else_label: Label(1),
-                    else_args: vec![],
-                },
-                InstKind::BlockLabel {
-                    label: Label(0),
-                    params: vec![],
-                    merge_of: None,
-                },
-                assign_ctx(&i, 3),
-                ret(4),
-                InstKind::BlockLabel {
-                    label: Label(1),
-                    params: vec![],
-                    merge_of: None,
-                },
-                ret(4),
-            ],
-            vec![(v(3), Ty::String), (v(4), Ty::Int), (v(5), Ty::Bool)],
-        );
-        assert_eq!(left_taken_count(&errors(m)), 1);
     }
 }

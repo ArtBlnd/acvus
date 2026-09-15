@@ -814,6 +814,13 @@ impl<'src> Solver<'src> {
                 self.unify_ty(a, b, Polarity::Invariant, registry)
             }
 
+            (TyTerm::Ref(ma, ia), TyTerm::Ref(mb, ib)) => {
+                if ma != mb {
+                    return Err((a.clone(), b.clone()));
+                }
+                self.unify_ty(ia, ib, Polarity::Invariant, registry)
+            }
+
             (TyTerm::Object(fa), TyTerm::Object(fb)) => {
                 let snap = self.snapshot();
                 let mut field_mismatch = false;

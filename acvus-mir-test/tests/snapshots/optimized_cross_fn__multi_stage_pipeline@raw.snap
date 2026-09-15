@@ -4,185 +4,164 @@ expression: raw
 ---
 -- enrich --
 === main ===
-     0 |   r0 = ref $v1
-     1 |   r1 = load r0
-     2 |   r2 = ref $v2
-     3 |   r3 = load r2
-     4 |   r4 = r1 + r3
-     5 |   r5 = ref $v1
-     6 |   r6 = load r5
-     8 |   r7 = r6 / 10 (r8)
-     9 |   r9 = r4 + r7
-    10 |   return r9
+     0 |   r0 = take $v1
+     1 |   r1 = take $v2
+     2 |   r2 = r0 + r1
+     3 |   r3 = take $v1
+     5 |   r4 = r3 / 10 (r5)
+     6 |   r6 = r2 + r4
+     7 |   return r6
 
-    ; r0 (v3) : Ref<Int>
-    ; r1 ($val) : Int
-    ; r2 (v5) : Ref<Int>
-    ; r3 ($offset) : Int
-    ; r4 (v7) : Int
-    ; r5 (v8) : Ref<Int>
-    ; r6 ($val) : Int
-    ; r7 (v11) : Int
-    ; r8 (v10) : Int
-    ; r9 (v12) : Int
-    ; r10 (v2) : Int
-    ; r11 (v1) : Int
+    ; r0 ($val) : Int
+    ; r1 ($offset) : Int
+    ; r2 (v5) : Int
+    ; r3 ($val) : Int
+    ; r4 (v8) : Int
+    ; r5 (v7) : Int
+    ; r6 (v9) : Int
+    ; r7 (v2) : Int
+    ; r8 (v1) : Int
 
 -- finalize --
 === main ===
-     0 |   r0 = ref $v1
-     1 |   r1 = load r0
-     2 |   r2 = ref $v2
-     3 |   r3 = load r2
-     4 |   r4 = r1 / r3
-     5 |   r5 = ref $v2
-     6 |   r6 = load r5
-     7 |   r7 = r4 * r6
-     8 |   return r7
+     0 |   r0 = take $v1
+     1 |   r1 = take $v2
+     2 |   r2 = r0 / r1
+     3 |   r3 = take $v2
+     4 |   r4 = r2 * r3
+     5 |   return r4
 
-    ; r0 (v3) : Ref<Int>
-    ; r1 ($val) : Int
-    ; r2 (v5) : Ref<Int>
+    ; r0 ($val) : Int
+    ; r1 ($prec) : Int
+    ; r2 (v5) : Int
     ; r3 ($prec) : Int
     ; r4 (v7) : Int
-    ; r5 (v8) : Ref<Int>
-    ; r6 ($prec) : Int
-    ; r7 (v10) : Int
-    ; r8 (v2) : Int
-    ; r9 (v1) : Int
+    ; r5 (v1) : Int
+    ; r6 (v2) : Int
 
 -- main --
 === main ===
-     0 |   r0 = ref $order
-     1 |   store r0 = r1
-     2 |   r2 = ref @source_id
-     3 |   r3 = load r2
-     4 |   r4 = ref $order
-     5 |   r5 = load r4
-     6 |   r6 = call #0(r3) [r5 -> r7]
-     7 |   r8 = ref $order
-     8 |   store r8 = r7
-     9 |   r9 = ref raw
-    10 |   store r9 = r6
-    11 |   r10 = ref raw
-    12 |   r11 = load r10
-    13 |   r12 = ref @scale
-    14 |   r13 = load r12
-    15 |   r14 = call #1(r11, r13)
-    16 |   r15 = ref s1
-    17 |   store r15 = r14
-    18 |   r16 = ref s1
-    19 |   r17 = load r16
-    20 |   r18 = ref @stage1
-    21 |   store r18 = r17
-    22 |   r19 = ref s1
-    23 |   r20 = load r19
-    24 |   r21 = ref @offset
-    25 |   r22 = load r21
-    26 |   r23 = call #2(r20, r22)
-    27 |   r24 = ref s2
-    28 |   store r24 = r23
-    29 |   r25 = ref s2
-    30 |   r26 = load r25
-    31 |   r27 = ref @stage2
-    32 |   store r27 = r26
-    33 |   r28 = ref s2
-    34 |   r29 = load r28
-    35 |   r30 = ref @precision
-    36 |   r31 = load r30
-    37 |   r32 = call #3(r29, r31)
-    38 |   r33 = ref s3
-    39 |   store r33 = r32
-    40 |   r34 = ref s3
-    41 |   r35 = load r34
-    42 |   r36 = ref @stage3
-    43 |   store r36 = r35
-    44 |   r37 = ref s1
-    45 |   r38 = load r37
-    46 |   r39 = ref s2
-    47 |   r40 = load r39
-    48 |   r41 = ref s3
-    49 |   r42 = load r41
-    50 |   r43 = ref $order
-    51 |   r44 = load r43
-    52 |   r45 = call #4(r38, r40, r42) [r44 -> r46]
-    53 |   r47 = ref $order
-    54 |   store r47 = r46
-    55 |   r48 = ref s3
-    56 |   r49 = load r48
-    57 |   r50 = ref $order
-    58 |   r51 = load r50
-    59 |   return r49 [r51]
+     0 |   assign $order = r0
+     1 |   r1 = fetch @offset
+     2 |   assign @offset = r1
+     3 |   r2 = fetch @stage2
+     4 |   assign @stage2 = r2
+     5 |   r3 = fetch @scale
+     6 |   assign @scale = r3
+     7 |   r4 = fetch @stage3
+     8 |   assign @stage3 = r4
+     9 |   r5 = fetch @source_id
+    10 |   assign @source_id = r5
+    11 |   r6 = fetch @stage1
+    12 |   assign @stage1 = r6
+    13 |   r7 = fetch @precision
+    14 |   assign @precision = r7
+    15 |   r8 = take @source_id
+    16 |   r9 = take $order
+    17 |   r10 = call #0(r8) [r9 -> r11]
+    18 |   assign $order = r11
+    19 |   assign raw = r10
+    20 |   r12 = take raw
+    21 |   r13 = take @scale
+    22 |   r14 = call #1(r12, r13)
+    23 |   assign s1 = r14
+    24 |   r15 = take s1
+    25 |   assign @stage1 = r15
+    26 |   r16 = take s1
+    27 |   r17 = take @offset
+    28 |   r18 = call #2(r16, r17)
+    29 |   assign s2 = r18
+    30 |   r19 = take s2
+    31 |   assign @stage2 = r19
+    32 |   r20 = take s2
+    33 |   r21 = take @precision
+    34 |   r22 = call #3(r20, r21)
+    35 |   assign s3 = r22
+    36 |   r23 = take s3
+    37 |   assign @stage3 = r23
+    38 |   r24 = take s1
+    39 |   r25 = take s2
+    40 |   r26 = take s3
+    41 |   r27 = take $order
+    42 |   r28 = call #4(r24, r25, r26) [r27 -> r29]
+    43 |   assign $order = r29
+    44 |   r30 = take s3
+    45 |   r31 = take @offset
+    46 |   commit @offset = r31
+    47 |   r32 = take @stage2
+    48 |   commit @stage2 = r32
+    49 |   r33 = take @scale
+    50 |   commit @scale = r33
+    51 |   r34 = take @stage3
+    52 |   commit @stage3 = r34
+    53 |   r35 = take @source_id
+    54 |   commit @source_id = r35
+    55 |   r36 = take @stage1
+    56 |   commit @stage1 = r36
+    57 |   r37 = take @precision
+    58 |   commit @precision = r37
+    59 |   r38 = take $order
+    60 |   return r30 [r38]
 
-    ; r0 (v3) : Ref<Order>
-    ; r1 (v1) : Order
-    ; r2 (@source_id) : Ref<Int>
-    ; r3 (v5) : Int
-    ; r4 (v7) : Ref<Order>
-    ; r5 (v8) : Order
-    ; r6 (fetch_data(...)) : Int
-    ; r7 (v9) : Order
-    ; r8 (v10) : Ref<Order>
-    ; r9 (v12) : Ref<Int>
-    ; r10 (v13) : Ref<Int>
-    ; r11 (raw) : Int
-    ; r12 (@scale) : Ref<Int>
-    ; r13 (v16) : Int
+    ; r0 (v1) : Order
+    ; r1 (@offset) : Int
+    ; r2 (@stage2) : Int
+    ; r3 (@scale) : Int
+    ; r4 (@stage3) : Int
+    ; r5 (@source_id) : Int
+    ; r6 (@stage1) : Int
+    ; r7 (@precision) : Int
+    ; r8 (@source_id) : Int
+    ; r9 (v19) : Order
+    ; r10 (fetch_data(...)) : Int
+    ; r11 (v20) : Order
+    ; r12 (raw) : Int
+    ; r13 (@scale) : Int
     ; r14 (normalize(...)) : Int
-    ; r15 (v19) : Ref<Int>
-    ; r16 (v20) : Ref<Int>
-    ; r17 (s1) : Int
-    ; r18 (@stage1) : Ref<Int>
-    ; r19 (v23) : Ref<Int>
-    ; r20 (s1) : Int
-    ; r21 (@offset) : Ref<Int>
-    ; r22 (v26) : Int
-    ; r23 (enrich(...)) : Int
-    ; r24 (v29) : Ref<Int>
-    ; r25 (v30) : Ref<Int>
-    ; r26 (s2) : Int
-    ; r27 (@stage2) : Ref<Int>
-    ; r28 (v33) : Ref<Int>
-    ; r29 (s2) : Int
-    ; r30 (@precision) : Ref<Int>
-    ; r31 (v36) : Int
-    ; r32 (finalize(...)) : Int
-    ; r33 (v39) : Ref<Int>
-    ; r34 (v40) : Ref<Int>
-    ; r35 (s3) : Int
-    ; r36 (@stage3) : Ref<Int>
-    ; r37 (v43) : Ref<Int>
-    ; r38 (s1) : Int
-    ; r39 (v45) : Ref<Int>
-    ; r40 (s2) : Int
-    ; r41 (v47) : Ref<Int>
-    ; r42 (s3) : Int
-    ; r43 (v50) : Ref<Order>
-    ; r44 (v51) : Order
-    ; r45 (log_pipeline(...)) : Int
-    ; r46 (v52) : Order
-    ; r47 (v53) : Ref<Order>
-    ; r48 (v54) : Ref<Int>
-    ; r49 (s3) : Int
-    ; r50 (v56) : Ref<Order>
-    ; r51 (v57) : Order
+    ; r15 (s1) : Int
+    ; r16 (s1) : Int
+    ; r17 (@offset) : Int
+    ; r18 (enrich(...)) : Int
+    ; r19 (s2) : Int
+    ; r20 (s2) : Int
+    ; r21 (@precision) : Int
+    ; r22 (finalize(...)) : Int
+    ; r23 (s3) : Int
+    ; r24 (s1) : Int
+    ; r25 (s2) : Int
+    ; r26 (s3) : Int
+    ; r27 (v41) : Order
+    ; r28 (log_pipeline(...)) : Int
+    ; r29 (v42) : Order
+    ; r30 (s3) : Int
+    ; r31 (v44) : Int
+    ; r32 (v45) : Int
+    ; r33 (v46) : Int
+    ; r34 (v47) : Int
+    ; r35 (v48) : Int
+    ; r36 (v49) : Int
+    ; r37 (v50) : Int
+    ; r38 (v51) : Order
+    ; r39 (@offset) : Int
+    ; r40 (@stage3) : Int
+    ; r41 (@stage2) : Int
+    ; r42 (@source_id) : Int
+    ; r43 (@precision) : Int
+    ; r44 (@stage1) : Int
+    ; r45 (@scale) : Int
 
 -- normalize --
 === main ===
-     0 |   r0 = ref $v1
-     1 |   r1 = load r0
-     2 |   r2 = ref $v2
-     3 |   r3 = load r2
-     4 |   r4 = r1 * r3
-     6 |   r5 = r4 / 1000 (r6)
-     7 |   return r5
+     0 |   r0 = take $v1
+     1 |   r1 = take $v2
+     2 |   r2 = r0 * r1
+     4 |   r3 = r2 / 1000 (r4)
+     5 |   return r3
 
-    ; r0 (v3) : Ref<Int>
-    ; r1 ($val) : Int
-    ; r2 (v5) : Ref<Int>
-    ; r3 ($scale) : Int
-    ; r4 (v7) : Int
-    ; r5 (v9) : Int
-    ; r6 (v8) : Int
-    ; r7 (v2) : Int
-    ; r8 (v1) : Int
+    ; r0 ($val) : Int
+    ; r1 ($scale) : Int
+    ; r2 (v5) : Int
+    ; r3 (v7) : Int
+    ; r4 (v6) : Int
+    ; r5 (v1) : Int
+    ; r6 (v2) : Int

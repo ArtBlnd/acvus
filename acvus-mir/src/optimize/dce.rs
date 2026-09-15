@@ -66,7 +66,11 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 fn is_root(kind: &InstKind) -> bool {
     match kind {
         // A write to storage is observable; a take leaves its storage empty.
-        InstKind::Store { .. } | InstKind::Assign { .. } | InstKind::Take { .. } => true,
+        InstKind::Store { .. }
+        | InstKind::Assign { .. }
+        | InstKind::Take { .. }
+        | InstKind::Fetch { .. }
+        | InstKind::Commit { .. } => true,
 
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
@@ -95,26 +99,6 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
         Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
         Terminator::JumpIf { cond, .. } => vec![*cond],
         Terminator::Jump { .. } | Terminator::Fallthrough => vec![],
-    }
-}
-
-/// Collect all uses from a terminator.
-fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
-    match term {
-        Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
-        Terminator::Jump { args, .. } => args.clone(),
-        Terminator::JumpIf {
-            cond,
-            then_args,
-            else_args,
-            ..
-        } => {
-            let mut v = vec![*cond];
-            v.extend_from_slice(then_args);
-            v.extend_from_slice(else_args);
-            v
-        }
-        Terminator::Fallthrough => vec![],
     }
 }
 

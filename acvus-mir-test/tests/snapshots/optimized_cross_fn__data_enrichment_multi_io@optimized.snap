@@ -8,63 +8,68 @@ expression: opt
   T2 = ")"
 
 === main ===
-     0 |   r0 = ref @alert_count
-     1 |   r1 = ref @alert_count
-     2 |   r2 = ref @user_id
-     3 |   r3 = load r0
-     4 |   r4 = load r2
-     5 |   r5 = spawn #0(r4) [r6 ->]
-     6 |   r0 = ref @weight
-     7 |   r7 = eval r5 [-> r6]
-     8 |   r5 = spawn #1(r4) [r6 ->]
-     9 |   r8 = eval r5 [-> r6]
-    10 |   r9 = r7 + r8
-    11 |   r8 = load r0
-    12 |   r10 = r9 * r8
-    13 |   r8 = const 100
-    14 |   r9 = r10 / r8
-    15 |   r11 = const T0
-    16 |   r12 = call #2(r7)
-    17 |   r13 = r11 + r12
-    18 |   r11 = const T1
-    19 |   r12 = r13 + r11
-    20 |   r11 = call #2(r9)
-    21 |   r13 = r12 + r11
-    22 |   r11 = const T2
-    23 |   r12 = r13 + r11
-    24 |   r0 = ref @threshold
-    25 |   r7 = load r0
-    26 |   r14 = r9 > r7
-    27 |   r15 = test r14 == true
-    28 |   r7 = const 1
-    29 |   r8 = r3 + r7
-    30 |   r16 = ref @result_label
-    31 |   r0 = ref @result_score
-    32 |   jump_if r15 then L0 else L1(r3, r6)
-    33 | L0:
-    34 |   r5 = spawn #3(r4, r9) [r6 ->]
-    35 |   r3 = eval r5 [-> r6]
-    36 |   jump L1(r8, r6)
-    37 | L1(r3: Int, r6: Order):
-    38 |   store r1 = r3
-    39 |   store r16 = r12
-    40 |   store r0 = r9
-    41 |   return r9 [r6]
+     0 |   r0 = fetch @result_label
+     1 |   drop r0
+     2 |   r1 = fetch @weight
+     3 |   r2 = fetch @alert_count
+     4 |   r3 = fetch @result_score
+     5 |   r3 = fetch @threshold
+     6 |   r4 = fetch @user_id
+     7 |   r5 = spawn #0(r4) [r6 ->]
+     8 |   r7 = eval r5 [-> r6]
+     9 |   r5 = spawn #1(r4) [r6 ->]
+    10 |   r8 = eval r5 [-> r6]
+    11 |   r9 = r7 + r8
+    12 |   r8 = r9 * r1
+    13 |   r9 = const 100
+    14 |   r10 = r8 / r9
+    15 |   r0 = const T0
+    16 |   r11 = call #2(r7)
+    17 |   r12 = r0 + r11
+    18 |   drop r11
+    19 |   drop r0
+    20 |   r0 = const T1
+    21 |   r11 = r12 + r0
+    22 |   drop r0
+    23 |   drop r12
+    24 |   r0 = call #2(r10)
+    25 |   r12 = r11 + r0
+    26 |   drop r0
+    27 |   drop r11
+    28 |   r0 = const T2
+    29 |   r11 = r12 + r0
+    30 |   drop r0
+    31 |   drop r12
+    32 |   r13 = r10 > r3
+    33 |   r14 = test r13 == true
+    34 |   r7 = const 1
+    35 |   r8 = r2 + r7
+    36 |   jump_if r14 then L0 else L1(r6, r2)
+    37 | L0:
+    38 |   r5 = spawn #3(r4, r10) [r6 ->]
+    39 |   r2 = eval r5 [-> r6]
+    40 |   jump L1(r6, r8)
+    41 | L1(r6: Order, r2: Int):
+    42 |   commit @result_label = r11
+    43 |   commit @weight = r1
+    44 |   commit @alert_count = r2
+    45 |   commit @result_score = r10
+    46 |   commit @threshold = r3
+    47 |   commit @user_id = r4
+    48 |   return r10 [r6]
 
-    ; r0 (@result_score) : Ref<Int>
-    ; r1 (@alert_count) : Ref<Int>
-    ; r2 (@user_id) : Ref<Int>
-    ; r3 (@alert_count) : Int
+    ; r0 (to_string(...)) : String
+    ; r1 (@weight) : Int
+    ; r2 (@alert_count) : Int
+    ; r3 (@threshold) : Int
     ; r4 (@user_id) : Int
     ; r5 (v7) : Handle<Int>
     ; r6 (v1) : Order
-    ; r7 (@threshold) : Int
-    ; r8 (@weight) : Int
+    ; r7 (v8) : Int
+    ; r8 (v9) : Int
     ; r9 (v10) : Int
     ; r10 (v11) : Int
     ; r11 (to_string(...)) : String
-    ; r12 (to_string(...)) : String
-    ; r13 (v14) : String
+    ; r12 (v13) : String
+    ; r13 (v14) : Bool
     ; r14 (v15) : Bool
-    ; r15 (v16) : Bool
-    ; r16 (@result_label) : Ref<String>

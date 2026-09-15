@@ -257,7 +257,19 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     worklist.push_back(BlockIdx(next));
                 }
             }
-            Terminator::Return { .. } => {}
+            Terminator::Return { value, .. } => {
+                let span = block.insts.last().map(|i| i.span).unwrap_or(Span::ZERO);
+                let mut state = block_exit[idx.0].clone();
+                try_consume_value(
+                    scope,
+                    block.insts.len(),
+                    span,
+                    *value,
+                    &cfg.val_types,
+                    &mut state,
+                    errors,
+                );
+            }
         }
     }
 }
@@ -365,31 +377,26 @@ fn process_inst(
         // Take: a move-only value leaves its storage; a second take is a use
         // after move.
         InstKind::Take { dst, target, .. } => {
-            let name = match target {
-                crate::ir::RefTarget::Var(n) | crate::ir::RefTarget::Param(n) => Some(*n),
-                crate::ir::RefTarget::Context(_) => None,
-            };
-            if let Some(name) = name {
-                if let Some(Liveness::Moved { at }) = state.get_var(name)
-                    && let Some(ty) = val_types.get(dst)
-                    && is_move_only(ty) == Some(true)
-                {
-                    errors.push(ValidationError {
-                        scope: scope.to_string(),
-                        inst_index: inst_idx,
-                        span,
-                        kind: ValidationErrorKind::UseAfterMove {
-                            value_id: dst.to_raw() as u32,
-                            moved_at: at,
-                            ty: ty.clone(),
-                        },
-                    });
-                }
-                if let Some(ty) = val_types.get(dst)
-                    && is_move_only(ty) == Some(true)
-                {
-                    state.set_var(name, Liveness::Moved { at: inst_idx });
-                }
+            let (crate::ir::RefTarget::Var(name) | crate::ir::RefTarget::Param(name)) = target;
+            if let Some(Liveness::Moved { at }) = state.get_var(*name)
+                && let Some(ty) = val_types.get(dst)
+                && is_move_only(ty) == Some(true)
+            {
+                errors.push(ValidationError {
+                    scope: scope.to_string(),
+                    inst_index: inst_idx,
+                    span,
+                    kind: ValidationErrorKind::UseAfterMove {
+                        value_id: dst.to_raw() as u32,
+                        moved_at: at,
+                        ty: ty.clone(),
+                    },
+                });
+            }
+            if let Some(ty) = val_types.get(dst)
+                && is_move_only(ty) == Some(true)
+            {
+                state.set_var(*name, Liveness::Moved { at: inst_idx });
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -399,6 +406,12 @@ fn process_inst(
             if let crate::ir::RefTarget::Var(name) = target {
                 state.set_var(*name, Liveness::Alive);
             }
+        }
+        InstKind::Fetch { dst, .. } => {
+            state.set_value(*dst, Liveness::Alive);
+        }
+        InstKind::Commit { value, .. } => {
+            try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
         }
         // Load copies a word out through a reference; Store moves a value
         // in through one. The reference itself is a word and is never

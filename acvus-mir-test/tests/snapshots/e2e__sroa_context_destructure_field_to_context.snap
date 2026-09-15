@@ -3,11 +3,22 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = take @a
-     1 |   r1 = take @b.x
-     2 |   assign @a = r1
-     3 |   return r1
+     0 |   r0 = undef
+     1 |   r1 = fetch @a
+     2 |   r2 = fetch @b
+     3 |   assign @b = r2
+     4 |   r3 = take @b.x
+     5 |   commit @a = r3
+     6 |   r4 = take @b
+     7 |   commit @b = r4
+     8 |   return r3
 
-    ; r0 (v3) : Int
-    ; r1 (@b.x) : Int
-    ; r2 (@a) : Int
+    ; r0 (v9) : Int
+    ; r1 (@a) : Int
+    ; r2 (@b) : {x: Int}
+    ; r3 (@b.x) : Int
+    ; r4 (v8) : {x: Int}
+    ; r5 (@b) : {x: Int}
+    ; r6 (v7) : Int
+    ; r7 (@a) : Int
+    ; r8 (@a) : Int

@@ -190,9 +190,6 @@ fn fmt_place(
                 format!("${name}")
             }
         }
-        crate::ir::RefTarget::Context(qref) => {
-            format!("@{}", ctx.interner.resolve(qref.name))
-        }
     };
     if path.is_empty() {
         base
@@ -292,6 +289,18 @@ fn write_body(
                 f,
                 "assign {} = {}",
                 fmt_place(body, ctx, target, path),
+                vn.fmt_use(*value, &consts, &texts)
+            )?,
+            InstKind::Fetch { dst, context } => writeln!(
+                f,
+                "{} = fetch @{}",
+                vn.fmt_val(*dst),
+                ctx.interner.resolve(context.name)
+            )?,
+            InstKind::Commit { context, value } => writeln!(
+                f,
+                "commit @{} = {}",
+                ctx.interner.resolve(context.name),
                 vn.fmt_use(*value, &consts, &texts)
             )?,
             InstKind::Load { dst, src } => writeln!(
@@ -867,8 +876,8 @@ mod tests {
                 (interner.intern("age"), Ty::Int),
             ])),
         )]);
-        let out = compile_and_dump_ctx("{{ @user.name }}", &context, &interner);
-        assert!(out.contains(".name"));
+        let out = compile_and_dump_ctx("{{ x = @user.age }}", &context, &interner);
+        assert!(out.contains(".age"), "{out}");
     }
 
     #[test]

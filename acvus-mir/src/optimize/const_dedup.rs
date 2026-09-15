@@ -113,6 +113,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
         InstKind::Const { .. }
         | InstKind::Ref { .. }
         | InstKind::Take { .. }
+        | InstKind::Fetch { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop
         | InstKind::Poison { .. }
@@ -134,7 +135,9 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
             remap_val(dst, remap);
             remap_val(value, remap);
         }
-        InstKind::Assign { value, .. } => remap_val(value, remap),
+        InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => {
+            remap_val(value, remap)
+        }
 
         InstKind::UnaryOp { operand, .. } => remap_val(operand, remap),
 

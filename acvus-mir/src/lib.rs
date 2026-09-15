@@ -80,7 +80,18 @@ mod tests {
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::Int),
         ]));
-        compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).unwrap();
+        compile_template(&i, "{{ x = @user.age }}", &[("user", user_ty)]).unwrap();
+    }
+
+    #[test]
+    fn a_string_field_read_out_of_a_context_is_rejected() {
+        let i = Interner::new();
+        let user_ty = Ty::Object(FxHashMap::from_iter([
+            (i.intern("name"), Ty::String),
+            (i.intern("age"), Ty::Int),
+        ]));
+        let err = compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).unwrap_err();
+        assert!(err.contains("UseAfterMove"), "{err}");
     }
 
     #[test]
@@ -150,7 +161,7 @@ mod tests {
     #[test]
     fn script_single_expr() {
         let i = Interner::new();
-        let module = compile_script(&i, "@data", &[("data", Ty::String)]).unwrap();
+        let module = compile_script(&i, "@data", &[("data", Ty::Int)]).unwrap();
         assert!(
             module
                 .main
@@ -161,15 +172,30 @@ mod tests {
     }
 
     #[test]
+    fn a_context_moved_out_and_not_assigned_back_is_rejected() {
+        let i = Interner::new();
+        let err = compile_script(&i, "@data", &[("data", Ty::String)]).unwrap_err();
+        assert!(err.contains("UseAfterMove"), "{err}");
+        let err = compile_script(&i, "x = @data; x", &[("data", Ty::String)]).unwrap_err();
+        assert!(err.contains("UseAfterMove"), "{err}");
+    }
+
+    #[test]
+    fn a_context_moved_out_and_assigned_back_is_accepted() {
+        let i = Interner::new();
+        compile_script(&i, r#"x = @data; @data = "new"; x"#, &[("data", Ty::String)]).unwrap();
+    }
+
+    #[test]
     fn script_bind_and_tail() {
         let i = Interner::new();
-        let module = compile_script(&i, "x = @data; x", &[("data", Ty::String)]).unwrap();
+        let module = compile_script(&i, "x = @data; x", &[("data", Ty::Int)]).unwrap();
         assert!(
             module
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(&i.kind, InstKind::Take { .. }))
+                .any(|i| matches!(&i.kind, InstKind::Fetch { .. }))
         );
         assert!(
             module
@@ -213,7 +239,7 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|inst| matches!(&inst.kind, InstKind::Assign { .. }))
+                .any(|inst| matches!(&inst.kind, InstKind::Commit { .. }))
         );
     }
 
@@ -241,7 +267,7 @@ mod tests {
         let kinds = inst_kinds(&module);
         let take_idx = kinds
             .iter()
-            .position(|k| matches!(k, InstKind::Take { .. }));
+            .position(|k| matches!(k, InstKind::Fetch { .. }));
         let ret_idx = kinds
             .iter()
             .position(|k| matches!(k, InstKind::Return { .. }));
@@ -252,8 +278,8 @@ mod tests {
     #[test]
     fn projection_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
-        let module = compile_script(&i, "@obj.name", &[("obj", obj_ty)]).unwrap();
+        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+        let module = compile_script(&i, "@obj.age", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         assert!(
             kinds.iter().any(|k| matches!(k, InstKind::Return { .. })),
@@ -283,13 +309,13 @@ mod tests {
         let i = Interner::new();
         let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).unwrap();
         let kinds = inst_kinds(&module);
-        assert!(kinds.iter().any(|k| matches!(k, InstKind::Assign { .. })));
+        assert!(kinds.iter().any(|k| matches!(k, InstKind::Commit { .. })));
     }
 
     #[test]
     fn projection_copy_to_local() {
         let i = Interner::new();
-        let module = compile_script(&i, "x = @data; x", &[("data", Ty::String)]).unwrap();
+        let module = compile_script(&i, "x = @data; x", &[("data", Ty::Int)]).unwrap();
         let kinds = inst_kinds(&module);
         assert!(kinds.iter().any(|k| matches!(k, InstKind::Return { .. })));
     }
@@ -302,7 +328,7 @@ mod tests {
         assert_eq!(
             kinds
                 .iter()
-                .filter(|k| matches!(k, InstKind::Take { .. }))
+                .filter(|k| matches!(k, InstKind::Fetch { .. }))
                 .count(),
             2
         );
@@ -339,8 +365,8 @@ mod tests {
     #[test]
     fn projection_no_leak_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
-        let module = compile_script(&i, "@obj.name", &[("obj", obj_ty)]).unwrap();
+        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+        let module = compile_script(&i, "@obj.age", &[("obj", obj_ty)]).unwrap();
         let mut ref_dsts = FxHashSet::default();
         let mut consumed = FxHashSet::default();
         for inst in &module.main.insts {
@@ -376,7 +402,7 @@ mod tests {
     #[test]
     fn context_data_string() {
         let i = Interner::new();
-        assert!(compile_script(&i, r#"@x = "hello"; @x"#, &[("x", Ty::String)]).is_ok());
+        assert!(compile_script(&i, r#"@x = "hello"; 1"#, &[("x", Ty::String)]).is_ok());
     }
 
     #[test]
@@ -386,7 +412,7 @@ mod tests {
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::Int),
         ]));
-        assert!(compile_script(&i, "@user = @user; @user", &[("user", obj_ty)]).is_ok());
+        assert!(compile_script(&i, "@user = @user; 1", &[("user", obj_ty)]).is_ok());
     }
 
     #[test]

@@ -3,12 +3,17 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @user
-     1 |   r1 = load r0
-     2 |   r2 = r1.name
-     3 |   return r2
+     0 |   r0 = fetch @user
+     1 |   assign @user = r0
+     2 |   r1 = take @user
+     3 |   r2 = take @user
+     4 |   commit @user = r2
+     5 |   r3 = r1.name
+     6 |   return r3
 
-    ; r0 (@user) : Ref<{age: Int, name: String}>
-    ; r1 (v4) : {age: Int, name: String}
-    ; r2 (name) : String
-    ; r3 (make_obj(...)) : {age: Int, name: String}
+    ; r0 (@user) : {age: Int, name: String}
+    ; r1 (@user) : {age: Int, name: String}
+    ; r2 (v6) : {age: Int, name: String}
+    ; r3 (name) : String
+    ; r4 (make_obj(...)) : {age: Int, name: String}
+    ; r5 (@user) : {age: Int, name: String}

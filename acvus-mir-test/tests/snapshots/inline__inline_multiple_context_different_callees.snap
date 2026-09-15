@@ -3,17 +3,27 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @a
-     1 |   r1 = load r0
-     2 |   r2 = ref @b
-     3 |   r3 = load r2
-     4 |   r4 = r1 + r3
-     5 |   return r4
+     0 |   r0 = fetch @a
+     1 |   assign @a = r0
+     2 |   r1 = take @a
+     3 |   r2 = take @a
+     4 |   commit @a = r2
+     5 |   r3 = fetch @b
+     6 |   assign @b = r3
+     7 |   r4 = take @b
+     8 |   r5 = take @b
+     9 |   commit @b = r5
+    10 |   r6 = r1 + r4
+    11 |   return r6
 
-    ; r0 (@a) : Ref<Int>
-    ; r1 (v5) : Int
-    ; r2 (@b) : Ref<Int>
-    ; r3 (v7) : Int
-    ; r4 (v3) : Int
-    ; r5 (read_a(...)) : Int
-    ; r6 (read_b(...)) : Int
+    ; r0 (@a) : Int
+    ; r1 (@a) : Int
+    ; r2 (v7) : Int
+    ; r3 (@b) : Int
+    ; r4 (@b) : Int
+    ; r5 (v11) : Int
+    ; r6 (v3) : Int
+    ; r7 (read_b(...)) : Int
+    ; r8 (read_a(...)) : Int
+    ; r9 (@b) : Int
+    ; r10 (@a) : Int

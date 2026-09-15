@@ -4,30 +4,24 @@ expression: raw
 ---
 -- compute_score --
 === main ===
-     0 |   r0 = ref $v1
-     1 |   r1 = load r0
-     2 |   r2 = ref $v2
-     3 |   r3 = load r2
-     4 |   r4 = r1 + r3
-     5 |   r5 = ref $v3
-     6 |   r6 = load r5
-     7 |   r7 = r4 * r6
-     9 |   r8 = r7 / 100 (r9)
-    10 |   return r8
+     0 |   r0 = take $v1
+     1 |   r1 = take $v2
+     2 |   r2 = r0 + r1
+     3 |   r3 = take $v3
+     4 |   r4 = r2 * r3
+     6 |   r5 = r4 / 100 (r6)
+     7 |   return r5
 
-    ; r0 (v4) : Ref<Int>
-    ; r1 ($profile) : Int
-    ; r2 (v6) : Ref<Int>
-    ; r3 ($history) : Int
+    ; r0 ($profile) : Int
+    ; r1 ($history) : Int
+    ; r2 (v6) : Int
+    ; r3 ($weight) : Int
     ; r4 (v8) : Int
-    ; r5 (v9) : Ref<Int>
-    ; r6 ($weight) : Int
-    ; r7 (v11) : Int
-    ; r8 (v13) : Int
-    ; r9 (v12) : Int
-    ; r10 (v3) : Int
-    ; r11 (v2) : Int
-    ; r12 (v1) : Int
+    ; r5 (v10) : Int
+    ; r6 (v9) : Int
+    ; r7 (v3) : Int
+    ; r8 (v2) : Int
+    ; r9 (v1) : Int
 
 -- format_label --
 === literals ===
@@ -36,169 +30,147 @@ expression: raw
   T2 = ")"
 
 === main ===
-     1 |   r0 = ref $v1
-     2 |   r1 = load r0
-     3 |   r2 = call #0(r1)
-     4 |   r3 = T0 + r2
-     6 |   r4 = r3 + T1
-     7 |   r5 = ref $v2
-     8 |   r6 = load r5
-     9 |   r7 = call #0(r6)
-    10 |   r8 = r4 + r7
-    12 |   r9 = r8 + T2
-    13 |   return r9
+     1 |   r0 = take $v1
+     2 |   r1 = call #0(r0)
+     3 |   r2 = T0 + r1
+     5 |   r3 = r2 + T1
+     6 |   r4 = take $v2
+     7 |   r5 = call #0(r4)
+     8 |   r6 = r3 + r5
+    10 |   r7 = r6 + T2
+    11 |   return r7
 
-    ; r0 (v4) : Ref<Int>
-    ; r1 ($profile) : Int
-    ; r2 (to_string(...)) : String
-    ; r3 (v7) : String
-    ; r4 (v9) : String
-    ; r5 (v10) : Ref<Int>
-    ; r6 ($score) : Int
-    ; r7 (to_string(...)) : String
-    ; r8 (v13) : String
-    ; r9 (v15) : String
-    ; r10 (v3) : String
-    ; r11 (v14) : String
-    ; r12 (v1) : Int
-    ; r13 (v2) : Int
-    ; r14 (v8) : String
+    ; r0 ($profile) : Int
+    ; r1 (to_string(...)) : String
+    ; r2 (v6) : String
+    ; r3 (v8) : String
+    ; r4 ($score) : Int
+    ; r5 (to_string(...)) : String
+    ; r6 (v11) : String
+    ; r7 (v13) : String
+    ; r8 (v7) : String
+    ; r9 (v3) : String
+    ; r10 (v2) : Int
+    ; r11 (v1) : Int
+    ; r12 (v12) : String
 
 -- main --
 === main ===
-     0 |   r0 = ref $order
-     1 |   store r0 = r1
-     2 |   r2 = ref @user_id
-     3 |   r3 = load r2
-     4 |   r4 = ref $order
-     5 |   r5 = load r4
-     6 |   r6 = call #0(r3) [r5 -> r7]
-     7 |   r8 = ref $order
-     8 |   store r8 = r7
-     9 |   r9 = ref profile
-    10 |   store r9 = r6
-    11 |   r10 = ref @user_id
-    12 |   r11 = load r10
-    13 |   r12 = ref $order
-    14 |   r13 = load r12
-    15 |   r14 = call #1(r11) [r13 -> r15]
-    16 |   r16 = ref $order
-    17 |   store r16 = r15
-    18 |   r17 = ref history
-    19 |   store r17 = r14
-    20 |   r18 = ref profile
-    21 |   r19 = load r18
-    22 |   r20 = ref history
-    23 |   r21 = load r20
-    24 |   r22 = ref @weight
-    25 |   r23 = load r22
-    26 |   r24 = call #2(r19, r21, r23)
-    27 |   r25 = ref score
-    28 |   store r25 = r24
-    29 |   r26 = ref profile
-    30 |   r27 = load r26
-    31 |   r28 = ref score
-    32 |   r29 = load r28
-    33 |   r30 = call #3(r27, r29)
-    34 |   r31 = ref label
-    35 |   store r31 = r30
-    36 |   r32 = ref score
-    37 |   r33 = load r32
-    38 |   r34 = ref @threshold
-    39 |   r35 = load r34
-    40 |   r36 = r33 > r35
-    41 |   r37 = test r36 == true
-    42 |   jump_if r37 then L0 else L1
-    43 | L0:
-    44 |   r38 = ref @user_id
-    45 |   r39 = load r38
-    46 |   r40 = ref score
-    47 |   r41 = load r40
-    48 |   r42 = ref $order
-    49 |   r43 = load r42
-    50 |   r44 = call #4(r39, r41) [r43 -> r45]
-    51 |   r46 = ref $order
-    52 |   store r46 = r45
-    53 |   r47 = ref @alert_count
-    54 |   r48 = load r47
-    56 |   r49 = r48 + 1 (r50)
-    57 |   r51 = ref @alert_count
-    58 |   store r51 = r49
-    59 |   jump L1
-    60 | L1:
-    61 |   r52 = ref label
-    62 |   r53 = load r52
-    63 |   r54 = ref @result_label
-    64 |   store r54 = r53
-    65 |   r55 = ref score
-    66 |   r56 = load r55
-    67 |   r57 = ref @result_score
-    68 |   store r57 = r56
-    69 |   r58 = ref score
-    70 |   r59 = load r58
-    71 |   r60 = ref $order
-    72 |   r61 = load r60
-    73 |   return r59 [r61]
+     0 |   assign $order = r0
+     1 |   r1 = fetch @result_label
+     2 |   assign @result_label = r1
+     3 |   r2 = fetch @weight
+     4 |   assign @weight = r2
+     5 |   r3 = fetch @alert_count
+     6 |   assign @alert_count = r3
+     7 |   r4 = fetch @result_score
+     8 |   assign @result_score = r4
+     9 |   r5 = fetch @threshold
+    10 |   assign @threshold = r5
+    11 |   r6 = fetch @user_id
+    12 |   assign @user_id = r6
+    13 |   r7 = take @user_id
+    14 |   r8 = take $order
+    15 |   r9 = call #0(r7) [r8 -> r10]
+    16 |   assign $order = r10
+    17 |   assign profile = r9
+    18 |   r11 = take @user_id
+    19 |   r12 = take $order
+    20 |   r13 = call #1(r11) [r12 -> r14]
+    21 |   assign $order = r14
+    22 |   assign history = r13
+    23 |   r15 = take profile
+    24 |   r16 = take history
+    25 |   r17 = take @weight
+    26 |   r18 = call #2(r15, r16, r17)
+    27 |   assign score = r18
+    28 |   r19 = take profile
+    29 |   r20 = take score
+    30 |   r21 = call #3(r19, r20)
+    31 |   assign label = r21
+    32 |   r22 = take score
+    33 |   r23 = take @threshold
+    34 |   r24 = r22 > r23
+    35 |   r25 = test r24 == true
+    36 |   jump_if r25 then L0 else L1
+    37 | L0:
+    38 |   r26 = take @user_id
+    39 |   r27 = take score
+    40 |   r28 = take $order
+    41 |   r29 = call #4(r26, r27) [r28 -> r30]
+    42 |   assign $order = r30
+    43 |   r31 = take @alert_count
+    45 |   r32 = r31 + 1 (r33)
+    46 |   assign @alert_count = r32
+    47 |   jump L1
+    48 | L1:
+    49 |   r34 = take label
+    50 |   assign @result_label = r34
+    51 |   r35 = take score
+    52 |   assign @result_score = r35
+    53 |   r36 = take score
+    54 |   r37 = take @result_label
+    55 |   commit @result_label = r37
+    56 |   r38 = take @weight
+    57 |   commit @weight = r38
+    58 |   r39 = take @alert_count
+    59 |   commit @alert_count = r39
+    60 |   r40 = take @result_score
+    61 |   commit @result_score = r40
+    62 |   r41 = take @threshold
+    63 |   commit @threshold = r41
+    64 |   r42 = take @user_id
+    65 |   commit @user_id = r42
+    66 |   r43 = take $order
+    67 |   return r36 [r43]
 
-    ; r0 (v3) : Ref<Order>
-    ; r1 (v1) : Order
-    ; r2 (@user_id) : Ref<Int>
-    ; r3 (v5) : Int
-    ; r4 (v7) : Ref<Order>
-    ; r5 (v8) : Order
-    ; r6 (fetch_profile(...)) : Int
-    ; r7 (v9) : Order
-    ; r8 (v10) : Ref<Order>
-    ; r9 (v12) : Ref<Int>
-    ; r10 (@user_id) : Ref<Int>
-    ; r11 (v14) : Int
-    ; r12 (v16) : Ref<Order>
-    ; r13 (v17) : Order
-    ; r14 (fetch_history(...)) : Int
-    ; r15 (v18) : Order
-    ; r16 (v19) : Ref<Order>
-    ; r17 (v21) : Ref<Int>
-    ; r18 (v22) : Ref<Int>
+    ; r0 (v1) : Order
+    ; r1 (@result_label) : String
+    ; r2 (@weight) : Int
+    ; r3 (@alert_count) : Int
+    ; r4 (@result_score) : Int
+    ; r5 (@threshold) : Int
+    ; r6 (@user_id) : Int
+    ; r7 (@user_id) : Int
+    ; r8 (v17) : Order
+    ; r9 (fetch_profile(...)) : Int
+    ; r10 (v18) : Order
+    ; r11 (@user_id) : Int
+    ; r12 (v22) : Order
+    ; r13 (fetch_history(...)) : Int
+    ; r14 (v23) : Order
+    ; r15 (profile) : Int
+    ; r16 (history) : Int
+    ; r17 (@weight) : Int
+    ; r18 (compute_score(...)) : Int
     ; r19 (profile) : Int
-    ; r20 (v24) : Ref<Int>
-    ; r21 (history) : Int
-    ; r22 (@weight) : Ref<Int>
-    ; r23 (v27) : Int
-    ; r24 (compute_score(...)) : Int
-    ; r25 (v30) : Ref<Int>
-    ; r26 (v31) : Ref<Int>
-    ; r27 (profile) : Int
-    ; r28 (v33) : Ref<Int>
-    ; r29 (score) : Int
-    ; r30 (format_label(...)) : String
-    ; r31 (v37) : Ref<String>
-    ; r32 (v38) : Ref<Int>
-    ; r33 (score) : Int
-    ; r34 (@threshold) : Ref<Int>
-    ; r35 (v41) : Int
-    ; r36 (v42) : Bool
-    ; r37 (v43) : Bool
-    ; r38 (@user_id) : Ref<Int>
-    ; r39 (v45) : Int
-    ; r40 (v46) : Ref<Int>
-    ; r41 (score) : Int
-    ; r42 (v49) : Ref<Order>
-    ; r43 (v50) : Order
-    ; r44 (notify_alert(...)) : Int
-    ; r45 (v51) : Order
-    ; r46 (v52) : Ref<Order>
-    ; r47 (@alert_count) : Ref<Int>
-    ; r48 (v54) : Int
-    ; r49 (v56) : Int
-    ; r50 (v55) : Int
-    ; r51 (@alert_count) : Ref<Int>
-    ; r52 (v58) : Ref<String>
-    ; r53 (label) : String
-    ; r54 (@result_label) : Ref<String>
-    ; r55 (v61) : Ref<Int>
-    ; r56 (score) : Int
-    ; r57 (@result_score) : Ref<Int>
-    ; r58 (v64) : Ref<Int>
-    ; r59 (score) : Int
-    ; r60 (v66) : Ref<Order>
-    ; r61 (v67) : Order
+    ; r20 (score) : Int
+    ; r21 (format_label(...)) : String
+    ; r22 (score) : Int
+    ; r23 (@threshold) : Int
+    ; r24 (v36) : Bool
+    ; r25 (v37) : Bool
+    ; r26 (@user_id) : Int
+    ; r27 (score) : Int
+    ; r28 (v41) : Order
+    ; r29 (notify_alert(...)) : Int
+    ; r30 (v42) : Order
+    ; r31 (@alert_count) : Int
+    ; r32 (v45) : Int
+    ; r33 (v44) : Int
+    ; r34 (label) : String
+    ; r35 (score) : Int
+    ; r36 (score) : Int
+    ; r37 (v49) : String
+    ; r38 (v50) : Int
+    ; r39 (v51) : Int
+    ; r40 (v52) : Int
+    ; r41 (v53) : Int
+    ; r42 (v54) : Int
+    ; r43 (v55) : Order
+    ; r44 (@result_label) : String
+    ; r45 (@weight) : Int
+    ; r46 (@result_score) : Int
+    ; r47 (@threshold) : Int
+    ; r48 (@user_id) : Int
+    ; r49 (@alert_count) : Int

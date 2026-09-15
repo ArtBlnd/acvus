@@ -3,18 +3,19 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = ref $v1
-     2 |   r1 = load r0
-     3 |   r2 = ref @count
-     4 |   store r2 = r1
-     5 |   r3 = ref $v1
-     6 |   r4 = load r3
-     7 |   return r4
+     1 |   r0 = fetch @count
+     2 |   assign @count = r0
+     3 |   r1 = take $v1
+     4 |   assign @count = r1
+     5 |   r2 = take $v1
+     6 |   r3 = take @count
+     7 |   commit @count = r3
+     8 |   return r2
 
-    ; r0 (v4) : Ref<Int>
+    ; r0 (@count) : Int
     ; r1 ($x) : Int
-    ; r2 (@count) : Ref<Int>
-    ; r3 (v7) : Ref<Int>
-    ; r4 ($x) : Int
+    ; r2 ($x) : Int
+    ; r3 (v8) : Int
+    ; r4 (@count) : Int
     ; r5 (v1) : Int
     ; r6 (set_count(...)) : Int

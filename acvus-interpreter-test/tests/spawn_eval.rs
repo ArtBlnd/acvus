@@ -23,7 +23,7 @@ fn inst(kind: InstKind) -> Inst {
 }
 
 fn empty_page() -> InMemoryContext {
-    InMemoryContext::empty(Interner::new())
+    InMemoryContext::empty()
 }
 
 fn make_context(

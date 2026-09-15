@@ -15,6 +15,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         InstKind::Const { dst, .. }
         | InstKind::Ref { dst, .. }
         | InstKind::Take { dst, .. }
+        | InstKind::Fetch { dst, .. }
         | InstKind::Load { dst, .. }
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
@@ -54,6 +55,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
 
         InstKind::Store { .. }
         | InstKind::Assign { .. }
+        | InstKind::Commit { .. }
         | InstKind::Drop { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
@@ -69,6 +71,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::Const { .. }
         | InstKind::Ref { .. }
         | InstKind::Take { .. }
+        | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop
@@ -79,6 +82,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::Load { src, .. } => smallvec![*src],
         InstKind::Store { dst, value, .. } => smallvec![*dst, *value],
         InstKind::Assign { value, .. } => smallvec![*value],
+        InstKind::Commit { value, .. } => smallvec![*value],
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
         InstKind::FieldGet { object, .. } => smallvec![*object],
         InstKind::FieldSet { object, value, .. } => smallvec![*object, *value],

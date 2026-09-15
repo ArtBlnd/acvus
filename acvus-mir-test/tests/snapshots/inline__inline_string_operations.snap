@@ -7,14 +7,12 @@ expression: ir
   T1 = "Hello "
 
 === main ===
-     2 |   r0 = ref $v1
-     3 |   r1 = load r0
-     4 |   r2 = T1 + r1
-     5 |   return r2
+     2 |   r0 = take $v1
+     3 |   r1 = T1 + r0
+     4 |   return r1
 
-    ; r0 (v5) : Ref<String>
-    ; r1 ($name) : String
-    ; r2 (v7) : String
-    ; r3 (v1) : String
-    ; r4 (v4) : String
-    ; r5 (greet(...)) : String
+    ; r0 ($name) : String
+    ; r1 (v6) : String
+    ; r2 (v1) : String
+    ; r3 (v4) : String
+    ; r4 (greet(...)) : String

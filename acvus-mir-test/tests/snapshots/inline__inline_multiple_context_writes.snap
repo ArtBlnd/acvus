@@ -3,24 +3,30 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = ref @a
-     2 |   store r0 = 1 (r1)
-     4 |   r2 = ref @b
-     5 |   store r2 = 2 (r3)
-     6 |   r4 = ref @a
-     7 |   r5 = load r4
-     8 |   r6 = ref @b
-     9 |   r7 = load r6
-    10 |   r8 = r5 + r7
-    11 |   return r8
+     0 |   r0 = fetch @a
+     1 |   assign @a = r0
+     2 |   r1 = fetch @b
+     3 |   assign @b = r1
+     5 |   assign @a = 1 (r2)
+     7 |   assign @b = 2 (r3)
+     8 |   r4 = take @a
+     9 |   r5 = take @b
+    10 |   r6 = r4 + r5
+    11 |   r7 = take @a
+    12 |   commit @a = r7
+    13 |   r8 = take @b
+    14 |   commit @b = r8
+    15 |   return r6
 
-    ; r0 (@a) : Ref<Int>
-    ; r1 (v2) : Int
-    ; r2 (@b) : Ref<Int>
-    ; r3 (v4) : Int
-    ; r4 (@a) : Ref<Int>
-    ; r5 (v7) : Int
-    ; r6 (@b) : Ref<Int>
-    ; r7 (v9) : Int
-    ; r8 (v10) : Int
-    ; r9 (init(...)) : Int
+    ; r0 (@a) : Int
+    ; r1 (@b) : Int
+    ; r2 (v6) : Int
+    ; r3 (v7) : Int
+    ; r4 (@a) : Int
+    ; r5 (@b) : Int
+    ; r6 (v10) : Int
+    ; r7 (v11) : Int
+    ; r8 (v12) : Int
+    ; r9 (@a) : Int
+    ; r10 (init(...)) : Int
+    ; r11 (@b) : Int

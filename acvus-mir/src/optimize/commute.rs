@@ -16,9 +16,9 @@
 //! axis.
 //!
 //! A call is ordered against the run's own context accesses by its effect's
-//! read and write sets (RFC-0017): it joins a run only if no store between
-//! the run's first call and itself names a context it touches, and no load
-//! names one it writes; a call that touches any context is never moved
+//! read and write sets (RFC-0017): it joins a run only if no `Commit`
+//! between the run's first call and itself names a context it touches, and
+//! no `Fetch` names one it writes; a call that touches any context is never moved
 //! across blocks.
 
 use rustc_hash::FxHashMap;
@@ -26,7 +26,6 @@ use rustc_hash::FxHashMap;
 use crate::analysis::domtree::{DomTree, PostDomTree};
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::graph::QualifiedRef;
 use crate::ir::{Inst, InstKind, OrderEdge, ValueId};
 use crate::optimize::context_ops::{context_read, context_written};
 use crate::ty::{Effect, Ty};
@@ -230,8 +229,8 @@ fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
 }
 
 /// Whether issuing a call of `effect` before `insts` would reorder it
-/// against a context access there: a store to a context it touches, or a
-/// load of a context it writes.
+/// against a page op there: a `Commit` of a context it touches, or a
+/// `Fetch` of a context it writes.
 fn accesses_between(insts: &[Inst], effect: &Effect) -> bool {
     insts.iter().any(|inst| {
         context_written(&inst.kind).is_some_and(|ctx| effect.touches(ctx))
@@ -377,12 +376,11 @@ mod tests {
     }
 
     #[test]
-    fn a_store_to_a_read_context_breaks_a_run() {
-        use crate::ir::RefTarget;
+    fn a_commit_to_a_read_context_breaks_a_run() {
         let i = Interner::new();
         let n = QualifiedRef::root(i.intern("n"));
-        // Two commutative calls that read @n, with a store to @n between
-        // them: o0 -> f -> o2 ; @n = _ ; o2 -> f -> o4. They do not merge.
+        // Two commutative calls that read @n, with a commit of @n between
+        // them: o0 -> f -> o2 ; commit @n ; o2 -> f -> o4. They do not merge.
         let c = Effect::with_contexts(
             crate::ty::Reissue::Idempotent,
             true,
@@ -401,9 +399,8 @@ mod tests {
                         after: 2,
                     },
                 ),
-                InstKind::Assign {
-                    target: RefTarget::Context(n),
-                    path: Vec::new(),
+                InstKind::Commit {
+                    context: n,
                     value: v(5),
                 },
                 call(
@@ -438,7 +435,7 @@ mod tests {
                     after: v(4)
                 },
             ],
-            "the store to @n keeps the second call on the chain after the first"
+            "the commit of @n keeps the second call on the chain after the first"
         );
         assert!(merges(&cfg).is_empty(), "no run formed, so no merge");
     }

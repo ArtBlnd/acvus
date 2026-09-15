@@ -107,7 +107,7 @@ async fn run_ext(
     let executor = Arc::new(SequentialExecutor);
     let shared =
         InterpreterContext::new(interner, exec_fns, executor).with_context_names(context_names);
-    let page = InMemoryContext::new(snapshot, interner.clone());
+    let page = InMemoryContext::new(snapshot);
     let mut interp = Interpreter::new(shared, entry_qref, page);
     interp.execute().await.expect("execution failed").value
 }

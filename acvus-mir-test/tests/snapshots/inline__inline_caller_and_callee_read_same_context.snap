@@ -3,23 +3,37 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @count
-     1 |   r1 = load r0
-     3 |   r2 = ref $v3
-     4 |   r3 = load r2
-     5 |   r4 = ref @count
-     6 |   r5 = load r4
-     7 |   r6 = r3 + r5
-     8 |   r7 = r1 + r6
-     9 |   return r7
+     0 |   r0 = fetch @count
+     1 |   assign @count = r0
+     2 |   r1 = take @count
+     4 |   r2 = take @count
+     5 |   commit @count = r2
+     6 |   r3 = fetch @count
+     7 |   assign @count = r3
+     8 |   r4 = take $v4
+     9 |   r5 = take @count
+    10 |   r6 = r4 + r5
+    11 |   r7 = take @count
+    12 |   commit @count = r7
+    13 |   r8 = fetch @count
+    14 |   assign @count = r8
+    15 |   r9 = r1 + r6
+    16 |   r10 = take @count
+    17 |   commit @count = r10
+    18 |   return r9
 
-    ; r0 (@count) : Ref<Int>
-    ; r1 (v2) : Int
-    ; r2 (v7) : Ref<Int>
-    ; r3 ($x) : Int
-    ; r4 (@count) : Ref<Int>
-    ; r5 (v10) : Int
-    ; r6 (v11) : Int
-    ; r7 (v5) : Int
-    ; r8 (v3) : Int
-    ; r9 (add_count(...)) : Int
+    ; r0 (@count) : Int
+    ; r1 (@count) : Int
+    ; r2 (v6) : Int
+    ; r3 (@count) : Int
+    ; r4 ($x) : Int
+    ; r5 (@count) : Int
+    ; r6 (v15) : Int
+    ; r7 (v16) : Int
+    ; r8 (@count) : Int
+    ; r9 (v8) : Int
+    ; r10 (v9) : Int
+    ; r11 (@count) : Int
+    ; r12 (@count) : Int
+    ; r13 (v4) : Int
+    ; r14 (add_count(...)) : Int

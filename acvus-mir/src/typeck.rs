@@ -51,6 +51,7 @@ pub struct TypeResolution {
     pub extern_params: Vec<(Astr, Ty)>,
     /// Join of the effects of every call in the body.
     pub effect: Effect,
+    pub context_types: FxHashMap<QualifiedRef, Ty>,
 }
 
 impl TypeResolution {
@@ -61,6 +62,7 @@ impl TypeResolution {
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
         effect: Effect,
+        context_types: FxHashMap<QualifiedRef, Ty>,
     ) -> Self {
         Self {
             type_map,
@@ -69,6 +71,7 @@ impl TypeResolution {
             tail_ty,
             extern_params,
             effect,
+            context_types,
         }
     }
 }
@@ -281,6 +284,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             })
             .collect();
         let effect = self.close_body_effect();
+        let context_types = self.named_context_types();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
@@ -288,6 +292,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Ty::String,
             extern_params,
             effect,
+            context_types,
         )))
     }
 
@@ -348,6 +353,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect();
         let frozen_tail = self.freeze_or_error(&self.solver.resolve_ty(&tail_ty));
         let effect = self.close_body_effect();
+        let context_types = self.named_context_types();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             self.coercion_map,
@@ -355,6 +361,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             frozen_tail,
             extern_params,
             effect,
+            context_types,
         )))
     }
 
@@ -632,6 +639,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn note_context_use(&mut self, qref: QualifiedRef, span: Span) {
         self.context_uses.entry(qref).or_insert(span);
+    }
+
+    fn named_context_types(&self) -> FxHashMap<QualifiedRef, Ty> {
+        self.context_uses
+            .keys()
+            .map(|qref| (*qref, self.context_type(*qref).unwrap_or_else(Ty::error)))
+            .collect()
     }
 
     /// The type a context resolved to, once every use has been checked.

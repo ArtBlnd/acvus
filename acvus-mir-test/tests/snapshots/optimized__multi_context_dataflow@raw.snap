@@ -3,48 +3,56 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 |   r0 = ref @a
-     1 |   r1 = load r0
-     2 |   r2 = ref @b
-     3 |   r3 = load r2
-     4 |   r4 = r1 + r3
-     5 |   r5 = ref sum
-     6 |   store r5 = r4
-     7 |   r6 = ref sum
-     8 |   r7 = load r6
-     9 |   r8 = ref @scale
-    10 |   r9 = load r8
-    11 |   r10 = r7 * r9
-    12 |   r11 = ref scaled
-    13 |   store r11 = r10
-    14 |   r12 = ref scaled
-    15 |   r13 = load r12
-    16 |   r14 = ref @a
-    17 |   r15 = load r14
-    18 |   r16 = r13 + r15
-    19 |   r17 = ref @output
-    20 |   store r17 = r16
-    21 |   r18 = ref @output
-    22 |   r19 = load r18
-    23 |   return r19
+     0 |   r0 = fetch @output
+     1 |   assign @output = r0
+     2 |   r1 = fetch @a
+     3 |   assign @a = r1
+     4 |   r2 = fetch @scale
+     5 |   assign @scale = r2
+     6 |   r3 = fetch @b
+     7 |   assign @b = r3
+     8 |   r4 = take @a
+     9 |   r5 = take @b
+    10 |   r6 = r4 + r5
+    11 |   assign sum = r6
+    12 |   r7 = take sum
+    13 |   r8 = take @scale
+    14 |   r9 = r7 * r8
+    15 |   assign scaled = r9
+    16 |   r10 = take scaled
+    17 |   r11 = take @a
+    18 |   r12 = r10 + r11
+    19 |   assign @output = r12
+    20 |   r13 = take @output
+    21 |   r14 = take @output
+    22 |   commit @output = r14
+    23 |   r15 = take @a
+    24 |   commit @a = r15
+    25 |   r16 = take @scale
+    26 |   commit @scale = r16
+    27 |   r17 = take @b
+    28 |   commit @b = r17
+    29 |   return r13
 
-    ; r0 (@a) : Ref<Int>
-    ; r1 (v2) : Int
-    ; r2 (@b) : Ref<Int>
-    ; r3 (v4) : Int
-    ; r4 (v5) : Int
-    ; r5 (v7) : Ref<Int>
-    ; r6 (v8) : Ref<Int>
+    ; r0 (@output) : Int
+    ; r1 (@a) : Int
+    ; r2 (@scale) : Int
+    ; r3 (@b) : Int
+    ; r4 (@a) : Int
+    ; r5 (@b) : Int
+    ; r6 (v11) : Int
     ; r7 (sum) : Int
-    ; r8 (@scale) : Ref<Int>
-    ; r9 (v11) : Int
-    ; r10 (v12) : Int
-    ; r11 (v14) : Ref<Int>
-    ; r12 (v15) : Ref<Int>
-    ; r13 (scaled) : Int
-    ; r14 (@a) : Ref<Int>
-    ; r15 (v18) : Int
-    ; r16 (v19) : Int
-    ; r17 (@output) : Ref<Int>
-    ; r18 (@output) : Ref<Int>
-    ; r19 (v22) : Int
+    ; r8 (@scale) : Int
+    ; r9 (v15) : Int
+    ; r10 (scaled) : Int
+    ; r11 (@a) : Int
+    ; r12 (v19) : Int
+    ; r13 (@output) : Int
+    ; r14 (v21) : Int
+    ; r15 (v22) : Int
+    ; r16 (v23) : Int
+    ; r17 (v24) : Int
+    ; r18 (@a) : Int
+    ; r19 (@b) : Int
+    ; r20 (@output) : Int
+    ; r21 (@scale) : Int

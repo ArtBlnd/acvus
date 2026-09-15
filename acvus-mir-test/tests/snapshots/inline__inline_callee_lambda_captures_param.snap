@@ -3,27 +3,34 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @items
-     1 |   r1 = load r0
-     3 |   r2 = ref $v2
-     4 |   r3 = load r2
-     5 |   r4 = call #0(r3)
-     6 |   r5 = ref $v3
-     7 |   r6 = load r5
-     8 |   r7 = closure L0 [r6]
-     9 |   r8 = call #1(r4, r7)
-    10 |   r9 = call #2(r8)
-    11 |   return r9
+     0 |   r0 = fetch @items
+     1 |   assign @items = r0
+     2 |   r1 = take @items
+     4 |   r2 = take $@items
+     5 |   r3 = call #0(r2)
+     6 |   r4 = take $v4
+     7 |   r5 = closure L0 [r4]
+     8 |   r6 = call #1(r3, r5)
+     9 |   r7 = take @items
+    10 |   commit @items = r7
+    11 |   r8 = call #2(r6)
+    12 |   r9 = fetch @items
+    13 |   assign @items = r9
+    14 |   r10 = take @items
+    15 |   commit @items = r10
+    16 |   return r8
 
-    ; r0 (@items) : Ref<Array<Int, 3>>
-    ; r1 (v2) : Array<Int, 3>
-    ; r2 (v8) : Ref<Array<Int, 3>>
-    ; r3 ($xs) : Array<Int, 3>
-    ; r4 (v10) : Iterator<Int, Pure, #IdentityId(3)>
-    ; r5 (v11) : Ref<Int>
-    ; r6 ($n) : Int
-    ; r7 (v13) : Fn(Int) -> Int
-    ; r8 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r9 (collect(...)) : List<Int>
-    ; r10 (v3) : Int
+    ; r0 (@items) : Array<Int, 3>
+    ; r1 (@items) : Array<Int, 3>
+    ; r2 ($xs) : Array<Int, 3>
+    ; r3 (v13) : Iterator<Int, Pure, #IdentityId(3)>
+    ; r4 ($n) : Int
+    ; r5 (v15) : Fn(Int) -> Int
+    ; r6 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
+    ; r7 (v7) : Array<Int, 3>
+    ; r8 (collect(...)) : List<Int>
+    ; r9 (@items) : Array<Int, 3>
+    ; r10 (v9) : Array<Int, 3>
     ; r11 (add_n(...)) : Iterator<Int, Pure, #IdentityId(2)>
+    ; r12 (@items) : Array<Int, 3>
+    ; r13 (v4) : Int

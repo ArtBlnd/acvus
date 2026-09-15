@@ -3,9 +3,16 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = take @obj.a.b
-     1 |   r1 = call #0(r0)
-     2 |   return r1
+     0 |   r0 = fetch @obj
+     1 |   assign @obj = r0
+     2 |   r1 = take @obj.a.b
+     3 |   r2 = call #0(r1)
+     4 |   r3 = take @obj
+     5 |   commit @obj = r3
+     6 |   return r2
 
-    ; r0 (@obj.a.b) : Int
-    ; r1 (to_string(...)) : String
+    ; r0 (@obj) : {a: {b: Int}}
+    ; r1 (@obj.a.b) : Int
+    ; r2 (to_string(...)) : String
+    ; r3 (v5) : {a: {b: Int}}
+    ; r4 (@obj) : {a: {b: Int}}

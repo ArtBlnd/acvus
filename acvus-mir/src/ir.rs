@@ -2,7 +2,6 @@ use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
-use rustc_hash::FxHashSet;
 
 use crate::graph::QualifiedRef;
 use crate::ty::{Mutability, Ty};
@@ -38,8 +37,6 @@ pub enum RefTarget {
     Var(ValueId),
     /// An extern parameter, identified by its param_reg ValueId.
     Param(ValueId),
-    /// A context: `@name`. Globally unique by QualifiedRef.
-    Context(QualifiedRef),
 }
 
 /// Target of a function call.
@@ -77,17 +74,27 @@ pub enum InstKind {
         mutability: Mutability,
     },
     /// Move the value out of a storage into `dst`; a primitive is copied
-    /// and the storage keeps it. A read of a variable or a context.
+    /// and the storage keeps it. A read of a variable.
     Take {
         dst: ValueId,
         target: RefTarget,
         path: Vec<Astr>,
     },
     /// Move `value` into a storage; the storage's old value is dropped. An
-    /// assignment to a variable or a context.
+    /// assignment to a variable.
     Assign {
         target: RefTarget,
         path: Vec<Astr>,
+        value: ValueId,
+    },
+    /// Move a context's whole value out of the page into `dst` (RFC-0025).
+    Fetch {
+        dst: ValueId,
+        context: QualifiedRef,
+    },
+    /// Move `value` into the page as the context's whole value (RFC-0025).
+    Commit {
+        context: QualifiedRef,
         value: ValueId,
     },
     /// `*r`: read through a reference. `src` is `&T` and `T` is a
@@ -355,6 +362,7 @@ impl DebugInfo {
                         // Look up debug name from val_origins for the slot.
                         match self.val_origins.get(slot) {
                             Some(ValOrigin::Named(n)) => interner.resolve(*n).to_string(),
+                            Some(ValOrigin::Context(n)) => format!("@{}", interner.resolve(*n)),
                             _ => format!("var_{}", slot.0),
                         }
                     }
@@ -362,7 +370,6 @@ impl DebugInfo {
                         Some(ValOrigin::ExternParam(n)) => format!("${}", interner.resolve(*n)),
                         _ => format!("$param_{}", slot.0),
                     },
-                    RefTarget::Context(qref) => format!("@{}", interner.resolve(qref.name)),
                 };
                 let fields: Vec<_> = path
                     .iter()
@@ -428,30 +435,3 @@ pub struct MirModule {
     pub closures: FxHashMap<Label, MirBody>,
 }
 
-impl MirModule {
-    /// Extract all context keys (Ref(Context) targets) referenced by this module.
-    pub fn extract_context_keys(&self) -> FxHashSet<QualifiedRef> {
-        let mut keys = FxHashSet::default();
-        for inst in &self.main.insts {
-            if let InstKind::Ref {
-                target: RefTarget::Context(ctx),
-                ..
-            } = &inst.kind
-            {
-                keys.insert(*ctx);
-            }
-        }
-        for closure in self.closures.values() {
-            for inst in &closure.insts {
-                if let InstKind::Ref {
-                    target: RefTarget::Context(ctx),
-                    ..
-                } = &inst.kind
-                {
-                    keys.insert(*ctx);
-                }
-            }
-        }
-        keys
-    }
-}

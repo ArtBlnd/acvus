@@ -8,28 +8,35 @@ expression: ir
   T2 = "guest page"
 
 === main ===
-     1 |   r0 = take @role
-     2 | L2:
-     3 |   r1 = test r0 == "admin"
-     4 |   jump_if r1 then L3 else L1
-     5 | L3:
-     8 |   r2 = T0 + T1
-     9 |   jump L0(r2)
-    10 | L1:
-    13 |   r3 = T0 + T2
-    14 |   jump L0(r3)
-    15 | L0(r4: String):  ; merge_of L2
-    16 |   r5 = T0 + r4
-    17 |   return r5
+     0 |   r0 = undef
+     1 |   r1 = fetch @role
+     3 | L2:
+     4 |   r2 = test r1 == "admin"
+     5 |   jump_if r2 then L3 else L1
+     6 | L3:
+     9 |   r3 = T0 + T1
+    10 |   jump L0(r3)
+    11 | L1:
+    14 |   r4 = T0 + T2
+    15 |   jump L0(r4)
+    16 | L0(r5: String):  ; merge_of L2
+    17 |   r6 = T0 + r5
+    18 |   commit @role = r1
+    19 |   return r6
 
-    ; r0 (@role) : String
-    ; r1 (v3) : Bool
-    ; r2 (v6) : String
-    ; r3 (v9) : String
-    ; r4 (v10) : String
-    ; r5 (v11) : String
-    ; r6 (v7) : String
-    ; r7 (v5) : String
-    ; r8 (v1) : String
-    ; r9 (v8) : String
-    ; r10 (v4) : String
+    ; r0 (v15) : String
+    ; r1 (@role) : String
+    ; r2 (v5) : Bool
+    ; r3 (v8) : String
+    ; r4 (v11) : String
+    ; r5 (v12) : String
+    ; r6 (v13) : String
+    ; r7 (v3) : String
+    ; r8 (v14) : String
+    ; r9 (v6) : String
+    ; r10 (v9) : String
+    ; r11 (@role) : String
+    ; r12 (@role) : String
+    ; r13 (v7) : String
+    ; r14 (v10) : String
+    ; r15 (v16) : String

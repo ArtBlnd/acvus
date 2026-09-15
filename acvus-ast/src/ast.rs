@@ -561,20 +561,48 @@ pub enum Literal {
 
 /// Extract all `@name` context references from a Script AST.
 pub fn extract_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<QualifiedRef> {
-    let mut refs = rustc_hash::FxHashSet::default();
+    script_context_refs(script, true)
+}
+
+pub fn direct_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<QualifiedRef> {
+    script_context_refs(script, false)
+}
+
+pub fn direct_expr_context_refs(expr: &Expr) -> rustc_hash::FxHashSet<QualifiedRef> {
+    let mut refs = ContextRefs::new(false);
+    walk_expr(expr, &mut refs);
+    refs.set
+}
+
+fn script_context_refs(script: &Script, into_lambdas: bool) -> rustc_hash::FxHashSet<QualifiedRef> {
+    let mut refs = ContextRefs::new(into_lambdas);
     walk_stmts(&script.stmts, &mut refs);
     if let Some(tail) = &script.tail {
         walk_expr(tail, &mut refs);
     }
-    refs
+    refs.set
 }
 
-fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
+struct ContextRefs {
+    set: rustc_hash::FxHashSet<QualifiedRef>,
+    into_lambdas: bool,
+}
+
+impl ContextRefs {
+    fn new(into_lambdas: bool) -> Self {
+        Self {
+            set: rustc_hash::FxHashSet::default(),
+            into_lambdas,
+        }
+    }
+}
+
+fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
     for stmt in stmts {
         match stmt {
             Stmt::Bind { expr, .. } => walk_expr(expr, refs),
             Stmt::ContextStore { name, expr, .. } => {
-                refs.insert(*name);
+                refs.set.insert(*name);
                 walk_expr(expr, refs);
             }
             Stmt::VarFieldStore { expr, .. } => walk_expr(expr, refs),
@@ -613,12 +641,20 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
 
 /// Extract all `@name` context references from a Template AST.
 pub fn extract_template_context_refs(template: &Template) -> rustc_hash::FxHashSet<QualifiedRef> {
-    let mut refs = rustc_hash::FxHashSet::default();
-    walk_nodes(&template.body, &mut refs);
-    refs
+    template_context_refs(template, true)
 }
 
-fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
+pub fn direct_template_context_refs(template: &Template) -> rustc_hash::FxHashSet<QualifiedRef> {
+    template_context_refs(template, false)
+}
+
+fn template_context_refs(template: &Template, into_lambdas: bool) -> rustc_hash::FxHashSet<QualifiedRef> {
+    let mut refs = ContextRefs::new(into_lambdas);
+    walk_nodes(&template.body, &mut refs);
+    refs.set
+}
+
+fn walk_nodes(nodes: &[Node], refs: &mut ContextRefs) {
     for node in nodes {
         match node {
             Node::Text { .. } | Node::Comment { .. } => {}
@@ -637,10 +673,10 @@ fn walk_nodes(nodes: &[Node], refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
     }
 }
 
-fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
+fn walk_pattern(pattern: &Pattern, refs: &mut ContextRefs) {
     match pattern {
         Pattern::ContextBind { name, .. } => {
-            refs.insert(*name);
+            refs.set.insert(*name);
         }
         Pattern::Binding { .. } | Pattern::Literal { .. } => {}
         Pattern::List { head, tail, .. } => {
@@ -672,10 +708,10 @@ fn walk_pattern(pattern: &Pattern, refs: &mut rustc_hash::FxHashSet<QualifiedRef
     }
 }
 
-fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
+fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
     match expr {
         Expr::ContextRef { name, .. } => {
-            refs.insert(*name);
+            refs.set.insert(*name);
         }
         Expr::Ident { .. } | Expr::Literal { .. } | Expr::Variant { .. } => {}
         Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. } => {
@@ -694,7 +730,11 @@ fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
                 walk_expr(arg, refs);
             }
         }
-        Expr::Lambda { body, .. } => walk_expr(body, refs),
+        Expr::Lambda { body, .. } => {
+            if refs.into_lambdas {
+                walk_expr(body, refs);
+            }
+        }
         Expr::List { head, tail, .. } => {
             for e in head {
                 walk_expr(e, refs);
@@ -761,7 +801,7 @@ fn walk_expr(expr: &Expr, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
     }
 }
 
-fn walk_else_branch(eb: &ElseBranch, refs: &mut rustc_hash::FxHashSet<QualifiedRef>) {
+fn walk_else_branch(eb: &ElseBranch, refs: &mut ContextRefs) {
     match eb {
         ElseBranch::ElseIf(expr) => walk_expr(expr, refs),
         ElseBranch::Else { body, tail, .. } => {

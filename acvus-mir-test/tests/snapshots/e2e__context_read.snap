@@ -6,12 +6,18 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 |   r0 = take @count
-     2 |   r1 = call #0(r0)
-     3 |   r2 = T0 + r1
-     4 |   return r2
+     0 |   r0 = undef
+     1 |   r1 = fetch @count
+     3 |   r2 = call #0(r1)
+     4 |   r3 = T0 + r2
+     5 |   commit @count = r1
+     6 |   return r3
 
-    ; r0 (@count) : Int
-    ; r1 (to_string(...)) : String
-    ; r2 (v4) : String
-    ; r3 (v1) : String
+    ; r0 (v8) : Int
+    ; r1 (@count) : Int
+    ; r2 (to_string(...)) : String
+    ; r3 (v6) : String
+    ; r4 (v3) : String
+    ; r5 (v7) : Int
+    ; r6 (@count) : Int
+    ; r7 (@count) : Int

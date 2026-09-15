@@ -5,33 +5,35 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = ref @out
-     3 |   r3 = load r2
-     4 |   r4 = ref @a
-     5 |   r5 = load r4
-     6 |   r6 = ref @b
-     7 |   r7 = load r6
-     8 |   r8 = r5 + r7
-     9 |   r9 = ref @out
-    10 |   store r9 = r8
-    11 |   r10 = ref @out
+     2 |   r2 = undef
+     3 |   r3 = undef
+     4 |   r4 = undef
+     5 |   r5 = fetch @a
+     6 |   r6 = fetch @b
+     7 |   r7 = fetch @out
+     8 |   r8 = r5 + r6
+     9 |   commit @a = r5
+    10 |   commit @b = r6
+    11 |   commit @out = r8
     12 |   return r8
 
     ; r0 (v18) : Int
     ; r1 (v19) : Int
-    ; r2 (v20) : Ref<Int>
-    ; r3 (v17) : Int
-    ; r4 (@a) : Ref<Int>
-    ; r5 (x) : Int
-    ; r6 (@b) : Ref<Int>
-    ; r7 (y) : Int
+    ; r2 (v20) : Int
+    ; r3 (v21) : Int
+    ; r4 (v22) : Int
+    ; r5 (@a) : Int
+    ; r6 (@b) : Int
+    ; r7 (@out) : Int
     ; r8 (v13) : Int
-    ; r9 (@out) : Ref<Int>
-    ; r10 (@out) : Ref<Int>
-    ; r11 (v11) : Ref<Int>
-    ; r12 (v9) : Ref<Int>
+    ; r9 (x) : Int
+    ; r10 (@b) : Int
+    ; r11 (@out) : Int
+    ; r12 (v17) : Int
     ; r13 (y) : Int
-    ; r14 (v4) : Ref<Int>
-    ; r15 (x) : Int
-    ; r16 (v16) : Int
-    ; r17 (v8) : Ref<Int>
+    ; r14 (@a) : Int
+    ; r15 (y) : Int
+    ; r16 (v15) : Int
+    ; r17 (x) : Int
+    ; r18 (@out) : Int
+    ; r19 (v16) : Int

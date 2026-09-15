@@ -248,7 +248,7 @@ fn execute_compiled(
     let shared = InterpreterContext::new(interner, functions, executor)
         .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
-    let page = InMemoryContext::new(snapshot, interner.clone());
+    let page = InMemoryContext::new(snapshot);
     let interp = Interpreter::new(shared.clone(), cr.entry_qref, page);
     (shared, interp)
 }

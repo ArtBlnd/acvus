@@ -12,7 +12,6 @@
 //!   changes a value's type in place.
 //! - Generic variance is invariant: inner types must match recursively.
 
-use crate::graph::QualifiedRef;
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 use crate::ty::{Mutability, Ty};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
@@ -68,10 +67,6 @@ pub enum ValidationErrorKind {
     BorrowConflict {
         storage: String,
         reference: u32,
-    },
-    /// A context taken by the run and not assigned before it ends.
-    ContextLeftTaken {
-        context: String,
     },
 }
 
@@ -726,6 +721,12 @@ impl CheckCtx {
                 let _ = self.ty_of(*dst, vt, span, pc, errors);
             }
             InstKind::Assign { value, .. } => {
+                let _ = self.ty_of(*value, vt, span, pc, errors);
+            }
+            InstKind::Fetch { dst, .. } => {
+                let _ = self.ty_of(*dst, vt, span, pc, errors);
+            }
+            InstKind::Commit { value, .. } => {
                 let _ = self.ty_of(*value, vt, span, pc, errors);
             }
             InstKind::Ref {

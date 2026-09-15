@@ -14,7 +14,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::CfgBody;
-use crate::graph::QualifiedRef;
 use crate::ir::{Callee, Inst, InstKind, RefTarget, ValueId};
 use crate::ty::Ty;
 use acvus_ast::Span;
@@ -198,20 +197,15 @@ impl DataflowAnalysis for InitCheckAnalysis {
 // -- Public API ------------------------------------------------------
 
 /// Run field-level definite-assignment check on a CfgBody.
-///
-/// `external_contexts`: contexts provided by the host - these start as Init.
-///   Script-created contexts (not in this set) start as Uninit.
-pub fn check_init(cfg: &CfgBody, external_contexts: &FxHashSet<QualifiedRef>) -> Vec<UninitError> {
+pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
     let value_fields = build_value_fields(cfg);
     let var_fields = collect_var_fields(cfg);
 
-    // Build initial state: Var fields start Uninit, Context/Param start Init.
     let mut initial = DataflowState::new();
     for (target, fields) in &var_fields {
         let is_external = match target {
             RefTarget::Var(_) => false,
             RefTarget::Param(_) => true,
-            RefTarget::Context(qref) => external_contexts.contains(qref),
         };
         for f in fields {
             initial.set(

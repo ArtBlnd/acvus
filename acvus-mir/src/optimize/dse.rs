@@ -1,21 +1,21 @@
-//! Dead Store Elimination (DSE) for context stores.
+//! Dead Store Elimination (DSE) for context commits.
 //!
-//! Runs post-SSA. Removes context Store instructions that are guaranteed
-//! to be overwritten on ALL paths before being read.
+//! Runs post-SSA. Removes a `Commit` that is guaranteed to be overwritten
+//! on ALL paths before being read.
 //!
-//! A context store is **live** if any subsequent path may read the context
-//! before another store overwrites it. A store is **dead** if on every path
-//! from the store, the context is written again before being read.
+//! A commit is **live** if any subsequent path may read the context
+//! before another commit overwrites it. A commit is **dead** if on every
+//! path from it, the context is committed again before being read.
 //!
-//! A read is a whole `Take` of the context, a call, or a Return (contexts
-//! are externally observable after return); a write is a whole `Assign`.
+//! A read is a `Fetch` of the context, a call, or a Return (contexts are
+//! externally observable after return); a write is a `Commit`.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ir::{InstKind, RefTarget, ValueId};
+use crate::ir::InstKind;
 use crate::optimize::context_ops::{context_read, context_written};
 
 // -- Per-block context gen/kill sets ---------------------------------
@@ -31,8 +31,6 @@ struct BlockContextInfo {
     reads: BTreeSet<QualifiedRef>,
     /// Contexts written in this block before being read (backward: kill set).
     kills: BTreeSet<QualifiedRef>,
-    /// Whether this block contains a Return terminator.
-    has_return: bool,
 }
 
 fn analyze_block(
@@ -42,10 +40,8 @@ fn analyze_block(
     let mut reads = BTreeSet::new();
     let mut kills = BTreeSet::new();
 
-    let has_return = matches!(block.terminator, Terminator::Return { .. });
-
     // If block has Return, ALL written contexts are "read" (externally observable).
-    if has_return {
+    if matches!(block.terminator, Terminator::Return { .. }) {
         reads = written_contexts.clone();
     }
 
@@ -66,11 +62,7 @@ fn analyze_block(
         }
     }
 
-    BlockContextInfo {
-        reads,
-        kills,
-        has_return,
-    }
+    BlockContextInfo { reads, kills }
 }
 
 // -- Backward context liveness ---------------------------------------
@@ -128,8 +120,8 @@ fn compute_context_liveness(
 
 /// Run Dead Store Elimination on a CfgBody.
 ///
-/// Removes context `Assign` instructions that are dead - the assigned value
-/// is guaranteed to be overwritten before being read.
+/// Removes each `Commit` that is dead - the committed value is guaranteed
+/// to be overwritten before being read.
 pub fn run(cfg: &mut CfgBody) {
     let written_contexts: BTreeSet<QualifiedRef> = cfg
         .blocks
@@ -204,10 +196,11 @@ pub fn run(cfg: &mut CfgBody) {
 mod tests {
     use super::*;
     use crate::cfg;
-    use crate::ir::{DebugInfo, Inst, MirBody};
+    use crate::ir::{DebugInfo, Inst, MirBody, ValueId};
     use crate::ty::Ty;
     use acvus_ast::Span;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
+    use rustc_hash::FxHashMap;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
@@ -237,33 +230,25 @@ mod tests {
         }
     }
 
-    fn count_assigns(cfg: &CfgBody) -> usize {
+    fn count_commits(cfg: &CfgBody) -> usize {
         cfg.blocks
             .iter()
             .flat_map(|b| &b.insts)
-            .filter(|i| matches!(i.kind, InstKind::Assign { .. }))
+            .filter(|i| matches!(i.kind, InstKind::Commit { .. }))
             .count()
     }
 
-    fn assign(ctx: QualifiedRef, value: ValueId) -> InstKind {
-        InstKind::Assign {
-            target: RefTarget::Context(ctx),
-            path: vec![],
-            value,
-        }
+    fn commit(context: QualifiedRef, value: ValueId) -> InstKind {
+        InstKind::Commit { context, value }
     }
 
-    fn take(ctx: QualifiedRef, dst: ValueId) -> InstKind {
-        InstKind::Take {
-            dst,
-            target: RefTarget::Context(ctx),
-            path: vec![],
-        }
+    fn fetch(context: QualifiedRef, dst: ValueId) -> InstKind {
+        InstKind::Fetch { dst, context }
     }
 
-    /// `assign @x = v0; assign @x = v1; return v1`: the first assign is dead.
+    /// `commit @x = v0; commit @x = v1; return v1`: the first commit is dead.
     #[test]
-    fn consecutive_assigns_first_dead() {
+    fn consecutive_commits_first_dead() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
@@ -271,8 +256,8 @@ mod tests {
         val_types.insert(v(1), Ty::Int);
         let body = make_body(
             vec![
-                assign(ctx, v(0)),
-                assign(ctx, v(1)),
+                commit(ctx, v(0)),
+                commit(ctx, v(1)),
                 InstKind::Return {
                     value: v(1),
                     order: None,
@@ -281,14 +266,14 @@ mod tests {
             val_types,
         );
         let mut cfg = cfg::promote(body);
-        assert_eq!(count_assigns(&cfg), 2);
+        assert_eq!(count_commits(&cfg), 2);
         run(&mut cfg);
-        assert_eq!(count_assigns(&cfg), 1, "first dead assign should be removed");
+        assert_eq!(count_commits(&cfg), 1, "first dead commit should be removed");
     }
 
-    /// `assign @x = v0; v1 = take @x; return v1`: the assign is read.
+    /// `commit @x = v0; v1 = fetch @x; return v1`: the commit is read.
     #[test]
-    fn assign_then_take_is_live() {
+    fn commit_then_fetch_is_live() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
@@ -296,8 +281,8 @@ mod tests {
         val_types.insert(v(1), Ty::Int);
         let body = make_body(
             vec![
-                assign(ctx, v(0)),
-                take(ctx, v(1)),
+                commit(ctx, v(0)),
+                fetch(ctx, v(1)),
                 InstKind::Return {
                     value: v(1),
                     order: None,
@@ -307,11 +292,11 @@ mod tests {
         );
         let mut cfg = cfg::promote(body);
         run(&mut cfg);
-        assert_eq!(count_assigns(&cfg), 1, "assign before take must not be removed");
+        assert_eq!(count_commits(&cfg), 1, "commit before fetch must not be removed");
     }
 
     #[test]
-    fn assign_then_call_then_assign_keeps_first() {
+    fn commit_then_call_then_commit_keeps_first() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let f = QualifiedRef::root(i.intern("f"));
@@ -320,7 +305,7 @@ mod tests {
         val_types.insert(v(1), Ty::Int);
         let body = make_body(
             vec![
-                assign(ctx, v(0)),
+                commit(ctx, v(0)),
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: crate::ir::Callee::Direct(f),
@@ -328,7 +313,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                assign(ctx, v(1)),
+                commit(ctx, v(1)),
                 InstKind::Return {
                     value: v(1),
                     order: None,
@@ -339,15 +324,15 @@ mod tests {
         let mut cfg = cfg::promote(body);
         run(&mut cfg);
         assert_eq!(
-            count_assigns(&cfg),
+            count_commits(&cfg),
             2,
-            "the call may read @x, so the first assign stays"
+            "the call may read @x, so the first commit stays"
         );
     }
 
-    /// An assign before return is externally observable.
+    /// A commit before return is externally observable.
     #[test]
-    fn assign_before_return_is_live() {
+    fn commit_before_return_is_live() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
@@ -355,7 +340,7 @@ mod tests {
         val_types.insert(v(1), Ty::Int);
         let body = make_body(
             vec![
-                assign(ctx, v(0)),
+                commit(ctx, v(0)),
                 InstKind::Return {
                     value: v(1),
                     order: None,
@@ -365,7 +350,7 @@ mod tests {
         );
         let mut cfg = cfg::promote(body);
         run(&mut cfg);
-        assert_eq!(count_assigns(&cfg), 1, "assign before return is externally observable");
+        assert_eq!(count_commits(&cfg), 1, "commit before return is externally observable");
     }
 
     /// No context stores -> DSE is a no-op.

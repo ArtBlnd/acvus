@@ -299,11 +299,6 @@ fn remap_one(val: ValueId, remap: &FxHashMap<ValueId, ValueId>) -> ValueId {
     remap.get(&val).copied().unwrap_or(val)
 }
 
-/// Remap a vec of ValueIds.
-fn remap_value_ids(vals: &[ValueId], remap: &FxHashMap<ValueId, ValueId>) -> Vec<ValueId> {
-    vals.iter().map(|v| remap_one(*v, remap)).collect()
-}
-
 /// Remap a Label with an offset.
 fn remap_target(
     target: &crate::ir::RefTarget,
@@ -312,7 +307,6 @@ fn remap_target(
     match target {
         crate::ir::RefTarget::Var(slot) => crate::ir::RefTarget::Var(remap_one(*slot, remap)),
         crate::ir::RefTarget::Param(slot) => crate::ir::RefTarget::Param(remap_one(*slot, remap)),
-        crate::ir::RefTarget::Context(qref) => crate::ir::RefTarget::Context(*qref),
     }
 }
 
@@ -365,6 +359,14 @@ fn remap_inst(
         } => InstKind::Assign {
             target: remap_target(target, val_remap),
             path: path.clone(),
+            value: r(*value),
+        },
+        InstKind::Fetch { dst, context } => InstKind::Fetch {
+            dst: r(*dst),
+            context: *context,
+        },
+        InstKind::Commit { context, value } => InstKind::Commit {
+            context: *context,
             value: r(*value),
         },
         InstKind::Load { dst, src } => InstKind::Load {

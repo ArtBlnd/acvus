@@ -1604,65 +1604,6 @@ fn variant_merge_inside_tuple_three_arms() {
     assert!(ir.contains("Z"), "variant Z missing:\n{ir}");
 }
 
-#[test]
-fn pruned_context_keys_in_dead_catch_all() {
-    // Outer match on @Impersonation with catch_all containing @Pov.
-    // When Impersonation=NoPersona is known, catch_all is dead,
-    // so @Pov should appear in partition.pruned.
-    use acvus_mir::analysis::reachable_context::{KnownValue, partition_context_keys};
-    use acvus_mir::graph::QualifiedRef;
-    use acvus_mir::ir::InstKind;
-
-    let i = Interner::new();
-    let src = r#"{-{ Impersonation::NoPersona = @Impersonation }}{-{_}}{-{ Pov::User = @Pov }}user{-{ Pov::Char = }}char{-{_}}other{-{ / }}{-{ / }}"#;
-    let module = compile_analysis(&i, src, &[]).unwrap();
-
-    let ir = acvus_mir::printer::dump_with(&i, &module);
-    eprintln!("=== PRUNED TEST IR ===\n{ir}\n=== END ===");
-
-    // Build name->QualifiedRef lookup from the compiled module's Ref(Context) instructions + debug info.
-    let mut name_to_qref: FxHashMap<&str, QualifiedRef> = FxHashMap::default();
-    for inst in &module.main.insts {
-        if let InstKind::Ref {
-            dst,
-            target: acvus_mir::ir::RefTarget::Context(ctx),
-            ..
-        } = &inst.kind
-        {
-            if let Some(acvus_mir::ir::ValOrigin::Context(name)) =
-                module.main.debug.val_origins.get(dst)
-            {
-                name_to_qref.insert(i.resolve(*name), *ctx);
-            }
-        }
-    }
-    let impersonation_id = name_to_qref["Impersonation"];
-    let pov_id = name_to_qref["Pov"];
-
-    let mut known = FxHashMap::default();
-    known.insert(
-        impersonation_id,
-        KnownValue::Variant {
-            tag: i.intern("NoPersona"),
-            payload: None,
-        },
-    );
-    let partition = partition_context_keys(&module, &known);
-
-    eprintln!("eager: {:?}", partition.eager);
-    eprintln!("lazy: {:?}", partition.lazy);
-    eprintln!("reachable_known: {:?}", partition.reachable_known);
-    eprintln!("pruned: {:?}", partition.pruned);
-
-    assert!(
-        partition.pruned.contains(&pov_id),
-        "Pov ({:?}) should be pruned when Impersonation=NoPersona, but got:\n  eager: {:?}\n  lazy: {:?}\n  pruned: {:?}",
-        pov_id,
-        partition.eager,
-        partition.lazy,
-        partition.pruned,
-    );
-}
 
 // -- SSA chain tests (script mode) -------------------------------
 
@@ -2695,8 +2636,8 @@ fn projection_context_whole_write() {
     let ir = compile_to_ir(&i, r#"{{ @out = "hello" }}"#, &context).unwrap();
     // Context store should produce Store instruction (may remain after SSA for write-back).
     assert!(
-        ir.contains("store"),
-        "should have context store in IR: {ir}"
+        ir.contains("commit @out"),
+        "should commit the context: {ir}"
     );
 }
 
@@ -2822,8 +2763,8 @@ fn projection_ssa_context_write_back() {
     let ir = compile_script_ir(&i, "@count = @count + 1; @count", &context).unwrap();
     // Context write-back Store should remain in the IR.
     assert!(
-        ir.contains("store"),
-        "context write-back store should remain: {ir}"
+        ir.contains("commit @count"),
+        "the context is committed at exit: {ir}"
     );
 }
 

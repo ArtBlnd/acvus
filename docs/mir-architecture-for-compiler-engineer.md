@@ -83,12 +83,14 @@ MirModule                        Terminator
 The five storage instructions (RFC-0018):
 
 - `Ref { dst, target, path, mutability }` — `dst` is a `&T` or `&mut T` naming the value at `path` under `target`.
-- `Take { dst, target, path }` — move the value out of a storage into `dst`; a primitive is copied and the storage keeps it. A read of a variable or a context.
-- `Assign { target, path, value }` — move `value` into a storage; the old value is dropped. An assignment to a variable or a context.
+- `Take { dst, target, path }` — move the value out of a storage into `dst`; a primitive is copied and the storage keeps it. A read of a variable.
+- `Assign { target, path, value }` — move `value` into a storage; the old value is dropped. An assignment to a variable.
+- `Fetch { dst, context }` — move a context's whole value out of the page into `dst` (RFC-0025).
+- `Commit { context, value }` — move `value` into the page as the context's whole value (RFC-0025).
 - `Load { dst, src }` — `*r`: read through a `&T`; `T` must be a primitive.
 - `Store { dst, value }` — write through a `&mut T`.
 
-A context lent to a call (`f(&@x)`, `push(&mut @x, v)`) is `Take`n into a temporary local before the call and `Assign`ed back after it; the call itself never sees the context (`lower.rs`, `emit_call_lending`). There is no lent-argument list on `FunctionCall`.
+A context is a variable of the body that names it (RFC-0025): the lowering fetches every named context into a slot at entry, commits each slot at every return, and brackets each call whose summary (RFC-0017, joined with the summaries of its function-typed arguments) touches the context with a `Commit` before and a `Fetch` after (`lower.rs`, `enter_contexts`, `emit_call`, `emit_return`). `@x`, `&@x`, and `@x = v` are then the variable rules on that slot; a context left moved out at a return is a use-after-move at the exit `Take`. The reorder pass keeps a `Fetch`/`Commit` in order against the page ops and the summary-touching calls of the same context.
 
 ### Type System
 
@@ -269,7 +271,8 @@ CompilationGraph { functions, contexts }
     v
 [Phase 2: Lower]  graph/lower.rs → lower.rs
     |    Typed AST → flat MIR instructions (pre-SSA).
-    |    Variable/context read → Take; assignment → Assign; &place → Ref; *r → Load.
+    |    Variable read → Take; assignment → Assign; &place → Ref; *r → Load.
+    |    Context: Fetch at entry, Commit at return, Commit/Fetch around a call by summary.
     |    Effectful call → FunctionCall with an OrderEdge on the body's order slot.
     |    Pattern matching → TestXxx + JumpIf chains.
     |    Output: Map<QualifiedRef, MirModule>

@@ -119,9 +119,11 @@ first `erase` and leaked for the life of the process. The host asserts
 Every storage is a register: a variable slot, a temporary, a parameter. A
 `Take` moves out of one (`use_from`), an `Assign` moves in, a `Ref` makes
 the word naming one, `Load` copies a word through a reference, `Store` moves
-a value in through a `&mut`. A context is the run's page: `Take` hands its
-value out of the journal and `Assign` puts one back; a lent context goes
-through a temporary register.
+a value in through a `&mut`. A context is a variable of the body that names
+it (RFC-0025): `Fetch` moves its whole value out of the run's page into a
+register (a page with no value for it is a panic) and `Commit` moves one
+back; a body fetches at entry, commits at return, and commits and fetches
+around a call whose summary touches the context.
 
 ## Open
 

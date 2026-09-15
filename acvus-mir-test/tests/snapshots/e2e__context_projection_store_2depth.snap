@@ -3,9 +3,16 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 |   assign @obj.x.y = 99 (r0)
-     2 |   r1 = take @obj.x.y
-     3 |   return r1
+     0 |   r0 = fetch @obj
+     1 |   assign @obj = r0
+     3 |   assign @obj.x.y = 99 (r1)
+     4 |   r2 = take @obj.x.y
+     5 |   r3 = take @obj
+     6 |   commit @obj = r3
+     7 |   return r2
 
-    ; r0 (v1) : Int
-    ; r1 (@obj.x.y) : Int
+    ; r0 (@obj) : {x: {y: Int}}
+    ; r1 (v3) : Int
+    ; r2 (@obj.x.y) : Int
+    ; r3 (v5) : {x: {y: Int}}
+    ; r4 (@obj) : {x: {y: Int}}

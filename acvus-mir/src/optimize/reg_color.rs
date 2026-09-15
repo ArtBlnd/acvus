@@ -407,7 +407,6 @@ fn reconstruct_debug(cfg: &CfgBody) -> crate::ir::DebugInfo {
                         ValOrigin::RefField(target.clone(), path.clone())
                     } else {
                         match target {
-                            RefTarget::Context(qref) => ValOrigin::Context(qref.name),
                             RefTarget::Var(slot) => {
                                 if let Some(&(name, _)) = slot_name.get(slot) {
                                     ValOrigin::Named(name)
@@ -429,6 +428,9 @@ fn reconstruct_debug(cfg: &CfgBody) -> crate::ir::DebugInfo {
                         }
                     };
                     debug.set(*dst, origin);
+                }
+                InstKind::Fetch { dst, context } => {
+                    debug.set(*dst, ValOrigin::Context(context.name));
                 }
                 InstKind::Load { dst, src, .. } => {
                     // Inherit origin from the Ref it loads from.
@@ -485,16 +487,16 @@ fn rewrite_inst(kind: &mut InstKind, remap: &impl Fn(ValueId) -> ValueId) {
             r(dst);
             match target {
                 crate::ir::RefTarget::Var(slot) | crate::ir::RefTarget::Param(slot) => r(slot),
-                crate::ir::RefTarget::Context(_) => {}
             }
         }
         InstKind::Assign { target, value, .. } => {
             match target {
                 crate::ir::RefTarget::Var(slot) | crate::ir::RefTarget::Param(slot) => r(slot),
-                crate::ir::RefTarget::Context(_) => {}
             }
             r(value);
         }
+        InstKind::Fetch { dst, .. } => r(dst),
+        InstKind::Commit { value, .. } => r(value),
         InstKind::Load { dst, src, .. } => {
             r(dst);
             r(src);

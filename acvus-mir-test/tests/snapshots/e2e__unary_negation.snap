@@ -7,19 +7,25 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = take @n
-     3 |   r2 = -r1
-     5 |   r3 = T0 + T0
-     6 |   r4 = call #0(r2)
-     7 |   r5 = r3 + r4
-     8 |   return r5
+     1 |   r1 = undef
+     2 |   r2 = fetch @n
+     4 |   r3 = -r2
+     6 |   r4 = T0 + T0
+     7 |   r5 = call #0(r3)
+     8 |   r6 = r4 + r5
+     9 |   commit @n = r2
+    10 |   return r6
 
-    ; r0 (v10) : Int
-    ; r1 (@n) : Int
-    ; r2 (v3) : Int
-    ; r3 (v6) : String
-    ; r4 (to_string(...)) : String
-    ; r5 (v9) : String
-    ; r6 (x) : Int
-    ; r7 (v5) : String
-    ; r8 (v1) : String
+    ; r0 (v13) : Int
+    ; r1 (v14) : Int
+    ; r2 (@n) : Int
+    ; r3 (v5) : Int
+    ; r4 (v8) : String
+    ; r5 (to_string(...)) : String
+    ; r6 (v11) : String
+    ; r7 (v7) : String
+    ; r8 (v3) : String
+    ; r9 (x) : Int
+    ; r10 (@n) : Int
+    ; r11 (v12) : Int
+    ; r12 (@n) : Int

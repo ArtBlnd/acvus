@@ -76,7 +76,7 @@ The pipeline is split into four phases not because it's architecturally elegant,
 
 **Infer** resolves all types via constraint propagation. Inter-function inference uses Tarjan's SCC algorithm so mutually recursive functions are solved simultaneously. Infer results are cached per-SCC with **early cutoff** — if a function's type didn't change after re-inference, its callers don't need re-inference. Most edits touch one SCC, so recompilation is O(changed) not O(total).
 
-**Lower** translates typed AST to MIR instructions. A read of a variable or a context is a `Take`; an assignment is an `Assign`; `&place` / `&mut place` is a `Ref`; `*r` is a `Load`. Every effectful call takes the current `Order` and yields a new one. This is a "pre-SSA" IR that's easy to generate from AST; the SSA pass in optimize handles the hard part (phi insertion at merge points).
+**Lower** translates typed AST to MIR instructions. A context is a variable of the body that names it (RFC-0025): every named context is fetched from the page at entry (`Fetch`), committed back at every return (`Commit`), and committed before and fetched after each call whose summary (RFC-0017) touches it. Inside the body, a read of a variable is a `Take`; an assignment is an `Assign`; `&place` / `&mut place` is a `Ref`; `*r` is a `Load`. Every effectful call takes the current `Order` and yields a new one. This is a "pre-SSA" IR that's easy to generate from AST; the SSA pass in optimize handles the hard part (phi insertion at merge points).
 
 **Optimize** is the final phase. Two passes (`graph/optimize.rs`):
 - **Pass 1** (per body, then cross-module): SSA → DSE → DCE on every body, then inlining across modules. Inline must see all modules because it resolves cross-function calls and devirtualizes closures.
@@ -154,15 +154,7 @@ In Cranelift's model, blocks take parameters (like function parameters), and jum
 
 ### What is promoted
 
-A storage — a local, a parameter, or a context — is promoted only when every access to it is a whole `Take` or `Assign`. A storage that is referenced (`Ref`) or accessed by field path stays in memory; the SSA pass leaves its instructions alone.
-
-### Write-back model for contexts
-
-Context mutations inside branches pose a problem: after a branch merges, which value does `@x` have? The SSA pass handles this with a write-back model:
-- Branch-internal whole `Assign`s to a context are removed (the stores become SSA value flow)
-- A single write-back `Assign` of the phi value is inserted at the merge block
-- A written context starts from a `Take` of its value at entry; a local starts from `Undef`
-- Locals need no write-back — they exist only in SSA form
+A storage — a local or a parameter — is promoted only when every access to it is a whole `Take` or `Assign`. A storage that is referenced (`Ref`) or accessed by field path stays in memory; the SSA pass leaves its instructions alone. A context's variable is a local like any other; `Fetch` defines a value and `Commit` uses one, and neither is promoted, removed, or moved.
 
 ### What this means for the optimizer
 

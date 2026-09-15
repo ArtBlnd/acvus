@@ -1,0 +1,104 @@
+//! Intent tests for RFC-0025.
+
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
+use acvus_mir::ty::{Mutability, Param, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
+use acvus_mir_test::*;
+use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
+
+fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
+    Function {
+        qref: QualifiedRef::root(i.intern(name)),
+        kind: FnKind::Extern { bounds: vec![] },
+        ty: TyTerm::Fn {
+            params: params
+                .iter()
+                .enumerate()
+                .map(|(n, ty)| ParamTerm::<Poly>::new(i.intern(&format!("_{n}")), lift_to_poly(ty)))
+                .collect(),
+            ret: Box::new(lift_to_poly(&ret)),
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        },
+    }
+}
+
+fn int_to_int(i: &Interner) -> Ty {
+    Ty::Fn {
+        params: vec![Param::new(i.intern("a"), Ty::Int)],
+        ret: Box::new(Ty::Int),
+        captures: vec![],
+        effect: acvus_mir::ty::Effect::OPAQUE.into(),
+    }
+}
+
+fn string_context(i: &Interner, name: &str) -> FxHashMap<acvus_utils::Astr, Ty> {
+    FxHashMap::from_iter([(i.intern(name), Ty::String)])
+}
+
+#[test]
+fn an_assign_to_a_context_while_it_is_lent_is_rejected() {
+    let i = Interner::new();
+    let f = extern_fn(
+        &i,
+        "f",
+        &[Ty::Ref(Mutability::Shared, Box::new(Ty::String)), Ty::Int],
+        Ty::Int,
+    );
+    let err = compile_script_ir_with(
+        &i,
+        r#"f(&@items, { @items = "x"; 1 })"#,
+        &string_context(&i, "items"),
+        &[f],
+    )
+    .unwrap_err();
+    assert!(err.contains("BorrowConflict"), "{err}");
+}
+
+#[test]
+fn a_closure_writing_a_lent_context_is_rejected_at_the_call() {
+    let i = Interner::new();
+    let f = extern_fn(
+        &i,
+        "f",
+        &[Ty::Ref(Mutability::Shared, Box::new(Ty::String)), int_to_int(&i)],
+        Ty::Int,
+    );
+    let err = compile_script_ir_with(
+        &i,
+        r#"f(&@items, |x| -> { @items = "x"; x })"#,
+        &string_context(&i, "items"),
+        &[f],
+    )
+    .unwrap_err();
+    assert!(err.contains("BorrowConflict"), "{err}");
+}
+
+#[test]
+fn a_context_read_after_a_call_whose_closure_writes_it_is_fetched_again() {
+    let i = Interner::new();
+    let f = extern_fn(&i, "f", &[int_to_int(&i)], Ty::Int);
+    let ctx = FxHashMap::from_iter([(i.intern("x"), Ty::Int)]);
+    let ir = compile_script_ir_with(&i, "@x = 1; f(|a| -> { @x = 2; a }); @x", &ctx, &[f]).unwrap();
+    let main = ir.split("=== closure").next().unwrap();
+    let commit = main.find("commit @x").expect("the context is committed before the call");
+    let call = main.find("call #").expect("the call");
+    let fetch = main.rfind("fetch @x").expect("the context is fetched after the call");
+    assert!(commit < call && call < fetch, "{main}");
+    let returned = main.lines().find(|l| l.contains("return")).unwrap();
+    assert!(!returned.contains("return 1"), "{main}");
+}
+
+#[test]
+fn a_context_moved_out_and_not_assigned_back_is_rejected() {
+    let i = Interner::new();
+    let err = compile_script_ir(&i, "x = @items; x", &string_context(&i, "items")).unwrap_err();
+    assert!(err.contains("UseAfterMove"), "{err}");
+}
+
+#[test]
+fn a_context_moved_out_and_assigned_back_is_accepted() {
+    let i = Interner::new();
+    compile_script_ir(&i, r#"x = @items; @items = "new"; x"#, &string_context(&i, "items"))
+        .unwrap();
+}

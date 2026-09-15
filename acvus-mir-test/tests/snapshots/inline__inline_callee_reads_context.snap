@@ -3,10 +3,15 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     0 |   r0 = ref @count
-     1 |   r1 = load r0
-     2 |   return r1
+     0 |   r0 = fetch @count
+     1 |   assign @count = r0
+     2 |   r1 = take @count
+     3 |   r2 = take @count
+     4 |   commit @count = r2
+     5 |   return r1
 
-    ; r0 (@count) : Ref<Int>
-    ; r1 (v3) : Int
-    ; r2 (get_count(...)) : Int
+    ; r0 (@count) : Int
+    ; r1 (@count) : Int
+    ; r2 (v5) : Int
+    ; r3 (get_count(...)) : Int
+    ; r4 (@count) : Int

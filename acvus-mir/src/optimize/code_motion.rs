@@ -35,7 +35,6 @@ use rustc_hash::FxHashMap;
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::graph::QualifiedRef;
 use crate::ir::*;
 use crate::optimize::context_ops::{context_read, context_written};
 
@@ -89,7 +88,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
             let uses = inst_info::uses(kind);
 
             if let Some(target) =
-                find_highest_target(BlockIdx(bi), &uses, &domtree, &def_block, cfg)
+                find_highest_target(BlockIdx(bi), &uses, &domtree, &def_block)
             {
                 hoists.push((bi, i, target.0));
                 for d in inst_info::defs(kind) {
@@ -160,7 +159,6 @@ fn find_highest_target(
     uses: &[ValueId],
     domtree: &DomTree,
     def_block: &FxHashMap<ValueId, BlockIdx>,
-    cfg: &CfgBody,
 ) -> Option<BlockIdx> {
     let mut best: Option<BlockIdx> = None;
     let mut candidate = domtree.idom(block_idx)?;
@@ -168,9 +166,7 @@ fn find_highest_target(
     loop {
         // All operands must be available at candidate's body (before terminator).
         let all_available = uses.iter().all(|u| match def_block.get(u) {
-            Some(&def_bi) if def_bi == candidate => {
-                !is_terminator_def(&cfg.blocks[candidate.0].terminator, *u)
-            }
+            Some(&def_bi) if def_bi == candidate => true,
             Some(&def_bi) => domtree.dominates(def_bi, candidate),
             None => true,
         });
@@ -232,14 +228,6 @@ fn is_hoistable(kind: &InstKind) -> bool {
     }
 }
 
-// -- Terminator helpers ---------------------------------------------
-
-fn is_terminator_def(term: &crate::cfg::Terminator, val: ValueId) -> bool {
-    match term {
-        _ => false,
-    }
-}
-
 // -- Sink pass -----------------------------------------------------
 //
 // Moves Eval and Load as late as possible - just before
@@ -275,8 +263,8 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
 
 // -- Sink infrastructure ---------------------------------------------
 
-/// Run the sink pass - move Eval, Load, and Store
-/// as late as possible within their block.
+/// Run the sink pass - move each Eval as late as possible within its
+/// block. A page op (`Fetch`, `Commit`) is never moved.
 ///
 /// Processes ONE sinkable instruction per iteration, then re-scans.
 /// This avoids index invalidation from multiple moves.
@@ -297,21 +285,14 @@ fn sink_pass(cfg: &mut CfgBody) {
     }
 }
 
-/// Try to sink ONE instruction. Returns true if something moved.
+/// Try to sink ONE Eval. Returns true if something moved.
 fn sink_one(cfg: &mut CfgBody) -> bool {
     for bi in 0..cfg.blocks.len() {
         for ii in 0..cfg.blocks[bi].insts.len() {
             let kind = &cfg.blocks[bi].insts[ii].kind;
-
-            let sink_info = match kind {
-                InstKind::Eval { .. } => Some(SinkKind::Eval),
-                InstKind::Take { .. } => context_read(kind).map(SinkKind::Load),
-                InstKind::Assign { .. } => context_written(kind).map(SinkKind::Store),
-                _ => None,
-            };
-            let Some(sink_kind) = sink_info else {
+            if !matches!(kind, InstKind::Eval { .. }) {
                 continue;
-            };
+            }
 
             let defs: Vec<ValueId> = inst_info::defs(kind).to_vec();
 
@@ -327,51 +308,9 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                     break;
                 }
 
-                if is_call(other) {
+                if is_call(other) || is_page_op(other) {
                     barrier = jj;
                     break;
-                }
-
-                if matches!(sink_kind, SinkKind::Eval)
-                    && (context_read(other).is_some()
-                        || context_written(other).is_some())
-                {
-                    barrier = jj;
-                    break;
-                }
-
-                // Another sinkable instruction is a barrier: sinking past it
-                // gains nothing, and two of them would leapfrog forever.
-                if matches!(other, InstKind::Eval { .. })
-                    || context_read(other).is_some()
-                    || context_written(other).is_some()
-                {
-                    barrier = jj;
-                    break;
-                }
-
-                if let SinkKind::Load(ctx) = &sink_kind {
-                    if let Some(store_ctx) = context_written(other) {
-                        if store_ctx == *ctx {
-                            barrier = jj;
-                            break;
-                        }
-                    }
-                }
-
-                if let SinkKind::Store(ctx) = &sink_kind {
-                    if let Some(load_ctx) = context_read(other) {
-                        if load_ctx == *ctx {
-                            barrier = jj;
-                            break;
-                        }
-                    }
-                    if let Some(store_ctx) = context_written(other) {
-                        if store_ctx == *ctx {
-                            barrier = jj;
-                            break;
-                        }
-                    }
                 }
             }
 
@@ -383,31 +322,6 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
             let target = if barrier > 0 { barrier - 1 } else { ii };
             if target > ii {
                 let inst = cfg.blocks[bi].insts.remove(ii);
-                // After remove(ii), the instruction that was at original position
-                // `target` is now at position `target - 1`. We want to place our
-                // instruction BEFORE it (at original position `target`), which is
-                // now position `target - 1` in the modified array. But we want
-                // to be AT position target in original coordinates = insert at
-                // target - 1 in modified coordinates. However, the "before barrier"
-                // semantics means we want to be at original position target,
-                // which after remove is at index target - 1.
-                // But we also need to account for that target = barrier - 1,
-                // so we're really placing at barrier - 1 in original, which is
-                // barrier - 2 in modified. That's target - 1.
-                //
-                // Wait, let me think step by step:
-                // Original array: [0..ii..target..barrier..len]
-                // We want: [0..target'..barrier..len] where target' has our inst
-                //   just before barrier (at position target = barrier-1)
-                // After remove(ii): array is len-1, positions ii..len-1 shifted
-                // Original position target is now at index target-1
-                // Insert at target-1 places inst at that position
-                // Result: [...inst(target-1)..barrier_inst(target)...]
-                // In original coordinates: inst at target, barrier at target+1
-                // But barrier was at barrier=target+1 originally? No, barrier
-                // was the first use, at original position barrier. target=barrier-1.
-                // So inst goes to original barrier-1, barrier stays at original barrier.
-                // That's correct!
                 cfg.blocks[bi].insts.insert(target, inst);
                 return true;
             }
@@ -416,11 +330,8 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
     false
 }
 
-#[derive(Debug)]
-enum SinkKind {
-    Eval,
-    Load(QualifiedRef),
-    Store(QualifiedRef),
+fn is_page_op(kind: &InstKind) -> bool {
+    context_read(kind).is_some() || context_written(kind).is_some()
 }
 
 fn is_call(kind: &InstKind) -> bool {
@@ -436,6 +347,7 @@ fn is_call(kind: &InstKind) -> bool {
 mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
+    use crate::graph::QualifiedRef;
     use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
@@ -1057,16 +969,15 @@ mod tests {
     }
 
     #[test]
-    fn load_not_sunk_past_call() {
+    fn fetch_not_sunk_past_call() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let f = QualifiedRef::root(i.intern("f"));
         let mut cfg = make_cfg(
             vec![
-                InstKind::Take {
+                InstKind::Fetch {
                     dst: v(1),
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
+                    context: ctx,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1100,7 +1011,7 @@ mod tests {
         let k = kinds(&body);
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Take { .. }))
+            .position(|k| matches!(k, InstKind::Fetch { .. }))
             .unwrap();
         let call_idx = k
             .iter()
@@ -1108,12 +1019,12 @@ mod tests {
             .unwrap();
         assert!(
             load_idx < call_idx,
-            "load must stay before the call (load {load_idx}, call {call_idx})"
+            "fetch must stay before the call (fetch {load_idx}, call {call_idx})"
         );
     }
 
     #[test]
-    fn eval_not_sunk_past_context_load() {
+    fn eval_not_sunk_past_fetch() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let (qref, ty) = io_fn_type(&i, "io_fn");
@@ -1137,10 +1048,9 @@ mod tests {
                     left: v(5),
                     right: v(5),
                 },
-                InstKind::Take {
+                InstKind::Fetch {
                     dst: v(4),
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
+                    context: ctx,
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1165,31 +1075,30 @@ mod tests {
             .unwrap();
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Take { .. }))
+            .position(|k| matches!(k, InstKind::Fetch { .. }))
             .unwrap();
         assert!(
             eval_idx < load_idx,
-            "eval must stay before the context load (eval {eval_idx}, load {load_idx})"
+            "eval must stay before the fetch (eval {eval_idx}, fetch {load_idx})"
         );
     }
 
-    /// Take is sunk past independent computation but NOT past an Assign to the same context.
+    /// A fetch is not moved, even past independent computation.
     #[test]
-    fn load_sunk_but_not_past_store() {
+    fn fetch_stays_in_place() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
-        // v1 = Take @x          <- should sink past v2 but not past the assign to @x
+        // v1 = fetch @x
         // v2 = BinOp(v5, v5)   <- independent
-        // @x = v5              <- writes @x - barrier for the take
-        // v6 = BinOp(v1, v2)   <- uses load result
+        // commit @x = v5
+        // v6 = BinOp(v1, v2)   <- uses the fetched value
         // Return v6
         let mut cfg = make_cfg(
             vec![
-                InstKind::Take {
+                InstKind::Fetch {
                     dst: v(1),
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
+                    context: ctx,
                 },
                 InstKind::BinOp {
                     dst: v(2),
@@ -1197,9 +1106,8 @@ mod tests {
                     left: v(5),
                     right: v(5),
                 },
-                InstKind::Assign {
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
+                InstKind::Commit {
+                    context: ctx,
                     value: v(5),
                 },
                 InstKind::BinOp {
@@ -1222,11 +1130,11 @@ mod tests {
 
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Take { .. }))
+            .position(|k| matches!(k, InstKind::Fetch { .. }))
             .unwrap();
         let store_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Assign { .. }))
+            .position(|k| matches!(k, InstKind::Commit { .. }))
             .unwrap();
         let independent_idx = k
             .iter()
@@ -1234,31 +1142,30 @@ mod tests {
             .unwrap();
 
         assert!(
-            load_idx > independent_idx,
-            "load should sink past independent computation"
+            load_idx < independent_idx,
+            "fetch is not moved (fetch {load_idx}, independent {independent_idx})"
         );
         assert!(
             load_idx < store_idx,
-            "load must NOT sink past store to same context (load {load_idx}, store {store_idx})"
+            "fetch stays before the commit of the same context (fetch {load_idx}, commit {store_idx})"
         );
     }
 
-    /// Assign is sunk past independent computation but NOT past a Take of the same context.
+    /// A commit is not moved, even past independent computation.
     #[test]
-    fn store_sunk_but_not_past_load_of_same_context() {
+    fn commit_stays_in_place() {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
-        // @x = v5                  <- should sink past v2 but not past v4 (take @x)
+        // commit @x = v5
         // v2 = BinOp(v5, v5)       <- independent
-        // v4 = Take @x             <- reads @x - barrier for the assign
+        // v4 = fetch @x
         // v6 = BinOp(v4, v2)
         // Return v6
         let mut cfg = make_cfg(
             vec![
-                InstKind::Assign {
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
+                InstKind::Commit {
+                    context: ctx,
                     value: v(5),
                 },
                 InstKind::BinOp {
@@ -1267,10 +1174,9 @@ mod tests {
                     left: v(5),
                     right: v(5),
                 },
-                InstKind::Take {
+                InstKind::Fetch {
                     dst: v(4),
-                    target: crate::ir::RefTarget::Context(ctx),
-                    path: vec![],
+                    context: ctx,
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -1292,11 +1198,11 @@ mod tests {
 
         let store_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Assign { .. }))
+            .position(|k| matches!(k, InstKind::Commit { .. }))
             .unwrap();
         let load_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Take { .. }))
+            .position(|k| matches!(k, InstKind::Fetch { .. }))
             .unwrap();
         let independent_idx = k
             .iter()
@@ -1304,12 +1210,12 @@ mod tests {
             .unwrap();
 
         assert!(
-            store_idx > independent_idx,
-            "store should sink past independent computation"
+            store_idx < independent_idx,
+            "commit is not moved (commit {store_idx}, independent {independent_idx})"
         );
         assert!(
             store_idx < load_idx,
-            "store must NOT sink past load of same context (store {store_idx}, load {load_idx})"
+            "commit stays before the fetch of the same context (commit {store_idx}, fetch {load_idx})"
         );
     }
 }

@@ -129,7 +129,6 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     let mut edge_drops: FxHashMap<usize, Vec<ValueId>> = FxHashMap::default();
 
     for bi in 0..cfg.blocks.len() {
-        let block_idx = BlockIdx(bi);
         let live_out = liveness.live_out.get(bi).cloned().unwrap_or_default();
 
         let block = &cfg.blocks[bi];
@@ -272,7 +271,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::UnwrapVariant { src, .. } => *src == val,
         // Store consumes the value (not the dst Ref).
         InstKind::Store { value, .. } => *value == val,
-        InstKind::Assign { value, .. } => *value == val,
+        InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => *value == val,
         // Cast consumes src (transforms it).
         // Container constructors consume their elements.
         InstKind::MakeArray { elements, .. } => elements.contains(&val),
@@ -304,6 +303,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::Const { .. }
         | InstKind::Ref { .. }
         | InstKind::Take { .. }
+        | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Undef { .. }

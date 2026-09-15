@@ -8,51 +8,58 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     3 |   r2 = take @data
-     4 | L2:
-     6 |   r3 = r2.0
-     8 |   r4 = true (r5) && true (r6)
-     9 |   r7 = r2.1
-    11 |   r8 = test has_key(r7, "x")
-    12 |   r9 = r7.x
-    14 |   r10 = true (r11) && true (r12)
-    15 |   r13 = r4 && r10
-    16 |   jump_if r13 then L3 else L1
-    17 | L3:
-    18 |   r14 = r2.0
-    19 |   r15 = r2.1
-    20 |   r16 = r15.x
-    22 |   r17 = T0 + r14
-    23 |   jump L0(r17, r14, r16)
-    24 | L1:
-    26 |   jump L0(T0, r0, r1)
-    27 | L0(r18: String, r19: String, r20: Int):  ; merge_of L2
-    28 |   r21 = T0 + r18
-    29 |   return r21
+     2 |   r2 = undef
+     3 |   r3 = fetch @data
+     5 | L2:
+     7 |   r4 = r3.0
+     9 |   r5 = true (r6) && true (r7)
+    10 |   r8 = r3.1
+    12 |   r9 = test has_key(r8, "x")
+    13 |   r10 = r8.x
+    15 |   r11 = true (r12) && true (r13)
+    16 |   r14 = r5 && r11
+    17 |   jump_if r14 then L3 else L1
+    18 | L3:
+    19 |   r15 = r3.0
+    20 |   r16 = r3.1
+    21 |   r17 = r16.x
+    23 |   r18 = T0 + r15
+    24 |   jump L0(r18, r15, r17)
+    25 | L1:
+    27 |   jump L0(T0, r1, r2)
+    28 | L0(r19: String, r20: String, r21: Int):  ; merge_of L2
+    29 |   r22 = T0 + r19
+    30 |   commit @data = r3
+    31 |   return r22
 
-    ; r0 (v25) : String
-    ; r1 (v26) : Int
-    ; r2 (@data) : (String, {x: Int})
-    ; r3 (v4) : String
-    ; r4 (v6) : Bool
-    ; r5 (v3) : Bool
+    ; r0 (v28) : (String, {x: Int})
+    ; r1 (v29) : String
+    ; r2 (v30) : Int
+    ; r3 (@data) : (String, {x: Int})
+    ; r4 (v6) : String
+    ; r5 (v8) : Bool
     ; r6 (v5) : Bool
-    ; r7 (v7) : {x: Int}
-    ; r8 (v9) : Bool
-    ; r9 (v10) : Int
-    ; r10 (v12) : Bool
-    ; r11 (v8) : Bool
-    ; r12 (v11) : Bool
+    ; r7 (v7) : Bool
+    ; r8 (v9) : {x: Int}
+    ; r9 (v11) : Bool
+    ; r10 (v12) : Int
+    ; r11 (v14) : Bool
+    ; r12 (v10) : Bool
     ; r13 (v13) : Bool
-    ; r14 (label) : String
-    ; r15 (v16) : {x: Int}
-    ; r16 (x) : Int
-    ; r17 (v21) : String
+    ; r14 (v15) : Bool
+    ; r15 (label) : String
+    ; r16 (v18) : {x: Int}
+    ; r17 (x) : Int
     ; r18 (v23) : String
-    ; r19 (v27) : String
-    ; r20 (v28) : Int
-    ; r21 (v24) : String
-    ; r22 (v22) : String
-    ; r23 (label) : String
-    ; r24 (v1) : String
-    ; r25 (v19) : String
+    ; r19 (v25) : String
+    ; r20 (v32) : String
+    ; r21 (v33) : Int
+    ; r22 (v26) : String
+    ; r23 (v3) : String
+    ; r24 (label) : String
+    ; r25 (v31) : (String, {x: Int})
+    ; r26 (@data) : (String, {x: Int})
+    ; r27 (@data) : (String, {x: Int})
+    ; r28 (v21) : String
+    ; r29 (v24) : String
+    ; r30 (v27) : (String, {x: Int})

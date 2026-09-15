@@ -7,9 +7,7 @@ pub use move_check::is_move_only;
 pub use type_check::{ValidationError, ValidationErrorKind};
 
 use crate::error::{MirError, MirErrorKind};
-use crate::graph::QualifiedRef;
 use crate::ir::MirModule;
-use rustc_hash::FxHashMap;
 
 /// Run all validation passes on a MIR module.
 /// Returns errors found. Empty vec means valid.
@@ -69,9 +67,6 @@ impl ValidationError {
             }
             ValidationErrorKind::BorrowConflict { storage, reference } => {
                 format!("{storage} is used while reference Val({reference}) to it is live")
-            }
-            ValidationErrorKind::ContextLeftTaken { context } => {
-                format!("{context} was taken and not assigned before the run ends")
             }
         };
 

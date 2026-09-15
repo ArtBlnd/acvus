@@ -6,6 +6,7 @@ use acvus_ast::{
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::QualifiedRef;
 use crate::ir::{
@@ -38,6 +39,7 @@ pub struct Lowerer<'a> {
     order_slot: Option<ValueId>,
     /// The innermost `anyorder` block being lowered, if any.
     anyorder: Option<AnyorderScope>,
+    context_slots: BTreeMap<QualifiedRef, ValueId>,
 }
 
 /// An `anyorder` block while its body is lowered (RFC-0007): every
@@ -58,14 +60,14 @@ struct Place {
 }
 
 /// A context place lent to a call through a temporary local.
-struct LentContext {
-    qref: QualifiedRef,
-    path: Vec<Astr>,
-    temporary: ValueId,
-    ty: Ty,
+/// A local variable binding: its type and the storage slot it owns.
+/// What a call's summary says it may touch; a type with no effect says
+/// everything.
+enum TouchedContexts {
+    Every,
+    These(BTreeSet<QualifiedRef>),
 }
 
-/// A local variable binding: its type and the storage slot it owns.
 #[derive(Clone)]
 struct Local {
     ty: Ty,
@@ -181,12 +183,14 @@ impl<'a> Lowerer<'a> {
             closure_label_count: 0,
             order_slot: None,
             anyorder: None,
+            context_slots: BTreeMap::new(),
         }
     }
 
     pub fn lower_template(mut self, template: &Template) -> MirModule {
         let effect = self.resolution.effect.clone();
         self.enter_body_order(effect, template.span);
+        self.enter_contexts(acvus_ast::direct_template_context_refs(template), template.span);
         let result = self.lower_nodes(&template.body, template.span);
         self.emit_return(template.span, result);
         self.build_module()
@@ -195,6 +199,7 @@ impl<'a> Lowerer<'a> {
     pub fn lower_script(mut self, script: &Script) -> MirModule {
         let effect = self.resolution.effect.clone();
         self.enter_body_order(effect, script.span);
+        self.enter_contexts(acvus_ast::direct_script_context_refs(script), script.span);
         for stmt in &script.stmts {
             self.lower_stmt(stmt);
         }
@@ -223,8 +228,97 @@ impl<'a> Lowerer<'a> {
         self.order_slot = Some(slot);
     }
 
+    fn enter_contexts(&mut self, named: FxHashSet<QualifiedRef>, span: Span) {
+        let named: BTreeSet<QualifiedRef> = named.into_iter().collect();
+        for qref in named {
+            let ty = self
+                .resolution
+                .context_types
+                .get(&qref)
+                .cloned()
+                .unwrap_or_else(|| panic!("context {qref:?} is named but was not typed"));
+            let slot = self.alloc_val();
+            self.set_val_type(slot, ty.clone());
+            self.set_origin(slot, ValOrigin::Context(qref.name));
+            self.fetch_into(span, qref, slot, ty);
+            self.context_slots.insert(qref, slot);
+        }
+    }
+
+    fn context_slot(&self, qref: QualifiedRef) -> ValueId {
+        *self
+            .context_slots
+            .get(&qref)
+            .unwrap_or_else(|| panic!("context {qref:?} has no variable in this body"))
+    }
+
+    fn slot_type(&self, slot: ValueId) -> Ty {
+        self.body
+            .val_types
+            .get(&slot)
+            .cloned()
+            .unwrap_or_else(|| panic!("slot {slot:?} has no type"))
+    }
+
+    fn fetch_into(&mut self, span: Span, context: QualifiedRef, slot: ValueId, ty: Ty) {
+        let fetched = self.alloc_val();
+        self.set_val_type(fetched, ty);
+        self.set_origin(fetched, ValOrigin::Context(context.name));
+        self.emit_inst(span, InstKind::Fetch { dst: fetched, context });
+        self.emit_assign(span, RefTarget::Var(slot), vec![], fetched);
+    }
+
+    fn commit_from(&mut self, span: Span, context: QualifiedRef, slot: ValueId) {
+        let ty = self.slot_type(slot);
+        let value = self.emit_take(span, RefTarget::Var(slot), vec![], ty);
+        self.emit_inst(span, InstKind::Commit { context, value });
+    }
+
+    /// The summary of a call (RFC-0017): the callee's, joined with that of
+    /// every function value it is passed.
+    fn touched_contexts(&self, callee_ty: &Ty, args: &[ValueId]) -> TouchedContexts {
+        let mut touched = BTreeSet::new();
+        let mut join = |ty: &Ty| -> bool {
+            let Some(effect) = ty.effect() else {
+                return false;
+            };
+            touched.extend(effect.reads.iter().copied());
+            touched.extend(effect.writes.iter().copied());
+            true
+        };
+        if !join(callee_ty) {
+            return TouchedContexts::Every;
+        }
+        for arg in args {
+            if let Some(ty) = self.body.val_types.get(arg)
+                && matches!(ty, Ty::Fn { .. })
+                && !join(ty)
+            {
+                return TouchedContexts::Every;
+            }
+        }
+        TouchedContexts::These(touched)
+    }
+
+    fn bracketed_contexts(&self, callee_ty: &Ty, args: &[ValueId]) -> Vec<(QualifiedRef, ValueId)> {
+        match self.touched_contexts(callee_ty, args) {
+            TouchedContexts::Every => self.context_slots.iter().map(|(q, s)| (*q, *s)).collect(),
+            TouchedContexts::These(touched) => self
+                .context_slots
+                .iter()
+                .filter(|(q, _)| touched.contains(q))
+                .map(|(q, s)| (*q, *s))
+                .collect(),
+        }
+    }
+
     /// Leave the body with `value`, yielding the current `Order` last.
     fn emit_return(&mut self, span: Span, value: ValueId) {
+        let contexts: Vec<(QualifiedRef, ValueId)> =
+            self.context_slots.iter().map(|(q, s)| (*q, *s)).collect();
+        for (qref, slot) in contexts {
+            self.commit_from(span, qref, slot);
+        }
         let order = self.current_order(span);
         self.emit_inst(span, InstKind::Return { value, order });
     }
@@ -245,22 +339,10 @@ impl<'a> Lowerer<'a> {
         callee_ty: Ty,
         args: Vec<ValueId>,
     ) {
-        self.emit_call_lending(span, dst, callee, callee_ty, args, Vec::new());
-    }
-
-    /// Emit a call. A callee whose effect is not Pure takes the current
-    /// `Order` and the call advances it. A context place lent to the call
-    /// was taken into a temporary before it; each such temporary is stored
-    /// back into its context after the call (RFC-0018).
-    fn emit_call_lending(
-        &mut self,
-        span: Span,
-        dst: ValueId,
-        callee: Callee,
-        callee_ty: Ty,
-        args: Vec<ValueId>,
-        lent_contexts: Vec<LentContext>,
-    ) {
+        let bracketed = self.bracketed_contexts(&callee_ty, &args);
+        for (qref, slot) in &bracketed {
+            self.commit_from(span, *qref, *slot);
+        }
         let effectful = callee_ty.effect().is_some_and(|e| !e.is_pure());
         let order = if effectful {
             let slot = self.order_slot.unwrap_or_else(|| {
@@ -286,9 +368,9 @@ impl<'a> Lowerer<'a> {
                 order,
             },
         );
-        for lent in lent_contexts {
-            let back = self.emit_take(span, RefTarget::Var(lent.temporary), vec![], lent.ty);
-            self.emit_assign(span, RefTarget::Context(lent.qref), lent.path, back);
+        for (qref, slot) in bracketed {
+            let ty = self.slot_type(slot);
+            self.fetch_into(span, qref, slot, ty);
         }
         let Some(edge) = order else {
             return;
@@ -874,7 +956,7 @@ impl<'a> Lowerer<'a> {
     /// or a context.
     fn storage_of(&mut self, root: &Expr) -> Option<RefTarget> {
         match root {
-            Expr::ContextRef { name, .. } => Some(RefTarget::Context(*name)),
+            Expr::ContextRef { name, .. } => Some(RefTarget::Var(self.context_slot(*name))),
             Expr::Ident {
                 name,
                 ref_kind: RefKind::ExternParam,
@@ -909,9 +991,6 @@ impl<'a> Lowerer<'a> {
     fn emit_take(&mut self, span: Span, target: RefTarget, path: Vec<Astr>, ty: Ty) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, ty);
-        if let RefTarget::Context(qref) = &target {
-            self.set_origin(dst, ValOrigin::Context(qref.name));
-        }
         self.emit_inst(span, InstKind::Take { dst, target, path });
         dst
     }
@@ -1325,7 +1404,10 @@ impl<'a> Lowerer<'a> {
                 span,
             } => {
                 let inner_ty = self.type_of_id(*id);
-                self.emit_take(*span, RefTarget::Context(*qref), vec![], inner_ty)
+                let slot = self.context_slot(*qref);
+                let dst = self.emit_take(*span, RefTarget::Var(slot), vec![], inner_ty);
+                self.set_origin(dst, ValOrigin::Context(qref.name));
+                dst
             }
 
             Expr::Ident {
@@ -1570,8 +1652,10 @@ impl<'a> Lowerer<'a> {
                 let saved_scopes = std::mem::replace(&mut self.scopes, vec![FxHashMap::default()]);
                 let saved_order_slot = self.order_slot;
                 let saved_anyorder = self.anyorder;
+                let saved_context_slots = std::mem::take(&mut self.context_slots);
                 let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
+                self.enter_contexts(acvus_ast::direct_expr_context_refs(body), *span);
 
                 // Captures and params are the closure body's first bindings.
                 for (((name, _, _), capture_reg), cap_ty) in free_vars
@@ -1604,6 +1688,7 @@ impl<'a> Lowerer<'a> {
                 self.scopes = saved_scopes;
                 self.order_slot = saved_order_slot;
                 self.anyorder = saved_anyorder;
+                self.context_slots = saved_context_slots;
 
                 closure_body_mir.captures = free_vars
                     .iter()
@@ -1788,7 +1873,8 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         let val = self.lower_expr(value_expr);
-        self.emit_assign(span, RefTarget::Context(qref), path.to_vec(), val);
+        let slot = self.context_slot(qref);
+        self.emit_assign(span, RefTarget::Var(slot), path.to_vec(), val);
         val
     }
 
@@ -1815,7 +1901,6 @@ impl<'a> Lowerer<'a> {
     ) -> ValueId {
         let mut arg_regs: Vec<ValueId> =
             Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
-        let mut lent_places: Vec<LentContext> = Vec::new();
         if let Some(left) = pipe_left {
             let val = self.lower_expr(left);
             arg_regs.push(val);
@@ -1834,27 +1919,8 @@ impl<'a> Lowerer<'a> {
                     Mutability::Shared
                 };
                 let place = self.place(place);
-                let reference = match place.target {
-                    RefTarget::Context(qref) => {
-                        let taken = self.emit_take(
-                            *span,
-                            RefTarget::Context(qref),
-                            place.path.clone(),
-                            place.ty.clone(),
-                        );
-                        let temporary = self.alloc_val();
-                        self.set_val_type(temporary, place.ty.clone());
-                        self.emit_assign(*span, RefTarget::Var(temporary), vec![], taken);
-                        lent_places.push(LentContext {
-                            qref,
-                            path: place.path,
-                            temporary,
-                            ty: place.ty.clone(),
-                        });
-                        self.emit_ref(*span, RefTarget::Var(temporary), vec![], mutability, place.ty)
-                    }
-                    target => self.emit_ref(*span, target, place.path, mutability, place.ty),
-                };
+                let reference =
+                    self.emit_ref(*span, place.target, place.path, mutability, place.ty);
                 arg_regs.push(reference);
                 continue;
             }
@@ -1879,13 +1945,12 @@ impl<'a> Lowerer<'a> {
                     // 1. Direct call - typeck resolved this callee to a named function.
                     if let Some(&qref) = self.resolution.direct_calls.get(&func.id()) {
                         let callee_ty = self.type_of_id(func.id());
-                        self.emit_call_lending(
+                        self.emit_call(
                             call_span,
                             dst,
                             Callee::Direct(qref),
                             callee_ty,
                             arg_regs,
-                            lent_places,
                         );
                         return dst;
                     }
@@ -1902,13 +1967,12 @@ impl<'a> Lowerer<'a> {
                             closure_ty.clone(),
                         );
                         self.set_origin(closure_reg, ValOrigin::Named(name.name));
-                        self.emit_call_lending(
+                        self.emit_call(
                             call_span,
                             dst,
                             Callee::Indirect(closure_reg),
                             closure_ty,
                             arg_regs,
-                            lent_places,
                         );
                         return dst;
                     }
@@ -1930,13 +1994,12 @@ impl<'a> Lowerer<'a> {
             .get(&func_reg)
             .expect("indirect callee must have val_type")
             .clone();
-        self.emit_call_lending(
+        self.emit_call(
             call_span,
             dst,
             Callee::Indirect(func_reg),
             fn_ty,
             arg_regs,
-            lent_places,
         );
         dst
     }
@@ -1954,7 +2017,8 @@ impl<'a> Lowerer<'a> {
             } = &mb.arms[0].pattern
         {
             let src = self.lower_expr(&mb.source);
-            self.emit_assign(*pat_span, RefTarget::Context(*qref), vec![], src);
+            let slot = self.context_slot(*qref);
+            self.emit_assign(*pat_span, RefTarget::Var(slot), vec![], src);
             return self.emit_empty_string(mb.span);
         }
 
@@ -2277,7 +2341,8 @@ impl<'a> Lowerer<'a> {
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
-                self.emit_assign(span, RefTarget::Context(*qref), vec![], src_reg);
+                let slot = self.context_slot(*qref);
+                self.emit_assign(span, RefTarget::Var(slot), vec![], src_reg);
             }
             Pattern::Binding {
                 name,

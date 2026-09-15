@@ -11,43 +11,50 @@ expression: ir
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = undef
-     6 |   r3 = T0 + T0
-     7 |   r4 = take @role
-     8 | L2:
-     9 |   r5 = test r4 == "admin"
-    10 |   jump_if r5 then L3 else L1
-    11 | L3:
-    15 |   r6 = T0 + T0
-    16 |   jump L0(r6, T1, r2)
-    17 | L1:
-    21 |   r7 = T0 + T0
-    22 |   jump L0(r7, r1, T2)
-    23 | L0(r8: String, r9: String, r10: String):  ; merge_of L2
-    24 |   r11 = r3 + r8
-    25 |   r12 = r11 + T0
-    26 |   return r12
+     3 |   r3 = undef
+     4 |   r4 = fetch @role
+     8 |   r5 = T0 + T0
+     9 | L2:
+    10 |   r6 = test r4 == "admin"
+    11 |   jump_if r6 then L3 else L1
+    12 | L3:
+    16 |   r7 = T0 + T0
+    17 |   jump L0(r7, T1, r3)
+    18 | L1:
+    22 |   r8 = T0 + T0
+    23 |   jump L0(r8, r2, T2)
+    24 | L0(r9: String, r10: String, r11: String):  ; merge_of L2
+    25 |   r12 = r5 + r9
+    26 |   r13 = r12 + T0
+    27 |   commit @role = r4
+    28 |   return r13
 
-    ; r0 (v22) : String
-    ; r1 (v23) : String
-    ; r2 (v24) : String
-    ; r3 (v5) : String
+    ; r0 (v25) : String
+    ; r1 (v26) : String
+    ; r2 (v27) : String
+    ; r3 (v28) : String
     ; r4 (@role) : String
-    ; r5 (v7) : Bool
-    ; r6 (v12) : String
-    ; r7 (v17) : String
-    ; r8 (v18) : String
-    ; r9 (v26) : String
-    ; r10 (v27) : String
-    ; r11 (v19) : String
+    ; r5 (v7) : String
+    ; r6 (v9) : Bool
+    ; r7 (v14) : String
+    ; r8 (v19) : String
+    ; r9 (v20) : String
+    ; r10 (v31) : String
+    ; r11 (v32) : String
     ; r12 (v21) : String
-    ; r13 (v11) : String
-    ; r14 (v14) : String
-    ; r15 (v25) : String
-    ; r16 (selected) : String
-    ; r17 (v9) : String
-    ; r18 (v13) : String
-    ; r19 (v2) : String
-    ; r20 (v1) : String
+    ; r13 (v23) : String
+    ; r14 (v3) : String
+    ; r15 (selected) : String
+    ; r16 (v6) : String
+    ; r17 (v15) : String
+    ; r18 (v11) : String
+    ; r19 (v30) : String
+    ; r20 (@role) : String
     ; r21 (v4) : String
-    ; r22 (v16) : String
-    ; r23 (v8) : String
+    ; r22 (v18) : String
+    ; r23 (v24) : String
+    ; r24 (@role) : String
+    ; r25 (v29) : String
+    ; r26 (v10) : String
+    ; r27 (v13) : String
+    ; r28 (v16) : String

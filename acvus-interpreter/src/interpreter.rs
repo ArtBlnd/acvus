@@ -67,25 +67,15 @@ fn context_key<'a>(shared: &'a InterpreterContext, qref: &QualifiedRef) -> &'a s
     shared.interner.resolve(*name)
 }
 
-fn take_context(ctx: &RunContext, qref: &QualifiedRef, path: &[Astr]) -> Value {
+fn fetch_context(ctx: &RunContext, qref: &QualifiedRef) -> Value {
     let key = context_key(&ctx.shared, qref);
-    let taken = if path.is_empty() {
-        ctx.page.take(key)
-    } else {
-        let path: Vec<&str> = path.iter().map(|f| ctx.shared.interner.resolve(*f)).collect();
-        ctx.page.take_field(key, &path)
-    };
-    taken.unwrap_or_else(|| panic!("context take: '{key}' holds no value"))
+    ctx.page
+        .take(key)
+        .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"))
 }
 
-fn assign_context(ctx: &RunContext, qref: &QualifiedRef, path: &[Astr], value: Value) {
-    let key = context_key(&ctx.shared, qref);
-    if path.is_empty() {
-        ctx.page.set(key, value);
-    } else {
-        let path: Vec<&str> = path.iter().map(|f| ctx.shared.interner.resolve(*f)).collect();
-        ctx.page.set_field(key, &path, value);
-    }
+fn commit_context(ctx: &RunContext, qref: &QualifiedRef, value: Value) {
+    ctx.page.set(context_key(&ctx.shared, qref), value);
 }
 
 // -- Frame ------------------------------------------------------------
@@ -356,7 +346,6 @@ async fn execute_inst(
                 RefTarget::Var(slot) | RefTarget::Param(slot) => {
                     Value::reference(walk_path(frame.get(*slot), path, &ctx.shared.interner))
                 }
-                RefTarget::Context(qref) => panic!("a context is never referenced: {qref:?}"),
             };
             frame.set(*dst, reference);
         }
@@ -365,9 +354,16 @@ async fn execute_inst(
                 RefTarget::Var(slot) | RefTarget::Param(slot) => {
                     take_at(frame.slot_mut(*slot), path, &ctx.shared.interner)
                 }
-                RefTarget::Context(qref) => take_context(ctx, qref, path),
             };
             frame.set(*dst, val);
+        }
+        InstKind::Fetch { dst, context } => {
+            let val = fetch_context(ctx, context);
+            frame.set(*dst, val);
+        }
+        InstKind::Commit { context, value } => {
+            let val = frame.use_val(*value);
+            commit_context(ctx, context, val);
         }
         InstKind::Assign {
             target,
@@ -382,7 +378,6 @@ async fn execute_inst(
                 RefTarget::Var(slot) | RefTarget::Param(slot) => {
                     store_path(frame.slot_mut(*slot), path, val, &ctx.shared.interner);
                 }
-                RefTarget::Context(qref) => assign_context(ctx, qref, path, val),
             }
         }
         InstKind::Load { dst, src } => {

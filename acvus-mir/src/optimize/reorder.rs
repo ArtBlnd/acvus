@@ -14,10 +14,14 @@
 //! # Dependency constraints (soundness)
 //!
 //! - SSA use-def: B uses value from A -> A before B.
-//! - ContextStore ordering: stores to the same context preserve original order.
+//! - Page order (RFC-0025): for each context `c`, every `Fetch c`, `Commit c`,
+//!   and every call whose summary touches `c` keep their original order among
+//!   themselves.
 //!
 //! These constraints are edges in a dependency graph. The scheduler picks from
 //! the ready set (zero in-degree) ordered by priority.
+
+use std::collections::BTreeSet;
 
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -26,11 +30,16 @@ use crate::analysis::inst_info;
 use crate::cfg::CfgBody;
 use crate::graph::QualifiedRef;
 use crate::ir::*;
+use crate::optimize::context_ops::{context_read, context_written};
+use crate::ty::Ty;
 
 /// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
 pub fn run(cfg: &mut CfgBody) {
-    for block in &mut cfg.blocks {
-        reorder_block(&mut block.insts);
+    let CfgBody {
+        blocks, val_types, ..
+    } = cfg;
+    for block in blocks {
+        reorder_block(&mut block.insts, val_types);
     }
 }
 
@@ -54,22 +63,98 @@ enum Priority {
 }
 
 /// Reorder instructions within a single basic block, in-place.
-fn reorder_block(insts: &mut Vec<Inst>) {
+fn reorder_block(insts: &mut Vec<Inst>, val_types: &FxHashMap<ValueId, Ty>) {
     let n = insts.len();
     if n <= 1 {
         return;
     }
 
-    let deps = build_dependency_graph(insts);
+    let deps = build_dependency_graph(insts, val_types);
     let priorities = compute_priorities(insts);
 
     *insts = priority_topo_sort(insts, &deps, &priorities);
 }
 
+// -- Page order -------------------------------------------------------
+
+/// The contexts an instruction may touch through the page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Touch {
+    Every,
+    Of(BTreeSet<QualifiedRef>),
+}
+
+impl Touch {
+    fn join(self, other: Touch) -> Touch {
+        match (self, other) {
+            (Touch::Of(mut a), Touch::Of(b)) => {
+                a.extend(b);
+                Touch::Of(a)
+            }
+            _ => Touch::Every,
+        }
+    }
+}
+
+fn effect_touch(ty: &Ty) -> Touch {
+    match ty.effect() {
+        Some(effect) => Touch::Of(effect.reads.union(&effect.writes).copied().collect()),
+        None => Touch::Every,
+    }
+}
+
+/// The summary of a call: the callee's effect joined with the effect of
+/// every function-typed argument.
+fn call_touch(callee_ty: &Ty, args: &[ValueId], val_types: &FxHashMap<ValueId, Ty>) -> Touch {
+    args.iter()
+        .filter_map(|arg| val_types.get(arg))
+        .filter(|ty| matches!(ty, Ty::Fn { .. }))
+        .fold(effect_touch(callee_ty), |touch, ty| {
+            touch.join(effect_touch(ty))
+        })
+}
+
+/// What each instruction of the block touches; `None` for one that never
+/// reaches the page.
+fn touches(insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> Vec<Option<Touch>> {
+    let mut spawn_of: FxHashMap<ValueId, usize> = FxHashMap::default();
+    let mut out: Vec<Option<Touch>> = Vec::with_capacity(insts.len());
+    for (i, inst) in insts.iter().enumerate() {
+        let touch = match &inst.kind {
+            InstKind::FunctionCall {
+                callee_ty, args, ..
+            } => Some(call_touch(callee_ty, args, val_types)),
+            InstKind::Spawn {
+                dst,
+                callee_ty,
+                args,
+                ..
+            } => {
+                spawn_of.insert(*dst, i);
+                Some(call_touch(callee_ty, args, val_types))
+            }
+            InstKind::Eval { src, .. } => Some(
+                spawn_of
+                    .get(src)
+                    .and_then(|&si| out[si].clone())
+                    .unwrap_or(Touch::Every),
+            ),
+            kind => context_read(kind)
+                .or_else(|| context_written(kind))
+                .map(|c| Touch::Of(BTreeSet::from([c]))),
+        };
+        out.push(touch);
+    }
+    out
+}
+
 // -- Dependency graph -----------------------------------------------
 
 /// Build dependency edges: `deps[i]` = instructions that must execute before `i`.
-fn build_dependency_graph(insts: &[Inst]) -> Vec<SmallVec<[usize; 4]>> {
+fn build_dependency_graph(
+    insts: &[Inst],
+    val_types: &FxHashMap<ValueId, Ty>,
+) -> Vec<SmallVec<[usize; 4]>> {
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
 
@@ -92,27 +177,26 @@ fn build_dependency_graph(insts: &[Inst]) -> Vec<SmallVec<[usize; 4]>> {
         }
     }
 
-    // Context ordering: every take of and assign to one context keeps its
-    // original order against the others of that context.
-    let mut last_ctx_op: FxHashMap<QualifiedRef, usize> = FxHashMap::default();
-    for (i, inst) in insts.iter().enumerate() {
-        let ctx = match &inst.kind {
-            InstKind::Take {
-                target: crate::ir::RefTarget::Context(ctx),
-                ..
+    // Page order: the last instruction that touched each context, and the
+    // last that touched every context, precede the next one that touches it.
+    let mut last_of: FxHashMap<QualifiedRef, usize> = FxHashMap::default();
+    let mut last_every: Option<usize> = None;
+    for (i, touch) in touches(insts, val_types).into_iter().enumerate() {
+        match touch {
+            None => {}
+            Some(Touch::Every) => {
+                deps[i].extend(last_of.values().copied());
+                deps[i].extend(last_every);
+                last_of.clear();
+                last_every = Some(i);
             }
-            | InstKind::Assign {
-                target: crate::ir::RefTarget::Context(ctx),
-                ..
-            } => *ctx,
-            _ => continue,
-        };
-        if let Some(&prev) = last_ctx_op.get(&ctx)
-            && prev != i
-        {
-            deps[i].push(prev);
+            Some(Touch::Of(contexts)) => {
+                deps[i].extend(last_every);
+                for c in contexts {
+                    deps[i].extend(last_of.insert(c, i));
+                }
+            }
         }
-        last_ctx_op.insert(ctx, i);
     }
 
     deps
@@ -230,10 +314,10 @@ mod tests {
         })
     }
 
-    /// `assign @x = v0; v1 = take @x; assign @x = v1`: the three keep their
+    /// `commit @x = v0; v1 = fetch @x; commit @x = v1`: the three keep their
     /// order whatever priorities say.
     #[test]
-    fn context_takes_and_assigns_keep_their_order() {
+    fn page_ops_keep_their_order() {
         let i = Interner::new();
         let x = QualifiedRef::root(i.intern("x"));
         let mut cfg = make_cfg(
@@ -242,19 +326,16 @@ mod tests {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(1),
                 },
-                InstKind::Assign {
-                    target: crate::ir::RefTarget::Context(x),
-                    path: vec![],
+                InstKind::Commit {
+                    context: x,
                     value: v(0),
                 },
-                InstKind::Take {
+                InstKind::Fetch {
                     dst: v(1),
-                    target: crate::ir::RefTarget::Context(x),
-                    path: vec![],
+                    context: x,
                 },
-                InstKind::Assign {
-                    target: crate::ir::RefTarget::Context(x),
-                    path: vec![],
+                InstKind::Commit {
+                    context: x,
                     value: v(1),
                 },
                 InstKind::Return {
@@ -265,17 +346,150 @@ mod tests {
             2,
         );
         run(&mut cfg);
-        let kinds: Vec<&str> = cfg.blocks[0]
+        assert_eq!(page_ops(&cfg), ["commit", "fetch", "commit"]);
+    }
+
+    fn page_ops(cfg: &CfgBody) -> Vec<&'static str> {
+        cfg.blocks[0]
             .insts
             .iter()
-            .map(|inst| match &inst.kind {
-                InstKind::Assign { .. } => "assign",
-                InstKind::Take { .. } => "take",
-                _ => "other",
+            .filter_map(|inst| match &inst.kind {
+                InstKind::Commit { .. } => Some("commit"),
+                InstKind::Fetch { .. } => Some("fetch"),
+                _ => None,
             })
-            .filter(|k| *k != "other")
-            .collect();
-        assert_eq!(kinds, ["assign", "take", "assign"]);
+            .collect()
+    }
+
+    fn fn_ty_touching(i: &Interner, name: &str, context: QualifiedRef) -> (QualifiedRef, Ty) {
+        let qref = QualifiedRef::root(i.intern(name));
+        let effect = crate::ty::Effect::with_contexts(
+            crate::ty::Reissue::Idempotent,
+            false,
+            Default::default(),
+            [context].into_iter().collect(),
+        );
+        (
+            qref,
+            Ty::Fn {
+                params: vec![],
+                ret: Box::new(Ty::String),
+                captures: vec![],
+                effect: effect.into(),
+            },
+        )
+    }
+
+    /// `commit @x; call f (touches @x); fetch @x` keeps its order; a spawn
+    /// that touches nothing still moves to the front.
+    #[test]
+    fn a_call_touching_a_context_stays_between_its_page_ops() {
+        let i = Interner::new();
+        let x = QualifiedRef::root(i.intern("x"));
+        let (f, f_ty) = fn_ty_touching(&i, "f", x);
+        let (g, g_ty) = io_fn_ty(&i, "g");
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Commit {
+                    context: x,
+                    value: v(0),
+                },
+                InstKind::FunctionCall {
+                    dst: v(1),
+                    callee: Callee::Direct(f),
+                    callee_ty: f_ty,
+                    args: vec![],
+                    order: None,
+                },
+                InstKind::Fetch {
+                    dst: v(2),
+                    context: x,
+                },
+                InstKind::Spawn {
+                    dst: v(3),
+                    callee: Callee::Direct(g),
+                    callee_ty: g_ty,
+                    args: vec![],
+                    order: None,
+                },
+                InstKind::Eval {
+                    dst: v(4),
+                    src: v(3),
+                    order: None,
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+            ],
+            5,
+        );
+        cfg.val_types.insert(v(3), Ty::Handle(Box::new(Ty::String)));
+        run(&mut cfg);
+
+        let commit = find_idx(&cfg, |k| matches!(k, InstKind::Commit { .. })).unwrap();
+        let call = find_idx(&cfg, |k| matches!(k, InstKind::FunctionCall { .. })).unwrap();
+        let fetch = find_idx(&cfg, |k| matches!(k, InstKind::Fetch { .. })).unwrap();
+        let spawn = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
+        assert!(commit < call && call < fetch, "commit {commit}, call {call}, fetch {fetch}");
+        assert!(spawn < commit, "the unrelated spawn moves first (spawn {spawn}, commit {commit})");
+    }
+
+    /// `commit @x; spawn f (touches @x); eval h; fetch @x` keeps the fetch
+    /// after the eval: the spawn's summary is the eval's.
+    #[test]
+    fn a_fetch_waits_for_the_eval_of_a_spawn_touching_it() {
+        let i = Interner::new();
+        let x = QualifiedRef::root(i.intern("x"));
+        let (f, f_ty) = fn_ty_touching(&i, "f", x);
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Commit {
+                    context: x,
+                    value: v(0),
+                },
+                InstKind::Spawn {
+                    dst: v(1),
+                    callee: Callee::Direct(f),
+                    callee_ty: f_ty,
+                    args: vec![],
+                    order: None,
+                },
+                InstKind::Eval {
+                    dst: v(2),
+                    src: v(1),
+                    order: None,
+                },
+                InstKind::Fetch {
+                    dst: v(3),
+                    context: x,
+                },
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
+            ],
+            4,
+        );
+        cfg.val_types.insert(v(1), Ty::Handle(Box::new(Ty::String)));
+        run(&mut cfg);
+
+        let commit = find_idx(&cfg, |k| matches!(k, InstKind::Commit { .. })).unwrap();
+        let spawn = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
+        let eval = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
+        let fetch = find_idx(&cfg, |k| matches!(k, InstKind::Fetch { .. })).unwrap();
+        assert!(
+            commit < spawn && spawn < eval && eval < fetch,
+            "commit {commit}, spawn {spawn}, eval {eval}, fetch {fetch}"
+        );
     }
 
     fn io_fn_ty(i: &Interner, name: &str) -> (QualifiedRef, Ty) {

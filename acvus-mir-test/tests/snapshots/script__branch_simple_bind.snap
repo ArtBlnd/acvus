@@ -4,26 +4,26 @@ expression: ir
 ---
 === main ===
      0 |   r0 = undef
-     1 |   r1 = ref @out
-     2 |   r2 = load r1
-     3 |   r3 = ref @data
-     4 |   r4 = load r3
-     6 |   r5 = r4 + 1 (r6)
-     7 |   r7 = ref @out
-     8 |   store r7 = r5
-     9 |   r8 = ref @out
-    10 |   return r5
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @data
+     4 |   r4 = fetch @out
+     6 |   r5 = r3 + 1 (r6)
+     7 |   commit @data = r3
+     8 |   commit @out = r5
+     9 |   return r5
 
     ; r0 (v13) : Int
-    ; r1 (v14) : Ref<Int>
-    ; r2 (v12) : Int
-    ; r3 (@data) : Ref<Int>
-    ; r4 (x) : Int
-    ; r5 (v8) : Int
-    ; r6 (v7) : Int
-    ; r7 (@out) : Ref<Int>
-    ; r8 (@out) : Ref<Int>
-    ; r9 (v11) : Int
-    ; r10 (x) : Int
-    ; r11 (v5) : Ref<Int>
-    ; r12 (v4) : Ref<Int>
+    ; r1 (v14) : Int
+    ; r2 (v15) : Int
+    ; r3 (@data) : Int
+    ; r4 (@out) : Int
+    ; r5 (v9) : Int
+    ; r6 (v8) : Int
+    ; r7 (x) : Int
+    ; r8 (v11) : Int
+    ; r9 (@out) : Int
+    ; r10 (@out) : Int
+    ; r11 (x) : Int
+    ; r12 (@data) : Int
+    ; r13 (v12) : Int

@@ -3,24 +3,18 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = ref $v1
-     2 |   r1 = load r0
-     4 |   r2 = r1 * 2 (r3)
-     5 |   r4 = ref y
-     6 |   store r4 = r2
-     7 |   r5 = ref y
-     8 |   r6 = load r5
-    10 |   r7 = r6 + 1 (r8)
-    11 |   return r7
+     1 |   r0 = take $v1
+     3 |   r1 = r0 * 2 (r2)
+     4 |   assign y = r1
+     5 |   r3 = take y
+     7 |   r4 = r3 + 1 (r5)
+     8 |   return r4
 
-    ; r0 (v4) : Ref<Int>
-    ; r1 ($x) : Int
-    ; r2 (v7) : Int
-    ; r3 (v6) : Int
-    ; r4 (v9) : Ref<Int>
-    ; r5 (v10) : Ref<Int>
-    ; r6 (y) : Int
-    ; r7 (v13) : Int
-    ; r8 (v12) : Int
-    ; r9 (compute(...)) : Int
-    ; r10 (v1) : Int
+    ; r0 ($x) : Int
+    ; r1 (v6) : Int
+    ; r2 (v5) : Int
+    ; r3 (y) : Int
+    ; r4 (v10) : Int
+    ; r5 (v9) : Int
+    ; r6 (compute(...)) : Int
+    ; r7 (v1) : Int
