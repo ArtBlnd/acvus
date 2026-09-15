@@ -307,9 +307,14 @@ pub fn contains_ref(ty: &Ty) -> bool {
         Ty::Object(fields) => fields.values().any(contains_ref),
         Ty::Tuple(items) => items.iter().any(contains_ref),
         Ty::Fn { captures, ret, .. } => captures.iter().any(contains_ref) || contains_ref(ret),
-        // The compiler cannot see inside an extension type: a value of one
-        // may hold any reference it was built from.
-        Ty::UserDefined { .. } => true,
+        // An extension type with an identity is tied to what built it
+        // (docs/identity-type-system.md) and may hold its references; one
+        // without holds only what its type arguments show.
+        Ty::UserDefined {
+            type_args,
+            identity_args,
+            ..
+        } => !identity_args.is_empty() || type_args.iter().any(contains_ref),
         Ty::Enum { variants, .. } => variants.values().flatten().any(|t| contains_ref(t)),
         _ => false,
     }
