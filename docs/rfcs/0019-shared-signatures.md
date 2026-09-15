@@ -1,0 +1,82 @@
+# RFC-0019: A shared signature and its instances
+
+Status: Proposed
+Date: 2026-09-15
+Supersedes: none
+
+## Ruling
+
+A shared signature is a name with one polymorphic function type and no
+body: `core::clone<T>(&T) -> T`, `core::eq<T>(&T, &T) -> Bool`. An
+instance is an ExternFn declared for one concrete `T` whose type is the
+signature's type at that `T`; whoever declares an extension type may
+declare its instances, in any registry. A type has at most one instance
+of a signature.
+
+A script calls the signature by name; the call resolves like a
+`Monomorphize` function (RFC-0011): the instance whose type matches the
+call's resolved type runs. When the registries are combined, every
+instance of a signature is collected into that one function, so the
+script sees one name whatever registry each instance came from.
+
+An ExternFn may require a signature of a type variable — `T: eq`. When
+the registries are combined the requirement becomes the bound
+`OneOf(every type with an instance)`; the solver and the checker treat it
+as any other declared bound (RFC-0011). Nothing new is inferred or
+dispatched.
+
+A shared signature declares no body, a type declares no impl block, and
+no value carries a table: the signature is a helper name with a fixed
+shape, and the set of types that fill it is closed at registration.
+
+## Rationale
+
+Copying, comparing, printing, and hashing are the operations a language
+wants on many types with one name, and the ruling that only a primitive
+copies (RFC-0018) made the first of them a call: `clone(&x)`. A
+`Monomorphize` function already gives one name many instances, but its
+member list is written where the function is declared, and `Regex`'s
+`clone` is written where `Regex` is. Opening the member list to other
+registries, and closing it again when they are combined, is the whole
+difference; the solver then sees exactly the `OneOf` bound it already
+carries.
+
+Traits with implementation blocks and dynamic dispatch would make a value
+carry what it can do. Here a type's abilities are a fact of the registry,
+known before a script is checked, and a call is resolved by type; the
+runtime never asks a value.
+
+## Not built
+
+- No generic functions in the language, and no `dyn`. A signature is
+  called on a concrete type; a script cannot write a function over "any
+  `T: eq`".
+- No instances for structural types declared in a script. An object type
+  gets an instance only if a registry declares one for that exact type
+  (the standard registry decides whether `eq` on objects is structural).
+- No default instance and no fallback: a type without an instance of
+  `eq` cannot be compared, and that is a type error at the call.
+- No inheritance between signatures. `ord` does not imply `eq`; a type
+  declares both.
+
+## Consequences
+
+- A registry item kind for a signature declaration: the name, its
+  polymorphic type, and its namespace. The standard registry declares
+  `core::clone`, `core::eq`, `core::ne`, `core::lt`, `core::le`,
+  `core::gt`, `core::ge`, `core::add`, `core::sub`, `core::mul`,
+  `core::div`, `core::rem`, `core::not`, `core::neg`, and instances for
+  the primitives and `String`.
+- An ExternFn attribute naming the signature it instantiates; registration
+  checks the Rust signature against the declaration at the instance's
+  type and rejects a second instance for the same type.
+- Combining registries collects instances per signature into one
+  `Monomorphize`-shaped function, and lowers every `T: sig` requirement to
+  `OneOf` over the collected types before type checking begins.
+- A Rust bound on an ExternFn's type parameter names the signature; the
+  macro reads it into the declaration's requirement.
+
+## Open questions
+
+- Whether `eq` on structural object types is provided field-wise by the
+  standard registry. This ruling leaves it to that registry.
