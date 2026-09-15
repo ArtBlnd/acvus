@@ -196,18 +196,20 @@ fn is_hoistable(kind: &InstKind) -> bool {
         // Arithmetic / logic.
         InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => true,
 
-        // Value construction.
-        InstKind::Const { .. }
-        | InstKind::MakeArray { .. }
+        // A word constant; a heap value is built where it is used.
+        InstKind::Const { value, .. } => {
+            !matches!(value, acvus_ast::Literal::String(_) | acvus_ast::Literal::List(_))
+        }
+        InstKind::MakeArray { .. }
         | InstKind::MakeObject { .. }
         | InstKind::MakeTuple { .. }
         | InstKind::MakeVariant { .. }
-        | InstKind::MakeClosure { .. } => true,
+        | InstKind::MakeClosure { .. } => false,
 
         // A place under a variable is an address (no-op, pure); one through
         // a reference is a memory op and stays in order with the other ops
         // through it.
-        InstKind::Ref { target, .. } => !matches!(target, RefTarget::Through(_)),
+        InstKind::Ref { .. } => false,
 
         // Field / element access (scalar, pure). UnwrapVariant assumes the
         // tag its test established and ArrayGet assumes an index in range,
@@ -550,6 +552,28 @@ mod tests {
             })
             .unwrap();
         assert!(spawn_idx > merge_idx, "spawn should stay in merge block");
+    }
+
+    #[test]
+    fn a_reference_and_a_heap_constant_are_never_hoisted() {
+        assert!(!is_hoistable(&InstKind::Ref {
+            dst: v(1),
+            target: RefTarget::Var(v(0)),
+            path: vec![],
+            mutability: crate::ty::Mutability::Shared,
+        }));
+        assert!(!is_hoistable(&InstKind::Const {
+            dst: v(1),
+            value: acvus_ast::Literal::String("a".into()),
+        }));
+        assert!(is_hoistable(&InstKind::Const {
+            dst: v(1),
+            value: acvus_ast::Literal::Int(1),
+        }));
+        assert!(!is_hoistable(&InstKind::MakeArray {
+            dst: v(1),
+            elements: vec![],
+        }));
     }
 
     #[test]

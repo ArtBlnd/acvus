@@ -6,6 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, ValueId};
+use crate::optimize::drop_insertion::is_consumed_by_inst;
 use crate::optimize::ssa_pass::map_uses;
 use crate::ty::Ty;
 
@@ -19,7 +20,12 @@ pub fn run(cfg: &mut CfgBody) {
         let old = std::mem::take(&mut cfg.blocks[bi].insts);
         let mut new = Vec::with_capacity(old.len());
         for (ii, mut inst) in old.into_iter().enumerate() {
-            let copies = copies_for(cfg, &live_after[ii], inst_info::uses(&inst.kind).iter().copied());
+            let consumed: Vec<ValueId> = inst_info::uses(&inst.kind)
+                .iter()
+                .copied()
+                .filter(|v| is_consumed_by_inst(&inst.kind, *v))
+                .collect();
+            let copies = copies_for(cfg, &live_after[ii], consumed.into_iter());
             for (src, dst) in &copies.clones {
                 new.push(clone_inst(inst.span, *src, *dst));
             }
@@ -29,8 +35,19 @@ pub fn run(cfg: &mut CfgBody) {
         }
         let mut terminator = std::mem::replace(&mut cfg.blocks[bi].terminator, Terminator::Fallthrough);
         let span = new.last().map(|i| i.span).unwrap_or(Span::ZERO);
-        let live_out = live.live_out[bi].clone();
-        let copies = copies_for(cfg, &live_out, terminator_args(&terminator).into_iter());
+        let live_by_own_name: FxHashSet<ValueId> = cfg
+            .successors(BlockIdx(bi))
+            .into_iter()
+            .flat_map(|succ| {
+                let params: FxHashSet<ValueId> = cfg.blocks[succ.0].params.iter().copied().collect();
+                live.live_in[succ.0]
+                    .iter()
+                    .copied()
+                    .filter(move |v| !params.contains(v))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let copies = copies_for(cfg, &live_by_own_name, terminator_args(&terminator).into_iter());
         for (src, dst) in &copies.clones {
             new.push(clone_inst(span, *src, *dst));
         }
@@ -143,7 +160,7 @@ fn terminator_args_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
 mod tests {
     use super::*;
     use crate::cfg::promote;
-    use crate::ir::{DebugInfo, MirBody};
+    use crate::ir::{DebugInfo, Label, MirBody};
     use acvus_ast::Literal;
     use acvus_utils::{LocalFactory, LocalIdOps};
 
@@ -235,6 +252,34 @@ mod tests {
         };
         assert_ne!(parts[0], parts[1]);
         assert_eq!(parts[1], v(1));
+    }
+
+    #[test]
+    fn a_jump_argument_alive_only_as_the_successor_parameter_is_not_copied() {
+        let mut cfg = body(
+            vec![
+                InstKind::Const {
+                    dst: v(1),
+                    value: Literal::String("a".into()),
+                },
+                InstKind::Jump {
+                    label: Label(0),
+                    args: vec![v(1)],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![v(2)],
+                    merge_of: None,
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+            ],
+            vec![(v(1), Ty::String), (v(2), Ty::String)],
+        );
+        run(&mut cfg);
+        assert_eq!(clones(&cfg), 0);
     }
 
     #[test]

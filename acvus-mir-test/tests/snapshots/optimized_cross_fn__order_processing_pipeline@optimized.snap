@@ -10,93 +10,135 @@ expression: opt
   T4 = " total:"
 
 === main ===
-     0 |   r0 = ref @shipping
-     1 |   r1 = ref @shipping
-     2 |   r2 = ref @item_count
-     3 |   r3 = const 100
-     4 |   r4 = load r0
-     5 |   r5 = load r2
-     6 |   r6 = r5 * r3
-     7 |   r0 = ref @discount_rate
-     8 |   r3 = load r0
-     9 |   r5 = r6 * r3
-    10 |   r3 = const 100
-    11 |   r7 = r5 / r3
-    12 |   r3 = r6 - r7
-    13 |   r0 = ref @tax_rate
-    14 |   r5 = load r0
-    15 |   r8 = r3 * r5
-    16 |   r3 = const 100
-    17 |   r5 = r8 / r3
-    18 |   r3 = r6 - r7
-    19 |   r8 = r3 + r5
-    20 |   r0 = ref @free_ship_min
-    21 |   r3 = load r0
-    22 |   r9 = r8 > r3
-    23 |   r10 = test r9 == true
-    25 |   r9 = r8 <= r3
-    26 |   r11 = test r9 == true
-    27 |   r0 = ref @default_ship
-    28 |   r12 = ref @customer
-    29 |   r13 = const T0
-    30 |   r14 = const T1
-    31 |   r15 = const T2
-    34 |   r2 = ref @total_out
-    35 |   r16 = ref @receipt_out
-    36 |   jump_if r10 then L0 else L1(r4)
-    37 | L0:
-    38 |   jump L1(0 (r17))
-    39 | L1(r3: Int):
-    40 |   jump_if r11 then L2 else L3(r3)
-    41 | L2:
-    42 |   r3 = load r0
-    43 |   jump L3(r3)
-    44 | L3(r3: Int):
-    45 |   r4 = r8 + r3
-    46 |   store r1 = r3
-    47 |   r18 = load r12
-    48 |   r19 = r18 + r13
-    49 |   r13 = call #0(r6)
-    50 |   r18 = r19 + r13
-    51 |   r13 = r18 + r14
-    52 |   r14 = call #0(r7)
-    53 |   r18 = r13 + r14
-    54 |   r13 = r18 + r15
-    55 |   r14 = call #0(r5)
-    56 |   r15 = r13 + r14
-    57 |   r13 = r15 + T3
-    58 |   r14 = call #0(r3)
-    59 |   r15 = r13 + r14
-    60 |   r13 = r15 + T4
-    61 |   r14 = call #0(r4)
-    62 |   r15 = r13 + r14
-    63 |   r20 = spawn #1(r15) [r21 ->]
-    64 |   store r2 = r4
-    65 |   store r16 = r15
-    66 |   r3 = eval r20 [-> r21]
-    67 |   return r4 [r21]
+     0 |   r0 = fetch @item_count
+     1 |   r1 = fetch @total_out
+     2 |   r1 = fetch @shipping
+     3 |   r2 = fetch @tax_rate
+     4 |   r3 = fetch @default_ship
+     5 |   r4 = fetch @receipt_out
+     6 |   drop r4
+     7 |   r5 = fetch @discount_rate
+     8 |   r4 = fetch @customer
+     9 |   r6 = fetch @free_ship_min
+    10 |   r7 = const 100
+    11 |   r8 = r0 * r7
+    12 |   r7 = r8 * r5
+    13 |   r9 = const 100
+    14 |   r10 = r7 / r9
+    15 |   r7 = r8 - r10
+    16 |   r9 = r7 * r2
+    17 |   r7 = const 100
+    18 |   r11 = r9 / r7
+    19 |   r7 = r8 - r10
+    20 |   r9 = r7 + r11
+    21 |   r12 = r9 > r6
+    22 |   r13 = test r12 == true
+    23 |   r7 = const 0
+    24 |   r12 = r9 <= r6
+    25 |   r14 = test r12 == true
+    26 |   jump_if r13 then L0 else L1(r1)
+    27 | L0:
+    28 |   jump L1(r7)
+    29 | L1(r1: Int):
+    30 |   jump_if r14 then L2 else L3(r1)
+    31 | L2:
+    32 |   jump L3(r3)
+    33 | L3(r1: Int):
+    34 |   r7 = r9 + r1
+    35 |   r15 = ref &$v124
+    36 |   r16 = const T0
+    37 |   assign v148 = r16
+    38 |   r17 = ref &v148
+    39 |   r16 = string_concat [r15, r17]
+    40 |   assign v151 = r16
+    41 |   r15 = ref &v151
+    42 |   r16 = call #0(r8)
+    43 |   assign v155 = r16
+    44 |   r17 = ref &v155
+    45 |   r16 = string_concat [r15, r17]
+    46 |   assign v158 = r16
+    47 |   r15 = ref &v158
+    48 |   r16 = const T1
+    49 |   assign v161 = r16
+    50 |   r17 = ref &v161
+    51 |   r16 = string_concat [r15, r17]
+    52 |   assign v164 = r16
+    53 |   r15 = ref &v164
+    54 |   r16 = call #0(r10)
+    55 |   assign v168 = r16
+    56 |   r17 = ref &v168
+    57 |   r16 = string_concat [r15, r17]
+    58 |   assign v171 = r16
+    59 |   r15 = ref &v171
+    60 |   r16 = const T2
+    61 |   assign v174 = r16
+    62 |   r17 = ref &v174
+    63 |   r16 = string_concat [r15, r17]
+    64 |   assign v177 = r16
+    65 |   r15 = ref &v177
+    66 |   r16 = call #0(r11)
+    67 |   assign v181 = r16
+    68 |   r17 = ref &v181
+    69 |   r16 = string_concat [r15, r17]
+    70 |   assign v184 = r16
+    71 |   r15 = ref &v184
+    72 |   r16 = const T3
+    73 |   assign v187 = r16
+    74 |   r17 = ref &v187
+    75 |   r16 = string_concat [r15, r17]
+    76 |   assign v190 = r16
+    77 |   r15 = ref &v190
+    78 |   r16 = call #0(r1)
+    79 |   assign v194 = r16
+    80 |   r17 = ref &v194
+    81 |   r16 = string_concat [r15, r17]
+    82 |   assign v197 = r16
+    83 |   r15 = ref &v197
+    84 |   r16 = const T4
+    85 |   assign v200 = r16
+    86 |   r17 = ref &v200
+    87 |   r16 = string_concat [r15, r17]
+    88 |   assign v203 = r16
+    89 |   r15 = ref &v203
+    90 |   r16 = call #0(r7)
+    91 |   assign v207 = r16
+    92 |   r17 = ref &v207
+    93 |   r16 = string_concat [r15, r17]
+    94 |   r18 = string_clone r16
+    95 |   r19 = spawn #1(r18) [r20 ->]
+    96 |   commit @item_count = r0
+    97 |   commit @total_out = r7
+    98 |   commit @shipping = r1
+    99 |   commit @tax_rate = r2
+   100 |   commit @default_ship = r3
+   101 |   commit @receipt_out = r16
+   102 |   commit @discount_rate = r5
+   103 |   commit @customer = r4
+   104 |   commit @free_ship_min = r6
+   105 |   r0 = eval r19 [-> r20]
+   106 |   return r7 [r20]
 
-    ; r0 (@default_ship) : Ref<Int>
-    ; r1 (@shipping) : Ref<Int>
-    ; r2 (@total_out) : Ref<Int>
+    ; orders: what the body's yielded Order waits for
+    ;   eval@105 <- spawn@95 #1 <- r20(entry)
+
+    ; r0 (@item_count) : Int
+    ; r1 (@shipping) : Int
+    ; r2 (@tax_rate) : Int
     ; r3 (@default_ship) : Int
-    ; r4 (@shipping) : Int
-    ; r5 (@tax_rate) : Int
-    ; r6 (v8) : Int
+    ; r4 (@customer) : String
+    ; r5 (@discount_rate) : Int
+    ; r6 (@free_ship_min) : Int
     ; r7 (v9) : Int
     ; r8 (v10) : Int
-    ; r9 (v11) : Bool
-    ; r10 (v12) : Bool
-    ; r11 (v14) : Bool
-    ; r12 (@customer) : Ref<String>
-    ; r13 (to_string(...)) : String
-    ; r14 (to_string(...)) : String
-    ; r15 (v18) : String
-    ; r16 (@receipt_out) : Ref<String>
-    ; r17 (v13) : Int
-    ; r18 (@customer) : String
-    ; r19 (v23) : String
-    ; r20 (v24) : Handle<Int>
-    ; r21 (v1) : Order
-    ; r22 (v20) : String
-    ; r23 (v19) : String
+    ; r9 (v11) : Int
+    ; r10 (v12) : Int
+    ; r11 (v13) : Int
+    ; r12 (v14) : Bool
+    ; r13 (v15) : Bool
+    ; r14 (v16) : Bool
+    ; r15 (v17) : &String
+    ; r16 (to_string(...)) : String
+    ; r17 (v19) : &String
+    ; r18 (v20) : String
+    ; r19 (v21) : Handle<Int>
+    ; r20 (v1) : Order

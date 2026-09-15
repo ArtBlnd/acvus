@@ -115,6 +115,12 @@ fn run_pipeline_with_registry(
         }
     }
 
+    let early_moves = acvus_mir::validate::move_check::check_moves(&module);
+    if !early_moves.is_empty() {
+        let msgs: Vec<String> = early_moves.iter().map(|e| format!("[validate:{}] {:?}", "test", e)).collect();
+        return Err(msgs.join("\n"));
+    }
+
     // SSA: promote whole reads and writes of locals to SSA form.
     let mut cfg_main = cfg::promote(std::mem::take(&mut module.main));
     acvus_mir::optimize::ssa_pass::run(&mut cfg_main);

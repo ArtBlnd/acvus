@@ -11,63 +11,71 @@ expression: opt
   T5 = ")"
 
 === main ===
-     0 |   r0 = ref @output
-     1 |   r1 = ref @user
-     2 |   r2 = load r1
-     3 |   r3 = r2.age
-     4 |   r4 = const T0
-     5 |   r5 = const 65
-     6 |   r6 = r3 >= r5
-     7 |   r7 = test r6 == true
-     8 |   r8 = const T1
-     9 |   r5 = const 18
-    10 |   r6 = r3 >= r5
-    11 |   r9 = test r6 == true
-    13 |   r5 = const 18
-    14 |   r6 = r3 < r5
-    15 |   r10 = test r6 == true
-    17 |   r11 = ref @output
-    18 |   r12 = r2.name
-    20 |   r13 = r12 + T4
-    21 |   r14 = ref @output
-    22 |   r12 = const T5
-    23 |   r15 = ref @output
-    24 |   jump_if r7 then L0 else L1(r4)
-    25 | L0:
-    26 |   jump L1(r8)
-    27 | L1(r4: String):
-    28 |   jump_if r9 then L2 else L3(r4)
-    29 | L2:
-    30 |   jump L3(T2)
-    31 | L3(r4: String):
-    32 |   store r0 = r4
-    33 |   jump_if r10 then L4 else L5
-    34 | L4:
-    35 |   store r11 = T3
-    36 |   jump L5
-    37 | L5:
-    38 |   r4 = load r14
-    39 |   r8 = r13 + r4
-    40 |   r4 = r8 + r12
-    41 |   store r15 = r4
-    42 |   return r4
+     0 |   r0 = fetch @output
+     1 |   assign @output = r0
+     2 |   r1 = fetch @user
+     3 |   assign var_3.age = r1
+     4 |   r2 = take var_3.age.age
+     5 |   r0 = const T0
+     6 |   assign @output = r0
+     7 |   r3 = const 65
+     8 |   r4 = r2 >= r3
+     9 |   r5 = test r4 == true
+    10 |   r3 = const 18
+    11 |   r4 = r2 >= r3
+    12 |   r6 = test r4 == true
+    13 |   r3 = const 18
+    14 |   r4 = r2 < r3
+    15 |   r7 = test r4 == true
+    16 |   jump_if r5 then L0 else L1
+    17 | L0:
+    18 |   r0 = const T1
+    19 |   assign @output = r0
+    20 |   jump L1
+    21 | L1:
+    22 |   jump_if r6 then L2 else L3
+    23 | L2:
+    24 |   r0 = const T2
+    25 |   assign @output = r0
+    26 |   jump L3
+    27 | L3:
+    28 |   jump_if r7 then L4 else L5
+    29 | L4:
+    30 |   r0 = const T3
+    31 |   assign @output = r0
+    32 |   jump L5
+    33 | L5:
+    34 |   r8 = ref &var_3.age.name
+    35 |   r0 = const T4
+    36 |   assign v25 = r0
+    37 |   r9 = ref &v25
+    38 |   r0 = string_concat [r8, r9]
+    39 |   assign v28 = r0
+    40 |   r8 = ref &v28
+    41 |   r9 = ref &@output
+    42 |   r0 = string_concat [r8, r9]
+    43 |   assign v32 = r0
+    44 |   r8 = ref &v32
+    45 |   r0 = const T5
+    46 |   assign v35 = r0
+    47 |   r9 = ref &v35
+    48 |   r0 = string_concat [r8, r9]
+    49 |   assign @output = r0
+    50 |   r0 = take @output
+    51 |   r10 = take @output
+    52 |   commit @output = r10
+    53 |   r1 = take var_3.age
+    54 |   commit @user = r1
+    55 |   return r0
 
-    ; r0 (@output) : Ref<String>
-    ; r1 (@user) : Ref<{age: Int, name: String}>
-    ; r2 (@user) : {age: Int, name: String}
-    ; r3 (age) : Int
-    ; r4 (@output) : String
-    ; r5 (v6) : Int
+    ; r0 (@output) : String
+    ; r1 (var_3.age) : {age: Int, name: String}
+    ; r2 (var_3.age) : Int
+    ; r3 (v4) : Int
+    ; r4 (v5) : Bool
+    ; r5 (v6) : Bool
     ; r6 (v7) : Bool
     ; r7 (v8) : Bool
-    ; r8 (v9) : String
-    ; r9 (v10) : Bool
-    ; r10 (v12) : Bool
-    ; r11 (@output) : Ref<String>
-    ; r12 (name) : String
-    ; r13 (v17) : String
-    ; r14 (@output) : Ref<String>
-    ; r15 (@output) : Ref<String>
-    ; r16 (v11) : String
-    ; r17 (v13) : String
-    ; r18 (v16) : String
+    ; r8 (v9) : &String
+    ; r9 (v10) : &String
+    ; r10 (@output) : String

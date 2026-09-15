@@ -7,70 +7,85 @@ expression: raw
   T1 = ")"
 
 === main ===
-     0 |   r0 = ref @user.age
-     1 |   r1 = load r0
-     3 |   r2 = r1 * 2 (r3)
-     4 |   r4 = ref score
-     5 |   store r4 = r2
-     6 |   r5 = ref @user.name
-     7 |   r6 = load r5
-     9 |   r7 = r6 + T0
-    10 |   r8 = ref score
-    11 |   r9 = load r8
-    12 |   r10 = call #0(r9)
-    13 |   r11 = r7 + r10
-    15 |   r12 = r11 + T1
-    16 |   r13 = ref label
-    17 |   store r13 = r12
-    18 |   r14 = ref score
-    19 |   r15 = load r14
-    20 |   r16 = ref @min_score
-    21 |   r17 = load r16
-    22 |   r18 = r15 > r17
-    23 |   r19 = ref eligible
-    24 |   store r19 = r18
-    25 |   r20 = ref label
-    26 |   r21 = load r20
-    27 |   r22 = ref score
-    28 |   r23 = load r22
-    29 |   r24 = ref eligible
-    30 |   r25 = load r24
-    31 |   r26 = object {label: r21, score: r23, eligible: r25}
-    32 |   r27 = ref @output
-    33 |   store r27 = r26
-    34 |   r28 = ref @output
-    35 |   r29 = load r28
-    36 |   return r29
+     0 |   r0 = fetch @output
+     1 |   assign @output = r0
+     2 |   r1 = fetch @min_score
+     3 |   assign @min_score = r1
+     4 |   r2 = fetch @user
+     5 |   assign @user = r2
+     6 |   r3 = take @user.age
+     8 |   r4 = r3 * 2 (r5)
+     9 |   assign score = r4
+    10 |   r6 = ref &@user.name
+    12 |   assign v13 = T0
+    13 |   r7 = ref &v13
+    14 |   r8 = string_concat [r6, r7]
+    15 |   assign v16 = r8
+    16 |   r9 = ref &v16
+    17 |   r10 = take score
+    18 |   r11 = call #0(r10)
+    19 |   assign v20 = r11
+    20 |   r12 = ref &v20
+    21 |   r13 = string_concat [r9, r12]
+    22 |   assign v23 = r13
+    23 |   r14 = ref &v23
+    25 |   assign v26 = T1
+    26 |   r15 = ref &v26
+    27 |   r16 = string_concat [r14, r15]
+    28 |   assign label = r16
+    29 |   r17 = take score
+    30 |   r18 = take @min_score
+    31 |   r19 = r17 > r18
+    32 |   assign eligible = r19
+    33 |   r20 = take label
+    34 |   r21 = take score
+    35 |   r22 = take eligible
+    36 |   r23 = object {label: r20, score: r21, eligible: r22}
+    37 |   assign @output = r23
+    38 |   r24 = take @output.score
+    39 |   r25 = take @output
+    40 |   commit @output = r25
+    41 |   r26 = take @min_score
+    42 |   commit @min_score = r26
+    43 |   r27 = take @user
+    44 |   commit @user = r27
+    45 |   return r24
 
-    ; r0 (@user.age) : Ref<Int>
-    ; r1 (v2) : Int
-    ; r2 (v4) : Int
-    ; r3 (v3) : Int
-    ; r4 (v6) : Ref<Int>
-    ; r5 (@user.name) : Ref<String>
-    ; r6 (v8) : String
-    ; r7 (v10) : String
-    ; r8 (v11) : Ref<Int>
-    ; r9 (score) : Int
-    ; r10 (to_string(...)) : String
-    ; r11 (v14) : String
-    ; r12 (v16) : String
-    ; r13 (v18) : Ref<String>
-    ; r14 (v19) : Ref<Int>
-    ; r15 (score) : Int
-    ; r16 (@min_score) : Ref<Int>
-    ; r17 (v22) : Int
-    ; r18 (v23) : Bool
-    ; r19 (v25) : Ref<Bool>
-    ; r20 (v26) : Ref<String>
-    ; r21 (label) : String
-    ; r22 (v28) : Ref<Int>
-    ; r23 (score) : Int
-    ; r24 (v30) : Ref<Bool>
-    ; r25 (eligible) : Bool
-    ; r26 (v32) : {eligible: Bool, label: String, score: Int}
-    ; r27 (@output) : Ref<{eligible: Bool, label: String, score: Int}>
-    ; r28 (@output) : Ref<{eligible: Bool, label: String, score: Int}>
-    ; r29 (v35) : {eligible: Bool, label: String, score: Int}
-    ; r30 (v9) : String
-    ; r31 (v15) : String
+    ; r0 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r1 (@min_score) : Int
+    ; r2 (@user) : {age: Int, name: String}
+    ; r3 (@user.age) : Int
+    ; r4 (v9) : Int
+    ; r5 (v8) : Int
+    ; r6 (@user.name) : &String
+    ; r7 (var_13.) : &String
+    ; r8 (v15) : String
+    ; r9 (var_16.) : &String
+    ; r10 (score) : Int
+    ; r11 (to_string(...)) : String
+    ; r12 (var_20.) : &String
+    ; r13 (v22) : String
+    ; r14 (var_23.) : &String
+    ; r15 (var_26.) : &String
+    ; r16 (v28) : String
+    ; r17 (score) : Int
+    ; r18 (@min_score) : Int
+    ; r19 (v32) : Bool
+    ; r20 (label) : String
+    ; r21 (score) : Int
+    ; r22 (eligible) : Bool
+    ; r23 (v37) : {eligible: Bool, label: String, score: Int}
+    ; r24 (@output.score) : Int
+    ; r25 (v39) : {eligible: Bool, label: String, score: Int}
+    ; r26 (v40) : Int
+    ; r27 (v41) : {age: Int, name: String}
+    ; r28 (@min_score) : Int
+    ; r29 (v25) : String
+    ; r30 (v12) : String
+    ; r31 (@user) : {age: Int, name: String}
+    ; r32 (v20) : String
+    ; r33 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r34 (v23) : String
+    ; r35 (v26) : String
+    ; r36 (v13) : String
+    ; r37 (v16) : String

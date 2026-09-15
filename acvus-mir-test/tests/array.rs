@@ -78,8 +78,7 @@ fn pattern_length_is_checked_statically() {
 #[test]
 fn array_flows_into_list_and_iterator() {
     let i = Interner::new();
-    let items = Ty::Array(Box::new(Ty::Int), LenTerm::Known(2));
-    let ctx = FxHashMap::from_iter([(i.intern("items"), items)]);
-    compile_script_ir(&i, "@items | len", &ctx).unwrap();
-    compile_script_ir(&i, "@items | iter | collect | iter | collect | len", &ctx).unwrap();
+    let ctx = FxHashMap::default();
+    compile_script_ir(&i, "[1, 2] | len", &ctx).unwrap();
+    compile_script_ir(&i, "[1, 2] | iter | collect | iter | collect | len", &ctx).unwrap();
 }

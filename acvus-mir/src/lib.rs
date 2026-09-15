@@ -114,10 +114,17 @@ mod tests {
         );
         compile_template(
             &i,
+            r#"{{ [{ name, }, ..] = &@users }}{{ name }}{{/}}"#,
+            &[("users", users_ty.clone())],
+        )
+        .unwrap();
+        let err = compile_template(
+            &i,
             r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
             &[("users", users_ty)],
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(err.contains("incompatible with source type"), "{err}");
     }
 
     #[test]

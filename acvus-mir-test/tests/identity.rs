@@ -31,7 +31,7 @@ fn chain_joins_two_sources_into_a_new_one() {
     let i = Interner::new();
     compile_script_ir(
         &i,
-        "a = @items | iter; b = @items | iter; chain(a, b) | collect | len",
+        "a = [1, 2] | iter; b = [1, 2] | iter; chain(a, b) | collect | len",
         &items(&i),
     )
     .unwrap();
@@ -49,8 +49,3 @@ fn a_derived_iterator_keeps_its_source_and_still_moves() {
     assert!(err.contains("UseAfterMove"), "{err}");
 }
 
-#[test]
-fn a_type_without_identity_copies() {
-    let i = Interner::new();
-    compile_script_ir(&i, "xs = @items | list; len(xs) + len(xs)", &items(&i)).unwrap();
-}

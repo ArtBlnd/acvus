@@ -185,6 +185,9 @@ ScriptModeStmt: Stmt = {
 };
 
 ScriptStmt: Stmt = {
+    // anyorder { body };
+    <l:@L> "anyorder" "{" <body:ScriptStmt*> "}" ";"? <r:@R> =>
+        Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
     // match-bind (if-let): pattern = source { body };
     <l:@L> <lhs:Expr> "=" <rhs:Expr> "{" <body:ScriptStmt*> "}" ";" <r:@R> =>?
         Ok(Stmt::MatchBind {

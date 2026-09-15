@@ -255,7 +255,7 @@ fn needs_drop(val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
 ///
 /// Consumed = the instruction takes ownership. No Drop needed after.
 /// Read = the instruction borrows. Drop still needed if this is the last use.
-fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
+pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
     match kind {
         // Function calls consume all arguments (ownership transfer to callee).
         InstKind::FunctionCall { callee, args, .. } => {

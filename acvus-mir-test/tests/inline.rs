@@ -328,14 +328,14 @@ fn inline_callee_takes_lambda_arg() {
 
 #[test]
 fn inline_callee_with_filter_lambda() {
-    // positives(xs) = xs | filter(|x| -> x > 0); main = positives([1, -2, 3]) | collect
+    // positives(xs) = xs | filter(|x| -> *x > 0); main = positives([1, -2, 3]) | collect
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
         ("main", "positives([1, -2, 3]) | collect"),
         &[(
             "positives",
-            "$xs | filter(|x| -> x > 0)",
+            "$xs | filter(|x| -> *x > 0)",
             sig(
                 &i,
                 &[(

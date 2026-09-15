@@ -6,29 +6,28 @@ expression: ir
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = undef
-     3 |   r3 = undef
-     4 |   r4 = fetch @user
-     5 |   r5 = fetch @out
-     6 |   r6 = r4.name
-     7 |   r7 = r4.age
-     8 |   commit @user = r4
-     9 |   r8 = string_clone r6
-    10 |   commit @out = r8
-    11 |   return r6
+     3 |   r3 = fetch @user
+     4 |   assign @user = r3
+     5 |   r4 = fetch @out
+     6 |   r5 = take @user.name
+     7 |   r6 = take @user.age
+     8 |   r7 = take @user
+     9 |   commit @user = r7
+    10 |   r8 = string_clone r5
+    11 |   commit @out = r8
+    12 |   return r5
 
-    ; r0 (v14) : {age: Int, name: String}
-    ; r1 (v15) : String
-    ; r2 (v16) : String
-    ; r3 (v17) : Int
-    ; r4 (@user) : {age: Int, name: String}
-    ; r5 (@out) : String
-    ; r6 (name) : String
-    ; r7 (age) : Int
-    ; r8 (v18) : String
+    ; r0 (v13) : String
+    ; r1 (v14) : String
+    ; r2 (v15) : Int
+    ; r3 (@user) : {age: Int, name: String}
+    ; r4 (@out) : String
+    ; r5 (name) : String
+    ; r6 (age) : Int
+    ; r7 (v11) : {age: Int, name: String}
+    ; r8 (v16) : String
     ; r9 (@out) : String
     ; r10 (@out) : String
-    ; r11 (@user) : {age: Int, name: String}
-    ; r12 (v12) : {age: Int, name: String}
-    ; r13 (name) : String
-    ; r14 (v13) : String
-    ; r15 (@user) : {age: Int, name: String}
+    ; r11 (name) : String
+    ; r12 (@user) : {age: Int, name: String}
+    ; r13 (v12) : String

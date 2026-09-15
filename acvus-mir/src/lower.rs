@@ -59,6 +59,17 @@ struct Place {
     ty: Ty,
 }
 
+/// What a pattern is applied to (RFC-0024).
+#[derive(Clone)]
+enum PatSrc {
+    Value(ValueId),
+    Place {
+        target: RefTarget,
+        path: Vec<PathSeg>,
+        ty: Ty,
+    },
+}
+
 fn fields(path: &[Astr]) -> Vec<PathSeg> {
     path.iter().copied().map(PathSeg::Field).collect()
 }
@@ -545,12 +556,12 @@ impl<'a> Lowerer<'a> {
         body: &[Stmt],
         span: Span,
     ) {
-        let source_reg = self.lower_expr(source);
+        let source_reg = self.pattern_source(source);
 
         if pattern_is_irrefutable(pattern) {
             // No branching needed - just bind and execute body.
             self.push_scope();
-            self.lower_pattern_bind(pattern, source_reg, span);
+            self.lower_pattern_bind(pattern, source_reg.clone(), span);
             for s in body {
                 self.lower_stmt(s);
             }
@@ -560,7 +571,7 @@ impl<'a> Lowerer<'a> {
             let body_label = self.alloc_label();
             let end_label = self.alloc_label();
 
-            let matched = self.lower_pattern_test(pattern, source_reg, span);
+            let matched = self.lower_pattern_test(pattern, source_reg.clone(), span);
             self.emit_inst(
                 span,
                 InstKind::JumpIf {
@@ -574,7 +585,7 @@ impl<'a> Lowerer<'a> {
 
             self.emit_label(span, body_label);
             self.push_scope();
-            self.lower_pattern_bind(pattern, source_reg, span);
+            self.lower_pattern_bind(pattern, source_reg.clone(), span);
             for s in body {
                 self.lower_stmt(s);
             }
@@ -659,8 +670,8 @@ impl<'a> Lowerer<'a> {
         );
         self.emit_label(span, loop_label);
 
-        let src = self.lower_expr(source);
-        let matched = self.lower_pattern_test(pattern, src, span);
+        let src = self.pattern_source(source);
+        let matched = self.lower_pattern_test(pattern, src.clone(), span);
         self.emit_inst(
             span,
             InstKind::JumpIf {
@@ -674,7 +685,7 @@ impl<'a> Lowerer<'a> {
 
         self.emit_label(span, body_label);
         self.push_scope();
-        self.lower_pattern_bind(pattern, src, span);
+        self.lower_pattern_bind(pattern, src.clone(), span);
         for s in body {
             self.lower_stmt(s);
         }
@@ -812,8 +823,8 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         let result_ty = self.type_of_id(id);
-        let src = self.lower_expr(source);
-        let matched = self.lower_pattern_test(pattern, src, span);
+        let src = self.pattern_source(source);
+        let matched = self.lower_pattern_test(pattern, src.clone(), span);
 
         let then_label = self.alloc_label();
         let merge_label = self.alloc_label();
@@ -835,7 +846,7 @@ impl<'a> Lowerer<'a> {
                 // Then branch.
                 self.emit_label(span, then_label);
                 self.push_scope();
-                self.lower_pattern_bind(pattern, src, span);
+                self.lower_pattern_bind(pattern, src.clone(), span);
                 for s in then_body {
                     self.lower_stmt(s);
                 }
@@ -890,7 +901,7 @@ impl<'a> Lowerer<'a> {
 
                 self.emit_label(span, then_label);
                 self.push_scope();
-                self.lower_pattern_bind(pattern, src, span);
+                self.lower_pattern_bind(pattern, src.clone(), span);
                 for s in then_body {
                     self.lower_stmt(s);
                 }
@@ -2207,7 +2218,7 @@ impl<'a> Lowerer<'a> {
                 .map(|ca| apply_indent_to_nodes(&ca.body, modifier))
         });
 
-        let source_reg = self.lower_expr(&mb.source);
+        let source_reg = self.pattern_source(&mb.source);
 
         // Match is single-value pattern matching (no iteration).
         // Try each arm against the source value; first match wins.
@@ -2224,7 +2235,7 @@ impl<'a> Lowerer<'a> {
             self.push_scope();
 
             // Test pattern against source value.
-            let matched = self.lower_pattern_test(&arm.pattern, source_reg, arm.tag_span);
+            let matched = self.lower_pattern_test(&arm.pattern, source_reg.clone(), arm.tag_span);
 
             // If pattern didn't match, try next arm (or catch-all).
             let arm_body_label = self.alloc_label();
@@ -2241,7 +2252,7 @@ impl<'a> Lowerer<'a> {
             self.emit_label(arm.tag_span, arm_body_label);
 
             // Bind pattern variables.
-            self.lower_pattern_bind(&arm.pattern, source_reg, arm.tag_span);
+            self.lower_pattern_bind(&arm.pattern, source_reg.clone(), arm.tag_span);
 
             // Lower arm body (use indent-adjusted body if available).
             let body = adjusted_arm_bodies
@@ -2419,7 +2430,7 @@ impl<'a> Lowerer<'a> {
                 let parts = self.pattern_parts_through(pattern, reference, inner, span);
                 let mut all_ok = self.emit_const_bool(span, true);
                 for (part, sub) in parts {
-                    let ok = self.lower_pattern_test(&sub, part, span);
+                    let ok = self.lower_pattern_test_value(&sub, part, span);
                     all_ok = self.emit_and(span, all_ok, ok);
                 }
                 all_ok
@@ -2456,7 +2467,7 @@ impl<'a> Lowerer<'a> {
                 self.emit_label(span, check_inner_label);
                 let parts = self.pattern_parts_through(pattern, reference, inner, span);
                 let (part, sub) = parts.into_iter().next().expect("a payload pattern names one part");
-                let inner_ok = self.lower_pattern_test(&sub, part, span);
+                let inner_ok = self.lower_pattern_test_value(&sub, part, span);
                 self.emit_fail_merge(span, inner_ok, fail_label)
             }
         }
@@ -2495,13 +2506,231 @@ impl<'a> Lowerer<'a> {
             | Pattern::Variant { .. } => {
                 let parts = self.pattern_parts_through(pattern, reference, inner, span);
                 for (part, sub) in parts {
-                    self.lower_pattern_bind(&sub, part, span);
+                    self.lower_pattern_bind_value(&sub, part, span);
                 }
             }
         }
     }
 
-    fn lower_pattern_test(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) -> ValueId {
+    /// RFC-0024.
+    fn pattern_source(&mut self, source: &Expr) -> PatSrc {
+        let mut path: Vec<PathSeg> = Vec::new();
+        let mut root = source;
+        loop {
+            match root {
+                Expr::FieldAccess { object, field, .. } => {
+                    path.push(PathSeg::Field(*field));
+                    root = object;
+                }
+                Expr::Paren { inner, .. } => root = inner,
+                _ => break,
+            }
+        }
+        path.reverse();
+        let root_ty = self.type_of_id(root.id());
+        if matches!(root_ty, Ty::Ref(..)) {
+            return PatSrc::Value(self.lower_expr(source));
+        }
+        match self.storage_of(root) {
+            Some(target) => PatSrc::Place {
+                target,
+                path,
+                ty: self.type_of_id(source.id()),
+            },
+            None => PatSrc::Value(self.lower_expr(source)),
+        }
+    }
+
+    fn lower_pattern_test(&mut self, pattern: &Pattern, src: PatSrc, span: Span) -> ValueId {
+        match src {
+            PatSrc::Value(reg) => self.lower_pattern_test_value(pattern, reg, span),
+            PatSrc::Place { target, path, ty } => {
+                self.lower_pattern_test_place(pattern, &target, &path, &ty, span)
+            }
+        }
+    }
+
+    fn lower_pattern_bind(&mut self, pattern: &Pattern, src: PatSrc, span: Span) {
+        match src {
+            PatSrc::Value(reg) => self.lower_pattern_bind_value(pattern, reg, span),
+            PatSrc::Place { target, path, ty } => {
+                self.lower_pattern_bind_place(pattern, &target, &path, &ty, span)
+            }
+        }
+    }
+
+    fn pattern_parts_place(pattern: &Pattern, path: &[PathSeg], ty: &Ty) -> Vec<(Vec<PathSeg>, Ty, Pattern)> {
+        let sub = |seg: PathSeg| {
+            let mut p = path.to_vec();
+            p.push(seg);
+            p
+        };
+        match pattern {
+            Pattern::List { head, tail, .. } => {
+                let Ty::Array(elem, len) = ty else {
+                    return Vec::new();
+                };
+                let len = len.get();
+                head.iter()
+                    .enumerate()
+                    .map(|(i, p)| (i, p))
+                    .chain(tail.iter().enumerate().map(|(i, p)| (len - tail.len() + i, p)))
+                    .map(|(i, p)| (sub(PathSeg::Index(i)), elem.as_ref().clone(), p.clone()))
+                    .collect()
+            }
+            Pattern::Object { fields: pats, .. } => {
+                let Ty::Object(field_tys) = ty else {
+                    return Vec::new();
+                };
+                pats.iter()
+                    .map(|ObjectPatternField { key, pattern, .. }| {
+                        let fty = field_tys.get(key).cloned().unwrap_or(Ty::error());
+                        (sub(PathSeg::Field(*key)), fty, pattern.clone())
+                    })
+                    .collect()
+            }
+            Pattern::Tuple { elements, .. } => {
+                let Ty::Tuple(elem_tys) = ty else {
+                    return Vec::new();
+                };
+                elements
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, elem)| match elem {
+                        TuplePatternElem::Pattern(pat) => Some((i, pat)),
+                        _ => None,
+                    })
+                    .map(|(i, pat)| {
+                        let ety = elem_tys.get(i).cloned().unwrap_or(Ty::error());
+                        (sub(PathSeg::Index(i)), ety, pat.clone())
+                    })
+                    .collect()
+            }
+            Pattern::Variant { tag, payload, .. } => match payload {
+                Some(inner) => vec![(sub(PathSeg::Payload), Self::payload_type(ty, *tag), (**inner).clone())],
+                None => Vec::new(),
+            },
+            Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => Vec::new(),
+        }
+    }
+
+    fn lower_pattern_test_place(
+        &mut self,
+        pattern: &Pattern,
+        target: &RefTarget,
+        path: &[PathSeg],
+        ty: &Ty,
+        span: Span,
+    ) -> ValueId {
+        match pattern {
+            Pattern::ContextBind { .. } | Pattern::Binding { .. } => self.emit_const_bool(span, true),
+            Pattern::Literal { value, .. } => {
+                let read = self.emit_take(span, target.clone(), path.to_vec(), ty.clone());
+                let dst = self.alloc_val();
+                self.set_val_type(dst, Ty::Bool);
+                self.emit_inst(
+                    span,
+                    InstKind::TestLiteral {
+                        dst,
+                        src: read,
+                        value: value.clone(),
+                    },
+                );
+                dst
+            }
+            Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
+                let mut all_ok = self.emit_const_bool(span, true);
+                for (sub_path, sub_ty, sub) in Self::pattern_parts_place(pattern, path, ty) {
+                    let ok = self.lower_pattern_test_place(&sub, target, &sub_path, &sub_ty, span);
+                    all_ok = self.emit_and(span, all_ok, ok);
+                }
+                all_ok
+            }
+            Pattern::Variant { tag, payload, .. } => {
+                let reference = self.emit_ref(span, target.clone(), path.to_vec(), Mutability::Shared, ty.clone());
+                let tag_ok = self.alloc_val();
+                self.set_val_type(tag_ok, Ty::Bool);
+                self.emit_inst(
+                    span,
+                    InstKind::TestVariant {
+                        dst: tag_ok,
+                        src: reference,
+                        tag: *tag,
+                    },
+                );
+                let Some(inner_pat) = payload else {
+                    return tag_ok;
+                };
+                if pattern_is_irrefutable(inner_pat) {
+                    return tag_ok;
+                }
+                let check_inner_label = self.alloc_label();
+                let fail_label = self.alloc_label();
+                self.emit_inst(
+                    span,
+                    InstKind::JumpIf {
+                        cond: tag_ok,
+                        then_label: check_inner_label,
+                        then_args: vec![],
+                        else_label: fail_label,
+                        else_args: vec![],
+                    },
+                );
+                self.emit_label(span, check_inner_label);
+                let (sub_path, sub_ty, sub) = Self::pattern_parts_place(pattern, path, ty)
+                    .into_iter()
+                    .next()
+                    .expect("a payload pattern names one part");
+                let inner_ok = self.lower_pattern_test_place(&sub, target, &sub_path, &sub_ty, span);
+                self.emit_fail_merge(span, inner_ok, fail_label)
+            }
+        }
+    }
+
+    fn lower_pattern_bind_place(
+        &mut self,
+        pattern: &Pattern,
+        target: &RefTarget,
+        path: &[PathSeg],
+        ty: &Ty,
+        span: Span,
+    ) {
+        match pattern {
+            Pattern::Binding {
+                name,
+                ref_kind: RefKind::Value,
+                ..
+            } => {
+                let read = self.emit_take(span, target.clone(), path.to_vec(), ty.clone());
+                self.set_origin(read, ValOrigin::Named(*name));
+                let slot = self.define_var(*name, ty.clone());
+                self.emit_assign(span, RefTarget::Var(slot), vec![], read);
+            }
+            Pattern::Binding {
+                ref_kind: RefKind::ExternParam,
+                ..
+            } => {
+                let dst = self.alloc_val();
+                self.emit_inst(span, InstKind::Poison { dst });
+            }
+            Pattern::ContextBind { name: qref, .. } => {
+                let read = self.emit_take(span, target.clone(), path.to_vec(), ty.clone());
+                let slot = self.context_slot(*qref);
+                self.emit_assign(span, RefTarget::Var(slot), vec![], read);
+            }
+            Pattern::Literal { .. } => {}
+            Pattern::List { .. }
+            | Pattern::Object { .. }
+            | Pattern::Tuple { .. }
+            | Pattern::Variant { .. } => {
+                for (sub_path, sub_ty, sub) in Self::pattern_parts_place(pattern, path, ty) {
+                    self.lower_pattern_bind_place(&sub, target, &sub_path, &sub_ty, span);
+                }
+            }
+        }
+    }
+
+    fn lower_pattern_test_value(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) -> ValueId {
         if let Some(inner) = self.reference_inner(src_reg) {
             return self.lower_pattern_test_through(pattern, src_reg, &inner, span);
         }
@@ -2542,13 +2771,13 @@ impl<'a> Lowerer<'a> {
                 let mut all_ok = self.emit_const_bool(span, true);
                 for (i, p) in head.iter().enumerate() {
                     let elem = self.emit_array_index(span, src_reg, i, elem_ty.clone());
-                    let value_id = self.lower_pattern_test(p, elem, span);
+                    let value_id = self.lower_pattern_test_value(p, elem, span);
                     all_ok = self.emit_and(span, all_ok, value_id);
                 }
                 for (i, p) in tail.iter().enumerate() {
                     let elem =
                         self.emit_array_index(span, src_reg, len - tail.len() + i, elem_ty.clone());
-                    let value_id = self.lower_pattern_test(p, elem, span);
+                    let value_id = self.lower_pattern_test_value(p, elem, span);
                     all_ok = self.emit_and(span, all_ok, value_id);
                 }
                 all_ok
@@ -2581,7 +2810,7 @@ impl<'a> Lowerer<'a> {
                         },
                     );
 
-                    let sub_ok = self.lower_pattern_test(pattern, field_val, span);
+                    let sub_ok = self.lower_pattern_test_value(pattern, field_val, span);
                     all_ok = self.emit_and(span, all_ok, sub_ok);
                 }
 
@@ -2607,7 +2836,7 @@ impl<'a> Lowerer<'a> {
                             index: i,
                         },
                     );
-                    let value_id = self.lower_pattern_test(pat, field_val, span);
+                    let value_id = self.lower_pattern_test_value(pat, field_val, span);
                     all_ok = self.emit_and(span, all_ok, value_id);
                 }
 
@@ -2663,7 +2892,7 @@ impl<'a> Lowerer<'a> {
                         src: src_reg,
                     },
                 );
-                let inner_ok = self.lower_pattern_test(inner_pat, inner_val, span);
+                let inner_ok = self.lower_pattern_test_value(inner_pat, inner_val, span);
 
                 self.emit_fail_merge(span, inner_ok, fail_label)
             }
@@ -2682,7 +2911,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Emit instructions that bind pattern variables from a matched value.
-    fn lower_pattern_bind(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
+    fn lower_pattern_bind_value(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
         if let Some(inner) = self.reference_inner(src_reg) {
             self.lower_pattern_bind_through(pattern, src_reg, &inner, span);
             return;
@@ -2725,12 +2954,12 @@ impl<'a> Lowerer<'a> {
                 let elem_ty = self.array_elem_type(src_reg);
                 for (i, p) in head.iter().enumerate() {
                     let elem = self.emit_array_index(span, src_reg, i, elem_ty.clone());
-                    self.lower_pattern_bind(p, elem, span);
+                    self.lower_pattern_bind_value(p, elem, span);
                 }
                 for (i, p) in tail.iter().enumerate() {
                     let elem =
                         self.emit_array_index(span, src_reg, len - tail.len() + i, elem_ty.clone());
-                    self.lower_pattern_bind(p, elem, span);
+                    self.lower_pattern_bind_value(p, elem, span);
                 }
             }
 
@@ -2746,7 +2975,7 @@ impl<'a> Lowerer<'a> {
                             key: *key,
                         },
                     );
-                    self.lower_pattern_bind(pattern, field_val, span);
+                    self.lower_pattern_bind_value(pattern, field_val, span);
                 }
             }
 
@@ -2765,7 +2994,7 @@ impl<'a> Lowerer<'a> {
                             index: i,
                         },
                     );
-                    self.lower_pattern_bind(pat, field_val, span);
+                    self.lower_pattern_bind_value(pat, field_val, span);
                 }
             }
 
@@ -2782,7 +3011,7 @@ impl<'a> Lowerer<'a> {
                         src: src_reg,
                     },
                 );
-                self.lower_pattern_bind(inner_pat, inner_val, span);
+                self.lower_pattern_bind_value(inner_pat, inner_val, span);
             }
         }
     }

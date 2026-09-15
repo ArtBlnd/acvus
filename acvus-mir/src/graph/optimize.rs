@@ -48,6 +48,16 @@ fn optimize_inner(
     recursive_fns: &FxHashSet<QualifiedRef>,
     untyped_scalars: bool,
 ) -> OptimizeResult {
+    // -- Pass 0: moves as the source wrote them, before any promotion ----
+
+    let mut all_errors = Vec::new();
+    for (qref, module) in &modules {
+        let errors = validate::move_check::check_moves(module);
+        if !errors.is_empty() {
+            all_errors.push((*qref, errors));
+        }
+    }
+
     // -- Pass 1: SSA (per-module) -> Inline (cross-module) -----
 
     let mut ssa_modules = modules;
@@ -63,7 +73,6 @@ fn optimize_inner(
     // -- Pass 2: Optimize + Validate (per-module, direct calls) ------
 
     let mut result_modules = FxHashMap::default();
-    let mut all_errors = Vec::new();
 
     for (qref, mut module) in inlined.modules {
         run_pass2_body(&mut module.main, context_types, untyped_scalars);

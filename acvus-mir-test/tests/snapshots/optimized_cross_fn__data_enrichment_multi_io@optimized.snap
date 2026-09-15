@@ -66,6 +66,9 @@ expression: opt
     55 |   commit @user_id = r4
     56 |   return r10 [r6]
 
+    ; orders: what the body's yielded Order waits for
+    ;   eval@47 <- spawn@46 #4 <- eval@10 <- spawn@9 #1 <- eval@8 <- spawn@7 #0 <- r6(entry)
+
     ; r0 (concat(...)) : String
     ; r1 (@weight) : Int
     ; r2 (@alert_count) : Int

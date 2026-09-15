@@ -69,7 +69,7 @@ fn field_read_modify_write_branch() {
             @stats.count = count;
             @stats.exceeded = true;
         };
-        @stats
+        @stats.count
     "#;
     let (raw, opt) = snap_both(&i, src, &c);
     insta::assert_snapshot!("field_read_modify_write_branch@raw", raw);
@@ -139,7 +139,7 @@ fn object_construct_from_fields() {
         label = @user.name + " (score: " + to_string(score) + ")";
         eligible = score > @min_score;
         @output = { label: label, score: score, eligible: eligible, };
-        @output
+        @output.score
     "#;
     let (raw, opt) = snap_both(&i, src, &c);
     insta::assert_snapshot!("object_construct_from_fields@raw", raw);
@@ -217,7 +217,7 @@ fn chained_field_mutations() {
         @state.step = @state.step + 1;
         @state.value = @state.value * @state.multiplier;
         @state.done = @state.step >= @state.max_steps;
-        @state
+        @state.value
     "#;
     let (raw, opt) = snap_both(&i, src, &c);
     insta::assert_snapshot!("chained_field_mutations@raw", raw);

@@ -537,6 +537,11 @@ impl Value {
         unsafe { self.peek::<VariantValue>() }
     }
     /// # Safety
+    /// The value is a variant.
+    pub unsafe fn as_variant_mut(&mut self) -> &mut VariantValue {
+        unsafe { self.peek_mut::<VariantValue>() }
+    }
+    /// # Safety
     /// The value is an `Fn`.
     pub unsafe fn as_fn(&self) -> &FnValue {
         unsafe { self.peek::<FnValue>() }

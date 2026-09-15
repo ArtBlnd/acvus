@@ -686,6 +686,8 @@ fn write_body(
         }
     }
 
+    write_order_tree(f, body, indent, ctx, &mut vn)?;
+
     // Print value types with origin names.
     if !body.val_types.is_empty() {
         writeln!(f)?;
@@ -767,6 +769,131 @@ impl MirModule {
             interner,
         }
     }
+}
+
+#[derive(Clone)]
+struct OrderNode {
+    /// Named by instruction index: registers are reused after coloring.
+    label: String,
+    waits_for: Vec<OrderNode>,
+}
+
+fn write_order_tree(
+    f: &mut fmt::Formatter<'_>,
+    body: &MirBody,
+    indent: &str,
+    ctx: &PrintCtx<'_>,
+    vn: &mut ValNormalizer,
+) -> fmt::Result {
+    let mut produced: FxHashMap<ValueId, OrderNode> = FxHashMap::default();
+    let entry = |v: ValueId, vn: &mut ValNormalizer| OrderNode {
+        label: format!("{}(entry)", vn.fmt_val(v)),
+        waits_for: Vec::new(),
+    };
+    let mut handles: FxHashMap<ValueId, OrderNode> = FxHashMap::default();
+    let mut returned: Option<OrderNode> = None;
+    let mut any = false;
+    for (i, inst) in body.insts.iter().enumerate() {
+        let callee_name = |c: &Callee, vn: &mut ValNormalizer| match c {
+            Callee::Direct(id) => ctx.fmt_fn_id(*id),
+            Callee::Indirect(v) => vn.fmt_val(*v),
+        };
+        match &inst.kind {
+            InstKind::FunctionCall {
+                callee,
+                order: Some(edge),
+                ..
+            } => {
+                any = true;
+                let before = produced.get(&edge.before).cloned().unwrap_or_else(|| entry(edge.before, vn));
+                produced.insert(
+                    edge.after,
+                    OrderNode {
+                        label: format!("call@{i} {}", callee_name(callee, vn)),
+                        waits_for: vec![before],
+                    },
+                );
+            }
+            InstKind::Spawn {
+                dst,
+                callee,
+                order: Some(o),
+                ..
+            } => {
+                any = true;
+                let before = produced.get(o).cloned().unwrap_or_else(|| entry(*o, vn));
+                handles.insert(
+                    *dst,
+                    OrderNode {
+                        label: format!("spawn@{i} {}", callee_name(callee, vn)),
+                        waits_for: vec![before],
+                    },
+                );
+            }
+            InstKind::Eval {
+                src,
+                order: Some(o),
+                ..
+            } => {
+                any = true;
+                let spawned = handles.get(src).cloned();
+                produced.insert(
+                    *o,
+                    OrderNode {
+                        label: format!("eval@{i}"),
+                        waits_for: spawned.into_iter().collect(),
+                    },
+                );
+            }
+            InstKind::Merge { dst, orders } => {
+                any = true;
+                let waits_for = orders
+                    .iter()
+                    .map(|o| produced.get(o).cloned().unwrap_or_else(|| entry(*o, vn)))
+                    .collect();
+                produced.insert(
+                    *dst,
+                    OrderNode {
+                        label: format!("merge@{i}"),
+                        waits_for,
+                    },
+                );
+            }
+            InstKind::Return { order: Some(o), .. } => {
+                returned = Some(produced.get(o).cloned().unwrap_or_else(|| entry(*o, vn)));
+            }
+            _ => {}
+        }
+    }
+    if !any {
+        return Ok(());
+    }
+    let Some(root) = returned else {
+        return Ok(());
+    };
+    writeln!(f)?;
+    writeln!(f, "{indent}  ; orders: what the body's yielded Order waits for")?;
+    write_order_node(f, &root, indent, 0)
+}
+
+fn write_order_node(
+    f: &mut fmt::Formatter<'_>,
+    node: &OrderNode,
+    indent: &str,
+    depth: usize,
+) -> fmt::Result {
+    let mut line = node.label.clone();
+    let mut current = node;
+    while current.waits_for.len() == 1 {
+        current = &current.waits_for[0];
+        line.push_str(" <- ");
+        line.push_str(&current.label);
+    }
+    writeln!(f, "{indent}  ;   {}{line}", "  ".repeat(depth))?;
+    for child in &current.waits_for {
+        write_order_node(f, child, indent, depth + 1)?;
+    }
+    Ok(())
 }
 
 fn write_closure(

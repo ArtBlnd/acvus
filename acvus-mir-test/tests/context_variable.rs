@@ -102,6 +102,13 @@ fn a_context_moved_out_and_not_assigned_back_is_rejected() {
 }
 
 #[test]
+fn a_context_bound_and_read_again_is_rejected_before_promotion() {
+    let i = Interner::new();
+    let err = compile_script_ir(&i, "x = @user; y = @user; 0", &object_context(&i, "user")).unwrap_err();
+    assert!(err.contains("UseAfterMove"), "{err}");
+}
+
+#[test]
 fn a_context_moved_out_and_assigned_back_is_accepted() {
     let i = Interner::new();
     compile_script_ir(&i, "x = @user; @user = { age: 1, }; x", &object_context(&i, "user")).unwrap();

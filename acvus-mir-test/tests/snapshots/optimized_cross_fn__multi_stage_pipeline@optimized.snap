@@ -32,6 +32,9 @@ expression: opt
     26 |   r0 = eval r3 [-> r4]
     27 |   return r9 [r4]
 
+    ; orders: what the body's yielded Order waits for
+    ;   eval@26 <- spawn@18 #1 <- eval@8 <- spawn@5 #0 <- r4(entry)
+
     ; r0 (@offset) : Int
     ; r1 (@scale) : Int
     ; r2 (@source_id) : Int

@@ -163,14 +163,8 @@ fn ssa_sequential_writes() {
 #[test]
 fn func_pipe_chain() {
     let i = Interner::new();
-    let c = ctx(
-        &i,
-        &[(
-            "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let ir = compile_script_ir(&i, "@items | filter(|x| -> x > 0) | collect", &c).unwrap();
+    let c = ctx(&i, &[]);
+    let ir = compile_script_ir(&i, "[1, 2, 3] | filter(|x| -> *x > 0) | collect", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -241,7 +235,7 @@ fn reject_type_mismatch_context_store() {
 }
 
 // =======================================================================
-//  Lent places (RFC-0015): the mode is checked at the call
+//  Lent places (RFC-0018): a parameter's mode is its type, unified at the call
 // =======================================================================
 
 fn items_ctx(i: &Interner) -> rustc_hash::FxHashMap<acvus_utils::Astr, Ty> {
@@ -259,7 +253,8 @@ fn a_lending_parameter_rejects_a_value_argument() {
     let i = Interner::new();
     let err = compile_script_mode_raw(&i, "let it = @items | iter; next(it)", &items_ctx(&i))
         .unwrap_err();
-    assert!(err.contains("takes `&mut`, got a value"), "{err}");
+    assert!(err.contains("type mismatch"), "{err}");
+    assert!(err.contains(", got Iterator<"), "{err}");
 }
 
 #[test]
@@ -267,7 +262,8 @@ fn a_lending_parameter_rejects_the_other_mode() {
     let i = Interner::new();
     let err = compile_script_mode_raw(&i, "let it = @items | iter; next(&it)", &items_ctx(&i))
         .unwrap_err();
-    assert!(err.contains("takes `&mut`, got `&`"), "{err}");
+    assert!(err.contains("type mismatch"), "{err}");
+    assert!(err.contains(", got &Iterator<"), "{err}");
 }
 
 #[test]
@@ -275,5 +271,5 @@ fn only_a_place_can_be_lent() {
     let i = Interner::new();
     let err =
         compile_script_mode_raw(&i, "next(&mut (@items | iter))", &items_ctx(&i)).unwrap_err();
-    assert!(err.contains("can be lent"), "{err}");
+    assert!(err.contains("can be referenced"), "{err}");
 }

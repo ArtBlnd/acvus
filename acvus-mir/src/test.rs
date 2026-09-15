@@ -103,6 +103,12 @@ fn run_pipeline(
         .map(|(_, m)| m)
         .ok_or_else(|| "no module produced for target".to_string())?;
 
+    let early_moves = crate::validate::move_check::check_moves(&module);
+    if !early_moves.is_empty() {
+        let msgs: Vec<String> = early_moves.iter().map(|e| format!("{:?}", e)).collect();
+        return Err(msgs.join("\n"));
+    }
+
     // SSA -> DCE.
     {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(&mut module.main, MirBody::new()));

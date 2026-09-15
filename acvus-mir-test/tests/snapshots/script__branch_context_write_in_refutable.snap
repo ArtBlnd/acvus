@@ -27,6 +27,6 @@ expression: ir
     ; r8 (v14) : Int
     ; r9 (v10) : Int
     ; r10 (v9) : Int
-    ; r11 (@val) : Int
+    ; r11 (v5) : Int
     ; r12 (@val) : Int
     ; r13 (@out) : Int

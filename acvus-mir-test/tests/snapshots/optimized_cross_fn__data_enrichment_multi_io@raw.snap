@@ -148,6 +148,9 @@ expression: raw
     66 |   r43 = take $order
     67 |   return r36 [r43]
 
+    ; orders: what the body's yielded Order waits for
+    ;   r43(entry)
+
     ; r0 (v1) : Order
     ; r1 (@result_label) : String
     ; r2 (@weight) : Int

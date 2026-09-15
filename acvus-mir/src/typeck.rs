@@ -1181,23 +1181,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             && matches!(&mb.arms[0].pattern, Pattern::Binding { .. })
     }
 
-    /// Determine what type a pattern matches against given the source type.
-    /// List patterns match the source directly (destructuring).
-    /// Other patterns match against the iterated element type.
-    fn pattern_match_type(&self, pattern: &Pattern, source_ty: &InferTy) -> InferTy {
-        match pattern {
-            Pattern::List { .. } | Pattern::Tuple { .. } | Pattern::Variant { .. } => {
-                // List/Tuple patterns destructure the source as a whole.
-                source_ty.clone()
-            }
-            _ => {
-                // Other patterns match iterated elements.
-                match source_ty {
-                    TyTerm::Array(inner, _) => inner.as_ref().clone(),
-                    _ => source_ty.clone(),
-                }
-            }
-        }
+    /// A pattern matches the source's type as it is (RFC-0024).
+    fn pattern_match_type(&self, _pattern: &Pattern, source_ty: &InferTy) -> InferTy {
+        source_ty.clone()
     }
 
     fn check_expr(&mut self, expr: &Expr) -> InferTy {

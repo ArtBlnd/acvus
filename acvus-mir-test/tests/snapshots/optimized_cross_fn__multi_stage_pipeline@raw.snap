@@ -103,6 +103,9 @@ expression: raw
     59 |   r38 = take $order
     60 |   return r30 [r38]
 
+    ; orders: what the body's yielded Order waits for
+    ;   r38(entry)
+
     ; r0 (v1) : Order
     ; r1 (@offset) : Int
     ; r2 (@stage2) : Int

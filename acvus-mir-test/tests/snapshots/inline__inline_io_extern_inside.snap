@@ -15,6 +15,9 @@ expression: ir
     10 |   r7 = take $order
     11 |   return r4 [r7]
 
+    ; orders: what the body's yielded Order waits for
+    ;   r7(entry)
+
     ; r0 (v1) : Order
     ; r1 (v5) : Order
     ; r2 ($id) : Int

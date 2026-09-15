@@ -65,7 +65,11 @@ fn walk_path_mut<'a>(mut value: &'a mut Value, path: &[PathSeg], interner: &Inte
                     &mut value.as_tuple_mut().0[*i]
                 }
             },
-            PathSeg::Payload => panic!("a payload is never assigned through a path"),
+            // SAFETY: the type checker admits a payload only on a variant.
+            PathSeg::Payload => unsafe { value.as_variant_mut() }
+                .payload
+                .as_deref_mut()
+                .expect("a payload path names a variant that carries one"),
         };
     }
     value
