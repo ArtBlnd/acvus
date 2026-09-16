@@ -30,6 +30,34 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     where
         T: Send + Sync + 'static;
 
+    /// The reference borrows the runtime as well as the value: a runtime
+    /// may hand out a value that lives on its own stack, so this is not a
+    /// free function over `Value`.
+    ///
+    /// # Safety
+    /// `T` must be the type the value was `erase`d from.
+    unsafe fn value_as_ref<'a, T>(&'a self, value: &'a Self::Value) -> &'a T
+    where
+        T: Send + Sync + 'static;
+    /// # Safety
+    /// As `value_as_ref`.
+    unsafe fn value_as_mut<'a, T>(&'a self, value: &'a mut Self::Value) -> &'a mut T
+    where
+        T: Send + Sync + 'static;
+
+    /// Read an `Inline` value out of the word it lives in.
+    ///
+    /// # Safety
+    /// `T` must be the type the value was `erase`d from.
+    unsafe fn inline_ref<T>(value: &Self::Value) -> &T
+    where
+        T: crate::obj::Inline;
+    /// # Safety
+    /// As `inline_ref`.
+    unsafe fn inline_mut<T>(value: &mut Self::Value) -> &mut T
+    where
+        T: crate::obj::Inline;
+
     /// Read the storage a reference names (RFC-0018).
     ///
     /// # Safety
@@ -99,6 +127,30 @@ impl Runtime for TypesOnly {
     where
         T: Send + Sync + 'static,
     {
+    }
+    unsafe fn value_as_ref<'a, T>(&'a self, _: &'a ()) -> &'a T
+    where
+        T: Send + Sync + 'static,
+    {
+        panic!("TypesOnly runtime holds no values")
+    }
+    unsafe fn value_as_mut<'a, T>(&'a self, _: &'a mut ()) -> &'a mut T
+    where
+        T: Send + Sync + 'static,
+    {
+        panic!("TypesOnly runtime holds no values")
+    }
+    unsafe fn inline_ref<T>(_: &()) -> &T
+    where
+        T: crate::obj::Inline,
+    {
+        panic!("TypesOnly runtime holds no values")
+    }
+    unsafe fn inline_mut<T>(_: &mut ()) -> &mut T
+    where
+        T: crate::obj::Inline,
+    {
+        panic!("TypesOnly runtime holds no values")
     }
     unsafe fn deref<'a, T>(&self, _: &'a ()) -> &'a T
     where

@@ -31,6 +31,10 @@ pub trait Cross<Rt>: Sized + Send + Sync + 'static
 where
     Rt: Runtime,
 {
+    /// `Self` is the runtime's value under another name, with its layout:
+    /// a container of `Self` is a container of values in place.
+    const STORED_AS_VALUE: bool = false;
+
     fn erase(self, rt: &Rt) -> Rt::Value;
     fn materialize(rt: &Rt, value: Rt::Value) -> Self;
 
@@ -54,11 +58,43 @@ where
 const NO_STORAGE: &str =
     "a value converted at the boundary has no storage of its own type to read through";
 
+/// A type the runtime stores as itself: its `erase` is `rt.erase::<Self>`,
+/// so the runtime reads a value erased from it back as a `Self` in place.
+pub trait Stored<Rt>: Cross<Rt>
+where
+    Rt: Runtime,
+{
+}
+
+/// A `Stored` type that lives in the runtime's value word itself, so
+/// `Erased<R, T>` derefs to it with no runtime in hand.
+pub trait Inline: Copy + Send + Sync + 'static {}
+
+macro_rules! inline {
+    ($($t:ty),*) => { $(
+        const _: () = assert!(
+            std::mem::size_of::<$t>() <= 8
+                && std::mem::align_of::<$t>() <= 8
+                && !std::mem::needs_drop::<$t>(),
+            "an Inline type fits the runtime's value word"
+        );
+        impl Inline for $t {}
+    )* };
+}
+inline!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, ());
+
+
 /// A type stored as itself: the runtime keeps the Rust value and hands it
 /// back untouched (RFC-0022).
 #[macro_export]
 macro_rules! cross_as_stored {
     ($t:ty $(, $($g:tt)*)?) => {
+        impl<$($($g)*,)? __Rt> $crate::Stored<__Rt> for $t
+        where
+            __Rt: $crate::Runtime,
+        {
+        }
+
         impl<$($($g)*,)? __Rt> $crate::Cross<__Rt> for $t
         where
             __Rt: $crate::Runtime,
@@ -112,15 +148,16 @@ where
     }
 }
 
-/// Whether a container of `T` is stored as a container of `T`: only when
-/// `T` is the runtime's value; any other element was converted on the way
-/// in, so the storage holds values, not `T`s.
-fn stored_as_container_of<T, Rt>() -> bool
+/// Whether a container of `T` is stored as a container of `T`: when `T`
+/// is the runtime's value or a `repr(transparent)` name for it; any other
+/// element was converted on the way in, so the storage holds values, not
+/// `T`s.
+pub(crate) fn stored_as_container_of<T, Rt>() -> bool
 where
-    T: 'static,
+    T: Cross<Rt>,
     Rt: Runtime,
 {
-    TypeId::of::<T>() == TypeId::of::<Rt::Value>()
+    T::STORED_AS_VALUE || TypeId::of::<T>() == TypeId::of::<Rt::Value>()
 }
 
 impl<T, Rt> Cross<Rt> for Option<T>

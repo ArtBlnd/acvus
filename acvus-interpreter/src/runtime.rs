@@ -34,18 +34,44 @@ impl Runtime for AcvusRuntime {
         unsafe { Value::erase(&self.0.vtables, value) }
     }
 
+    unsafe fn value_as_ref<'a, T>(&'a self, value: &'a Value) -> &'a T
+    where
+        T: Send + Sync + 'static,
+    {
+        // SAFETY: the caller's contract: the value was erased from a `T`.
+        unsafe { read::<T>(value) }
+    }
+
+    unsafe fn value_as_mut<'a, T>(&'a self, value: &'a mut Value) -> &'a mut T
+    where
+        T: Send + Sync + 'static,
+    {
+        // SAFETY: the caller's contract: the value was erased from a `T`.
+        unsafe { read_mut::<T>(value) }
+    }
+
+    unsafe fn inline_ref<T>(value: &Value) -> &T
+    where
+        T: acvus_extern::Inline,
+    {
+        // SAFETY: the caller's contract: the value was erased from a `T`.
+        unsafe { read::<T>(value) }
+    }
+
+    unsafe fn inline_mut<T>(value: &mut Value) -> &mut T
+    where
+        T: acvus_extern::Inline,
+    {
+        // SAFETY: the caller's contract: the value was erased from a `T`.
+        unsafe { read_mut::<T>(value) }
+    }
+
     unsafe fn deref<'a, T>(&self, reference: &'a Value) -> &'a T
     where
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract: a live reference to a `T`.
-        let target = unsafe { reference.target() };
-        if const { is_small::<T>() } {
-            // SAFETY: a small `T` was written into the word by `erase`.
-            unsafe { &*(target.small_ref() as *const u64 as *const T) }
-        } else {
-            unsafe { target.peek::<T>() }
-        }
+        unsafe { read::<T>(reference.target()) }
     }
 
     unsafe fn deref_mut<'a, T>(&self, reference: &'a Value) -> &'a mut T
@@ -53,13 +79,7 @@ impl Runtime for AcvusRuntime {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract: a live, exclusively named `T`.
-        let target = unsafe { reference.target_mut() };
-        if const { is_small::<T>() } {
-            // SAFETY: a small `T` was written into the word by `erase`.
-            unsafe { &mut *(target.small_mut() as *mut u64 as *mut T) }
-        } else {
-            unsafe { target.peek_mut::<T>() }
-        }
+        unsafe { read_mut::<T>(reference.target_mut()) }
     }
 
     unsafe fn reference(&self, target: &Value) -> Value {
@@ -80,6 +100,36 @@ impl Runtime for AcvusRuntime {
 
     fn call_n<'a>(&'a self, f: &'a Value, args: Vec<Value>, _: CallToken) -> Self::CallFuture<'a> {
         self.run(f, args)
+    }
+}
+
+/// # Safety
+/// `value` was erased from a `T`.
+unsafe fn read<T>(value: &Value) -> &T
+where
+    T: 'static,
+{
+    if const { is_small::<T>() } {
+        // SAFETY: a small `T` was written into the word by `erase`.
+        unsafe { &*(value.small_ref() as *const u64 as *const T) }
+    } else {
+        // SAFETY: a large `T` is the payload behind the header.
+        unsafe { value.peek::<T>() }
+    }
+}
+
+/// # Safety
+/// As `read`, exclusively.
+unsafe fn read_mut<T>(value: &mut Value) -> &mut T
+where
+    T: 'static,
+{
+    if const { is_small::<T>() } {
+        // SAFETY: a small `T` was written into the word by `erase`.
+        unsafe { &mut *(value.small_mut() as *mut u64 as *mut T) }
+    } else {
+        // SAFETY: a large `T` is the payload behind the header.
+        unsafe { value.peek_mut::<T>() }
     }
 }
 

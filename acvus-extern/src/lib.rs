@@ -8,6 +8,7 @@ extern crate self as acvus_extern;
 
 pub mod core;
 mod effect;
+mod erased;
 mod func;
 mod handler;
 mod identity;
@@ -22,12 +23,13 @@ mod ty_arg;
 mod vec;
 
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
+pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{ExternHandler, Instance, Instances};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
-    Cross, Obj, Variant, erase_field, materialize_field, materialize_payload, take_payload,
+    Cross, Inline, Obj, Stored, Variant, erase_field, materialize_field, materialize_payload, take_payload,
 };
 pub use reference::{Ref, RefMut};
 pub use registry::{

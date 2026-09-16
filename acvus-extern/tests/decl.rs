@@ -130,6 +130,31 @@ fn target(reference: &V) -> &V {
     }
 }
 
+/// The Rust value inside an `Erased`, or a panic naming the mismatch.
+fn open_ref<T>(value: &V) -> &T
+where
+    T: Send + Sync + 'static,
+{
+    match value {
+        V::Erased(any) => any
+            .downcast_ref::<T>()
+            .unwrap_or_else(|| panic!("open_ref: value is not a {}", std::any::type_name::<T>())),
+        other => panic!("open_ref: not a value: {other:?}"),
+    }
+}
+
+fn open_mut<T>(value: &mut V) -> &mut T
+where
+    T: Send + Sync + 'static,
+{
+    match value {
+        V::Erased(any) => any
+            .downcast_mut::<T>()
+            .unwrap_or_else(|| panic!("open_mut: value is not a {}", std::any::type_name::<T>())),
+        other => panic!("open_mut: not a value: {other:?}"),
+    }
+}
+
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
 impl acvus_extern::Cross<Tiny> for V {
@@ -155,6 +180,19 @@ impl acvus_extern::Cross<Tiny> for V {
 }
 
 impl Runtime for Tiny {
+    unsafe fn inline_ref<T>(value: &V) -> &T
+    where
+        T: acvus_extern::Inline,
+    {
+        open_ref::<T>(value)
+    }
+    unsafe fn inline_mut<T>(value: &mut V) -> &mut T
+    where
+        T: acvus_extern::Inline,
+    {
+        open_mut::<T>(value)
+    }
+
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
     }
@@ -175,16 +213,23 @@ impl Runtime for Tiny {
     {
         erased(value)
     }
+    unsafe fn value_as_ref<'a, T>(&'a self, value: &'a V) -> &'a T
+    where
+        T: Send + Sync + 'static,
+    {
+        open_ref(value)
+    }
+    unsafe fn value_as_mut<'a, T>(&'a self, value: &'a mut V) -> &'a mut T
+    where
+        T: Send + Sync + 'static,
+    {
+        open_mut(value)
+    }
     unsafe fn deref<'a, T>(&self, reference: &'a V) -> &'a T
     where
         T: Send + Sync + 'static,
     {
-        match target(reference) {
-            V::Erased(any) => any
-                .downcast_ref::<T>()
-                .unwrap_or_else(|| panic!("deref: target is not a {}", std::any::type_name::<T>())),
-            other => panic!("deref: target is not a value: {other:?}"),
-        }
+        open_ref(target(reference))
     }
     unsafe fn deref_mut<'a, T>(&self, reference: &'a V) -> &'a mut T
     where
@@ -194,12 +239,7 @@ impl Runtime for Tiny {
             panic!("deref_mut: not a reference: {reference:?}")
         };
         // SAFETY: the target is live and, by the checker, exclusively named.
-        match unsafe { &mut *(*p as *mut V) } {
-            V::Erased(any) => any.downcast_mut::<T>().unwrap_or_else(|| {
-                panic!("deref_mut: target is not a {}", std::any::type_name::<T>())
-            }),
-            other => panic!("deref_mut: target is not a value: {other:?}"),
-        }
+        open_mut(unsafe { &mut *(*p as *mut V) })
     }
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
@@ -1038,4 +1078,20 @@ fn two_instances_whose_types_unify_are_refused() {
         matches!(err, acvus_extern::CombineError::DuplicateInstance { .. }),
         "{err:?}"
     );
+}
+
+/// An `Inline` element is read, copied and edited through `Erased` with no
+/// runtime in hand; a `String` still needs one.
+#[test]
+fn erased_inline_derefs_without_a_runtime() {
+    use acvus_extern::Erased;
+    let rt = Tiny;
+    let mut n: Erased<Tiny, i64> = Erased::new(&rt, 41);
+    assert_eq!(*n, 41);
+    assert_eq!(n.get(), 41);
+    *n += 1;
+    assert_eq!(n, Erased::new(&rt, 42));
+    assert_eq!(n.into_inner(&rt), 42);
+    let s: Erased<Tiny, String> = Erased::new(&rt, "a".to_string());
+    assert_eq!(s.as_ref(&rt), "a");
 }

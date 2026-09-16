@@ -1,6 +1,6 @@
 //! String operations. All pure.
 
-use acvus_extern::{Registry, Runtime, Trap, extern_fn, extern_registry};
+use acvus_extern::{Erased, Registry, Runtime, Trap, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
 fn len_str(s: String) -> i64 {
@@ -61,8 +61,13 @@ fn replace_str(s: String, from: String, to: String) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn split_str(s: String, sep: String) -> Vec<String> {
-    s.split(&*sep).map(str::to_owned).collect()
+fn split_str<Rt>(rt: &Rt, s: String, sep: String) -> Vec<Erased<Rt, String>>
+where
+    Rt: Runtime,
+{
+    s.split(&*sep)
+        .map(|part| Erased::new(rt, part.to_owned()))
+        .collect()
 }
 
 #[extern_fn(effect = pure)]
