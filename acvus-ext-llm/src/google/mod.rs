@@ -2,7 +2,6 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_ext::List;
 use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
 
 use crate::extract::{input_messages, split_system};
@@ -151,13 +150,13 @@ fn first_message(resp: ModelResponse) -> Result<OutputMessage, ExternError> {
 async fn google_llm<R>(
     _: &R,
     #[state] fetch: &FetchClient,
-    messages: List<InputMessage>,
+    messages: Vec<InputMessage>,
     config: GoogleConfig,
 ) -> Result<OutputMessage, ExternError>
 where
     R: Runtime,
 {
-    let msgs = input_messages(messages.0);
+    let msgs = input_messages(messages);
     let (system, rest) = split_system(&msgs);
 
     let request_body = schema::Request {

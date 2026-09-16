@@ -23,7 +23,7 @@ expression: ir
     ; r4 ($n) : Int
     ; r5 (v13) : Fn(Int) -> Int
     ; r6 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r7 (collect(...)) : List<Int>
+    ; r7 (collect(...)) : Vec<Int>
     ; r8 (v7) : Array<Int, 3>
     ; r9 (add_n(...)) : Iterator<Int, Pure, #IdentityId(2)>
     ; r10 (@items) : Array<Int, 3>

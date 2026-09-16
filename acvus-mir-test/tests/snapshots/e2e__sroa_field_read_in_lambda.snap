@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 2630
 expression: ir
 ---
 === literals ===
@@ -23,24 +22,24 @@ expression: ir
     15 |   commit @users = r4
     16 |   return r11
 
-    ; r0 (v19) : List<{name: String}>
-    ; r1 (v20) : List<{name: String}>
-    ; r2 (@users) : List<{name: String}>
+    ; r0 (v19) : Vec<{name: String}>
+    ; r1 (v20) : Vec<{name: String}>
+    ; r2 (@users) : Vec<{name: String}>
     ; r3 (v6) : Array<{name: String}, 0>
-    ; r4 (list(...)) : List<{name: String}>
+    ; r4 (vec(...)) : Vec<{name: String}>
     ; r5 (into_iter(...)) : Iterator<{name: String}, Pure, #IdentityId(0)>
     ; r6 (v11) : Fn({name: String}) -> String
     ; r7 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r8 (collect(...)) : List<String>
+    ; r8 (collect(...)) : Vec<String>
     ; r9 (v14) : Iterator<String, Pure, #IdentityId(3)>
     ; r10 (join(...)) : String
     ; r11 (v17) : String
-    ; r12 (@users) : List<{name: String}>
-    ; r13 (users) : List<{name: String}>
-    ; r14 (@users) : List<{name: String}>
-    ; r15 (users) : List<{name: String}>
+    ; r12 (@users) : Vec<{name: String}>
+    ; r13 (users) : Vec<{name: String}>
+    ; r14 (@users) : Vec<{name: String}>
+    ; r15 (users) : Vec<{name: String}>
     ; r16 (v15) : String
-    ; r17 (v18) : List<{name: String}>
+    ; r17 (v18) : Vec<{name: String}>
     ; r18 (v5) : String
     ; r19 (v8) : String
 

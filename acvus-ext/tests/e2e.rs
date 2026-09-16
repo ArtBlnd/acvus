@@ -118,10 +118,9 @@ fn assert_str(v: &Value, expected: &str) {
 }
 
 fn strings_of(v: Value) -> Vec<String> {
-    // SAFETY: `collect` returns a `List<T>` and `T` is erased as `Value`.
-    let list: List<Value> = unsafe { v.materialize() };
-    list.0
-        .iter()
+    // SAFETY: `collect` returns a `Vec<T>` and `T` is erased as `Value`.
+    let list: Vec<Value> = unsafe { v.materialize() };
+    list.iter()
         .map(|item| {
             assert!(item.is_string(), "expected a String, got {item:?}");
             // SAFETY: the witness is String.
@@ -391,11 +390,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn pts<R>(_: &R) -> List<Pt>
+fn pts<R>(_: &R) -> Vec<Pt>
 where
     R: Runtime,
 {
-    List(vec![
+    vec![
         Pt {
             x: 10,
             label: "a".to_owned(),
@@ -404,15 +403,15 @@ where
             x: 20,
             label: "b".to_owned(),
         },
-    ])
+    ]
 }
 
 #[extern_fn(effect = pure)]
-fn total<R>(_: &R, ps: List<Pt>) -> i64
+fn total<R>(_: &R, ps: Vec<Pt>) -> i64
 where
     R: Runtime,
 {
-    ps.0.iter().map(|p| p.x).sum()
+    ps.iter().map(|p| p.x).sum()
 }
 
 #[extern_fn(effect = pure)]

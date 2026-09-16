@@ -25,28 +25,28 @@ expression: ir
     20 |   commit @users = r4
     21 |   return r13
 
-    ; r0 (v24) : List<{age: Int, name: String}>
-    ; r1 (v25) : List<{age: Int, name: String}>
-    ; r2 (@users) : List<{age: Int, name: String}>
+    ; r0 (v24) : Vec<{age: Int, name: String}>
+    ; r1 (v25) : Vec<{age: Int, name: String}>
+    ; r2 (@users) : Vec<{age: Int, name: String}>
     ; r3 (v6) : Array<{age: Int, name: String}, 0>
-    ; r4 (list(...)) : List<{age: Int, name: String}>
+    ; r4 (vec(...)) : Vec<{age: Int, name: String}>
     ; r5 (into_iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
     ; r6 (v11) : Fn({age: Int, name: String}) -> (String, Int)
     ; r7 (map(...)) : Iterator<(String, Int), Pure, #IdentityId(0)>
-    ; r8 (collect(...)) : List<(String, Int)>
-    ; r9 (x.) : &List<(String, Int)>
+    ; r8 (collect(...)) : Vec<(String, Int)>
+    ; r9 (x.) : &Vec<(String, Int)>
     ; r10 (len(...)) : Int
     ; r11 (out.) : &Int
     ; r12 (to_string(...)) : String
     ; r13 (v22) : String
-    ; r14 (@users) : List<{age: Int, name: String}>
-    ; r15 (x) : List<(String, Int)>
-    ; r16 (users) : List<{age: Int, name: String}>
+    ; r14 (@users) : Vec<{age: Int, name: String}>
+    ; r15 (x) : Vec<(String, Int)>
+    ; r16 (users) : Vec<{age: Int, name: String}>
     ; r17 (v15) : String
-    ; r18 (users) : List<{age: Int, name: String}>
+    ; r18 (users) : Vec<{age: Int, name: String}>
     ; r19 (out) : Int
-    ; r20 (@users) : List<{age: Int, name: String}>
-    ; r21 (v23) : List<{age: Int, name: String}>
+    ; r20 (@users) : Vec<{age: Int, name: String}>
+    ; r21 (v23) : Vec<{age: Int, name: String}>
     ; r22 (v5) : String
     ; r23 (v8) : String
     ; r24 (v19) : String

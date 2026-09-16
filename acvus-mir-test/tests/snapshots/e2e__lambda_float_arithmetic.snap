@@ -25,28 +25,28 @@ expression: ir
     20 |   commit @vals = r4
     21 |   return r13
 
-    ; r0 (v24) : List<Float>
-    ; r1 (v25) : List<Float>
-    ; r2 (@vals) : List<Float>
+    ; r0 (v24) : Vec<Float>
+    ; r1 (v25) : Vec<Float>
+    ; r2 (@vals) : Vec<Float>
     ; r3 (v6) : Array<Float, 0>
-    ; r4 (list(...)) : List<Float>
+    ; r4 (vec(...)) : Vec<Float>
     ; r5 (into_iter(...)) : Iterator<Float, Pure, #IdentityId(0)>
     ; r6 (v11) : Fn(Float) -> Float
     ; r7 (map(...)) : Iterator<Float, Pure, #IdentityId(0)>
-    ; r8 (collect(...)) : List<Float>
-    ; r9 (x.) : &List<Float>
+    ; r8 (collect(...)) : Vec<Float>
+    ; r9 (x.) : &Vec<Float>
     ; r10 (len(...)) : Int
     ; r11 (out.) : &Int
     ; r12 (to_string(...)) : String
     ; r13 (v22) : String
-    ; r14 (@vals) : List<Float>
-    ; r15 (x) : List<Float>
-    ; r16 (vals) : List<Float>
+    ; r14 (@vals) : Vec<Float>
+    ; r15 (x) : Vec<Float>
+    ; r16 (vals) : Vec<Float>
     ; r17 (v15) : String
-    ; r18 (vals) : List<Float>
+    ; r18 (vals) : Vec<Float>
     ; r19 (out) : Int
-    ; r20 (@vals) : List<Float>
-    ; r21 (v23) : List<Float>
+    ; r20 (@vals) : Vec<Float>
+    ; r21 (v23) : Vec<Float>
     ; r22 (v5) : String
     ; r23 (v8) : String
     ; r24 (v19) : String

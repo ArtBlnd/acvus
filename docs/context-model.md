@@ -106,7 +106,7 @@ and merges it back, a static fact rather than a runtime search.
 
 **Append-only storage.** A context is a place, so a value in it cannot be
 consumed. An operation that would change its type — a `Deque` tainting into a
-`List` on a middle insert — is a consuming operation, and consuming is
+`Vec` on a middle insert — is a consuming operation, and consuming is
 unavailable, so only in-place operations remain. Append-only is then a fact of
 the type, and storage can be an incremental log.
 

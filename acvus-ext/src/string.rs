@@ -2,7 +2,6 @@
 
 use acvus_extern::{ExternError, Registry, Runtime, extern_fn, extern_registry};
 
-use crate::list::List;
 
 #[extern_fn(effect = pure)]
 fn len_str<R>(_: &R, s: String) -> i64
@@ -96,11 +95,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn split_str<R>(_: &R, s: String, sep: String) -> List<String>
+fn split_str<R>(_: &R, s: String, sep: String) -> Vec<String>
 where
     R: Runtime,
 {
-    List(s.split(&*sep).map(str::to_owned).collect())
+    s.split(&*sep).map(str::to_owned).collect()
 }
 
 #[extern_fn(effect = pure)]
@@ -126,27 +125,27 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn to_bytes<R>(_: &R, s: String) -> List<u8>
+fn to_bytes<R>(_: &R, s: String) -> Vec<u8>
 where
     R: Runtime,
 {
-    List(s.into_bytes())
+    s.into_bytes()
 }
 
 #[extern_fn(effect = pure)]
-fn to_utf8<R>(_: &R, bytes: List<u8>) -> Option<String>
+fn to_utf8<R>(_: &R, bytes: Vec<u8>) -> Option<String>
 where
     R: Runtime,
 {
-    String::from_utf8(bytes.0).ok()
+    String::from_utf8(bytes).ok()
 }
 
 #[extern_fn(effect = pure)]
-fn to_utf8_lossy<R>(_: &R, bytes: List<u8>) -> String
+fn to_utf8_lossy<R>(_: &R, bytes: Vec<u8>) -> String
 where
     R: Runtime,
 {
-    String::from_utf8_lossy(&bytes.0).into_owned()
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 pub fn string_registry<R: Runtime>() -> Registry<R> {

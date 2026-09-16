@@ -2,7 +2,7 @@
 //!
 //! - Constructors: the shared signatures `iter::into_iter` (consuming) and
 //!   `iter::as_iter` (over a borrowed container, yielding references), with
-//!   instances for `List` and `Array` here and for `Deque` in `deque`;
+//!   instances for `Vec` and `Array` here and for `Deque` in `deque`;
 //!   rev_iter (consuming)
 //! - Lazy combinators: map, pmap, filter, take, skip, chain, pchain, flatten,
 //!   flatten_arrays, flat_map
@@ -15,7 +15,6 @@ use acvus_extern::{
 };
 
 use crate::iter_pipeline::Iter;
-use crate::list::List;
 
 /// The shared signatures every container declares instances of (RFC-0027).
 pub mod sig {
@@ -72,14 +71,14 @@ where
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
 #[extern_cast]
-fn into_iter_list<T, E, I, Rt>(_: &Rt, items: List<T>) -> Iter<T, E, I, Rt>
+fn into_iter_vec<T, E, I, Rt>(_: &Rt, items: Vec<T>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    Iter::from_items(items.0)
+    Iter::from_items(items)
 }
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
@@ -96,14 +95,14 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_list<T, E, I, Rt>(_: &Rt, items: Ref<List<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
+fn as_iter_vec<T, E, I, Rt>(_: &Rt, items: Ref<Vec<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    lent_iter(items, |list, i| list.0.get(i))
+    lent_iter(items, |items, i| items.get(i))
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
@@ -119,14 +118,14 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn rev_iter<T, E, I, Rt>(_: &Rt, items: List<T>) -> Iter<T, E, I, Rt>
+fn rev_iter<T, E, I, Rt>(_: &Rt, items: Vec<T>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    let mut items = items.0;
+    let mut items = items;
     items.reverse();
     Iter::from_items(items)
 }
@@ -202,7 +201,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn pchain<T, E, I, K, Rt>(_: &Rt, parts: List<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
+fn pchain<T, E, I, K, Rt>(_: &Rt, parts: Vec<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -211,13 +210,12 @@ where
     Rt: Runtime,
 {
     parts
-        .0
         .into_iter()
         .fold(Iter::<T, E, K, Rt>::empty(), |acc, part| acc.chain(part))
 }
 
 #[extern_fn(effect = pure)]
-fn flatten<T, E, I, Rt>(_: &Rt, it: Iter<List<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
+fn flatten<T, E, I, Rt>(_: &Rt, it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -243,7 +241,7 @@ where
 fn flat_map<T, U, E, I, Rt>(
     _: &Rt,
     it: Iter<T, E, I, Rt>,
-    f: Fn1<T, List<U>, E, Rt>,
+    f: Fn1<T, Vec<U>, E, Rt>,
 ) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
@@ -252,11 +250,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.flat_map::<List<U>, U>(f)
+    it.flat_map::<Vec<U>, U>(f)
 }
 
 #[extern_fn(effect = E)]
-async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<List<T>, Rt::Error>
+async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Vec<T>, Rt::Error>
 where
     T: TyVar,
     E: EffectVar,
@@ -267,7 +265,7 @@ where
     while let Some(item) = it.next(rt).await? {
         items.push(item);
     }
-    Ok(List(items))
+    Ok(items)
 }
 
 #[extern_fn(effect = E)]
@@ -445,7 +443,7 @@ where
         types: [Iter<_, _, _, Rt>],
         signatures: [sig::into_iter, sig::as_iter],
         fns: [
-            into_iter_list, into_iter_array, as_iter_list, as_iter_array, rev_iter,
+            into_iter_vec, into_iter_array, as_iter_vec, as_iter_array, rev_iter,
             map, pmap, filter, take, skip, chain, pchain, flatten, flatten_arrays, flat_map,
             collect, join, contains, next, find, reduce, fold, any, all,
         ],

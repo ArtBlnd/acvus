@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 1255
 expression: ir
 ---
 === literals ===
@@ -19,19 +18,19 @@ expression: ir
     11 |   commit @names = r4
     12 |   return r7
 
-    ; r0 (v15) : List<String>
-    ; r1 (v16) : List<String>
-    ; r2 (@names) : List<String>
+    ; r0 (v15) : Vec<String>
+    ; r1 (v16) : Vec<String>
+    ; r2 (@names) : Vec<String>
     ; r3 (v6) : Array<String, 0>
-    ; r4 (list(...)) : List<String>
+    ; r4 (vec(...)) : Vec<String>
     ; r5 (v10) : Iterator<String, Pure, #IdentityId(2)>
     ; r6 (join(...)) : String
     ; r7 (v13) : String
-    ; r8 (@names) : List<String>
+    ; r8 (@names) : Vec<String>
     ; r9 (v11) : String
-    ; r10 (v14) : List<String>
-    ; r11 (names) : List<String>
-    ; r12 (@names) : List<String>
-    ; r13 (names) : List<String>
+    ; r10 (v14) : Vec<String>
+    ; r11 (names) : Vec<String>
+    ; r12 (@names) : Vec<String>
+    ; r13 (names) : Vec<String>
     ; r14 (v5) : String
     ; r15 (v8) : String

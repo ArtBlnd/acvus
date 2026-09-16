@@ -48,7 +48,7 @@ pub fn substitute(ty: &Type, lookup: &dyn Fn(&Ident) -> Option<Type>) -> Type {
     }
 }
 
-/// `List<_>` -> `List<()>`: an inferred argument in a registry's type list
+/// `Vec<_>` -> `Vec<()>`: an inferred argument in a registry's type list
 /// stands for any instantiation.
 pub fn infer_to_unit(ty: &Type) -> Type {
     match ty {

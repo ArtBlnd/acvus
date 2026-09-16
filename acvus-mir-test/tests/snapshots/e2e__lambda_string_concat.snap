@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 1128
 expression: ir
 ---
 === literals ===
@@ -23,28 +22,28 @@ expression: ir
     15 |   commit @names = r5
     16 |   return r10
 
-    ; r0 (v20) : List<String>
-    ; r1 (v21) : List<String>
+    ; r0 (v20) : Vec<String>
+    ; r1 (v21) : Vec<String>
     ; r2 (v22) : Iterator<String, Pure, #IdentityId(0)>
-    ; r3 (@names) : List<String>
+    ; r3 (@names) : Vec<String>
     ; r4 (v6) : Array<String, 0>
-    ; r5 (list(...)) : List<String>
+    ; r5 (vec(...)) : Vec<String>
     ; r6 (into_iter(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r7 (v11) : Fn(String) -> String
     ; r8 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r9 (join(...)) : String
     ; r10 (v18) : String
-    ; r11 (@names) : List<String>
+    ; r11 (@names) : Vec<String>
     ; r12 (v14) : String
-    ; r13 (names) : List<String>
+    ; r13 (names) : Vec<String>
     ; r14 (x) : Iterator<String, Pure, #IdentityId(0)>
     ; r15 (v5) : String
     ; r16 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r17 (@names) : List<String>
-    ; r18 (names) : List<String>
+    ; r17 (@names) : Vec<String>
+    ; r18 (names) : Vec<String>
     ; r19 (v16) : String
     ; r20 (v8) : String
-    ; r21 (v19) : List<String>
+    ; r21 (v19) : Vec<String>
 
 === closure L0 (ValueId(0)) ===
      0 |   assign n = r0

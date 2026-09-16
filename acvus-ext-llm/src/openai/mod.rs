@@ -4,7 +4,6 @@ pub mod schema;
 
 use std::sync::Arc;
 
-use acvus_ext::List;
 use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
 
 use crate::extract::input_messages;
@@ -141,8 +140,8 @@ pub struct UsageValue {
 /// What `openai_chat` returns: content messages, or tool calls, with usage.
 #[derive(Debug, Clone, TyArg)]
 pub struct ChatResponse {
-    pub content: List<OutputMessage>,
-    pub tool_calls: List<ToolCallValue>,
+    pub content: Vec<OutputMessage>,
+    pub tool_calls: Vec<ToolCallValue>,
     pub usage: UsageValue,
 }
 
@@ -153,22 +152,20 @@ fn chat_response(resp: ModelResponse, usage: Usage) -> ChatResponse {
     };
     match resp {
         ModelResponse::Content(parts) => ChatResponse {
-            content: List(parts.iter().map(OutputMessage::text).collect()),
-            tool_calls: List(vec![]),
+            content: parts.iter().map(OutputMessage::text).collect(),
+            tool_calls: vec![],
             usage,
         },
         ModelResponse::ToolCalls(calls) => ChatResponse {
-            content: List(vec![]),
-            tool_calls: List(
-                calls
-                    .into_iter()
-                    .map(|tc| ToolCallValue {
-                        id: tc.id,
-                        name: tc.name,
-                        arguments: tc.arguments.to_string(),
-                    })
-                    .collect(),
-            ),
+            content: vec![],
+            tool_calls: calls
+                .into_iter()
+                .map(|tc| ToolCallValue {
+                    id: tc.id,
+                    name: tc.name,
+                    arguments: tc.arguments.to_string(),
+                })
+                .collect(),
             usage,
         },
     }
@@ -178,13 +175,13 @@ fn chat_response(resp: ModelResponse, usage: Usage) -> ChatResponse {
 async fn openai_chat<R>(
     _: &R,
     #[state] fetch: &FetchClient,
-    messages: List<InputMessage>,
+    messages: Vec<InputMessage>,
     config: OpenAiConfig,
 ) -> Result<ChatResponse, ExternError>
 where
     R: Runtime,
 {
-    let messages = input_messages(messages.0);
+    let messages = input_messages(messages);
     let request_body = schema::Request {
         model: config.model,
         messages: messages.iter().map(convert_message).collect(),

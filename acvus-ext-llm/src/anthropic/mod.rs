@@ -2,7 +2,6 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_ext::List;
 use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
 
 use crate::extract::{input_messages, split_system};
@@ -111,9 +110,9 @@ pub struct AnthropicConfig {
     pub max_tokens: i64,
 }
 
-fn response_messages(resp: ModelResponse) -> Result<List<OutputMessage>, ExternError> {
+fn response_messages(resp: ModelResponse) -> Result<Vec<OutputMessage>, ExternError> {
     match resp {
-        ModelResponse::Content(parts) => Ok(List(parts.iter().map(OutputMessage::text).collect())),
+        ModelResponse::Content(parts) => Ok(parts.iter().map(OutputMessage::text).collect()),
         ModelResponse::ToolCalls(_) => Err(ExternError::call(
             "anthropic",
             "anthropic: tool calls are not representable as messages",
@@ -125,13 +124,13 @@ fn response_messages(resp: ModelResponse) -> Result<List<OutputMessage>, ExternE
 async fn anthropic<R>(
     _: &R,
     #[state] fetch: &FetchClient,
-    messages: List<InputMessage>,
+    messages: Vec<InputMessage>,
     config: AnthropicConfig,
-) -> Result<List<OutputMessage>, ExternError>
+) -> Result<Vec<OutputMessage>, ExternError>
 where
     R: Runtime,
 {
-    let messages = input_messages(messages.0);
+    let messages = input_messages(messages);
     let (system, rest) = split_system(&messages);
     let max_tokens = u32::try_from(config.max_tokens).map_err(|_| {
         ExternError::call(

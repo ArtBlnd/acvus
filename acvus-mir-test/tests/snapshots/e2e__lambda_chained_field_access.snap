@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 1112
 expression: ir
 ---
 === literals ===
@@ -22,28 +21,28 @@ expression: ir
     15 |   commit @users = r5
     16 |   return r10
 
-    ; r0 (v20) : List<{address: {city: String}}>
-    ; r1 (v21) : List<{address: {city: String}}>
+    ; r0 (v20) : Vec<{address: {city: String}}>
+    ; r1 (v21) : Vec<{address: {city: String}}>
     ; r2 (v22) : Iterator<String, Pure, #IdentityId(0)>
-    ; r3 (@users) : List<{address: {city: String}}>
+    ; r3 (@users) : Vec<{address: {city: String}}>
     ; r4 (v6) : Array<{address: {city: String}}, 0>
-    ; r5 (list(...)) : List<{address: {city: String}}>
+    ; r5 (vec(...)) : Vec<{address: {city: String}}>
     ; r6 (into_iter(...)) : Iterator<{address: {city: String}}, Pure, #IdentityId(0)>
     ; r7 (v11) : Fn({address: {city: String}}) -> String
     ; r8 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r9 (join(...)) : String
     ; r10 (v18) : String
-    ; r11 (@users) : List<{address: {city: String}}>
+    ; r11 (@users) : Vec<{address: {city: String}}>
     ; r12 (v14) : String
-    ; r13 (users) : List<{address: {city: String}}>
+    ; r13 (users) : Vec<{address: {city: String}}>
     ; r14 (x) : Iterator<String, Pure, #IdentityId(0)>
     ; r15 (v5) : String
     ; r16 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r17 (@users) : List<{address: {city: String}}>
-    ; r18 (users) : List<{address: {city: String}}>
+    ; r17 (@users) : Vec<{address: {city: String}}>
+    ; r18 (users) : Vec<{address: {city: String}}>
     ; r19 (v16) : String
     ; r20 (v8) : String
-    ; r21 (v19) : List<{address: {city: String}}>
+    ; r21 (v19) : Vec<{address: {city: String}}>
 
 === closure L0 (ValueId(0)) ===
      0 |   assign u = r0

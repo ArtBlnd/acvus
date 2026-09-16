@@ -26,35 +26,35 @@ expression: ir
     23 |   commit @items = r5
     24 |   return r15
 
-    ; r0 (v28) : List<Int>
+    ; r0 (v28) : Vec<Int>
     ; r1 (v29) : Int
-    ; r2 (v30) : List<Int>
-    ; r3 (@items) : List<Int>
+    ; r2 (v30) : Vec<Int>
+    ; r3 (@items) : Vec<Int>
     ; r4 (v9) : Array<Int, 0>
-    ; r5 (list(...)) : List<Int>
+    ; r5 (vec(...)) : Vec<Int>
     ; r6 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
     ; r7 (v15) : Fn(&Int) -> Bool
     ; r8 (v3) : Int
     ; r9 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r10 (collect(...)) : List<Int>
-    ; r11 (x.) : &List<Int>
+    ; r10 (collect(...)) : Vec<Int>
+    ; r11 (x.) : &Vec<Int>
     ; r12 (len(...)) : Int
     ; r13 (out.) : &Int
     ; r14 (to_string(...)) : String
     ; r15 (v26) : String
     ; r16 (out) : Int
-    ; r17 (@items) : List<Int>
-    ; r18 (items) : List<Int>
+    ; r17 (@items) : Vec<Int>
+    ; r18 (items) : Vec<Int>
     ; r19 (v11) : String
     ; r20 (threshold) : &Int
-    ; r21 (@items) : List<Int>
+    ; r21 (@items) : Vec<Int>
     ; r22 (threshold) : Int
     ; r23 (v23) : String
-    ; r24 (x) : List<Int>
+    ; r24 (x) : Vec<Int>
     ; r25 (v5) : String
-    ; r26 (v27) : List<Int>
+    ; r26 (v27) : Vec<Int>
     ; r27 (v8) : String
-    ; r28 (items) : List<Int>
+    ; r28 (items) : Vec<Int>
     ; r29 (v19) : String
 
 === closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===

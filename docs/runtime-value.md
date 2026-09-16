@@ -46,8 +46,8 @@ trait ClosureFn<Rt: Runtime> {
   too. They are `unsafe` because the layout match is the caller's contract,
   and they return `T` rather than `Result<T>` because a mismatch is a compiler
   bug and panics.
-- **A container of a type variable crosses whole.** `List<String>` is
-  `Vec<String>` on both sides: a `Monomorphize` extern is one instance per
+- **A container of a type variable crosses whole.** `Vec<String>` is the
+  same `Vec<String>` on both sides: a `Monomorphize` extern is one instance per
   member type, plus the erased value as the instance of last resort when the
   parameter carries no other bound. Nothing unifies layouts.
 - **A reference is a value** (RFC-0018). `reference(&v)` makes the word that

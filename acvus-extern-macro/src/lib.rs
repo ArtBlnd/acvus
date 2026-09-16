@@ -827,7 +827,7 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
 
 // -- extern_registry! ------------------------------------------------
 
-/// `extern_registry! { ns: "core", types: [List<_>], signatures: [eq],
+/// `extern_registry! { ns: "core", types: [Vec<_>], signatures: [eq],
 /// fns: [len, chat(client)] }` (RFC-0021).
 struct RegistryInput {
     ns: LitStr,

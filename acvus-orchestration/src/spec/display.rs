@@ -2,7 +2,7 @@
 pub enum DisplaySpec {
     /// Renders a single value.
     Static { name: String, source: String },
-    /// Renders items from history (List<T>, indexed) and/or live (Iterator<T>, lazy).
+    /// Renders items from history (Vec<T>, indexed) and/or live (Iterator<T>, lazy).
     Iterator {
         name: String,
         history: Option<String>,

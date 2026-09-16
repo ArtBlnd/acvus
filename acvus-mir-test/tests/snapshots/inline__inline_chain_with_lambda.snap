@@ -23,8 +23,8 @@ expression: ir
     ; r5 (v10) : Iterator<Int, Pure, #IdentityId(3)>
     ; r6 (v11) : Fn(Int) -> Int
     ; r7 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r8 (collect(...)) : List<Int>
-    ; r9 ($xs) : List<Int>
+    ; r8 (collect(...)) : Vec<Int>
+    ; r9 ($xs) : Vec<Int>
     ; r10 (v15) : Iterator<Int, Pure, #IdentityId(6)>
     ; r11 (v17) : Fn(Int, Int) -> Int
     ; r12 (fold(...)) : Int

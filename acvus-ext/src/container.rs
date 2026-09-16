@@ -1,12 +1,11 @@
 //! Reading a container (RFC-0028): the shared signatures `container::{len,
-//! get, get_mut, first, last}`, with instances for `List` and `Array` here
+//! get, get_mut, first, last}`, with instances for `Vec` and `Array` here
 //! and for `Deque` in `deque`.
 
 use acvus_extern::{
     Arr, ExternError, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
 };
 
-use crate::list::List;
 
 pub mod sig {
     use acvus_extern::{Ref, RefMut, extern_signature};
@@ -66,57 +65,57 @@ pub(crate) fn checked_index(
         .ok_or_else(|| ExternError::call(name, format!("index {index} out of {len}")))
 }
 
-// -- List ---------------------------------------------------------------
+// -- Vec ----------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::len, effect = pure)]
-fn len_list<T, Rt>(_: &Rt, c: &List<T>) -> i64
+fn len_vec<T, Rt>(_: &Rt, c: &Vec<T>) -> i64
 where
     T: TyVar,
     Rt: Runtime,
 {
-    c.0.len() as i64
+    c.len() as i64
 }
 
 #[extern_fn(instance_of = sig::get, effect = pure)]
-fn get_list<T, Rt>(rt: &Rt, c: Ref<List<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, ExternError>
+fn get_vec<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, ExternError>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    let i = c.with(rt, |c| checked_index("get", c.0.len(), index))?;
-    Ok(c.map(rt, |c| &c.0[i]))
+    let i = c.with(rt, |c| checked_index("get", c.len(), index))?;
+    Ok(c.map(rt, |c| &c[i]))
 }
 
 #[extern_fn(instance_of = sig::get_mut, effect = pure)]
-fn get_mut_list<T, Rt>(
+fn get_mut_vec<T, Rt>(
     rt: &Rt,
-    c: RefMut<List<T>, Rt>,
+    c: RefMut<Vec<T>, Rt>,
     index: i64,
 ) -> Result<RefMut<T, Rt>, ExternError>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    let i = c.with_mut(rt, |c| checked_index("get_mut", c.0.len(), index))?;
-    Ok(c.map_mut(rt, |c| &mut c.0[i]))
+    let i = c.with_mut(rt, |c| checked_index("get_mut", c.len(), index))?;
+    Ok(c.map_mut(rt, |c| &mut c[i]))
 }
 
 #[extern_fn(instance_of = sig::first, effect = pure)]
-fn first_list<T, Rt>(rt: &Rt, c: Ref<List<T>, Rt>) -> Option<Ref<T, Rt>>
+fn first_vec<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    c.try_map(rt, |c| c.0.first())
+    c.try_map(rt, |c| c.first())
 }
 
 #[extern_fn(instance_of = sig::last, effect = pure)]
-fn last_list<T, Rt>(rt: &Rt, c: Ref<List<T>, Rt>) -> Option<Ref<T, Rt>>
+fn last_vec<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    c.try_map(rt, |c| c.0.last())
+    c.try_map(rt, |c| c.last())
 }
 
 // -- Array --------------------------------------------------------------
@@ -189,7 +188,7 @@ where
         ns: "std",
         signatures: [sig::len, sig::get, sig::get_mut, sig::first, sig::last],
         fns: [
-            len_list, get_list, get_mut_list, first_list, last_list,
+            len_vec, get_vec, get_mut_vec, first_vec, last_vec,
             len_array, get_array, get_mut_array, first_array, last_array,
         ],
     }

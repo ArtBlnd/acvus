@@ -65,7 +65,7 @@ Identity unification is **invariant** — only identical identities unify:
 - `Identity(N)` unifies with `Identity(N)` — same source, OK
 - `Identity(N)` does NOT unify with `Identity(M)` where N != M — different sources, rejected
 - When identity mismatch occurs, LUB (Least Upper Bound) erases the identity:
-  - `Deque<T, Identity(1)>` vs `Deque<T, Identity(2)>` → LUB is `List<T>` (identity erased)
+  - `Deque<T, Identity(1)>` vs `Deque<T, Identity(2)>` → LUB is `Vec<T>` (identity erased)
   - `Sequence<T, Identity(1), E>` vs `Sequence<T, Identity(2), E>` → LUB is `Iterator<T, E>` (identity erased)
 
 ### Identity on Structs

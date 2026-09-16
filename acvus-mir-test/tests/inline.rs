@@ -318,7 +318,7 @@ fn inline_callee_takes_lambda_arg() {
         &[(
             "transform",
             "$xs | map(|x| -> x * 2)",
-            sig(&i, &[("xs", acvus_ext::list_ty(&i, Ty::Int))]),
+            sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::Int))]),
         )],
         &[],
     )
@@ -404,7 +404,7 @@ fn inline_chain_with_lambda() {
             (
                 "sum_list",
                 "$xs | fold(0, |a, b| -> a + b)",
-                sig(&i, &[("xs", acvus_ext::list_ty(&i, Ty::Int))]),
+                sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::Int))]),
             ),
         ],
         &[],

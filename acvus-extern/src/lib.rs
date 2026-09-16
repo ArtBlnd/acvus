@@ -20,6 +20,7 @@ mod space;
 mod registry;
 mod runtime;
 mod ty_arg;
+mod vec;
 
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use error::ExternError;
@@ -37,6 +38,7 @@ pub use registry::{
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use ty_arg::{Monomorphize, PolyVars, TyArg, TyVar, Typeck, VarCounts};
+pub use vec::vec_ty;
 
 pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, extern_signature};
 

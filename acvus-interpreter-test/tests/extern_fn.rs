@@ -1056,8 +1056,8 @@ async fn io_inside_iterator_pipeline() {
         |_| {},
     )
     .await;
-    // SAFETY: `collect` returns a `List<T>` and `T` is erased as `Value`.
-    let list: acvus_ext::List<Value> = unsafe { result.value.materialize() };
-    let items: Vec<i64> = list.0.iter().map(Value::as_int).collect();
+    // SAFETY: `collect` returns a `Vec<T>` and `T` is erased as `Value`.
+    let list: Vec<Value> = unsafe { result.value.materialize() };
+    let items: Vec<i64> = list.iter().map(Value::as_int).collect();
     assert_eq!(items, vec![10, 20, 30]);
 }

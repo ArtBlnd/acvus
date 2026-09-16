@@ -20,20 +20,20 @@ expression: ir
     14 |   commit @items = r3
     15 |   return r8
 
-    ; r0 (v17) : List<Int>
-    ; r1 (@items) : List<Int>
+    ; r0 (v17) : Vec<Int>
+    ; r1 (@items) : Vec<Int>
     ; r2 (v6) : Array<Int, 0>
-    ; r3 (list(...)) : List<Int>
-    ; r4 (items.) : &List<Int>
+    ; r3 (vec(...)) : Vec<Int>
+    ; r4 (items.) : &Vec<Int>
     ; r5 (len(...)) : Int
     ; r6 (out.) : &Int
     ; r7 (to_string(...)) : String
     ; r8 (v15) : String
-    ; r9 (@items) : List<Int>
+    ; r9 (@items) : Vec<Int>
     ; r10 (out) : Int
-    ; r11 (@items) : List<Int>
+    ; r11 (@items) : Vec<Int>
     ; r12 (v12) : String
-    ; r13 (items) : List<Int>
+    ; r13 (items) : Vec<Int>
     ; r14 (v5) : String
-    ; r15 (v16) : List<Int>
+    ; r15 (v16) : Vec<Int>
     ; r16 (v8) : String

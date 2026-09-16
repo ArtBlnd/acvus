@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/script.rs
-assertion_line: 168
 expression: ir
 ---
 === main ===
@@ -18,7 +17,7 @@ expression: ir
     ; r4 (v5) : Iterator<Int, Pure, #IdentityId(3)>
     ; r5 (v6) : Fn(&Int) -> Bool
     ; r6 (filter(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r7 (collect(...)) : List<Int>
+    ; r7 (collect(...)) : Vec<Int>
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

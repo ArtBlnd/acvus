@@ -21,23 +21,23 @@ expression: ir
     15 |   commit @items = r4
     16 |   return r10
 
-    ; r0 (v19) : List<Int>
-    ; r1 (v20) : List<Int>
-    ; r2 (@items) : List<Int>
+    ; r0 (v19) : Vec<Int>
+    ; r1 (v20) : Vec<Int>
+    ; r2 (@items) : Vec<Int>
     ; r3 (v6) : Array<Int, 0>
-    ; r4 (list(...)) : List<Int>
+    ; r4 (vec(...)) : Vec<Int>
     ; r5 (v10) : Iterator<Int, Pure, #IdentityId(2)>
     ; r6 (v11) : Fn(Int, Int) -> Int
     ; r7 (reduce(...)) : Int
     ; r8 (out.) : &Int
     ; r9 (to_string(...)) : String
     ; r10 (v17) : String
-    ; r11 (@items) : List<Int>
+    ; r11 (@items) : Vec<Int>
     ; r12 (v14) : String
-    ; r13 (items) : List<Int>
-    ; r14 (@items) : List<Int>
-    ; r15 (items) : List<Int>
-    ; r16 (v18) : List<Int>
+    ; r13 (items) : Vec<Int>
+    ; r14 (@items) : Vec<Int>
+    ; r15 (items) : Vec<Int>
+    ; r16 (v18) : Vec<Int>
     ; r17 (out) : Int
     ; r18 (v5) : String
     ; r19 (v8) : String

@@ -17,7 +17,7 @@ use acvus_mir::ty::Ty;
 use crate::container::{checked_index, sig as container};
 use crate::iter_pipeline::Iter;
 use crate::iterator::{lent_iter, sig};
-use crate::list::{List, list};
+use crate::vec::vec;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Deque<T>
@@ -349,15 +349,15 @@ where
     d.pop_back()
 }
 
-/// A deque demotes to a list: the record is dropped with the deque.
-#[extern_fn(instance_of = list, effect = pure)]
+/// A deque demotes to a vec: the record is dropped with the deque.
+#[extern_fn(instance_of = vec, effect = pure)]
 #[extern_cast]
-fn list_deque<T, R>(_: &R, d: Deque<T>) -> List<T>
+fn vec_deque<T, R>(_: &R, d: Deque<T>) -> Vec<T>
 where
     T: TyVar,
     R: Runtime,
 {
-    List(d.items.into())
+    d.items.into()
 }
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
@@ -439,7 +439,7 @@ pub fn deque_registry<R: Runtime>() -> Registry<R> {
         types: [Deque<_>],
         fns: [
             deque, push_front, push_back, pop_front, pop_back,
-            list_deque, into_iter_deque, as_iter_deque,
+            vec_deque, into_iter_deque, as_iter_deque,
             len_deque, get_deque, get_mut_deque, first_deque, last_deque,
         ],
     }

@@ -138,12 +138,12 @@ fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
     )
 }
 
-/// Helper: a context holding a `List<elem>`. A pipeline takes the list whole
+/// Helper: a context holding a `Vec<elem>`. A pipeline takes the vec whole
 /// (`iter` consumes it), so a body that names the context takes it into a
 /// local and puts an empty list back before the pipeline runs
-/// (`{{ items = @items }}{{ @items = list([]) }}`, RFC-0025).
+/// (`{{ items = @items }}{{ @items = vec([]) }}`, RFC-0025).
 fn list_context(i: &Interner, name: &str, elem: Ty) -> FxHashMap<Astr, Ty> {
-    ctx(i, &[(name, acvus_ext::list_ty(i, elem))])
+    ctx(i, &[(name, acvus_extern::vec_ty(i, elem))])
 }
 
 fn items_list_context(i: &Interner) -> FxHashMap<Astr, Ty> {
@@ -291,7 +291,7 @@ fn pipe_filter_map() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -314,7 +314,7 @@ fn lambda_in_filter() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -652,7 +652,7 @@ fn pmap_builtin() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | pmap(|i| -> i + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | pmap(|i| -> i + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -716,13 +716,13 @@ fn closure_capture_context() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_ext::list_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
             ("threshold", Ty::Int),
         ],
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > @threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > @threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &context,
     )
     .unwrap();
@@ -749,10 +749,10 @@ fn list_literal_expression() {
 #[test]
 fn lambda_map_arithmetic() {
     let i = Interner::new();
-    // Lambda param type resolved via unification: map(List<Int>, |x| -> x + 1)
+    // Lambda param type resolved via unification: map(Vec<Int>, |x| -> x + 1)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -762,10 +762,10 @@ fn lambda_map_arithmetic() {
 #[test]
 fn lambda_filter_comparison() {
     let i = Interner::new();
-    // Lambda param type resolved via unification: filter(List<Int>, |x| -> *x > 0)
+    // Lambda param type resolved via unification: filter(Vec<Int>, |x| -> *x > 0)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -781,7 +781,7 @@ fn closure_capture_local() {
     // through a reference (RFC-0018).
     let ir = compile_to_ir(
         &i,
-        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > *threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -895,7 +895,7 @@ fn triple_pipe_chain() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -948,7 +948,7 @@ fn lambda_negate_param() {
     // Lambda param has Ty::Var initially; -i must resolve via unification.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> -i) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> -i) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -964,7 +964,7 @@ fn lambda_not_param() {
     let context = list_context(&i, "flags", Ty::Bool);
     let ir = compile_to_ir(
         &i,
-        r#"{{ flags = @flags }}{{ @flags = list([]) }}{{ x = flags | into_iter | map(|i| -> !i) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ flags = @flags }}{{ @flags = vec([]) }}{{ x = flags | into_iter | map(|i| -> !i) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &context,
     )
     .unwrap();
@@ -976,7 +976,7 @@ fn lambda_not_param() {
 #[test]
 fn object_destructure_match() {
     let i = Interner::new();
-    // Object pattern directly on Object source (not List<Object>).
+    // Object pattern directly on Object source (not Vec<Object>).
     let ir = compile_to_ir(
         &i,
         r#"{{ { name, age, } = @user }}{{ name }}{{ age.to_string() }}{{_}}none{{/}}"#,
@@ -994,13 +994,13 @@ fn multiple_closures_same_capture() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_ext::list_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
             ("offset", Ty::Int),
         ],
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &context,
     )
     .unwrap();
@@ -1041,7 +1041,7 @@ fn lambda_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1057,7 +1057,7 @@ fn pipe_map_to_string_then_filter() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -1075,7 +1075,7 @@ fn lambda_capture_local_var_ref() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter | filter(|i| -> *i > *offset) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > *offset) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1095,7 +1095,7 @@ fn lambda_multiple_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> (u.name, u.age)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> (u.name, u.age)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &context,
     )
     .unwrap();
@@ -1114,7 +1114,7 @@ fn lambda_chained_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | map(|u| -> u.address.city) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.address.city) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1130,7 +1130,7 @@ fn lambda_string_concat() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = list([]) }}{{ x = names | into_iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
+        r#"{{ names = @names }}{{ @names = vec([]) }}{{ x = names | into_iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1149,7 +1149,7 @@ fn pipe_filter_then_map_field() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",") }}"#,
         &context,
     )
     .unwrap();
@@ -1187,7 +1187,7 @@ fn lambda_float_arithmetic() {
     let context = list_context(&i, "vals", Ty::Float);
     let ir = compile_to_ir(
         &i,
-        r#"{{ vals = @vals }}{{ @vals = list([]) }}{{ x = vals | into_iter | map(|v| -> v * 2.0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ vals = @vals }}{{ @vals = vec([]) }}{{ x = vals | into_iter | map(|v| -> v * 2.0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &context,
     )
     .unwrap();
@@ -1216,7 +1216,7 @@ fn filter_object_field_equality() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ x = users | into_iter | filter(|u| -> u.active) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | filter(|u| -> u.active) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
         &context,
     )
     .unwrap();
@@ -1252,7 +1252,7 @@ fn builtin_len() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ out = len(&items) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = len(&items) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1265,7 +1265,7 @@ fn builtin_join() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = list([]) }}{{ names | join(", ") }}"#,
+        r#"{{ names = @names }}{{ @names = vec([]) }}{{ names | join(", ") }}"#,
         &context,
     )
     .unwrap();
@@ -1278,7 +1278,7 @@ fn builtin_contains() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ out = items | contains(3) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | contains(3) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1291,7 +1291,7 @@ fn builtin_find() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ out = items | find(|x| -> *x > 10) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | find(|x| -> *x > 10) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1304,7 +1304,7 @@ fn builtin_reduce() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ out = items | reduce(|a, b| -> a + b) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | reduce(|a, b| -> a + b) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1317,7 +1317,7 @@ fn builtin_fold() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ out = items | fold(0, |acc, x| -> acc + x) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | fold(0, |acc, x| -> acc + x) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1330,7 +1330,7 @@ fn builtin_any() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ out = items | any(|x| -> *x > 10) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | any(|x| -> *x > 10) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1343,7 +1343,7 @@ fn builtin_all() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ out = items | all(|x| -> *x > 0) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | all(|x| -> *x > 0) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1613,7 +1613,7 @@ fn migrated_integration_pipe_with_lambda() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1644,7 +1644,7 @@ fn migrated_pipe_extern_fn_ok() {
     let mapper = extern_fn(&i, "mapper", &[Ty::Int], Ty::String);
     compile_to_ir_with(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | map(|i| -> mapper(i)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | map(|i| -> mapper(i)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &items_list_context(&i),
         &[mapper],
     )
@@ -1666,13 +1666,13 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_ext::list_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
             ("threshold", Ty::Int),
         ],
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ n1 = items | filter(|x| -> *x > @threshold) | collect }}{{ out = len(&n1) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ n1 = items | filter(|x| -> *x > @threshold) | collect }}{{ out = len(&n1) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1684,7 +1684,7 @@ fn migrated_typeck_lambda_type_check() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1696,7 +1696,7 @@ fn migrated_typeck_lambda_no_capture_local_params() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ n2 = items | map(|x| -> x + 1) | collect }}{{ out = len(&n2) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ n2 = items | map(|x| -> x + 1) | collect }}{{ out = len(&n2) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1726,13 +1726,13 @@ fn migrated_typeck_nested_lambda_captures() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_ext::list_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
             ("factor", Ty::Int),
         ],
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ n3 = items | map(|x| -> x * @factor) | collect }}{{ out = len(&n3) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ n3 = items | map(|x| -> x * @factor) | collect }}{{ out = len(&n3) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1771,7 +1771,7 @@ fn migrated_print_closure() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -2083,13 +2083,13 @@ fn migrated_move_accept_var_reassign() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_ext::list_ty(&i, Ty::Int)),
-            ("items2", acvus_ext::list_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
+            ("items2", acvus_extern::vec_ty(&i, Ty::Int)),
         ],
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ n6 = a | collect }}{{ out = len(&n6) }}{{ out.to_string() }}{{ items2 = @items2 }}{{ @items2 = list([]) }}{{ a = items2 | into_iter }}{{ n7 = a | collect }}{{ out = len(&n7) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ a = items | into_iter }}{{ n6 = a | collect }}{{ out = len(&n6) }}{{ out.to_string() }}{{ items2 = @items2 }}{{ @items2 = vec([]) }}{{ a = items2 | into_iter }}{{ n7 = a | collect }}{{ out = len(&n7) }}{{ out.to_string() }}",
         &context,
     );
     assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
@@ -2139,7 +2139,7 @@ fn migrated_move_reject_list_of_iter_reuse() {
     let result = compile_script_ir(&i, "x = @src; a = len(&x); b = len(&x); a + b", &context);
     assert!(
         result.is_err(),
-        "List containing an Iterator should be move-only"
+        "Vec containing an Iterator should be move-only"
     );
 }
 
@@ -2206,12 +2206,12 @@ fn migrated_move_accept_branch_move_no_use_after() {
         &i,
         &[
             ("flag", Ty::Bool),
-            ("items", acvus_ext::list_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
         ],
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = list([]) }}{{ a = items | into_iter }}{{ true = @flag }}{{ n13 = a | collect }}{{ out = len(&n13) }}{{ out.to_string() }}{{_}}nothing{{/}}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ a = items | into_iter }}{{ true = @flag }}{{ n13 = a | collect }}{{ out = len(&n13) }}{{ out.to_string() }}{{_}}nothing{{/}}",
         &context,
     );
     assert!(
@@ -2304,7 +2304,7 @@ fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let context = items_list_context(&i);
     let result = compile_to_ir(
         &i,
-        "{{ f = (|z| -> { items = @items; @items = list([]); collect(items | into_iter) }) }}{{ n19 = f(0) }}{{ out = len(&n19) }}{{ out.to_string() }}{{ n20 = f(0) }}{{ out = len(&n20) }}{{ out.to_string() }}",
+        "{{ f = (|z| -> { items = @items; @items = vec([]); collect(items | into_iter) }) }}{{ n19 = f(0) }}{{ out = len(&n19) }}{{ out.to_string() }}{{ n20 = f(0) }}{{ out = len(&n20) }}{{ out.to_string() }}",
         &context,
     );
     assert!(
@@ -2491,7 +2491,7 @@ fn projection_soundness_reject_fn_in_context() {
     assert!(result.is_err(), "storing Fn to context should fail");
 }
 
-/// Store non-materializable (List<Fn>) to context -> must be rejected.
+/// Store non-materializable (Vec<Fn>) to context -> must be rejected.
 #[test]
 fn projection_soundness_reject_list_fn_in_context() {
     let i = Interner::new();
@@ -2509,7 +2509,7 @@ fn projection_soundness_reject_list_fn_in_context() {
         )],
     );
     let result = compile_script_ir(&i, "@xs = @xs; @xs", &context);
-    assert!(result.is_err(), "storing List<Fn> to context should fail");
+    assert!(result.is_err(), "storing Vec<Fn> to context should fail");
 }
 
 /// Write to ExternParam -> must be rejected (typeck catches this).
@@ -2562,7 +2562,7 @@ fn projection_move_single_use() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ n16 = x | collect }}{{ out = len(&n16) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter }}{{ n16 = x | collect }}{{ out = len(&n16) }}{{ out.to_string() }}"#,
         &context,
     )
     .unwrap();
@@ -2579,7 +2579,7 @@ fn projection_move_var_reassign_revives() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ n17 = x | collect }}{{ out = len(&n17) }}{{ out.to_string() }}{{ items = @items }}{{ @items = list([]) }}{{ x = items | into_iter }}{{ n18 = x | collect }}{{ out = len(&n18) }}{{ out.to_string() }}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter }}{{ n17 = x | collect }}{{ out = len(&n17) }}{{ out.to_string() }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter }}{{ n18 = x | collect }}{{ out = len(&n18) }}{{ out.to_string() }}"#,
         &context,
     ).unwrap();
     assert!(
@@ -2643,7 +2643,7 @@ fn sroa_field_read_in_lambda() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = list([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | join(",") }}"#,
         &context,
     )
     .unwrap();
