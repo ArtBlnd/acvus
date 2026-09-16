@@ -2,8 +2,9 @@
 //! through `as_mut` is what the program reads afterwards, and equality over
 //! an `Iter` of it goes through `as_ref` with no `Monomorphize` member list.
 
-use acvus_ext::Iter;
-use acvus_extern::{EffectVar, Erased, IdentityVar, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{
+    EffectVar, Erased, IdentityVar, Iter, Registry, Runtime, extern_fn, extern_registry,
+};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::*;
 use acvus_utils::Interner;

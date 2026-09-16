@@ -56,14 +56,19 @@ where
         unsafe { rt.erase::<Vec<Rt::Value>>(items) }
     }
 
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: as in `erase`.
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and `erase` boxes a `Vec<Value>`.
         let items = unsafe { rt.materialize::<Vec<Rt::Value>>(value) };
         if stored_as_container_of::<T, Rt>() {
             // SAFETY: the branch condition is `from_values`'s contract.
             unsafe { from_values::<T, Rt>(items) }
         } else {
-            items.into_iter().map(|v| T::materialize(rt, v)).collect()
+            // SAFETY: the caller's contract, forwarded: `erase` erased every
+            // element from a `T`.
+            items
+                .into_iter()
+                .map(|v| unsafe { T::materialize(rt, v) })
+                .collect()
         }
     }
 

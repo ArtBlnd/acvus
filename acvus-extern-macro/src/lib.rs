@@ -279,9 +279,11 @@ fn generate_extern_fn(
                 let next = quote! { __args.next().expect("arity checked by typeck") };
                 let lent = format_ident!("{a}_lent");
                 match p.mode {
-                    Mode::Value => {
-                        quote! { let #a = <#ty as #cross<__R>>::materialize(__rt, #next); }
-                    }
+                    Mode::Value => quote! {
+                        // SAFETY: typeck settled this position to this type, the instance's
+                        // signature.
+                        let #a = unsafe { <#ty as #cross<__R>>::materialize(__rt, #next) };
+                    },
                     Mode::Borrow => quote! {
                         let #lent = #next;
                         // SAFETY: the checker lends a live storage of this type (RFC-0018).
@@ -289,7 +291,8 @@ fn generate_extern_fn(
                     },
                     Mode::BorrowMut => quote! {
                         let #lent = #next;
-                        // SAFETY: as above, exclusively.
+                        // SAFETY: the checker lends a live storage of this type, exclusively
+                        // (RFC-0018).
                         let #a: &mut #ty = unsafe { <#ty as #cross<__R>>::deref_mut(__rt, &#lent) };
                     },
                 }
@@ -388,13 +391,17 @@ fn generate_extern_fn(
                 };
                 let erase = handler(quote! {
                     <#rt_ty as ::acvus_extern::Cross<__R>>::erase(
-                        <#rt_ty as ::acvus_extern::CrossSpecialized<__R>>::materialize(__rt, __v),
+                        // SAFETY: typeck settled this position to the specialized type; the
+                        // compiler inserts this cast only there.
+                        unsafe { <#rt_ty as ::acvus_extern::CrossSpecialized<__R>>::materialize(__rt, __v) },
                         __rt,
                     )
                 });
                 let materialize = handler(quote! {
                     <#rt_ty as ::acvus_extern::CrossSpecialized<__R>>::erase(
-                        <#rt_ty as ::acvus_extern::Cross<__R>>::materialize(__rt, __v),
+                        // SAFETY: typeck settled this position to the uniform type; the
+                        // compiler inserts this cast only there.
+                        unsafe { <#rt_ty as ::acvus_extern::Cross<__R>>::materialize(__rt, __v) },
                         __rt,
                     )
                 });
@@ -777,8 +784,8 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             unsafe { __rt.erase::<#payload_ty>(self.0) }
         }
 
-        fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
-            // SAFETY: as in `erase`.
+        unsafe fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+            // SAFETY: the caller's contract, and `erase` is `erase::<payload>`.
             Self(unsafe { __rt.materialize::<#payload_ty>(__value) } #(, #phantoms)*)
         }
 
@@ -905,7 +912,7 @@ fn cross_impl(
                 #erase
             }
 
-            fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+            unsafe fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
                 #materialize
             }
         }
@@ -993,14 +1000,16 @@ impl<'a> ObjectShape<'a> {
     ) -> proc_macro2::TokenStream {
         let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
         quote! {{
-            // SAFETY: as in `erase`.
+            // SAFETY: the caller's contract, and `erase` boxes an `Obj<Value>`.
             let ::acvus_extern::Obj(mut __fields) = unsafe {
                 __rt.materialize::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(#value)
             };
             #path {
-                #(#idents: ::acvus_extern::materialize_field::<#tys, __R>(
+                // SAFETY: the caller's contract, forwarded: `erase` erased each field
+                // from its declared type.
+                #(#idents: unsafe { ::acvus_extern::materialize_field::<#tys, __R>(
                     __rt, &mut __fields, #names,
-                ),)*
+                ) },)*
             }
         }}
     }
@@ -1053,9 +1062,11 @@ fn generate_enum_ty_arg(
                 });
                 materialize_arms.push(quote! {
                     if __tag == __rt.symbol(#tag) {
-                        Self::#v(::acvus_extern::materialize_payload::<#ty, __R>(
+                        // SAFETY: the caller's contract, forwarded: `erase` erased this
+                        // variant's payload from its declared type.
+                        Self::#v(unsafe { ::acvus_extern::materialize_payload::<#ty, __R>(
                             __rt, __payload, #tag,
-                        ))
+                        ) })
                     }
                 });
             }
@@ -1098,7 +1109,7 @@ fn generate_enum_ty_arg(
         }
     }};
     let materialize = quote! {{
-        // SAFETY: as in `erase`.
+        // SAFETY: the caller's contract, and `erase` boxes a `Variant<Value>`.
         let ::acvus_extern::Variant { tag: __tag, payload: __payload } = unsafe {
             __rt.materialize::<::acvus_extern::Variant<<__R as ::acvus_extern::Runtime>::Value>>(__value)
         };

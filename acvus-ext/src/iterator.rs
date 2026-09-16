@@ -10,17 +10,13 @@
 //!   reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, Cross, EffectVar, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime, TyVar,
-    extern_fn, extern_registry,
+    Arr, ClosureFn, Cross, EffectVar, Fn1, Fn2, IdentityVar, Iter, LenVar, Ref, Registry, Runtime,
+    TyVar, extern_fn, extern_registry,
 };
-
-use crate::iter_pipeline::Iter;
 
 /// The shared signatures every container declares instances of (RFC-0027).
 pub mod sig {
-    use acvus_extern::{Ref, extern_signature};
-
-    use crate::iter_pipeline::Iter;
+    use acvus_extern::{Iter, Ref, extern_signature};
 
     extern_signature! {
         ns: "iter",
@@ -321,12 +317,7 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next_value(rt).await? {
-        if f.call(rt, (Ref::lend(rt, &item),)).await? {
-            return Ok(Some(T::materialize(rt, item)));
-        }
-    }
-    Ok(None)
+    it.filter(f).next(rt).await
 }
 
 #[extern_fn(effect = E)]
@@ -341,14 +332,13 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    let Some(mut acc) = it.next_value(rt).await? else {
+    let Some(mut acc) = it.next(rt).await? else {
         return Ok(None);
     };
-    let f = f.erased();
-    while let Some(item) = it.next_value(rt).await? {
+    while let Some(item) = it.next(rt).await? {
         acc = f.call(rt, (acc, item)).await?;
     }
-    Ok(Some(T::materialize(rt, acc)))
+    Ok(Some(acc))
 }
 
 #[extern_fn(effect = E)]
@@ -365,12 +355,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    let mut acc = init.erase(rt);
-    let f = f.erased();
-    while let Some(item) = it.next_value(rt).await? {
+    let mut acc = init;
+    while let Some(item) = it.next(rt).await? {
         acc = f.call(rt, (acc, item)).await?;
     }
-    Ok(U::materialize(rt, acc))
+    Ok(acc)
 }
 
 #[extern_fn(effect = E)]

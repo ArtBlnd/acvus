@@ -50,7 +50,6 @@ dependencies = [
  "rust_decimal",
  "rustc-hash",
  "serde",
- "sync_wrapper",
  "tokio",
 ]
 
@@ -92,6 +91,7 @@ dependencies = [
  "acvus-utils",
  "futures",
  "rustc-hash",
+ "sync_wrapper",
  "tokio",
 ]
 

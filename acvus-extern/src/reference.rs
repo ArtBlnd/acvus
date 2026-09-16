@@ -156,7 +156,7 @@ where
         self.0
     }
 
-    fn materialize(_: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(_: &Rt, value: Rt::Value) -> Self {
         Self::new(value)
     }
 }
@@ -170,7 +170,7 @@ where
         self.0
     }
 
-    fn materialize(_: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(_: &Rt, value: Rt::Value) -> Self {
         Self::new(value)
     }
 }

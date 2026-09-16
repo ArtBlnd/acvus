@@ -94,7 +94,7 @@ impl acvus_extern::Cross<Counting> for V {
         self
     }
 
-    fn materialize(_: &Counting, value: V) -> Self {
+    unsafe fn materialize(_: &Counting, value: V) -> Self {
         value
     }
 

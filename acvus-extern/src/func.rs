@@ -82,7 +82,7 @@ macro_rules! define_fn_arg {
                 self.0
             }
 
-            fn materialize(_: &Rt, value: Rt::Value) -> Self {
+            unsafe fn materialize(_: &Rt, value: Rt::Value) -> Self {
                 Self::new(value)
             }
         }
@@ -132,7 +132,8 @@ where
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
             let out = rt.call_0(&self.0, CallToken::mint()).await?;
-            Ok(R::materialize(rt, out))
+            // SAFETY: the closure's declared return type is `R`.
+            Ok(unsafe { R::materialize(rt, out) })
         }
     }
 }
@@ -153,7 +154,8 @@ where
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
             let out = rt.call_1(&self.0, a.erase(rt), CallToken::mint()).await?;
-            Ok(R::materialize(rt, out))
+            // SAFETY: the closure's declared return type is `R`.
+            Ok(unsafe { R::materialize(rt, out) })
         }
     }
 }
@@ -176,7 +178,8 @@ where
         async move {
             let args = vec![a.erase(rt), b.erase(rt)];
             let out = rt.call_n(&self.0, args, CallToken::mint()).await?;
-            Ok(R::materialize(rt, out))
+            // SAFETY: the closure's declared return type is `R`.
+            Ok(unsafe { R::materialize(rt, out) })
         }
     }
 }
@@ -200,7 +203,8 @@ where
         async move {
             let args = vec![a.erase(rt), b.erase(rt), c.erase(rt)];
             let out = rt.call_n(&self.0, args, CallToken::mint()).await?;
-            Ok(R::materialize(rt, out))
+            // SAFETY: the closure's declared return type is `R`.
+            Ok(unsafe { R::materialize(rt, out) })
         }
     }
 }

@@ -162,7 +162,7 @@ impl acvus_extern::Cross<Tiny> for V {
         self
     }
 
-    fn materialize(_: &Tiny, value: V) -> Self {
+    unsafe fn materialize(_: &Tiny, value: V) -> Self {
         value
     }
 
@@ -632,7 +632,8 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 
     let arr = erased(Arr::<V, ()>::new(vec![erased(1i64), erased(2i64)]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]).unwrap();
-    let Boxed::<V, Pure, Tiny>(items, _) = Boxed::materialize(&Tiny, boxed);
+    // SAFETY: `boxed`'s glue erased its return from a `Boxed<T, Pure, Rt>`.
+    let Boxed::<V, Pure, Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, boxed) };
     assert_eq!(items.len(), 2);
     let boxed = Boxed::<V, (), Tiny>(items, PhantomData).erase(&Tiny);
 
@@ -644,7 +645,8 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double])
         .await
         .unwrap();
-    let Boxed::<V, (), Tiny>(items, _) = Boxed::materialize(&Tiny, out);
+    // SAFETY: `apply`'s glue erased its return from a `Boxed<U, E, Rt>`.
+    let Boxed::<V, (), Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, out) };
     let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
     assert_eq!(doubled, vec![2, 4]);
 

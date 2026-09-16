@@ -12,6 +12,7 @@ mod erased;
 mod func;
 mod handler;
 mod identity;
+mod iter;
 mod len;
 mod obj;
 mod reference;
@@ -27,6 +28,7 @@ pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{ExternHandler, Instance, Instances};
 pub use identity::{IdentityArg, IdentityVar, Idn};
+pub use iter::{Iter, Pipeline};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
     Cross, CrossSpecialized, Inline, Obj, Stored, Variant, erase_field, materialize_field,

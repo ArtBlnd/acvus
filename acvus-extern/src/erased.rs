@@ -40,7 +40,8 @@ where
     }
 
     pub fn into_inner(self, rt: &R) -> T {
-        T::materialize(rt, self.0)
+        // SAFETY: `new` erased the value from a `T`.
+        unsafe { T::materialize(rt, self.0) }
     }
 
     pub fn get(&self) -> T
@@ -117,7 +118,7 @@ where
         self.0
     }
 
-    fn materialize(_: &R, value: R::Value) -> Self {
+    unsafe fn materialize(_: &R, value: R::Value) -> Self {
         Self(value, PhantomData)
     }
 

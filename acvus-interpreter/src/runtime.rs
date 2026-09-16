@@ -148,7 +148,7 @@ impl acvus_extern::Cross<AcvusRuntime> for Value {
         self
     }
 
-    fn materialize(_: &AcvusRuntime, value: Value) -> Self {
+    unsafe fn materialize(_: &AcvusRuntime, value: Value) -> Self {
         value
     }
 

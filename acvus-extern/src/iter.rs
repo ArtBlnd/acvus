@@ -10,10 +10,16 @@
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-use acvus_extern::{
-    BoxFuture, ClosureFn, Cross, EffectVar, ExternType, Fn1, IdentityVar, Ref, Runtime, TyVar,
-};
 use sync_wrapper::SyncWrapper;
+
+use crate::effect::EffectVar;
+use crate::func::{ClosureFn, Fn1};
+use crate::identity::IdentityVar;
+use crate::obj::Cross;
+use crate::reference::Ref;
+use crate::runtime::Runtime;
+use crate::ty_arg::TyVar;
+use crate::{BoxFuture, ExternType};
 
 #[derive(ExternType)]
 #[extern_type(name = "Iterator")]
@@ -206,10 +212,12 @@ where
     where
         T: Cross<Rt>,
     {
+        // SAFETY: the instance's signature types this pipeline's elements
+        // `T`.
         Ok(self
             .next_value(rt)
             .await?
-            .map(|value| T::materialize(rt, value)))
+            .map(|value| unsafe { T::materialize(rt, value) }))
     }
 }
 
@@ -220,7 +228,9 @@ where
     Rt: Runtime,
 {
     Box::new(|rt, value| {
-        S::materialize(rt, value)
+        // SAFETY: the instance's signature types this pipeline's elements
+        // `S` at the op that expands them.
+        unsafe { S::materialize(rt, value) }
             .into_iter()
             .map(|u| u.erase(rt))
             .collect()

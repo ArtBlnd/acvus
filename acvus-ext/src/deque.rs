@@ -7,15 +7,14 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, PolyTy,
-    PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError, SpaceHooks,
-    SpaceResult, Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
+    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Iter, Journaled, NodeHash,
+    PolyTy, PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError,
+    SpaceHooks, SpaceResult, Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
     extern_registry,
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
 use crate::container::{checked_index, sig as container};
-use crate::iter_pipeline::Iter;
 use crate::iterator::{lent_iter, sig};
 use crate::vec::vec;
 

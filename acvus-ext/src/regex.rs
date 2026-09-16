@@ -1,10 +1,8 @@
 //! Regular expressions: the `Regex` extension type and its functions.
 
 use acvus_extern::{
-    ExternType, IdentityVar, Pure, Registry, Runtime, TyArg, extern_fn, extern_registry,
+    ExternType, IdentityVar, Iter, Pure, Registry, Runtime, TyArg, extern_fn, extern_registry,
 };
-
-use crate::iter_pipeline::Iter;
 
 #[derive(ExternType)]
 #[repr(transparent)]

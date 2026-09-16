@@ -36,7 +36,11 @@ where
     const STORED_AS_VALUE: bool = false;
 
     fn erase(self, rt: &Rt) -> Rt::Value;
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self;
+
+    /// # Safety
+    /// `value` was erased from `Self` (by the runtime's `erase::<Self>` or
+    /// `Self::erase`).
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self;
 
     /// # Safety
     /// `reference` names a live storage of `Self`, exclusively for the
@@ -68,7 +72,11 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value;
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self;
+
+    /// # Safety
+    /// `value` was erased from `Self` (by the runtime's `erase::<Self>` or
+    /// `Self::erase`).
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self;
 
     /// # Safety
     /// As `Cross::deref`.
@@ -140,8 +148,8 @@ macro_rules! cross_whole {
                 unsafe { rt.erase::<$t>(self) }
             }
 
-            fn materialize(rt: &__Rt, value: <__Rt as $crate::Runtime>::Value) -> Self {
-                // SAFETY: as in `erase`.
+            unsafe fn materialize(rt: &__Rt, value: <__Rt as $crate::Runtime>::Value) -> Self {
+                // SAFETY: the caller's contract, and `erase` is `rt.erase::<$t>`.
                 unsafe { rt.materialize::<$t>(value) }
             }
 
@@ -179,7 +187,7 @@ where
         match self {}
     }
 
-    fn materialize(_: &Rt, _: Rt::Value) -> Self {
+    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
         panic!("a value of type `!` was materialized")
     }
 }
@@ -192,7 +200,7 @@ where
         match self {}
     }
 
-    fn materialize(_: &Rt, _: Rt::Value) -> Self {
+    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
         panic!("a value of type `!` was materialized")
     }
 }
@@ -221,10 +229,12 @@ where
         unsafe { rt.erase::<Option<Rt::Value>>(inner) }
     }
 
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: as in `erase`.
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and `erase` boxes an `Option<Value>`.
         let inner = unsafe { rt.materialize::<Option<Rt::Value>>(value) };
-        inner.map(|v| T::materialize(rt, v))
+        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
+        // from a `T`.
+        inner.map(|v| unsafe { T::materialize(rt, v) })
     }
 
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
@@ -254,12 +264,17 @@ where
         unsafe { rt.erase::<Result<Rt::Value, Rt::Value>>(inner) }
     }
 
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: as in `erase`.
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and `erase` boxes a
+        // `Result<Value, Value>`.
         let inner = unsafe { rt.materialize::<Result<Rt::Value, Rt::Value>>(value) };
-        inner
-            .map(|v| T::materialize(rt, v))
-            .map_err(|e| E::materialize(rt, e))
+        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
+        // from a `T` or an `E`.
+        unsafe {
+            inner
+                .map(|v| T::materialize(rt, v))
+                .map_err(|e| E::materialize(rt, e))
+        }
     }
 }
 
@@ -275,10 +290,12 @@ where
         unsafe { rt.erase::<Option<Rt::Value>>(inner) }
     }
 
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: as in `erase`.
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and `erase` boxes an `Option<Value>`.
         let inner = unsafe { rt.materialize::<Option<Rt::Value>>(value) };
-        inner.map(|v| T::materialize(rt, v))
+        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
+        // from a `T`.
+        inner.map(|v| unsafe { T::materialize(rt, v) })
     }
 }
 
@@ -296,12 +313,17 @@ where
         unsafe { rt.erase::<Result<Rt::Value, Rt::Value>>(inner) }
     }
 
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: as in `erase`.
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and `erase` boxes a
+        // `Result<Value, Value>`.
         let inner = unsafe { rt.materialize::<Result<Rt::Value, Rt::Value>>(value) };
-        inner
-            .map(|v| T::materialize(rt, v))
-            .map_err(|e| E::materialize(rt, e))
+        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
+        // from a `T` or an `E`.
+        unsafe {
+            inner
+                .map(|v| T::materialize(rt, v))
+                .map_err(|e| E::materialize(rt, e))
+        }
     }
 }
 
@@ -317,10 +339,18 @@ where
         unsafe { rt.erase::<Arr<Rt::Value, ()>>(Arr::new(items)) }
     }
 
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: as in `erase`.
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and `erase` boxes an `Arr<Value, ()>`.
         let items = unsafe { rt.materialize::<Arr<Rt::Value, ()>>(value) };
-        Arr::new(items.0.into_iter().map(|v| T::materialize(rt, v)).collect())
+        // SAFETY: the caller's contract, forwarded: `erase` erased every
+        // element from a `T`.
+        Arr::new(
+            items
+                .0
+                .into_iter()
+                .map(|v| unsafe { T::materialize(rt, v) })
+                .collect(),
+        )
     }
 }
 
@@ -336,10 +366,18 @@ where
         unsafe { rt.erase::<Arr<Rt::Value, ()>>(Arr::new(items)) }
     }
 
-    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: as in `erase`.
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and `erase` boxes an `Arr<Value, ()>`.
         let items = unsafe { rt.materialize::<Arr<Rt::Value, ()>>(value) };
-        Arr::new(items.0.into_iter().map(|v| T::materialize(rt, v)).collect())
+        // SAFETY: the caller's contract, forwarded: `erase` erased every
+        // element from a `T`.
+        Arr::new(
+            items
+                .0
+                .into_iter()
+                .map(|v| unsafe { T::materialize(rt, v) })
+                .collect(),
+        )
     }
 
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
@@ -372,10 +410,17 @@ where
     value.erase(rt)
 }
 
+/// # Safety
+/// The field `name` of the object was erased from a `T`.
+///
 /// # Panics
 /// When the object lacks the field: the checker admits only objects of
 /// the declared type.
-pub fn materialize_field<T, Rt>(rt: &Rt, fields: &mut FxHashMap<Astr, Rt::Value>, name: &str) -> T
+pub unsafe fn materialize_field<T, Rt>(
+    rt: &Rt,
+    fields: &mut FxHashMap<Astr, Rt::Value>,
+    name: &str,
+) -> T
 where
     T: Cross<Rt>,
     Rt: Runtime,
@@ -385,7 +430,8 @@ where
             "object field `{name}` is missing: the checker admits only objects of the declared type"
         )
     });
-    T::materialize(rt, value)
+    // SAFETY: the caller's contract.
+    unsafe { T::materialize(rt, value) }
 }
 
 /// # Panics
@@ -401,10 +447,14 @@ pub fn take_payload<V>(payload: Option<Box<V>>, tag: &str) -> V {
 }
 
 /// The payload of a derived variant, crossed by its own type.
-pub fn materialize_payload<T, Rt>(rt: &Rt, payload: Option<Box<Rt::Value>>, tag: &str) -> T
+///
+/// # Safety
+/// The payload of variant `tag` was erased from a `T`.
+pub unsafe fn materialize_payload<T, Rt>(rt: &Rt, payload: Option<Box<Rt::Value>>, tag: &str) -> T
 where
     T: Cross<Rt>,
     Rt: Runtime,
 {
-    T::materialize(rt, take_payload(payload, tag))
+    // SAFETY: the caller's contract.
+    unsafe { T::materialize(rt, take_payload(payload, tag)) }
 }
