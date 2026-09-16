@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{string_registry, vec_registry};
 use acvus_extern::{
-    CallToken, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef, Registry,
-    Runtime, Trap, TyTerm, TypeArg, extern_fn, extern_registry,
+    CallToken, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef, Ref,
+    Registry, Runtime, Trap, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -222,11 +222,15 @@ impl Runtime for Counting {
 // -- The reader under test --------------------------------------------
 
 #[extern_fn(effect = pure)]
-fn join_erased<Rt>(rt: &Rt, items: &Vec<Erased<Rt, String>>) -> String
+fn join_erased<Rt>(rt: &Rt, items: Ref<Vec<Erased<Rt, String>>, Rt>) -> String
 where
     Rt: Runtime,
 {
-    let parts: Vec<&str> = items.iter().map(|s| s.as_ref(rt).as_str()).collect();
+    let parts: Vec<&str> = items
+        .as_slice(rt)
+        .iter()
+        .map(|s| s.as_ref(rt).as_str())
+        .collect();
     parts.join(",")
 }
 

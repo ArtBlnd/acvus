@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::PolyTy;
 use acvus_utils::Interner;
 
-use crate::obj::{Cross, FromValue, Inline, Stored, expect_type};
+use crate::obj::{Cross, FromValue, Inline, Stored, TransparentOver, expect_type};
 use crate::runtime::Runtime;
 use crate::trap::Trap;
 use crate::ty_arg::{PolyVars, TyArg};
@@ -43,6 +43,10 @@ where
     pub fn into_inner(self, rt: &R) -> T {
         // SAFETY: `new` erased the value from a `T`.
         unsafe { T::materialize(rt, self.0) }
+    }
+
+    pub fn into_value(self) -> R::Value {
+        self.0
     }
 
     pub fn get(&self) -> T
@@ -137,6 +141,15 @@ where
             &mut *(<R::Value as Cross<R>>::deref_mut(rt, reference) as *mut R::Value as *mut Self)
         }
     }
+}
+
+// SAFETY: `#[repr(transparent)]` above, with `R::Value` the one
+// non-zero-sized field.
+unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
+where
+    R: Runtime,
+    T: Stored<R>,
+{
 }
 
 impl<R, T> FromValue<R> for Erased<R, T>

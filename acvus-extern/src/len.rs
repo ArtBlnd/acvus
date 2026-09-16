@@ -30,6 +30,12 @@ impl<const K: usize> LenArg for Len<K> {
 }
 
 /// `Array<T, N>` with N a length variable. Holds the elements at runtime.
+///
+/// `Cross::deref` in `obj.rs` reads the runtime's `Arr<Value, ()>` as an
+/// `Arr<Value, N>` through this `repr(transparent)`; drop the attribute and
+/// that file still compiles while the read stands on nothing the language
+/// promises.
+#[repr(transparent)]
 pub struct Arr<T, N>(pub Vec<T>, PhantomData<N>)
 where
     T: TyVar,

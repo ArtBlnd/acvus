@@ -8,7 +8,7 @@ use std::mem::ManuallyDrop;
 
 use acvus_mir::ty::{Ty, TypeArg};
 
-use crate::obj::{Cross, stored_as_container_of};
+use crate::obj::{Cross, storage_as, storage_as_mut, stored_as_container_of};
 use crate::registry::ExternTypeDecl;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, SlotRepr, TyArg, TyVar};
@@ -73,26 +73,29 @@ where
     }
 
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
-        assert!(
-            stored_as_container_of::<T, Rt>(),
-            "a Vec converted at the boundary has no storage of its own type to read through"
-        );
-        // SAFETY: the storage is `Vec<Value>`, and `T` is `Value` or
-        // `repr(transparent)` over it: the two `Vec`s have one layout.
-        unsafe { &*(rt.deref::<Vec<Rt::Value>>(reference) as *const Vec<Rt::Value> as *const Self) }
+        // SAFETY: the caller's contract, and `erase` boxes a `Vec<Value>`.
+        let values = unsafe { rt.deref::<Vec<Rt::Value>>(reference) };
+        let Some(same) = storage_as::<_, Self>(values) else {
+            panic!("{NO_VEC_STORAGE}")
+        };
+        same
     }
 
     unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
-        assert!(
-            stored_as_container_of::<T, Rt>(),
-            "a Vec converted at the boundary has no storage of its own type to read through"
-        );
-        // SAFETY: as in `deref`, exclusively.
-        unsafe {
-            &mut *(rt.deref_mut::<Vec<Rt::Value>>(reference) as *mut Vec<Rt::Value> as *mut Self)
-        }
+        // SAFETY: the caller's contract, exclusively, and `erase` boxes a
+        // `Vec<Value>`.
+        let values = unsafe { rt.deref_mut::<Vec<Rt::Value>>(reference) };
+        let Some(same) = storage_as_mut::<_, Self>(values) else {
+            panic!("{NO_VEC_STORAGE}")
+        };
+        same
     }
 }
+
+/// The message a `Vec<T>` gives when read through a reference and `T` is not
+/// the runtime's value: the storage is a `Vec<Value>`, and only a slice of
+/// a `repr(transparent)` element is a promised view of it.
+const NO_VEC_STORAGE: &str = "a Vec whose element is not the runtime's value has no Vec of its own type to read through; a transparent element is read as a slice by `Ref::as_slice`";
 
 crate::cross_whole!(CrossSpecialized, Vec<T>, T: Send + Sync + 'static);
 

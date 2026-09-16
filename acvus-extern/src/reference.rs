@@ -5,11 +5,13 @@
 //! reference, returns it, or takes it inside a lambda or an iterator. Its
 //! region is the caller's.
 
+use std::any::Any;
 use std::marker::PhantomData;
 
 use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::obj::TransparentOver;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
@@ -110,6 +112,40 @@ where
     }
 }
 
+impl<T, Rt> Ref<Vec<T>, Rt>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    /// The elements, read in place: the storage is the runtime's
+    /// `Vec<Value>`, and a `Vec<T>` of them is not a view the language
+    /// promises, so the typed view is the slice.
+    pub fn as_slice<'a>(&'a self, rt: &Rt) -> &'a [T] {
+        // SAFETY: as `with`: the storage holds a `Vec<Value>` and is live.
+        let values = unsafe { rt.deref::<Vec<Rt::Value>>(&self.0) };
+        // SAFETY: `T: TransparentOver<Rt>`: `[T]` and `[Rt::Value]` are one
+        // layout.
+        unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<T>(), values.len()) }
+    }
+}
+
+impl<T, Rt> RefMut<Vec<T>, Rt>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    /// As `Ref::as_slice`; the elements are edited in place, and the
+    /// length is changed only through the stored `Vec<Rt::Value>`.
+    pub fn as_mut_slice<'a>(&'a mut self, rt: &Rt) -> &'a mut [T] {
+        // SAFETY: as `with_mut`: the storage holds a `Vec<Value>`, is live,
+        // and the loan is exclusive.
+        let values = unsafe { rt.deref_mut::<Vec<Rt::Value>>(&self.0) };
+        // SAFETY: `T: TransparentOver<Rt>`: `[T]` and `[Rt::Value]` are one
+        // layout.
+        unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<T>(), values.len()) }
+    }
+}
+
 /// A reference to `part`, which lives in storage a live loan names.
 fn reference_to<U, Rt>(rt: &Rt, part: &U) -> Ref<U, Rt>
 where
@@ -175,15 +211,22 @@ where
     }
 }
 
-/// The runtime value a type variable's item is: `T` is a type variable of
-/// the ExternFn, so it is `Rt::Value` at run time (RFC-0022).
-///
-/// # Safety
-/// `T` is a type variable of the calling ExternFn, not a concrete type.
-unsafe fn value_of<T, Rt>(item: &T) -> &Rt::Value
+/// The runtime value a type variable's item is. The glue substitutes
+/// `Rt::Value` for a type variable of the ExternFn (RFC-0022), and this
+/// downcast is where that substitution is checked; a `U` of any other type,
+/// `Erased<..>` included, is refused here rather than cast, because a
+/// `repr(transparent)` promise cannot be a bound on `U` while the glue also
+/// instantiates `U` as the uninhabited `Typeck<N>`.
+fn value_of<U, Rt>(item: &U) -> &Rt::Value
 where
-    T: TyVar,
+    U: TyVar,
     Rt: Runtime,
 {
-    unsafe { &*(item as *const T as *const Rt::Value) }
+    let Some(value) = (item as &dyn Any).downcast_ref::<Rt::Value>() else {
+        panic!(
+            "a part reached through a reference is a type variable's item and so the runtime's value; `{}` is not",
+            std::any::type_name::<U>()
+        )
+    };
+    value
 }

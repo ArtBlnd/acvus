@@ -29,8 +29,8 @@ pub use handler::{ExternHandler, Instance, Instances};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
-    Cross, CrossSpecialized, FromValue, Inline, Obj, Stored, Variant, downcast, erase_field,
-    expect_type, materialize_field, materialize_payload, take_payload,
+    Cross, CrossSpecialized, FromValue, Inline, Obj, Stored, TransparentOver, Variant, downcast,
+    erase_field, expect_type, materialize_field, materialize_payload, take_payload,
 };
 pub use reference::{Ref, RefMut};
 pub use registry::{

@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use acvus_ext::Iter;
 use acvus_extern::{
-    EffectVar, Erased, FromValue, IdentityVar, Registry, Runtime, extern_fn, extern_registry,
+    EffectVar, Erased, FromValue, IdentityVar, RefMut, Registry, Runtime, extern_fn,
+    extern_registry,
 };
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
@@ -15,11 +16,11 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 #[extern_fn(effect = pure)]
-fn upcase_first<Rt>(rt: &Rt, items: &mut Vec<Erased<Rt, String>>)
+fn upcase_first<Rt>(rt: &Rt, mut items: RefMut<Vec<Erased<Rt, String>>, Rt>)
 where
     Rt: Runtime,
 {
-    let Some(first) = items.first_mut() else {
+    let Some(first) = items.as_mut_slice(rt).first_mut() else {
         return;
     };
     first.as_mut(rt).make_ascii_uppercase();

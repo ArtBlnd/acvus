@@ -6,7 +6,7 @@
 //! holds. `Obj<V>` and `Variant<V>` are the runtime's own object and
 //! variant shapes.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::mem::ManuallyDrop;
 
 use acvus_utils::Astr;
@@ -97,6 +97,18 @@ where
 /// A type the runtime stores as itself: its `erase` is `rt.erase::<Self>`,
 /// so the runtime reads a value erased from it back as a `Self` in place.
 pub trait Stored<Rt>: Cross<Rt>
+where
+    Rt: Runtime,
+{
+}
+
+/// A name for the runtime's value with its layout, so a `[Rt::Value]` in
+/// storage is read in place as a `[Self]` (`Ref::as_slice`).
+///
+/// # Safety
+/// `Self` is `#[repr(transparent)]` with `Rt::Value` as its one
+/// non-zero-sized field.
+pub unsafe trait TransparentOver<Rt>: Cross<Rt>
 where
     Rt: Runtime,
 {
@@ -282,6 +294,29 @@ where
     T::STORED_AS_VALUE || TypeId::of::<T>() == TypeId::of::<Rt::Value>()
 }
 
+/// There is no cast arm beside this downcast: two instantiations of a
+/// `repr(Rust)` type, such as `Option<Value>` and `Option<Erased<..>>`,
+/// have no layout the language promises to be the same.
+pub(crate) fn storage_as<S, T>(stored: &S) -> Option<&T>
+where
+    S: 'static,
+    T: 'static,
+{
+    (stored as &dyn Any).downcast_ref::<T>()
+}
+
+pub(crate) fn storage_as_mut<S, T>(stored: &mut S) -> Option<&mut T>
+where
+    S: 'static,
+    T: 'static,
+{
+    (stored as &mut dyn Any).downcast_mut::<T>()
+}
+
+/// An `Option` of a payload other than the runtime's value is refused, as
+/// `storage_as` says.
+const NO_OPTION_STORAGE: &str = "an Option whose payload is not the runtime's value has no Option of its own type to read through; read the stored `Option<Value>` and wrap the payload with `Erased::from_value`";
+
 impl<T, Rt> Cross<Rt> for Option<T>
 where
     T: Cross<Rt>,
@@ -303,15 +338,22 @@ where
     }
 
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
-        assert!(stored_as_container_of::<T, Rt>(), "{NO_STORAGE}");
-        // SAFETY: the storage is `Option<Value>` and `T` is `Value`.
-        unsafe { rt.deref::<Self>(reference) }
+        // SAFETY: the caller's contract, and `erase` boxes an `Option<Value>`.
+        let stored = unsafe { rt.deref::<Option<Rt::Value>>(reference) };
+        let Some(same) = storage_as::<_, Self>(stored) else {
+            panic!("{NO_OPTION_STORAGE}")
+        };
+        same
     }
 
     unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
-        assert!(stored_as_container_of::<T, Rt>(), "{NO_STORAGE}");
-        // SAFETY: as in `deref`.
-        unsafe { rt.deref_mut::<Self>(reference) }
+        // SAFETY: the caller's contract, exclusively, and `erase` boxes an
+        // `Option<Value>`.
+        let stored = unsafe { rt.deref_mut::<Option<Rt::Value>>(reference) };
+        let Some(same) = storage_as_mut::<_, Self>(stored) else {
+            panic!("{NO_OPTION_STORAGE}")
+        };
+        same
     }
 }
 
@@ -446,22 +488,24 @@ where
     }
 
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
-        assert!(stored_as_container_of::<T, Rt>(), "{NO_STORAGE}");
-        // SAFETY: the storage is `Arr<Value, ()>`, `T` is `Value`, and `N`
-        // is a phantom: the two `Arr`s have one layout.
-        unsafe {
-            &*(rt.deref::<Arr<Rt::Value, ()>>(reference) as *const Arr<Rt::Value, ()>
-                as *const Self)
-        }
+        // SAFETY: the caller's contract, and `erase` boxes an `Arr<Value, ()>`.
+        let stored = unsafe { rt.deref::<Arr<Rt::Value, ()>>(reference) };
+        let Some(items) = storage_as::<_, Vec<T>>(&stored.0) else {
+            panic!("{NO_STORAGE}")
+        };
+        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
+        unsafe { &*(items as *const Vec<T> as *const Self) }
     }
 
     unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
-        assert!(stored_as_container_of::<T, Rt>(), "{NO_STORAGE}");
-        // SAFETY: as in `deref`.
-        unsafe {
-            &mut *(rt.deref_mut::<Arr<Rt::Value, ()>>(reference) as *mut Arr<Rt::Value, ()>
-                as *mut Self)
-        }
+        // SAFETY: the caller's contract, exclusively, and `erase` boxes an
+        // `Arr<Value, ()>`.
+        let stored = unsafe { rt.deref_mut::<Arr<Rt::Value, ()>>(reference) };
+        let Some(items) = storage_as_mut::<_, Vec<T>>(&mut stored.0) else {
+            panic!("{NO_STORAGE}")
+        };
+        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
+        unsafe { &mut *(items as *mut Vec<T> as *mut Self) }
     }
 }
 
