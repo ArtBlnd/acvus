@@ -254,12 +254,20 @@ fn generate_extern_fn(
     };
 
     let arg_idents: Vec<Ident> = (0..params.len()).map(|i| format_ident!("__a{i}")).collect();
+    let crossing = |ty: &Type, member: Option<&Type>| -> proc_macro2::TokenStream {
+        if member.is_some() && vars.mentions_mono(ty) {
+            quote! { ::acvus_extern::CrossSpecialized }
+        } else {
+            quote! { ::acvus_extern::Cross }
+        }
+    };
     let glue = |member: Option<&Type>| -> proc_macro2::TokenStream {
         let rt_tys: Vec<Type> = params
             .iter()
             .map(|p| vars.to_runtime_instance(&p.ty, member))
             .collect();
         let rt_ret = vars.to_runtime_instance(&ret.ty, member);
+        let ret_cross = crossing(&ret.ty, member);
         let turbofish = vars.runtime_turbofish_instance(member);
         let error_ty = quote! { <__R as ::acvus_extern::Runtime>::Error };
         let unpack_stmts: Vec<proc_macro2::TokenStream> = params
@@ -267,19 +275,22 @@ fn generate_extern_fn(
             .zip(&arg_idents)
             .zip(&rt_tys)
             .map(|((p, a), ty)| {
+                let cross = crossing(&p.ty, member);
                 let next = quote! { __args.next().expect("arity checked by typeck") };
                 let lent = format_ident!("{a}_lent");
                 match p.mode {
-                    Mode::Value => quote! { let #a = <#ty as ::acvus_extern::Cross<__R>>::materialize(__rt, #next); },
+                    Mode::Value => {
+                        quote! { let #a = <#ty as #cross<__R>>::materialize(__rt, #next); }
+                    }
                     Mode::Borrow => quote! {
                         let #lent = #next;
                         // SAFETY: the checker lends a live storage of this type (RFC-0018).
-                        let #a: &#ty = unsafe { <#ty as ::acvus_extern::Cross<__R>>::deref(__rt, &#lent) };
+                        let #a: &#ty = unsafe { <#ty as #cross<__R>>::deref(__rt, &#lent) };
                     },
                     Mode::BorrowMut => quote! {
                         let #lent = #next;
                         // SAFETY: as above, exclusively.
-                        let #a: &mut #ty = unsafe { <#ty as ::acvus_extern::Cross<__R>>::deref_mut(__rt, &#lent) };
+                        let #a: &mut #ty = unsafe { <#ty as #cross<__R>>::deref_mut(__rt, &#lent) };
                     },
                 }
             })
@@ -307,7 +318,7 @@ fn generate_extern_fn(
         let hold_state = quote! {
             #(let #state_idents = ::std::sync::Arc::clone(&#state_idents);)*
         };
-        let ret_value = quote! { <#rt_ret as ::acvus_extern::Cross<__R>>::erase(__r, __rt) };
+        let ret_value = quote! { <#rt_ret as #ret_cross<__R>>::erase(__r, __rt) };
         let returned = quote! {
             ::core::result::Result::<_, #error_ty>::Ok(#ret_value)
         };
@@ -353,6 +364,56 @@ fn generate_extern_fn(
         }
     };
 
+    let family_casts = |member: &Type| -> Vec<proc_macro2::TokenStream> {
+        let mut seen = std::collections::HashSet::new();
+        params
+            .iter()
+            .map(|p| &p.ty)
+            .chain(std::iter::once(&ret.ty))
+            .filter(|ty| vars.mentions_mono(ty))
+            .filter(|ty| seen.insert(quote! { #ty }.to_string()))
+            .map(|ty| {
+                let specialized = vars.to_compile_time_instance(ty, Some(member));
+                let uniform = vars.to_compile_time_uniform(ty, member);
+                let rt_ty = vars.to_runtime_instance(ty, Some(member));
+                let handler = |body: proc_macro2::TokenStream| quote! {
+                    ::acvus_extern::ExternHandler::Sync(::std::sync::Arc::new(
+                        move |__rt: &__R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
+                            let mut __args = __args.into_iter();
+                            let __v = __args.next().expect("arity checked by typeck");
+                            debug_assert!(__args.next().is_none(), "arity checked by typeck");
+                            ::core::result::Result::<_, <__R as ::acvus_extern::Runtime>::Error>::Ok(#body)
+                        }
+                    ))
+                };
+                let erase = handler(quote! {
+                    <#rt_ty as ::acvus_extern::Cross<__R>>::erase(
+                        <#rt_ty as ::acvus_extern::CrossSpecialized<__R>>::materialize(__rt, __v),
+                        __rt,
+                    )
+                });
+                let materialize = handler(quote! {
+                    <#rt_ty as ::acvus_extern::CrossSpecialized<__R>>::erase(
+                        <#rt_ty as ::acvus_extern::Cross<__R>>::materialize(__rt, __v),
+                        __rt,
+                    )
+                });
+                quote! {
+                    __casts.extend(::acvus_extern::family_casts::<__R>(
+                        __i,
+                        ::acvus_extern::MemberType {
+                            specialized: <#specialized as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
+                            uniform: <#uniform as ::acvus_extern::TyArg>::poly_ty(__i, &__vars),
+                            erase: #erase,
+                            materialize: #materialize,
+                        },
+                    ));
+                }
+            })
+            .collect()
+    };
+
+    let mut casts: Vec<proc_macro2::TokenStream> = Vec::new();
     let instances = match vars.mono_var() {
         None => {
             let generic = glue(None);
@@ -376,6 +437,7 @@ fn generate_extern_fn(
             } else {
                 quote! { ::core::option::Option::None }
             };
+            casts = members.iter().flat_map(|m| family_casts(m)).collect();
             quote! {
                 ::acvus_extern::Instances {
                     concrete: vec![#(#concrete),*],
@@ -400,14 +462,16 @@ fn generate_extern_fn(
             __i: &::acvus_extern::Interner,
             __ns: ::core::option::Option<&str>,
             #(#state_idents: #state_tys,)*
-        ) -> ::acvus_extern::ExternFn<__R>
+        ) -> ::std::vec::Vec<::acvus_extern::ExternFn<__R>>
         where
             #rt_bounds
             #(#state_tys: ::core::marker::Send + ::core::marker::Sync + 'static,)*
         {
             let __vars = ::acvus_extern::PolyVars::fresh(#counts);
             #(let #state_idents = ::std::sync::Arc::new(#state_idents);)*
-            ::acvus_extern::ExternFn {
+            let mut __casts: ::std::vec::Vec<::acvus_extern::ExternFn<__R>> = ::std::vec::Vec::new();
+            #(#casts)*
+            let __declared = ::acvus_extern::ExternFn {
                 decl: ::acvus_extern::FnDecl {
                     qref: #qref,
                     ty: #declared_ty,
@@ -417,7 +481,8 @@ fn generate_extern_fn(
                     requires: vec![#(#requires),*],
                 },
                 instances: #instances,
-            }
+            };
+            ::core::iter::once(__declared).chain(__casts).collect()
         }
     })
 }
@@ -706,6 +771,27 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
 
     let qref = qref_expr_in(attr.ns.as_deref(), &name);
+    let payload_crossing = quote! {
+        fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
+            // SAFETY: an extension type is stored as its payload (RFC-0039).
+            unsafe { __rt.erase::<#payload_ty>(self.0) }
+        }
+
+        fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+            // SAFETY: as in `erase`.
+            Self(unsafe { __rt.materialize::<#payload_ty>(__value) } #(, #phantoms)*)
+        }
+
+        unsafe fn deref<'a>(__rt: &__R, __reference: &'a <__R as ::acvus_extern::Runtime>::Value) -> &'a Self {
+            // SAFETY: the caller's contract; `Self` is `repr(transparent)` over the payload.
+            unsafe { &*(__rt.deref::<#payload_ty>(__reference) as *const #payload_ty as *const Self) }
+        }
+
+        unsafe fn deref_mut<'a>(__rt: &__R, __reference: &'a <__R as ::acvus_extern::Runtime>::Value) -> &'a mut Self {
+            // SAFETY: as in `deref`, exclusively.
+            unsafe { &mut *(__rt.deref_mut::<#payload_ty>(__reference) as *mut #payload_ty as *mut Self) }
+        }
+    };
 
     Ok(quote! {
         impl #arg_impl_generics ::acvus_extern::TyArg for #ident #ty_generics #where_clause {
@@ -727,25 +813,15 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             __R: ::acvus_extern::Runtime,
             #where_predicates
         {
-            fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
-                // SAFETY: an extension type is stored as its payload (RFC-0039).
-                unsafe { __rt.erase::<#payload_ty>(self.0) }
-            }
+            #payload_crossing
+        }
 
-            fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
-                // SAFETY: as in `erase`.
-                Self(unsafe { __rt.materialize::<#payload_ty>(__value) } #(, #phantoms)*)
-            }
-
-            unsafe fn deref<'a>(__rt: &__R, __reference: &'a <__R as ::acvus_extern::Runtime>::Value) -> &'a Self {
-                // SAFETY: the caller's contract; `Self` is `repr(transparent)` over the payload.
-                unsafe { &*(__rt.deref::<#payload_ty>(__reference) as *const #payload_ty as *const Self) }
-            }
-
-            unsafe fn deref_mut<'a>(__rt: &__R, __reference: &'a <__R as ::acvus_extern::Runtime>::Value) -> &'a mut Self {
-                // SAFETY: as in `deref`, exclusively.
-                unsafe { &mut *(__rt.deref_mut::<#payload_ty>(__reference) as *mut #payload_ty as *mut Self) }
-            }
+        impl<#impl_params __R> ::acvus_extern::CrossSpecialized<__R> for #ident #ty_generics
+        where
+            __R: ::acvus_extern::Runtime,
+            #where_predicates
+        {
+            #payload_crossing
         }
 
         impl #impl_generics ::acvus_extern::ExternTypeDecl for #ident #ty_generics #where_clause {
@@ -1139,12 +1215,6 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
     quote! {
         ::acvus_extern::Registry::new(move |__i: &::acvus_extern::Interner| {
             let __ns: ::core::option::Option<&str> = ::core::option::Option::Some(#ns);
-            let mut __fns: ::std::vec::Vec<::acvus_extern::FnDecl> = ::std::vec::Vec::new();
-            let mut __instances = ::acvus_extern::FxHashMap::default();
-            for __f in ::std::vec::Vec::<::acvus_extern::ExternFn<_>>::from([#(#fns),*]) {
-                __instances.insert(__f.decl.qref, __f.instances);
-                __fns.push(__f.decl);
-            }
             let mut __space = ::acvus_extern::FxHashMap::default();
             #(
                 if let ::core::option::Option::Some(__hooks) =
@@ -1156,17 +1226,24 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
                     );
                 }
             )*
-            ::acvus_extern::Contribution {
+            let mut __contribution = ::acvus_extern::Contribution {
                 manifest: ::acvus_extern::Manifest {
                     types: vec![#(<#types as ::acvus_extern::ExternTypeDecl>::type_decl(__i)),*],
                     signatures: vec![#(
                         <#signatures as ::acvus_extern::SharedSignature>::signature_decl(__i)
                     ),*],
-                    fns: __fns,
+                    fns: ::std::vec::Vec::new(),
                 },
-                instances: __instances,
+                instances: ::acvus_extern::FxHashMap::default(),
                 space: __space,
+            };
+            for __f in ::std::vec::Vec::<::std::vec::Vec<::acvus_extern::ExternFn<_>>>::from([#(#fns),*])
+                .into_iter()
+                .flatten()
+            {
+                __contribution.declare(__f);
             }
+            __contribution
         })
     }
     .into()

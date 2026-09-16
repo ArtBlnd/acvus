@@ -4,6 +4,7 @@
 //! an error, the demand reaches the producer, and the generic instance is
 //! the uniform one.
 
+use acvus_extern::{Externs, Monomorphize, Registry, TypesOnly, extern_fn, extern_registry};
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
@@ -253,14 +254,24 @@ struct Checked {
     /// Every extern call the script makes, by callee name, with the
     /// instance the checker settled.
     calls: Vec<(String, usize)>,
+    /// The conversions the checker settled at argument positions.
+    casts: usize,
 }
 
 /// The script's return type and its extern calls, or every error the
 /// checker reported.
 fn check_with(i: &Interner, reg: TypeRegistry, source: &str) -> Result<Checked, Vec<String>> {
+    check_functions(i, reg, externs(i), source)
+}
+
+fn check_functions(
+    i: &Interner,
+    reg: TypeRegistry,
+    mut functions: Vec<Function>,
+    source: &str,
+) -> Result<Checked, Vec<String>> {
     let script = script_fn(i, source);
     let qref = script.qref;
-    let mut functions = externs(i);
     functions.push(script);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
@@ -280,6 +291,7 @@ fn check_with(i: &Interner, reg: TypeRegistry, source: &str) -> Result<Checked, 
         panic!("expected Fn, got {:?}", outcome.meta().ty)
     };
     let resolution = outcome.resolution().expect("complete");
+    let casts = resolution.coercion_map.len();
     let mut calls: Vec<(String, usize)> = resolution
         .direct_calls
         .values()
@@ -292,6 +304,7 @@ fn check_with(i: &Interner, reg: TypeRegistry, source: &str) -> Result<Checked, 
     Ok(Checked {
         ret: (**ret).clone(),
         calls,
+        casts,
     })
 }
 
@@ -475,4 +488,71 @@ fn h7_an_unregistered_type_is_refused_where_it_is_named() {
     );
     let b = vec_of(&i, TypeArg::<acvus_mir::ty::Infer>::uniform(TyTerm::String));
     let _ = solver.unify(&a, &b);
+}
+
+// -- H8: a `Monomorphize` member's registered signature ------------------
+
+/// The arithmetic a member supplies; the bound keeps the generic instance
+/// out, so `dot` and `zeros` exist only at `f64`.
+trait Float: Copy + Send + Sync + 'static {
+    const ZERO: Self;
+    fn mul_add(self, a: Self, b: Self) -> Self;
+}
+
+impl Float for f64 {
+    const ZERO: Self = 0.0;
+
+    fn mul_add(self, a: Self, b: Self) -> Self {
+        self + a * b
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn dot<T>(a: Vec<T>, b: Vec<T>) -> T
+where
+    T: Monomorphize<(f64,)> + Float,
+{
+    a.iter()
+        .zip(&b)
+        .fold(T::ZERO, |acc, (x, y)| acc.mul_add(*x, *y))
+}
+
+#[extern_fn(effect = pure)]
+fn zeros<T>(n: i64) -> Vec<T>
+where
+    T: Monomorphize<(f64,)> + Float,
+{
+    vec![T::ZERO; usize::try_from(n).expect("a count is not negative")]
+}
+
+fn member_registry() -> Registry<TypesOnly> {
+    extern_registry! {
+        ns: "t",
+        fns: [dot, zeros],
+    }
+}
+
+/// `zeros<T: Monomorphize<(f64,)>>(i64) -> Vec<T>` feeding
+/// `dot<T: Monomorphize<(f64,)>>(Vec<T>, Vec<T>) -> T`, both registered by
+/// the macro with `#f64` as their only instance: the consumer's demand
+/// picks the producer's instance through the registered signatures, as H3
+/// does through hand-built ones, and no conversion sits between them.
+#[test]
+fn h8_a_member_s_demand_reaches_a_member_producer_through_the_registry() {
+    let i = Interner::new();
+    let Externs {
+        functions, types, ..
+    } = Externs::combine(vec![acvus_ext::vec_registry(), member_registry()], &i)
+        .expect("registries combine");
+    let checked = check_functions(&i, types, functions, "dot(zeros(3), zeros(3))").unwrap();
+    assert_eq!(checked.ret, Ty::Float);
+    assert_eq!(instance_of(&checked, "dot"), 0);
+    let zeros: Vec<usize> = checked
+        .calls
+        .iter()
+        .filter(|(name, _)| name == "zeros")
+        .map(|(_, instance)| *instance)
+        .collect();
+    assert_eq!(zeros, vec![0, 0]);
+    assert_eq!(checked.casts, 0);
 }

@@ -8,8 +8,9 @@ use std::collections::VecDeque;
 
 use acvus_extern::{
     Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, PolyTy,
-    PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SpaceError, SpaceHooks, SpaceResult,
-    Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn, extern_registry,
+    PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError, SpaceHooks,
+    SpaceResult, Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
+    extern_registry,
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
@@ -146,10 +147,12 @@ impl<T> TyArg for Deque<T>
 where
     T: TyArg + TyVar,
 {
+    const SLOT: SlotRepr = T::SLOT;
+
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::UserDefined {
             id: QualifiedRef::root(i.intern("Deque")),
-            type_args: vec![TypeArg::uniform(T::poly_ty(i, vars))],
+            type_args: vec![T::slot(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
         }

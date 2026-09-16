@@ -63,6 +63,20 @@ impl<R: Runtime> Instances<R> {
         }
     }
 
+    /// Adds the instances of `more` whose signature is not already here:
+    /// two declarations of one family cast at one member are one instance.
+    pub fn add_concrete(&mut self, more: Vec<Instance<R>>) {
+        for instance in more {
+            let present = self
+                .concrete
+                .iter()
+                .any(|existing| existing.signature == instance.signature);
+            if !present {
+                self.concrete.push(instance);
+            }
+        }
+    }
+
     pub fn signatures(&self) -> acvus_mir::ty::Instances {
         acvus_mir::ty::Instances {
             concrete: self.concrete.iter().map(|i| i.signature.clone()).collect(),

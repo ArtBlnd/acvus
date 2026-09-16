@@ -58,6 +58,32 @@ where
 const NO_STORAGE: &str =
     "a value converted at the boundary has no storage of its own type to read through";
 
+/// How the type of a `#` slot crosses (both.md, Revision): a family
+/// (`Vec<T>`, `Deque<T>`) is one box holding the whole Rust value, a leaf
+/// is stored as itself, and `Option`/`Result`/`Arr` forward to their
+/// payloads. The glue of a `Monomorphize` member instance calls this for
+/// every parameter and return whose type names the member.
+pub trait CrossSpecialized<Rt>: Sized + Send + Sync + 'static
+where
+    Rt: Runtime,
+{
+    fn erase(self, rt: &Rt) -> Rt::Value;
+    fn materialize(rt: &Rt, value: Rt::Value) -> Self;
+
+    /// # Safety
+    /// As `Cross::deref`.
+    unsafe fn deref<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a Self {
+        panic!("{}", NO_STORAGE)
+    }
+
+    /// # Safety
+    /// As `Cross::deref_mut`.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn deref_mut<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a mut Self {
+        panic!("{}", NO_STORAGE)
+    }
+}
+
 /// A type the runtime stores as itself: its `erase` is `rt.erase::<Self>`,
 /// so the runtime reads a value erased from it back as a `Self` in place.
 pub trait Stored<Rt>: Cross<Rt>
@@ -83,7 +109,6 @@ macro_rules! inline {
 }
 inline!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, ());
 
-
 /// A type stored as itself: the runtime keeps the Rust value and hands it
 /// back untouched (RFC-0022).
 #[macro_export]
@@ -95,7 +120,18 @@ macro_rules! cross_as_stored {
         {
         }
 
-        impl<$($($g)*,)? __Rt> $crate::Cross<__Rt> for $t
+        $crate::cross_whole!(Cross, $t $(, $($g)*)?);
+        $crate::cross_whole!(CrossSpecialized, $t $(, $($g)*)?);
+    };
+}
+
+/// One crossing trait implemented as the whole Rust value in one runtime
+/// box.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! cross_whole {
+    ($trait:ident, $t:ty $(, $($g:tt)*)?) => {
+        impl<$($($g)*,)? __Rt> $crate::$trait<__Rt> for $t
         where
             __Rt: $crate::Runtime,
         {
@@ -136,6 +172,19 @@ cross_as_stored!(String);
 cross_as_stored!(());
 
 impl<Rt> Cross<Rt> for Never
+where
+    Rt: Runtime,
+{
+    fn erase(self, _: &Rt) -> Rt::Value {
+        match self {}
+    }
+
+    fn materialize(_: &Rt, _: Rt::Value) -> Self {
+        panic!("a value of type `!` was materialized")
+    }
+}
+
+impl<Rt> CrossSpecialized<Rt> for Never
 where
     Rt: Runtime,
 {
@@ -211,6 +260,67 @@ where
         inner
             .map(|v| T::materialize(rt, v))
             .map_err(|e| E::materialize(rt, e))
+    }
+}
+
+impl<T, Rt> CrossSpecialized<Rt> for Option<T>
+where
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
+{
+    fn erase(self, rt: &Rt) -> Rt::Value {
+        let inner: Option<Rt::Value> = self.map(|v| v.erase(rt));
+        // SAFETY: the language's Option is the runtime's `Option<Value>`
+        // (RFC-0022).
+        unsafe { rt.erase::<Option<Rt::Value>>(inner) }
+    }
+
+    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: as in `erase`.
+        let inner = unsafe { rt.materialize::<Option<Rt::Value>>(value) };
+        inner.map(|v| T::materialize(rt, v))
+    }
+}
+
+impl<T, E, Rt> CrossSpecialized<Rt> for Result<T, E>
+where
+    T: CrossSpecialized<Rt>,
+    E: CrossSpecialized<Rt>,
+    Rt: Runtime,
+{
+    fn erase(self, rt: &Rt) -> Rt::Value {
+        let inner: Result<Rt::Value, Rt::Value> =
+            self.map(|v| v.erase(rt)).map_err(|e| e.erase(rt));
+        // SAFETY: the language's Result is the runtime's `Result<Value, Value>`
+        // (RFC-0038).
+        unsafe { rt.erase::<Result<Rt::Value, Rt::Value>>(inner) }
+    }
+
+    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: as in `erase`.
+        let inner = unsafe { rt.materialize::<Result<Rt::Value, Rt::Value>>(value) };
+        inner
+            .map(|v| T::materialize(rt, v))
+            .map_err(|e| E::materialize(rt, e))
+    }
+}
+
+impl<T, N, Rt> CrossSpecialized<Rt> for Arr<T, N>
+where
+    T: CrossSpecialized<Rt>,
+    N: LenVar,
+    Rt: Runtime,
+{
+    fn erase(self, rt: &Rt) -> Rt::Value {
+        let items: Vec<Rt::Value> = self.0.into_iter().map(|v| v.erase(rt)).collect();
+        // SAFETY: the language's array is `Arr<Value, ()>` (RFC-0022).
+        unsafe { rt.erase::<Arr<Rt::Value, ()>>(Arr::new(items)) }
+    }
+
+    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: as in `erase`.
+        let items = unsafe { rt.materialize::<Arr<Rt::Value, ()>>(value) };
+        Arr::new(items.0.into_iter().map(|v| T::materialize(rt, v)).collect())
     }
 }
 

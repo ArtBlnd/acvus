@@ -29,17 +29,18 @@ pub use handler::{ExternHandler, Instance, Instances};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
-    Cross, Inline, Obj, Stored, Variant, erase_field, materialize_field, materialize_payload, take_payload,
+    Cross, CrossSpecialized, Inline, Obj, Stored, Variant, erase_field, materialize_field,
+    materialize_payload, take_payload,
 };
 pub use reference::{Ref, RefMut};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
-    Manifest, Registry, SharedSignature, SignatureDecl,
+    Manifest, MemberType, Registry, SharedSignature, SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use trap::Trap;
-pub use ty_arg::{Monomorphize, Never, PolyVars, TyArg, TyVar, Typeck, VarCounts};
+pub use ty_arg::{Monomorphize, Never, PolyVars, SlotRepr, Spec, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;
 
 pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, extern_signature};

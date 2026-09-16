@@ -1,8 +1,13 @@
 //! `TyArg`: a Rust type that names an acvus type.
 //! `TyVar`: a generic parameter that is an acvus type variable.
 //! `Typeck<N>`: the compile-time stand-in for the N-th type variable.
+//! `Spec<T>`: the compile-time stand-in for a `Monomorphize` member.
 
-use acvus_mir::ty::{EffectTerm, IdentityTerm, IntTy, LenTerm, Poly, PolyBuilder, PolyTy};
+use std::marker::PhantomData;
+
+use acvus_mir::ty::{
+    EffectTerm, IdentityTerm, IntTy, LenTerm, Poly, PolyBuilder, PolyTy, Repr, TypeArg,
+};
 use acvus_utils::Interner;
 
 /// The variables a polymorphic ExternFn type ranges over, by kind and
@@ -41,9 +46,47 @@ impl PolyVars {
     }
 }
 
+/// The representation of a specializing slot by what it holds
+/// (hash-types.md, Signatures); a composite takes the strongest of its
+/// parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SlotRepr {
+    Ground,
+    Var,
+    Member,
+}
+
+/// The one `ρ` of a signature (RFC-0040).
+const SIGNATURE_RHO: u32 = 0;
+
+impl SlotRepr {
+    pub const fn join(self, other: Self) -> Self {
+        if (self as u8) >= (other as u8) {
+            self
+        } else {
+            other
+        }
+    }
+
+    pub const fn repr(self) -> Repr<Poly> {
+        match self {
+            SlotRepr::Ground => Repr::Uniform,
+            SlotRepr::Var => Repr::Var(SIGNATURE_RHO),
+            SlotRepr::Member => Repr::Specialized,
+        }
+    }
+}
+
 /// A Rust type that names an acvus type.
 pub trait TyArg: 'static {
+    const SLOT: SlotRepr = SlotRepr::Ground;
+
     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy;
+
+    /// This type as the argument of a specializing slot.
+    fn slot(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::new(Self::SLOT.repr(), Self::poly_ty(interner, vars))
+    }
 }
 
 /// A generic parameter that is an acvus type variable. The body never opens
@@ -59,8 +102,26 @@ impl<T: Send + Sync + 'static> TyVar for T {}
 pub enum Typeck<const N: usize> {}
 
 impl<const N: usize> TyArg for Typeck<N> {
+    const SLOT: SlotRepr = SlotRepr::Var;
+
     fn poly_ty(_: &Interner, vars: &PolyVars) -> PolyTy {
         vars.tys[N].clone()
+    }
+}
+
+/// Compile-time stand-in for a `Monomorphize` member `T` in a member
+/// instance's type: the acvus type is `T`'s, and a specializing slot
+/// holding it is `#`. Uninhabited: it names a type and is never a value.
+pub struct Spec<T>(PhantomData<fn() -> T>, Never);
+
+impl<T> TyArg for Spec<T>
+where
+    T: TyArg,
+{
+    const SLOT: SlotRepr = SlotRepr::Member;
+
+    fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
+        T::poly_ty(i, vars)
     }
 }
 
@@ -99,6 +160,8 @@ impl<T, const N: usize> TyArg for [T; N]
 where
     T: TyArg,
 {
+    const SLOT: SlotRepr = T::SLOT;
+
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Array(Box::new(T::poly_ty(i, vars)), LenTerm::Known(N))
     }
@@ -108,6 +171,8 @@ impl<T> TyArg for Option<T>
 where
     T: TyArg,
 {
+    const SLOT: SlotRepr = T::SLOT;
+
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Option(Box::new(T::poly_ty(i, vars)))
     }
@@ -118,6 +183,8 @@ where
     T: TyArg,
     E: TyArg,
 {
+    const SLOT: SlotRepr = T::SLOT.join(E::SLOT);
+
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Result(Box::new(T::poly_ty(i, vars)), Box::new(E::poly_ty(i, vars)))
     }
@@ -129,6 +196,8 @@ macro_rules! impl_tuple_ty_arg {
         where
             $($T: TyArg,)+
         {
+            const SLOT: SlotRepr = SlotRepr::Ground$(.join($T::SLOT))+;
+
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
                 PolyTy::Tuple(vec![$($T::poly_ty(i, vars)),+])
             }

@@ -1,7 +1,8 @@
 //! `Vec<T>`: the dynamic-length sequence is the language's `Vec<T>` and
-//! Rust's `Vec<T>` alike. It crosses the boundary as the runtime's
-//! `Vec<Value>` (RFC-0022): as the whole buffer when the element is a value
-//! in place, element by element when the element converts.
+//! Rust's `Vec<T>` alike. In a uniform slot it crosses the boundary as the
+//! runtime's `Vec<Value>` (RFC-0022): as the whole buffer when the element
+//! is a value in place, element by element when the element converts. In a
+//! `#` slot it crosses as one box holding the Rust `Vec<T>` itself.
 
 use std::mem::ManuallyDrop;
 
@@ -10,7 +11,7 @@ use acvus_mir::ty::{Ty, TypeArg};
 use crate::obj::{Cross, stored_as_container_of};
 use crate::registry::ExternTypeDecl;
 use crate::runtime::Runtime;
-use crate::ty_arg::{PolyVars, TyArg, TyVar};
+use crate::ty_arg::{PolyVars, SlotRepr, TyArg, TyVar};
 use crate::{Interner, PolyTy, QualifiedRef, TyVarBound, UserDefinedDecl};
 
 /// # Safety
@@ -88,14 +89,18 @@ where
     }
 }
 
+crate::cross_whole!(CrossSpecialized, Vec<T>, T: Send + Sync + 'static);
+
 impl<T> TyArg for Vec<T>
 where
     T: TyArg + TyVar,
 {
+    const SLOT: SlotRepr = T::SLOT;
+
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::UserDefined {
             id: QualifiedRef::root(i.intern("Vec")),
-            type_args: vec![TypeArg::uniform(T::poly_ty(i, vars))],
+            type_args: vec![T::slot(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
         }

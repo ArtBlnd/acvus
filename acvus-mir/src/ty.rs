@@ -303,8 +303,9 @@ where
     }
     /// A pattern's representation variable stands for the uniform
     /// representation: the generic instance is the uniform one
-    /// (hash-types.md, R3). A fixed representation matches itself; an
-    /// open one matches only when unknowns are open.
+    /// (hash-types.md, R3). A fixed representation matches itself; a
+    /// variable matches a pattern variable, and a fixed one only when
+    /// unknowns are open.
     fn arg_matches<P>(
         arg: &TypeArg<P>,
         pat: &TypeArg<Poly>,
@@ -315,6 +316,7 @@ where
         P: Phase + PartialEq,
     {
         let repr_ok = match (&arg.repr, &pat.repr) {
+            (Repr::Var(_), Repr::Var(_)) => true,
             (Repr::Var(_), _) => unknowns == Unknowns::Open,
             (Repr::Uniform, Repr::Var(_)) => true,
             (Repr::Specialized, Repr::Var(_)) => false,

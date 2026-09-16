@@ -5,8 +5,8 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, PolyTy, TyVarBound, TypeRegistry, UserDefinedDecl,
-    matches_pattern, unify_patterns,
+    CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, TyTerm,
+    TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -52,6 +52,132 @@ pub struct ExternFn<R: Runtime> {
     pub instances: Instances<R>,
 }
 
+/// Whether two declarations are one family cast: one name, one type, both
+/// casts with instances only. Every `Monomorphize` member signature naming
+/// a family declares that family's casts, so the declarations meet and
+/// their instances are one list.
+fn same_family_cast<R>(
+    a: &FnDecl,
+    a_instances: &Instances<R>,
+    b: &FnDecl,
+    b_instances: &Instances<R>,
+) -> bool
+where
+    R: Runtime,
+{
+    a.qref == b.qref
+        && a.cast
+        && b.cast
+        && a.ty == b.ty
+        && a_instances.generic.is_none()
+        && b_instances.generic.is_none()
+}
+
+/// A type of a `Monomorphize` member signature at its two representations,
+/// with the handlers converting between them.
+pub struct MemberType<R>
+where
+    R: Runtime,
+{
+    pub specialized: PolyTy,
+    pub uniform: PolyTy,
+    /// From `specialized` to `uniform`.
+    pub erase: ExternHandler<R>,
+    /// From `uniform` to `specialized`.
+    pub materialize: ExternHandler<R>,
+}
+
+/// The two casts a family type in a `Monomorphize` member signature
+/// declares, each with one instance at this member: `F::erase` from
+/// `F<#T>` to `F<T>` and `F::materialize` back. A composite whose family
+/// sits below the top, such as `Option<Vec<#T>>`, is not a family type and
+/// declares nothing: the solver's cast rules are keyed by a user-defined
+/// head, so a value of that type crosses only at its own representation.
+pub fn family_casts<R>(i: &Interner, member: MemberType<R>) -> Vec<ExternFn<R>>
+where
+    R: Runtime,
+{
+    let MemberType {
+        specialized,
+        uniform,
+        erase,
+        materialize,
+    } = member;
+    if specialized == uniform {
+        return Vec::new();
+    }
+    let TyTerm::UserDefined {
+        id,
+        type_args,
+        effect_args,
+        identity_args,
+    } = &specialized
+    else {
+        return Vec::new();
+    };
+    let mut b = PolyBuilder::new();
+    let ty_vars: Vec<PolyTy> = type_args.iter().map(|_| b.fresh_ty_var()).collect();
+    let effect_vars: Vec<EffectTerm<Poly>> =
+        effect_args.iter().map(|_| b.fresh_effect_var()).collect();
+    let identity_vars: Vec<IdentityTerm<Poly>> = identity_args
+        .iter()
+        .map(|_| b.fresh_identity_var())
+        .collect();
+    let pattern = |repr_of: fn(&TypeArg<Poly>) -> Repr<Poly>| PolyTy::UserDefined {
+        id: *id,
+        type_args: type_args
+            .iter()
+            .zip(&ty_vars)
+            .map(|(arg, var)| TypeArg::new(repr_of(arg), var.clone()))
+            .collect(),
+        effect_args: effect_vars.clone(),
+        identity_args: identity_vars.clone(),
+    };
+    let specialized_pattern = pattern(|arg| arg.repr);
+    let uniform_pattern = pattern(|_| Repr::Uniform);
+    let family = match id.namespace {
+        Some(ns) => format!("{}::{}", i.resolve(ns), i.resolve(id.name)),
+        None => i.resolve(id.name).to_string(),
+    };
+    let fn_ty = |from: PolyTy, to: PolyTy| PolyTy::Fn {
+        params: vec![ParamTerm::<Poly>::new(i.intern("value"), from)],
+        ret: Box::new(to),
+        captures: vec![],
+        effect: EffectTerm::Known(Effect::PURE),
+    };
+    let cast = |name: &str, generic: PolyTy, instance: PolyTy, handler| ExternFn {
+        decl: FnDecl {
+            qref: QualifiedRef::qualified(i.intern(&family), i.intern(name)),
+            ty: generic,
+            bounds: vec![TyVarBound::Any; ty_vars.len()],
+            cast: true,
+            instance_of: None,
+            requires: vec![None; ty_vars.len()],
+        },
+        instances: Instances {
+            concrete: vec![Instance {
+                signature: instance,
+                handler,
+            }],
+            generic: None,
+        },
+    };
+    vec![
+        cast(
+            "erase",
+            fn_ty(specialized_pattern.clone(), uniform_pattern.clone()),
+            fn_ty(specialized.clone(), uniform.clone()),
+            erase,
+        ),
+        cast(
+            "materialize",
+            fn_ty(uniform_pattern, specialized_pattern),
+            fn_ty(uniform, specialized),
+            materialize,
+        ),
+    ]
+}
+
 pub trait ExternTypeDecl {
     fn type_decl(interner: &Interner) -> UserDefinedDecl;
     /// The type's space hooks (RFC-0033); a type without them cannot be a
@@ -82,6 +208,23 @@ pub struct Contribution<R: Runtime> {
     pub manifest: Manifest,
     pub instances: FxHashMap<QualifiedRef, Instances<R>>,
     pub space: FxHashMap<QualifiedRef, SpaceHooks<R>>,
+}
+
+impl<R: Runtime> Contribution<R> {
+    /// Adds a declared function; a second declaration of one family cast
+    /// adds its instances to the first.
+    pub fn declare(&mut self, f: ExternFn<R>) {
+        let declared = self.manifest.fns.iter().find(|d| d.qref == f.decl.qref);
+        if let Some(decl) = declared
+            && let Some(instances) = self.instances.get_mut(&decl.qref)
+            && same_family_cast(decl, instances, &f.decl, &f.instances)
+        {
+            instances.add_concrete(f.instances.concrete);
+            return;
+        }
+        self.instances.insert(f.decl.qref, f.instances);
+        self.manifest.fns.push(f.decl);
+    }
 }
 
 pub struct Registry<R: Runtime> {
@@ -225,10 +368,18 @@ impl<R: Runtime> Externs<R> {
                 match decl.instance_of {
                     Some(sig) => add_instance(&mut signatures, decl, instances, sig)?,
                     None => {
-                        if !names.insert(decl.qref) {
-                            return Err(CombineError::DuplicateName(decl.qref));
+                        let declared = plain
+                            .iter_mut()
+                            .find(|f| same_family_cast(&f.decl, &f.instances, &decl, &instances));
+                        match declared {
+                            Some(existing) => existing.instances.add_concrete(instances.concrete),
+                            None => {
+                                if !names.insert(decl.qref) {
+                                    return Err(CombineError::DuplicateName(decl.qref));
+                                }
+                                plain.push(ExternFn { decl, instances });
+                            }
                         }
-                        plain.push(ExternFn { decl, instances });
                     }
                 }
             }
