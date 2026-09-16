@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    BoxFuture, ClosureFn, EffectVar, ExternType, Fn1, IdentityVar, Ref, Runtime, TyVar,
+    BoxFuture, ClosureFn, Cross, EffectVar, ExternType, Fn1, IdentityVar, Ref, Runtime, TyVar,
 };
 use sync_wrapper::SyncWrapper;
 
@@ -33,10 +33,12 @@ type Expand<Rt> =
 /// A closure as the pipeline keeps it: its element types are erased with
 /// the pipeline's, so one op shape serves every `T`.
 type Lambda<Rt> = Fn1<<Rt as Runtime>::Value, <Rt as Runtime>::Value, (), Rt>;
+/// A predicate as the pipeline keeps it: it reads the item and answers.
+type Predicate<Rt> = Fn1<Ref<<Rt as Runtime>::Value, Rt>, bool, (), Rt>;
 
 enum Op<Rt: Runtime> {
     Map(Lambda<Rt>),
-    Filter(Lambda<Rt>),
+    Filter(Predicate<Rt>),
     Take { remaining: u64 },
     Skip { remaining: u64 },
     Flatten(Expand<Rt>),
@@ -120,7 +122,10 @@ where
         Self::erased(Pipeline::from_source(Source::Done))
     }
 
-    pub fn from_items(items: Vec<T>) -> Self {
+    pub fn from_items(items: Vec<T>) -> Self
+    where
+        T: Cross<Rt>,
+    {
         let mut items = items.into_iter();
         Self::generate(move || items.next())
     }
@@ -132,8 +137,11 @@ where
     }
 
     /// A typed generator: each item crosses into the runtime as it is pulled.
-    pub fn generate(mut f: impl FnMut() -> Option<T> + Send + 'static) -> Self {
-        Self::from_fn(move |rt| f().map(|item| unsafe { rt.erase::<T>(item) }))
+    pub fn generate(mut f: impl FnMut() -> Option<T> + Send + 'static) -> Self
+    where
+        T: Cross<Rt>,
+    {
+        Self::from_fn(move |rt| f().map(|item| item.erase(rt)))
     }
 
     pub fn map<U: TyVar>(self, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt> {
@@ -141,7 +149,7 @@ where
     }
 
     pub fn filter(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
-        Self::erased(self.0.push_op(Op::Filter(f.erased())))
+        Self::erased(self.0.push_op(Op::Filter(Fn1::new(f.into_value()))))
     }
 
     pub fn take(self, n: u64) -> Self {
@@ -170,8 +178,8 @@ where
     /// Flatten items that are themselves sequences of `U`.
     pub fn flatten<U>(self) -> Iter<U, E, I, Rt>
     where
-        T: IntoIterator<Item = U>,
-        U: TyVar,
+        T: Cross<Rt> + IntoIterator<Item = U>,
+        U: Cross<Rt>,
     {
         Self::erased(self.0.push_op(Op::Flatten(expand_as::<T, U, Rt>()))).retype()
     }
@@ -179,8 +187,8 @@ where
     /// Map each item to a sequence of `U` and flatten.
     pub fn flat_map<S, U>(self, f: Fn1<T, S, E, Rt>) -> Iter<U, E, I, Rt>
     where
-        S: TyVar + IntoIterator<Item = U>,
-        U: TyVar,
+        S: Cross<Rt> + IntoIterator<Item = U>,
+        U: Cross<Rt>,
     {
         Self::erased(
             self.0
@@ -189,26 +197,32 @@ where
         .retype()
     }
 
+    /// The next item as the runtime holds it.
+    pub async fn next_value(&mut self, rt: &Rt) -> Result<Option<Rt::Value>, Rt::Error> {
+        pull(&mut self.0, rt).await
+    }
+
     pub async fn next(&mut self, rt: &Rt) -> Result<Option<T>, Rt::Error>
-where {
-        match pull(&mut self.0, rt).await? {
-            Some(value) => Ok(Some(unsafe { rt.materialize::<T>(value) })),
-            None => Ok(None),
-        }
+    where
+        T: Cross<Rt>,
+    {
+        Ok(self
+            .next_value(rt)
+            .await?
+            .map(|value| T::materialize(rt, value)))
     }
 }
 
 fn expand_as<S, U, Rt>() -> Expand<Rt>
 where
-    S: TyVar + IntoIterator<Item = U>,
-    U: TyVar,
+    S: Cross<Rt> + IntoIterator<Item = U>,
+    U: Cross<Rt>,
     Rt: Runtime,
 {
     Box::new(|rt, value| {
-        let items = unsafe { rt.materialize::<S>(value) };
-        items
+        S::materialize(rt, value)
             .into_iter()
-            .map(|u| unsafe { rt.erase::<U>(u) })
+            .map(|u| u.erase(rt))
             .collect()
     })
 }
@@ -278,8 +292,7 @@ async fn run_ops<Rt: Runtime>(
         match &mut pipeline.ops[i] {
             Op::Map(f) => val = f.call(rt, (val,)).await?,
             Op::Filter(f) => {
-                let keep = f.call(rt, (unsafe { rt.reference(&val) },)).await?;
-                if !unsafe { rt.materialize::<bool>(keep) } {
+                if !f.call(rt, (Ref::lend(rt, &val),)).await? {
                     return Ok(None);
                 }
             }

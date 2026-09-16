@@ -265,6 +265,7 @@ where
     E: EffectVar,
     Rt: Runtime,
 {
+    let f = f.erased();
     let mut out = Vec::with_capacity(v.0.len());
     for item in v.0 {
         out.push(f.call(rt, (item,)).await?);

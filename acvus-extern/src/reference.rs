@@ -32,6 +32,15 @@ where
         Self(value, PhantomData)
     }
 
+    /// A reference to a runtime value the caller holds, for a call that
+    /// reads it: the callee cannot keep the reference past the call
+    /// (RFC-0018), so it never outlives `target`.
+    pub fn lend(rt: &Rt, target: &Rt::Value) -> Self {
+        // SAFETY: `target` is live for the call, and RFC-0018 keeps the
+        // reference within it.
+        Self::new(unsafe { rt.reference(target) })
+    }
+
     pub fn into_value(self) -> Rt::Value {
         self.0
     }

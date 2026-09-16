@@ -10,7 +10,7 @@
 //!   reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime, TyVar,
+    Arr, ClosureFn, Cross, EffectVar, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime, TyVar,
     extern_fn, extern_registry,
 };
 
@@ -69,7 +69,7 @@ where
 #[extern_cast]
 fn into_iter_vec<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -81,7 +81,7 @@ where
 #[extern_cast]
 fn into_iter_array<T, N, E, I, Rt>(items: Arr<T, N>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,
@@ -116,7 +116,7 @@ where
 #[extern_fn(effect = pure)]
 fn rev_iter<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -213,7 +213,7 @@ where
 #[extern_fn(effect = pure)]
 fn flatten<T, E, I, Rt>(it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -224,7 +224,7 @@ where
 #[extern_fn(effect = pure)]
 fn flatten_arrays<T, N, E, I, Rt>(it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,
@@ -237,7 +237,7 @@ where
 fn flat_map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, Vec<U>, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
-    U: TyVar,
+    U: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -248,7 +248,7 @@ where
 #[extern_fn(effect = E)]
 async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Vec<T>, Rt::Error>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -285,7 +285,7 @@ async fn contains<T, E, I, Rt>(
     needle: T,
 ) -> Result<bool, Rt::Error>
 where
-    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + PartialEq,
+    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Cross<Rt> + PartialEq,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -301,7 +301,7 @@ where
 #[extern_fn(effect = E)]
 async fn next<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -316,17 +316,14 @@ async fn find<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(rt).await? {
-        let lent = unsafe { rt.erase::<T>(item) };
-        let keep = f.call(rt, (unsafe { rt.reference(&lent) },)).await;
-        let item = unsafe { rt.materialize::<T>(lent) };
-        if unsafe { rt.materialize::<bool>(keep?) } {
-            return Ok(Some(item));
+    while let Some(item) = it.next_value(rt).await? {
+        if f.call(rt, (Ref::lend(rt, &item),)).await? {
+            return Ok(Some(T::materialize(rt, item)));
         }
     }
     Ok(None)
@@ -339,26 +336,19 @@ async fn reduce<T, E, I, Rt>(
     f: Fn2<T, T, T, E, Rt>,
 ) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    let Some(mut acc) = it.next(rt).await? else {
+    let Some(mut acc) = it.next_value(rt).await? else {
         return Ok(None);
     };
-    while let Some(item) = it.next(rt).await? {
-        let out = f
-            .call(
-                rt,
-                (unsafe { rt.erase::<T>(acc) }, unsafe {
-                    rt.erase::<T>(item)
-                }),
-            )
-            .await?;
-        acc = unsafe { rt.materialize::<T>(out) };
+    let f = f.erased();
+    while let Some(item) = it.next_value(rt).await? {
+        acc = f.call(rt, (acc, item)).await?;
     }
-    Ok(Some(acc))
+    Ok(Some(T::materialize(rt, acc)))
 }
 
 #[extern_fn(effect = E)]
@@ -369,25 +359,18 @@ async fn fold<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> Result<U, Rt::Error>
 where
-    T: TyVar,
-    U: TyVar,
+    T: TyVar + Cross<Rt>,
+    U: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    let mut acc = init;
-    while let Some(item) = it.next(rt).await? {
-        let out = f
-            .call(
-                rt,
-                (unsafe { rt.erase::<U>(acc) }, unsafe {
-                    rt.erase::<T>(item)
-                }),
-            )
-            .await?;
-        acc = unsafe { rt.materialize::<U>(out) };
+    let mut acc = init.erase(rt);
+    let f = f.erased();
+    while let Some(item) = it.next_value(rt).await? {
+        acc = f.call(rt, (acc, item)).await?;
     }
-    Ok(acc)
+    Ok(U::materialize(rt, acc))
 }
 
 #[extern_fn(effect = E)]
@@ -397,16 +380,13 @@ async fn any<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(rt).await? {
-        let lent = unsafe { rt.erase::<T>(item) };
-        let keep = f.call(rt, (unsafe { rt.reference(&lent) },)).await;
-        drop(unsafe { rt.materialize::<T>(lent) });
-        if unsafe { rt.materialize::<bool>(keep?) } {
+    while let Some(item) = it.next_value(rt).await? {
+        if f.call(rt, (Ref::lend(rt, &item),)).await? {
             return Ok(true);
         }
     }
@@ -420,16 +400,13 @@ async fn all<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Result<bool, Rt::Error>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(rt).await? {
-        let lent = unsafe { rt.erase::<T>(item) };
-        let keep = f.call(rt, (unsafe { rt.reference(&lent) },)).await;
-        drop(unsafe { rt.materialize::<T>(lent) });
-        if !unsafe { rt.materialize::<bool>(keep?) } {
+    while let Some(item) = it.next_value(rt).await? {
+        if !f.call(rt, (Ref::lend(rt, &item),)).await? {
             return Ok(false);
         }
     }

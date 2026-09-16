@@ -1,6 +1,6 @@
 # RFC-0039: One crossing at the boundary
 
-Status: Accepted (crossing built; the held value and the typed call to follow)
+Status: Accepted
 Date: 2026-09-16
 Extends: RFC-0022, RFC-0032, RFC-0036, RFC-0038
 
@@ -50,14 +50,18 @@ Storing an extension type as its payload is what RFC-0022 meant by
 the store's, and `repr(transparent)` is the one fact that lets a
 reference cross between them, so the derive requires it.
 
+A closure call is typed at its declaration: `Fn1<A, R>::call` takes an
+`A` and returns an `R`, both crossing inside `call`. A type variable of an
+ExternFn is `Rt::Value` at run time, and `Rt::Value: Cross<Rt>`, so a
+Rust function bounds its type variable `T: TyVar + Cross<Rt>` and
+converts with `T::materialize` / `erase` where a value enters or leaves
+Rust; an iterator's items stay runtime values inside the pipeline
+(`next_value`), are lent to a predicate through `Ref::lend`, and become a
+`T` only where a terminal returns one. Nothing in `iterator.rs` or
+`iter_pipeline.rs` is unsafe.
+
 ## Not built
 
-- A held value, `Held<T, Rt>`: a runtime value carried under the type
-  the checker gave it, with `new`, `into_owned`, and `lend`, so that the
-  iterator terminals and the closure call keep values in the store and
-  convert only where a Rust value is wanted. With it, `ClosureFn::call`
-  takes and returns typed carriers and the unsafe blocks leave
-  `iterator.rs` and `iter_pipeline.rs`.
 - A checker rule refusing `&T` parameters of converted types in extern
   signatures; today the refusal is at run time.
 
@@ -73,3 +77,6 @@ reference cross between them, so the derive requires it.
 - `acvus-ext`: `Regex`, `DateTime`, `Decimal`, `Iter` are
   `#[repr(transparent)]`; `Deque` uses `cross_as_stored!`.
 - `acvus-interpreter`: `Value: Cross<AcvusRuntime>`.
+- `acvus-extern`: `ClosureFn::call` has `Args` and `Ret`; `Ref::lend`.
+- `acvus-ext`: `Iter::next_value`; the item-pulling functions bound
+  `T: TyVar + Cross<Rt>`; the pipeline's filter holds a typed predicate.

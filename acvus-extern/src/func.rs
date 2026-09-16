@@ -7,12 +7,14 @@
 //! parameters and gets one back; a parameter declared `Ref<T>` is passed
 //! `rt.reference(&a)`.
 
+use std::future::Future;
 use std::marker::PhantomData;
 
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
 use crate::effect::{EffectArg, EffectVar};
+use crate::obj::Cross;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
@@ -26,10 +28,16 @@ impl CallToken {
     }
 }
 
-/// A closure value called with runtime values, arity fixed by the type.
+/// A closure value called at the types its declaration names: the
+/// arguments cross in and the result crosses out here, once (RFC-0039).
 pub trait ClosureFn<Rt: Runtime> {
-    type Args;
-    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args) -> Rt::CallFuture<'a>;
+    type Args: Send;
+    type Ret;
+    fn call<'a>(
+        &'a self,
+        rt: &'a Rt,
+        args: Self::Args,
+    ) -> impl Future<Output = Result<Self::Ret, Rt::Error>> + Send + 'a;
 }
 
 macro_rules! define_fn_arg {
@@ -111,54 +119,88 @@ define_fn_arg!(Fn3; A: "_0", B: "_1", C: "_2");
 
 impl<R, E, Rt> ClosureFn<Rt> for Fn0<R, E, Rt>
 where
-    R: TyVar,
+    R: Cross<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {
     type Args = ();
-    fn call<'a>(&'a self, rt: &'a Rt, _: ()) -> Rt::CallFuture<'a> {
-        rt.call_0(&self.0, CallToken::mint())
+    type Ret = R;
+    fn call<'a>(
+        &'a self,
+        rt: &'a Rt,
+        _: (),
+    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+        async move {
+            let out = rt.call_0(&self.0, CallToken::mint()).await?;
+            Ok(R::materialize(rt, out))
+        }
     }
 }
 
 impl<A, R, E, Rt> ClosureFn<Rt> for Fn1<A, R, E, Rt>
 where
-    A: TyVar,
-    R: TyVar,
+    A: Cross<Rt>,
+    R: Cross<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {
-    type Args = (Rt::Value,);
-    fn call<'a>(&'a self, rt: &'a Rt, (a,): Self::Args) -> Rt::CallFuture<'a> {
-        rt.call_1(&self.0, a, CallToken::mint())
+    type Args = (A,);
+    type Ret = R;
+    fn call<'a>(
+        &'a self,
+        rt: &'a Rt,
+        (a,): Self::Args,
+    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+        async move {
+            let out = rt.call_1(&self.0, a.erase(rt), CallToken::mint()).await?;
+            Ok(R::materialize(rt, out))
+        }
     }
 }
 
 impl<A, B, R, E, Rt> ClosureFn<Rt> for Fn2<A, B, R, E, Rt>
 where
-    A: TyVar,
-    B: TyVar,
-    R: TyVar,
+    A: Cross<Rt>,
+    B: Cross<Rt>,
+    R: Cross<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {
-    type Args = (Rt::Value, Rt::Value);
-    fn call<'a>(&'a self, rt: &'a Rt, (a, b): Self::Args) -> Rt::CallFuture<'a> {
-        rt.call_n(&self.0, vec![a, b], CallToken::mint())
+    type Args = (A, B);
+    type Ret = R;
+    fn call<'a>(
+        &'a self,
+        rt: &'a Rt,
+        (a, b): Self::Args,
+    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+        async move {
+            let args = vec![a.erase(rt), b.erase(rt)];
+            let out = rt.call_n(&self.0, args, CallToken::mint()).await?;
+            Ok(R::materialize(rt, out))
+        }
     }
 }
 
 impl<A, B, C, R, E, Rt> ClosureFn<Rt> for Fn3<A, B, C, R, E, Rt>
 where
-    A: TyVar,
-    B: TyVar,
-    C: TyVar,
-    R: TyVar,
+    A: Cross<Rt>,
+    B: Cross<Rt>,
+    C: Cross<Rt>,
+    R: Cross<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {
-    type Args = (Rt::Value, Rt::Value, Rt::Value);
-    fn call<'a>(&'a self, rt: &'a Rt, (a, b, c): Self::Args) -> Rt::CallFuture<'a> {
-        rt.call_n(&self.0, vec![a, b, c], CallToken::mint())
+    type Args = (A, B, C);
+    type Ret = R;
+    fn call<'a>(
+        &'a self,
+        rt: &'a Rt,
+        (a, b, c): Self::Args,
+    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+        async move {
+            let args = vec![a.erase(rt), b.erase(rt), c.erase(rt)];
+            let out = rt.call_n(&self.0, args, CallToken::mint()).await?;
+            Ok(R::materialize(rt, out))
+        }
     }
 }
