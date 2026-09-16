@@ -70,12 +70,24 @@ pub enum IdentityBound {
 }
 
 /// A representation variable's state (hash-types.md, R2): open until a
-/// specializing position fixes it; solved open, it is `Uniform`.
+/// decision fixes it; solved open, it is `Uniform`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReprBound {
-    Unbound,
+    Unbound(ReprOwner),
     Bound(Repr<Concrete>),
     Forward(ReprVarId),
+}
+
+/// What binds an open representation variable. A signature's `ρ` is bound
+/// by a decision — the instance decision of the signature it belongs to, a
+/// conversion decision writing its answer — or by the default at `solve`;
+/// a value flowing into its slot leaves it open, and the flow is the
+/// conversion decision at that argument (R4). A local `ρ`, minted by the
+/// checker for a shape it named, is bound by any join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReprOwner {
+    Signature,
+    Local,
 }
 
 /// The sources of one compilation. A source number names one identity
@@ -111,6 +123,9 @@ pub enum MismatchReason {
     /// The join is a union neither side is, and no variable names either
     /// side, so the union has no home.
     UnionWithoutHome,
+    /// A slot's representation is a signature's open variable, which a
+    /// flow does not bind: the decision that owns it answers later.
+    ReprOpen(ReprVarId),
 }
 
 /// How two effects are related by a constraint.
@@ -139,14 +154,17 @@ enum Structure {
     Sum,
 }
 
-/// What the join is for: a value flowing into a type, or a pattern tested
-/// against a source. A pattern may name fewer members than its source has
-/// without anything recording the union; a value may not lack what the
-/// type it flows into has.
+/// What the join is for: a value flowing into a type, a pattern tested
+/// against a source, or a decision writing its answer. A pattern may name
+/// fewer members than its source has without anything recording the
+/// union; a value may not lack what the type it flows into has. A
+/// signature's representation variable is bound only by a decision's
+/// join (`ReprOwner`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JoinKind {
     Flow,
     Pattern,
+    Decision,
 }
 
 // -- Terms ---------------------------------------------------------------
@@ -605,8 +623,8 @@ impl Terms {
 
     // -- Representation variables ------------------------------------
 
-    fn alloc_repr_var(&mut self) -> ReprVarId {
-        alloc_repr_var(&mut self.repr_vars)
+    fn alloc_repr_var(&mut self, owner: ReprOwner) -> ReprVarId {
+        alloc_repr_var(&mut self.repr_vars, owner)
     }
 
     fn find_repr_root(&self, id: ReprVarId) -> ReprVarId {
@@ -623,32 +641,68 @@ impl Terms {
         let root = self.find_repr_root(id);
         match &self.repr_vars[root.0 as usize] {
             ReprBound::Bound(fixed) => lift_repr(*fixed),
-            ReprBound::Unbound => Repr::Var(root),
+            ReprBound::Unbound(_) => Repr::Var(root),
             ReprBound::Forward(_) => unreachable!("find_repr_root resolves forwards"),
         }
     }
 
-    /// Two representations at one specializing position: an open one takes
-    /// the other; two fixed ones must agree (hash-types.md, R3).
-    fn unify_repr(&mut self, a: Repr<Infer>, b: Repr<Infer>) -> Result<(), ReprMismatch> {
+    fn repr_owner(&self, root: ReprVarId) -> ReprOwner {
+        match &self.repr_vars[root.0 as usize] {
+            ReprBound::Unbound(owner) => *owner,
+            ReprBound::Bound(_) | ReprBound::Forward(_) => {
+                unreachable!("repr_owner takes an open root")
+            }
+        }
+    }
+
+    /// Two representations at one specializing position (hash-types.md,
+    /// R3). Two fixed ones must agree. An open one takes the other when
+    /// its owner lets this join bind it: a local variable at any join, a
+    /// signature's variable at a decision's join. A local variable meeting
+    /// a signature's forwards to it, so the local name follows the
+    /// decision; two signatures' variables are two decisions' names, and
+    /// only a decision's join — a conversion answered identity — makes
+    /// them one.
+    fn unify_repr(
+        &mut self,
+        a: Repr<Infer>,
+        b: Repr<Infer>,
+        kind: JoinKind,
+    ) -> Result<(), MismatchReason> {
+        let binds = |terms: &Self, v: ReprVarId| {
+            kind == JoinKind::Decision || terms.repr_owner(v) == ReprOwner::Local
+        };
         match (self.resolve_repr(a), self.resolve_repr(b)) {
+            (Repr::Var(x), Repr::Var(y)) if x == y => Ok(()),
             (Repr::Var(x), Repr::Var(y)) => {
-                if x != y {
-                    self.repr_vars[x.0 as usize] = ReprBound::Forward(y);
+                let (from, to) = match (self.repr_owner(x), self.repr_owner(y)) {
+                    (ReprOwner::Local, _) => (x, y),
+                    (ReprOwner::Signature, ReprOwner::Local) => (y, x),
+                    (ReprOwner::Signature, ReprOwner::Signature) => {
+                        if kind != JoinKind::Decision {
+                            return Err(MismatchReason::ReprOpen(x));
+                        }
+                        (x, y)
+                    }
+                };
+                self.repr_vars[from.0 as usize] = ReprBound::Forward(to);
+                Ok(())
+            }
+            (Repr::Var(v), fixed) | (fixed, Repr::Var(v)) => {
+                if !binds(self, v) {
+                    return Err(MismatchReason::ReprOpen(v));
                 }
-                Ok(())
-            }
-            (Repr::Var(v), Repr::Uniform) | (Repr::Uniform, Repr::Var(v)) => {
-                self.repr_vars[v.0 as usize] = ReprBound::Bound(Repr::Uniform);
-                Ok(())
-            }
-            (Repr::Var(v), Repr::Specialized) | (Repr::Specialized, Repr::Var(v)) => {
-                self.repr_vars[v.0 as usize] = ReprBound::Bound(Repr::Specialized);
+                let fixed = match fixed {
+                    Repr::Uniform => Repr::Uniform,
+                    Repr::Specialized => Repr::Specialized,
+                    Repr::Var(_) => unreachable!("two variables are matched above"),
+                };
+                self.repr_vars[v.0 as usize] = ReprBound::Bound(fixed);
                 Ok(())
             }
             (Repr::Uniform, Repr::Uniform) | (Repr::Specialized, Repr::Specialized) => Ok(()),
             (Repr::Uniform, Repr::Specialized) | (Repr::Specialized, Repr::Uniform) => {
-                Err(ReprMismatch)
+                Err(MismatchReason::NoJoin)
             }
         }
     }
@@ -712,11 +766,12 @@ impl Terms {
 
         let ra = self.shallow_resolve_ty(a);
         let rb = self.shallow_resolve_ty(b);
-        let mismatch = |terms: &Self| Mismatch {
+        let mismatch_for = |terms: &Self, reason: MismatchReason| Mismatch {
             expected: terms.resolve_ty(&ra),
             got: terms.resolve_ty(&rb),
-            reason: MismatchReason::NoJoin,
+            reason,
         };
+        let mismatch = |terms: &Self| mismatch_for(terms, MismatchReason::NoJoin);
 
         match (&ra, &rb) {
             (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => Ok(()),
@@ -841,8 +896,9 @@ impl Terms {
                 if ma != mb {
                     return Err(mismatch(self));
                 }
-                self.join_arg(ia, ib, true, kind, registry)
-                    .map_err(|ArgMismatch| mismatch(self))
+                self.join(&ia.ty, &ib.ty, Position::Argument, kind, registry)?;
+                self.unify_repr(ia.repr, ib.repr, kind)
+                    .map_err(|reason| mismatch_for(self, reason))
             }
             (
                 TyTerm::Fn {
@@ -890,10 +946,19 @@ impl Terms {
                 assert_eq!(ta_args.len(), tb_args.len());
                 assert_eq!(ea_args.len(), eb_args.len());
                 assert_eq!(ia_args.len(), ib_args.len());
+                for (x, y) in ta_args.iter().zip(tb_args.iter()) {
+                    self.join(&x.ty, &y.ty, Position::Argument, kind, registry)?;
+                }
                 for (index, (x, y)) in ta_args.iter().zip(tb_args.iter()).enumerate() {
-                    let specializing = registry.specializes(*id_a, index);
-                    self.join_arg(x, y, specializing, kind, registry)
-                        .map_err(|ArgMismatch| mismatch(self))?;
+                    if registry.specializes(*id_a, index) {
+                        self.unify_repr(x.repr, y.repr, kind)
+                            .map_err(|reason| mismatch_for(self, reason))?;
+                    } else {
+                        debug_assert!(
+                            matches!(x.repr, Repr::Uniform) && matches!(y.repr, Repr::Uniform),
+                            "a slot that does not specialize is uniform by instantiation"
+                        );
+                    }
                 }
                 for (x, y) in ea_args.iter().zip(eb_args.iter()) {
                     if self.unify_effect(x, y, EffectRelation::Equal).is_err() {
@@ -948,30 +1013,6 @@ impl Terms {
         Ok(())
     }
 
-    /// A slot's two arguments. At a specializing position the
-    /// representations meet; at a uniform one they are `Uniform` by
-    /// instantiation and only the types meet.
-    fn join_arg(
-        &mut self,
-        a: &TypeArg<Infer>,
-        b: &TypeArg<Infer>,
-        specializing: bool,
-        kind: JoinKind,
-        registry: &TypeRegistry,
-    ) -> Result<(), ArgMismatch> {
-        if specializing {
-            self.unify_repr(a.repr, b.repr)
-                .map_err(|ReprMismatch| ArgMismatch)?;
-        } else {
-            debug_assert!(
-                matches!(a.repr, Repr::Uniform) && matches!(b.repr, Repr::Uniform),
-                "a slot that does not specialize is uniform by instantiation"
-            );
-        }
-        self.join(&a.ty, &b.ty, Position::Argument, kind, registry)
-            .map_err(|_| ArgMismatch)
-    }
-
     /// `! ⊔ T = T` at a value position (RFC-0038): the variable that named
     /// `!` now names `T`, by forwarding to `T`'s root where it has one so
     /// the two stay one name, else by binding to `T`.
@@ -1016,8 +1057,8 @@ impl Terms {
         let must_grow_without_home = |side: &UnionSide| side.grows && side.root.is_none();
         let unsound = match (kind, structure) {
             (JoinKind::Pattern, _) => must_grow_without_home(&a),
-            (JoinKind::Flow, Structure::Product) => false,
-            (JoinKind::Flow, Structure::Sum) => must_grow_without_home(&b),
+            (JoinKind::Flow | JoinKind::Decision, Structure::Product) => false,
+            (JoinKind::Flow | JoinKind::Decision, Structure::Sum) => must_grow_without_home(&b),
         };
         if unsound {
             return Err(Mismatch {
@@ -1047,8 +1088,11 @@ struct Interval {
 }
 
 impl Terms {
-    /// A polymorphic type with every placeholder a fresh variable and every
-    /// identity open: for joining with a type whose sources are minted.
+    /// An instance's signature with every placeholder a fresh variable and
+    /// every identity open, for joining with a call type whose sources are
+    /// minted. An open representation is `Uniform`: a concrete instance
+    /// names its representations, and a variable is a generic body's
+    /// (hash-types.md R3).
     fn instantiate_open(&mut self, ty: &PolyTy, registry: &TypeRegistry) -> InferTy {
         let mut maps = PolyMaps::default();
         let Terms {
@@ -1056,7 +1100,6 @@ impl Terms {
             effect_vars,
             len_vars,
             identity_vars,
-            repr_vars,
             ..
         } = self;
         let instance = ty.map(
@@ -1090,14 +1133,7 @@ impl Terms {
                         .or_insert_with(|| alloc_len_var(len_vars)),
                 )
             },
-            &mut |id: u32| {
-                Repr::Var(
-                    *maps
-                        .repr
-                        .entry(id)
-                        .or_insert_with(|| alloc_repr_var(repr_vars)),
-                )
-            },
+            &mut |_: u32| Repr::Uniform,
         );
         uniform_slots(instance, registry)
     }
@@ -1108,33 +1144,7 @@ impl Terms {
         let mut trial = self.clone();
         let instance = trial.instantiate_open(signature, registry);
         trial
-            .join(call, &instance, Position::Value, JoinKind::Flow, registry)
-            .is_ok()
-    }
-
-    /// The generic instance is the uniform one (hash-types.md R3): its
-    /// signature is taken with every open representation `Uniform`.
-    fn as_generic(&self, instance: InferTy) -> InferTy {
-        instance.map(
-            &mut TyTerm::Var,
-            &mut IdentityTerm::Var,
-            &mut EffectTerm::Var,
-            &mut LenTerm::Var,
-            &mut |_: ReprVarId| Repr::Uniform,
-        )
-    }
-
-    fn would_take_generic(
-        &self,
-        call: &InferTy,
-        signature: &PolyTy,
-        registry: &TypeRegistry,
-    ) -> bool {
-        let mut trial = self.clone();
-        let instance = trial.instantiate_open(signature, registry);
-        let instance = trial.as_generic(instance);
-        trial
-            .join(call, &instance, Position::Value, JoinKind::Flow, registry)
+            .join(call, &instance, Position::Value, JoinKind::Decision, registry)
             .is_ok()
     }
 }
@@ -1150,14 +1160,6 @@ struct UnionSide {
     root: Option<TypeBoundId>,
     grows: bool,
 }
-
-/// Two fixed representations met at one specializing position (R3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ReprMismatch;
-
-/// A slot argument that failed to join: its representation or its type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ArgMismatch;
 
 fn alloc_ty_var(ty_bounds: &mut Vec<TypeBound>, bound: TyVarBound) -> TypeBoundId {
     let id = TypeBoundId(ty_bounds.len() as u32);
@@ -1183,9 +1185,9 @@ fn alloc_effect_var(effect_vars: &mut Vec<EffectBound>) -> EffectVarId {
     id
 }
 
-fn alloc_repr_var(repr_vars: &mut Vec<ReprBound>) -> ReprVarId {
+fn alloc_repr_var(repr_vars: &mut Vec<ReprBound>, owner: ReprOwner) -> ReprVarId {
     let id = ReprVarId(repr_vars.len() as u32);
-    repr_vars.push(ReprBound::Unbound);
+    repr_vars.push(ReprBound::Unbound(owner));
     id
 }
 
@@ -1394,7 +1396,7 @@ impl<'src> Solver<'src> {
     }
 
     pub fn fresh_repr_var(&mut self) -> Repr<Infer> {
-        Repr::Var(self.terms.alloc_repr_var())
+        Repr::Var(self.terms.alloc_repr_var(ReprOwner::Local))
     }
 
     // -- Unify -------------------------------------------------------
@@ -1419,11 +1421,18 @@ impl<'src> Solver<'src> {
         )
     }
 
-    /// Whether `unify(a, b)` would succeed, on a copy of the terms.
-    pub fn would_unify(&self, a: &InferTy, b: &InferTy) -> bool {
+    /// The join a decision writes as its answer: a signature's
+    /// representation variable takes the answer here (`ReprOwner`).
+    fn settle_join(&mut self, a: &InferTy, b: &InferTy) -> Result<(), Mismatch> {
+        self.terms
+            .join(a, b, Position::Value, JoinKind::Decision, self.registry)
+    }
+
+    /// Whether `settle_join(a, b)` would succeed, on a copy of the terms.
+    fn would_settle_join(&self, a: &InferTy, b: &InferTy) -> bool {
         let mut trial = self.terms.clone();
         trial
-            .join(a, b, Position::Value, JoinKind::Flow, self.registry)
+            .join(a, b, Position::Value, JoinKind::Decision, self.registry)
             .is_ok()
     }
 
@@ -1553,7 +1562,7 @@ impl<'src> Solver<'src> {
             };
         }
         for index in 0..self.terms.repr_vars.len() {
-            if self.terms.repr_vars[index] == ReprBound::Unbound {
+            if matches!(self.terms.repr_vars[index], ReprBound::Unbound(_)) {
                 self.terms.repr_vars[index] = ReprBound::Bound(Repr::Uniform);
             }
         }
@@ -1634,7 +1643,7 @@ impl<'src> Solver<'src> {
             .filter(|c| self.terms.would_take(call, &c.ty, self.registry))
             .cloned()
             .collect();
-        let generic = generic.filter(|g| self.terms.would_take_generic(call, &g.ty, self.registry));
+        let generic = generic.filter(|g| self.terms.would_take(call, &g.ty, self.registry));
         let narrowed = remaining.len() != candidates.len();
         if narrowed
             && let Decision::Instance { candidates, .. } =
@@ -1654,8 +1663,7 @@ impl<'src> Solver<'src> {
             }),
             ([], Some(generic)) => {
                 let instance = self.instantiate_open(&generic.ty);
-                let instance = self.terms.as_generic(instance);
-                match self.unify(call, &instance) {
+                match self.settle_join(call, &instance) {
                     Ok(()) => {
                         Progress::Settled(Answer::Instance(InstanceKind::Extern(generic.instance)))
                     }
@@ -1670,7 +1678,7 @@ impl<'src> Solver<'src> {
             }
             ([only], generic) if generic.is_none() || matches_pattern(&ty, &only.ty) => {
                 let instance = self.instantiate_open(&only.ty);
-                match self.unify(call, &instance) {
+                match self.settle_join(call, &instance) {
                     Ok(()) => Progress::Settled(Answer::Instance(only.instance)),
                     Err(Mismatch { expected, got, .. }) => {
                         Progress::Failed(Unsettled::InstanceMismatch {
@@ -1685,10 +1693,12 @@ impl<'src> Solver<'src> {
         }
     }
 
+    /// A conversion is identity where the two join, the join written as
+    /// the answer; else the one declared cast, once both sides resolve.
     fn step_conversion(&mut self, id: DecisionId, from: &InferTy, to: &InferTy) -> Progress {
-        if self.would_unify(from, to) {
-            self.unify(from, to)
-                .expect("would_unify checked this join on a copy of the terms");
+        if self.would_settle_join(from, to) {
+            self.settle_join(from, to)
+                .expect("would_settle_join checked this join on a copy of the terms");
             return Progress::Settled(Answer::Conversion(None));
         }
         let from_r = self.terms.shallow_resolve_ty(from);
@@ -1710,8 +1720,8 @@ impl<'src> Solver<'src> {
         let fn_ref = rule.fn_ref;
         let (inst_from, inst_to) = self.instantiate_poly_pair(&rule.from, &rule.to);
         match self
-            .unify(from, &inst_from)
-            .and_then(|()| self.unify(&inst_to, to))
+            .settle_join(from, &inst_from)
+            .and_then(|()| self.settle_join(&inst_to, to))
         {
             Ok(()) => Progress::Settled(Answer::Conversion(Some(fn_ref))),
             Err(Mismatch { expected, got, .. }) => Progress::Failed(Unsettled::NoConversion {
@@ -1840,6 +1850,14 @@ impl<'src> Solver<'src> {
         compiler_instances: Vec<Candidate>,
     ) -> Instantiated {
         let mut bounded: Vec<TypeBoundId> = Vec::new();
+        let fixed_generic = scheme.instances.as_ref().is_some_and(|instances| {
+            instances.concrete.is_empty() && !instances.generic && compiler_instances.is_empty()
+        });
+        let reprs = if fixed_generic {
+            Reprs::Uniform
+        } else {
+            Reprs::Open
+        };
         let ty = self.instantiate_with(
             &scheme.ty,
             |var, fresh| {
@@ -1850,10 +1868,10 @@ impl<'src> Solver<'src> {
                 bound
             },
             Identities::Declared,
+            reprs,
         );
         let instance = scheme.instances.as_ref().map(|instances| {
-            if instances.concrete.is_empty() && !instances.generic && compiler_instances.is_empty()
-            {
+            if fixed_generic {
                 return InstanceChoice::Fixed(instances.generic_index());
             }
             let id = self.decide(Decision::Instance {
@@ -1888,6 +1906,7 @@ impl<'src> Solver<'src> {
         ty: &PolyTy,
         mut bound_for: impl FnMut(u32, TypeBoundId) -> TyVarBound,
         identities: Identities,
+        reprs: Reprs,
     ) -> InferTy {
         let mut maps = PolyMaps::default();
         let from_params = identity_vars_bound_by_params(ty);
@@ -1939,13 +1958,14 @@ impl<'src> Solver<'src> {
                         .or_insert_with(|| alloc_len_var(len_vars)),
                 )
             },
-            &mut |id: u32| {
-                Repr::Var(
+            &mut |id: u32| match reprs {
+                Reprs::Uniform => Repr::Uniform,
+                Reprs::Open => Repr::Var(
                     *maps
                         .repr
                         .entry(id)
-                        .or_insert_with(|| alloc_repr_var(repr_vars)),
-                )
+                        .or_insert_with(|| alloc_repr_var(repr_vars, ReprOwner::Signature)),
+                ),
             },
         );
         uniform_slots(instance, self.registry)
@@ -1994,7 +2014,7 @@ impl<'src> Solver<'src> {
                 *maps
                     .repr
                     .entry(id)
-                    .or_insert_with(|| alloc_repr_var(repr_vars)),
+                    .or_insert_with(|| alloc_repr_var(repr_vars, ReprOwner::Signature)),
             )
         };
         let mut on_identity_a = |id: u32| {
@@ -2082,11 +2102,17 @@ impl<'src> Solver<'src> {
                 )
             },
             &mut |root: ReprVarId| {
+                let owner = match &repr_vars[root.0 as usize] {
+                    ReprBound::Unbound(owner) => *owner,
+                    ReprBound::Bound(_) | ReprBound::Forward(_) => {
+                        unreachable!("resolve_ty yields open roots")
+                    }
+                };
                 Repr::Var(
                     *maps
                         .repr
                         .entry(root)
-                        .or_insert_with(|| alloc_repr_var(repr_vars)),
+                        .or_insert_with(|| alloc_repr_var(repr_vars, owner)),
                 )
             },
         )
@@ -2269,6 +2295,18 @@ pub struct Instantiated {
 pub enum InstanceChoice {
     Fixed(usize),
     Decided(DecisionId),
+}
+
+/// What a representation variable of a declaration becomes when the
+/// declaration is instantiated.
+#[derive(Clone, Copy)]
+enum Reprs {
+    /// A signature's variable, bound by its instance decision or the
+    /// default.
+    Open,
+    /// `Uniform`: the function's one instance is the generic one, and the
+    /// generic instance is the uniform one (hash-types.md R3).
+    Uniform,
 }
 
 /// What an identity variable of a declaration becomes when the declaration

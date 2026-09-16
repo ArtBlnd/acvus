@@ -10,7 +10,7 @@ use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind};
 use crate::solver::{
     Answer, Candidate, Decision, DecisionId, EffectRelation, InstanceChoice, InstanceKind,
-    Mismatch, Unsettled,
+    Mismatch, MismatchReason, Unsettled,
 };
 use crate::ty::{
     Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Ty, TyTerm,
@@ -162,12 +162,34 @@ struct ConversionSite {
 /// The error a failed conversion is reported as, by the kind of site.
 #[derive(Debug, Clone, Copy)]
 enum ConversionReport {
-    /// A call argument, a returned tail: "expected .., got ..".
+    /// A call argument, a branch of an `if`: "expected .., got ..".
     Value,
     /// A template emits the value: it must be a `String`.
     Emit,
     /// An element of a list literal against the first element.
     ListElement,
+    /// A value stored into a typed place: a context, a variable, a field,
+    /// a dereference.
+    Store,
+    /// A body's value into its declared return type.
+    Return,
+    /// A pattern's source against the type the pattern names.
+    Pattern,
+}
+
+/// The expression a pattern's source is: a conversion of the source is a
+/// cast of that expression before the match. A member of a destructured
+/// source is no expression.
+#[derive(Debug, Clone, Copy)]
+enum PatternSource {
+    Expr(AstId),
+    Member,
+}
+
+/// A branch of an `if`: its type and the expression whose value it is.
+struct Branch {
+    ty: InferTy,
+    value: Option<AstId>,
 }
 
 /// A conversion decision registered at a site; a cast the solver settles
@@ -424,7 +446,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let tail_ty = if let Some(tail) = &script.tail {
             let ty = self.check_expr(tail);
-            if self.flow(&ty, &return_ty).is_err() {
+            let site = ConversionSite {
+                id: tail.id(),
+                span: tail.span(),
+                report: ConversionReport::Return,
+            };
+            if self.flow(&ty, &return_ty, site).is_err() {
                 let resolved = self.solver.resolve_ty(&ty);
                 let expected = self.solver.resolve_ty(&return_ty);
                 self.error(
@@ -487,13 +514,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         )))
     }
 
-    /// Unify `value_ty` with `expected_ty` in covariant position, recording
-    /// any coercion needed at `span`. This is the single entry point for all
-    /// covariant unification - ensures coercion detection is consistent.
     /// A value flows into a position that must have its type (solver.md
-    /// R1): the two join at a value position.
-    fn flow(&mut self, value_ty: &InferTy, expected_ty: &InferTy) -> Result<(), Mismatch> {
-        self.solver.unify(value_ty, expected_ty)
+    /// R1): the two join at a value position. A join whose one
+    /// disagreement is a signature's open representation is the conversion
+    /// decision at the site (R4, hash-types.md), answered when that
+    /// representation is decided; every other mismatch is the caller's to
+    /// report. A flow into a fresh variable or a primitive has no site and
+    /// joins through `Solver::unify` directly: no representation is open
+    /// there.
+    fn flow(
+        &mut self,
+        value_ty: &InferTy,
+        expected_ty: &InferTy,
+        site: ConversionSite,
+    ) -> Result<(), Mismatch> {
+        match self.solver.unify(value_ty, expected_ty) {
+            Err(Mismatch {
+                reason: MismatchReason::ReprOpen(_),
+                ..
+            }) => {
+                self.convert_at(value_ty, expected_ty, site);
+                Ok(())
+            }
+            joined => joined,
+        }
     }
 
     /// A value meets a type it may need converting to (solver.md R4): the
@@ -613,7 +657,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.return_ty = outer_return;
         match &expected_ret {
             Some(expected_ret) => {
-                self.flow(&ret, expected_ret)
+                self.solver
+                    .unify(&ret, expected_ret)
                     .expect("a lambda's fresh return variable takes the expected return");
                 self.convert_at(
                     &body_ty,
@@ -626,7 +671,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 );
             }
             None => {
-                if let Err(Mismatch { expected, got, .. }) = self.flow(&body_ty, &ret) {
+                let site = ConversionSite {
+                    id: body.id(),
+                    span: body.span(),
+                    report: ConversionReport::Return,
+                };
+                if let Err(Mismatch { expected, got, .. }) = self.flow(&body_ty, &ret, site) {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&expected),
@@ -991,7 +1041,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             expected: to,
                             got: from,
                         },
-                        Some(ConversionReport::Value) | None => MirErrorKind::UnificationFailure {
+                        Some(ConversionReport::Pattern) => MirErrorKind::PatternTypeMismatch {
+                            pattern_ty: to,
+                            source_ty: from,
+                        },
+                        Some(
+                            ConversionReport::Value
+                            | ConversionReport::Store
+                            | ConversionReport::Return,
+                        )
+                        | None => MirErrorKind::UnificationFailure {
                             expected: to,
                             got: from,
                         },
@@ -1414,7 +1473,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     },
                 ),
                 None => {
-                    if let Err(Mismatch { expected, got, .. }) = self.flow(at, pt) {
+                    if let Err(Mismatch { expected, got, .. }) = self.solver.unify(at, pt) {
                         self.error(
                             MirErrorKind::UnificationFailure {
                                 expected: self.freeze_or_error(&expected),
@@ -1495,9 +1554,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .get(name)
                     .cloned()
                     .unwrap_or_else(|| self.solver.fresh_ty_var());
-                // Walk path to get the target field type.
                 let target_ty = self.field_path_for_store(&ctx_ty, path, *span);
-                if self.solver.unify(&ty, &target_ty).is_err() {
+                let site = ConversionSite {
+                    id: expr.id(),
+                    span: *span,
+                    report: ConversionReport::Store,
+                };
+                if self.flow(&ty, &target_ty, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&target_ty),
@@ -1533,7 +1596,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     _ => var_ty,
                 };
                 let target_ty = self.field_path_for_store(&base, path, *span);
-                if self.solver.unify(&ty, &target_ty).is_err() {
+                let site = ConversionSite {
+                    id: expr.id(),
+                    span: *span,
+                    report: ConversionReport::Store,
+                };
+                if self.flow(&ty, &target_ty, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&target_ty),
@@ -1561,7 +1629,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         Self::infer_error()
                     }
                 };
-                if self.solver.unify(&ty, &inner).is_err() {
+                let site = ConversionSite {
+                    id: expr.id(),
+                    span: *span,
+                    report: ConversionReport::Store,
+                };
+                if self.flow(&ty, &inner, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&inner),
@@ -1585,7 +1658,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let source_ty = self.check_expr(source);
                 let resolved_source = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
-                self.check_pattern(pattern, &resolved_source, *span);
+                self.check_pattern(
+                    pattern,
+                    &resolved_source,
+                    PatternSource::Expr(source.id()),
+                    *span,
+                );
                 for s in body {
                     self.check_stmt(s);
                 }
@@ -1622,7 +1700,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                     Self::infer_error()
                 });
-                if self.solver.unify(&ty, &var_ty).is_err() {
+                let site = ConversionSite {
+                    id: expr.id(),
+                    span: *span,
+                    report: ConversionReport::Store,
+                };
+                if self.flow(&ty, &var_ty, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&var_ty),
@@ -1669,7 +1752,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let source_ty = self.check_expr(source);
                 let resolved = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
-                self.check_pattern(pattern, &resolved, *span);
+                self.check_pattern(pattern, &resolved, PatternSource::Expr(source.id()), *span);
                 for s in body {
                     self.check_stmt(s);
                 }
@@ -1682,7 +1765,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         // Body-less variable binding: define in current scope (no push/pop).
         if self.is_bodyless_var_binding(mb) {
             let source_ty = self.check_expr(&mb.source);
-            self.check_pattern(&mb.arms[0].pattern, &source_ty, mb.arms[0].tag_span);
+            self.check_pattern(
+                &mb.arms[0].pattern,
+                &source_ty,
+                PatternSource::Expr(mb.source.id()),
+                mb.arms[0].tag_span,
+            );
             return;
         }
 
@@ -1707,7 +1795,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             };
 
             self.push_scope();
-            self.check_pattern(&arm.pattern, &pattern_source, arm.tag_span);
+            self.check_pattern(
+                &arm.pattern,
+                &pattern_source,
+                PatternSource::Expr(mb.source.id()),
+                arm.tag_span,
+            );
             self.check_nodes(&arm.body);
             self.pop_scope();
         }
@@ -1755,7 +1848,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         } else {
                             let element = self.solver.fresh_ty_var();
                             let first_ty = self.literal_ty(&elems[0], *span);
-                            self.flow(&first_ty, &element)
+                            self.solver
+                                .unify(&first_ty, &element)
                                 .expect("a fresh variable takes any type");
                             for elem in &elems[1..] {
                                 let elem_ty = self.literal_ty(elem, *span);
@@ -1929,8 +2023,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Bool
                     }
                     BinOp::And | BinOp::Or => {
-                        let lok = self.flow(&lt, &TyTerm::Bool).is_ok();
-                        let rok = self.flow(&rt, &TyTerm::Bool).is_ok();
+                        let lok = self.solver.unify(&lt, &TyTerm::Bool).is_ok();
+                        let rok = self.solver.unify(&rt, &TyTerm::Bool).is_ok();
                         if !lok || !rok {
                             self.binop_error(
                                 op_str(*op),
@@ -2042,7 +2136,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         match &ot {
                             TyTerm::Bool => {}
                             TyTerm::Var(_) => {
-                                let _ = self.flow(&ot, &TyTerm::Bool);
+                                let _ = self.solver.unify(&ot, &TyTerm::Bool);
                             }
                             _ => self.binop_error("!", ot, Self::infer_error(), *span),
                         }
@@ -2233,7 +2327,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let element = self.solver.fresh_ty_var();
                 let first_ty = self.check_expr(all_elems[0]);
                 self.reject_reference_in_data(&first_ty, all_elems[0].span());
-                self.flow(&first_ty, &element)
+                self.solver
+                    .unify(&first_ty, &element)
                     .expect("a fresh variable takes any type");
 
                 for elem in all_elems.iter().skip(1) {
@@ -2329,7 +2424,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 return Self::infer_error();
                             };
                             let inner_ty = self.check_expr(inner_expr);
-                            if self.flow(&type_params[*idx], &inner_ty).is_err() {
+                            if self.solver.unify(&type_params[*idx], &inner_ty).is_err() {
                                 let resolved_tp = self.solver.resolve_ty(&type_params[*idx]);
                                 let resolved_inner = self.solver.resolve_ty(&inner_ty);
                                 self.error(
@@ -2413,17 +2508,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 for s in then_body {
                     self.check_stmt(s);
                 }
-                let then_ty = match then_tail {
-                    Some(tail) => self.check_expr(tail),
-                    None => TyTerm::Unit,
+                let then = match then_tail {
+                    Some(tail) => Branch {
+                        ty: self.check_expr(tail),
+                        value: Some(tail.id()),
+                    },
+                    None => Branch {
+                        ty: TyTerm::Unit,
+                        value: None,
+                    },
                 };
                 self.pop_scope();
                 let result_ty = match else_branch {
                     Some(eb) => {
-                        let else_ty = self.check_else_branch(eb);
-                        self.join_branches(&then_ty, &else_ty, *span)
+                        let else_ = self.check_else_branch(eb);
+                        self.join_branches(&then, &else_, *span)
                     }
-                    None => then_ty,
+                    None => then.ty,
                 };
                 self.record_ret(*id, result_ty)
             }
@@ -2440,41 +2541,56 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let source_ty = self.check_expr(source);
                 let resolved = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
-                self.check_pattern(pattern, &resolved, *span);
+                self.check_pattern(pattern, &resolved, PatternSource::Expr(source.id()), *span);
                 for s in then_body {
                     self.check_stmt(s);
                 }
-                let then_ty = match then_tail {
-                    Some(tail) => self.check_expr(tail),
-                    None => TyTerm::Unit,
+                let then = match then_tail {
+                    Some(tail) => Branch {
+                        ty: self.check_expr(tail),
+                        value: Some(tail.id()),
+                    },
+                    None => Branch {
+                        ty: TyTerm::Unit,
+                        value: None,
+                    },
                 };
                 self.pop_scope();
                 let result_ty = match else_branch {
                     Some(eb) => {
-                        let else_ty = self.check_else_branch(eb);
-                        self.join_branches(&then_ty, &else_ty, *span)
+                        let else_ = self.check_else_branch(eb);
+                        self.join_branches(&then, &else_, *span)
                     }
-                    None => then_ty,
+                    None => then.ty,
                 };
                 self.record_ret(*id, result_ty)
             }
         }
     }
 
-    fn check_else_branch(&mut self, eb: &acvus_ast::ElseBranch) -> InferTy {
+    fn check_else_branch(&mut self, eb: &acvus_ast::ElseBranch) -> Branch {
         match eb {
-            acvus_ast::ElseBranch::ElseIf(expr) => self.check_expr(expr),
+            acvus_ast::ElseBranch::ElseIf(expr) => Branch {
+                ty: self.check_expr(expr),
+                value: Some(expr.id()),
+            },
             acvus_ast::ElseBranch::Else { body, tail, .. } => {
                 self.push_scope();
                 for s in body {
                     self.check_stmt(s);
                 }
-                let ty = match tail {
-                    Some(tail) => self.check_expr(tail),
-                    None => TyTerm::Unit,
+                let branch = match tail {
+                    Some(tail) => Branch {
+                        ty: self.check_expr(tail),
+                        value: Some(tail.id()),
+                    },
+                    None => Branch {
+                        ty: TyTerm::Unit,
+                        value: None,
+                    },
                 };
                 self.pop_scope();
-                ty
+                branch
             }
         }
     }
@@ -2654,7 +2770,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     effect: effect.clone(),
                 };
                 self.note_call_effect(&effect, call_span);
-                if self.flow(func_ty, &fn_ty).is_err() {
+                if self.solver.unify(func_ty, &fn_ty).is_err() {
                     self.error(
                         MirErrorKind::UndefinedFunction("<expr>".to_string()),
                         call_span,
@@ -2668,18 +2784,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// RFC-0024.
-    fn check_pattern(&mut self, pattern: &Pattern, source_ty: &InferTy, span: Span) {
+    fn check_pattern(
+        &mut self,
+        pattern: &Pattern,
+        source_ty: &InferTy,
+        source: PatternSource,
+        span: Span,
+    ) {
         let resolved = self.solver.shallow_resolve_ty(source_ty);
         if let TyTerm::Ref(_, inner) = &resolved {
             let outer = std::mem::replace(&mut self.pattern_through, true);
-            self.check_pattern_inner(pattern, &inner.ty, span);
+            self.check_pattern_inner(pattern, &inner.ty, source, span);
             self.pattern_through = outer;
         } else {
-            self.check_pattern_inner(pattern, source_ty, span);
+            self.check_pattern_inner(pattern, source_ty, source, span);
         }
     }
 
-    fn check_pattern_inner(&mut self, pattern: &Pattern, source_ty: &InferTy, span: Span) {
+    fn check_pattern_inner(
+        &mut self,
+        pattern: &Pattern,
+        source_ty: &InferTy,
+        source: PatternSource,
+        span: Span,
+    ) {
         let source_resolved = self.solver.resolve_ty(source_ty);
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
@@ -2695,7 +2823,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .get(qref)
                     .cloned()
                     .unwrap_or_else(|| self.solver.fresh_ty_var());
-                if self.solver.unify(source_ty, &ctx_ty).is_err() {
+                let joined = match source {
+                    PatternSource::Expr(id) => {
+                        let site = ConversionSite {
+                            id,
+                            span,
+                            report: ConversionReport::Pattern,
+                        };
+                        self.flow(source_ty, &ctx_ty, site)
+                    }
+                    PatternSource::Member => self.solver.unify(source_ty, &ctx_ty),
+                };
+                if joined.is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: self.freeze_or_error(&ctx_ty),
@@ -2784,7 +2923,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     LenTerm::Var(_) => self.error(MirErrorKind::ArrayLengthUnknown, span),
                 }
                 for p in head.iter().chain(tail.iter()) {
-                    self.check_pattern(p, &elem_ty, span);
+                    self.check_pattern(p, &elem_ty, PatternSource::Member, span);
                 }
             }
 
@@ -2823,7 +2962,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         continue;
                     };
                     let resolved = self.solver.resolve_ty(field_ty);
-                    self.check_pattern(pattern, &resolved, span);
+                    self.check_pattern(pattern, &resolved, PatternSource::Member, span);
                 }
             }
 
@@ -2860,7 +2999,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     let TuplePatternElem::Pattern(pat) = elem else {
                         continue; // Wildcard: no binding, skip.
                     };
-                    self.check_pattern(pat, &elem_tys[i], span);
+                    self.check_pattern(pat, &elem_tys[i], PatternSource::Member, span);
                 }
             }
 
@@ -2889,7 +3028,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     if let VariantPayload::TypeParam(idx) = &variant_payload {
                         let resolved_inner = self.solver.resolve_ty(&type_params[*idx]);
                         if let Some(inner_pat) = payload {
-                            self.check_pattern(inner_pat, &resolved_inner, span);
+                            self.check_pattern(
+                                inner_pat,
+                                &resolved_inner,
+                                PatternSource::Member,
+                                span,
+                            );
                         }
                     }
                     return;
@@ -2937,7 +3081,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     let inner_ty = payload_ty
                         .map(|ty| self.solver.resolve_ty(&ty))
                         .unwrap_or_else(Self::infer_error);
-                    self.check_pattern(inner_pat, &inner_ty, span);
+                    self.check_pattern(inner_pat, &inner_ty, PatternSource::Member, span);
                 }
             }
         }
@@ -2969,16 +3113,29 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// The type of an `if` with both branches: each flows into one fresh
     /// variable, so a branch typed `!` (a call that traps) leaves the other
-    /// branch's type standing (RFC-0038).
-    fn join_branches(&mut self, then_ty: &InferTy, else_ty: &InferTy, span: Span) -> InferTy {
+    /// branch's type standing (RFC-0038). The `then` branch fills the
+    /// variable; the `else` branch meets it, and a conversion there is a
+    /// cast of the `else` value.
+    fn join_branches(&mut self, then: &Branch, else_: &Branch, span: Span) -> InferTy {
         let joined = self.solver.fresh_ty_var();
-        let then_ok = self.flow(then_ty, &joined).is_ok();
-        let else_ok = then_ok && self.flow(else_ty, &joined).is_ok();
+        let then_ok = self.solver.unify(&then.ty, &joined).is_ok();
+        let else_ok = then_ok
+            && match else_.value {
+                Some(id) => {
+                    let site = ConversionSite {
+                        id,
+                        span,
+                        report: ConversionReport::Value,
+                    };
+                    self.flow(&else_.ty, &joined, site).is_ok()
+                }
+                None => self.solver.unify(&else_.ty, &joined).is_ok(),
+            };
         if !else_ok {
             self.error(
                 MirErrorKind::UnificationFailure {
-                    expected: self.freeze_or_error(then_ty),
-                    got: self.freeze_or_error(else_ty),
+                    expected: self.freeze_or_error(&then.ty),
+                    got: self.freeze_or_error(&else_.ty),
                 },
                 span,
             );
@@ -3015,7 +3172,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return Self::infer_error();
             }
         };
-        if self.flow(&leaves, &return_ty).is_err() {
+        if self.solver.unify(&leaves, &return_ty).is_err() {
             let expected = self.solver.resolve_ty(&return_ty);
             self.error(
                 MirErrorKind::TryReturnMismatch {
@@ -3037,7 +3194,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Box::new(self.solver.fresh_ty_var()),
             Box::new(self.solver.fresh_ty_var()),
         );
-        if self.flow(operand, &assumed).is_err() {
+        if self.solver.unify(operand, &assumed).is_err() {
             return Self::infer_error();
         }
         self.solver.resolve_ty(&assumed)

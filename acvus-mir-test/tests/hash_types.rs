@@ -8,7 +8,7 @@ use acvus_extern::{Externs, Monomorphize, Registry, TypesOnly, extern_fn, extern
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
-use acvus_mir::ir::Callee;
+use acvus_mir::ir::{Callee, CastKind};
 use acvus_mir::ty::{
     CastRule, Effect, Instances, LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Ty, TyTerm,
     TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
@@ -254,8 +254,8 @@ struct Checked {
     /// Every extern call the script makes, by callee name, with the
     /// instance the checker settled.
     calls: Vec<(String, usize)>,
-    /// The conversions the checker settled at argument positions.
-    casts: usize,
+    /// The conversions the checker settled on a cast, by the cast's name.
+    casts: Vec<String>,
 }
 
 /// The script's return type and its extern calls, or every error the
@@ -291,7 +291,12 @@ fn check_functions(
         panic!("expected Fn, got {:?}", outcome.meta().ty)
     };
     let resolution = outcome.resolution().expect("complete");
-    let casts = resolution.coercion_map.len();
+    let mut casts: Vec<String> = resolution
+        .coercion_map
+        .iter()
+        .map(|(_, CastKind::Extern { fn_ref, .. })| i.resolve(fn_ref.name).to_string())
+        .collect();
+    casts.sort();
     let mut calls: Vec<(String, usize)> = resolution
         .direct_calls
         .values()
@@ -426,13 +431,16 @@ fn h3_an_element_type_without_an_instance_takes_the_generic_one() {
 
 // -- H4: R3 instance ----------------------------------------------------
 
+/// `first<T>` has only the generic instance, whose parameter is uniform;
+/// `f()` is `Vec<#String>`, and no `Vec::erase` is declared here, so the
+/// conversion at the argument has no answer and names both types.
 #[test]
 fn h4_a_specialized_binding_without_an_instance_is_an_error() {
     let i = Interner::new();
     let errs = errors_of(&i, "first(f())");
     assert!(
         errs.iter()
-            .any(|e| e.contains("no instance") && e.contains("Vec<#String>")),
+            .any(|e| e.contains("Vec<#String>") && e.contains("Vec<String>")),
         "{errs:?}"
     );
 }
@@ -460,7 +468,11 @@ fn h5_a_composite_inside_a_slot_is_one_representation() {
     );
     assert_eq!(ty_of(&i, "first(optv())"), option);
     let errs = errors_of(&i, "first(opt())");
-    assert!(errs.iter().any(|e| e.contains("no instance")), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("Vec<#Option<String>>") && e.contains("Vec<Option<String>>")),
+        "{errs:?}"
+    );
 }
 
 // -- H6: R2 reopening ---------------------------------------------------
@@ -554,5 +566,66 @@ fn h8_a_member_s_demand_reaches_a_member_producer_through_the_registry() {
         .map(|(_, instance)| *instance)
         .collect();
     assert_eq!(zeros, vec![0, 0]);
-    assert_eq!(checked.casts, 0);
+    assert!(checked.casts.is_empty(), "{:?}", checked.casts);
+}
+
+// -- H9–H11: `ρ` is bound by a decision, never by a flow -----------------
+
+/// The externs of H8 with `std::reverse` and `std::vec_array`, both generic
+/// only, beside the `#f64` members and the `Vec::erase` /
+/// `Vec::materialize` casts the members declare.
+fn check_members(i: &Interner, source: &str) -> Checked {
+    let Externs {
+        functions, types, ..
+    } = Externs::combine(vec![acvus_ext::vec_registry(), member_registry()], i)
+        .expect("registries combine");
+    check_functions(i, types, functions, source).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+fn instances_of(checked: &Checked, name: &str) -> Vec<usize> {
+    checked
+        .calls
+        .iter()
+        .filter(|(n, _)| n == name)
+        .map(|(_, instance)| *instance)
+        .collect()
+}
+
+/// `zeros(3)` is `Vec<#f64>` by its one instance; `reverse<T>` has only the
+/// generic instance, whose parameter is uniform. The argument's flow does
+/// not bind `reverse`'s `ρ`; the conversion at the argument is `Vec::erase`.
+#[test]
+fn h9_a_specialized_value_reaches_a_generic_parameter_through_erase() {
+    let i = Interner::new();
+    let checked = check_members(&i, "reverse(zeros(3))");
+    assert_eq!(checked.ret, vec_of(&i, unif_ty(Ty::Float)));
+    assert_eq!(instance_of(&checked, "zeros"), 0);
+    assert_eq!(instance_of(&checked, "reverse"), 0);
+    assert_eq!(checked.casts, vec!["erase".to_string()]);
+}
+
+/// H8 under the same rule: both arguments are `#f64` by their producers'
+/// instances and `dot@#f64` takes them as they are.
+#[test]
+fn h10_two_specialized_values_reach_a_specialized_instance_as_they_are() {
+    let i = Interner::new();
+    let checked = check_members(&i, "dot(zeros(3), zeros(3))");
+    assert_eq!(checked.ret, Ty::Float);
+    assert_eq!(instance_of(&checked, "dot"), 0);
+    assert_eq!(instances_of(&checked, "zeros"), vec![0, 0]);
+    assert!(checked.casts.is_empty(), "{:?}", checked.casts);
+}
+
+/// `vec([1.0, 2.0])` runs `std::vec_array`, a generic body, so it is
+/// uniform `Vec<Float>`; `dot@#f64` is the one instance, so the first
+/// argument pays `Vec::materialize` and the second is `#f64` already.
+#[test]
+fn h11_a_uniform_value_reaches_a_specialized_instance_through_materialize() {
+    let i = Interner::new();
+    let checked = check_members(&i, "dot(vec([1.0, 2.0]), zeros(2))");
+    assert_eq!(checked.ret, Ty::Float);
+    assert_eq!(instance_of(&checked, "dot"), 0);
+    assert_eq!(instance_of(&checked, "zeros"), 0);
+    assert_eq!(instance_of(&checked, "vec"), 0);
+    assert_eq!(checked.casts, vec!["materialize".to_string()]);
 }
