@@ -67,7 +67,7 @@ used, under a name that says what it is.
 
 ## Not built
 
-- `Trap` is not yet built; `ExternError` stands until it is.
+- `Trap` is not yet built; `Trap` stands until it is.
 - No `Result` from an extern fn as a language value yet: the macro still
   reads a returned `Result<T, E>` as the abort path (RFC-0023). The trap
   step flips that.

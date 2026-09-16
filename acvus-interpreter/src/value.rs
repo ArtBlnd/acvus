@@ -445,9 +445,9 @@ static HANDLE: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None));
 
 /// Every composite vtable, in the order of `Composite`.
-pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 8]> = LazyLock::new(|| {
+pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 9]> = LazyLock::new(|| {
     [
-        &STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &OPTION, &FN, &HANDLE,
+        &STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &OPTION, &RESULT, &FN, &HANDLE,
     ]
 });
 

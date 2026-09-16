@@ -2,7 +2,7 @@
 //! `Float` is not. A wire struct carries it as a field; on the wire it is
 //! the number's text.
 
-use acvus_extern::{ExternError, ExternType, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Registry, Runtime, Trap, extern_fn, extern_registry};
 use serde::{Deserialize, Serialize};
 
 use crate::conversion::sig;
@@ -12,10 +12,10 @@ use crate::conversion::sig;
 pub struct Decimal(pub rust_decimal::Decimal);
 
 #[extern_fn(effect = pure)]
-fn decimal(text: String) -> Result<Decimal, ExternError> {
+fn decimal(text: String) -> Result<Decimal, Trap> {
     text.parse()
         .map(Decimal)
-        .map_err(|e| ExternError::call("decimal", format!("invalid decimal '{text}': {e}")))
+        .map_err(|e| Trap::call("decimal", format!("invalid decimal '{text}': {e}")))
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
@@ -24,9 +24,9 @@ fn to_string_decimal(a: &Decimal) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn decimal_to_float(a: &Decimal) -> Result<f64, ExternError> {
+fn decimal_to_float(a: &Decimal) -> Result<f64, Trap> {
     rust_decimal::prelude::ToPrimitive::to_f64(&a.0)
-        .ok_or_else(|| ExternError::call("decimal_to_float", format!("{} has no f64", a.0)))
+        .ok_or_else(|| Trap::call("decimal_to_float", format!("{} has no f64", a.0)))
 }
 
 #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure)]

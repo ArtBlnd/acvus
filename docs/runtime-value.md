@@ -11,7 +11,7 @@ kovac is another, signing the same trait with its own representation.
 ```rust
 trait Runtime: Send + Sync + 'static {
     type Value: Send + Sync + 'static;
-    type Error: From<ExternError> + Send + Sync + 'static;
+    type Error: From<Trap> + Send + Sync + 'static;
     type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
     where Self: 'a;
 

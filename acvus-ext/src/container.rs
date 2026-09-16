@@ -3,7 +3,7 @@
 //! and for `Deque` in `deque`.
 
 use acvus_extern::{
-    Arr, ExternError, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
+    Arr, LenVar, Ref, RefMut, Registry, Runtime, Trap, TyVar, extern_fn, extern_registry,
 };
 
 pub mod sig {
@@ -53,15 +53,11 @@ pub mod sig {
     }
 }
 
-pub(crate) fn checked_index(
-    name: &'static str,
-    len: usize,
-    index: i64,
-) -> Result<usize, ExternError> {
+pub(crate) fn checked_index(name: &'static str, len: usize, index: i64) -> Result<usize, Trap> {
     usize::try_from(index)
         .ok()
         .filter(|i| *i < len)
-        .ok_or_else(|| ExternError::call(name, format!("index {index} out of {len}")))
+        .ok_or_else(|| Trap::call(name, format!("index {index} out of {len}")))
 }
 
 // -- Vec ----------------------------------------------------------------
@@ -75,7 +71,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::get, effect = pure)]
-fn get_vec<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, ExternError>
+fn get_vec<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
 where
     T: TyVar,
     Rt: Runtime,
@@ -85,11 +81,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::get_mut, effect = pure)]
-fn get_mut_vec<T, Rt>(
-    rt: &Rt,
-    c: RefMut<Vec<T>, Rt>,
-    index: i64,
-) -> Result<RefMut<T, Rt>, ExternError>
+fn get_mut_vec<T, Rt>(rt: &Rt, c: RefMut<Vec<T>, Rt>, index: i64) -> Result<RefMut<T, Rt>, Trap>
 where
     T: TyVar,
     Rt: Runtime,
@@ -128,11 +120,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::get, effect = pure)]
-fn get_array<T, N, Rt>(
-    rt: &Rt,
-    c: Ref<Arr<T, N>, Rt>,
-    index: i64,
-) -> Result<Ref<T, Rt>, ExternError>
+fn get_array<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
 where
     T: TyVar,
     N: LenVar,
@@ -147,7 +135,7 @@ fn get_mut_array<T, N, Rt>(
     rt: &Rt,
     c: RefMut<Arr<T, N>, Rt>,
     index: i64,
-) -> Result<RefMut<T, Rt>, ExternError>
+) -> Result<RefMut<T, Rt>, Trap>
 where
     T: TyVar,
     N: LenVar,

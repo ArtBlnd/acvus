@@ -2,7 +2,7 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, Trap, TyArg, extern_fn, extern_registry};
 
 use crate::extract::{input_messages, split_system};
 use crate::http::{Fetch, FetchClient, HttpRequest, RequestError};
@@ -110,10 +110,10 @@ pub struct AnthropicConfig {
     pub max_tokens: i64,
 }
 
-fn response_messages(resp: ModelResponse) -> Result<Vec<OutputMessage>, ExternError> {
+fn response_messages(resp: ModelResponse) -> Result<Vec<OutputMessage>, Trap> {
     match resp {
         ModelResponse::Content(parts) => Ok(parts.iter().map(OutputMessage::text).collect()),
-        ModelResponse::ToolCalls(_) => Err(ExternError::call(
+        ModelResponse::ToolCalls(_) => Err(Trap::call(
             "anthropic",
             "anthropic: tool calls are not representable as messages",
         )),
@@ -125,11 +125,11 @@ async fn anthropic(
     #[state] fetch: &FetchClient,
     messages: Vec<InputMessage>,
     config: AnthropicConfig,
-) -> Result<Vec<OutputMessage>, ExternError> {
+) -> Result<Vec<OutputMessage>, Trap> {
     let messages = input_messages(messages);
     let (system, rest) = split_system(&messages);
     let max_tokens = u32::try_from(config.max_tokens).map_err(|_| {
-        ExternError::call(
+        Trap::call(
             "anthropic",
             format!("max_tokens {} out of range", config.max_tokens),
         )
@@ -155,15 +155,15 @@ async fn anthropic(
             ("Content-Type".into(), "application/json".into()),
         ],
         body: serde_json::to_value(&request_body)
-            .map_err(|e| ExternError::call("anthropic", format!("serialization failed: {e}")))?,
+            .map_err(|e| Trap::call("anthropic", format!("serialization failed: {e}")))?,
     };
 
     let response_json = fetch
         .fetch(&http_request)
         .await
-        .map_err(|e| ExternError::call("anthropic", e))?;
+        .map_err(|e| Trap::call("anthropic", e))?;
     let (response, _usage) =
-        parse_response(response_json).map_err(|e| ExternError::call("anthropic", e.to_string()))?;
+        parse_response(response_json).map_err(|e| Trap::call("anthropic", e.to_string()))?;
     response_messages(response)
 }
 

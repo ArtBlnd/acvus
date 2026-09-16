@@ -1,6 +1,6 @@
 use std::fmt;
 
-use acvus_extern::ExternError;
+use acvus_extern::Trap;
 
 // -- CollectionOp - which collection operation failed ----------------
 
@@ -198,14 +198,14 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-impl From<ExternError> for RuntimeError {
-    fn from(e: ExternError) -> Self {
+impl From<Trap> for RuntimeError {
+    fn from(e: Trap) -> Self {
         let kind = match e {
-            ExternError::Call { name, message } => RuntimeErrorKind::ExternCallFailed {
+            Trap::Call { name, message } => RuntimeErrorKind::ExternCallFailed {
                 name,
                 source: message,
             },
-            ExternError::Internal { message } => RuntimeErrorKind::Internal { message },
+            Trap::Internal { message } => RuntimeErrorKind::Internal { message },
         };
         Self { kind, span: None }
     }

@@ -12,8 +12,8 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::handler::{ExternEntry, MonoHandler, MonoInstance};
-use crate::space::SpaceHooks;
 use crate::runtime::Runtime;
+use crate::space::SpaceHooks;
 
 // -- Declarations ------------------------------------------------------
 
@@ -131,7 +131,10 @@ impl fmt::Display for CombineError {
             Self::UnknownSignature {
                 instance,
                 signature,
-            } => write!(f, "{instance:?} instantiates unknown signature {signature:?}"),
+            } => write!(
+                f,
+                "{instance:?} instantiates unknown signature {signature:?}"
+            ),
             Self::InstanceMismatch {
                 instance,
                 signature,
@@ -168,7 +171,10 @@ struct Collected<R: Runtime> {
 }
 
 impl<R: Runtime> Externs<R> {
-    pub fn combine(registries: Vec<Registry<R>>, interner: &Interner) -> Result<Self, CombineError> {
+    pub fn combine(
+        registries: Vec<Registry<R>>,
+        interner: &Interner,
+    ) -> Result<Self, CombineError> {
         let mut types = TypeRegistry::new();
         let mut names: FxHashSet<QualifiedRef> = FxHashSet::default();
         let mut signatures: FxHashMap<QualifiedRef, Collected<R>> = FxHashMap::default();

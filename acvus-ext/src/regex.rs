@@ -1,7 +1,7 @@
 //! Regular expressions: the `Regex` extension type and its functions.
 
 use acvus_extern::{
-    ExternError, ExternType, IdentityVar, Pure, Registry, Runtime, extern_fn, extern_registry,
+    ExternType, IdentityVar, Pure, Registry, Runtime, Trap, extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -10,10 +10,10 @@ use crate::iter_pipeline::Iter;
 pub struct Regex(regex::Regex);
 
 #[extern_fn(effect = pure)]
-fn regex(pattern: String) -> Result<Regex, ExternError> {
+fn regex(pattern: String) -> Result<Regex, Trap> {
     regex::Regex::new(&pattern)
         .map(Regex)
-        .map_err(|e| ExternError::call("regex", format!("invalid pattern '{pattern}': {e}")))
+        .map_err(|e| Trap::call("regex", format!("invalid pattern '{pattern}': {e}")))
 }
 
 #[extern_fn(effect = pure)]

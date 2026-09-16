@@ -66,4 +66,3 @@ where
         PolyTy::Array(Box::new(T::poly_ty(i, vars)), N::poly_len(vars))
     }
 }
-

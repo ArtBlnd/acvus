@@ -2,7 +2,7 @@ mod schema;
 
 use std::sync::Arc;
 
-use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, Trap, TyArg, extern_fn, extern_registry};
 
 use crate::extract::{input_messages, split_system};
 use crate::http::{Fetch, FetchClient, HttpRequest, RequestError};
@@ -129,13 +129,13 @@ pub struct GoogleConfig {
     pub model: String,
 }
 
-fn first_message(resp: ModelResponse) -> Result<OutputMessage, ExternError> {
+fn first_message(resp: ModelResponse) -> Result<OutputMessage, Trap> {
     match resp {
         ModelResponse::Content(parts) => parts
             .first()
             .map(OutputMessage::text)
-            .ok_or_else(|| ExternError::call("google_llm", "response has no content parts")),
-        ModelResponse::ToolCalls(_) => Err(ExternError::call(
+            .ok_or_else(|| Trap::call("google_llm", "response has no content parts")),
+        ModelResponse::ToolCalls(_) => Err(Trap::call(
             "google_llm",
             "google_llm: tool calls are not representable as a message",
         )),
@@ -151,7 +151,7 @@ async fn google_llm(
     #[state] fetch: &FetchClient,
     messages: Vec<InputMessage>,
     config: GoogleConfig,
-) -> Result<OutputMessage, ExternError> {
+) -> Result<OutputMessage, Trap> {
     let msgs = input_messages(messages);
     let (system, rest) = split_system(&msgs);
 
@@ -169,7 +169,7 @@ async fn google_llm(
         config.endpoint, config.model, config.api_key
     );
     let body = serde_json::to_value(&request_body)
-        .map_err(|e| ExternError::call("google_llm", format!("serialization failed: {e}")))?;
+        .map_err(|e| Trap::call("google_llm", format!("serialization failed: {e}")))?;
     let http_request = HttpRequest {
         url,
         headers: vec![("Content-Type".into(), "application/json".into())],
@@ -179,9 +179,9 @@ async fn google_llm(
     let response_json = fetch
         .fetch(&http_request)
         .await
-        .map_err(|e| ExternError::call("google_llm", e))?;
-    let (response, _usage) = parse_response(response_json)
-        .map_err(|e| ExternError::call("google_llm", e.to_string()))?;
+        .map_err(|e| Trap::call("google_llm", e))?;
+    let (response, _usage) =
+        parse_response(response_json).map_err(|e| Trap::call("google_llm", e.to_string()))?;
     first_message(response)
 }
 

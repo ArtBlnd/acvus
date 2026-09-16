@@ -7,10 +7,9 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, EffectVar, Encode, ExternError, ExternTypeDecl, IdentityVar, Interner, Journaled,
-    NodeHash, PolyTy, PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SpaceError,
-    SpaceHooks, SpaceResult, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
-    extern_registry,
+    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, PolyTy,
+    PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SpaceError, SpaceHooks, SpaceResult,
+    Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn, extern_registry,
 };
 use acvus_mir::ty::Ty;
 
@@ -407,7 +406,7 @@ where
 }
 
 #[extern_fn(instance_of = container::get, effect = pure)]
-fn get_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, ExternError>
+fn get_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
 where
     T: TyVar,
     Rt: Runtime,
@@ -417,11 +416,7 @@ where
 }
 
 #[extern_fn(instance_of = container::get_mut, effect = pure)]
-fn get_mut_deque<T, Rt>(
-    rt: &Rt,
-    d: RefMut<Deque<T>, Rt>,
-    index: i64,
-) -> Result<RefMut<T, Rt>, ExternError>
+fn get_mut_deque<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> Result<RefMut<T, Rt>, Trap>
 where
     T: TyVar,
     Rt: Runtime,

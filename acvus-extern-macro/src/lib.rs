@@ -152,7 +152,7 @@ fn generate_extern_fn(
             RustParam::Acvus(_) => None,
         })
         .collect();
-    let ret = parse_return(&func.sig.output);
+    let ret = parse_return(&func.sig.output, vars.runtime_ident());
 
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
@@ -540,7 +540,7 @@ fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {
     r.mutability.is_none() && matches!(r.elem.as_ref(), Type::Path(p) if p.path.is_ident(runtime))
 }
 
-fn parse_return(output: &ReturnType) -> ExternReturn {
+fn parse_return(output: &ReturnType, runtime: Option<&Ident>) -> ExternReturn {
     match output {
         ReturnType::Default => ExternReturn {
             ty: syn::parse_quote! { () },
@@ -552,6 +552,7 @@ fn parse_return(output: &ReturnType) -> ExternReturn {
                 && seg.ident == "Result"
                 && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
                 && let Some(syn::GenericArgument::Type(ok)) = args.args.first()
+                && args.args.iter().nth(1).is_some_and(|e| is_trap(e, runtime))
             {
                 return ExternReturn {
                     ty: ok.clone(),
@@ -563,6 +564,21 @@ fn parse_return(output: &ReturnType) -> ExternReturn {
                 is_result: false,
             }
         }
+    }
+}
+
+/// Whether a generic argument names the abort path: `Trap`, or the
+/// runtime's own `R::Error`. `Result<T, Trap>` stops the run; every other
+/// `Result<T, E>` is the language's (RFC-0038).
+fn is_trap(arg: &syn::GenericArgument, runtime: Option<&Ident>) -> bool {
+    let syn::GenericArgument::Type(Type::Path(p)) = arg else {
+        return false;
+    };
+    let segments: Vec<&Ident> = p.path.segments.iter().map(|s| &s.ident).collect();
+    match segments.as_slice() {
+        [.., last] if *last == "Trap" => true,
+        [first, last] => *last == "Error" && runtime.is_some_and(|r| *first == r),
+        _ => false,
     }
 }
 
@@ -1190,7 +1206,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             }
         }
     }
-    let ret = parse_return(&sig.output);
+    let ret = parse_return(&sig.output, vars.runtime_ident());
     let name = ident.to_string();
     let qref = qref_expr_in(Some(&input.ns.value()), &name);
     let types_only = |ty: &Type| {

@@ -1,6 +1,6 @@
 //! String operations. All pure.
 
-use acvus_extern::{ExternError, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, Trap, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
 fn len_str(s: String) -> i64 {
@@ -66,9 +66,9 @@ fn split_str(s: String, sep: String) -> Vec<String> {
 }
 
 #[extern_fn(effect = pure)]
-fn repeat_str(s: String, n: i64) -> Result<String, ExternError> {
-    let n = usize::try_from(n)
-        .map_err(|_| ExternError::call("repeat_str", format!("negative count {n}")))?;
+fn repeat_str(s: String, n: i64) -> Result<String, Trap> {
+    let n =
+        usize::try_from(n).map_err(|_| Trap::call("repeat_str", format!("negative count {n}")))?;
     Ok(s.repeat(n))
 }
 

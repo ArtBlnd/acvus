@@ -8,9 +8,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, ExternError, ExternFn,
-    ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure,
-    Registry, Runtime, TyArg, TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
+    Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, ExternFn, ExternHandler,
+    ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure, Registry,
+    Runtime, Trap, TyArg, TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
     extern_signature,
 };
 
@@ -111,12 +111,12 @@ where
 struct Tiny;
 
 impl Tiny {
-    fn call(&self, f: &V, args: Vec<V>) -> Result<V, ExternError> {
+    fn call(&self, f: &V, args: Vec<V>) -> Result<V, Trap> {
         match f {
             V::Closure(c) => Ok((c.0)(args)),
-            V::Erased(_) | V::Reference(_) => Err(ExternError::internal(
-                "call on a value that is not a closure",
-            )),
+            V::Erased(_) | V::Reference(_) => {
+                Err(Trap::internal("call on a value that is not a closure"))
+            }
         }
     }
 }
@@ -138,8 +138,8 @@ impl Runtime for Tiny {
     }
 
     type Value = V;
-    type Error = ExternError;
-    type CallFuture<'a> = Ready<Result<V, ExternError>>;
+    type Error = Trap;
+    type CallFuture<'a> = Ready<Result<V, Trap>>;
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -267,7 +267,7 @@ where
 }
 
 #[extern_fn]
-async fn fetch(p: Point) -> Result<Point, ExternError> {
+async fn fetch(p: Point) -> Result<Point, Trap> {
     Ok(Point {
         x: p.x * 2,
         label: p.label,
@@ -474,7 +474,7 @@ fn types_and_casts_reach_the_type_registry() {
     );
 }
 
-fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternError> {
+fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, Trap> {
     match handler {
         ExternHandler::Sync(f) => f(&Tiny, args),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
@@ -504,7 +504,7 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     );
 }
 
-async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternError> {
+async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, Trap> {
     match handler {
         ExternHandler::Async(f) => f(Tiny, args).await,
         ExternHandler::Sync(_) => panic!("expected an async handler"),
@@ -883,26 +883,26 @@ fn the_call_type_selects_the_instance() {
 extern_signature! { ns: "t", fn first<C, T>(c: C) -> T where C: TyVar, T: TyVar; }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_arr<T, N>(a: Arr<T, N>) -> Result<T, ExternError>
+fn first_arr<T, N>(a: Arr<T, N>) -> Result<T, Trap>
 where
     T: TyVar,
     N: LenVar,
 {
     a.0.into_iter()
         .next()
-        .ok_or_else(|| ExternError::call("first", "empty array"))
+        .ok_or_else(|| Trap::call("first", "empty array"))
 }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_opt<T>(v: Option<T>) -> Result<T, ExternError>
+fn first_opt<T>(v: Option<T>) -> Result<T, Trap>
 where
     T: TyVar,
 {
-    v.ok_or_else(|| ExternError::call("first", "none"))
+    v.ok_or_else(|| Trap::call("first", "none"))
 }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_arr_again<T, N>(a: Arr<T, N>) -> Result<T, ExternError>
+fn first_arr_again<T, N>(a: Arr<T, N>) -> Result<T, Trap>
 where
     T: TyVar,
     N: LenVar,

@@ -4,7 +4,7 @@ pub mod schema;
 
 use std::sync::Arc;
 
-use acvus_extern::{ExternError, Registry, Runtime, TyArg, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, Trap, TyArg, extern_fn, extern_registry};
 
 use crate::extract::input_messages;
 use crate::http::{Fetch, FetchClient, HttpRequest, RequestError};
@@ -176,7 +176,7 @@ async fn openai_chat(
     #[state] fetch: &FetchClient,
     messages: Vec<InputMessage>,
     config: OpenAiConfig,
-) -> Result<ChatResponse, ExternError> {
+) -> Result<ChatResponse, Trap> {
     let messages = input_messages(messages);
     let request_body = schema::Request {
         model: config.model,
@@ -195,15 +195,15 @@ async fn openai_chat(
             ("Content-Type".into(), "application/json".into()),
         ],
         body: serde_json::to_value(&request_body)
-            .map_err(|e| ExternError::call("openai_chat", format!("serialization failed: {e}")))?,
+            .map_err(|e| Trap::call("openai_chat", format!("serialization failed: {e}")))?,
     };
 
     let response_json = fetch
         .fetch(&http_request)
         .await
-        .map_err(|e| ExternError::call("openai_chat", e))?;
-    let (response, usage) = parse_response(response_json)
-        .map_err(|e| ExternError::call("openai_chat", e.to_string()))?;
+        .map_err(|e| Trap::call("openai_chat", e))?;
+    let (response, usage) =
+        parse_response(response_json).map_err(|e| Trap::call("openai_chat", e.to_string()))?;
     Ok(chat_response(response, usage))
 }
 

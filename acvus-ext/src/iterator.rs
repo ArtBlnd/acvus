@@ -10,8 +10,8 @@
 //!   reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, ExternError, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime,
-    TyVar, extern_fn, extern_registry,
+    Arr, ClosureFn, EffectVar, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime, Trap, TyVar,
+    extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -45,8 +45,8 @@ pub mod sig {
     }
 }
 
-fn count(name: &'static str, n: i64) -> Result<usize, ExternError> {
-    usize::try_from(n).map_err(|_| ExternError::call(name, format!("negative count {n}")))
+fn count(name: &'static str, n: i64) -> Result<usize, Trap> {
+    usize::try_from(n).map_err(|_| Trap::call(name, format!("negative count {n}")))
 }
 
 /// An iterator over references into a borrowed container, read by `at`.
@@ -333,7 +333,7 @@ where
             return Ok(item);
         }
     }
-    Err(ExternError::call("find", "no element matched").into())
+    Err(Trap::call("find", "no element matched").into())
 }
 
 #[extern_fn(effect = E)]
@@ -349,7 +349,7 @@ where
     Rt: Runtime,
 {
     let Some(mut acc) = it.next(rt).await? else {
-        return Err(ExternError::call("reduce", "empty iterator").into());
+        return Err(Trap::call("reduce", "empty iterator").into());
     };
     while let Some(item) = it.next(rt).await? {
         let out = f

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_ext::*;
-use acvus_extern::{ExternType, Externs, Registry, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Externs, Registry, Trap, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
@@ -685,6 +685,84 @@ async fn a_result_built_by_the_script_crosses_into_the_extern_fn() {
     )
     .await;
     assert_str(&v, "err nope");
+}
+
+#[derive(acvus_extern::TyArg)]
+enum ParseFail {
+    Empty,
+    NotANumber(String),
+}
+
+#[extern_fn(effect = pure)]
+fn parse_int(text: String) -> Result<i64, ParseFail> {
+    if text.is_empty() {
+        return Err(ParseFail::Empty);
+    }
+    text.parse().map_err(|_| ParseFail::NotANumber(text))
+}
+
+#[extern_fn(effect = pure)]
+fn must_be_even(n: i64) -> Result<i64, Trap> {
+    if n % 2 == 0 {
+        Ok(n)
+    } else {
+        Err(Trap::call("must_be_even", format!("{n} is odd")))
+    }
+}
+
+fn fallible_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [parse_int, must_be_even],
+    }
+}
+
+#[tokio::test]
+async fn an_extern_fn_s_result_is_the_script_s_result() {
+    let i = Interner::new();
+    let regs = || vec![fallible_registry()];
+    let src = |text: &str| {
+        [
+            &format!(r#"{{{{ r = parse_int("{text}") }}}}"#),
+            "{{ Ok(n) = r }}{{ n.to_string() }}",
+            "{{ Err(ParseFail::NotANumber(t)) = }}not a number: {{ t }}",
+            "{{ Err(ParseFail::Empty) = }}empty{{_}}?{{/}}",
+        ]
+        .concat()
+    };
+    let v = run_ext_template(&i, &src("42"), TypedContext::default(), regs()).await;
+    assert_str(&v, "42");
+    let v = run_ext_template(&i, &src("4x"), TypedContext::default(), regs()).await;
+    assert_str(&v, "not a number: 4x");
+    let v = run_ext_template(&i, &src(""), TypedContext::default(), regs()).await;
+    assert_str(&v, "empty");
+}
+
+#[tokio::test]
+async fn a_result_of_trap_still_stops_the_run() {
+    let i = Interner::new();
+    let regs = || vec![fallible_registry()];
+    let v = run_ext_template(
+        &i,
+        "{{ n = must_be_even(4) }}{{ n.to_string() }}",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "4");
+}
+
+#[tokio::test]
+#[should_panic(expected = "3 is odd")]
+async fn a_trap_carries_its_message() {
+    let i = Interner::new();
+    run_ext_template(
+        &i,
+        "{{ n = must_be_even(3) }}{{ n.to_string() }}",
+        TypedContext::default(),
+        vec![fallible_registry()],
+    )
+    .await;
 }
 
 #[tokio::test]

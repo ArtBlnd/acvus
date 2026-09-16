@@ -6,15 +6,15 @@
 
 use std::future::{Future, Ready};
 
-use crate::error::ExternError;
 use crate::func::CallToken;
+use crate::trap::Trap;
 
 /// The contract a host signs to run declared ExternFns. A `Value` is opaque;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Send + Sync + 'static {
     type Value: Send + Sync + 'static;
-    type Error: From<ExternError> + Send + Sync + 'static;
+    type Error: From<Trap> + Send + Sync + 'static;
     type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
     where
         Self: 'a;
@@ -61,8 +61,12 @@ pub trait Runtime: Send + Sync + 'static {
     /// parameter. Only `Fn0`/`Fn1`/… reach these: the token is theirs to
     /// mint.
     fn call_0<'a>(&'a self, f: &'a Self::Value, token: CallToken) -> Self::CallFuture<'a>;
-    fn call_1<'a>(&'a self, f: &'a Self::Value, a: Self::Value, token: CallToken)
-    -> Self::CallFuture<'a>;
+    fn call_1<'a>(
+        &'a self,
+        f: &'a Self::Value,
+        a: Self::Value,
+        token: CallToken,
+    ) -> Self::CallFuture<'a>;
     fn call_n<'a>(
         &'a self,
         f: &'a Self::Value,
@@ -76,14 +80,14 @@ pub trait Runtime: Send + Sync + 'static {
 #[derive(Clone, Copy)]
 pub struct TypesOnly;
 
-fn no_values<T>() -> Result<T, ExternError> {
-    Err(ExternError::internal("TypesOnly runtime holds no values"))
+fn no_values<T>() -> Result<T, Trap> {
+    Err(Trap::internal("TypesOnly runtime holds no values"))
 }
 
 impl Runtime for TypesOnly {
     type Value = ();
-    type Error = ExternError;
-    type CallFuture<'a> = Ready<Result<(), ExternError>>;
+    type Error = Trap;
+    type CallFuture<'a> = Ready<Result<(), Trap>>;
 
     unsafe fn materialize<T>(&self, _: ()) -> T
     where

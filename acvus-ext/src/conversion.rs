@@ -3,7 +3,7 @@
 //! `core::to_string` and `core::to_int` are shared signatures (RFC-0019) with
 //! one instance per scalar: Int, Float, Bool, Byte, String.
 
-use acvus_extern::{ExternError, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, Trap, extern_fn, extern_registry};
 
 pub mod sig {
     use acvus_extern::extern_signature;
@@ -57,24 +57,24 @@ fn to_string_string(a: &String) -> String {
 // -- to_int -------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_int(a: &i64) -> Result<i64, ExternError> {
+fn to_int_int(a: &i64) -> Result<i64, Trap> {
     Ok(*a)
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_float(a: &f64) -> Result<i64, ExternError> {
+fn to_int_float(a: &f64) -> Result<i64, Trap> {
     Ok(*a as i64)
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_bool(a: &bool) -> Result<i64, ExternError> {
+fn to_int_bool(a: &bool) -> Result<i64, Trap> {
     Ok(i64::from(*a))
 }
 
 macro_rules! to_int_widens {
     ($($name:ident: $t:ty),* $(,)?) => {$(
         #[extern_fn(instance_of = sig::to_int, effect = pure)]
-        fn $name(a: &$t) -> Result<i64, ExternError> {
+        fn $name(a: &$t) -> Result<i64, Trap> {
             Ok(i64::from(*a))
         }
     )*};
@@ -86,14 +86,14 @@ to_int_widens! {
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_u64(a: &u64) -> Result<i64, ExternError> {
-    i64::try_from(*a).map_err(|_| ExternError::call("to_int", format!("{a} does not fit i64")))
+fn to_int_u64(a: &u64) -> Result<i64, Trap> {
+    i64::try_from(*a).map_err(|_| Trap::call("to_int", format!("{a} does not fit i64")))
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_string(a: &String) -> Result<i64, ExternError> {
+fn to_int_string(a: &String) -> Result<i64, Trap> {
     a.parse::<i64>()
-        .map_err(|e| ExternError::call("to_int", format!("cannot parse string: {e}")))
+        .map_err(|e| Trap::call("to_int", format!("cannot parse string: {e}")))
 }
 
 // -- the rest -----------------------------------------------------------
@@ -104,20 +104,20 @@ fn to_float(n: i64) -> f64 {
 }
 
 #[extern_fn(effect = pure)]
-fn char_to_int(s: String) -> Result<i64, ExternError> {
+fn char_to_int(s: String) -> Result<i64, Trap> {
     match s.chars().next() {
         Some(c) => Ok(c as i64),
-        None => Err(ExternError::call("char_to_int", "empty string")),
+        None => Err(Trap::call("char_to_int", "empty string")),
     }
 }
 
 #[extern_fn(effect = pure)]
-fn int_to_char(n: i64) -> Result<String, ExternError> {
+fn int_to_char(n: i64) -> Result<String, Trap> {
     let code = u32::try_from(n)
-        .map_err(|_| ExternError::call("int_to_char", format!("{n} is not a code point")))?;
+        .map_err(|_| Trap::call("int_to_char", format!("{n} is not a code point")))?;
     match char::from_u32(code) {
         Some(c) => Ok(c.to_string()),
-        None => Err(ExternError::call(
+        None => Err(Trap::call(
             "int_to_char",
             format!("{n} is not a code point"),
         )),

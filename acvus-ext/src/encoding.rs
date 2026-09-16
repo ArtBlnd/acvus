@@ -1,6 +1,6 @@
 //! Base64 and URL encoding. All pure.
 
-use acvus_extern::{ExternError, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, Trap, extern_fn, extern_registry};
 use base64::Engine;
 
 #[extern_fn(effect = pure)]
@@ -9,12 +9,11 @@ fn base64_encode(s: String) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn base64_decode(s: String) -> Result<String, ExternError> {
+fn base64_decode(s: String) -> Result<String, Trap> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&s)
-        .map_err(|e| ExternError::call("base64_decode", format!("invalid input: {e}")))?;
-    String::from_utf8(bytes)
-        .map_err(|e| ExternError::call("base64_decode", format!("invalid UTF-8: {e}")))
+        .map_err(|e| Trap::call("base64_decode", format!("invalid input: {e}")))?;
+    String::from_utf8(bytes).map_err(|e| Trap::call("base64_decode", format!("invalid UTF-8: {e}")))
 }
 
 #[extern_fn(effect = pure)]

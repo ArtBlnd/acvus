@@ -8,7 +8,6 @@ extern crate self as acvus_extern;
 
 pub mod core;
 mod effect;
-mod error;
 mod func;
 mod handler;
 mod identity;
@@ -19,11 +18,11 @@ mod registry;
 pub mod repr;
 mod runtime;
 mod space;
+mod trap;
 mod ty_arg;
 mod vec;
 
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
-pub use error::ExternError;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{ExternEntry, ExternHandler, MonoHandler, MonoInstance};
 pub use identity::{IdentityArg, IdentityVar, Idn};
@@ -39,6 +38,7 @@ pub use registry::{
 pub use repr::{AsCross, AsIs, Crossing, HasRepr};
 pub use runtime::{Runtime, TypesOnly};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
+pub use trap::Trap;
 pub use ty_arg::{Monomorphize, PolyVars, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;
 

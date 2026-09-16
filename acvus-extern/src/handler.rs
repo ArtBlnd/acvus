@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use acvus_mir::ty::{PolyTy, Ty, matches_poly};
 
-use crate::error::ExternError;
 use crate::runtime::Runtime;
+use crate::trap::Trap;
 
 type SyncFn<R> = dyn Fn(&R, Vec<<R as Runtime>::Value>) -> Result<<R as Runtime>::Value, <R as Runtime>::Error>
     + Send
@@ -15,7 +15,8 @@ type SyncFn<R> = dyn Fn(&R, Vec<<R as Runtime>::Value>) -> Result<<R as Runtime>
 type AsyncFn<R> = dyn Fn(
         R,
         Vec<<R as Runtime>::Value>,
-    ) -> Pin<Box<dyn Future<Output = Result<<R as Runtime>::Value, <R as Runtime>::Error>> + Send>>
+    )
+        -> Pin<Box<dyn Future<Output = Result<<R as Runtime>::Value, <R as Runtime>::Error>> + Send>>
     + Send
     + Sync;
 
@@ -82,7 +83,7 @@ impl<R: Runtime> Clone for ExternEntry<R> {
 
 impl<R: Runtime> ExternEntry<R> {
     /// The handler for a call whose resolved function type is `callee_ty`.
-    pub fn select(&self, callee_ty: &Ty) -> Result<&ExternHandler<R>, ExternError> {
+    pub fn select(&self, callee_ty: &Ty) -> Result<&ExternHandler<R>, Trap> {
         match self {
             Self::Single(h) => Ok(h),
             Self::Mono(m) => m
@@ -91,7 +92,7 @@ impl<R: Runtime> ExternEntry<R> {
                 .find(|i| matches_poly(callee_ty, &i.signature))
                 .map(|i| &i.handler)
                 .ok_or_else(|| {
-                    ExternError::internal(format!(
+                    Trap::internal(format!(
                         "no instance of the ExternFn matches the call type {callee_ty:?}"
                     ))
                 }),
