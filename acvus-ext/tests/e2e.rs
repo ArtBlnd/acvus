@@ -645,6 +645,48 @@ async fn an_extension_type_is_a_field_of_a_derived_object() {
     assert_str(&v, "0.10");
 }
 
+#[extern_fn(effect = pure)]
+fn or_zero(r: Result<i64, String>) -> i64 {
+    r.unwrap_or(0)
+}
+
+#[extern_fn(effect = pure)]
+fn describe(r: Result<i64, String>) -> String {
+    match r {
+        Ok(n) => format!("ok {n}"),
+        Err(e) => format!("err {e}"),
+    }
+}
+
+fn result_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [or_zero, describe],
+    }
+}
+
+#[tokio::test]
+async fn a_result_built_by_the_script_crosses_into_the_extern_fn() {
+    let i = Interner::new();
+    let regs = || vec![result_registry()];
+    let v = run_ext_template(
+        &i,
+        "{{ n = or_zero(Ok(41)) }}{{ n.to_string() }}",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "41");
+    let v = run_ext_template(
+        &i,
+        r#"{{ describe(Err("nope")) }}"#,
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "err nope");
+}
+
 #[tokio::test]
 async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     let i = Interner::new();

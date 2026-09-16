@@ -44,12 +44,19 @@ pub enum RuntimeErrorKind {
     /// Division by zero.
     DivisionByZero,
     /// Index out of bounds.
-    IndexOutOfBounds { index: i64, len: usize },
+    IndexOutOfBounds {
+        index: i64,
+        len: usize,
+    },
     /// Operation on empty collection.
-    EmptyCollection { op: CollectionOp },
+    EmptyCollection {
+        op: CollectionOp,
+    },
     /// Object field not found. Field name is resolved to String at
     /// construction time so Display works without an interner.
-    MissingField { field: std::string::String },
+    MissingField {
+        field: std::string::String,
+    },
     /// External function call failed.
     ExternCallFailed {
         /// Resolved function name.
@@ -63,11 +70,15 @@ pub enum RuntimeErrorKind {
         source: std::string::String,
     },
     /// Tool call iteration limit exceeded.
-    ToolCallLimitExceeded { limit: usize },
+    ToolCallLimitExceeded {
+        limit: usize,
+    },
     /// Assert expression evaluated to false.
     AssertFailed,
     /// Internal interpreter error (compiler bug or invalid state).
-    Internal { message: std::string::String },
+    Internal {
+        message: std::string::String,
+    },
 }
 
 // -- Constructors ----------------------------------------------------

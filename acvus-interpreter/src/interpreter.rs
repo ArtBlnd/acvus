@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use crate::error::RuntimeError;
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::runtime::{AcvusRuntime, ExternHandler};
-use crate::value::{FnValue, HandleValue, OptionValue, Value, VariantValue};
+use crate::value::{FnValue, HandleValue, OptionValue, ResultValue, Value, VariantValue};
 use crate::vtable::VtableRegistry;
 
 fn field<'a>(value: &'a Value, f: Astr, interner: &Interner) -> &'a Value {
@@ -46,10 +46,14 @@ fn walk_path<'a>(mut value: &'a Value, path: &[PathSeg], interner: &Interner) ->
                     &value.as_tuple()[*i]
                 }
             },
-            // SAFETY: the type checker admits a payload only on an option or a variant.
+            // SAFETY: the type checker admits a payload only on an option, a result, or a variant.
             PathSeg::Payload => unsafe {
                 if value.is_option() {
                     value.as_option().as_ref()
+                } else if value.is_result() {
+                    match value.as_result() {
+                        Ok(v) | Err(v) => Some(v),
+                    }
                 } else {
                     value.as_variant().payload.as_deref()
                 }
@@ -76,10 +80,14 @@ fn walk_path_mut<'a>(
                     &mut value.as_tuple_mut().0[*i]
                 }
             },
-            // SAFETY: the type checker admits a payload only on an option or a variant.
+            // SAFETY: the type checker admits a payload only on an option, a result, or a variant.
             PathSeg::Payload => unsafe {
                 if value.is_option() {
                     value.as_option_mut().as_mut()
+                } else if value.is_result() {
+                    match value.as_result_mut() {
+                        Ok(v) | Err(v) => Some(v),
+                    }
                 } else {
                     value.as_variant_mut().payload.as_deref_mut()
                 }
@@ -125,8 +133,8 @@ fn read_place<'a>(frame: &'a Frame, val_types: &FxHashMap<ValueId, Ty>, id: Valu
 }
 
 /// The tag `Some` of the language's `Option`; the other is `None`.
-fn option_tag_is_some(interner: &Interner, tag: Astr) -> bool {
-    interner.resolve(tag) == "Some"
+fn tag_is(interner: &Interner, tag: Astr, name: &str) -> bool {
+    interner.resolve(tag) == name
 }
 
 /// The page key of a context.
@@ -624,10 +632,17 @@ async fn execute_inst(
         // -- Variant --------------------------------------
         InstKind::MakeVariant { dst, tag, payload } => {
             let p = payload.map(|v| frame.use_val(v));
-            let value = if let Ty::Option(_) = type_of(val_types, *dst) {
-                Value::option(p)
-            } else {
-                Value::variant(*tag, p)
+            let value = match type_of(val_types, *dst) {
+                Ty::Option(_) => Value::option(p),
+                Ty::Result(..) => {
+                    let payload = p.expect("Ok and Err carry a payload");
+                    Value::result(if tag_is(&ctx.shared.interner, *tag, "Ok") {
+                        Ok(payload)
+                    } else {
+                        Err(payload)
+                    })
+                }
+                _ => Value::variant(*tag, p),
             };
             frame.set(*dst, value);
         }
@@ -636,7 +651,9 @@ async fn execute_inst(
             // SAFETY: the composite check precedes each read.
             let matches = unsafe {
                 if src_val.is_option() {
-                    src_val.as_option().is_some() == option_tag_is_some(&ctx.shared.interner, *tag)
+                    src_val.as_option().is_some() == tag_is(&ctx.shared.interner, *tag, "Some")
+                } else if src_val.is_result() {
+                    src_val.as_result().is_ok() == tag_is(&ctx.shared.interner, *tag, "Ok")
                 } else {
                     src_val.is_variant() && src_val.as_variant().tag == *tag
                 }
@@ -649,6 +666,10 @@ async fn execute_inst(
             let payload = unsafe {
                 if src_val.is_option() {
                     src_val.materialize::<OptionValue>()
+                } else if src_val.is_result() {
+                    Some(match src_val.materialize::<ResultValue>() {
+                        Ok(v) | Err(v) => v,
+                    })
                 } else {
                     assert!(
                         src_val.is_variant(),

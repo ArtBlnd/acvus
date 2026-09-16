@@ -110,6 +110,16 @@ pub fn encode(
             }
             None => out.push(0),
         },
+        Ty::Result(ok, err) => match unsafe { value.as_result() } {
+            Ok(v) => {
+                out.push(0);
+                encode(rt, nested, ok, v, out)?;
+            }
+            Err(e) => {
+                out.push(1);
+                encode(rt, nested, err, e, out)?;
+            }
+        },
         Ty::Enum { variants, .. } => {
             let variant = unsafe { value.as_variant() };
             let sorted = sorted_variants(rt, variants);
@@ -204,6 +214,11 @@ pub fn decode(
             1 => Some(decode(rt, nested, inner, input)?),
             other => return Err(SpaceError::new(format!("Option: tag {other}"))),
         }),
+        Ty::Result(ok, err) => Value::result(match take(input, 1)?[0] {
+            0 => Ok(decode(rt, nested, ok, input)?),
+            1 => Err(decode(rt, nested, err, input)?),
+            other => return Err(SpaceError::new(format!("Result: tag {other}"))),
+        }),
         Ty::Enum { variants, .. } => {
             let sorted = sorted_variants(rt, variants);
             let index = take_u64(input)? as usize;
@@ -234,6 +249,7 @@ pub fn holds_extension(ty: &Ty) -> bool {
     match ty {
         Ty::UserDefined { .. } => true,
         Ty::Array(inner, _) | Ty::Option(inner) => holds_extension(inner),
+        Ty::Result(ok, err) => holds_extension(ok) || holds_extension(err),
         Ty::Tuple(elems) => elems.iter().any(holds_extension),
         Ty::Object(fields) => fields.values().any(holds_extension),
         Ty::Enum { variants, .. } => variants.values().flatten().any(|t| holds_extension(t)),

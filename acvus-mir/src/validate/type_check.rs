@@ -125,6 +125,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         // Containers (invariant inner)
         (Ty::Array(a, la), Ty::Array(b, lb)) => la == lb && types_match(a, b),
         (Ty::Option(a), Ty::Option(b)) => types_match(a, b),
+        (Ty::Result(ta, ea), Ty::Result(tb, eb)) => types_match(ta, tb) && types_match(ea, eb),
         (Ty::Ref(ma, a), Ty::Ref(mb, b)) => ma == mb && types_match(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_match(x, y))
@@ -354,6 +355,7 @@ impl CheckCtx {
                 }
                 (PathSeg::Index(i), Ty::Tuple(elems)) => elems.get(*i).cloned(),
                 (PathSeg::Payload, Ty::Option(payload)) => Some(payload.as_ref().clone()),
+                (PathSeg::Payload, Ty::Result(..)) => Some(Ty::error()),
                 // Enum payload: dst type comes from val_types, trust typechecker
                 (PathSeg::Payload, Ty::Enum { .. }) => Some(Ty::error()),
                 (_, Ty::Error(_)) => Some(Ty::error()),
@@ -1187,7 +1189,10 @@ impl CheckCtx {
                     Ty::Ref(_, inner) => inner.as_ref(),
                     other => other,
                 };
-                if !matches!(src_ty, Ty::Enum { .. } | Ty::Option(_) | Ty::Error(_)) {
+                if !matches!(
+                    src_ty,
+                    Ty::Enum { .. } | Ty::Option(_) | Ty::Result(..) | Ty::Error(_)
+                ) {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
@@ -1210,7 +1215,7 @@ impl CheckCtx {
                         let dst_ty = ty!(*dst);
                         self.assert_match(pc, span, "UnwrapVariant", "dst", inner, dst_ty, errors);
                     }
-                    Ty::Enum { .. } => {
+                    Ty::Enum { .. } | Ty::Result(..) => {
                         // Enum unwrap: dst type comes from val_types, trust typechecker
                     }
                     Ty::Error(_) => {}

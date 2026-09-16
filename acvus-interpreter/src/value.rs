@@ -294,6 +294,10 @@ pub type VariantValue = acvus_extern::Variant<Value>;
 /// crosses the extern boundary as itself (RFC-0022).
 pub type OptionValue = Option<Value>;
 
+/// The language's `Result<T, E>` is Rust's `Result` at `T = E = Value`, so
+/// it crosses the extern boundary as itself (RFC-0038).
+pub type ResultValue = Result<Value, Value>;
+
 /// A self-contained callable: execution context + body + captured values.
 ///
 /// Created at `MakeClosure` time. It shares the run's live page: a
@@ -407,6 +411,12 @@ typed_debug_fn! { VariantValue;
         None => write!(f, "{:?}", d.tag),
     };
 }
+typed_debug_fn! { ResultValue;
+    dbg_result = |d, f| match d {
+        Ok(v) => write!(f, "Ok({v:?})"),
+        Err(e) => write!(f, "Err({e:?})"),
+    };
+}
 typed_debug_fn! { OptionValue;
     dbg_option = |d, f| match d {
         Some(p) => write!(f, "Some({p:?})"),
@@ -427,6 +437,8 @@ static VARIANT: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<VariantValue>("Variant", Composite::Variant, Some(dbg_variant)));
 static OPTION: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<OptionValue>("Option", Composite::Option, Some(dbg_option)));
+static RESULT: LazyLock<Vtable> =
+    LazyLock::new(|| vtable::<ResultValue>("Result", Composite::Result, Some(dbg_result)));
 static FN: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<FnValue>("Fn", Composite::Fn, Some(dbg_fn)));
 static HANDLE: LazyLock<Vtable> =
@@ -499,6 +511,9 @@ impl Value {
     pub fn option(payload: OptionValue) -> Self {
         large(&OPTION, payload)
     }
+    pub fn result(payload: ResultValue) -> Self {
+        large(&RESULT, payload)
+    }
     pub fn closure(fv: FnValue) -> Self {
         large(&FN, fv)
     }
@@ -523,6 +538,19 @@ impl Value {
     }
     pub fn is_option(&self) -> bool {
         self.composite() == Some(Composite::Option)
+    }
+    pub fn is_result(&self) -> bool {
+        self.composite() == Some(Composite::Result)
+    }
+    /// # Safety
+    /// The value is a `Result`.
+    pub unsafe fn as_result(&self) -> &ResultValue {
+        unsafe { self.peek::<ResultValue>() }
+    }
+    /// # Safety
+    /// The value is a `Result`.
+    pub unsafe fn as_result_mut(&mut self) -> &mut ResultValue {
+        unsafe { self.peek_mut::<ResultValue>() }
     }
     /// # Safety
     /// The value is an `Option`.

@@ -71,6 +71,29 @@ where
     }
 }
 
+impl<T, E, Rt> Cross<Rt> for Result<T, E>
+where
+    T: Cross<Rt> + Send + Sync + 'static,
+    E: Cross<Rt> + Send + Sync + 'static,
+    Rt: Runtime,
+{
+    fn erase(self, rt: &Rt) -> Rt::Value {
+        let inner: Result<Rt::Value, Rt::Value> =
+            self.map(|v| v.erase(rt)).map_err(|e| e.erase(rt));
+        // SAFETY: the language's Result is the runtime's `Result<Value, Value>`
+        // (RFC-0038).
+        unsafe { rt.erase::<Result<Rt::Value, Rt::Value>>(inner) }
+    }
+
+    fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: as in `erase`.
+        let inner = unsafe { rt.materialize::<Result<Rt::Value, Rt::Value>>(value) };
+        inner
+            .map(|v| T::materialize(rt, v))
+            .map_err(|e| E::materialize(rt, e))
+    }
+}
+
 impl<T, N, Rt> Cross<Rt> for Arr<T, N>
 where
     T: Cross<Rt> + TyVar,

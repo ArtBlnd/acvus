@@ -109,6 +109,10 @@ pub enum SerTy {
     Option {
         inner: Box<SerTy>,
     },
+    Result {
+        ok: Box<SerTy>,
+        err: Box<SerTy>,
+    },
     Enum {
         name: std::string::String,
         variants: BTreeMap<std::string::String, Option<Box<SerTy>>>,
@@ -173,6 +177,10 @@ impl Ty {
             },
             Ty::Option(inner) => SerTy::Option {
                 inner: Box::new(inner.to_ser(interner)),
+            },
+            Ty::Result(ok, err) => SerTy::Result {
+                ok: Box::new(ok.to_ser(interner)),
+                err: Box::new(err.to_ser(interner)),
             },
             Ty::Enum { name, variants } => SerTy::Enum {
                 name: interner.resolve(*name).to_string(),
@@ -245,6 +253,9 @@ impl SerTy {
                     .collect(),
             },
             SerTy::Option { inner } => Ty::Option(Box::new(inner.to_ty(interner))),
+            SerTy::Result { ok, err } => {
+                Ty::Result(Box::new(ok.to_ty(interner)), Box::new(err.to_ty(interner)))
+            }
             SerTy::Enum { name, variants } => Ty::Enum {
                 name: interner.intern(name),
                 variants: variants

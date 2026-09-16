@@ -31,6 +31,7 @@ pub enum Composite {
     Object,
     Variant,
     Option,
+    Result,
     Fn,
     Handle,
 }

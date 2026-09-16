@@ -105,6 +105,16 @@ where
     }
 }
 
+impl<T, E> TyArg for Result<T, E>
+where
+    T: TyArg,
+    E: TyArg,
+{
+    fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
+        PolyTy::Result(Box::new(T::poly_ty(i, vars)), Box::new(E::poly_ty(i, vars)))
+    }
+}
+
 macro_rules! impl_tuple_ty_arg {
     ($($T:ident),+) => {
         impl<$($T),+> TyArg for ($($T,)+)

@@ -703,6 +703,16 @@ fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
     );
 }
 
+#[test]
+fn a_result_is_the_language_s_result_of_its_two_types() {
+    let i = Interner::new();
+    let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts::default());
+    assert_eq!(
+        <Result<i64, String> as TyArg>::poly_ty(&i, &vars),
+        PolyTy::Result(Box::new(PolyTy::I64), Box::new(PolyTy::String))
+    );
+}
+
 // -- Monomorphize -------------------------------------------------------
 
 /// Twice the value, as each member type defines it.

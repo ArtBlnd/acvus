@@ -1242,11 +1242,10 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn variant_inner_type(&self, variant_val: ValueId) -> Ty {
-        if let Some(Ty::Option(inner)) = self.body.val_types.get(&variant_val) {
-            inner.as_ref().clone()
-        } else {
-            Ty::error()
+    fn variant_inner_type(&self, variant_val: ValueId, tag: Astr) -> Ty {
+        match self.body.val_types.get(&variant_val) {
+            Some(ty) => self.payload_type(ty, tag),
+            None => Ty::error(),
         }
     }
 
@@ -2450,9 +2449,16 @@ impl<'a> Lowerer<'a> {
         )
     }
 
-    fn payload_type(inner: &Ty, tag: Astr) -> Ty {
+    fn payload_type(&self, inner: &Ty, tag: Astr) -> Ty {
         match inner {
             Ty::Option(payload) => payload.as_ref().clone(),
+            Ty::Result(ok, err) => {
+                if self.interner.resolve(tag) == "Ok" {
+                    ok.as_ref().clone()
+                } else {
+                    err.as_ref().clone()
+                }
+            }
             Ty::Enum { variants, .. } => variants
                 .get(&tag)
                 .cloned()
@@ -2471,7 +2477,7 @@ impl<'a> Lowerer<'a> {
         inner: &Ty,
         span: Span,
     ) -> Vec<RefPart> {
-        Self::pattern_parts_place(pattern, &[], inner)
+        self.pattern_parts_place(pattern, &[], inner)
             .into_iter()
             .map(|part| {
                 let seg = part
@@ -2645,7 +2651,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn pattern_parts_place(pattern: &Pattern, path: &[PathSeg], ty: &Ty) -> Vec<PlacePart> {
+    fn pattern_parts_place(&self, pattern: &Pattern, path: &[PathSeg], ty: &Ty) -> Vec<PlacePart> {
         let part = |seg: PathSeg, ty: Ty, pattern: &Pattern| {
             let mut p = path.to_vec();
             p.push(seg);
@@ -2701,7 +2707,7 @@ impl<'a> Lowerer<'a> {
                 })
                 .collect(),
             Pattern::Variant { tag, payload, .. } => match payload {
-                Some(inner) => vec![part(PathSeg::Payload, Self::payload_type(ty, *tag), inner)],
+                Some(inner) => vec![part(PathSeg::Payload, self.payload_type(ty, *tag), inner)],
                 None => Vec::new(),
             },
             Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => {
@@ -2738,7 +2744,7 @@ impl<'a> Lowerer<'a> {
             }
             Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
                 let mut all_ok = self.emit_const_bool(span, true);
-                for part in Self::pattern_parts_place(pattern, path, ty) {
+                for part in self.pattern_parts_place(pattern, path, ty) {
                     let ok = self.lower_pattern_test_place(
                         &part.pattern,
                         target,
@@ -2787,7 +2793,8 @@ impl<'a> Lowerer<'a> {
                     },
                 );
                 self.emit_label(span, check_inner_label);
-                let part = Self::pattern_parts_place(pattern, path, ty)
+                let part = self
+                    .pattern_parts_place(pattern, path, ty)
                     .into_iter()
                     .next()
                     .expect("a payload pattern names one part");
@@ -2839,7 +2846,7 @@ impl<'a> Lowerer<'a> {
             | Pattern::Object { .. }
             | Pattern::Tuple { .. }
             | Pattern::Variant { .. } => {
-                for part in Self::pattern_parts_place(pattern, path, ty) {
+                for part in self.pattern_parts_place(pattern, path, ty) {
                     self.lower_pattern_bind_place(
                         &part.pattern,
                         target,
@@ -3011,7 +3018,7 @@ impl<'a> Lowerer<'a> {
                 // Success path: unwrap and test inner pattern.
                 self.emit_label(span, check_inner_label);
                 let inner_val = self.alloc_val();
-                self.set_val_type(inner_val, self.variant_inner_type(src_reg));
+                self.set_val_type(inner_val, self.variant_inner_type(src_reg, *tag));
                 self.emit_inst(
                     span,
                     InstKind::UnwrapVariant {
@@ -3125,12 +3132,12 @@ impl<'a> Lowerer<'a> {
                 }
             }
 
-            Pattern::Variant { payload, .. } => {
+            Pattern::Variant { tag, payload, .. } => {
                 let Some(inner_pat) = payload else {
                     return;
                 };
                 let inner_val = self.alloc_val();
-                self.set_val_type(inner_val, self.variant_inner_type(src_reg));
+                self.set_val_type(inner_val, self.variant_inner_type(src_reg, *tag));
                 self.emit_inst(
                     span,
                     InstKind::UnwrapVariant {

@@ -9,7 +9,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, RwLock};
 
-
 use crate::value::Value;
 
 // -- ContextWrite -----------------------------------------------------
@@ -132,7 +131,12 @@ mod tests {
         let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].key, "x");
-        assert!(is_int(Some(Value::use_from(&mut { writes.into_iter().next().unwrap().value })), 3));
+        assert!(is_int(
+            Some(Value::use_from(&mut {
+                writes.into_iter().next().unwrap().value
+            })),
+            3
+        ));
         assert!(ctx.take("x").is_none(), "the drained value left the page");
         assert!(is_int(ctx.take("y"), 9), "an unassigned key stays");
     }

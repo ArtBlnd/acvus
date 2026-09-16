@@ -316,6 +316,9 @@ where
                 len_ok && go(e, pe, seen, unknowns)
             }
             (TyTerm::Option(i), TyTerm::Option(pi)) => go(i, pi, seen, unknowns),
+            (TyTerm::Result(t, e), TyTerm::Result(pt, pe)) => {
+                go(t, pt, seen, unknowns) && go(e, pe, seen, unknowns)
+            }
             (TyTerm::Handle(i), TyTerm::Handle(pi)) => go(i, pi, seen, unknowns),
             (TyTerm::Ref(m, i), TyTerm::Ref(pm, pi)) => m == pm && go(i, pi, seen, unknowns),
             (TyTerm::Tuple(es), TyTerm::Tuple(ps)) => {
@@ -553,6 +556,9 @@ impl PatternSubst {
             (TyTerm::Option(ia), TyTerm::Option(ib)) | (TyTerm::Handle(ia), TyTerm::Handle(ib)) => {
                 self.unify(ia, ib)
             }
+            (TyTerm::Result(ta, ea), TyTerm::Result(tb, eb)) => {
+                self.unify(ta, tb) && self.unify(ea, eb)
+            }
             (TyTerm::Ref(ma, ia), TyTerm::Ref(mb, ib)) => ma == mb && self.unify(ia, ib),
             (TyTerm::Tuple(ea), TyTerm::Tuple(eb)) => {
                 ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| self.unify(x, y))
@@ -698,6 +704,7 @@ enum TyHead {
     Tuple,
     Fn,
     Option,
+    Result,
     Enum,
     Handle,
     Ref,
@@ -718,6 +725,7 @@ fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
         TyTerm::Tuple(_) => TyHead::Tuple,
         TyTerm::Fn { .. } => TyHead::Fn,
         TyTerm::Option(_) => TyHead::Option,
+        TyTerm::Result(..) => TyHead::Result,
         TyTerm::Enum { .. } => TyHead::Enum,
         TyTerm::Handle(..) => TyHead::Handle,
         TyTerm::Ref(..) => TyHead::Ref,
@@ -1191,6 +1199,7 @@ impl TyTerm<Concrete> {
         match self {
             Ty::Int(_) | Ty::Float | Ty::String | Ty::Bool | Ty::Unit => true,
             Ty::Array(inner, _) | Ty::Option(inner) => inner.is_data(),
+            Ty::Result(ok, err) => ok.is_data() && err.is_data(),
             Ty::Tuple(elems) => elems.iter().all(Ty::is_data),
             Ty::Object(fields) => fields.values().all(Ty::is_data),
             Ty::Enum { variants, .. } => variants
@@ -1326,6 +1335,12 @@ where
                 write!(f, "Handle<{}>", inner.display(self.interner))
             }
             TyTerm::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
+            TyTerm::Result(ok, err) => write!(
+                f,
+                "Result<{}, {}>",
+                ok.display(self.interner),
+                err.display(self.interner)
+            ),
             TyTerm::UserDefined {
                 id,
                 type_args,
@@ -1555,6 +1570,7 @@ pub enum TyTerm<V: Phase> {
     Object(FxHashMap<Astr, TyTerm<V>>),
     Tuple(Vec<TyTerm<V>>),
     Option(Box<TyTerm<V>>),
+    Result(Box<TyTerm<V>>, Box<TyTerm<V>>),
     // Functions
     Fn {
         params: Vec<ParamTerm<V>>,
@@ -1684,6 +1700,10 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Option(inner) => {
                 TyTerm::Option(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
             }
+            TyTerm::Result(ok, err) => TyTerm::Result(
+                Box::new(ok.map(on_var, on_identity, on_effect, on_len)),
+                Box::new(err.map(on_var, on_identity, on_effect, on_len)),
+            ),
             TyTerm::Fn {
                 params,
                 ret,
@@ -1782,6 +1802,10 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
             )?))),
+            TyTerm::Result(ok, err) => Ok(TyTerm::Result(
+                Box::new(ok.try_map(on_var, on_identity, on_effect, on_len)?),
+                Box::new(err.try_map(on_var, on_identity, on_effect, on_len)?),
+            )),
             TyTerm::Fn {
                 params,
                 ret,
@@ -1897,6 +1921,9 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
             }
             Ty::Tuple(elems) => TyTerm::Tuple(elems.iter().map(|e| go(e, builder)).collect()),
             Ty::Option(inner) => TyTerm::Option(Box::new(go(inner, builder))),
+            Ty::Result(ok, err) => {
+                TyTerm::Result(Box::new(go(ok, builder)), Box::new(go(err, builder)))
+            }
             Ty::Fn {
                 params,
                 ret,

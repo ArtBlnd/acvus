@@ -1423,20 +1423,20 @@ fn structural_enum_three_variants_merge() {
 #[test]
 fn structural_enum_with_payload() {
     let i = Interner::new();
-    let src = r#"{{ R::Ok(v) = @r }}{{ v.to_string() }}{{_}}err{{/}}"#;
+    let src = r#"{{ R::Good(v) = @r }}{{ v.to_string() }}{{_}}err{{/}}"#;
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
-    assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
+    assert!(ir.contains("Good"), "variant Good missing:\n{ir}");
 }
 
 #[test]
 fn structural_enum_mixed_payload_and_unit() {
     let i = Interner::new();
-    let src = r#"{{ R::Ok(v) = @r }}{{ v.to_string() }}{{ R::Err = }}fail{{_}}??{{/}}"#;
+    let src = r#"{{ R::Good(v) = @r }}{{ v.to_string() }}{{ R::Bad = }}fail{{_}}??{{/}}"#;
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
-    assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
-    assert!(ir.contains("Err"), "variant Err missing:\n{ir}");
+    assert!(ir.contains("Good"), "variant Good missing:\n{ir}");
+    assert!(ir.contains("Bad"), "variant Bad missing:\n{ir}");
 }
 
 #[test]
@@ -1497,10 +1497,9 @@ fn structural_enum_payload_type_propagates_through_context() {
     // When context provides an enum type with payload, payload type should propagate.
     let i = Interner::new();
     let mut variants = FxHashMap::default();
-    variants.insert(i.intern("Ok"), Some(Box::new(Ty::I64)));
-    variants.insert(i.intern("Err"), None);
-    let src =
-        r#"{{ R::Ok(v) = @r }}{{ out = v + 1 }}{{ out.to_string() }}{{ R::Err = }}err{{_}}??{{/}}"#;
+    variants.insert(i.intern("Good"), Some(Box::new(Ty::I64)));
+    variants.insert(i.intern("Bad"), None);
+    let src = r#"{{ R::Good(v) = @r }}{{ out = v + 1 }}{{ out.to_string() }}{{ R::Bad = }}err{{_}}??{{/}}"#;
     let module = compile_analysis(
         &i,
         src,
@@ -1514,8 +1513,8 @@ fn structural_enum_payload_type_propagates_through_context() {
     )
     .unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
-    assert!(ir.contains("Ok"), "variant Ok missing:\n{ir}");
-    assert!(ir.contains("Err"), "variant Err missing:\n{ir}");
+    assert!(ir.contains("Good"), "variant Good missing:\n{ir}");
+    assert!(ir.contains("Bad"), "variant Bad missing:\n{ir}");
 }
 
 // -- Variant unification inside Tuple/List patterns -------------

@@ -335,6 +335,7 @@ pub fn contains_ref(ty: &Ty) -> bool {
     match ty {
         Ty::Ref(..) => true,
         Ty::Array(inner, _) | Ty::Option(inner) | Ty::Handle(inner) => contains_ref(inner),
+        Ty::Result(ok, err) => contains_ref(ok) || contains_ref(err),
         Ty::Object(fields) => fields.values().any(contains_ref),
         Ty::Tuple(items) => items.iter().any(contains_ref),
         Ty::Fn { captures, ret, .. } => captures.iter().any(contains_ref) || contains_ref(ret),

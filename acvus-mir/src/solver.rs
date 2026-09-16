@@ -768,6 +768,7 @@ impl<'src> Solver<'src> {
             TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Ref(_, inner) => {
                 self.occurs_in(id, inner)
             }
+            TyTerm::Result(ok, err) => self.occurs_in(id, ok) || self.occurs_in(id, err),
             TyTerm::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
             TyTerm::Object(fields) => fields.values().any(|v| self.occurs_in(id, v)),
             TyTerm::Fn {
@@ -1000,6 +1001,10 @@ impl<'src> Solver<'src> {
 
             (TyTerm::Option(a), TyTerm::Option(b)) => {
                 self.unify_ty(a, b, Polarity::Invariant, registry)
+            }
+            (TyTerm::Result(ta, ea), TyTerm::Result(tb, eb)) => {
+                self.unify_ty(ta, tb, Polarity::Invariant, registry)?;
+                self.unify_ty(ea, eb, Polarity::Invariant, registry)
             }
 
             (TyTerm::Ref(ma, ia), TyTerm::Ref(mb, ib)) => {
@@ -1416,6 +1421,10 @@ impl<'src> Solver<'src> {
             TyTerm::Option(inner) => TyTerm::Option(Box::new(
                 self.instantiate_infer_inner(inner, var_map, fresh_map, effect_map),
             )),
+            TyTerm::Result(ok, err) => TyTerm::Result(
+                Box::new(self.instantiate_infer_inner(ok, var_map, fresh_map, effect_map)),
+                Box::new(self.instantiate_infer_inner(err, var_map, fresh_map, effect_map)),
+            ),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
                 elems
                     .iter()

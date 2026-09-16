@@ -2207,9 +2207,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                         VariantPayload::None => {}
                     }
-                    // Builtin Option -> Ty::Option
-                    let inner = self.solver.resolve_ty(&type_params[0]);
-                    let ty = TyTerm::Option(Box::new(inner));
+                    let ty = self.builtin_enum_ty(&type_params);
                     return self.record_ret(*id, ty);
                 }
 
@@ -2779,7 +2777,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if let Some((_enum_name, type_params, variant_payload)) =
                     self.resolve_builtin_variant(ast_enum_name, *tag)
                 {
-                    let enum_ty = TyTerm::Option(Box::new(self.solver.resolve_ty(&type_params[0])));
+                    let enum_ty = self.builtin_enum_ty(&type_params);
                     if self
                         .unify_covariant(&source_resolved, &enum_ty, None)
                         .is_err()
@@ -2858,24 +2856,34 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         ast_enum_name: &Option<Astr>,
         tag: Astr,
     ) -> Option<(Astr, Vec<InferTy>, VariantPayload)> {
-        let tag_str = self.interner.resolve(tag);
-        let option_name = self.interner.intern("Option");
-
-        // Check qualified name if present.
+        let (name, payload, arity) = match self.interner.resolve(tag) {
+            "Some" => ("Option", VariantPayload::TypeParam(0), 1),
+            "None" => ("Option", VariantPayload::None, 1),
+            "Ok" => ("Result", VariantPayload::TypeParam(0), 2),
+            "Err" => ("Result", VariantPayload::TypeParam(1), 2),
+            _ => return None,
+        };
+        let name = self.interner.intern(name);
         if let Some(ename) = ast_enum_name
-            && *ename != option_name
+            && *ename != name
         {
             return None;
         }
+        let type_params = (0..arity).map(|_| self.solver.fresh_ty_var()).collect();
+        Some((name, type_params, payload))
+    }
 
-        let payload = match tag_str {
-            "Some" => VariantPayload::TypeParam(0),
-            "None" => VariantPayload::None,
-            _ => return None,
-        };
-
-        let type_params = vec![self.solver.fresh_ty_var()];
-        Some((option_name, type_params, payload))
+    /// `Option<T>` for one type parameter, `Result<T, E>` for two: the
+    /// builtin enums `Some`/`None` and `Ok`/`Err` construct.
+    fn builtin_enum_ty(&self, type_params: &[InferTy]) -> InferTy {
+        match type_params {
+            [inner] => TyTerm::Option(Box::new(self.solver.resolve_ty(inner))),
+            [ok, err] => TyTerm::Result(
+                Box::new(self.solver.resolve_ty(ok)),
+                Box::new(self.solver.resolve_ty(err)),
+            ),
+            _ => unreachable!("a builtin enum has one or two type parameters"),
+        }
     }
 
     fn literal_ty(&mut self, lit: &Literal, span: Span) -> InferTy {

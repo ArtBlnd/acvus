@@ -42,6 +42,10 @@ pub enum Token {
     Some,
     #[token("None", priority = 3)]
     None,
+    #[token("Ok", priority = 3)]
+    Ok,
+    #[token("Err", priority = 3)]
+    Err,
 
     // -- Script mode keywords --
     #[token("let", priority = 3)]
@@ -163,6 +167,8 @@ impl fmt::Display for Token {
             Token::Underscore => write!(f, "_"),
             Token::Some => write!(f, "Some"),
             Token::None => write!(f, "None"),
+            Token::Ok => write!(f, "Ok"),
+            Token::Err => write!(f, "Err"),
             Token::Let => write!(f, "let"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),

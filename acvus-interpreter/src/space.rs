@@ -539,6 +539,10 @@ impl Space {
                 }
                 Ok(())
             }
+            Ty::Result(ok, err) => match unsafe { value.as_result_mut() } {
+                Ok(v) => self.commit_nested(rt, ok, v, moved),
+                Err(e) => self.commit_nested(rt, err, e, moved),
+            },
             Ty::Enum { variants, .. } => {
                 let variant = unsafe { value.as_variant_mut() };
                 if let (Some(payload), Some(Some(t))) =

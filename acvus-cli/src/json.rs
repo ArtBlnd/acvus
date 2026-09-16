@@ -50,6 +50,13 @@ pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
             Some(v) => of(interner, inner, v),
             None => Json::Null,
         },
+        Ty::Result(ok, err) => {
+            let (tag, ty, v) = match unsafe { value.as_result() } {
+                Ok(v) => ("Ok", ok, v),
+                Err(e) => ("Err", err, e),
+            };
+            Json::Object(Map::from_iter([(tag.to_owned(), of(interner, ty, v))]))
+        }
         Ty::Enum { variants, .. } => {
             let variant = unsafe { value.as_variant() };
             let tag = interner.resolve(variant.tag).to_string();

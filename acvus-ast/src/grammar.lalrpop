@@ -25,6 +25,8 @@ extern {
         "_" => Token::Underscore,
         "Some" => Token::Some,
         "None" => Token::None,
+        "Ok" => Token::Ok,
+        "Err" => Token::Err,
         "let" => Token::Let,
         "if" => Token::If,
         "else" => Token::Else,
@@ -408,6 +410,10 @@ PrimaryExpr: Expr = {
         Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Some"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
     <l:@L> "None" <r:@R> =>
         Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("None"), payload: None, span: Span::new(l, r) },
+    <l:@L> "Ok" "(" <inner:Expr> ")" <r:@R> =>
+        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Ok"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
+    <l:@L> "Err" "(" <inner:Expr> ")" <r:@R> =>
+        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Err"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
 
     // Parenthesized expression or tuple
     <l:@L> "(" <items:CommaSep<TupleElemRule>> ")" <r:@R> => {

@@ -37,6 +37,7 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
         | Ty::UserDefined { .. }
         | Ty::Array(..)
         | Ty::Option(..)
+        | Ty::Result(..)
         | Ty::Tuple(..)
         | Ty::Object(..)
         | Ty::Enum { .. }
