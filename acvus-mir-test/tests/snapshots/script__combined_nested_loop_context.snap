@@ -14,37 +14,41 @@ expression: ir
      8 | L0:
      9 |   r4 = ref &mut rows
     10 |   r5 = call #1(r4)
-    11 |   r6 = test r5 is Some
-    12 |   jump_if r6 then L1 else L2
-    13 | L1:
-    14 |   r7 = unwrap r5
-    15 |   assign row = r7
-    16 |   r8 = take row
-    17 |   r9 = call #0(r8)
-    18 |   assign xs = r9
-    19 |   jump L3
-    20 | L3:
-    21 |   r10 = ref &mut xs
-    22 |   r11 = call #1(r10)
-    23 |   r12 = test r11 is Some
-    24 |   jump_if r12 then L4 else L5
-    25 | L4:
-    26 |   r13 = unwrap r11
-    27 |   assign x = r13
-    28 |   r14 = take @total
-    29 |   r15 = take x
-    30 |   r16 = r14 + r15
-    31 |   assign @total = r16
-    32 |   jump L3
-    33 | L5:
-    34 |   jump L0
-    35 | L2:
-    36 |   r17 = take @total
-    37 |   r18 = take @outer
-    38 |   commit @outer = r18
-    39 |   r19 = take @total
-    40 |   commit @total = r19
-    41 |   return r17
+    11 |   assign $source = r5
+    12 |   r6 = ref &$source
+    13 |   r7 = test r6 is Some
+    14 |   jump_if r7 then L1 else L2
+    15 | L1:
+    16 |   r8 = take $source.payload
+    17 |   assign row = r8
+    18 |   r9 = take row
+    19 |   r10 = call #0(r9)
+    20 |   assign xs = r10
+    21 |   jump L3
+    22 | L3:
+    23 |   r11 = ref &mut xs
+    24 |   r12 = call #1(r11)
+    25 |   assign $source = r12
+    26 |   r13 = ref &$source
+    27 |   r14 = test r13 is Some
+    28 |   jump_if r14 then L4 else L5
+    29 | L4:
+    30 |   r15 = take $source.payload
+    31 |   assign x = r15
+    32 |   r16 = take @total
+    33 |   r17 = take x
+    34 |   r18 = r16 + r17
+    35 |   assign @total = r18
+    36 |   jump L3
+    37 | L5:
+    38 |   jump L0
+    39 | L2:
+    40 |   r19 = take @total
+    41 |   r20 = take @outer
+    42 |   commit @outer = r20
+    43 |   r21 = take @total
+    44 |   commit @total = r21
+    45 |   return r19
 
     ; r0 (@outer) : Array<Array<i64, 3>, 3>
     ; r1 (@total) : i64
@@ -52,23 +56,27 @@ expression: ir
     ; r3 (into_iter(...)) : Iterator<Array<i64, 3>, Pure, #IdentityId(0)>
     ; r4 (rows.) : &mut Iterator<Array<i64, 3>, Pure, #IdentityId(0)>
     ; r5 (next(...)) : Option<Array<i64, 3>>
-    ; r6 (v10) : Bool
-    ; r7 (row) : Array<i64, 3>
+    ; r6 ($source.) : &Option<Array<i64, 3>>
+    ; r7 (v12) : Bool
     ; r8 (row) : Array<i64, 3>
-    ; r9 (into_iter(...)) : Iterator<i64, Pure, #IdentityId(1)>
-    ; r10 (xs.) : &mut Iterator<i64, Pure, #IdentityId(1)>
-    ; r11 (next(...)) : Option<i64>
-    ; r12 (v18) : Bool
-    ; r13 (x) : i64
-    ; r14 (@total) : i64
+    ; r9 (row) : Array<i64, 3>
+    ; r10 (into_iter(...)) : Iterator<i64, Pure, #IdentityId(1)>
+    ; r11 (xs.) : &mut Iterator<i64, Pure, #IdentityId(1)>
+    ; r12 (next(...)) : Option<i64>
+    ; r13 ($source.) : &Option<i64>
+    ; r14 (v22) : Bool
     ; r15 (x) : i64
-    ; r16 (v23) : i64
-    ; r17 (@total) : i64
-    ; r18 (v25) : Array<Array<i64, 3>, 3>
-    ; r19 (v26) : i64
-    ; r20 (@total) : i64
-    ; r21 (xs) : Iterator<i64, Pure, #IdentityId(1)>
-    ; r22 (rows) : Iterator<Array<i64, 3>, Pure, #IdentityId(0)>
-    ; r23 (x) : i64
-    ; r24 (@outer) : Array<Array<i64, 3>, 3>
-    ; r25 (row) : Array<i64, 3>
+    ; r16 (@total) : i64
+    ; r17 (x) : i64
+    ; r18 (v27) : i64
+    ; r19 (@total) : i64
+    ; r20 (v29) : Array<Array<i64, 3>, 3>
+    ; r21 (v30) : i64
+    ; r22 (@total) : i64
+    ; r23 (xs) : Iterator<i64, Pure, #IdentityId(1)>
+    ; r24 (row) : Array<i64, 3>
+    ; r25 (@outer) : Array<Array<i64, 3>, 3>
+    ; r26 ($source) : Option<i64>
+    ; r27 (x) : i64
+    ; r28 (rows) : Iterator<Array<i64, 3>, Pure, #IdentityId(0)>
+    ; r29 ($source) : Option<Array<i64, 3>>

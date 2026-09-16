@@ -4,27 +4,31 @@ expression: ir
 ---
 === main ===
      1 |   r0 = variant Some(42 (r1))
-     2 |   r2 = test r0 is Some
-     3 |   jump_if r2 then L0 else L2
-     4 | L0:
-     5 |   r3 = unwrap r0
-     6 |   assign v = r3
-     7 |   r4 = take v
-     8 |   jump L1(r4)
-     9 | L2:
-    11 |   jump L1(0 (r5))
-    12 | L1(r6: i64):
-    13 |   assign x = r6
-    14 |   r7 = take x
-    15 |   return r7
+     2 |   assign $source = r0
+     3 |   r2 = ref &$source
+     4 |   r3 = test r2 is Some
+     5 |   jump_if r3 then L0 else L2
+     6 | L0:
+     7 |   r4 = take $source.payload
+     8 |   assign v = r4
+     9 |   r5 = take v
+    10 |   jump L1(r5)
+    11 | L2:
+    13 |   jump L1(0 (r6))
+    14 | L1(r7: i64):
+    15 |   assign x = r7
+    16 |   r8 = take x
+    17 |   return r8
 
     ; r0 (v2) : Option<i64>
     ; r1 (v1) : i64
-    ; r2 (v3) : Bool
-    ; r3 (v) : i64
+    ; r2 ($source.) : &Option<i64>
+    ; r3 (v5) : Bool
     ; r4 (v) : i64
-    ; r5 (v7) : i64
-    ; r6 (v8) : i64
-    ; r7 (x) : i64
+    ; r5 (v) : i64
+    ; r6 (v9) : i64
+    ; r7 (v10) : i64
     ; r8 (x) : i64
     ; r9 (v) : i64
+    ; r10 (x) : i64
+    ; r11 ($source) : Option<i64>

@@ -10,62 +10,60 @@ expression: ir
      4 |   r4 = fetch @b
      5 |   r5 = string_clone r4
      6 |   r6 = tuple (r3, r5)
-     7 | L2:
-     9 |   r7 = r6.0
-    11 |   r8 = true (r9) && true (r10)
-    12 |   r11 = r6.1
-    14 |   r12 = r8 && true (r13)
-    15 |   jump_if r12 then L3 else L1
-    16 | L3:
-    17 |   r14 = r6.0
-    18 |   assign a = r14
-    19 |   r15 = r6.1
-    20 |   r16 = ref &a
-    21 |   r17 = call #0(r16)
-    22 |   r18 = string_clone r15
-    23 |   r19 = string_concat [r17, r18]
-    24 |   jump L0(r19, r15)
-    25 | L1:
-    26 |   r20 = string_concat []
-    27 |   jump L0(r20, r2)
-    28 | L0(r21: String, r22: String):  ; merge_of L2
-    29 |   r23 = string_concat [r21]
-    30 |   commit @a = r3
-    31 |   commit @b = r4
-    32 |   return r23
+     7 |   assign $source = r6
+     8 | L2:
+    11 |   r7 = true (r8) && true (r9)
+    13 |   r10 = r7 && true (r11)
+    14 |   jump_if r10 then L3 else L1
+    15 | L3:
+    16 |   r12 = take $source[0]
+    17 |   assign a = r12
+    18 |   r13 = take $source[1]
+    19 |   r14 = ref &a
+    20 |   r15 = call #0(r14)
+    21 |   r16 = string_clone r13
+    22 |   r17 = string_concat [r15, r16]
+    23 |   jump L0(r17, r13)
+    24 | L1:
+    25 |   r18 = string_concat []
+    26 |   jump L0(r18, r2)
+    27 | L0(r19: String, r20: String):  ; merge_of L2
+    28 |   r21 = string_concat [r19]
+    29 |   commit @a = r3
+    30 |   commit @b = r4
+    31 |   return r21
 
-    ; r0 (v28) : i64
-    ; r1 (v29) : String
-    ; r2 (v30) : String
+    ; r0 (v27) : i64
+    ; r1 (v28) : String
+    ; r2 (v29) : String
     ; r3 (@a) : i64
     ; r4 (@b) : String
-    ; r5 (v34) : String
+    ; r5 (v33) : String
     ; r6 (v7) : (i64, String)
-    ; r7 (v9) : i64
-    ; r8 (v11) : Bool
-    ; r9 (v8) : Bool
-    ; r10 (v10) : Bool
-    ; r11 (v12) : String
-    ; r12 (v14) : Bool
-    ; r13 (v13) : Bool
-    ; r14 (a) : i64
-    ; r15 (b) : String
-    ; r16 (a.) : &i64
-    ; r17 (to_string(...)) : String
-    ; r18 (v35) : String
-    ; r19 (v22) : String
-    ; r20 (v23) : String
+    ; r7 (v11) : Bool
+    ; r8 (v9) : Bool
+    ; r9 (v10) : Bool
+    ; r10 (v13) : Bool
+    ; r11 (v12) : Bool
+    ; r12 (a) : i64
+    ; r13 (b) : String
+    ; r14 (a.) : &i64
+    ; r15 (to_string(...)) : String
+    ; r16 (v34) : String
+    ; r17 (v21) : String
+    ; r18 (v22) : String
+    ; r19 (v23) : String
+    ; r20 (v32) : String
     ; r21 (v24) : String
-    ; r22 (v33) : String
-    ; r23 (v25) : String
+    ; r22 (@b) : String
+    ; r23 (v25) : i64
     ; r24 (@b) : String
-    ; r25 (@b) : String
-    ; r26 (v31) : i64
-    ; r27 (@a) : i64
+    ; r25 (v31) : String
+    ; r26 (v30) : i64
+    ; r27 ($source) : (i64, String)
     ; r28 (b) : String
-    ; r29 (b) : String
-    ; r30 (@a) : i64
-    ; r31 (v27) : String
-    ; r32 (v26) : i64
-    ; r33 (v32) : String
-    ; r34 (a) : i64
+    ; r29 (@a) : i64
+    ; r30 (b) : String
+    ; r31 (a) : i64
+    ; r32 (@a) : i64
+    ; r33 (v26) : String

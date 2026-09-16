@@ -14,22 +14,24 @@ expression: ir
      8 | L0:
      9 |   r4 = ref &mut it
     10 |   r5 = call #1(r4)
-    11 |   r6 = test r5 is Some
-    12 |   jump_if r6 then L1 else L2
-    13 | L1:
-    14 |   r7 = unwrap r5
-    15 |   assign x = r7
-    16 |   r8 = take @count
-    18 |   r9 = r8 + 1 (r10)
-    19 |   assign @count = r9
-    20 |   jump L0
-    21 | L2:
-    22 |   r11 = take @count
-    23 |   r12 = take @items
-    24 |   commit @items = r12
-    25 |   r13 = take @count
-    26 |   commit @count = r13
-    27 |   return r11
+    11 |   assign $source = r5
+    12 |   r6 = ref &$source
+    13 |   r7 = test r6 is Some
+    14 |   jump_if r7 then L1 else L2
+    15 | L1:
+    16 |   r8 = take $source.payload
+    17 |   assign x = r8
+    18 |   r9 = take @count
+    20 |   r10 = r9 + 1 (r11)
+    21 |   assign @count = r10
+    22 |   jump L0
+    23 | L2:
+    24 |   r12 = take @count
+    25 |   r13 = take @items
+    26 |   commit @items = r13
+    27 |   r14 = take @count
+    28 |   commit @count = r14
+    29 |   return r12
 
     ; r0 (@items) : Array<i64, 3>
     ; r1 (@count) : i64
@@ -37,15 +39,17 @@ expression: ir
     ; r3 (into_iter(...)) : Iterator<i64, Pure, #IdentityId(0)>
     ; r4 (it.) : &mut Iterator<i64, Pure, #IdentityId(0)>
     ; r5 (next(...)) : Option<i64>
-    ; r6 (v10) : Bool
-    ; r7 (x) : i64
-    ; r8 (@count) : i64
-    ; r9 (v15) : i64
-    ; r10 (v14) : i64
-    ; r11 (@count) : i64
-    ; r12 (v17) : Array<i64, 3>
-    ; r13 (v18) : i64
-    ; r14 (@count) : i64
-    ; r15 (@items) : Array<i64, 3>
+    ; r6 ($source.) : &Option<i64>
+    ; r7 (v12) : Bool
+    ; r8 (x) : i64
+    ; r9 (@count) : i64
+    ; r10 (v17) : i64
+    ; r11 (v16) : i64
+    ; r12 (@count) : i64
+    ; r13 (v19) : Array<i64, 3>
+    ; r14 (v20) : i64
+    ; r15 (@count) : i64
     ; r16 (x) : i64
-    ; r17 (it) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r17 (@items) : Array<i64, 3>
+    ; r18 (it) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r19 ($source) : Option<i64>

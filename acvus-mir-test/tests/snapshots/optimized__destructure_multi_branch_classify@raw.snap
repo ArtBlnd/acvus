@@ -20,48 +20,54 @@ expression: raw
      7 |   assign @output = T0
      8 |   r3 = take age
     10 |   r4 = r3 >= 65 (r5)
-    11 |   r6 = test r4 == true
-    12 |   jump_if r6 then L0 else L1
-    13 | L0:
-    15 |   assign @output = T1
-    16 |   jump L1
-    17 | L1:
-    18 |   r7 = take age
-    20 |   r8 = r7 >= 18 (r9)
-    21 |   r10 = test r8 == true
-    22 |   jump_if r10 then L2 else L3
-    23 | L2:
-    25 |   assign @output = T2
-    26 |   jump L3
-    27 | L3:
-    28 |   r11 = take age
-    30 |   r12 = r11 < 18 (r13)
-    31 |   r14 = test r12 == true
-    32 |   jump_if r14 then L4 else L5
-    33 | L4:
-    35 |   assign @output = T3
-    36 |   jump L5
-    37 | L5:
-    38 |   r15 = ref &@user.name
-    40 |   assign v25 = T4
-    41 |   r16 = ref &v25
-    42 |   r17 = string_concat [r15, r16]
-    43 |   assign v28 = r17
-    44 |   r18 = ref &v28
-    45 |   r19 = ref &@output
-    46 |   r20 = string_concat [r18, r19]
-    47 |   assign v32 = r20
-    48 |   r21 = ref &v32
-    50 |   assign v35 = T5
-    51 |   r22 = ref &v35
+    11 |   assign $source = r4
+    12 |   r6 = take $source
+    13 |   r7 = test r6 == true
+    14 |   jump_if r7 then L0 else L1
+    15 | L0:
+    17 |   assign @output = T1
+    18 |   jump L1
+    19 | L1:
+    20 |   r8 = take age
+    22 |   r9 = r8 >= 18 (r10)
+    23 |   assign $source = r9
+    24 |   r11 = take $source
+    25 |   r12 = test r11 == true
+    26 |   jump_if r12 then L2 else L3
+    27 | L2:
+    29 |   assign @output = T2
+    30 |   jump L3
+    31 | L3:
+    32 |   r13 = take age
+    34 |   r14 = r13 < 18 (r15)
+    35 |   assign $source = r14
+    36 |   r16 = take $source
+    37 |   r17 = test r16 == true
+    38 |   jump_if r17 then L4 else L5
+    39 | L4:
+    41 |   assign @output = T3
+    42 |   jump L5
+    43 | L5:
+    44 |   r18 = ref &@user.name
+    46 |   assign v31 = T4
+    47 |   r19 = ref &v31
+    48 |   r20 = string_concat [r18, r19]
+    49 |   assign v34 = r20
+    50 |   r21 = ref &v34
+    51 |   r22 = ref &@output
     52 |   r23 = string_concat [r21, r22]
-    53 |   assign @output = r23
-    54 |   r24 = take @output
-    55 |   r25 = take @output
-    56 |   commit @output = r25
-    57 |   r26 = take @user
-    58 |   commit @user = r26
-    59 |   return r24
+    53 |   assign v38 = r23
+    54 |   r24 = ref &v38
+    56 |   assign v41 = T5
+    57 |   r25 = ref &v41
+    58 |   r26 = string_concat [r24, r25]
+    59 |   assign @output = r26
+    60 |   r27 = take @output
+    61 |   r28 = take @output
+    62 |   commit @output = r28
+    63 |   r29 = take @user
+    64 |   commit @user = r29
+    65 |   return r27
 
     ; r0 (@output) : String
     ; r1 (@user) : {age: i64, name: String}
@@ -69,37 +75,43 @@ expression: raw
     ; r3 (age) : i64
     ; r4 (v10) : Bool
     ; r5 (v9) : i64
-    ; r6 (v11) : Bool
-    ; r7 (age) : i64
-    ; r8 (v15) : Bool
-    ; r9 (v14) : i64
-    ; r10 (v16) : Bool
-    ; r11 (age) : i64
+    ; r6 (v12) : Bool
+    ; r7 (v13) : Bool
+    ; r8 (age) : i64
+    ; r9 (v17) : Bool
+    ; r10 (v16) : i64
+    ; r11 (v19) : Bool
     ; r12 (v20) : Bool
-    ; r13 (v19) : i64
-    ; r14 (v21) : Bool
-    ; r15 (@user.name) : &String
-    ; r16 (var_25.) : &String
-    ; r17 (v27) : String
-    ; r18 (var_28.) : &String
-    ; r19 (@output.) : &String
-    ; r20 (v31) : String
-    ; r21 (var_32.) : &String
-    ; r22 (var_35.) : &String
+    ; r13 (age) : i64
+    ; r14 (v24) : Bool
+    ; r15 (v23) : i64
+    ; r16 (v26) : Bool
+    ; r17 (v27) : Bool
+    ; r18 (@user.name) : &String
+    ; r19 (var_31.) : &String
+    ; r20 (v33) : String
+    ; r21 (var_34.) : &String
+    ; r22 (@output.) : &String
     ; r23 (v37) : String
-    ; r24 (@output) : String
-    ; r25 (v39) : String
-    ; r26 (v40) : {age: i64, name: String}
-    ; r27 (@user) : {age: i64, name: String}
-    ; r28 (v22) : String
-    ; r29 (v25) : String
-    ; r30 (age) : i64
-    ; r31 (v28) : String
-    ; r32 (v12) : String
-    ; r33 (v34) : String
-    ; r34 (v24) : String
-    ; r35 (v17) : String
-    ; r36 (@output) : String
-    ; r37 (v7) : String
-    ; r38 (v32) : String
-    ; r39 (v35) : String
+    ; r24 (var_38.) : &String
+    ; r25 (var_41.) : &String
+    ; r26 (v43) : String
+    ; r27 (@output) : String
+    ; r28 (v45) : String
+    ; r29 (v46) : {age: i64, name: String}
+    ; r30 (@user) : {age: i64, name: String}
+    ; r31 ($source) : Bool
+    ; r32 (age) : i64
+    ; r33 (v28) : String
+    ; r34 (v31) : String
+    ; r35 ($source) : Bool
+    ; r36 (v30) : String
+    ; r37 (v34) : String
+    ; r38 ($source) : Bool
+    ; r39 (v40) : String
+    ; r40 (v21) : String
+    ; r41 (v14) : String
+    ; r42 (@output) : String
+    ; r43 (v7) : String
+    ; r44 (v38) : String
+    ; r45 (v41) : String

@@ -9,41 +9,46 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     2 |   r2 = fetch @a
-     3 |   r3 = fetch @b
-     4 |   r4 = r2 == r3
-     5 | L2:
-     6 |   r5 = test r4 == true
-     7 |   jump_if r5 then L3 else L1
-     8 | L3:
-    10 |   r6 = string_concat [T0]
-    11 |   jump L0(r6)
-    12 | L1:
-    14 |   r7 = string_concat [T1]
-    15 |   jump L0(r7)
-    16 | L0(r8: String):  ; merge_of L2
-    17 |   r9 = string_concat [r8]
-    18 |   commit @a = r2
-    19 |   commit @b = r3
-    20 |   return r9
+     2 |   r2 = undef
+     3 |   r3 = fetch @a
+     4 |   r4 = fetch @b
+     5 |   r5 = r3 == r4
+     6 | L2:
+     7 |   r6 = test r5 == true
+     8 |   jump_if r6 then L3 else L1
+     9 | L3:
+    11 |   r7 = string_concat [T0]
+    12 |   jump L0(r7)
+    13 | L1:
+    15 |   r8 = string_concat [T1]
+    16 |   jump L0(r8)
+    17 | L0(r9: String):  ; merge_of L2
+    18 |   r10 = string_concat [r9]
+    19 |   commit @a = r3
+    20 |   commit @b = r4
+    21 |   return r10
 
-    ; r0 (v17) : i64
-    ; r1 (v18) : i64
-    ; r2 (@a) : i64
-    ; r3 (@b) : i64
-    ; r4 (v7) : Bool
-    ; r5 (v8) : Bool
-    ; r6 (v10) : String
+    ; r0 (v19) : i64
+    ; r1 (v20) : i64
+    ; r2 (v21) : Bool
+    ; r3 (@a) : i64
+    ; r4 (@b) : i64
+    ; r5 (v7) : Bool
+    ; r6 (v10) : Bool
     ; r7 (v12) : String
-    ; r8 (v13) : String
-    ; r9 (v14) : String
-    ; r10 (@b) : i64
-    ; r11 (v11) : String
-    ; r12 (@b) : i64
-    ; r13 (v9) : String
-    ; r14 (v20) : i64
-    ; r15 (@a) : i64
-    ; r16 (v15) : i64
-    ; r17 (@a) : i64
-    ; r18 (v16) : i64
-    ; r19 (v19) : i64
+    ; r8 (v14) : String
+    ; r9 (v15) : String
+    ; r10 (v16) : String
+    ; r11 (v22) : i64
+    ; r12 (v11) : String
+    ; r13 (@b) : i64
+    ; r14 (v17) : i64
+    ; r15 (@b) : i64
+    ; r16 (v9) : Bool
+    ; r17 (v18) : i64
+    ; r18 (v24) : Bool
+    ; r19 (v13) : String
+    ; r20 (@a) : i64
+    ; r21 (v23) : i64
+    ; r22 (@a) : i64
+    ; r23 ($source) : Bool

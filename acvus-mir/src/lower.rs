@@ -2717,7 +2717,24 @@ impl<'a> Lowerer<'a> {
                 path,
                 ty: self.type_of_id(source.id()),
             },
-            None => PatSrc::Value(self.lower_expr(source)),
+            None => self.spill_pattern_source(source),
+        }
+    }
+
+    /// A pattern's source that is not a place is stored in a slot of its
+    /// own before matching: the test reads it and the bind takes from it,
+    /// and a temporary can be taken only once.
+    fn spill_pattern_source(&mut self, source: &Expr) -> PatSrc {
+        let value = self.lower_expr(source);
+        let ty = self.type_of_id(source.id());
+        let slot = self.body.val_factory.next();
+        self.set_origin(slot, ValOrigin::Named(self.interner.intern("$source")));
+        self.set_val_type(slot, ty.clone());
+        self.emit_assign(source.span(), RefTarget::Var(slot), vec![], value);
+        PatSrc::Place {
+            target: RefTarget::Var(slot),
+            path: vec![],
+            ty,
         }
     }
 
