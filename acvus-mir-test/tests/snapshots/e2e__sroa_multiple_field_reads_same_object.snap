@@ -12,9 +12,9 @@ expression: ir
      6 |   commit @obj = r4
      7 |   return r3
 
-    ; r0 (@obj) : {x: Int, y: Int}
-    ; r1 (@obj.x) : Int
-    ; r2 (@obj.y) : Int
-    ; r3 (v5) : Int
-    ; r4 (v6) : {x: Int, y: Int}
-    ; r5 (@obj) : {x: Int, y: Int}
+    ; r0 (@obj) : {x: i64, y: i64}
+    ; r1 (@obj.x) : i64
+    ; r2 (@obj.y) : i64
+    ; r3 (v5) : i64
+    ; r4 (v6) : {x: i64, y: i64}
+    ; r5 (@obj) : {x: i64, y: i64}

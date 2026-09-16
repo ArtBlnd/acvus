@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 199
 expression: ir
 ---
 === literals ===
@@ -12,8 +11,8 @@ expression: ir
      4 |   r2 = string_concat [T0]
      5 |   return r2
 
-    ; r0 (v5) : Int
-    ; r1 (v1) : Int
+    ; r0 (v5) : i64
+    ; r1 (v1) : i64
     ; r2 (v4) : String
     ; r3 (v3) : String
-    ; r4 (count) : Int
+    ; r4 (count) : i64

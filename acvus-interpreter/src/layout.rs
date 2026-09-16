@@ -67,10 +67,9 @@ pub fn encode(
     out: &mut Vec<u8>,
 ) -> SpaceResult<()> {
     match ty {
-        Ty::Int => out.extend_from_slice(&value.as_int().to_le_bytes()),
+        Ty::Int(k) => out.extend_from_slice(&value.small().to_le_bytes()[..k.bytes()]),
         Ty::Float => out.extend_from_slice(&value.as_float().to_bits().to_le_bytes()),
         Ty::Bool => out.push(value.as_bool() as u8),
-        Ty::Byte => out.push(value.as_byte()),
         Ty::Unit => {}
         // SAFETY (each composite): the type is the runtime's witness of the
         // value's shape; the checker admits no other value in a place of
@@ -156,10 +155,13 @@ pub fn decode(
     input: &mut &[u8],
 ) -> SpaceResult<Value> {
     Ok(match ty {
-        Ty::Int => Value::int(take_u64(input)? as i64),
+        Ty::Int(k) => {
+            let mut word = [0u8; 8];
+            word[..k.bytes()].copy_from_slice(take(input, k.bytes())?);
+            Value::from_bits(k.read(u64::from_le_bytes(word)) as u64)
+        }
         Ty::Float => Value::float(f64::from_bits(take_u64(input)?)),
         Ty::Bool => Value::bool_(take(input, 1)?[0] != 0),
-        Ty::Byte => Value::byte(take(input, 1)?[0]),
         Ty::Unit => Value::unit(),
         Ty::String => {
             let len = take_u64(input)? as usize;

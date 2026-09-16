@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/inline.rs
-assertion_line: 264
 expression: ir
 ---
 === main ===
@@ -26,20 +25,20 @@ expression: ir
     20 |   commit @count = r12
     21 |   return r11
 
-    ; r0 (@count) : Int
-    ; r1 (v4) : Int
-    ; r2 (@count) : Int
-    ; r3 (@count) : Int
-    ; r4 (v15) : Int
-    ; r5 (v14) : Int
-    ; r6 (@count) : Int
-    ; r7 (v17) : Int
-    ; r8 (@count) : Int
-    ; r9 (x) : Int
-    ; r10 (@count) : Int
-    ; r11 (v9) : Int
-    ; r12 (v10) : Int
-    ; r13 (bump(...)) : Int
-    ; r14 (@count) : Int
-    ; r15 (x) : Int
-    ; r16 (@count) : Int
+    ; r0 (@count) : i64
+    ; r1 (v4) : i64
+    ; r2 (@count) : i64
+    ; r3 (@count) : i64
+    ; r4 (v15) : i64
+    ; r5 (v14) : i64
+    ; r6 (@count) : i64
+    ; r7 (v17) : i64
+    ; r8 (@count) : i64
+    ; r9 (x) : i64
+    ; r10 (@count) : i64
+    ; r11 (v9) : i64
+    ; r12 (v10) : i64
+    ; r13 (bump(...)) : i64
+    ; r14 (@count) : i64
+    ; r15 (x) : i64
+    ; r16 (@count) : i64

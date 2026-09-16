@@ -12,14 +12,14 @@ expression: ir
      8 |   r6 = r2 + r5
      9 |   return r6
 
-    ; r0 ($x) : Int
-    ; r1 ($x) : Int
-    ; r2 (v9) : Int
-    ; r3 ($x) : Int
-    ; r4 ($x) : Int
-    ; r5 (v13) : Int
-    ; r6 (v5) : Int
-    ; r7 (v3) : Int
-    ; r8 (square(...)) : Int
-    ; r9 (v1) : Int
-    ; r10 (square(...)) : Int
+    ; r0 ($x) : i64
+    ; r1 ($x) : i64
+    ; r2 (v9) : i64
+    ; r3 ($x) : i64
+    ; r4 ($x) : i64
+    ; r5 (v13) : i64
+    ; r6 (v5) : i64
+    ; r7 (v3) : i64
+    ; r8 (square(...)) : i64
+    ; r9 (v1) : i64
+    ; r10 (square(...)) : i64

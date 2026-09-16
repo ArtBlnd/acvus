@@ -115,12 +115,11 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Var(v), _) | (_, Ty::Var(v)) => match *v {},
 
         // Primitives
-        (Ty::Int, Ty::Int) => true,
+        (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float, Ty::Float) => true,
         (Ty::String, Ty::String) => true,
         (Ty::Bool, Ty::Bool) => true,
         (Ty::Unit, Ty::Unit) => true,
-        (Ty::Byte, Ty::Byte) => true,
         (Ty::Order, Ty::Order) => true,
 
         // Containers (invariant inner)
@@ -170,10 +169,9 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
 fn literal_ty(lit: &Literal) -> Ty {
     match lit {
         Literal::String(_) => Ty::String,
-        Literal::Int(_) => Ty::Int,
+        Literal::Int(_) => Ty::I64,
         Literal::Float(_) => Ty::Float,
         Literal::Bool(_) => Ty::Bool,
-        Literal::Byte(_) => Ty::Byte,
         Literal::List(_) => Ty::error(),
         Literal::Unit => Ty::Unit,
     }
@@ -351,7 +349,9 @@ impl CheckCtx {
         for seg in path {
             let next = match (seg, &at) {
                 (PathSeg::Field(field), Ty::Object(fields)) => fields.get(field).cloned(),
-                (PathSeg::Index(i), Ty::Array(elem, _)) => Some(elem.as_ref().clone()).filter(|_| *i < usize::MAX),
+                (PathSeg::Index(i), Ty::Array(elem, _)) => {
+                    Some(elem.as_ref().clone()).filter(|_| *i < usize::MAX)
+                }
                 (PathSeg::Index(i), Ty::Tuple(elems)) => elems.get(*i).cloned(),
                 (PathSeg::Payload, Ty::Option(payload)) => Some(payload.as_ref().clone()),
                 // Enum payload: dst type comes from val_types, trust typechecker
@@ -449,10 +449,16 @@ impl CheckCtx {
 
             // === Const ===
             InstKind::Const { dst, value } => {
-                let lit_ty = literal_ty(value);
-                if !lit_ty.is_error() {
-                    let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "Const", "dst", &lit_ty, dst_ty, errors);
+                let dst_ty = ty!(*dst);
+                if let Literal::Int(_) = value {
+                    if !matches!(dst_ty, Ty::Int(_)) {
+                        self.assert_match(pc, span, "Const", "dst", &Ty::I64, dst_ty, errors);
+                    }
+                } else {
+                    let lit_ty = literal_ty(value);
+                    if !lit_ty.is_error() {
+                        self.assert_match(pc, span, "Const", "dst", &lit_ty, dst_ty, errors);
+                    }
                 }
             }
 
@@ -849,7 +855,10 @@ impl CheckCtx {
                         return;
                     };
                     self.assert_match(pc, span, "Take", "dst", &at, dst_ty, errors);
-                    if !at.is_primitive() && !matches!(at, Ty::String | Ty::Ref(..)) && !at.is_error() {
+                    if !at.is_primitive()
+                        && !matches!(at, Ty::String | Ty::Ref(..))
+                        && !at.is_error()
+                    {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
@@ -870,7 +879,8 @@ impl CheckCtx {
             } => {
                 let val_ty = ty!(*value);
                 if let RefTarget::Through(r) = target {
-                    let Some((m, at)) = self.through(pc, span, "Assign", *r, path, vt, errors) else {
+                    let Some((m, at)) = self.through(pc, span, "Assign", *r, path, vt, errors)
+                    else {
                         return;
                     };
                     if m != Mutability::Mut {
@@ -1120,7 +1130,7 @@ impl CheckCtx {
             } => {
                 let list_ty = ty!(*list);
                 let index_ty = ty!(*index);
-                self.assert_match(pc, span, "ArrayGet", "index", &Ty::Int, index_ty, errors);
+                self.assert_match(pc, span, "ArrayGet", "index", &Ty::I64, index_ty, errors);
                 if let Some(inner) = as_array_inner(list_ty) {
                     let dst_ty = ty!(*dst);
                     self.assert_match(pc, span, "ArrayGet", "dst", inner, dst_ty, errors);
@@ -1537,7 +1547,7 @@ mod tests {
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::Int);
+        vt.insert(v0, Ty::I64);
         let module = make_module(
             vec![inst(InstKind::Const {
                 dst: v0,
@@ -1573,9 +1583,9 @@ mod tests {
         let v1 = vf.next();
         let v2 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::Int);
+        vt.insert(v0, Ty::I64);
         vt.insert(v1, Ty::String); // mismatch
-        vt.insert(v2, Ty::Int);
+        vt.insert(v2, Ty::I64);
         let module = make_module(
             vec![inst(InstKind::BinOp {
                 dst: v2,
@@ -1595,8 +1605,8 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::Int);
-        vt.insert(v1, Ty::Tuple(vec![Ty::Int, Ty::String])); // expects 2 elements
+        vt.insert(v0, Ty::I64);
+        vt.insert(v1, Ty::Tuple(vec![Ty::I64, Ty::String])); // expects 2 elements
         let module = make_module(
             vec![inst(InstKind::MakeTuple {
                 dst: v1,
@@ -1615,8 +1625,8 @@ mod tests {
         let v0 = vf.next();
         let v1 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::Int);
-        vt.insert(v1, Ty::Int);
+        vt.insert(v0, Ty::I64);
+        vt.insert(v1, Ty::I64);
         let module = make_module(
             vec![
                 inst(InstKind::BlockLabel {

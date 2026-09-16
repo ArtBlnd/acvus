@@ -18,15 +18,15 @@ expression: ir
     14 |   commit @b = r8
     15 |   return r6
 
-    ; r0 (@a) : Int
-    ; r1 (@b) : Int
-    ; r2 (v6) : Int
-    ; r3 (v7) : Int
-    ; r4 (@a) : Int
-    ; r5 (@b) : Int
-    ; r6 (v10) : Int
-    ; r7 (v11) : Int
-    ; r8 (v12) : Int
-    ; r9 (@a) : Int
-    ; r10 (init(...)) : Int
-    ; r11 (@b) : Int
+    ; r0 (@a) : i64
+    ; r1 (@b) : i64
+    ; r2 (v6) : i64
+    ; r3 (v7) : i64
+    ; r4 (@a) : i64
+    ; r5 (@b) : i64
+    ; r6 (v10) : i64
+    ; r7 (v11) : i64
+    ; r8 (v12) : i64
+    ; r9 (@a) : i64
+    ; r10 (init(...)) : i64
+    ; r11 (@b) : i64

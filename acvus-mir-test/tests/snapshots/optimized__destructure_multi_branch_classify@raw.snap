@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
-assertion_line: 254
 expression: raw
 ---
 === literals ===
@@ -65,19 +64,19 @@ expression: raw
     59 |   return r24
 
     ; r0 (@output) : String
-    ; r1 (@user) : {age: Int, name: String}
-    ; r2 (@user.age) : Int
-    ; r3 (age) : Int
+    ; r1 (@user) : {age: i64, name: String}
+    ; r2 (@user.age) : i64
+    ; r3 (age) : i64
     ; r4 (v10) : Bool
-    ; r5 (v9) : Int
+    ; r5 (v9) : i64
     ; r6 (v11) : Bool
-    ; r7 (age) : Int
+    ; r7 (age) : i64
     ; r8 (v15) : Bool
-    ; r9 (v14) : Int
+    ; r9 (v14) : i64
     ; r10 (v16) : Bool
-    ; r11 (age) : Int
+    ; r11 (age) : i64
     ; r12 (v20) : Bool
-    ; r13 (v19) : Int
+    ; r13 (v19) : i64
     ; r14 (v21) : Bool
     ; r15 (@user.name) : &String
     ; r16 (var_25.) : &String
@@ -90,11 +89,11 @@ expression: raw
     ; r23 (v37) : String
     ; r24 (@output) : String
     ; r25 (v39) : String
-    ; r26 (v40) : {age: Int, name: String}
-    ; r27 (@user) : {age: Int, name: String}
+    ; r26 (v40) : {age: i64, name: String}
+    ; r27 (@user) : {age: i64, name: String}
     ; r28 (v22) : String
     ; r29 (v25) : String
-    ; r30 (age) : Int
+    ; r30 (age) : i64
     ; r31 (v28) : String
     ; r32 (v12) : String
     ; r33 (v34) : String

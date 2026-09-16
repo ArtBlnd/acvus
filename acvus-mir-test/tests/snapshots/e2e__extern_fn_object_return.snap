@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 1227
 expression: ir
 ---
 === literals ===
@@ -18,13 +17,13 @@ expression: ir
     ;   call@2 #0 <- r3(entry)
 
     ; r0 (v12) : Order
-    ; r1 (get_user(...)) : {age: Int, name: String}
-    ; r2 (v3) : Int
+    ; r1 (get_user(...)) : {age: i64, name: String}
+    ; r2 (v3) : i64
     ; r3 (v1) : Order
     ; r4 (v6) : Order
     ; r5 (u.name) : String
     ; r6 (v10) : String
-    ; r7 (u) : {age: Int, name: String}
+    ; r7 (u) : {age: i64, name: String}
     ; r8 (v11) : Order
     ; r9 (v5) : Order
     ; r10 (v8) : String

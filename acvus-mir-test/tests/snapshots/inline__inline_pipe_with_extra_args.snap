@@ -8,9 +8,9 @@ expression: ir
      4 |   r2 = r0 + r1
      5 |   return r2
 
-    ; r0 ($a) : Int
-    ; r1 ($b) : Int
-    ; r2 (v8) : Int
-    ; r3 (add(...)) : Int
-    ; r4 (v1) : Int
-    ; r5 (v2) : Int
+    ; r0 ($a) : i64
+    ; r1 ($b) : i64
+    ; r2 (v8) : i64
+    ; r3 (add(...)) : i64
+    ; r4 (v1) : i64
+    ; r5 (v2) : i64

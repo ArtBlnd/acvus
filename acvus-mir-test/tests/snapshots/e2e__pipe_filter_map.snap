@@ -27,32 +27,32 @@ expression: ir
     22 |   commit @items = r4
     23 |   return r15
 
-    ; r0 (v26) : Vec<Int>
-    ; r1 (v27) : Vec<Int>
-    ; r2 (@items) : Vec<Int>
-    ; r3 (v6) : Array<Int, 0>
-    ; r4 (vec(...)) : Vec<Int>
-    ; r5 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r6 (v11) : Fn(&Int) -> Bool
-    ; r7 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r8 (v13) : Fn(Int) -> Int
-    ; r9 (map(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r10 (collect(...)) : Vec<Int>
-    ; r11 (x.) : &Vec<Int>
-    ; r12 (len(...)) : Int
-    ; r13 (out.) : &Int
+    ; r0 (v26) : Vec<i64>
+    ; r1 (v27) : Vec<i64>
+    ; r2 (@items) : Vec<i64>
+    ; r3 (v6) : Array<i64, 0>
+    ; r4 (vec(...)) : Vec<i64>
+    ; r5 (into_iter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r6 (v11) : Fn(&i64) -> Bool
+    ; r7 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r8 (v13) : Fn(i64) -> i64
+    ; r9 (map(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r10 (collect(...)) : Vec<i64>
+    ; r11 (x.) : &Vec<i64>
+    ; r12 (len(...)) : i64
+    ; r13 (out.) : &i64
     ; r14 (to_string(...)) : String
     ; r15 (v24) : String
-    ; r16 (@items) : Vec<Int>
-    ; r17 (v25) : Vec<Int>
-    ; r18 (items) : Vec<Int>
+    ; r16 (@items) : Vec<i64>
+    ; r17 (v25) : Vec<i64>
+    ; r18 (items) : Vec<i64>
     ; r19 (v17) : String
     ; r20 (v21) : String
-    ; r21 (out) : Int
-    ; r22 (@items) : Vec<Int>
-    ; r23 (items) : Vec<Int>
+    ; r21 (out) : i64
+    ; r22 (@items) : Vec<i64>
+    ; r23 (items) : Vec<i64>
     ; r24 (v5) : String
-    ; r25 (x) : Vec<Int>
+    ; r25 (x) : Vec<i64>
     ; r26 (v8) : String
 
 === closure L0 (ValueId(0)) ===
@@ -61,22 +61,22 @@ expression: ir
      3 |   r3 = r1 != 0 (r4)
      4 |   return r3
 
-    ; r0 (v7) : &Int
-    ; r1 (v4) : Int
-    ; r2 (v1) : &Int
+    ; r0 (v7) : &i64
+    ; r1 (v4) : i64
+    ; r2 (v1) : &i64
     ; r3 (v6) : Bool
-    ; r4 (v5) : Int
-    ; r5 (x) : &Int
-    ; r6 (x) : &Int
+    ; r4 (v5) : i64
+    ; r5 (x) : &i64
+    ; r6 (x) : &i64
 
 === closure L1 (ValueId(0)) ===
      0 |   r0 = undef
      2 |   r1 = r2 + 1 (r3)
      3 |   return r1
 
-    ; r0 (v6) : Int
-    ; r1 (v5) : Int
-    ; r2 (v1) : Int
-    ; r3 (v4) : Int
-    ; r4 (x) : Int
-    ; r5 (x) : Int
+    ; r0 (v6) : i64
+    ; r1 (v5) : i64
+    ; r2 (v1) : i64
+    ; r3 (v4) : i64
+    ; r4 (x) : i64
+    ; r5 (x) : i64

@@ -97,7 +97,7 @@ A context is a variable of the body that names it (RFC-0025): the lowering fetch
 ```
 Ty = TyTerm<Concrete>;  PolyTy = TyTerm<Poly>;  InferTy = TyTerm<Infer>
 
-TyTerm::Int | Float | String | Bool | Unit | Byte
+TyTerm::Int(IntTy) | Float | String | Bool | Unit
    | Order                          -- dependency between effectful calls; IR-only (RFC-0007)
    | Array(Box<Ty>, LenTerm)        -- length is a term: known or a variable
    | Object(Map<Astr,Ty>)           -- structural typed record

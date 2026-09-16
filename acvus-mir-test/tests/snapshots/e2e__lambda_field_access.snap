@@ -21,34 +21,34 @@ expression: ir
     15 |   commit @users = r5
     16 |   return r10
 
-    ; r0 (v20) : Vec<{age: Int, name: String}>
-    ; r1 (v21) : Vec<{age: Int, name: String}>
+    ; r0 (v20) : Vec<{age: i64, name: String}>
+    ; r1 (v21) : Vec<{age: i64, name: String}>
     ; r2 (v22) : Iterator<String, Pure, #IdentityId(0)>
-    ; r3 (@users) : Vec<{age: Int, name: String}>
-    ; r4 (v6) : Array<{age: Int, name: String}, 0>
-    ; r5 (vec(...)) : Vec<{age: Int, name: String}>
-    ; r6 (into_iter(...)) : Iterator<{age: Int, name: String}, Pure, #IdentityId(0)>
-    ; r7 (v11) : Fn({age: Int, name: String}) -> String
+    ; r3 (@users) : Vec<{age: i64, name: String}>
+    ; r4 (v6) : Array<{age: i64, name: String}, 0>
+    ; r5 (vec(...)) : Vec<{age: i64, name: String}>
+    ; r6 (into_iter(...)) : Iterator<{age: i64, name: String}, Pure, #IdentityId(0)>
+    ; r7 (v11) : Fn({age: i64, name: String}) -> String
     ; r8 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r9 (join(...)) : String
     ; r10 (v18) : String
-    ; r11 (@users) : Vec<{age: Int, name: String}>
+    ; r11 (@users) : Vec<{age: i64, name: String}>
     ; r12 (v14) : String
-    ; r13 (users) : Vec<{age: Int, name: String}>
+    ; r13 (users) : Vec<{age: i64, name: String}>
     ; r14 (x) : Iterator<String, Pure, #IdentityId(0)>
     ; r15 (v5) : String
     ; r16 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r17 (@users) : Vec<{age: Int, name: String}>
-    ; r18 (users) : Vec<{age: Int, name: String}>
+    ; r17 (@users) : Vec<{age: i64, name: String}>
+    ; r18 (users) : Vec<{age: i64, name: String}>
     ; r19 (v16) : String
     ; r20 (v8) : String
-    ; r21 (v19) : Vec<{age: Int, name: String}>
+    ; r21 (v19) : Vec<{age: i64, name: String}>
 
 === closure L0 (ValueId(0)) ===
      0 |   assign u = r0
      1 |   r1 = take u.name
      2 |   return r1
 
-    ; r0 (v1) : {age: Int, name: String}
+    ; r0 (v1) : {age: i64, name: String}
     ; r1 (u.name) : String
-    ; r2 (u) : {age: Int, name: String}
+    ; r2 (u) : {age: i64, name: String}

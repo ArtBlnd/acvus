@@ -6,11 +6,10 @@ use rustc_hash::FxHashMap;
 /// Wraps f64 via to_bits() to provide Hash + Eq.
 #[derive(Hash, Eq, PartialEq)]
 enum LiteralKey {
-    Int(i64),
+    Int(i128),
     Float(u64),
     String(String),
     Bool(bool),
-    Byte(u8),
     List(Vec<LiteralKey>),
     Unit,
 }
@@ -22,7 +21,6 @@ impl LiteralKey {
             Literal::Float(v) => LiteralKey::Float(v.to_bits()),
             Literal::String(v) => LiteralKey::String(v.clone()),
             Literal::Bool(v) => LiteralKey::Bool(*v),
-            Literal::Byte(v) => LiteralKey::Byte(*v),
             Literal::List(elems) => {
                 LiteralKey::List(elems.iter().map(LiteralKey::from_literal).collect())
             }

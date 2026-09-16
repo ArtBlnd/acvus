@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use crate::graph::types::QualifiedRef;
 use crate::ty::{
     CastRule, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
-    IdentityVarId, Infer, InferTy, LenTerm, LenVarId, Polarity, PolyTy, Scheme, Ty, TyTerm,
+    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Polarity, PolyTy, Scheme, Ty, TyTerm,
     TyVarBound, TypeBoundId, TypeRegistry, could_match_pattern,
 };
 
@@ -89,7 +89,10 @@ pub struct ChoiceId(pub u32);
 
 #[derive(Debug)]
 pub enum ChoiceFailure {
-    NoInstance { choice: ChoiceId, ty: InferTy },
+    NoInstance {
+        choice: ChoiceId,
+        ty: InferTy,
+    },
     Mismatch {
         choice: ChoiceId,
         expected: InferTy,
@@ -524,8 +527,8 @@ impl<'src> Solver<'src> {
         let b = self.resolve_effect(b);
         match (a, b) {
             (EffectTerm::Known(ea), EffectTerm::Known(eb)) => {
-                let same_contexts = pol != Polarity::Invariant
-                    || (ea.reads == eb.reads && ea.writes == eb.writes);
+                let same_contexts =
+                    pol != Polarity::Invariant || (ea.reads == eb.reads && ea.writes == eb.writes);
                 let (required, allowed) = match pol {
                     Polarity::Invariant => (ea.join(&eb), ea.meet(&eb)),
                     Polarity::Covariant => (ea, eb),
@@ -555,7 +558,11 @@ impl<'src> Solver<'src> {
         }
     }
 
-    fn effect_at_least(&mut self, below: EffectVarId, above: EffectVarId) -> Result<(), EffectConflict> {
+    fn effect_at_least(
+        &mut self,
+        below: EffectVarId,
+        above: EffectVarId,
+    ) -> Result<(), EffectConflict> {
         let below = self.find_effect_root(below);
         let above = self.find_effect_root(above);
         if below == above {
@@ -595,6 +602,44 @@ impl<'src> Solver<'src> {
     }
 
     /// Allocate a fresh unconstrained type variable.
+    /// A fresh variable for an integer literal: any integer width, `i64`
+    /// where nothing narrows it (RFC-0037).
+    pub fn fresh_int_var(&mut self) -> InferTy {
+        let id = TypeBoundId(self.ty_bounds.len() as u32);
+        self.ty_bounds.push(TypeBound::Unresolved {
+            bound: TyVarBound::Integer {
+                signed: false,
+                among: IntTy::ALL.to_vec(),
+            },
+        });
+        TyTerm::Var(id)
+    }
+
+    /// An integer literal that no member of the bound it met admits takes
+    /// its default width, so that the other bound reports the mismatch
+    /// where it was declared; whether one of `roots` was such a literal.
+    fn settle_unadmitted_literal(&mut self, roots: [TypeBoundId; 2]) -> bool {
+        for root in roots {
+            if let Some(k) = self.bound_of(root).integer_default() {
+                self.bind_ty(root, TyTerm::Int(k));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// A negated integer literal is a signed one (RFC-0037).
+    pub fn require_signed(&mut self, id: TypeBoundId) {
+        let root = self.find_ty_root(id);
+        if let TypeBound::Unresolved {
+            bound: TyVarBound::Integer { signed, among },
+        } = &mut self.ty_bounds[root.0 as usize]
+        {
+            *signed = true;
+            among.retain(|k| k.signed());
+        }
+    }
+
     pub fn fresh_ty_var(&mut self) -> InferTy {
         let id = TypeBoundId(self.ty_bounds.len() as u32);
         self.ty_bounds.push(TypeBound::Unresolved {
@@ -654,7 +699,10 @@ impl<'src> Solver<'src> {
                             })
                         }
                     }
-                    TypeBound::Unresolved { .. } => Err(FreezeError::UnresolvedType(root)),
+                    TypeBound::Unresolved { bound } => match bound.integer_default() {
+                        Some(k) => Ok(Ty::Int(k)),
+                        None => Err(FreezeError::UnresolvedType(root)),
+                    },
                     TypeBound::Forward(_) => unreachable!("find_ty_root should resolve forwards"),
                 }
             },
@@ -806,12 +854,11 @@ impl<'src> Solver<'src> {
         match (&a, &b) {
             (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => Ok(None),
 
-            (TyTerm::Int, TyTerm::Int)
-            | (TyTerm::Float, TyTerm::Float)
+            (TyTerm::Int(ka), TyTerm::Int(kb)) if ka == kb => Ok(None),
+            (TyTerm::Float, TyTerm::Float)
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
-            | (TyTerm::Unit, TyTerm::Unit)
-            | (TyTerm::Byte, TyTerm::Byte) => Ok(None),
+            | (TyTerm::Unit, TyTerm::Unit) => Ok(None),
 
             (
                 TyTerm::UserDefined {
@@ -910,6 +957,9 @@ impl<'src> Solver<'src> {
                         let root1 = self.find_ty_root(*id);
                         let root2 = self.find_ty_root(*id2);
                         let Some(merged) = self.bound_of(root1).meet(&self.bound_of(root2)) else {
+                            if self.settle_unadmitted_literal([root1, root2]) {
+                                return self.unify_ty(orig_a, orig_b, pol, registry);
+                            }
                             return Err((a.clone(), b.clone()));
                         };
                         self.ty_bounds[root2.0 as usize] = TypeBound::Unresolved { bound: merged };
@@ -919,6 +969,12 @@ impl<'src> Solver<'src> {
                         self.bind_ty(*id, other.clone());
                     }
                     _ => {
+                        let root = self.find_ty_root(*id);
+                        if let TyVarBound::Integer { signed, among } = self.bound_of(root)
+                            && !matches!(other, TyTerm::Int(k) if among.contains(k) && (!signed || k.signed()))
+                        {
+                            return Err((a.clone(), b.clone()));
+                        }
                         self.bind_ty(*id, other.clone());
                     }
                 }

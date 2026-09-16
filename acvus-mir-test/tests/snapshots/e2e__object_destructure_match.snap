@@ -32,15 +32,15 @@ expression: ir
     27 |   return r16
 
     ; r0 (v21) : String
-    ; r1 (@user) : {age: Int, email: String, name: String}
+    ; r1 (@user) : {age: i64, email: String, name: String}
     ; r2 (v5) : Bool
     ; r3 (v3) : Bool
     ; r4 (v4) : Bool
     ; r5 (v7) : Bool
     ; r6 (v6) : Bool
     ; r7 (name) : String
-    ; r8 (age) : Int
-    ; r9 (age.) : &Int
+    ; r8 (age) : i64
+    ; r9 (age.) : &i64
     ; r10 (to_string(...)) : String
     ; r11 (v23) : String
     ; r12 (v15) : String
@@ -48,9 +48,9 @@ expression: ir
     ; r14 (v18) : String
     ; r15 (v22) : String
     ; r16 (v19) : String
-    ; r17 (v20) : {age: Int, email: String, name: String}
-    ; r18 (age) : Int
+    ; r17 (v20) : {age: i64, email: String, name: String}
+    ; r18 (age) : i64
     ; r19 (name) : String
-    ; r20 (@user) : {age: Int, email: String, name: String}
+    ; r20 (@user) : {age: i64, email: String, name: String}
     ; r21 (name) : String
     ; r22 (v16) : String

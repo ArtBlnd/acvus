@@ -20,12 +20,12 @@ expression: ir
 
     ; r0 (v1) : Order
     ; r1 (v5) : Order
-    ; r2 ($id) : Int
+    ; r2 ($id) : i64
     ; r3 (v13) : Order
     ; r4 (fetch(...)) : String
     ; r5 (v14) : Order
     ; r6 (v15) : Order
     ; r7 (v7) : Order
-    ; r8 (v3) : Int
+    ; r8 (v3) : i64
     ; r9 (v6) : Order
     ; r10 (wrapper(...)) : String

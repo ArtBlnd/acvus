@@ -2,7 +2,7 @@
 //! `TyVar`: a generic parameter that is an acvus type variable.
 //! `Typeck<N>`: the compile-time stand-in for the N-th type variable.
 
-use acvus_mir::ty::{EffectTerm, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy};
+use acvus_mir::ty::{EffectTerm, IdentityTerm, IntTy, LenTerm, Poly, PolyBuilder, PolyTy};
 use acvus_utils::Interner;
 
 /// The variables a polymorphic ExternFn type ranges over, by kind and
@@ -65,21 +65,27 @@ impl<const N: usize> TyArg for Typeck<N> {
 }
 
 macro_rules! impl_scalar_ty_arg {
-    ($T:ty, $variant:ident) => {
+    ($T:ty, $ty:expr) => {
         impl TyArg for $T {
             fn poly_ty(_: &Interner, _: &PolyVars) -> PolyTy {
-                PolyTy::$variant
+                $ty
             }
         }
     };
 }
 
-impl_scalar_ty_arg!(i64, Int);
-impl_scalar_ty_arg!(f64, Float);
-impl_scalar_ty_arg!(String, String);
-impl_scalar_ty_arg!(bool, Bool);
-impl_scalar_ty_arg!(u8, Byte);
-impl_scalar_ty_arg!((), Unit);
+impl_scalar_ty_arg!(i8, PolyTy::I8);
+impl_scalar_ty_arg!(i16, PolyTy::I16);
+impl_scalar_ty_arg!(i32, PolyTy::I32);
+impl_scalar_ty_arg!(i64, PolyTy::I64);
+impl_scalar_ty_arg!(u8, PolyTy::U8);
+impl_scalar_ty_arg!(u16, PolyTy::U16);
+impl_scalar_ty_arg!(u32, PolyTy::U32);
+impl_scalar_ty_arg!(u64, PolyTy::U64);
+impl_scalar_ty_arg!(f64, PolyTy::Float);
+impl_scalar_ty_arg!(String, PolyTy::String);
+impl_scalar_ty_arg!(bool, PolyTy::Bool);
+impl_scalar_ty_arg!((), PolyTy::Unit);
 
 impl<T, const N: usize> TyArg for [T; N]
 where

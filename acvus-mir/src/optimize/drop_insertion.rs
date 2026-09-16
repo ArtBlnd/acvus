@@ -175,7 +175,12 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 }
 
 /// Check if `val` is used after `at_idx` within the block (instructions + terminator).
-fn is_last_use_in_block(block: &crate::cfg::Block, at_idx: usize, val: ValueId, loans: &Loans) -> bool {
+fn is_last_use_in_block(
+    block: &crate::cfg::Block,
+    at_idx: usize,
+    val: ValueId,
+    loans: &Loans,
+) -> bool {
     for inst in &block.insts[at_idx + 1..] {
         if loans.uses_with_storage(&inst.kind).contains(&val) {
             return false;
@@ -440,7 +445,7 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), Ty::Int)],
+            vec![(v(0), Ty::I64)],
         );
 
         insert_drops(&mut cfg, &val_types);
@@ -471,7 +476,7 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::Int)],
+            vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
         );
 
         insert_drops(&mut cfg, &val_types);
@@ -520,7 +525,7 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::Int)],
+            vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
         );
 
         insert_drops(&mut cfg, &val_types);
@@ -582,7 +587,7 @@ mod tests {
             vec![
                 (v(0), user_defined_ty()),
                 (v(1), Ty::Bool),
-                (v(2), Ty::Int),
+                (v(2), Ty::I64),
                 (v(3), user_defined_ty()),
             ],
         );
@@ -701,8 +706,8 @@ mod tests {
             vec![
                 (v(0), user_defined_ty()),
                 (v(1), user_defined_ty()),
-                (v(2), Ty::Int),
-                (v(3), Ty::Int),
+                (v(2), Ty::I64),
+                (v(3), Ty::I64),
             ],
         );
 
@@ -746,7 +751,7 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::Int), (v(2), Ty::Int)],
+            vec![(v(0), user_defined_ty()), (v(1), Ty::I64), (v(2), Ty::I64)],
         );
 
         insert_drops(&mut cfg, &val_types);
@@ -780,7 +785,7 @@ mod tests {
                     v(0),
                     Ty::Array(Box::new(user_defined_ty()), crate::ty::LenTerm::Known(3)),
                 ), // List<MoveOnly> = move-only
-                (v(1), Ty::Int),
+                (v(1), Ty::I64),
             ],
         );
 
@@ -811,9 +816,9 @@ mod tests {
             vec![
                 (
                     v(0),
-                    Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+                    Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
                 ),
-                (v(1), Ty::Int),
+                (v(1), Ty::I64),
             ],
         );
 
@@ -919,7 +924,7 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::Int)],
+            vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
         );
 
         insert_drops(&mut cfg, &val_types);

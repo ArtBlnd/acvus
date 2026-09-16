@@ -12,9 +12,9 @@ expression: ir
      7 |   commit @a = r4
      8 |   return r3
 
-    ; r0 (@a) : {x: Int}
-    ; r1 (v3) : Int
-    ; r2 (v4) : {x: Int}
-    ; r3 (@a.x) : Int
-    ; r4 (v6) : {x: Int}
-    ; r5 (@a) : {x: Int}
+    ; r0 (@a) : {x: i64}
+    ; r1 (v3) : i64
+    ; r2 (v4) : {x: i64}
+    ; r3 (@a.x) : i64
+    ; r4 (v6) : {x: i64}
+    ; r5 (@a) : {x: i64}

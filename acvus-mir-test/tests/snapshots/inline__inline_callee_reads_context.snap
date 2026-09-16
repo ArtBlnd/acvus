@@ -10,8 +10,8 @@ expression: ir
      4 |   commit @count = r2
      5 |   return r1
 
-    ; r0 (@count) : Int
-    ; r1 (@count) : Int
-    ; r2 (v5) : Int
-    ; r3 (get_count(...)) : Int
-    ; r4 (@count) : Int
+    ; r0 (@count) : i64
+    ; r1 (@count) : i64
+    ; r2 (v5) : i64
+    ; r3 (get_count(...)) : i64
+    ; r4 (@count) : i64

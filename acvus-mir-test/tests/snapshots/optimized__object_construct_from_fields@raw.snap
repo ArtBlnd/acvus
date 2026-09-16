@@ -51,44 +51,44 @@ expression: raw
     44 |   commit @user = r27
     45 |   return r24
 
-    ; r0 (@output) : {eligible: Bool, label: String, score: Int}
-    ; r1 (@min_score) : Int
-    ; r2 (@user) : {age: Int, name: String}
-    ; r3 (@user.age) : Int
-    ; r4 (v9) : Int
-    ; r5 (v8) : Int
+    ; r0 (@output) : {eligible: Bool, label: String, score: i64}
+    ; r1 (@min_score) : i64
+    ; r2 (@user) : {age: i64, name: String}
+    ; r3 (@user.age) : i64
+    ; r4 (v9) : i64
+    ; r5 (v8) : i64
     ; r6 (@user.name) : &String
     ; r7 (var_13.) : &String
     ; r8 (v15) : String
     ; r9 (var_16.) : &String
-    ; r10 (score.) : &Int
+    ; r10 (score.) : &i64
     ; r11 (to_string(...)) : String
     ; r12 (var_20.) : &String
     ; r13 (v22) : String
     ; r14 (var_23.) : &String
     ; r15 (var_26.) : &String
     ; r16 (v28) : String
-    ; r17 (score) : Int
-    ; r18 (@min_score) : Int
+    ; r17 (score) : i64
+    ; r18 (@min_score) : i64
     ; r19 (v32) : Bool
     ; r20 (label) : String
-    ; r21 (score) : Int
+    ; r21 (score) : i64
     ; r22 (eligible) : Bool
-    ; r23 (v37) : {eligible: Bool, label: String, score: Int}
-    ; r24 (@output.score) : Int
-    ; r25 (v39) : {eligible: Bool, label: String, score: Int}
-    ; r26 (v40) : Int
-    ; r27 (v41) : {age: Int, name: String}
-    ; r28 (@min_score) : Int
+    ; r23 (v37) : {eligible: Bool, label: String, score: i64}
+    ; r24 (@output.score) : i64
+    ; r25 (v39) : {eligible: Bool, label: String, score: i64}
+    ; r26 (v40) : i64
+    ; r27 (v41) : {age: i64, name: String}
+    ; r28 (@min_score) : i64
     ; r29 (v25) : String
     ; r30 (v12) : String
-    ; r31 (@user) : {age: Int, name: String}
+    ; r31 (@user) : {age: i64, name: String}
     ; r32 (eligible) : Bool
     ; r33 (v20) : String
-    ; r34 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r34 (@output) : {eligible: Bool, label: String, score: i64}
     ; r35 (v23) : String
     ; r36 (v26) : String
-    ; r37 (score) : Int
+    ; r37 (score) : i64
     ; r38 (label) : String
     ; r39 (v13) : String
     ; r40 (v16) : String

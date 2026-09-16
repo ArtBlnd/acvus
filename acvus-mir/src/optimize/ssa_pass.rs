@@ -713,7 +713,7 @@ mod tests {
     fn a_stored_copy_of_a_promoted_load_defines_the_ssa_value() {
         let i = Interner::new();
         let module =
-            compile_script(&i, "x = 1; y = x; @out = y; @out", &[("out", Ty::Int)]).unwrap();
+            compile_script(&i, "x = 1; y = x; @out = y; @out", &[("out", Ty::I64)]).unwrap();
         let mut cfg_body = cfg::promote(module.main);
         run(&mut cfg_body);
         assert!(
@@ -730,7 +730,7 @@ mod tests {
         let module = compile_template(
             &i,
             r#"{{ true = @n == 1 }}{{ @x = 42 }}{{ _ }}noop{{/}}"#,
-            &[("x", Ty::Int), ("n", Ty::Int)],
+            &[("x", Ty::I64), ("n", Ty::I64)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -747,7 +747,7 @@ mod tests {
         let module = compile_template(
             &i,
             r#"{{ true = @n == 1 }}{{ @x = 1 }}{{ _ }}{{ @x = 2 }}{{/}}"#,
-            &[("x", Ty::Int), ("n", Ty::Int)],
+            &[("x", Ty::I64), ("n", Ty::I64)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -763,7 +763,7 @@ mod tests {
         let module = compile_template(
             &i,
             r#"{{ true = @n == 1 }}yes{{ _ }}no{{/}}"#,
-            &[("n", Ty::Int)],
+            &[("n", Ty::I64)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn straight_line_write_keeps_commits() {
         let i = Interner::new();
-        let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::Int)]).unwrap();
+        let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::I64)]).unwrap();
         let mut cfg_body = cfg::promote(module.main);
         let commits_before = count_commits(&cfg_body);
         run(&mut cfg_body);

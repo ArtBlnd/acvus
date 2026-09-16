@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
-assertion_line: 333
 expression: opt
 ---
 === main ===
@@ -34,84 +33,84 @@ expression: opt
     ; orders: what the body's yielded Order waits for
     ;   eval@26 <- spawn@18 #1 <- eval@8 <- spawn@5 #0 <- r6(entry)
 
-    ; r0 (@offset) : Int
-    ; r1 (@stage2) : Int
-    ; r2 (@scale) : Int
-    ; r3 (@stage3) : Int
-    ; r4 (@source_id) : Int
-    ; r5 (v87) : Handle<Int>
+    ; r0 (@offset) : i64
+    ; r1 (@stage2) : i64
+    ; r2 (@scale) : i64
+    ; r3 (@stage3) : i64
+    ; r4 (@source_id) : i64
+    ; r5 (v87) : Handle<i64>
     ; r6 (v1) : Order
-    ; r7 (@stage1) : Int
-    ; r8 (@precision) : Int
-    ; r9 (fetch_data(...)) : Int
+    ; r7 (@stage1) : i64
+    ; r8 (@precision) : i64
+    ; r9 (fetch_data(...)) : i64
     ; r10 (v20) : Order
-    ; r11 (v68) : Int
-    ; r12 (v70) : Int
-    ; r13 (v69) : Int
-    ; r14 (v75) : Int
-    ; r15 (v78) : Int
-    ; r16 (v77) : Int
-    ; r17 (v79) : Int
-    ; r18 (v84) : Int
-    ; r19 (v86) : Int
-    ; r20 (v88) : Handle<Int>
-    ; r21 (log_pipeline(...)) : Int
+    ; r11 (v68) : i64
+    ; r12 (v70) : i64
+    ; r13 (v69) : i64
+    ; r14 (v75) : i64
+    ; r15 (v78) : i64
+    ; r16 (v77) : i64
+    ; r17 (v79) : i64
+    ; r18 (v84) : i64
+    ; r19 (v86) : i64
+    ; r20 (v88) : Handle<i64>
+    ; r21 (log_pipeline(...)) : i64
     ; r22 (v42) : Order
-    ; r23 (v44) : Int
-    ; r24 (s1) : Int
+    ; r23 (v44) : i64
+    ; r24 (s1) : i64
     ; r25 (v41) : Order
-    ; r26 (@offset) : Int
-    ; r27 (@stage3) : Int
-    ; r28 ($val) : Int
-    ; r29 (s2) : Int
-    ; r30 (v50) : Int
-    ; r31 (s2) : Int
-    ; r32 (v56) : Int
-    ; r33 (s1) : Int
-    ; r34 (v62) : Int
-    ; r35 (s3) : Int
-    ; r36 (normalize(...)) : Int
-    ; r37 (@stage2) : Int
-    ; r38 (v49) : Int
-    ; r39 (s2) : Int
-    ; r40 ($offset) : Int
-    ; r41 (@source_id) : Int
-    ; r42 (v55) : Int
-    ; r43 (s3) : Int
-    ; r44 (@source_id) : Int
-    ; r45 (v61) : Int
-    ; r46 (@scale) : Int
-    ; r47 ($scale) : Int
-    ; r48 (v48) : Int
-    ; r49 (enrich(...)) : Int
-    ; r50 ($val) : Int
-    ; r51 (v54) : Int
-    ; r52 (s3) : Int
-    ; r53 (v60) : Int
-    ; r54 ($prec) : Int
-    ; r55 (raw) : Int
-    ; r56 ($val) : Int
-    ; r57 (v47) : Int
-    ; r58 (@offset) : Int
-    ; r59 (v53) : Int
-    ; r60 (finalize(...)) : Int
-    ; r61 (@precision) : Int
-    ; r62 (v59) : Int
-    ; r63 (raw) : Int
-    ; r64 (v46) : Int
-    ; r65 (s1) : Int
+    ; r26 (@offset) : i64
+    ; r27 (@stage3) : i64
+    ; r28 ($val) : i64
+    ; r29 (s2) : i64
+    ; r30 (v50) : i64
+    ; r31 (s2) : i64
+    ; r32 (v56) : i64
+    ; r33 (s1) : i64
+    ; r34 (v62) : i64
+    ; r35 (s3) : i64
+    ; r36 (normalize(...)) : i64
+    ; r37 (@stage2) : i64
+    ; r38 (v49) : i64
+    ; r39 (s2) : i64
+    ; r40 ($offset) : i64
+    ; r41 (@source_id) : i64
+    ; r42 (v55) : i64
+    ; r43 (s3) : i64
+    ; r44 (@source_id) : i64
+    ; r45 (v61) : i64
+    ; r46 (@scale) : i64
+    ; r47 ($scale) : i64
+    ; r48 (v48) : i64
+    ; r49 (enrich(...)) : i64
+    ; r50 ($val) : i64
+    ; r51 (v54) : i64
+    ; r52 (s3) : i64
+    ; r53 (v60) : i64
+    ; r54 ($prec) : i64
+    ; r55 (raw) : i64
+    ; r56 ($val) : i64
+    ; r57 (v47) : i64
+    ; r58 (@offset) : i64
+    ; r59 (v53) : i64
+    ; r60 (finalize(...)) : i64
+    ; r61 (@precision) : i64
+    ; r62 (v59) : i64
+    ; r63 (raw) : i64
+    ; r64 (v46) : i64
+    ; r65 (s1) : i64
     ; r66 (v52) : Order
-    ; r67 (@precision) : Int
-    ; r68 (v58) : Int
-    ; r69 (s3) : Int
-    ; r70 ($prec) : Int
-    ; r71 (v45) : Int
-    ; r72 (s1) : Int
-    ; r73 (@scale) : Int
+    ; r67 (@precision) : i64
+    ; r68 (v58) : i64
+    ; r69 (s3) : i64
+    ; r70 ($prec) : i64
+    ; r71 (v45) : i64
+    ; r72 (s1) : i64
+    ; r73 (@scale) : i64
     ; r74 (v51) : Order
-    ; r75 (s2) : Int
-    ; r76 (@stage1) : Int
-    ; r77 (v57) : Int
-    ; r78 ($val) : Int
+    ; r75 (s2) : i64
+    ; r76 (@stage1) : i64
+    ; r77 (v57) : i64
+    ; r78 ($val) : i64
     ; r79 (v19) : Order
-    ; r80 (v63) : Int
+    ; r80 (v63) : i64

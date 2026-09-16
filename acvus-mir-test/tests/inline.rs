@@ -35,7 +35,7 @@ fn inline_simple_call() {
     let ir = compile_inline_ir(
         &i,
         ("main", "double(5)"),
-        &[("double", "$x + $x", sig(&i, &[("x", Ty::Int)]))],
+        &[("double", "$x + $x", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -49,7 +49,7 @@ fn inline_multi_arg() {
     let ir = compile_inline_ir(
         &i,
         ("main", "add(3, 4)"),
-        &[("add", "$a + $b", sig(&i, &[("a", Ty::Int), ("b", Ty::Int)]))],
+        &[("add", "$a + $b", sig(&i, &[("a", Ty::I64), ("b", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -64,8 +64,8 @@ fn inline_chain() {
         &i,
         ("main", "double(inc(3))"),
         &[
-            ("inc", "$x + 1", sig(&i, &[("x", Ty::Int)])),
-            ("double", "$x + $x", sig(&i, &[("x", Ty::Int)])),
+            ("inc", "$x + 1", sig(&i, &[("x", Ty::I64)])),
+            ("double", "$x + $x", sig(&i, &[("x", Ty::I64)])),
         ],
         &[],
     )
@@ -80,7 +80,7 @@ fn inline_multiple_calls() {
     let ir = compile_inline_ir(
         &i,
         ("main", "inc(1) + inc(2)"),
-        &[("inc", "$x + 1", sig(&i, &[("x", Ty::Int)]))],
+        &[("inc", "$x + 1", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -94,7 +94,7 @@ fn inline_return_used_in_binop() {
     let ir = compile_inline_ir(
         &i,
         ("main", "square(3) + square(4)"),
-        &[("square", "$x * $x", sig(&i, &[("x", Ty::Int)]))],
+        &[("square", "$x * $x", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -122,7 +122,7 @@ fn inline_pipe_syntax() {
     let ir = compile_inline_ir(
         &i,
         ("main", "5 | double"),
-        &[("double", "$x + $x", sig(&i, &[("x", Ty::Int)]))],
+        &[("double", "$x + $x", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -136,7 +136,7 @@ fn inline_pipe_with_extra_args() {
     let ir = compile_inline_ir(
         &i,
         ("main", "3 | add(4)"),
-        &[("add", "$a + $b", sig(&i, &[("a", Ty::Int), ("b", Ty::Int)]))],
+        &[("add", "$a + $b", sig(&i, &[("a", Ty::I64), ("b", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -163,7 +163,7 @@ fn inline_local_around_extern() {
     let ir = compile_inline_ir(
         &i,
         ("main", "wrap(42)"),
-        &[("wrap", "$x.to_string()", sig(&i, &[("x", Ty::Int)]))],
+        &[("wrap", "$x.to_string()", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -197,7 +197,7 @@ fn inline_mixed_local_extern() {
     let ir = compile_inline_ir(
         &i,
         ("main", "n = double(3); n.to_string()"),
-        &[("double", "$x + $x", sig(&i, &[("x", Ty::Int)]))],
+        &[("double", "$x + $x", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -216,7 +216,7 @@ fn inline_callee_reads_context() {
         &i,
         ("main", "get_count()"),
         &[("get_count", "@count", sig(&i, &[]))],
-        &[("count", Ty::Int)],
+        &[("count", Ty::I64)],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -229,8 +229,8 @@ fn inline_callee_writes_context() {
     let ir = compile_inline_ir(
         &i,
         ("main", "set_count(42)"),
-        &[("set_count", "@count = $x; $x", sig(&i, &[("x", Ty::Int)]))],
-        &[("count", Ty::Int)],
+        &[("set_count", "@count = $x; $x", sig(&i, &[("x", Ty::I64)]))],
+        &[("count", Ty::I64)],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -243,8 +243,8 @@ fn inline_caller_and_callee_read_same_context() {
     let ir = compile_inline_ir(
         &i,
         ("main", "@count + add_count(1)"),
-        &[("add_count", "$x + @count", sig(&i, &[("x", Ty::Int)]))],
-        &[("count", Ty::Int)],
+        &[("add_count", "$x + @count", sig(&i, &[("x", Ty::I64)]))],
+        &[("count", Ty::I64)],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -258,7 +258,7 @@ fn inline_callee_writes_caller_reads() {
         &i,
         ("main", "x = bump(); x + @count"),
         &[("bump", "@count = @count + 1; @count", sig(&i, &[]))],
-        &[("count", Ty::Int)],
+        &[("count", Ty::I64)],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -272,7 +272,7 @@ fn inline_multiple_context_writes() {
         &i,
         ("main", "init()"),
         &[("init", "@a = 1; @b = 2; @a + @b", sig(&i, &[]))],
-        &[("a", Ty::Int), ("b", Ty::Int)],
+        &[("a", Ty::I64), ("b", Ty::I64)],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -296,7 +296,7 @@ fn inline_callee_returns_closure_result() {
                 &i,
                 &[(
                     "xs",
-                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                    Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
                 )],
             ),
         )],
@@ -318,7 +318,7 @@ fn inline_callee_takes_lambda_arg() {
         &[(
             "transform",
             "$xs | map(|x| -> x * 2)",
-            sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::Int))]),
+            sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::I64))]),
         )],
         &[],
     )
@@ -340,7 +340,7 @@ fn inline_callee_with_filter_lambda() {
                 &i,
                 &[(
                     "xs",
-                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                    Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
                 )],
             ),
         )],
@@ -365,15 +365,15 @@ fn inline_callee_lambda_captures_param() {
                 &[
                     (
                         "xs",
-                        Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                        Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
                     ),
-                    ("n", Ty::Int),
+                    ("n", Ty::I64),
                 ],
             ),
         )],
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     )
     .unwrap();
@@ -397,14 +397,14 @@ fn inline_chain_with_lambda() {
                     &i,
                     &[(
                         "xs",
-                        Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                        Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
                     )],
                 ),
             ),
             (
                 "sum_list",
                 "$xs | fold(0, |a, b| -> a + b)",
-                sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::Int))]),
+                sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::I64))]),
             ),
         ],
         &[],
@@ -424,7 +424,7 @@ fn inline_pure_function() {
     let ir = compile_inline_ir(
         &i,
         ("main", "add(1, 2)"),
-        &[("add", "$a + $b", sig(&i, &[("a", Ty::Int), ("b", Ty::Int)]))],
+        &[("add", "$a + $b", sig(&i, &[("a", Ty::I64), ("b", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -446,7 +446,7 @@ fn inline_io_extern_inside() {
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
                 i.intern("id"),
-                lift_to_poly(&Ty::Int),
+                lift_to_poly(&Ty::I64),
             )],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
@@ -456,7 +456,7 @@ fn inline_io_extern_inside() {
     let ir = compile_inline_ir_with(
         &i,
         ("main", "wrapper(1)"),
-        &[("wrapper", "fetch($id)", sig(&i, &[("id", Ty::Int)]))],
+        &[("wrapper", "fetch($id)", sig(&i, &[("id", Ty::I64)]))],
         &[],
         &[fetch],
     )
@@ -477,7 +477,7 @@ fn inline_context_write_propagation() {
             "@counter = @counter + 1; @counter",
             sig(&i, &[]),
         )],
-        &[("counter", Ty::Int)],
+        &[("counter", Ty::I64)],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -508,9 +508,9 @@ fn inline_nested_three_levels() {
         &i,
         ("main", "c(10)"),
         &[
-            ("a", "$x + 1", sig(&i, &[("x", Ty::Int)])),
-            ("b", "a($x) + a($x)", sig(&i, &[("x", Ty::Int)])),
-            ("c", "b($x) * 2", sig(&i, &[("x", Ty::Int)])),
+            ("a", "$x + 1", sig(&i, &[("x", Ty::I64)])),
+            ("b", "a($x) + a($x)", sig(&i, &[("x", Ty::I64)])),
+            ("c", "b($x) * 2", sig(&i, &[("x", Ty::I64)])),
         ],
         &[],
     )
@@ -561,7 +561,7 @@ fn inline_comparison() {
     let ir = compile_inline_ir(
         &i,
         ("main", "is_positive(42)"),
-        &[("is_positive", "$x > 0", sig(&i, &[("x", Ty::Int)]))],
+        &[("is_positive", "$x > 0", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -575,7 +575,7 @@ fn inline_with_local_binding() {
     let ir = compile_inline_ir(
         &i,
         ("main", "compute(5)"),
-        &[("compute", "y = $x * 2; y + 1", sig(&i, &[("x", Ty::Int)]))],
+        &[("compute", "y = $x * 2; y + 1", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
     .unwrap();
@@ -604,7 +604,7 @@ fn inline_field_access_after_call() {
         &i,
         ("main", "make_obj().name"),
         &[("make_obj", "@user", sig(&i, &[]))],
-        &[("user", obj(&i, &[("name", Ty::String), ("age", Ty::Int)]))],
+        &[("user", obj(&i, &[("name", Ty::String), ("age", Ty::I64)]))],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -624,7 +624,7 @@ fn inline_list_collect_pattern() {
                 &i,
                 &[(
                     "xs",
-                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                    Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
                 )],
             ),
         )],
@@ -645,7 +645,7 @@ fn inline_multiple_context_different_callees() {
             ("read_a", "@a", sig(&i, &[])),
             ("read_b", "@b", sig(&i, &[])),
         ],
-        &[("a", Ty::Int), ("b", Ty::Int)],
+        &[("a", Ty::I64), ("b", Ty::I64)],
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -665,7 +665,7 @@ fn inline_callee_uses_builtin_len() {
                 &i,
                 &[(
                     "xs",
-                    Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                    Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
                 )],
             ),
         )],

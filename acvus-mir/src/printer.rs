@@ -65,7 +65,6 @@ fn fmt_literal(lit: &Literal) -> String {
         Literal::Float(f) => format!("{f:?}"),
         Literal::String(s) => format!("{s:?}"),
         Literal::Bool(b) => b.to_string(),
-        Literal::Byte(b) => format!("0x{b:02x}"),
         Literal::Unit => "()".to_string(),
         Literal::List(elems) => {
             let items: Vec<String> = elems.iter().map(fmt_literal).collect();
@@ -805,7 +804,10 @@ fn write_order_tree(
                 ..
             } => {
                 any = true;
-                let before = produced.get(&edge.before).cloned().unwrap_or_else(|| entry(edge.before, vn));
+                let before = produced
+                    .get(&edge.before)
+                    .cloned()
+                    .unwrap_or_else(|| entry(edge.before, vn));
                 produced.insert(
                     edge.after,
                     OrderNode {
@@ -872,7 +874,10 @@ fn write_order_tree(
         return Ok(());
     };
     writeln!(f)?;
-    writeln!(f, "{indent}  ; orders: what the body's yielded Order waits for")?;
+    writeln!(
+        f,
+        "{indent}  ; orders: what the body's yielded Order waits for"
+    )?;
     write_order_node(f, &root, indent, 0)
 }
 
@@ -998,12 +1003,8 @@ mod tests {
     #[test]
     fn print_match_block() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
-        let out = compile_and_dump_ctx(
-            r#"{{ true = @n == 1 }}matched{{/}}"#,
-            &context,
-            &interner,
-        );
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
+        let out = compile_and_dump_ctx(r#"{{ true = @n == 1 }}matched{{/}}"#, &context, &interner);
         assert!(!out.contains("iter_init"));
         assert!(!out.contains("iter_next"));
         assert!(out.contains("jump_if"));
@@ -1015,8 +1016,8 @@ mod tests {
         let context = FxHashMap::from_iter([(
             interner.intern("user"),
             Ty::Object(FxHashMap::from_iter([
-                (interner.intern("n"), Ty::Int),
-                (interner.intern("age"), Ty::Int),
+                (interner.intern("n"), Ty::I64),
+                (interner.intern("age"), Ty::I64),
             ])),
         )]);
         let out = compile_and_dump_ctx("{{ x = @user.age }}", &context, &interner);

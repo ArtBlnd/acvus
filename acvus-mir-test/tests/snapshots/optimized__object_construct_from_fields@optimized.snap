@@ -49,18 +49,18 @@ expression: opt
     42 |   commit @user = r28
     43 |   return r26
 
-    ; r0 (@output) : {eligible: Bool, label: String, score: Int}
-    ; r1 (@min_score) : Int
-    ; r2 (@user) : {age: Int, name: String}
-    ; r3 (@user.age) : Int
-    ; r4 (v9) : Int
-    ; r5 (v8) : Int
+    ; r0 (@output) : {eligible: Bool, label: String, score: i64}
+    ; r1 (@min_score) : i64
+    ; r2 (@user) : {age: i64, name: String}
+    ; r3 (@user.age) : i64
+    ; r4 (v9) : i64
+    ; r5 (v8) : i64
     ; r6 (@user.name) : &String
     ; r7 (var_13.) : &String
     ; r8 (v15) : String
     ; r9 (v13) : String
     ; r10 (var_16.) : &String
-    ; r11 (score.) : &Int
+    ; r11 (score.) : &i64
     ; r12 (to_string(...)) : String
     ; r13 (var_20.) : &String
     ; r14 (v22) : String
@@ -71,25 +71,25 @@ expression: opt
     ; r19 (v28) : String
     ; r20 (v26) : String
     ; r21 (v23) : String
-    ; r22 (score) : Int
+    ; r22 (score) : i64
     ; r23 (v32) : Bool
-    ; r24 (score) : Int
-    ; r25 (v37) : {eligible: Bool, label: String, score: Int}
-    ; r26 (@output.score) : Int
-    ; r27 (v39) : {eligible: Bool, label: String, score: Int}
-    ; r28 (v41) : {age: Int, name: String}
+    ; r24 (score) : i64
+    ; r25 (v37) : {eligible: Bool, label: String, score: i64}
+    ; r26 (@output.score) : i64
+    ; r27 (v39) : {eligible: Bool, label: String, score: i64}
+    ; r28 (v41) : {age: i64, name: String}
     ; r29 (v44) : Bool
-    ; r30 (@min_score) : Int
+    ; r30 (@min_score) : i64
     ; r31 (v25) : String
-    ; r32 (@min_score) : Int
-    ; r33 (@user) : {age: Int, name: String}
+    ; r32 (@min_score) : i64
+    ; r33 (@user) : {age: i64, name: String}
     ; r34 (eligible) : Bool
     ; r35 (v12) : String
     ; r36 (label) : String
-    ; r37 (v40) : Int
+    ; r37 (v40) : i64
     ; r38 (v43) : String
     ; r39 (eligible) : Bool
-    ; r40 (v42) : Int
-    ; r41 (@output) : {eligible: Bool, label: String, score: Int}
+    ; r40 (v42) : i64
+    ; r41 (@output) : {eligible: Bool, label: String, score: i64}
     ; r42 (label) : String
-    ; r43 (score) : Int
+    ; r43 (score) : i64

@@ -38,6 +38,12 @@ pub enum MirErrorKind {
         ty: Ty,
         bound: crate::ty::TyVarBound,
     },
+    /// An integer literal's value is not representable in the type its use
+    /// gave it (RFC-0037).
+    IntegerLiteralOutOfRange {
+        value: i128,
+        ty: Ty,
+    },
     EffectExceeded(crate::ty::EffectConflict),
     ArrayLengthMismatch {
         pattern_min: usize,
@@ -103,7 +109,10 @@ pub enum MirErrorKind {
     /// A lambda returned a reference.
     ReferenceReturned,
     /// A bare name that two namespaces both declare.
-    AmbiguousFunction { name: String, candidates: Vec<String> },
+    AmbiguousFunction {
+        name: String,
+        candidates: Vec<String>,
+    },
     /// One call names the same place twice.
     PlaceNamedTwice(String),
 
@@ -214,7 +223,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(f, "a lambda cannot capture a reference")
             }
             MirErrorKind::ReferenceInData => {
-                write!(f, "a reference cannot be stored in a list, object, or tuple")
+                write!(
+                    f,
+                    "a reference cannot be stored in a list, object, or tuple"
+                )
             }
             MirErrorKind::ReferenceReturned => {
                 write!(f, "a lambda cannot return a reference")
@@ -229,7 +241,11 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(f, "undefined function `{name}`")
             }
             MirErrorKind::StoreThroughSharedReference(ty) => {
-                write!(f, "cannot store through {}: not a `&mut`", ty.display(interner))
+                write!(
+                    f,
+                    "cannot store through {}: not a `&mut`",
+                    ty.display(interner)
+                )
             }
             MirErrorKind::MutableBorrowOfShared => {
                 write!(f, "a shared reference cannot be borrowed mutably")
@@ -266,7 +282,20 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                         }
                         Ok(())
                     }
+                    crate::ty::TyVarBound::Integer { signed, among } => {
+                        if among.len() == crate::ty::IntTy::ALL.len() {
+                            write!(f, "an integer")
+                        } else if *signed && among.iter().all(|k| k.signed()) && among.len() == 4 {
+                            write!(f, "a signed integer")
+                        } else {
+                            let names: Vec<&str> = among.iter().map(|k| k.name()).collect();
+                            write!(f, "one of {}", names.join(", "))
+                        }
+                    }
                 }
+            }
+            MirErrorKind::IntegerLiteralOutOfRange { value, ty } => {
+                write!(f, "literal {value} does not fit {}", ty.display(interner))
             }
             MirErrorKind::UndefinedField { object_ty, field } => {
                 write!(

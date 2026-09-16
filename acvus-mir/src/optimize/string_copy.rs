@@ -33,13 +33,15 @@ pub fn run(cfg: &mut CfgBody) {
             map_uses(&mut inst.kind, &mut |v| remaining.redirect(v));
             new.push(inst);
         }
-        let mut terminator = std::mem::replace(&mut cfg.blocks[bi].terminator, Terminator::Fallthrough);
+        let mut terminator =
+            std::mem::replace(&mut cfg.blocks[bi].terminator, Terminator::Fallthrough);
         let span = new.last().map(|i| i.span).unwrap_or(Span::ZERO);
         let live_by_own_name: FxHashSet<ValueId> = cfg
             .successors(BlockIdx(bi))
             .into_iter()
             .flat_map(|succ| {
-                let params: FxHashSet<ValueId> = cfg.blocks[succ.0].params.iter().copied().collect();
+                let params: FxHashSet<ValueId> =
+                    cfg.blocks[succ.0].params.iter().copied().collect();
                 live.live_in[succ.0]
                     .iter()
                     .copied()
@@ -47,7 +49,11 @@ pub fn run(cfg: &mut CfgBody) {
                     .collect::<Vec<_>>()
             })
             .collect();
-        let copies = copies_for(cfg, &live_by_own_name, terminator_args(&terminator).into_iter());
+        let copies = copies_for(
+            cfg,
+            &live_by_own_name,
+            terminator_args(&terminator).into_iter(),
+        );
         for (src, dst) in &copies.clones {
             new.push(clone_inst(span, *src, *dst));
         }
@@ -60,7 +66,11 @@ pub fn run(cfg: &mut CfgBody) {
     }
 }
 
-fn live_after_each(cfg: &CfgBody, bi: usize, live: &liveness::LivenessResult) -> Vec<FxHashSet<ValueId>> {
+fn live_after_each(
+    cfg: &CfgBody,
+    bi: usize,
+    live: &liveness::LivenessResult,
+) -> Vec<FxHashSet<ValueId>> {
     let block = &cfg.blocks[bi];
     let mut current: FxHashSet<ValueId> = live.live_out[bi].clone();
     current.extend(terminator_args(&block.terminator));
@@ -140,7 +150,9 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
     match t {
         Terminator::Jump { args, .. } => args.clone(),
         Terminator::JumpIf {
-            then_args, else_args, ..
+            then_args,
+            else_args,
+            ..
         } => then_args.iter().chain(else_args).copied().collect(),
         Terminator::Return { .. } | Terminator::Fallthrough => Vec::new(),
     }
@@ -150,7 +162,9 @@ fn terminator_args_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
     match t {
         Terminator::Jump { args, .. } => args.iter_mut().collect(),
         Terminator::JumpIf {
-            then_args, else_args, ..
+            then_args,
+            else_args,
+            ..
         } => then_args.iter_mut().chain(else_args.iter_mut()).collect(),
         Terminator::Return { .. } | Terminator::Fallthrough => Vec::new(),
     }

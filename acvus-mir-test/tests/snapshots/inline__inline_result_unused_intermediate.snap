@@ -6,8 +6,8 @@ expression: ir
      2 |   r0 = 1 (r1) + 2 (r2)
      3 |   return r0
 
-    ; r0 (v3) : Int
-    ; r1 (v4) : Int
-    ; r2 (v5) : Int
-    ; r3 (get_a(...)) : Int
-    ; r4 (get_b(...)) : Int
+    ; r0 (v3) : i64
+    ; r1 (v4) : i64
+    ; r2 (v5) : i64
+    ; r3 (get_a(...)) : i64
+    ; r4 (get_b(...)) : i64

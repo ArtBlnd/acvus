@@ -95,14 +95,17 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
 #[test]
 fn the_argument_s_shape_picks_the_instance_and_fixes_the_element_type() {
     let i = Interner::new();
-    assert_eq!(check(&i, "pick([1, 2], |x| -> x)").unwrap(), Ty::Int);
-    assert_eq!(check(&i, "pick(Some(\"a\"), |x| -> x)").unwrap(), Ty::String);
+    assert_eq!(check(&i, "pick([1, 2], |x| -> x)").unwrap(), Ty::I64);
+    assert_eq!(
+        check(&i, "pick(Some(\"a\"), |x| -> x)").unwrap(),
+        Ty::String
+    );
 }
 
 #[test]
 fn a_lambda_after_the_argument_sees_the_element_type_the_instance_fixed() {
     let i = Interner::new();
-    assert_eq!(check(&i, "pick([1, 2], |x| -> x + 1)").unwrap(), Ty::Int);
+    assert_eq!(check(&i, "pick([1, 2], |x| -> x + 1)").unwrap(), Ty::I64);
 }
 
 #[test]
@@ -110,7 +113,8 @@ fn a_call_no_instance_matches_is_an_error_at_the_call() {
     let i = Interner::new();
     let errs = check(&i, "pick(1, |x| -> x)").unwrap_err();
     assert!(
-        errs.iter().any(|e| e.contains("no instance of the signature")),
+        errs.iter()
+            .any(|e| e.contains("no instance of the signature")),
         "{errs:?}"
     );
 }
@@ -118,5 +122,8 @@ fn a_call_no_instance_matches_is_an_error_at_the_call() {
 #[test]
 fn the_choice_waits_for_the_argument_to_resolve() {
     let i = Interner::new();
-    assert_eq!(check(&i, "g = |c| -> pick(c, |x| -> x); g([1])").unwrap(), Ty::Int);
+    assert_eq!(
+        check(&i, "g = |c| -> pick(c, |x| -> x); g([1])").unwrap(),
+        Ty::I64
+    );
 }

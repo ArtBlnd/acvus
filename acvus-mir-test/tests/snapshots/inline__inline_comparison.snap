@@ -7,8 +7,8 @@ expression: ir
      3 |   r1 = r0 > 0 (r2)
      4 |   return r1
 
-    ; r0 ($x) : Int
+    ; r0 ($x) : i64
     ; r1 (v6) : Bool
-    ; r2 (v5) : Int
-    ; r3 (v1) : Int
+    ; r2 (v5) : i64
+    ; r3 (v1) : i64
     ; r4 (is_positive(...)) : Bool

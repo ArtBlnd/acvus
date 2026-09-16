@@ -14,7 +14,7 @@ fn ctx(i: &Interner, entries: Vec<(&str, TypedValue)>) -> Context {
 }
 
 fn int(n: i64) -> TypedValue {
-    typed(Ty::Int, Value::int(n))
+    typed(Ty::I64, Value::int(n))
 }
 
 fn assert_str(v: &Value, expected: &str) {
@@ -85,7 +85,7 @@ async fn if_let_refutable_no_match() {
 // =======================================================================
 
 fn ints_ty(len: usize) -> Ty {
-    Ty::Array(Box::new(Ty::Int), LenTerm::Known(len))
+    Ty::Array(Box::new(Ty::I64), LenTerm::Known(len))
 }
 
 fn ints_value(xs: &[i64]) -> Value {

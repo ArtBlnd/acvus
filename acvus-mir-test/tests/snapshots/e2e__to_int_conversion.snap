@@ -20,11 +20,11 @@ expression: ir
 
     ; r0 (@f) : Float
     ; r1 (@f.) : &Float
-    ; r2 (to_int(...)) : Int
-    ; r3 (x.) : &Int
+    ; r2 (to_int(...)) : i64
+    ; r3 (x.) : &i64
     ; r4 (to_string(...)) : String
     ; r5 (v9) : String
     ; r6 (v10) : Float
     ; r7 (v6) : String
-    ; r8 (x) : Int
+    ; r8 (x) : i64
     ; r9 (@f) : Float

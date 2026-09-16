@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ir::{PathSeg, Callee, Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
+use acvus_mir::ir::{
+    Callee, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
+};
+use acvus_mir::ty::IntTy;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Freeze, Interner, LocalFactory, LocalVec};
 use futures::future::BoxFuture;
@@ -12,8 +15,8 @@ use smallvec::SmallVec;
 use crate::error::RuntimeError;
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::runtime::{AcvusRuntime, ExternHandler};
-use crate::vtable::VtableRegistry;
 use crate::value::{FnValue, HandleValue, OptionValue, Value, VariantValue};
+use crate::vtable::VtableRegistry;
 
 fn field<'a>(value: &'a Value, f: Astr, interner: &Interner) -> &'a Value {
     assert!(value.is_object(), "field load on non-object: {value:?}");
@@ -57,7 +60,11 @@ fn walk_path<'a>(mut value: &'a Value, path: &[PathSeg], interner: &Interner) ->
     value
 }
 
-fn walk_path_mut<'a>(mut value: &'a mut Value, path: &[PathSeg], interner: &Interner) -> &'a mut Value {
+fn walk_path_mut<'a>(
+    mut value: &'a mut Value,
+    path: &[PathSeg],
+    interner: &Interner,
+) -> &'a mut Value {
     for seg in path {
         value = match seg {
             PathSeg::Field(f) => field_mut(value, *f, interner),
@@ -188,12 +195,7 @@ impl Frame {
         &mut self.regs[id]
     }
 
-    fn jump(
-        &mut self,
-        insts: &[Inst],
-        label: &Label,
-        args: &[ValueId],
-    ) -> usize {
+    fn jump(&mut self, insts: &[Inst], label: &Label, args: &[ValueId]) -> usize {
         let target = self.resolve_label(label);
         self.bind_block_params(insts, target, args);
         target
@@ -206,7 +208,11 @@ impl Frame {
         then: (&Label, &[ValueId]),
         else_: (&Label, &[ValueId]),
     ) -> usize {
-        let (label, args) = if self.get(cond).as_bool() { then } else { else_ };
+        let (label, args) = if self.get(cond).as_bool() {
+            then
+        } else {
+            else_
+        };
         self.jump(insts, label, args)
     }
 
@@ -363,13 +369,7 @@ fn run_loop<'s>(
     frame: &'s mut Frame,
     val_types: &'s FxHashMap<ValueId, Ty>,
 ) -> BoxFuture<'s, Result<Value, RuntimeError>> {
-    Box::pin(run_loop_inner(
-        ctx,
-        insts,
-        closures,
-        frame,
-        val_types,
-    ))
+    Box::pin(run_loop_inner(ctx, insts, closures, frame, val_types))
 }
 
 async fn run_loop_inner(
@@ -442,7 +442,11 @@ async fn execute_inst(
                     let ty = type_of(val_types, *dst);
                     // SAFETY: the type checker admits only a live reference to
                     // a word or a `String` at `path` here.
-                    let at = walk_path(unsafe { frame.get(*r).target() }, path, &ctx.shared.interner);
+                    let at = walk_path(
+                        unsafe { frame.get(*r).target() },
+                        path,
+                        &ctx.shared.interner,
+                    );
                     if let Ty::String = ty {
                         // SAFETY: the type checker admits only a string here.
                         Value::string(unsafe { at.as_str() }.to_string())
@@ -496,7 +500,7 @@ async fn execute_inst(
         }
         InstKind::UnaryOp { dst, op, operand } => {
             let ty = type_of(val_types, *operand);
-            let result = eval_unaryop(*op, ty, frame.get(*operand));
+            let result = eval_unaryop(*op, ty, frame.get(*operand))?;
             frame.set(*dst, result);
         }
 
@@ -507,7 +511,10 @@ async fn execute_inst(
             field: f,
             rest,
         } => {
-            let path: Vec<PathSeg> = std::iter::once(*f).chain(rest.iter().copied()).map(PathSeg::Field).collect();
+            let path: Vec<PathSeg> = std::iter::once(*f)
+                .chain(rest.iter().copied())
+                .map(PathSeg::Field)
+                .collect();
             let ty = type_of(val_types, *dst).clone();
             let val = read_at(frame.slot_mut(*object), &path, &ty, &ctx.shared.interner);
             frame.set(*dst, val);
@@ -521,13 +528,21 @@ async fn execute_inst(
         } => {
             let mut obj = frame.take(*object);
             let new_val = frame.use_val(*value);
-            let path: Vec<PathSeg> = std::iter::once(*f).chain(rest.iter().copied()).map(PathSeg::Field).collect();
+            let path: Vec<PathSeg> = std::iter::once(*f)
+                .chain(rest.iter().copied())
+                .map(PathSeg::Field)
+                .collect();
             store_path(&mut obj, &path, new_val, &ctx.shared.interner);
             frame.set(*dst, obj);
         }
         InstKind::TupleIndex { dst, tuple, index } => {
             let ty = type_of(val_types, *dst).clone();
-            let val = read_at(frame.slot_mut(*tuple), &[PathSeg::Index(*index)], &ty, &ctx.shared.interner);
+            let val = read_at(
+                frame.slot_mut(*tuple),
+                &[PathSeg::Index(*index)],
+                &ty,
+                &ctx.shared.interner,
+            );
             frame.set(*dst, val);
         }
 
@@ -547,7 +562,12 @@ async fn execute_inst(
         }
         InstKind::StringEq { dst, a, b } => {
             // SAFETY: the type checker admits only live `&String`s here.
-            let (a, b) = unsafe { (frame.get(*a).target().as_str(), frame.get(*b).target().as_str()) };
+            let (a, b) = unsafe {
+                (
+                    frame.get(*a).target().as_str(),
+                    frame.get(*b).target().as_str(),
+                )
+            };
             frame.set(*dst, Value::bool_(a == b));
         }
         InstKind::StringConcat { dst, parts } => {
@@ -571,8 +591,10 @@ async fn execute_inst(
             frame.set(*dst, Value::array(items));
         }
         InstKind::MakeObject { dst, fields } => {
-            let obj: FxHashMap<Astr, Value> =
-                fields.iter().map(|(k, v)| (*k, frame.use_val(*v))).collect();
+            let obj: FxHashMap<Astr, Value> = fields
+                .iter()
+                .map(|(k, v)| (*k, frame.use_val(*v)))
+                .collect();
             frame.set(*dst, Value::object(obj));
         }
         InstKind::MakeTuple { dst, elements } => {
@@ -628,7 +650,10 @@ async fn execute_inst(
                 if src_val.is_option() {
                     src_val.materialize::<OptionValue>()
                 } else {
-                    assert!(src_val.is_variant(), "UnwrapVariant on non-variant: {src_val:?}");
+                    assert!(
+                        src_val.is_variant(),
+                        "UnwrapVariant on non-variant: {src_val:?}"
+                    );
                     src_val.materialize::<VariantValue>().payload.map(|p| *p)
                 }
             };
@@ -639,10 +664,14 @@ async fn execute_inst(
         InstKind::TestLiteral { dst, src, value } => {
             let src_val = read_place(frame, val_types, *src);
             let matches = match value {
-                Literal::Int(b) => src_val.as_int() == *b,
+                Literal::Int(b) => {
+                    let Ty::Int(k) = type_of(val_types, *src) else {
+                        panic!("TestLiteral: an integer literal against a non-integer")
+                    };
+                    k.read(src_val.small()) == *b
+                }
                 Literal::Float(b) => src_val.as_float() == *b,
                 Literal::Bool(b) => src_val.as_bool() == *b,
-                Literal::Byte(b) => src_val.as_byte() == *b,
                 // SAFETY: the type checker matches a string literal against a string.
                 Literal::String(b) => (unsafe { src_val.as_str() }) == b.as_str(),
                 Literal::Unit => true,
@@ -762,19 +791,22 @@ async fn execute_inst(
                 Executable::Extern(entry) => SpawnKind::Extern(entry.select(callee_ty)?.clone()),
                 Executable::Module(_) => SpawnKind::Module,
             };
-            let spawn_args: Vec<Value> =
-                args.iter().map(|a| frame.use_val(*a)).collect();
+            let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a)).collect();
             let handle = match spawn_kind {
                 SpawnKind::Extern(handler) => {
                     let rt = ctx.shared.runtime();
                     match &handler {
                         ExternHandler::Sync(f) => {
                             let f = Arc::clone(f);
-                            ctx.shared.executor.spawn_blocking(Box::new(move || f(&rt, spawn_args)))
+                            ctx.shared
+                                .executor
+                                .spawn_blocking(Box::new(move || f(&rt, spawn_args)))
                         }
                         ExternHandler::Async(f) => {
                             let f = Arc::clone(f);
-                            ctx.shared.executor.spawn_async(Box::pin(async move { f(rt, spawn_args).await }))
+                            ctx.shared
+                                .executor
+                                .spawn_async(Box::pin(async move { f(rt, spawn_args).await }))
                         }
                     }
                 }
@@ -803,18 +835,33 @@ async fn execute_inst(
         // -- Object/List dynamic access -------------------
         InstKind::ObjectGet { dst, object, key } => {
             let ty = type_of(val_types, *dst).clone();
-            let val = read_at(frame.slot_mut(*object), &[PathSeg::Field(*key)], &ty, &ctx.shared.interner);
+            let val = read_at(
+                frame.slot_mut(*object),
+                &[PathSeg::Field(*key)],
+                &ty,
+                &ctx.shared.interner,
+            );
             frame.set(*dst, val);
         }
         InstKind::ArrayIndex { dst, array, index } => {
             let ty = type_of(val_types, *dst).clone();
-            let val = read_at(frame.slot_mut(*array), &[PathSeg::Index(*index)], &ty, &ctx.shared.interner);
+            let val = read_at(
+                frame.slot_mut(*array),
+                &[PathSeg::Index(*index)],
+                &ty,
+                &ctx.shared.interner,
+            );
             frame.set(*dst, val);
         }
         InstKind::ArrayGet { dst, array, index } => {
             let idx = frame.get(*index).as_int() as usize;
             let ty = type_of(val_types, *dst).clone();
-            let val = read_at(frame.slot_mut(*array), &[PathSeg::Index(idx)], &ty, &ctx.shared.interner);
+            let val = read_at(
+                frame.slot_mut(*array),
+                &[PathSeg::Index(idx)],
+                &ty,
+                &ctx.shared.interner,
+            );
             frame.set(*dst, val);
         }
     }
@@ -884,7 +931,14 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
     }
 
     let empty_closures = FxHashMap::default();
-    run_loop(&mut closure_ctx, &body.insts, &empty_closures, &mut frame, &body.val_types).await
+    run_loop(
+        &mut closure_ctx,
+        &body.insts,
+        &empty_closures,
+        &mut frame,
+        &body.val_types,
+    )
+    .await
 }
 
 // -- Interpreter - thin entry point ----------------------------------
@@ -903,7 +957,11 @@ impl Interpreter {
 
     /// An interpreter over a page the caller keeps a handle to: a space's
     /// page, committed after the run (RFC-0033).
-    pub fn on_page(shared: InterpreterContext, entry: QualifiedRef, page: Arc<dyn RuntimeContext>) -> Self {
+    pub fn on_page(
+        shared: InterpreterContext,
+        entry: QualifiedRef,
+        page: Arc<dyn RuntimeContext>,
+    ) -> Self {
         Self {
             shared,
             entry,
@@ -933,11 +991,10 @@ impl Interpreter {
 
 fn literal_to_value(lit: &Literal) -> Value {
     match lit {
-        Literal::Int(n) => Value::int(*n),
+        Literal::Int(n) => Value::from_bits(*n as u64),
         Literal::Float(f) => Value::float(*f),
         Literal::String(s) => Value::string(s.as_str()),
         Literal::Bool(b) => Value::bool_(*b),
-        Literal::Byte(b) => Value::byte(*b),
         Literal::List(items) => Value::array(items.iter().map(literal_to_value).collect()),
         Literal::Unit => Value::unit(),
     }
@@ -945,48 +1002,97 @@ fn literal_to_value(lit: &Literal) -> Value {
 
 // -- BinOp ------------------------------------------------------------
 
+/// Runs `$body` with `$t` the Rust integer type of an `IntTy`.
+macro_rules! for_int_ty {
+    ($k:expr, |$t:ident| $body:expr) => {
+        match $k {
+            IntTy::I8 => {
+                type $t = i8;
+                $body
+            }
+            IntTy::I16 => {
+                type $t = i16;
+                $body
+            }
+            IntTy::I32 => {
+                type $t = i32;
+                $body
+            }
+            IntTy::I64 => {
+                type $t = i64;
+                $body
+            }
+            IntTy::U8 => {
+                type $t = u8;
+                $body
+            }
+            IntTy::U16 => {
+                type $t = u16;
+                $body
+            }
+            IntTy::U32 => {
+                type $t = u32;
+                $body
+            }
+            IntTy::U64 => {
+                type $t = u64;
+                $body
+            }
+        }
+    };
+}
+
+/// Integer arithmetic at one width: checked, so an overflow, a division by
+/// zero, or a shift past the width is a run-time error, never a wrap.
+fn int_binop(op: BinOp, k: IntTy, left: u64, right: u64) -> Result<Value, RuntimeError> {
+    for_int_ty!(k, |T| {
+        let a = k.read(left) as T;
+        let b = k.read(right) as T;
+        let overflow = RuntimeError::integer_overflow;
+        let int = |v: T| Value::from_bits(v as u64);
+        Ok(match op {
+            BinOp::Add => int(a.checked_add(b).ok_or_else(overflow)?),
+            BinOp::Sub => int(a.checked_sub(b).ok_or_else(overflow)?),
+            BinOp::Mul => int(a.checked_mul(b).ok_or_else(overflow)?),
+            BinOp::Div => {
+                if b == 0 {
+                    return Err(RuntimeError::division_by_zero());
+                }
+                int(a.checked_div(b).ok_or_else(overflow)?)
+            }
+            BinOp::Mod => {
+                if b == 0 {
+                    return Err(RuntimeError::division_by_zero());
+                }
+                int(a.checked_rem(b).ok_or_else(overflow)?)
+            }
+            BinOp::Eq => Value::bool_(a == b),
+            BinOp::Neq => Value::bool_(a != b),
+            BinOp::Lt => Value::bool_(a < b),
+            BinOp::Gt => Value::bool_(a > b),
+            BinOp::Lte => Value::bool_(a <= b),
+            BinOp::Gte => Value::bool_(a >= b),
+            BinOp::BitAnd => int(a & b),
+            BinOp::BitOr => int(a | b),
+            BinOp::Xor => int(a ^ b),
+            BinOp::Shl => int(u32::try_from(b)
+                .ok()
+                .and_then(|n| a.checked_shl(n))
+                .ok_or_else(overflow)?),
+            BinOp::Shr => int(u32::try_from(b)
+                .ok()
+                .and_then(|n| a.checked_shr(n))
+                .ok_or_else(overflow)?),
+            BinOp::And | BinOp::Or => panic!("And/Or on an integer"),
+        })
+    })
+}
+
 /// The operands' type is the left operand's MIR type; the type checker
 /// makes both sides agree.
-fn eval_binop(
-    op: BinOp,
-    ty: &Ty,
-    left: &Value,
-    right: &Value,
-
-) -> Result<Value, RuntimeError> {
+fn eval_binop(op: BinOp, ty: &Ty, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
     match ty {
-        Ty::Int => {
-            let (a, b) = (left.as_int(), right.as_int());
-            Ok(match op {
-                BinOp::Add => Value::int(a.checked_add(b).ok_or_else(RuntimeError::integer_overflow)?),
-                BinOp::Sub => Value::int(a.checked_sub(b).ok_or_else(RuntimeError::integer_overflow)?),
-                BinOp::Mul => Value::int(a.checked_mul(b).ok_or_else(RuntimeError::integer_overflow)?),
-                BinOp::Div => {
-                    if b == 0 {
-                        return Err(RuntimeError::division_by_zero());
-                    }
-                    Value::int(a / b)
-                }
-                BinOp::Mod => {
-                    if b == 0 {
-                        return Err(RuntimeError::division_by_zero());
-                    }
-                    Value::int(a % b)
-                }
-                BinOp::Eq => Value::bool_(a == b),
-                BinOp::Neq => Value::bool_(a != b),
-                BinOp::Lt => Value::bool_(a < b),
-                BinOp::Gt => Value::bool_(a > b),
-                BinOp::Lte => Value::bool_(a <= b),
-                BinOp::Gte => Value::bool_(a >= b),
-                BinOp::BitAnd => Value::int(a & b),
-                BinOp::BitOr => Value::int(a | b),
-                BinOp::Xor => Value::int(a ^ b),
-                BinOp::Shl => Value::int(a << b),
-                BinOp::Shr => Value::int(a >> b),
-                BinOp::And | BinOp::Or => panic!("And/Or on Int"),
-            })
-        }
+        Ty::Int(k) => int_binop(op, *k, left.small(), right.small()),
         Ty::Float => {
             let (a, b) = (left.as_float(), right.as_float());
             Ok(match op {
@@ -1021,13 +1127,16 @@ fn eval_binop(
 
 // -- UnaryOp ----------------------------------------------------------
 
-fn eval_unaryop(op: UnaryOp, ty: &Ty, val: &Value) -> Value {
-    match (op, ty) {
-        (UnaryOp::Neg, Ty::Int) => Value::int(-val.as_int()),
+fn eval_unaryop(op: UnaryOp, ty: &Ty, val: &Value) -> Result<Value, RuntimeError> {
+    Ok(match (op, ty) {
+        (UnaryOp::Neg, Ty::Int(k)) => for_int_ty!(*k, |T| {
+            let a = k.read(val.small()) as T;
+            Value::from_bits(a.checked_neg().ok_or_else(RuntimeError::integer_overflow)? as u64)
+        }),
         (UnaryOp::Neg, Ty::Float) => Value::float(-val.as_float()),
         (UnaryOp::Not, Ty::Bool) => Value::bool_(!val.as_bool()),
         (op, other) => panic!("unary {op:?} on {other:?}"),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1036,7 +1145,7 @@ mod primitive_operator_tests {
     use crate::error::RuntimeErrorKind;
 
     fn int(op: BinOp, a: i64, b: i64) -> Result<Value, RuntimeError> {
-        eval_binop(op, &Ty::Int, &Value::int(a), &Value::int(b))
+        eval_binop(op, &Ty::I64, &Value::int(a), &Value::int(b))
     }
 
     fn float(op: BinOp, a: f64, b: f64) -> bool {

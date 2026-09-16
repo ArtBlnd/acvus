@@ -12,9 +12,9 @@ expression: ir
      6 |   commit @n = r4
      7 |   return r3
 
-    ; r0 (@n) : Int
-    ; r1 (@n.) : &Int
+    ; r0 (@n) : i64
+    ; r1 (@n.) : &i64
     ; r2 (to_string(...)) : String
     ; r3 (v5) : String
-    ; r4 (v6) : Int
-    ; r5 (@n) : Int
+    ; r4 (v6) : i64
+    ; r5 (@n) : i64

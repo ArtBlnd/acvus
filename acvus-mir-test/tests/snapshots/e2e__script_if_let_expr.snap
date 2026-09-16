@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 2857
 expression: ir
 ---
 === main ===
@@ -14,18 +13,18 @@ expression: ir
      8 |   jump L1(r4)
      9 | L2:
     11 |   jump L1(0 (r5))
-    12 | L1(r6: Int):
+    12 | L1(r6: i64):
     13 |   assign x = r6
     14 |   r7 = take x
     15 |   return r7
 
-    ; r0 (v2) : Option<Int>
-    ; r1 (v1) : Int
+    ; r0 (v2) : Option<i64>
+    ; r1 (v1) : i64
     ; r2 (v3) : Bool
-    ; r3 (v) : Int
-    ; r4 (v) : Int
-    ; r5 (v7) : Int
-    ; r6 (v8) : Int
-    ; r7 (x) : Int
-    ; r8 (x) : Int
-    ; r9 (v) : Int
+    ; r3 (v) : i64
+    ; r4 (v) : i64
+    ; r5 (v7) : i64
+    ; r6 (v8) : i64
+    ; r7 (x) : i64
+    ; r8 (x) : i64
+    ; r9 (v) : i64

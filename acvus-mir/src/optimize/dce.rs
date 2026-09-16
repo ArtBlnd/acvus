@@ -15,8 +15,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
-use crate::cfg::{CfgBody, Terminator};
 use crate::analysis::loans::Loans;
+use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{InstKind, Label, ValueId};
 
 // -- Def location ----------------------------------------------------
@@ -287,7 +287,7 @@ mod tests {
             callee: Callee::Direct(QualifiedRef::root(i.intern(name))),
             callee_ty: Ty::Fn {
                 params: vec![],
-                ret: Box::new(Ty::Int),
+                ret: Box::new(Ty::I64),
                 captures: vec![],
                 effect: effect.into(),
             },
@@ -300,7 +300,7 @@ mod tests {
         let mut factory = LocalFactory::<ValueId>::new();
         let mut val_types = FxHashMap::default();
         for _ in 0..val_count {
-            val_types.insert(factory.next(), Ty::Int);
+            val_types.insert(factory.next(), Ty::I64);
         }
         cfg::promote(MirBody {
             insts: insts

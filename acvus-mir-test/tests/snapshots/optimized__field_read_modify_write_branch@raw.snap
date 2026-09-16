@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
-assertion_line: 75
 expression: raw
 ---
 === main ===
@@ -25,17 +24,17 @@ expression: raw
     20 |   commit @stats = r11
     21 |   return r10
 
-    ; r0 (@stats) : {count: Int, exceeded: Bool, threshold: Int}
-    ; r1 (@stats.count) : Int
-    ; r2 (v5) : Int
-    ; r3 (v4) : Int
-    ; r4 (count) : Int
-    ; r5 (@stats.threshold) : Int
+    ; r0 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r1 (@stats.count) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (count) : i64
+    ; r5 (@stats.threshold) : i64
     ; r6 (v9) : Bool
     ; r7 (v10) : Bool
-    ; r8 (count) : Int
+    ; r8 (count) : i64
     ; r9 (v12) : Bool
-    ; r10 (@stats.count) : Int
-    ; r11 (v14) : {count: Int, exceeded: Bool, threshold: Int}
-    ; r12 (count) : Int
-    ; r13 (@stats) : {count: Int, exceeded: Bool, threshold: Int}
+    ; r10 (@stats.count) : i64
+    ; r11 (v14) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r12 (count) : i64
+    ; r13 (@stats) : {count: i64, exceeded: Bool, threshold: i64}

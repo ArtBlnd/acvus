@@ -9,10 +9,16 @@ use std::collections::BTreeSet;
 fn commutative_io(i: &Interner, name: &str) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(i.intern("x"), lift_to_poly(&Ty::Int))],
-            ret: Box::new(lift_to_poly(&Ty::Int)),
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: Effect::with_contexts(Reissue::Opaque, true, BTreeSet::new(), BTreeSet::new())
                 .into(),
@@ -43,16 +49,27 @@ fn a_chain_of_calls_is_one_line() {
     let i = Interner::new();
     let io = Function {
         qref: QualifiedRef::root(i.intern("io")),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(i.intern("x"), lift_to_poly(&Ty::Int))],
-            ret: Box::new(lift_to_poly(&Ty::Int)),
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
         },
     };
-    let ir = compile_script_ir_with(&i, "a = io(1); io(a)", &rustc_hash::FxHashMap::default(), &[io])
-        .unwrap();
+    let ir = compile_script_ir_with(
+        &i,
+        "a = io(1); io(a)",
+        &rustc_hash::FxHashMap::default(),
+        &[io],
+    )
+    .unwrap();
     assert!(ir.contains("call@"), "{ir}");
     assert!(ir.contains("(entry)"), "{ir}");
     assert!(!ir.contains("merge@"), "{ir}");
@@ -63,10 +80,16 @@ fn anyorder_in_a_script_merges_its_calls() {
     let i = Interner::new();
     let io = Function {
         qref: QualifiedRef::root(i.intern("io")),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(i.intern("x"), lift_to_poly(&Ty::Int))],
-            ret: Box::new(lift_to_poly(&Ty::Int)),
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
         },

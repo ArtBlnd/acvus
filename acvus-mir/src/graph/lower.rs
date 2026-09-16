@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn lower_with_context() {
         let i = Interner::new();
-        let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::Int)]);
+        let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
         let inf =
             crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
@@ -172,7 +172,7 @@ mod tests {
         let graph = make_graph_with_ctx(
             &i,
             "x = @data { @out = x + 1; }; @out",
-            &[("data", Ty::Int), ("out", Ty::Int)],
+            &[("data", Ty::I64), ("out", Ty::I64)],
         );
         let ext = extract::extract(&i, &graph);
         let inf =
@@ -197,7 +197,7 @@ mod tests {
         let graph = make_graph_with_ctx(
             &i,
             "42 = @val { @out = 1; }; @out",
-            &[("val", Ty::Int), ("out", Ty::Int)],
+            &[("val", Ty::I64), ("out", Ty::I64)],
         );
         let ext = extract::extract(&i, &graph);
         let inf =

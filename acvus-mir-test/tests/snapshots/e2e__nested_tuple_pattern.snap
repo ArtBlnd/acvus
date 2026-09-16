@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 822
 expression: ir
 ---
 === literals ===
@@ -32,21 +31,21 @@ expression: ir
     27 |   jump L0(r22, r20, r21, r19)
     28 | L1:
     30 |   jump L0(T0, r0, r1, r2)
-    31 | L0(r23: String, r24: &Int, r25: &Int, r26: &String):  ; merge_of L2
+    31 | L0(r23: String, r24: &i64, r25: &i64, r26: &String):  ; merge_of L2
     32 |   r27 = string_concat [r23]
     33 |   r28 = take @data
     34 |   commit @data = r28
     35 |   return r27
 
-    ; r0 (v30) : &Int
-    ; r1 (v31) : &Int
+    ; r0 (v30) : &i64
+    ; r1 (v31) : &i64
     ; r2 (v32) : &String
-    ; r3 (@data) : ((Int, Int), String)
-    ; r4 (@data.) : &((Int, Int), String)
-    ; r5 ((*r3).[0]) : &(Int, Int)
+    ; r3 (@data) : ((i64, i64), String)
+    ; r4 (@data.) : &((i64, i64), String)
+    ; r5 ((*r3).[0]) : &(i64, i64)
     ; r6 ((*r3).[1]) : &String
-    ; r7 ((*r5).[0]) : &Int
-    ; r8 ((*r5).[1]) : &Int
+    ; r7 ((*r5).[0]) : &i64
+    ; r8 ((*r5).[1]) : &i64
     ; r9 (v11) : Bool
     ; r10 (v7) : Bool
     ; r11 (v10) : Bool
@@ -56,20 +55,20 @@ expression: ir
     ; r15 (v4) : Bool
     ; r16 (v16) : Bool
     ; r17 (v15) : Bool
-    ; r18 ((*r3).[0]) : &(Int, Int)
+    ; r18 ((*r3).[0]) : &(i64, i64)
     ; r19 (label) : &String
-    ; r20 (a) : &Int
-    ; r21 (b) : &Int
+    ; r20 (a) : &i64
+    ; r21 (b) : &i64
     ; r22 (v25) : String
     ; r23 (v27) : String
-    ; r24 (v33) : &Int
-    ; r25 (v34) : &Int
+    ; r24 (v33) : &i64
+    ; r25 (v34) : &i64
     ; r26 (v35) : &String
     ; r27 (v28) : String
-    ; r28 (v29) : ((Int, Int), String)
-    ; r29 (b) : &Int
-    ; r30 (@data) : ((Int, Int), String)
-    ; r31 (a) : &Int
+    ; r28 (v29) : ((i64, i64), String)
+    ; r29 (b) : &i64
+    ; r30 (@data) : ((i64, i64), String)
+    ; r31 (a) : &i64
     ; r32 (label) : &String
     ; r33 (label) : &String
     ; r34 (v26) : String

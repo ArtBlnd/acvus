@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized_cross_fn.rs
-assertion_line: 334
 expression: raw
 ---
 -- enrich --
@@ -13,15 +12,15 @@ expression: raw
      6 |   r6 = r2 + r4
      7 |   return r6
 
-    ; r0 ($val) : Int
-    ; r1 ($offset) : Int
-    ; r2 (v5) : Int
-    ; r3 ($val) : Int
-    ; r4 (v8) : Int
-    ; r5 (v7) : Int
-    ; r6 (v9) : Int
-    ; r7 (v2) : Int
-    ; r8 (v1) : Int
+    ; r0 ($val) : i64
+    ; r1 ($offset) : i64
+    ; r2 (v5) : i64
+    ; r3 ($val) : i64
+    ; r4 (v8) : i64
+    ; r5 (v7) : i64
+    ; r6 (v9) : i64
+    ; r7 (v2) : i64
+    ; r8 (v1) : i64
 
 -- finalize --
 === main ===
@@ -32,13 +31,13 @@ expression: raw
      4 |   r4 = r2 * r3
      5 |   return r4
 
-    ; r0 ($val) : Int
-    ; r1 ($prec) : Int
-    ; r2 (v5) : Int
-    ; r3 ($prec) : Int
-    ; r4 (v7) : Int
-    ; r5 (v1) : Int
-    ; r6 (v2) : Int
+    ; r0 ($val) : i64
+    ; r1 ($prec) : i64
+    ; r2 (v5) : i64
+    ; r3 ($prec) : i64
+    ; r4 (v7) : i64
+    ; r5 (v1) : i64
+    ; r6 (v2) : i64
 
 -- main --
 === main ===
@@ -108,55 +107,55 @@ expression: raw
     ;   r38(entry)
 
     ; r0 (v1) : Order
-    ; r1 (@offset) : Int
-    ; r2 (@stage2) : Int
-    ; r3 (@scale) : Int
-    ; r4 (@stage3) : Int
-    ; r5 (@source_id) : Int
-    ; r6 (@stage1) : Int
-    ; r7 (@precision) : Int
-    ; r8 (@source_id) : Int
+    ; r1 (@offset) : i64
+    ; r2 (@stage2) : i64
+    ; r3 (@scale) : i64
+    ; r4 (@stage3) : i64
+    ; r5 (@source_id) : i64
+    ; r6 (@stage1) : i64
+    ; r7 (@precision) : i64
+    ; r8 (@source_id) : i64
     ; r9 (v19) : Order
-    ; r10 (fetch_data(...)) : Int
+    ; r10 (fetch_data(...)) : i64
     ; r11 (v20) : Order
-    ; r12 (raw) : Int
-    ; r13 (@scale) : Int
-    ; r14 (normalize(...)) : Int
-    ; r15 (s1) : Int
-    ; r16 (s1) : Int
-    ; r17 (@offset) : Int
-    ; r18 (enrich(...)) : Int
-    ; r19 (s2) : Int
-    ; r20 (s2) : Int
-    ; r21 (@precision) : Int
-    ; r22 (finalize(...)) : Int
-    ; r23 (s3) : Int
-    ; r24 (s1) : Int
-    ; r25 (s2) : Int
-    ; r26 (s3) : Int
+    ; r12 (raw) : i64
+    ; r13 (@scale) : i64
+    ; r14 (normalize(...)) : i64
+    ; r15 (s1) : i64
+    ; r16 (s1) : i64
+    ; r17 (@offset) : i64
+    ; r18 (enrich(...)) : i64
+    ; r19 (s2) : i64
+    ; r20 (s2) : i64
+    ; r21 (@precision) : i64
+    ; r22 (finalize(...)) : i64
+    ; r23 (s3) : i64
+    ; r24 (s1) : i64
+    ; r25 (s2) : i64
+    ; r26 (s3) : i64
     ; r27 (v41) : Order
-    ; r28 (log_pipeline(...)) : Int
+    ; r28 (log_pipeline(...)) : i64
     ; r29 (v42) : Order
-    ; r30 (s3) : Int
-    ; r31 (v44) : Int
-    ; r32 (v45) : Int
-    ; r33 (v46) : Int
-    ; r34 (v47) : Int
-    ; r35 (v48) : Int
-    ; r36 (v49) : Int
-    ; r37 (v50) : Int
+    ; r30 (s3) : i64
+    ; r31 (v44) : i64
+    ; r32 (v45) : i64
+    ; r33 (v46) : i64
+    ; r34 (v47) : i64
+    ; r35 (v48) : i64
+    ; r36 (v49) : i64
+    ; r37 (v50) : i64
     ; r38 (v51) : Order
-    ; r39 (@offset) : Int
-    ; r40 (s1) : Int
-    ; r41 (raw) : Int
-    ; r42 (@stage2) : Int
-    ; r43 (@stage3) : Int
-    ; r44 (@precision) : Int
-    ; r45 (s2) : Int
-    ; r46 (@source_id) : Int
-    ; r47 (@scale) : Int
-    ; r48 (@stage1) : Int
-    ; r49 (s3) : Int
+    ; r39 (@offset) : i64
+    ; r40 (s1) : i64
+    ; r41 (raw) : i64
+    ; r42 (@stage2) : i64
+    ; r43 (@stage3) : i64
+    ; r44 (@precision) : i64
+    ; r45 (s2) : i64
+    ; r46 (@source_id) : i64
+    ; r47 (@scale) : i64
+    ; r48 (@stage1) : i64
+    ; r49 (s3) : i64
 
 -- normalize --
 === main ===
@@ -166,10 +165,10 @@ expression: raw
      4 |   r3 = r2 / 1000 (r4)
      5 |   return r3
 
-    ; r0 ($val) : Int
-    ; r1 ($scale) : Int
-    ; r2 (v5) : Int
-    ; r3 (v7) : Int
-    ; r4 (v6) : Int
-    ; r5 (v1) : Int
-    ; r6 (v2) : Int
+    ; r0 ($val) : i64
+    ; r1 ($scale) : i64
+    ; r2 (v5) : i64
+    ; r3 (v7) : i64
+    ; r4 (v6) : i64
+    ; r5 (v1) : i64
+    ; r6 (v2) : i64

@@ -11,8 +11,8 @@ expression: ir
      6 |   commit @obj = r3
      7 |   return r2
 
-    ; r0 (@obj) : {x: {y: Int}}
-    ; r1 (v3) : Int
-    ; r2 (@obj.x.y) : Int
-    ; r3 (v5) : {x: {y: Int}}
-    ; r4 (@obj) : {x: {y: Int}}
+    ; r0 (@obj) : {x: {y: i64}}
+    ; r1 (v3) : i64
+    ; r2 (@obj.x.y) : i64
+    ; r3 (v5) : {x: {y: i64}}
+    ; r4 (@obj) : {x: {y: i64}}

@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
-assertion_line: 105
 expression: raw
 ---
 === main ===
@@ -35,27 +34,27 @@ expression: raw
     28 |   commit @b = r17
     29 |   return r13
 
-    ; r0 (@output) : Int
-    ; r1 (@a) : Int
-    ; r2 (@scale) : Int
-    ; r3 (@b) : Int
-    ; r4 (@a) : Int
-    ; r5 (@b) : Int
-    ; r6 (v11) : Int
-    ; r7 (sum) : Int
-    ; r8 (@scale) : Int
-    ; r9 (v15) : Int
-    ; r10 (scaled) : Int
-    ; r11 (@a) : Int
-    ; r12 (v19) : Int
-    ; r13 (@output) : Int
-    ; r14 (v21) : Int
-    ; r15 (v22) : Int
-    ; r16 (v23) : Int
-    ; r17 (v24) : Int
-    ; r18 (@a) : Int
-    ; r19 (@b) : Int
-    ; r20 (@output) : Int
-    ; r21 (sum) : Int
-    ; r22 (@scale) : Int
-    ; r23 (scaled) : Int
+    ; r0 (@output) : i64
+    ; r1 (@a) : i64
+    ; r2 (@scale) : i64
+    ; r3 (@b) : i64
+    ; r4 (@a) : i64
+    ; r5 (@b) : i64
+    ; r6 (v11) : i64
+    ; r7 (sum) : i64
+    ; r8 (@scale) : i64
+    ; r9 (v15) : i64
+    ; r10 (scaled) : i64
+    ; r11 (@a) : i64
+    ; r12 (v19) : i64
+    ; r13 (@output) : i64
+    ; r14 (v21) : i64
+    ; r15 (v22) : i64
+    ; r16 (v23) : i64
+    ; r17 (v24) : i64
+    ; r18 (@a) : i64
+    ; r19 (@b) : i64
+    ; r20 (@output) : i64
+    ; r21 (sum) : i64
+    ; r22 (@scale) : i64
+    ; r23 (scaled) : i64

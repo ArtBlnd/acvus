@@ -88,9 +88,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
 
             let uses = inst_info::uses(kind);
 
-            if let Some(target) =
-                find_highest_target(BlockIdx(bi), &uses, &domtree, &def_block)
-            {
+            if let Some(target) = find_highest_target(BlockIdx(bi), &uses, &domtree, &def_block) {
                 hoists.push((bi, i, target.0));
                 for d in inst_info::defs(kind) {
                     def_block.insert(d, target);
@@ -198,9 +196,10 @@ fn is_hoistable(kind: &InstKind) -> bool {
         InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => true,
 
         // A word constant; a heap value is built where it is used.
-        InstKind::Const { value, .. } => {
-            !matches!(value, acvus_ast::Literal::String(_) | acvus_ast::Literal::List(_))
-        }
+        InstKind::Const { value, .. } => !matches!(
+            value,
+            acvus_ast::Literal::String(_) | acvus_ast::Literal::List(_)
+        ),
         InstKind::MakeArray { .. }
         | InstKind::MakeObject { .. }
         | InstKind::MakeTuple { .. }
@@ -315,7 +314,10 @@ fn sink_one(cfg: &mut CfgBody) -> bool {
                     break;
                 }
 
-                if is_call(other) || is_page_op(other) || effect.conflicts(&loans.storage_effect(other)) {
+                if is_call(other)
+                    || is_page_op(other)
+                    || effect.conflicts(&loans.storage_effect(other))
+                {
                     barrier = jj;
                     break;
                 }
@@ -391,7 +393,7 @@ mod tests {
             qref,
             Ty::Fn {
                 params: vec![],
-                ret: Box::new(Ty::Int),
+                ret: Box::new(Ty::I64),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
             },

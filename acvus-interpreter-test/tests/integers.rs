@@ -1,0 +1,56 @@
+use acvus_interpreter::Value;
+use acvus_interpreter_test::*;
+use acvus_mir::ty::{IntTy, Ty};
+use acvus_utils::Interner;
+
+fn ctx(i: &Interner, name: &str, ty: IntTy, bits: u64) -> Context {
+    [(i.intern(name), typed(Ty::Int(ty), Value::from_bits(bits)))]
+        .into_iter()
+        .collect()
+}
+
+#[tokio::test]
+async fn arithmetic_runs_at_the_operands_width() {
+    let i = Interner::new();
+    let v = run_script(&i, "@b + 5", ctx(&i, "b", IntTy::U8, 250)).await;
+    assert_eq!(IntTy::U8.read(v.small()), 255);
+    let v = run_script(
+        &i,
+        "@n * 3",
+        ctx(&i, "n", IntTy::I32, (-7i32) as u32 as u64),
+    )
+    .await;
+    assert_eq!(IntTy::I32.read(v.small()), -21);
+    let v = run_script(&i, "@u - 1", ctx(&i, "u", IntTy::U64, u64::MAX)).await;
+    assert_eq!(IntTy::U64.read(v.small()), u64::MAX as i128 - 1);
+    let v = run_script(&i, "-@n", ctx(&i, "n", IntTy::I16, 5)).await;
+    assert_eq!(IntTy::I16.read(v.small()), -5);
+}
+
+#[tokio::test]
+#[should_panic(expected = "IntegerOverflow")]
+async fn an_overflow_at_the_width_is_a_runtime_error() {
+    let i = Interner::new();
+    run_script(&i, "@b + 10", ctx(&i, "b", IntTy::U8, 250)).await;
+}
+
+#[tokio::test]
+async fn to_string_has_an_instance_for_every_width() {
+    let i = Interner::new();
+    let v = run_script(&i, "@b.to_string()", ctx(&i, "b", IntTy::U8, 250)).await;
+    assert_eq!(unsafe { v.as_str() }, "250");
+    let v = run_script(&i, "@n.to_string()", ctx(&i, "n", IntTy::I8, 0xFF)).await;
+    assert_eq!(unsafe { v.as_str() }, "-1");
+    let v = run_script(&i, "@u.to_string()", ctx(&i, "u", IntTy::U64, u64::MAX)).await;
+    assert_eq!(unsafe { v.as_str() }, "18446744073709551615");
+}
+
+#[tokio::test]
+async fn a_literal_matches_at_the_source_s_width() {
+    let i = Interner::new();
+    let src = "if let 255 = @b { \"max\" } else { \"other\" }";
+    let v = run_script_mode(&i, src, ctx(&i, "b", IntTy::U8, 255)).await;
+    assert_eq!(unsafe { v.as_str() }, "max");
+    let v = run_script_mode(&i, src, ctx(&i, "b", IntTy::U8, 7)).await;
+    assert_eq!(unsafe { v.as_str() }, "other");
+}

@@ -19,7 +19,7 @@ async fn int(src: &str) -> i64 {
 }
 
 fn byte_context(i: &Interner, value: u8) -> Context {
-    FxHashMap::from_iter([(i.intern("b"), typed(Ty::Byte, Value::byte(value)))])
+    FxHashMap::from_iter([(i.intern("b"), typed(Ty::U8, Value::byte(value)))])
 }
 
 #[tokio::test]

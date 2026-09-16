@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 fn items(i: &Interner) -> FxHashMap<acvus_utils::Astr, Ty> {
     FxHashMap::from_iter([(
         i.intern("items"),
-        Ty::Array(Box::new(Ty::Int), LenTerm::Known(2)),
+        Ty::Array(Box::new(Ty::I64), LenTerm::Known(2)),
     )])
 }
 
@@ -48,4 +48,3 @@ fn a_derived_iterator_keeps_its_source_and_still_moves() {
     .unwrap_err();
     assert!(err.contains("UseAfterMove"), "{err}");
 }
-

@@ -6,7 +6,7 @@
 
 use acvus_mir::graph::types::QualifiedRef;
 use acvus_mir::ty::{
-    InferTy, Polarity, Sources, PolyBuilder, PolyTy, Solver, Ty, TypeRegistry, lift_ty,
+    InferTy, Polarity, PolyBuilder, PolyTy, Solver, Sources, Ty, TypeRegistry, lift_ty,
 };
 use acvus_utils::Interner;
 
@@ -76,8 +76,8 @@ fn iterator_same_args_unifies() {
     let (i, reg) = setup();
     let mut sources = Sources::new();
     let mut s = Solver::new(&mut sources);
-    let a = iter_ity(&i, it(&Ty::Int));
-    let b = iter_ity(&i, it(&Ty::Int));
+    let a = iter_ity(&i, it(&Ty::I64));
+    let b = iter_ity(&i, it(&Ty::I64));
     assert!(s.unify_ty(&a, &b, Invariant, &reg).is_ok());
 }
 
@@ -86,7 +86,7 @@ fn iterator_type_arg_mismatch_fails() {
     let (i, reg) = setup();
     let mut sources = Sources::new();
     let mut s = Solver::new(&mut sources);
-    let a = iter_ity(&i, it(&Ty::Int));
+    let a = iter_ity(&i, it(&Ty::I64));
     let b = iter_ity(&i, it(&Ty::String));
     assert!(s.unify_ty(&a, &b, Invariant, &reg).is_err());
 }
@@ -98,9 +98,9 @@ fn iterator_type_param_resolves() {
     let mut s = Solver::new(&mut sources);
     let t = s.fresh_ty_var();
     let a = iter_ity(&i, t.clone());
-    let b = iter_ity(&i, it(&Ty::Int));
+    let b = iter_ity(&i, it(&Ty::I64));
     assert!(s.unify_ty(&a, &b, Invariant, &reg).is_ok());
-    assert_eq!(s.resolve_ty(&t), it(&Ty::Int));
+    assert_eq!(s.resolve_ty(&t), it(&Ty::I64));
 }
 
 // ================================================================
@@ -110,14 +110,14 @@ fn iterator_type_param_resolves() {
 #[test]
 fn iterator_is_data() {
     let (i, _reg) = setup();
-    assert!(iter_ty(&i, Ty::Int).is_data());
+    assert!(iter_ty(&i, Ty::I64).is_data());
 }
 
 #[test]
 fn list_of_iterator_is_data() {
     let (i, _reg) = setup();
     let list = Ty::Array(
-        Box::new(iter_ty(&i, Ty::Int)),
+        Box::new(iter_ty(&i, Ty::I64)),
         acvus_mir::ty::LenTerm::Known(3),
     );
     assert!(list.is_data());
@@ -128,7 +128,7 @@ fn iterator_over_fn_is_not_data() {
     let (i, _reg) = setup();
     let fn_ty = Ty::Fn {
         params: vec![],
-        ret: Box::new(Ty::Int),
+        ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::PURE.into(),
     };
@@ -143,7 +143,7 @@ fn iterator_over_fn_is_not_data() {
 fn iterator_is_move_only() {
     let (i, _reg) = setup();
     assert_eq!(
-        acvus_mir::validate::move_check::is_move_only(&iter_ty(&i, Ty::Int)),
+        acvus_mir::validate::move_check::is_move_only(&iter_ty(&i, Ty::I64)),
         Some(true)
     );
 }
@@ -181,7 +181,7 @@ fn instantiate_pair_shares_params() {
     // Unify inst_from with concrete -> T resolves
     let concrete_from = InferTy::UserDefined {
         id,
-        type_args: vec![it(&Ty::Int)],
+        type_args: vec![it(&Ty::I64)],
         effect_args: vec![],
         identity_args: vec![],
     };
@@ -194,7 +194,7 @@ fn instantiate_pair_shares_params() {
     let resolved_to = s.resolve_ty(&inst_to);
     assert_eq!(
         resolved_to,
-        InferTy::Array(Box::new(it(&Ty::Int)), acvus_mir::ty::LenTerm::Known(3))
+        InferTy::Array(Box::new(it(&Ty::I64)), acvus_mir::ty::LenTerm::Known(3))
     );
 }
 
@@ -209,10 +209,10 @@ fn coerce_list_to_iterator_completeness() {
     let mut sources = Sources::new();
     let mut s = Solver::new(&mut sources);
     let list = it(&Ty::Array(
-        Box::new(Ty::Int),
+        Box::new(Ty::I64),
         acvus_mir::ty::LenTerm::Known(3),
     ));
-    let iter = iter_ity_open(&i, &mut s, it(&Ty::Int));
+    let iter = iter_ity_open(&i, &mut s, it(&Ty::I64));
     assert!(
         s.unify_ty(&list, &iter, Covariant, &reg).is_ok(),
         "List -> Iterator coercion should succeed"
@@ -225,9 +225,9 @@ fn coerce_iterator_to_list_soundness_rejected() {
     let (i, reg) = setup();
     let mut sources = Sources::new();
     let mut s = Solver::new(&mut sources);
-    let iter = iter_ity(&i, it(&Ty::Int));
+    let iter = iter_ity(&i, it(&Ty::I64));
     let list = it(&Ty::Array(
-        Box::new(Ty::Int),
+        Box::new(Ty::I64),
         acvus_mir::ty::LenTerm::Known(3),
     ));
     assert!(
@@ -243,10 +243,10 @@ fn coerce_invariant_rejects_list_to_iterator() {
     let mut sources = Sources::new();
     let mut s = Solver::new(&mut sources);
     let list = it(&Ty::Array(
-        Box::new(Ty::Int),
+        Box::new(Ty::I64),
         acvus_mir::ty::LenTerm::Known(3),
     ));
-    let iter = iter_ity(&i, it(&Ty::Int));
+    let iter = iter_ity(&i, it(&Ty::I64));
     assert!(
         s.unify_ty(&list, &iter, Invariant, &reg).is_err(),
         "Invariant should reject List -> Iterator"

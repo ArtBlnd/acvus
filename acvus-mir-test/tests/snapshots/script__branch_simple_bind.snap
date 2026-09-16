@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/script.rs
-assertion_line: 55
 expression: ir
 ---
 === main ===
@@ -14,18 +13,18 @@ expression: ir
      8 |   commit @out = r5
      9 |   return r5
 
-    ; r0 (v13) : Int
-    ; r1 (v14) : Int
-    ; r2 (v15) : Int
-    ; r3 (@data) : Int
-    ; r4 (@out) : Int
-    ; r5 (v9) : Int
-    ; r6 (v8) : Int
-    ; r7 (@out) : Int
-    ; r8 (v11) : Int
-    ; r9 (x) : Int
-    ; r10 (@data) : Int
-    ; r11 (v12) : Int
-    ; r12 (x) : Int
-    ; r13 (@out) : Int
-    ; r14 (x) : Int
+    ; r0 (v13) : i64
+    ; r1 (v14) : i64
+    ; r2 (v15) : i64
+    ; r3 (@data) : i64
+    ; r4 (@out) : i64
+    ; r5 (v9) : i64
+    ; r6 (v8) : i64
+    ; r7 (@out) : i64
+    ; r8 (v11) : i64
+    ; r9 (x) : i64
+    ; r10 (@data) : i64
+    ; r11 (v12) : i64
+    ; r12 (x) : i64
+    ; r13 (@out) : i64
+    ; r14 (x) : i64

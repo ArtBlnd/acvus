@@ -16,14 +16,14 @@ expression: ir
      8 |   commit @n = r1
      9 |   return r5
 
-    ; r0 (v11) : Int
-    ; r1 (@n) : Int
+    ; r0 (v11) : i64
+    ; r1 (@n) : i64
     ; r2 (to_float(...)) : Float
     ; r3 (x.) : &Float
     ; r4 (to_string(...)) : String
     ; r5 (v9) : String
-    ; r6 (@n) : Int
-    ; r7 (v10) : Int
+    ; r6 (@n) : i64
+    ; r7 (v10) : i64
     ; r8 (v6) : String
     ; r9 (x) : Float
-    ; r10 (@n) : Int
+    ; r10 (@n) : i64

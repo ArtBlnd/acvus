@@ -102,7 +102,10 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref,
-                kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+                kind: FnKind::Extern {
+                    bounds: vec![],
+                    instances: vec![],
+                },
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),

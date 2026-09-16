@@ -11,8 +11,8 @@ expression: ir
      5 |   commit @val = r3
      6 |   return r2
 
-    ; r0 (@val) : Int
-    ; r1 (@val.) : &Int
+    ; r0 (@val) : i64
+    ; r1 (@val.) : &i64
     ; r2 (to_string(...)) : String
-    ; r3 (v5) : Int
-    ; r4 (@val) : Int
+    ; r3 (v5) : i64
+    ; r4 (@val) : i64

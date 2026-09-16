@@ -160,6 +160,6 @@ fn a_space_directory_keeps_contexts_between_runs() {
     let out = acvus(dir.path(), &["space", "store"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     let listing = text(&out.stdout);
-    assert!(listing.starts_with("@n: Int = "), "{listing}");
+    assert!(listing.starts_with("@n: i64 = "), "{listing}");
     assert!(listing.contains("2 nodes"), "{listing}");
 }

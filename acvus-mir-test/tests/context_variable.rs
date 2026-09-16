@@ -9,7 +9,10 @@ use rustc_hash::FxHashMap;
 fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
             params: params
                 .iter()
@@ -25,8 +28,8 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
 
 fn int_to_int(i: &Interner) -> Ty {
     Ty::Fn {
-        params: vec![Param::new(i.intern("a"), Ty::Int)],
-        ret: Box::new(Ty::Int),
+        params: vec![Param::new(i.intern("a"), Ty::I64)],
+        ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
     }
@@ -42,8 +45,8 @@ fn an_assign_to_a_context_while_it_is_lent_is_rejected() {
     let f = extern_fn(
         &i,
         "f",
-        &[Ty::Ref(Mutability::Shared, Box::new(Ty::String)), Ty::Int],
-        Ty::Int,
+        &[Ty::Ref(Mutability::Shared, Box::new(Ty::String)), Ty::I64],
+        Ty::I64,
     );
     let err = compile_script_ir_with(
         &i,
@@ -61,8 +64,11 @@ fn a_closure_writing_a_lent_context_is_rejected_at_the_call() {
     let f = extern_fn(
         &i,
         "f",
-        &[Ty::Ref(Mutability::Shared, Box::new(Ty::String)), int_to_int(&i)],
-        Ty::Int,
+        &[
+            Ty::Ref(Mutability::Shared, Box::new(Ty::String)),
+            int_to_int(&i),
+        ],
+        Ty::I64,
     );
     let err = compile_script_ir_with(
         &i,
@@ -77,20 +83,24 @@ fn a_closure_writing_a_lent_context_is_rejected_at_the_call() {
 #[test]
 fn a_context_read_after_a_call_whose_closure_writes_it_is_fetched_again() {
     let i = Interner::new();
-    let f = extern_fn(&i, "f", &[int_to_int(&i)], Ty::Int);
-    let ctx = FxHashMap::from_iter([(i.intern("x"), Ty::Int)]);
+    let f = extern_fn(&i, "f", &[int_to_int(&i)], Ty::I64);
+    let ctx = FxHashMap::from_iter([(i.intern("x"), Ty::I64)]);
     let ir = compile_script_ir_with(&i, "@x = 1; f(|a| -> { @x = 2; a }); @x", &ctx, &[f]).unwrap();
     let main = ir.split("=== closure").next().unwrap();
-    let commit = main.find("commit @x").expect("the context is committed before the call");
+    let commit = main
+        .find("commit @x")
+        .expect("the context is committed before the call");
     let call = main.find("call #").expect("the call");
-    let fetch = main.rfind("fetch @x").expect("the context is fetched after the call");
+    let fetch = main
+        .rfind("fetch @x")
+        .expect("the context is fetched after the call");
     assert!(commit < call && call < fetch, "{main}");
     let returned = main.lines().find(|l| l.contains("return")).unwrap();
     assert!(!returned.contains("return 1"), "{main}");
 }
 
 fn object_context(i: &Interner, name: &str) -> FxHashMap<acvus_utils::Astr, Ty> {
-    let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+    let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
     FxHashMap::from_iter([(i.intern(name), user)])
 }
 
@@ -104,14 +114,20 @@ fn a_context_moved_out_and_not_assigned_back_is_rejected() {
 #[test]
 fn a_context_bound_and_read_again_is_rejected_before_promotion() {
     let i = Interner::new();
-    let err = compile_script_ir(&i, "x = @user; y = @user; 0", &object_context(&i, "user")).unwrap_err();
+    let err =
+        compile_script_ir(&i, "x = @user; y = @user; 0", &object_context(&i, "user")).unwrap_err();
     assert!(err.contains("UseAfterMove"), "{err}");
 }
 
 #[test]
 fn a_context_moved_out_and_assigned_back_is_accepted() {
     let i = Interner::new();
-    compile_script_ir(&i, "x = @user; @user = { age: 1, }; x", &object_context(&i, "user")).unwrap();
+    compile_script_ir(
+        &i,
+        "x = @user; @user = { age: 1, }; x",
+        &object_context(&i, "user"),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -124,14 +140,23 @@ fn a_string_context_named_twice_is_copied_before_its_first_use() {
 #[test]
 fn a_string_context_used_once_after_reassignment_is_not_copied() {
     let i = Interner::new();
-    let ir = compile_script_ir(&i, r#"x = @items; @items = "new"; x"#, &string_context(&i, "items"))
-        .unwrap();
+    let ir = compile_script_ir(
+        &i,
+        r#"x = @items; @items = "new"; x"#,
+        &string_context(&i, "items"),
+    )
+    .unwrap();
     assert!(!ir.contains("string_clone"), "{ir}");
 }
 
 #[test]
 fn a_template_that_binds_a_string_context_and_emits_it_is_accepted() {
     let i = Interner::new();
-    let ir = compile_to_ir(&i, r#"{{ x = @items }}{{ x }}"#, &string_context(&i, "items")).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        r#"{{ x = @items }}{{ x }}"#,
+        &string_context(&i, "items"),
+    )
+    .unwrap();
     assert!(ir.contains("string_clone"), "{ir}");
 }

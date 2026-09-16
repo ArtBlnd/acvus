@@ -11,10 +11,13 @@ use rustc_hash::FxHashMap;
 fn extern_fn(i: &Interner, name: &str, effect: Effect) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
             params: vec![],
-            ret: Box::new(lift_to_poly(&Ty::Int)),
+            ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: effect.into(),
         },
@@ -98,7 +101,7 @@ fn lambda_effect_counts_only_when_called() {
 fn params(i: &Interner, names: &[&str]) -> Vec<PolyParam> {
     names
         .iter()
-        .map(|n| ParamTerm::<Poly>::new(i.intern(n), lift_to_poly(&Ty::Int)))
+        .map(|n| ParamTerm::<Poly>::new(i.intern(n), lift_to_poly(&Ty::I64)))
         .collect()
 }
 

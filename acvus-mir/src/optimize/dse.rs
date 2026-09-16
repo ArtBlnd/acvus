@@ -252,8 +252,8 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Int);
-        val_types.insert(v(1), Ty::Int);
+        val_types.insert(v(0), Ty::I64);
+        val_types.insert(v(1), Ty::I64);
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -268,7 +268,11 @@ mod tests {
         let mut cfg = cfg::promote(body);
         assert_eq!(count_commits(&cfg), 2);
         run(&mut cfg);
-        assert_eq!(count_commits(&cfg), 1, "first dead commit should be removed");
+        assert_eq!(
+            count_commits(&cfg),
+            1,
+            "first dead commit should be removed"
+        );
     }
 
     /// `commit @x = v0; v1 = fetch @x; return v1`: the commit is read.
@@ -277,8 +281,8 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Int);
-        val_types.insert(v(1), Ty::Int);
+        val_types.insert(v(0), Ty::I64);
+        val_types.insert(v(1), Ty::I64);
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -292,7 +296,11 @@ mod tests {
         );
         let mut cfg = cfg::promote(body);
         run(&mut cfg);
-        assert_eq!(count_commits(&cfg), 1, "commit before fetch must not be removed");
+        assert_eq!(
+            count_commits(&cfg),
+            1,
+            "commit before fetch must not be removed"
+        );
     }
 
     #[test]
@@ -301,8 +309,8 @@ mod tests {
         let ctx = QualifiedRef::root(i.intern("x"));
         let f = QualifiedRef::root(i.intern("f"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Int);
-        val_types.insert(v(1), Ty::Int);
+        val_types.insert(v(0), Ty::I64);
+        val_types.insert(v(1), Ty::I64);
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -336,8 +344,8 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Int);
-        val_types.insert(v(1), Ty::Int);
+        val_types.insert(v(0), Ty::I64);
+        val_types.insert(v(1), Ty::I64);
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -350,14 +358,18 @@ mod tests {
         );
         let mut cfg = cfg::promote(body);
         run(&mut cfg);
-        assert_eq!(count_commits(&cfg), 1, "commit before return is externally observable");
+        assert_eq!(
+            count_commits(&cfg),
+            1,
+            "commit before return is externally observable"
+        );
     }
 
     /// No context stores -> DSE is a no-op.
     #[test]
     fn no_context_stores_noop() {
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::Int);
+        val_types.insert(v(0), Ty::I64);
 
         let body = make_body(
             vec![

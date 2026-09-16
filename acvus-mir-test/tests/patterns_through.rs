@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 fn items(i: &Interner) -> FxHashMap<acvus_utils::Astr, Ty> {
     FxHashMap::from_iter([(
         i.intern("items"),
-        Ty::Array(Box::new(Ty::Int), LenTerm::Known(3)),
+        Ty::Array(Box::new(Ty::I64), LenTerm::Known(3)),
     )])
 }
 
@@ -17,7 +17,7 @@ fn user(i: &Interner) -> FxHashMap<acvus_utils::Astr, Ty> {
         i.intern("user"),
         Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
-            (i.intern("age"), Ty::Int),
+            (i.intern("age"), Ty::I64),
         ])),
     )])
 }
@@ -34,7 +34,8 @@ fn a_list_pattern_against_a_reference_binds_element_references() {
 #[test]
 fn a_word_binding_through_a_reference_is_not_the_word() {
     let i = Interner::new();
-    let err = compile_script_ir(&i, "[a, b, ..] = &@items { x = a + 1; }; 0", &items(&i)).unwrap_err();
+    let err =
+        compile_script_ir(&i, "[a, b, ..] = &@items { x = a + 1; }; 0", &items(&i)).unwrap_err();
     assert!(!err.is_empty(), "{err}");
 }
 
@@ -66,7 +67,7 @@ fn a_list_pattern_against_a_value_copies_its_words_out() {
 #[test]
 fn a_list_pattern_against_a_value_of_objects_leaves_it_partly_moved() {
     let i = Interner::new();
-    let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+    let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
     let users = FxHashMap::from_iter([(
         i.intern("users"),
         Ty::Array(Box::new(user), LenTerm::Known(2)),
@@ -81,8 +82,14 @@ fn a_list_pattern_against_a_value_of_objects_leaves_it_partly_moved() {
 fn a_context_bind_through_a_reference_is_rejected() {
     let i = Interner::new();
     let ctx = FxHashMap::from_iter([
-        (i.intern("user"), Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]))),
-        (i.intern("copy"), Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]))),
+        (
+            i.intern("user"),
+            Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
+        ),
+        (
+            i.intern("copy"),
+            Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
+        ),
     ]);
     let err = compile_script_ir(&i, "@copy = &@user; 0", &ctx).unwrap_err();
     assert!(!err.is_empty(), "{err}");

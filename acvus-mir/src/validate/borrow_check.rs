@@ -309,7 +309,7 @@ mod tests {
             (v(1), Ty::Ref(Mutability::Shared, Box::new(Ty::String))),
             (v(2), Ty::Ref(Mutability::Mut, Box::new(Ty::String))),
             (v(3), Ty::String),
-            (v(4), Ty::Int),
+            (v(4), Ty::I64),
         ]
     }
 
@@ -353,8 +353,8 @@ mod tests {
     #[test]
     fn a_primitive_is_read_while_shared_referenced() {
         let mut types = string_slot();
-        types[0] = (slot(), Ty::Int);
-        types.push((v(7), Ty::Int));
+        types[0] = (slot(), Ty::I64);
+        types.push((v(7), Ty::I64));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -444,8 +444,8 @@ mod tests {
     #[test]
     fn a_read_of_the_storage_while_a_mutable_reference_is_live_is_rejected() {
         let mut types = string_slot();
-        types[0] = (slot(), Ty::Int);
-        types.push((v(7), Ty::Int));
+        types[0] = (slot(), Ty::I64);
+        types.push((v(7), Ty::I64));
         let m = body(
             vec![
                 reference(2, Mutability::Mut),

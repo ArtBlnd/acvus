@@ -19,7 +19,7 @@ fn ctx(i: &Interner, entries: Vec<(&str, TypedValue)>) -> Context {
 }
 
 fn int(n: i64) -> TypedValue {
-    typed(Ty::Int, Value::int(n))
+    typed(Ty::I64, Value::int(n))
 }
 
 fn bool_(b: bool) -> TypedValue {
@@ -32,7 +32,7 @@ fn string(s: &str) -> TypedValue {
 
 fn ints(xs: &[i64]) -> TypedValue {
     typed(
-        Ty::Array(Box::new(Ty::Int), LenTerm::Known(xs.len())),
+        Ty::Array(Box::new(Ty::I64), LenTerm::Known(xs.len())),
         Value::array(xs.iter().map(|&x| Value::int(x)).collect()),
     )
 }
@@ -567,7 +567,7 @@ async fn a_field_of_a_context_is_a_place() {
     let i = Interner::new();
     let n = i.intern("n");
     let a = typed(
-        Ty::Object(FxHashMap::from_iter([(n, Ty::Int)])),
+        Ty::Object(FxHashMap::from_iter([(n, Ty::I64)])),
         Value::object(FxHashMap::from_iter([(n, Value::int(1))])),
     );
     let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", vec![("a", a)]).await;

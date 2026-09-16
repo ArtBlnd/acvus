@@ -35,7 +35,10 @@ pub fn typed(ty: Ty, value: Value) -> TypedValue {
     TypedValue { ty, value }
 }
 
-fn split_context(interner: &Interner, context: Context) -> (FxHashMap<Astr, Ty>, HashMap<String, Value>) {
+fn split_context(
+    interner: &Interner,
+    context: Context,
+) -> (FxHashMap<Astr, Ty>, HashMap<String, Value>) {
     let mut types = FxHashMap::default();
     let mut snapshot = HashMap::new();
     for (name, TypedValue { ty, value }) in context {
@@ -271,7 +274,8 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
         }
     }
 
-    let (shared, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
+    let (shared, mut interp) =
+        execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
     let result = interp.execute().await.expect("execution failed");
 
     // A template yields a String; an empty one yields unit.
@@ -387,15 +391,19 @@ where
 pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue {
     match v {
         serde_json::Value::Number(n) => match n.as_i64() {
-            Some(i) => typed(Ty::Int, Value::int(i)),
-            None => typed(Ty::Float, Value::float(n.as_f64().expect("a JSON number is i64 or f64"))),
+            Some(i) => typed(Ty::I64, Value::int(i)),
+            None => typed(
+                Ty::Float,
+                Value::float(n.as_f64().expect("a JSON number is i64 or f64")),
+            ),
         },
         serde_json::Value::String(s) => typed(Ty::String, Value::string(s.as_str())),
         serde_json::Value::Bool(b) => typed(Ty::Bool, Value::bool_(*b)),
         serde_json::Value::Null => typed(Ty::Unit, Value::unit()),
         serde_json::Value::Array(items) => {
-            let items: Vec<TypedValue> = items.iter().map(|v| value_from_json(interner, v)).collect();
-            let elem = items.first().map(|t| t.ty.clone()).unwrap_or(Ty::Int);
+            let items: Vec<TypedValue> =
+                items.iter().map(|v| value_from_json(interner, v)).collect();
+            let elem = items.first().map(|t| t.ty.clone()).unwrap_or(Ty::I64);
             let len = items.len();
             typed(
                 Ty::Array(Box::new(elem), LenTerm::Known(len)),
@@ -419,11 +427,14 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
 // -- Context helpers ----------------------------------------------
 
 pub fn int_context(interner: &Interner, name: &str, value: i64) -> Context {
-    FxHashMap::from_iter([(interner.intern(name), typed(Ty::Int, Value::int(value)))])
+    FxHashMap::from_iter([(interner.intern(name), typed(Ty::I64, Value::int(value)))])
 }
 
 pub fn string_context(interner: &Interner, name: &str, value: &str) -> Context {
-    FxHashMap::from_iter([(interner.intern(name), typed(Ty::String, Value::string(value)))])
+    FxHashMap::from_iter([(
+        interner.intern(name),
+        typed(Ty::String, Value::string(value)),
+    )])
 }
 
 pub fn user_context(interner: &Interner) -> Context {
@@ -435,7 +446,7 @@ pub fn user_context(interner: &Interner) -> Context {
         typed(
             Ty::Object(FxHashMap::from_iter([
                 (name, Ty::String),
-                (age, Ty::Int),
+                (age, Ty::I64),
                 (email, Ty::String),
             ])),
             Value::object(FxHashMap::from_iter([
@@ -452,7 +463,7 @@ pub fn items_context(interner: &Interner, items: Vec<i64>) -> Context {
     FxHashMap::from_iter([(
         interner.intern("items"),
         typed(
-            Ty::Array(Box::new(Ty::Int), LenTerm::Known(len)),
+            Ty::Array(Box::new(Ty::I64), LenTerm::Known(len)),
             Value::array(items.into_iter().map(Value::int).collect()),
         ),
     )])

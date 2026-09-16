@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
-assertion_line: 224
 expression: opt
 ---
 === main ===
@@ -22,16 +21,16 @@ expression: opt
     16 |   commit @state = r11
     17 |   return r10
 
-    ; r0 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
-    ; r1 (@state.step) : Int
-    ; r2 (v5) : Int
-    ; r3 (v4) : Int
-    ; r4 (@state.value) : Int
-    ; r5 (@state.multiplier) : Int
-    ; r6 (v8) : Int
-    ; r7 (@state.step) : Int
-    ; r8 (@state.max_steps) : Int
+    ; r0 (@state) : {done: Bool, max_steps: i64, multiplier: i64, step: i64, value: i64}
+    ; r1 (@state.step) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (@state.value) : i64
+    ; r5 (@state.multiplier) : i64
+    ; r6 (v8) : i64
+    ; r7 (@state.step) : i64
+    ; r8 (@state.max_steps) : i64
     ; r9 (v11) : Bool
-    ; r10 (@state.value) : Int
-    ; r11 (v13) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
-    ; r12 (@state) : {done: Bool, max_steps: Int, multiplier: Int, step: Int, value: Int}
+    ; r10 (@state.value) : i64
+    ; r11 (v13) : {done: Bool, max_steps: i64, multiplier: i64, step: i64, value: i64}
+    ; r12 (@state) : {done: Bool, max_steps: i64, multiplier: i64, step: i64, value: i64}

@@ -568,10 +568,9 @@ pub enum RefKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     String(String),
-    Int(i64),
+    Int(i128),
     Float(f64),
     Bool(bool),
-    Byte(u8),
     List(Vec<Literal>),
     Unit,
 }
@@ -671,7 +670,10 @@ pub fn direct_template_context_refs(template: &Template) -> rustc_hash::FxHashSe
     template_context_refs(template, false)
 }
 
-fn template_context_refs(template: &Template, into_lambdas: bool) -> rustc_hash::FxHashSet<QualifiedRef> {
+fn template_context_refs(
+    template: &Template,
+    into_lambdas: bool,
+) -> rustc_hash::FxHashSet<QualifiedRef> {
     let mut refs = ContextRefs::new(into_lambdas);
     walk_nodes(&template.body, &mut refs);
     refs.set

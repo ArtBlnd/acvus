@@ -16,15 +16,15 @@ expression: ir
     11 |   commit @items = r8
     12 |   return r7
 
-    ; r0 (@items) : Array<Int, 3>
-    ; r1 (@items) : Array<Int, 3>
-    ; r2 ($xs) : Array<Int, 3>
-    ; r3 (v11) : Iterator<Int, Pure, #IdentityId(3)>
-    ; r4 ($n) : Int
-    ; r5 (v13) : Fn(Int) -> Int
-    ; r6 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r7 (collect(...)) : Vec<Int>
-    ; r8 (v7) : Array<Int, 3>
-    ; r9 (add_n(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r10 (@items) : Array<Int, 3>
-    ; r11 (v4) : Int
+    ; r0 (@items) : Array<i64, 3>
+    ; r1 (@items) : Array<i64, 3>
+    ; r2 ($xs) : Array<i64, 3>
+    ; r3 (v11) : Iterator<i64, Pure, #IdentityId(3)>
+    ; r4 ($n) : i64
+    ; r5 (v13) : Fn(i64) -> i64
+    ; r6 (map(...)) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r7 (collect(...)) : Vec<i64>
+    ; r8 (v7) : Array<i64, 3>
+    ; r9 (add_n(...)) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r10 (@items) : Array<i64, 3>
+    ; r11 (v4) : i64

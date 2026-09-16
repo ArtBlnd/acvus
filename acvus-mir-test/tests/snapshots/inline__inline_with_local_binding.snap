@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/inline.rs
-assertion_line: 579
 expression: ir
 ---
 === main ===
@@ -11,12 +10,12 @@ expression: ir
      7 |   r4 = r3 + 1 (r5)
      8 |   return r4
 
-    ; r0 ($x) : Int
-    ; r1 (v6) : Int
-    ; r2 (v5) : Int
-    ; r3 (y) : Int
-    ; r4 (v10) : Int
-    ; r5 (v9) : Int
-    ; r6 (y) : Int
-    ; r7 (compute(...)) : Int
-    ; r8 (v1) : Int
+    ; r0 ($x) : i64
+    ; r1 (v6) : i64
+    ; r2 (v5) : i64
+    ; r3 (y) : i64
+    ; r4 (v10) : i64
+    ; r5 (v9) : i64
+    ; r6 (y) : i64
+    ; r7 (compute(...)) : i64
+    ; r8 (v1) : i64

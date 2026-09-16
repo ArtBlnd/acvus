@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 369
 expression: ir
 ---
 === literals ===
@@ -19,7 +18,7 @@ expression: ir
     ; r0 (v12) : Order
     ; r1 (v13) : String
     ; r2 (fetch_user(...)) : String
-    ; r3 (v3) : Int
+    ; r3 (v3) : i64
     ; r4 (v1) : Order
     ; r5 (v6) : Order
     ; r6 (v10) : String

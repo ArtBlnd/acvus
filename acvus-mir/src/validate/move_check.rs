@@ -31,9 +31,7 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 /// classify.
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
-        Ty::Int | Ty::Float | Ty::Bool | Ty::Unit | Ty::Byte | Ty::Order | Ty::Ref(..) => {
-            Some(false)
-        }
+        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Order | Ty::Ref(..) => Some(false),
         Ty::String
         | Ty::Handle(..)
         | Ty::UserDefined { .. }
@@ -190,14 +188,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
 
         // Process instructions in this block
         for (i, inst) in block.insts.iter().enumerate() {
-            process_inst(
-                scope,
-                i,
-                inst,
-                &cfg.val_types,
-                &mut state,
-                errors,
-            );
+            process_inst(scope, i, inst, &cfg.val_types, &mut state, errors);
         }
 
         block_exit[idx.0] = state;
@@ -419,7 +410,8 @@ fn process_inst(
         // Take: a move-only value leaves its storage; a second take is a use
         // after move.
         InstKind::Take { dst, target, .. } => {
-            let (crate::ir::RefTarget::Var(name) | crate::ir::RefTarget::Param(name)) = target else {
+            let (crate::ir::RefTarget::Var(name) | crate::ir::RefTarget::Param(name)) = target
+            else {
                 state.set_value(*dst, Liveness::Alive);
                 return;
             };
@@ -536,7 +528,9 @@ fn process_inst(
         // === Non-consuming operations (borrow operands) ===
         // These read the value but don't take ownership.
         InstKind::FieldGet { dst, object, .. } => {
-            extract_part(scope, inst_idx, span, *object, *dst, val_types, state, errors);
+            extract_part(
+                scope, inst_idx, span, *object, *dst, val_types, state, errors,
+            );
         }
         InstKind::FieldSet {
             dst,
@@ -548,20 +542,28 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::ObjectGet { dst, object, .. } => {
-            extract_part(scope, inst_idx, span, *object, *dst, val_types, state, errors);
+            extract_part(
+                scope, inst_idx, span, *object, *dst, val_types, state, errors,
+            );
         }
         InstKind::TupleIndex { dst, tuple, .. } => {
-            extract_part(scope, inst_idx, span, *tuple, *dst, val_types, state, errors);
+            extract_part(
+                scope, inst_idx, span, *tuple, *dst, val_types, state, errors,
+            );
         }
         InstKind::ArrayIndex { dst, array, .. } => {
-            extract_part(scope, inst_idx, span, *array, *dst, val_types, state, errors);
+            extract_part(
+                scope, inst_idx, span, *array, *dst, val_types, state, errors,
+            );
         }
         InstKind::ArrayGet {
             dst,
             array,
             index: _,
         } => {
-            extract_part(scope, inst_idx, span, *array, *dst, val_types, state, errors);
+            extract_part(
+                scope, inst_idx, span, *array, *dst, val_types, state, errors,
+            );
         }
         // Unwrap moves the payload out of the variant: the variant is consumed.
         InstKind::UnwrapVariant { dst, src } => {
@@ -677,15 +679,18 @@ mod tests {
 
     #[test]
     fn only_primitives_copy() {
-        assert_eq!(is_move_only(&Ty::Int), Some(false));
+        assert_eq!(is_move_only(&Ty::I64), Some(false));
         assert_eq!(is_move_only(&Ty::Bool), Some(false));
         assert_eq!(
-            is_move_only(&Ty::Ref(crate::ty::Mutability::Shared, Box::new(Ty::String))),
+            is_move_only(&Ty::Ref(
+                crate::ty::Mutability::Shared,
+                Box::new(Ty::String)
+            )),
             Some(false)
         );
         assert_eq!(is_move_only(&Ty::String), Some(true));
         assert_eq!(
-            is_move_only(&Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3))),
+            is_move_only(&Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3))),
             Some(true)
         );
     }
@@ -709,15 +714,15 @@ mod tests {
 
     #[test]
     fn tuple_with_user_defined_is_move() {
-        let ty = Ty::Tuple(vec![Ty::Int, test_user_defined()]);
+        let ty = Ty::Tuple(vec![Ty::I64, test_user_defined()]);
         assert_eq!(is_move_only(&ty), Some(true));
     }
 
     #[test]
     fn fn_with_user_defined_capture_is_move() {
         let ty = Ty::Fn {
-            params: vec![param(Ty::Int)],
-            ret: Box::new(Ty::Int),
+            params: vec![param(Ty::I64)],
+            ret: Box::new(Ty::I64),
             captures: vec![test_user_defined()],
             effect: crate::ty::Effect::OPAQUE.into(),
         };
@@ -727,9 +732,9 @@ mod tests {
     #[test]
     fn fn_moves() {
         let ty = Ty::Fn {
-            params: vec![param(Ty::Int)],
-            ret: Box::new(Ty::Int),
-            captures: vec![Ty::Int, Ty::String],
+            params: vec![param(Ty::I64)],
+            ret: Box::new(Ty::I64),
+            captures: vec![Ty::I64, Ty::String],
             effect: crate::ty::Effect::OPAQUE.into(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
@@ -748,11 +753,11 @@ mod tests {
         val_types.insert(v0, test_user_defined());
         val_types.insert(
             v1,
-            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
         val_types.insert(
             v2,
-            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
 
         let module = make_module(
@@ -793,7 +798,7 @@ mod tests {
         val_types.insert(v0, test_user_defined());
         val_types.insert(
             v1,
-            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
 
         let module = make_module(
@@ -830,11 +835,11 @@ mod tests {
         val_types.insert(v3, move_ty.clone());
         val_types.insert(
             v4,
-            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
         val_types.insert(
             v5,
-            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
 
         let module = make_module(
@@ -907,11 +912,11 @@ mod tests {
         val_types.insert(v2, move_ty.clone());
         val_types.insert(
             v3,
-            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
         val_types.insert(
             v4,
-            Ty::Array(Box::new(Ty::Int), crate::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
 
         let module = make_module(

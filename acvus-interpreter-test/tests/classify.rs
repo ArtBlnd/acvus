@@ -12,8 +12,11 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
     let name = i.intern("name");
     let age = i.intern("age");
     let user = typed(
-        Ty::Object(FxHashMap::from_iter([(name, Ty::String), (age, Ty::Int)])),
-        Value::object(FxHashMap::from_iter([(name, Value::string("alice")), (age, Value::int(30))])),
+        Ty::Object(FxHashMap::from_iter([(name, Ty::String), (age, Ty::I64)])),
+        Value::object(FxHashMap::from_iter([
+            (name, Value::string("alice")),
+            (age, Value::int(30)),
+        ])),
     );
     let c = FxHashMap::from_iter([
         (i.intern("user"), user),

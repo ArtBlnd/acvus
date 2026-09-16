@@ -87,7 +87,7 @@ mod tests {
         let mut val_types = FxHashMap::default();
         for _ in 0..val_count {
             let vid = factory.next();
-            val_types.insert(vid, Ty::Int);
+            val_types.insert(vid, Ty::I64);
         }
         promote(MirBody {
             insts: insts
@@ -121,7 +121,7 @@ mod tests {
         fn_metadata.insert(
             fetch_id,
             Ty::Fn {
-                params: vec![Param::new(i.intern("id"), Ty::Int)],
+                params: vec![Param::new(i.intern("id"), Ty::I64)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
 
@@ -189,10 +189,10 @@ mod tests {
             add_id,
             Ty::Fn {
                 params: vec![
-                    Param::new(i.intern("a"), Ty::Int),
-                    Param::new(i.intern("b"), Ty::Int),
+                    Param::new(i.intern("a"), Ty::I64),
+                    Param::new(i.intern("b"), Ty::I64),
                 ],
-                ret: Box::new(Ty::Int),
+                ret: Box::new(Ty::I64),
                 captures: vec![],
 
                 effect: crate::ty::Effect::OPAQUE.into(),

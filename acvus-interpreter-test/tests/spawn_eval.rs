@@ -74,7 +74,11 @@ async fn spawn_eval_basic() {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: types(vec![(vids[0], Ty::Int), (vids[1], Ty::Int), (vids[2], Ty::Int)]),
+                val_types: types(vec![
+                    (vids[0], Ty::I64),
+                    (vids[1], Ty::I64),
+                    (vids[2], Ty::I64),
+                ]),
                 params: vec![(interner.intern("p0"), vids[0])],
                 captures: vec![],
                 debug: DebugInfo::new(),
@@ -116,9 +120,9 @@ async fn spawn_eval_basic() {
             main: MirBody {
                 insts,
                 val_types: types(vec![
-                    (vids[0], Ty::Int),
-                    (vids[1], Ty::Handle(Box::new(Ty::Int))),
-                    (vids[2], Ty::Int),
+                    (vids[0], Ty::I64),
+                    (vids[1], Ty::Handle(Box::new(Ty::I64))),
+                    (vids[2], Ty::I64),
                 ]),
                 params: vec![],
                 captures: vec![],
@@ -170,7 +174,11 @@ async fn spawn_eval_multi_args() {
         MirModule {
             main: MirBody {
                 insts,
-                val_types: types(vec![(vids[0], Ty::Int), (vids[1], Ty::Int), (vids[2], Ty::Int)]),
+                val_types: types(vec![
+                    (vids[0], Ty::I64),
+                    (vids[1], Ty::I64),
+                    (vids[2], Ty::I64),
+                ]),
                 params: vec![
                     (interner.intern("p0"), vids[0]),
                     (interner.intern("p1"), vids[1]),
@@ -219,10 +227,10 @@ async fn spawn_eval_multi_args() {
             main: MirBody {
                 insts,
                 val_types: types(vec![
-                    (vids[0], Ty::Int),
-                    (vids[1], Ty::Int),
-                    (vids[2], Ty::Handle(Box::new(Ty::Int))),
-                    (vids[3], Ty::Int),
+                    (vids[0], Ty::I64),
+                    (vids[1], Ty::I64),
+                    (vids[2], Ty::Handle(Box::new(Ty::I64))),
+                    (vids[3], Ty::I64),
                 ]),
                 params: vec![],
                 captures: vec![],

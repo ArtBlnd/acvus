@@ -2,4 +2,4 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-[infer:test] [7..14] type mismatch in `+`: Int vs Float
+[infer:test] [7..14] type mismatch in `+`: i64 vs Float

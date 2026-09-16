@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/inline.rs
-assertion_line: 493
 expression: ir
 ---
 === main ===
@@ -10,11 +9,11 @@ expression: ir
      4 |   r2 = call r1(5 (r3))
      5 |   return r2
 
-    ; r0 (v1) : Fn(Int) -> Int
-    ; r1 (f) : &Fn(Int) -> Int
-    ; r2 (f(...)) : Int
-    ; r3 (v3) : Int
-    ; r4 (f) : Fn(Int) -> Int
+    ; r0 (v1) : Fn(i64) -> i64
+    ; r1 (f) : &Fn(i64) -> i64
+    ; r2 (f(...)) : i64
+    ; r3 (v3) : i64
+    ; r4 (f) : Fn(i64) -> i64
 
 === closure L0 (ValueId(0)) ===
      0 |   assign x = r0
@@ -22,8 +21,8 @@ expression: ir
      3 |   r2 = r1 + 1 (r3)
      4 |   return r2
 
-    ; r0 (v1) : Int
-    ; r1 (x) : Int
-    ; r2 (v5) : Int
-    ; r3 (v4) : Int
-    ; r4 (x) : Int
+    ; r0 (v1) : i64
+    ; r1 (x) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (x) : i64

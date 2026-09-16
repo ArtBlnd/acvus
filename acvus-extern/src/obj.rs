@@ -50,7 +50,7 @@ macro_rules! scalar_crosses_as_itself {
     )*};
 }
 
-scalar_crosses_as_itself!(i64, f64, bool, u8, String, ());
+scalar_crosses_as_itself!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, String, ());
 
 impl<T, Rt> Cross<Rt> for Option<T>
 where

@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 2850
 expression: ir
 ---
 === main ===
@@ -24,15 +23,15 @@ expression: ir
     19 |   r8 = take result
     20 |   return r8
 
-    ; r0 (v2) : Option<Int>
-    ; r1 (v1) : Int
-    ; r2 (v4) : Int
-    ; r3 (x.) : &Option<Int>
+    ; r0 (v2) : Option<i64>
+    ; r1 (v1) : i64
+    ; r2 (v4) : i64
+    ; r3 (x.) : &Option<i64>
     ; r4 (v7) : Bool
-    ; r5 (v) : Int
-    ; r6 (v) : Int
-    ; r7 (v11) : Option<Int>
-    ; r8 (result) : Int
-    ; r9 (x) : Option<Int>
-    ; r10 (v) : Int
-    ; r11 (result) : Int
+    ; r5 (v) : i64
+    ; r6 (v) : i64
+    ; r7 (v11) : Option<i64>
+    ; r8 (result) : i64
+    ; r9 (x) : Option<i64>
+    ; r10 (v) : i64
+    ; r11 (result) : i64

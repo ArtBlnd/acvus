@@ -1,9 +1,9 @@
+use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::cfg;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
 use acvus_mir::printer::dump_with;
-use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::ty::{PolyBuilder, PolyParam, Ty, TyTerm, TypeRegistry, lift_declaration};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -118,7 +118,10 @@ fn run_pipeline_with_registry(
 
     let early_moves = acvus_mir::validate::move_check::check_moves(&module);
     if !early_moves.is_empty() {
-        let msgs: Vec<String> = early_moves.iter().map(|e| format!("[validate:{}] {:?}", "test", e)).collect();
+        let msgs: Vec<String> = early_moves
+            .iter()
+            .map(|e| format!("[validate:{}] {:?}", "test", e))
+            .collect();
         return Err(msgs.join("\n"));
     }
 
@@ -205,7 +208,7 @@ pub fn user_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
         interner.intern("user"),
         Ty::Object(FxHashMap::from_iter([
             (interner.intern("name"), Ty::String),
-            (interner.intern("age"), Ty::Int),
+            (interner.intern("age"), Ty::I64),
             (interner.intern("email"), Ty::String),
         ])),
     )])
@@ -217,7 +220,7 @@ pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
         Ty::Array(
             Box::new(Ty::Object(FxHashMap::from_iter([
                 (interner.intern("name"), Ty::String),
-                (interner.intern("age"), Ty::Int),
+                (interner.intern("age"), Ty::I64),
             ]))),
             acvus_mir::ty::LenTerm::Known(3),
         ),
@@ -227,7 +230,7 @@ pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
 pub fn items_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
     FxHashMap::from_iter([(
         interner.intern("items"),
-        Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+        Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
     )])
 }
 

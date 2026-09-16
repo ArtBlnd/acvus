@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/optimized.rs
-assertion_line: 255
 expression: opt
 ---
 === literals ===
@@ -68,16 +67,16 @@ expression: opt
     62 |   return r26
 
     ; r0 (@output) : String
-    ; r1 (@user) : {age: Int, name: String}
-    ; r2 (@user.age) : Int
+    ; r1 (@user) : {age: i64, name: String}
+    ; r2 (@user.age) : i64
     ; r3 (v10) : Bool
-    ; r4 (v9) : Int
+    ; r4 (v9) : i64
     ; r5 (v11) : Bool
     ; r6 (v15) : Bool
-    ; r7 (v14) : Int
+    ; r7 (v14) : i64
     ; r8 (v16) : Bool
     ; r9 (v20) : Bool
-    ; r10 (v19) : Int
+    ; r10 (v19) : i64
     ; r11 (v21) : Bool
     ; r12 (@output) : String
     ; r13 (@user.name) : &String
@@ -95,19 +94,19 @@ expression: opt
     ; r25 (v32) : String
     ; r26 (@output) : String
     ; r27 (v39) : String
-    ; r28 (v40) : {age: Int, name: String}
-    ; r29 (v44) : Int
+    ; r28 (v40) : {age: i64, name: String}
+    ; r29 (v44) : i64
     ; r30 (v22) : String
-    ; r31 (@user) : {age: Int, name: String}
-    ; r32 (age) : Int
+    ; r31 (@user) : {age: i64, name: String}
+    ; r32 (age) : i64
     ; r33 (v24) : String
-    ; r34 (age) : Int
+    ; r34 (age) : i64
     ; r35 (v12) : String
     ; r36 (v34) : String
-    ; r37 (age) : Int
-    ; r38 (v43) : Int
+    ; r37 (age) : i64
+    ; r38 (v43) : i64
     ; r39 (v17) : String
-    ; r40 (v42) : Int
+    ; r40 (v42) : i64
     ; r41 (v7) : String
-    ; r42 (age) : Int
-    ; r43 (v41) : Int
+    ; r42 (age) : i64
+    ; r43 (v41) : i64

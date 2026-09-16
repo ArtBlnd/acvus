@@ -22,19 +22,19 @@ expression: ir
     17 |   commit @c = r8
     18 |   return r8
 
-    ; r0 (v16) : Int
-    ; r1 (@a) : {val: Int}
-    ; r2 (@b) : {a: {val: Int}}
-    ; r3 (@c) : Int
-    ; r4 (@b.a) : {val: Int}
-    ; r5 (v8) : Int
-    ; r6 (v9) : {val: Int}
-    ; r7 (v10) : {a: {val: Int}}
-    ; r8 (@a.val) : Int
-    ; r9 (v13) : {val: Int}
-    ; r10 (v14) : {a: {val: Int}}
-    ; r11 (@b) : {a: {val: Int}}
-    ; r12 (@a) : {val: Int}
-    ; r13 (@c) : Int
-    ; r14 (v15) : Int
-    ; r15 (@c) : Int
+    ; r0 (v16) : i64
+    ; r1 (@a) : {val: i64}
+    ; r2 (@b) : {a: {val: i64}}
+    ; r3 (@c) : i64
+    ; r4 (@b.a) : {val: i64}
+    ; r5 (v8) : i64
+    ; r6 (v9) : {val: i64}
+    ; r7 (v10) : {a: {val: i64}}
+    ; r8 (@a.val) : i64
+    ; r9 (v13) : {val: i64}
+    ; r10 (v14) : {a: {val: i64}}
+    ; r11 (@b) : {a: {val: i64}}
+    ; r12 (@a) : {val: i64}
+    ; r13 (@c) : i64
+    ; r14 (v15) : i64
+    ; r15 (@c) : i64

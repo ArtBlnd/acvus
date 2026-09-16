@@ -62,7 +62,7 @@ fn a_value_of_a_language_shape_comes_back_equal() {
             (i.intern("name"), Ty::String),
             (
                 i.intern("scores"),
-                Ty::Array(Box::new(Ty::Int), LenTerm::Known(2)),
+                Ty::Array(Box::new(Ty::I64), LenTerm::Known(2)),
             ),
             (i.intern("tag"), Ty::Option(Box::new(Ty::Bool))),
         ]
@@ -108,7 +108,7 @@ fn a_deque_s_commit_is_its_ops_replayed_from_the_last_checkpoint() {
     let space = Space::new(Mode::Log {
         checkpoint_every: 100,
     });
-    let ty = deque_ty(&i, Ty::Int);
+    let ty = deque_ty(&i, Ty::I64);
     let mut d = deque_of(&rt, [Value::int(1), Value::int(2)]);
     space.commit(&rt, "d", &ty, &mut d).unwrap();
     assert_eq!(
@@ -137,7 +137,7 @@ fn a_checkpoint_is_written_every_n_ops_and_loading_starts_there() {
     let space = Space::new(Mode::Log {
         checkpoint_every: 2,
     });
-    let ty = deque_ty(&i, Ty::Int);
+    let ty = deque_ty(&i, Ty::I64);
     let mut d = deque_of(&rt, []);
     space.commit(&rt, "d", &ty, &mut d).unwrap();
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
@@ -166,7 +166,7 @@ fn in_plain_mode_a_commit_is_one_state_node() {
     let i = Interner::new();
     let rt = runtime(&i);
     let space = Space::new(Mode::Plain);
-    let ty = deque_ty(&i, Ty::Int);
+    let ty = deque_ty(&i, Ty::I64);
     let mut d = deque_of(&rt, [Value::int(1)]);
     space.commit(&rt, "d", &ty, &mut d).unwrap();
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
@@ -186,7 +186,7 @@ fn a_deque_nested_in_a_deque_has_its_own_log() {
     let space = Space::new(Mode::Log {
         checkpoint_every: 100,
     });
-    let inner_ty = deque_ty(&i, Ty::Int);
+    let inner_ty = deque_ty(&i, Ty::I64);
     let ty = deque_ty(&i, inner_ty.clone());
     let inner_a = deque_of(&rt, [Value::int(1)]);
     let inner_b = deque_of(&rt, [Value::int(10), Value::int(20)]);
@@ -224,7 +224,7 @@ fn a_head_that_moved_refuses_the_commit() {
     let space = Space::new(Mode::Log {
         checkpoint_every: 100,
     });
-    let ty = deque_ty(&i, Ty::Int);
+    let ty = deque_ty(&i, Ty::I64);
     let mut d = deque_of(&rt, [Value::int(1)]);
     space.commit(&rt, "d", &ty, &mut d).unwrap();
     let mut a = space.load(&rt, "d", &ty).unwrap().unwrap();
@@ -249,7 +249,7 @@ async fn a_script_s_change_to_a_deque_context_is_committed_as_its_ops() {
     let space = Space::new(Mode::Log {
         checkpoint_every: 100,
     });
-    let ty = deque_ty(&i, Ty::Int);
+    let ty = deque_ty(&i, Ty::I64);
     let mut d = deque_of(&rt, [Value::int(1), Value::int(2)]);
     space.commit(&rt, "d", &ty, &mut d).unwrap();
     let loaded = space.load(&rt, "d", &ty).unwrap().unwrap();
@@ -283,7 +283,7 @@ fn a_directory_store_holds_nodes_and_heads_across_openings() {
     let i = Interner::new();
     let rt = runtime(&i);
     let dir = tempfile::tempdir().unwrap();
-    let ty = deque_ty(&i, Ty::Int);
+    let ty = deque_ty(&i, Ty::I64);
     {
         let store = acvus_interpreter::DirStore::open(dir.path(), &i).unwrap();
         let space = Space::over(
@@ -323,7 +323,7 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
     let space = Arc::new(Space::new(Mode::Log {
         checkpoint_every: 100,
     }));
-    let ty = deque_ty(&i, Ty::Int);
+    let ty = deque_ty(&i, Ty::I64);
     let rt = runtime(&i);
     let mut d = deque_of(&rt, [Value::int(1)]);
     space.commit(&rt, "d", &ty, &mut d).unwrap();
@@ -373,7 +373,7 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let space = Space::new(Mode::Log {
         checkpoint_every: 100,
     });
-    let inner_ty = deque_ty(&i, Ty::Int);
+    let inner_ty = deque_ty(&i, Ty::I64);
     let obj_ty = Ty::Object(
         [
             (i.intern("name"), Ty::String),

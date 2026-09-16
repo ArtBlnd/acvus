@@ -25,28 +25,28 @@ expression: ir
     20 |   commit @items = r4
     21 |   return r13
 
-    ; r0 (v24) : Vec<Int>
-    ; r1 (v25) : Vec<Int>
-    ; r2 (@items) : Vec<Int>
-    ; r3 (v6) : Array<Int, 0>
-    ; r4 (vec(...)) : Vec<Int>
-    ; r5 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r6 (v11) : Fn(&Int) -> Bool with reads {@threshold}
-    ; r7 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r8 (collect(...)) : Vec<Int>
-    ; r9 (x.) : &Vec<Int>
-    ; r10 (len(...)) : Int
-    ; r11 (out.) : &Int
+    ; r0 (v24) : Vec<i64>
+    ; r1 (v25) : Vec<i64>
+    ; r2 (@items) : Vec<i64>
+    ; r3 (v6) : Array<i64, 0>
+    ; r4 (vec(...)) : Vec<i64>
+    ; r5 (into_iter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r6 (v11) : Fn(&i64) -> Bool with reads {@threshold}
+    ; r7 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r8 (collect(...)) : Vec<i64>
+    ; r9 (x.) : &Vec<i64>
+    ; r10 (len(...)) : i64
+    ; r11 (out.) : &i64
     ; r12 (to_string(...)) : String
     ; r13 (v22) : String
-    ; r14 (@items) : Vec<Int>
-    ; r15 (x) : Vec<Int>
-    ; r16 (items) : Vec<Int>
+    ; r14 (@items) : Vec<i64>
+    ; r15 (x) : Vec<i64>
+    ; r16 (items) : Vec<i64>
     ; r17 (v15) : String
-    ; r18 (items) : Vec<Int>
-    ; r19 (out) : Int
-    ; r20 (@items) : Vec<Int>
-    ; r21 (v23) : Vec<Int>
+    ; r18 (items) : Vec<i64>
+    ; r19 (out) : i64
+    ; r20 (@items) : Vec<i64>
+    ; r21 (v23) : Vec<i64>
     ; r22 (v5) : String
     ; r23 (v8) : String
     ; r24 (v19) : String
@@ -60,14 +60,14 @@ expression: ir
      5 |   commit @threshold = r2
      6 |   return r5
 
-    ; r0 (v10) : Int
-    ; r1 (v11) : &Int
-    ; r2 (@threshold) : Int
-    ; r3 (v6) : Int
-    ; r4 (v1) : &Int
+    ; r0 (v10) : i64
+    ; r1 (v11) : &i64
+    ; r2 (@threshold) : i64
+    ; r3 (v6) : i64
+    ; r4 (v1) : &i64
     ; r5 (v8) : Bool
-    ; r6 (@threshold) : Int
-    ; r7 (@threshold) : Int
-    ; r8 (v9) : Int
-    ; r9 (i) : &Int
-    ; r10 (i) : &Int
+    ; r6 (@threshold) : i64
+    ; r7 (@threshold) : i64
+    ; r8 (v9) : i64
+    ; r9 (i) : &i64
+    ; r10 (i) : &i64

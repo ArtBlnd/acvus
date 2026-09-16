@@ -181,7 +181,13 @@ fn build_dependency_graph(
             deps[i].extend(last_write.get(s).copied().filter(|&w| w != i));
         }
         for s in &effect.writes {
-            deps[i].extend(reads_since.remove(s).into_iter().flatten().filter(|&r| r != i));
+            deps[i].extend(
+                reads_since
+                    .remove(s)
+                    .into_iter()
+                    .flatten()
+                    .filter(|&r| r != i),
+            );
             last_write.insert(*s, i);
         }
         for s in &effect.reads {
@@ -306,7 +312,7 @@ mod tests {
         let mut val_types = FxHashMap::default();
         for _ in 0..val_count {
             let vid = factory.next();
-            val_types.insert(vid, Ty::Int);
+            val_types.insert(vid, Ty::I64);
         }
         cfg::promote(MirBody {
             insts: insts
@@ -447,8 +453,14 @@ mod tests {
         let call = find_idx(&cfg, |k| matches!(k, InstKind::FunctionCall { .. })).unwrap();
         let fetch = find_idx(&cfg, |k| matches!(k, InstKind::Fetch { .. })).unwrap();
         let spawn = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
-        assert!(commit < call && call < fetch, "commit {commit}, call {call}, fetch {fetch}");
-        assert!(spawn < commit, "the unrelated spawn moves first (spawn {spawn}, commit {commit})");
+        assert!(
+            commit < call && call < fetch,
+            "commit {commit}, call {call}, fetch {fetch}"
+        );
+        assert!(
+            spawn < commit,
+            "the unrelated spawn moves first (spawn {spawn}, commit {commit})"
+        );
     }
 
     /// `commit @x; spawn f (touches @x); eval h; fetch @x` keeps the fetch

@@ -5,9 +5,9 @@
 Every collection literal in acvus receives a unique **Identity** — a compile-time tag embedded in the type that tracks where the value came from. Two values with the same Identity are guaranteed to originate from the same source. Two values with different Identities are guaranteed to originate from different sources.
 
 ```
-a = [1, 2, 3]       // Deque<Int, Identity(1)>
-b = [4, 5, 6]       // Deque<Int, Identity(2)>
-c = a                // Deque<Int, Identity(1)> — same source as a
+a = [1, 2, 3]       // Deque<i64, Identity(1)>
+b = [4, 5, 6]       // Deque<i64, Identity(2)>
+c = a                // Deque<i64, Identity(1)> — same source as a
 ```
 
 Identity is not an annotation. It is not a runtime tag. It is a type-level invariant, enforced by unification and propagated automatically through the type system.

@@ -453,4 +453,3 @@ pub struct MirModule {
     pub main: MirBody,
     pub closures: FxHashMap<Label, MirBody>,
 }
-

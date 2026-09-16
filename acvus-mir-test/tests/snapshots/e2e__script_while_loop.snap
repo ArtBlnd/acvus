@@ -17,11 +17,11 @@ expression: ir
     13 |   jump L0
     14 | L2:
 
-    ; r0 (@n) : Int
-    ; r1 (@n) : Int
+    ; r0 (@n) : i64
+    ; r1 (@n) : i64
     ; r2 (v5) : Bool
-    ; r3 (v4) : Int
-    ; r4 (@n) : Int
-    ; r5 (v8) : Int
-    ; r6 (v7) : Int
-    ; r7 (@n) : Int
+    ; r3 (v4) : i64
+    ; r4 (@n) : i64
+    ; r5 (v8) : i64
+    ; r6 (v7) : i64
+    ; r7 (@n) : i64

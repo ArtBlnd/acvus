@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 2785
 expression: ir
 ---
 === main ===
@@ -8,6 +7,6 @@ expression: ir
      2 |   r1 = take x
      3 |   return r1
 
-    ; r0 (v1) : Int
-    ; r1 (x) : Int
-    ; r2 (x) : Int
+    ; r0 (v1) : i64
+    ; r1 (x) : i64
+    ; r2 (x) : i64

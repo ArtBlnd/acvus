@@ -22,7 +22,7 @@ A single expression like `@users | filter(active) | map(name) | join(", ")` comp
 
 **Use first, define later.** Most things in acvus are inferred from usage, not declared upfront. Write `@data | map(f) | collect` and the compiler works *backwards* — `@data` must be iterable, `f` must return something, the result is a list of that something. Context types, function parameter types, effect footprints, even generic constraints are all discovered by analyzing how values are used, then propagated outward to the environment. The host system provides concrete types for contexts; the compiler checks that they satisfy the constraints the code imposed. This inverts the traditional "define type, then use" flow — users write code freely, and the system figures out what the environment must provide.
 
-**Only a primitive copies.** `Int`, `Float`, `Bool`, `Byte`, `Unit`, `Order`, and a reference are words and copy. Every other value moves: a binding used twice is a type error, and duplication is an explicit `clone` extern (RFC-0018). `&T` and `&mut T` are types; a reference is never data, never returned, never captured.
+**Only a primitive copies.** the integers (`i8`…`u64`), `Float`, `Bool`, `Unit`, `Order`, and a reference are words and copy. Every other value moves: a binding used twice is a type error, and duplication is an explicit `clone` extern (RFC-0018). `&T` and `&mut T` are types; a reference is never data, never returned, never captured.
 
 ---
 

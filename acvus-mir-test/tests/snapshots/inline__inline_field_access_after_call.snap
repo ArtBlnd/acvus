@@ -11,9 +11,9 @@ expression: ir
      5 |   r3 = r1.name
      6 |   return r3
 
-    ; r0 (@user) : {age: Int, name: String}
-    ; r1 (@user) : {age: Int, name: String}
-    ; r2 (v6) : {age: Int, name: String}
+    ; r0 (@user) : {age: i64, name: String}
+    ; r1 (@user) : {age: i64, name: String}
+    ; r2 (v6) : {age: i64, name: String}
     ; r3 (name) : String
-    ; r4 (make_obj(...)) : {age: Int, name: String}
-    ; r5 (@user) : {age: Int, name: String}
+    ; r4 (make_obj(...)) : {age: i64, name: String}
+    ; r5 (@user) : {age: i64, name: String}

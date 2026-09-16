@@ -12,14 +12,14 @@ expression: ir
      9 |   r9 = call #2(r8)
     10 |   return r9
 
-    ; r0 (v3) : Int
-    ; r1 (v2) : Int
-    ; r2 (v5) : Array<Int, 3>
-    ; r3 (v1) : Int
-    ; r4 (v4) : Int
-    ; r5 ($xs) : Array<Int, 3>
-    ; r6 (v10) : Iterator<Int, Pure, #IdentityId(3)>
-    ; r7 (v11) : Fn(&Int) -> Bool
-    ; r8 (filter(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r9 (collect(...)) : Vec<Int>
-    ; r10 (positives(...)) : Iterator<Int, Pure, #IdentityId(2)>
+    ; r0 (v3) : i64
+    ; r1 (v2) : i64
+    ; r2 (v5) : Array<i64, 3>
+    ; r3 (v1) : i64
+    ; r4 (v4) : i64
+    ; r5 ($xs) : Array<i64, 3>
+    ; r6 (v10) : Iterator<i64, Pure, #IdentityId(3)>
+    ; r7 (v11) : Fn(&i64) -> Bool
+    ; r8 (filter(...)) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r9 (collect(...)) : Vec<i64>
+    ; r10 (positives(...)) : Iterator<i64, Pure, #IdentityId(2)>

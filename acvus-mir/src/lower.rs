@@ -3031,7 +3031,7 @@ impl<'a> Lowerer<'a> {
             Pattern::Literal {
                 value: Literal::Int(n),
                 ..
-            } => *n,
+            } => *n as i64,
             _ => 0,
         };
         (extract(start), extract(end))
@@ -3422,7 +3422,7 @@ mod tests {
     #[test]
     fn lower_match_block() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
         // Use a non-binding pattern to trigger full match block (no iteration).
         let module = lower_with(&interner, r#"{{ true = @n == 1 }}matched{{/}}"#, &context);
         // Should have pattern test and conditional jump.
@@ -3438,7 +3438,7 @@ mod tests {
     #[ignore = "requires Phase 2: builtin -> graph Function migration"]
     fn lower_builtin_call() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
         let module = lower_with(&interner, r#"{{ @n | to_string }}"#, &context);
         let has_call = module
             .main
@@ -3486,7 +3486,7 @@ mod tests {
     #[test]
     fn lower_match_block_indent_decrease() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
         let source = "{{ true = @n == 1 }}\n    matched\n    here{{/-2}}";
         let module = lower_with(&interner, source, &context);
         let texts: Vec<&str> = module
@@ -3507,7 +3507,7 @@ mod tests {
     #[test]
     fn lower_match_block_indent_increase() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::Int)]);
+        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
         let source = "{{ true = @n == 1 }}\nmatched{{/+4}}";
         let module = lower_with(&interner, source, &context);
         let texts: Vec<&str> = module

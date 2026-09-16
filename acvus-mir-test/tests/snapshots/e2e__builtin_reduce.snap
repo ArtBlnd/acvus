@@ -21,24 +21,24 @@ expression: ir
     15 |   commit @items = r4
     16 |   return r10
 
-    ; r0 (v19) : Vec<Int>
-    ; r1 (v20) : Vec<Int>
-    ; r2 (@items) : Vec<Int>
-    ; r3 (v6) : Array<Int, 0>
-    ; r4 (vec(...)) : Vec<Int>
-    ; r5 (v10) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r6 (v11) : Fn(Int, Int) -> Int
-    ; r7 (reduce(...)) : Int
-    ; r8 (out.) : &Int
+    ; r0 (v19) : Vec<i64>
+    ; r1 (v20) : Vec<i64>
+    ; r2 (@items) : Vec<i64>
+    ; r3 (v6) : Array<i64, 0>
+    ; r4 (vec(...)) : Vec<i64>
+    ; r5 (v10) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r6 (v11) : Fn(i64, i64) -> i64
+    ; r7 (reduce(...)) : i64
+    ; r8 (out.) : &i64
     ; r9 (to_string(...)) : String
     ; r10 (v17) : String
-    ; r11 (@items) : Vec<Int>
+    ; r11 (@items) : Vec<i64>
     ; r12 (v14) : String
-    ; r13 (items) : Vec<Int>
-    ; r14 (@items) : Vec<Int>
-    ; r15 (items) : Vec<Int>
-    ; r16 (v18) : Vec<Int>
-    ; r17 (out) : Int
+    ; r13 (items) : Vec<i64>
+    ; r14 (@items) : Vec<i64>
+    ; r15 (items) : Vec<i64>
+    ; r16 (v18) : Vec<i64>
+    ; r17 (out) : i64
     ; r18 (v5) : String
     ; r19 (v8) : String
 
@@ -48,12 +48,12 @@ expression: ir
      2 |   r2 = r3 + r4
      3 |   return r2
 
-    ; r0 (v8) : Int
-    ; r1 (v9) : Int
-    ; r2 (v7) : Int
-    ; r3 (v1) : Int
-    ; r4 (v2) : Int
-    ; r5 (a) : Int
-    ; r6 (b) : Int
-    ; r7 (a) : Int
-    ; r8 (b) : Int
+    ; r0 (v8) : i64
+    ; r1 (v9) : i64
+    ; r2 (v7) : i64
+    ; r3 (v1) : i64
+    ; r4 (v2) : i64
+    ; r5 (a) : i64
+    ; r6 (b) : i64
+    ; r7 (a) : i64
+    ; r8 (b) : i64

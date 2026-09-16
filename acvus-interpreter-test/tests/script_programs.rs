@@ -25,7 +25,7 @@ const COLLATZ: &str = include_str!("scripts/collatz.acvus");
 #[tokio::test]
 async fn collatz_start_6() {
     let i = Interner::new();
-    let c = ctx(&i, vec![("start", typed(Ty::Int, Value::int(6)))]);
+    let c = ctx(&i, vec![("start", typed(Ty::I64, Value::int(6)))]);
     let result = run_script_mode(&i, COLLATZ, c).await;
     eprintln!("collatz(6) max_val = {result:?}");
     // 6 -> 3 -> 10 -> 5 -> 16 -> 8 -> 4 -> 2 -> 1
@@ -35,7 +35,7 @@ async fn collatz_start_6() {
 #[tokio::test]
 async fn collatz_start_27() {
     let i = Interner::new();
-    let c = ctx(&i, vec![("start", typed(Ty::Int, Value::int(27)))]);
+    let c = ctx(&i, vec![("start", typed(Ty::I64, Value::int(27)))]);
     let result = run_script_mode(&i, COLLATZ, c).await;
     eprintln!("collatz(27) max_val = {result:?}");
     // Famous case: reaches 9232 before falling back to 1
@@ -45,7 +45,7 @@ async fn collatz_start_27() {
 #[tokio::test]
 async fn collatz_start_1() {
     let i = Interner::new();
-    let c = ctx(&i, vec![("start", typed(Ty::Int, Value::int(1)))]);
+    let c = ctx(&i, vec![("start", typed(Ty::I64, Value::int(1)))]);
     let result = run_script_mode(&i, COLLATZ, c).await;
     eprintln!("collatz(1) max_val = {result:?}");
     // Already at 1 - while body never executes
@@ -72,7 +72,7 @@ fn student(i: &Interner, name: &str, score: i64) -> Value {
 fn student_ty(i: &Interner) -> Ty {
     Ty::Object(FxHashMap::from_iter([
         (i.intern("name"), Ty::String),
-        (i.intern("score"), Ty::Int),
+        (i.intern("score"), Ty::I64),
     ]))
 }
 

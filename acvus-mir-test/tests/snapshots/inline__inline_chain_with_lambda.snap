@@ -15,19 +15,19 @@ expression: ir
     13 |   r12 = call #3(r10, 0 (r13), r11)
     14 |   return r12
 
-    ; r0 (v4) : Array<Int, 3>
-    ; r1 (v1) : Int
-    ; r2 (v2) : Int
-    ; r3 (v3) : Int
-    ; r4 ($xs) : Array<Int, 3>
-    ; r5 (v10) : Iterator<Int, Pure, #IdentityId(3)>
-    ; r6 (v11) : Fn(Int) -> Int
-    ; r7 (map(...)) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r8 (collect(...)) : Vec<Int>
-    ; r9 ($xs) : Vec<Int>
-    ; r10 (v15) : Iterator<Int, Pure, #IdentityId(6)>
-    ; r11 (v17) : Fn(Int, Int) -> Int
-    ; r12 (fold(...)) : Int
-    ; r13 (v16) : Int
-    ; r14 (sum_list(...)) : Int
-    ; r15 (double_all(...)) : Iterator<Int, Pure, #IdentityId(2)>
+    ; r0 (v4) : Array<i64, 3>
+    ; r1 (v1) : i64
+    ; r2 (v2) : i64
+    ; r3 (v3) : i64
+    ; r4 ($xs) : Array<i64, 3>
+    ; r5 (v10) : Iterator<i64, Pure, #IdentityId(3)>
+    ; r6 (v11) : Fn(i64) -> i64
+    ; r7 (map(...)) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r8 (collect(...)) : Vec<i64>
+    ; r9 ($xs) : Vec<i64>
+    ; r10 (v15) : Iterator<i64, Pure, #IdentityId(6)>
+    ; r11 (v17) : Fn(i64, i64) -> i64
+    ; r12 (fold(...)) : i64
+    ; r13 (v16) : i64
+    ; r14 (sum_list(...)) : i64
+    ; r15 (double_all(...)) : Iterator<i64, Pure, #IdentityId(2)>

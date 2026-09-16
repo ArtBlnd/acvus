@@ -292,7 +292,7 @@ mod tests {
     fn fn_ty(effect: Effect) -> Ty {
         Ty::Fn {
             params: vec![],
-            ret: Box::new(Ty::Int),
+            ret: Box::new(Ty::I64),
             captures: vec![],
             effect: effect.into(),
         }
@@ -328,7 +328,7 @@ mod tests {
             let ty = if orders.contains(&n) {
                 Ty::Order
             } else {
-                Ty::Int
+                Ty::I64
             };
             val_types.insert(vid, ty);
         }

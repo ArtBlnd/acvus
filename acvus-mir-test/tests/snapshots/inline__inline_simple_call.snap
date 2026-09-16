@@ -8,8 +8,8 @@ expression: ir
      3 |   r2 = r0 + r1
      4 |   return r2
 
-    ; r0 ($x) : Int
-    ; r1 ($x) : Int
-    ; r2 (v6) : Int
-    ; r3 (v1) : Int
-    ; r4 (double(...)) : Int
+    ; r0 ($x) : i64
+    ; r1 ($x) : i64
+    ; r2 (v6) : i64
+    ; r3 (v1) : i64
+    ; r4 (double(...)) : i64

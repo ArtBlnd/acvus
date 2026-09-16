@@ -445,6 +445,11 @@ impl Value {
     pub fn int(n: i64) -> Self {
         Value::Small(n as u64)
     }
+    /// An integer of any width from its two's-complement bits, sign- or
+    /// zero-extended to the word; the type says which (RFC-0037).
+    pub fn from_bits(bits: u64) -> Self {
+        Value::Small(bits)
+    }
     pub fn float(f: f64) -> Self {
         Value::Small(f.to_bits())
     }

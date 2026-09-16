@@ -28,9 +28,9 @@ fn loop_context_write_phi() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("count", Ty::Int),
+            ("count", Ty::I64),
         ],
     );
     let ir = compile_script_mode_raw(
@@ -50,7 +50,7 @@ fn loop_context_write_phi() {
 fn branch_simple_bind() {
     // Irrefutable: x = @data { body } - no branching needed
     let i = Interner::new();
-    let c = ctx(&i, &[("data", Ty::Int), ("out", Ty::Int)]);
+    let c = ctx(&i, &[("data", Ty::I64), ("out", Ty::I64)]);
     let ir = compile_script_ir(&i, "x = @data { @out = x + 1; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -59,7 +59,7 @@ fn branch_simple_bind() {
 fn branch_refutable_literal() {
     // Refutable: literal match - needs test + branch
     let i = Interner::new();
-    let c = ctx(&i, &[("val", Ty::Int), ("out", Ty::Int)]);
+    let c = ctx(&i, &[("val", Ty::I64), ("out", Ty::I64)]);
     let ir = compile_script_ir(&i, "42 = @val { @out = 1; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -69,7 +69,7 @@ fn branch_destructure_object() {
     let i = Interner::new();
     let obj_ty = Ty::Object(FxHashMap::from_iter([
         (i.intern("name"), Ty::String),
-        (i.intern("age"), Ty::Int),
+        (i.intern("age"), Ty::I64),
     ]));
     let c = ctx(&i, &[("user", obj_ty), ("out", Ty::String)]);
     let ir = compile_script_ir(&i, "{ name, age, } = @user { @out = name; }; @out", &c).unwrap();
@@ -79,7 +79,7 @@ fn branch_destructure_object() {
 #[test]
 fn branch_nested_match() {
     let i = Interner::new();
-    let c = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int), ("out", Ty::Int)]);
+    let c = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64), ("out", Ty::I64)]);
     let ir = compile_script_ir(&i, "x = @a { y = @b { @out = x + y; }; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -88,7 +88,7 @@ fn branch_nested_match() {
 fn branch_context_write_in_refutable() {
     // Context write inside refutable branch - needs PHI at merge
     let i = Interner::new();
-    let c = ctx(&i, &[("val", Ty::Int), ("out", Ty::Int)]);
+    let c = ctx(&i, &[("val", Ty::I64), ("out", Ty::I64)]);
     let ir = compile_script_ir(&i, "42 = @val { @out = 99; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -101,7 +101,7 @@ fn branch_context_write_in_refutable() {
 fn ssa_store_load_forwarding() {
     // Context write then read - SSA should forward the stored value
     let i = Interner::new();
-    let c = ctx(&i, &[("x", Ty::Int)]);
+    let c = ctx(&i, &[("x", Ty::I64)]);
     let ir = compile_script_ir(&i, "@x = 42; @x", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -110,7 +110,7 @@ fn ssa_store_load_forwarding() {
 fn ssa_write_in_branch_phi() {
     // Context write in one branch - PHI at merge point
     let i = Interner::new();
-    let c = ctx(&i, &[("cond", Ty::Int), ("x", Ty::Int)]);
+    let c = ctx(&i, &[("cond", Ty::I64), ("x", Ty::I64)]);
     let ir = compile_script_ir(&i, "42 = @cond { @x = 1; }; @x", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -124,9 +124,9 @@ fn ssa_write_in_loop_phi() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("acc", Ty::Int),
+            ("acc", Ty::I64),
         ],
     );
     let ir = compile_script_mode_raw(
@@ -142,7 +142,7 @@ fn ssa_write_in_loop_phi() {
 fn ssa_multiple_contexts() {
     // Independent SSA chains for different contexts
     let i = Interner::new();
-    let c = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let c = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_script_ir(&i, "@a = @a + 1; @b = @b + 2; @a + @b", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -151,7 +151,7 @@ fn ssa_multiple_contexts() {
 fn ssa_sequential_writes() {
     // Multiple writes to same context - only last value visible
     let i = Interner::new();
-    let c = ctx(&i, &[("x", Ty::Int)]);
+    let c = ctx(&i, &[("x", Ty::I64)]);
     let ir = compile_script_ir(&i, "@x = 1; @x = 2; @x = 3; @x", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -171,7 +171,7 @@ fn func_pipe_chain() {
 #[test]
 fn func_to_string_in_bind() {
     let i = Interner::new();
-    let c = ctx(&i, &[("val", Ty::Int)]);
+    let c = ctx(&i, &[("val", Ty::I64)]);
     let ir = compile_script_ir(&i, "@val.to_string()", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -191,13 +191,13 @@ fn combined_nested_loop_context() {
                 "outer",
                 Ty::Array(
                     Box::new(Ty::Array(
-                        Box::new(Ty::Int),
+                        Box::new(Ty::I64),
                         acvus_mir::ty::LenTerm::Known(3),
                     )),
                     acvus_mir::ty::LenTerm::Known(3),
                 ),
             ),
-            ("total", Ty::Int),
+            ("total", Ty::I64),
         ],
     );
     let ir = compile_script_mode_raw(
@@ -217,7 +217,7 @@ fn combined_nested_loop_context() {
 fn reject_iterate_non_iterable() {
     // Int is not iterable
     let i = Interner::new();
-    let c = ctx(&i, &[("val", Ty::Int)]);
+    let c = ctx(&i, &[("val", Ty::I64)]);
     let result = compile_script_ir(&i, "x in @val { }; x", &c);
     assert!(result.is_err(), "expected error for iterating over Int");
 }
@@ -226,7 +226,7 @@ fn reject_iterate_non_iterable() {
 fn reject_type_mismatch_context_store() {
     // Storing String into Int context
     let i = Interner::new();
-    let c = ctx(&i, &[("x", Ty::Int)]);
+    let c = ctx(&i, &[("x", Ty::I64)]);
     let result = compile_script_ir(&i, r#"@x = "hello"; @x"#, &c);
     assert!(
         result.is_err(),
@@ -243,7 +243,7 @@ fn items_ctx(i: &Interner) -> rustc_hash::FxHashMap<acvus_utils::Astr, Ty> {
         &i,
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     )
 }

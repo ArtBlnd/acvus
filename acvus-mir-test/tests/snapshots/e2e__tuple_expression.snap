@@ -34,23 +34,23 @@ expression: ir
     31 |   commit @b = r4
     32 |   return r23
 
-    ; r0 (v28) : Int
+    ; r0 (v28) : i64
     ; r1 (v29) : String
     ; r2 (v30) : String
-    ; r3 (@a) : Int
+    ; r3 (@a) : i64
     ; r4 (@b) : String
     ; r5 (v34) : String
-    ; r6 (v7) : (Int, String)
-    ; r7 (v9) : Int
+    ; r6 (v7) : (i64, String)
+    ; r7 (v9) : i64
     ; r8 (v11) : Bool
     ; r9 (v8) : Bool
     ; r10 (v10) : Bool
     ; r11 (v12) : String
     ; r12 (v14) : Bool
     ; r13 (v13) : Bool
-    ; r14 (a) : Int
+    ; r14 (a) : i64
     ; r15 (b) : String
-    ; r16 (a.) : &Int
+    ; r16 (a.) : &i64
     ; r17 (to_string(...)) : String
     ; r18 (v35) : String
     ; r19 (v22) : String
@@ -60,12 +60,12 @@ expression: ir
     ; r23 (v25) : String
     ; r24 (@b) : String
     ; r25 (@b) : String
-    ; r26 (v31) : Int
-    ; r27 (@a) : Int
+    ; r26 (v31) : i64
+    ; r27 (@a) : i64
     ; r28 (b) : String
     ; r29 (b) : String
-    ; r30 (@a) : Int
+    ; r30 (@a) : i64
     ; r31 (v27) : String
-    ; r32 (v26) : Int
+    ; r32 (v26) : i64
     ; r33 (v32) : String
-    ; r34 (a) : Int
+    ; r34 (a) : i64

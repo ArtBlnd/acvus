@@ -29,7 +29,7 @@ pub enum Bank {
 /// Classify a type into a bank.
 fn classify_ty(ty: &Ty) -> Bank {
     match ty {
-        Ty::Int | Ty::Bool | Ty::Float | Ty::Unit => Bank::A,
+        Ty::Int(_) | Ty::Bool | Ty::Float | Ty::Unit => Bank::A,
         _ => Bank::M,
     }
 }
@@ -334,15 +334,6 @@ impl<'a> Lowerer<'a> {
             }
             Literal::String(_) => {
                 // TODO: string constants go to M bank
-            }
-            Literal::Byte(b) => {
-                let (bank, rd) = self.reg(dst);
-                let base = match bank {
-                    Bank::A => CONST_A,
-                    Bank::B => CONST_B,
-                    _ => panic!("Byte const should go to scalar bank"),
-                };
-                self.pb.emit_const(encode1(base, rd), *b as u64);
             }
             Literal::List(_) => {
                 // TODO: list constants go to M bank

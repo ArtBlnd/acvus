@@ -108,7 +108,7 @@ fn no_errors_simple_template() {
 #[test]
 fn valid_multi_context_equivalence() {
     let i = Interner::new();
-    let ctx = [("name", Ty::String), ("count", Ty::Int)];
+    let ctx = [("name", Ty::String), ("count", Ty::I64)];
     let source = "{{ @name }} and {{ @count.to_string() }}";
     let batch = batch_errors(&i, source, &ctx);
     let lsp = lsp_errors(&i, source, &ctx);
@@ -119,7 +119,7 @@ fn valid_multi_context_equivalence() {
 #[test]
 fn type_error_equivalence() {
     let i = Interner::new();
-    let ctx = [("name", Ty::String), ("count", Ty::Int)];
+    let ctx = [("name", Ty::String), ("count", Ty::I64)];
     // String + Int is a type error.
     let source = "{{ out = @name + @count }}{{ out.to_string() }}";
     let batch = batch_errors(&i, source, &ctx);
@@ -132,7 +132,7 @@ fn incremental_update_fixes_error() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
     register_std(&mut session);
-    session.add_context("x", None, lift_to_poly(&Ty::Int));
+    session.add_context("x", None, lift_to_poly(&Ty::I64));
 
     // Start with emit type error: Int not emittable in template.
     let doc = session.open("test", "{{ @x }}", None);
@@ -174,7 +174,7 @@ fn namespace_context_isolation() {
     let mut session = LspSession::new(&i);
 
     let ns = session.add_namespace("node_a");
-    session.add_context("value", Some(ns), lift_to_poly(&Ty::Int));
+    session.add_context("value", Some(ns), lift_to_poly(&Ty::I64));
     session.add_context("global", None, lift_to_poly(&Ty::String));
 
     // Root function sees @global.
@@ -192,7 +192,7 @@ fn completion_context_trigger() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
     session.add_context("name", None, lift_to_poly(&Ty::String));
-    session.add_context("count", None, lift_to_poly(&Ty::Int));
+    session.add_context("count", None, lift_to_poly(&Ty::I64));
 
     let doc = session.open("test", "{{ @n }}", None);
     // Cursor after "@n" -> context trigger with prefix "n"
@@ -272,7 +272,7 @@ fn completion_updates_with_source() {
     let i = Interner::new();
     let mut session = LspSession::new(&i);
     session.add_context("name", None, lift_to_poly(&Ty::String));
-    session.add_context("age", None, lift_to_poly(&Ty::Int));
+    session.add_context("age", None, lift_to_poly(&Ty::I64));
 
     let doc = session.open("test", "{{ @n }}", None);
     let items = session.completions(doc, 5);

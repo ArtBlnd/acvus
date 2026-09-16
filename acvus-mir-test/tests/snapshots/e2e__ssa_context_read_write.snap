@@ -9,11 +9,11 @@ expression: ir
      4 |   commit @x = r2
      5 |   return r2
 
-    ; r0 (v8) : Int
-    ; r1 (@x) : Int
-    ; r2 (v5) : Int
-    ; r3 (v4) : Int
-    ; r4 (@x) : Int
-    ; r5 (v7) : Int
-    ; r6 (@x) : Int
-    ; r7 (@x) : Int
+    ; r0 (v8) : i64
+    ; r1 (@x) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (@x) : i64
+    ; r5 (v7) : i64
+    ; r6 (@x) : i64
+    ; r7 (@x) : i64

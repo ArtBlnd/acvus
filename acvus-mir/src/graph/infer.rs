@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn infer_known_context_not_in_params() {
         let i = Interner::new();
-        let graph = make_graph_with_ctx(&i, "@x + @y", &[("x", Ty::Int)]);
+        let graph = make_graph_with_ctx(&i, "@x + @y", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
     }
@@ -1275,7 +1275,10 @@ mod tests {
             .collect();
         Function {
             qref: QualifiedRef::root(interner.intern(name)),
-            kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+            kind: FnKind::Extern {
+                bounds: vec![],
+                instances: vec![],
+            },
             ty: TyTerm::Fn {
                 params: named_params,
                 ret: Box::new(lift_to_poly(&ret)),
@@ -1301,13 +1304,13 @@ mod tests {
         );
         let uid = last_local_id(&graph);
         assert!(result.try_resolution(uid).is_some());
-        assert_eq!(tail_type(&result, uid).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::I64);
     }
 
     #[test]
     fn resolve_with_declared_context() {
         let i = Interner::new();
-        let graph = make_graph_with_ctx_and_builtins(&i, "@x + 1", &[("x", Ty::Int)]);
+        let graph = make_graph_with_ctx_and_builtins(&i, "@x + 1", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
@@ -1317,7 +1320,7 @@ mod tests {
             error_strings(&i, &result)
         );
         let uid = last_local_id(&graph);
-        assert_eq!(tail_type(&result, uid).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::I64);
     }
 
     #[test]
@@ -1326,7 +1329,7 @@ mod tests {
         let graph = make_graph_no_ctx_with_builtins(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
         let mut user = FxHashMap::default();
-        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::Int));
+        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::I64));
         let result = infer(&i, &graph, &ext, &user, Freeze::default());
 
         assert!(
@@ -1335,7 +1338,7 @@ mod tests {
             error_strings(&i, &result)
         );
         let uid = last_local_id(&graph);
-        assert_eq!(tail_type(&result, uid).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, uid).unwrap(), Ty::I64);
     }
 
     #[test]
@@ -1388,12 +1391,12 @@ mod tests {
     #[test]
     fn resolve_context_types_populated() {
         let i = Interner::new();
-        let graph = make_graph_with_ctx_and_builtins(&i, "@x", &[("x", Ty::Int)]);
+        let graph = make_graph_with_ctx_and_builtins(&i, "@x", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         let ctx_ref = graph.contexts[0].qref;
-        assert_eq!(*result.context_type(&ctx_ref).unwrap(), Ty::Int);
+        assert_eq!(*result.context_type(&ctx_ref).unwrap(), Ty::I64);
     }
 
     // -- Completeness: valid inter-function calls ----------------------
@@ -1405,7 +1408,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("double", "$x * 2", Some(vec![("x", Ty::Int)]), None),
+                ("double", "$x * 2", Some(vec![("x", Ty::I64)]), None),
                 ("main", "double(21)", None, None),
             ],
             &[],
@@ -1413,7 +1416,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// C2: A calls B, B returns String.
@@ -1444,7 +1447,7 @@ mod tests {
                 (
                     "add",
                     "$x + $y",
-                    Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
+                    Some(vec![("x", Ty::I64), ("y", Ty::I64)]),
                     None,
                 ),
                 ("main", "add(1, 2)", None, None),
@@ -1454,7 +1457,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// C4: Chain of calls - A calls B, B calls C.
@@ -1464,11 +1467,11 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("inc", "$x + 1", Some(vec![("x", Ty::Int)]), None),
+                ("inc", "$x + 1", Some(vec![("x", Ty::I64)]), None),
                 (
                     "double_inc",
                     "inc($x) + inc($x)",
-                    Some(vec![("x", Ty::Int)]),
+                    Some(vec![("x", Ty::I64)]),
                     None,
                 ),
                 ("main", "double_inc(5)", None, None),
@@ -1478,7 +1481,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[2].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// C5: Function uses context and is called by another function.
@@ -1491,12 +1494,12 @@ mod tests {
                 ("get_count", "@count", Some(vec![]), None),
                 ("main", "get_count() + 1", None, None),
             ],
-            &[("count", Ty::Int)],
+            &[("count", Ty::I64)],
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// C6: Function with declared Exact output type.
@@ -1537,7 +1540,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// C8: Pipe syntax - value | fn.
@@ -1547,7 +1550,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("double", "$x * 2", Some(vec![("x", Ty::Int)]), None),
+                ("double", "$x * 2", Some(vec![("x", Ty::I64)]), None),
                 ("main", "10 | double", None, None),
             ],
             &[],
@@ -1555,7 +1558,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     // inter_fn_list_return: migrated to acvus-mir-test (depends on ExternFn `len`)
@@ -1585,7 +1588,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("inc", "$x + 1", Some(vec![("x", Ty::Int)]), None),
+                ("inc", "$x + 1", Some(vec![("x", Ty::I64)]), None),
                 ("a", "inc(10)", None, None),
                 ("b", "inc(20)", None, None),
             ],
@@ -1593,8 +1596,8 @@ mod tests {
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
-        assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::Int);
-        assert_eq!(tail_type(&result, ids[2].1).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::I64);
+        assert_eq!(tail_type(&result, ids[2].1).unwrap(), Ty::I64);
     }
 
     /// C12: Calling function with bool return.
@@ -1604,7 +1607,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("is_positive", "$x > 0", Some(vec![("x", Ty::Int)]), None),
+                ("is_positive", "$x > 0", Some(vec![("x", Ty::I64)]), None),
                 ("main", "is_positive(42)", None, None),
             ],
             &[],
@@ -1632,7 +1635,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[3].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     // inter_fn_mixed_builtin_and_local: migrated to acvus-mir-test (depends on ExternFn `to_string`)
@@ -1644,7 +1647,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("inc", "$x + 1", Some(vec![("x", Ty::Int)]), None),
+                ("inc", "$x + 1", Some(vec![("x", Ty::I64)]), None),
                 ("main", "inc(inc(0))", None, None),
             ],
             &[],
@@ -1652,7 +1655,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// C16: Mutual recursion - A calls B, B calls A.
@@ -1665,13 +1668,13 @@ mod tests {
                 (
                     "is_even",
                     "is_odd($n - 1)",
-                    Some(vec![("n", Ty::Int)]),
+                    Some(vec![("n", Ty::I64)]),
                     Some(lift_to_poly(&Ty::Bool)),
                 ),
                 (
                     "is_odd",
                     "is_even($n - 1)",
-                    Some(vec![("n", Ty::Int)]),
+                    Some(vec![("n", Ty::I64)]),
                     Some(lift_to_poly(&Ty::Bool)),
                 ),
                 ("main", "is_even(10)", None, None),
@@ -1694,8 +1697,8 @@ mod tests {
                 (
                     "fib",
                     "fib($n - 1) + fib($n - 2)",
-                    Some(vec![("n", Ty::Int)]),
-                    Some(lift_to_poly(&Ty::Int)),
+                    Some(vec![("n", Ty::I64)]),
+                    Some(lift_to_poly(&Ty::I64)),
                 ),
                 ("main", "fib(10)", None, None),
             ],
@@ -1704,7 +1707,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// C18: Function with float params and return.
@@ -1739,7 +1742,7 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("double", "x * 2", Some(vec![("x", Ty::Int)]), None),
+                ("double", "x * 2", Some(vec![("x", Ty::I64)]), None),
                 ("main", "double(\"hello\")", None, None),
             ],
             &[],
@@ -1757,7 +1760,7 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("inc", "x + 1", Some(vec![("x", Ty::Int)]), None),
+                ("inc", "x + 1", Some(vec![("x", Ty::I64)]), None),
                 ("main", "inc(1, 2)", None, None),
             ],
             &[],
@@ -1775,7 +1778,7 @@ mod tests {
                 (
                     "add",
                     "x + y",
-                    Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
+                    Some(vec![("x", Ty::I64), ("y", Ty::I64)]),
                     None,
                 ),
                 ("main", "add(1)", None, None),
@@ -1836,8 +1839,8 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), None),
-                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), None),
+                ("ping", "pong(x)", Some(vec![("x", Ty::I64)]), None),
+                ("pong", "ping(x)", Some(vec![("x", Ty::I64)]), None),
             ],
             &[],
         );
@@ -1852,7 +1855,7 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), None),
+                ("needs_int", "x + 1", Some(vec![("x", Ty::I64)]), None),
                 ("main", "\"hello\" | needs_int", None, None),
             ],
             &[],
@@ -1888,7 +1891,7 @@ mod tests {
         let (result, _ids) = infer_multi(
             &i,
             &[
-                ("f", "x", Some(vec![("x", Ty::Int)]), None),
+                ("f", "x", Some(vec![("x", Ty::I64)]), None),
                 ("main", "f(1) + f(1, 2)", None, None),
             ],
             &[],
@@ -1923,7 +1926,7 @@ mod tests {
             &i,
             &[
                 ("make_str", "\"hi\"", Some(vec![]), None),
-                ("needs_int", "x + 1", Some(vec![("x", Ty::Int)]), None),
+                ("needs_int", "x + 1", Some(vec![("x", Ty::I64)]), None),
                 ("main", "needs_int(make_str())", None, None),
             ],
             &[],
@@ -1951,7 +1954,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// E2: Same name as builtin - local should shadow or coexist?
@@ -1961,7 +1964,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("len", "42", Some(vec![]), Some(lift_to_poly(&Ty::Int))),
+                ("len", "42", Some(vec![]), Some(lift_to_poly(&Ty::I64))),
                 ("main", "len()", None, None),
             ],
             &[],
@@ -1990,7 +1993,7 @@ mod tests {
             "forward reference should resolve: {errs:?}"
         );
         let main_id = ids[0].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// E4: Two functions reading the same context.
@@ -2004,12 +2007,12 @@ mod tests {
                 ("read_b", "@x + 2", Some(vec![]), None),
                 ("main", "read_a() + read_b()", None, None),
             ],
-            &[("x", Ty::Int)],
+            &[("x", Ty::I64)],
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[2].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// E5: Function calling itself with Exact type annotation (base case).
@@ -2022,8 +2025,8 @@ mod tests {
                 (
                     "f",
                     "f($x - 1)",
-                    Some(vec![("x", Ty::Int)]),
-                    Some(lift_to_poly(&Ty::Int)),
+                    Some(vec![("x", Ty::I64)]),
+                    Some(lift_to_poly(&Ty::I64)),
                 ),
                 ("main", "f(10)", None, None),
             ],
@@ -2032,7 +2035,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[1].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// E6: Diamond dependency - A calls B and C, both call D.
@@ -2052,7 +2055,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[3].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     // inter_fn_pipe_through_builtins: migrated to acvus-mir-test (depends on ExternFn `iter`, `map`, `collect`, `len`)
@@ -2068,9 +2071,9 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("stage1", "$x + 1", Some(vec![("x", Ty::Int)]), None),
-                ("stage2", "$x * 2", Some(vec![("x", Ty::Int)]), None),
-                ("stage3", "$x - 1", Some(vec![("x", Ty::Int)]), None),
+                ("stage1", "$x + 1", Some(vec![("x", Ty::I64)]), None),
+                ("stage2", "$x * 2", Some(vec![("x", Ty::I64)]), None),
+                ("stage3", "$x - 1", Some(vec![("x", Ty::I64)]), None),
                 ("main", "0 | stage1 | stage2 | stage3", None, None),
             ],
             &[],
@@ -2078,7 +2081,7 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[3].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// E11: All local functions are callers - no inter-function calls.
@@ -2092,7 +2095,7 @@ mod tests {
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
-        assert_eq!(tail_type(&result, ids[0].1).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, ids[0].1).unwrap(), Ty::I64);
         assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::String);
     }
 
@@ -2102,7 +2105,7 @@ mod tests {
         let i = Interner::new();
         let obj_ty = Ty::Object(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
-            (i.intern("age"), Ty::Int),
+            (i.intern("age"), Ty::I64),
         ]));
         let (result, ids) = infer_multi(
             &i,
@@ -2119,7 +2122,7 @@ mod tests {
                 "user",
                 Ty::Object(FxHashMap::from_iter([
                     (i.intern("name"), Ty::String),
-                    (i.intern("age"), Ty::Int),
+                    (i.intern("age"), Ty::I64),
                 ])),
             )],
         );
@@ -2174,8 +2177,8 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("ping", "pong(x)", Some(vec![("x", Ty::Int)]), None),
-                ("pong", "ping(x)", Some(vec![("x", Ty::Int)]), None),
+                ("ping", "pong(x)", Some(vec![("x", Ty::I64)]), None),
+                ("pong", "ping(x)", Some(vec![("x", Ty::I64)]), None),
             ],
             &[],
         );
@@ -2195,7 +2198,7 @@ mod tests {
         let (result, _) = infer_multi(
             &i,
             &[
-                ("f", "f(x - 1)", Some(vec![("x", Ty::Int)]), None),
+                ("f", "f(x - 1)", Some(vec![("x", Ty::I64)]), None),
                 ("main", "f(10)", None, None),
             ],
             &[],
@@ -2222,7 +2225,7 @@ mod tests {
         if let Some(main_ty) = tail_type(&result, main_id) {
             assert_ne!(
                 main_ty,
-                Ty::Int,
+                Ty::I64,
                 "main must not see Int when bad declared String"
             );
         }
@@ -2243,7 +2246,7 @@ mod tests {
         if !result.has_errors() {
             let main_id = ids[1].1;
             if let Some(ty) = tail_type(&result, main_id) {
-                assert_eq!(ty, Ty::Int, "if resolved, return type should be Int");
+                assert_eq!(ty, Ty::I64, "if resolved, return type should be Int");
             }
         }
     }
@@ -2254,7 +2257,7 @@ mod tests {
     #[test]
     fn extern_fn_call_resolves() {
         let i = Interner::new();
-        let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
+        let fetch = make_extern_fn(&i, "fetch", vec![Ty::I64], Ty::String);
         let (result, ids) =
             infer_with_extern(&i, &[("main", "fetch(42)", None, None)], &[fetch], &[]);
         let errs = error_strings(&i, &result);
@@ -2267,7 +2270,7 @@ mod tests {
     #[test]
     fn extern_fn_call_type_mismatch() {
         let i = Interner::new();
-        let fetch = make_extern_fn(&i, "fetch", vec![Ty::Int], Ty::String);
+        let fetch = make_extern_fn(&i, "fetch", vec![Ty::I64], Ty::String);
         let (result, _) =
             infer_with_extern(&i, &[("main", "fetch(\"bad\")", None, None)], &[fetch], &[]);
         assert!(
@@ -2280,7 +2283,7 @@ mod tests {
     #[test]
     fn extern_fn_return_type_propagates() {
         let i = Interner::new();
-        let get_count = make_extern_fn(&i, "get_count", vec![], Ty::Int);
+        let get_count = make_extern_fn(&i, "get_count", vec![], Ty::I64);
         let (result, ids) = infer_with_extern(
             &i,
             &[("main", "get_count() + 1", None, None)],
@@ -2290,14 +2293,14 @@ mod tests {
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
         let main_id = ids[0].1;
-        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, main_id).unwrap(), Ty::I64);
     }
 
     /// Multiple extern functions can be registered and called.
     #[test]
     fn extern_fn_multiple() {
         let i = Interner::new();
-        let add = make_extern_fn(&i, "ext_add", vec![Ty::Int, Ty::Int], Ty::Int);
+        let add = make_extern_fn(&i, "ext_add", vec![Ty::I64, Ty::I64], Ty::I64);
         let greet = make_extern_fn(&i, "ext_greet", vec![Ty::String], Ty::String);
         let (result, ids) = infer_with_extern(
             &i,
@@ -2310,7 +2313,7 @@ mod tests {
         );
         let errs = error_strings(&i, &result);
         assert!(errs.is_empty(), "should resolve: {errs:?}");
-        assert_eq!(tail_type(&result, ids[0].1).unwrap(), Ty::Int);
+        assert_eq!(tail_type(&result, ids[0].1).unwrap(), Ty::I64);
         assert_eq!(tail_type(&result, ids[1].1).unwrap(), Ty::String);
     }
 
@@ -2355,7 +2358,7 @@ mod tests {
     #[test]
     fn context_declared_exact_is_complete() {
         let i = Interner::new();
-        let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::Int)]);
+        let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
@@ -2401,7 +2404,7 @@ mod tests {
         );
         // The inferred type should be Int (from @x + 1).
         let qref = QualifiedRef::root(i.intern("x"));
-        assert_eq!(*result.context_type(&qref).unwrap(), Ty::Int);
+        assert_eq!(*result.context_type(&qref).unwrap(), Ty::I64);
     }
 
     /// Undeclared context - typechecker creates fresh infer var in analysis mode.
@@ -2429,7 +2432,7 @@ mod tests {
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
         let mut user = FxHashMap::default();
-        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::Int));
+        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::I64));
         let result = infer(&i, &graph, &ext, &user, Freeze::default());
 
         let fid = graph.functions[0].qref;
@@ -2467,14 +2470,14 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", "$x + 1", Some(vec![("x", Ty::Int)]), None)],
+            &[("test", "$x + 1", Some(vec![("x", Ty::I64)]), None)],
             &[],
         );
         let fid = ids[0].1;
         let meta = result.outcomes[&fid].meta();
         assert_eq!(meta.params.len(), 1);
         assert_eq!(meta.params[0].name, i.intern("x"));
-        assert_eq!(meta.params[0].ty, Ty::Int);
+        assert_eq!(meta.params[0].ty, Ty::I64);
     }
 
     /// Multiple $params.
@@ -2486,7 +2489,7 @@ mod tests {
             &[(
                 "test",
                 "$x + $y",
-                Some(vec![("x", Ty::Int), ("y", Ty::Int)]),
+                Some(vec![("x", Ty::I64), ("y", Ty::I64)]),
                 None,
             )],
             &[],
@@ -2505,12 +2508,12 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", "$x + 1", Some(vec![("x", Ty::Int)]), None)],
+            &[("test", "$x + 1", Some(vec![("x", Ty::I64)]), None)],
             &[],
         );
         let fid = ids[0].1;
         let meta = result.outcomes[&fid].meta();
-        assert_eq!(meta.params[0].ty, Ty::Int);
+        assert_eq!(meta.params[0].ty, Ty::I64);
     }
 
     /// Param matched against a string literal -> inferred as String.
@@ -2542,7 +2545,7 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("test", "42", Some(vec![]), Some(lift_to_poly(&Ty::Int)))],
+            &[("test", "42", Some(vec![]), Some(lift_to_poly(&Ty::I64)))],
             &[],
         );
         let fid = ids[0].1;
@@ -2562,7 +2565,7 @@ mod tests {
                 "test",
                 r#""hello""#,
                 Some(vec![]),
-                Some(lift_to_poly(&Ty::Int)),
+                Some(lift_to_poly(&Ty::I64)),
             )],
             &[],
         );

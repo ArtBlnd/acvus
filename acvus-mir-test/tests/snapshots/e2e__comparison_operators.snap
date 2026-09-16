@@ -19,19 +19,19 @@ expression: ir
     11 |   commit @b = r3
     12 |   return r7
 
-    ; r0 (v15) : Int
-    ; r1 (v16) : Int
-    ; r2 (@a) : Int
-    ; r3 (@b) : Int
+    ; r0 (v15) : i64
+    ; r1 (v16) : i64
+    ; r2 (@a) : i64
+    ; r3 (@b) : i64
     ; r4 (v7) : Bool
     ; r5 (x.) : &Bool
     ; r6 (to_string(...)) : String
     ; r7 (v12) : String
-    ; r8 (@b) : Int
-    ; r9 (v14) : Int
-    ; r10 (@b) : Int
+    ; r8 (@b) : i64
+    ; r9 (v14) : i64
+    ; r10 (@b) : i64
     ; r11 (v9) : String
-    ; r12 (@a) : Int
-    ; r13 (v13) : Int
-    ; r14 (@a) : Int
+    ; r12 (@a) : i64
+    ; r13 (v13) : i64
+    ; r14 (@a) : i64
     ; r15 (x) : Bool

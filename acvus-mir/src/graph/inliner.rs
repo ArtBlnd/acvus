@@ -631,7 +631,7 @@ mod tests {
         let mut val_types = FxHashMap::default();
         for _ in 0..val_count {
             let v = factory.next();
-            val_types.insert(v, Ty::Int);
+            val_types.insert(v, Ty::I64);
         }
         MirBody {
             insts: insts.into_iter().map(make_inst).collect(),

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, LenTerm, Reissue, Ty};
+use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, IntTy, LenTerm, Reissue, Ty};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
@@ -76,13 +76,14 @@ pub struct SerParam {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SerTy {
-    Int,
+    Int {
+        width: IntTy,
+    },
     Order,
     Float,
     String,
     Bool,
     Unit,
-    Byte,
     Error,
     Array {
         len: usize,
@@ -118,13 +119,12 @@ impl Ty {
     /// Convert to a serializable representation by resolving all interned strings.
     pub fn to_ser(&self, interner: &Interner) -> SerTy {
         match self {
-            Ty::Int => SerTy::Int,
+            Ty::Int(k) => SerTy::Int { width: *k },
             Ty::Order => SerTy::Order,
             Ty::Float => SerTy::Float,
             Ty::String => SerTy::String,
             Ty::Bool => SerTy::Bool,
             Ty::Unit => SerTy::Unit,
-            Ty::Byte => SerTy::Byte,
             Ty::Error(_) => SerTy::Error,
             Ty::Array(elem, len) => SerTy::Array {
                 len: len.get(),
@@ -162,7 +162,10 @@ impl Ty {
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
-                effect_args: effect_args.iter().map(|e| effect_to_ser(e.get(), interner)).collect(),
+                effect_args: effect_args
+                    .iter()
+                    .map(|e| effect_to_ser(e.get(), interner))
+                    .collect(),
                 identity_args: identity_args
                     .iter()
                     .map(|i| i.get().to_raw() as u32)
@@ -194,13 +197,12 @@ impl SerTy {
     /// Convert back to [`Ty`] by re-interning all strings.
     pub fn to_ty(&self, interner: &Interner) -> Ty {
         match self {
-            SerTy::Int => Ty::Int,
+            SerTy::Int { width } => Ty::Int(*width),
             SerTy::Order => Ty::Order,
             SerTy::Float => Ty::Float,
             SerTy::String => Ty::String,
             SerTy::Bool => Ty::Bool,
             SerTy::Unit => Ty::Unit,
-            SerTy::Byte => Ty::Byte,
             SerTy::Error => Ty::error(),
             SerTy::Array { len, elem } => {
                 Ty::Array(Box::new(elem.to_ty(interner)), LenTerm::Known(*len))
@@ -233,7 +235,10 @@ impl SerTy {
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
                 type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
-                effect_args: effect_args.iter().map(|e| EffectTerm::Known(ser_to_effect(e, interner))).collect(),
+                effect_args: effect_args
+                    .iter()
+                    .map(|e| EffectTerm::Known(ser_to_effect(e, interner)))
+                    .collect(),
                 identity_args: identity_args
                     .iter()
                     .map(|i| IdentityTerm::Known(IdentityId::from_raw(*i as usize)))
@@ -266,7 +271,7 @@ mod tests {
         let i = Interner::new();
         let fn_ty = Ty::Fn {
             params: vec![],
-            ret: Box::new(Ty::Int),
+            ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::IDEMPOTENT.into(),
         };
@@ -277,7 +282,7 @@ mod tests {
 
         let ud = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("Iterator")),
-            type_args: vec![Ty::Int],
+            type_args: vec![Ty::I64],
             effect_args: vec![Effect::OPAQUE.into()],
             identity_args: vec![],
         };

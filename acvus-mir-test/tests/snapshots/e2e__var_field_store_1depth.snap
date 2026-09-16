@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 2725
 expression: ir
 ---
 === main ===
@@ -14,15 +13,15 @@ expression: ir
      8 |   commit @obj = r5
      9 |   return r4
 
-    ; r0 (v11) : {x: Int}
-    ; r1 (v12) : Int
-    ; r2 (@obj) : {x: Int}
-    ; r3 (v5) : Int
-    ; r4 (a.x) : Int
-    ; r5 (a) : {x: Int}
-    ; r6 (x) : Int
-    ; r7 (@obj) : {x: Int}
-    ; r8 (v10) : {x: Int}
-    ; r9 (x) : Int
-    ; r10 (@obj) : {x: Int}
-    ; r11 (a) : {x: Int}
+    ; r0 (v11) : {x: i64}
+    ; r1 (v12) : i64
+    ; r2 (@obj) : {x: i64}
+    ; r3 (v5) : i64
+    ; r4 (a.x) : i64
+    ; r5 (a) : {x: i64}
+    ; r6 (x) : i64
+    ; r7 (@obj) : {x: i64}
+    ; r8 (v10) : {x: i64}
+    ; r9 (x) : i64
+    ; r10 (@obj) : {x: i64}
+    ; r11 (a) : {x: i64}

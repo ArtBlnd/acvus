@@ -51,12 +51,12 @@ fn literal_types_as_array_with_its_length() {
     let i = Interner::new();
     assert_eq!(
         return_type(&i, "[1, 2, 3]"),
-        Ty::Array(Box::new(Ty::Int), LenTerm::Known(3))
+        Ty::Array(Box::new(Ty::I64), LenTerm::Known(3))
     );
     assert_eq!(
         return_type(&i, "[[1], [2]]"),
         Ty::Array(
-            Box::new(Ty::Array(Box::new(Ty::Int), LenTerm::Known(1))),
+            Box::new(Ty::Array(Box::new(Ty::I64), LenTerm::Known(1))),
             LenTerm::Known(2)
         )
     );
@@ -65,7 +65,7 @@ fn literal_types_as_array_with_its_length() {
 #[test]
 fn pattern_length_is_checked_statically() {
     let i = Interner::new();
-    let items = Ty::Array(Box::new(Ty::Int), LenTerm::Known(3));
+    let items = Ty::Array(Box::new(Ty::I64), LenTerm::Known(3));
     let ctx = FxHashMap::from_iter([(i.intern("items"), items)]);
 
     let err = compile_script_ir(&i, "[a, b] = @items { x = a; }; 0", &ctx).unwrap_err();
@@ -80,5 +80,10 @@ fn array_flows_into_list_and_iterator() {
     let i = Interner::new();
     let ctx = FxHashMap::default();
     compile_script_ir(&i, "xs = [1, 2]; len(&xs)", &ctx).unwrap();
-    compile_script_ir(&i, "xs = [1, 2] | into_iter | collect | into_iter | collect; len(&xs)", &ctx).unwrap();
+    compile_script_ir(
+        &i,
+        "xs = [1, 2] | into_iter | collect | into_iter | collect; len(&xs)",
+        &ctx,
+    )
+    .unwrap();
 }

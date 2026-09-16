@@ -24,12 +24,16 @@ struct Typed {
 
 fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, String> {
     Ok(match v {
-        serde_json::Value::Number(n) => match n.as_i64() {
-            Some(i) => Typed {
-                ty: Ty::Int,
+        serde_json::Value::Number(n) => match (n.as_i64(), n.as_u64()) {
+            (Some(i), _) => Typed {
+                ty: Ty::I64,
                 value: Value::int(i),
             },
-            None => Typed {
+            (None, Some(u)) => Typed {
+                ty: Ty::U64,
+                value: Value::from_bits(u),
+            },
+            (None, None) => Typed {
                 ty: Ty::Float,
                 value: Value::float(
                     n.as_f64()

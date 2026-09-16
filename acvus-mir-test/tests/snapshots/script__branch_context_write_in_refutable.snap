@@ -11,22 +11,22 @@ expression: ir
      5 |   jump_if r4 then L0 else L1(r3)
      6 | L0:
      8 |   jump L1(99 (r5))
-     9 | L1(r6: Int):
+     9 | L1(r6: i64):
     10 |   commit @val = r2
     11 |   commit @out = r6
     12 |   return r6
 
-    ; r0 (v11) : Int
-    ; r1 (v12) : Int
-    ; r2 (@val) : Int
-    ; r3 (@out) : Int
+    ; r0 (v11) : i64
+    ; r1 (v12) : i64
+    ; r2 (@val) : i64
+    ; r3 (@out) : i64
     ; r4 (v6) : Bool
-    ; r5 (v7) : Int
-    ; r6 (v13) : Int
-    ; r7 (@out) : Int
-    ; r8 (v14) : Int
-    ; r9 (v10) : Int
-    ; r10 (v9) : Int
-    ; r11 (v5) : Int
-    ; r12 (@val) : Int
-    ; r13 (@out) : Int
+    ; r5 (v7) : i64
+    ; r6 (v13) : i64
+    ; r7 (@out) : i64
+    ; r8 (v14) : i64
+    ; r9 (v10) : i64
+    ; r10 (v9) : i64
+    ; r11 (v5) : i64
+    ; r12 (@val) : i64
+    ; r13 (@out) : i64

@@ -21,24 +21,24 @@ expression: ir
     15 |   commit @items = r4
     16 |   return r10
 
-    ; r0 (v19) : Vec<Int>
-    ; r1 (v20) : Vec<Int>
-    ; r2 (@items) : Vec<Int>
-    ; r3 (v6) : Array<Int, 0>
-    ; r4 (vec(...)) : Vec<Int>
-    ; r5 (v10) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r6 (v11) : Fn(&Int) -> Bool
-    ; r7 (find(...)) : Int
-    ; r8 (out.) : &Int
+    ; r0 (v19) : Vec<i64>
+    ; r1 (v20) : Vec<i64>
+    ; r2 (@items) : Vec<i64>
+    ; r3 (v6) : Array<i64, 0>
+    ; r4 (vec(...)) : Vec<i64>
+    ; r5 (v10) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r6 (v11) : Fn(&i64) -> Bool
+    ; r7 (find(...)) : i64
+    ; r8 (out.) : &i64
     ; r9 (to_string(...)) : String
     ; r10 (v17) : String
-    ; r11 (@items) : Vec<Int>
+    ; r11 (@items) : Vec<i64>
     ; r12 (v14) : String
-    ; r13 (items) : Vec<Int>
-    ; r14 (@items) : Vec<Int>
-    ; r15 (items) : Vec<Int>
-    ; r16 (v18) : Vec<Int>
-    ; r17 (out) : Int
+    ; r13 (items) : Vec<i64>
+    ; r14 (@items) : Vec<i64>
+    ; r15 (items) : Vec<i64>
+    ; r16 (v18) : Vec<i64>
+    ; r17 (out) : i64
     ; r18 (v5) : String
     ; r19 (v8) : String
 
@@ -48,10 +48,10 @@ expression: ir
      3 |   r3 = r1 > 10 (r4)
      4 |   return r3
 
-    ; r0 (v7) : &Int
-    ; r1 (v4) : Int
-    ; r2 (v1) : &Int
+    ; r0 (v7) : &i64
+    ; r1 (v4) : i64
+    ; r2 (v1) : &i64
     ; r3 (v6) : Bool
-    ; r4 (v5) : Int
-    ; r5 (x) : &Int
-    ; r6 (x) : &Int
+    ; r4 (v5) : i64
+    ; r5 (x) : &i64
+    ; r6 (x) : &i64

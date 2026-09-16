@@ -25,30 +25,30 @@ expression: ir
     19 | L1:
     21 |   r12 = string_concat [T0]
     22 |   jump L0(r12, r0)
-    23 | L0(r13: String, r14: Int):  ; merge_of L2
+    23 | L0(r13: String, r14: i64):  ; merge_of L2
     24 |   r15 = string_concat [r13]
     25 |   r16 = take @items
     26 |   commit @items = r16
     27 |   return r15
 
-    ; r0 (v20) : Int
-    ; r1 (@items) : Array<Int, 3>
+    ; r0 (v20) : i64
+    ; r1 (@items) : Array<i64, 3>
     ; r2 (v5) : Bool
     ; r3 (v3) : Bool
     ; r4 (v4) : Bool
     ; r5 (v7) : Bool
     ; r6 (v6) : Bool
-    ; r7 (first) : Int
-    ; r8 (last) : Int
-    ; r9 (first.) : &Int
+    ; r7 (first) : i64
+    ; r8 (last) : i64
+    ; r9 (first.) : &i64
     ; r10 (to_string(...)) : String
     ; r11 (v14) : String
     ; r12 (v16) : String
     ; r13 (v17) : String
-    ; r14 (v21) : Int
+    ; r14 (v21) : i64
     ; r15 (v18) : String
-    ; r16 (v19) : Array<Int, 3>
-    ; r17 (last) : Int
-    ; r18 (first) : Int
-    ; r19 (@items) : Array<Int, 3>
+    ; r16 (v19) : Array<i64, 3>
+    ; r17 (last) : i64
+    ; r18 (first) : i64
+    ; r19 (@items) : Array<i64, 3>
     ; r20 (v15) : String

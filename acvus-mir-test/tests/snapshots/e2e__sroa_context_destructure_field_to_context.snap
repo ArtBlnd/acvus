@@ -13,12 +13,12 @@ expression: ir
      7 |   commit @b = r4
      8 |   return r3
 
-    ; r0 (v9) : Int
-    ; r1 (@a) : Int
-    ; r2 (@b) : {x: Int}
-    ; r3 (@b.x) : Int
-    ; r4 (v8) : {x: Int}
-    ; r5 (@b) : {x: Int}
-    ; r6 (v7) : Int
-    ; r7 (@a) : Int
-    ; r8 (@a) : Int
+    ; r0 (v9) : i64
+    ; r1 (@a) : i64
+    ; r2 (@b) : {x: i64}
+    ; r3 (@b.x) : i64
+    ; r4 (v8) : {x: i64}
+    ; r5 (@b) : {x: i64}
+    ; r6 (v7) : i64
+    ; r7 (@a) : i64
+    ; r8 (@a) : i64

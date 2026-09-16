@@ -25,9 +25,18 @@ pub mod sig {
 
 // -- to_string ----------------------------------------------------------
 
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
-fn to_string_int(a: &i64) -> String {
-    a.to_string()
+macro_rules! to_string_ints {
+    ($($name:ident: $t:ty),* $(,)?) => {$(
+        #[extern_fn(instance_of = sig::to_string, effect = pure)]
+        fn $name(a: &$t) -> String {
+            a.to_string()
+        }
+    )*};
+}
+
+to_string_ints! {
+    to_string_i8: i8, to_string_i16: i16, to_string_i32: i32, to_string_int: i64,
+    to_string_u8: u8, to_string_u16: u16, to_string_u32: u32, to_string_u64: u64,
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
@@ -37,11 +46,6 @@ fn to_string_float(a: &f64) -> String {
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
 fn to_string_bool(a: &bool) -> String {
-    a.to_string()
-}
-
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
-fn to_string_byte(a: &u8) -> String {
     a.to_string()
 }
 
@@ -67,9 +71,23 @@ fn to_int_bool(a: &bool) -> Result<i64, ExternError> {
     Ok(i64::from(*a))
 }
 
+macro_rules! to_int_widens {
+    ($($name:ident: $t:ty),* $(,)?) => {$(
+        #[extern_fn(instance_of = sig::to_int, effect = pure)]
+        fn $name(a: &$t) -> Result<i64, ExternError> {
+            Ok(i64::from(*a))
+        }
+    )*};
+}
+
+to_int_widens! {
+    to_int_i8: i8, to_int_i16: i16, to_int_i32: i32,
+    to_int_byte: u8, to_int_u16: u16, to_int_u32: u32,
+}
+
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_byte(a: &u8) -> Result<i64, ExternError> {
-    Ok(i64::from(*a))
+fn to_int_u64(a: &u64) -> Result<i64, ExternError> {
+    i64::try_from(*a).map_err(|_| ExternError::call("to_int", format!("{a} does not fit i64")))
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
@@ -111,8 +129,12 @@ pub fn conversion_registry<R: Runtime>() -> Registry<R> {
         ns: "std",
         signatures: [sig::to_string, sig::to_int],
         fns: [
-            to_string_int, to_string_float, to_string_bool, to_string_byte, to_string_string,
-            to_int_int, to_int_float, to_int_bool, to_int_byte, to_int_string,
+            to_string_i8, to_string_i16, to_string_i32, to_string_int,
+            to_string_u8, to_string_u16, to_string_u32, to_string_u64,
+            to_string_float, to_string_bool, to_string_string,
+            to_int_i8, to_int_i16, to_int_i32, to_int_int,
+            to_int_byte, to_int_u16, to_int_u32, to_int_u64,
+            to_int_float, to_int_bool, to_int_string,
             to_float, char_to_int, int_to_char,
         ],
     }

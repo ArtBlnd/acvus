@@ -103,7 +103,13 @@ impl RegionAnalysis<'_> {
     }
 
     /// `to ⊒ from`, when `to` can hold a reference or `always` says so.
-    fn flow(&self, state: &mut DataflowState<ValueId, Region>, from: ValueId, to: ValueId, always: bool) {
+    fn flow(
+        &self,
+        state: &mut DataflowState<ValueId, Region>,
+        from: ValueId,
+        to: ValueId,
+        always: bool,
+    ) {
         if !always && !self.carries_ref(to) {
             return;
         }

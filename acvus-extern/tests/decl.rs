@@ -389,8 +389,8 @@ fn find<'a>(reg: &'a [acvus_extern::Function], i: &Interner, name: &str) -> &'a 
 fn concrete_signature_and_declared_effect() {
     let (i, reg) = combined::<TypesOnly>();
     let add = fn_ty(find(&reg.functions, &i, "add"));
-    assert_eq!(add.params, vec![PolyTy::Int, PolyTy::Int]);
-    assert_eq!(add.ret, PolyTy::Int);
+    assert_eq!(add.params, vec![PolyTy::I64, PolyTy::I64]);
+    assert_eq!(add.ret, PolyTy::I64);
     assert_eq!(add.effect, EffectTerm::Known(Effect::PURE));
 
     assert_eq!(
@@ -489,9 +489,9 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     };
     assert_eq!(
         params[0].ty,
-        PolyTy::Ref(acvus_extern::Mutability::Mut, Box::new(PolyTy::Int))
+        PolyTy::Ref(acvus_extern::Mutability::Mut, Box::new(PolyTy::I64))
     );
-    assert_eq!(params[1].ty, PolyTy::Int);
+    assert_eq!(params[1].ty, PolyTy::I64);
 
     let h = handler(&reg, &i, "bump");
     let place = erased(40i64);
@@ -591,7 +591,7 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     let (i, reg) = combined::<TypesOnly>();
     let point = acvus_extern::Ty::Object(
         [
-            (i.intern("x"), acvus_extern::Ty::Int),
+            (i.intern("x"), acvus_extern::Ty::I64),
             (i.intern("label"), acvus_extern::Ty::String),
         ]
         .into_iter()
@@ -608,7 +608,7 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     assert_eq!(
         bounds[0],
         acvus_extern::TyVarBound::OneOf(vec![
-            acvus_extern::PolyTy::Int,
+            acvus_extern::PolyTy::I64,
             acvus_extern::lift_to_poly(&point)
         ])
     );
@@ -623,7 +623,7 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     assert_eq!(
         bounds[0],
         acvus_extern::TyVarBound::OneOf(vec![
-            acvus_extern::PolyTy::Int,
+            acvus_extern::PolyTy::I64,
             acvus_extern::lift_to_poly(&point)
         ])
     );
@@ -684,7 +684,7 @@ fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
     let i = Interner::new();
     let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts::default());
     let rect = PolyTy::Object(
-        [(i.intern("w"), PolyTy::Int), (i.intern("h"), PolyTy::Int)]
+        [(i.intern("w"), PolyTy::I64), (i.intern("h"), PolyTy::I64)]
             .into_iter()
             .collect(),
     );
@@ -694,7 +694,7 @@ fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
             name: i.intern("Shape"),
             variants: [
                 (i.intern("Dot"), None),
-                (i.intern("Circle"), Some(Box::new(PolyTy::Int))),
+                (i.intern("Circle"), Some(Box::new(PolyTy::I64))),
                 (i.intern("Rect"), Some(Box::new(rect))),
             ]
             .into_iter()
@@ -770,7 +770,7 @@ fn a_monomorphized_parameter_declares_its_members_as_the_bound() {
     assert_eq!(
         bounds,
         &vec![acvus_extern::TyVarBound::OneOf(vec![
-            acvus_extern::PolyTy::Int,
+            acvus_extern::PolyTy::I64,
             acvus_extern::PolyTy::String
         ])]
     );
@@ -802,7 +802,7 @@ fn the_call_type_selects_the_instance() {
     let reg = Externs::combine(vec![mono_registry::<Tiny>()], &i).expect("registries combine");
     let entry = &reg.handlers[&qref(&i, "double")];
 
-    let on_int = call_type(vec![acvus_extern::Ty::Int], acvus_extern::Ty::Int, &i);
+    let on_int = call_type(vec![acvus_extern::Ty::I64], acvus_extern::Ty::I64, &i);
     let h = entry.select(&on_int).unwrap();
     assert_eq!(open::<i64>(call_sync(h, vec![erased(21i64)]).unwrap()), 42);
 
@@ -846,7 +846,7 @@ fn the_call_type_selects_the_instance() {
     };
     let ty = call_type(
         vec![boxed_of(acvus_extern::Ty::String)],
-        acvus_extern::Ty::Int,
+        acvus_extern::Ty::I64,
         &i,
     );
     let h = inside.select(&ty).unwrap();
@@ -857,7 +857,7 @@ fn the_call_type_selects_the_instance() {
     assert_eq!(open::<i64>(call_sync(h, vec![payload]).unwrap()), 2);
     let ty = call_type(
         vec![boxed_of(acvus_extern::Ty::Float)],
-        acvus_extern::Ty::Int,
+        acvus_extern::Ty::I64,
         &i,
     );
     let fallback = inside.select(&ty).unwrap();
@@ -943,10 +943,10 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     let entry = &reg.handlers[&qref(&i, "first")];
     let on_array = call_type(
         vec![acvus_extern::Ty::Array(
-            Box::new(acvus_extern::Ty::Int),
+            Box::new(acvus_extern::Ty::I64),
             acvus_extern::LenTerm::Known(2),
         )],
-        acvus_extern::Ty::Int,
+        acvus_extern::Ty::I64,
         &i,
     );
     let arr = erased(Arr::<V, ()>::new(vec![erased(7i64), erased(8i64)]));
@@ -964,7 +964,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         "s"
     );
 
-    let on_int = call_type(vec![acvus_extern::Ty::Int], acvus_extern::Ty::Int, &i);
+    let on_int = call_type(vec![acvus_extern::Ty::I64], acvus_extern::Ty::I64, &i);
     assert!(entry.select(&on_int).is_err());
 }
 

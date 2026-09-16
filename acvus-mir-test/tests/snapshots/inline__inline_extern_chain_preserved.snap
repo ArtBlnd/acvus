@@ -14,9 +14,9 @@ expression: ir
      6 |   return r3
 
     ; r0 ($s) : String
-    ; r1 (len_str(...)) : Int
-    ; r2 (var_4.) : &Int
+    ; r1 (len_str(...)) : i64
+    ; r2 (var_4.) : &i64
     ; r3 (to_string(...)) : String
     ; r4 (v1) : String
-    ; r5 (n) : Int
+    ; r5 (n) : i64
     ; r6 (process(...)) : String

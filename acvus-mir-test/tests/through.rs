@@ -9,7 +9,10 @@ use rustc_hash::FxHashMap;
 fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern(name)),
-        kind: FnKind::Extern { bounds: vec![], instances: vec![] },
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: vec![],
+        },
         ty: TyTerm::Fn {
             params: params
                 .iter()
@@ -26,7 +29,7 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
 fn user(i: &Interner) -> Ty {
     Ty::Object(FxHashMap::from_iter([
         (i.intern("name"), Ty::String),
-        (i.intern("age"), Ty::Int),
+        (i.intern("age"), Ty::I64),
     ]))
 }
 
@@ -40,7 +43,7 @@ fn closure_taking(i: &Interner, param: Ty, ret: Ty) -> Ty {
 }
 
 fn with_closure(i: &Interner, param: Ty, ret: Ty, body: &str) -> Result<String, String> {
-    let f = extern_fn(&i, "f", &[closure_taking(i, param, ret)], Ty::Int);
+    let f = extern_fn(&i, "f", &[closure_taking(i, param, ret)], Ty::I64);
     compile_script_ir_with(i, &format!("f(|u| -> {body})"), &FxHashMap::default(), &[f])
 }
 
@@ -48,7 +51,7 @@ fn with_closure(i: &Interner, param: Ty, ret: Ty, body: &str) -> Result<String, 
 fn a_primitive_field_is_read_through_a_reference() {
     let i = Interner::new();
     let shared = Ty::Ref(Mutability::Shared, Box::new(user(&i)));
-    let ir = with_closure(&i, shared, Ty::Int, "u.age").unwrap();
+    let ir = with_closure(&i, shared, Ty::I64, "u.age").unwrap();
     assert!(ir.contains("take (*r"), "{ir}");
 }
 
@@ -65,10 +68,10 @@ fn an_object_field_cannot_be_moved_out_through_a_reference() {
     let i = Interner::new();
     let nested = Ty::Object(FxHashMap::from_iter([(
         i.intern("inner"),
-        Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)])),
+        Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
     )]));
     let shared = Ty::Ref(Mutability::Shared, Box::new(nested.clone()));
-    let inner = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::Int)]));
+    let inner = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
     let err = with_closure(&i, shared, inner, "u.inner").unwrap_err();
     assert!(!err.is_empty(), "{err}");
 }
@@ -86,7 +89,7 @@ fn a_string_field_is_borrowed_through_a_reference_and_cloned() {
 fn a_field_is_assigned_through_a_mutable_reference() {
     let i = Interner::new();
     let mutable = Ty::Ref(Mutability::Mut, Box::new(user(&i)));
-    let ir = with_closure(&i, mutable, Ty::Int, "{ u.age = 1; 0 }").unwrap();
+    let ir = with_closure(&i, mutable, Ty::I64, "{ u.age = 1; 0 }").unwrap();
     assert!(ir.contains("assign (*r"), "{ir}");
 }
 
@@ -94,15 +97,15 @@ fn a_field_is_assigned_through_a_mutable_reference() {
 fn a_field_cannot_be_assigned_through_a_shared_reference() {
     let i = Interner::new();
     let shared = Ty::Ref(Mutability::Shared, Box::new(user(&i)));
-    let err = with_closure(&i, shared, Ty::Int, "{ u.age = 1; 0 }").unwrap_err();
+    let err = with_closure(&i, shared, Ty::I64, "{ u.age = 1; 0 }").unwrap_err();
     assert!(err.contains("not a `&mut`"), "{err}");
 }
 
 #[test]
 fn a_word_is_stored_through_a_mutable_reference() {
     let i = Interner::new();
-    let mutable = Ty::Ref(Mutability::Mut, Box::new(Ty::Int));
-    let ir = with_closure(&i, mutable, Ty::Int, "{ *u = 1; *u }").unwrap();
+    let mutable = Ty::Ref(Mutability::Mut, Box::new(Ty::I64));
+    let ir = with_closure(&i, mutable, Ty::I64, "{ *u = 1; *u }").unwrap();
     assert!(ir.contains("assign (*r"), "{ir}");
     assert!(ir.contains("take (*r"), "{ir}");
 }
@@ -110,7 +113,7 @@ fn a_word_is_stored_through_a_mutable_reference() {
 #[test]
 fn a_word_cannot_be_stored_through_a_shared_reference() {
     let i = Interner::new();
-    let shared = Ty::Ref(Mutability::Shared, Box::new(Ty::Int));
-    let err = with_closure(&i, shared, Ty::Int, "{ *u = 1; 0 }").unwrap_err();
+    let shared = Ty::Ref(Mutability::Shared, Box::new(Ty::I64));
+    let err = with_closure(&i, shared, Ty::I64, "{ *u = 1; 0 }").unwrap_err();
     assert!(err.contains("not a `&mut`"), "{err}");
 }

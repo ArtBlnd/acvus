@@ -7,10 +7,16 @@ use serde_json::{Map, Value as Json};
 
 pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
     match ty {
-        Ty::Int => Json::from(value.as_int()),
+        Ty::Int(k) => {
+            let v = k.read(value.small());
+            if k.signed() {
+                Json::from(v as i64)
+            } else {
+                Json::from(v as u64)
+            }
+        }
         Ty::Float => Json::from(value.as_float()),
         Ty::Bool => Json::from(value.as_bool()),
-        Ty::Byte => Json::from(value.as_byte()),
         Ty::Unit => Json::Null,
         // SAFETY: the type is the runtime's own witness of the value's shape.
         Ty::String => Json::from(unsafe { value.as_str() }),

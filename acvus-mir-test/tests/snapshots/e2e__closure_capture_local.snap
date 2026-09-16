@@ -26,35 +26,35 @@ expression: ir
     23 |   commit @items = r5
     24 |   return r15
 
-    ; r0 (v28) : Vec<Int>
-    ; r1 (v29) : Int
-    ; r2 (v30) : Vec<Int>
-    ; r3 (@items) : Vec<Int>
-    ; r4 (v9) : Array<Int, 0>
-    ; r5 (vec(...)) : Vec<Int>
-    ; r6 (into_iter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r7 (v15) : Fn(&Int) -> Bool
-    ; r8 (v3) : Int
-    ; r9 (filter(...)) : Iterator<Int, Pure, #IdentityId(0)>
-    ; r10 (collect(...)) : Vec<Int>
-    ; r11 (x.) : &Vec<Int>
-    ; r12 (len(...)) : Int
-    ; r13 (out.) : &Int
+    ; r0 (v28) : Vec<i64>
+    ; r1 (v29) : i64
+    ; r2 (v30) : Vec<i64>
+    ; r3 (@items) : Vec<i64>
+    ; r4 (v9) : Array<i64, 0>
+    ; r5 (vec(...)) : Vec<i64>
+    ; r6 (into_iter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r7 (v15) : Fn(&i64) -> Bool
+    ; r8 (v3) : i64
+    ; r9 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r10 (collect(...)) : Vec<i64>
+    ; r11 (x.) : &Vec<i64>
+    ; r12 (len(...)) : i64
+    ; r13 (out.) : &i64
     ; r14 (to_string(...)) : String
     ; r15 (v26) : String
-    ; r16 (out) : Int
-    ; r17 (@items) : Vec<Int>
-    ; r18 (items) : Vec<Int>
+    ; r16 (out) : i64
+    ; r17 (@items) : Vec<i64>
+    ; r18 (items) : Vec<i64>
     ; r19 (v11) : String
-    ; r20 (threshold) : &Int
-    ; r21 (@items) : Vec<Int>
-    ; r22 (threshold) : Int
+    ; r20 (threshold) : &i64
+    ; r21 (@items) : Vec<i64>
+    ; r22 (threshold) : i64
     ; r23 (v23) : String
-    ; r24 (x) : Vec<Int>
+    ; r24 (x) : Vec<i64>
     ; r25 (v5) : String
-    ; r26 (v27) : Vec<Int>
+    ; r26 (v27) : Vec<i64>
     ; r27 (v8) : String
-    ; r28 (items) : Vec<Int>
+    ; r28 (items) : Vec<i64>
     ; r29 (v19) : String
 
 === closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
@@ -65,14 +65,14 @@ expression: ir
      4 |   r6 = r2 > r4
      5 |   return r6
 
-    ; r0 (v10) : &Int
-    ; r1 (v11) : &Int
-    ; r2 (v6) : Int
-    ; r3 (v2) : &Int
-    ; r4 (v8) : Int
-    ; r5 (v1) : &Int
+    ; r0 (v10) : &i64
+    ; r1 (v11) : &i64
+    ; r2 (v6) : i64
+    ; r3 (v2) : &i64
+    ; r4 (v8) : i64
+    ; r5 (v1) : &i64
     ; r6 (v9) : Bool
-    ; r7 (threshold) : &Int
-    ; r8 (threshold) : &Int
-    ; r9 (i) : &Int
-    ; r10 (i) : &Int
+    ; r7 (threshold) : &i64
+    ; r8 (threshold) : &i64
+    ; r9 (i) : &i64
+    ; r10 (i) : &i64

@@ -40,6 +40,14 @@ struct BoundSite {
     span: Span,
 }
 
+/// An integer literal awaiting its width, checked against its value once
+/// the width is known (RFC-0037).
+struct IntLiteral {
+    ty: InferTy,
+    value: i128,
+    span: Span,
+}
+
 /// The first argument of a call that was checked before the callee's
 /// parameters were seen: a piped value or a method receiver.
 struct FirstArg {
@@ -176,6 +184,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Bounded variables instantiated so far, each at the span that will
     /// report a violation.
     bound_sites: Vec<BoundSite>,
+    int_literals: Vec<IntLiteral>,
     /// Calls `ns::tag(payload)` that resolved to a structural variant
     /// (RFC-0030), for the lowering.
     structural_variant_calls: FxHashSet<AstId>,
@@ -221,6 +230,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             pattern_through: false,
             in_borrow_place: false,
             bound_sites: Vec::new(),
+            int_literals: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
             choice_sites: FxHashMap::default(),
             errors: Vec::new(),
@@ -729,6 +739,33 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
             }
         }
+        let literals = std::mem::take(&mut self.int_literals);
+        for IntLiteral { ty, value, span } in literals {
+            let Ok(Ty::Int(k)) = self.solver.freeze_ty(&ty) else {
+                continue;
+            };
+            if !k.holds(value) {
+                self.error(
+                    MirErrorKind::IntegerLiteralOutOfRange {
+                        value,
+                        ty: Ty::Int(k),
+                    },
+                    span,
+                );
+            }
+        }
+    }
+
+    /// An integer literal's type: a variable any integer width may fill,
+    /// checked against the literal's value once it is known (RFC-0037).
+    fn int_literal(&mut self, value: i128, span: Span) -> InferTy {
+        let ty = self.solver.fresh_int_var();
+        self.int_literals.push(IntLiteral {
+            ty: ty.clone(),
+            value,
+            span,
+        });
+        ty
     }
 
     fn record(&mut self, id: AstId, ty: InferTy) {
@@ -930,7 +967,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 Some(_) => {
                     let ty = self.check_expr(receiver);
-                    if !matches!(self.solver.resolve_ty(&ty), TyTerm::Ref(..) | TyTerm::Error(_)) {
+                    if !matches!(
+                        self.solver.resolve_ty(&ty),
+                        TyTerm::Ref(..) | TyTerm::Error(_)
+                    ) {
                         self.error(MirErrorKind::NotAPlace, receiver.span());
                     }
                     ty
@@ -1512,19 +1552,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             Expr::Literal { id, value, span } => {
                 let ty = match value {
-                    Literal::Int(_) => TyTerm::Int,
+                    Literal::Int(n) => self.int_literal(*n, *span),
                     Literal::Float(_) => TyTerm::Float,
                     Literal::String(_) => TyTerm::String,
                     Literal::Bool(_) => TyTerm::Bool,
-                    Literal::Byte(_) => TyTerm::Byte,
                     Literal::Unit => TyTerm::Unit,
                     Literal::List(elems) => {
                         if elems.is_empty() {
                             TyTerm::Array(Box::new(self.solver.fresh_ty_var()), LenTerm::Known(0))
                         } else {
-                            let first_ty = self.literal_ty(&elems[0]);
+                            let first_ty = self.literal_ty(&elems[0], *span);
                             for elem in &elems[1..] {
-                                let elem_ty = self.literal_ty(elem);
+                                let elem_ty = self.literal_ty(elem, *span);
                                 if self
                                     .unify_covariant(
                                         &elem_ty,
@@ -1687,7 +1726,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                         let rl = self.solver.resolve_ty(&lt);
                         match &rl {
-                            TyTerm::Int | TyTerm::Float | TyTerm::Var(_) => rl,
+                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Var(_) => rl,
                             TyTerm::String if *op == BinOp::Add => TyTerm::String,
                             _ => {
                                 self.binop_error(
@@ -1731,17 +1770,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Bool
                     }
                     BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-                        let lok = self.unify_covariant(&lt, &TyTerm::Int, None).is_ok();
-                        let rok = self.unify_covariant(&rt, &TyTerm::Int, None).is_ok();
-                        if !lok || !rok {
+                        let ok = self
+                            .solver
+                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
+                            .is_ok()
+                            && matches!(
+                                self.solver.resolve_ty(&lt),
+                                TyTerm::Int(_) | TyTerm::Var(_)
+                            );
+                        if !ok {
                             self.binop_error(
                                 op_str(*op),
                                 self.solver.resolve_ty(&lt),
                                 self.solver.resolve_ty(&rt),
                                 *span,
                             );
+                            Self::infer_error()
+                        } else {
+                            self.solver.resolve_ty(&lt)
                         }
-                        TyTerm::Int
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                         let ok = self
@@ -1750,7 +1797,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             .is_ok()
                             && matches!(
                                 self.solver.resolve_ty(&lt),
-                                TyTerm::Int | TyTerm::Float | TyTerm::Var(_)
+                                TyTerm::Int(_) | TyTerm::Float | TyTerm::Var(_)
                             );
                         if !ok {
                             self.binop_error(
@@ -1817,9 +1864,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                     },
                     acvus_ast::UnaryOp::Neg => match &ot {
-                        TyTerm::Int => TyTerm::Int,
+                        TyTerm::Int(k) if k.signed() => ot.clone(),
                         TyTerm::Float => TyTerm::Float,
-                        TyTerm::Var(_) => ot.clone(),
+                        TyTerm::Var(v) => {
+                            self.solver.require_signed(*v);
+                            ot.clone()
+                        }
                         _ => {
                             self.binop_error("-", ot, Self::infer_error(), *span);
                             Self::infer_error()
@@ -2578,7 +2628,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             },
 
             Pattern::Literal { value, .. } => {
-                let pat_ty = self.literal_ty(value);
+                let pat_ty = self.literal_ty(value, span);
                 if self
                     .unify_covariant(&source_resolved, &pat_ty, None)
                     .is_err()
@@ -2828,17 +2878,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Some((option_name, type_params, payload))
     }
 
-    fn literal_ty(&mut self, lit: &Literal) -> InferTy {
+    fn literal_ty(&mut self, lit: &Literal, span: Span) -> InferTy {
         match lit {
-            Literal::Int(_) => TyTerm::Int,
+            Literal::Int(n) => self.int_literal(*n, span),
             Literal::Float(_) => TyTerm::Float,
             Literal::String(_) => TyTerm::String,
             Literal::Bool(_) => TyTerm::Bool,
-            Literal::Byte(_) => TyTerm::Byte,
             Literal::Unit => TyTerm::Unit,
             Literal::List(elems) => match elems.first() {
                 Some(first) => TyTerm::Array(
-                    Box::new(self.literal_ty(first)),
+                    Box::new(self.literal_ty(first, span)),
                     LenTerm::Known(elems.len()),
                 ),
                 None => TyTerm::Array(Box::new(self.solver.fresh_ty_var()), LenTerm::Known(0)),
@@ -3002,7 +3051,7 @@ mod tests {
         let context = FxHashMap::from_iter([(
             i.intern("fetch_user"),
             Ty::Fn {
-                params: vec![p(&i, Ty::Int)],
+                params: vec![p(&i, Ty::I64)],
                 ret: Box::new(Ty::String),
 
                 captures: vec![],
@@ -3020,7 +3069,7 @@ mod tests {
             i.intern("user"),
             Ty::Object(FxHashMap::from_iter([
                 (i.intern("name"), Ty::String),
-                (i.intern("age"), Ty::Int),
+                (i.intern("age"), Ty::I64),
             ])),
         )]);
         let src = "{{ @user.name }}";
@@ -3072,7 +3121,7 @@ mod tests {
     #[test]
     fn none_pattern_matches_option() {
         let i = Interner::new();
-        let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
+        let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::I64)))]);
         let src = "{{ None = @opt }}none{{_}}has value{{/}}";
         check_with_interner(src, &context, &i).unwrap();
     }
@@ -3111,8 +3160,8 @@ mod tests {
     fn opaque_callback_rejected_where_pure_required() {
         let i = Interner::new();
         let pure_fn_ty = Ty::Fn {
-            params: vec![p(&i, Ty::Int)],
-            ret: Box::new(Ty::Int),
+            params: vec![p(&i, Ty::I64)],
+            ret: Box::new(Ty::I64),
             captures: vec![],
             effect: crate::ty::Effect::PURE.into(),
         };
@@ -3129,8 +3178,8 @@ mod tests {
             (
                 i.intern("io_fn"),
                 Ty::Fn {
-                    params: vec![p(&i, Ty::Int)],
-                    ret: Box::new(Ty::Int),
+                    params: vec![p(&i, Ty::I64)],
+                    ret: Box::new(Ty::I64),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
                 },
@@ -3155,7 +3204,7 @@ mod tests {
         let fns = FxHashMap::from_iter([(
             i.intern("my_fn"),
             Ty::Fn {
-                params: vec![p(&i, Ty::String), p(&i, Ty::Int)],
+                params: vec![p(&i, Ty::String), p(&i, Ty::I64)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
@@ -3182,7 +3231,7 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("items"),
-            Ty::Array(Box::new(Ty::Int), LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), LenTerm::Known(3)),
         )]);
         let src = "{{ x = @items }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
@@ -3195,7 +3244,7 @@ mod tests {
     fn lazy_option_context_load_ok() {
         // @opt : Option<Int> - Lazy tier, allowed.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::Int)))]);
+        let ctx = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::I64)))]);
         let src = "{{ x = @opt }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
     }
@@ -3204,7 +3253,7 @@ mod tests {
     fn lazy_tuple_context_load_ok() {
         // @pair : (Int, String) - Lazy tier, allowed.
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(i.intern("pair"), Ty::Tuple(vec![Ty::Int, Ty::String]))]);
+        let ctx = FxHashMap::from_iter([(i.intern("pair"), Ty::Tuple(vec![Ty::I64, Ty::String]))]);
         let src = "{{ x = @pair }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
     }
@@ -3215,7 +3264,7 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("obj"),
-            Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::Int)])),
+            Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::I64)])),
         )]);
         let src = "{{ x = @obj }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
@@ -3228,8 +3277,8 @@ mod tests {
             i.intern("fns"),
             Ty::Array(
                 Box::new(Ty::Fn {
-                    params: vec![p(&i, Ty::Int)],
-                    ret: Box::new(Ty::Int),
+                    params: vec![p(&i, Ty::I64)],
+                    ret: Box::new(Ty::I64),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
                 }),
@@ -3283,7 +3332,7 @@ mod tests {
     #[test]
     fn pure_int_context_load_ok() {
         let i = Interner::new();
-        let ctx = FxHashMap::from_iter([(i.intern("count"), Ty::Int)]);
+        let ctx = FxHashMap::from_iter([(i.intern("count"), Ty::I64)]);
         let src = "{{ x = @count }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();
     }

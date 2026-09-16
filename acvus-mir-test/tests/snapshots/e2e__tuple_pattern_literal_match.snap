@@ -44,38 +44,38 @@ expression: ir
     38 |   commit @b = r3
     39 |   return r23
 
-    ; r0 (v32) : Int
-    ; r1 (v33) : Int
-    ; r2 (@a) : Int
-    ; r3 (@b) : Int
-    ; r4 (v7) : (Int, Int)
-    ; r5 (v9) : Int
+    ; r0 (v32) : i64
+    ; r1 (v33) : i64
+    ; r2 (@a) : i64
+    ; r3 (@b) : i64
+    ; r4 (v7) : (i64, i64)
+    ; r5 (v9) : i64
     ; r6 (v10) : Bool
     ; r7 (v11) : Bool
     ; r8 (v8) : Bool
-    ; r9 (v12) : Int
+    ; r9 (v12) : i64
     ; r10 (v13) : Bool
     ; r11 (v14) : Bool
-    ; r12 (v15) : Int
-    ; r13 (v16) : Int
+    ; r12 (v15) : i64
+    ; r13 (v16) : i64
     ; r14 (v18) : String
-    ; r15 (v20) : Int
+    ; r15 (v20) : i64
     ; r16 (v21) : Bool
     ; r17 (v22) : Bool
     ; r18 (v19) : Bool
-    ; r19 (v23) : Int
+    ; r19 (v23) : i64
     ; r20 (v25) : String
     ; r21 (v27) : String
     ; r22 (v28) : String
     ; r23 (v29) : String
-    ; r24 (@b) : Int
-    ; r25 (@b) : Int
-    ; r26 (v31) : Int
-    ; r27 (v30) : Int
+    ; r24 (@b) : i64
+    ; r25 (@b) : i64
+    ; r26 (v31) : i64
+    ; r27 (v30) : i64
     ; r28 (v17) : String
-    ; r29 (@a) : Int
-    ; r30 (v34) : Int
+    ; r29 (@a) : i64
+    ; r30 (v34) : i64
     ; r31 (v24) : String
-    ; r32 (@a) : Int
+    ; r32 (@a) : i64
     ; r33 (v26) : String
-    ; r34 (v35) : Int
+    ; r34 (v35) : i64

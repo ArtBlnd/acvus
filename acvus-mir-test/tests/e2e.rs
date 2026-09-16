@@ -147,7 +147,7 @@ fn list_context(i: &Interner, name: &str, elem: Ty) -> FxHashMap<Astr, Ty> {
 }
 
 fn items_list_context(i: &Interner) -> FxHashMap<Astr, Ty> {
-    list_context(i, "items", Ty::Int)
+    list_context(i, "items", Ty::I64)
 }
 
 // -- Text & literals ----------------------------------------------
@@ -187,7 +187,7 @@ fn mixed_text_and_expr() {
 #[test]
 fn context_read() {
     let i = Interner::new();
-    let context = ctx(&i, &[("count", Ty::Int)]);
+    let context = ctx(&i, &[("count", Ty::I64)]);
     let ir = compile_to_ir(&i, "{{ @count.to_string() }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -211,7 +211,7 @@ fn context_field_access() {
 #[test]
 fn arithmetic_to_string() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(&i, "{{ out = @a + @b }}{{ out.to_string() }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -301,7 +301,7 @@ fn pipe_filter_map() {
 #[test]
 fn pipe_to_string() {
     let i = Interner::new();
-    let context = ctx(&i, &[("n", Ty::Int)]);
+    let context = ctx(&i, &[("n", Ty::I64)]);
     let ir = compile_to_ir(&i, "{{ @n.to_string() }}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -356,7 +356,7 @@ fn extern_async_call() {
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
                 i.intern("id"),
-                lift_to_poly(&Ty::Int),
+                lift_to_poly(&Ty::I64),
             )],
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
@@ -378,7 +378,7 @@ fn extern_async_call() {
 #[test]
 fn tuple_expression() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::String)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::String)]);
     let ir = compile_to_ir(
         &i,
         r#"{{ (a, b) = (@a, @b) }}{{ a.to_string() }}{{ b }}{{_}}{{/}}"#,
@@ -391,7 +391,7 @@ fn tuple_expression() {
 #[test]
 fn tuple_pattern_binding() {
     let i = Interner::new();
-    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
+    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::I64]))]);
     let ir = compile_to_ir(&i, r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -399,7 +399,7 @@ fn tuple_pattern_binding() {
 #[test]
 fn tuple_pattern_wildcard() {
     let i = Interner::new();
-    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::Int]))]);
+    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::I64]))]);
     let ir = compile_to_ir(&i, r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#, &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -407,7 +407,7 @@ fn tuple_pattern_wildcard() {
 #[test]
 fn tuple_pattern_literal_match() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
         r#"{{ (0, 1) = (@a, @b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
@@ -424,7 +424,7 @@ fn tuple_nested_destructure() {
         &i,
         &[(
             "data",
-            Ty::Tuple(vec![Ty::String, obj(&i, &[("x", Ty::Int)])]),
+            Ty::Tuple(vec![Ty::String, obj(&i, &[("x", Ty::I64)])]),
         )],
     );
     let ir = compile_to_ir(
@@ -439,7 +439,7 @@ fn tuple_nested_destructure() {
 #[test]
 fn error_tuple_arity_mismatch() {
     let i = Interner::new();
-    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::Int, Ty::Int]))]);
+    let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::I64, Ty::I64]))]);
     let result = compile_to_ir(
         &i,
         r#"{{ (a, b, c) = @pair }}{{ a.to_string() }}{{/}}"#,
@@ -581,7 +581,7 @@ fn object_literal_field_access() {
 #[test]
 fn comparison_operators() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @a > @b }}{{ x.to_string() }}{{_}}{{/}}"#,
@@ -594,7 +594,7 @@ fn comparison_operators() {
 #[test]
 fn unary_negation() {
     let i = Interner::new();
-    let context = ctx(&i, &[("n", Ty::Int)]);
+    let context = ctx(&i, &[("n", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
         r#"{{ x = -@n }}{{ x.to_string() }}{{_}}{{/}}"#,
@@ -622,7 +622,7 @@ fn boolean_not() {
 #[test]
 fn to_float_conversion() {
     let i = Interner::new();
-    let context = ctx(&i, &[("n", Ty::Int)]);
+    let context = ctx(&i, &[("n", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
         r#"{{ x = @n | to_float }}{{ x.to_string() }}{{_}}{{/}}"#,
@@ -716,8 +716,8 @@ fn closure_capture_context() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
-            ("threshold", Ty::Int),
+            ("items", acvus_extern::vec_ty(&i, Ty::I64)),
+            ("threshold", Ty::I64),
         ],
     );
     let ir = compile_to_ir(
@@ -814,7 +814,7 @@ fn nested_tuple_pattern() {
         &i,
         &[(
             "data",
-            Ty::Tuple(vec![Ty::Tuple(vec![Ty::Int, Ty::Int]), Ty::String]),
+            Ty::Tuple(vec![Ty::Tuple(vec![Ty::I64, Ty::I64]), Ty::String]),
         )],
     );
     let ir = compile_to_ir(
@@ -831,7 +831,7 @@ fn nested_tuple_pattern() {
 #[test]
 fn variable_write_computed() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
         r#"{{ result = @a + @b }}{{ result.to_string() }}"#,
@@ -913,7 +913,7 @@ fn field_access_on_destructured() {
         &i,
         &[(
             "pair",
-            Ty::Tuple(vec![obj(&i, &[("name", Ty::String)]), Ty::Int]),
+            Ty::Tuple(vec![obj(&i, &[("name", Ty::String)]), Ty::I64]),
         )],
     );
     let ir = compile_to_ir(
@@ -930,7 +930,7 @@ fn field_access_on_destructured() {
 #[test]
 fn equality_as_match_source() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
         r#"{{ true = @a == @b }}equal{{_}}not equal{{/}}"#,
@@ -994,8 +994,8 @@ fn multiple_closures_same_capture() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
-            ("offset", Ty::Int),
+            ("items", acvus_extern::vec_ty(&i, Ty::I64)),
+            ("offset", Ty::I64),
         ],
     );
     let ir = compile_to_ir(
@@ -1037,7 +1037,7 @@ fn lambda_field_access() {
     let context = list_context(
         &i,
         "users",
-        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
+        obj(&i, &[("name", Ty::String), ("age", Ty::I64)]),
     );
     let ir = compile_to_ir(
         &i,
@@ -1091,7 +1091,7 @@ fn lambda_multiple_field_access() {
     let context = list_context(
         &i,
         "users",
-        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
+        obj(&i, &[("name", Ty::String), ("age", Ty::I64)]),
     );
     let ir = compile_to_ir(
         &i,
@@ -1145,7 +1145,7 @@ fn pipe_filter_then_map_field() {
     let context = list_context(
         &i,
         "users",
-        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
+        obj(&i, &[("name", Ty::String), ("age", Ty::I64)]),
     );
     let ir = compile_to_ir(
         &i,
@@ -1161,7 +1161,7 @@ fn pipe_filter_then_map_field() {
 #[test]
 fn error_field_access_on_int() {
     let i = Interner::new();
-    let context = ctx(&i, &[("n", Ty::Int)]);
+    let context = ctx(&i, &[("n", Ty::I64)]);
     let result = compile_to_ir(&i, "{{ @n.foo.to_string() }}", &context);
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
@@ -1173,7 +1173,7 @@ fn error_field_access_on_int() {
 fn error_variable_write_type_mismatch() {
     let i = Interner::new();
     // Attempting to write to a context key (read-only).
-    let context = ctx(&i, &[("count", Ty::Int)]);
+    let context = ctx(&i, &[("count", Ty::I64)]);
     let result = compile_to_ir(&i, r#"{{ @count = "hello" }}"#, &context);
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
@@ -1231,8 +1231,8 @@ fn extern_fn_object_return() {
     let get_user = extern_fn(
         &i,
         "get_user",
-        &[Ty::Int],
-        obj(&i, &[("name", Ty::String), ("age", Ty::Int)]),
+        &[Ty::I64],
+        obj(&i, &[("name", Ty::String), ("age", Ty::I64)]),
     );
     let ir = compile_to_ir_with(
         &i,
@@ -1371,7 +1371,7 @@ fn variant_none_expr() {
 #[test]
 fn variant_some_pattern() {
     let i = Interner::new();
-    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
+    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::I64)))]);
     let ir = compile_to_ir(
         &i,
         "{{ Some(v) = &@opt }}{{ to_string(v) }}{{_}}nope{{/}}",
@@ -1384,7 +1384,7 @@ fn variant_some_pattern() {
 #[test]
 fn variant_none_pattern() {
     let i = Interner::new();
-    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
+    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::I64)))]);
     let ir = compile_to_ir(&i, "{{ None = @opt }}none{{_}}has value{{/}}", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -1497,7 +1497,7 @@ fn structural_enum_payload_type_propagates_through_context() {
     // When context provides an enum type with payload, payload type should propagate.
     let i = Interner::new();
     let mut variants = FxHashMap::default();
-    variants.insert(i.intern("Ok"), Some(Box::new(Ty::Int)));
+    variants.insert(i.intern("Ok"), Some(Box::new(Ty::I64)));
     variants.insert(i.intern("Err"), None);
     let src =
         r#"{{ R::Ok(v) = @r }}{{ out = v + 1 }}{{ out.to_string() }}{{ R::Err = }}err{{_}}??{{/}}"#;
@@ -1551,7 +1551,7 @@ fn variant_merge_inside_tuple_three_arms() {
 #[test]
 fn ssa_context_read_write() {
     let i = Interner::new();
-    let context = ctx(&i, &[("x", Ty::Int)]);
+    let context = ctx(&i, &[("x", Ty::I64)]);
     let ir = compile_script_ir(&i, "@x = @x + 1; @x", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -1559,7 +1559,7 @@ fn ssa_context_read_write() {
 #[test]
 fn ssa_context_branch_phi() {
     let i = Interner::new();
-    let context = ctx(&i, &[("x", Ty::Int), ("flag", Ty::Bool)]);
+    let context = ctx(&i, &[("x", Ty::I64), ("flag", Ty::Bool)]);
     let ir = compile_script_ir(
         &i,
         r#"@x = @flag ? { @x = @x + 1; @x } : { @x = @x - 1; @x }; @x"#,
@@ -1575,7 +1575,7 @@ fn ssa_context_branch_phi() {
 #[test]
 fn ssa_multiple_contexts_independent() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_script_ir(&i, "@a = @a + 1; @b = @b + 2; @a + @b", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -1592,7 +1592,7 @@ fn migrated_extern_param_write_rejected() {
     // Writing to extern param is rejected.
     assert!(compile_to_ir(&i, "{{ $count = 42 }}", &FxHashMap::default()).is_err());
     // Reading an extern param via context with pipe is valid.
-    let context = ctx(&i, &[("count", Ty::Int)]);
+    let context = ctx(&i, &[("count", Ty::I64)]);
     compile_to_ir(&i, "{{ @count.to_string() }}", &context).unwrap();
 }
 
@@ -1622,7 +1622,7 @@ fn migrated_integration_pipe_with_lambda() {
 #[test]
 fn migrated_projection_chained_field_access() {
     let i = Interner::new();
-    let inner = obj(&i, &[("b", Ty::Int)]);
+    let inner = obj(&i, &[("b", Ty::I64)]);
     let obj_ty = obj(&i, &[("a", inner)]);
     let context = ctx(&i, &[("obj", obj_ty)]);
     let ir = compile_script_ir(&i, "@obj.a.b.to_string()", &context).unwrap();
@@ -1641,7 +1641,7 @@ fn migrated_projection_chained_field_access() {
 #[test]
 fn migrated_pipe_extern_fn_ok() {
     let i = Interner::new();
-    let mapper = extern_fn(&i, "mapper", &[Ty::Int], Ty::String);
+    let mapper = extern_fn(&i, "mapper", &[Ty::I64], Ty::String);
     compile_to_ir_with(
         &i,
         r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | map(|i| -> mapper(i)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
@@ -1656,7 +1656,7 @@ fn migrated_pipe_extern_fn_ok() {
 #[test]
 fn migrated_typeck_builtin_to_string() {
     let i = Interner::new();
-    let context = ctx(&i, &[("count", Ty::Int)]);
+    let context = ctx(&i, &[("count", Ty::I64)]);
     compile_to_ir(&i, "{{ @count.to_string() }}", &context).unwrap();
 }
 
@@ -1666,8 +1666,8 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
-            ("threshold", Ty::Int),
+            ("items", acvus_extern::vec_ty(&i, Ty::I64)),
+            ("threshold", Ty::I64),
         ],
     );
     compile_to_ir(
@@ -1709,7 +1709,7 @@ fn migrated_typeck_list_pattern_matching() {
         &i,
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     );
     compile_to_ir(
@@ -1726,8 +1726,8 @@ fn migrated_typeck_nested_lambda_captures() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
-            ("factor", Ty::Int),
+            ("items", acvus_extern::vec_ty(&i, Ty::I64)),
+            ("factor", Ty::I64),
         ],
     );
     compile_to_ir(
@@ -1741,7 +1741,7 @@ fn migrated_typeck_nested_lambda_captures() {
 #[test]
 fn migrated_typeck_some_unifies_with_option_context() {
     let i = Interner::new();
-    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::Int)))]);
+    let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::I64)))]);
     compile_to_ir(
         &i,
         "{{ Some(v) = &@opt }}{{ to_string(v) }}{{_}}{{/}}",
@@ -1755,7 +1755,7 @@ fn migrated_typeck_some_unifies_with_option_context() {
 #[test]
 fn migrated_print_arithmetic() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", Ty::Int), ("b", Ty::Int)]);
+    let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
         "{{ x = @a + @b }}{{ x.to_string() }}{{_}}{{/}}",
@@ -1803,9 +1803,9 @@ fn iter_map_reuse_rejected() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("counter", Ty::Int),
+            ("counter", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -1825,9 +1825,9 @@ fn iter_map_single_use_ok() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("counter", Ty::Int),
+            ("counter", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -1850,10 +1850,10 @@ fn iter_chain_reuse_rejected() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("a", Ty::Int),
-            ("b", Ty::Int),
+            ("a", Ty::I64),
+            ("b", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -1876,10 +1876,10 @@ fn iter_chain_single_use_ok() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("a", Ty::Int),
-            ("b", Ty::Int),
+            ("a", Ty::I64),
+            ("b", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -1901,7 +1901,7 @@ fn iter_pure_map_reuse_rejected() {
         &i,
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     );
     let result = compile_script_ir(
@@ -1924,9 +1924,9 @@ fn iter_reuse_after_collect_rejected() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("counter", Ty::Int),
+            ("counter", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -1950,7 +1950,7 @@ fn iter_reuse_after_collect_rejected() {
 fn iter_int_ty(interner: &Interner) -> Ty {
     Ty::UserDefined {
         id: QualifiedRef::root(interner.intern("Iterator")),
-        type_args: vec![Ty::Int],
+        type_args: vec![Ty::I64],
         effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
@@ -1972,9 +1972,9 @@ fn migrated_move_reject_iter_reuse() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("counter", Ty::Int),
+            ("counter", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -1996,7 +1996,7 @@ fn migrated_move_reject_var_double_load() {
         &i,
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     );
     let result = compile_to_ir(
@@ -2019,9 +2019,9 @@ fn migrated_move_reject_iter_pipe_reuse() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("counter", Ty::Int),
+            ("counter", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -2061,9 +2061,9 @@ fn migrated_move_accept_iter_single_use() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("counter", Ty::Int),
+            ("counter", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -2083,8 +2083,8 @@ fn migrated_move_accept_var_reassign() {
     let context = ctx(
         &i,
         &[
-            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
-            ("items2", acvus_extern::vec_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::I64)),
+            ("items2", acvus_extern::vec_ty(&i, Ty::I64)),
         ],
     );
     let result = compile_to_ir(
@@ -2103,9 +2103,9 @@ fn migrated_move_accept_iter_pipe_chain() {
         &[
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
-            ("counter", Ty::Int),
+            ("counter", Ty::I64),
         ],
     );
     let result = compile_script_ir(
@@ -2122,7 +2122,7 @@ fn migrated_move_accept_iter_pipe_chain() {
 #[test]
 fn migrated_move_accept_fn_multiple_calls() {
     let i = Interner::new();
-    let f = extern_fn(&i, "f", &[Ty::Int], Ty::Int);
+    let f = extern_fn(&i, "f", &[Ty::I64], Ty::I64);
     let result =
         compile_script_ir_with(&i, "a = f(1); b = f(2); a + b", &FxHashMap::default(), &[f]);
     assert!(
@@ -2165,7 +2165,7 @@ fn migrated_move_reject_branch_move_then_use() {
             ("flag", Ty::Bool),
             (
                 "items",
-                Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+                Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
             ),
         ],
     );
@@ -2206,7 +2206,7 @@ fn migrated_move_accept_branch_move_no_use_after() {
         &i,
         &[
             ("flag", Ty::Bool),
-            ("items", acvus_extern::vec_ty(&i, Ty::Int)),
+            ("items", acvus_extern::vec_ty(&i, Ty::I64)),
         ],
     );
     let result = compile_to_ir(
@@ -2223,7 +2223,7 @@ fn migrated_move_accept_branch_move_no_use_after() {
 #[test]
 fn migrated_move_accept_pure_capture_fn_multi_call() {
     let i = Interner::new();
-    let context = ctx(&i, &[("val", Ty::Int)]);
+    let context = ctx(&i, &[("val", Ty::I64)]);
     let result = compile_script_ir(
         &i,
         "x = @val; f = (|a| -> *x + a); a = f(1); b = f(2); a + b",
@@ -2242,7 +2242,7 @@ fn migrated_move_accept_lambda_return_deque_as_iterator() {
         &i,
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     );
     let result = compile_script_ir(
@@ -2263,7 +2263,7 @@ fn migrated_move_accept_lambda_return_scalar() {
         &i,
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     );
     let result = compile_script_ir(
@@ -2284,7 +2284,7 @@ fn migrated_move_accept_nested_flat_map_deque_return() {
         &i,
         &[(
             "items",
-            Ty::Array(Box::new(Ty::Int), acvus_mir::ty::LenTerm::Known(3)),
+            Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3)),
         )],
     );
     let result = compile_script_ir(
@@ -2397,7 +2397,7 @@ fn projection_var_multiple_writes() {
 #[test]
 fn projection_context_whole_read() {
     let i = Interner::new();
-    let context = ctx(&i, &[("data", Ty::Int)]);
+    let context = ctx(&i, &[("data", Ty::I64)]);
     let ir = compile_script_ir(&i, "@data", &context).unwrap();
     // SSA forwards the entry load value.
     // Ref/Load from entry may remain or be forwarded - just verify it compiles + returns.
@@ -2431,7 +2431,7 @@ fn projection_context_whole_write() {
 #[test]
 fn projection_chained_field_access_2depth() {
     let i = Interner::new();
-    let inner = obj(&i, &[("b", Ty::Int)]);
+    let inner = obj(&i, &[("b", Ty::I64)]);
     let context = ctx(&i, &[("obj", obj(&i, &[("a", inner)]))]);
     let ir = compile_script_ir(&i, "@obj.a.b.to_string()", &context).unwrap();
     // Should have field access for .b (either as FieldGet or via Ref).
@@ -2443,7 +2443,7 @@ fn projection_chained_field_access_2depth() {
 #[test]
 fn projection_var_in_arithmetic() {
     let i = Interner::new();
-    let context = ctx(&i, &[("val", Ty::Int)]);
+    let context = ctx(&i, &[("val", Ty::I64)]);
     let ir = compile_script_ir(&i, "x = @val; x + 1", &context).unwrap();
     // SSA should promote x - no Ref for x should remain.
     assert!(ir.contains("+"), "should have addition: {ir}");
@@ -2455,7 +2455,7 @@ fn projection_var_in_arithmetic() {
 #[test]
 fn projection_lambda_capture() {
     let i = Interner::new();
-    let context = ctx(&i, &[("data", Ty::Int)]);
+    let context = ctx(&i, &[("data", Ty::I64)]);
     let ir = compile_script_ir(&i, "x = @data; |y| -> *x + y", &context).unwrap();
     assert!(ir.contains("closure"), "should have closure: {ir}");
     assert!(ir.contains("return"), "should compile and return: {ir}");
@@ -2468,7 +2468,7 @@ fn projection_param_read() {
     let ir = compile_to_ir(
         &i,
         "{{ $count.to_string() }}",
-        &FxHashMap::from_iter([(i.intern("count"), Ty::Int)]),
+        &FxHashMap::from_iter([(i.intern("count"), Ty::I64)]),
     )
     .unwrap();
     assert!(ir.contains("return"), "should compile and return: {ir}");
@@ -2481,8 +2481,8 @@ fn projection_param_read() {
 fn projection_soundness_reject_fn_in_context() {
     let i = Interner::new();
     let fn_ty = Ty::Fn {
-        params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
-        ret: Box::new(Ty::Int),
+        params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::I64)],
+        ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
     };
@@ -2496,8 +2496,8 @@ fn projection_soundness_reject_fn_in_context() {
 fn projection_soundness_reject_list_fn_in_context() {
     let i = Interner::new();
     let fn_ty = Ty::Fn {
-        params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
-        ret: Box::new(Ty::Int),
+        params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::I64)],
+        ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
     };
@@ -2519,7 +2519,7 @@ fn projection_soundness_reject_param_write() {
     let result = compile_to_ir(
         &i,
         "{{ $count = 42 }}",
-        &FxHashMap::from_iter([(i.intern("count"), Ty::Int)]),
+        &FxHashMap::from_iter([(i.intern("count"), Ty::I64)]),
     );
     assert!(result.is_err(), "writing to ExternParam should fail");
 }
@@ -2546,7 +2546,7 @@ fn projection_ssa_var_promoted() {
 #[test]
 fn projection_ssa_context_write_back() {
     let i = Interner::new();
-    let context = ctx(&i, &[("count", Ty::Int)]);
+    let context = ctx(&i, &[("count", Ty::I64)]);
     let ir = compile_script_ir(&i, "@count = @count + 1; @count", &context).unwrap();
     // Context write-back Store should remain in the IR.
     assert!(
@@ -2605,7 +2605,7 @@ fn sroa_context_field_read_1depth() {
 #[test]
 fn sroa_context_field_read_2depth() {
     let i = Interner::new();
-    let inner = obj(&i, &[("b", Ty::Int)]);
+    let inner = obj(&i, &[("b", Ty::I64)]);
     let context = ctx(&i, &[("obj", obj(&i, &[("a", inner)]))]);
     let ir = compile_script_ir(&i, "@obj.a.b.to_string()", &context).unwrap();
     insta::assert_snapshot!(ir);
@@ -2614,7 +2614,7 @@ fn sroa_context_field_read_2depth() {
 #[test]
 fn sroa_context_field_read_3depth() {
     let i = Interner::new();
-    let c = obj(&i, &[("c", Ty::Int)]);
+    let c = obj(&i, &[("c", Ty::I64)]);
     let b = obj(&i, &[("b", c)]);
     let context = ctx(&i, &[("obj", obj(&i, &[("a", b)]))]);
     let ir = compile_script_ir(&i, "@obj.a.b.c.to_string()", &context).unwrap();
@@ -2624,7 +2624,7 @@ fn sroa_context_field_read_3depth() {
 #[test]
 fn sroa_field_read_arithmetic() {
     let i = Interner::new();
-    let context = ctx(&i, &[("obj", obj(&i, &[("val", Ty::Int)]))]);
+    let context = ctx(&i, &[("obj", obj(&i, &[("val", Ty::I64)]))]);
     let ir = compile_script_ir(&i, "@obj.val + 1", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -2632,7 +2632,7 @@ fn sroa_field_read_arithmetic() {
 #[test]
 fn sroa_multiple_field_reads_same_object() {
     let i = Interner::new();
-    let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::Int), ("y", Ty::Int)]))]);
+    let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::I64), ("y", Ty::I64)]))]);
     let ir = compile_script_ir(&i, "@obj.x + @obj.y", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -2655,7 +2655,7 @@ fn sroa_field_read_in_lambda() {
 #[test]
 fn sroa_soundness_context_write_back_preserved() {
     let i = Interner::new();
-    let context = ctx(&i, &[("count", Ty::Int)]);
+    let context = ctx(&i, &[("count", Ty::I64)]);
     let ir = compile_script_ir(&i, "@count = @count + 1; @count", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -2664,8 +2664,8 @@ fn sroa_soundness_context_write_back_preserved() {
 fn sroa_soundness_reject_fn_in_context() {
     let i = Interner::new();
     let fn_ty = Ty::Fn {
-        params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::Int)],
-        ret: Box::new(Ty::Int),
+        params: vec![acvus_mir::ty::Param::new(i.intern("x"), Ty::I64)],
+        ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
     };
@@ -2682,7 +2682,7 @@ fn sroa_soundness_reject_fn_in_context() {
 #[test]
 fn sroa_context_destructure_field_to_context() {
     let i = Interner::new();
-    let context = ctx(&i, &[("b", obj(&i, &[("x", Ty::Int)])), ("a", Ty::Int)]);
+    let context = ctx(&i, &[("b", obj(&i, &[("x", Ty::I64)])), ("a", Ty::I64)]);
     let ir = compile_script_ir(&i, "@a = @b.x; @a", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -2690,13 +2690,13 @@ fn sroa_context_destructure_field_to_context() {
 #[test]
 fn sroa_context_chain_destructure() {
     let i = Interner::new();
-    let inner = obj(&i, &[("val", Ty::Int)]);
+    let inner = obj(&i, &[("val", Ty::I64)]);
     let context = ctx(
         &i,
         &[
             ("b", obj(&i, &[("a", inner.clone())])),
             ("a", inner),
-            ("c", Ty::Int),
+            ("c", Ty::I64),
         ],
     );
     // `@b.a` is an Object: reading it moves it out of `@b`, which is then
@@ -2713,7 +2713,7 @@ fn sroa_context_chain_destructure() {
 #[test]
 fn sroa_context_destructure_then_overwrite() {
     let i = Interner::new();
-    let context = ctx(&i, &[("b", obj(&i, &[("x", Ty::Int)])), ("a", Ty::Int)]);
+    let context = ctx(&i, &[("b", obj(&i, &[("x", Ty::I64)])), ("a", Ty::I64)]);
     let ir = compile_script_ir(&i, "@a = @b.x; @a = 0; @a", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -2723,7 +2723,7 @@ fn sroa_context_destructure_then_overwrite() {
 #[test]
 fn context_projection_store_1depth() {
     let i = Interner::new();
-    let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::Int)]))]);
+    let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::I64)]))]);
     let ir = compile_script_ir(&i, "@obj.x = 42; @obj.x", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -2731,7 +2731,7 @@ fn context_projection_store_1depth() {
 #[test]
 fn context_projection_store_2depth() {
     let i = Interner::new();
-    let inner = obj(&i, &[("y", Ty::Int)]);
+    let inner = obj(&i, &[("y", Ty::I64)]);
     let context = ctx(&i, &[("obj", obj(&i, &[("x", inner)]))]);
     let ir = compile_script_ir(&i, "@obj.x.y = 99; @obj.x.y", &context).unwrap();
     insta::assert_snapshot!(ir);
@@ -2740,7 +2740,7 @@ fn context_projection_store_2depth() {
 #[test]
 fn var_field_store_1depth() {
     let i = Interner::new();
-    let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::Int)]))]);
+    let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::I64)]))]);
     let ir = compile_script_ir(&i, "a = @obj; a.x = 0; x = a.x; @obj = a; x", &context).unwrap();
     insta::assert_snapshot!(ir);
 }
@@ -2769,7 +2769,7 @@ fn uninit_field_load_rejected() {
 #[test]
 fn init_field_load_passes() {
     let i = Interner::new();
-    let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::Int)]))]);
+    let context = ctx(&i, &[("a", obj(&i, &[("x", Ty::I64)]))]);
     // All fields present - should compile fine.
     let ir = compile_script_ir(&i, "@a = { x: 42, }; @a.x", &context).unwrap();
     insta::assert_snapshot!(ir);
@@ -2847,7 +2847,7 @@ fn script_if_no_else() {
 #[test]
 fn script_while_loop() {
     let i = Interner::new();
-    let ctx = ctx(&i, &[("n", Ty::Int)]);
+    let ctx = ctx(&i, &[("n", Ty::I64)]);
     let ir = script_mode_ctx(&i, "while @n > 0 { @n = @n - 1; }", &ctx);
     insta::assert_snapshot!(ir);
 }

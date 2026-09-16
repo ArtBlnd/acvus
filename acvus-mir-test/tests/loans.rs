@@ -9,8 +9,8 @@ use acvus_utils::Interner;
 
 fn bump(i: &Interner, effect: Effect) -> Function {
     let params = [
-        ("n", Ty::Ref(Mutability::Mut, Box::new(Ty::Int))),
-        ("by", Ty::Int),
+        ("n", Ty::Ref(Mutability::Mut, Box::new(Ty::I64))),
+        ("by", Ty::I64),
     ];
     Function {
         qref: QualifiedRef::root(i.intern("bump")),
@@ -23,7 +23,7 @@ fn bump(i: &Interner, effect: Effect) -> Function {
                 .iter()
                 .map(|(n, ty)| ParamTerm::<Poly>::new(i.intern(n), lift_to_poly(ty)))
                 .collect(),
-            ret: Box::new(lift_to_poly(&Ty::Int)),
+            ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: effect.into(),
         },
@@ -92,11 +92,11 @@ fn peek(i: &Interner) -> Function {
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
                 i.intern("n"),
-                lift_to_poly(&Ty::Ref(Mutability::Mut, Box::new(Ty::Int))),
+                lift_to_poly(&Ty::Ref(Mutability::Mut, Box::new(Ty::I64))),
             )],
             ret: Box::new(lift_to_poly(&Ty::Ref(
                 Mutability::Shared,
-                Box::new(Ty::Int),
+                Box::new(Ty::I64),
             ))),
             captures: vec![],
             effect: Effect::PURE.into(),

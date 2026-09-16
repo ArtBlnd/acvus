@@ -56,8 +56,8 @@ fn field_read_modify_write_branch() {
             obj(
                 &i,
                 &[
-                    ("count", Ty::Int),
-                    ("threshold", Ty::Int),
+                    ("count", Ty::I64),
+                    ("threshold", Ty::I64),
                     ("exceeded", Ty::Bool),
                 ],
             ),
@@ -89,10 +89,10 @@ fn multi_context_dataflow() {
     let c = ctx(
         &i,
         &[
-            ("a", Ty::Int),
-            ("b", Ty::Int),
-            ("scale", Ty::Int),
-            ("output", Ty::Int),
+            ("a", Ty::I64),
+            ("b", Ty::I64),
+            ("scale", Ty::I64),
+            ("output", Ty::I64),
         ],
     );
     let src = r#"
@@ -119,15 +119,15 @@ fn object_construct_from_fields() {
     let c = ctx(
         &i,
         &[
-            ("user", obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
-            ("min_score", Ty::Int),
+            ("user", obj(&i, &[("name", Ty::String), ("age", Ty::I64)])),
+            ("min_score", Ty::I64),
             (
                 "output",
                 obj(
                     &i,
                     &[
                         ("label", Ty::String),
-                        ("score", Ty::Int),
+                        ("score", Ty::I64),
                         ("eligible", Ty::Bool),
                     ],
                 ),
@@ -158,10 +158,10 @@ fn diamond_divergent_context_mutations() {
     let c = ctx(
         &i,
         &[
-            ("input", Ty::Int),
-            ("high", Ty::Int),
-            ("low", Ty::Int),
-            ("output", Ty::Int),
+            ("input", Ty::I64),
+            ("high", Ty::I64),
+            ("low", Ty::I64),
+            ("output", Ty::I64),
         ],
     );
     let src = r#"
@@ -204,11 +204,11 @@ fn chained_field_mutations() {
             obj(
                 &i,
                 &[
-                    ("step", Ty::Int),
-                    ("value", Ty::Int),
-                    ("multiplier", Ty::Int),
+                    ("step", Ty::I64),
+                    ("value", Ty::I64),
+                    ("multiplier", Ty::I64),
                     ("done", Ty::Bool),
-                    ("max_steps", Ty::Int),
+                    ("max_steps", Ty::I64),
                 ],
             ),
         )],
@@ -237,7 +237,7 @@ fn destructure_multi_branch_classify() {
     let c = ctx(
         &i,
         &[
-            ("user", obj(&i, &[("name", Ty::String), ("age", Ty::Int)])),
+            ("user", obj(&i, &[("name", Ty::String), ("age", Ty::I64)])),
             ("output", Ty::String),
         ],
     );

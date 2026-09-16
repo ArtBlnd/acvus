@@ -14,7 +14,7 @@ extern {
     type Error = ParseError;
 
     enum Token {
-        "int" => Token::IntLit(<i64>),
+        "int" => Token::IntLit(<i128>),
         "float" => Token::FloatLit(<f64>),
         "string" => Token::StringLit(<String>),
         "ident" => Token::Ident(<Astr>),

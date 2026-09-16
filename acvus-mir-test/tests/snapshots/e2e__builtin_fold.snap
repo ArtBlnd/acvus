@@ -21,27 +21,27 @@ expression: ir
     16 |   commit @items = r4
     17 |   return r11
 
-    ; r0 (v20) : Vec<Int>
-    ; r1 (v21) : Vec<Int>
-    ; r2 (@items) : Vec<Int>
-    ; r3 (v6) : Array<Int, 0>
-    ; r4 (vec(...)) : Vec<Int>
-    ; r5 (v10) : Iterator<Int, Pure, #IdentityId(2)>
-    ; r6 (v12) : Fn(Int, Int) -> Int
-    ; r7 (fold(...)) : Int
-    ; r8 (v11) : Int
-    ; r9 (out.) : &Int
+    ; r0 (v20) : Vec<i64>
+    ; r1 (v21) : Vec<i64>
+    ; r2 (@items) : Vec<i64>
+    ; r3 (v6) : Array<i64, 0>
+    ; r4 (vec(...)) : Vec<i64>
+    ; r5 (v10) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r6 (v12) : Fn(i64, i64) -> i64
+    ; r7 (fold(...)) : i64
+    ; r8 (v11) : i64
+    ; r9 (out.) : &i64
     ; r10 (to_string(...)) : String
     ; r11 (v18) : String
-    ; r12 (@items) : Vec<Int>
-    ; r13 (out) : Int
-    ; r14 (items) : Vec<Int>
-    ; r15 (@items) : Vec<Int>
+    ; r12 (@items) : Vec<i64>
+    ; r13 (out) : i64
+    ; r14 (items) : Vec<i64>
+    ; r15 (@items) : Vec<i64>
     ; r16 (v15) : String
     ; r17 (v5) : String
-    ; r18 (items) : Vec<Int>
+    ; r18 (items) : Vec<i64>
     ; r19 (v8) : String
-    ; r20 (v19) : Vec<Int>
+    ; r20 (v19) : Vec<i64>
 
 === closure L0 (ValueId(0), ValueId(1)) ===
      0 |   r0 = undef
@@ -49,12 +49,12 @@ expression: ir
      2 |   r2 = r3 + r4
      3 |   return r2
 
-    ; r0 (v8) : Int
-    ; r1 (v9) : Int
-    ; r2 (v7) : Int
-    ; r3 (v1) : Int
-    ; r4 (v2) : Int
-    ; r5 (acc) : Int
-    ; r6 (x) : Int
-    ; r7 (acc) : Int
-    ; r8 (x) : Int
+    ; r0 (v8) : i64
+    ; r1 (v9) : i64
+    ; r2 (v7) : i64
+    ; r3 (v1) : i64
+    ; r4 (v2) : i64
+    ; r5 (acc) : i64
+    ; r6 (x) : i64
+    ; r7 (acc) : i64
+    ; r8 (x) : i64

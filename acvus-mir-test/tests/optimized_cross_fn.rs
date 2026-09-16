@@ -75,12 +75,12 @@ fn order_processing_pipeline() {
             (
                 "calc_discount",
                 "$subtotal * $rate / 100",
-                sig(&i, &[("subtotal", Ty::Int), ("rate", Ty::Int)]),
+                sig(&i, &[("subtotal", Ty::I64), ("rate", Ty::I64)]),
             ),
             (
                 "calc_tax",
                 "$amount * $rate / 100",
-                sig(&i, &[("amount", Ty::Int), ("rate", Ty::Int)]),
+                sig(&i, &[("amount", Ty::I64), ("rate", Ty::I64)]),
             ),
             (
                 "format_receipt",
@@ -89,27 +89,27 @@ fn order_processing_pipeline() {
                     &i,
                     &[
                         ("name", Ty::String),
-                        ("sub", Ty::Int),
-                        ("disc", Ty::Int),
-                        ("tax", Ty::Int),
-                        ("ship", Ty::Int),
-                        ("total", Ty::Int),
+                        ("sub", Ty::I64),
+                        ("disc", Ty::I64),
+                        ("tax", Ty::I64),
+                        ("ship", Ty::I64),
+                        ("total", Ty::I64),
                     ],
                 ),
             ),
         ],
         &[
-            ("item_count", Ty::Int),
-            ("discount_rate", Ty::Int),
-            ("tax_rate", Ty::Int),
-            ("free_ship_min", Ty::Int),
-            ("default_ship", Ty::Int),
-            ("shipping", Ty::Int),
+            ("item_count", Ty::I64),
+            ("discount_rate", Ty::I64),
+            ("tax_rate", Ty::I64),
+            ("free_ship_min", Ty::I64),
+            ("default_ship", Ty::I64),
+            ("shipping", Ty::I64),
             ("customer", Ty::String),
-            ("total_out", Ty::Int),
+            ("total_out", Ty::I64),
             ("receipt_out", Ty::String),
         ],
-        &[io_extern(&i, "send_email", &[("msg", Ty::String)], Ty::Int)],
+        &[io_extern(&i, "send_email", &[("msg", Ty::String)], Ty::I64)],
     );
     let raw = compile_multi_fn_raw(
         &i,
@@ -134,12 +134,12 @@ fn order_processing_pipeline() {
             (
                 "calc_discount",
                 "$subtotal * $rate / 100",
-                sig(&i, &[("subtotal", Ty::Int), ("rate", Ty::Int)]),
+                sig(&i, &[("subtotal", Ty::I64), ("rate", Ty::I64)]),
             ),
             (
                 "calc_tax",
                 "$amount * $rate / 100",
-                sig(&i, &[("amount", Ty::Int), ("rate", Ty::Int)]),
+                sig(&i, &[("amount", Ty::I64), ("rate", Ty::I64)]),
             ),
             (
                 "format_receipt",
@@ -148,27 +148,27 @@ fn order_processing_pipeline() {
                     &i,
                     &[
                         ("name", Ty::String),
-                        ("sub", Ty::Int),
-                        ("disc", Ty::Int),
-                        ("tax", Ty::Int),
-                        ("ship", Ty::Int),
-                        ("total", Ty::Int),
+                        ("sub", Ty::I64),
+                        ("disc", Ty::I64),
+                        ("tax", Ty::I64),
+                        ("ship", Ty::I64),
+                        ("total", Ty::I64),
                     ],
                 ),
             ),
         ],
         &[
-            ("item_count", Ty::Int),
-            ("discount_rate", Ty::Int),
-            ("tax_rate", Ty::Int),
-            ("free_ship_min", Ty::Int),
-            ("default_ship", Ty::Int),
-            ("shipping", Ty::Int),
+            ("item_count", Ty::I64),
+            ("discount_rate", Ty::I64),
+            ("tax_rate", Ty::I64),
+            ("free_ship_min", Ty::I64),
+            ("default_ship", Ty::I64),
+            ("shipping", Ty::I64),
             ("customer", Ty::String),
-            ("total_out", Ty::Int),
+            ("total_out", Ty::I64),
             ("receipt_out", Ty::String),
         ],
-        &[io_extern(&i, "send_email", &[("msg", Ty::String)], Ty::Int)],
+        &[io_extern(&i, "send_email", &[("msg", Ty::String)], Ty::I64)],
     );
 
     let opt = opt.unwrap();
@@ -223,34 +223,34 @@ fn data_enrichment_multi_io() {
             sig(
                 &i,
                 &[
-                    ("profile", Ty::Int),
-                    ("history", Ty::Int),
-                    ("weight", Ty::Int),
+                    ("profile", Ty::I64),
+                    ("history", Ty::I64),
+                    ("weight", Ty::I64),
                 ],
             ),
         ),
         (
             "format_label",
             r#"a = "User("; b = $profile.to_string(); c = " score:"; d = $score.to_string(); e = ")"; ab = concat(&a, &b); abc = concat(&ab, &c); abcd = concat(&abc, &d); concat(&abcd, &e)"#,
-            sig(&i, &[("profile", Ty::Int), ("score", Ty::Int)]),
+            sig(&i, &[("profile", Ty::I64), ("score", Ty::I64)]),
         ),
     ];
     let contexts: &[_] = &[
-        ("user_id", Ty::Int),
-        ("weight", Ty::Int),
-        ("threshold", Ty::Int),
-        ("alert_count", Ty::Int),
+        ("user_id", Ty::I64),
+        ("weight", Ty::I64),
+        ("threshold", Ty::I64),
+        ("alert_count", Ty::I64),
         ("result_label", Ty::String),
-        ("result_score", Ty::Int),
+        ("result_score", Ty::I64),
     ];
     let extern_fns: &[_] = &[
-        io_extern(&i, "fetch_profile", &[("id", Ty::Int)], Ty::Int),
-        io_extern(&i, "fetch_history", &[("id", Ty::Int)], Ty::Int),
+        io_extern(&i, "fetch_profile", &[("id", Ty::I64)], Ty::I64),
+        io_extern(&i, "fetch_history", &[("id", Ty::I64)], Ty::I64),
         io_extern(
             &i,
             "notify_alert",
-            &[("id", Ty::Int), ("score", Ty::Int)],
-            Ty::Int,
+            &[("id", Ty::I64), ("score", Ty::I64)],
+            Ty::I64,
         ),
     ];
     let opt = compile_multi_fn_optimized(&i, target, helpers, contexts, extern_fns).unwrap();
@@ -300,35 +300,35 @@ fn multi_stage_pipeline() {
         (
             "normalize",
             "$val * $scale / 1000",
-            sig(&i, &[("val", Ty::Int), ("scale", Ty::Int)]),
+            sig(&i, &[("val", Ty::I64), ("scale", Ty::I64)]),
         ),
         (
             "enrich",
             "$val + $offset + $val / 10",
-            sig(&i, &[("val", Ty::Int), ("offset", Ty::Int)]),
+            sig(&i, &[("val", Ty::I64), ("offset", Ty::I64)]),
         ),
         (
             "finalize",
             "($val / $prec) * $prec",
-            sig(&i, &[("val", Ty::Int), ("prec", Ty::Int)]),
+            sig(&i, &[("val", Ty::I64), ("prec", Ty::I64)]),
         ),
     ];
     let contexts: &[_] = &[
-        ("source_id", Ty::Int),
-        ("scale", Ty::Int),
-        ("offset", Ty::Int),
-        ("precision", Ty::Int),
-        ("stage1", Ty::Int),
-        ("stage2", Ty::Int),
-        ("stage3", Ty::Int),
+        ("source_id", Ty::I64),
+        ("scale", Ty::I64),
+        ("offset", Ty::I64),
+        ("precision", Ty::I64),
+        ("stage1", Ty::I64),
+        ("stage2", Ty::I64),
+        ("stage3", Ty::I64),
     ];
     let extern_fns: &[_] = &[
-        io_extern(&i, "fetch_data", &[("id", Ty::Int)], Ty::Int),
+        io_extern(&i, "fetch_data", &[("id", Ty::I64)], Ty::I64),
         io_extern(
             &i,
             "log_pipeline",
-            &[("s1", Ty::Int), ("s2", Ty::Int), ("s3", Ty::Int)],
-            Ty::Int,
+            &[("s1", Ty::I64), ("s2", Ty::I64), ("s3", Ty::I64)],
+            Ty::I64,
         ),
     ];
     let opt = compile_multi_fn_optimized(&i, target, helpers, contexts, extern_fns).unwrap();

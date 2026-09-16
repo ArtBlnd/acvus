@@ -12,10 +12,10 @@ expression: ir
      7 |   commit @count = r3
      8 |   return r2
 
-    ; r0 (@count) : Int
-    ; r1 ($x) : Int
-    ; r2 ($x) : Int
-    ; r3 (v8) : Int
-    ; r4 (@count) : Int
-    ; r5 (v1) : Int
-    ; r6 (set_count(...)) : Int
+    ; r0 (@count) : i64
+    ; r1 ($x) : i64
+    ; r2 ($x) : i64
+    ; r3 (v8) : i64
+    ; r4 (@count) : i64
+    ; r5 (v1) : i64
+    ; r6 (set_count(...)) : i64

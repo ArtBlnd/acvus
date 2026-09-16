@@ -15,7 +15,7 @@ fn add_fn(i: &Interner) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern("add")),
         kind: FnKind::Extern {
-            bounds: vec![TyVarBound::OneOf(vec![TyTerm::Int, TyTerm::Float])],
+            bounds: vec![TyVarBound::OneOf(vec![TyTerm::I64, TyTerm::Float])],
             instances: vec![],
         },
         ty: TyTerm::Fn {
@@ -78,7 +78,7 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
 #[test]
 fn a_declared_member_is_admitted() {
     let i = Interner::new();
-    assert_eq!(check(&i, "add(1, 2)").unwrap(), Ty::Int);
+    assert_eq!(check(&i, "add(1, 2)").unwrap(), Ty::I64);
     assert_eq!(check(&i, "add(1.5, 2.5)").unwrap(), Ty::Float);
 }
 
@@ -96,7 +96,7 @@ fn a_type_outside_the_bound_is_rejected_where_it_was_called() {
 #[test]
 fn the_bound_waits_for_the_argument_to_resolve() {
     let i = Interner::new();
-    assert_eq!(check(&i, "g = |x| -> add(x, 1); g(41)").unwrap(), Ty::Int);
+    assert_eq!(check(&i, "g = |x| -> add(x, 1); g(41)").unwrap(), Ty::I64);
     let errs = check(&i, "g = |x| -> add(x, x); g(\"a\")").unwrap_err();
     assert!(
         errs.iter()

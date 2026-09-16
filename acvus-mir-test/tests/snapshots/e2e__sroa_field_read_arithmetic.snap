@@ -11,9 +11,9 @@ expression: ir
      6 |   commit @obj = r4
      7 |   return r2
 
-    ; r0 (@obj) : {val: Int}
-    ; r1 (@obj.val) : Int
-    ; r2 (v5) : Int
-    ; r3 (v4) : Int
-    ; r4 (v6) : {val: Int}
-    ; r5 (@obj) : {val: Int}
+    ; r0 (@obj) : {val: i64}
+    ; r1 (@obj.val) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (v6) : {val: i64}
+    ; r5 (@obj) : {val: i64}

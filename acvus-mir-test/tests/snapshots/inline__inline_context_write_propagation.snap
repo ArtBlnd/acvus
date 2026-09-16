@@ -13,11 +13,11 @@ expression: ir
      8 |   commit @counter = r5
      9 |   return r4
 
-    ; r0 (@counter) : Int
-    ; r1 (@counter) : Int
-    ; r2 (v6) : Int
-    ; r3 (v5) : Int
-    ; r4 (@counter) : Int
-    ; r5 (v8) : Int
-    ; r6 (@counter) : Int
-    ; r7 (inc_and_get(...)) : Int
+    ; r0 (@counter) : i64
+    ; r1 (@counter) : i64
+    ; r2 (v6) : i64
+    ; r3 (v5) : i64
+    ; r4 (@counter) : i64
+    ; r5 (v8) : i64
+    ; r6 (@counter) : i64
+    ; r7 (inc_and_get(...)) : i64

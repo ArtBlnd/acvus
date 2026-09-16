@@ -11,8 +11,8 @@ expression: ir
      5 |   commit @user = r3
      6 |   return r2
 
-    ; r0 (@user) : {age: Int, email: String, name: String}
+    ; r0 (@user) : {age: i64, email: String, name: String}
     ; r1 (@user.name) : String
     ; r2 (v4) : String
-    ; r3 (v5) : {age: Int, email: String, name: String}
-    ; r4 (@user) : {age: Int, email: String, name: String}
+    ; r3 (v5) : {age: i64, email: String, name: String}
+    ; r4 (@user) : {age: i64, email: String, name: String}

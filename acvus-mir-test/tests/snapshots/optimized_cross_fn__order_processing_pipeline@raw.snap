@@ -10,13 +10,13 @@ expression: raw
      4 |   r3 = r2 / 100 (r4)
      5 |   return r3
 
-    ; r0 ($subtotal) : Int
-    ; r1 ($rate) : Int
-    ; r2 (v5) : Int
-    ; r3 (v7) : Int
-    ; r4 (v6) : Int
-    ; r5 (v1) : Int
-    ; r6 (v2) : Int
+    ; r0 ($subtotal) : i64
+    ; r1 ($rate) : i64
+    ; r2 (v5) : i64
+    ; r3 (v7) : i64
+    ; r4 (v6) : i64
+    ; r5 (v1) : i64
+    ; r6 (v2) : i64
 
 -- calc_tax --
 === main ===
@@ -26,13 +26,13 @@ expression: raw
      4 |   r3 = r2 / 100 (r4)
      5 |   return r3
 
-    ; r0 ($amount) : Int
-    ; r1 ($rate) : Int
-    ; r2 (v5) : Int
-    ; r3 (v7) : Int
-    ; r4 (v6) : Int
-    ; r5 (v1) : Int
-    ; r6 (v2) : Int
+    ; r0 ($amount) : i64
+    ; r1 ($rate) : i64
+    ; r2 (v5) : i64
+    ; r3 (v7) : i64
+    ; r4 (v6) : i64
+    ; r5 (v1) : i64
+    ; r6 (v2) : i64
 
 -- format_receipt --
 === literals ===
@@ -108,7 +108,7 @@ expression: raw
     ; r1 (var_9.) : &String
     ; r2 (v11) : String
     ; r3 (var_12.) : &String
-    ; r4 ($param_2.) : &Int
+    ; r4 ($param_2.) : &i64
     ; r5 (to_string(...)) : String
     ; r6 (var_16.) : &String
     ; r7 (v18) : String
@@ -116,7 +116,7 @@ expression: raw
     ; r9 (var_22.) : &String
     ; r10 (v24) : String
     ; r11 (var_25.) : &String
-    ; r12 ($param_3.) : &Int
+    ; r12 ($param_3.) : &i64
     ; r13 (to_string(...)) : String
     ; r14 (var_29.) : &String
     ; r15 (v31) : String
@@ -124,7 +124,7 @@ expression: raw
     ; r17 (var_35.) : &String
     ; r18 (v37) : String
     ; r19 (var_38.) : &String
-    ; r20 ($param_4.) : &Int
+    ; r20 ($param_4.) : &i64
     ; r21 (to_string(...)) : String
     ; r22 (var_42.) : &String
     ; r23 (v44) : String
@@ -132,7 +132,7 @@ expression: raw
     ; r25 (var_48.) : &String
     ; r26 (v50) : String
     ; r27 (var_51.) : &String
-    ; r28 ($param_5.) : &Int
+    ; r28 ($param_5.) : &i64
     ; r29 (to_string(...)) : String
     ; r30 (var_55.) : &String
     ; r31 (v57) : String
@@ -140,24 +140,24 @@ expression: raw
     ; r33 (var_61.) : &String
     ; r34 (v63) : String
     ; r35 (var_64.) : &String
-    ; r36 ($param_6.) : &Int
+    ; r36 ($param_6.) : &i64
     ; r37 (to_string(...)) : String
     ; r38 (var_68.) : &String
     ; r39 (v70) : String
     ; r40 (v25) : String
-    ; r41 (v3) : Int
+    ; r41 (v3) : i64
     ; r42 (v47) : String
     ; r43 (v60) : String
     ; r44 (v9) : String
     ; r45 (v51) : String
-    ; r46 (v6) : Int
+    ; r46 (v6) : i64
     ; r47 (v12) : String
     ; r48 (v68) : String
-    ; r49 (v5) : Int
+    ; r49 (v5) : i64
     ; r50 (v55) : String
     ; r51 (v61) : String
     ; r52 (v42) : String
-    ; r53 (v4) : Int
+    ; r53 (v4) : i64
     ; r54 (v48) : String
     ; r55 (v29) : String
     ; r56 (v35) : String
@@ -165,7 +165,7 @@ expression: raw
     ; r58 (v22) : String
     ; r59 (v34) : String
     ; r60 (v21) : String
-    ; r61 (v2) : Int
+    ; r61 (v2) : i64
     ; r62 (v8) : String
     ; r63 (v58) : String
     ; r64 (v64) : String
@@ -280,80 +280,80 @@ expression: raw
     ;   r62(entry)
 
     ; r0 (v1) : Order
-    ; r1 (@item_count) : Int
-    ; r2 (@total_out) : Int
-    ; r3 (@shipping) : Int
-    ; r4 (@tax_rate) : Int
-    ; r5 (@default_ship) : Int
+    ; r1 (@item_count) : i64
+    ; r2 (@total_out) : i64
+    ; r3 (@shipping) : i64
+    ; r4 (@tax_rate) : i64
+    ; r5 (@default_ship) : i64
     ; r6 (@receipt_out) : String
-    ; r7 (@discount_rate) : Int
+    ; r7 (@discount_rate) : i64
     ; r8 (@customer) : String
-    ; r9 (@free_ship_min) : Int
-    ; r10 (@item_count) : Int
-    ; r11 (v23) : Int
-    ; r12 (v22) : Int
-    ; r13 (subtotal) : Int
-    ; r14 (@discount_rate) : Int
-    ; r15 (calc_discount(...)) : Int
-    ; r16 (subtotal) : Int
-    ; r17 (discount) : Int
-    ; r18 (v31) : Int
-    ; r19 (@tax_rate) : Int
-    ; r20 (calc_tax(...)) : Int
-    ; r21 (subtotal) : Int
-    ; r22 (discount) : Int
-    ; r23 (v37) : Int
-    ; r24 (tax) : Int
-    ; r25 (v39) : Int
-    ; r26 (total) : Int
-    ; r27 (@free_ship_min) : Int
+    ; r9 (@free_ship_min) : i64
+    ; r10 (@item_count) : i64
+    ; r11 (v23) : i64
+    ; r12 (v22) : i64
+    ; r13 (subtotal) : i64
+    ; r14 (@discount_rate) : i64
+    ; r15 (calc_discount(...)) : i64
+    ; r16 (subtotal) : i64
+    ; r17 (discount) : i64
+    ; r18 (v31) : i64
+    ; r19 (@tax_rate) : i64
+    ; r20 (calc_tax(...)) : i64
+    ; r21 (subtotal) : i64
+    ; r22 (discount) : i64
+    ; r23 (v37) : i64
+    ; r24 (tax) : i64
+    ; r25 (v39) : i64
+    ; r26 (total) : i64
+    ; r27 (@free_ship_min) : i64
     ; r28 (v43) : Bool
     ; r29 (v44) : Bool
-    ; r30 (v45) : Int
-    ; r31 (total) : Int
-    ; r32 (@free_ship_min) : Int
+    ; r30 (v45) : i64
+    ; r31 (total) : i64
+    ; r32 (@free_ship_min) : i64
     ; r33 (v48) : Bool
     ; r34 (v49) : Bool
-    ; r35 (@default_ship) : Int
-    ; r36 (total) : Int
-    ; r37 (@shipping) : Int
-    ; r38 (v53) : Int
+    ; r35 (@default_ship) : i64
+    ; r36 (total) : i64
+    ; r37 (@shipping) : i64
+    ; r38 (v53) : i64
     ; r39 (@customer) : String
-    ; r40 (subtotal) : Int
-    ; r41 (discount) : Int
-    ; r42 (tax) : Int
-    ; r43 (@shipping) : Int
-    ; r44 (final_total) : Int
+    ; r40 (subtotal) : i64
+    ; r41 (discount) : i64
+    ; r42 (tax) : i64
+    ; r43 (@shipping) : i64
+    ; r44 (final_total) : i64
     ; r45 (format_receipt(...)) : String
-    ; r46 (final_total) : Int
+    ; r46 (final_total) : i64
     ; r47 (receipt) : String
     ; r48 (receipt) : String
     ; r49 (v67) : Order
-    ; r50 (send_email(...)) : Int
+    ; r50 (send_email(...)) : i64
     ; r51 (v68) : Order
-    ; r52 (final_total) : Int
-    ; r53 (v70) : Int
-    ; r54 (v71) : Int
-    ; r55 (v72) : Int
-    ; r56 (v73) : Int
-    ; r57 (v74) : Int
+    ; r52 (final_total) : i64
+    ; r53 (v70) : i64
+    ; r54 (v71) : i64
+    ; r55 (v72) : i64
+    ; r56 (v73) : i64
+    ; r57 (v74) : i64
     ; r58 (v75) : String
-    ; r59 (v76) : Int
+    ; r59 (v76) : i64
     ; r60 (v77) : String
-    ; r61 (v78) : Int
+    ; r61 (v78) : i64
     ; r62 (v79) : Order
-    ; r63 (@item_count) : Int
+    ; r63 (@item_count) : i64
     ; r64 (receipt) : String
-    ; r65 (subtotal) : Int
-    ; r66 (@total_out) : Int
-    ; r67 (@default_ship) : Int
+    ; r65 (subtotal) : i64
+    ; r66 (@total_out) : i64
+    ; r67 (@default_ship) : i64
     ; r68 (@customer) : String
-    ; r69 (final_total) : Int
-    ; r70 (discount) : Int
-    ; r71 (@tax_rate) : Int
-    ; r72 (tax) : Int
-    ; r73 (@discount_rate) : Int
-    ; r74 (total) : Int
-    ; r75 (@shipping) : Int
+    ; r69 (final_total) : i64
+    ; r70 (discount) : i64
+    ; r71 (@tax_rate) : i64
+    ; r72 (tax) : i64
+    ; r73 (@discount_rate) : i64
+    ; r74 (total) : i64
+    ; r75 (@shipping) : i64
     ; r76 (@receipt_out) : String
-    ; r77 (@free_ship_min) : Int
+    ; r77 (@free_ship_min) : i64

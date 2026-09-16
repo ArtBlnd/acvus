@@ -20,6 +20,101 @@ pub struct UserDefinedDecl {
     pub identity_params: usize,
 }
 
+/// The width and signedness of an integer type: `i8` to `i64`, `u8` to
+/// `u64`. An integer literal takes the width its use demands and is `i64`
+/// where nothing demands one (RFC-0037).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IntTy {
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
+impl IntTy {
+    pub const ALL: [IntTy; 8] = [
+        IntTy::I8,
+        IntTy::I16,
+        IntTy::I32,
+        IntTy::I64,
+        IntTy::U8,
+        IntTy::U16,
+        IntTy::U32,
+        IntTy::U64,
+    ];
+
+    pub fn bits(self) -> u32 {
+        match self {
+            IntTy::I8 | IntTy::U8 => 8,
+            IntTy::I16 | IntTy::U16 => 16,
+            IntTy::I32 | IntTy::U32 => 32,
+            IntTy::I64 | IntTy::U64 => 64,
+        }
+    }
+
+    pub fn bytes(self) -> usize {
+        self.bits() as usize / 8
+    }
+
+    pub fn signed(self) -> bool {
+        matches!(self, IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            IntTy::I8 => "i8",
+            IntTy::I16 => "i16",
+            IntTy::I32 => "i32",
+            IntTy::I64 => "i64",
+            IntTy::U8 => "u8",
+            IntTy::U16 => "u16",
+            IntTy::U32 => "u32",
+            IntTy::U64 => "u64",
+        }
+    }
+
+    pub fn min(self) -> i128 {
+        if self.signed() {
+            -(1i128 << (self.bits() - 1))
+        } else {
+            0
+        }
+    }
+
+    pub fn max(self) -> i128 {
+        if self.signed() {
+            (1i128 << (self.bits() - 1)) - 1
+        } else {
+            (1i128 << self.bits()) - 1
+        }
+    }
+
+    /// Whether `value` is representable in this type.
+    pub fn holds(self, value: i128) -> bool {
+        (self.min()..=self.max()).contains(&value)
+    }
+
+    /// The value the low `bits()` of `bits` spell, sign- or zero-extended
+    /// to `i128`.
+    pub fn read(self, bits: u64) -> i128 {
+        match self {
+            IntTy::I8 => bits as u8 as i8 as i128,
+            IntTy::I16 => bits as u16 as i16 as i128,
+            IntTy::I32 => bits as u32 as i32 as i128,
+            IntTy::I64 => bits as i64 as i128,
+            IntTy::U8 => bits as u8 as i128,
+            IntTy::U16 => bits as u16 as i128,
+            IntTy::U32 => bits as u32 as i128,
+            IntTy::U64 => bits as i128,
+        }
+    }
+}
+
 /// What a declaration says about one of its type variables. The solver
 /// carries it on the variable and verifies it when the variable freezes.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,13 +122,44 @@ pub enum TyVarBound {
     Any,
     /// The variable resolves to a type of one of these shapes (RFC-0027).
     OneOf(Vec<PolyTy>),
+    /// The variable is an integer literal's type: one of `among`, which a
+    /// use narrows, signed where the literal is negated (RFC-0037).
+    Integer {
+        signed: bool,
+        among: Vec<IntTy>,
+    },
 }
 
 impl TyVarBound {
+    /// An integer bound over the widths `among` yields, signed-only where
+    /// `signed`; `None` when no width remains.
+    pub fn integer(signed: bool, among: impl Iterator<Item = IntTy>) -> Option<Self> {
+        let among: Vec<IntTy> = among.filter(|k| !signed || k.signed()).collect();
+        (!among.is_empty()).then_some(Self::Integer { signed, among })
+    }
+
+    /// The width an integer literal takes where its uses left more than one:
+    /// `i64` when it remains, the only one when one remains, none otherwise.
+    pub fn integer_default(&self) -> Option<IntTy> {
+        let Self::Integer { among, .. } = self else {
+            return None;
+        };
+        if among.contains(&IntTy::I64) {
+            Some(IntTy::I64)
+        } else if let [only] = among.as_slice() {
+            Some(*only)
+        } else {
+            None
+        }
+    }
+
     pub fn admits(&self, ty: &Ty) -> bool {
         match self {
             Self::Any => true,
             Self::OneOf(shapes) => shapes.iter().any(|s| matches_poly(ty, s)),
+            Self::Integer { signed, among } => {
+                matches!(ty, Ty::Int(k) if among.contains(k) && (!*signed || k.signed()))
+            }
         }
     }
 
@@ -42,6 +168,24 @@ impl TyVarBound {
     pub fn meet(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (Self::Any, b) | (b, Self::Any) => Some(b.clone()),
+            (
+                Self::Integer {
+                    signed: sa,
+                    among: aa,
+                },
+                Self::Integer {
+                    signed: sb,
+                    among: ab,
+                },
+            ) => Self::integer(*sa || *sb, aa.iter().filter(|k| ab.contains(k)).copied()),
+            (Self::Integer { signed, among }, Self::OneOf(shapes))
+            | (Self::OneOf(shapes), Self::Integer { signed, among }) => Self::integer(
+                *signed,
+                shapes.iter().filter_map(|s| match s {
+                    TyTerm::Int(k) if among.contains(k) => Some(*k),
+                    _ => None,
+                }),
+            ),
             (Self::OneOf(a), Self::OneOf(b)) => {
                 let both: Vec<PolyTy> = a
                     .iter()
@@ -124,7 +268,11 @@ fn matches_pattern_with<P>(ty: &TyTerm<P>, pattern: &PolyTy, unknowns: Unknowns)
 where
     P: Phase + PartialEq,
 {
-    fn effect_matches<P>(effect: &EffectTerm<P>, pattern: &EffectTerm<Poly>, unknowns: Unknowns) -> bool
+    fn effect_matches<P>(
+        effect: &EffectTerm<P>,
+        pattern: &EffectTerm<Poly>,
+        unknowns: Unknowns,
+    ) -> bool
     where
         P: Phase + PartialEq,
     {
@@ -153,13 +301,12 @@ where
                 }
             },
             (TyTerm::Var(_), _) => unknowns == Unknowns::Open,
-            (TyTerm::Int, TyTerm::Int)
-            | (TyTerm::Float, TyTerm::Float)
+            (TyTerm::Int(a), TyTerm::Int(b)) => a == b,
+            (TyTerm::Float, TyTerm::Float)
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
-            | (TyTerm::Order, TyTerm::Order)
-            | (TyTerm::Byte, TyTerm::Byte) => true,
+            | (TyTerm::Order, TyTerm::Order) => true,
             (TyTerm::Array(e, n), TyTerm::Array(pe, pn)) => {
                 let len_ok = match (n, pn) {
                     (_, LenTerm::Var(_)) => true,
@@ -224,12 +371,18 @@ where
                         .iter()
                         .zip(peffects)
                         .all(|(a, b)| effect_matches(a, b, unknowns))
-                    && identity_args.iter().zip(pidentities).all(|(a, b)| match (a, b) {
-                        (_, IdentityTerm::Var(_)) => true,
-                        (IdentityTerm::Var(_), _) => unknowns == Unknowns::Open,
-                        (IdentityTerm::Known(a), IdentityTerm::Known(k)) => a == k,
-                    })
-                    && type_args.iter().zip(pargs).all(|(a, b)| go(a, b, seen, unknowns))
+                    && identity_args
+                        .iter()
+                        .zip(pidentities)
+                        .all(|(a, b)| match (a, b) {
+                            (_, IdentityTerm::Var(_)) => true,
+                            (IdentityTerm::Var(_), _) => unknowns == Unknowns::Open,
+                            (IdentityTerm::Known(a), IdentityTerm::Known(k)) => a == k,
+                        })
+                    && type_args
+                        .iter()
+                        .zip(pargs)
+                        .all(|(a, b)| go(a, b, seen, unknowns))
             }
             (
                 TyTerm::Enum { name, variants },
@@ -387,19 +540,19 @@ impl PatternSubst {
                 self.ty.insert(*v, other.clone());
                 true
             }
-            (TyTerm::Int, TyTerm::Int)
-            | (TyTerm::Float, TyTerm::Float)
+            (TyTerm::Int(a), TyTerm::Int(b)) => a == b,
+            (TyTerm::Float, TyTerm::Float)
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
-            | (TyTerm::Order, TyTerm::Order)
-            | (TyTerm::Byte, TyTerm::Byte) => true,
+            | (TyTerm::Order, TyTerm::Order) => true,
             (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => false,
             (TyTerm::Array(ea, la), TyTerm::Array(eb, lb)) => {
                 self.unify_len(la, lb) && self.unify(ea, eb)
             }
-            (TyTerm::Option(ia), TyTerm::Option(ib))
-            | (TyTerm::Handle(ia), TyTerm::Handle(ib)) => self.unify(ia, ib),
+            (TyTerm::Option(ia), TyTerm::Option(ib)) | (TyTerm::Handle(ia), TyTerm::Handle(ib)) => {
+                self.unify(ia, ib)
+            }
             (TyTerm::Ref(ma, ia), TyTerm::Ref(mb, ib)) => ma == mb && self.unify(ia, ib),
             (TyTerm::Tuple(ea), TyTerm::Tuple(eb)) => {
                 ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| self.unify(x, y))
@@ -481,7 +634,12 @@ impl PatternSubst {
                 Some(bound) => self.apply(bound),
                 None => TyTerm::Var(v),
             },
-            &mut |v| self.identity.get(&v).copied().unwrap_or(IdentityTerm::Var(v)),
+            &mut |v| {
+                self.identity
+                    .get(&v)
+                    .copied()
+                    .unwrap_or(IdentityTerm::Var(v))
+            },
             &mut |v| self.effect.get(&v).cloned().unwrap_or(EffectTerm::Var(v)),
             &mut |v| self.len.get(&v).copied().unwrap_or(LenTerm::Var(v)),
         )
@@ -529,12 +687,11 @@ pub struct CastRule {
 /// Head constructor of a type - used for duplicate cast rule detection.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum TyHead {
-    Int,
+    Int(IntTy),
     Float,
     String,
     Bool,
     Unit,
-    Byte,
     Order,
     Array,
     Object,
@@ -550,13 +707,12 @@ enum TyHead {
 
 fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
     match ty {
-        TyTerm::Int => TyHead::Int,
+        TyTerm::Int(k) => TyHead::Int(*k),
         TyTerm::Float => TyHead::Float,
         TyTerm::String => TyHead::String,
         TyTerm::Bool => TyHead::Bool,
         TyTerm::Unit => TyHead::Unit,
         TyTerm::Order => TyHead::Order,
-        TyTerm::Byte => TyHead::Byte,
         TyTerm::Array(..) => TyHead::Array,
         TyTerm::Object(_) => TyHead::Object,
         TyTerm::Tuple(_) => TyHead::Tuple,
@@ -1033,7 +1189,7 @@ impl TyTerm<Concrete> {
     /// host's declaration, not the checker's.
     pub fn is_data(&self) -> bool {
         match self {
-            Ty::Int | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Byte => true,
+            Ty::Int(_) | Ty::Float | Ty::String | Ty::Bool | Ty::Unit => true,
             Ty::Array(inner, _) | Ty::Option(inner) => inner.is_data(),
             Ty::Tuple(elems) => elems.iter().all(Ty::is_data),
             Ty::Object(fields) => fields.values().all(Ty::is_data),
@@ -1086,13 +1242,12 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.ty {
-            TyTerm::Int => write!(f, "Int"),
+            TyTerm::Int(k) => write!(f, "{}", k.name()),
             TyTerm::Order => write!(f, "Order"),
             TyTerm::Float => write!(f, "Float"),
             TyTerm::String => write!(f, "String"),
             TyTerm::Bool => write!(f, "Bool"),
             TyTerm::Unit => write!(f, "Unit"),
-            TyTerm::Byte => write!(f, "Byte"),
             TyTerm::Object(fields) => {
                 let mut sorted: Vec<_> = fields.iter().collect();
                 sorted.sort_by_key(|(k, _)| self.interner.resolve(**k).to_string());
@@ -1384,15 +1539,14 @@ pub type InferTy = TyTerm<Infer>;
 ///
 /// When `V = Concrete`: `Var(Infallible)` is uninhabitable - type is always concrete.
 /// When `V = Infer`: `Var(TypeBoundId)` references the solver's bound table.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TyTerm<V: Phase> {
     // Primitives
-    Int,
+    Int(IntTy),
     Float,
     String,
     Bool,
     Unit,
-    Byte,
     /// A dependency between effectful calls (RFC-0007). IR-only: no script
     /// names it, and no value of it exists at runtime.
     Order,
@@ -1449,7 +1603,7 @@ impl Mutability {
 
 /// Named, typed function parameter - parameterized over phase. A parameter
 /// that borrows has a reference type; there is no mode beside the type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamTerm<V: Phase> {
     pub name: Astr,
     pub ty: TyTerm<V>,
@@ -1476,11 +1630,20 @@ impl<V: Phase> ParamTerm<V> {
 // resolve, instantiate) are specializations of these two operations.
 
 impl<V: Phase> TyTerm<V> {
+    pub const I8: Self = TyTerm::Int(IntTy::I8);
+    pub const I16: Self = TyTerm::Int(IntTy::I16);
+    pub const I32: Self = TyTerm::Int(IntTy::I32);
+    pub const I64: Self = TyTerm::Int(IntTy::I64);
+    pub const U8: Self = TyTerm::Int(IntTy::U8);
+    pub const U16: Self = TyTerm::Int(IntTy::U16);
+    pub const U32: Self = TyTerm::Int(IntTy::U32);
+    pub const U64: Self = TyTerm::Int(IntTy::U64);
+
     /// A word-sized type the runtime copies (RFC-0018); everything else moves.
     pub fn is_primitive(&self) -> bool {
         matches!(
             self,
-            TyTerm::Int | TyTerm::Float | TyTerm::Bool | TyTerm::Unit | TyTerm::Byte | TyTerm::Order
+            TyTerm::Int(_) | TyTerm::Float | TyTerm::Bool | TyTerm::Unit | TyTerm::Order
         )
     }
 
@@ -1496,13 +1659,12 @@ impl<V: Phase> TyTerm<V> {
         on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
     ) -> TyTerm<W> {
         match self {
-            TyTerm::Int => TyTerm::Int,
+            TyTerm::Int(k) => TyTerm::Int(*k),
             TyTerm::Float => TyTerm::Float,
             TyTerm::String => TyTerm::String,
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
             TyTerm::Order => TyTerm::Order,
-            TyTerm::Byte => TyTerm::Byte,
             TyTerm::Array(inner, len) => TyTerm::Array(
                 Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
                 len.map(on_len),
@@ -1570,9 +1732,10 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Handle(inner) => {
                 TyTerm::Handle(Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
             }
-            TyTerm::Ref(m, inner) => {
-                TyTerm::Ref(*m, Box::new(inner.map(on_var, on_identity, on_effect, on_len)))
-            }
+            TyTerm::Ref(m, inner) => TyTerm::Ref(
+                *m,
+                Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
+            ),
             TyTerm::Error(token) => TyTerm::Error(*token),
             TyTerm::Var(v) => on_var(*v),
         }
@@ -1587,13 +1750,12 @@ impl<V: Phase> TyTerm<V> {
         on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
     ) -> Result<TyTerm<W>, E> {
         match self {
-            TyTerm::Int => Ok(TyTerm::Int),
+            TyTerm::Int(k) => Ok(TyTerm::Int(*k)),
             TyTerm::Float => Ok(TyTerm::Float),
             TyTerm::String => Ok(TyTerm::String),
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
             TyTerm::Order => Ok(TyTerm::Order),
-            TyTerm::Byte => Ok(TyTerm::Byte),
             TyTerm::Array(inner, len) => Ok(TyTerm::Array(
                 Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
                 len.try_map(on_len)?,
@@ -1723,20 +1885,16 @@ pub fn lift_to_poly(ty: &Ty) -> PolyTy {
 pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
     fn go(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
         match ty {
-            Ty::Int => TyTerm::Int,
+            Ty::Int(k) => TyTerm::Int(*k),
             Ty::Float => TyTerm::Float,
             Ty::String => TyTerm::String,
             Ty::Bool => TyTerm::Bool,
             Ty::Unit => TyTerm::Unit,
-            Ty::Byte => TyTerm::Byte,
             Ty::Order => TyTerm::Order,
             Ty::Array(inner, len) => TyTerm::Array(Box::new(go(inner, builder)), lift_ty_len(len)),
-            Ty::Object(fields) => TyTerm::Object(
-                fields
-                    .iter()
-                    .map(|(k, v)| (*k, go(v, builder)))
-                    .collect(),
-            ),
+            Ty::Object(fields) => {
+                TyTerm::Object(fields.iter().map(|(k, v)| (*k, go(v, builder))).collect())
+            }
             Ty::Tuple(elems) => TyTerm::Tuple(elems.iter().map(|e| go(e, builder)).collect()),
             Ty::Option(inner) => TyTerm::Option(Box::new(go(inner, builder))),
             Ty::Fn {
@@ -1932,7 +2090,7 @@ mod tests {
         let mut s = Solver::new(&mut sources);
         let registry = TypeRegistry::new();
         assert!(
-            s.unify_ty(&TyTerm::Int, &TyTerm::Int, Invariant, &registry)
+            s.unify_ty(&TyTerm::I64, &TyTerm::I64, Invariant, &registry)
                 .is_ok()
         );
         assert!(
@@ -1959,7 +2117,7 @@ mod tests {
         let mut s = Solver::new(&mut sources);
         let registry = TypeRegistry::new();
         assert!(
-            s.unify_ty(&TyTerm::Int, &TyTerm::Float, Invariant, &registry)
+            s.unify_ty(&TyTerm::I64, &TyTerm::Float, Invariant, &registry)
                 .is_err()
         );
         assert!(
@@ -1974,8 +2132,8 @@ mod tests {
         let mut s = Solver::new(&mut sources);
         let registry = TypeRegistry::new();
         let t = s.fresh_ty_var();
-        assert!(s.unify_ty(&t, &TyTerm::Int, Invariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&t), TyTerm::Int);
+        assert!(s.unify_ty(&t, &TyTerm::I64, Invariant, &registry).is_ok());
+        assert_eq!(s.resolve_ty(&t), TyTerm::I64);
     }
 
     #[test]
@@ -1991,10 +2149,10 @@ mod tests {
         ]));
         let obj2 = TyTerm::Object(FxHashMap::from_iter([
             (interner.intern("name"), TyTerm::String),
-            (interner.intern("age"), TyTerm::Int),
+            (interner.intern("age"), TyTerm::I64),
         ]));
         assert!(s.unify_ty(&obj1, &obj2, Invariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&t), TyTerm::Int);
+        assert_eq!(s.resolve_ty(&t), TyTerm::I64);
     }
 
     #[test]
@@ -2009,7 +2167,7 @@ mod tests {
         )]));
         let obj2 = TyTerm::Object(FxHashMap::from_iter([(
             interner.intern("age"),
-            TyTerm::Int,
+            TyTerm::I64,
         )]));
         assert!(s.unify_ty(&obj1, &obj2, Invariant, &registry).is_err());
     }
@@ -2039,7 +2197,7 @@ mod tests {
         let registry = TypeRegistry::new();
         let i = Interner::new();
         let v = s.fresh_ty_var();
-        let obj_a = TyTerm::Object(FxHashMap::from_iter([(i.intern("a"), TyTerm::Int)]));
+        let obj_a = TyTerm::Object(FxHashMap::from_iter([(i.intern("a"), TyTerm::I64)]));
         let obj_b = TyTerm::Object(FxHashMap::from_iter([(i.intern("b"), TyTerm::String)]));
         assert!(s.unify_ty(&v, &obj_a, Invariant, &registry).is_ok());
         assert!(s.unify_ty(&v, &obj_b, Invariant, &registry).is_ok());
@@ -2047,7 +2205,7 @@ mod tests {
         match &resolved {
             TyTerm::Object(fields) => {
                 assert_eq!(fields.len(), 2, "expected {{a, b}}, got {fields:?}");
-                assert_eq!(fields.get(&i.intern("a")), Some(&TyTerm::Int));
+                assert_eq!(fields.get(&i.intern("a")), Some(&TyTerm::I64));
                 assert_eq!(fields.get(&i.intern("b")), Some(&TyTerm::String));
             }
             other => panic!("expected Object, got {other:?}"),
@@ -2063,7 +2221,7 @@ mod tests {
         let i = Interner::new();
         let v = s.fresh_ty_var();
         let obj_ab = TyTerm::Object(FxHashMap::from_iter([
-            (i.intern("a"), TyTerm::Int),
+            (i.intern("a"), TyTerm::I64),
             (i.intern("b"), TyTerm::String),
         ]));
         let obj_bc = TyTerm::Object(FxHashMap::from_iter([
@@ -2076,7 +2234,7 @@ mod tests {
         match &resolved {
             TyTerm::Object(fields) => {
                 assert_eq!(fields.len(), 3, "expected {{a, b, c}}, got {fields:?}");
-                assert_eq!(fields.get(&i.intern("a")), Some(&TyTerm::Int));
+                assert_eq!(fields.get(&i.intern("a")), Some(&TyTerm::I64));
                 assert_eq!(fields.get(&i.intern("b")), Some(&TyTerm::String));
                 assert_eq!(fields.get(&i.intern("c")), Some(&TyTerm::Bool));
             }
@@ -2092,7 +2250,7 @@ mod tests {
         let registry = TypeRegistry::new();
         let i = Interner::new();
         let v = s.fresh_ty_var();
-        let obj1 = TyTerm::Object(FxHashMap::from_iter([(i.intern("b"), TyTerm::Int)]));
+        let obj1 = TyTerm::Object(FxHashMap::from_iter([(i.intern("b"), TyTerm::I64)]));
         let obj2 = TyTerm::Object(FxHashMap::from_iter([(i.intern("b"), TyTerm::String)]));
         assert!(s.unify_ty(&v, &obj1, Invariant, &registry).is_ok());
         assert!(s.unify_ty(&v, &obj2, Invariant, &registry).is_err());
@@ -2163,8 +2321,8 @@ mod tests {
         let mut sources = Sources::new();
         let mut s = Solver::new(&mut sources);
         let registry = TypeRegistry::new();
-        let l1 = arr(TyTerm::Int, 3);
-        let l2 = arr(TyTerm::Int, 3);
+        let l1 = arr(TyTerm::I64, 3);
+        let l2 = arr(TyTerm::I64, 3);
         assert!(s.unify_ty(&l1, &l2, Invariant, &registry).is_ok());
         assert!(s.unify_ty(&l2, &l1, Invariant, &registry).is_ok());
     }
@@ -2206,8 +2364,8 @@ mod tests {
         let mut sources = Sources::new();
         let mut s = Solver::new(&mut sources);
         let registry = TypeRegistry::new();
-        let l = arr(TyTerm::Int, 3);
-        let t = TyTerm::Tuple(vec![TyTerm::Int]);
+        let l = arr(TyTerm::I64, 3);
+        let t = TyTerm::Tuple(vec![TyTerm::I64]);
         assert!(s.unify_ty(&l, &t, Covariant, &registry).is_err());
         assert!(s.unify_ty(&l, &t, Invariant, &registry).is_err());
     }
@@ -2255,8 +2413,8 @@ mod tests {
         let id = fresh_qref();
         assert!(
             s.unify_ty(
-                &ud(id, vec![TyTerm::Int]),
-                &ud(id, vec![TyTerm::Int]),
+                &ud(id, vec![TyTerm::I64]),
+                &ud(id, vec![TyTerm::I64]),
                 Invariant,
                 &registry
             )
@@ -2274,13 +2432,13 @@ mod tests {
         assert!(
             s.unify_ty(
                 &ud(id, vec![p.clone()]),
-                &ud(id, vec![TyTerm::Int]),
+                &ud(id, vec![TyTerm::I64]),
                 Invariant,
                 &registry
             )
             .is_ok()
         );
-        assert_eq!(s.resolve_ty(&p), TyTerm::Int);
+        assert_eq!(s.resolve_ty(&p), TyTerm::I64);
     }
 
     #[test]
@@ -2294,13 +2452,13 @@ mod tests {
         assert!(
             s.unify_ty(
                 &ud(id, vec![arr(p.clone(), 3)]),
-                &ud(id, vec![arr(TyTerm::Int, 3)]),
+                &ud(id, vec![arr(TyTerm::I64, 3)]),
                 Invariant,
                 &registry
             )
             .is_ok()
         );
-        assert_eq!(s.resolve_ty(&p), TyTerm::Int);
+        assert_eq!(s.resolve_ty(&p), TyTerm::I64);
     }
 
     // -- Soundness: invalid UserDefined unifications --
@@ -2326,7 +2484,7 @@ mod tests {
         let id = fresh_qref();
         assert!(
             s.unify_ty(
-                &ud(id, vec![TyTerm::Int]),
+                &ud(id, vec![TyTerm::I64]),
                 &ud(id, vec![TyTerm::String]),
                 Invariant,
                 &registry
@@ -2342,7 +2500,7 @@ mod tests {
         let registry = TypeRegistry::new();
         let id = fresh_qref();
         assert!(
-            s.unify_ty(&ud(id, vec![]), &TyTerm::Int, Invariant, &registry)
+            s.unify_ty(&ud(id, vec![]), &TyTerm::I64, Invariant, &registry)
                 .is_err()
         );
         assert!(
@@ -2361,10 +2519,12 @@ mod tests {
         let id = fresh_qref();
         let p = s.fresh_ty_var();
         let ty = arr(ud(id, vec![p.clone()]), 3);
-        assert!(s.unify_ty(&p, &TyTerm::Int, Invariant, &registry).is_ok());
+        assert!(s.unify_ty(&p, &TyTerm::I64, Invariant, &registry).is_ok());
         match s.resolve_ty(&ty) {
             TyTerm::Array(inner, _) => match *inner {
-                TyTerm::UserDefined { type_args, .. } => assert_eq!(type_args, vec![TyTerm::Int]),
+                TyTerm::UserDefined { type_args, .. } => {
+                    assert_eq!(type_args, vec![TyTerm::I64])
+                }
                 other => panic!("expected UserDefined, got {other:?}"),
             },
             other => panic!("expected Array, got {other:?}"),
@@ -2464,43 +2624,52 @@ mod tests {
     #[test]
     fn extern_cast_basic_coercion() {
         // UserDefined(A, [T]) -> List<T>
-        let CastSetup { from_id: id, registry } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
+        let CastSetup {
+            from_id: id,
+            registry,
+        } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
         let mut sources = Sources::new();
         let mut s = Solver::new(&mut sources);
 
         let from = TyTerm::UserDefined {
             id,
-            type_args: vec![TyTerm::Int],
+            type_args: vec![TyTerm::I64],
             effect_args: vec![],
             identity_args: vec![],
         };
-        let to = arr(TyTerm::Int, 3);
+        let to = arr(TyTerm::I64, 3);
         assert!(s.unify_ty(&from, &to, Covariant, &registry).is_ok());
     }
 
     #[test]
     fn extern_cast_with_param_resolution() {
         // UserDefined(A, [T]) -> List<T>, where T is a fresh param on the consumer side
-        let CastSetup { from_id: id, registry } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
+        let CastSetup {
+            from_id: id,
+            registry,
+        } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
         let mut sources = Sources::new();
         let mut s = Solver::new(&mut sources);
 
         let from = TyTerm::UserDefined {
             id,
-            type_args: vec![TyTerm::Int],
+            type_args: vec![TyTerm::I64],
             effect_args: vec![],
             identity_args: vec![],
         };
         let consumer_param = s.fresh_ty_var();
         let to = arr(consumer_param.clone(), 3);
         assert!(s.unify_ty(&from, &to, Covariant, &registry).is_ok());
-        assert_eq!(s.resolve_ty(&consumer_param), TyTerm::Int);
+        assert_eq!(s.resolve_ty(&consumer_param), TyTerm::I64);
     }
 
     #[test]
     fn extern_cast_no_type_params() {
         // UserDefined(A, []) -> Int
-        let CastSetup { from_id: id, registry } = make_cast_registry(0, |_| TyTerm::Int);
+        let CastSetup {
+            from_id: id,
+            registry,
+        } = make_cast_registry(0, |_| TyTerm::I64);
         let mut sources = Sources::new();
         let mut s = Solver::new(&mut sources);
 
@@ -2511,7 +2680,7 @@ mod tests {
             identity_args: vec![],
         };
         assert!(
-            s.unify_ty(&from, &TyTerm::Int, Covariant, &registry)
+            s.unify_ty(&from, &TyTerm::I64, Covariant, &registry)
                 .is_ok()
         );
     }
@@ -2521,13 +2690,16 @@ mod tests {
     #[test]
     fn extern_cast_wrong_target_fails() {
         // Rule: A -> List<T>, but expected String
-        let CastSetup { from_id: id, registry } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
+        let CastSetup {
+            from_id: id,
+            registry,
+        } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
         let mut sources = Sources::new();
         let mut s = Solver::new(&mut sources);
 
         let from = TyTerm::UserDefined {
             id,
-            type_args: vec![TyTerm::Int],
+            type_args: vec![TyTerm::I64],
             effect_args: vec![],
             identity_args: vec![],
         };
@@ -2552,7 +2724,7 @@ mod tests {
             identity_args: vec![],
         };
         assert!(
-            s.unify_ty(&from, &TyTerm::Int, Covariant, &registry)
+            s.unify_ty(&from, &TyTerm::I64, Covariant, &registry)
                 .is_err()
         );
     }
@@ -2560,7 +2732,10 @@ mod tests {
     #[test]
     fn extern_cast_invariant_not_attempted() {
         // ExternCast only works in covariant/contravariant, not invariant
-        let CastSetup { from_id: id, registry } = make_cast_registry(0, |_| TyTerm::Int);
+        let CastSetup {
+            from_id: id,
+            registry,
+        } = make_cast_registry(0, |_| TyTerm::I64);
         let mut sources = Sources::new();
         let mut s = Solver::new(&mut sources);
 
@@ -2571,7 +2746,7 @@ mod tests {
             identity_args: vec![],
         };
         assert!(
-            s.unify_ty(&from, &TyTerm::Int, Invariant, &registry)
+            s.unify_ty(&from, &TyTerm::I64, Invariant, &registry)
                 .is_err()
         );
     }
@@ -2627,12 +2802,12 @@ mod tests {
 
         let from = TyTerm::UserDefined {
             id,
-            type_args: vec![TyTerm::Int],
+            type_args: vec![TyTerm::I64],
             effect_args: vec![],
             identity_args: vec![],
         };
         assert!(
-            s.unify_ty(&from, &arr(TyTerm::Int, 3), Covariant, &reg)
+            s.unify_ty(&from, &arr(TyTerm::I64, 3), Covariant, &reg)
                 .is_err()
         );
     }
@@ -2727,12 +2902,12 @@ mod tests {
 
     #[test]
     fn data_scalars_and_containers_of_scalars() {
-        assert!(Ty::Int.is_data());
+        assert!(Ty::I64.is_data());
         assert!(Ty::String.is_data());
-        assert!(arr(Ty::Int, 3).is_data());
+        assert!(arr(Ty::I64, 3).is_data());
         assert!(Ty::Option(Box::new(Ty::String)).is_data());
-        assert!(Ty::Tuple(vec![Ty::Int, Ty::String]).is_data());
-        assert!(arr(Ty::Option(Box::new(arr(Ty::Int, 2))), 3).is_data());
+        assert!(Ty::Tuple(vec![Ty::I64, Ty::String]).is_data());
+        assert!(arr(Ty::Option(Box::new(arr(Ty::I64, 2))), 3).is_data());
     }
 
     #[test]
@@ -2745,11 +2920,17 @@ mod tests {
     fn data_user_defined_over_fn_is_not_data() {
         let fn_ty = Ty::Fn {
             params: vec![],
-            ret: Box::new(Ty::Int),
+            ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
         };
-        let Ty::UserDefined { id, effect_args, identity_args, .. } = test_user_defined() else {
+        let Ty::UserDefined {
+            id,
+            effect_args,
+            identity_args,
+            ..
+        } = test_user_defined()
+        else {
             unreachable!()
         };
         let over_fn = Ty::UserDefined {
@@ -2765,14 +2946,14 @@ mod tests {
     fn data_fn_handle_order_ref_are_not_data() {
         let fn_ty = Ty::Fn {
             params: vec![],
-            ret: Box::new(Ty::Int),
+            ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::PURE.into(),
         };
         assert!(!fn_ty.is_data());
-        assert!(!Ty::Handle(Box::new(Ty::Int)).is_data());
+        assert!(!Ty::Handle(Box::new(Ty::I64)).is_data());
         assert!(!Ty::Order.is_data());
-        assert!(!Ty::Ref(Mutability::Shared, Box::new(Ty::Int)).is_data());
+        assert!(!Ty::Ref(Mutability::Shared, Box::new(Ty::I64)).is_data());
         assert!(!Ty::error().is_data());
     }
 
@@ -2780,16 +2961,15 @@ mod tests {
     fn data_container_holding_fn_is_not_data() {
         let fn_ty = Ty::Fn {
             params: vec![],
-            ret: Box::new(Ty::Int),
+            ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::PURE.into(),
         };
         assert!(!arr(fn_ty.clone(), 3).is_data());
         assert!(!Ty::Option(Box::new(fn_ty.clone())).is_data());
-        assert!(!Ty::Tuple(vec![Ty::Int, fn_ty.clone()]).is_data());
+        assert!(!Ty::Tuple(vec![Ty::I64, fn_ty.clone()]).is_data());
         let interner = Interner::new();
         let obj = Ty::Object(FxHashMap::from_iter([(interner.intern("cb"), fn_ty)]));
         assert!(!obj.is_data());
     }
-
 }

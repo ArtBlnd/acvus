@@ -25,14 +25,14 @@ expression: ir
     17 |   commit @opt = r7
     18 |   return r6
 
-    ; r0 (@opt) : Option<Int>
-    ; r1 (@opt.) : &Option<Int>
+    ; r0 (@opt) : Option<i64>
+    ; r1 (@opt.) : &Option<i64>
     ; r2 (v4) : Bool
     ; r3 (v6) : String
     ; r4 (v8) : String
     ; r5 (v9) : String
     ; r6 (v10) : String
-    ; r7 (v11) : Option<Int>
+    ; r7 (v11) : Option<i64>
     ; r8 (v7) : String
     ; r9 (v5) : String
-    ; r10 (@opt) : Option<Int>
+    ; r10 (@opt) : Option<i64>

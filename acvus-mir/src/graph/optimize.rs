@@ -102,7 +102,6 @@ fn run_pass2_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-
 /// Pass 2 pipeline on CfgBody.
 fn run_pass2(cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
