@@ -131,7 +131,7 @@ where
 {
     pub fn of<J>() -> Self
     where
-        J: Journaled<Rt>,
+        J: Journaled<Rt> + crate::Cross<Rt>,
     {
         // SAFETY (each hook): the value was erased from `J` — the hooks are
         // looked up by the value's declared type — and the space alone
@@ -139,7 +139,7 @@ where
         Self {
             encode_state: Box::new(|rt, value, args, elem, out| {
                 let reference = unsafe { rt.reference(value) };
-                let j: &J = unsafe { rt.deref::<J>(&reference) };
+                let j: &J = unsafe { J::deref(rt, &reference) };
                 j.encode_state(rt, args, elem, out)
             }),
             decode_state: Box::new(|rt, args, elem, input| {
@@ -148,27 +148,27 @@ where
             }),
             take_ops: Box::new(|rt, value, args, elem| {
                 let reference = unsafe { rt.reference(value) };
-                let j: &mut J = unsafe { rt.deref_mut::<J>(&reference) };
+                let j: &mut J = unsafe { J::deref_mut(rt, &reference) };
                 j.take_ops(rt, args, elem)
             }),
             apply_op: Box::new(|rt, value, args, elem, op| {
                 let reference = unsafe { rt.reference(value) };
-                let j: &mut J = unsafe { rt.deref_mut::<J>(&reference) };
+                let j: &mut J = unsafe { J::deref_mut(rt, &reference) };
                 j.apply_op(rt, args, elem, op)
             }),
             children: Box::new(|rt, value, args, visit| {
                 let reference = unsafe { rt.reference(value) };
-                let j: &mut J = unsafe { rt.deref_mut::<J>(&reference) };
+                let j: &mut J = unsafe { J::deref_mut(rt, &reference) };
                 j.children(args, visit)
             }),
             head: Box::new(|rt, value| {
                 let reference = unsafe { rt.reference(value) };
-                let j: &J = unsafe { rt.deref::<J>(&reference) };
+                let j: &J = unsafe { J::deref(rt, &reference) };
                 j.head()
             }),
             set_head: Box::new(|rt, value, head| {
                 let reference = unsafe { rt.reference(value) };
-                let j: &mut J = unsafe { rt.deref_mut::<J>(&reference) };
+                let j: &mut J = unsafe { J::deref_mut(rt, &reference) };
                 j.set_head(head)
             }),
         }

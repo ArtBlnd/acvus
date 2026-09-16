@@ -7,6 +7,7 @@ mod encoding;
 mod iter_pipeline;
 mod iterator;
 mod option;
+mod panic;
 mod regex;
 mod string;
 mod vec;
@@ -20,6 +21,7 @@ pub use encoding::encoding_registry;
 pub use iter_pipeline::Iter;
 pub use iterator::iterator_registry;
 pub use option::option_registry;
+pub use panic::panic_registry;
 pub use regex::regex_registry;
 pub use string::string_registry;
 pub use vec::vec_registry;
@@ -39,6 +41,7 @@ where
         container_registry(),
         deque_registry(),
         option_registry(),
+        panic_registry(),
         iterator_registry(),
     ];
     registries.extend(from_str_registries());

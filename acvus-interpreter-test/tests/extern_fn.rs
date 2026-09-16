@@ -117,9 +117,9 @@ async fn regex_match_via_extern() {
 
     let registry = acvus_ext::regex_registry();
     let c = ctx(&i, vec![("text", string("hello world 42"))]);
-    let result = run_script_with_externs(
+    let result = run_script_mode_with_externs(
         &i,
-        r#"re = regex("[0-9]+"); regex_match(re, @text)"#,
+        r#"if let Ok(re) = regex("[0-9]+") { regex_match(re, @text) } else { false }"#,
         c,
         vec![registry],
     )
@@ -133,9 +133,9 @@ async fn regex_find_via_extern() {
 
     let registry = acvus_ext::regex_registry();
     let c = ctx(&i, vec![("text", string("price is 42 dollars"))]);
-    let result = run_script_with_externs(
+    let result = run_script_mode_with_externs(
         &i,
-        r#"re = regex("[0-9]+"); regex_find(re, @text)"#,
+        r#"if let Ok(re) = regex("[0-9]+") { regex_find(re, @text) } else { None }"#,
         c,
         vec![registry],
     )
@@ -952,6 +952,7 @@ fn io_compiler_pipeline_mir() {
 // =======================================================================
 
 #[derive(ExternType)]
+#[repr(transparent)]
 struct Tok<I>(i64, std::marker::PhantomData<I>)
 where
     I: acvus_extern::IdentityVar;

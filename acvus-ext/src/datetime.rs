@@ -1,8 +1,9 @@
 //! The `DateTime` extension type. Every function but `now` is pure.
 
-use acvus_extern::{ExternType, Registry, Runtime, Trap, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Registry, Runtime, TyArg, extern_fn, extern_registry};
 
 #[derive(ExternType)]
+#[repr(transparent)]
 pub struct DateTime(chrono::DateTime<chrono::Utc>);
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,15 +17,25 @@ fn format_date(dt: DateTime, fmt: String) -> String {
     dt.0.format(&fmt).to_string()
 }
 
+/// Why a text is not a date, or an epoch not a moment.
+#[derive(TyArg)]
+pub enum DateError {
+    Unparsable {
+        input: String,
+        format: String,
+        message: String,
+    },
+    OutOfRange(i64),
+}
+
 #[extern_fn(effect = pure)]
-fn parse_date(s: String, fmt: String) -> Result<DateTime, Trap> {
+fn parse_date(s: String, fmt: String) -> Result<DateTime, DateError> {
     chrono::NaiveDateTime::parse_from_str(&s, &fmt)
         .map(|ndt| DateTime(ndt.and_utc()))
-        .map_err(|e| {
-            Trap::call(
-                "parse_date",
-                format!("invalid input '{s}' with format '{fmt}': {e}"),
-            )
+        .map_err(|e| DateError::Unparsable {
+            message: e.to_string(),
+            input: s,
+            format: fmt,
         })
 }
 
@@ -35,10 +46,10 @@ fn timestamp(dt: DateTime) -> i64 {
 }
 
 #[extern_fn(effect = pure)]
-fn from_timestamp(epoch: i64) -> Result<DateTime, Trap> {
+fn from_timestamp(epoch: i64) -> Result<DateTime, DateError> {
     chrono::DateTime::from_timestamp(epoch, 0)
         .map(DateTime)
-        .ok_or_else(|| Trap::call("from_timestamp", format!("invalid epoch {epoch}")))
+        .ok_or(DateError::OutOfRange(epoch))
 }
 
 #[extern_fn(effect = pure)]

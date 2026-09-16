@@ -270,22 +270,21 @@ fn generate_extern_fn(
                 let next = quote! { __args.next().expect("arity checked by typeck") };
                 let lent = format_ident!("{a}_lent");
                 match p.mode {
-                    Mode::Value if is_carrier(ty) => quote! { let #a = <#ty>::new(#next); },
-                    Mode::Value => quote! { let #a = unsafe { (&::acvus_extern::Crossing::<#ty, __R>::new()).materialize(__rt, #next) }; },
+                    Mode::Value => quote! { let #a = <#ty as ::acvus_extern::Cross<__R>>::materialize(__rt, #next); },
                     Mode::Borrow => quote! {
                         let #lent = #next;
-                        let #a: &#ty = unsafe { (&::acvus_extern::Crossing::<#ty, __R>::new()).deref(__rt, &#lent) };
+                        // SAFETY: the checker lends a live storage of this type (RFC-0018).
+                        let #a: &#ty = unsafe { <#ty as ::acvus_extern::Cross<__R>>::deref(__rt, &#lent) };
                     },
                     Mode::BorrowMut => quote! {
                         let #lent = #next;
-                        let #a: &mut #ty = unsafe { (&::acvus_extern::Crossing::<#ty, __R>::new()).deref_mut(__rt, &#lent) };
+                        // SAFETY: as above, exclusively.
+                        let #a: &mut #ty = unsafe { <#ty as ::acvus_extern::Cross<__R>>::deref_mut(__rt, &#lent) };
                     },
                 }
             })
             .collect();
         let unpack = quote! {
-            #[allow(unused_imports)]
-            use ::acvus_extern::{AsCross as _, AsIs as _};
             let mut __args = __args.into_iter();
             #(#unpack_stmts)*
             debug_assert!(__args.next().is_none(), "arity checked by typeck");
@@ -308,13 +307,7 @@ fn generate_extern_fn(
         let hold_state = quote! {
             #(let #state_idents = ::std::sync::Arc::clone(&#state_idents);)*
         };
-        let ret_value = if is_carrier(&rt_ret) {
-            quote! { __r.into_value() }
-        } else if is_option_of_carrier(&rt_ret) {
-            quote! { ::acvus_extern::Carried::into_value(__r, __rt) }
-        } else {
-            quote! { unsafe { (&::acvus_extern::Crossing::<#rt_ret, __R>::new()).erase(__rt, __r) } }
-        };
+        let ret_value = quote! { <#rt_ret as ::acvus_extern::Cross<__R>>::erase(__r, __rt) };
         let returned = quote! {
             ::core::result::Result::<_, #error_ty>::Ok(#ret_value)
         };
@@ -435,36 +428,6 @@ fn generate_extern_fn(
             }
         }
     })
-}
-
-/// `Fn0`, `Fn1`, `Fn2` carry a closure value by name; they wrap it rather
-/// than materialize it.
-fn is_carrier(ty: &Type) -> bool {
-    let Type::Path(p) = ty else {
-        return false;
-    };
-    p.path.segments.last().is_some_and(|s| {
-        matches!(
-            s.ident.to_string().as_str(),
-            "Fn0" | "Fn1" | "Fn2" | "Fn3" | "Ref" | "RefMut"
-        )
-    })
-}
-
-fn is_option_of_carrier(ty: &Type) -> bool {
-    let Type::Path(p) = ty else {
-        return false;
-    };
-    let Some(last) = p.path.segments.last() else {
-        return false;
-    };
-    if last.ident != "Option" {
-        return false;
-    }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
-        return false;
-    };
-    matches!(args.args.first(), Some(syn::GenericArgument::Type(inner)) if is_carrier(inner))
 }
 
 /// Remove `#[name]` from the attribute list; report whether it was there.
@@ -610,6 +573,15 @@ struct ExternTypeAttr {
     ns: Option<String>,
 }
 
+/// Whether the struct carries `#[repr(transparent)]`.
+fn is_repr_transparent(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("repr")
+            && a.parse_args::<Ident>()
+                .is_ok_and(|ident| ident == "transparent")
+    })
+}
+
 fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
     let mut out = ExternTypeAttr {
         name: None,
@@ -676,6 +648,16 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         ));
     };
     let payload_ty = &payload.ty;
+    let phantoms: Vec<proc_macro2::TokenStream> = field_iter
+        .clone()
+        .map(|_| quote! { ::core::marker::PhantomData })
+        .collect();
+    if !is_repr_transparent(&input.attrs) {
+        return Err(syn::Error::new(
+            ident.span(),
+            "an extension type is `#[repr(transparent)]`: it is stored as its payload and read back through it",
+        ));
+    }
     for extra in field_iter {
         let is_phantom = match &extra.ty {
             Type::Path(p) => p
@@ -701,6 +683,23 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let arg_impl_generics = vars.arg_impl_generics();
+    let impl_params = {
+        let params = &input.generics.params;
+        if params.is_empty() {
+            quote! {}
+        } else {
+            quote! { #params, }
+        }
+    };
+    let where_predicates = input
+        .generics
+        .where_clause
+        .as_ref()
+        .map(|w| {
+            let preds = &w.predicates;
+            quote! { #preds }
+        })
+        .unwrap_or_default();
     let type_arg_exprs = vars.type_arg_exprs();
     let effect_arg_exprs = vars.effect_arg_exprs();
     let identity_arg_exprs = vars.identity_arg_exprs();
@@ -728,6 +727,32 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     effect_args: vec![#(#effect_arg_exprs),*],
                     identity_args: vec![#(#identity_arg_exprs),*],
                 }
+            }
+        }
+
+        impl<#impl_params __R> ::acvus_extern::Cross<__R> for #ident #ty_generics
+        where
+            __R: ::acvus_extern::Runtime,
+            #where_predicates
+        {
+            fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
+                // SAFETY: an extension type is stored as its payload (RFC-0039).
+                unsafe { __rt.erase::<#payload_ty>(self.0) }
+            }
+
+            fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+                // SAFETY: as in `erase`.
+                Self(unsafe { __rt.materialize::<#payload_ty>(__value) } #(, #phantoms)*)
+            }
+
+            unsafe fn deref<'a>(__rt: &__R, __reference: &'a <__R as ::acvus_extern::Runtime>::Value) -> &'a Self {
+                // SAFETY: the caller's contract; `Self` is `repr(transparent)` over the payload.
+                unsafe { &*(__rt.deref::<#payload_ty>(__reference) as *const #payload_ty as *const Self) }
+            }
+
+            unsafe fn deref_mut<'a>(__rt: &__R, __reference: &'a <__R as ::acvus_extern::Runtime>::Value) -> &'a mut Self {
+                // SAFETY: as in `deref`, exclusively.
+                unsafe { &mut *(__rt.deref_mut::<#payload_ty>(__reference) as *mut #payload_ty as *mut Self) }
             }
         }
 

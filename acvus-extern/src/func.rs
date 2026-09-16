@@ -63,6 +63,22 @@ macro_rules! define_fn_arg {
             }
         }
 
+        impl<$($A,)* R, E, Rt> crate::Cross<Rt> for $name<$($A,)* R, E, Rt>
+        where
+            $($A: TyVar,)*
+            R: TyVar,
+            E: EffectVar,
+            Rt: Runtime,
+        {
+            fn erase(self, _: &Rt) -> Rt::Value {
+                self.0
+            }
+
+            fn materialize(_: &Rt, value: Rt::Value) -> Self {
+                Self::new(value)
+            }
+        }
+
         impl<$($A,)* R, E, Rt> TyArg for $name<$($A,)* R, E, Rt>
         where
             $($A: TyArg + TyVar,)*

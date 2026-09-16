@@ -101,17 +101,6 @@ impl<Rt: Runtime> Pipeline<Rt> {
     }
 }
 
-// SAFETY: `Iter` is `repr(transparent)` over its pipeline; the phantoms are ZSTs.
-unsafe impl<T, E, I, Rt> acvus_extern::HasRepr for Iter<T, E, I, Rt>
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    type Repr = Pipeline<Rt>;
-}
-
 impl<T, E, I, Rt> Iter<T, E, I, Rt>
 where
     T: TyVar,

@@ -91,3 +91,25 @@ impl AcvusRuntime {
         Box::pin(async move { crate::interpreter::fn_value_call(closure, args).await })
     }
 }
+
+/// The runtime's own value crosses as itself: nothing to convert, and a
+/// reference to one is read through the word that names it (RFC-0039).
+impl acvus_extern::Cross<AcvusRuntime> for Value {
+    fn erase(self, _: &AcvusRuntime) -> Value {
+        self
+    }
+
+    fn materialize(_: &AcvusRuntime, value: Value) -> Self {
+        value
+    }
+
+    unsafe fn deref<'a>(_: &AcvusRuntime, reference: &'a Value) -> &'a Value {
+        // SAFETY: the caller's contract: a live reference.
+        unsafe { reference.target() }
+    }
+
+    unsafe fn deref_mut<'a>(_: &AcvusRuntime, reference: &'a Value) -> &'a mut Value {
+        // SAFETY: the caller's contract: a live, exclusively named target.
+        unsafe { reference.target_mut() }
+    }
+}

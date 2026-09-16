@@ -12,7 +12,7 @@ use crate::{Interner, PolyTy, QualifiedRef, TyVarBound, UserDefinedDecl};
 
 impl<T, Rt> Cross<Rt> for Vec<T>
 where
-    T: Cross<Rt> + TyVar,
+    T: Cross<Rt>,
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
@@ -25,6 +25,24 @@ where
         // SAFETY: as in `erase`.
         let items = unsafe { rt.materialize::<Vec<Rt::Value>>(value) };
         items.into_iter().map(|v| T::materialize(rt, v)).collect()
+    }
+
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
+        assert!(
+            std::any::TypeId::of::<T>() == std::any::TypeId::of::<Rt::Value>(),
+            "a Vec converted at the boundary has no storage of its own type to read through"
+        );
+        // SAFETY: the storage is `Vec<Value>` and `T` is `Value`.
+        unsafe { rt.deref::<Self>(reference) }
+    }
+
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
+        assert!(
+            std::any::TypeId::of::<T>() == std::any::TypeId::of::<Rt::Value>(),
+            "a Vec converted at the boundary has no storage of its own type to read through"
+        );
+        // SAFETY: as in `deref`.
+        unsafe { rt.deref_mut::<Self>(reference) }
     }
 }
 

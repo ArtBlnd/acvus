@@ -15,7 +15,6 @@ mod len;
 mod obj;
 mod reference;
 mod registry;
-pub mod repr;
 mod runtime;
 mod space;
 mod trap;
@@ -30,12 +29,11 @@ pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
     Cross, Obj, Variant, erase_field, materialize_field, materialize_payload, take_payload,
 };
-pub use reference::{Carried, Ref, RefMut};
+pub use reference::{Ref, RefMut};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
     Manifest, Registry, SharedSignature, SignatureDecl,
 };
-pub use repr::{AsCross, AsIs, Crossing, HasRepr};
 pub use runtime::{Runtime, TypesOnly};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use trap::Trap;

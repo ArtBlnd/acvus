@@ -1,19 +1,29 @@
 //! Regular expressions: the `Regex` extension type and its functions.
 
 use acvus_extern::{
-    ExternType, IdentityVar, Pure, Registry, Runtime, Trap, extern_fn, extern_registry,
+    ExternType, IdentityVar, Pure, Registry, Runtime, TyArg, extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
 
 #[derive(ExternType)]
+#[repr(transparent)]
 pub struct Regex(regex::Regex);
 
+/// Why a pattern is not a regular expression.
+#[derive(TyArg)]
+pub enum RegexError {
+    Invalid { pattern: String, message: String },
+}
+
 #[extern_fn(effect = pure)]
-fn regex(pattern: String) -> Result<Regex, Trap> {
+fn regex(pattern: String) -> Result<Regex, RegexError> {
     regex::Regex::new(&pattern)
         .map(Regex)
-        .map_err(|e| Trap::call("regex", format!("invalid pattern '{pattern}': {e}")))
+        .map_err(|e| RegexError::Invalid {
+            message: e.to_string(),
+            pattern,
+        })
 }
 
 #[extern_fn(effect = pure)]

@@ -1291,7 +1291,7 @@ fn builtin_find() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | find(|x| -> *x > 10) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | find(|x| -> *x > 10) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
         &context,
     )
     .unwrap();
@@ -1304,7 +1304,7 @@ fn builtin_reduce() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | reduce(|a, b| -> a + b) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | reduce(|a, b| -> a + b) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
         &context,
     )
     .unwrap();

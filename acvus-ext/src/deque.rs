@@ -140,6 +140,8 @@ where
     }
 }
 
+acvus_extern::cross_as_stored!(Deque<T>, T: TyVar);
+
 impl<T> TyArg for Deque<T>
 where
     T: TyArg + TyVar,

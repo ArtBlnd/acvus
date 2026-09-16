@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, ExternFn, ExternHandler,
+    Arr, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, ExternFn, ExternHandler,
     ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure, Registry,
     Runtime, Trap, TyArg, TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
     extern_signature,
@@ -132,6 +132,28 @@ fn target(reference: &V) -> &V {
 
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
+impl acvus_extern::Cross<Tiny> for V {
+    fn erase(self, _: &Tiny) -> V {
+        self
+    }
+
+    fn materialize(_: &Tiny, value: V) -> Self {
+        value
+    }
+
+    unsafe fn deref<'a>(_: &Tiny, reference: &'a V) -> &'a V {
+        target(reference)
+    }
+
+    unsafe fn deref_mut<'a>(_: &Tiny, reference: &'a V) -> &'a mut V {
+        let V::Reference(p) = reference else {
+            panic!("deref_mut: not a reference: {reference:?}")
+        };
+        // SAFETY: the target is live and, by the checker, exclusively named.
+        unsafe { &mut *(*p as *mut V) }
+    }
+}
+
 impl Runtime for Tiny {
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
@@ -196,6 +218,7 @@ impl Runtime for Tiny {
 // -- Declarations under test ------------------------------------------
 
 #[derive(ExternType)]
+#[repr(transparent)]
 #[extern_type(name = "Box")]
 struct Boxed<T, E, Rt>(Vec<Rt::Value>, PhantomData<(T, E)>)
 where
@@ -205,6 +228,7 @@ where
 
 /// A value that is a source of its own: it carries an identity, so it moves.
 #[derive(ExternType)]
+#[repr(transparent)]
 struct Token<I>(i64, PhantomData<I>)
 where
     I: acvus_extern::IdentityVar;
@@ -539,11 +563,11 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 
     let arr = erased(Arr::<V, ()>::new(vec![erased(1i64), erased(2i64)]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]).unwrap();
-    let Boxed::<V, Pure, Tiny>(items, _) = open(boxed) else {
+    let Boxed::<V, Pure, Tiny>(items, _) = Boxed::materialize(&Tiny, boxed) else {
         unreachable!("boxed returns a Box")
     };
     assert_eq!(items.len(), 2);
-    let boxed = erased(Boxed::<V, (), Tiny>(items, PhantomData));
+    let boxed = Boxed::<V, (), Tiny>(items, PhantomData).erase(&Tiny);
 
     let double = V::Closure(Closure(Arc::new(|args| {
         let [n] = <[V; 1]>::try_from(args)
@@ -553,7 +577,7 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double])
         .await
         .unwrap();
-    let Boxed::<V, (), Tiny>(items, _) = open(out);
+    let Boxed::<V, (), Tiny>(items, _) = Boxed::materialize(&Tiny, out);
     let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
     assert_eq!(doubled, vec![2, 4]);
 
@@ -860,10 +884,11 @@ fn the_call_type_selects_the_instance() {
         &i,
     );
     let h = inside.select(&ty).unwrap();
-    let payload = erased(Boxed::<String, Pure, Tiny>(
+    let payload = Boxed::<String, Pure, Tiny>(
         vec![erased(String::from("a")), erased(String::from("b"))],
         PhantomData,
-    ));
+    )
+    .erase(&Tiny);
     assert_eq!(open::<i64>(call_sync(h, vec![payload]).unwrap()), 2);
     let ty = call_type(
         vec![boxed_of(acvus_extern::Ty::Float)],
@@ -871,10 +896,11 @@ fn the_call_type_selects_the_instance() {
         &i,
     );
     let fallback = inside.select(&ty).unwrap();
-    let payload = erased(Boxed::<V, Pure, Tiny>(
+    let payload = Boxed::<V, Pure, Tiny>(
         vec![erased(1.5f64), erased(2.5f64), erased(3.5f64)],
         PhantomData,
-    ));
+    )
+    .erase(&Tiny);
     assert_eq!(open::<i64>(call_sync(fallback, vec![payload]).unwrap()), 3);
 }
 

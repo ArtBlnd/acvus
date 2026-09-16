@@ -10,7 +10,7 @@
 //!   reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime, Trap, TyVar,
+    Arr, ClosureFn, EffectVar, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime, TyVar,
     extern_fn, extern_registry,
 };
 
@@ -314,7 +314,7 @@ async fn find<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
-) -> Result<T, Rt::Error>
+) -> Result<Option<T>, Rt::Error>
 where
     T: TyVar,
     E: EffectVar,
@@ -326,10 +326,10 @@ where
         let keep = f.call(rt, (unsafe { rt.reference(&lent) },)).await;
         let item = unsafe { rt.materialize::<T>(lent) };
         if unsafe { rt.materialize::<bool>(keep?) } {
-            return Ok(item);
+            return Ok(Some(item));
         }
     }
-    Err(Trap::call("find", "no element matched").into())
+    Ok(None)
 }
 
 #[extern_fn(effect = E)]
@@ -337,7 +337,7 @@ async fn reduce<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn2<T, T, T, E, Rt>,
-) -> Result<T, Rt::Error>
+) -> Result<Option<T>, Rt::Error>
 where
     T: TyVar,
     E: EffectVar,
@@ -345,7 +345,7 @@ where
     Rt: Runtime,
 {
     let Some(mut acc) = it.next(rt).await? else {
-        return Err(Trap::call("reduce", "empty iterator").into());
+        return Ok(None);
     };
     while let Some(item) = it.next(rt).await? {
         let out = f
@@ -358,7 +358,7 @@ where
             .await?;
         acc = unsafe { rt.materialize::<T>(out) };
     }
-    Ok(acc)
+    Ok(Some(acc))
 }
 
 #[extern_fn(effect = E)]

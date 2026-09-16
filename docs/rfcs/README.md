@@ -84,3 +84,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0036](0036-enums-across-the-boundary.md) | A Rust enum crosses the boundary as the language's enum | Accepted |
 | [RFC-0037](0037-integer-widths.md) | Integers have a width, and a literal takes the width its use demands | Accepted |
 | [RFC-0038](0038-result-and-trap.md) | `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error | Accepted (Result, `!`, `?` built; trap to follow) |
+| [RFC-0039](0039-one-crossing.md) | One crossing at the boundary | Accepted (crossing built; held value and typed call to follow) |

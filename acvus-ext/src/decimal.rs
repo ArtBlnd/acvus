@@ -2,20 +2,27 @@
 //! `Float` is not. A wire struct carries it as a field; on the wire it is
 //! the number's text.
 
-use acvus_extern::{ExternType, Registry, Runtime, Trap, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Registry, Runtime, TyArg, extern_fn, extern_registry};
 use serde::{Deserialize, Serialize};
 
 use crate::conversion::sig;
 
 #[derive(ExternType, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
+#[repr(transparent)]
 pub struct Decimal(pub rust_decimal::Decimal);
 
+/// Why a text is not a decimal: the text itself.
+#[derive(TyArg)]
+pub enum DecimalError {
+    Unparsable(String),
+}
+
 #[extern_fn(effect = pure)]
-fn decimal(text: String) -> Result<Decimal, Trap> {
+fn decimal(text: String) -> Result<Decimal, DecimalError> {
     text.parse()
         .map(Decimal)
-        .map_err(|e| Trap::call("decimal", format!("invalid decimal '{text}': {e}")))
+        .map_err(|_| DecimalError::Unparsable(text))
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]

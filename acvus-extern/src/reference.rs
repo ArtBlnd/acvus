@@ -132,44 +132,31 @@ where
     }
 }
 
-/// A returned value the glue hands to the runtime as the reference it
-/// carries.
-pub trait Carried<Rt>
-where
-    Rt: Runtime,
-{
-    fn into_value(self, rt: &Rt) -> Rt::Value;
-}
-
-impl<T, Rt> Carried<Rt> for Ref<T, Rt>
+impl<T, Rt> crate::Cross<Rt> for Ref<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    fn into_value(self, _: &Rt) -> Rt::Value {
+    fn erase(self, _: &Rt) -> Rt::Value {
         self.0
+    }
+
+    fn materialize(_: &Rt, value: Rt::Value) -> Self {
+        Self::new(value)
     }
 }
 
-impl<T, Rt> Carried<Rt> for RefMut<T, Rt>
+impl<T, Rt> crate::Cross<Rt> for RefMut<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    fn into_value(self, _: &Rt) -> Rt::Value {
+    fn erase(self, _: &Rt) -> Rt::Value {
         self.0
     }
-}
 
-impl<C, Rt> Carried<Rt> for Option<C>
-where
-    C: Carried<Rt>,
-    Rt: Runtime,
-{
-    fn into_value(self, rt: &Rt) -> Rt::Value {
-        // SAFETY: the declared type is `Option<..>` of the carrier's type,
-        // whose runtime shape is `Option<Rt::Value>` (RFC-0022).
-        unsafe { rt.erase::<Option<Rt::Value>>(self.map(|c| c.into_value(rt))) }
+    fn materialize(_: &Rt, value: Rt::Value) -> Self {
+        Self::new(value)
     }
 }
 

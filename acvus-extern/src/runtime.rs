@@ -12,8 +12,8 @@ use crate::trap::Trap;
 /// The contract a host signs to run declared ExternFns. A `Value` is opaque;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
-pub trait Runtime: Send + Sync + 'static {
-    type Value: Send + Sync + 'static;
+pub trait Runtime: Sized + Send + Sync + 'static {
+    type Value: crate::Cross<Self>;
     type Error: From<Trap> + Send + Sync + 'static;
     type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
     where

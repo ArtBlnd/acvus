@@ -165,9 +165,9 @@ fn strings_of(v: Value) -> Vec<String> {
 #[tokio::test]
 async fn regex_match_true() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"re = regex("\\d+"); regex_match(re, "abc123")"#,
+        r#"if let Ok(re) = regex("\\d+") { regex_match(re, "abc123") } else { false }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -178,9 +178,9 @@ async fn regex_match_true() {
 #[tokio::test]
 async fn regex_match_false() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"re = regex("\\d+"); regex_match(re, "abc")"#,
+        r#"if let Ok(re) = regex("\\d+") { regex_match(re, "abc") } else { true }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -191,9 +191,9 @@ async fn regex_match_false() {
 #[tokio::test]
 async fn regex_find_all_collect() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"re = regex("\\d+"); regex_find_all(re, "a1b22c333") | collect"#,
+        r#"if let Ok(re) = regex("\\d+") { regex_find_all(re, "a1b22c333") | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -204,9 +204,9 @@ async fn regex_find_all_collect() {
 #[tokio::test]
 async fn regex_replace() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"re = regex("\\s+"); regex_replace("hello   world", re, " ")"#,
+        r#"if let Ok(re) = regex("\\s+") { regex_replace("hello   world", re, " ") } else { "?" }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -217,9 +217,9 @@ async fn regex_replace() {
 #[tokio::test]
 async fn regex_split_collect() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"re = regex("[,;]\\s*"); regex_split(re, "a, b;c") | collect"#,
+        r#"if let Ok(re) = regex("[,;]\\s*") { regex_split(re, "a, b;c") | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -285,9 +285,9 @@ async fn url_roundtrip() {
 async fn datetime_format_from_timestamp() {
     let i = Interner::new();
     // 2024-01-01 00:00:00 UTC = epoch 1704067200
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"dt = from_timestamp(1704067200); format_date(dt, "%Y-%m-%d")"#,
+        r#"if let Ok(dt) = from_timestamp(1704067200) { format_date(dt, "%Y-%m-%d") } else { "?" }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     )
@@ -298,9 +298,9 @@ async fn datetime_format_from_timestamp() {
 #[tokio::test]
 async fn datetime_timestamp_roundtrip() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"dt = from_timestamp(1704067200); timestamp(dt)"#,
+        r#"if let Ok(dt) = from_timestamp(1704067200) { timestamp(dt) } else { -1 }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     )
@@ -311,9 +311,9 @@ async fn datetime_timestamp_roundtrip() {
 #[tokio::test]
 async fn datetime_add_days() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"dt = from_timestamp(1704067200); dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d")"#,
+        r#"if let Ok(dt) = from_timestamp(1704067200) { let dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d") } else { "?" }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     )
@@ -324,9 +324,9 @@ async fn datetime_add_days() {
 #[tokio::test]
 async fn datetime_parse_and_format() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"dt = parse_date("2024-06-15 12:30:00", "%Y-%m-%d %H:%M:%S"); format_date(dt, "%m/%d/%Y")"#,
+        r#"if let Ok(dt) = parse_date("2024-06-15 12:30:00", "%Y-%m-%d %H:%M:%S") { format_date(dt, "%m/%d/%Y") } else { "?" }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     ).await;
@@ -340,9 +340,9 @@ async fn datetime_parse_and_format() {
 #[tokio::test]
 async fn mixed_regex_and_encoding() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"m = regex_match(regex("\\d+"), "abc123"); base64_encode("hello") + " " + m.to_string()"#,
+        r#"if let Ok(re) = regex("\\d+") { let m = regex_match(re, "abc123"); base64_encode("hello") + " " + m.to_string() } else { "?" }"#,
         TypedContext::default(),
         vec![
             regex_registry::<AcvusRuntime>(),
@@ -358,6 +358,7 @@ async fn mixed_regex_and_encoding() {
 // =======================================================================
 
 #[derive(ExternType)]
+#[repr(transparent)]
 struct MyNum(i64);
 
 #[extern_fn(effect = pure)]
@@ -630,7 +631,7 @@ async fn a_decimal_is_exact_text_in_and_out() {
     let i = Interner::new();
     let v = run_ext_template(
         &i,
-        r#"{{ d = decimal("1.50") }}{{ d.to_string() }}"#,
+        r#"{{ Ok(d) = decimal("1.50") }}{{ d.to_string() }}{{/}}"#,
         TypedContext::default(),
         vec![],
     )
@@ -638,7 +639,7 @@ async fn a_decimal_is_exact_text_in_and_out() {
     assert_str(&v, "1.50");
     let v = run_ext_template(
         &i,
-        r#"{{ a = decimal("1.5") }}{{ b = decimal("1.50") }}{{ same = a == b }}{{ same.to_string() }}"#,
+        r#"{{ Ok(a) = decimal("1.5") }}{{ Ok(b) = decimal("1.50") }}{{ same = a == b }}{{ same.to_string() }}{{/}}{{/}}"#,
         TypedContext::default(),
         vec![],
     )
@@ -646,7 +647,7 @@ async fn a_decimal_is_exact_text_in_and_out() {
     assert_str(&v, "true");
     let v = run_ext_template(
         &i,
-        r#"{{ d = decimal("0.5") }}{{ f = decimal_to_float(&d) }}{{ f.to_string() }}"#,
+        r#"{{ Ok(d) = decimal("0.5") }}{{ f = decimal_to_float(&d) }}{{ f.to_string() }}{{/}}"#,
         TypedContext::default(),
         vec![],
     )
@@ -668,7 +669,7 @@ async fn an_extension_type_is_a_field_of_a_derived_object() {
     assert_str(&v, "9.99 USD");
     let v = run_ext_template(
         &i,
-        r#"{{ p = double_price({ amount: decimal("0.05"), currency: "KRW", }) }}{{ p.amount.to_string() }}"#,
+        r#"{{ Ok(d) = decimal("0.05") }}{{ p = double_price({ amount: d, currency: "KRW", }) }}{{ p.amount.to_string() }}{{/}}"#,
         TypedContext::default(),
         regs(),
     )
@@ -796,6 +797,104 @@ async fn a_trap_carries_its_message() {
     .await;
 }
 
+#[derive(acvus_extern::TyArg)]
+struct Line {
+    pts: Vec<Pt>,
+    origin: Pt,
+}
+
+#[extern_fn(effect = pure)]
+fn line() -> Line {
+    Line {
+        pts: vec![
+            Pt {
+                x: 1,
+                label: "a".to_owned(),
+            },
+            Pt {
+                x: 2,
+                label: "b".to_owned(),
+            },
+        ],
+        origin: Pt {
+            x: 9,
+            label: "o".to_owned(),
+        },
+    }
+}
+
+fn line_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [line],
+    }
+}
+
+#[tokio::test]
+async fn a_derived_object_s_fields_cross_by_their_own_types() {
+    let i = Interner::new();
+    let v = run_ext_template(
+        &i,
+        "{{ l = line() }}{{ n = len(&l.pts) }}{{ n.to_string() }} {{ l.origin.label }}",
+        TypedContext::default(),
+        vec![line_registry()],
+    )
+    .await;
+    assert_str(&v, "2 o");
+}
+
+#[tokio::test]
+async fn a_refused_input_names_why_in_its_own_enum() {
+    let i = Interner::new();
+    let v = run_ext_template(
+        &i,
+        r#"{{ r = regex("(") }}{{ Err(RegexError::Invalid(e)) = r }}{{ e.pattern }}{{_}}?{{/}}"#,
+        TypedContext::default(),
+        vec![regex_registry()],
+    )
+    .await;
+    assert_str(&v, "(");
+    let v = run_ext_template(
+        &i,
+        r#"{{ r = parse_date("yesterday", "%Y") }}{{ Err(DateError::Unparsable(e)) = r }}{{ e.input }} {{ e.format }}{{_}}?{{/}}"#,
+        TypedContext::default(),
+        vec![datetime_registry()],
+    )
+    .await;
+    assert_str(&v, "yesterday %Y");
+    let v = run_ext_template(
+        &i,
+        r#"{{ r = from_timestamp(9223372036854775807) }}{{ Err(DateError::OutOfRange(n)) = r }}{{ n.to_string() }}{{_}}?{{/}}"#,
+        TypedContext::default(),
+        vec![datetime_registry()],
+    )
+    .await;
+    assert_str(&v, "9223372036854775807");
+    let v = run_ext_template(
+        &i,
+        r#"{{ r = decimal("1.2.3") }}{{ Err(DecimalError::Unparsable(t)) = r }}{{ t }}{{_}}?{{/}}"#,
+        TypedContext::default(),
+        vec![],
+    )
+    .await;
+    assert_str(&v, "1.2.3");
+}
+
+#[tokio::test]
+#[should_panic(expected = "the sky fell")]
+async fn panic_stops_the_run_with_the_script_s_message() {
+    let i = Interner::new();
+    run_ext_script_mode(
+        &i,
+        r#"if @never { 1 } else { panic("the sky fell") }"#,
+        [(i.intern("never"), (Ty::Bool, Value::bool_(false)))]
+            .into_iter()
+            .collect(),
+        vec![],
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     let i = Interner::new();
@@ -815,9 +914,9 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     )
     .await;
     assert_str(&v, "héllo");
-    let v = run_ext(
+    let v = run_ext_script_mode(
         &i,
-        "re = regex(\"[0-9]+\"); unwrap_or(regex_find(re, \"ab42cd\"), \"none\")",
+        "if let Ok(re) = regex(\"[0-9]+\") { unwrap_or(regex_find(re, \"ab42cd\"), \"none\") } else { \"?\" }",
         TypedContext::default(),
         vec![regex_registry()],
     )
