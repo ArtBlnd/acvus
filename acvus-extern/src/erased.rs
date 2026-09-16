@@ -6,8 +6,9 @@ use std::marker::PhantomData;
 use acvus_mir::ty::PolyTy;
 use acvus_utils::Interner;
 
-use crate::obj::{Cross, Inline, Stored};
+use crate::obj::{Cross, FromValue, Inline, Stored, expect_type};
 use crate::runtime::Runtime;
+use crate::trap::Trap;
 use crate::ty_arg::{PolyVars, TyArg};
 
 /// The bound is `Stored`, not `Cross`, and there is no check in `as_ref`:
@@ -135,6 +136,17 @@ where
         unsafe {
             &mut *(<R::Value as Cross<R>>::deref_mut(rt, reference) as *mut R::Value as *mut Self)
         }
+    }
+}
+
+impl<R, T> FromValue<R> for Erased<R, T>
+where
+    R: Runtime,
+    T: Stored<R>,
+{
+    fn from_value(rt: &R, value: R::Value) -> Result<Self, Trap> {
+        expect_type::<T, R>(rt, &value)?;
+        Ok(Self(value, PhantomData))
     }
 }
 

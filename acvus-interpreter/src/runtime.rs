@@ -1,14 +1,15 @@
 //! This interpreter as a `Runtime`: the shared context is the host, and
 //! its vtable registry is what `erase` consults for an extension type.
 
+use std::any::{TypeId, type_name};
 use std::future::Future;
 use std::pin::Pin;
 
-use acvus_extern::{CallToken, Runtime};
+use acvus_extern::{CallToken, Runtime, Trap};
 
 use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
-use crate::value::{Value, is_small};
+use crate::value::{Tag, Value};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
@@ -19,6 +20,24 @@ impl Runtime for AcvusRuntime {
     type Value = Value;
     type Error = RuntimeError;
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, RuntimeError>> + Send + 'a>>;
+
+    fn type_of(&self, value: &Value) -> Option<TypeId> {
+        match value {
+            Value::Small(tag, _) => Some(tag.type_id()),
+            // SAFETY: the header is live for as long as the value.
+            Value::Large(p) => Some(unsafe { p.as_ref() }.vtable.type_id),
+            Value::Ref(_) | Value::Empty | Value::Undef => None,
+        }
+    }
+
+    fn type_name_of(&self, value: &Value) -> Option<&'static str> {
+        match value {
+            Value::Small(tag, _) => Some(tag.name()),
+            // SAFETY: the header is live for as long as the value.
+            Value::Large(p) => Some(unsafe { p.as_ref() }.vtable.name),
+            Value::Ref(_) | Value::Empty | Value::Undef => None,
+        }
+    }
 
     unsafe fn materialize<T>(&self, value: Value) -> T
     where
@@ -109,12 +128,14 @@ unsafe fn read<T>(value: &Value) -> &T
 where
     T: 'static,
 {
-    if const { is_small::<T>() } {
-        // SAFETY: a small `T` was written into the word by `erase`.
-        unsafe { &*(value.small_ref() as *const u64 as *const T) }
-    } else {
+    match Tag::of::<T>() {
+        Some(tag) => {
+            debug_assert_eq!(value.tag(), tag, "read: value is not a {}", type_name::<T>());
+            // SAFETY: an `Inline` `T` was written into the word by `erase`.
+            unsafe { &*(value.small_ref() as *const u64 as *const T) }
+        }
         // SAFETY: a large `T` is the payload behind the header.
-        unsafe { value.peek::<T>() }
+        None => unsafe { value.peek::<T>() },
     }
 }
 
@@ -124,12 +145,14 @@ unsafe fn read_mut<T>(value: &mut Value) -> &mut T
 where
     T: 'static,
 {
-    if const { is_small::<T>() } {
-        // SAFETY: a small `T` was written into the word by `erase`.
-        unsafe { &mut *(value.small_mut() as *mut u64 as *mut T) }
-    } else {
+    match Tag::of::<T>() {
+        Some(tag) => {
+            debug_assert_eq!(value.tag(), tag, "read_mut: value is not a {}", type_name::<T>());
+            // SAFETY: an `Inline` `T` was written into the word by `erase`.
+            unsafe { &mut *(value.small_mut() as *mut u64 as *mut T) }
+        }
         // SAFETY: a large `T` is the payload behind the header.
-        unsafe { value.peek_mut::<T>() }
+        None => unsafe { value.peek_mut::<T>() },
     }
 }
 
@@ -138,6 +161,12 @@ impl AcvusRuntime {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
         Box::pin(async move { crate::interpreter::fn_value_call(closure, args).await })
+    }
+}
+
+impl acvus_extern::FromValue<AcvusRuntime> for Value {
+    fn from_value(_: &AcvusRuntime, value: Value) -> Result<Value, Trap> {
+        Ok(value)
     }
 }
 

@@ -125,6 +125,44 @@ where
     }
 }
 
+/// The stand-ins appear inside types that ask their element to be
+/// `Stored`, such as `Erased<Rt, T>`; being uninhabited, they never cross.
+impl<const N: usize, Rt> crate::Cross<Rt> for Typeck<N>
+where
+    Rt: crate::Runtime,
+{
+    fn erase(self, _: &Rt) -> Rt::Value {
+        match self {}
+    }
+
+    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
+        panic!("a value of a compile-time stand-in type was materialized")
+    }
+}
+
+impl<const N: usize, Rt> crate::Stored<Rt> for Typeck<N> where Rt: crate::Runtime {}
+
+impl<T, Rt> crate::Cross<Rt> for Spec<T>
+where
+    T: Send + Sync + 'static,
+    Rt: crate::Runtime,
+{
+    fn erase(self, _: &Rt) -> Rt::Value {
+        match self.1 {}
+    }
+
+    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
+        panic!("a value of a compile-time stand-in type was materialized")
+    }
+}
+
+impl<T, Rt> crate::Stored<Rt> for Spec<T>
+where
+    T: Send + Sync + 'static,
+    Rt: crate::Runtime,
+{
+}
+
 macro_rules! impl_scalar_ty_arg {
     ($T:ty, $ty:expr) => {
         impl TyArg for $T {

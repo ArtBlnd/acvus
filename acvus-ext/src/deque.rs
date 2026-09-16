@@ -7,14 +7,15 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Iter, Journaled, NodeHash,
-    PolyTy, PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError,
-    SpaceHooks, SpaceResult, Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
+    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, PolyTy,
+    PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError, SpaceHooks,
+    SpaceResult, Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
     extern_registry,
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
 use crate::container::{checked_index, sig as container};
+use crate::iter::Iter;
 use crate::iterator::{lent_iter, sig};
 use crate::vec::vec;
 
@@ -141,6 +142,16 @@ where
 }
 
 acvus_extern::cross_as_stored!(Deque<T>, T: TyVar);
+
+impl<T, Rt> acvus_extern::FromValue<Rt> for Deque<T>
+where
+    T: TyVar,
+    Rt: acvus_extern::Runtime,
+{
+    fn from_value(rt: &Rt, value: Rt::Value) -> Result<Self, acvus_extern::Trap> {
+        acvus_extern::downcast(rt, value)
+    }
+}
 
 impl<T> TyArg for Deque<T>
 where

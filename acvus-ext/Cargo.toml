@@ -8,6 +8,7 @@ acvus-extern = { path = "../acvus-extern" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
 futures = "0.3"
+sync_wrapper = "1"
 rustc-hash = { workspace = true }
 regex = "1"
 chrono = "0.4"

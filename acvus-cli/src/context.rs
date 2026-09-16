@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use acvus_interpreter::{ContextWrite, Value};
-use acvus_mir::ty::{LenTerm, Ty};
+use acvus_mir::ty::{IntTy, LenTerm, Ty};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -31,7 +31,7 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
             },
             (None, Some(u)) => Typed {
                 ty: Ty::U64,
-                value: Value::from_bits(u),
+                value: Value::from_bits(IntTy::U64, u),
             },
             (None, None) => Typed {
                 ty: Ty::Float,

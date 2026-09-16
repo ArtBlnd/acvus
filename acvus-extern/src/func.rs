@@ -138,6 +138,20 @@ where
     }
 }
 
+impl<A, R, E, Rt> Fn1<A, R, E, Rt>
+where
+    A: TyVar,
+    R: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    /// The closure applied to a value the caller holds at `A`, the result
+    /// left as the runtime holds it.
+    pub fn call_value<'a>(&'a self, rt: &'a Rt, a: Rt::Value) -> Rt::CallFuture<'a> {
+        rt.call_1(&self.0, a, CallToken::mint())
+    }
+}
+
 impl<A, R, E, Rt> ClosureFn<Rt> for Fn1<A, R, E, Rt>
 where
     A: Cross<Rt>,

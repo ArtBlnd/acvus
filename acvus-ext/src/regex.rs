@@ -1,8 +1,10 @@
 //! Regular expressions: the `Regex` extension type and its functions.
 
 use acvus_extern::{
-    ExternType, IdentityVar, Iter, Pure, Registry, Runtime, TyArg, extern_fn, extern_registry,
+    ExternType, IdentityVar, Pure, Registry, Runtime, TyArg, extern_fn, extern_registry,
 };
+
+use crate::iter::Iter;
 
 #[derive(ExternType)]
 #[repr(transparent)]
@@ -41,7 +43,7 @@ where
     Rt: Runtime,
 {
     let mut start = 0;
-    Iter::generate(move || {
+    Iter::generate(move |_| {
         let m = re.0.find_at(&text, start)?;
         start = m.end();
         Some(m.as_str().to_owned())
@@ -61,7 +63,7 @@ where
 {
     let mut last_end = 0;
     let mut done = false;
-    Iter::generate(move || {
+    Iter::generate(move |_| {
         if done {
             return None;
         }
@@ -87,7 +89,7 @@ where
     Rt: Runtime,
 {
     let mut start = 0;
-    Iter::generate(move || {
+    Iter::generate(move |_| {
         loop {
             let caps = re.0.captures_at(&text, start)?;
             let full = caps.get(0)?;

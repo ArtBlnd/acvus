@@ -1,6 +1,7 @@
-//! The interpreter's value: an erased word or an erased pointer. What a
-//! value *is* lives in the MIR type the interpreter carries per value and in
-//! the vtable its allocation carries, never in the value itself.
+//! The interpreter's value: a tagged word, a reference, or an erased
+//! pointer. The Rust type a value was erased from is recorded in it: the
+//! `Tag` of a `Small`, the vtable of a `Large`. The MIR type the interpreter
+//! carries per value says what the program reads it as.
 
 use std::any::TypeId;
 use std::fmt;
@@ -9,6 +10,7 @@ use std::ptr::{self, NonNull};
 use std::sync::{Arc, LazyLock};
 
 use acvus_mir::ir::MirBody;
+use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
@@ -17,6 +19,61 @@ use crate::interpreter::InterpreterContext;
 use crate::journal::InMemoryContext;
 use crate::vtable::{Composite, Header, Slot, Vtable, VtableRegistry};
 
+// -- Tag --------------------------------------------------------------
+
+macro_rules! tag {
+    ($($name:ident: $t:ty),*) => {
+        /// The `Inline` type a `Small` word holds, one variant per type in
+        /// `acvus_extern::for_each_inline!`.
+        #[repr(u8)]
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum Tag {
+            $($name,)*
+        }
+
+        impl Tag {
+            pub fn of<T>() -> Option<Tag>
+            where
+                T: 'static,
+            {
+                let id = TypeId::of::<T>();
+                $(if id == TypeId::of::<$t>() {
+                    return Some(Tag::$name);
+                })*
+                None
+            }
+
+            pub fn type_id(self) -> TypeId {
+                match self {
+                    $(Tag::$name => TypeId::of::<$t>(),)*
+                }
+            }
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Tag::$name => stringify!($t),)*
+                }
+            }
+        }
+    };
+}
+acvus_extern::for_each_inline!(tag);
+
+impl Tag {
+    pub fn int(k: IntTy) -> Tag {
+        match k {
+            IntTy::I8 => Tag::I8,
+            IntTy::I16 => Tag::I16,
+            IntTy::I32 => Tag::I32,
+            IntTy::I64 => Tag::I64,
+            IntTy::U8 => Tag::U8,
+            IntTy::U16 => Tag::U16,
+            IntTy::U32 => Tag::U32,
+            IntTy::U64 => Tag::U64,
+        }
+    }
+}
+
 // -- Value ------------------------------------------------------------
 
 /// `Empty` is the moved-out sentinel and `Undef` the SSA initial value of a
@@ -24,13 +81,14 @@ use crate::vtable::{Composite, Header, Slot, Vtable, VtableRegistry};
 pub enum Value {
     Empty,
     Undef,
-    Small(u64),
+    Small(Tag, u64),
+    Ref(NonNull<Value>),
     Large(NonNull<Header>),
 }
 
 // SAFETY: every `Large` payload entered through `erase<T: Send + Sync>` or a
 // composite constructor, all `Send + Sync`, and its vtable is a shared
-// static.
+// static. A `Ref` is used only while its target is live (RFC-0018).
 unsafe impl Send for Value {}
 unsafe impl Sync for Value {}
 
@@ -43,9 +101,11 @@ impl Drop for Value {
     }
 }
 
-/// Whether `T` rides inline in `Small`: it fits the word and owns nothing.
-pub const fn is_small<T>() -> bool {
-    mem::size_of::<T>() <= 8 && mem::align_of::<T>() <= 8 && !mem::needs_drop::<T>()
+pub fn is_small<T>() -> bool
+where
+    T: 'static,
+{
+    Tag::of::<T>().is_some()
 }
 
 fn large<T>(vtable: &'static Vtable, value: T) -> Value {
@@ -69,20 +129,21 @@ impl Value {
             mem::forget(value);
             return same;
         }
-        if const { is_small::<T>() } {
-            let mut bits = 0u64;
-            // SAFETY: T fits in the word; low bytes are written and read alike.
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    &value as *const T as *const u8,
-                    &mut bits as *mut u64 as *mut u8,
-                    mem::size_of::<T>(),
-                );
+        match Tag::of::<T>() {
+            Some(tag) => {
+                let mut bits = 0u64;
+                // SAFETY: an `Inline` T fits the word; low bytes are written and read alike.
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        &value as *const T as *const u8,
+                        &mut bits as *mut u64 as *mut u8,
+                        mem::size_of::<T>(),
+                    );
+                }
+                mem::forget(value);
+                Value::Small(tag, bits)
             }
-            mem::forget(value);
-            Value::Small(bits)
-        } else {
-            large(table.vtable_of::<T>(), value)
+            None => large(table.vtable_of::<T>(), value),
         }
     }
 
@@ -99,10 +160,11 @@ impl Value {
             return same;
         }
         let out = match &self {
-            Value::Small(bits) => {
-                debug_assert!(
-                    is_small::<T>(),
-                    "materialize: {} is not a small type",
+            Value::Small(tag, bits) => {
+                debug_assert_eq!(
+                    Some(*tag),
+                    Tag::of::<T>(),
+                    "materialize: value is not a {}",
                     std::any::type_name::<T>()
                 );
                 let mut out = MaybeUninit::<T>::uninit();
@@ -129,6 +191,7 @@ impl Value {
                 let Slot { value, .. } = *slot;
                 value
             }
+            Value::Ref(_) => panic!("materialize: a reference was erased from no type"),
             Value::Empty => panic!("materialize: accessed moved-out value"),
             Value::Undef => panic!("materialize: accessed undef value"),
         };
@@ -179,8 +242,15 @@ impl Value {
 
     pub fn small(&self) -> u64 {
         match self {
-            Value::Small(bits) => *bits,
+            Value::Small(_, bits) => *bits,
             other => panic!("small: not a small value: {other:?}"),
+        }
+    }
+
+    pub fn tag(&self) -> Tag {
+        match self {
+            Value::Small(tag, _) => *tag,
+            other => panic!("tag: not a small value: {other:?}"),
         }
     }
 
@@ -199,18 +269,26 @@ impl Value {
     #[inline]
     pub fn use_from(slot: &mut Value) -> Value {
         match slot {
-            Value::Small(bits) => Value::Small(*bits),
+            Value::Small(..) | Value::Ref(_) => slot.copy_word(),
             Value::Undef => Value::Undef,
             Value::Empty => panic!("use: accessed moved-out value"),
             Value::Large(_) => slot.take(),
         }
     }
 
+    /// The copy of a `Small` or a `Ref`, the two values that are their word.
+    pub fn copy_word(&self) -> Value {
+        match self {
+            Value::Small(tag, bits) => Value::Small(*tag, *bits),
+            Value::Ref(p) => Value::Ref(*p),
+            other => panic!("copy_word: not a word value: {other:?}"),
+        }
+    }
+
     // -- References (RFC-0018) ------------------------------------
 
-    /// A reference: the word that names `target`'s storage.
     pub fn reference(target: &Value) -> Value {
-        Value::Small(target as *const Value as usize as u64)
+        Value::Ref(NonNull::from(target))
     }
 
     /// The storage a reference names.
@@ -219,20 +297,26 @@ impl Value {
     /// `self` is a reference made by `Value::reference` whose target is
     /// still live and unmoved.
     pub unsafe fn target<'a>(&self) -> &'a Value {
-        unsafe { &*(self.small() as usize as *const Value) }
+        match self {
+            Value::Ref(p) => unsafe { p.as_ref() },
+            other => panic!("target: not a reference: {other:?}"),
+        }
     }
 
     /// # Safety
     /// As `target`, and no other name of the storage is used meanwhile.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn target_mut<'a>(&self) -> &'a mut Value {
-        unsafe { &mut *(self.small() as usize as *mut Value) }
+        match self {
+            Value::Ref(p) => unsafe { &mut *p.as_ptr() },
+            other => panic!("target_mut: not a reference: {other:?}"),
+        }
     }
 
     /// The bits of a `Small`, in place.
     pub fn small_ref(&self) -> &u64 {
         match self {
-            Value::Small(bits) => bits,
+            Value::Small(_, bits) => bits,
             other => panic!("small_ref: not a small value: {other:?}"),
         }
     }
@@ -240,7 +324,7 @@ impl Value {
     /// The bits of a `Small`, in place.
     pub fn small_mut(&mut self) -> &mut u64 {
         match self {
-            Value::Small(bits) => bits,
+            Value::Small(_, bits) => bits,
             other => panic!("small_mut: not a small value: {other:?}"),
         }
     }
@@ -251,7 +335,8 @@ impl fmt::Debug for Value {
         match self {
             Value::Empty => write!(f, "<empty>"),
             Value::Undef => write!(f, "<undef>"),
-            Value::Small(bits) => write!(f, "Small({bits:#x})"),
+            Value::Small(tag, bits) => write!(f, "Small({tag:?}, {bits:#x})"),
+            Value::Ref(p) => write!(f, "Ref({p:p})"),
             Value::Large(p) => {
                 let vtable = self.header().vtable;
                 match vtable.debug {
@@ -264,12 +349,13 @@ impl fmt::Debug for Value {
     }
 }
 
-/// Identity for `Large`, bits for `Small`. Equality of what a value holds is
-/// a property of its type: materialize, then compare.
+/// Identity for `Large` and `Ref`, tag and bits for `Small`. Equality of
+/// what a value holds is a property of its type: materialize, then compare.
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Value::Small(a), Value::Small(b)) => a == b,
+            (Value::Small(ta, a), Value::Small(tb, b)) => ta == tb && a == b,
+            (Value::Ref(pa), Value::Ref(pb)) => pa == pb,
             (Value::Large(pa), Value::Large(pb)) => pa == pb,
             (Value::Empty, Value::Empty) | (Value::Undef, Value::Undef) => true,
             _ => false,
@@ -455,24 +541,24 @@ pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 9]> = LazyLock::
 
 impl Value {
     pub fn int(n: i64) -> Self {
-        Value::Small(n as u64)
+        Value::Small(Tag::I64, n as u64)
     }
-    /// An integer of any width from its two's-complement bits, sign- or
-    /// zero-extended to the word; the type says which (RFC-0037).
-    pub fn from_bits(bits: u64) -> Self {
-        Value::Small(bits)
+    /// An integer of width `k` from its two's-complement bits, sign- or
+    /// zero-extended to the word as `k` says (RFC-0037).
+    pub fn from_bits(k: IntTy, bits: u64) -> Self {
+        Value::Small(Tag::int(k), bits)
     }
     pub fn float(f: f64) -> Self {
-        Value::Small(f.to_bits())
+        Value::Small(Tag::F64, f.to_bits())
     }
     pub fn bool_(b: bool) -> Self {
-        Value::Small(b as u64)
+        Value::Small(Tag::Bool, b as u64)
     }
     pub fn unit() -> Self {
-        Value::Small(0)
+        Value::Small(Tag::Unit, 0)
     }
     pub fn byte(b: u8) -> Self {
-        Value::Small(b as u64)
+        Value::Small(Tag::U8, b as u64)
     }
     pub fn as_int(&self) -> i64 {
         self.small() as i64
@@ -634,6 +720,52 @@ mod tests {
         assert!(is_small::<()>());
         assert!(!is_small::<String>());
         assert!(!is_small::<Box<u8>>());
+    }
+
+    #[test]
+    fn a_copy_type_outside_the_inline_set_is_large() {
+        #[derive(Clone, Copy)]
+        struct Word(u32);
+        assert!(!is_small::<Word>());
+        let table = VtableRegistry::default();
+        let v = unsafe { Value::erase(&table, Word(9)) };
+        assert!(matches!(v, Value::Large(_)));
+        assert_eq!(unsafe { v.materialize::<Word>() }.0, 9);
+    }
+
+    #[test]
+    fn erase_writes_the_tag_of_the_type() {
+        let table = VtableRegistry::default();
+        assert_eq!(unsafe { Value::erase(&table, 7i64) }.tag(), Tag::I64);
+        assert_eq!(unsafe { Value::erase(&table, 7u8) }.tag(), Tag::U8);
+        assert_eq!(unsafe { Value::erase(&table, 1.5f64) }.tag(), Tag::F64);
+        assert_eq!(unsafe { Value::erase(&table, true) }.tag(), Tag::Bool);
+        assert_eq!(unsafe { Value::erase(&table, ()) }.tag(), Tag::Unit);
+    }
+
+    #[test]
+    fn every_tag_names_its_type() {
+        assert_eq!(Tag::I64.type_id(), TypeId::of::<i64>());
+        assert_eq!(Tag::of::<i64>(), Some(Tag::I64));
+        assert_eq!(Tag::I64.name(), "i64");
+        assert_eq!(Tag::Unit.name(), "()");
+        assert_eq!(Tag::int(IntTy::U16), Tag::U16);
+        assert_eq!(Tag::of::<u16>(), Some(Tag::U16));
+    }
+
+    #[test]
+    fn a_reference_is_its_own_variant() {
+        let v = Value::int(3);
+        let r = Value::reference(&v);
+        assert!(matches!(r, Value::Ref(_)));
+        assert_eq!(unsafe { r.target() }.as_int(), 3);
+        assert_eq!(r.copy_word(), r);
+    }
+
+    #[test]
+    fn equal_bits_under_different_tags_are_not_equal() {
+        assert_ne!(Value::int(1), Value::bool_(true));
+        assert_eq!(Value::int(1), Value::int(1));
     }
 
     #[test]

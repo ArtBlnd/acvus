@@ -168,7 +168,7 @@ pub fn decode(
         Ty::Int(k) => {
             let mut word = [0u8; 8];
             word[..k.bytes()].copy_from_slice(take(input, k.bytes())?);
-            Value::from_bits(k.read(u64::from_le_bytes(word)) as u64)
+            Value::from_bits(*k, k.read(u64::from_le_bytes(word)) as u64)
         }
         Ty::Float => Value::float(f64::from_bits(take_u64(input)?)),
         Ty::Bool => Value::bool_(take(input, 1)?[0] != 0),

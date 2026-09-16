@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{string_registry, vec_registry};
 use acvus_extern::{
-    CallToken, Erased, ExternHandler, Externs, Interner, PolyTy, QualifiedRef, Registry, Runtime,
-    Trap, TyTerm, TypeArg, extern_fn, extern_registry,
+    CallToken, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef, Registry,
+    Runtime, Trap, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -105,7 +105,22 @@ impl acvus_extern::Cross<Counting> for V {
     }
 }
 
+impl acvus_extern::FromValue<Counting> for V {
+    fn from_value(_: &Counting, value: V) -> Result<V, Trap> {
+        Ok(value)
+    }
+}
+
 impl Runtime for Counting {
+    fn type_of(&self, value: &V) -> Option<TypeId> {
+        let V::Boxed(any) = value else {
+            return None;
+        };
+        Some((**any).type_id())
+    }
+    fn type_name_of(&self, _: &V) -> Option<&'static str> {
+        None
+    }
     unsafe fn inline_ref<T>(value: &V) -> &T
     where
         T: acvus_extern::Inline,
@@ -279,6 +294,40 @@ fn vec_of(elem: PolyTy, interner: &Interner) -> PolyTy {
         effect_args: vec![],
         identity_args: vec![],
     }
+}
+
+// -- The checked exit ---------------------------------------------------
+
+#[test]
+fn from_value_on_a_value_of_another_type_traps_naming_the_expected_type() {
+    let rt = Counting::default();
+    // SAFETY: stored as itself.
+    let holds_an_i64 = unsafe { rt.erase::<i64>(7) };
+    let Err(trap) = Erased::<Counting, String>::from_value(&rt, holds_an_i64) else {
+        panic!("an i64 is read back as a String")
+    };
+    let message = trap.to_string();
+    assert!(
+        message.contains(type_name::<String>()),
+        "the trap names the expected type: {message}"
+    );
+    assert_eq!(
+        rt.counts(),
+        Counts {
+            boxes: 1,
+            unboxes: 0
+        },
+        "a refused value is not unboxed"
+    );
+}
+
+#[test]
+fn from_value_on_a_value_of_the_type_is_the_value() {
+    let rt = Counting::default();
+    // SAFETY: stored as itself.
+    let holds_a_string = unsafe { rt.erase::<String>("s".to_owned()) };
+    let erased = Erased::<Counting, String>::from_value(&rt, holds_a_string).expect("a String");
+    assert_eq!(erased.as_ref(&rt), "s");
 }
 
 // -- E1 -----------------------------------------------------------------

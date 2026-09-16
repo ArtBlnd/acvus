@@ -4,6 +4,7 @@
 //! opens one shape of value; a shape that is not there is the runtime's
 //! own error.
 
+use std::any::TypeId;
 use std::future::{Future, Ready};
 
 use crate::func::CallToken;
@@ -13,11 +14,19 @@ use crate::trap::Trap;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
-    type Value: crate::Cross<Self>;
+    type Value: crate::Cross<Self> + crate::FromValue<Self>;
     type Error: From<Trap> + Send + Sync + 'static;
     type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
     where
         Self: 'a;
+
+    /// The `T` of the `erase::<T>` that made this value, when the value
+    /// records it. `downcast` and `Erased::from_value` trust this answer
+    /// with a `materialize::<T>`, so a runtime answers only from the record.
+    fn type_of(&self, value: &Self::Value) -> Option<TypeId>;
+    /// The runtime's name for the type `type_of` reports, for a trap
+    /// message; a runtime that keeps no name answers `None`.
+    fn type_name_of(&self, value: &Self::Value) -> Option<&'static str>;
 
     /// # Safety
     /// `T` must be the type the value was `erase`d from.
@@ -112,11 +121,23 @@ fn no_values<T>() -> Result<T, Trap> {
     Err(Trap::internal("TypesOnly runtime holds no values"))
 }
 
+impl crate::FromValue<TypesOnly> for () {
+    fn from_value(_: &TypesOnly, value: ()) -> Result<(), Trap> {
+        Ok(value)
+    }
+}
+
 impl Runtime for TypesOnly {
     type Value = ();
     type Error = Trap;
     type CallFuture<'a> = Ready<Result<(), Trap>>;
 
+    fn type_of(&self, _: &()) -> Option<TypeId> {
+        None
+    }
+    fn type_name_of(&self, _: &()) -> Option<&'static str> {
+        None
+    }
     unsafe fn materialize<T>(&self, _: ()) -> T
     where
         T: Send + Sync + 'static,

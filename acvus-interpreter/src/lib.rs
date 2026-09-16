@@ -16,6 +16,6 @@ pub use layout::Hooks as SpaceHooksByType;
 pub use runtime::{AcvusRuntime, ExternHandler};
 pub use space::{DirStore, Head, MemoryStore, Mode, Space, SpacePage, Store, hex};
 pub use value::{
-    Array, FnValue, HandleValue, Object, OptionValue, ResultValue, Tuple, Value, VariantValue,
+    Array, FnValue, HandleValue, Object, OptionValue, ResultValue, Tag, Tuple, Value, VariantValue,
 };
 pub use vtable::{Composite, Vtable, VtableRegistry};

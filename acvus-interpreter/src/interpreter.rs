@@ -437,7 +437,7 @@ async fn execute_inst(
     match &insts[pc].kind {
         // -- Constants ------------------------------------
         InstKind::Const { dst, value } => {
-            frame.set(*dst, literal_to_value(value));
+            frame.set(*dst, literal_to_value(value, type_of(val_types, *dst)));
         }
 
         // -- Storage (RFC-0018) ----------------------------
@@ -475,7 +475,7 @@ async fn execute_inst(
                         // SAFETY: the type checker admits only a string here.
                         Value::string(unsafe { at.as_str() }.to_string())
                     } else {
-                        Value::Small(at.small())
+                        at.copy_word()
                     }
                 }
             };
@@ -503,7 +503,7 @@ async fn execute_inst(
                     store_path(frame.slot_mut(*slot), path, val, &ctx.shared.interner);
                 }
                 RefTarget::Through(r) => {
-                    let reference = Value::Small(frame.get(*r).small());
+                    let reference = frame.get(*r).copy_word();
                     // SAFETY: the type checker admits only a live `&mut` here.
                     let base = unsafe { reference.target_mut() };
                     *walk_path_mut(base, path, &ctx.shared.interner) = val;
@@ -1024,14 +1024,21 @@ impl Interpreter {
 
 // -- Literal -> Value --------------------------------------------------
 
-fn literal_to_value(lit: &Literal) -> Value {
-    match lit {
-        Literal::Int(n) => Value::from_bits(*n as u64),
-        Literal::Float(f) => Value::float(*f),
-        Literal::String(s) => Value::string(s.as_str()),
-        Literal::Bool(b) => Value::bool_(*b),
-        Literal::List(items) => Value::array(items.iter().map(literal_to_value).collect()),
-        Literal::Unit => Value::unit(),
+fn literal_to_value(lit: &Literal, ty: &Ty) -> Value {
+    match (lit, ty) {
+        (Literal::Int(n), Ty::Int(k)) => Value::from_bits(*k, *n as u64),
+        (Literal::Int(n), other) => panic!("integer literal {n} typed as {other:?}"),
+        (Literal::Float(f), _) => Value::float(*f),
+        (Literal::String(s), _) => Value::string(s.as_str()),
+        (Literal::Bool(b), _) => Value::bool_(*b),
+        (Literal::List(items), Ty::Array(elem, _)) => Value::array(
+            items
+                .iter()
+                .map(|item| literal_to_value(item, elem))
+                .collect(),
+        ),
+        (Literal::List(_), other) => panic!("list literal typed as {other:?}"),
+        (Literal::Unit, _) => Value::unit(),
     }
 }
 
@@ -1084,7 +1091,7 @@ fn int_binop(op: BinOp, k: IntTy, left: u64, right: u64) -> Result<Value, Runtim
         let a = k.read(left) as T;
         let b = k.read(right) as T;
         let overflow = RuntimeError::integer_overflow;
-        let int = |v: T| Value::from_bits(v as u64);
+        let int = |v: T| Value::from_bits(k, v as u64);
         Ok(match op {
             BinOp::Add => int(a.checked_add(b).ok_or_else(overflow)?),
             BinOp::Sub => int(a.checked_sub(b).ok_or_else(overflow)?),
@@ -1166,7 +1173,10 @@ fn eval_unaryop(op: UnaryOp, ty: &Ty, val: &Value) -> Result<Value, RuntimeError
     Ok(match (op, ty) {
         (UnaryOp::Neg, Ty::Int(k)) => for_int_ty!(*k, |T| {
             let a = k.read(val.small()) as T;
-            Value::from_bits(a.checked_neg().ok_or_else(RuntimeError::integer_overflow)? as u64)
+            Value::from_bits(
+                *k,
+                a.checked_neg().ok_or_else(RuntimeError::integer_overflow)? as u64,
+            )
         }),
         (UnaryOp::Neg, Ty::Float) => Value::float(-val.as_float()),
         (UnaryOp::Not, Ty::Bool) => Value::bool_(!val.as_bool()),

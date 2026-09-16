@@ -7,13 +7,15 @@
 //! variant shapes.
 
 use std::any::TypeId;
+use std::mem::ManuallyDrop;
 
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
 use crate::len::{Arr, LenVar};
 use crate::runtime::Runtime;
-use crate::ty_arg::Never;
+use crate::trap::Trap;
+use crate::ty_arg::{Never, TyVar};
 
 /// An object as the runtime holds it: field name to value.
 pub struct Obj<V>(pub FxHashMap<Astr, V>);
@@ -100,12 +102,75 @@ where
 {
 }
 
+/// The `Value -> Self` step a body takes outside the glue: identity for the
+/// runtime's own value, otherwise a downcast checked against
+/// `Runtime::type_of`. There is no impl for a bare scalar: a scalar comes
+/// out as `Erased<Rt, T>`, whose `from_value` checks the value's record of
+/// its type like any other.
+pub trait FromValue<Rt>: Sized
+where
+    Rt: Runtime,
+{
+    fn from_value(rt: &Rt, value: Rt::Value) -> Result<Self, Trap>;
+}
+
+pub fn expect_type<T, Rt>(rt: &Rt, value: &Rt::Value) -> Result<(), Trap>
+where
+    T: 'static,
+    Rt: Runtime,
+{
+    let expected = TypeId::of::<T>();
+    match rt.type_of(value) {
+        Some(found) if found == expected => Ok(()),
+        Some(found) => Err(Trap::internal(match rt.type_name_of(value) {
+            Some(name) => format!(
+                "expected a value erased from `{}`, found one erased from `{name}`",
+                std::any::type_name::<T>()
+            ),
+            None => format!(
+                "expected a value erased from `{}`, found a payload of {found:?}",
+                std::any::type_name::<T>()
+            ),
+        })),
+        None => Err(Trap::internal(format!(
+            "expected a value erased from `{}`, found a value no Rust type was erased into",
+            std::any::type_name::<T>()
+        ))),
+    }
+}
+
+pub fn downcast<T, Rt>(rt: &Rt, value: Rt::Value) -> Result<T, Trap>
+where
+    T: Send + Sync + 'static,
+    Rt: Runtime,
+{
+    expect_type::<T, Rt>(rt, &value)?;
+    // SAFETY: `expect_type` just read `T`'s `TypeId` off this value, which
+    // `Runtime::type_of` reports only for a value erased through
+    // `erase::<T>`.
+    Ok(unsafe { rt.materialize::<T>(value) })
+}
+
 /// A `Stored` type that lives in the runtime's value word itself, so
 /// `Erased<R, T>` derefs to it with no runtime in hand.
 pub trait Inline: Copy + Send + Sync + 'static {}
 
+/// Calls `$m! { Name: type, ... }` with every `Inline` type and a name for
+/// it. `Inline` is implemented from this list, and a runtime that tags its
+/// value word per type builds the tag from the same list.
+#[macro_export]
+macro_rules! for_each_inline {
+    ($m:ident) => {
+        $m! {
+            I8: i8, I16: i16, I32: i32, I64: i64,
+            U8: u8, U16: u16, U32: u32, U64: u64,
+            F64: f64, Bool: bool, Unit: ()
+        }
+    };
+}
+
 macro_rules! inline {
-    ($($t:ty),*) => { $(
+    ($($name:ident: $t:ty),*) => { $(
         const _: () = assert!(
             std::mem::size_of::<$t>() <= 8
                 && std::mem::align_of::<$t>() <= 8
@@ -115,7 +180,7 @@ macro_rules! inline {
         impl Inline for $t {}
     )* };
 }
-inline!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, ());
+crate::for_each_inline!(inline);
 
 /// A type stored as itself: the runtime keeps the Rust value and hands it
 /// back untouched (RFC-0022).
@@ -397,6 +462,49 @@ where
             &mut *(rt.deref_mut::<Arr<Rt::Value, ()>>(reference) as *mut Arr<Rt::Value, ()>
                 as *mut Self)
         }
+    }
+}
+
+/// The elements of a checked container box, each taken by its own
+/// `FromValue`; the buffer itself is reused when the element is the value.
+fn elements_from_values<E, Rt>(rt: &Rt, items: Vec<Rt::Value>) -> Result<Vec<E>, Trap>
+where
+    E: FromValue<Rt> + 'static,
+    Rt: Runtime,
+{
+    if TypeId::of::<E>() == TypeId::of::<Rt::Value>() {
+        let mut items = ManuallyDrop::new(items);
+        // SAFETY: `E` is `Rt::Value`: one element type, one allocator.
+        return Ok(unsafe {
+            Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity())
+        });
+    }
+    items
+        .into_iter()
+        .map(|item| E::from_value(rt, item))
+        .collect()
+}
+
+impl<E, Rt> FromValue<Rt> for Vec<E>
+where
+    E: FromValue<Rt> + Send + Sync + 'static,
+    Rt: Runtime,
+{
+    fn from_value(rt: &Rt, value: Rt::Value) -> Result<Self, Trap> {
+        let items = downcast::<Vec<Rt::Value>, Rt>(rt, value)?;
+        elements_from_values(rt, items)
+    }
+}
+
+impl<E, N, Rt> FromValue<Rt> for Arr<E, N>
+where
+    E: FromValue<Rt> + TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    fn from_value(rt: &Rt, value: Rt::Value) -> Result<Self, Trap> {
+        let items = downcast::<Arr<Rt::Value, ()>, Rt>(rt, value)?;
+        Ok(Arr::new(elements_from_values(rt, items.0)?))
     }
 }
 

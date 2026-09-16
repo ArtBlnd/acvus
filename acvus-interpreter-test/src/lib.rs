@@ -284,7 +284,7 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
             // SAFETY: the witness is String.
             unsafe { v.as_str() }.to_owned()
         }
-        Value::Small(_) => String::new(),
+        Value::Small(..) => String::new(),
         other => format!("{other:?}"),
     }
 }

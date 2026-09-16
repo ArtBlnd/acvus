@@ -4,7 +4,7 @@ use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
 
 fn ctx(i: &Interner, name: &str, ty: IntTy, bits: u64) -> Context {
-    [(i.intern(name), typed(Ty::Int(ty), Value::from_bits(bits)))]
+    [(i.intern(name), typed(Ty::Int(ty), Value::from_bits(ty, bits)))]
         .into_iter()
         .collect()
 }

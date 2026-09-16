@@ -10,13 +10,17 @@
 //!   reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, Cross, EffectVar, Fn1, Fn2, IdentityVar, Iter, LenVar, Ref, Registry, Runtime,
-    TyVar, extern_fn, extern_registry,
+    Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar, Ref,
+    Registry, Runtime, Stored, TyVar, extern_fn, extern_registry,
 };
+
+use crate::iter::Iter;
 
 /// The shared signatures every container declares instances of (RFC-0027).
 pub mod sig {
-    use acvus_extern::{Iter, Ref, extern_signature};
+    use acvus_extern::{Ref, extern_signature};
+
+    use crate::iter::Iter;
 
     extern_signature! {
         ns: "iter",
@@ -54,10 +58,10 @@ where
     Rt: Runtime,
 {
     let mut index = 0;
-    Iter::from_fn(move |rt| {
+    Iter::generate(move |rt| {
         let item = items.try_map(rt, |container| at(container, index));
         index += 1;
-        item.map(Ref::into_value)
+        item
     })
 }
 
@@ -201,15 +205,13 @@ where
     K: IdentityVar,
     Rt: Runtime,
 {
-    parts
-        .into_iter()
-        .fold(Iter::<T, E, K, Rt>::empty(), |acc, part| acc.chain(part))
+    Iter::chain_all(parts)
 }
 
 #[extern_fn(effect = pure)]
 fn flatten<T, E, I, Rt>(it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -220,7 +222,7 @@ where
 #[extern_fn(effect = pure)]
 fn flatten_arrays<T, N, E, I, Rt>(it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,
@@ -233,7 +235,7 @@ where
 fn flat_map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, Vec<U>, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
-    U: TyVar + Cross<Rt>,
+    U: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -244,7 +246,7 @@ where
 #[extern_fn(effect = E)]
 async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Vec<T>, Rt::Error>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -259,7 +261,7 @@ where
 #[extern_fn(effect = E)]
 async fn join<E, I, Rt>(
     rt: &Rt,
-    mut it: Iter<String, E, I, Rt>,
+    mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     sep: String,
 ) -> Result<String, Rt::Error>
 where
@@ -269,7 +271,7 @@ where
 {
     let mut parts = Vec::new();
     while let Some(part) = it.next(rt).await? {
-        parts.push(part);
+        parts.push(part.into_inner(rt));
     }
     Ok(parts.join(&sep))
 }
@@ -277,17 +279,17 @@ where
 #[extern_fn(effect = E)]
 async fn contains<T, E, I, Rt>(
     rt: &Rt,
-    mut it: Iter<T, E, I, Rt>,
+    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
     needle: T,
 ) -> Result<bool, Rt::Error>
 where
-    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Cross<Rt> + PartialEq,
+    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
     while let Some(item) = it.next(rt).await? {
-        if item == needle {
+        if *item.as_ref(rt) == needle {
             return Ok(true);
         }
     }
@@ -297,7 +299,7 @@ where
 #[extern_fn(effect = E)]
 async fn next<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -312,7 +314,7 @@ async fn find<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -327,7 +329,7 @@ async fn reduce<T, E, I, Rt>(
     f: Fn2<T, T, T, E, Rt>,
 ) -> Result<Option<T>, Rt::Error>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -349,7 +351,7 @@ async fn fold<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> Result<U, Rt::Error>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
     U: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,

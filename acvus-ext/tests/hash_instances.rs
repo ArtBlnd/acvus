@@ -115,10 +115,26 @@ impl acvus_extern::Cross<Counting> for V {
     }
 }
 
+impl acvus_extern::FromValue<Counting> for V {
+    fn from_value(_: &Counting, value: V) -> Result<V, Trap> {
+        Ok(value)
+    }
+}
+
 impl Runtime for Counting {
     type Value = V;
     type Error = Trap;
     type CallFuture<'a> = Ready<Result<V, Trap>>;
+
+    fn type_of(&self, value: &V) -> Option<TypeId> {
+        let (V::Boxed(any) | V::Word(any)) = value else {
+            return None;
+        };
+        Some((**any).type_id())
+    }
+    fn type_name_of(&self, _: &V) -> Option<&'static str> {
+        None
+    }
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where

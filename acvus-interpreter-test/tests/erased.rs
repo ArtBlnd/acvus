@@ -1,13 +1,18 @@
-//! `Erased<R, String>` inside a running script (E2, E3): an element edited
+//! `Erased<R, T>` inside a running script (E2, E3): an element edited
 //! through `as_mut` is what the program reads afterwards, and equality over
 //! an `Iter` of it goes through `as_ref` with no `Monomorphize` member list.
 
+use std::any::type_name;
+use std::sync::Arc;
+
+use acvus_ext::Iter;
 use acvus_extern::{
-    EffectVar, Erased, IdentityVar, Iter, Registry, Runtime, extern_fn, extern_registry,
+    EffectVar, Erased, FromValue, IdentityVar, Registry, Runtime, extern_fn, extern_registry,
 };
-use acvus_interpreter::{AcvusRuntime, Value};
+use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
 #[extern_fn(effect = pure)]
 fn upcase_first<Rt>(rt: &Rt, items: &mut Vec<Erased<Rt, String>>)
@@ -79,4 +84,61 @@ async fn contains_compares_through_as_ref() {
     assert!(hit.as_bool());
     let miss = run(r#"into_iter(split_str("a,b,c", ",")) | contains_erased("z")"#).await;
     assert!(!miss.as_bool());
+}
+
+// -- The checked exit on an Inline element ------------------------------
+
+#[tokio::test]
+async fn contains_over_inline_elements_reads_them_by_their_tag() {
+    assert!(run("into_iter([1, 2, 3]) | contains(3)").await.as_bool());
+    assert!(!run("into_iter([1, 2, 3]) | contains(4)").await.as_bool());
+    assert!(run("into_iter([1.5, 2.5]) | contains(2.5)").await.as_bool());
+    assert!(run("into_iter([true, false]) | contains(false)").await.as_bool());
+}
+
+fn runtime(i: &Interner) -> AcvusRuntime {
+    InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor)).runtime()
+}
+
+#[test]
+fn type_of_reports_the_tag_of_a_small_value() {
+    use std::any::TypeId;
+    let rt = runtime(&Interner::new());
+    assert_eq!(rt.type_of(&Value::int(1)), Some(TypeId::of::<i64>()));
+    assert_eq!(rt.type_of(&Value::float(1.0)), Some(TypeId::of::<f64>()));
+    assert_eq!(rt.type_of(&Value::bool_(true)), Some(TypeId::of::<bool>()));
+    assert_eq!(rt.type_of(&Value::unit()), Some(TypeId::of::<()>()));
+    assert_eq!(rt.type_of(&Value::string("s")), Some(TypeId::of::<String>()));
+    assert_eq!(rt.type_of(&Value::Empty), None);
+    assert_eq!(rt.type_of(&Value::Undef), None);
+    let target = Value::int(1);
+    assert_eq!(rt.type_of(&Value::reference(&target)), None);
+}
+
+#[test]
+fn from_value_on_an_int_as_a_float_traps_naming_both_types() {
+    let rt = runtime(&Interner::new());
+    let Err(trap) = Erased::<AcvusRuntime, f64>::from_value(&rt, Value::int(2)) else {
+        panic!("an i64 word is read back as an f64")
+    };
+    let message = trap.to_string();
+    assert!(message.contains(type_name::<f64>()), "{message}");
+    assert!(message.contains("`i64`"), "{message}");
+}
+
+#[test]
+fn from_value_on_an_int_as_an_int_is_the_value() {
+    let rt = runtime(&Interner::new());
+    let erased = Erased::<AcvusRuntime, i64>::from_value(&rt, Value::int(2)).expect("an i64");
+    assert_eq!(erased.get(), 2);
+}
+
+#[test]
+fn from_value_on_a_reference_traps_as_a_value_erased_from_no_type() {
+    let rt = runtime(&Interner::new());
+    let target = Value::int(2);
+    let Err(trap) = Erased::<AcvusRuntime, i64>::from_value(&rt, Value::reference(&target)) else {
+        panic!("a reference is read back as an i64")
+    };
+    assert!(trap.to_string().contains("no Rust type was erased into"), "{trap}");
 }

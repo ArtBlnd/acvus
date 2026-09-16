@@ -179,7 +179,22 @@ impl acvus_extern::Cross<Tiny> for V {
     }
 }
 
+impl acvus_extern::FromValue<Tiny> for V {
+    fn from_value(_: &Tiny, value: V) -> Result<V, Trap> {
+        Ok(value)
+    }
+}
+
 impl Runtime for Tiny {
+    fn type_of(&self, value: &V) -> Option<std::any::TypeId> {
+        let V::Erased(any) = value else {
+            return None;
+        };
+        Some((**any).type_id())
+    }
+    fn type_name_of(&self, _: &V) -> Option<&'static str> {
+        None
+    }
     unsafe fn inline_ref<T>(value: &V) -> &T
     where
         T: acvus_extern::Inline,
