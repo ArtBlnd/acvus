@@ -66,9 +66,13 @@ fn split_str(s: String, sep: String) -> Vec<String> {
 }
 
 #[extern_fn(effect = pure)]
-fn repeat_str(s: String, n: i64) -> Result<String, Trap> {
-    let n =
-        usize::try_from(n).map_err(|_| Trap::call("repeat_str", format!("negative count {n}")))?;
+fn repeat_str(s: String, n: u64) -> Result<String, Trap> {
+    let Ok(n) = usize::try_from(n) else {
+        return Err(Trap::call(
+            "repeat_str",
+            format!("count {n} exceeds the address space"),
+        ));
+    };
     Ok(s.repeat(n))
 }
 

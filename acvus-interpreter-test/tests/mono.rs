@@ -30,16 +30,16 @@ async fn to_string_runs_the_instance_for_the_argument_type() {
 }
 
 #[tokio::test]
-async fn to_int_reads_a_string_through_its_own_instance() {
+async fn to_int_reads_each_scalar_through_its_own_instance() {
     let i = Interner::new();
     assert_eq!(
         run_script(
             &i,
-            "s = \"42\"; f = 1.9; to_int(&s) + to_int(&f)",
+            "b = true; f = 1.9; to_int(&b) + to_int(&f)",
             FxHashMap::default()
         )
         .await
         .as_int(),
-        43
+        2
     );
 }

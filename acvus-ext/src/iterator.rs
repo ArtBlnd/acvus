@@ -45,10 +45,6 @@ pub mod sig {
     }
 }
 
-fn count(name: &'static str, n: i64) -> Result<usize, Trap> {
-    usize::try_from(n).map_err(|_| Trap::call(name, format!("negative count {n}")))
-}
-
 /// An iterator over references into a borrowed container, read by `at`.
 pub(crate) fn lent_iter<C, T, E, I, Rt>(
     items: Ref<C, Rt>,
@@ -166,25 +162,25 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn take<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
+fn take<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    Ok(it.take(count("take", n)?))
+    it.take(n)
 }
 
 #[extern_fn(effect = pure)]
-fn skip<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
+fn skip<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    Ok(it.skip(count("skip", n)?))
+    it.skip(n)
 }
 
 #[extern_fn(effect = pure)]

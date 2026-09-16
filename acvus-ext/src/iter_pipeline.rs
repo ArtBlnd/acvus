@@ -37,8 +37,8 @@ type Lambda<Rt> = Fn1<<Rt as Runtime>::Value, <Rt as Runtime>::Value, (), Rt>;
 enum Op<Rt: Runtime> {
     Map(Lambda<Rt>),
     Filter(Lambda<Rt>),
-    Take { remaining: usize },
-    Skip { remaining: usize },
+    Take { remaining: u64 },
+    Skip { remaining: u64 },
     Flatten(Expand<Rt>),
     FlatMap(Lambda<Rt>, Expand<Rt>),
 }
@@ -155,11 +155,11 @@ where
         Self::erased(self.0.push_op(Op::Filter(f.erased())))
     }
 
-    pub fn take(self, n: usize) -> Self {
+    pub fn take(self, n: u64) -> Self {
         Self::erased(self.0.push_op(Op::Take { remaining: n }))
     }
 
-    pub fn skip(self, n: usize) -> Self {
+    pub fn skip(self, n: u64) -> Self {
         Self::erased(self.0.push_op(Op::Skip { remaining: n }))
     }
 

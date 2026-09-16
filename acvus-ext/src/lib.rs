@@ -12,7 +12,7 @@ mod string;
 mod vec;
 
 pub use container::container_registry;
-pub use conversion::conversion_registry;
+pub use conversion::{conversion_registry, from_str_registries};
 pub use datetime::datetime_registry;
 pub use decimal::{Decimal, decimal_registry};
 pub use deque::{Deque, deque_registry};
@@ -31,7 +31,7 @@ pub fn std_registries<R>() -> Vec<Registry<R>>
 where
     R: Runtime,
 {
-    vec![
+    let mut registries = vec![
         string_registry(),
         conversion_registry(),
         decimal_registry(),
@@ -40,5 +40,7 @@ where
         deque_registry(),
         option_registry(),
         iterator_registry(),
-    ]
+    ];
+    registries.extend(from_str_registries());
+    registries
 }

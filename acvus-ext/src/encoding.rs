@@ -1,7 +1,13 @@
 //! Base64 and URL encoding. All pure.
 
-use acvus_extern::{Registry, Runtime, Trap, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, TyArg, extern_fn, extern_registry};
 use base64::Engine;
+
+#[derive(TyArg)]
+pub enum Base64Error {
+    InvalidBase64 { input: String, message: String },
+    InvalidUtf8 { input: String, message: String },
+}
 
 #[extern_fn(effect = pure)]
 fn base64_encode(s: String) -> String {
@@ -9,11 +15,20 @@ fn base64_encode(s: String) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn base64_decode(s: String) -> Result<String, Trap> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&s)
-        .map_err(|e| Trap::call("base64_decode", format!("invalid input: {e}")))?;
-    String::from_utf8(bytes).map_err(|e| Trap::call("base64_decode", format!("invalid UTF-8: {e}")))
+fn base64_decode(s: String) -> Result<String, Base64Error> {
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(&s) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Err(Base64Error::InvalidBase64 {
+                message: e.to_string(),
+                input: s,
+            });
+        }
+    };
+    String::from_utf8(bytes).map_err(|e| Base64Error::InvalidUtf8 {
+        message: e.to_string(),
+        input: s,
+    })
 }
 
 #[extern_fn(effect = pure)]

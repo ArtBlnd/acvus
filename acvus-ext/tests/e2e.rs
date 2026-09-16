@@ -11,6 +11,7 @@ use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::ty::{Ty, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
+use base64::Engine;
 use rustc_hash::FxHashMap;
 
 type TypedContext = FxHashMap<Astr, (Ty, Value)>;
@@ -23,6 +24,16 @@ async fn run_ext(
     registries: Vec<Registry<AcvusRuntime>>,
 ) -> Value {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
+    run_parsed(interner, ast, context, registries).await
+}
+
+async fn run_ext_script_mode(
+    interner: &Interner,
+    source: &str,
+    context: TypedContext,
+    registries: Vec<Registry<AcvusRuntime>>,
+) -> Value {
+    let ast = ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse"));
     run_parsed(interner, ast, context, registries).await
 }
 
@@ -223,14 +234,34 @@ async fn regex_split_collect() {
 #[tokio::test]
 async fn base64_roundtrip() {
     let i = Interner::new();
-    let result = run_ext(
+    let result = run_ext_script_mode(
         &i,
-        r#"base64_decode(base64_encode("hello world"))"#,
+        r#"if let Ok(s) = base64_decode(base64_encode("hello world")) { s } else { "not decoded" }"#,
         TypedContext::default(),
         vec![encoding_registry::<AcvusRuntime>()],
     )
     .await;
     assert_str(&result, "hello world");
+}
+
+#[tokio::test]
+async fn base64_that_does_not_decode_names_which_decoding_failed() {
+    let i = Interner::new();
+    let src = |input: &str| {
+        [
+            &format!(r#"{{{{ r = base64_decode("{input}") }}}}"#),
+            "{{ Ok(s) = r }}{{ s }}",
+            "{{ Err(Base64Error::InvalidBase64(e)) = }}not base64: {{ e.input }}",
+            "{{ Err(Base64Error::InvalidUtf8(e)) = }}not utf8: {{ e.input }}{{/}}",
+        ]
+        .concat()
+    };
+    let regs = || vec![encoding_registry::<AcvusRuntime>()];
+    let v = run_ext_template(&i, &src("!!!!"), TypedContext::default(), regs()).await;
+    assert_str(&v, "not base64: !!!!");
+    let not_utf8 = base64::engine::general_purpose::STANDARD.encode([0xFF]);
+    let v = run_ext_template(&i, &src(&not_utf8), TypedContext::default(), regs()).await;
+    assert_str(&v, &format!("not utf8: {not_utf8}"));
 }
 
 #[tokio::test]

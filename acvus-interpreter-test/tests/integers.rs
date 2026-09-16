@@ -46,6 +46,27 @@ async fn to_string_has_an_instance_for_every_width() {
 }
 
 #[tokio::test]
+async fn a_literal_argument_takes_the_parameter_s_width() {
+    let i = Interner::new();
+    let v = run_script(&i, r#"repeat_str("ab", 3)"#, Context::default()).await;
+    assert_eq!(unsafe { v.as_str() }, "ababab");
+    let v = run_script(
+        &i,
+        "xs = [1, 2, 3, 4]; xs | into_iter | take(2) | fold(0, |a, x| -> a + x)",
+        Context::default(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 3);
+    let v = run_script(
+        &i,
+        "xs = [1, 2, 3, 4]; xs | into_iter | skip(3) | fold(0, |a, x| -> a + x)",
+        Context::default(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 4);
+}
+
+#[tokio::test]
 async fn a_literal_matches_at_the_source_s_width() {
     let i = Interner::new();
     let src = "if let 255 = @b { \"max\" } else { \"other\" }";

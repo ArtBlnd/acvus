@@ -23,10 +23,17 @@ fn to_string_decimal(a: &Decimal) -> String {
     a.0.to_string()
 }
 
+/// The `Option` that `ToPrimitive::to_f64` returns is the trait's shape,
+/// not a failure of this type: rust_decimal 1.40.0 builds a `Some` on every
+/// path of its `to_f64`, and the `to_i128` its integral branch maps over is
+/// `Some` on every path as well. That reading is of `src/decimal.rs` in
+/// rust_decimal 1.40.0; a change of that dependency re-opens it.
 #[extern_fn(effect = pure)]
-fn decimal_to_float(a: &Decimal) -> Result<f64, Trap> {
-    rust_decimal::prelude::ToPrimitive::to_f64(&a.0)
-        .ok_or_else(|| Trap::call("decimal_to_float", format!("{} has no f64", a.0)))
+fn decimal_to_float(a: &Decimal) -> f64 {
+    let Some(f) = rust_decimal::prelude::ToPrimitive::to_f64(&a.0) else {
+        unreachable!("rust_decimal::Decimal::to_f64 is Some for every value")
+    };
+    f
 }
 
 #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure)]
