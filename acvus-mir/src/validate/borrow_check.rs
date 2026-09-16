@@ -197,7 +197,7 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
             v.extend(*order);
             v
         }
-        Terminator::Fallthrough => Vec::new(),
+        Terminator::Fallthrough | Terminator::Diverge => Vec::new(),
     }
 }
 

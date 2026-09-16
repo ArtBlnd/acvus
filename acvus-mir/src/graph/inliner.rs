@@ -599,6 +599,7 @@ fn remap_inst(
             order: order.map(r),
         },
         InstKind::Nop => InstKind::Nop,
+        InstKind::Diverge => InstKind::Diverge,
 
         // Cast
 

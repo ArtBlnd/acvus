@@ -291,6 +291,10 @@ pub enum InstKind {
         value: ValueId,
         order: Option<ValueId>,
     },
+    /// The body does not continue past here: the instruction before it
+    /// produced a `!`, a call that traps instead of returning (RFC-0038).
+    /// Never executed; a block it ends has no successor.
+    Diverge,
     /// Undefined value - valid to move/copy, UB to read as a concrete value.
     /// Used as initial value for SSA variables that are defined inside loops
     /// (iteration bindings, write-only contexts).

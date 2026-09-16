@@ -58,6 +58,8 @@ pub enum Terminator {
         value: ValueId,
         order: Option<ValueId>,
     },
+    /// The block does not continue: it ended in a `!` (RFC-0038).
+    Diverge,
     /// Implicit fallthrough to next block.
     Fallthrough,
 }
@@ -109,7 +111,7 @@ impl CfgBody {
                     succs.push(BlockIdx(next));
                 }
             }
-            Terminator::Return { .. } => {}
+            Terminator::Return { .. } | Terminator::Diverge => {}
         }
         succs
     }
@@ -214,7 +216,7 @@ pub fn promote(body: MirBody) -> CfgBody {
         "duplicate block labels after promote"
     );
 
-    CfgBody {
+    prune_unreachable(CfgBody {
         blocks,
         label_to_block,
         val_types: body.val_types,
@@ -223,7 +225,37 @@ pub fn promote(body: MirBody) -> CfgBody {
         order_param: body.order_param,
         debug: body.debug,
         val_factory: body.val_factory,
+    })
+}
+
+/// Drops every block no path from the entry reaches: the code the source
+/// wrote after an expression typed `!` (RFC-0038). A pass that walks
+/// predecessors never sees a block without any.
+fn prune_unreachable(mut cfg: CfgBody) -> CfgBody {
+    let mut reachable = vec![false; cfg.blocks.len()];
+    let mut worklist = vec![BlockIdx(0)];
+    while let Some(idx) = worklist.pop() {
+        if std::mem::replace(&mut reachable[idx.0], true) {
+            continue;
+        }
+        worklist.extend(cfg.successors(idx));
     }
+    if reachable.iter().all(|r| *r) {
+        return cfg;
+    }
+    let blocks: Vec<Block> = cfg
+        .blocks
+        .into_iter()
+        .zip(reachable)
+        .filter_map(|(block, keep)| keep.then_some(block))
+        .collect();
+    cfg.label_to_block = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, block)| (block.label, BlockIdx(i)))
+        .collect();
+    cfg.blocks = blocks;
+    cfg
 }
 
 /// Extract the last control-flow instruction as a Terminator.
@@ -262,6 +294,10 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 };
                 insts.pop();
                 return term;
+            }
+            InstKind::Diverge => {
+                insts.pop();
+                return Terminator::Diverge;
             }
             _ => {}
         }
@@ -320,6 +356,12 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
                     kind: InstKind::Return { value, order },
+                });
+            }
+            Terminator::Diverge => {
+                insts.push(Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind: InstKind::Diverge,
                 });
             }
             Terminator::Fallthrough => {

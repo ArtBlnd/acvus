@@ -223,7 +223,7 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
             uses.extend(then_args.iter().copied());
             uses.extend(else_args.iter().copied());
         }
-        Terminator::Fallthrough => {}
+        Terminator::Fallthrough | Terminator::Diverge => {}
     }
     uses
 }
@@ -246,7 +246,7 @@ fn terminator_edges(term: &Terminator) -> Vec<(Label, FxHashSet<ValueId>)> {
                 (*else_label, else_args.iter().copied().collect()),
             ]
         }
-        Terminator::Return { .. } | Terminator::Fallthrough => vec![],
+        Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
 
@@ -324,7 +324,10 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::Nop => false,
 
         // Control flow - handled by terminator, not here.
-        InstKind::Jump { .. } | InstKind::JumpIf { .. } | InstKind::Return { .. } => false,
+        InstKind::Jump { .. }
+        | InstKind::JumpIf { .. }
+        | InstKind::Return { .. }
+        | InstKind::Diverge => false,
     }
 }
 
@@ -341,7 +344,7 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
             else_args,
             ..
         } => then_args.contains(&val) || else_args.contains(&val),
-        Terminator::Fallthrough => false,
+        Terminator::Fallthrough | Terminator::Diverge => false,
     }
 }
 

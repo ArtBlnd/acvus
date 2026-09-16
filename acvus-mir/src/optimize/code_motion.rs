@@ -261,7 +261,7 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
             v.extend_from_slice(else_args);
             v
         }
-        Terminator::Fallthrough => vec![],
+        Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
 

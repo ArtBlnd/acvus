@@ -87,6 +87,14 @@ impl_scalar_ty_arg!(String, PolyTy::String);
 impl_scalar_ty_arg!(bool, PolyTy::Bool);
 impl_scalar_ty_arg!((), PolyTy::Unit);
 
+/// The language's `!`: an extern fn returning `Result<Never, Trap>` never
+/// returns `Ok`, so its call is typed `!` and nothing runs after it
+/// (RFC-0038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Never {}
+
+impl_scalar_ty_arg!(Never, PolyTy::Never);
+
 impl<T, const N: usize> TyArg for [T; N]
 where
     T: TyArg,

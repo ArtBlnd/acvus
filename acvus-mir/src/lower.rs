@@ -1535,7 +1535,19 @@ impl<'a> Lowerer<'a> {
     /// Lower an expression to a value.
     fn lower_expr(&mut self, expr: &Expr) -> ValueId {
         let val = self.lower_expr_inner(expr);
+        if matches!(self.type_of_id(expr.id()), Ty::Never) {
+            self.emit_diverge(expr.span());
+        }
         self.maybe_cast(expr.id(), expr.span(), val)
+    }
+
+    /// The expression just lowered was typed `!`: nothing after it runs.
+    /// The block ends here, and what the source wrote after it lands in a
+    /// block no jump reaches (RFC-0038).
+    fn emit_diverge(&mut self, span: Span) {
+        self.emit_inst(span, InstKind::Diverge);
+        let unreachable = self.alloc_label();
+        self.emit_label(span, unreachable);
     }
 
     fn lower_expr_inner(&mut self, expr: &Expr) -> ValueId {

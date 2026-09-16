@@ -62,6 +62,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Return { .. }
+        | InstKind::Diverge
         | InstKind::Nop => smallvec![],
     }
 }
@@ -71,6 +72,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
     match kind {
         // No uses
         InstKind::Const { .. }
+        | InstKind::Diverge
         | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }
         | InstKind::BlockLabel { .. }
@@ -206,6 +208,7 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
             | InstKind::Return { .. }
+            | InstKind::Diverge
     )
 }
 

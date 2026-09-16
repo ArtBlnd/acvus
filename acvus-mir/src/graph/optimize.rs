@@ -215,7 +215,7 @@ fn debug_validate(cfg: &CfgBody) {
                 v.extend(else_args);
                 v
             }
-            crate::cfg::Terminator::Fallthrough => vec![],
+            crate::cfg::Terminator::Fallthrough | crate::cfg::Terminator::Diverge => vec![],
         };
         for u in &term_uses {
             if !defs.contains(u) {

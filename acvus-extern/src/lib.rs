@@ -39,7 +39,7 @@ pub use repr::{AsCross, AsIs, Crossing, HasRepr};
 pub use runtime::{Runtime, TypesOnly};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use trap::Trap;
-pub use ty_arg::{Monomorphize, PolyVars, TyArg, TyVar, Typeck, VarCounts};
+pub use ty_arg::{Monomorphize, Never, PolyVars, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;
 
 pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, extern_signature};

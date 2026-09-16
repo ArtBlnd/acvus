@@ -271,6 +271,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     errors,
                 );
             }
+            Terminator::Diverge => {}
         }
     }
 }
@@ -466,6 +467,7 @@ fn process_inst(
         InstKind::Return { value, .. } => {
             try_consume_value(scope, inst_idx, span, *value, val_types, state, errors);
         }
+        InstKind::Diverge => {}
         InstKind::Drop { src } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, state, errors);
         }

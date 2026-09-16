@@ -116,6 +116,7 @@ fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
     match kind {
         // No uses
         InstKind::Const { .. }
+        | InstKind::Diverge
         | InstKind::Fetch { .. }
         | InstKind::BlockLabel { .. }
         | InstKind::Nop

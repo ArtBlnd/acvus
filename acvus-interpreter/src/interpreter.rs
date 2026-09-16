@@ -735,6 +735,11 @@ async fn execute_inst(
         InstKind::Return { value, .. } => {
             return Ok(Flow::Return(frame.take(*value)));
         }
+        InstKind::Diverge => {
+            return Err(RuntimeError::internal(
+                "a call typed `!` returned: its handler must trap",
+            ));
+        }
         InstKind::Merge { dst, .. } => {
             frame.set(*dst, Value::unit());
         }

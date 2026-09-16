@@ -18,6 +18,7 @@ use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
 use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{InstKind, Label, ValueId};
+use crate::ty::Ty;
 
 // -- Def location ----------------------------------------------------
 
@@ -78,6 +79,11 @@ fn is_root(kind: &InstKind, loans: &Loans) -> bool {
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
 
+        // A call typed `!` ends the run (RFC-0038): observable whatever its
+        // effect says.
+        InstKind::FunctionCall { callee_ty, .. } if matches!(callee_ty, Ty::Fn { ret, .. } if matches!(**ret, Ty::Never)) => {
+            true
+        }
         // A Pure call that writes no context has no effect (RFC-0007,
         // RFC-0017): dead if its result is unused. A call whose effect is
         // unknown stays.
@@ -101,7 +107,7 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
         Terminator::JumpIf { cond, .. } => vec![*cond],
-        Terminator::Jump { .. } | Terminator::Fallthrough => vec![],
+        Terminator::Jump { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
 
@@ -257,7 +263,7 @@ pub fn run(cfg: &mut CfgBody) {
                     prune(else_args, dead);
                 }
             }
-            Terminator::Return { .. } | Terminator::Fallthrough => {}
+            Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}
         }
         if let Some(dead) = dead_of(block.label) {
             prune(&mut block.params, dead);

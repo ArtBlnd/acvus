@@ -111,6 +111,8 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         // Poison - accept anything.
         (Ty::Error(_), _) | (_, Ty::Error(_)) => true,
+        // No value of `!` exists, so one satisfies any slot (RFC-0038).
+        (Ty::Never, _) => true,
         // Uninhabitable - concrete types never have Var.
         (Ty::Var(v), _) | (_, Ty::Var(v)) => match *v {},
 
@@ -443,6 +445,7 @@ impl CheckCtx {
             InstKind::Poison { .. }
             | InstKind::Undef { .. }
             | InstKind::Nop
+            | InstKind::Diverge
             | InstKind::BlockLabel { .. } => {}
 
             InstKind::Drop { src } => {

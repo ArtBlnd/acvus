@@ -90,6 +90,7 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
         InstKind::Const { .. }
         | InstKind::Fetch { .. }
         | InstKind::Nop
+        | InstKind::Diverge
         | InstKind::Poison { .. }
         | InstKind::Undef { .. } => {}
         // A place through a reference uses the reference.
@@ -225,7 +226,7 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
                 s(o);
             }
         }
-        Terminator::Fallthrough => {}
+        Terminator::Fallthrough | Terminator::Diverge => {}
     }
 }
 

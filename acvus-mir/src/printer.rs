@@ -678,6 +678,7 @@ fn write_body(
                 }
                 writeln!(f)?
             }
+            InstKind::Diverge => writeln!(f, "diverge")?,
             InstKind::Nop => writeln!(f, "nop")?,
             InstKind::Drop { src } => writeln!(f, "drop {}", vn.fmt_use(*src, &consts, &texts))?,
             InstKind::Undef { dst } => writeln!(f, "{} = undef", vn.fmt_val(*dst))?,

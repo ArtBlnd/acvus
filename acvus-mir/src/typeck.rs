@@ -2342,20 +2342,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let result_ty = match else_branch {
                     Some(eb) => {
                         let else_ty = self.check_else_branch(eb);
-                        if self
-                            .solver
-                            .unify_ty(&then_ty, &else_ty, Polarity::Covariant, self.registry)
-                            .is_err()
-                        {
-                            self.error(
-                                MirErrorKind::UnificationFailure {
-                                    expected: self.freeze_or_error(&then_ty),
-                                    got: self.freeze_or_error(&else_ty),
-                                },
-                                *span,
-                            );
-                        }
-                        then_ty
+                        self.join_branches(&then_ty, &else_ty, *span)
                     }
                     None => then_ty,
                 };
@@ -2386,20 +2373,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let result_ty = match else_branch {
                     Some(eb) => {
                         let else_ty = self.check_else_branch(eb);
-                        if self
-                            .solver
-                            .unify_ty(&then_ty, &else_ty, Polarity::Covariant, self.registry)
-                            .is_err()
-                        {
-                            self.error(
-                                MirErrorKind::UnificationFailure {
-                                    expected: self.freeze_or_error(&then_ty),
-                                    got: self.freeze_or_error(&else_ty),
-                                },
-                                *span,
-                            );
-                        }
-                        then_ty
+                        self.join_branches(&then_ty, &else_ty, *span)
                     }
                     None => then_ty,
                 };
@@ -2924,6 +2898,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let type_params = (0..arity).map(|_| self.solver.fresh_ty_var()).collect();
         Some((name, type_params, payload))
+    }
+
+    /// The type of an `if` with both branches: each flows into one fresh
+    /// variable, so a branch typed `!` (a call that traps) leaves the other
+    /// branch's type standing (RFC-0038).
+    fn join_branches(&mut self, then_ty: &InferTy, else_ty: &InferTy, span: Span) -> InferTy {
+        let joined = self.solver.fresh_ty_var();
+        let then_ok = self.unify_covariant(then_ty, &joined, None).is_ok();
+        let else_ok = then_ok && self.unify_covariant(else_ty, &joined, None).is_ok();
+        if !else_ok {
+            self.error(
+                MirErrorKind::UnificationFailure {
+                    expected: self.freeze_or_error(then_ty),
+                    got: self.freeze_or_error(else_ty),
+                },
+                span,
+            );
+        }
+        self.solver.resolve_ty(&joined)
     }
 
     /// `inner?` (RFC-0038): the payload of an `Ok` or a `Some`, while the

@@ -337,6 +337,18 @@ where
     run_parsed_with_externs(interner, ast, context, extern_registries, declare_types).await
 }
 
+/// Run a script-mode source (keyword syntax) with the given registries.
+pub async fn run_script_mode_with_externs(
+    interner: &Interner,
+    source: &str,
+    context: Context,
+    extern_registries: Vec<Registry<AcvusRuntime>>,
+) -> Ran {
+    let ast =
+        ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
+    run_parsed_with_externs(interner, ast, context, extern_registries, |_| {}).await
+}
+
 /// Run an already parsed script against `context` with the given registries.
 pub async fn run_parsed_with_externs<D>(
     interner: &Interner,
