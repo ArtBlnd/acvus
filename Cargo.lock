@@ -47,7 +47,9 @@ dependencies = [
  "futures",
  "percent-encoding",
  "regex",
+ "rust_decimal",
  "rustc-hash",
+ "serde",
  "sync_wrapper",
  "tokio",
 ]

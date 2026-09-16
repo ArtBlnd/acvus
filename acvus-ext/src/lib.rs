@@ -1,6 +1,7 @@
 mod container;
 mod conversion;
 mod datetime;
+mod decimal;
 mod deque;
 mod encoding;
 mod iter_pipeline;
@@ -13,6 +14,7 @@ mod vec;
 pub use container::container_registry;
 pub use conversion::conversion_registry;
 pub use datetime::datetime_registry;
+pub use decimal::{Decimal, decimal_registry};
 pub use deque::{Deque, deque_registry};
 pub use encoding::encoding_registry;
 pub use iter_pipeline::Iter;
@@ -32,6 +34,7 @@ where
     vec![
         string_registry(),
         conversion_registry(),
+        decimal_registry(),
         vec_registry(),
         container_registry(),
         deque_registry(),

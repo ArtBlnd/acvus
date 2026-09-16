@@ -55,3 +55,7 @@ the result.
 - `acvus-extern-macro`: `#[derive(TyArg)]` accepts an enum; the struct
   path and the struct-variant path share `ObjectShape`.
 - `acvus-interpreter`: `VariantValue` is `Variant<Value>`.
+- `acvus-ext`: `Decimal`, the extension type over `rust_decimal::Decimal`,
+  `serde`-transparent so a wire struct's field is the one type on both
+  sides; `std::decimal(text)`, `to_string`, `decimal_to_float`, `core::eq`
+  and `core::clone` instances.

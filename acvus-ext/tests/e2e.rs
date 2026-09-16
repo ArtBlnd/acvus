@@ -565,6 +565,86 @@ async fn an_enum_built_by_the_script_crosses_into_the_extern_fn() {
     assert_str(&v, "6");
 }
 
+#[derive(acvus_extern::TyArg)]
+struct Price {
+    amount: Decimal,
+    currency: String,
+}
+
+#[extern_fn(effect = pure)]
+fn price() -> Price {
+    Price {
+        amount: Decimal("9.99".parse().expect("a decimal literal")),
+        currency: "USD".to_owned(),
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn double_price(p: Price) -> Price {
+    Price {
+        amount: Decimal(p.amount.0 * rust_decimal::Decimal::TWO),
+        currency: p.currency,
+    }
+}
+
+fn price_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [price, double_price],
+    }
+}
+
+#[tokio::test]
+async fn a_decimal_is_exact_text_in_and_out() {
+    let i = Interner::new();
+    let v = run_ext_template(
+        &i,
+        r#"{{ d = decimal("1.50") }}{{ d.to_string() }}"#,
+        TypedContext::default(),
+        vec![],
+    )
+    .await;
+    assert_str(&v, "1.50");
+    let v = run_ext_template(
+        &i,
+        r#"{{ a = decimal("1.5") }}{{ b = decimal("1.50") }}{{ same = a == b }}{{ same.to_string() }}"#,
+        TypedContext::default(),
+        vec![],
+    )
+    .await;
+    assert_str(&v, "true");
+    let v = run_ext_template(
+        &i,
+        r#"{{ d = decimal("0.5") }}{{ f = decimal_to_float(&d) }}{{ f.to_string() }}"#,
+        TypedContext::default(),
+        vec![],
+    )
+    .await;
+    assert_str(&v, "0.5");
+}
+
+#[tokio::test]
+async fn an_extension_type_is_a_field_of_a_derived_object() {
+    let i = Interner::new();
+    let regs = || vec![price_registry()];
+    let v = run_ext_template(
+        &i,
+        "{{ p = price() }}{{ p.amount.to_string() }} {{ p.currency }}",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "9.99 USD");
+    let v = run_ext_template(
+        &i,
+        r#"{{ p = double_price({ amount: decimal("0.05"), currency: "KRW", }) }}{{ p.amount.to_string() }}"#,
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "0.10");
+}
+
 #[tokio::test]
 async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     let i = Interner::new();
