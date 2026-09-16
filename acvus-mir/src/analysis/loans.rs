@@ -346,7 +346,7 @@ pub fn contains_ref(ty: &Ty) -> bool {
             type_args,
             identity_args,
             ..
-        } => !identity_args.is_empty() || type_args.iter().any(contains_ref),
+        } => !identity_args.is_empty() || type_args.iter().any(|a| contains_ref(&a.ty)),
         Ty::Enum { variants, .. } => variants.values().flatten().any(|t| contains_ref(t)),
         _ => false,
     }

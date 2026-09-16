@@ -3,6 +3,7 @@ use std::fmt;
 use acvus_ast::Span;
 use acvus_utils::Interner;
 
+use crate::graph::QualifiedRef;
 use crate::ty::Ty;
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,13 @@ pub enum MirErrorKind {
     IntegerLiteralOutOfRange {
         value: i128,
         ty: Ty,
+    },
+    /// More than one declared conversion takes the value to the type
+    /// (RFC-0023).
+    AmbiguousConversion {
+        from: Ty,
+        to: Ty,
+        rules: Vec<QualifiedRef>,
     },
     /// `?` where nothing returns: a template body (RFC-0038).
     TryOutsideFunction,
@@ -305,6 +313,21 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::IntegerLiteralOutOfRange { value, ty } => {
                 write!(f, "literal {value} does not fit {}", ty.display(interner))
+            }
+            MirErrorKind::AmbiguousConversion { from, to, rules } => {
+                write!(
+                    f,
+                    "more than one conversion takes {} to {}: ",
+                    from.display(interner),
+                    to.display(interner)
+                )?;
+                for (i, rule) in rules.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", interner.resolve(rule.name))?;
+                }
+                Ok(())
             }
             MirErrorKind::TryOutsideFunction => {
                 write!(

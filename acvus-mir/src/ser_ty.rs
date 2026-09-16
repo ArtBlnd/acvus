@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
-use crate::ty::{Effect, EffectTerm, IdentityId, IdentityTerm, IntTy, LenTerm, Reissue, Ty};
+use crate::ty::{
+    Concrete, Effect, EffectTerm, IdentityId, IdentityTerm, IntTy, LenTerm, Reissue, Repr, Ty,
+    TypeArg,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerQualifiedRef {
@@ -72,6 +75,42 @@ pub struct SerParam {
     pub ty: SerTy,
 }
 
+/// The representation of a slot's argument (hash-types.md).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum SerRepr {
+    Uniform,
+    Specialized,
+}
+
+/// A type argument of a user-defined type, with its representation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerTypeArg {
+    pub repr: SerRepr,
+    pub ty: SerTy,
+}
+
+fn arg_to_ser(arg: &TypeArg<Concrete>, interner: &Interner) -> SerTypeArg {
+    SerTypeArg {
+        repr: match arg.repr {
+            Repr::Uniform => SerRepr::Uniform,
+            Repr::Specialized => SerRepr::Specialized,
+            Repr::Var(v) => match v {},
+        },
+        ty: arg.ty.to_ser(interner),
+    }
+}
+
+fn ser_to_arg(arg: &SerTypeArg, interner: &Interner) -> TypeArg<Concrete> {
+    TypeArg {
+        repr: match arg.repr {
+            SerRepr::Uniform => Repr::Uniform,
+            SerRepr::Specialized => Repr::Specialized,
+        },
+        ty: arg.ty.to_ty(interner),
+    }
+}
+
 /// Serializable mirror of [`Ty`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -103,7 +142,7 @@ pub enum SerTy {
     },
     UserDefined {
         id: SerQualifiedRef,
-        type_args: Vec<SerTy>,
+        type_args: Vec<SerTypeArg>,
         effect_args: Vec<SerEffect>,
         identity_args: Vec<u32>,
     },
@@ -167,7 +206,7 @@ impl Ty {
                 identity_args,
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
-                type_args: type_args.iter().map(|t| t.to_ser(interner)).collect(),
+                type_args: type_args.iter().map(|t| arg_to_ser(t, interner)).collect(),
                 effect_args: effect_args
                     .iter()
                     .map(|e| effect_to_ser(e.get(), interner))
@@ -245,7 +284,7 @@ impl SerTy {
                 identity_args,
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
-                type_args: type_args.iter().map(|t| t.to_ty(interner)).collect(),
+                type_args: type_args.iter().map(|t| ser_to_arg(t, interner)).collect(),
                 effect_args: effect_args
                     .iter()
                     .map(|e| EffectTerm::Known(ser_to_effect(e, interner)))
@@ -296,7 +335,7 @@ mod tests {
 
         let ud = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("Iterator")),
-            type_args: vec![Ty::I64],
+            type_args: vec![TypeArg::uniform(Ty::I64)],
             effect_args: vec![Effect::OPAQUE.into()],
             identity_args: vec![],
         };

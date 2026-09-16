@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/inline.rs
+assertion_line: 350
 expression: ir
 ---
 === main ===
@@ -18,8 +19,8 @@ expression: ir
     ; r3 (v1) : i64
     ; r4 (v4) : i64
     ; r5 ($xs) : Array<i64, 3>
-    ; r6 (v10) : Iterator<i64, Pure, #IdentityId(3)>
+    ; r6 (v10) : Iterator<i64, Pure, #IdentityId(1)>
     ; r7 (v11) : Fn(&i64) -> Bool
-    ; r8 (filter(...)) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r8 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
     ; r9 (collect(...)) : Vec<i64>
-    ; r10 (positives(...)) : Iterator<i64, Pure, #IdentityId(2)>
+    ; r10 (positives(...)) : Iterator<i64, Pure, #IdentityId(0)>

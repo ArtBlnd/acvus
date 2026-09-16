@@ -2,7 +2,7 @@
 //! Rust's `Vec<T>` alike. It crosses the boundary as the runtime's
 //! `Vec<Value>` (RFC-0022), element by element when the element converts.
 
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Ty, TypeArg};
 
 use crate::obj::Cross;
 use crate::registry::ExternTypeDecl;
@@ -53,7 +53,7 @@ where
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::UserDefined {
             id: QualifiedRef::root(i.intern("Vec")),
-            type_args: vec![T::poly_ty(i, vars)],
+            type_args: vec![TypeArg::uniform(T::poly_ty(i, vars))],
             effect_args: vec![],
             identity_args: vec![],
         }
@@ -70,6 +70,7 @@ where
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            specializable: vec![true],
         }
     }
 }
@@ -78,7 +79,7 @@ where
 pub fn vec_ty(interner: &Interner, elem: Ty) -> Ty {
     Ty::UserDefined {
         id: QualifiedRef::root(interner.intern("Vec")),
-        type_args: vec![elem],
+        type_args: vec![TypeArg::uniform(elem)],
         effect_args: vec![],
         identity_args: vec![],
     }

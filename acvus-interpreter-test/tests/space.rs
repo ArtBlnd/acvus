@@ -10,7 +10,7 @@ use acvus_extern::{Externs, Runtime};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, Mode, SequentialExecutor, Space, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{LenTerm, Ty};
+use acvus_mir::ty::{LenTerm, Ty, TypeArg};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -24,7 +24,7 @@ fn runtime(i: &Interner) -> AcvusRuntime {
 fn deque_ty(i: &Interner, elem: Ty) -> Ty {
     Ty::UserDefined {
         id: QualifiedRef::root(i.intern("Deque")),
-        type_args: vec![elem],
+        type_args: vec![TypeArg::uniform(elem)],
         effect_args: vec![],
         identity_args: vec![],
     }

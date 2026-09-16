@@ -715,7 +715,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             ) -> ::acvus_extern::PolyTy {
                 ::acvus_extern::PolyTy::UserDefined {
                     id: #qref,
-                    type_args: vec![#(#type_arg_exprs),*],
+                    type_args: vec![#(::acvus_extern::TypeArg::uniform(#type_arg_exprs)),*],
                     effect_args: vec![#(#effect_arg_exprs),*],
                     identity_args: vec![#(#identity_arg_exprs),*],
                 }
@@ -755,6 +755,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     type_params: vec![::acvus_extern::TyVarBound::Any; #n_tys],
                     effect_params: #n_effects,
                     identity_params: #n_identities,
+                    specializable: vec![false; #n_tys],
                 }
             }
         }

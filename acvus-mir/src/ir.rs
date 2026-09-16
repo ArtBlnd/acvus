@@ -6,6 +6,13 @@ use rustc_hash::FxHashMap;
 use crate::graph::QualifiedRef;
 use crate::ty::{Mutability, Ty};
 
+/// A call that is an instruction of the language (RFC-0020): the
+/// compiler's own instance of a shared signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Intrinsic {
+    StringClone,
+}
+
 acvus_utils::declare_local_id!(pub ValueId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

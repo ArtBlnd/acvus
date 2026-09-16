@@ -117,7 +117,7 @@ fn a_call_no_instance_matches_is_an_error_at_the_call() {
     let errs = check(&i, "pick(1, |x| -> x)").unwrap_err();
     assert!(
         errs.iter()
-            .any(|e| e.contains("no instance of the signature")),
+            .any(|e| e.contains("outside the declared bound")),
         "{errs:?}"
     );
 }

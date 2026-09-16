@@ -7,7 +7,7 @@
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::{Mutability, PolyTy};
+use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
 use crate::runtime::Runtime;
@@ -127,7 +127,10 @@ where
     Rt: Runtime,
 {
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
-        PolyTy::Ref(Mutability::Shared, Box::new(T::poly_ty(i, vars)))
+        PolyTy::Ref(
+            Mutability::Shared,
+            Box::new(TypeArg::uniform(T::poly_ty(i, vars))),
+        )
     }
 }
 
@@ -137,7 +140,10 @@ where
     Rt: Runtime,
 {
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
-        PolyTy::Ref(Mutability::Mut, Box::new(T::poly_ty(i, vars)))
+        PolyTy::Ref(
+            Mutability::Mut,
+            Box::new(TypeArg::uniform(T::poly_ty(i, vars))),
+        )
     }
 }
 

@@ -3,13 +3,16 @@
 //! storage sees that (RFC-0015, RFC-0018).
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Effect, Mutability, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{Effect, Mutability, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
 
 fn bump(i: &Interner, effect: Effect) -> Function {
     let params = [
-        ("n", Ty::Ref(Mutability::Mut, Box::new(Ty::I64))),
+        (
+            "n",
+            Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::I64))),
+        ),
         ("by", Ty::I64),
     ];
     Function {
@@ -92,11 +95,14 @@ fn peek(i: &Interner) -> Function {
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
                 i.intern("n"),
-                lift_to_poly(&Ty::Ref(Mutability::Mut, Box::new(Ty::I64))),
+                lift_to_poly(&Ty::Ref(
+                    Mutability::Mut,
+                    Box::new(TypeArg::uniform(Ty::I64)),
+                )),
             )],
             ret: Box::new(lift_to_poly(&Ty::Ref(
                 Mutability::Shared,
-                Box::new(Ty::I64),
+                Box::new(TypeArg::uniform(Ty::I64)),
             ))),
             captures: vec![],
             effect: Effect::PURE.into(),

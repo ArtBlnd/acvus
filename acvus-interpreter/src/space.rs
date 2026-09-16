@@ -422,9 +422,9 @@ impl Space {
             }
         };
         let decode = |t: &Ty, input: &mut &[u8]| layout::decode(rt, self, t, input);
-        let mut value = (hooks.decode_state)(rt, args, &decode, &mut state.bytes.as_slice())?;
+        let mut value = (hooks.decode_state)(rt, &args, &decode, &mut state.bytes.as_slice())?;
         for op in ops.iter().rev() {
-            (hooks.apply_op)(rt, &mut value, args, &decode, &mut op.bytes.as_slice())?;
+            (hooks.apply_op)(rt, &mut value, &args, &decode, &mut op.bytes.as_slice())?;
         }
         (hooks.set_head)(rt, &mut value, head);
         Ok(value)
@@ -446,15 +446,15 @@ impl Space {
         // and a child whose head moved is a change of the parent.
         let mut children_moved = false;
         if args.iter().any(layout::holds_extension) {
-            (hooks.children)(rt, value, args, &mut |child_ty, child| {
+            (hooks.children)(rt, value, &args, &mut |child_ty, child| {
                 self.commit_nested(rt, child_ty, child, &mut children_moved)
             })?;
         }
         let encode = |t: &Ty, v: &Value, out: &mut Vec<u8>| layout::encode(rt, self, t, v, out);
-        let ops = (hooks.take_ops)(rt, value, args, &encode)?;
+        let ops = (hooks.take_ops)(rt, value, &args, &encode)?;
         let state = |parent: Option<NodeHash>| -> SpaceResult<Node> {
             let mut bytes = Vec::new();
-            (hooks.encode_state)(rt, value, args, &encode, &mut bytes)?;
+            (hooks.encode_state)(rt, value, &args, &encode, &mut bytes)?;
             Ok(Node {
                 kind: Kind::State,
                 parent,

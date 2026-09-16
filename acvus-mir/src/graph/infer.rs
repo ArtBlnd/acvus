@@ -501,9 +501,9 @@ pub fn infer_scc(
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
     declared: &FxHashMap<QualifiedRef, Declared>,
     sources: &mut Sources,
+    registry: &TypeRegistry,
 ) -> SccInferResult {
-    let mut solver = Solver::new(sources);
-    let registry = TypeRegistry::default();
+    let mut solver = Solver::new(sources, registry);
 
     // Instantiate context types into solver-scoped InferTy.
     let known_ctx_infer: FxHashMap<QualifiedRef, InferTy> = known_ctx
@@ -592,7 +592,7 @@ pub fn infer_scc(
             })
             .collect();
 
-        let checker = crate::typeck::TypeChecker::new(interner, &env, &registry, &mut solver)
+        let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
             .with_analysis_mode()
             .with_declared_param_types(declared_types)
             .with_body_effect(fn_effect_vars[&fid].clone());
@@ -607,12 +607,7 @@ pub fn infer_scc(
                 if expected_tail_ty.is_none() {
                     if let Some(ret_var) = fn_ret_vars.get(&fid) {
                         let tail_infer = lift_ty(&unchecked.tail_ty);
-                        let _ = solver.unify_ty(
-                            ret_var,
-                            &tail_infer,
-                            crate::ty::Polarity::Invariant,
-                            &registry,
-                        );
+                        let _ = solver.unify(ret_var, &tail_infer);
                     }
                 }
                 let closed = EffectTerm::Known(unchecked.effect.clone());
@@ -620,7 +615,7 @@ pub fn infer_scc(
                     .unify_effect(
                         &fn_effect_vars[&fid],
                         &closed,
-                        crate::ty::Polarity::Invariant,
+                        crate::solver::EffectRelation::Equal,
                     )
                     .expect("the closed effect is the variable's own lower bound");
 
@@ -692,8 +687,8 @@ pub fn infer(
     type_registry: Freeze<TypeRegistry>,
 ) -> InferResult {
     let mut sources = Sources::new();
-    let mut solver = Solver::new(&mut sources);
     let registry_ref: &TypeRegistry = &type_registry;
+    let mut solver = Solver::new(&mut sources, registry_ref);
 
     // Per-function state accumulated across SCCs.
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
@@ -832,11 +827,10 @@ pub fn infer(
                 })
                 .collect();
 
-            let checker =
-                crate::typeck::TypeChecker::new(interner, &env, registry_ref, &mut solver)
-                    .with_analysis_mode()
-                    .with_declared_param_types(declared_types)
-                    .with_body_effect(scc_effect_vars[&fid].clone());
+            let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
+                .with_analysis_mode()
+                .with_declared_param_types(declared_types)
+                .with_body_effect(scc_effect_vars[&fid].clone());
             let result = match parsed {
                 ParsedSource::Script(script) => {
                     checker.check_script(script, expected_tail_ty.as_ref())
@@ -850,12 +844,7 @@ pub fn infer(
                     if expected_tail_ty.is_none() {
                         if let Some(ret_var) = scc_ret_vars.get(&fid) {
                             let tail_infer = lift_ty(&unchecked.tail_ty);
-                            let _ = solver.unify_ty(
-                                ret_var,
-                                &tail_infer,
-                                crate::ty::Polarity::Invariant,
-                                registry_ref,
-                            );
+                            let _ = solver.unify(ret_var, &tail_infer);
                         }
                     }
                     let closed = EffectTerm::Known(unchecked.effect.clone());
@@ -863,7 +852,7 @@ pub fn infer(
                         .unify_effect(
                             &scc_effect_vars[&fid],
                             &closed,
-                            crate::ty::Polarity::Invariant,
+                            crate::solver::EffectRelation::Equal,
                         )
                         .expect("the closed effect is the variable's own lower bound");
 

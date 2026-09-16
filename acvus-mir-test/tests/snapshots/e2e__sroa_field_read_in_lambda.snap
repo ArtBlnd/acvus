@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 2649
 expression: ir
 ---
 === literals ===
@@ -31,7 +32,7 @@ expression: ir
     ; r6 (v11) : Fn({name: String}) -> String
     ; r7 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r8 (collect(...)) : Vec<String>
-    ; r9 (v14) : Iterator<String, Pure, #IdentityId(3)>
+    ; r9 (v14) : Iterator<String, Pure, #IdentityId(2)>
     ; r10 (join(...)) : String
     ; r11 (v17) : String
     ; r12 (@users) : Vec<{name: String}>

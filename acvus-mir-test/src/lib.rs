@@ -108,7 +108,13 @@ fn run_pipeline_with_registry(
                 .map(|e| {
                     format!(
                         "UninitError: {:?} fields {:?} at [{},{}]",
-                        e.target, e.uninit_fields, e.span.start, e.span.end,
+                        e.subject,
+                        e.uninit_fields
+                            .iter()
+                            .map(|f| interner.resolve(*f))
+                            .collect::<Vec<_>>(),
+                        e.span.start,
+                        e.span.end,
                     )
                 })
                 .collect();
@@ -346,6 +352,17 @@ pub fn compile_script_mode_raw(
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
+    compile_script_mode_ir_with(interner, source, context, &[])
+}
+
+/// Compile a script-mode source with contexts and extern functions, through
+/// lowering and every validation.
+pub fn compile_script_mode_ir_with(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+    extern_fns: &[Function],
+) -> Result<String, String> {
     let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
@@ -365,6 +382,7 @@ pub fn compile_script_mode_raw(
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
+    functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
@@ -395,10 +413,32 @@ pub fn compile_script_mode_raw(
         return Err(errors.join("\n"));
     }
 
-    let module = result
+    let mut module = result
         .module(test_qref)
+        .cloned()
         .ok_or_else(|| "no module produced for target".to_string())?;
-    Ok(dump_with(interner, module))
+    let cfg_main = cfg::promote(std::mem::take(&mut module.main));
+    let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main);
+    module.main = cfg::demote(cfg_main);
+    if !init_errors.is_empty() {
+        let msgs: Vec<String> = init_errors
+            .iter()
+            .map(|e| {
+                format!(
+                    "UninitError: {:?} fields {:?} at [{},{}]",
+                    e.subject,
+                    e.uninit_fields
+                        .iter()
+                        .map(|f| interner.resolve(*f))
+                        .collect::<Vec<_>>(),
+                    e.span.start,
+                    e.span.end,
+                )
+            })
+            .collect();
+        return Err(msgs.join("\n"));
+    }
+    Ok(dump_with(interner, &module))
 }
 
 /// Compile a **script** with the **full optimization pipeline** (SROA -> SSA -> Inline -> Pass2).

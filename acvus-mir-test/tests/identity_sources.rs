@@ -5,16 +5,28 @@
 use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::{FnKind, Function, ParsedAst, QualifiedRef};
 use acvus_mir::ty::{
-    IdentityTerm, ParamTerm, Polarity, Poly, PolyBuilder, PolyTy, Solver, Sources, Ty, TyTerm,
+    IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Solver, Sources, Ty, TyTerm, TypeArg,
     TypeRegistry, lift_to_poly,
 };
 use acvus_mir_test::inferred_function;
 use acvus_utils::Interner;
 
+fn iterator_registry(i: &Interner) -> TypeRegistry {
+    let mut reg = TypeRegistry::new();
+    reg.register(acvus_mir::ty::UserDefinedDecl {
+        qref: QualifiedRef::root(i.intern("Iterator")),
+        type_params: vec![acvus_mir::ty::TyVarBound::Any],
+        effect_params: 1,
+        identity_params: 1,
+        specializable: vec![false],
+    });
+    reg
+}
+
 fn iter_poly(i: &Interner, identity: IdentityTerm<Poly>) -> PolyTy {
     TyTerm::UserDefined {
         id: QualifiedRef::root(i.intern("Iterator")),
-        type_args: vec![TyTerm::I64],
+        type_args: vec![TypeArg::uniform(TyTerm::I64)],
         effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
         identity_args: vec![identity],
     }
@@ -33,24 +45,23 @@ fn source_of(ty: &Ty) -> acvus_mir::ty::IdentityId {
 #[test]
 fn a_source_frozen_in_one_solver_is_never_minted_by_another() {
     let i = Interner::new();
-    let reg = TypeRegistry::new();
+    let reg = iterator_registry(&i);
     let mut sources = Sources::new();
 
     let frozen_y = {
-        let mut a = Solver::new(&mut sources);
+        let mut a = Solver::new(&mut sources, &reg);
         let mut pb = PolyBuilder::new();
         let y = a.instantiate_poly(&iter_poly(&i, pb.fresh_identity_var()));
         a.freeze_ty(&y).unwrap()
     };
 
-    let mut b = Solver::new(&mut sources);
+    let mut b = Solver::new(&mut sources, &reg);
     let imported_y = b.instantiate_poly(&lift_to_poly(&frozen_y));
     for _ in 0..8 {
         let mut pb = PolyBuilder::new();
         let fresh = b.instantiate_poly(&iter_poly(&i, pb.fresh_identity_var()));
         assert!(
-            b.unify_ty(&imported_y, &fresh, Polarity::Invariant, &reg)
-                .is_err(),
+            b.unify(&imported_y, &fresh).is_err(),
             "a source minted in solver B unified with a source imported from solver A"
         );
         assert_ne!(
@@ -66,7 +77,7 @@ fn a_source_frozen_in_one_solver_is_never_minted_by_another() {
 #[test]
 fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
     let i = Interner::new();
-    let mut graph = IncrementalGraph::new(&i);
+    let mut graph = IncrementalGraph::with_type_registry(&i, iterator_registry(&i));
 
     let mut pb = PolyBuilder::new();
     let mk = Function {
@@ -136,7 +147,7 @@ fn a_declared_context_never_shares_a_source_with_a_new_one() {
     let i = Interner::new();
     let declared = Ty::UserDefined {
         id: QualifiedRef::root(i.intern("Iterator")),
-        type_args: vec![Ty::I64],
+        type_args: vec![TypeArg::uniform(Ty::I64)],
         effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
         identity_args: vec![IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),

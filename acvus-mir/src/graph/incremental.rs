@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::MirError;
-use crate::ty::{PolyTy, Sources, Ty, lift_to_poly};
+use crate::ty::{PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
 
 use super::extract::{ExtractResult, ParsedSource, extract_one};
 use super::infer::{SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
@@ -35,6 +35,8 @@ pub struct IncrementalGraph {
     interner: Interner,
     /// The sources of this compilation, shared by every solver it runs.
     sources: Sources,
+    /// The user-defined types and cast rules of this compilation.
+    type_registry: TypeRegistry,
 
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
@@ -58,9 +60,14 @@ pub struct IncrementalGraph {
 
 impl IncrementalGraph {
     pub fn new(interner: &Interner) -> Self {
+        Self::with_type_registry(interner, TypeRegistry::new())
+    }
+
+    pub fn with_type_registry(interner: &Interner, type_registry: TypeRegistry) -> Self {
         Self {
             interner: interner.clone(),
             sources: Sources::new(),
+            type_registry,
             functions: FxHashMap::default(),
             contexts: FxHashMap::default(),
             extract_cache: FxHashMap::default(),
@@ -373,6 +380,7 @@ impl IncrementalGraph {
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
+                &self.type_registry,
             );
 
             resolved_fn_types.extend(
@@ -468,6 +476,7 @@ impl IncrementalGraph {
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
+                &self.type_registry,
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -558,7 +567,7 @@ impl IncrementalGraph {
             context_types: {
                 // PolyTy -> InferTy (instantiate) -> Ty (freeze) at the output boundary.
                 let known = self.known_context_types();
-                let mut solver = crate::ty::Solver::new(&mut self.sources);
+                let mut solver = crate::ty::Solver::new(&mut self.sources, &self.type_registry);
                 Freeze::new(
                     known
                         .into_iter()

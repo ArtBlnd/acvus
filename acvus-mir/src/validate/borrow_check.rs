@@ -14,7 +14,7 @@ use crate::analysis::loans::{Loan, Loans};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{InstKind, MirBody, MirModule, RefTarget, ValueId};
-use crate::ty::{Mutability, Ty};
+use crate::ty::{Mutability, Ty, TypeArg};
 use crate::validate::move_check::is_move_only;
 use crate::validate::type_check::{ValidationError, ValidationErrorKind};
 
@@ -306,8 +306,14 @@ mod tests {
     fn string_slot() -> Vec<(ValueId, Ty)> {
         vec![
             (slot(), Ty::String),
-            (v(1), Ty::Ref(Mutability::Shared, Box::new(Ty::String))),
-            (v(2), Ty::Ref(Mutability::Mut, Box::new(Ty::String))),
+            (
+                v(1),
+                Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
+            ),
+            (
+                v(2),
+                Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String))),
+            ),
             (v(3), Ty::String),
             (v(4), Ty::I64),
         ]
@@ -513,8 +519,14 @@ mod tests {
     #[test]
     fn a_reference_assigned_into_a_storage_keeps_its_loan_live() {
         let mut types = string_slot();
-        types.push((v(7), Ty::Ref(Mutability::Shared, Box::new(Ty::String))));
-        types.push((v(8), Ty::Ref(Mutability::Shared, Box::new(Ty::String))));
+        types.push((
+            v(7),
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
+        ));
+        types.push((
+            v(8),
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
+        ));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -552,8 +564,10 @@ mod tests {
         );
         main.params
             .push((acvus_utils::Interner::new().intern("p"), param));
-        main.val_types
-            .insert(param, Ty::Ref(Mutability::Mut, Box::new(Ty::String)));
+        main.val_types.insert(
+            param,
+            Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String))),
+        );
         assert_eq!(conflict_count(&errors(main)), 1);
     }
 }

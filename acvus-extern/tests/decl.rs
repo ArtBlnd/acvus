@@ -10,7 +10,7 @@ use std::sync::Arc;
 use acvus_extern::{
     Arr, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, ExternFn, ExternHandler,
     ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure, Registry,
-    Runtime, Trap, TyArg, TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
+    Runtime, Trap, TyArg, TyVar, TypeArg, TypeRegistry, TypesOnly, extern_fn, extern_registry,
     extern_signature,
 };
 
@@ -444,7 +444,7 @@ fn generic_parameters_become_positional_variables() {
     let apply = fn_ty(find(&reg.functions, &i, "apply"));
     let boxed_of = |t: PolyTy| PolyTy::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
-        type_args: vec![t],
+        type_args: vec![TypeArg::uniform(t)],
         effect_args: vec![EffectTerm::Var(0)],
         identity_args: vec![],
     };
@@ -472,7 +472,7 @@ fn generic_parameters_become_positional_variables() {
         boxed.ret,
         PolyTy::UserDefined {
             id: acvus_extern::QualifiedRef::root(i.intern("Box")),
-            type_args: vec![PolyTy::Var(0)],
+            type_args: vec![TypeArg::uniform(PolyTy::Var(0))],
             effect_args: vec![EffectTerm::Known(Effect::PURE)],
             identity_args: vec![],
         }
@@ -514,7 +514,10 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     };
     assert_eq!(
         params[0].ty,
-        PolyTy::Ref(acvus_extern::Mutability::Mut, Box::new(PolyTy::I64))
+        PolyTy::Ref(
+            acvus_extern::Mutability::Mut,
+            Box::new(TypeArg::uniform(PolyTy::I64))
+        )
     );
     assert_eq!(params[1].ty, PolyTy::I64);
 
@@ -892,7 +895,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
 
     let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
-        type_args: vec![t],
+        type_args: vec![TypeArg::uniform(t)],
         effect_args: vec![EffectTerm::Known(Effect::PURE)],
         identity_args: vec![],
     };

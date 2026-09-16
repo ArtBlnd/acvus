@@ -1,7 +1,7 @@
 //! Intent tests for RFC-0025.
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Mutability, Param, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{Mutability, Param, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -45,7 +45,10 @@ fn an_assign_to_a_context_while_it_is_lent_is_rejected() {
     let f = extern_fn(
         &i,
         "f",
-        &[Ty::Ref(Mutability::Shared, Box::new(Ty::String)), Ty::I64],
+        &[
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
+            Ty::I64,
+        ],
         Ty::I64,
     );
     let err = compile_script_ir_with(
@@ -65,7 +68,7 @@ fn a_closure_writing_a_lent_context_is_rejected_at_the_call() {
         &i,
         "f",
         &[
-            Ty::Ref(Mutability::Shared, Box::new(Ty::String)),
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
             int_to_int(&i),
         ],
         Ty::I64,

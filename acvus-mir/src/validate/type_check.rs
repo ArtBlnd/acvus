@@ -13,7 +13,7 @@
 //! - Generic variance is invariant: inner types must match recursively.
 
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId};
-use crate::ty::{Mutability, Ty};
+use crate::ty::{Mutability, Ty, TypeArg};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::{Astr, LocalIdOps};
 use rustc_hash::FxHashMap;
@@ -129,7 +129,9 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::Array(a, la), Ty::Array(b, lb)) => la == lb && types_match(a, b),
         (Ty::Option(a), Ty::Option(b)) => types_match(a, b),
         (Ty::Result(ta, ea), Ty::Result(tb, eb)) => types_match(ta, tb) && types_match(ea, eb),
-        (Ty::Ref(ma, a), Ty::Ref(mb, b)) => ma == mb && types_match(a, b),
+        (Ty::Ref(ma, a), Ty::Ref(mb, b)) => {
+            ma == mb && a.repr == b.repr && types_match(&a.ty, &b.ty)
+        }
         (Ty::Tuple(a), Ty::Tuple(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_match(x, y))
         }
@@ -349,7 +351,7 @@ impl CheckCtx {
             }
             return None;
         };
-        let mut at: Ty = inner.as_ref().clone();
+        let mut at: Ty = inner.ty.clone();
         for seg in path {
             let next = match (seg, &at) {
                 (PathSeg::Field(field), Ty::Object(fields)) => fields.get(field).cloned(),
@@ -475,7 +477,7 @@ impl CheckCtx {
                 let src_ty = ty!(*src);
                 let is_string = match src_ty {
                     Ty::String | Ty::Error(_) => true,
-                    Ty::Ref(_, inner) => matches!(inner.as_ref(), Ty::String),
+                    Ty::Ref(_, inner) => matches!(inner.ty, Ty::String),
                     _ => false,
                 };
                 if !is_string {
@@ -496,7 +498,7 @@ impl CheckCtx {
                 self.assert_match(pc, span, "StringEq", "dst", &Ty::Bool, dst_ty, errors);
                 for operand in [a, b] {
                     let operand_ty = ty!(*operand);
-                    let is_string_ref = matches!(operand_ty, Ty::Ref(_, inner) if matches!(inner.as_ref(), Ty::String))
+                    let is_string_ref = matches!(operand_ty, Ty::Ref(_, inner) if matches!(inner.ty, Ty::String))
                         || operand_ty.is_error();
                     if !is_string_ref {
                         errors.push(ValidationError {
@@ -519,7 +521,7 @@ impl CheckCtx {
                     let part_ty = ty!(*part);
                     let is_string = match part_ty {
                         Ty::String => true,
-                        Ty::Ref(_, inner) => matches!(inner.as_ref(), Ty::String),
+                        Ty::Ref(_, inner) => matches!(inner.ty, Ty::String),
                         Ty::Error(_) => true,
                         _ => false,
                     };
@@ -935,7 +937,7 @@ impl CheckCtx {
                             },
                         });
                     }
-                    let expected = Ty::Ref(*mutability, Box::new(at));
+                    let expected = Ty::Ref(*mutability, Box::new(TypeArg::uniform(at)));
                     self.assert_match(pc, span, "Ref", "dst", &expected, dst_ty, errors);
                     return;
                 }
@@ -1163,7 +1165,7 @@ impl CheckCtx {
             InstKind::TestObjectKey { dst, src, .. } => {
                 let src_ty = ty!(*src);
                 let src_ty = match src_ty {
-                    Ty::Ref(_, inner) => inner.as_ref(),
+                    Ty::Ref(_, inner) => &inner.ty,
                     other => other,
                 };
                 let src_ty = if matches!(src_ty, Ty::Object(_) | Ty::Error(_)) {
@@ -1190,7 +1192,7 @@ impl CheckCtx {
             InstKind::TestVariant { dst, src, .. } => {
                 let src_ty = ty!(*src);
                 let src_ty = match src_ty {
-                    Ty::Ref(_, inner) => inner.as_ref(),
+                    Ty::Ref(_, inner) => &inner.ty,
                     other => other,
                 };
                 if !matches!(

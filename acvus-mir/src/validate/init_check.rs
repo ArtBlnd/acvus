@@ -52,8 +52,16 @@ impl SemiLattice for FieldInit {
 #[derive(Debug, Clone)]
 pub struct UninitError {
     pub span: Span,
-    pub target: RefTarget,
+    pub subject: UninitSubject,
     pub uninit_fields: Vec<Astr>,
+}
+
+/// What lacked the fields: a named storage, or a value built in place and
+/// passed on without a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UninitSubject {
+    Storage(RefTarget),
+    Value(ValueId),
 }
 
 // -- Pre-pass data ---------------------------------------------------
@@ -88,7 +96,9 @@ fn build_value_fields(cfg: &CfgBody) -> ValueFields {
 
 /// Every (storage, field) the body names: a whole-storage `Take`/`Assign`
 /// contributes the fields of its object type, a field path proves its first
-/// field exists.
+/// field exists, and a call contributes the fields its callee requires of a
+/// storage passed whole, so a field the body never wrote is tracked where
+/// the callee reads it.
 fn collect_var_fields(cfg: &CfgBody) -> FxHashMap<RefTarget, FxHashSet<Astr>> {
     let mut target_fields: FxHashMap<RefTarget, FxHashSet<Astr>> = FxHashMap::default();
     let mut note = |target: &RefTarget, path: &[PathSeg], whole: Option<&Ty>| match path.first() {
@@ -121,12 +131,40 @@ fn collect_var_fields(cfg: &CfgBody) -> FxHashMap<RefTarget, FxHashSet<Astr>> {
                     dst, target, path, ..
                 } => {
                     let inner = match cfg.val_types.get(dst) {
-                        Some(Ty::Ref(_, inner)) => Some(inner.as_ref()),
+                        Some(Ty::Ref(_, inner)) => Some(&inner.ty),
                         _ => None,
                     };
                     note(target, path, inner);
                 }
                 _ => {}
+            }
+        }
+    }
+    for block in &cfg.blocks {
+        for inst in &block.insts {
+            let (InstKind::FunctionCall {
+                callee_ty, args, ..
+            }
+            | InstKind::Spawn {
+                callee_ty, args, ..
+            }) = &inst.kind
+            else {
+                continue;
+            };
+            let Ty::Fn { params, .. } = callee_ty else {
+                continue;
+            };
+            for (arg, param) in args.iter().zip(params.iter()) {
+                let Ty::Object(required) = &param.ty else {
+                    continue;
+                };
+                let Some(target) = find_arg_source(arg, cfg) else {
+                    continue;
+                };
+                target_fields
+                    .entry(target)
+                    .or_default()
+                    .extend(required.keys().copied());
             }
         }
     }
@@ -239,7 +277,7 @@ pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
                     {
                         errors.push(UninitError {
                             span: inst.span,
-                            target: *target,
+                            subject: UninitSubject::Storage(*target),
                             uninit_fields: vec![*field],
                         });
                     }
@@ -256,7 +294,16 @@ pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
                     args,
                     ..
                 } => {
-                    check_call_args(&state, cfg, callee, callee_ty, args, inst.span, &mut errors);
+                    check_call_args(
+                        &state,
+                        cfg,
+                        &analysis.value_fields,
+                        callee,
+                        callee_ty,
+                        args,
+                        inst.span,
+                        &mut errors,
+                    );
                 }
                 _ => {}
             }
@@ -267,11 +314,14 @@ pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
     errors
 }
 
-/// Check that all fields required by the callee's parameter types
-/// are initialized for each argument.
+/// Check that all fields required by the callee's parameter types are
+/// initialized for each argument: in the storage it was taken from, or in
+/// the value it was built as.
+#[allow(clippy::too_many_arguments)]
 fn check_call_args(
     state: &DataflowState<(RefTarget, Astr), FieldInit>,
     cfg: &CfgBody,
+    value_fields: &ValueFields,
     callee: &Callee,
     callee_ty: &Ty,
     args: &[ValueId],
@@ -295,18 +345,28 @@ fn check_call_args(
         if required_fields.is_empty() {
             continue;
         }
-        let Some(target) = find_arg_source(arg, cfg) else {
-            continue;
-        };
-
-        let uninit_fields: Vec<Astr> = required_fields
-            .into_iter()
-            .filter(|f| state.get((target, *f)) == FieldInit::Uninit)
-            .collect();
+        let (subject, uninit_fields): (UninitSubject, Vec<Astr>) =
+            match (find_arg_source(arg, cfg), value_fields.get(arg)) {
+                (Some(target), _) => (
+                    UninitSubject::Storage(target),
+                    required_fields
+                        .into_iter()
+                        .filter(|f| state.get((target, *f)) == FieldInit::Uninit)
+                        .collect(),
+                ),
+                (None, Some(built)) => (
+                    UninitSubject::Value(*arg),
+                    required_fields
+                        .into_iter()
+                        .filter(|f| !built.contains(f))
+                        .collect(),
+                ),
+                (None, None) => continue,
+            };
         if !uninit_fields.is_empty() {
             errors.push(UninitError {
                 span,
-                target,
+                subject,
                 uninit_fields,
             });
         }

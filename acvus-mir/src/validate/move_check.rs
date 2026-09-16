@@ -634,7 +634,7 @@ mod tests {
     use super::*;
     use crate::graph::QualifiedRef;
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
-    use crate::ty::Param;
+    use crate::ty::{Param, TypeArg};
     use acvus_utils::{Interner, LocalFactory};
 
     /// Create a dummy Param for tests where parameter name is irrelevant.
@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(
             is_move_only(&Ty::Ref(
                 crate::ty::Mutability::Shared,
-                Box::new(Ty::String)
+                Box::new(TypeArg::uniform(Ty::String))
             )),
             Some(false)
         );

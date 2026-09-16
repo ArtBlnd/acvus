@@ -1,7 +1,7 @@
 //! Intent tests for RefTarget::Through (RFC-0018).
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Mutability, Param, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{Mutability, Param, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -50,7 +50,7 @@ fn with_closure(i: &Interner, param: Ty, ret: Ty, body: &str) -> Result<String, 
 #[test]
 fn a_primitive_field_is_read_through_a_reference() {
     let i = Interner::new();
-    let shared = Ty::Ref(Mutability::Shared, Box::new(user(&i)));
+    let shared = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(user(&i))));
     let ir = with_closure(&i, shared, Ty::I64, "u.age").unwrap();
     assert!(ir.contains("take (*r"), "{ir}");
 }
@@ -58,7 +58,7 @@ fn a_primitive_field_is_read_through_a_reference() {
 #[test]
 fn a_string_field_is_copied_through_a_reference() {
     let i = Interner::new();
-    let shared = Ty::Ref(Mutability::Shared, Box::new(user(&i)));
+    let shared = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(user(&i))));
     let ir = with_closure(&i, shared, Ty::String, "u.name").unwrap();
     assert!(ir.contains("take (*r"), "{ir}");
 }
@@ -70,7 +70,10 @@ fn an_object_field_cannot_be_moved_out_through_a_reference() {
         i.intern("inner"),
         Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
     )]));
-    let shared = Ty::Ref(Mutability::Shared, Box::new(nested.clone()));
+    let shared = Ty::Ref(
+        Mutability::Shared,
+        Box::new(TypeArg::uniform(nested.clone())),
+    );
     let inner = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
     let err = with_closure(&i, shared, inner, "u.inner").unwrap_err();
     assert!(!err.is_empty(), "{err}");
@@ -79,7 +82,7 @@ fn an_object_field_cannot_be_moved_out_through_a_reference() {
 #[test]
 fn a_string_field_is_borrowed_through_a_reference_and_cloned() {
     let i = Interner::new();
-    let shared = Ty::Ref(Mutability::Shared, Box::new(user(&i)));
+    let shared = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(user(&i))));
     let ir = with_closure(&i, shared, Ty::Bool, r#"u.name == "bob""#).unwrap();
     assert!(ir.contains("ref &(*r"), "{ir}");
     assert!(ir.contains("string_eq"), "{ir}");
@@ -88,7 +91,7 @@ fn a_string_field_is_borrowed_through_a_reference_and_cloned() {
 #[test]
 fn a_field_is_assigned_through_a_mutable_reference() {
     let i = Interner::new();
-    let mutable = Ty::Ref(Mutability::Mut, Box::new(user(&i)));
+    let mutable = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(user(&i))));
     let ir = with_closure(&i, mutable, Ty::I64, "{ u.age = 1; 0 }").unwrap();
     assert!(ir.contains("assign (*r"), "{ir}");
 }
@@ -96,7 +99,7 @@ fn a_field_is_assigned_through_a_mutable_reference() {
 #[test]
 fn a_field_cannot_be_assigned_through_a_shared_reference() {
     let i = Interner::new();
-    let shared = Ty::Ref(Mutability::Shared, Box::new(user(&i)));
+    let shared = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(user(&i))));
     let err = with_closure(&i, shared, Ty::I64, "{ u.age = 1; 0 }").unwrap_err();
     assert!(err.contains("not a `&mut`"), "{err}");
 }
@@ -104,7 +107,7 @@ fn a_field_cannot_be_assigned_through_a_shared_reference() {
 #[test]
 fn a_word_is_stored_through_a_mutable_reference() {
     let i = Interner::new();
-    let mutable = Ty::Ref(Mutability::Mut, Box::new(Ty::I64));
+    let mutable = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::I64)));
     let ir = with_closure(&i, mutable, Ty::I64, "{ *u = 1; *u }").unwrap();
     assert!(ir.contains("assign (*r"), "{ir}");
     assert!(ir.contains("take (*r"), "{ir}");
@@ -113,7 +116,7 @@ fn a_word_is_stored_through_a_mutable_reference() {
 #[test]
 fn a_word_cannot_be_stored_through_a_shared_reference() {
     let i = Interner::new();
-    let shared = Ty::Ref(Mutability::Shared, Box::new(Ty::I64));
+    let shared = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64)));
     let err = with_closure(&i, shared, Ty::I64, "{ *u = 1; 0 }").unwrap_err();
     assert!(err.contains("not a `&mut`"), "{err}");
 }

@@ -11,7 +11,7 @@ use acvus_extern::{
     PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SpaceError, SpaceHooks, SpaceResult,
     Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn, extern_registry,
 };
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{Ty, TypeArg};
 
 use crate::container::{checked_index, sig as container};
 use crate::iter_pipeline::Iter;
@@ -149,7 +149,7 @@ where
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::UserDefined {
             id: QualifiedRef::root(i.intern("Deque")),
-            type_args: vec![T::poly_ty(i, vars)],
+            type_args: vec![TypeArg::uniform(T::poly_ty(i, vars))],
             effect_args: vec![],
             identity_args: vec![],
         }
@@ -166,6 +166,7 @@ where
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            specializable: vec![true],
         }
     }
 

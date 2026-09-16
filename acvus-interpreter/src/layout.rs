@@ -5,7 +5,7 @@
 
 use acvus_extern::{NodeHash, SpaceError, SpaceHooks, SpaceResult};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{LenTerm, Ty};
+use acvus_mir::ty::{LenTerm, Repr, Ty};
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
@@ -257,16 +257,25 @@ pub fn holds_extension(ty: &Ty) -> bool {
     }
 }
 
-/// The hooks of an extension type, with the type's arguments.
+/// The hooks of an extension type, with the type's arguments. A
+/// specialized slot (`#τ`, hash-types.md) has no space layout yet and is
+/// refused here.
 pub fn extension<'a>(
     rt: &'a AcvusRuntime,
     ty: &'a Ty,
-) -> SpaceResult<(&'a SpaceHooks<AcvusRuntime>, &'a [Ty])> {
+) -> SpaceResult<(&'a SpaceHooks<AcvusRuntime>, Vec<Ty>)> {
     let Ty::UserDefined { id, type_args, .. } = ty else {
         return Err(SpaceError::new(format!(
             "{} is not an extension type",
             ty.display(&rt.0.interner)
         )));
     };
-    Ok((hooks_of(rt, ty, id)?, type_args))
+    if type_args.iter().any(|a| a.repr == Repr::Specialized) {
+        return Err(SpaceError::new(format!(
+            "{} has a specialized slot, which has no space layout",
+            ty.display(&rt.0.interner)
+        )));
+    }
+    let args = type_args.iter().map(|a| a.ty.clone()).collect();
+    Ok((hooks_of(rt, ty, id)?, args))
 }

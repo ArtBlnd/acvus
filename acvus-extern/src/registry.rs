@@ -368,8 +368,8 @@ fn instance_type(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
     };
     sp.iter().zip(ip).find_map(|(s, i)| match (&s.ty, &i.ty) {
         (PolyTy::Var(0), t) => Some(t.clone()),
-        (PolyTy::Ref(_, inner), PolyTy::Ref(_, t)) if matches!(**inner, PolyTy::Var(0)) => {
-            Some((**t).clone())
+        (PolyTy::Ref(_, inner), PolyTy::Ref(_, t)) if matches!(inner.ty, PolyTy::Var(0)) => {
+            Some(t.ty.clone())
         }
         _ => None,
     })

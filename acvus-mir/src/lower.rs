@@ -12,7 +12,7 @@ use crate::ir::{
     Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget,
     ValOrigin, ValueId,
 };
-use crate::ty::{Effect, Mutability, Ty};
+use crate::ty::{Effect, Mutability, Ty, TypeArg};
 use crate::typeck::TypeResolution;
 
 pub struct Lowerer<'a> {
@@ -1066,7 +1066,7 @@ impl<'a> Lowerer<'a> {
         // (RFC-0029).
         let ty = match ty {
             Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => {
-                *inner
+                inner.ty
             }
             ty => ty,
         };
@@ -1176,7 +1176,10 @@ impl<'a> Lowerer<'a> {
         inner_ty: Ty,
     ) -> ValueId {
         let dst = self.alloc_val();
-        self.set_val_type(dst, Ty::Ref(mutability, Box::new(inner_ty)));
+        self.set_val_type(
+            dst,
+            Ty::Ref(mutability, Box::new(TypeArg::uniform(inner_ty))),
+        );
         self.set_origin(dst, ValOrigin::RefField(target.clone(), path.clone()));
         self.emit_inst(
             span,
@@ -1650,7 +1653,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let left_ty = self.type_of_id(left.id());
                 let on_string = matches!(&left_ty, Ty::String)
-                    || matches!(&left_ty, Ty::Ref(_, inner) if matches!(inner.as_ref(), Ty::String));
+                    || matches!(&left_ty, Ty::Ref(_, inner) if matches!(inner.ty, Ty::String));
                 if on_string && matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Add) {
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
@@ -2529,7 +2532,7 @@ impl<'a> Lowerer<'a> {
     /// Returns a register holding a Bool (true = match).
     fn reference_inner(&self, reg: ValueId) -> Option<Ty> {
         match self.body.val_types.get(&reg) {
-            Some(Ty::Ref(_, inner)) => Some(inner.as_ref().clone()),
+            Some(Ty::Ref(_, inner)) => Some(inner.ty.clone()),
             _ => None,
         }
     }
@@ -2675,7 +2678,10 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 self.set_origin(reference, ValOrigin::Named(*name));
-                let ty = Ty::Ref(Mutability::Shared, Box::new(inner.clone()));
+                let ty = Ty::Ref(
+                    Mutability::Shared,
+                    Box::new(TypeArg::uniform(inner.clone())),
+                );
                 let slot = self.define_var(*name, ty);
                 self.emit_assign(span, RefTarget::Var(slot), vec![], reference);
             }

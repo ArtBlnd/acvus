@@ -8,10 +8,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind};
-use crate::solver::{ChoiceFailure, ChoiceId, InstanceChoice};
+use crate::solver::{
+    Answer, Candidate, Decision, DecisionId, EffectRelation, InstanceChoice, InstanceKind,
+    Mismatch, Unsettled,
+};
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Polarity, Solver,
-    Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Ty, TyTerm,
+    TyVarBound, TypeArg, TypeEnv, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -67,11 +70,7 @@ fn first_param_reference(ty: &crate::ty::PolyTy) -> Option<Mutability> {
     }
 }
 
-/// A call that is an instruction of the language (RFC-0020).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Intrinsic {
-    StringClone,
-}
+pub use crate::ir::Intrinsic;
 
 /// An operator resolved to a shared signature (RFC-0020).
 #[derive(Debug, Clone)]
@@ -151,11 +150,33 @@ struct LambdaScope {
     captures: Vec<InferTy>,
 }
 
-/// The expression a coercion is recorded on.
+/// Where a value meets a type it may need converting to, and how a
+/// conversion that does not exist is reported there.
 #[derive(Debug, Clone, Copy)]
-struct CoerceSite {
+struct ConversionSite {
     id: AstId,
     span: Span,
+    report: ConversionReport,
+}
+
+/// The error a failed conversion is reported as, by the kind of site.
+#[derive(Debug, Clone, Copy)]
+enum ConversionReport {
+    /// A call argument, a returned tail: "expected .., got ..".
+    Value,
+    /// A template emits the value: it must be a `String`.
+    Emit,
+    /// An element of a list literal against the first element.
+    ListElement,
+}
+
+/// A conversion decision registered at a site; a cast the solver settles
+/// on becomes a `PendingCoercion` when the body is solved.
+struct PendingConversion {
+    site: ConversionSite,
+    decision: DecisionId,
+    from: InferTy,
+    to: InferTy,
 }
 
 /// State only active in analysis mode (partial inference for unknown contexts/params).
@@ -173,8 +194,6 @@ pub struct TypeChecker<'a, 's, 'src> {
     interner: &'a Interner,
     /// Unified type environment: contexts + functions.
     env: &'a TypeEnv,
-    /// Type registry for coercion rules.
-    registry: &'a TypeRegistry,
     /// Namespace this function belongs to.
     namespace: Option<Astr>,
     /// Stack of scopes: each scope maps variable names to types.
@@ -192,7 +211,6 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Direct call resolutions (callee AstId -> the function and instance).
     direct_calls: FxHashMap<AstId, ResolvedCallee>,
     operator_calls: FxHashMap<AstId, OperatorCall<ResolvedCallee, InferTy>>,
-    intrinsic_calls: FxHashMap<AstId, Intrinsic>,
     pattern_through: bool,
     /// Accumulated errors.
     errors: Vec<MirError>,
@@ -213,9 +231,11 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Calls `ns::tag(payload)` that resolved to a structural variant
     /// (RFC-0030), for the lowering.
     structural_variant_calls: FxHashSet<AstId>,
-    /// Choices among instances instantiated so far, each at the span that
-    /// will report a failure.
-    choice_sites: FxHashMap<ChoiceId, Span>,
+    /// Conversion decisions registered so far, at their sites.
+    conversions: Vec<PendingConversion>,
+    /// Decisions instantiated so far, each at the span that will report a
+    /// failure.
+    decision_sites: FxHashMap<DecisionId, Span>,
     /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
     analysis: Option<AnalysisState>,
     /// Stack of active lambda scopes. Each entry is (scope_depth, captures).
@@ -223,27 +243,17 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// enclosing lambdas whose scope depth is exceeded.
     lambda_stack: Vec<LambdaScope>,
     /// Maps lambda expression AstId -> body expression AstId.
-    /// Used by `detect_fn_ret_coercion` to register coercions on the
-    /// correct id (body, not lambda) so the lowerer's `maybe_cast`
-    /// naturally inserts a Cast at the lambda return site.
-    lambda_body_ids: FxHashMap<AstId, AstId>,
     /// Effect variable of the body being checked; every call raises its lower bound.
     body_effect: EffectTerm<Infer>,
 }
 
 impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
-    pub fn new(
-        interner: &'a Interner,
-        env: &'a TypeEnv,
-        registry: &'a TypeRegistry,
-        solver: &'s mut Solver<'src>,
-    ) -> Self {
+    pub fn new(interner: &'a Interner, env: &'a TypeEnv, solver: &'s mut Solver<'src>) -> Self {
         let body_effect = solver.fresh_effect_var();
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
             env,
-            registry,
             namespace: None,
             param_types: smallvec::smallvec![],
             solver,
@@ -251,7 +261,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             coercions: Vec::new(),
             direct_calls: FxHashMap::default(),
             operator_calls: FxHashMap::default(),
-            intrinsic_calls: FxHashMap::default(),
             pattern_through: false,
             in_borrow_place: false,
             bound_sites: Vec::new(),
@@ -259,12 +268,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             try_sites: FxHashMap::default(),
             int_literals: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
-            choice_sites: FxHashMap::default(),
+            conversions: Vec::new(),
+            decision_sites: FxHashMap::default(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
             analysis: None,
             lambda_stack: Vec::new(),
-            lambda_body_ids: FxHashMap::default(),
             body_effect,
         }
     }
@@ -276,7 +285,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn note_call_effect(&mut self, callee: &EffectTerm<Infer>, span: Span) {
         let body = self.body_effect.clone();
-        if let Err(conflict) = self.solver.unify_effect(callee, &body, Polarity::Covariant) {
+        if let Err(conflict) = self
+            .solver
+            .unify_effect(callee, &body, EffectRelation::AtMost)
+        {
             self.error(MirErrorKind::EffectExceeded(conflict), span);
         }
     }
@@ -364,8 +376,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         template: &Template,
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
         self.check_nodes(&template.body);
-        self.verify_bounds();
-        self.solver.settle_identities();
+        self.solve_body();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -389,7 +400,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             coercion_map,
             direct_calls,
             operator_calls,
-            self.intrinsic_calls,
+            self.frozen_intrinsic_calls(),
             self.structural_variant_calls,
             FxHashMap::default(),
             Ty::String,
@@ -413,7 +424,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let tail_ty = if let Some(tail) = &script.tail {
             let ty = self.check_expr(tail);
-            if self.unify_covariant(&ty, &return_ty, None).is_err() {
+            if self.flow(&ty, &return_ty).is_err() {
                 let resolved = self.solver.resolve_ty(&ty);
                 let expected = self.solver.resolve_ty(&return_ty);
                 self.error(
@@ -426,34 +437,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             if let Some(expected) = expected_tail {
                 let expected_infer = lift_ty(expected);
-                if self
-                    .unify_covariant(
-                        &ty,
-                        &expected_infer,
-                        Some(CoerceSite {
-                            id: tail.id(),
-                            span: tail.span(),
-                        }),
-                    )
-                    .is_err()
-                {
-                    let resolved = self.solver.resolve_ty(&ty);
-                    let expected_resolved = self.solver.resolve_ty(&expected_infer);
-                    self.error(
-                        MirErrorKind::UnificationFailure {
-                            expected: self.freeze_or_error(&expected_resolved),
-                            got: self.freeze_or_error(&resolved),
-                        },
-                        tail.span(),
-                    );
-                }
+                self.convert_at(
+                    &ty,
+                    &expected_infer,
+                    ConversionSite {
+                        id: tail.id(),
+                        span: tail.span(),
+                        report: ConversionReport::Value,
+                    },
+                );
             }
             ty
         } else {
             TyTerm::Unit
         };
-        self.verify_bounds();
-        self.solver.settle_identities();
+        self.solve_body();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -479,7 +477,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             coercion_map,
             direct_calls,
             operator_calls,
-            self.intrinsic_calls,
+            self.frozen_intrinsic_calls(),
             self.structural_variant_calls,
             try_returns,
             frozen_tail,
@@ -492,69 +490,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Unify `value_ty` with `expected_ty` in covariant position, recording
     /// any coercion needed at `span`. This is the single entry point for all
     /// covariant unification - ensures coercion detection is consistent.
-    fn unify_covariant(
-        &mut self,
-        value_ty: &InferTy,
-        expected_ty: &InferTy,
-        coerce_at: Option<CoerceSite>,
-    ) -> Result<(), (InferTy, InferTy)> {
-        let result =
-            self.solver
-                .unify_ty(value_ty, expected_ty, Polarity::Covariant, self.registry);
-        if let Ok(maybe_fn) = &result
-            && let Some(CoerceSite { id, span }) = coerce_at
-        {
-            if let Some(fn_ref) = maybe_fn {
-                // Build callee_ty: instantiate the cast function's PolyTy and unify
-                // with value_ty (param) and expected_ty (ret) to get concrete types.
-                let (callee_ty, instance) = if let Some(scheme) = self.env.functions.get(fn_ref) {
-                    let (inst, instance) = self.instantiate_at(scheme, span);
-                    // Unify param with value_ty, ret with expected_ty to concretize.
-                    if let TyTerm::Fn {
-                        params,
-                        ret,
-                        effect,
-                        ..
-                    } = &inst
-                    {
-                        if let Some(p) = params.first() {
-                            let _ = self.solver.unify_ty(
-                                &p.ty,
-                                value_ty,
-                                Polarity::Invariant,
-                                self.registry,
-                            );
-                        }
-                        let _ = self.solver.unify_ty(
-                            ret,
-                            expected_ty,
-                            Polarity::Invariant,
-                            self.registry,
-                        );
-                        let effect = effect.clone();
-                        self.note_call_effect(&effect, span);
-                    }
-                    self.settle_choices();
-                    let resolved = self.solver.resolve_ty(&inst);
-                    let callee_ty = self
-                        .solver
-                        .freeze_ty(&resolved)
-                        .unwrap_or_else(|_| Ty::error());
-                    (callee_ty, instance)
-                } else {
-                    (Ty::error(), None)
-                };
-                self.coercions.push(PendingCoercion {
-                    at: id,
-                    cast: ResolvedCallee {
-                        qref: *fn_ref,
-                        instance,
-                    },
-                    callee_ty,
-                });
-            }
-        }
-        result.map(|_| ())
+    /// A value flows into a position that must have its type (solver.md
+    /// R1): the two join at a value position.
+    fn flow(&mut self, value_ty: &InferTy, expected_ty: &InferTy) -> Result<(), Mismatch> {
+        self.solver.unify(value_ty, expected_ty)
+    }
+
+    /// A value meets a type it may need converting to (solver.md R4): the
+    /// conversion is a decision the body's solve answers, reported at the
+    /// site if none exists.
+    fn convert_at(&mut self, value_ty: &InferTy, expected_ty: &InferTy, site: ConversionSite) {
+        let decision = self
+            .solver
+            .decide(Decision::conversion(value_ty, expected_ty));
+        self.decision_sites.insert(decision, site.span);
+        self.conversions.push(PendingConversion {
+            site,
+            decision,
+            from: value_ty.clone(),
+            to: expected_ty.clone(),
+        });
     }
 
     fn push_scope(&mut self) {
@@ -565,7 +520,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.scopes.pop();
     }
 
+    /// A name for a value: its type is a variable of the solver, so what
+    /// the value grows to (a field stored, a variant added) is seen by
+    /// every use of the name.
     fn define_var(&mut self, name: Astr, ty: InferTy) {
+        let ty = match ty {
+            TyTerm::Var(_) => ty,
+            term => {
+                let home = self.solver.fresh_ty_var();
+                self.solver
+                    .unify(&term, &home)
+                    .expect("a fresh variable takes any type");
+                home
+            }
+        };
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, ty);
         }
@@ -588,7 +556,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 let captured = self.lambda_stack.last().is_some_and(|ls| depth < ls.depth);
                 return Some(if captured {
-                    TyTerm::Ref(Mutability::Shared, Box::new(ty.clone()))
+                    TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty.clone())))
                 } else {
                     ty.clone()
                 });
@@ -599,17 +567,28 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A lambda's parameter types come from the parameter that receives it
     /// (RFC-0018) when that is known; otherwise they are inference variables.
-    fn check_lambda(&mut self, expr: &Expr, expected_params: Option<&[InferTy]>) -> InferTy {
+    /// A lambda, at the function type the position expects where there is
+    /// one: its parameters are the expected ones and its body's value
+    /// converts into the expected return (solver.md R4), else fresh.
+    fn check_lambda(&mut self, expr: &Expr, expected: Option<&InferTy>) -> InferTy {
         let Expr::Lambda {
             id, params, body, ..
         } = expr
         else {
             unreachable!("check_lambda takes a lambda");
         };
+        let expected = expected.map(|e| self.solver.shallow_resolve_ty(e));
+        let (expected_params, expected_ret): (Vec<InferTy>, Option<InferTy>) = match &expected {
+            Some(TyTerm::Fn { params, ret, .. }) => (
+                params.iter().map(|p| p.ty.clone()).collect(),
+                Some((**ret).clone()),
+            ),
+            Some(_) | None => (Vec::new(), None),
+        };
         self.push_scope();
         let mut param_types = Vec::new();
         for (i, p) in params.iter().enumerate() {
-            let pt = match expected_params.and_then(|e| e.get(i)) {
+            let pt = match expected_params.get(i) {
                 Some(t) => t.clone(),
                 None => self.solver.fresh_ty_var(),
             };
@@ -632,16 +611,31 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .take()
             .expect("the lambda's return type was set above");
         self.return_ty = outer_return;
-        if self.unify_covariant(&body_ty, &ret, None).is_err() {
-            let resolved = self.solver.resolve_ty(&body_ty);
-            let expected = self.solver.resolve_ty(&ret);
-            self.error(
-                MirErrorKind::UnificationFailure {
-                    expected: self.freeze_or_error(&expected),
-                    got: self.freeze_or_error(&resolved),
-                },
-                body.span(),
-            );
+        match &expected_ret {
+            Some(expected_ret) => {
+                self.flow(&ret, expected_ret)
+                    .expect("a lambda's fresh return variable takes the expected return");
+                self.convert_at(
+                    &body_ty,
+                    &ret,
+                    ConversionSite {
+                        id: body.id(),
+                        span: body.span(),
+                        report: ConversionReport::Value,
+                    },
+                );
+            }
+            None => {
+                if let Err(Mismatch { expected, got, .. }) = self.flow(&body_ty, &ret) {
+                    self.error(
+                        MirErrorKind::UnificationFailure {
+                            expected: self.freeze_or_error(&expected),
+                            got: self.freeze_or_error(&got),
+                        },
+                        body.span(),
+                    );
+                }
+            }
         }
         let lambda_effect = self.body_effect.clone();
         self.body_effect = outer_effect;
@@ -660,10 +654,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.error(MirErrorKind::ReferenceReturned, body.span());
         }
 
-        // Record body span so detect_fn_ret_coercion can register
-        // return-site coercions on the correct expression.
-        self.lambda_body_ids.insert(*id, body.id());
-
         self.pop_scope();
         let ty = TyTerm::Fn {
             params: param_types,
@@ -676,11 +666,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A call argument, checked against the parameter that receives it.
     fn check_arg(&mut self, arg: &Expr, expected: Option<&InferTy>) -> InferTy {
-        if let (Expr::Lambda { .. }, Some(expected)) = (arg, expected)
-            && let TyTerm::Fn { params, .. } = self.solver.resolve_ty(expected)
-        {
-            let tys: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
-            return self.check_lambda(arg, Some(&tys));
+        if let (Expr::Lambda { .. }, Some(expected)) = (arg, expected) {
+            return self.check_lambda(arg, Some(expected));
         }
         self.check_expr(arg)
     }
@@ -701,10 +688,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy| {
             if let Some(param) = param {
-                let _ = this
-                    .solver
-                    .unify_ty(param, arg, Polarity::Invariant, this.registry);
-                this.settle_choices();
+                let _ = this.solver.unify(param, arg);
             }
         };
         let mut arg_types = Vec::with_capacity(args.len() + 1);
@@ -731,20 +715,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// Walk a field path on a type, resolving each step.
     /// Returns the leaf type, or an error type if any step fails.
-    fn resolve_field_path(&self, base: &InferTy, path: &[Astr]) -> InferTy {
+    /// The type stored at `base.path`: each step joins the object with a
+    /// partial one naming the field, so a store to a field the object did
+    /// not have grows the object (solver.md R1). A base that is not an
+    /// object is a type error at the store.
+    fn field_path_for_store(&mut self, base: &InferTy, path: &[Astr], span: Span) -> InferTy {
         let mut current = base.clone();
         for field in path {
-            let resolved = self.solver.resolve_ty(&current);
-            match resolved {
-                TyTerm::Object(fields) => {
-                    if let Some(field_ty) = fields.get(field) {
-                        current = field_ty.clone();
-                    } else {
-                        return Self::infer_error();
-                    }
-                }
-                _ => return Self::infer_error(),
+            let field_ty = self.solver.fresh_ty_var();
+            let partial = TyTerm::Object(FxHashMap::from_iter([(*field, field_ty.clone())]));
+            if let Err(Mismatch { expected, got, .. }) = self.solver.unify(&current, &partial) {
+                self.error(
+                    MirErrorKind::UnificationFailure {
+                        expected: self.freeze_or_error(&got),
+                        got: self.freeze_or_error(&expected),
+                    },
+                    span,
+                );
+                return Self::infer_error();
             }
+            current = field_ty;
         }
         current
     }
@@ -754,18 +744,32 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// Instantiate a scheme for a use at `span`; its bounded variables are
-    /// verified in `verify_bounds` once the whole body is checked, and its
-    /// choice among instances in `settle_choices`.
+    /// verified and its instance decided when the body is solved. The
+    /// compiler's own instances of a shared signature (RFC-0020) join the
+    /// declared ones, and the bound admits their shapes.
     fn instantiate_at(
         &mut self,
+        qref: QualifiedRef,
         scheme: &crate::ty::Scheme,
         span: Span,
     ) -> (InferTy, Option<InstanceChoice>) {
-        let inst = self.solver.instantiate_scheme(scheme);
+        let compiler_instances = self.compiler_instances(qref);
+        let mut scheme = scheme.clone();
+        if !compiler_instances.is_empty()
+            && let Some(TyVarBound::OneOf(shapes)) = scheme.bounds.first_mut()
+        {
+            shapes.extend(compiler_instances.iter().filter_map(|c| match &c.ty {
+                TyTerm::Fn { ret, .. } => Some((**ret).clone()),
+                _ => None,
+            }));
+        }
+        let inst = self
+            .solver
+            .instantiate_scheme_with(&scheme, compiler_instances);
         self.bound_sites
             .extend(inst.bounded.into_iter().map(|var| BoundSite { var, span }));
-        if let Some(InstanceChoice::Choice(choice)) = inst.instance {
-            self.choice_sites.insert(choice, span);
+        if let Some(InstanceChoice::Decided(decision)) = inst.instance {
+            self.decision_sites.insert(decision, span);
         }
         (inst.ty, inst.instance)
     }
@@ -777,12 +781,60 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let instance = match resolved.instance {
             None => return Some(Callee::Direct(resolved.qref)),
             Some(InstanceChoice::Fixed(instance)) => instance,
-            Some(InstanceChoice::Choice(choice)) => self.solver.settled_instance(choice)?,
+            Some(InstanceChoice::Decided(decision)) => match self.solver.answer(decision)? {
+                Answer::Instance(InstanceKind::Extern(instance)) => instance,
+                Answer::Instance(InstanceKind::Intrinsic(_)) => return None,
+                Answer::Conversion(_) => {
+                    unreachable!("an instance decision answers with an instance")
+                }
+            },
         };
         Some(Callee::Extern {
             id: resolved.qref,
             instance,
         })
+    }
+
+    /// The calls whose instance decision settled on an instruction of the
+    /// language (RFC-0020).
+    fn frozen_intrinsic_calls(&self) -> FxHashMap<AstId, Intrinsic> {
+        self.direct_calls
+            .iter()
+            .filter_map(|(id, resolved)| {
+                let Some(InstanceChoice::Decided(decision)) = resolved.instance else {
+                    return None;
+                };
+                match self.solver.answer(decision)? {
+                    Answer::Instance(InstanceKind::Intrinsic(intrinsic)) => Some((*id, intrinsic)),
+                    Answer::Instance(InstanceKind::Extern(_)) | Answer::Conversion(_) => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The compiler's own instances of a shared signature (RFC-0020):
+    /// `core::clone` on a `String` is an instruction.
+    fn compiler_instances(&self, qref: QualifiedRef) -> Vec<Candidate> {
+        let core_clone =
+            QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("clone"));
+        if qref != core_clone {
+            return Vec::new();
+        }
+        vec![Candidate {
+            instance: InstanceKind::Intrinsic(Intrinsic::StringClone),
+            ty: TyTerm::Fn {
+                params: vec![ParamTerm::new(
+                    self.interner.intern("a"),
+                    TyTerm::Ref(
+                        Mutability::Shared,
+                        Box::new(TypeArg::uniform(TyTerm::String)),
+                    ),
+                )],
+                ret: Box::new(TyTerm::String),
+                captures: vec![],
+                effect: Effect::PURE.into(),
+            },
+        }]
     }
 
     fn frozen_direct_calls(&self) -> DirectCallMap {
@@ -815,43 +867,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect()
     }
 
-    /// Settle the choices the types checked so far decide (RFC-0027).
-    fn settle_choices(&mut self) {
-        let failures = self.solver.settle_choices(self.registry);
-        self.report_choice_failures(failures);
-    }
-
-    fn report_choice_failures(&mut self, failures: Vec<ChoiceFailure>) {
-        for failure in failures {
-            let (choice, kind) = match failure {
-                ChoiceFailure::NoInstance { choice, ty } => (
-                    choice,
-                    MirErrorKind::NoInstance {
-                        ty: self.freeze_or_error(&ty),
-                    },
-                ),
-                ChoiceFailure::Mismatch {
-                    choice,
-                    expected,
-                    got,
-                } => (
-                    choice,
-                    MirErrorKind::UnificationFailure {
-                        expected: self.freeze_or_error(&expected),
-                        got: self.freeze_or_error(&got),
-                    },
-                ),
-            };
-            let span = self.choice_sites[&choice];
-            self.error(kind, span);
-        }
-    }
-
-    /// Report every bounded variable that resolved outside its bound. An
-    /// unresolved variable is not a bound violation; it is reported as such
-    /// wherever its type is needed.
-    fn verify_bounds(&mut self) {
-        self.settle_choices();
+    /// Solve the body once it is checked (solver.md): every decision
+    /// settles or is reported at its site, casts the conversions settled on
+    /// become coercions, and every bounded variable and literal is verified.
+    fn solve_body(&mut self) {
+        let unsettled = self.solver.solve();
+        self.report_unsettled(unsettled);
+        self.resolve_conversions();
         let sites = std::mem::take(&mut self.bound_sites);
         for site in sites {
             if let Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) =
@@ -875,8 +897,116 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 );
             }
         }
-        let failures = self.solver.settle_pending_choices(self.registry);
-        self.report_choice_failures(failures);
+    }
+
+    /// Every conversion the solve settled on a cast becomes a coercion
+    /// through that cast at its call type.
+    fn resolve_conversions(&mut self) {
+        let conversions = std::mem::take(&mut self.conversions);
+        for conversion in &conversions {
+            let Some(Answer::Conversion(Some(fn_ref))) = self.solver.answer(conversion.decision)
+            else {
+                continue;
+            };
+            let Some(scheme) = self.env.functions.get(&fn_ref) else {
+                unreachable!("a cast rule names a declared function (RFC-0023)")
+            };
+            let scheme = scheme.clone();
+            let (inst, instance) = self.instantiate_at(fn_ref, &scheme, conversion.site.span);
+            if let TyTerm::Fn {
+                params,
+                ret,
+                effect,
+                ..
+            } = &inst
+            {
+                if let Some(p) = params.first() {
+                    let _ = self.solver.unify(&p.ty, &conversion.from);
+                }
+                let _ = self.solver.unify(ret, &conversion.to);
+                let effect = effect.clone();
+                self.note_call_effect(&effect, conversion.site.span);
+            }
+            let unsettled = self.solver.settle();
+            self.report_unsettled(unsettled);
+            let callee_ty = self.freeze_or_error(&self.solver.resolve_ty(&inst));
+            self.coercions.push(PendingCoercion {
+                at: conversion.site.id,
+                cast: ResolvedCallee {
+                    qref: fn_ref,
+                    instance,
+                },
+                callee_ty,
+            });
+        }
+        self.conversions = conversions;
+    }
+
+    fn report_unsettled(&mut self, unsettled: Vec<Unsettled>) {
+        for failure in unsettled {
+            let decision = failure.decision();
+            let span = self.decision_sites[&decision];
+            let report = self
+                .conversions
+                .iter()
+                .find(|c| c.decision == decision)
+                .map(|c| c.site.report);
+            let kind = match failure {
+                Unsettled::NoInstance { call, .. } => MirErrorKind::NoInstance {
+                    ty: self.freeze_or_error(&call),
+                },
+                Unsettled::InstanceMismatch { expected, got, .. } => {
+                    MirErrorKind::UnificationFailure {
+                        expected: self.freeze_or_error(&expected),
+                        got: self.freeze_or_error(&got),
+                    }
+                }
+                Unsettled::AmbiguousInstance { .. } | Unsettled::ConversionOpen { .. } => {
+                    // The call's type stayed open: the lowering treats the
+                    // call as unresolved, and the open type is reported
+                    // where it is frozen.
+                    continue;
+                }
+                Unsettled::NoConversion { from, to, .. } => {
+                    if let TyTerm::Var(var) = self.solver.resolve_ty(&to)
+                        && let bound @ (TyVarBound::OneOf(_) | TyVarBound::Integer { .. }) =
+                            self.solver.bound_of_var(var)
+                    {
+                        self.error(
+                            MirErrorKind::TypeOutOfBound {
+                                ty: self.freeze_or_error(&from),
+                                bound,
+                            },
+                            span,
+                        );
+                        continue;
+                    }
+                    let from = self.freeze_or_error(&from);
+                    let to = self.freeze_or_error(&to);
+                    match report {
+                        Some(ConversionReport::Emit) => {
+                            MirErrorKind::EmitNotString { actual: from }
+                        }
+                        Some(ConversionReport::ListElement) => MirErrorKind::HeterogeneousList {
+                            expected: to,
+                            got: from,
+                        },
+                        Some(ConversionReport::Value) | None => MirErrorKind::UnificationFailure {
+                            expected: to,
+                            got: from,
+                        },
+                    }
+                }
+                Unsettled::AmbiguousConversion {
+                    from, to, rules, ..
+                } => MirErrorKind::AmbiguousConversion {
+                    from: self.freeze_or_error(&from),
+                    to: self.freeze_or_error(&to),
+                    rules,
+                },
+            };
+            self.error(kind, span);
+        }
     }
 
     /// An integer literal's type: a variable any integer width may fill,
@@ -980,34 +1110,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A call that is an instruction of the language (RFC-0020).
-    fn check_intrinsic_call(
-        &mut self,
-        qref: QualifiedRef,
-        callee_id: AstId,
-        first_ty: Option<&InferTy>,
-        args: &[Expr],
-    ) -> Option<InferTy> {
-        let core_clone =
-            QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("clone"));
-        if qref != core_clone {
-            return None;
-        }
-        let arg_ty = match (first_ty, args) {
-            (Some(first), []) => first.clone(),
-            (None, [arg]) => self.check_expr(arg),
-            _ => return None,
-        };
-        let TyTerm::Ref(_, inner) = self.solver.resolve_ty(&arg_ty) else {
-            return None;
-        };
-        if !matches!(self.solver.resolve_ty(&inner), TyTerm::String) {
-            return None;
-        }
-        self.intrinsic_calls
-            .insert(callee_id, Intrinsic::StringClone);
-        Some(TyTerm::String)
-    }
-
     /// `&place` / `&mut place`: the reference type, with the place checked
     /// as a place.
     fn check_borrow(&mut self, place: &Expr, mutable: bool, span: Span) -> InferTy {
@@ -1032,15 +1134,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         // A borrow of a reference is a reborrow of what it names
         // (RFC-0029).
-        let ty = match self.solver.resolve_ty(&ty) {
+        let ty = match self.solver.shallow_resolve_ty(&ty) {
             TyTerm::Ref(Mutability::Shared, inner) if mutable => {
                 self.error(MirErrorKind::MutableBorrowOfShared, span);
-                *inner
+                inner.ty
             }
-            TyTerm::Ref(_, inner) => *inner,
+            TyTerm::Ref(_, inner) => inner.ty,
             other => other,
         };
-        TyTerm::Ref(mutability, Box::new(ty))
+        TyTerm::Ref(mutability, Box::new(TypeArg::uniform(ty)))
     }
 
     /// `recv.f(args)` is `f(recv', args)`, `recv'` borrowed when `f`'s
@@ -1140,15 +1242,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         args: &[Expr],
         call_span: Span,
     ) -> InferTy {
-        if let Some(ty) = self.check_intrinsic_call(
-            resolved_qref,
-            callee_id,
-            first.as_ref().map(|f| &f.ty),
-            args,
-        ) {
-            return ty;
-        }
-        let (fn_ty, instance) = self.instantiate_at(fn_sig, call_span);
+        let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, call_span);
         let first_ty = first.as_ref().map(|f| f.ty.clone());
         let arg_types = self.check_args_in_order(&fn_ty, first_ty.as_ref(), args);
         let arg_spans: Vec<Span> = first
@@ -1174,7 +1268,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 let effect = effect.clone();
                 self.note_call_effect(&effect, call_span);
-                self.record(callee_id, self.solver.resolve_ty(&fn_ty));
+                self.record(callee_id, fn_ty.clone());
                 self.direct_calls.insert(
                     callee_id,
                     ResolvedCallee {
@@ -1182,7 +1276,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         instance,
                     },
                 );
-                self.solver.resolve_ty(ret)
+                (**ret).clone()
             }
             _ => {
                 self.error(
@@ -1244,7 +1338,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return;
         };
-        let (fn_ty, instance) = self.instantiate_at(&scheme, span);
+        let (fn_ty, instance) = self.instantiate_at(qref, &scheme, span);
         let TyTerm::Fn { params, effect, .. } = &fn_ty else {
             unreachable!("a shared signature is a function type");
         };
@@ -1252,13 +1346,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         for (given, param) in operands.iter().zip(params.iter()) {
             let borrowed = match given {
                 TyTerm::Ref(..) => given.clone(),
-                other => TyTerm::Ref(Mutability::Shared, Box::new(other.clone())),
+                other => TyTerm::Ref(
+                    Mutability::Shared,
+                    Box::new(TypeArg::uniform(other.clone())),
+                ),
             };
-            if self
-                .solver
-                .unify_ty(&borrowed, param, Polarity::Invariant, self.registry)
-                .is_err()
-            {
+            if self.solver.unify(&borrowed, param).is_err() {
                 let shown = self.freeze_or_error(operand);
                 self.error(MirErrorKind::NoOperatorInstance { op, ty: shown }, span);
                 return;
@@ -1310,17 +1403,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         for (i, (at, pt)) in arg_types.iter().zip(param_tys.iter()).enumerate() {
             let span = arg_spans.get(i).copied().unwrap_or(call_span);
-            let coerce_at = arg_ids.get(i).map(|&id| CoerceSite { id, span });
-            if self.unify_covariant(at, pt, coerce_at).is_err() {
-                let resolved_pt = self.solver.resolve_ty(pt);
-                let resolved_at = self.solver.resolve_ty(at);
-                self.error(
-                    MirErrorKind::UnificationFailure {
-                        expected: self.freeze_or_error(&resolved_pt),
-                        got: self.freeze_or_error(&resolved_at),
+            match arg_ids.get(i) {
+                Some(&id) => self.convert_at(
+                    at,
+                    pt,
+                    ConversionSite {
+                        id,
+                        span,
+                        report: ConversionReport::Value,
                     },
-                    call_span,
-                );
+                ),
+                None => {
+                    if let Err(Mismatch { expected, got, .. }) = self.flow(at, pt) {
+                        self.error(
+                            MirErrorKind::UnificationFailure {
+                                expected: self.freeze_or_error(&expected),
+                                got: self.freeze_or_error(&got),
+                            },
+                            call_span,
+                        );
+                    }
+                }
             }
         }
         true
@@ -1341,27 +1444,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 match &resolved {
                     TyTerm::String | TyTerm::Error(_) => {}
                     TyTerm::Ref(_, inner)
-                        if matches!(self.solver.resolve_ty(inner), TyTerm::String) => {}
-                    TyTerm::Var(_) => {
-                        if self
-                            .unify_covariant(
-                                &ty,
-                                &TyTerm::String,
-                                Some(CoerceSite {
-                                    id: expr.id(),
-                                    span: expr.span(),
-                                }),
-                            )
-                            .is_err()
-                        {
-                            self.error(
-                                MirErrorKind::EmitNotString {
-                                    actual: self.freeze_or_error(&resolved),
-                                },
-                                *span,
-                            );
-                        }
-                    }
+                        if matches!(self.solver.resolve_ty(&inner.ty), TyTerm::String) => {}
+                    TyTerm::Var(_) => self.convert_at(
+                        &ty,
+                        &TyTerm::String,
+                        ConversionSite {
+                            id: expr.id(),
+                            span: *span,
+                            report: ConversionReport::Emit,
+                        },
+                    ),
                     _ => self.error(
                         MirErrorKind::EmitNotString {
                             actual: self.freeze_or_error(&resolved),
@@ -1404,12 +1496,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .cloned()
                     .unwrap_or_else(|| self.solver.fresh_ty_var());
                 // Walk path to get the target field type.
-                let target_ty = self.resolve_field_path(&ctx_ty, path);
-                if self
-                    .solver
-                    .unify_ty(&ty, &target_ty, Polarity::Invariant, self.registry)
-                    .is_err()
-                {
+                let target_ty = self.field_path_for_store(&ctx_ty, path, *span);
+                if self.solver.unify(&ty, &target_ty).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&target_ty),
@@ -1435,8 +1523,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                     Self::infer_error()
                 });
-                let base = match self.solver.resolve_ty(&var_ty) {
-                    TyTerm::Ref(Mutability::Mut, inner) => *inner,
+                let base = match self.solver.shallow_resolve_ty(&var_ty) {
+                    TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
                     TyTerm::Ref(Mutability::Shared, _) => {
                         let shown = self.freeze_or_error(&var_ty);
                         self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
@@ -1444,12 +1532,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     }
                     _ => var_ty,
                 };
-                let target_ty = self.resolve_field_path(&base, path);
-                if self
-                    .solver
-                    .unify_ty(&ty, &target_ty, Polarity::Invariant, self.registry)
-                    .is_err()
-                {
+                let target_ty = self.field_path_for_store(&base, path, *span);
+                if self.solver.unify(&ty, &target_ty).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&target_ty),
@@ -1469,7 +1553,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ty = self.check_expr(expr);
                 let tt = self.check_expr(target);
                 let inner = match self.solver.resolve_ty(&tt) {
-                    TyTerm::Ref(Mutability::Mut, inner) => *inner,
+                    TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
                     TyTerm::Error(_) => Self::infer_error(),
                     other => {
                         let shown = self.freeze_or_error(&other);
@@ -1477,11 +1561,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         Self::infer_error()
                     }
                 };
-                if self
-                    .solver
-                    .unify_ty(&ty, &inner, Polarity::Invariant, self.registry)
-                    .is_err()
-                {
+                if self.solver.unify(&ty, &inner).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&inner),
@@ -1542,11 +1622,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                     Self::infer_error()
                 });
-                if self
-                    .solver
-                    .unify_ty(&ty, &var_ty, Polarity::Invariant, self.registry)
-                    .is_err()
-                {
+                if self.solver.unify(&ty, &var_ty).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.freeze_or_error(&var_ty),
@@ -1561,11 +1637,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 cond, body, span, ..
             } => {
                 let cond_ty = self.check_expr(cond);
-                if self
-                    .solver
-                    .unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry)
-                    .is_err()
-                {
+                if self.solver.unify(&cond_ty, &TyTerm::Bool).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: Ty::Bool,
@@ -1610,12 +1682,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         // Body-less variable binding: define in current scope (no push/pop).
         if self.is_bodyless_var_binding(mb) {
             let source_ty = self.check_expr(&mb.source);
-            if matches!(&mb.arms[0].pattern, Pattern::Variant { .. }) {
-                self.check_pattern(&mb.arms[0].pattern, &source_ty, mb.arms[0].tag_span);
-            } else {
-                let resolved_source = self.solver.resolve_ty(&source_ty);
-                self.check_pattern(&mb.arms[0].pattern, &resolved_source, mb.arms[0].tag_span);
-            }
+            self.check_pattern(&mb.arms[0].pattern, &source_ty, mb.arms[0].tag_span);
             return;
         }
 
@@ -1632,9 +1699,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             // Object patterns are NOT included because they go through the
             // iteration path (pattern_match_type extracts element types).
             let pattern_source = match &arm.pattern {
-                Pattern::Variant { .. } | Pattern::Tuple { .. } | Pattern::List { .. } => {
-                    source_ty.clone()
-                }
+                Pattern::Variant { .. }
+                | Pattern::Tuple { .. }
+                | Pattern::List { .. }
+                | Pattern::Binding { .. } => source_ty.clone(),
                 _ => match_ty,
             };
 
@@ -1685,35 +1753,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         if elems.is_empty() {
                             TyTerm::Array(Box::new(self.solver.fresh_ty_var()), LenTerm::Known(0))
                         } else {
+                            let element = self.solver.fresh_ty_var();
                             let first_ty = self.literal_ty(&elems[0], *span);
+                            self.flow(&first_ty, &element)
+                                .expect("a fresh variable takes any type");
                             for elem in &elems[1..] {
                                 let elem_ty = self.literal_ty(elem, *span);
-                                if self
-                                    .unify_covariant(
-                                        &elem_ty,
-                                        &first_ty,
-                                        Some(CoerceSite {
-                                            id: *id,
-                                            span: *span,
-                                        }),
-                                    )
-                                    .is_err()
-                                {
-                                    let resolved_first = self.solver.resolve_ty(&first_ty);
-                                    let resolved_elem = self.solver.resolve_ty(&elem_ty);
-                                    self.error(
-                                        MirErrorKind::HeterogeneousList {
-                                            expected: self.freeze_or_error(&resolved_first),
-                                            got: self.freeze_or_error(&resolved_elem),
-                                        },
-                                        *span,
-                                    );
-                                }
+                                self.convert_at(
+                                    &elem_ty,
+                                    &element,
+                                    ConversionSite {
+                                        id: *id,
+                                        span: *span,
+                                        report: ConversionReport::ListElement,
+                                    },
+                                );
                             }
-                            TyTerm::Array(
-                                Box::new(self.solver.resolve_ty(&first_ty)),
-                                LenTerm::Known(elems.len()),
-                            )
+                            TyTerm::Array(Box::new(element), LenTerm::Known(elems.len()))
                         }
                     }
                 };
@@ -1803,7 +1859,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let lt = self.solver.resolve_ty(&lt);
                 let rt = self.solver.resolve_ty(&rt);
                 let through = |ty: TyTerm<Infer>| match ty {
-                    TyTerm::Ref(_, inner) => *inner,
+                    TyTerm::Ref(_, inner) => inner.ty,
                     other => other,
                 };
                 let (lt, rt) = if operands_are_lent {
@@ -1835,11 +1891,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
                 let ty = match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        if self
-                            .solver
-                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
-                            .is_err()
-                        {
+                        if self.solver.unify(&lt, &rt).is_err() {
                             self.binop_error(
                                 op_str(*op),
                                 self.solver.resolve_ty(&lt),
@@ -1864,11 +1916,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                     }
                     BinOp::Eq | BinOp::Neq => {
-                        if self
-                            .solver
-                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
-                            .is_err()
-                        {
+                        if self.solver.unify(&lt, &rt).is_err() {
                             self.binop_error(op_str(*op), lt, rt, *span);
                             return self.record_ret(*id, TyTerm::Bool);
                         }
@@ -1881,8 +1929,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Bool
                     }
                     BinOp::And | BinOp::Or => {
-                        let lok = self.unify_covariant(&lt, &TyTerm::Bool, None).is_ok();
-                        let rok = self.unify_covariant(&rt, &TyTerm::Bool, None).is_ok();
+                        let lok = self.flow(&lt, &TyTerm::Bool).is_ok();
+                        let rok = self.flow(&rt, &TyTerm::Bool).is_ok();
                         if !lok || !rok {
                             self.binop_error(
                                 op_str(*op),
@@ -1894,10 +1942,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Bool
                     }
                     BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-                        let ok = self
-                            .solver
-                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
-                            .is_ok()
+                        let ok = self.solver.unify(&lt, &rt).is_ok()
                             && matches!(
                                 self.solver.resolve_ty(&lt),
                                 TyTerm::Int(_) | TyTerm::Var(_)
@@ -1915,10 +1960,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                        let ok = self
-                            .solver
-                            .unify_ty(&lt, &rt, Polarity::Invariant, self.registry)
-                            .is_ok()
+                        let ok = self.solver.unify(&lt, &rt).is_ok()
                             && matches!(
                                 self.solver.resolve_ty(&lt),
                                 TyTerm::Int(_) | TyTerm::Float | TyTerm::Var(_)
@@ -1959,18 +2001,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     acvus_ast::UnaryOp::Deref => match &ot {
                         TyTerm::Var(_) => {
                             let inner = self.solver.fresh_ty_var();
-                            let reference =
-                                TyTerm::Ref(Mutability::Shared, Box::new(inner.clone()));
-                            let _ = self.solver.unify_ty(
-                                &ot,
-                                &reference,
-                                Polarity::Invariant,
-                                self.registry,
+                            let reference = TyTerm::Ref(
+                                Mutability::Shared,
+                                Box::new(TypeArg::new(self.solver.fresh_repr_var(), inner.clone())),
                             );
+                            let _ = self.solver.unify(&ot, &reference);
                             inner
                         }
                         TyTerm::Ref(_, inner) => {
-                            let inner = self.solver.resolve_ty(inner);
+                            let inner = self.solver.resolve_ty(&inner.ty);
                             if inner.is_primitive()
                                 || matches!(inner, TyTerm::Var(_) | TyTerm::Ref(..))
                             {
@@ -2003,7 +2042,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         match &ot {
                             TyTerm::Bool => {}
                             TyTerm::Var(_) => {
-                                let _ = self.unify_covariant(&ot, &TyTerm::Bool, None);
+                                let _ = self.flow(&ot, &TyTerm::Bool);
                             }
                             _ => self.binop_error("!", ot, Self::infer_error(), *span),
                         }
@@ -2020,21 +2059,32 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let ot_raw = self.check_expr(object);
-                let ot = self.solver.resolve_ty(&ot_raw);
+                let ot = self.solver.shallow_resolve_ty(&ot_raw);
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
                 if let TyTerm::Ref(_, inner) = &ot {
-                    let inner_raw = inner.as_ref().clone();
-                    let inner = self.solver.resolve_ty(inner);
-                    if matches!(inner, TyTerm::Var(_)) {
-                        let fresh = self.solver.fresh_ty_var();
-                        let partial =
-                            TyTerm::Object(FxHashMap::from_iter([(field_key, fresh.clone())]));
-                        if self
-                            .solver
-                            .unify_ty(&inner_raw, &partial, Polarity::Invariant, self.registry)
-                            .is_err()
-                        {
+                    let field_ty = match self.solver.shallow_resolve_ty(&inner.ty) {
+                        TyTerm::Object(fields) if fields.contains_key(&field_key) => {
+                            fields[&field_key].clone()
+                        }
+                        TyTerm::Error(_) => Self::infer_error(),
+                        TyTerm::Object(_) | TyTerm::Var(_) => {
+                            let fresh = self.solver.fresh_ty_var();
+                            let partial =
+                                TyTerm::Object(FxHashMap::from_iter([(field_key, fresh.clone())]));
+                            if self.solver.unify(&inner.ty, &partial).is_err() {
+                                self.error(
+                                    MirErrorKind::UndefinedField {
+                                        object_ty: self.freeze_or_error(&ot),
+                                        field: field_str(),
+                                    },
+                                    *span,
+                                );
+                                return self.record_ret(*id, Self::infer_error());
+                            }
+                            fresh
+                        }
+                        _ => {
                             self.error(
                                 MirErrorKind::UndefinedField {
                                     object_ty: self.freeze_or_error(&ot),
@@ -2044,27 +2094,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             );
                             return self.record_ret(*id, Self::infer_error());
                         }
-                        return self.record_ret(*id, fresh);
-                    }
-                    let TyTerm::Object(fields) = &inner else {
-                        self.error(
-                            MirErrorKind::UndefinedField {
-                                object_ty: self.freeze_or_error(&ot),
-                                field: field_str(),
-                            },
-                            *span,
-                        );
-                        return self.record_ret(*id, Self::infer_error());
-                    };
-                    let Some(field_ty) = fields.get(&field_key).cloned() else {
-                        self.error(
-                            MirErrorKind::UndefinedField {
-                                object_ty: self.freeze_or_error(&ot),
-                                field: field_str(),
-                            },
-                            *span,
-                        );
-                        return self.record_ret(*id, Self::infer_error());
                     };
                     let field_resolved = self.solver.resolve_ty(&field_ty);
                     if !self.in_borrow_place
@@ -2085,32 +2114,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     TyTerm::Object(fields) if fields.contains_key(&field_key) => {
                         fields[&field_key].clone()
                     }
-                    TyTerm::Object(fields) => {
-                        let Some(leaf_var) = self.solver.find_leaf_var(&ot_raw) else {
-                            self.error(
-                                MirErrorKind::UndefinedField {
-                                    object_ty: self.freeze_or_error(&ot),
-                                    field: field_str(),
-                                },
-                                *span,
-                            );
-                            return Self::infer_error();
-                        };
-                        let fresh = self.solver.fresh_ty_var();
-                        let mut new_fields = fields.clone();
-                        new_fields.insert(field_key, fresh.clone());
-                        self.solver.bind_ty(leaf_var, TyTerm::Object(new_fields));
-                        fresh
-                    }
-                    TyTerm::Var(_) => {
+                    TyTerm::Object(_) | TyTerm::Var(_) => {
                         let fresh = self.solver.fresh_ty_var();
                         let partial_obj =
                             TyTerm::Object(FxHashMap::from_iter([(field_key, fresh.clone())]));
-                        if self
-                            .solver
-                            .unify_ty(&ot_raw, &partial_obj, Polarity::Invariant, self.registry)
-                            .is_err()
-                        {
+                        if self.solver.unify(&ot_raw, &partial_obj).is_err() {
                             self.error(
                                 MirErrorKind::UndefinedField {
                                     object_ty: self.freeze_or_error(&ot),
@@ -2222,28 +2230,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     return self.record_ret(*id, ty);
                 }
 
-                let elem_ty = self.check_expr(all_elems[0]);
-                self.reject_reference_in_data(&elem_ty, all_elems[0].span());
+                let element = self.solver.fresh_ty_var();
+                let first_ty = self.check_expr(all_elems[0]);
+                self.reject_reference_in_data(&first_ty, all_elems[0].span());
+                self.flow(&first_ty, &element)
+                    .expect("a fresh variable takes any type");
 
                 for elem in all_elems.iter().skip(1) {
                     let et = self.check_expr(elem);
-                    if self.unify_covariant(&et, &elem_ty, None).is_err() {
-                        let resolved_elem = self.solver.resolve_ty(&elem_ty);
-                        let resolved_et = self.solver.resolve_ty(&et);
-                        self.error(
-                            MirErrorKind::HeterogeneousList {
-                                expected: self.freeze_or_error(&resolved_elem),
-                                got: self.freeze_or_error(&resolved_et),
-                            },
-                            *span,
-                        );
-                    }
+                    self.convert_at(
+                        &et,
+                        &element,
+                        ConversionSite {
+                            id: elem.id(),
+                            span: *span,
+                            report: ConversionReport::ListElement,
+                        },
+                    );
                 }
 
-                let ty = TyTerm::Array(
-                    Box::new(self.solver.resolve_ty(&elem_ty)),
-                    LenTerm::Known(all_elems.len()),
-                );
+                let ty = TyTerm::Array(Box::new(element), LenTerm::Known(all_elems.len()));
                 self.record_ret(*id, ty)
             }
 
@@ -2323,10 +2329,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 return Self::infer_error();
                             };
                             let inner_ty = self.check_expr(inner_expr);
-                            if self
-                                .unify_covariant(&type_params[*idx], &inner_ty, None)
-                                .is_err()
-                            {
+                            if self.flow(&type_params[*idx], &inner_ty).is_err() {
                                 let resolved_tp = self.solver.resolve_ty(&type_params[*idx]);
                                 let resolved_inner = self.solver.resolve_ty(&inner_ty);
                                 self.error(
@@ -2397,11 +2400,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let cond_ty = self.check_expr(cond);
-                if self
-                    .solver
-                    .unify_ty(&cond_ty, &TyTerm::Bool, Polarity::Invariant, self.registry)
-                    .is_err()
-                {
+                if self.solver.unify(&cond_ty, &TyTerm::Bool).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: Ty::Bool,
@@ -2500,7 +2499,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         else {
             // Not a simple name - evaluate the function expression.
             let ft = self.check_expr(func);
-            let resolved = self.solver.resolve_ty(&ft);
+            let resolved = self.solver.shallow_resolve_ty(&ft);
             let pipe_left_span = pipe_left.map(|e| e.span());
             let pipe_left_id = pipe_left.map(|e| e.id());
             return self.check_callable(
@@ -2558,7 +2557,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
         // Check local variable with function type (indirect call).
         if let Some(var_ty) = self.lookup_var(name.name) {
-            let resolved = self.solver.resolve_ty(&var_ty);
+            let resolved = self.solver.shallow_resolve_ty(&var_ty);
             // Record callee's Fn type on the callee's AstId (indirect - no direct_calls entry).
             self.record(func.id(), resolved.clone());
             let pipe_left_span = pipe_left.map(|e| e.span());
@@ -2639,7 +2638,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 let effect = effect.clone();
                 self.note_call_effect(&effect, call_span);
-                self.solver.resolve_ty(ret)
+                (**ret).clone()
             }
             TyTerm::Var(_) => {
                 let ret = self.solver.fresh_ty_var();
@@ -2655,14 +2654,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     effect: effect.clone(),
                 };
                 self.note_call_effect(&effect, call_span);
-                if self.unify_covariant(func_ty, &fn_ty, None).is_err() {
+                if self.flow(func_ty, &fn_ty).is_err() {
                     self.error(
                         MirErrorKind::UndefinedFunction("<expr>".to_string()),
                         call_span,
                     );
                     return Self::infer_error();
                 }
-                self.solver.resolve_ty(&ret)
+                ret
             }
             _ => unreachable!(),
         }
@@ -2670,10 +2669,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// RFC-0024.
     fn check_pattern(&mut self, pattern: &Pattern, source_ty: &InferTy, span: Span) {
-        let resolved = self.solver.resolve_ty(source_ty);
+        let resolved = self.solver.shallow_resolve_ty(source_ty);
         if let TyTerm::Ref(_, inner) = &resolved {
             let outer = std::mem::replace(&mut self.pattern_through, true);
-            self.check_pattern_inner(pattern, inner, span);
+            self.check_pattern_inner(pattern, &inner.ty, span);
             self.pattern_through = outer;
         } else {
             self.check_pattern_inner(pattern, source_ty, span);
@@ -2696,16 +2695,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .get(qref)
                     .cloned()
                     .unwrap_or_else(|| self.solver.fresh_ty_var());
-                if self
-                    .solver
-                    .unify_ty(
-                        &source_resolved,
-                        &ctx_ty,
-                        Polarity::Invariant,
-                        self.registry,
-                    )
-                    .is_err()
-                {
+                if self.solver.unify(source_ty, &ctx_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: self.freeze_or_error(&ctx_ty),
@@ -2724,9 +2714,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 RefKind::Value => {
                     let ty = if self.pattern_through {
-                        TyTerm::Ref(Mutability::Shared, Box::new(source_resolved))
+                        TyTerm::Ref(
+                            Mutability::Shared,
+                            Box::new(TypeArg::uniform(source_ty.clone())),
+                        )
                     } else {
-                        source_resolved
+                        source_ty.clone()
                     };
                     self.define_var(*name, ty);
                 }
@@ -2734,10 +2727,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
             Pattern::Literal { value, .. } => {
                 let pat_ty = self.literal_ty(value, span);
-                if self
-                    .unify_covariant(&source_resolved, &pat_ty, None)
-                    .is_err()
-                {
+                if self.solver.unify_pattern(source_ty, &pat_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: self.freeze_or_error(&pat_ty),
@@ -2758,7 +2748,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let var = self.solver.fresh_ty_var();
                         let len = self.solver.fresh_len_var();
                         let array_ty = TyTerm::Array(Box::new(var.clone()), len);
-                        if self.unify_covariant(source_ty, &array_ty, None).is_err() {
+                        if self.solver.unify_pattern(source_ty, &array_ty).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
                                     pattern_ty: self.freeze_or_error(&array_ty),
@@ -2809,7 +2799,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         .map(|f| (f.key, self.solver.fresh_ty_var()))
                         .collect();
                     let obj_ty = TyTerm::Object(field_vars.clone());
-                    if self.unify_covariant(source_ty, &obj_ty, None).is_err() {
+                    if self.solver.unify_pattern(source_ty, &obj_ty).is_err() {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
                                 pattern_ty: self.freeze_or_error(&obj_ty),
@@ -2853,7 +2843,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             .map(|_| self.solver.fresh_ty_var())
                             .collect();
                         let tuple_ty = TyTerm::Tuple(vars.clone());
-                        if self.unify_covariant(source_ty, &tuple_ty, None).is_err() {
+                        if self.solver.unify_pattern(source_ty, &tuple_ty).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
                                     pattern_ty: self.freeze_or_error(&tuple_ty),
@@ -2885,10 +2875,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     self.resolve_builtin_variant(ast_enum_name, *tag)
                 {
                     let enum_ty = self.builtin_enum_ty(&type_params);
-                    if self
-                        .unify_covariant(&source_resolved, &enum_ty, None)
-                        .is_err()
-                    {
+                    if self.solver.unify_pattern(source_ty, &enum_ty).is_err() {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
                                 pattern_ty: self.freeze_or_error(&enum_ty),
@@ -2934,7 +2921,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 };
                 // Unify against the original (unresolved) source_ty so that
                 // find_leaf_var can trace the Var chain and rebind the merged type.
-                if self.unify_covariant(source_ty, &enum_ty, None).is_err() {
+                if self.solver.unify_pattern(source_ty, &enum_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
                             pattern_ty: self.freeze_or_error(&enum_ty),
@@ -2985,8 +2972,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// branch's type standing (RFC-0038).
     fn join_branches(&mut self, then_ty: &InferTy, else_ty: &InferTy, span: Span) -> InferTy {
         let joined = self.solver.fresh_ty_var();
-        let then_ok = self.unify_covariant(then_ty, &joined, None).is_ok();
-        let else_ok = then_ok && self.unify_covariant(else_ty, &joined, None).is_ok();
+        let then_ok = self.flow(then_ty, &joined).is_ok();
+        let else_ok = then_ok && self.flow(else_ty, &joined).is_ok();
         if !else_ok {
             self.error(
                 MirErrorKind::UnificationFailure {
@@ -3028,7 +3015,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return Self::infer_error();
             }
         };
-        if self.unify_covariant(&leaves, &return_ty, None).is_err() {
+        if self.flow(&leaves, &return_ty).is_err() {
             let expected = self.solver.resolve_ty(&return_ty);
             self.error(
                 MirErrorKind::TryReturnMismatch {
@@ -3050,7 +3037,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Box::new(self.solver.fresh_ty_var()),
             Box::new(self.solver.fresh_ty_var()),
         );
-        if self.unify_covariant(operand, &assumed, None).is_err() {
+        if self.flow(operand, &assumed).is_err() {
             return Self::infer_error();
         }
         self.solver.resolve_ty(&assumed)
@@ -3076,11 +3063,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// builtin enums `Some`/`None` and `Ok`/`Err` construct.
     fn builtin_enum_ty(&self, type_params: &[InferTy]) -> InferTy {
         match type_params {
-            [inner] => TyTerm::Option(Box::new(self.solver.resolve_ty(inner))),
-            [ok, err] => TyTerm::Result(
-                Box::new(self.solver.resolve_ty(ok)),
-                Box::new(self.solver.resolve_ty(err)),
-            ),
+            [inner] => TyTerm::Option(Box::new(inner.clone())),
+            [ok, err] => TyTerm::Result(Box::new(ok.clone()), Box::new(err.clone())),
             _ => unreachable!("a builtin enum has one or two type parameters"),
         }
     }
@@ -3130,6 +3114,7 @@ fn op_str(op: BinOp) -> &'static str {
 mod tests {
     use super::*;
     use crate::graph::types::QualifiedRef;
+    use crate::ty::TypeRegistry;
 
     /// Test helper: create a `Param` with name "_".
     fn p(i: &Interner, ty: Ty) -> Param {
@@ -3157,8 +3142,8 @@ mod tests {
     ) -> Result<TypeMap, String> {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
         let mut sources = crate::ty::Sources::new();
-        let mut solver = Solver::new(&mut sources);
         let registry = TypeRegistry::default();
+        let mut solver = Solver::new(&mut sources, &registry);
         let qref_contexts: FxHashMap<QualifiedRef, InferTy> = context
             .iter()
             .map(|(&name, ty)| (QualifiedRef::root(name), crate::ty::lift_ty(ty)))
@@ -3177,7 +3162,7 @@ mod tests {
             contexts: qref_contexts,
             functions: qref_functions,
         };
-        let checker = TypeChecker::new(interner, &env, &registry, &mut solver);
+        let checker = TypeChecker::new(interner, &env, &mut solver);
         let resolution = checker.check_template(&template).map_err(|errs| {
             errs.iter()
                 .map(|e| {
@@ -3284,7 +3269,10 @@ mod tests {
     }
 
     #[test]
-    fn field_access_undefined() {
+    /// A field the object did not have grows the object (solver.md R1);
+    /// whether it is initialized where it is read is the
+    /// definite-assignment check's question, not the type checker's.
+    fn field_access_grows_the_object() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(
             i.intern("user"),
@@ -3292,7 +3280,7 @@ mod tests {
         )]);
         let src = "{{ @user.unknown }}";
         let result = check_with_interner(src, &context, &i);
-        assert!(result.is_err());
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]
