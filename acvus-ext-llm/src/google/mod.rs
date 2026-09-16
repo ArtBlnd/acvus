@@ -147,15 +147,11 @@ fn first_message(resp: ModelResponse) -> Result<OutputMessage, ExternError> {
 /// - System messages are extracted into the `system_instruction` field (separate from `contents`)
 /// - Role `"assistant"` is mapped to `"model"` for the Gemini API
 #[extern_fn]
-async fn google_llm<R>(
-    _: &R,
+async fn google_llm(
     #[state] fetch: &FetchClient,
     messages: Vec<InputMessage>,
     config: GoogleConfig,
-) -> Result<OutputMessage, ExternError>
-where
-    R: Runtime,
-{
+) -> Result<OutputMessage, ExternError> {
     let msgs = input_messages(messages);
     let (system, rest) = split_system(&msgs);
 
@@ -172,9 +168,8 @@ where
         "{}/models/{}:generateContent?key={}",
         config.endpoint, config.model, config.api_key
     );
-    let body = serde_json::to_value(&request_body).map_err(|e| {
-        ExternError::call("google_llm", format!("serialization failed: {e}"))
-    })?;
+    let body = serde_json::to_value(&request_body)
+        .map_err(|e| ExternError::call("google_llm", format!("serialization failed: {e}")))?;
     let http_request = HttpRequest {
         url,
         headers: vec![("Content-Type".into(), "application/json".into())],
@@ -350,8 +345,8 @@ mod tests {
         });
         let interner = acvus_extern::Interner::new();
         let registry = google_registry::<_, acvus_extern::TypesOnly>(fetch);
-        let registered = acvus_extern::Externs::combine(vec![registry], &interner)
-            .expect("registry combines");
+        let registered =
+            acvus_extern::Externs::combine(vec![registry], &interner).expect("registry combines");
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.handlers.len(), 1);
 

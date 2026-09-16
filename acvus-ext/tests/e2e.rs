@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_ext::*;
-use acvus_extern::{ExternType, Externs, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Externs, Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
@@ -312,27 +312,18 @@ async fn mixed_regex_and_encoding() {
 struct MyNum(i64);
 
 #[extern_fn(effect = pure)]
-fn make_num<R>(_: &R) -> MyNum
-where
-    R: Runtime,
-{
+fn make_num() -> MyNum {
     MyNum(42)
 }
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn num_to_int<R>(_: &R, n: MyNum) -> i64
-where
-    R: Runtime,
-{
+fn num_to_int(n: MyNum) -> i64 {
     n.0
 }
 
 #[extern_fn(effect = pure)]
-fn double<R>(_: &R, n: i64) -> i64
-where
-    R: Runtime,
-{
+fn double(n: i64) -> i64 {
     n * 2
 }
 
@@ -368,10 +359,7 @@ struct Pt {
 }
 
 #[extern_fn(effect = pure)]
-fn make_pt<R>(_: &R) -> Pt
-where
-    R: Runtime,
-{
+fn make_pt() -> Pt {
     Pt {
         x: 1,
         label: "one".to_owned(),
@@ -379,10 +367,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn shift<R>(_: &R, p: Pt) -> Pt
-where
-    R: Runtime,
-{
+fn shift(p: Pt) -> Pt {
     Pt {
         x: p.x + 1,
         label: format!("{}!", p.label),
@@ -390,10 +375,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn pts<R>(_: &R) -> Vec<Pt>
-where
-    R: Runtime,
-{
+fn pts() -> Vec<Pt> {
     vec![
         Pt {
             x: 10,
@@ -407,18 +389,12 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn total<R>(_: &R, ps: Vec<Pt>) -> i64
-where
-    R: Runtime,
-{
+fn total(ps: Vec<Pt>) -> i64 {
     ps.iter().map(|p| p.x).sum()
 }
 
 #[extern_fn(effect = pure)]
-fn maybe_pt<R>(_: &R, some: bool) -> Option<Pt>
-where
-    R: Runtime,
-{
+fn maybe_pt(some: bool) -> Option<Pt> {
     some.then(|| Pt {
         x: 7,
         label: "seven".to_owned(),

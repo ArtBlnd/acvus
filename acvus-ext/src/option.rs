@@ -3,19 +3,17 @@
 use acvus_extern::{ExternError, Registry, Runtime, TyVar, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
-fn unwrap<T, R>(_: &R, val: Option<T>) -> Result<T, ExternError>
+fn unwrap<T>(val: Option<T>) -> Result<T, ExternError>
 where
     T: TyVar,
-    R: Runtime,
 {
     val.ok_or_else(|| ExternError::call("unwrap", "called on None"))
 }
 
 #[extern_fn(effect = pure)]
-fn unwrap_or<T, R>(_: &R, val: Option<T>, default: T) -> T
+fn unwrap_or<T>(val: Option<T>, default: T) -> T
 where
     T: TyVar,
-    R: Runtime,
 {
     val.unwrap_or(default)
 }
@@ -35,7 +33,8 @@ mod tests {
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let reg = Externs::combine(vec![option_registry::<TypesOnly>()], &i).expect("registry combines");
+        let reg =
+            Externs::combine(vec![option_registry::<TypesOnly>()], &i).expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
         assert_eq!(reg.functions.len() - core.functions.len(), 2);
         assert_eq!(reg.handlers.len() - core.handlers.len(), 2);

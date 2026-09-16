@@ -26,84 +26,54 @@ pub mod sig {
 // -- to_string ----------------------------------------------------------
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
-fn to_string_int<R>(_: &R, a: &i64) -> String
-where
-    R: Runtime,
-{
+fn to_string_int(a: &i64) -> String {
     a.to_string()
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
-fn to_string_float<R>(_: &R, a: &f64) -> String
-where
-    R: Runtime,
-{
+fn to_string_float(a: &f64) -> String {
     a.to_string()
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
-fn to_string_bool<R>(_: &R, a: &bool) -> String
-where
-    R: Runtime,
-{
+fn to_string_bool(a: &bool) -> String {
     a.to_string()
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
-fn to_string_byte<R>(_: &R, a: &u8) -> String
-where
-    R: Runtime,
-{
+fn to_string_byte(a: &u8) -> String {
     a.to_string()
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
-fn to_string_string<R>(_: &R, a: &String) -> String
-where
-    R: Runtime,
-{
+fn to_string_string(a: &String) -> String {
     a.clone()
 }
 
 // -- to_int -------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_int<R>(_: &R, a: &i64) -> Result<i64, ExternError>
-where
-    R: Runtime,
-{
+fn to_int_int(a: &i64) -> Result<i64, ExternError> {
     Ok(*a)
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_float<R>(_: &R, a: &f64) -> Result<i64, ExternError>
-where
-    R: Runtime,
-{
+fn to_int_float(a: &f64) -> Result<i64, ExternError> {
     Ok(*a as i64)
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_bool<R>(_: &R, a: &bool) -> Result<i64, ExternError>
-where
-    R: Runtime,
-{
+fn to_int_bool(a: &bool) -> Result<i64, ExternError> {
     Ok(i64::from(*a))
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_byte<R>(_: &R, a: &u8) -> Result<i64, ExternError>
-where
-    R: Runtime,
-{
+fn to_int_byte(a: &u8) -> Result<i64, ExternError> {
     Ok(i64::from(*a))
 }
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_string<R>(_: &R, a: &String) -> Result<i64, ExternError>
-where
-    R: Runtime,
-{
+fn to_int_string(a: &String) -> Result<i64, ExternError> {
     a.parse::<i64>()
         .map_err(|e| ExternError::call("to_int", format!("cannot parse string: {e}")))
 }
@@ -111,18 +81,12 @@ where
 // -- the rest -----------------------------------------------------------
 
 #[extern_fn(effect = pure)]
-fn to_float<R>(_: &R, n: i64) -> f64
-where
-    R: Runtime,
-{
+fn to_float(n: i64) -> f64 {
     n as f64
 }
 
 #[extern_fn(effect = pure)]
-fn char_to_int<R>(_: &R, s: String) -> Result<i64, ExternError>
-where
-    R: Runtime,
-{
+fn char_to_int(s: String) -> Result<i64, ExternError> {
     match s.chars().next() {
         Some(c) => Ok(c as i64),
         None => Err(ExternError::call("char_to_int", "empty string")),
@@ -130,10 +94,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn int_to_char<R>(_: &R, n: i64) -> Result<String, ExternError>
-where
-    R: Runtime,
-{
+fn int_to_char(n: i64) -> Result<String, ExternError> {
     let code = u32::try_from(n)
         .map_err(|_| ExternError::call("int_to_char", format!("{n} is not a code point")))?;
     match char::from_u32(code) {

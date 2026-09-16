@@ -172,15 +172,11 @@ fn chat_response(resp: ModelResponse, usage: Usage) -> ChatResponse {
 }
 
 #[extern_fn]
-async fn openai_chat<R>(
-    _: &R,
+async fn openai_chat(
     #[state] fetch: &FetchClient,
     messages: Vec<InputMessage>,
     config: OpenAiConfig,
-) -> Result<ChatResponse, ExternError>
-where
-    R: Runtime,
-{
+) -> Result<ChatResponse, ExternError> {
     let messages = input_messages(messages);
     let request_body = schema::Request {
         model: config.model,
@@ -198,9 +194,8 @@ where
             ("Authorization".into(), format!("Bearer {}", config.api_key)),
             ("Content-Type".into(), "application/json".into()),
         ],
-        body: serde_json::to_value(&request_body).map_err(|e| {
-            ExternError::call("openai_chat", format!("serialization failed: {e}"))
-        })?,
+        body: serde_json::to_value(&request_body)
+            .map_err(|e| ExternError::call("openai_chat", format!("serialization failed: {e}")))?,
     };
 
     let response_json = fetch
@@ -360,8 +355,8 @@ mod tests {
         });
         let interner = acvus_extern::Interner::new();
         let registry = openai_registry::<_, acvus_extern::TypesOnly>(fetch);
-        let registered = acvus_extern::Externs::combine(vec![registry], &interner)
-            .expect("registry combines");
+        let registered =
+            acvus_extern::Externs::combine(vec![registry], &interner).expect("registry combines");
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.handlers.len(), 1);
 

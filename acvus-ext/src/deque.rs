@@ -224,7 +224,13 @@ impl<Rt> Journaled<Rt> for Deque<Rt::Value>
 where
     Rt: Runtime,
 {
-    fn encode_state(&self, _: &Rt, type_args: &[Ty], elem: &Encode<'_, Rt>, out: &mut Vec<u8>) -> SpaceResult<()> {
+    fn encode_state(
+        &self,
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Encode<'_, Rt>,
+        out: &mut Vec<u8>,
+    ) -> SpaceResult<()> {
         let ty = element_of(type_args)?;
         out.extend_from_slice(&(self.items.len() as u64).to_le_bytes());
         for item in &self.items {
@@ -233,7 +239,12 @@ where
         Ok(())
     }
 
-    fn decode_state(_: &Rt, type_args: &[Ty], elem: &Decode<'_, Rt>, input: &mut &[u8]) -> SpaceResult<Self> {
+    fn decode_state(
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Decode<'_, Rt>,
+        input: &mut &[u8],
+    ) -> SpaceResult<Self> {
         let ty = element_of(type_args)?;
         let count = read_u64(input)?;
         let mut d = Deque::default();
@@ -244,7 +255,12 @@ where
         Ok(d)
     }
 
-    fn take_ops(&mut self, _: &Rt, type_args: &[Ty], elem: &Encode<'_, Rt>) -> SpaceResult<Vec<Vec<u8>>> {
+    fn take_ops(
+        &mut self,
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Encode<'_, Rt>,
+    ) -> SpaceResult<Vec<Vec<u8>>> {
         let ty = element_of(type_args)?;
         let mut ops = Vec::new();
         for _ in 0..self.dropped_front {
@@ -270,7 +286,13 @@ where
         Ok(ops)
     }
 
-    fn apply_op(&mut self, _: &Rt, type_args: &[Ty], elem: &Decode<'_, Rt>, op: &mut &[u8]) -> SpaceResult<()> {
+    fn apply_op(
+        &mut self,
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Decode<'_, Rt>,
+        op: &mut &[u8],
+    ) -> SpaceResult<()> {
         let ty = element_of(type_args)?;
         let (tag, rest) = op
             .split_first()
@@ -305,46 +327,41 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn deque<T, R>(_: &R) -> Deque<T>
+fn deque<T>() -> Deque<T>
 where
     T: TyVar,
-    R: Runtime,
 {
     Deque::default()
 }
 
 #[extern_fn(effect = pure)]
-fn push_front<T, R>(_: &R, d: &mut Deque<T>, item: T)
+fn push_front<T>(d: &mut Deque<T>, item: T)
 where
     T: TyVar,
-    R: Runtime,
 {
     d.push_front(item);
 }
 
 #[extern_fn(effect = pure)]
-fn push_back<T, R>(_: &R, d: &mut Deque<T>, item: T)
+fn push_back<T>(d: &mut Deque<T>, item: T)
 where
     T: TyVar,
-    R: Runtime,
 {
     d.push_back(item);
 }
 
 #[extern_fn(effect = pure)]
-fn pop_front<T, R>(_: &R, d: &mut Deque<T>) -> Option<T>
+fn pop_front<T>(d: &mut Deque<T>) -> Option<T>
 where
     T: TyVar,
-    R: Runtime,
 {
     d.pop_front()
 }
 
 #[extern_fn(effect = pure)]
-fn pop_back<T, R>(_: &R, d: &mut Deque<T>) -> Option<T>
+fn pop_back<T>(d: &mut Deque<T>) -> Option<T>
 where
     T: TyVar,
-    R: Runtime,
 {
     d.pop_back()
 }
@@ -352,16 +369,15 @@ where
 /// A deque demotes to a vec: the record is dropped with the deque.
 #[extern_fn(instance_of = vec, effect = pure)]
 #[extern_cast]
-fn vec_deque<T, R>(_: &R, d: Deque<T>) -> Vec<T>
+fn vec_deque<T>(d: Deque<T>) -> Vec<T>
 where
     T: TyVar,
-    R: Runtime,
 {
     d.items.into()
 }
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
-fn into_iter_deque<T, E, I, Rt>(_: &Rt, d: Deque<T>) -> Iter<T, E, I, Rt>
+fn into_iter_deque<T, E, I, Rt>(d: Deque<T>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -372,7 +388,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_deque<T, E, I, Rt>(_: &Rt, d: Ref<Deque<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
+fn as_iter_deque<T, E, I, Rt>(d: Ref<Deque<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -383,10 +399,9 @@ where
 }
 
 #[extern_fn(instance_of = container::len, effect = pure)]
-fn len_deque<T, Rt>(_: &Rt, d: &Deque<T>) -> i64
+fn len_deque<T>(d: &Deque<T>) -> i64
 where
     T: TyVar,
-    Rt: Runtime,
 {
     d.len() as i64
 }

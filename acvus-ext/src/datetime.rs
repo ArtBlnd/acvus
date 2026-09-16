@@ -1,32 +1,23 @@
 //! The `DateTime` extension type. Every function but `now` is pure.
 
-use acvus_extern::{ExternError, Registry, ExternType, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternError, ExternType, Registry, Runtime, extern_fn, extern_registry};
 
 #[derive(ExternType)]
 pub struct DateTime(chrono::DateTime<chrono::Utc>);
 
 #[cfg(not(target_arch = "wasm32"))]
 #[extern_fn]
-fn now<R>(_: &R) -> DateTime
-where
-    R: Runtime,
-{
+fn now() -> DateTime {
     DateTime(chrono::Utc::now())
 }
 
 #[extern_fn(effect = pure)]
-fn format_date<R>(_: &R, dt: DateTime, fmt: String) -> String
-where
-    R: Runtime,
-{
+fn format_date(dt: DateTime, fmt: String) -> String {
     dt.0.format(&fmt).to_string()
 }
 
 #[extern_fn(effect = pure)]
-fn parse_date<R>(_: &R, s: String, fmt: String) -> Result<DateTime, ExternError>
-where
-    R: Runtime,
-{
+fn parse_date(s: String, fmt: String) -> Result<DateTime, ExternError> {
     chrono::NaiveDateTime::parse_from_str(&s, &fmt)
         .map(|ndt| DateTime(ndt.and_utc()))
         .map_err(|e| {
@@ -39,36 +30,24 @@ where
 
 /// Unix epoch seconds.
 #[extern_fn(effect = pure)]
-fn timestamp<R>(_: &R, dt: DateTime) -> i64
-where
-    R: Runtime,
-{
+fn timestamp(dt: DateTime) -> i64 {
     dt.0.timestamp()
 }
 
 #[extern_fn(effect = pure)]
-fn from_timestamp<R>(_: &R, epoch: i64) -> Result<DateTime, ExternError>
-where
-    R: Runtime,
-{
+fn from_timestamp(epoch: i64) -> Result<DateTime, ExternError> {
     chrono::DateTime::from_timestamp(epoch, 0)
         .map(DateTime)
         .ok_or_else(|| ExternError::call("from_timestamp", format!("invalid epoch {epoch}")))
 }
 
 #[extern_fn(effect = pure)]
-fn add_days<R>(_: &R, dt: DateTime, n: i64) -> DateTime
-where
-    R: Runtime,
-{
+fn add_days(dt: DateTime, n: i64) -> DateTime {
     DateTime(dt.0 + chrono::Duration::days(n))
 }
 
 #[extern_fn(effect = pure)]
-fn add_hours<R>(_: &R, dt: DateTime, n: i64) -> DateTime
-where
-    R: Runtime,
-{
+fn add_hours(dt: DateTime, n: i64) -> DateTime {
     DateTime(dt.0 + chrono::Duration::hours(n))
 }
 
@@ -98,7 +77,8 @@ mod tests {
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let registered = Externs::combine(vec![datetime_registry::<TypesOnly>()], &i).expect("registry combines");
+        let registered = Externs::combine(vec![datetime_registry::<TypesOnly>()], &i)
+            .expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
         assert_eq!(registered.functions.len() - core.functions.len(), 7);
         assert_eq!(registered.functions.len(), registered.handlers.len());

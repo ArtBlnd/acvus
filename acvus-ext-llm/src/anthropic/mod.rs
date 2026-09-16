@@ -121,15 +121,11 @@ fn response_messages(resp: ModelResponse) -> Result<Vec<OutputMessage>, ExternEr
 }
 
 #[extern_fn]
-async fn anthropic<R>(
-    _: &R,
+async fn anthropic(
     #[state] fetch: &FetchClient,
     messages: Vec<InputMessage>,
     config: AnthropicConfig,
-) -> Result<Vec<OutputMessage>, ExternError>
-where
-    R: Runtime,
-{
+) -> Result<Vec<OutputMessage>, ExternError> {
     let messages = input_messages(messages);
     let (system, rest) = split_system(&messages);
     let max_tokens = u32::try_from(config.max_tokens).map_err(|_| {
@@ -158,17 +154,16 @@ where
             ("anthropic-version".into(), ANTHROPIC_API_VERSION.into()),
             ("Content-Type".into(), "application/json".into()),
         ],
-        body: serde_json::to_value(&request_body).map_err(|e| {
-            ExternError::call("anthropic", format!("serialization failed: {e}"))
-        })?,
+        body: serde_json::to_value(&request_body)
+            .map_err(|e| ExternError::call("anthropic", format!("serialization failed: {e}")))?,
     };
 
     let response_json = fetch
         .fetch(&http_request)
         .await
         .map_err(|e| ExternError::call("anthropic", e))?;
-    let (response, _usage) = parse_response(response_json)
-        .map_err(|e| ExternError::call("anthropic", e.to_string()))?;
+    let (response, _usage) =
+        parse_response(response_json).map_err(|e| ExternError::call("anthropic", e.to_string()))?;
     response_messages(response)
 }
 
@@ -334,8 +329,8 @@ mod tests {
         });
         let interner = acvus_extern::Interner::new();
         let registry = anthropic_registry::<_, acvus_extern::TypesOnly>(fetch);
-        let registered = acvus_extern::Externs::combine(vec![registry], &interner)
-            .expect("registry combines");
+        let registered =
+            acvus_extern::Externs::combine(vec![registry], &interner).expect("registry combines");
         assert_eq!(registered.functions.len(), 1);
         assert_eq!(registered.handlers.len(), 1);
 

@@ -136,7 +136,7 @@ fn generate_extern_fn(
     let is_cast = take_marker_attr(&mut func.attrs, "extern_cast");
     let is_async = func.sig.asyncness.is_some();
     let vars = Vars::from_generics(&func.sig.generics)?;
-    let rust_params = parse_params(&mut func.sig, true)?;
+    let (has_runtime, rust_params) = parse_params(&mut func.sig, vars.runtime_ident())?;
     let params: Vec<&ExternParam> = rust_params
         .iter()
         .filter_map(|p| match p {
@@ -230,9 +230,10 @@ fn generate_extern_fn(
     let signature = |member: Option<&Type>| -> proc_macro2::TokenStream {
         let param_terms = params.iter().map(|p| {
             let name = &p.name;
-            let comp_ty = p
-                .mode
-                .acvus_ty(&vars.to_compile_time_instance(&p.ty, member), &quote! { __R });
+            let comp_ty = p.mode.acvus_ty(
+                &vars.to_compile_time_instance(&p.ty, member),
+                &quote! { __R },
+            );
             quote! {
                 ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
                     __i.intern(#name),
@@ -316,8 +317,9 @@ fn generate_extern_fn(
         let returned = quote! {
             ::core::result::Result::<_, #error_ty>::Ok(#ret_value)
         };
+        let rt_arg = has_runtime.then(|| quote! { __rt, });
         if is_async {
-            let call = quote! { #fn_ident #turbofish (__rt, #(#passed),*) };
+            let call = quote! { #fn_ident #turbofish (#rt_arg #(#passed),*) };
             let awaited = if ret.is_result {
                 quote! { (#call).await.map_err(::core::convert::Into::<#error_ty>::into)? }
             } else {
@@ -338,7 +340,7 @@ fn generate_extern_fn(
                 ))
             }}
         } else {
-            let call = quote! { #fn_ident #turbofish (__rt, #(#passed),*) };
+            let call = quote! { #fn_ident #turbofish (#rt_arg #(#passed),*) };
             let result = if ret.is_result {
                 quote! { (#call).map_err(::core::convert::Into::<#error_ty>::into)? }
             } else {
@@ -471,18 +473,20 @@ fn take_marker_attr(attrs: &mut Vec<Attribute>, name: &str) -> bool {
     attrs.len() != before
 }
 
-/// The parameters of a signature after the runtime one (skipped when
-/// `has_runtime`), `#[state]` markers taken off.
-fn parse_params(sig: &mut syn::Signature, has_runtime: bool) -> syn::Result<Vec<RustParam>> {
-    let mut inputs = sig.inputs.iter_mut();
+/// The parameters of a signature, `#[state]` markers taken off, and whether
+/// the first one was the runtime: `&R` with `R` the parameter bounded by
+/// `Runtime`. A function that does not use its runtime does not take it.
+fn parse_params(
+    sig: &mut syn::Signature,
+    runtime: Option<&Ident>,
+) -> syn::Result<(bool, Vec<RustParam>)> {
+    let mut inputs = sig.inputs.iter_mut().peekable();
+    let has_runtime = match (runtime, inputs.peek()) {
+        (Some(runtime), Some(first)) => is_runtime_param(first, runtime),
+        _ => false,
+    };
     if has_runtime {
-        let Some(first) = inputs.next() else {
-            return Err(syn::Error::new(
-                sig.ident.span(),
-                "an extern_fn takes its runtime, `&R`, as its first parameter",
-            ));
-        };
-        check_runtime_param(first)?;
+        inputs.next();
     }
 
     let mut params = Vec::new();
@@ -522,28 +526,17 @@ fn parse_params(sig: &mut syn::Signature, has_runtime: bool) -> syn::Result<Vec<
             mode,
         }));
     }
-    Ok(params)
+    Ok((has_runtime, params))
 }
 
-fn check_runtime_param(arg: &FnArg) -> syn::Result<()> {
+fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {
     let FnArg::Typed(pat_type) = arg else {
-        return Err(syn::Error::new_spanned(
-            arg,
-            "an extern_fn has no self parameter",
-        ));
+        return false;
     };
-    let ok = match pat_type.ty.as_ref() {
-        Type::Reference(r) => r.mutability.is_none() && matches!(r.elem.as_ref(), Type::Path(_)),
-        _ => false,
+    let Type::Reference(r) = pat_type.ty.as_ref() else {
+        return false;
     };
-    if ok {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(
-            &pat_type.ty,
-            "an extern_fn takes its runtime, `&R` with `R: Runtime`, first",
-        ))
-    }
+    r.mutability.is_none() && matches!(r.elem.as_ref(), Type::Path(p) if p.path.is_ident(runtime))
 }
 
 fn parse_return(output: &ReturnType) -> ExternReturn {
@@ -999,7 +992,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     let mut sig = input.sig;
     let ident = sig.ident.clone();
     let vars = Vars::from_generics(&sig.generics)?;
-    let rust_params = parse_params(&mut sig, false)?;
+    let (_, rust_params) = parse_params(&mut sig, None)?;
     let mut params = Vec::new();
     for p in rust_params {
         match p {

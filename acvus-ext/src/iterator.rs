@@ -10,8 +10,8 @@
 //!   reduce, fold, any, all
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, ExternError, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry,
-    Runtime, TyVar, extern_fn, extern_registry,
+    Arr, ClosureFn, EffectVar, ExternError, Fn1, Fn2, IdentityVar, LenVar, Ref, Registry, Runtime,
+    TyVar, extern_fn, extern_registry,
 };
 
 use crate::iter_pipeline::Iter;
@@ -71,7 +71,7 @@ where
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
 #[extern_cast]
-fn into_iter_vec<T, E, I, Rt>(_: &Rt, items: Vec<T>) -> Iter<T, E, I, Rt>
+fn into_iter_vec<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -83,7 +83,7 @@ where
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
 #[extern_cast]
-fn into_iter_array<T, N, E, I, Rt>(_: &Rt, items: Arr<T, N>) -> Iter<T, E, I, Rt>
+fn into_iter_array<T, N, E, I, Rt>(items: Arr<T, N>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     N: LenVar,
@@ -95,7 +95,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_vec<T, E, I, Rt>(_: &Rt, items: Ref<Vec<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
+fn as_iter_vec<T, E, I, Rt>(items: Ref<Vec<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -106,7 +106,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_array<T, N, E, I, Rt>(_: &Rt, items: Ref<Arr<T, N>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
+fn as_iter_array<T, N, E, I, Rt>(items: Ref<Arr<T, N>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     T: TyVar,
     N: LenVar,
@@ -118,7 +118,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn rev_iter<T, E, I, Rt>(_: &Rt, items: Vec<T>) -> Iter<T, E, I, Rt>
+fn rev_iter<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -131,7 +131,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map<T, U, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+fn map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -143,7 +143,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn pmap<T, U, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+fn pmap<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -155,7 +155,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn filter<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Iter<T, E, I, Rt>
+fn filter<T, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -166,7 +166,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn take<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
+fn take<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
 where
     T: TyVar,
     E: EffectVar,
@@ -177,7 +177,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn skip<T, E, I, Rt>(_: &Rt, it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
+fn skip<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: i64) -> Result<Iter<T, E, I, Rt>, Rt::Error>
 where
     T: TyVar,
     E: EffectVar,
@@ -188,7 +188,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn chain<T, E, I, J, K, Rt>(_: &Rt, a: Iter<T, E, I, Rt>, b: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
+fn chain<T, E, I, J, K, Rt>(a: Iter<T, E, I, Rt>, b: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -201,7 +201,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn pchain<T, E, I, K, Rt>(_: &Rt, parts: Vec<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
+fn pchain<T, E, I, K, Rt>(parts: Vec<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -215,7 +215,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flatten<T, E, I, Rt>(_: &Rt, it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
+fn flatten<T, E, I, Rt>(it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
@@ -226,7 +226,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flatten_arrays<T, N, E, I, Rt>(_: &Rt, it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
+fn flatten_arrays<T, N, E, I, Rt>(it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     N: LenVar,
@@ -238,11 +238,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flat_map<T, U, E, I, Rt>(
-    _: &Rt,
-    it: Iter<T, E, I, Rt>,
-    f: Fn1<T, Vec<U>, E, Rt>,
-) -> Iter<U, E, I, Rt>
+fn flat_map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, Vec<U>, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -357,7 +353,12 @@ where
     };
     while let Some(item) = it.next(rt).await? {
         let out = f
-            .call(rt, (unsafe { rt.erase::<T>(acc) }, unsafe { rt.erase::<T>(item) }))
+            .call(
+                rt,
+                (unsafe { rt.erase::<T>(acc) }, unsafe {
+                    rt.erase::<T>(item)
+                }),
+            )
             .await?;
         acc = unsafe { rt.materialize::<T>(out) };
     }
@@ -381,7 +382,12 @@ where
     let mut acc = init;
     while let Some(item) = it.next(rt).await? {
         let out = f
-            .call(rt, (unsafe { rt.erase::<U>(acc) }, unsafe { rt.erase::<T>(item) }))
+            .call(
+                rt,
+                (unsafe { rt.erase::<U>(acc) }, unsafe {
+                    rt.erase::<T>(item)
+                }),
+            )
             .await?;
         acc = unsafe { rt.materialize::<U>(out) };
     }

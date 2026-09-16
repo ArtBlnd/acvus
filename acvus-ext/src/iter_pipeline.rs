@@ -193,12 +193,15 @@ where
         S: TyVar + IntoIterator<Item = U>,
         U: TyVar,
     {
-        Self::erased(self.0.push_op(Op::FlatMap(f.erased(), expand_as::<S, U, Rt>()))).retype()
+        Self::erased(
+            self.0
+                .push_op(Op::FlatMap(f.erased(), expand_as::<S, U, Rt>())),
+        )
+        .retype()
     }
 
     pub async fn next(&mut self, rt: &Rt) -> Result<Option<T>, Rt::Error>
-    where
-    {
+where {
         match pull(&mut self.0, rt).await? {
             Some(value) => Ok(Some(unsafe { rt.materialize::<T>(value) })),
             None => Ok(None),

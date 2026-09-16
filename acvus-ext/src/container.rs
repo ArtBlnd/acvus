@@ -6,7 +6,6 @@ use acvus_extern::{
     Arr, ExternError, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
 };
 
-
 pub mod sig {
     use acvus_extern::{Ref, RefMut, extern_signature};
 
@@ -68,10 +67,9 @@ pub(crate) fn checked_index(
 // -- Vec ----------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::len, effect = pure)]
-fn len_vec<T, Rt>(_: &Rt, c: &Vec<T>) -> i64
+fn len_vec<T>(c: &Vec<T>) -> i64
 where
     T: TyVar,
-    Rt: Runtime,
 {
     c.len() as i64
 }
@@ -121,11 +119,10 @@ where
 // -- Array --------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::len, effect = pure)]
-fn len_array<T, N, Rt>(_: &Rt, c: &Arr<T, N>) -> i64
+fn len_array<T, N>(c: &Arr<T, N>) -> i64
 where
     T: TyVar,
     N: LenVar,
-    Rt: Runtime,
 {
     c.0.len() as i64
 }

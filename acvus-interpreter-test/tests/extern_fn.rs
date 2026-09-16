@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::{ExternType, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Executable, TokioExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
@@ -48,10 +48,7 @@ fn assert_str(v: &Value, expected: &str) {
 // =======================================================================
 
 #[extern_fn(effect = pure)]
-fn ext_add<R>(_: &R, a: i64, b: i64) -> i64
-where
-    R: Runtime,
-{
+fn ext_add(a: i64, b: i64) -> i64 {
     a + b
 }
 
@@ -69,10 +66,7 @@ async fn extern_pure_add() {
 }
 
 #[extern_fn(effect = pure)]
-fn shout<R>(_: &R, s: String) -> String
-where
-    R: Runtime,
-{
+fn shout(s: String) -> String {
     s.to_uppercase()
 }
 
@@ -94,10 +88,7 @@ async fn extern_pure_string_transform() {
 // =======================================================================
 
 #[extern_fn(effect = pure)]
-fn multiply_secret<R>(_: &R, #[state] secret: &i64, x: i64) -> i64
-where
-    R: Runtime,
-{
+fn multiply_secret(#[state] secret: &i64, x: i64) -> i64 {
     x * secret
 }
 
@@ -160,10 +151,7 @@ async fn regex_find_via_extern() {
 // =======================================================================
 
 #[extern_fn(effect = pure)]
-fn double<R>(_: &R, x: i64) -> i64
-where
-    R: Runtime,
-{
+fn double(x: i64) -> i64 {
     x * 2
 }
 
@@ -227,69 +215,45 @@ fn ir_pure_function_call_no_context_bindings() {
 // Each test dumps the optimized MIR to stderr (--nocapture) for inspection.
 
 #[extern_fn]
-fn fetch_a<R>(_: &R) -> i64
-where
-    R: Runtime,
-{
+fn fetch_a() -> i64 {
     100
 }
 
 #[extern_fn]
-fn fetch_b<R>(_: &R) -> i64
-where
-    R: Runtime,
-{
+fn fetch_b() -> i64 {
     200
 }
 
 #[extern_fn]
-fn fetch_c<R>(_: &R) -> i64
-where
-    R: Runtime,
-{
+fn fetch_c() -> i64 {
     300
 }
 
 #[extern_fn]
-fn fetch_d<R>(_: &R) -> i64
-where
-    R: Runtime,
-{
+fn fetch_d() -> i64 {
     400
 }
 
 #[extern_fn]
-fn fetch_by<R>(_: &R, x: i64) -> i64
-where
-    R: Runtime,
-{
+fn fetch_by(x: i64) -> i64 {
     x * 10
 }
 
 /// Four independent Opaque fetches and one parameterized.
 /// A fresh draw: two draws in either order are the same program.
 #[extern_fn(effect = idempotent, commutative)]
-fn draw_a<R>(_: &R) -> i64
-where
-    R: Runtime,
-{
+fn draw_a() -> i64 {
     5
 }
 
 #[extern_fn(effect = idempotent, commutative)]
-fn draw_b<R>(_: &R) -> i64
-where
-    R: Runtime,
-{
+fn draw_b() -> i64 {
     7
 }
 
 /// Adds `by` to the lent place and returns the new value (RFC-0015).
 #[extern_fn(effect = pure)]
-fn bump<R>(_: &R, n: &mut i64, by: i64) -> i64
-where
-    R: Runtime,
-{
+fn bump(n: &mut i64, by: i64) -> i64 {
     *n += by;
     *n
 }
@@ -791,34 +755,22 @@ impl Probe {
 }
 
 #[extern_fn(name = "probe_a", effect = opaque)]
-async fn probe_a_opaque<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
-where
-    R: Runtime,
-{
+async fn probe_a_opaque(#[state] p: &Arc<Probe>) -> i64 {
     p.hold().await
 }
 
 #[extern_fn(name = "probe_b", effect = opaque)]
-async fn probe_b_opaque<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
-where
-    R: Runtime,
-{
+async fn probe_b_opaque(#[state] p: &Arc<Probe>) -> i64 {
     p.hold().await
 }
 
 #[extern_fn(name = "probe_a", effect = idempotent, commutative)]
-async fn probe_a_commutative<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
-where
-    R: Runtime,
-{
+async fn probe_a_commutative(#[state] p: &Arc<Probe>) -> i64 {
     p.hold().await
 }
 
 #[extern_fn(name = "probe_b", effect = idempotent, commutative)]
-async fn probe_b_commutative<R>(_: &R, #[state] p: &Arc<Probe>) -> i64
-where
-    R: Runtime,
-{
+async fn probe_b_commutative(#[state] p: &Arc<Probe>) -> i64 {
     p.hold().await
 }
 
@@ -1005,19 +957,17 @@ where
     I: acvus_extern::IdentityVar;
 
 #[extern_fn(effect = pure)]
-fn mk_tok<I, R>(_: &R) -> Tok<I>
+fn mk_tok<I>() -> Tok<I>
 where
     I: acvus_extern::IdentityVar,
-    R: Runtime,
 {
     Tok(7, std::marker::PhantomData)
 }
 
 #[extern_fn]
-fn consume_tok<I, R>(_: &R, tok: Tok<I>) -> i64
+fn consume_tok<I>(tok: Tok<I>) -> i64
 where
     I: acvus_extern::IdentityVar,
-    R: Runtime,
 {
     tok.0
 }

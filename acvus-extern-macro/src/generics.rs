@@ -70,10 +70,16 @@ fn required_signature<'a>(
             continue;
         }
         let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-            return Err(syn::Error::new_spanned(seg, "HasInstance takes a signature"));
+            return Err(syn::Error::new_spanned(
+                seg,
+                "HasInstance takes a signature",
+            ));
         };
         let Some(syn::GenericArgument::Type(Type::Path(sig))) = args.args.first() else {
-            return Err(syn::Error::new_spanned(seg, "HasInstance takes a signature"));
+            return Err(syn::Error::new_spanned(
+                seg,
+                "HasInstance takes a signature",
+            ));
         };
         return Ok(Some(sig.path.clone()));
     }
@@ -197,6 +203,14 @@ impl Vars {
             ));
         }
         Ok(Self(vars))
+    }
+
+    /// The generic parameter bounded by `Runtime`, when the declaration has one.
+    pub fn runtime_ident(&self) -> Option<&Ident> {
+        self.0
+            .iter()
+            .find(|v| v.kind == VarKind::Runtime)
+            .map(|v| &v.ident)
     }
 
     pub fn lookup(&self, ident: &Ident) -> Option<(VarKind, usize)> {

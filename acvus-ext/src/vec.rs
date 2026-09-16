@@ -14,10 +14,9 @@ extern_signature! {
 }
 
 #[extern_fn(effect = pure)]
-fn reverse<T, R>(_: &R, mut items: Vec<T>) -> Vec<T>
+fn reverse<T>(mut items: Vec<T>) -> Vec<T>
 where
     T: TyVar,
-    R: Runtime,
 {
     items.reverse();
     items
@@ -25,11 +24,10 @@ where
 
 #[extern_fn(instance_of = vec, effect = pure)]
 #[extern_cast]
-fn vec_array<T, N, R>(_: &R, items: Arr<T, N>) -> Vec<T>
+fn vec_array<T, N>(items: Arr<T, N>) -> Vec<T>
 where
     T: TyVar,
     N: LenVar,
-    R: Runtime,
 {
     items.0
 }

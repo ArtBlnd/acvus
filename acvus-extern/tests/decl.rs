@@ -10,8 +10,8 @@ use std::sync::Arc;
 use acvus_extern::{
     Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, ExternError, ExternFn,
     ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure,
-    Registry, Runtime, TyArg, extern_signature,
-    TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
+    Registry, Runtime, TyArg, TyVar, TypeRegistry, TypesOnly, extern_fn, extern_registry,
+    extern_signature,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -71,8 +71,14 @@ where
             .downcast_ref::<T>()
             .unwrap_or_else(|| panic!("peek: value is not a {}", std::any::type_name::<T>()))
             .clone(),
-        V::Closure(_) => panic!("peek: value is a closure, not a {}", std::any::type_name::<T>()),
-        V::Reference(_) => panic!("peek: value is a reference, not a {}", std::any::type_name::<T>()),
+        V::Closure(_) => panic!(
+            "peek: value is a closure, not a {}",
+            std::any::type_name::<T>()
+        ),
+        V::Reference(_) => panic!(
+            "peek: value is a reference, not a {}",
+            std::any::type_name::<T>()
+        ),
     }
 }
 
@@ -167,9 +173,9 @@ impl Runtime for Tiny {
         };
         // SAFETY: the target is live and, by the checker, exclusively named.
         match unsafe { &mut *(*p as *mut V) } {
-            V::Erased(any) => any
-                .downcast_mut::<T>()
-                .unwrap_or_else(|| panic!("deref_mut: target is not a {}", std::any::type_name::<T>())),
+            V::Erased(any) => any.downcast_mut::<T>().unwrap_or_else(|| {
+                panic!("deref_mut: target is not a {}", std::any::type_name::<T>())
+            }),
             other => panic!("deref_mut: target is not a value: {other:?}"),
         }
     }
@@ -210,19 +216,15 @@ struct Point {
 }
 
 #[extern_fn(effect = pure)]
-fn add<R>(_: &R, a: i64, b: i64) -> i64
-where
-    R: Runtime,
-{
+fn add(a: i64, b: i64) -> i64 {
     a + b
 }
 
 #[extern_fn(name = "id_any", effect = E)]
-fn identity<T, E, R>(_: &R, v: T) -> T
+fn identity<T, E>(v: T) -> T
 where
     T: TyVar,
     E: EffectVar,
-    R: Runtime,
 {
     v
 }
@@ -265,10 +267,7 @@ where
 }
 
 #[extern_fn]
-async fn fetch<R>(_: &R, p: Point) -> Result<Point, ExternError>
-where
-    R: Runtime,
-{
+async fn fetch(p: Point) -> Result<Point, ExternError> {
     Ok(Point {
         x: p.x * 2,
         label: p.label,
@@ -276,29 +275,22 @@ where
 }
 
 #[extern_fn(effect = idempotent)]
-fn take_token<I, R>(_: &R, t: Token<I>) -> i64
+fn take_token<I>(t: Token<I>) -> i64
 where
     I: acvus_extern::IdentityVar,
-    R: Runtime,
 {
     t.0
 }
 
 /// A fresh draw: two draws in either order are the same program.
 #[extern_fn(effect = idempotent, commutative)]
-fn draw<R>(_: &R) -> i64
-where
-    R: Runtime,
-{
+fn draw() -> i64 {
     4
 }
 
 /// Adds `by` to the lent place and returns the new value.
 #[extern_fn(effect = pure)]
-fn bump<R>(_: &R, n: &mut i64, by: i64) -> i64
-where
-    R: Runtime,
-{
+fn bump(n: &mut i64, by: i64) -> i64 {
     *n += by;
     *n
 }
@@ -306,18 +298,12 @@ where
 extern_signature! { ns: "t", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }
 
 #[extern_fn(instance_of = eq, effect = pure)]
-fn eq_int<R>(_: &R, a: &i64, b: &i64) -> bool
-where
-    R: Runtime,
-{
+fn eq_int(a: &i64, b: &i64) -> bool {
     a == b
 }
 
 #[extern_fn(instance_of = eq, effect = pure)]
-fn eq_point<R>(_: &R, a: &Point, b: &Point) -> bool
-where
-    R: Runtime,
-{
+fn eq_point(a: &Point, b: &Point) -> bool {
     a == b
 }
 
@@ -338,10 +324,7 @@ where
 struct Greeting(String);
 
 #[extern_fn(effect = pure)]
-fn greet<R>(_: &R, #[state] greeting: &Greeting, name: String) -> String
-where
-    R: Runtime,
-{
+fn greet(#[state] greeting: &Greeting, name: String) -> String {
     format!("{}, {name}", greeting.0)
 }
 
@@ -514,7 +497,11 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     let place = erased(40i64);
     let r = call_sync(h, vec![unsafe { Tiny.reference(&place) }, erased(2i64)]).unwrap();
     assert_eq!(open::<i64>(r), 42);
-    assert_eq!(open::<i64>(place), 42, "the place the reference named was written");
+    assert_eq!(
+        open::<i64>(place),
+        42,
+        "the place the reference named was written"
+    );
 }
 
 async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, ExternError> {
@@ -559,9 +546,8 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let boxed = erased(Boxed::<V, (), Tiny>(items, PhantomData));
 
     let double = V::Closure(Closure(Arc::new(|args| {
-        let [n] = <[V; 1]>::try_from(args).unwrap_or_else(|args| {
-            panic!("double takes one argument, got {}", args.len())
-        });
+        let [n] = <[V; 1]>::try_from(args)
+            .unwrap_or_else(|args| panic!("double takes one argument, got {}", args.len()));
         erased(open::<i64>(n) * 2)
     })));
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double])
@@ -586,7 +572,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
         .unwrap();
     let acvus_extern::Obj(mut fields) = open::<acvus_extern::Obj<V>>(out);
     assert_eq!(open::<i64>(fields.remove(&Tiny.symbol("x")).unwrap()), 42);
-    assert_eq!(open::<String>(fields.remove(&Tiny.symbol("label")).unwrap()), "p");
+    assert_eq!(
+        open::<String>(fields.remove(&Tiny.symbol("label")).unwrap()),
+        "p"
+    );
     assert!(fields.is_empty());
 }
 
@@ -601,11 +590,18 @@ fn wrong_argument_type_panics_trusting_typeck() {
 fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     let (i, reg) = combined::<TypesOnly>();
     let point = acvus_extern::Ty::Object(
-        [(i.intern("x"), acvus_extern::Ty::Int), (i.intern("label"), acvus_extern::Ty::String)]
-            .into_iter()
-            .collect(),
+        [
+            (i.intern("x"), acvus_extern::Ty::Int),
+            (i.intern("label"), acvus_extern::Ty::String),
+        ]
+        .into_iter()
+        .collect(),
     );
-    let eq_fn = reg.functions.iter().find(|f| f.qref == qref(&i, "eq")).expect("eq");
+    let eq_fn = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(&i, "eq"))
+        .expect("eq");
     let acvus_extern::FnKind::Extern { bounds, .. } = &eq_fn.kind else {
         panic!("eq is extern")
     };
@@ -616,7 +612,11 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
             acvus_extern::lift_to_poly(&point)
         ])
     );
-    let same = reg.functions.iter().find(|f| f.qref == qref(&i, "same")).expect("same");
+    let same = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(&i, "same"))
+        .expect("same");
     let acvus_extern::FnKind::Extern { bounds, .. } = &same.kind else {
         panic!("same is extern")
     };
@@ -627,7 +627,10 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
             acvus_extern::lift_to_poly(&point)
         ])
     );
-    assert!(matches!(reg.handlers[&qref(&i, "eq")], acvus_extern::ExternEntry::Mono(_)));
+    assert!(matches!(
+        reg.handlers[&qref(&i, "eq")],
+        acvus_extern::ExternEntry::Mono(_)
+    ));
 }
 
 #[test]
@@ -689,26 +692,24 @@ impl Twice for String {
 }
 
 #[extern_fn(effect = pure)]
-fn double<A, R>(_: &R, a: A) -> A
+fn double<A>(a: A) -> A
 where
     A: acvus_extern::Monomorphize<(i64, String)> + Twice,
-    R: Runtime,
 {
     a.twice()
 }
 
 #[extern_fn(effect = pure)]
-fn first_or<A, R>(_: &R, v: Option<A>, fallback: A) -> A
+fn first_or<A>(v: Option<A>, fallback: A) -> A
 where
     A: acvus_extern::Monomorphize<(i64, String)>,
-    R: Runtime,
 {
     v.unwrap_or(fallback)
 }
 
 /// The member type appears only inside an extension type here.
 #[extern_fn(effect = pure)]
-fn box_count<A, Rt>(_: &Rt, v: Boxed<A, Pure, Rt>) -> i64
+fn box_count<A, Rt>(v: Boxed<A, Pure, Rt>) -> i64
 where
     A: acvus_extern::Monomorphize<(i64, String)>,
     Rt: Runtime,
@@ -841,11 +842,10 @@ fn the_call_type_selects_the_instance() {
 extern_signature! { ns: "t", fn first<C, T>(c: C) -> T where C: TyVar, T: TyVar; }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_arr<T, N, R>(_: &R, a: Arr<T, N>) -> Result<T, ExternError>
+fn first_arr<T, N>(a: Arr<T, N>) -> Result<T, ExternError>
 where
     T: TyVar,
     N: LenVar,
-    R: Runtime,
 {
     a.0.into_iter()
         .next()
@@ -853,22 +853,20 @@ where
 }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_opt<T, R>(_: &R, v: Option<T>) -> Result<T, ExternError>
+fn first_opt<T>(v: Option<T>) -> Result<T, ExternError>
 where
     T: TyVar,
-    R: Runtime,
 {
     v.ok_or_else(|| ExternError::call("first", "none"))
 }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_arr_again<T, N, R>(_: &R, a: Arr<T, N>) -> Result<T, ExternError>
+fn first_arr_again<T, N>(a: Arr<T, N>) -> Result<T, ExternError>
 where
     T: TyVar,
     N: LenVar,
-    R: Runtime,
 {
-    first_arr(&TypesOnly, a)
+    first_arr(a)
 }
 
 fn first_registry<R: Runtime>() -> Registry<R> {
@@ -902,8 +900,14 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     let acvus_extern::TyVarBound::OneOf(shapes) = &bounds[0] else {
         panic!("the instance variable is bounded")
     };
-    assert!(shapes.iter().any(|s| matches!(s, PolyTy::Array(..))), "{shapes:?}");
-    assert!(shapes.iter().any(|s| matches!(s, PolyTy::Option(..))), "{shapes:?}");
+    assert!(
+        shapes.iter().any(|s| matches!(s, PolyTy::Array(..))),
+        "{shapes:?}"
+    );
+    assert!(
+        shapes.iter().any(|s| matches!(s, PolyTy::Option(..))),
+        "{shapes:?}"
+    );
 
     let entry = &reg.handlers[&qref(&i, "first")];
     let on_array = call_type(
