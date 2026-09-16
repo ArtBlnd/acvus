@@ -120,6 +120,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
         (Ty::String, Ty::String) => true,
         (Ty::Bool, Ty::Bool) => true,
         (Ty::Unit, Ty::Unit) => true,
+        (Ty::Never, Ty::Never) => true,
         (Ty::Order, Ty::Order) => true,
 
         // Containers (invariant inner)

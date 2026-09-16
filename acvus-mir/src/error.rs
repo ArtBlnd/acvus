@@ -44,6 +44,15 @@ pub enum MirErrorKind {
         value: i128,
         ty: Ty,
     },
+    /// `?` where nothing returns: a template body (RFC-0038).
+    TryOutsideFunction,
+    /// `?` on a value that is neither a `Result` nor an `Option`.
+    TryOnNonResult(Ty),
+    /// `?` would leave with a type the function does not return.
+    TryReturnMismatch {
+        leaves: Ty,
+        returns: Ty,
+    },
     EffectExceeded(crate::ty::EffectConflict),
     ArrayLengthMismatch {
         pattern_min: usize,
@@ -297,6 +306,23 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::IntegerLiteralOutOfRange { value, ty } => {
                 write!(f, "literal {value} does not fit {}", ty.display(interner))
             }
+            MirErrorKind::TryOutsideFunction => {
+                write!(
+                    f,
+                    "`?` needs a function to return from; a template has none"
+                )
+            }
+            MirErrorKind::TryOnNonResult(ty) => write!(
+                f,
+                "`?` takes a Result or an Option, not {}",
+                ty.display(interner)
+            ),
+            MirErrorKind::TryReturnMismatch { leaves, returns } => write!(
+                f,
+                "`?` leaves with {} but the function returns {}",
+                leaves.display(interner),
+                returns.display(interner)
+            ),
             MirErrorKind::UndefinedField { object_ty, field } => {
                 write!(
                     f,

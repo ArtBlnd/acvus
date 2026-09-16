@@ -17,6 +17,15 @@ use crate::ty::{
 // -- Solver types ----------------------------------------------------
 
 /// State of a type inference variable in the solver. The declared bound
+/// What freezing does with a type variable nothing constrained.
+#[derive(Clone, Copy)]
+enum Open {
+    /// Checking is not complete; the variable stays open.
+    Refuse,
+    /// Checking is complete; the variable is `!` (RFC-0038).
+    Never,
+}
+
 /// travels with the variable and is verified when it freezes.
 #[derive(Debug, Clone)]
 pub enum TypeBound {
@@ -682,13 +691,23 @@ impl<'src> Solver<'src> {
 
     /// Freeze an InferTy into a concrete Ty.
     /// Returns Err if any unresolved variable remains.
+    /// Freezes a type once checking is complete: a variable nothing
+    /// constrained is `!`, since no value of it ever exists (RFC-0038).
+    pub fn close_ty(&self, ty: &InferTy) -> Result<Ty, FreezeError> {
+        self.freeze_ty_with(ty, Open::Never)
+    }
+
     pub fn freeze_ty(&self, ty: &InferTy) -> Result<Ty, FreezeError> {
+        self.freeze_ty_with(ty, Open::Refuse)
+    }
+
+    fn freeze_ty_with(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
         ty.try_map(
             &mut |id: TypeBoundId| {
                 let root = self.find_ty_root(id);
                 match &self.ty_bounds[root.0 as usize] {
                     TypeBound::Resolved { ty: inner, bound } => {
-                        let frozen = self.freeze_ty(inner)?;
+                        let frozen = self.freeze_ty_with(inner, open)?;
                         if bound.admits(&frozen) {
                             Ok(frozen)
                         } else {
@@ -699,9 +718,11 @@ impl<'src> Solver<'src> {
                             })
                         }
                     }
-                    TypeBound::Unresolved { bound } => match bound.integer_default() {
-                        Some(k) => Ok(Ty::Int(k)),
-                        None => Err(FreezeError::UnresolvedType(root)),
+                    TypeBound::Unresolved { bound } => match (bound.integer_default(), bound, open)
+                    {
+                        (Some(k), _, _) => Ok(Ty::Int(k)),
+                        (None, TyVarBound::Any, Open::Never) => Ok(Ty::Never),
+                        (None, _, _) => Err(FreezeError::UnresolvedType(root)),
                     },
                     TypeBound::Forward(_) => unreachable!("find_ty_root should resolve forwards"),
                 }
@@ -859,7 +880,11 @@ impl<'src> Solver<'src> {
             (TyTerm::Float, TyTerm::Float)
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
-            | (TyTerm::Unit, TyTerm::Unit) => Ok(None),
+            | (TyTerm::Unit, TyTerm::Unit)
+            | (TyTerm::Never, TyTerm::Never) => Ok(None),
+            // `!` is below every type: a value of it never arrives where a
+            // `T` is expected (RFC-0038).
+            (TyTerm::Never, _) if pol == Polarity::Covariant => Ok(None),
 
             (
                 TyTerm::UserDefined {
@@ -1003,8 +1028,8 @@ impl<'src> Solver<'src> {
                 self.unify_ty(a, b, Polarity::Invariant, registry)
             }
             (TyTerm::Result(ta, ea), TyTerm::Result(tb, eb)) => {
-                self.unify_ty(ta, tb, Polarity::Invariant, registry)?;
-                self.unify_ty(ea, eb, Polarity::Invariant, registry)
+                self.unify_ty(ta, tb, pol, registry)?;
+                self.unify_ty(ea, eb, pol, registry)
             }
 
             (TyTerm::Ref(ma, ia), TyTerm::Ref(mb, ib)) => {

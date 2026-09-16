@@ -304,6 +304,13 @@ pub enum Expr {
         payload: Option<Box<Expr>>,
         span: Span,
     },
+    /// `inner?`: the `Ok` or `Some` payload, or an early return of the
+    /// `Err` or `None` (RFC-0038).
+    Try {
+        id: AstId,
+        inner: Box<Expr>,
+        span: Span,
+    },
 
     // -- Script mode expressions -------------------------------------
     /// `if cond { body; tail } else { ... }` - conditional expression (Script mode).
@@ -360,6 +367,7 @@ impl Expr {
             | Expr::Pipe { id, .. }
             | Expr::Lambda { id, .. }
             | Expr::Paren { id, .. }
+            | Expr::Try { id, .. }
             | Expr::Borrow { id, .. }
             | Expr::List { id, .. }
             | Expr::Group { id, .. }
@@ -385,6 +393,7 @@ impl Expr {
             | Expr::Pipe { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::Paren { span, .. }
+            | Expr::Try { span, .. }
             | Expr::Borrow { span, .. }
             | Expr::List { span, .. }
             | Expr::Group { span, .. }
@@ -745,6 +754,7 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
         }
         Expr::UnaryOp { operand, .. }
         | Expr::Paren { inner: operand, .. }
+        | Expr::Try { inner: operand, .. }
         | Expr::Borrow { place: operand, .. } => {
             walk_expr(operand, refs);
         }

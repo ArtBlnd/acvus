@@ -91,6 +91,8 @@ pub struct TypeResolution {
     pub intrinsic_calls: FxHashMap<AstId, Intrinsic>,
     /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
     pub structural_variant_calls: FxHashSet<AstId>,
+    /// The return type of the function each `?` leaves early from (RFC-0038).
+    pub try_returns: FxHashMap<AstId, Ty>,
     pub tail_ty: Ty,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
@@ -107,6 +109,7 @@ impl TypeResolution {
         operator_calls: FxHashMap<AstId, OperatorCall<Ty>>,
         intrinsic_calls: FxHashMap<AstId, Intrinsic>,
         structural_variant_calls: FxHashSet<AstId>,
+        try_returns: FxHashMap<AstId, Ty>,
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
         effect: Effect,
@@ -119,6 +122,7 @@ impl TypeResolution {
             operator_calls,
             intrinsic_calls,
             structural_variant_calls,
+            try_returns,
             tail_ty,
             extern_params,
             effect,
@@ -184,6 +188,11 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Bounded variables instantiated so far, each at the span that will
     /// report a violation.
     bound_sites: Vec<BoundSite>,
+    /// The return type of the function being checked, where one can be
+    /// left early: a script's or a lambda's, never a template's (RFC-0038).
+    return_ty: Option<InferTy>,
+    /// Each `?` with the return type it leaves through (RFC-0038).
+    try_sites: FxHashMap<AstId, InferTy>,
     int_literals: Vec<IntLiteral>,
     /// Calls `ns::tag(payload)` that resolved to a structural variant
     /// (RFC-0030), for the lowering.
@@ -230,6 +239,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             pattern_through: false,
             in_borrow_place: false,
             bound_sites: Vec::new(),
+            return_ty: None,
+            try_sites: FxHashMap::default(),
             int_literals: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
             choice_sites: FxHashMap::default(),
@@ -313,7 +324,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 (
                     *id,
                     self.solver
-                        .freeze_ty(&resolved)
+                        .close_ty(&resolved)
                         .unwrap_or_else(|_| Ty::error()),
                 )
             })
@@ -362,6 +373,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             operator_calls,
             self.intrinsic_calls,
             self.structural_variant_calls,
+            FxHashMap::default(),
             Ty::String,
             extern_params,
             effect,
@@ -376,11 +388,24 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         script: &acvus_ast::Script,
         expected_tail: Option<&Ty>,
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
+        let return_ty = self.solver.fresh_ty_var();
+        self.return_ty = Some(return_ty.clone());
         for stmt in &script.stmts {
             self.check_stmt(stmt);
         }
         let tail_ty = if let Some(tail) = &script.tail {
             let ty = self.check_expr(tail);
+            if self.unify_covariant(&ty, &return_ty, None).is_err() {
+                let resolved = self.solver.resolve_ty(&ty);
+                let expected = self.solver.resolve_ty(&return_ty);
+                self.error(
+                    MirErrorKind::UnificationFailure {
+                        expected: self.freeze_or_error(&expected),
+                        got: self.freeze_or_error(&resolved),
+                    },
+                    tail.span(),
+                );
+            }
             if let Some(expected) = expected_tail {
                 let expected_infer = lift_ty(expected);
                 if self
@@ -425,6 +450,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             })
             .collect();
         let frozen_tail = self.freeze_or_error(&self.solver.resolve_ty(&tail_ty));
+        let try_returns = self.frozen_try_returns();
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
         let operator_calls = self.frozen_operator_calls();
@@ -435,6 +461,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             operator_calls,
             self.intrinsic_calls,
             self.structural_variant_calls,
+            try_returns,
             frozen_tail,
             extern_params,
             effect,
@@ -575,7 +602,24 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
         let outer_effect = self.body_effect.clone();
         self.body_effect = self.solver.fresh_effect_var();
-        let ret = self.check_expr(body);
+        let outer_return = self.return_ty.replace(self.solver.fresh_ty_var());
+        let body_ty = self.check_expr(body);
+        let ret = self
+            .return_ty
+            .take()
+            .expect("the lambda's return type was set above");
+        self.return_ty = outer_return;
+        if self.unify_covariant(&body_ty, &ret, None).is_err() {
+            let resolved = self.solver.resolve_ty(&body_ty);
+            let expected = self.solver.resolve_ty(&ret);
+            self.error(
+                MirErrorKind::UnificationFailure {
+                    expected: self.freeze_or_error(&expected),
+                    got: self.freeze_or_error(&resolved),
+                },
+                body.span(),
+            );
+        }
         let lambda_effect = self.body_effect.clone();
         self.body_effect = outer_effect;
 
@@ -2073,6 +2117,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.record_ret(*id, ty)
             }
 
+            Expr::Try { id, inner, span } => {
+                let ty = self.check_try(inner, *span);
+                if !Self::is_error(&ty) {
+                    let ret = self.return_ty.clone().expect("check_try admitted a return");
+                    self.try_sites.insert(*id, ret);
+                }
+                self.record_ret(*id, ty)
+            }
+
             Expr::List {
                 id,
                 head,
@@ -2871,6 +2924,79 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let type_params = (0..arity).map(|_| self.solver.fresh_ty_var()).collect();
         Some((name, type_params, payload))
+    }
+
+    /// `inner?` (RFC-0038): the payload of an `Ok` or a `Some`, while the
+    /// `Err` or `None` leaves the function early, so the function returns a
+    /// `Result` whose error type unifies with the operand's, or an `Option`.
+    fn check_try(&mut self, inner: &Expr, span: Span) -> InferTy {
+        let operand = self.check_expr(inner);
+        let mut operand = self.solver.resolve_ty(&operand);
+        let Some(return_ty) = self.return_ty.clone() else {
+            self.error(MirErrorKind::TryOutsideFunction, span);
+            return Self::infer_error();
+        };
+        if let TyTerm::Var(_) = operand {
+            operand = self.assume_result_operand(&operand);
+        }
+        let (payload, leaves) = match &operand {
+            TyTerm::Result(ok, err) => (
+                (**ok).clone(),
+                TyTerm::Result(Box::new(self.solver.fresh_ty_var()), err.clone()),
+            ),
+            TyTerm::Option(some) => (
+                (**some).clone(),
+                TyTerm::Option(Box::new(self.solver.fresh_ty_var())),
+            ),
+            TyTerm::Error(_) => return Self::infer_error(),
+            other => {
+                let shown = self.freeze_or_error(other);
+                self.error(MirErrorKind::TryOnNonResult(shown), span);
+                return Self::infer_error();
+            }
+        };
+        if self.unify_covariant(&leaves, &return_ty, None).is_err() {
+            let expected = self.solver.resolve_ty(&return_ty);
+            self.error(
+                MirErrorKind::TryReturnMismatch {
+                    leaves: self.freeze_or_error(&leaves),
+                    returns: self.freeze_or_error(&expected),
+                },
+                span,
+            );
+            return Self::infer_error();
+        }
+        payload
+    }
+
+    /// A `?` operand whose type nothing has fixed yet — a lambda parameter
+    /// checked before any call — is a `Result` (RFC-0038); an `Option`
+    /// operand must be known where `?` is applied.
+    fn assume_result_operand(&mut self, operand: &InferTy) -> InferTy {
+        let assumed = TyTerm::Result(
+            Box::new(self.solver.fresh_ty_var()),
+            Box::new(self.solver.fresh_ty_var()),
+        );
+        if self.unify_covariant(operand, &assumed, None).is_err() {
+            return Self::infer_error();
+        }
+        self.solver.resolve_ty(&assumed)
+    }
+
+    /// The return type each `?` leaves through, frozen for the lowering.
+    fn frozen_try_returns(&self) -> FxHashMap<AstId, Ty> {
+        self.try_sites
+            .iter()
+            .map(|(id, ty)| {
+                let resolved = self.solver.resolve_ty(ty);
+                (
+                    *id,
+                    self.solver
+                        .close_ty(&resolved)
+                        .unwrap_or_else(|_| Ty::error()),
+                )
+            })
+            .collect()
     }
 
     /// `Option<T>` for one type parameter, `Result<T, E>` for two: the

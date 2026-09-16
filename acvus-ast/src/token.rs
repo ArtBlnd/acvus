@@ -114,6 +114,8 @@ pub enum Token {
     Percent,
     #[token("!")]
     Bang,
+    #[token("?")]
+    Question,
     #[token("&")]
     Amp,
     #[token("<")]
@@ -183,6 +185,7 @@ impl fmt::Display for Token {
             Token::Slash => write!(f, "/"),
             Token::Percent => write!(f, "%"),
             Token::Bang => write!(f, "!"),
+            Token::Question => write!(f, "?"),
             Token::AndAnd => write!(f, "&&"),
             Token::OrOr => write!(f, "||"),
             Token::Eq => write!(f, "=="),

@@ -84,6 +84,7 @@ pub enum SerTy {
     String,
     Bool,
     Unit,
+    Never,
     Error,
     Array {
         len: usize,
@@ -129,6 +130,7 @@ impl Ty {
             Ty::String => SerTy::String,
             Ty::Bool => SerTy::Bool,
             Ty::Unit => SerTy::Unit,
+            Ty::Never => SerTy::Never,
             Ty::Error(_) => SerTy::Error,
             Ty::Array(elem, len) => SerTy::Array {
                 len: len.get(),
@@ -211,6 +213,7 @@ impl SerTy {
             SerTy::String => Ty::String,
             SerTy::Bool => Ty::Bool,
             SerTy::Unit => Ty::Unit,
+            SerTy::Never => Ty::Never,
             SerTy::Error => Ty::error(),
             SerTy::Array { len, elem } => {
                 Ty::Array(Box::new(elem.to_ty(interner)), LenTerm::Known(*len))

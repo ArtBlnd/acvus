@@ -306,6 +306,7 @@ where
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
+            | (TyTerm::Never, TyTerm::Never)
             | (TyTerm::Order, TyTerm::Order) => true,
             (TyTerm::Array(e, n), TyTerm::Array(pe, pn)) => {
                 let len_ok = match (n, pn) {
@@ -548,6 +549,7 @@ impl PatternSubst {
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
+            | (TyTerm::Never, TyTerm::Never)
             | (TyTerm::Order, TyTerm::Order) => true,
             (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => false,
             (TyTerm::Array(ea, la), TyTerm::Array(eb, lb)) => {
@@ -698,6 +700,7 @@ enum TyHead {
     String,
     Bool,
     Unit,
+    Never,
     Order,
     Array,
     Object,
@@ -719,6 +722,7 @@ fn ty_head<V: Phase>(ty: &TyTerm<V>) -> TyHead {
         TyTerm::String => TyHead::String,
         TyTerm::Bool => TyHead::Bool,
         TyTerm::Unit => TyHead::Unit,
+        TyTerm::Never => TyHead::Never,
         TyTerm::Order => TyHead::Order,
         TyTerm::Array(..) => TyHead::Array,
         TyTerm::Object(_) => TyHead::Object,
@@ -1197,7 +1201,7 @@ impl TyTerm<Concrete> {
     /// host's declaration, not the checker's.
     pub fn is_data(&self) -> bool {
         match self {
-            Ty::Int(_) | Ty::Float | Ty::String | Ty::Bool | Ty::Unit => true,
+            Ty::Int(_) | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Never => true,
             Ty::Array(inner, _) | Ty::Option(inner) => inner.is_data(),
             Ty::Result(ok, err) => ok.is_data() && err.is_data(),
             Ty::Tuple(elems) => elems.iter().all(Ty::is_data),
@@ -1257,6 +1261,7 @@ where
             TyTerm::String => write!(f, "String"),
             TyTerm::Bool => write!(f, "Bool"),
             TyTerm::Unit => write!(f, "Unit"),
+            TyTerm::Never => write!(f, "!"),
             TyTerm::Object(fields) => {
                 let mut sorted: Vec<_> = fields.iter().collect();
                 sorted.sort_by_key(|(k, _)| self.interner.resolve(**k).to_string());
@@ -1562,6 +1567,10 @@ pub enum TyTerm<V: Phase> {
     String,
     Bool,
     Unit,
+    /// The type with no value: what an unconstrained type variable
+    /// resolves to, and the error side of a `Result` nothing fails into
+    /// (RFC-0038). A value of it never exists, so it is below every type.
+    Never,
     /// A dependency between effectful calls (RFC-0007). IR-only: no script
     /// names it, and no value of it exists at runtime.
     Order,
@@ -1659,7 +1668,12 @@ impl<V: Phase> TyTerm<V> {
     pub fn is_primitive(&self) -> bool {
         matches!(
             self,
-            TyTerm::Int(_) | TyTerm::Float | TyTerm::Bool | TyTerm::Unit | TyTerm::Order
+            TyTerm::Int(_)
+                | TyTerm::Float
+                | TyTerm::Bool
+                | TyTerm::Unit
+                | TyTerm::Never
+                | TyTerm::Order
         )
     }
 
@@ -1680,6 +1694,7 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::String => TyTerm::String,
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
+            TyTerm::Never => TyTerm::Never,
             TyTerm::Order => TyTerm::Order,
             TyTerm::Array(inner, len) => TyTerm::Array(
                 Box::new(inner.map(on_var, on_identity, on_effect, on_len)),
@@ -1775,6 +1790,7 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::String => Ok(TyTerm::String),
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
+            TyTerm::Never => Ok(TyTerm::Never),
             TyTerm::Order => Ok(TyTerm::Order),
             TyTerm::Array(inner, len) => Ok(TyTerm::Array(
                 Box::new(inner.try_map(on_var, on_identity, on_effect, on_len)?),
@@ -1914,6 +1930,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
             Ty::String => TyTerm::String,
             Ty::Bool => TyTerm::Bool,
             Ty::Unit => TyTerm::Unit,
+            Ty::Never => TyTerm::Never,
             Ty::Order => TyTerm::Order,
             Ty::Array(inner, len) => TyTerm::Array(Box::new(go(inner, builder)), lift_ty_len(len)),
             Ty::Object(fields) => {

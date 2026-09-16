@@ -346,6 +346,80 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// `inner?` (RFC-0038): test the operand's tag; on `Ok`/`Some` the
+    /// payload is the value, on `Err`/`None` the function returns the
+    /// operand's failure rebuilt at the function's return type.
+    fn lower_try(&mut self, id: AstId, inner: &Expr, span: Span) -> ValueId {
+        let src = self.lower_expr(inner);
+        let operand_ty = self
+            .body
+            .val_types
+            .get(&src)
+            .cloned()
+            .unwrap_or(Ty::error());
+        let return_ty = self
+            .resolution
+            .try_returns
+            .get(&id)
+            .cloned()
+            .unwrap_or(Ty::error());
+        let (ok_tag, fail_tag, fail_carries) = match &operand_ty {
+            Ty::Result(..) => ("Ok", "Err", true),
+            _ => ("Some", "None", false),
+        };
+        let ok_tag = self.interner.intern(ok_tag);
+        let fail_tag = self.interner.intern(fail_tag);
+
+        let is_ok = self.alloc_val();
+        self.set_val_type(is_ok, Ty::Bool);
+        self.emit_inst(
+            span,
+            InstKind::TestVariant {
+                dst: is_ok,
+                src,
+                tag: ok_tag,
+            },
+        );
+        let ok_label = self.alloc_label();
+        let fail_label = self.alloc_label();
+        self.emit_inst(
+            span,
+            InstKind::JumpIf {
+                cond: is_ok,
+                then_label: ok_label,
+                then_args: vec![],
+                else_label: fail_label,
+                else_args: vec![],
+            },
+        );
+
+        self.emit_label(span, fail_label);
+        let failure = self.alloc_val();
+        self.set_val_type(failure, return_ty.clone());
+        let payload = if fail_carries {
+            let err = self.alloc_val();
+            self.set_val_type(err, self.payload_type(&operand_ty, fail_tag));
+            self.emit_inst(span, InstKind::UnwrapVariant { dst: err, src });
+            Some(err)
+        } else {
+            None
+        };
+        self.emit_inst(
+            span,
+            InstKind::MakeVariant {
+                dst: failure,
+                tag: fail_tag,
+                payload,
+            },
+        );
+        self.emit_return(span, failure);
+
+        self.emit_label(span, ok_label);
+        let dst = self.alloc_expr(id);
+        self.emit_inst(span, InstKind::UnwrapVariant { dst, src });
+        dst
+    }
+
     /// Leave the body with `value`, yielding the current `Order` last.
     fn emit_return(&mut self, span: Span, value: ValueId) {
         let contexts: Vec<(QualifiedRef, ValueId)> =
@@ -1895,6 +1969,8 @@ impl<'a> Lowerer<'a> {
 
             Expr::Paren { inner, .. } => self.lower_expr(inner),
 
+            Expr::Try { id, inner, span } => self.lower_try(*id, inner, *span),
+
             Expr::List {
                 id,
                 head,
@@ -3279,7 +3355,9 @@ impl<'a> Lowerer<'a> {
                 }
                 self.collect_free_vars(body, &inner_bound, free, seen);
             }
-            Expr::Paren { inner, .. } | Expr::Borrow { place: inner, .. } => {
+            Expr::Paren { inner, .. }
+            | Expr::Try { inner, .. }
+            | Expr::Borrow { place: inner, .. } => {
                 self.collect_free_vars(inner, bound, free, seen);
             }
             Expr::List { head, tail, .. } => {

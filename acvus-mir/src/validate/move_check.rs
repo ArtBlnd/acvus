@@ -31,7 +31,9 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 /// classify.
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
-        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Order | Ty::Ref(..) => Some(false),
+        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order | Ty::Ref(..) => {
+            Some(false)
+        }
         Ty::String
         | Ty::Handle(..)
         | Ty::UserDefined { .. }

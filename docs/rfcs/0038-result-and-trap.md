@@ -1,6 +1,6 @@
 # RFC-0038: `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error
 
-Status: Accepted (Result built; `?` and trap to follow)
+Status: Accepted (Result, `!`, and `?` built; trap to follow)
 Date: 2026-09-16
 Extends: RFC-0022, RFC-0023, RFC-0036
 
@@ -12,15 +12,31 @@ time it is Rust's `Result` at `T = E = Value`, so it crosses the extern
 boundary as itself (RFC-0022). Its two sides are typed apart; a script
 that builds a `Result` must let both be known, as Rust does.
 
+`!` is the type with no value. A type variable that nothing constrained
+by the time checking is complete is `!`: `let r = Ok(3)` gives `r` the
+type `Result<i64, !>`, since nothing fails into it. `!` is below every
+type, so a `Result<T, !>` goes wherever a `Result<T, E>` is expected.
+The compile-time freeze that asks whether a declared type is fully known
+keeps refusing an open variable; only the final freeze closes one to `!`.
+
 `x?` on `x: Result<T, E1>` inside a function returning `Result<U, E2>`
-yields the `T` and unifies `E1` with `E2`. When both are structural
-enums (RFC-0036), that unification is the solver's enum merge: the
-function's error enum grows the variants of every `?` in its body, and
-nothing declares that growth. `x?` on an `Option` in a function
-returning an `Option` propagates `None`. In a function whose return is
-neither, `?` is a type error. In a template, `?` is `unwrap`: an `Err`
-stops the run as a trap, because a template's result is text and has no
-side to carry an error.
+yields the `T` and unifies `Result<_, E1>` with the return type. When
+`E1` and `E2` are structural enums (RFC-0036), that unification is the
+solver's enum merge: the function's error enum grows the variants of
+every `?` in its body, and nothing declares that growth. `x?` on an
+`Option` in a function returning an `Option` propagates `None`. A
+function is a script or a lambda; each has a return type the checker
+tracks, and the tail expression flows into it as `?` does. In a
+function whose return is neither, `?` is a type error, and in a
+template `?` is refused: a template's result is text and has no side to
+carry an error. An operand whose type nothing has fixed when `?` is
+applied — a lambda parameter, checked before any call — is taken to be a
+`Result`; `?` on an `Option` needs its type known there.
+
+With `!` in the language, a trapping `unwrap` for templates and a
+`panic` the script calls become ordinary functions returning `!`; the
+analyses then have to treat a `!`-typed expression as one that does not
+continue. That is the trap step's work.
 
 A failure the program can act on is a value: an extern fn returns
 `Result<T, E>` with `E` a type it declares — usually a `#[derive(TyArg)]`
@@ -51,17 +67,25 @@ used, under a name that says what it is.
 
 ## Not built
 
-- `?` and `Trap` are not yet built; `ExternError` stands until they are.
+- `Trap` is not yet built; `ExternError` stands until it is.
 - No `Result` from an extern fn as a language value yet: the macro still
   reads a returned `Result<T, E>` as the abort path (RFC-0023). The trap
   step flips that.
-- An unresolved type variable in a script — `let r = Ok(3)` with nothing
-  fixing `E` — is not yet reported; it freezes to an error type
-  silently, as it did before this RFC.
+- No `?` in a template, and no `!`-returning functions yet; the analyses
+  do not know a diverging expression.
+- A lambda body is one expression: `if` and `let` are statements of a
+  script and do not yet appear inside a lambda or a parenthesis, so a
+  lambda that branches is written around an `if` bound outside it. This
+  is the grammar as it was, not this RFC's ruling.
 
 ## Consequences
 
-- `acvus-ast`: `Ok` and `Err` tokens and variant expressions.
+- `acvus-ast`: `Ok` and `Err` tokens and variant expressions; `?` and
+  `Expr::Try`.
+- `acvus-mir`: `TyTerm::Never`; `Solver::close_ty` beside `freeze_ty`;
+  the checker's `return_ty`, `check_try`, and `try_returns` handed to the
+  lowering, which tests the tag, unwraps the payload, and returns the
+  failure rebuilt at the function's return type.
 - `acvus-mir`: `TyTerm::Result`, `TyHead::Result`, `SerTy::Result`;
   `resolve_builtin_variant` knows both builtin enums; lowering picks a
   variant's payload type by its tag.

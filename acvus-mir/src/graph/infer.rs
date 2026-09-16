@@ -272,7 +272,7 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
             }
         }
         Expr::Lambda { body, .. } => collect_value_refs_expr(body, refs),
-        Expr::Paren { inner, .. } | Expr::Borrow { place: inner, .. } => {
+        Expr::Paren { inner, .. } | Expr::Try { inner, .. } | Expr::Borrow { place: inner, .. } => {
             collect_value_refs_expr(inner, refs)
         }
         Expr::List { head, tail, .. } => {

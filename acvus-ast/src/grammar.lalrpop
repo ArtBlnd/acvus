@@ -40,6 +40,7 @@ extern {
         "/" => Token::Slash,
         "%" => Token::Percent,
         "!" => Token::Bang,
+        "?" => Token::Question,
         "&&" => Token::AndAnd,
         "||" => Token::OrOr,
         "==" => Token::Eq,
@@ -371,6 +372,9 @@ QualifiedExpr: Expr = {
 PostfixExpr: Expr = {
     <l:@L> <obj:PostfixExpr> "." <f:"ident"> <r:@R> =>
         Expr::FieldAccess { id: AstId::alloc(), object: Box::new(obj), field: f, span: Span::new(l, r) },
+    // `e?`: the Ok or Some payload, or an early return of the Err or None (RFC-0038).
+    <l:@L> <inner:PostfixExpr> "?" <r:@R> =>
+        Expr::Try { id: AstId::alloc(), inner: Box::new(inner), span: Span::new(l, r) },
     CalleeExpr,
 };
 
