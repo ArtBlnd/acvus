@@ -7,10 +7,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
-use crate::ir::{Callee, CastKind};
+use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
-    Answer, Candidate, Decision, DecisionId, EffectRelation, InstanceChoice, InstanceKind,
-    Mismatch, MismatchReason, Unsettled,
+    Answer, Candidate, Conversion, Decision, DecisionId, EffectRelation, InstanceChoice,
+    InstanceKind, Mismatch, MismatchReason, ReferencePair, Unsettled,
 };
 use crate::ty::{
     Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Ty, TyTerm,
@@ -55,8 +55,48 @@ struct IntLiteral {
 /// parameters were seen: a piped value or a method receiver.
 struct FirstArg {
     ty: InferTy,
-    span: Span,
+    site: ArgSite,
+}
+
+/// A call argument at its site, with the place it borrows when it is
+/// `&place` or a receiver lent as one: a conversion answered through the
+/// reference rewrites that place.
+#[derive(Debug, Clone, Copy)]
+struct ArgSite {
     id: AstId,
+    span: Span,
+    place: Option<AstId>,
+}
+
+impl ArgSite {
+    fn of(expr: &Expr) -> Self {
+        let place = match expr {
+            Expr::Borrow { place, .. } if place_of(place).is_some() => Some(place.id()),
+            _ => None,
+        };
+        Self {
+            id: expr.id(),
+            span: expr.span(),
+            place,
+        }
+    }
+
+    fn value(expr: &Expr) -> Self {
+        Self {
+            id: expr.id(),
+            span: expr.span(),
+            place: None,
+        }
+    }
+
+    /// A receiver lent to a reference parameter: the receiver is the place.
+    fn lent(expr: &Expr) -> Self {
+        Self {
+            id: expr.id(),
+            span: expr.span(),
+            place: Some(expr.id()),
+        }
+    }
 }
 
 /// The mutability of a function's first parameter when it is a reference.
@@ -87,10 +127,25 @@ struct ResolvedCallee {
     instance: Option<InstanceChoice>,
 }
 
-/// A coercion through a cast function, recorded at the value it converts.
+/// A coercion recorded at the value it converts.
 struct PendingCoercion {
     at: AstId,
-    cast: ResolvedCallee,
+    cast: PendingCast,
+}
+
+enum PendingCast {
+    Value(PendingExternCast),
+    ThroughRef {
+        mutability: Mutability,
+        cast: PendingExternCast,
+        back: PendingExternCast,
+    },
+}
+
+/// A cast function at the type of one call of it, its instance still the
+/// solver's to name.
+struct PendingExternCast {
+    callee: ResolvedCallee,
     callee_ty: Ty,
 }
 
@@ -199,6 +254,8 @@ struct PendingConversion {
     decision: DecisionId,
     from: InferTy,
     to: InferTy,
+    /// The place the value borrows, at a call argument that is `&place`.
+    place: Option<AstId>,
 }
 
 /// State only active in analysis mode (partial inference for unknown contexts/params).
@@ -544,16 +601,38 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// conversion is a decision the body's solve answers, reported at the
     /// site if none exists.
     fn convert_at(&mut self, value_ty: &InferTy, expected_ty: &InferTy, site: ConversionSite) {
-        let decision = self
-            .solver
-            .decide(Decision::conversion(value_ty, expected_ty));
-        self.decision_sites.insert(decision, site.span);
+        let decision = self.decide_conversion(value_ty, expected_ty, site.span);
         self.conversions.push(PendingConversion {
             site,
             decision,
             from: value_ty.clone(),
             to: expected_ty.clone(),
+            place: None,
         });
+    }
+
+    /// `convert_at` for a call argument: a conversion answered through the
+    /// reference rewrites the place the argument borrows.
+    fn convert_argument_at(&mut self, value_ty: &InferTy, expected_ty: &InferTy, arg: ArgSite) {
+        let site = ConversionSite {
+            id: arg.id,
+            span: arg.span,
+            report: ConversionReport::Value,
+        };
+        let decision = self.decide_conversion(value_ty, expected_ty, site.span);
+        self.conversions.push(PendingConversion {
+            site,
+            decision,
+            from: value_ty.clone(),
+            to: expected_ty.clone(),
+            place: arg.place,
+        });
+    }
+
+    fn decide_conversion(&mut self, from: &InferTy, to: &InferTy, span: Span) -> DecisionId {
+        let decision = self.solver.decide(Decision::conversion(from, to));
+        self.decision_sites.insert(decision, span);
+        decision
     }
 
     fn push_scope(&mut self) {
@@ -898,23 +977,47 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.coercions
             .iter()
             .filter_map(|coercion| {
-                let Callee::Extern {
-                    id: fn_ref,
-                    instance,
-                } = self.callee_of(coercion.cast)?
-                else {
-                    unreachable!("a cast is an Extern function (RFC-0023)")
-                };
-                Some((
-                    coercion.at,
-                    CastKind::Extern {
-                        fn_ref,
-                        instance,
-                        callee_ty: coercion.callee_ty.clone(),
+                let kind = match &coercion.cast {
+                    PendingCast::Value(cast) => {
+                        let ExternCast {
+                            fn_ref,
+                            instance,
+                            callee_ty,
+                        } = self.frozen_cast(cast)?;
+                        CastKind::Extern {
+                            fn_ref,
+                            instance,
+                            callee_ty,
+                        }
+                    }
+                    PendingCast::ThroughRef {
+                        mutability,
+                        cast,
+                        back,
+                    } => CastKind::ThroughRef {
+                        mutability: *mutability,
+                        cast: self.frozen_cast(cast)?,
+                        back: self.frozen_cast(back)?,
                     },
-                ))
+                };
+                Some((coercion.at, kind))
             })
             .collect()
+    }
+
+    fn frozen_cast(&self, cast: &PendingExternCast) -> Option<ExternCast> {
+        let Callee::Extern {
+            id: fn_ref,
+            instance,
+        } = self.callee_of(cast.callee)?
+        else {
+            unreachable!("a cast is an Extern function (RFC-0023)")
+        };
+        Some(ExternCast {
+            fn_ref,
+            instance,
+            callee_ty: cast.callee_ty.clone(),
+        })
     }
 
     /// Solve the body once it is checked (solver.md): every decision
@@ -954,42 +1057,92 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn resolve_conversions(&mut self) {
         let conversions = std::mem::take(&mut self.conversions);
         for conversion in &conversions {
-            let Some(Answer::Conversion(Some(fn_ref))) = self.solver.answer(conversion.decision)
-            else {
+            let Some(Answer::Conversion(answer)) = self.solver.answer(conversion.decision) else {
                 continue;
             };
-            let Some(scheme) = self.env.functions.get(&fn_ref) else {
-                unreachable!("a cast rule names a declared function (RFC-0023)")
-            };
-            let scheme = scheme.clone();
-            let (inst, instance) = self.instantiate_at(fn_ref, &scheme, conversion.site.span);
-            if let TyTerm::Fn {
-                params,
-                ret,
-                effect,
-                ..
-            } = &inst
-            {
-                if let Some(p) = params.first() {
-                    let _ = self.solver.unify(&p.ty, &conversion.from);
+            let span = conversion.site.span;
+            let cast = match answer {
+                Conversion::Identity => continue,
+                Conversion::Cast(fn_ref) => {
+                    PendingCast::Value(self.cast_at(fn_ref, &conversion.from, &conversion.to, span))
                 }
-                let _ = self.solver.unify(ret, &conversion.to);
-                let effect = effect.clone();
-                self.note_call_effect(&effect, conversion.site.span);
-            }
-            let unsettled = self.solver.settle();
-            self.report_unsettled(unsettled);
-            let callee_ty = self.freeze_or_error(&self.solver.resolve_ty(&inst));
+                Conversion::ThroughRef {
+                    mutability,
+                    cast,
+                    back,
+                } => {
+                    let owned_place = conversion.place.filter(|place| {
+                        !matches!(
+                            self.solver.resolve_ty(&self.type_map[place]),
+                            TyTerm::Ref(..)
+                        )
+                    });
+                    if owned_place.is_none() {
+                        self.report_unsettled(vec![Unsettled::ConversionNeedsPlace {
+                            decision: conversion.decision,
+                            from: conversion.from.clone(),
+                            to: conversion.to.clone(),
+                        }]);
+                        continue;
+                    }
+                    let from = self.solver.shallow_resolve_ty(&conversion.from);
+                    let to = self.solver.shallow_resolve_ty(&conversion.to);
+                    let Some(references) = ReferencePair::of(&from, &to) else {
+                        unreachable!("a ThroughRef answer was formed from a reference pair")
+                    };
+                    let named_from = references.from.ty.clone();
+                    let named_to = references.to.ty.clone();
+                    PendingCast::ThroughRef {
+                        mutability,
+                        cast: self.cast_at(cast, &named_from, &named_to, span),
+                        back: self.cast_at(back, &named_to, &named_from, span),
+                    }
+                }
+            };
             self.coercions.push(PendingCoercion {
                 at: conversion.site.id,
-                cast: ResolvedCallee {
-                    qref: fn_ref,
-                    instance,
-                },
-                callee_ty,
+                cast,
             });
         }
         self.conversions = conversions;
+    }
+
+    fn cast_at(
+        &mut self,
+        fn_ref: QualifiedRef,
+        from: &InferTy,
+        to: &InferTy,
+        span: Span,
+    ) -> PendingExternCast {
+        let Some(scheme) = self.env.functions.get(&fn_ref) else {
+            unreachable!("a cast rule names a declared function (RFC-0023)")
+        };
+        let scheme = scheme.clone();
+        let (inst, instance) = self.instantiate_at(fn_ref, &scheme, span);
+        if let TyTerm::Fn {
+            params,
+            ret,
+            effect,
+            ..
+        } = &inst
+        {
+            if let Some(p) = params.first() {
+                let _ = self.solver.unify(&p.ty, from);
+            }
+            let _ = self.solver.unify(ret, to);
+            let effect = effect.clone();
+            self.note_call_effect(&effect, span);
+        }
+        let unsettled = self.solver.settle();
+        self.report_unsettled(unsettled);
+        let callee_ty = self.freeze_or_error(&self.solver.resolve_ty(&inst));
+        PendingExternCast {
+            callee: ResolvedCallee {
+                qref: fn_ref,
+                instance,
+            },
+            callee_ty,
+        }
     }
 
     fn report_unsettled(&mut self, unsettled: Vec<Unsettled>) {
@@ -1063,6 +1216,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     to: self.freeze_or_error(&to),
                     rules,
                 },
+                Unsettled::ConversionNeedsPlace { from, to, .. } => {
+                    MirErrorKind::ConversionNeedsPlace {
+                        from: self.freeze_or_error(&from),
+                        to: self.freeze_or_error(&to),
+                    }
+                }
             };
             self.error(kind, span);
         }
@@ -1241,9 +1400,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             // receiver that is already a reference value is passed as it
             // is (RFC-0030).
             let first = match first_param_reference(&fn_sig.ty) {
-                Some(mutability) if place_of(receiver).is_some() => {
-                    self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span())
-                }
+                Some(mutability) if place_of(receiver).is_some() => FirstArg {
+                    ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
+                    site: ArgSite::lent(receiver),
+                },
                 Some(_) => {
                     let ty = self.check_expr(receiver);
                     if !matches!(
@@ -1252,14 +1412,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     ) {
                         self.error(MirErrorKind::NotAPlace, receiver.span());
                     }
-                    ty
+                    FirstArg {
+                        ty,
+                        site: ArgSite::value(receiver),
+                    }
                 }
-                None => self.check_expr(receiver),
-            };
-            let first = FirstArg {
-                ty: first,
-                span: receiver.span(),
-                id: receiver.id(),
+                None => FirstArg {
+                    ty: self.check_expr(receiver),
+                    site: ArgSite::value(receiver),
+                },
             };
             return self.check_resolved_call(
                 resolved_qref,
@@ -1279,8 +1440,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 &resolved,
                 args,
                 &Some(recv_ty),
-                Some(receiver.span()),
-                Some(receiver.id()),
+                Some(ArgSite::value(receiver)),
                 call_span,
             );
         }
@@ -1304,15 +1464,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, call_span);
         let first_ty = first.as_ref().map(|f| f.ty.clone());
         let arg_types = self.check_args_in_order(&fn_ty, first_ty.as_ref(), args);
-        let arg_spans: Vec<Span> = first
+        let arg_sites: Vec<ArgSite> = first
             .iter()
-            .map(|f| f.span)
-            .chain(args.iter().map(|a| a.span()))
-            .collect();
-        let arg_ids: Vec<AstId> = first
-            .iter()
-            .map(|f| f.id)
-            .chain(args.iter().map(|a| a.id()))
+            .map(|f| f.site)
+            .chain(args.iter().map(ArgSite::of))
             .collect();
         match &fn_ty {
             TyTerm::Fn {
@@ -1322,7 +1477,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             } => {
                 let tys: Vec<InferTy> = param_tys.iter().map(|p| p.ty.clone()).collect();
-                if !self.check_args(name_str, &arg_types, &arg_spans, &arg_ids, &tys, call_span) {
+                if !self.check_args(name_str, &arg_types, &arg_sites, &tys, call_span) {
                     return Self::infer_error();
                 }
                 let effect = effect.clone();
@@ -1444,8 +1599,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         func: &str,
         arg_types: &[InferTy],
-        arg_spans: &[Span],
-        arg_ids: &[AstId],
+        arg_sites: &[ArgSite],
         param_tys: &[InferTy],
         call_span: Span,
     ) -> bool {
@@ -1461,17 +1615,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return false;
         }
         for (i, (at, pt)) in arg_types.iter().zip(param_tys.iter()).enumerate() {
-            let span = arg_spans.get(i).copied().unwrap_or(call_span);
-            match arg_ids.get(i) {
-                Some(&id) => self.convert_at(
-                    at,
-                    pt,
-                    ConversionSite {
-                        id,
-                        span,
-                        report: ConversionReport::Value,
-                    },
-                ),
+            match arg_sites.get(i) {
+                Some(&site) => self.convert_argument_at(at, pt, site),
                 None => {
                     if let Err(Mismatch { expected, got, .. }) = self.solver.unify(at, pt) {
                         self.error(
@@ -2279,14 +2424,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     _ => {
                         let lt = self.check_expr(left);
                         let rt = self.check_expr(right);
-                        self.check_callable(
-                            &rt,
-                            &[],
-                            &Some(lt),
-                            Some(left.span()),
-                            Some(left.id()),
-                            *span,
-                        )
+                        self.check_callable(&rt, &[], &Some(lt), Some(ArgSite::of(left)), *span)
                     }
                 };
                 self.record_ret(*id, ty)
@@ -2616,14 +2754,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             // Not a simple name - evaluate the function expression.
             let ft = self.check_expr(func);
             let resolved = self.solver.shallow_resolve_ty(&ft);
-            let pipe_left_span = pipe_left.map(|e| e.span());
-            let pipe_left_id = pipe_left.map(|e| e.id());
             return self.check_callable(
                 &resolved,
                 args,
                 &pipe_ty,
-                pipe_left_span,
-                pipe_left_id,
+                pipe_left.map(ArgSite::of),
                 call_span,
             );
         };
@@ -2654,8 +2789,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if let Some((resolved_qref, fn_sig)) = resolved {
             let first = pipe_left.zip(pipe_ty).map(|(e, ty)| FirstArg {
                 ty,
-                span: e.span(),
-                id: e.id(),
+                site: ArgSite::of(e),
             });
             return self.check_resolved_call(
                 resolved_qref,
@@ -2676,14 +2810,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let resolved = self.solver.shallow_resolve_ty(&var_ty);
             // Record callee's Fn type on the callee's AstId (indirect - no direct_calls entry).
             self.record(func.id(), resolved.clone());
-            let pipe_left_span = pipe_left.map(|e| e.span());
-            let pipe_left_id = pipe_left.map(|e| e.id());
             return self.check_callable(
                 &resolved,
                 args,
                 &pipe_ty,
-                pipe_left_span,
-                pipe_left_id,
+                pipe_left.map(ArgSite::of),
                 call_span,
             );
         }
@@ -2700,8 +2831,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         func_ty: &InferTy,
         args: &[Expr],
         pipe_ty: &Option<InferTy>,
-        pipe_left_span: Option<Span>,
-        pipe_left_id: Option<AstId>,
+        pipe_left: Option<ArgSite>,
         call_span: Span,
     ) -> InferTy {
         // Early exit for non-callable types.
@@ -2723,15 +2853,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
 
         let arg_types = self.check_args_in_order(func_ty, pipe_ty.as_ref(), args);
-        let arg_spans: Vec<Span> = pipe_left_span
-            .iter()
-            .copied()
-            .chain(args.iter().map(|a| a.span()))
-            .collect();
-        let arg_ids: Vec<AstId> = pipe_left_id
-            .iter()
-            .copied()
-            .chain(args.iter().map(|a| a.id()))
+        let arg_sites: Vec<ArgSite> = pipe_left
+            .into_iter()
+            .chain(args.iter().map(ArgSite::of))
             .collect();
 
         match func_ty {
@@ -2742,14 +2866,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             } => {
                 let tys: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
-                if !self.check_args(
-                    "<closure>",
-                    &arg_types,
-                    &arg_spans,
-                    &arg_ids,
-                    &tys,
-                    call_span,
-                ) {
+                if !self.check_args("<closure>", &arg_types, &arg_sites, &tys, call_span) {
                     return Self::infer_error();
                 }
                 let effect = effect.clone();

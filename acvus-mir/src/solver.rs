@@ -18,9 +18,9 @@ use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
-    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Phase, Poly, PolyTy, Repr, ReprVarId,
-    Scheme, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry, could_match_pattern,
-    matches_pattern,
+    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Mutability, Phase, Poly, PolyTy, Repr,
+    ReprVarId, Scheme, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
+    could_match_pattern, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -1144,7 +1144,13 @@ impl Terms {
         let mut trial = self.clone();
         let instance = trial.instantiate_open(signature, registry);
         trial
-            .join(call, &instance, Position::Value, JoinKind::Decision, registry)
+            .join(
+                call,
+                &instance,
+                Position::Value,
+                JoinKind::Decision,
+                registry,
+            )
             .is_ok()
     }
 }
@@ -1252,8 +1258,22 @@ impl Decision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Instance(InstanceKind),
-    /// `None` is identity.
-    Conversion(Option<QualifiedRef>),
+    Conversion(Conversion),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conversion {
+    Identity,
+    Cast(QualifiedRef),
+    /// The lowering does not cast the reference value: it runs `cast` on
+    /// the place the argument borrows before the call and `back` on the
+    /// same place after it, so the callee's writes land in the caller's
+    /// storage (scratchpad/tobe/reference-cast-in-place.md).
+    ThroughRef {
+        mutability: Mutability,
+        cast: QualifiedRef,
+        back: QualifiedRef,
+    },
 }
 
 /// Why a decision did not settle.
@@ -1290,6 +1310,16 @@ pub enum Unsettled {
         to: InferTy,
         rule: QualifiedRef,
     },
+    /// The answer is `Conversion::ThroughRef`, but the argument at the
+    /// decision's site is a reference value and not a borrow of a place,
+    /// so there is no storage to hold the callee's representation. The
+    /// solver does not see expressions; the checker raises this at the site
+    /// when it reads the answer.
+    ConversionNeedsPlace {
+        decision: DecisionId,
+        from: InferTy,
+        to: InferTy,
+    },
 }
 
 impl Unsettled {
@@ -1300,7 +1330,8 @@ impl Unsettled {
             | Unsettled::AmbiguousInstance { decision, .. }
             | Unsettled::NoConversion { decision, .. }
             | Unsettled::AmbiguousConversion { decision, .. }
-            | Unsettled::ConversionOpen { decision, .. } => *decision,
+            | Unsettled::ConversionOpen { decision, .. }
+            | Unsettled::ConversionNeedsPlace { decision, .. } => *decision,
         }
     }
 }
@@ -1694,12 +1725,14 @@ impl<'src> Solver<'src> {
     }
 
     /// A conversion is identity where the two join, the join written as
-    /// the answer; else the one declared cast, once both sides resolve.
+    /// the answer; else the one declared cast, once both sides resolve. A
+    /// pair of references is answered through the rule for what they name,
+    /// and needs the rule back as well.
     fn step_conversion(&mut self, id: DecisionId, from: &InferTy, to: &InferTy) -> Progress {
         if self.would_settle_join(from, to) {
             self.settle_join(from, to)
                 .expect("would_settle_join checked this join on a copy of the terms");
-            return Progress::Settled(Answer::Conversion(None));
+            return Progress::Settled(Answer::Conversion(Conversion::Identity));
         }
         let from_r = self.terms.shallow_resolve_ty(from);
         let to_r = self.terms.shallow_resolve_ty(to);
@@ -1717,13 +1750,55 @@ impl<'src> Solver<'src> {
             }
             return Progress::Unchanged;
         };
-        let fn_ref = rule.fn_ref;
+        let rule = rule.clone();
         let (inst_from, inst_to) = self.instantiate_poly_pair(&rule.from, &rule.to);
+        let Some(references) = ReferencePair::of(&from_r, &to_r) else {
+            return self.settle_cast(
+                id,
+                from,
+                to,
+                &inst_from,
+                &inst_to,
+                Conversion::Cast(rule.fn_ref),
+            );
+        };
+        let back = self.conversion_rules(&references.to.ty, &references.from.ty);
+        let [back] = back.as_slice() else {
+            if back.is_empty() {
+                return Progress::Failed(Unsettled::NoConversion {
+                    decision: id,
+                    from: self.terms.resolve_ty(&references.to.ty),
+                    to: self.terms.resolve_ty(&references.from.ty),
+                });
+            }
+            return Progress::Unchanged;
+        };
+        let answer = Conversion::ThroughRef {
+            mutability: references.mutability,
+            cast: rule.fn_ref,
+            back: back.fn_ref,
+        };
+        let inst_from = references.from_side(inst_from);
+        let inst_to = references.to_side(inst_to);
+        self.settle_cast(id, from, to, &inst_from, &inst_to, answer)
+    }
+
+    /// The rule's two sides, instantiated, joined with the decision's two
+    /// sides; the decision settles on `answer`.
+    fn settle_cast(
+        &mut self,
+        id: DecisionId,
+        from: &InferTy,
+        to: &InferTy,
+        inst_from: &InferTy,
+        inst_to: &InferTy,
+        answer: Conversion,
+    ) -> Progress {
         match self
-            .settle_join(from, &inst_from)
-            .and_then(|()| self.settle_join(&inst_to, to))
+            .settle_join(from, inst_from)
+            .and_then(|()| self.settle_join(inst_to, to))
         {
-            Ok(()) => Progress::Settled(Answer::Conversion(Some(fn_ref))),
+            Ok(()) => Progress::Settled(Answer::Conversion(answer)),
             Err(Mismatch { expected, got, .. }) => Progress::Failed(Unsettled::NoConversion {
                 decision: id,
                 from: expected,
@@ -1732,10 +1807,15 @@ impl<'src> Solver<'src> {
         }
     }
 
-    /// The declared conversions that could still take `from` to `to`.
+    /// The declared conversions that could still take `from` to `to`; for
+    /// a pair of references of one mutability, those that take what they
+    /// name.
     fn conversion_rules(&self, from: &InferTy, to: &InferTy) -> Vec<CastRule> {
         let from_r = self.terms.resolve_ty(from);
         let to_r = self.terms.resolve_ty(to);
+        if let Some(references) = ReferencePair::of(&from_r, &to_r) {
+            return self.conversion_rules(&references.from.ty, &references.to.ty);
+        }
         let shape = conversion_shape(&from_r, &to_r);
         let from_rules = match &from_r {
             TyTerm::UserDefined { id, .. } => self.registry.rules_from(*id),
@@ -2168,6 +2248,37 @@ where
     V: Phase,
 {
     TyTerm::Tuple(vec![from.clone(), to.clone()])
+}
+
+/// The two sides of a conversion decision when both are references of one
+/// mutability: the decision is answered through what they name.
+pub(crate) struct ReferencePair<'a> {
+    pub(crate) mutability: Mutability,
+    pub(crate) from: &'a TypeArg<Infer>,
+    pub(crate) to: &'a TypeArg<Infer>,
+}
+
+impl<'a> ReferencePair<'a> {
+    pub(crate) fn of(from: &'a InferTy, to: &'a InferTy) -> Option<Self> {
+        let (TyTerm::Ref(from_m, from), TyTerm::Ref(to_m, to)) = (from, to) else {
+            return None;
+        };
+        (from_m == to_m).then(|| Self {
+            mutability: *from_m,
+            from,
+            to,
+        })
+    }
+
+    /// The `from` reference with what it names replaced by `ty`.
+    fn from_side(&self, ty: InferTy) -> InferTy {
+        TyTerm::Ref(self.mutability, Box::new(TypeArg::new(self.from.repr, ty)))
+    }
+
+    /// The `to` reference with what it names replaced by `ty`.
+    fn to_side(&self, ty: InferTy) -> InferTy {
+        TyTerm::Ref(self.mutability, Box::new(TypeArg::new(self.to.repr, ty)))
+    }
 }
 
 /// A signature enters the solver with the slots that do not specialize

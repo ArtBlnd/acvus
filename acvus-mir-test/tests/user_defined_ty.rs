@@ -5,7 +5,7 @@
 //! predicate, and coercion behaviors.
 
 use acvus_mir::graph::types::QualifiedRef;
-use acvus_mir::solver::{Answer, Decision, Unsettled};
+use acvus_mir::solver::{Answer, Conversion, Decision, Unsettled};
 use acvus_mir::ty::{
     InferTy, PolyBuilder, PolyTy, Solver, Sources, Ty, TypeArg, TypeRegistry, lift_ty,
 };
@@ -214,7 +214,10 @@ fn coerce_list_to_iterator_completeness() {
     let unsettled = s.settle();
     assert!(unsettled.is_empty(), "{unsettled:?}");
     assert!(
-        matches!(s.answer(conversion), Some(Answer::Conversion(Some(_)))),
+        matches!(
+            s.answer(conversion),
+            Some(Answer::Conversion(Conversion::Cast(_)))
+        ),
         "List -> Iterator converts through the declared cast"
     );
 }

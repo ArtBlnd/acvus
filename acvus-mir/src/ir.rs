@@ -34,6 +34,22 @@ pub enum CastKind {
         instance: usize,
         callee_ty: Ty,
     },
+    /// At a call argument that borrows a place: `cast` runs on the place's
+    /// value before the call and `back` on it after, each stored back into
+    /// the place; the reference itself is not cast.
+    ThroughRef {
+        mutability: Mutability,
+        cast: ExternCast,
+        back: ExternCast,
+    },
+}
+
+/// A cast function at the type of one call of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternCast {
+    pub fn_ref: QualifiedRef,
+    pub instance: usize,
+    pub callee_ty: Ty,
 }
 
 /// The kind of named storage a Ref points to.

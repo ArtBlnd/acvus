@@ -7,7 +7,7 @@ use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
 use acvus_mir::ir::{Callee, CastKind};
-use acvus_mir::solver::{Answer, Decision, InstanceChoice, InstanceKind};
+use acvus_mir::solver::{Answer, Conversion, Decision, InstanceChoice, InstanceKind};
 use acvus_mir::ty::{
     CastRule, Effect, Instances, LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Scheme,
     Solver, Sources, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
@@ -205,7 +205,14 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     let mut coercions: Vec<String> = resolution
         .coercion_map
         .iter()
-        .map(|(_, CastKind::Extern { fn_ref, .. })| i.resolve(fn_ref.name).to_string())
+        .map(|(_, kind)| match kind {
+            CastKind::Extern { fn_ref, .. } => i.resolve(fn_ref.name).to_string(),
+            CastKind::ThroughRef { cast, back, .. } => format!(
+                "&{}/{}",
+                i.resolve(cast.fn_ref.name),
+                i.resolve(back.fn_ref.name)
+            ),
+        })
         .collect();
     coercions.sort();
     Ok(Checked {
@@ -301,7 +308,10 @@ fn s3_dependent_decisions_settle_in_one_call() {
             VEC_ARRAY_AT_SPECIALIZED
         )))
     );
-    assert_eq!(solver.answer(conversion), Some(Answer::Conversion(None)));
+    assert_eq!(
+        solver.answer(conversion),
+        Some(Answer::Conversion(Conversion::Identity))
+    );
     assert_eq!(
         solver.freeze_ty(&ret).expect("solved"),
         vec_of(&i, TypeArg::specialized(Ty::String))

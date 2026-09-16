@@ -2326,7 +2326,7 @@ impl Default for PolyBuilder {
 mod tests {
     use super::*;
     use crate::graph::types::QualifiedRef;
-    use crate::solver::{Answer, Decision};
+    use crate::solver::{Answer, Conversion, Decision};
     use acvus_utils::Interner;
 
     #[test]
@@ -2946,7 +2946,7 @@ mod tests {
         assert!(s.settle().is_empty());
         assert!(matches!(
             s.answer(conversion),
-            Some(Answer::Conversion(Some(_)))
+            Some(Answer::Conversion(Conversion::Cast(_)))
         ));
     }
 
@@ -2972,7 +2972,7 @@ mod tests {
         assert!(s.settle().is_empty());
         assert!(matches!(
             s.answer(conversion),
-            Some(Answer::Conversion(Some(_)))
+            Some(Answer::Conversion(Conversion::Cast(_)))
         ));
         assert_eq!(s.resolve_ty(&consumer_param), TyTerm::I64);
     }
@@ -2997,7 +2997,7 @@ mod tests {
         assert!(s.settle().is_empty());
         assert!(matches!(
             s.answer(conversion),
-            Some(Answer::Conversion(Some(_)))
+            Some(Answer::Conversion(Conversion::Cast(_)))
         ));
     }
 

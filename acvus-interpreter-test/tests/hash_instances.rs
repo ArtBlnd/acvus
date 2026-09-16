@@ -1,6 +1,7 @@
 //! A uniform value lent to a `#` parameter inside a running script
-//! (scenarios.md S12). Ignored until the compiler side exists; see the
-//! test's own doc for where.
+//! (scenarios.md S12, reference-cast-in-place.md): the argument's storage
+//! is cast into the callee's representation before the call and back
+//! after it, so the callee reads and writes the caller's storage.
 
 use acvus_extern::{Monomorphize, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Value};
@@ -33,10 +34,20 @@ where
     v.iter().fold(T::ZERO, |acc, x| acc.mul_add(*x, *x)).sqrt()
 }
 
+#[extern_fn(effect = pure)]
+fn scale<T>(v: &mut Vec<T>, k: T)
+where
+    T: Monomorphize<(f64,)> + Float,
+{
+    for x in v.iter_mut() {
+        *x = T::ZERO.mul_add(*x, k);
+    }
+}
+
 fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "t",
-        fns: [norm],
+        fns: [norm, scale],
     }
 }
 
@@ -49,20 +60,16 @@ async fn run(source: &str) -> Value {
         .value
 }
 
-/// A uniform `Vec<f64>` lent to a `#` parameter is materialized in its
-/// storage before the call and erased back after it (scenarios.md S12).
-/// Two compiler steps are not built, in this order. First, `norm`'s
-/// generic signature carries a uniform slot, not a `ρ`, so the checker
-/// reports `no instance of the signature has the call type Fn(&Vec<Float>)
-/// -> Float` before any conversion is considered; the `ρ` is deferred by
-/// both.md. Second, `check_args` in `acvus-mir/src/typeck.rs` registers a
-/// conversion on the argument expression, and a cast settled there is
-/// lowered as a value conversion of the reference itself, not of the place
-/// it names. Expected once both exist: `5.0`, with the storage of `x`
-/// uniform again afterwards.
+/// `vec([..])` runs the generic `std::vec`, so `x` holds a uniform
+/// `Vec<Float>`; `norm` exists only at `#f64` and takes `&Vec<#f64>`.
 #[tokio::test]
-#[ignore = "S12: the generic signature has no `ρ`, and the place rule for a lent argument is compiler work"]
 async fn a_uniform_vec_lent_to_a_specialized_parameter_is_converted_in_place() {
     let v = run("let x = vec([3.0, 4.0]); norm(&x)").await;
     assert_eq!(v.as_float(), 5.0);
+}
+
+#[tokio::test]
+async fn a_callee_s_writes_through_a_mutable_lend_survive_the_cast_back() {
+    let v = run("let x = vec([3.0, 4.0]); scale(&mut x, 2.0); norm(&x)").await;
+    assert_eq!(v.as_float(), 10.0);
 }

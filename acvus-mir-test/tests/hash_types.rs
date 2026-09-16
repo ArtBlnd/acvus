@@ -294,7 +294,14 @@ fn check_functions(
     let mut casts: Vec<String> = resolution
         .coercion_map
         .iter()
-        .map(|(_, CastKind::Extern { fn_ref, .. })| i.resolve(fn_ref.name).to_string())
+        .map(|(_, kind)| match kind {
+            CastKind::Extern { fn_ref, .. } => i.resolve(fn_ref.name).to_string(),
+            CastKind::ThroughRef { cast, back, .. } => format!(
+                "&{}/{}",
+                i.resolve(cast.fn_ref.name),
+                i.resolve(back.fn_ref.name)
+            ),
+        })
         .collect();
     casts.sort();
     let mut calls: Vec<(String, usize)> = resolution
@@ -537,10 +544,18 @@ where
     vec![T::ZERO; usize::try_from(n).expect("a count is not negative")]
 }
 
+#[extern_fn(effect = pure)]
+fn norm<T>(v: &Vec<T>) -> T
+where
+    T: Monomorphize<(f64,)> + Float,
+{
+    v.iter().fold(T::ZERO, |acc, x| acc.mul_add(*x, *x))
+}
+
 fn member_registry() -> Registry<TypesOnly> {
     extern_registry! {
         ns: "t",
-        fns: [dot, zeros],
+        fns: [dot, zeros, norm],
     }
 }
 
@@ -628,4 +643,40 @@ fn h11_a_uniform_value_reaches_a_specialized_instance_through_materialize() {
     assert_eq!(instance_of(&checked, "zeros"), 0);
     assert_eq!(instance_of(&checked, "vec"), 0);
     assert_eq!(checked.casts, vec!["materialize".to_string()]);
+}
+
+// -- H12: a cast at a reference argument applies to the place -------------
+
+/// `x` is uniform by `std::vec_array`; `norm` exists only at `#f64` and
+/// takes `&Vec<#f64>`. The conversion at `&x` is answered through the
+/// reference: `Vec::materialize` on the place before the call and
+/// `Vec::erase` back after it.
+#[test]
+fn h12_a_borrow_of_a_uniform_place_is_cast_in_place_for_a_specialized_parameter() {
+    let i = Interner::new();
+    let checked = check_members(&i, "x = vec([1.0, 2.0]); norm(&x)");
+    assert_eq!(checked.ret, Ty::Float);
+    assert_eq!(instance_of(&checked, "norm"), 0);
+    assert_eq!(checked.casts, vec!["&materialize/erase".to_string()]);
+}
+
+/// `r` holds a reference, not the storage: nothing here can hold the
+/// callee's representation, so the same conversion is refused at `r`.
+#[test]
+fn h13_a_reference_value_at_a_specialized_parameter_needs_a_place() {
+    let i = Interner::new();
+    let Externs {
+        functions, types, ..
+    } = Externs::combine(vec![acvus_ext::vec_registry(), member_registry()], &i)
+        .expect("registries combine");
+    let errs = match check_functions(&i, types, functions, "x = vec([1.0, 2.0]); r = &x; norm(r)") {
+        Ok(checked) => panic!("checked to {:?}", checked.ret),
+        Err(errs) => errs,
+    };
+    assert!(
+        errs.iter().any(|e| e.contains("&Vec<Float>")
+            && e.contains("&Vec<#Float>")
+            && e.contains("not a borrow of a place")),
+        "{errs:?}"
+    );
 }

@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::QualifiedRef;
 use crate::ir::{
-    Callee, CastKind, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget,
-    ValOrigin, ValueId,
+    Callee, CastKind, ExternCast, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg,
+    RefTarget, ValOrigin, ValueId,
 };
 use crate::ty::{Effect, Mutability, Ty, TypeArg};
 use crate::typeck::TypeResolution;
@@ -52,10 +52,33 @@ struct AnyorderScope {
 }
 
 /// A place a program names: where it is, and the type of what it holds.
+#[derive(Clone)]
 struct Place {
     target: RefTarget,
     path: Vec<PathSeg>,
     ty: Ty,
+}
+
+/// The arguments of one call, and the places the call leaves to restore.
+struct CallArgs {
+    values: Vec<ValueId>,
+    restores: Vec<PlaceRestore>,
+}
+
+/// A place cast into the callee's representation for the call: `back`
+/// runs on the value it holds afterwards, and the result is stored back.
+struct PlaceRestore {
+    span: Span,
+    place: Place,
+    back: ExternCast,
+}
+
+/// A place lent as the call argument at `id`.
+struct Lent {
+    id: AstId,
+    span: Span,
+    place: Place,
+    mutability: Mutability,
 }
 
 struct PlacePart {
@@ -1507,37 +1530,45 @@ impl<'a> Lowerer<'a> {
     /// If the coercion map indicates this span needs a cast, emit a Cast
     /// instruction and return the new ValueId. Otherwise return `val` as-is.
     fn maybe_cast(&mut self, id: AstId, span: Span, val: ValueId) -> ValueId {
-        if let Some(kind) = self.coercion_lookup.get(&id).cloned() {
-            match &kind {
-                CastKind::Extern {
+        match self.coercion_lookup.get(&id).cloned() {
+            Some(CastKind::Extern {
+                fn_ref,
+                instance,
+                callee_ty,
+            }) => self.emit_extern_cast(
+                span,
+                &ExternCast {
                     fn_ref,
                     instance,
                     callee_ty,
-                } => {
-                    // ExternCast -> lower as FunctionCall (pure, 1 arg, no context).
-                    // Derive ret_ty from callee_ty.
-                    let ret_ty = match callee_ty {
-                        Ty::Fn { ret, .. } => *ret.clone(),
-                        _ => panic!("CastKind::Extern callee_ty is not Fn: {callee_ty:?}"),
-                    };
-                    let cast_dst = self.alloc_val();
-                    self.set_val_type(cast_dst, ret_ty);
-                    self.emit_call(
-                        span,
-                        cast_dst,
-                        Callee::Extern {
-                            id: *fn_ref,
-                            instance: *instance,
-                        },
-                        callee_ty.clone(),
-                        vec![val],
-                    );
-                    cast_dst
-                }
+                },
+                val,
+            ),
+            Some(CastKind::ThroughRef { .. }) => {
+                unreachable!("a cast through a reference is lowered where the argument is lent")
             }
-        } else {
-            val
+            None => val,
         }
+    }
+
+    /// A call of a cast function on `val`: pure, one argument, no context.
+    fn emit_extern_cast(&mut self, span: Span, cast: &ExternCast, val: ValueId) -> ValueId {
+        let Ty::Fn { ret, .. } = &cast.callee_ty else {
+            panic!("a cast's callee_ty is not Fn: {:?}", cast.callee_ty)
+        };
+        let cast_dst = self.alloc_val();
+        self.set_val_type(cast_dst, (**ret).clone());
+        self.emit_call(
+            span,
+            cast_dst,
+            Callee::Extern {
+                id: cast.fn_ref,
+                instance: cast.instance,
+            },
+            cast.callee_ty.clone(),
+            vec![val],
+        );
+        cast_dst
     }
 
     // --- Expression lowering ---
@@ -2193,26 +2224,109 @@ impl<'a> Lowerer<'a> {
 
     /// The arguments of a call: a `&place` argument is lent, any other is
     /// a value.
-    fn lower_call_args(&mut self, args: &[Expr]) -> Vec<ValueId> {
-        args.iter()
-            .map(|a| match a {
+    fn lower_call_args<'e, I>(&mut self, args: I) -> CallArgs
+    where
+        I: Iterator<Item = &'e Expr>,
+    {
+        let mut call = CallArgs {
+            values: Vec::new(),
+            restores: Vec::new(),
+        };
+        for a in args {
+            let value = match a {
                 Expr::Borrow {
+                    id,
                     place,
                     mutable,
                     span,
-                    ..
                 } => {
                     let mutability = if *mutable {
                         Mutability::Mut
                     } else {
                         Mutability::Shared
                     };
-                    let place = self.place(place);
-                    self.emit_ref(*span, place.target, place.path, mutability, place.ty)
+                    let lent = Lent {
+                        id: *id,
+                        span: *span,
+                        place: self.place(place),
+                        mutability,
+                    };
+                    self.lend_place(lent, &mut call.restores)
                 }
                 other => self.lower_expr(other),
-            })
-            .collect()
+            };
+            call.values.push(value);
+        }
+        call
+    }
+
+    /// The reference a lent argument passes. A conversion the checker
+    /// answered through the reference casts the place's value into the
+    /// callee's representation first, and leaves the place to restore
+    /// after the call; a conversion of the reference itself casts the
+    /// reference.
+    fn lend_place(&mut self, lent: Lent, restores: &mut Vec<PlaceRestore>) -> ValueId {
+        let Lent {
+            id,
+            span,
+            place,
+            mutability,
+        } = lent;
+        match self.coercion_lookup.get(&id).cloned() {
+            Some(CastKind::ThroughRef { cast, back, .. }) => {
+                let held = self.cast_place(span, &place, &cast);
+                restores.push(PlaceRestore {
+                    span,
+                    place: Place {
+                        ty: held.clone(),
+                        ..place.clone()
+                    },
+                    back,
+                });
+                self.emit_ref(span, place.target, place.path, mutability, held)
+            }
+            Some(CastKind::Extern {
+                fn_ref,
+                instance,
+                callee_ty,
+            }) => {
+                let reference = self.emit_ref(span, place.target, place.path, mutability, place.ty);
+                self.emit_extern_cast(
+                    span,
+                    &ExternCast {
+                        fn_ref,
+                        instance,
+                        callee_ty,
+                    },
+                    reference,
+                )
+            }
+            None => self.emit_ref(span, place.target, place.path, mutability, place.ty),
+        }
+    }
+
+    /// `place = cast(place)`: the type the place holds afterwards.
+    fn cast_place(&mut self, span: Span, place: &Place, cast: &ExternCast) -> Ty {
+        let value = self.emit_take(span, place.target, place.path.clone(), place.ty.clone());
+        let converted = self.emit_extern_cast(span, cast, value);
+        self.emit_assign(span, place.target, place.path.clone(), converted);
+        self.slot_type(converted)
+    }
+
+    /// A call with its arguments; every place cast for the callee is
+    /// restored after it.
+    fn emit_call_with(
+        &mut self,
+        span: Span,
+        dst: ValueId,
+        callee: Callee,
+        callee_ty: Ty,
+        args: CallArgs,
+    ) {
+        self.emit_call(span, dst, callee, callee_ty, args.values);
+        for restore in args.restores {
+            self.cast_place(restore.span, &restore.place, &restore.back);
+        }
     }
 
     /// `recv.f(args)`: `f(recv', args)`, the receiver lent when `f`'s first
@@ -2233,19 +2347,19 @@ impl<'a> Lowerer<'a> {
             },
             _ => None,
         };
+        let mut restores = Vec::new();
         let first = match lent {
             // A receiver that is already a reference value is passed as it
             // is (RFC-0030).
             Some(_) if !crate::typeck::is_place(receiver) => self.lower_expr(receiver),
             Some(mutability) => {
-                let place = self.place(receiver);
-                self.emit_ref(
-                    receiver.span(),
-                    place.target,
-                    place.path,
+                let lent = Lent {
+                    id: receiver.id(),
+                    span: receiver.span(),
+                    place: self.place(receiver),
                     mutability,
-                    place.ty,
-                )
+                };
+                self.lend_place(lent, &mut restores)
             }
             None => self.lower_expr(receiver),
         };
@@ -2258,13 +2372,14 @@ impl<'a> Lowerer<'a> {
                 }
             };
         }
-        let mut arg_regs = vec![first];
-        arg_regs.extend(self.lower_call_args(args));
+        let mut call = self.lower_call_args(args.iter());
+        call.values.insert(0, first);
+        call.restores.splice(0..0, restores);
         let dst = self.alloc_typed(call_id);
         match self.resolution.direct_calls.get(&callee_id).copied() {
             Some(callee) => {
                 self.set_origin(dst, ValOrigin::Call(callee.id().name));
-                self.emit_call(call_span, dst, callee, callee_ty, arg_regs);
+                self.emit_call_with(call_span, dst, callee, callee_ty, call);
             }
             None => {
                 self.emit_inst(call_span, InstKind::Poison { dst });
@@ -2302,13 +2417,7 @@ impl<'a> Lowerer<'a> {
             );
             return dst;
         }
-        let mut arg_regs: Vec<ValueId> =
-            Vec::with_capacity(args.len() + pipe_left.is_some() as usize);
-        if let Some(left) = pipe_left {
-            let val = self.lower_expr(left);
-            arg_regs.push(val);
-        }
-        arg_regs.extend(self.lower_call_args(args));
+        let call = self.lower_call_args(pipe_left.map(|left| &**left).into_iter().chain(args));
         let dst = self.alloc_typed(call_id);
 
         // Named function call (Ident).
@@ -2327,7 +2436,7 @@ impl<'a> Lowerer<'a> {
                     // 1. Direct call - typeck resolved this callee to a named function.
                     if let Some(callee) = self.resolution.direct_calls.get(&func.id()).copied() {
                         let callee_ty = self.type_of_id(func.id());
-                        self.emit_call(call_span, dst, callee, callee_ty, arg_regs);
+                        self.emit_call_with(call_span, dst, callee, callee_ty, call);
                         return dst;
                     }
 
@@ -2343,12 +2452,12 @@ impl<'a> Lowerer<'a> {
                             closure_ty.clone(),
                         );
                         self.set_origin(closure_reg, ValOrigin::Named(name.name));
-                        self.emit_call(
+                        self.emit_call_with(
                             call_span,
                             dst,
                             Callee::Indirect(closure_reg),
                             closure_ty,
-                            arg_regs,
+                            call,
                         );
                         return dst;
                     }
@@ -2370,7 +2479,7 @@ impl<'a> Lowerer<'a> {
             .get(&func_reg)
             .expect("indirect callee must have val_type")
             .clone();
-        self.emit_call(call_span, dst, Callee::Indirect(func_reg), fn_ty, arg_regs);
+        self.emit_call_with(call_span, dst, Callee::Indirect(func_reg), fn_ty, call);
         dst
     }
 

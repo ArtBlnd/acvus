@@ -52,6 +52,12 @@ pub enum MirErrorKind {
         to: Ty,
         rules: Vec<QualifiedRef>,
     },
+    /// The conversion rewrites the place a reference names, and the
+    /// argument is a reference value with no place behind it.
+    ConversionNeedsPlace {
+        from: Ty,
+        to: Ty,
+    },
     /// `?` where nothing returns: a template body (RFC-0038).
     TryOutsideFunction,
     /// `?` on a value that is neither a `Result` nor an `Option`.
@@ -328,6 +334,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     write!(f, "{}", interner.resolve(rule.name))?;
                 }
                 Ok(())
+            }
+            MirErrorKind::ConversionNeedsPlace { from, to } => {
+                write!(
+                    f,
+                    "converting {} to {} rewrites the place the reference names, and this argument is a reference value, not a borrow of a place",
+                    from.display(interner),
+                    to.display(interner)
+                )
             }
             MirErrorKind::TryOutsideFunction => {
                 write!(
