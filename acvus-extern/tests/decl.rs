@@ -672,6 +672,37 @@ fn stand_ins_name_their_positions() {
     );
 }
 
+#[derive(TyArg, Debug, PartialEq)]
+enum Shape {
+    Dot,
+    Circle(i64),
+    Rect { w: i64, h: i64 },
+}
+
+#[test]
+fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
+    let i = Interner::new();
+    let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts::default());
+    let rect = PolyTy::Object(
+        [(i.intern("w"), PolyTy::Int), (i.intern("h"), PolyTy::Int)]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(
+        <Shape as TyArg>::poly_ty(&i, &vars),
+        PolyTy::Enum {
+            name: i.intern("Shape"),
+            variants: [
+                (i.intern("Dot"), None),
+                (i.intern("Circle"), Some(Box::new(PolyTy::Int))),
+                (i.intern("Rect"), Some(Box::new(rect))),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    );
+}
+
 // -- Monomorphize -------------------------------------------------------
 
 /// Twice the value, as each member type defines it.

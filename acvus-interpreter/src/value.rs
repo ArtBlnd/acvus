@@ -15,7 +15,7 @@ use rustc_hash::FxHashMap;
 use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
 use crate::journal::InMemoryContext;
-use crate::vtable::{Composite, Header, Slot, VtableRegistry, Vtable};
+use crate::vtable::{Composite, Header, Slot, Vtable, VtableRegistry};
 
 // -- Value ------------------------------------------------------------
 
@@ -287,10 +287,8 @@ pub struct Tuple(pub Vec<Value>);
 /// (RFC-0032).
 pub type Object = acvus_extern::Obj<Value>;
 
-pub struct VariantValue {
-    pub tag: Astr,
-    pub payload: Option<Box<Value>>,
-}
+/// The language's variant is the extern contract's `Variant` at `V = Value`.
+pub type VariantValue = acvus_extern::Variant<Value>;
 
 /// The language's `Option<T>` is Rust's `Option` at `T = Value`, so it
 /// crosses the extern boundary as itself (RFC-0022).
@@ -429,13 +427,17 @@ static VARIANT: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<VariantValue>("Variant", Composite::Variant, Some(dbg_variant)));
 static OPTION: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<OptionValue>("Option", Composite::Option, Some(dbg_option)));
-static FN: LazyLock<Vtable> = LazyLock::new(|| vtable::<FnValue>("Fn", Composite::Fn, Some(dbg_fn)));
+static FN: LazyLock<Vtable> =
+    LazyLock::new(|| vtable::<FnValue>("Fn", Composite::Fn, Some(dbg_fn)));
 static HANDLE: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None));
 
 /// Every composite vtable, in the order of `Composite`.
-pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 8]> =
-    LazyLock::new(|| [&STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &OPTION, &FN, &HANDLE]);
+pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 8]> = LazyLock::new(|| {
+    [
+        &STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &OPTION, &FN, &HANDLE,
+    ]
+});
 
 // -- Constructors -----------------------------------------------------
 

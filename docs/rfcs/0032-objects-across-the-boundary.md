@@ -39,7 +39,7 @@ value with the runtime's own shape crosses for free.
 
 ## Not built
 
-- No enum crossing: a Rust enum is not an object.
+- No enum crossing: a Rust enum is not an object (built in RFC-0036).
 - No renamed or skipped fields: a field is a key of the same name.
 - No object with a generic field: a structural object has no type
   parameters, as before.

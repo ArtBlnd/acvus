@@ -2,7 +2,8 @@
 //!
 //! - `#[extern_fn]`: a Rust function declares an ExternFn.
 //! - `#[derive(ExternType)]`: a Rust struct declares an extension type.
-//! - `#[derive(TyArg)]`: a Rust struct declares a structural object type.
+//! - `#[derive(TyArg)]`: a Rust struct declares a structural object type; a
+//!   Rust enum declares the language's enum of the same name.
 //! - `extern_registry!`: the items one registry contributes.
 
 use proc_macro::TokenStream;
@@ -743,43 +744,46 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new(
             ident.span(),
-            "a structural object has no generic parameters",
+            "a structural type has no generic parameters",
         ));
     }
-    let syn::Data::Struct(data) = &input.data else {
-        return Err(syn::Error::new(
+    match &input.data {
+        syn::Data::Struct(data) => {
+            let syn::Fields::Named(fields) = &data.fields else {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    "TyArg is derived on a struct with named fields, one per object field",
+                ));
+            };
+            let shape = ObjectShape::of(fields);
+            let ty = shape.poly_ty();
+            let erase = shape.erase(quote! { self });
+            let materialize = shape.materialize(quote! { __value }, quote! { Self });
+            Ok(cross_impl(ident, ty, erase, materialize))
+        }
+        syn::Data::Enum(data) => generate_enum_ty_arg(ident, data),
+        syn::Data::Union(_) => Err(syn::Error::new(
             ident.span(),
-            "TyArg is derived on a struct",
-        ));
-    };
-    let syn::Fields::Named(fields) = &data.fields else {
-        return Err(syn::Error::new(
-            ident.span(),
-            "TyArg is derived on a struct with named fields, one per object field",
-        ));
-    };
-    let field_idents: Vec<&Ident> = fields
-        .named
-        .iter()
-        .map(|f| f.ident.as_ref().expect("named"))
-        .collect();
-    let field_names: Vec<String> = field_idents.iter().map(|f| f.to_string()).collect();
-    let field_tys: Vec<&Type> = fields.named.iter().map(|f| &f.ty).collect();
+            "TyArg is derived on a struct or an enum",
+        )),
+    }
+}
 
-    Ok(quote! {
+/// The `TyArg` and `Cross` impls of a derived type, given its poly type
+/// and its two crossings.
+fn cross_impl(
+    ident: &Ident,
+    ty: proc_macro2::TokenStream,
+    erase: proc_macro2::TokenStream,
+    materialize: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    quote! {
         impl ::acvus_extern::TyArg for #ident {
             fn poly_ty(
                 __i: &::acvus_extern::Interner,
                 __vars: &::acvus_extern::PolyVars,
             ) -> ::acvus_extern::PolyTy {
-                ::acvus_extern::PolyTy::Object(
-                    [#((
-                        __i.intern(#field_names),
-                        <#field_tys as ::acvus_extern::TyArg>::poly_ty(__i, __vars),
-                    )),*]
-                    .into_iter()
-                    .collect(),
-                )
+                #ty
             }
         }
 
@@ -788,34 +792,215 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             __R: ::acvus_extern::Runtime,
         {
             fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
-                let mut __fields = ::acvus_extern::FxHashMap::default();
-                #(
-                    __fields.insert(
-                        __rt.symbol(#field_names),
-                        ::acvus_extern::erase_field::<#field_tys, __R>(__rt, self.#field_idents),
-                    );
-                )*
-                // SAFETY: the language's object is `Obj<Value>` (RFC-0032).
-                unsafe {
-                    __rt.erase::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(
-                        ::acvus_extern::Obj(__fields),
-                    )
-                }
+                #erase
             }
 
             fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
-                // SAFETY: as in `erase`.
-                let ::acvus_extern::Obj(mut __fields) = unsafe {
-                    __rt.materialize::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(__value)
-                };
-                Self {
-                    #(#field_idents: ::acvus_extern::materialize_field::<#field_tys, __R>(
-                        __rt, &mut __fields, #field_names,
-                    ),)*
-                }
+                #materialize
             }
         }
-    })
+    }
+}
+
+/// Named fields as an object: the struct's, or a struct variant's.
+struct ObjectShape<'a> {
+    idents: Vec<&'a Ident>,
+    names: Vec<String>,
+    tys: Vec<&'a Type>,
+}
+
+impl<'a> ObjectShape<'a> {
+    fn of(fields: &'a syn::FieldsNamed) -> Self {
+        let idents: Vec<&Ident> = fields
+            .named
+            .iter()
+            .map(|f| f.ident.as_ref().expect("named"))
+            .collect();
+        let names = idents.iter().map(|f| f.to_string()).collect();
+        let tys = fields.named.iter().map(|f| &f.ty).collect();
+        Self { idents, names, tys }
+    }
+
+    fn poly_ty(&self) -> proc_macro2::TokenStream {
+        let (names, tys) = (&self.names, &self.tys);
+        quote! {
+            ::acvus_extern::PolyTy::Object(
+                [#((
+                    __i.intern(#names),
+                    <#tys as ::acvus_extern::TyArg>::poly_ty(__i, __vars),
+                )),*]
+                .into_iter()
+                .collect(),
+            )
+        }
+    }
+
+    /// Erases the fields reached as `#owner.field` into the runtime's object.
+    fn erase(&self, owner: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
+        quote! {{
+            let mut __fields = ::acvus_extern::FxHashMap::default();
+            #(
+                __fields.insert(
+                    __rt.symbol(#names),
+                    ::acvus_extern::erase_field::<#tys, __R>(__rt, #owner.#idents),
+                );
+            )*
+            // SAFETY: the language's object is `Obj<Value>` (RFC-0032).
+            unsafe {
+                __rt.erase::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(
+                    ::acvus_extern::Obj(__fields),
+                )
+            }
+        }}
+    }
+
+    /// Erases fields already bound to their own idents (a matched variant).
+    fn erase_bound(&self) -> proc_macro2::TokenStream {
+        let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
+        quote! {{
+            let mut __fields = ::acvus_extern::FxHashMap::default();
+            #(
+                __fields.insert(
+                    __rt.symbol(#names),
+                    ::acvus_extern::erase_field::<#tys, __R>(__rt, #idents),
+                );
+            )*
+            // SAFETY: the language's object is `Obj<Value>` (RFC-0032).
+            unsafe {
+                __rt.erase::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(
+                    ::acvus_extern::Obj(__fields),
+                )
+            }
+        }}
+    }
+
+    /// Materializes `#value` into `#path { fields }`.
+    fn materialize(
+        &self,
+        value: proc_macro2::TokenStream,
+        path: proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
+        let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
+        quote! {{
+            // SAFETY: as in `erase`.
+            let ::acvus_extern::Obj(mut __fields) = unsafe {
+                __rt.materialize::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(#value)
+            };
+            #path {
+                #(#idents: ::acvus_extern::materialize_field::<#tys, __R>(
+                    __rt, &mut __fields, #names,
+                ),)*
+            }
+        }}
+    }
+}
+
+/// A Rust enum is the language's enum of the same name: a unit variant has
+/// no payload, a one-field tuple variant's payload is that field, and a
+/// struct variant's payload is the object its fields spell.
+fn generate_enum_ty_arg(
+    ident: &Ident,
+    data: &syn::DataEnum,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let name = ident.to_string();
+    let mut variant_tys = Vec::new();
+    let mut erase_arms = Vec::new();
+    let mut materialize_arms = Vec::new();
+    for variant in &data.variants {
+        let v = &variant.ident;
+        let tag = v.to_string();
+        match &variant.fields {
+            syn::Fields::Unit => {
+                variant_tys.push(quote! { (__i.intern(#tag), ::core::option::Option::None) });
+                erase_arms
+                    .push(quote! { Self::#v => (__rt.symbol(#tag), ::core::option::Option::None) });
+                materialize_arms.push(quote! { if __tag == __rt.symbol(#tag) { Self::#v } });
+            }
+            syn::Fields::Unnamed(fields) => {
+                let mut tys = fields.unnamed.iter().map(|f| &f.ty);
+                let (Some(ty), None) = (tys.next(), tys.next()) else {
+                    return Err(syn::Error::new_spanned(
+                        &variant.fields,
+                        "a tuple variant has one field, the variant's payload",
+                    ));
+                };
+                variant_tys.push(quote! {
+                    (
+                        __i.intern(#tag),
+                        ::core::option::Option::Some(::std::boxed::Box::new(
+                            <#ty as ::acvus_extern::TyArg>::poly_ty(__i, __vars),
+                        )),
+                    )
+                });
+                erase_arms.push(quote! {
+                    Self::#v(__payload) => (
+                        __rt.symbol(#tag),
+                        ::core::option::Option::Some(::std::boxed::Box::new(
+                            ::acvus_extern::erase_field::<#ty, __R>(__rt, __payload),
+                        )),
+                    )
+                });
+                materialize_arms.push(quote! {
+                    if __tag == __rt.symbol(#tag) {
+                        Self::#v(::acvus_extern::materialize_payload::<#ty, __R>(
+                            __rt, __payload, #tag,
+                        ))
+                    }
+                });
+            }
+            syn::Fields::Named(fields) => {
+                let shape = ObjectShape::of(fields);
+                let idents = &shape.idents;
+                let ty = shape.poly_ty();
+                let erase = shape.erase_bound();
+                let materialize = shape.materialize(
+                    quote! { ::acvus_extern::take_payload(__payload, #tag) },
+                    quote! { Self::#v },
+                );
+                variant_tys.push(quote! {
+                    (__i.intern(#tag), ::core::option::Option::Some(::std::boxed::Box::new(#ty)))
+                });
+                erase_arms.push(quote! {
+                    Self::#v { #(#idents),* } => (
+                        __rt.symbol(#tag),
+                        ::core::option::Option::Some(::std::boxed::Box::new(#erase)),
+                    )
+                });
+                materialize_arms.push(quote! { if __tag == __rt.symbol(#tag) { #materialize } });
+            }
+        }
+    }
+
+    let ty = quote! {
+        ::acvus_extern::PolyTy::Enum {
+            name: __i.intern(#name),
+            variants: [#(#variant_tys),*].into_iter().collect(),
+        }
+    };
+    let erase = quote! {{
+        let (__tag, __payload) = match self { #(#erase_arms,)* };
+        // SAFETY: the language's variant is `Variant<Value>`.
+        unsafe {
+            __rt.erase::<::acvus_extern::Variant<<__R as ::acvus_extern::Runtime>::Value>>(
+                ::acvus_extern::Variant { tag: __tag, payload: __payload },
+            )
+        }
+    }};
+    let materialize = quote! {{
+        // SAFETY: as in `erase`.
+        let ::acvus_extern::Variant { tag: __tag, payload: __payload } = unsafe {
+            __rt.materialize::<::acvus_extern::Variant<<__R as ::acvus_extern::Runtime>::Value>>(__value)
+        };
+        #(#materialize_arms else)*
+        {
+            panic!(
+                "a variant not in enum `{}`: the checker admits only variants of the declared enum",
+                #name,
+            )
+        }
+    }};
+    Ok(cross_impl(ident, ty, erase, materialize))
 }
 
 // -- extern_registry! ------------------------------------------------

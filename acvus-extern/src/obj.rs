@@ -13,6 +13,12 @@ use crate::ty_arg::TyVar;
 /// An object as the runtime holds it: field name to value.
 pub struct Obj<V>(pub FxHashMap<Astr, V>);
 
+/// A variant as the runtime holds it: the tag and its payload, if any.
+pub struct Variant<V> {
+    pub tag: Astr,
+    pub payload: Option<Box<V>>,
+}
+
 /// A type that crosses the boundary by conversion: its runtime value has
 /// another shape than the Rust value.
 pub trait Cross<Rt>: Sized
@@ -114,4 +120,28 @@ where
     });
     // SAFETY: as in `erase_field`.
     unsafe { (&Crossing::<T, Rt>::new()).materialize(rt, value) }
+}
+
+/// # Panics
+/// When the variant has no payload: the checker admits only variants of
+/// the declared enum.
+pub fn take_payload<V>(payload: Option<Box<V>>, tag: &str) -> V {
+    let Some(payload) = payload else {
+        panic!(
+            "variant `{tag}` has no payload: the checker admits only variants of the declared enum"
+        )
+    };
+    *payload
+}
+
+/// The payload of a derived variant, crossed by its own type.
+pub fn materialize_payload<T, Rt>(rt: &Rt, payload: Option<Box<Rt::Value>>, tag: &str) -> T
+where
+    T: Send + Sync + 'static,
+    Rt: Runtime,
+{
+    #[allow(unused_imports)]
+    use crate::repr::{AsCross as _, AsIs as _};
+    // SAFETY: as in `erase_field`.
+    unsafe { (&Crossing::<T, Rt>::new()).materialize(rt, take_payload(payload, tag)) }
 }

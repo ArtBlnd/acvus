@@ -7,7 +7,6 @@
 extern crate self as acvus_extern;
 
 pub mod core;
-pub mod repr;
 mod effect;
 mod error;
 mod func;
@@ -16,9 +15,10 @@ mod identity;
 mod len;
 mod obj;
 mod reference;
-mod space;
 mod registry;
+pub mod repr;
 mod runtime;
+mod space;
 mod ty_arg;
 mod vec;
 
@@ -28,15 +28,17 @@ pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{ExternEntry, ExternHandler, MonoHandler, MonoInstance};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
-pub use obj::{Cross, Obj, erase_field, materialize_field};
+pub use obj::{
+    Cross, Obj, Variant, erase_field, materialize_field, materialize_payload, take_payload,
+};
 pub use reference::{Carried, Ref, RefMut};
-pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
-pub use repr::{AsCross, AsIs, Crossing, HasRepr};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
     Manifest, Registry, SharedSignature, SignatureDecl,
 };
+pub use repr::{AsCross, AsIs, Crossing, HasRepr};
 pub use runtime::{Runtime, TypesOnly};
+pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use ty_arg::{Monomorphize, PolyVars, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;
 

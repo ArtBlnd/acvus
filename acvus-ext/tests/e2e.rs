@@ -22,6 +22,26 @@ async fn run_ext(
     context: TypedContext,
     registries: Vec<Registry<AcvusRuntime>>,
 ) -> Value {
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
+    run_parsed(interner, ast, context, registries).await
+}
+
+async fn run_ext_template(
+    interner: &Interner,
+    source: &str,
+    context: TypedContext,
+    registries: Vec<Registry<AcvusRuntime>>,
+) -> Value {
+    let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse"));
+    run_parsed(interner, ast, context, registries).await
+}
+
+async fn run_parsed(
+    interner: &Interner,
+    ast: ParsedAst,
+    context: TypedContext,
+    registries: Vec<Registry<AcvusRuntime>>,
+) -> Value {
     let mut all_registries = std_registries::<AcvusRuntime>();
     all_registries.extend(registries);
     let Externs {
@@ -44,9 +64,7 @@ async fn run_ext(
         let mut pb = acvus_mir::ty::PolyBuilder::new();
         functions.push(Function {
             qref: entry_qref,
-            kind: FnKind::Local(ParsedAst::Script(
-                acvus_ast::parse_script(interner, source).expect("parse"),
-            )),
+            kind: FnKind::Local(ast),
             ty: acvus_mir::ty::PolyTy::Fn {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
@@ -470,6 +488,81 @@ async fn a_container_of_objects_converts_each_element() {
     )
     .await;
     assert_eq!(v.as_int(), 1);
+}
+
+#[derive(acvus_extern::TyArg)]
+enum Shape {
+    Dot,
+    Circle(i64),
+    Rect { w: i64, h: i64 },
+}
+
+#[extern_fn(effect = pure)]
+fn shape(kind: i64) -> Shape {
+    match kind {
+        0 => Shape::Dot,
+        1 => Shape::Circle(5),
+        _ => Shape::Rect { w: 2, h: 3 },
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn area(s: Shape) -> i64 {
+    match s {
+        Shape::Dot => 0,
+        Shape::Circle(r) => r * r,
+        Shape::Rect { w, h } => w * h,
+    }
+}
+
+fn enum_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [shape, area],
+    }
+}
+
+#[tokio::test]
+async fn an_enum_returned_by_an_extern_fn_is_matched_by_the_script() {
+    let i = Interner::new();
+    let regs = || vec![enum_registry()];
+    let src = |kind: i64| {
+        [
+            &format!("{{{{ s = shape({kind}) }}}}"),
+            "{{ Shape::Circle(r) = s }}{{ r.to_string() }}",
+            "{{ Shape::Rect(d) = }}{{ d.w.to_string() }}x{{ d.h.to_string() }}",
+            "{{ Shape::Dot = }}dot{{_}}?{{/}}",
+        ]
+        .concat()
+    };
+    let v = run_ext_template(&i, &src(0), TypedContext::default(), regs()).await;
+    assert_str(&v, "dot");
+    let v = run_ext_template(&i, &src(1), TypedContext::default(), regs()).await;
+    assert_str(&v, "5");
+    let v = run_ext_template(&i, &src(2), TypedContext::default(), regs()).await;
+    assert_str(&v, "2x3");
+}
+
+#[tokio::test]
+async fn an_enum_built_by_the_script_crosses_into_the_extern_fn() {
+    let i = Interner::new();
+    let regs = || vec![enum_registry()];
+    let v = run_ext_template(
+        &i,
+        "{{ a = area(Shape::Circle(3)) }}{{ a.to_string() }}",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "9");
+    let v = run_ext_template(
+        &i,
+        "{{ a = area(shape(2)) }}{{ a.to_string() }}",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_str(&v, "6");
 }
 
 #[tokio::test]

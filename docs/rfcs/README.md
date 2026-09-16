@@ -81,3 +81,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0033](0033-space.md) | A space holds a context as its type lays it out and its ops change it | Accepted (first instance) |
 | [RFC-0034](0034-vec.md) | The dynamic-length sequence is `Vec<T>` on both sides | Accepted |
 | [RFC-0035](0035-runtime-parameter-by-use.md) | An extern fn takes its runtime only when it uses it | Accepted |
+| [RFC-0036](0036-enums-across-the-boundary.md) | A Rust enum crosses the boundary as the language's enum | Accepted |
