@@ -27,7 +27,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: infer_params,

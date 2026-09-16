@@ -11,7 +11,7 @@ use acvus_mir::ty::{
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::handler::{ExternEntry, MonoHandler, MonoInstance};
+use crate::handler::{ExternHandler, Instance, Instances};
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -46,10 +46,10 @@ pub struct Manifest {
     pub fns: Vec<FnDecl>,
 }
 
-/// One declared function with its handler, as `#[extern_fn]` produces it.
+/// One declared function with its instances, as `#[extern_fn]` produces it.
 pub struct ExternFn<R: Runtime> {
     pub decl: FnDecl,
-    pub handler: ExternEntry<R>,
+    pub instances: Instances<R>,
 }
 
 pub trait ExternTypeDecl {
@@ -75,12 +75,12 @@ pub trait SharedSignature {
 pub trait HasInstance<Sig> {}
 impl<T, Sig> HasInstance<Sig> for T {}
 
-pub type Handlers<R> = FxHashMap<QualifiedRef, ExternEntry<R>>;
+pub type Handlers<R> = FxHashMap<QualifiedRef, Vec<ExternHandler<R>>>;
 
 /// What one registry contributes.
 pub struct Contribution<R: Runtime> {
     pub manifest: Manifest,
-    pub handlers: Handlers<R>,
+    pub instances: FxHashMap<QualifiedRef, Instances<R>>,
     pub space: FxHashMap<QualifiedRef, SpaceHooks<R>>,
 }
 
@@ -166,7 +166,7 @@ pub struct Externs<R: Runtime> {
 struct Collected<R: Runtime> {
     decl: SignatureDecl,
     instance_types: Vec<PolyTy>,
-    instances: Vec<MonoInstance<R>>,
+    instances: Vec<Instance<R>>,
     casts: Vec<CastRule>,
 }
 
@@ -197,7 +197,7 @@ impl<R: Runtime> Externs<R> {
         for c in contributions {
             let Contribution {
                 manifest,
-                handlers,
+                instances,
                 space: hooks,
             } = c;
             for decl in manifest.types {
@@ -215,20 +215,20 @@ impl<R: Runtime> Externs<R> {
                     },
                 );
             }
-            plain_manifests.push((manifest.fns, handlers));
+            plain_manifests.push((manifest.fns, instances));
         }
-        for (fns, mut handlers) in plain_manifests {
+        for (fns, mut instances) in plain_manifests {
             for decl in fns {
-                let handler = handlers
+                let instances = instances
                     .remove(&decl.qref)
                     .unwrap_or_else(|| panic!("no handler for declared {:?}", decl.qref));
                 match decl.instance_of {
-                    Some(sig) => add_instance(&mut signatures, decl, handler, sig)?,
+                    Some(sig) => add_instance(&mut signatures, decl, instances, sig)?,
                     None => {
                         if !names.insert(decl.qref) {
                             return Err(CombineError::DuplicateName(decl.qref));
                         }
-                        plain.push(ExternFn { decl, handler });
+                        plain.push(ExternFn { decl, instances });
                     }
                 }
             }
@@ -236,7 +236,11 @@ impl<R: Runtime> Externs<R> {
 
         let mut functions = Vec::new();
         let mut handlers: Handlers<R> = FxHashMap::default();
-        for ExternFn { mut decl, handler } in plain {
+        for ExternFn {
+            mut decl,
+            instances,
+        } in plain
+        {
             for (i, required) in decl.requires.iter().enumerate() {
                 let Some(sig) = required else {
                     continue;
@@ -257,11 +261,11 @@ impl<R: Runtime> Externs<R> {
                 qref: decl.qref,
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
-                    instances: vec![],
+                    instances: instances.signatures(),
                 },
                 ty: decl.ty,
             });
-            handlers.insert(decl.qref, handler);
+            handlers.insert(decl.qref, instances.into_handlers());
         }
         let mut collected: Vec<Collected<R>> = signatures.into_values().collect();
         collected.sort_by_key(|c| c.decl.qref);
@@ -273,20 +277,19 @@ impl<R: Runtime> Externs<R> {
             for cast in c.casts {
                 types.register_cast(cast);
             }
+            let instances = Instances {
+                concrete: c.instances,
+                generic: None,
+            };
             functions.push(Function {
                 qref: c.decl.qref,
                 kind: FnKind::Extern {
                     bounds,
-                    instances: c.instances.iter().map(|i| i.signature.clone()).collect(),
+                    instances: instances.signatures(),
                 },
                 ty: c.decl.ty,
             });
-            handlers.insert(
-                c.decl.qref,
-                ExternEntry::Mono(MonoHandler {
-                    instances: c.instances,
-                }),
-            );
+            handlers.insert(c.decl.qref, instances.into_handlers());
         }
         Ok(Externs {
             functions,
@@ -308,7 +311,7 @@ fn meet(bound: &TyVarBound, allowed: &[PolyTy]) -> TyVarBound {
 fn add_instance<R: Runtime>(
     signatures: &mut FxHashMap<QualifiedRef, Collected<R>>,
     decl: FnDecl,
-    handler: ExternEntry<R>,
+    instances: Instances<R>,
     sig: QualifiedRef,
 ) -> Result<(), CombineError> {
     let collected = signatures
@@ -332,16 +335,23 @@ fn add_instance<R: Runtime>(
     {
         return Err(CombineError::DuplicateInstance { signature: sig, ty });
     }
-    let ExternEntry::Single(handler) = handler else {
+    let Instances {
+        concrete,
+        generic: Some(handler),
+    } = instances
+    else {
         return Err(mismatch());
     };
+    if !concrete.is_empty() {
+        return Err(mismatch());
+    }
     if decl.cast {
         let mut rule = cast_rule(&decl)?;
         rule.fn_ref = sig;
         collected.casts.push(rule);
     }
     collected.instance_types.push(ty);
-    collected.instances.push(MonoInstance {
+    collected.instances.push(Instance {
         signature: decl.ty,
         handler,
     });

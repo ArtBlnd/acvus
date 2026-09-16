@@ -309,7 +309,7 @@ Map<QualifiedRef, MirModule>  (optimized, validated)
     |
     v
 [Runtime]  acvus-interpreter
-    Executable::Module(MirModule) | Extern(ExternEntry)
+    Executable::Module(MirModule) | Extern(Vec<ExternHandler>)
     Executor: SequentialExecutor | TokioExecutor
 ```
 

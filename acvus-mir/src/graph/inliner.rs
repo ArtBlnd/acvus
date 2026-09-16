@@ -428,7 +428,7 @@ fn remap_inst(
             order,
         } => {
             let callee = match callee {
-                Callee::Direct(id) => Callee::Direct(*id),
+                Callee::Direct(_) | Callee::Extern { .. } => callee.clone(),
                 Callee::Indirect(v) => Callee::Indirect(r(*v)),
             };
             InstKind::FunctionCall {
@@ -450,7 +450,7 @@ fn remap_inst(
             order,
         } => {
             let callee = match callee {
-                Callee::Direct(id) => Callee::Direct(*id),
+                Callee::Direct(_) | Callee::Extern { .. } => callee.clone(),
                 Callee::Indirect(v) => Callee::Indirect(r(*v)),
             };
             InstKind::Spawn {

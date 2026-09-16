@@ -7,8 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
-use crate::ir::CastKind;
-use crate::solver::{ChoiceFailure, ChoiceId};
+use crate::ir::{Callee, CastKind};
+use crate::solver::{ChoiceFailure, ChoiceId, InstanceChoice};
 use crate::ty::{
     Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Polarity, Solver,
     Ty, TyTerm, TypeEnv, TypeRegistry, lift_ty,
@@ -25,7 +25,7 @@ pub type CoercionMap = Vec<(AstId, CastKind)>;
 /// Maps callee expression AstId -> QualifiedRef for direct calls.
 /// Present only when typeck resolved the callee to a named function.
 /// Absent = indirect call (local variable, closure, etc.).
-pub type DirectCallMap = FxHashMap<AstId, QualifiedRef>;
+pub type DirectCallMap = FxHashMap<AstId, Callee>;
 
 // -- TypeResolution: boundary between TypeChecker and Lowerer ----------
 
@@ -75,19 +75,34 @@ pub enum Intrinsic {
 
 /// An operator resolved to a shared signature (RFC-0020).
 #[derive(Debug, Clone)]
-pub struct OperatorCall<T> {
-    pub callee: QualifiedRef,
+pub struct OperatorCall<C, T> {
+    pub callee: C,
     pub ty: T,
+}
+
+/// A call resolved to a named function, at the instance the solver fixed
+/// or is still settling.
+#[derive(Debug, Clone, Copy)]
+struct ResolvedCallee {
+    qref: QualifiedRef,
+    instance: Option<InstanceChoice>,
+}
+
+/// A coercion through a cast function, recorded at the value it converts.
+struct PendingCoercion {
+    at: AstId,
+    cast: ResolvedCallee,
+    callee_ty: Ty,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypeResolution {
     pub type_map: TypeMap,
     pub coercion_map: CoercionMap,
-    /// Direct call resolution: callee AstId -> QualifiedRef.
+    /// Direct call resolution: callee AstId -> the function and instance.
     /// Only contains entries for calls resolved to named functions.
     pub direct_calls: DirectCallMap,
-    pub operator_calls: FxHashMap<AstId, OperatorCall<Ty>>,
+    pub operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
     pub intrinsic_calls: FxHashMap<AstId, Intrinsic>,
     /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
     pub structural_variant_calls: FxHashSet<AstId>,
@@ -106,7 +121,7 @@ impl TypeResolution {
         type_map: TypeMap,
         coercion_map: CoercionMap,
         direct_calls: DirectCallMap,
-        operator_calls: FxHashMap<AstId, OperatorCall<Ty>>,
+        operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
         intrinsic_calls: FxHashMap<AstId, Intrinsic>,
         structural_variant_calls: FxHashSet<AstId>,
         try_returns: FxHashMap<AstId, Ty>,
@@ -171,11 +186,12 @@ pub struct TypeChecker<'a, 's, 'src> {
     solver: &'s mut Solver<'src>,
     /// Accumulated type map (internal, uses InferTy during inference).
     type_map: FxHashMap<AstId, InferTy>,
-    /// Accumulated coercion records (span -> CastKind).
-    coercion_map: CoercionMap,
-    /// Direct call resolutions (callee AstId -> QualifiedRef).
-    direct_calls: DirectCallMap,
-    operator_calls: FxHashMap<AstId, OperatorCall<InferTy>>,
+    /// Accumulated coercions, each through the cast function at its
+    /// call type.
+    coercions: Vec<PendingCoercion>,
+    /// Direct call resolutions (callee AstId -> the function and instance).
+    direct_calls: FxHashMap<AstId, ResolvedCallee>,
+    operator_calls: FxHashMap<AstId, OperatorCall<ResolvedCallee, InferTy>>,
     intrinsic_calls: FxHashMap<AstId, Intrinsic>,
     pattern_through: bool,
     /// Accumulated errors.
@@ -232,8 +248,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             param_types: smallvec::smallvec![],
             solver,
             type_map: FxHashMap::default(),
-            coercion_map: CoercionMap::default(),
-            direct_calls: DirectCallMap::default(),
+            coercions: Vec::new(),
+            direct_calls: FxHashMap::default(),
             operator_calls: FxHashMap::default(),
             intrinsic_calls: FxHashMap::default(),
             pattern_through: false,
@@ -366,10 +382,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
         let operator_calls = self.frozen_operator_calls();
+        let coercion_map = self.frozen_coercions();
+        let direct_calls = self.frozen_direct_calls();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
-            self.coercion_map,
-            self.direct_calls,
+            coercion_map,
+            direct_calls,
             operator_calls,
             self.intrinsic_calls,
             self.structural_variant_calls,
@@ -454,10 +472,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
         let operator_calls = self.frozen_operator_calls();
+        let coercion_map = self.frozen_coercions();
+        let direct_calls = self.frozen_direct_calls();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
-            self.coercion_map,
-            self.direct_calls,
+            coercion_map,
+            direct_calls,
             operator_calls,
             self.intrinsic_calls,
             self.structural_variant_calls,
@@ -487,8 +507,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             if let Some(fn_ref) = maybe_fn {
                 // Build callee_ty: instantiate the cast function's PolyTy and unify
                 // with value_ty (param) and expected_ty (ret) to get concrete types.
-                let callee_ty = if let Some(scheme) = self.env.functions.get(fn_ref) {
-                    let inst = self.instantiate_at(scheme, span);
+                let (callee_ty, instance) = if let Some(scheme) = self.env.functions.get(fn_ref) {
+                    let (inst, instance) = self.instantiate_at(scheme, span);
                     // Unify param with value_ty, ret with expected_ty to concretize.
                     if let TyTerm::Fn {
                         params,
@@ -516,19 +536,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     }
                     self.settle_choices();
                     let resolved = self.solver.resolve_ty(&inst);
-                    self.solver
+                    let callee_ty = self
+                        .solver
                         .freeze_ty(&resolved)
-                        .unwrap_or_else(|_| Ty::error())
+                        .unwrap_or_else(|_| Ty::error());
+                    (callee_ty, instance)
                 } else {
-                    Ty::error()
+                    (Ty::error(), None)
                 };
-                self.coercion_map.push((
-                    id,
-                    CastKind::Extern {
-                        fn_ref: *fn_ref,
-                        callee_ty,
+                self.coercions.push(PendingCoercion {
+                    at: id,
+                    cast: ResolvedCallee {
+                        qref: *fn_ref,
+                        instance,
                     },
-                ));
+                    callee_ty,
+                });
             }
         }
         result.map(|_| ())
@@ -733,19 +756,73 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Instantiate a scheme for a use at `span`; its bounded variables are
     /// verified in `verify_bounds` once the whole body is checked, and its
     /// choice among instances in `settle_choices`.
-    fn instantiate_at(&mut self, scheme: &crate::ty::Scheme, span: Span) -> InferTy {
+    fn instantiate_at(
+        &mut self,
+        scheme: &crate::ty::Scheme,
+        span: Span,
+    ) -> (InferTy, Option<InstanceChoice>) {
         let inst = self.solver.instantiate_scheme(scheme);
         self.bound_sites
             .extend(inst.bounded.into_iter().map(|var| BoundSite { var, span }));
-        if let Some(choice) = inst.choice {
+        if let Some(InstanceChoice::Choice(choice)) = inst.instance {
             self.choice_sites.insert(choice, span);
         }
-        inst.ty
+        (inst.ty, inst.instance)
+    }
+
+    /// The callee a resolved call lowers to; `None` while the call's type
+    /// is too open to choose an instance, which the lowering treats as it
+    /// treats any unresolved call.
+    fn callee_of(&self, resolved: ResolvedCallee) -> Option<Callee> {
+        let instance = match resolved.instance {
+            None => return Some(Callee::Direct(resolved.qref)),
+            Some(InstanceChoice::Fixed(instance)) => instance,
+            Some(InstanceChoice::Choice(choice)) => self.solver.settled_instance(choice)?,
+        };
+        Some(Callee::Extern {
+            id: resolved.qref,
+            instance,
+        })
+    }
+
+    fn frozen_direct_calls(&self) -> DirectCallMap {
+        self.direct_calls
+            .iter()
+            .filter_map(|(id, resolved)| Some((*id, self.callee_of(*resolved)?)))
+            .collect()
+    }
+
+    fn frozen_coercions(&self) -> CoercionMap {
+        self.coercions
+            .iter()
+            .filter_map(|coercion| {
+                let Callee::Extern {
+                    id: fn_ref,
+                    instance,
+                } = self.callee_of(coercion.cast)?
+                else {
+                    unreachable!("a cast is an Extern function (RFC-0023)")
+                };
+                Some((
+                    coercion.at,
+                    CastKind::Extern {
+                        fn_ref,
+                        instance,
+                        callee_ty: coercion.callee_ty.clone(),
+                    },
+                ))
+            })
+            .collect()
     }
 
     /// Settle the choices the types checked so far decide (RFC-0027).
     fn settle_choices(&mut self) {
-        for failure in self.solver.settle_choices(self.registry) {
+        let failures = self.solver.settle_choices(self.registry);
+        self.report_choice_failures(failures);
+    }
+
+    fn report_choice_failures(&mut self, failures: Vec<ChoiceFailure>) {
+        for failure in failures {
             let (choice, kind) = match failure {
                 ChoiceFailure::NoInstance { choice, ty } => (
                     choice,
@@ -798,6 +875,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 );
             }
         }
+        let failures = self.solver.settle_pending_choices(self.registry);
+        self.report_choice_failures(failures);
     }
 
     /// An integer literal's type: a variable any integer width may fill,
@@ -846,19 +925,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.context_uses.entry(qref).or_insert(span);
     }
 
-    fn frozen_operator_calls(&self) -> FxHashMap<AstId, OperatorCall<Ty>> {
+    fn frozen_operator_calls(&self) -> FxHashMap<AstId, OperatorCall<Callee, Ty>> {
         self.operator_calls
             .iter()
-            .map(|(id, call)| {
+            .filter_map(|(id, call)| {
+                let callee = self.callee_of(call.callee)?;
                 let resolved = self.solver.resolve_ty(&call.ty);
                 let ty = self.freeze_or_error(&resolved);
-                (
-                    *id,
-                    OperatorCall {
-                        callee: call.callee,
-                        ty,
-                    },
-                )
+                Some((*id, OperatorCall { callee, ty }))
             })
             .collect()
     }
@@ -1074,7 +1148,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         ) {
             return ty;
         }
-        let fn_ty = self.instantiate_at(fn_sig, call_span);
+        let (fn_ty, instance) = self.instantiate_at(fn_sig, call_span);
         let first_ty = first.as_ref().map(|f| f.ty.clone());
         let arg_types = self.check_args_in_order(&fn_ty, first_ty.as_ref(), args);
         let arg_spans: Vec<Span> = first
@@ -1101,7 +1175,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let effect = effect.clone();
                 self.note_call_effect(&effect, call_span);
                 self.record(callee_id, self.solver.resolve_ty(&fn_ty));
-                self.direct_calls.insert(callee_id, resolved_qref);
+                self.direct_calls.insert(
+                    callee_id,
+                    ResolvedCallee {
+                        qref: resolved_qref,
+                        instance,
+                    },
+                );
                 self.solver.resolve_ty(ret)
             }
             _ => {
@@ -1164,7 +1244,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return;
         };
-        let fn_ty = self.instantiate_at(&scheme, span);
+        let (fn_ty, instance) = self.instantiate_at(&scheme, span);
         let TyTerm::Fn { params, effect, .. } = &fn_ty else {
             unreachable!("a shared signature is a function type");
         };
@@ -1189,7 +1269,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.operator_calls.insert(
             id,
             OperatorCall {
-                callee: qref,
+                callee: ResolvedCallee { qref, instance },
                 ty: fn_ty,
             },
         );

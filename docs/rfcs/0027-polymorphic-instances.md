@@ -3,6 +3,7 @@
 Status: Accepted
 Date: 2026-09-15
 Extends: RFC-0019
+Extended by: RFC-0040
 
 ## Ruling
 
@@ -28,11 +29,11 @@ unified is the pairwise unifier of their schemes.
 
 An instance declared as a cast (RFC-0023) registers a coercion from its
 parameter scheme to its return scheme, resolved through the signature: the
-coercion is a call of the signature, and the runtime selects the instance
-by the call's type as it does for any signature.
+coercion is a call of the signature, settled on an instance as any call
+of the signature is.
 
-At run time nothing changes: the instance whose type has the shape of the
-call's resolved type runs, and every instance's type is already a scheme.
+The instance a call settles on is written into the call (RFC-0040); the
+runtime runs it without looking at a type.
 
 ## Rationale
 

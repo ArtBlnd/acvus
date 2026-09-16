@@ -1263,7 +1263,7 @@ impl CheckCtx {
                     self.expect_order(edge.after, vt, span, pc, errors);
                 }
                 match callee {
-                    Callee::Direct(_) => {
+                    Callee::Direct(_) | Callee::Extern { .. } => {
                         let _ = self.ty_of(*dst, vt, span, pc, errors);
                     }
                     Callee::Indirect(closure) => {
@@ -1320,7 +1320,7 @@ impl CheckCtx {
             } => {
                 self.expect_order_edge("Spawn", callee_ty, *order, vt, span, pc, errors);
                 match callee {
-                    Callee::Direct(_) => {
+                    Callee::Direct(_) | Callee::Extern { .. } => {
                         let dst_ty = ty!(*dst);
                         if !matches!(dst_ty, Ty::Handle(..) | Ty::Error(_)) {
                             errors.push(ValidationError {

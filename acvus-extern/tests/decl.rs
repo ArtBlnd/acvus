@@ -537,12 +537,37 @@ async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, Tr
 }
 
 fn handler<'a>(reg: &'a Externs<Tiny>, i: &Interner, name: &str) -> &'a ExternHandler<Tiny> {
-    match &reg.handlers[&qref(i, name)] {
-        acvus_extern::ExternEntry::Single(h) => h,
-        acvus_extern::ExternEntry::Mono(_) => {
-            panic!("{name} is monomorphized; select by call type")
-        }
+    match reg.handlers[&qref(i, name)].as_slice() {
+        [only] => only,
+        many => panic!("{name} has {} instances; pick one by call type", many.len()),
     }
+}
+
+/// The handler the compiler would settle a call of type `callee_ty` on:
+/// the concrete instance whose signature the type matches, else the
+/// generic one. The instance list the compiler reads and the handler list
+/// the runtime indexes are the same list.
+fn instance_for<'a>(
+    reg: &'a Externs<Tiny>,
+    i: &Interner,
+    name: &str,
+    callee_ty: &acvus_extern::Ty,
+) -> Option<&'a ExternHandler<Tiny>> {
+    let function = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(i, name))
+        .expect("declared");
+    let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
+        panic!("{name} is extern")
+    };
+    let handlers = &reg.handlers[&qref(i, name)];
+    let concrete = instances
+        .concrete
+        .iter()
+        .position(|sig| acvus_mir::ty::matches_poly(callee_ty, sig));
+    let index = concrete.or_else(|| instances.generic.then(|| instances.generic_index()))?;
+    Some(&handlers[index])
 }
 
 #[tokio::test]
@@ -564,9 +589,7 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 
     let arr = erased(Arr::<V, ()>::new(vec![erased(1i64), erased(2i64)]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]).unwrap();
-    let Boxed::<V, Pure, Tiny>(items, _) = Boxed::materialize(&Tiny, boxed) else {
-        unreachable!("boxed returns a Box")
-    };
+    let Boxed::<V, Pure, Tiny>(items, _) = Boxed::materialize(&Tiny, boxed);
     assert_eq!(items.len(), 2);
     let boxed = Boxed::<V, (), Tiny>(items, PhantomData).erase(&Tiny);
 
@@ -652,10 +675,7 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
             acvus_extern::lift_to_poly(&point)
         ])
     );
-    assert!(matches!(
-        reg.handlers[&qref(&i, "eq")],
-        acvus_extern::ExternEntry::Mono(_)
-    ));
+    assert_eq!(reg.handlers[&qref(&i, "eq")].len(), 2);
 }
 
 #[test]
@@ -832,26 +852,24 @@ fn call_type(
 }
 
 #[test]
-fn the_call_type_selects_the_instance() {
+fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
     let i = Interner::new();
     let reg = Externs::combine(vec![mono_registry::<Tiny>()], &i).expect("registries combine");
-    let entry = &reg.handlers[&qref(&i, "double")];
 
     let on_int = call_type(vec![acvus_extern::Ty::I64], acvus_extern::Ty::I64, &i);
-    let h = entry.select(&on_int).unwrap();
+    let h = instance_for(&reg, &i, "double", &on_int).unwrap();
     assert_eq!(open::<i64>(call_sync(h, vec![erased(21i64)]).unwrap()), 42);
 
     let on_str = call_type(vec![acvus_extern::Ty::String], acvus_extern::Ty::String, &i);
-    let h = entry.select(&on_str).unwrap();
+    let h = instance_for(&reg, &i, "double", &on_str).unwrap();
     assert_eq!(
         open::<String>(call_sync(h, vec![erased(String::from("ab"))]).unwrap()),
         "abab"
     );
 
     let on_float = call_type(vec![acvus_extern::Ty::Float], acvus_extern::Ty::Float, &i);
-    assert!(entry.select(&on_float).is_err());
+    assert!(instance_for(&reg, &i, "double", &on_float).is_none());
 
-    let nested = &reg.handlers[&qref(&i, "first_or")];
     let ty = call_type(
         vec![
             acvus_extern::Ty::Option(Box::new(acvus_extern::Ty::String)),
@@ -860,7 +878,7 @@ fn the_call_type_selects_the_instance() {
         acvus_extern::Ty::String,
         &i,
     );
-    let h = nested.select(&ty).unwrap();
+    let h = instance_for(&reg, &i, "first_or", &ty).unwrap();
     assert_eq!(
         open::<String>(
             call_sync(
@@ -872,7 +890,6 @@ fn the_call_type_selects_the_instance() {
         "x"
     );
 
-    let inside = &reg.handlers[&qref(&i, "box_count")];
     let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![t],
@@ -884,7 +901,7 @@ fn the_call_type_selects_the_instance() {
         acvus_extern::Ty::I64,
         &i,
     );
-    let h = inside.select(&ty).unwrap();
+    let h = instance_for(&reg, &i, "box_count", &ty).unwrap();
     let payload = Boxed::<String, Pure, Tiny>(
         vec![erased(String::from("a")), erased(String::from("b"))],
         PhantomData,
@@ -896,7 +913,7 @@ fn the_call_type_selects_the_instance() {
         acvus_extern::Ty::I64,
         &i,
     );
-    let fallback = inside.select(&ty).unwrap();
+    let fallback = instance_for(&reg, &i, "box_count", &ty).unwrap();
     let payload = Boxed::<V, Pure, Tiny>(
         vec![erased(1.5f64), erased(2.5f64), erased(3.5f64)],
         PhantomData,
@@ -964,7 +981,8 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     let acvus_extern::FnKind::Extern { bounds, instances } = &first_fn.kind else {
         panic!("first is extern")
     };
-    assert_eq!(instances.len(), 2);
+    assert_eq!(instances.concrete.len(), 2);
+    assert!(!instances.generic);
     let acvus_extern::TyVarBound::OneOf(shapes) = &bounds[0] else {
         panic!("the instance variable is bounded")
     };
@@ -977,7 +995,6 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         "{shapes:?}"
     );
 
-    let entry = &reg.handlers[&qref(&i, "first")];
     let on_array = call_type(
         vec![acvus_extern::Ty::Array(
             Box::new(acvus_extern::Ty::I64),
@@ -987,7 +1004,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         &i,
     );
     let arr = erased(Arr::<V, ()>::new(vec![erased(7i64), erased(8i64)]));
-    let h = entry.select(&on_array).unwrap();
+    let h = instance_for(&reg, &i, "first", &on_array).unwrap();
     assert_eq!(open::<i64>(call_sync(h, vec![arr]).unwrap()), 7);
 
     let on_option = call_type(
@@ -995,14 +1012,14 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         acvus_extern::Ty::String,
         &i,
     );
-    let h = entry.select(&on_option).unwrap();
+    let h = instance_for(&reg, &i, "first", &on_option).unwrap();
     assert_eq!(
         open::<String>(call_sync(h, vec![erased(Some(erased(String::from("s"))))]).unwrap()),
         "s"
     );
 
     let on_int = call_type(vec![acvus_extern::Ty::I64], acvus_extern::Ty::I64, &i);
-    assert!(entry.select(&on_int).is_err());
+    assert!(instance_for(&reg, &i, "first", &on_int).is_none());
 }
 
 #[test]

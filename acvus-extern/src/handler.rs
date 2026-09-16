@@ -4,10 +4,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_mir::ty::{PolyTy, Ty, matches_poly};
+use acvus_mir::ty::PolyTy;
 
 use crate::runtime::Runtime;
-use crate::trap::Trap;
 
 type SyncFn<R> = dyn Fn(&R, Vec<<R as Runtime>::Value>) -> Result<<R as Runtime>::Value, <R as Runtime>::Error>
     + Send
@@ -42,60 +41,40 @@ impl<R: Runtime> ExternHandler<R> {
     }
 }
 
-/// One instantiation of a monomorphized ExternFn: the function's type
-/// with the bounded variable set to one member, and the handler compiled
-/// for it.
-pub struct MonoInstance<R: Runtime> {
+pub struct Instance<R: Runtime> {
     pub signature: PolyTy,
     pub handler: ExternHandler<R>,
 }
 
-/// The handlers of an ExternFn whose type variable ranges over a finite
-/// set of concrete types. The instance whose signature matches the call's
-/// resolved function type is the one to run.
-pub struct MonoHandler<R: Runtime> {
-    pub instances: Vec<MonoInstance<R>>,
+/// The number a call carries in `Callee::Extern` is an index into
+/// `into_handlers`, and the compiler assigns it from `signatures`: the two
+/// lists are the same list in the same order, and `acvus_mir::ty::Instances`
+/// is the compiler's half of that contract.
+pub struct Instances<R: Runtime> {
+    pub concrete: Vec<Instance<R>>,
+    pub generic: Option<ExternHandler<R>>,
 }
 
-/// What the registry holds for one ExternFn.
-pub enum ExternEntry<R: Runtime> {
-    Single(ExternHandler<R>),
-    Mono(MonoHandler<R>),
-}
-
-impl<R: Runtime> Clone for ExternEntry<R> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Single(h) => Self::Single(h.clone()),
-            Self::Mono(m) => Self::Mono(MonoHandler {
-                instances: m
-                    .instances
-                    .iter()
-                    .map(|i| MonoInstance {
-                        signature: i.signature.clone(),
-                        handler: i.handler.clone(),
-                    })
-                    .collect(),
-            }),
+impl<R: Runtime> Instances<R> {
+    pub fn generic(handler: ExternHandler<R>) -> Self {
+        Self {
+            concrete: Vec::new(),
+            generic: Some(handler),
         }
     }
-}
 
-impl<R: Runtime> ExternEntry<R> {
-    /// The handler for a call whose resolved function type is `callee_ty`.
-    pub fn select(&self, callee_ty: &Ty) -> Result<&ExternHandler<R>, Trap> {
-        match self {
-            Self::Single(h) => Ok(h),
-            Self::Mono(m) => m
-                .instances
-                .iter()
-                .find(|i| matches_poly(callee_ty, &i.signature))
-                .map(|i| &i.handler)
-                .ok_or_else(|| {
-                    Trap::internal(format!(
-                        "no instance of the ExternFn matches the call type {callee_ty:?}"
-                    ))
-                }),
+    pub fn signatures(&self) -> acvus_mir::ty::Instances {
+        acvus_mir::ty::Instances {
+            concrete: self.concrete.iter().map(|i| i.signature.clone()).collect(),
+            generic: self.generic.is_some(),
         }
+    }
+
+    pub fn into_handlers(self) -> Vec<ExternHandler<R>> {
+        self.concrete
+            .into_iter()
+            .map(|i| i.handler)
+            .chain(self.generic)
+            .collect()
     }
 }

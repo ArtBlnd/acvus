@@ -11,7 +11,7 @@ fn commutative_io(i: &Interner, name: &str) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
@@ -51,7 +51,7 @@ fn a_chain_of_calls_is_one_line() {
         qref: QualifiedRef::root(i.intern("io")),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
@@ -82,7 +82,7 @@ fn anyorder_in_a_script_merges_its_calls() {
         qref: QualifiedRef::root(i.intern("io")),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

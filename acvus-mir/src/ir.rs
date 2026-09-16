@@ -22,7 +22,11 @@ pub struct Inst {
 pub enum CastKind {
     /// ExternCast - coercion performed by a registered pure ExternFn.
     /// `callee_ty` is the full Fn type of the cast function at this call site.
-    Extern { fn_ref: QualifiedRef, callee_ty: Ty },
+    Extern {
+        fn_ref: QualifiedRef,
+        instance: usize,
+        callee_ty: Ty,
+    },
 }
 
 /// The kind of named storage a Ref points to.
@@ -50,12 +54,24 @@ pub enum RefTarget {
 }
 
 /// Target of a function call.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Callee {
-    /// Compile-time known function. Enables pre-fetch and inlining.
+    /// A function with a body in the graph. Enables pre-fetch and inlining.
     Direct(QualifiedRef),
+    /// An ExternFn at the instance the checker settled on (RFC-0040).
+    Extern { id: QualifiedRef, instance: usize },
     /// Runtime-determined callable (closure, variable holding a function).
     Indirect(ValueId),
+}
+
+impl Callee {
+    /// The named function of a `Direct` or `Extern` callee.
+    pub fn id(&self) -> QualifiedRef {
+        match self {
+            Self::Direct(id) | Self::Extern { id, .. } => *id,
+            Self::Indirect(_) => unreachable!("an indirect callee has no name"),
+        }
+    }
 }
 
 /// The `Order` a call waits for and the `Order` it yields (RFC-0007).

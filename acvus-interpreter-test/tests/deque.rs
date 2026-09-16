@@ -15,7 +15,8 @@ async fn push_back_accumulates_over_structs() {
 #[tokio::test]
 async fn get_reads_back_a_struct_field_in_order() {
     let i = Interner::new();
-    let src = "d = deque(); push_back(&mut d, { x: 10, }); push_back(&mut d, { x: 20, }); get(&d, 1).x";
+    let src =
+        "d = deque(); push_back(&mut d, { x: 10, }); push_back(&mut d, { x: 20, }); get(&d, 1).x";
     assert_eq!(run_script(&i, src, FxHashMap::default()).await.as_int(), 20);
 }
 

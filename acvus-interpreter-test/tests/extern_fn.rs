@@ -191,7 +191,7 @@ fn ir_pure_function_call_no_context_bindings() {
             matches!(
                 &inst.kind,
                 InstKind::FunctionCall {
-                    callee: acvus_mir::ir::Callee::Direct(id),
+                    callee: acvus_mir::ir::Callee::Extern { id, .. },
                     ..
                 } if cr.extern_executables.contains_key(id)
             )

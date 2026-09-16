@@ -136,11 +136,11 @@ fn collect_fn_ids_from_body(
         let ids: &[crate::graph::QualifiedRef] = match &inst.kind {
             InstKind::LoadFunction { id, .. } => std::slice::from_ref(id),
             InstKind::FunctionCall {
-                callee: Callee::Direct(id),
+                callee: Callee::Direct(id) | Callee::Extern { id, .. },
                 ..
             } => std::slice::from_ref(id),
             InstKind::Spawn {
-                callee: Callee::Direct(id),
+                callee: Callee::Direct(id) | Callee::Extern { id, .. },
                 ..
             } => std::slice::from_ref(id),
             _ => &[],
@@ -391,7 +391,7 @@ fn write_body(
                 ..
             } => {
                 let callee_str = match callee {
-                    Callee::Direct(id) => ctx.fmt_fn_id(*id),
+                    Callee::Direct(id) | Callee::Extern { id, .. } => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => vn.fmt_use(*val, &consts, &texts),
                 };
                 write!(
@@ -427,7 +427,7 @@ fn write_body(
                 ..
             } => {
                 let callee_str = match callee {
-                    Callee::Direct(id) => ctx.fmt_fn_id(*id),
+                    Callee::Direct(id) | Callee::Extern { id, .. } => ctx.fmt_fn_id(*id),
                     Callee::Indirect(val) => vn.fmt_use(*val, &consts, &texts),
                 };
                 write!(
@@ -795,7 +795,7 @@ fn write_order_tree(
     let mut any = false;
     for (i, inst) in body.insts.iter().enumerate() {
         let callee_name = |c: &Callee, vn: &mut ValNormalizer| match c {
-            Callee::Direct(id) => ctx.fmt_fn_id(*id),
+            Callee::Direct(id) | Callee::Extern { id, .. } => ctx.fmt_fn_id(*id),
             Callee::Indirect(v) => vn.fmt_val(*v),
         };
         match &inst.kind {

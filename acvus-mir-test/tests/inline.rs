@@ -441,7 +441,7 @@ fn inline_io_extern_inside() {
         qref: QualifiedRef::root(i.intern("fetch")),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

@@ -104,7 +104,7 @@ mod tests {
                 qref,
                 kind: FnKind::Extern {
                     bounds: vec![],
-                    instances: vec![],
+                    instances: crate::ty::Instances::default(),
                 },
                 ty: TyTerm::Fn {
                     params: vec![],

@@ -201,15 +201,30 @@ impl TyVarBound {
     }
 }
 
+/// The instances of an Extern function, numbered as the runtime numbers
+/// its handlers: the concrete ones in order, then the generic one when
+/// `generic` holds (RFC-0040). `acvus_extern::Instances` is the runtime's
+/// half of that contract.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Instances {
+    pub concrete: Vec<PolyTy>,
+    pub generic: bool,
+}
+
+impl Instances {
+    pub fn generic_index(&self) -> usize {
+        self.concrete.len()
+    }
+}
+
 /// A polymorphic type with the bounds its variables were declared with.
 /// Variable `i` of `ty` has bound `bounds[i]`; a missing entry is `Any`.
-/// A shared signature also carries the types of its instances; the solver
-/// settles each instantiation on one of them (RFC-0027).
+/// `instances` is `Some` for an Extern function.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: PolyTy,
     pub bounds: Vec<TyVarBound>,
-    pub instances: Vec<PolyTy>,
+    pub instances: Option<Instances>,
 }
 
 impl Scheme {
@@ -217,7 +232,7 @@ impl Scheme {
         Self {
             ty,
             bounds: Vec::new(),
-            instances: Vec::new(),
+            instances: None,
         }
     }
 

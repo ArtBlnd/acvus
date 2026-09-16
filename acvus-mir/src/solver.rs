@@ -79,8 +79,8 @@ pub enum IdentityBound {
     Forward(IdentityVarId),
 }
 
-/// A call of a shared signature, settled on the one instance the call's
-/// type can still match (RFC-0027).
+/// A call of an Extern function with several instances, settled on the
+/// one whose type the call's type can still match (RFC-0027, RFC-0040).
 #[derive(Debug, Clone)]
 pub struct Choice {
     ty: InferTy,
@@ -89,8 +89,28 @@ pub struct Choice {
 
 #[derive(Debug, Clone)]
 enum ChoiceState {
-    Pending(Vec<PolyTy>),
-    Settled,
+    Pending {
+        candidates: Vec<Candidate>,
+        generic: Option<usize>,
+    },
+    Settled(usize),
+    Failed,
+}
+
+/// A concrete instance a pending choice may still settle on.
+#[derive(Debug, Clone)]
+struct Candidate {
+    instance: usize,
+    ty: PolyTy,
+}
+
+/// Which instance of an Extern function a call runs: fixed at the
+/// instantiation when the function has no concrete instance to choose
+/// among, or a choice the solver settles as the call's type resolves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceChoice {
+    Fixed(usize),
+    Choice(ChoiceId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -169,8 +189,9 @@ impl<'src> Solver<'src> {
 
     // -- Choices -----------------------------------------------------
 
-    /// Settle every pending choice whose call type excludes all instances
-    /// but one, while a settlement narrows another.
+    /// Settle every pending choice whose call type excludes all concrete
+    /// instances but one, or all of them where the function has a generic
+    /// instance, while a settlement narrows another.
     pub fn settle_choices(&mut self, registry: &TypeRegistry) -> Vec<ChoiceFailure> {
         let mut failures = Vec::new();
         let mut progressed = true;
@@ -178,22 +199,32 @@ impl<'src> Solver<'src> {
             progressed = false;
             for index in 0..self.choices.len() {
                 let id = ChoiceId(index as u32);
-                let ChoiceState::Pending(candidates) = &self.choices[index].state else {
+                let ChoiceState::Pending {
+                    candidates,
+                    generic,
+                } = &self.choices[index].state
+                else {
                     continue;
                 };
+                let generic = *generic;
                 let ty = self.resolve_ty(&self.choices[index].ty);
-                let remaining: Vec<PolyTy> = candidates
+                let remaining: Vec<Candidate> = candidates
                     .iter()
-                    .filter(|c| could_match_pattern(&ty, c))
+                    .filter(|c| could_match_pattern(&ty, &c.ty))
                     .cloned()
                     .collect();
-                match remaining.as_slice() {
-                    [] => {
+                match (remaining.as_slice(), generic) {
+                    ([], None) => {
                         failures.push(ChoiceFailure::NoInstance { choice: id, ty });
-                        self.choices[index].state = ChoiceState::Settled;
+                        self.choices[index].state = ChoiceState::Failed;
                     }
-                    [only] => {
-                        let instance = self.instantiate_open(only);
+                    ([], Some(generic)) => {
+                        self.choices[index].state = ChoiceState::Settled(generic);
+                        progressed = true;
+                    }
+                    ([only], _) => {
+                        let chosen = only.instance;
+                        let instance = self.instantiate_open(&only.ty);
                         if self
                             .unify_ty(&ty, &instance, Polarity::Invariant, registry)
                             .is_err()
@@ -203,19 +234,108 @@ impl<'src> Solver<'src> {
                                 expected: instance,
                                 got: ty,
                             });
+                            self.choices[index].state = ChoiceState::Failed;
+                        } else {
+                            self.choices[index].state = ChoiceState::Settled(chosen);
                         }
-                        self.choices[index].state = ChoiceState::Settled;
                         progressed = true;
                     }
                     _ => {
                         if remaining.len() != candidates.len() {
-                            self.choices[index].state = ChoiceState::Pending(remaining);
+                            self.choices[index].state = ChoiceState::Pending {
+                                candidates: remaining,
+                                generic,
+                            };
                         }
                     }
                 }
             }
         }
         failures
+    }
+
+    /// Settle every choice still pending once the whole body is checked,
+    /// with every integer literal at its default width. A choice several
+    /// instances still match stays pending: the call's type is unresolved,
+    /// and that is reported wherever the type is needed.
+    pub fn settle_pending_choices(&mut self, registry: &TypeRegistry) -> Vec<ChoiceFailure> {
+        let mut failures = Vec::new();
+        for index in 0..self.choices.len() {
+            let id = ChoiceId(index as u32);
+            let ChoiceState::Pending {
+                candidates,
+                generic,
+            } = &self.choices[index].state
+            else {
+                continue;
+            };
+            let generic = *generic;
+            let ty = self.resolve_ty(&self.choices[index].ty);
+            let defaulted = self.with_integer_defaults(&ty);
+            let remaining: Vec<Candidate> = candidates
+                .iter()
+                .filter(|c| could_match_pattern(&defaulted, &c.ty))
+                .cloned()
+                .collect();
+            match (remaining.as_slice(), generic) {
+                ([], None) => {
+                    failures.push(ChoiceFailure::NoInstance { choice: id, ty });
+                    self.choices[index].state = ChoiceState::Failed;
+                }
+                ([], Some(generic)) => {
+                    self.choices[index].state = ChoiceState::Settled(generic);
+                }
+                ([only], _) => {
+                    let chosen = only.instance;
+                    let instance = self.instantiate_open(&only.ty);
+                    if self
+                        .unify_ty(&ty, &instance, Polarity::Invariant, registry)
+                        .is_err()
+                    {
+                        failures.push(ChoiceFailure::Mismatch {
+                            choice: id,
+                            expected: instance,
+                            got: ty,
+                        });
+                        self.choices[index].state = ChoiceState::Failed;
+                    } else {
+                        self.choices[index].state = ChoiceState::Settled(chosen);
+                    }
+                }
+                _ => {}
+            }
+        }
+        failures
+    }
+
+    /// `ty` with every unresolved variable that has an integer default
+    /// replaced by that default.
+    fn with_integer_defaults(&self, ty: &InferTy) -> InferTy {
+        ty.map(
+            &mut |id: TypeBoundId| {
+                let root = self.find_ty_root(id);
+                match &self.ty_bounds[root.0 as usize] {
+                    TypeBound::Resolved { ty: inner, .. } => self.with_integer_defaults(inner),
+                    TypeBound::Unresolved { bound } => match bound.integer_default() {
+                        Some(k) => TyTerm::Int(k),
+                        None => TyTerm::Var(root),
+                    },
+                    TypeBound::Forward(_) => unreachable!("find_ty_root should resolve forwards"),
+                }
+            },
+            &mut |id: IdentityVarId| self.resolve_identity(&IdentityTerm::Var(id)),
+            &mut |id: EffectVarId| self.resolve_effect(&EffectTerm::Var(id)),
+            &mut |id: LenVarId| self.resolve_len(&LenTerm::Var(id)),
+        )
+    }
+
+    /// The instance a settled choice runs; `None` while it is pending or
+    /// after it failed.
+    pub fn settled_instance(&self, id: ChoiceId) -> Option<usize> {
+        match self.choices[id.0 as usize].state {
+            ChoiceState::Settled(instance) => Some(instance),
+            ChoiceState::Pending { .. } | ChoiceState::Failed => None,
+        }
     }
 
     // -- Identity variables ------------------------------------------
@@ -1564,7 +1684,8 @@ pub enum FreezeError {
 pub struct Instantiated {
     pub ty: InferTy,
     pub bounded: Vec<TypeBoundId>,
-    pub choice: Option<ChoiceId>,
+    /// `Some` for an Extern function.
+    pub instance: Option<InstanceChoice>,
 }
 
 /// What an identity variable of a declaration becomes when the declaration
@@ -1621,17 +1742,29 @@ impl Solver<'_> {
             },
             Identities::Declared,
         );
-        let choice = (!scheme.instances.is_empty()).then(|| {
+        let instance = scheme.instances.as_ref().map(|instances| {
+            if instances.concrete.is_empty() {
+                return InstanceChoice::Fixed(instances.generic_index());
+            }
             self.choices.push(Choice {
                 ty: ty.clone(),
-                state: ChoiceState::Pending(scheme.instances.clone()),
+                state: ChoiceState::Pending {
+                    candidates: instances
+                        .concrete
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(instance, ty)| Candidate { instance, ty })
+                        .collect(),
+                    generic: instances.generic.then(|| instances.generic_index()),
+                },
             });
-            ChoiceId((self.choices.len() - 1) as u32)
+            InstanceChoice::Choice(ChoiceId((self.choices.len() - 1) as u32))
         });
         Instantiated {
             ty,
             bounded,
-            choice,
+            instance,
         }
     }
 

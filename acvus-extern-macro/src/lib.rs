@@ -353,42 +353,34 @@ fn generate_extern_fn(
         }
     };
 
-    let handler = match vars.mono_var() {
+    let instances = match vars.mono_var() {
         None => {
-            let single = glue(None);
-            quote! { ::acvus_extern::ExternEntry::Single(#single) }
+            let generic = glue(None);
+            quote! { ::acvus_extern::Instances::generic(#generic) }
         }
         Some(mono) => {
             let members = mono.mono.as_ref().expect("mono_var has members");
-            let instances = members.iter().map(|member| {
+            let concrete = members.iter().map(|member| {
                 let handler = glue(Some(member));
                 let signature = signature(Some(member));
                 quote! {
-                    ::acvus_extern::MonoInstance {
+                    ::acvus_extern::Instance {
                         signature: #signature,
                         handler: #handler,
                     }
                 }
             });
-            let fallback = if mono.mono_fallback {
-                let fallback_signature = signature(None);
-                let fallback_handler = glue(None);
-                quote! {
-                    ::acvus_extern::MonoInstance {
-                        signature: #fallback_signature,
-                        handler: #fallback_handler,
-                    },
-                }
+            let generic = if mono.mono_fallback {
+                let handler = glue(None);
+                quote! { ::core::option::Option::Some(#handler) }
             } else {
-                quote! {}
+                quote! { ::core::option::Option::None }
             };
             quote! {
-                ::acvus_extern::ExternEntry::Mono(::acvus_extern::MonoHandler {
-                    instances: vec![
-                        #(#instances,)*
-                        #fallback
-                    ],
-                })
+                ::acvus_extern::Instances {
+                    concrete: vec![#(#concrete),*],
+                    generic: #generic,
+                }
             }
         }
     };
@@ -424,7 +416,7 @@ fn generate_extern_fn(
                     instance_of: #instance_of,
                     requires: vec![#(#requires),*],
                 },
-                handler: #handler,
+                instances: #instances,
             }
         }
     })
@@ -1147,9 +1139,9 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
         ::acvus_extern::Registry::new(move |__i: &::acvus_extern::Interner| {
             let __ns: ::core::option::Option<&str> = ::core::option::Option::Some(#ns);
             let mut __fns: ::std::vec::Vec<::acvus_extern::FnDecl> = ::std::vec::Vec::new();
-            let mut __handlers: ::acvus_extern::Handlers<_> = ::acvus_extern::FxHashMap::default();
+            let mut __instances = ::acvus_extern::FxHashMap::default();
             for __f in ::std::vec::Vec::<::acvus_extern::ExternFn<_>>::from([#(#fns),*]) {
-                __handlers.insert(__f.decl.qref, __f.handler);
+                __instances.insert(__f.decl.qref, __f.instances);
                 __fns.push(__f.decl);
             }
             let mut __space = ::acvus_extern::FxHashMap::default();
@@ -1171,7 +1163,7 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
                     ),*],
                     fns: __fns,
                 },
-                handlers: __handlers,
+                instances: __instances,
                 space: __space,
             }
         })

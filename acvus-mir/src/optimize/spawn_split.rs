@@ -22,7 +22,7 @@ pub fn run(cfg: &mut CfgBody) {
             match inst.kind {
                 InstKind::FunctionCall {
                     dst,
-                    callee: Callee::Direct(ref callee_id),
+                    callee: ref callee @ (Callee::Direct(_) | Callee::Extern { .. }),
                     ref callee_ty,
                     ref args,
                     order,
@@ -39,7 +39,7 @@ pub fn run(cfg: &mut CfgBody) {
                         span: inst.span,
                         kind: InstKind::Spawn {
                             dst: handle,
-                            callee: Callee::Direct(*callee_id),
+                            callee: callee.clone(),
                             callee_ty: callee_ty.clone(),
                             args: args.clone(),
                             order: order.map(|edge| edge.before),

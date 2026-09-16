@@ -280,7 +280,7 @@ enum Flow {
 /// A single executable unit - MIR module or extern function.
 pub enum Executable {
     Module(MirModule),
-    Extern(crate::runtime::ExternEntry),
+    Extern(Vec<ExternHandler>),
 }
 
 impl Executable {
@@ -358,6 +358,22 @@ fn lookup_function<'a>(shared: &'a InterpreterContext, id: &QualifiedRef) -> &'a
     shared.functions.get(id).unwrap_or_else(|| {
         let name = shared.interner.resolve(id.name);
         panic!("no function for {id:?} (name={name:?})")
+    })
+}
+
+fn lookup_extern<'a>(
+    shared: &'a InterpreterContext,
+    id: &QualifiedRef,
+    instance: usize,
+) -> &'a ExternHandler {
+    let Executable::Extern(handlers) = lookup_function(shared, id) else {
+        panic!("{id:?} is called as an ExternFn but is a module")
+    };
+    handlers.get(instance).unwrap_or_else(|| {
+        panic!(
+            "{id:?} has {} instances; the checker settled on instance {instance}",
+            handlers.len()
+        )
     })
 }
 
@@ -767,22 +783,15 @@ async fn execute_inst(
             }
             let returned = match callee {
                 Callee::Direct(id) => {
-                    let is_extern =
-                        matches!(lookup_function(&ctx.shared, id), Executable::Extern(_));
-                    if is_extern {
-                        let entry = match lookup_function(&ctx.shared, id) {
-                            Executable::Extern(h) => h.clone(),
-                            _ => unreachable!(),
-                        };
-                        let handler = entry.select(callee_ty)?.clone();
-                        let arg_vals: Vec<Value> = args.iter().map(|a| frame.use_val(*a)).collect();
-                        match &handler {
-                            ExternHandler::Sync(f) => f(&ctx.shared.runtime(), arg_vals)?,
-                            ExternHandler::Async(f) => f(ctx.shared.runtime(), arg_vals).await?,
-                        }
-                    } else {
-                        let arg_vals: Args = args.iter().map(|a| frame.use_val(*a)).collect();
-                        dispatch_call(ctx, id, arg_vals).await?
+                    let arg_vals: Args = args.iter().map(|a| frame.use_val(*a)).collect();
+                    dispatch_call(ctx, id, arg_vals).await?
+                }
+                Callee::Extern { id, instance } => {
+                    let handler = lookup_extern(&ctx.shared, id, *instance).clone();
+                    let arg_vals: Vec<Value> = args.iter().map(|a| frame.use_val(*a)).collect();
+                    match &handler {
+                        ExternHandler::Sync(f) => f(&ctx.shared.runtime(), arg_vals)?,
+                        ExternHandler::Async(f) => f(ctx.shared.runtime(), arg_vals).await?,
                     }
                 }
                 Callee::Indirect(val_id) => {
@@ -805,17 +814,17 @@ async fn execute_inst(
         InstKind::Spawn {
             dst,
             callee,
-            callee_ty,
+            callee_ty: _,
             args,
             order: _,
         } => {
-            let callee_id = match callee {
-                Callee::Direct(id) => *id,
+            let (callee_id, spawn_kind) = match callee {
+                Callee::Direct(id) => (*id, SpawnKind::Module),
+                Callee::Extern { id, instance } => (
+                    *id,
+                    SpawnKind::Extern(lookup_extern(&ctx.shared, id, *instance).clone()),
+                ),
                 Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
-            };
-            let spawn_kind = match lookup_function(&ctx.shared, &callee_id) {
-                Executable::Extern(entry) => SpawnKind::Extern(entry.select(callee_ty)?.clone()),
-                Executable::Module(_) => SpawnKind::Module,
             };
             let spawn_args: Vec<Value> = args.iter().map(|a| frame.use_val(*a)).collect();
             let handle = match spawn_kind {

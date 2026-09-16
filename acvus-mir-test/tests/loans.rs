@@ -16,7 +16,7 @@ fn bump(i: &Interner, effect: Effect) -> Function {
         qref: QualifiedRef::root(i.intern("bump")),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: params
@@ -87,7 +87,7 @@ fn peek(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("peek")),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

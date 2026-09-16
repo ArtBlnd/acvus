@@ -73,7 +73,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         qref: QualifiedRef::root(i.intern("mk")),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: vec![],
@@ -88,7 +88,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         qref: QualifiedRef::root(i.intern("same")),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: vec![

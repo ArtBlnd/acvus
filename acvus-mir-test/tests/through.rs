@@ -11,7 +11,7 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
-            instances: vec![],
+            instances: Default::default(),
         },
         ty: TyTerm::Fn {
             params: params

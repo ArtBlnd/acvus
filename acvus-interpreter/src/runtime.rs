@@ -11,7 +11,6 @@ use crate::interpreter::InterpreterContext;
 use crate::value::{Value, is_small};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
-pub type ExternEntry = acvus_extern::ExternEntry<AcvusRuntime>;
 
 #[derive(Clone)]
 pub struct AcvusRuntime(pub InterpreterContext);

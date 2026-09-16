@@ -1506,7 +1506,11 @@ impl<'a> Lowerer<'a> {
     fn maybe_cast(&mut self, id: AstId, span: Span, val: ValueId) -> ValueId {
         if let Some(kind) = self.coercion_lookup.get(&id).cloned() {
             match &kind {
-                CastKind::Extern { fn_ref, callee_ty } => {
+                CastKind::Extern {
+                    fn_ref,
+                    instance,
+                    callee_ty,
+                } => {
                     // ExternCast -> lower as FunctionCall (pure, 1 arg, no context).
                     // Derive ret_ty from callee_ty.
                     let ret_ty = match callee_ty {
@@ -1518,7 +1522,10 @@ impl<'a> Lowerer<'a> {
                     self.emit_call(
                         span,
                         cast_dst,
-                        Callee::Direct(*fn_ref),
+                        Callee::Extern {
+                            id: *fn_ref,
+                            instance: *instance,
+                        },
                         callee_ty.clone(),
                         vec![val],
                     );
@@ -1685,7 +1692,7 @@ impl<'a> Lowerer<'a> {
                     return dst;
                 }
                 if let Some(call) = self.resolution.operator_calls.get(id).cloned() {
-                    let (qref, fn_ty) = (call.callee, call.ty);
+                    let (callee, fn_ty) = (call.callee, call.ty);
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
                     let dst = self.alloc_expr(*id);
@@ -1697,7 +1704,7 @@ impl<'a> Lowerer<'a> {
                         }
                         _ => (dst, false),
                     };
-                    self.emit_call(*span, call_dst, Callee::Direct(qref), fn_ty, vec![l, r]);
+                    self.emit_call(*span, call_dst, callee, fn_ty, vec![l, r]);
                     if negate {
                         self.emit_inst(
                             *span,
@@ -2251,10 +2258,10 @@ impl<'a> Lowerer<'a> {
         let mut arg_regs = vec![first];
         arg_regs.extend(self.lower_call_args(args));
         let dst = self.alloc_typed(call_id);
-        match self.resolution.direct_calls.get(&callee_id) {
-            Some(&qref) => {
-                self.set_origin(dst, ValOrigin::Call(qref.name));
-                self.emit_call(call_span, dst, Callee::Direct(qref), callee_ty, arg_regs);
+        match self.resolution.direct_calls.get(&callee_id).copied() {
+            Some(callee) => {
+                self.set_origin(dst, ValOrigin::Call(callee.id().name));
+                self.emit_call(call_span, dst, callee, callee_ty, arg_regs);
             }
             None => {
                 self.emit_inst(call_span, InstKind::Poison { dst });
@@ -2315,9 +2322,9 @@ impl<'a> Lowerer<'a> {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
                     // 1. Direct call - typeck resolved this callee to a named function.
-                    if let Some(&qref) = self.resolution.direct_calls.get(&func.id()) {
+                    if let Some(callee) = self.resolution.direct_calls.get(&func.id()).copied() {
                         let callee_ty = self.type_of_id(func.id());
-                        self.emit_call(call_span, dst, Callee::Direct(qref), callee_ty, arg_regs);
+                        self.emit_call(call_span, dst, callee, callee_ty, arg_regs);
                         return dst;
                     }
 

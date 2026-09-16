@@ -476,7 +476,7 @@ pub fn declared_bounds<'a>(
 
 pub struct Declared {
     pub bounds: Vec<TyVarBound>,
-    pub instances: Vec<PolyTy>,
+    pub instances: crate::ty::Instances,
 }
 
 /// The scheme a function's type is instantiated under: its declaration
@@ -486,7 +486,7 @@ fn declared_scheme(declared: Option<&Declared>, ty: PolyTy) -> Scheme {
         Some(declared) => Scheme {
             ty,
             bounds: declared.bounds.clone(),
-            instances: declared.instances.clone(),
+            instances: Some(declared.instances.clone()),
         },
         None => Scheme::unbounded(ty),
     }
@@ -1277,7 +1277,7 @@ mod tests {
             qref: QualifiedRef::root(interner.intern(name)),
             kind: FnKind::Extern {
                 bounds: vec![],
-                instances: vec![],
+                instances: crate::ty::Instances::default(),
             },
             ty: TyTerm::Fn {
                 params: named_params,

@@ -85,3 +85,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0037](0037-integer-widths.md) | Integers have a width, and a literal takes the width its use demands | Accepted |
 | [RFC-0038](0038-result-and-trap.md) | `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error | Accepted (Result, `!`, `?` built; trap to follow) |
 | [RFC-0039](0039-one-crossing.md) | One crossing at the boundary | Accepted |
+| [RFC-0040](0040-instance-chosen-by-the-compiler.md) | The compiler chooses an ExternFn's instance and the runtime indexes it | Accepted |
