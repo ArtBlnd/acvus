@@ -86,3 +86,5 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0038](0038-result-and-trap.md) | `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error | Accepted (Result, `!`, `?` built; trap to follow) |
 | [RFC-0039](0039-one-crossing.md) | One crossing at the boundary | Accepted |
 | [RFC-0040](0040-instance-chosen-by-the-compiler.md) | The compiler chooses an ExternFn's instance and the runtime indexes it | Accepted |
+| [RFC-0041](0041-representation-of-a-slot.md) | `#τ` is the representation of a slot; an extension holds values through `Erased` | Accepted |
+| [RFC-0042](0042-equality-and-decision.md) | The solver separates equality from decision | Accepted |

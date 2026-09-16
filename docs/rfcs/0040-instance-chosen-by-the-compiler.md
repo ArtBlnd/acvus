@@ -71,8 +71,8 @@ when the candidates are exhausted, which is still exclusion, never search.
 - `acvus-extern-macro`: `#[extern_fn]` emits `Instances`; a plain function
   is `Instances::generic`.
 - `acvus-mir`: `ty::Instances` on `FnKind::Extern` and `Scheme`;
-  `InstanceChoice`, `ChoiceState::Settled(index)`,
-  `Solver::settle_pending_choices`, `Solver::settled_instance`;
+  `InstanceChoice`; the choice is a `Decision::Instance` settled by
+  `Solver::settle` (RFC-0042);
   `Callee::Extern`, `CastKind::Extern::instance`; the type checker's
   `direct_calls` and `operator_calls` carry a `Callee`.
 - `acvus-interpreter`: `Executable::Extern(Vec<ExternHandler>)`; a call

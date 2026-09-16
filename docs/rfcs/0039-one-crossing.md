@@ -57,8 +57,8 @@ Rust function bounds its type variable `T: TyVar + Cross<Rt>` and
 converts with `T::materialize` / `erase` where a value enters or leaves
 Rust; an iterator's items stay runtime values inside the pipeline
 (`next_value`), are lent to a predicate through `Ref::lend`, and become a
-`T` only where a terminal returns one. Nothing in `iterator.rs` or
-`iter_pipeline.rs` is unsafe.
+`T` only through `FromValue` (RFC-0041). Nothing in `iterator.rs` or
+`iter.rs` is unsafe.
 
 ## Not built
 
