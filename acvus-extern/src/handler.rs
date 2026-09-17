@@ -26,14 +26,6 @@ type Sync0<R> = dyn Fn(&R) -> <R as Runtime>::Value + Send + Sync;
 type Sync1<R> = dyn Fn(&R, <R as Runtime>::Value) -> <R as Runtime>::Value + Send + Sync;
 type Sync2<R> =
     dyn Fn(&R, <R as Runtime>::Value, <R as Runtime>::Value) -> <R as Runtime>::Value + Send + Sync;
-type Sync3<R> = dyn Fn(
-        &R,
-        <R as Runtime>::Value,
-        <R as Runtime>::Value,
-        <R as Runtime>::Value,
-    ) -> <R as Runtime>::Value
-    + Send
-    + Sync;
 type SyncN<R> = dyn Fn(&R, &mut [<R as Runtime>::Value]) -> <R as Runtime>::Value + Send + Sync;
 type AsyncFn<R> = dyn Fn(
         R,
@@ -52,7 +44,6 @@ where
     Arity0(Arc<Sync0<R>>),
     Arity1(Arc<Sync1<R>>),
     Arity2(Arc<Sync2<R>>),
-    Arity3(Arc<Sync3<R>>),
     ArityN(Arc<SyncN<R>>),
 }
 
@@ -65,7 +56,6 @@ where
             Self::Arity0(f) => Self::Arity0(Arc::clone(f)),
             Self::Arity1(f) => Self::Arity1(Arc::clone(f)),
             Self::Arity2(f) => Self::Arity2(Arc::clone(f)),
-            Self::Arity3(f) => Self::Arity3(Arc::clone(f)),
             Self::ArityN(f) => Self::ArityN(Arc::clone(f)),
         }
     }
@@ -82,7 +72,6 @@ where
             Self::Arity0(_) => Some(0),
             Self::Arity1(_) => Some(1),
             Self::Arity2(_) => Some(2),
-            Self::Arity3(_) => Some(3),
             Self::ArityN(_) => None,
         }
     }
@@ -114,12 +103,6 @@ where
                 let a0 = std::mem::take(&mut args[0]);
                 let a1 = std::mem::take(&mut args[1]);
                 f(rt, a0, a1)
-            }
-            Self::Arity3(f) => {
-                let a0 = std::mem::take(&mut args[0]);
-                let a1 = std::mem::take(&mut args[1]);
-                let a2 = std::mem::take(&mut args[2]);
-                f(rt, a0, a1, a2)
             }
             Self::ArityN(f) => f(rt, args),
         }

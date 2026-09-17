@@ -89,20 +89,6 @@ pub fn call_extern_2(machine: &mut Machine<'_>, op: &Op) -> Flow {
     Flow::Next
 }
 
-pub fn call_extern_3(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Sync(SyncHandler::Arity3(f)) = &call.handler else {
-        panic!("prepared as an arity-3 extern call, but the handler is not one")
-    };
-    yield_order(machine, call.order);
-    let a0 = machine.use_val(op.b);
-    let a1 = machine.use_val(op.c);
-    let a2 = machine.use_val(op.d);
-    let value = f(&machine.rt, a0, a1, a2);
-    machine.set(op.a, value);
-    Flow::Next
-}
-
 pub fn call_extern_n(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let call = extern_call(machine, op);
     let ExternHandler::Sync(SyncHandler::ArityN(f)) = &call.handler else {

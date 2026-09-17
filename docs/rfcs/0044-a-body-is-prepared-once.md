@@ -191,7 +191,7 @@ into its slot by a `SlotMove` the call carries. Everything else takes the
 lowest slot free over its live range.
 
 **A synchronous handler takes its arguments by value, one Rust parameter
-each, up to three** (stage 2c). A `Value` is a scalar pair, so
+each, up to two** (stage 2c). A `Value` is a scalar pair, so
 `Arity2(&R, Value, Value)` is six scalars under the `rust-call` ABI and
 every argument crosses in a register; the operation reads each out of the
 register its own `b`, `c`, `d` word names, with `Machine::use_val` — the
@@ -199,7 +199,7 @@ read the window's moves already used, which copies an inline value or a
 reference and moves a `Large` out. Such a call site constrains no run of
 registers at all, so `window_args` reports none to the selector and the
 selector's window invariant has nothing to check there. `SyncHandler` is
-the enum of the four by-value arities plus `ArityN`, and a window is
+the enum of the three by-value arities plus `ArityN`, and a window is
 what `ArityN`, every `AsyncFn(R, &mut [Value])` and every spawn keep: the
 handler `mem::take`s each argument out of the register it was lent, an
 asynchronous one before it builds its future, because the future is
@@ -207,12 +207,12 @@ asynchronous one before it builds its future, because the future is
 arguments past the frame. `Runtime::call_n` is unchanged; it is the
 closure boundary, not the handler's.
 
-The cut is at three because the fourth argument does not fit: measured on
-the emitted code, `Arity2` passes both arguments in registers, while
-`Arity3` runs the SysV integer registers out at seven and pushes the
-third argument's two words. Two pushes is still less than a window — a
-contiguous run the selector must find, a `SlotMove` per live argument, a
-slice borrow, and a `mem::take` per argument — so three stays by value.
+The cut is at two because the third argument does not fit: measured on
+the emitted code, `Arity2` passes both arguments in registers, while an
+`Arity3` ran the SysV integer registers out at seven and pushed the third
+argument's two words. The owner set the cut where every argument is in a
+register (2026-09-18); an extern of three or more parameters takes the
+window, and none of the benches calls one.
 
 Two values a `ValueId` cannot speak for keep one slot for the whole body:
 a storage a place names directly, because `storage::ref_var` builds a

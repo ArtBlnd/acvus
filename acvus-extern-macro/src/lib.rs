@@ -499,9 +499,9 @@ fn generate_extern_fn(
 }
 
 /// Remove `#[name]` from the attribute list; report whether it was there.
-/// RFC-0044 stage 2c fixes the by-value cut at three.
+/// RFC-0044 stage 2c fixes the by-value cut at two.
 fn by_value_variant(arity: usize) -> Option<Ident> {
-    (arity <= 3).then(|| format_ident!("Arity{arity}"))
+    (arity <= 2).then(|| format_ident!("Arity{arity}"))
 }
 
 fn take_marker_attr(attrs: &mut Vec<Attribute>, name: &str) -> bool {
