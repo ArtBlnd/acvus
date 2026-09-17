@@ -6,8 +6,8 @@ pub mod scripts;
 use acvus_extern::{Externs, Registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::{
-    ContextWrite, Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
-    Value,
+    ContextWrite, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
+    SequentialExecutor, Value, prepare_module,
 };
 
 /// What a run produced: its value, and the final value of every context it
@@ -57,7 +57,7 @@ pub fn split_context(
 /// Compile a template source -> MirModule + context id mapping.
 pub struct CompileResult {
     pub entry_qref: QualifiedRef,
-    pub modules: FxHashMap<QualifiedRef, Executable>,
+    pub modules: FxHashMap<QualifiedRef, acvus_mir::ir::MirModule>,
     pub context_names: FxHashMap<QualifiedRef, Astr>,
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
@@ -221,12 +221,7 @@ where
         );
     }
 
-    // Collect optimized modules as Executable::Module.
-    let modules: FxHashMap<QualifiedRef, Executable> = opt_result
-        .modules
-        .into_iter()
-        .map(|(qref, module)| (qref, Executable::Module(module)))
-        .collect();
+    let modules = opt_result.modules;
 
     // Build context qref -> name mapping.
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
@@ -251,10 +246,23 @@ pub fn execute_compiled(
     snapshot: HashMap<String, Value>,
     executor: Arc<dyn acvus_interpreter::Executor>,
 ) -> (InterpreterContext, Interpreter) {
-    let mut functions = cr.modules;
-    for (id, exec) in cr.extern_executables {
-        functions.insert(id, exec);
-    }
+    let mut functions = cr.extern_executables;
+    let ctx = PrepareCtx {
+        interner,
+        externs: &functions,
+        context_names: &cr.context_names,
+    };
+    let prepared: Vec<(QualifiedRef, Executable)> = cr
+        .modules
+        .iter()
+        .map(|(qref, module)| {
+            (
+                *qref,
+                Executable::Module(Arc::new(prepare_module(module, &ctx))),
+            )
+        })
+        .collect();
+    functions.extend(prepared);
     let shared = InterpreterContext::new(interner, functions, executor)
         .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
@@ -269,7 +277,7 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
     let cr = compile(interner, source, &context_types);
 
     // Debug: dump entry module IR + closures
-    if let Some(Executable::Module(module)) = cr.modules.get(&cr.entry_qref) {
+    if let Some(module) = cr.modules.get(&cr.entry_qref) {
         let ir = acvus_mir::printer::dump_with(interner, module);
         eprintln!("=== IR for entry ===\n{ir}");
         for (label, closure) in &module.closures {

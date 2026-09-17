@@ -341,8 +341,27 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
         &[(i.intern("d"), ty.clone())].into_iter().collect(),
         acvus_ext::std_registries(),
     );
-    let mut functions = compiled.modules;
-    functions.extend(compiled.extern_executables);
+    let mut functions = compiled.extern_executables;
+    let prepare_ctx = acvus_interpreter::PrepareCtx {
+        interner: &i,
+        externs: &functions,
+        context_names: &compiled.context_names,
+    };
+    let prepared: Vec<(
+        acvus_mir::graph::QualifiedRef,
+        acvus_interpreter::Executable,
+    )> = compiled
+        .modules
+        .iter()
+        .map(|(qref, module)| {
+            let prepared = acvus_interpreter::prepare_module(module, &prepare_ctx);
+            (
+                *qref,
+                acvus_interpreter::Executable::Module(Arc::new(prepared)),
+            )
+        })
+        .collect();
+    functions.extend(prepared);
     let shared = InterpreterContext::new(&i, functions, Arc::new(SequentialExecutor))
         .with_fn_types(compiled.fn_types)
         .with_context_names(compiled.context_names)

@@ -9,14 +9,13 @@ use std::mem::{self, MaybeUninit};
 use std::ptr::{self, NonNull};
 use std::sync::{Arc, LazyLock};
 
-use acvus_mir::ir::{Label, MirBody};
 use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
+use crate::code::Code;
 use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
-use crate::journal::InMemoryContext;
 use crate::vtable::{Composite, Header, Slot, Vtable, VtableRegistry};
 
 // -- Tag --------------------------------------------------------------
@@ -384,26 +383,24 @@ pub type OptionValue = Option<Value>;
 /// it crosses the extern boundary as itself (RFC-0038).
 pub type ResultValue = Result<Value, Value>;
 
-/// A self-contained callable: execution context + body + captured values.
+/// A self-contained callable: execution context, prepared body, captures.
 ///
 /// Created at `MakeClosure` time. It shares the run's live page: a
 /// context read in its body sees the store that precedes the call, as
 /// any call does (RFC-0014). Only captures are taken by value.
 pub struct FnValue {
-    pub shared: InterpreterContext,
+    pub shared: Arc<InterpreterContext>,
     pub page: Arc<dyn crate::journal::RuntimeContext>,
-    pub body: Arc<MirBody>,
-    pub closures: Arc<FxHashMap<Label, MirBody>>,
+    pub code: Arc<Code>,
     pub captures: Arc<[Value]>,
 }
 
 impl Clone for FnValue {
     fn clone(&self) -> Self {
         Self {
-            shared: self.shared.clone(),
+            shared: Arc::clone(&self.shared),
             page: Arc::clone(&self.page),
-            body: Arc::clone(&self.body),
-            closures: Arc::clone(&self.closures),
+            code: Arc::clone(&self.code),
             captures: Arc::clone(&self.captures),
         }
     }
@@ -411,17 +408,17 @@ impl Clone for FnValue {
 
 impl fmt::Debug for FnValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<fn {:?}>", Arc::as_ptr(&self.body))
+        write!(f, "<fn {:?}>", Arc::as_ptr(&self.code))
     }
 }
 
 impl FnValue {
     pub async fn call(&self, arg: Value) -> Result<Value, RuntimeError> {
-        crate::interpreter::fn_value_call(self, vec![arg]).await
+        crate::machine::fn_value_call(self, vec![arg]).await
     }
 
     pub async fn call2(&self, arg1: Value, arg2: Value) -> Result<Value, RuntimeError> {
-        crate::interpreter::fn_value_call(self, vec![arg1, arg2]).await
+        crate::machine::fn_value_call(self, vec![arg1, arg2]).await
     }
 }
 

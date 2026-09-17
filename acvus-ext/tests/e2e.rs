@@ -111,22 +111,29 @@ async fn run_parsed(
         panic!("compile failed: {}", errs.join("; "));
     }
 
-    let mut exec_fns: FxHashMap<QualifiedRef, Executable> = result
-        .modules
+    let mut exec_fns: FxHashMap<QualifiedRef, Executable> = handlers
         .into_iter()
-        .map(|(qref, module)| (qref, Executable::Module(module)))
+        .map(|(q, h)| (q, Executable::Extern(h)))
         .collect();
-    exec_fns.extend(
-        handlers
-            .into_iter()
-            .map(|(q, h)| (q, Executable::Extern(h))),
-    );
-
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
         .contexts
         .iter()
         .map(|ctx| (ctx.qref, ctx.qref.name))
         .collect();
+    let prepare_ctx = PrepareCtx {
+        interner,
+        externs: &exec_fns,
+        context_names: &context_names,
+    };
+    let prepared: Vec<(QualifiedRef, Executable)> = result
+        .modules
+        .iter()
+        .map(|(qref, module)| {
+            let prepared = prepare_module(module, &prepare_ctx);
+            (*qref, Executable::Module(std::sync::Arc::new(prepared)))
+        })
+        .collect();
+    exec_fns.extend(prepared);
     let snapshot: HashMap<String, Value> = context
         .into_iter()
         .map(|(k, (_, v))| (interner.resolve(k).to_string(), v))

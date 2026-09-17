@@ -212,10 +212,69 @@ fn micros(d: Duration) -> f64 {
     d.as_secs_f64() * 1e6
 }
 
+/// This mode exists so a profiler sees one phase. Pointed at the default
+/// bench, `perf record` attributes most of the process to the compiler, and
+/// the interpreter symbols the stage is about sit under the noise.
+fn execute_only(rt: &Runtime, case: &Case) -> Duration {
+    let Case { n, d, reps } = *case;
+    let inputs = inputs(n, d);
+    let json = context_json(&inputs);
+    let interner = Interner::new();
+    let source = format!("{ATTENTION} *get(&out, 0)");
+    let context_types: FxHashMap<Astr, Ty> =
+        split_context(&interner, context_of(&interner, &json)).0;
+    let cr = compile_script_mode(&interner, &source, &context_types);
+
+    let mut samples = Vec::new();
+    for rep in 0..reps {
+        let snapshot = snapshot_of(&interner, &json);
+        let (_shared, mut interp) = execute_compiled(
+            &interner,
+            compile_script_mode(&interner, &source, &context_types),
+            snapshot,
+            Arc::new(SequentialExecutor),
+        );
+        let start = Instant::now();
+        let value = rt.block_on(interp.execute()).expect("execution failed");
+        let elapsed = start.elapsed();
+        black_box(value);
+        if rep > 0 {
+            samples.push(elapsed);
+        }
+    }
+    drop(black_box(cr));
+    median(samples)
+}
+
+fn case_from_env() -> Case {
+    let size = std::env::var("ATTENTION_SIZE").unwrap_or_else(|_| "64x64".to_string());
+    let (n, d) = size
+        .split_once('x')
+        .unwrap_or_else(|| panic!("ATTENTION_SIZE is <n>x<d>, got {size:?}"));
+    Case {
+        n: n.parse()
+            .unwrap_or_else(|e| panic!("ATTENTION_SIZE n {n:?}: {e}")),
+        d: d.parse()
+            .unwrap_or_else(|e| panic!("ATTENTION_SIZE d {d:?}: {e}")),
+        reps: match std::env::var("ATTENTION_REPS") {
+            Ok(text) => text
+                .parse()
+                .unwrap_or_else(|e| panic!("ATTENTION_REPS {text:?}: {e}")),
+            Err(_) => 20,
+        },
+    }
+}
+
 fn main() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread tokio runtime");
+
+    if std::env::var("ATTENTION_PHASE").as_deref() == Ok("execute") {
+        println!("{:.1}", micros(execute_only(&rt, &case_from_env())));
+        return;
+    }
+
     let cases = [
         Case {
             n: 2,

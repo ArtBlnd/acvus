@@ -1,6 +1,6 @@
 # RFC-0044: A body is prepared once
 
-Status: Draft
+Status: Accepted
 Date: 2026-09-17
 Extends: RFC-0007, RFC-0018, RFC-0020, RFC-0040
 
@@ -129,6 +129,21 @@ first repetition discarded; 2026-09-17, tree `5f9cb4f` + the bench):
 | (2, 2) | 2326 µs | 7.1 µs | 37.4 µs | 0.04 µs | 934 |
 | (64, 64) | 2322 µs | 12.6 µs | 4090 µs | 5.3 µs | 770 |
 | (256, 128) | 2334 µs | 15.1 µs | 32538 µs | 53.5 µs | 608 |
+
+After stage 1, the same bench on the same machine (2026-09-17; the
+machine runs `Code`, one operation per instruction, slots still the
+body's `ValueId`s):
+
+| (n, d) | compile | setup | execute | Rust f64 | execute / Rust |
+|--------|---------|-------|---------|----------|----------------|
+| (2, 2) | 2343 µs | 20.3 µs | 10.9 µs | 0.04 µs | 272 |
+| (64, 64) | 2318 µs | 16.1 µs | 753 µs | 5.2 µs | 144 |
+| (256, 128) | 2346 µs | 18.3 µs | 6219 µs | 53.6 µs | 116 |
+
+The baseline row was re-measured beside it on the day: 38.0 µs, 4079 µs
+and 32022 µs, so the execute column falls by 3.5×, 5.4× and 5.1×. The
+setup column carries the preparation of every body and rose by 3 µs at
+(64, 64).
 
 The compile is constant in the input: the script is the same text at
 every size. The execute ratio falls with size because the fixed cost of

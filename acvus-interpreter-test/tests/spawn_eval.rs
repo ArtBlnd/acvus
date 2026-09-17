@@ -136,8 +136,21 @@ async fn spawn_eval_basic() {
     };
 
     let mut functions = FxHashMap::default();
-    functions.insert(entry_id, Executable::Module(entry_module));
-    functions.insert(callee_id, Executable::Module(callee_module));
+    let no_externs = FxHashMap::default();
+    let no_contexts = FxHashMap::default();
+    let prepare_ctx = acvus_interpreter::PrepareCtx {
+        interner: &interner,
+        externs: &no_externs,
+        context_names: &no_contexts,
+    };
+    let prepare = |module| {
+        Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(
+            &module,
+            &prepare_ctx,
+        )))
+    };
+    functions.insert(entry_id, prepare(entry_module));
+    functions.insert(callee_id, prepare(callee_module));
 
     let shared = make_context(&interner, functions);
     let page = empty_page();
@@ -244,8 +257,21 @@ async fn spawn_eval_multi_args() {
     };
 
     let mut functions = FxHashMap::default();
-    functions.insert(entry_id, Executable::Module(entry_module));
-    functions.insert(callee_id, Executable::Module(callee_module));
+    let no_externs = FxHashMap::default();
+    let no_contexts = FxHashMap::default();
+    let prepare_ctx = acvus_interpreter::PrepareCtx {
+        interner: &interner,
+        externs: &no_externs,
+        context_names: &no_contexts,
+    };
+    let prepare = |module| {
+        Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(
+            &module,
+            &prepare_ctx,
+        )))
+    };
+    functions.insert(entry_id, prepare(entry_module));
+    functions.insert(callee_id, prepare(callee_module));
 
     let shared = make_context(&interner, functions);
     let page = empty_page();

@@ -3,7 +3,9 @@
 
 use acvus_ast::Span;
 use acvus_extern::{Externs, Registry};
-use acvus_interpreter::{AcvusRuntime, Executable};
+use std::sync::Arc;
+
+use acvus_interpreter::{AcvusRuntime, Executable, PrepareCtx, prepare_module};
 use acvus_mir::graph::{
     CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef, extract, infer, lower,
     optimize,
@@ -161,21 +163,26 @@ pub fn compile(
             .get(&entry)
             .expect("the entry function lowers to a module"),
     );
-    let mut executables: FxHashMap<QualifiedRef, Executable> = optimized
-        .modules
+    let mut executables: FxHashMap<QualifiedRef, Executable> = handlers
         .into_iter()
-        .map(|(q, m)| (q, Executable::Module(m)))
+        .map(|(q, h)| (q, Executable::Extern(h)))
         .collect();
-    executables.extend(
-        handlers
-            .into_iter()
-            .map(|(q, h)| (q, Executable::Extern(h))),
-    );
-    let context_names = graph
+    let context_names: FxHashMap<QualifiedRef, Astr> = graph
         .contexts
         .iter()
         .map(|c| (c.qref, c.qref.name))
         .collect();
+    let ctx = PrepareCtx {
+        interner,
+        externs: &executables,
+        context_names: &context_names,
+    };
+    let prepared: Vec<(QualifiedRef, Executable)> = optimized
+        .modules
+        .iter()
+        .map(|(q, m)| (*q, Executable::Module(Arc::new(prepare_module(m, &ctx)))))
+        .collect();
+    executables.extend(prepared);
     Ok(Compiled {
         entry,
         functions: executables,

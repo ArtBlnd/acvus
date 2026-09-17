@@ -177,11 +177,7 @@ fn ir_pure_function_call_no_context_bindings() {
         vec![registry],
     );
 
-    let entry_module = cr.modules.get(&cr.entry_qref).unwrap();
-    let module = match entry_module {
-        Executable::Module(m) => m,
-        _ => panic!("entry should be a Module"),
-    };
+    let module = cr.modules.get(&cr.entry_qref).unwrap();
 
     let call_insts: Vec<_> = module
         .main
@@ -193,7 +189,7 @@ fn ir_pure_function_call_no_context_bindings() {
                 InstKind::FunctionCall {
                     callee: acvus_mir::ir::Callee::Extern { id, .. },
                     ..
-                } if cr.extern_executables.contains_key(id)
+                } if cr.extern_executables.contains_key(&id)
             )
         })
         .collect();
@@ -325,10 +321,7 @@ async fn run_io_script_mode_on(
 
 /// Dump MIR and return (spawn_positions, eval_positions) for assertion.
 fn dump_and_positions(label: &str, i: &Interner, cr: &CompileResult) -> (Vec<usize>, Vec<usize>) {
-    let module = match cr.modules.get(&cr.entry_qref).unwrap() {
-        Executable::Module(m) => m,
-        _ => panic!("expected Module"),
-    };
+    let module = cr.modules.get(&cr.entry_qref).unwrap();
     let dump = acvus_mir::printer::dump_with(i, module);
     eprintln!("=== {label} ===\n{dump}");
 
@@ -642,9 +635,7 @@ fn a_commutative_call_after_a_branch_is_issued_with_the_one_before_mir() {
 }
 
 fn has_merge(cr: &CompileResult) -> bool {
-    let Executable::Module(m) = cr.modules.get(&cr.entry_qref).unwrap() else {
-        panic!("expected Module");
-    };
+    let m = cr.modules.get(&cr.entry_qref).unwrap();
     m.main
         .insts
         .iter()

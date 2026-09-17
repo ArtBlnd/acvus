@@ -4,6 +4,7 @@
 use std::any::{TypeId, type_name};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use acvus_extern::{CallToken, Runtime, Trap};
 
@@ -14,7 +15,7 @@ use crate::value::{Tag, Value};
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
 #[derive(Clone)]
-pub struct AcvusRuntime(pub InterpreterContext);
+pub struct AcvusRuntime(pub Arc<InterpreterContext>);
 
 impl Runtime for AcvusRuntime {
     type Value = Value;
@@ -130,7 +131,12 @@ where
 {
     match Tag::of::<T>() {
         Some(tag) => {
-            debug_assert_eq!(value.tag(), tag, "read: value is not a {}", type_name::<T>());
+            debug_assert_eq!(
+                value.tag(),
+                tag,
+                "read: value is not a {}",
+                type_name::<T>()
+            );
             // SAFETY: an `Inline` `T` was written into the word by `erase`.
             unsafe { &*(value.small_ref() as *const u64 as *const T) }
         }
@@ -147,7 +153,12 @@ where
 {
     match Tag::of::<T>() {
         Some(tag) => {
-            debug_assert_eq!(value.tag(), tag, "read_mut: value is not a {}", type_name::<T>());
+            debug_assert_eq!(
+                value.tag(),
+                tag,
+                "read_mut: value is not a {}",
+                type_name::<T>()
+            );
             // SAFETY: an `Inline` `T` was written into the word by `erase`.
             unsafe { &mut *(value.small_mut() as *mut u64 as *mut T) }
         }
@@ -160,7 +171,7 @@ impl AcvusRuntime {
     fn run<'a>(&'a self, f: &'a Value, args: Vec<Value>) -> <Self as Runtime>::CallFuture<'a> {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        Box::pin(async move { crate::interpreter::fn_value_call(closure, args).await })
+        Box::pin(async move { crate::machine::fn_value_call(closure, args).await })
     }
 }
 
