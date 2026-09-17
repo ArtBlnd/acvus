@@ -257,3 +257,18 @@ async fn closure_reads_context_at_call() {
     .await;
     assert_eq!(result.as_int(), 21);
 }
+
+#[tokio::test]
+async fn a_factor_the_nested_loops_never_assign_still_reaches_the_inner_body() {
+    let i = Interner::new();
+    let c = ctx(&i, vec![("n", int(3))]);
+    let result = run_script(
+        &i,
+        "let d = @n; let k = d + 3; let total = 0; let t = 0; \
+         while t < d { let i = 0; while i < d { total = total + k; i = i + 1; } t = t + 1; } \
+         total",
+        c,
+    )
+    .await;
+    assert_eq!(result.as_int(), 54);
+}

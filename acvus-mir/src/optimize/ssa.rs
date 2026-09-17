@@ -10,6 +10,16 @@
 //!    - `use_var(block, var)` when reading a variable -> returns ValueId
 //! 3. When all predecessors of a block are known, `seal_block(block)`
 //! 4. `finish()` returns the PHI insertions to apply
+//!
+//! Removing a trivial PHI only where it is resolved was once the whole of
+//! it, and nested loops made that visible: an attention kernel's outer loop
+//! header carried `d`, `n` and `scale` as block parameters although neither
+//! loop assigns them. The outer header's PHI is resolved while the inner
+//! header's is still pending, so it sees two distinct operands and is kept;
+//! the inner PHI then resolves to the outer one, and the operand that kept
+//! the outer PHI alive is gone. Braun et al. answer this with a users set
+//! and a recursive `tryRemoveTrivialPhi`; `finish` answers it as a fixpoint
+//! over the PHIs that are left.
 
 use crate::graph::QualifiedRef;
 use crate::ir::{Label, ValueId};
@@ -72,6 +82,36 @@ pub struct PhiInsertion {
 
 /// Entry block label constant - used by Lowerer to identify the implicit entry block.
 pub const ENTRY_BLOCK: Label = Label(u32::MAX);
+
+/// The value `val` stands for once every removed PHI on the way is replaced.
+fn substituted(trivial_subst: &FxHashMap<ValueId, ValueId>, val: ValueId) -> ValueId {
+    let mut resolved = val;
+    while let Some(&next) = trivial_subst.get(&resolved) {
+        resolved = next;
+    }
+    resolved
+}
+
+/// Record `phi` as trivial and return whether it was: its operands, which the
+/// caller has already substituted, are one value besides the PHI itself.
+fn remove_if_trivial(phi: &PhiInsertion, trivial_subst: &mut FxHashMap<ValueId, ValueId>) -> bool {
+    let unique: FxHashSet<ValueId> = phi
+        .incoming
+        .iter()
+        .map(|(_, v)| *v)
+        .filter(|&v| v != phi.result)
+        .collect();
+    let mut unique = unique.into_iter();
+    let (Some(single), None) = (unique.next(), unique.next()) else {
+        return false;
+    };
+    let single = substituted(trivial_subst, single);
+    if single == phi.result {
+        return false;
+    }
+    trivial_subst.insert(phi.result, single);
+    true
+}
 
 impl Default for SSABuilder {
     fn default() -> Self {
@@ -154,27 +194,30 @@ impl SSABuilder {
         }
     }
 
-    /// Finish SSA construction. Returns PHI insertions and the trivial-phi substitution map.
-    ///
-    /// Resolves incoming values through trivial_subst: if a phi operand
-    /// references a trivially-eliminated phi, it's replaced with the final value.
-    ///
-    /// The trivial_subst map is also returned so callers can resolve any
-    /// ValueIds that reference trivially-eliminated phis (e.g. var_subst entries).
-    pub fn finish(mut self) -> (Vec<PhiInsertion>, FxHashMap<ValueId, ValueId>) {
-        if !self.trivial_subst.is_empty() {
-            for phi in &mut self.phi_results {
+    /// Finish SSA construction: substitute the operands of the PHIs that
+    /// were kept and remove those that are trivial once substituted, until a
+    /// round removes none. Returns the PHI insertions and the trivial-phi
+    /// substitution map, which callers apply to their own ValueIds (e.g.
+    /// `var_subst` entries) to reach the value a removed PHI stood for.
+    pub fn finish(self) -> (Vec<PhiInsertion>, FxHashMap<ValueId, ValueId>) {
+        let Self {
+            mut phi_results,
+            mut trivial_subst,
+            ..
+        } = self;
+
+        loop {
+            for phi in &mut phi_results {
                 for (_, val) in &mut phi.incoming {
-                    // Walk the substitution chain (A->B->C if B was also trivial).
-                    let mut resolved = *val;
-                    while let Some(&next) = self.trivial_subst.get(&resolved) {
-                        resolved = next;
-                    }
-                    *val = resolved;
+                    *val = substituted(&trivial_subst, *val);
                 }
             }
+            let kept = phi_results.len();
+            phi_results.retain(|phi| !remove_if_trivial(phi, &mut trivial_subst));
+            if phi_results.len() == kept {
+                return (phi_results, trivial_subst);
+            }
         }
-        (self.phi_results, self.trivial_subst)
     }
 
     // -- Internal ----------------------------------------------------
@@ -573,6 +616,207 @@ mod tests {
             ssa.finish().0.is_empty(),
             "trivial PHI should be eliminated"
         );
+    }
+
+    /// The seal order in these tests is `ssa_pass`'s: every block as it is
+    /// passed, the loop headers last. Change that protocol and these tests
+    /// stop reproducing what the pass does.
+    fn nested_loops(ssa: &mut SSABuilder) -> NestedLoops {
+        let loops = NestedLoops {
+            entry: label(0),
+            outer_header: label(1),
+            outer_body: label(2),
+            inner_header: label(3),
+            inner_body: label(4),
+            outer_latch: label(5),
+            exit: label(6),
+        };
+        for (to, from) in [
+            (loops.outer_header, loops.entry),
+            (loops.outer_body, loops.outer_header),
+            (loops.inner_header, loops.outer_body),
+            (loops.inner_body, loops.inner_header),
+            (loops.inner_header, loops.inner_body),
+            (loops.outer_latch, loops.inner_header),
+            (loops.outer_header, loops.outer_latch),
+            (loops.exit, loops.outer_header),
+        ] {
+            ssa.add_predecessor(to, from);
+        }
+        loops
+    }
+
+    struct NestedLoops {
+        entry: Label,
+        outer_header: Label,
+        outer_body: Label,
+        inner_header: Label,
+        inner_body: Label,
+        outer_latch: Label,
+        exit: Label,
+    }
+
+    /// The incident: the attention kernel's `d` is read by the inner loop's
+    /// condition and assigned by neither loop, and both headers carried it.
+    /// The inner PHI is trivial when it resolves; the outer one becomes
+    /// trivial only because of that removal.
+    #[test]
+    fn an_outer_invariant_read_in_the_inner_loop_needs_no_phi() {
+        let i = Interner::new();
+        let d = make_ctx(&i, "d");
+        let mut ssa = SSABuilder::new();
+        let mut alloc = make_val_alloc();
+
+        let l = nested_loops(&mut ssa);
+        ssa.seal_block(l.entry, &mut alloc);
+        let entry_def = alloc(d);
+        ssa.define(l.entry, d, entry_def);
+        ssa.seal_block(l.outer_body, &mut alloc);
+
+        let read = ssa.use_var(l.inner_header, d, &mut alloc);
+        for b in [l.inner_body, l.outer_latch, l.exit] {
+            ssa.seal_block(b, &mut alloc);
+        }
+        for b in [l.outer_header, l.inner_header] {
+            ssa.seal_block(b, &mut alloc);
+        }
+
+        let (phis, subst) = ssa.finish();
+        assert!(
+            phis.is_empty(),
+            "neither header carries a value no loop assigns, got {phis:?}"
+        );
+        assert_eq!(
+            substituted(&subst, read),
+            entry_def,
+            "the read in the inner loop is the entry definition"
+        );
+    }
+
+    #[test]
+    fn a_variable_the_inner_loop_assigns_keeps_a_phi_at_both_headers() {
+        let i = Interner::new();
+        let s = make_ctx(&i, "s");
+        let mut ssa = SSABuilder::new();
+        let mut alloc = make_val_alloc();
+
+        let l = nested_loops(&mut ssa);
+        ssa.seal_block(l.entry, &mut alloc);
+        let entry_def = alloc(s);
+        ssa.define(l.entry, s, entry_def);
+        ssa.seal_block(l.outer_body, &mut alloc);
+
+        let read = ssa.use_var(l.inner_header, s, &mut alloc);
+        ssa.seal_block(l.inner_body, &mut alloc);
+        let written = alloc(s);
+        ssa.define(l.inner_body, s, written);
+        for b in [l.outer_latch, l.exit, l.outer_header, l.inner_header] {
+            ssa.seal_block(b, &mut alloc);
+        }
+
+        let (phis, subst) = ssa.finish();
+        let blocks: FxHashSet<Label> = phis.iter().map(|p| p.block).collect();
+        assert_eq!(
+            blocks,
+            FxHashSet::from_iter([l.outer_header, l.inner_header]),
+            "both headers carry it, got {phis:?}"
+        );
+        assert_eq!(substituted(&subst, read), read, "the inner PHI is the read");
+    }
+
+    #[test]
+    fn a_diamond_in_a_loop_that_writes_on_one_arm_keeps_its_phi() {
+        let i = Interner::new();
+        let x = make_ctx(&i, "x");
+        let mut ssa = SSABuilder::new();
+        let mut alloc = make_val_alloc();
+
+        let (entry, header, written_arm, empty_arm, merge, exit) =
+            (label(0), label(1), label(2), label(3), label(4), label(5));
+        for (to, from) in [
+            (header, entry),
+            (written_arm, header),
+            (empty_arm, header),
+            (merge, written_arm),
+            (merge, empty_arm),
+            (header, merge),
+            (exit, header),
+        ] {
+            ssa.add_predecessor(to, from);
+        }
+        ssa.seal_block(entry, &mut alloc);
+        let entry_def = alloc(x);
+        ssa.define(entry, x, entry_def);
+
+        let _header_read = ssa.use_var(header, x, &mut alloc);
+        ssa.seal_block(written_arm, &mut alloc);
+        let written = alloc(x);
+        ssa.define(written_arm, x, written);
+        for b in [empty_arm, merge, exit, header] {
+            ssa.seal_block(b, &mut alloc);
+        }
+
+        let (phis, _) = ssa.finish();
+        let blocks: FxHashSet<Label> = phis.iter().map(|p| p.block).collect();
+        assert_eq!(
+            blocks,
+            FxHashSet::from_iter([header, merge]),
+            "the merge and the header both merge two values, got {phis:?}"
+        );
+    }
+
+    /// The PHI chain is `outer(entry, middle)`, `middle(outer, inner)`,
+    /// `inner(middle, inner)`: each removal is what makes the next one
+    /// trivial, so one pass of substitution is not enough.
+    #[test]
+    fn three_nested_loops_collapse_the_whole_phi_chain() {
+        let i = Interner::new();
+        let d = make_ctx(&i, "d");
+        let mut ssa = SSABuilder::new();
+        let mut alloc = make_val_alloc();
+
+        let entry = label(0);
+        let headers = [label(1), label(3), label(5)];
+        let bodies = [label(2), label(4)];
+        let latches = [label(8), label(7), label(6)];
+        let exit = label(9);
+        for (to, from) in [
+            (headers[0], entry),
+            (bodies[0], headers[0]),
+            (headers[1], bodies[0]),
+            (bodies[1], headers[1]),
+            (headers[2], bodies[1]),
+            (latches[2], headers[2]),
+            (headers[2], latches[2]),
+            (latches[1], headers[2]),
+            (headers[1], latches[1]),
+            (latches[0], headers[1]),
+            (headers[0], latches[0]),
+            (exit, headers[0]),
+        ] {
+            ssa.add_predecessor(to, from);
+        }
+        ssa.seal_block(entry, &mut alloc);
+        let entry_def = alloc(d);
+        ssa.define(entry, d, entry_def);
+        for b in bodies {
+            ssa.seal_block(b, &mut alloc);
+        }
+
+        let read = ssa.use_var(headers[2], d, &mut alloc);
+        for b in latches.into_iter().chain([exit]) {
+            ssa.seal_block(b, &mut alloc);
+        }
+        for b in headers {
+            ssa.seal_block(b, &mut alloc);
+        }
+
+        let (phis, subst) = ssa.finish();
+        assert!(
+            phis.is_empty(),
+            "no header carries a value no loop assigns, got {phis:?}"
+        );
+        assert_eq!(substituted(&subst, read), entry_def);
     }
 
     /// Multiple contexts - independent PHIs.
