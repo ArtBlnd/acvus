@@ -167,6 +167,24 @@ impl TyVarBound {
         }
     }
 
+    /// The bound either side satisfies (RFC-0043).
+    pub fn union(self, other: Self) -> Self {
+        let shapes = |bound: Self| -> Option<Vec<PolyTy>> {
+            match bound {
+                Self::Any => None,
+                Self::OneOf(shapes) => Some(shapes),
+                Self::Integer { among, .. } => Some(among.into_iter().map(TyTerm::Int).collect()),
+            }
+        };
+        match (shapes(self), shapes(other)) {
+            (Some(mut a), Some(b)) => {
+                a.extend(b);
+                Self::OneOf(a)
+            }
+            (None, _) | (_, None) => Self::Any,
+        }
+    }
+
     /// The bound both sides satisfy: the pairwise unifiers of their shapes.
     /// `None` when no type does.
     pub fn meet(&self, other: &Self) -> Option<Self> {
@@ -246,6 +264,66 @@ impl Scheme {
             .cloned()
             .unwrap_or(TyVarBound::Any)
     }
+
+    pub fn params(&self) -> &[ParamTerm<Poly>] {
+        match &self.ty {
+            TyTerm::Fn { params, .. } => params,
+            _ => &[],
+        }
+    }
+
+    /// The bound a call's parameter takes from this scheme's parameter
+    /// (RFC-0043): every `OneOf`-bounded variable expanded to its shapes,
+    /// shifted past the scheme's variables so the two sets stay apart.
+    pub fn param_bound(&self, param: &PolyTy) -> TyVarBound {
+        let scheme_span = var_span(&self.ty);
+        let mut shapes = vec![param.clone()];
+        while let Some((var, bound)) = shapes.iter().find_map(|s| self.first_bounded_var(s)) {
+            shapes = shapes
+                .iter()
+                .flat_map(|shape| {
+                    let by = scheme_span.max(var_span(shape));
+                    bound
+                        .iter()
+                        .map(move |b| substitute_var(shape, var, &shift_vars(b, by)))
+                })
+                .collect();
+        }
+        if shapes.iter().any(|shape| matches!(shape, TyTerm::Var(_))) {
+            return TyVarBound::Any;
+        }
+        TyVarBound::OneOf(shapes)
+    }
+
+    fn first_bounded_var(&self, pattern: &PolyTy) -> Option<(u32, Vec<PolyTy>)> {
+        let mut found = None;
+        let visited = pattern.map::<Poly>(
+            &mut |v| {
+                if found.is_none()
+                    && let TyVarBound::OneOf(bound) = self.bound_of(v)
+                {
+                    found = Some((v, bound));
+                }
+                TyTerm::Var(v)
+            },
+            &mut IdentityTerm::Var,
+            &mut EffectTerm::Var,
+            &mut LenTerm::Var,
+            &mut Repr::Var,
+        );
+        debug_assert_eq!(&visited, pattern, "the identity map rebuilds the pattern");
+        found
+    }
+}
+
+fn substitute_var(pattern: &PolyTy, var: u32, by: &PolyTy) -> PolyTy {
+    pattern.map::<Poly>(
+        &mut |v| if v == var { by.clone() } else { TyTerm::Var(v) },
+        &mut IdentityTerm::Var,
+        &mut EffectTerm::Var,
+        &mut LenTerm::Var,
+        &mut Repr::Var,
+    )
 }
 
 /// Whether a concrete type has the shape of a polymorphic pattern.
@@ -465,6 +543,18 @@ struct VarSpan {
     effect: u32,
     len: u32,
     repr: u32,
+}
+
+impl VarSpan {
+    fn max(self, other: Self) -> Self {
+        Self {
+            ty: self.ty.max(other.ty),
+            identity: self.identity.max(other.identity),
+            effect: self.effect.max(other.effect),
+            len: self.len.max(other.len),
+            repr: self.repr.max(other.repr),
+        }
+    }
 }
 
 fn var_span(pattern: &PolyTy) -> VarSpan {
@@ -1550,13 +1640,14 @@ pub struct TypeEnv {
 /// What a name resolves to among the environment's functions.
 pub enum FnLookup<'a> {
     Found(QualifiedRef, &'a Scheme),
-    Ambiguous(Vec<QualifiedRef>),
+    /// A bare name several namespaces declare (RFC-0043).
+    Overloaded(Vec<(QualifiedRef, &'a Scheme)>),
     Missing,
 }
 
 impl TypeEnv {
-    /// A script's bare name is its own function if it has one, else the one
-    /// function of that name under any namespace (RFC-0021).
+    /// A script's bare name is its own function if it has one, else the
+    /// functions of that name under any namespace (RFC-0021, RFC-0043).
     pub fn resolve_fn(&self, name: QualifiedRef) -> FnLookup<'_> {
         if let Some(scheme) = self.functions.get(&name) {
             return FnLookup::Found(name, scheme);
@@ -1574,7 +1665,12 @@ impl TypeEnv {
         match candidates.as_slice() {
             [] => FnLookup::Missing,
             [one] => FnLookup::Found(*one, &self.functions[one]),
-            _ => FnLookup::Ambiguous(candidates),
+            _ => FnLookup::Overloaded(
+                candidates
+                    .into_iter()
+                    .map(|qref| (qref, &self.functions[&qref]))
+                    .collect(),
+            ),
         }
     }
 

@@ -1,0 +1,277 @@
+//! The iterator producers, stages, consumers and aggregates added after
+//! RFC-0041, each at the script contract: `range`, `range_step`,
+//! `step_by`, `take_while`, `skip_while`, `chunks`, `dedup`, `count`,
+//! `last`, `nth`, `position`, `sum`, `product`, `min`, `max`,
+//! `min_by_key`, `max_by_key`. A trap surfaces here as a panic of the
+//! harness carrying the trap's message.
+
+use acvus_interpreter::{AcvusRuntime, Value};
+use acvus_interpreter_test::*;
+use acvus_utils::Interner;
+
+async fn run(source: &str) -> Value {
+    let i = Interner::new();
+    let registries = acvus_ext::std_registries::<AcvusRuntime>();
+    run_script_mode_with_externs(&i, source, Context::default(), registries)
+        .await
+        .value
+}
+
+// -- Producers ------------------------------------------------------------------
+
+#[tokio::test]
+async fn range_is_half_open() {
+    assert_eq!(run("range(0, 5) | count()").await.as_int(), 5);
+    assert_eq!(run("range(3, 4) | sum()").await.as_int(), 3);
+}
+
+#[tokio::test]
+async fn range_with_end_not_after_start_is_empty() {
+    assert_eq!(run("range(5, 5) | count()").await.as_int(), 0);
+    assert_eq!(run("range(7, 2) | count()").await.as_int(), 0);
+}
+
+#[tokio::test]
+async fn range_step_counts_up_by_the_step_short_of_the_end() {
+    let v = run("let xs = range_step(0, 10, 3) | collect; xs.len() * 100 + *xs.get(3)").await;
+    assert_eq!(v.as_int(), 409, "0, 3, 6, 9");
+}
+
+#[tokio::test]
+async fn range_step_with_a_negative_step_counts_down() {
+    assert_eq!(
+        run("range_step(10, 0, -3) | sum()").await.as_int(),
+        22,
+        "10 + 7 + 4 + 1"
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "range_step")]
+async fn range_step_with_a_zero_step_traps() {
+    run("range_step(0, 5, 0) | count()").await;
+}
+
+// -- Stages ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn step_by_keeps_the_first_and_every_nth_after_it() {
+    let v = run("let xs = range(0, 10) | step_by(3) | collect; xs.len() * 100 + *xs.get(3)").await;
+    assert_eq!(v.as_int(), 409, "0, 3, 6, 9");
+}
+
+#[tokio::test]
+#[should_panic(expected = "step_by")]
+async fn step_by_zero_traps() {
+    run("range(0, 3) | step_by(0) | count()").await;
+}
+
+#[tokio::test]
+async fn take_while_stops_at_the_first_element_that_fails() {
+    assert_eq!(
+        run("into_iter([1, 2, 9, 3]) | take_while(|x| -> *x < 5) | count()")
+            .await
+            .as_int(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn skip_while_resumes_at_the_first_element_that_fails_and_keeps_the_rest() {
+    assert_eq!(
+        run("into_iter([1, 2, 9, 3]) | skip_while(|x| -> *x < 5) | sum()")
+            .await
+            .as_int(),
+        12
+    );
+}
+
+#[tokio::test]
+async fn chunks_cover_the_source_with_a_short_last_chunk() {
+    assert_eq!(run("range(0, 7) | chunks(3) | count()").await.as_int(), 3);
+    let v = run("let c = range(0, 7) | chunks(3) | last() | unwrap; c.len()").await;
+    assert_eq!(v.as_int(), 1);
+}
+
+#[tokio::test]
+#[should_panic(expected = "chunks")]
+async fn chunks_of_zero_traps() {
+    run("range(0, 3) | chunks(0) | count()").await;
+}
+
+#[tokio::test]
+async fn dedup_collapses_consecutive_equal_elements_only() {
+    let v = run("let xs = into_iter([1, 1, 2, 2, 1]) | dedup | collect; xs.len()").await;
+    assert_eq!(v.as_int(), 3);
+}
+
+#[tokio::test]
+async fn dedup_over_strings_reads_each_element_in_place() {
+    let v = run(r#"into_iter(["a", "a", "b", "b", "a"]) | dedup | count()"#).await;
+    assert_eq!(v.as_int(), 3);
+}
+
+// -- Consumers ------------------------------------------------------------------
+
+#[tokio::test]
+async fn count_is_the_number_of_elements_after_the_stages() {
+    let v = run("range(0, 5) | map(|x| -> x * 2) | filter(|x| -> *x > 2) | count()").await;
+    assert_eq!(v.as_int(), 3, "4, 6, 8");
+}
+
+#[tokio::test]
+async fn last_is_the_final_element_or_none() {
+    assert_eq!(
+        run("range(3, 8) | last() | unwrap_or(-1)").await.as_int(),
+        7
+    );
+    assert_eq!(
+        run("range(0, 0) | last() | unwrap_or(-1)").await.as_int(),
+        -1
+    );
+}
+
+#[tokio::test]
+async fn nth_is_zero_based_and_none_past_the_end() {
+    assert_eq!(
+        run("range(10, 20) | nth(2) | unwrap_or(-1)").await.as_int(),
+        12
+    );
+    assert_eq!(
+        run("range(0, 2) | nth(5) | unwrap_or(-1)").await.as_int(),
+        -1
+    );
+}
+
+#[tokio::test]
+async fn position_is_the_index_of_the_first_match_or_none() {
+    assert_eq!(
+        run("into_iter([5, 6, 7]) | position(|x| -> *x == 7) | unwrap_or(-1)")
+            .await
+            .as_int(),
+        2
+    );
+    assert_eq!(
+        run("into_iter([5, 6, 7]) | position(|x| -> *x == 9) | unwrap_or(-1)")
+            .await
+            .as_int(),
+        -1
+    );
+}
+
+// -- Aggregates -----------------------------------------------------------------
+
+#[tokio::test]
+async fn sum_of_a_range_of_ints() {
+    assert_eq!(run("range(0, 5) | sum()").await.as_int(), 10);
+}
+
+#[tokio::test]
+async fn sum_of_an_empty_iter_is_zero() {
+    assert_eq!(run("range(0, 0) | sum()").await.as_int(), 0);
+}
+
+#[tokio::test]
+async fn sum_of_floats_is_a_float() {
+    assert_eq!(run("into_iter([1.0, 2.5]) | sum()").await.as_float(), 3.5);
+}
+
+#[tokio::test]
+async fn product_of_a_range_and_of_nothing() {
+    assert_eq!(run("range(1, 5) | product()").await.as_int(), 24);
+    assert_eq!(run("range(0, 0) | product()").await.as_int(), 1);
+}
+
+#[tokio::test]
+#[should_panic(expected = "integer overflow")]
+async fn sum_that_overflows_an_int_traps() {
+    run("into_iter([9223372036854775807, 1]) | sum()").await;
+}
+
+#[tokio::test]
+async fn max_of_an_empty_iter_is_none() {
+    assert_eq!(
+        run("range(0, 0) | max() | unwrap_or(-1)").await.as_int(),
+        -1
+    );
+}
+
+#[tokio::test]
+async fn min_and_max_of_ints() {
+    assert_eq!(
+        run("into_iter([3, 9, 2]) | max() | unwrap_or(-1)")
+            .await
+            .as_int(),
+        9
+    );
+    assert_eq!(
+        run("into_iter([3, 9, 2]) | min() | unwrap_or(-1)")
+            .await
+            .as_int(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn min_and_max_of_floats() {
+    assert_eq!(
+        run("into_iter([1.5, -2.0]) | min() | unwrap_or(0.0)")
+            .await
+            .as_float(),
+        -2.0
+    );
+    assert_eq!(
+        run("into_iter([1.5, -2.0]) | max() | unwrap_or(0.0)")
+            .await
+            .as_float(),
+        1.5
+    );
+}
+
+#[tokio::test]
+async fn min_by_key_and_max_by_key_return_the_element_not_the_key() {
+    assert_eq!(
+        run("into_iter([3, -7, 5]) | min_by_key(|x| -> *x * *x) | unwrap_or(0)")
+            .await
+            .as_int(),
+        3
+    );
+    assert_eq!(
+        run("into_iter([3, -7, 5]) | max_by_key(|x| -> *x * *x) | unwrap_or(0)")
+            .await
+            .as_int(),
+        -7
+    );
+}
+
+#[tokio::test]
+async fn min_by_key_and_max_by_key_keep_the_first_of_equal_keys() {
+    assert_eq!(
+        run("into_iter([4, -4, 2, -2]) | min_by_key(|x| -> *x * *x) | unwrap_or(0)")
+            .await
+            .as_int(),
+        2
+    );
+    assert_eq!(
+        run("into_iter([4, -4, 2, -2]) | max_by_key(|x| -> *x * *x) | unwrap_or(0)")
+            .await
+            .as_int(),
+        4
+    );
+}
+
+#[tokio::test]
+async fn min_by_key_over_an_empty_iter_is_none() {
+    assert_eq!(
+        run("range(0, 0) | min_by_key(|x| -> *x) | unwrap_or(-1)")
+            .await
+            .as_int(),
+        -1
+    );
+}
+
+#[tokio::test]
+async fn a_pipeline_mixing_the_new_stages_and_an_aggregate() {
+    let v = run("range(0, 5) | map(|x| -> x * 2) | step_by(2) | sum()").await;
+    assert_eq!(v.as_int(), 12, "0, 4, 8");
+}

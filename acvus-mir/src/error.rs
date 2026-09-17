@@ -131,10 +131,15 @@ pub enum MirErrorKind {
     ReferenceInData,
     /// A lambda returned a reference.
     ReferenceReturned,
-    /// A bare name that two namespaces both declare.
+    /// RFC-0043.
     AmbiguousFunction {
         name: String,
         candidates: Vec<String>,
+    },
+    /// RFC-0043.
+    NoMatchingFunction {
+        name: String,
+        ty: Ty,
     },
     /// One call names the same place twice.
     PlaceNamedTwice(String),
@@ -256,6 +261,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::AmbiguousFunction { name, candidates } => {
                 write!(f, "`{name}` is declared by {}", candidates.join(" and "))
+            }
+            MirErrorKind::NoMatchingFunction { name, ty } => {
+                write!(
+                    f,
+                    "no `{name}` takes a call of type {}",
+                    ty.display(interner)
+                )
             }
             MirErrorKind::PlaceNamedTwice(place) => {
                 write!(f, "`{place}` is named twice in one call")

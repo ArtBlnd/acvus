@@ -72,5 +72,6 @@ acvus type does not mention it.
 - The interpreter's context and the test harnesses take an `Externs`.
 - A script's bare name resolves to its own function if it declares one,
   else to the one extern of that name under any namespace; a name two
-  namespaces declare is an error at the call. A qualified call form in
-  the grammar is not part of this ruling.
+  namespaces declare is a set of signatures the call's evidence settles
+  (RFC-0043). A qualified call form in the grammar is not part of this
+  ruling.

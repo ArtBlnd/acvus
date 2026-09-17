@@ -3,18 +3,90 @@
 //! - Constructors: the shared signatures `iter::into_iter` (consuming) and
 //!   `iter::as_iter` (over a borrowed container, yielding references), with
 //!   instances for `Vec` and `Array` here and for `Deque` in `deque`;
-//!   rev_iter (consuming)
-//! - Lazy combinators: map, pmap, filter, take, skip, chain, pchain, flatten,
-//!   flatten_arrays, flat_map
+//!   rev_iter (consuming); range, range_step
+//! - Lazy combinators: map, pmap, filter, take, skip, step_by, take_while,
+//!   skip_while, chunks, dedup, chain, pchain, flatten, flatten_arrays,
+//!   flat_map
 //! - Consumers (async, effect E): collect, join, contains, next, find,
-//!   reduce, fold, any, all
+//!   reduce, fold, any, all, count, last, nth, position, min_by_key,
+//!   max_by_key (the key is `i64`)
+//! - Aggregates over a numeric element (async, effect E): sum, product,
+//!   min, max
+//!
+//! A typed per-element operation takes `Iter<Erased<Rt, T>>` with `T`
+//! bounded by `Monomorphize`: the element is read in place through
+//! `Erased::as_ref`, and the `Iter` slot stays uniform (RFC-0041).
+//!
+//! Not here, each an `acvus-extern` contract: `enumerate`, `zip`,
+//! `partition` yield a tuple, and no tuple implements `Cross` (a tuple has
+//! `TyArg` only); `repeat` needs a clone of a runtime value, which
+//! `Runtime` does not offer; `min_by_key`/`max_by_key` take an `i64` key
+//! and not a `Monomorphize<(i64, f64)>` member, because a member fn's glue
+//! crosses every parameter naming the member through `CrossSpecialized`,
+//! which `Fn1` does not implement.
 
 use acvus_extern::{
-    Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar, Ref,
-    Registry, Runtime, Stored, TyVar, extern_fn, extern_registry,
+    Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar,
+    Monomorphize, Ref, Registry, Runtime, Stored, Trap, TyVar, extern_fn, extern_registry,
 };
 
 use crate::iter::Iter;
+
+/// The arithmetic the aggregates need of a `Monomorphize<(i64, f64)>`
+/// member; an overflowed `add`/`mul` is a trap at the aggregate.
+trait Num: Copy + Send + Sync + 'static {
+    const ZERO: Self;
+    const ONE: Self;
+    fn add(self, other: Self) -> Option<Self>;
+    fn mul(self, other: Self) -> Option<Self>;
+    fn min(self, other: Self) -> Self;
+    fn max(self, other: Self) -> Self;
+}
+
+impl Num for i64 {
+    const ZERO: Self = 0;
+    const ONE: Self = 1;
+
+    fn add(self, other: Self) -> Option<Self> {
+        self.checked_add(other)
+    }
+
+    fn mul(self, other: Self) -> Option<Self> {
+        self.checked_mul(other)
+    }
+
+    fn min(self, other: Self) -> Self {
+        Ord::min(self, other)
+    }
+
+    fn max(self, other: Self) -> Self {
+        Ord::max(self, other)
+    }
+}
+
+/// `min` and `max` are `f64::min`/`f64::max`: when one side is NaN the
+/// other side is the result, so a NaN never wins unless every element is
+/// NaN.
+impl Num for f64 {
+    const ZERO: Self = 0.0;
+    const ONE: Self = 1.0;
+
+    fn add(self, other: Self) -> Option<Self> {
+        Some(self + other)
+    }
+
+    fn mul(self, other: Self) -> Option<Self> {
+        Some(self * other)
+    }
+
+    fn min(self, other: Self) -> Self {
+        f64::min(self, other)
+    }
+
+    fn max(self, other: Self) -> Self {
+        f64::max(self, other)
+    }
+}
 
 /// The shared signatures every container declares instances of (RFC-0027).
 pub mod sig {
@@ -404,6 +476,345 @@ where
     Ok(true)
 }
 
+/// `start..end`: empty when `end <= start`.
+#[extern_fn(effect = pure)]
+fn range<E, I, Rt>(start: i64, end: i64) -> Iter<i64, E, I, Rt>
+where
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut current = start;
+    Iter::generate(move |_| {
+        if current >= end {
+            return None;
+        }
+        let item = current;
+        current += 1;
+        Some(item)
+    })
+}
+
+/// `start`, `start + step`, … while short of `end`: upward for a positive
+/// `step`, downward for a negative one. A zero `step` traps.
+#[extern_fn(effect = pure)]
+fn range_step<E, I, Rt>(start: i64, end: i64, step: i64) -> Result<Iter<i64, E, I, Rt>, Trap>
+where
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    if step == 0 {
+        return Err(Trap::call("range_step", "step is zero"));
+    }
+    let mut current = start;
+    Ok(Iter::generate(move |_| {
+        let short_of_end = if step > 0 {
+            current < end
+        } else {
+            current > end
+        };
+        if !short_of_end {
+            return None;
+        }
+        let item = current;
+        current = current.checked_add(step)?;
+        Some(item)
+    }))
+}
+
+#[extern_fn(effect = pure)]
+fn step_by<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Result<Iter<T, E, I, Rt>, Trap>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    if n == 0 {
+        return Err(Trap::call("step_by", "step is zero"));
+    }
+    Ok(it.step_by(n))
+}
+
+#[extern_fn(effect = pure)]
+fn take_while<T, E, I, Rt>(
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+) -> Iter<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    it.take_while(f)
+}
+
+#[extern_fn(effect = pure)]
+fn skip_while<T, E, I, Rt>(
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+) -> Iter<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    it.skip_while(f)
+}
+
+#[extern_fn(effect = pure)]
+fn chunks<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Result<Iter<Vec<T>, E, I, Rt>, Trap>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    if n == 0 {
+        return Err(Trap::call("chunks", "chunk size is zero"));
+    }
+    Ok(it.chunks(n))
+}
+
+#[extern_fn(effect = pure)]
+fn dedup<T, E, I, Rt>(it: Iter<Erased<Rt, T>, E, I, Rt>) -> Iter<Erased<Rt, T>, E, I, Rt>
+where
+    T: Monomorphize<(i64, f64, bool, String)> + Stored<Rt> + PartialEq + Clone,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    it.dedup()
+}
+
+#[extern_fn(effect = E)]
+async fn count<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<i64, Rt::Error>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut n = 0;
+    while it.next_value(rt).await?.is_some() {
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[extern_fn(effect = E)]
+async fn last<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut last = None;
+    while let Some(item) = it.next(rt).await? {
+        last = Some(item);
+    }
+    Ok(last)
+}
+
+#[extern_fn(effect = E)]
+async fn nth<T, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, n: u64) -> Result<Option<T>, Rt::Error>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    it.skip(n).next(rt).await
+}
+
+#[extern_fn(effect = E)]
+async fn position<T, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+) -> Result<Option<i64>, Rt::Error>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut index = 0;
+    while let Some(item) = it.next_value(rt).await? {
+        if f.call(rt, (Ref::lend(rt, &item),)).await? {
+            return Ok(Some(index));
+        }
+        index += 1;
+    }
+    Ok(None)
+}
+
+#[extern_fn(effect = E)]
+async fn sum<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Result<T, Rt::Error>
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut acc = T::ZERO;
+    while let Some(item) = it.next(rt).await? {
+        let Some(next) = acc.add(*item.as_ref(rt)) else {
+            return Err(Trap::call("sum", "integer overflow").into());
+        };
+        acc = next;
+    }
+    Ok(acc)
+}
+
+#[extern_fn(effect = E)]
+async fn product<T, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
+) -> Result<T, Rt::Error>
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut acc = T::ONE;
+    while let Some(item) = it.next(rt).await? {
+        let Some(next) = acc.mul(*item.as_ref(rt)) else {
+            return Err(Trap::call("product", "integer overflow").into());
+        };
+        acc = next;
+    }
+    Ok(acc)
+}
+
+#[extern_fn(effect = E)]
+async fn min<T, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
+) -> Result<Option<T>, Rt::Error>
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut best: Option<T> = None;
+    while let Some(item) = it.next(rt).await? {
+        let current = *item.as_ref(rt);
+        best = Some(match best {
+            Some(best) => best.min(current),
+            None => current,
+        });
+    }
+    Ok(best)
+}
+
+#[extern_fn(effect = E)]
+async fn max<T, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
+) -> Result<Option<T>, Rt::Error>
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut best: Option<T> = None;
+    while let Some(item) = it.next(rt).await? {
+        let current = *item.as_ref(rt);
+        best = Some(match best {
+            Some(best) => best.max(current),
+            None => current,
+        });
+    }
+    Ok(best)
+}
+
+struct Keyed<V> {
+    value: V,
+    key: i64,
+}
+
+#[derive(Clone, Copy)]
+enum Extreme {
+    Min,
+    Max,
+}
+
+impl Extreme {
+    fn prefers(self, candidate: i64, best: i64) -> bool {
+        match self {
+            Extreme::Min => candidate < best,
+            Extreme::Max => candidate > best,
+        }
+    }
+}
+
+async fn extreme_by_key<T, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    extreme: Extreme,
+) -> Result<Option<T>, Rt::Error>
+where
+    T: TyVar + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut best: Option<Keyed<Rt::Value>> = None;
+    while let Some(value) = it.next_value(rt).await? {
+        let key = f.call(rt, (Ref::lend(rt, &value),)).await?;
+        let replace = match &best {
+            Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
+            None => true,
+        };
+        if replace {
+            best = Some(Keyed { value, key });
+        }
+    }
+    let Some(Keyed { value, .. }) = best else {
+        return Ok(None);
+    };
+    Ok(Some(T::from_value(rt, value)?))
+}
+
+#[extern_fn(effect = E)]
+async fn min_by_key<T, E, I, Rt>(
+    rt: &Rt,
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+) -> Result<Option<T>, Rt::Error>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    extreme_by_key(rt, it, f, Extreme::Min).await
+}
+
+#[extern_fn(effect = E)]
+async fn max_by_key<T, E, I, Rt>(
+    rt: &Rt,
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+) -> Result<Option<T>, Rt::Error>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    extreme_by_key(rt, it, f, Extreme::Max).await
+}
+
 pub fn iterator_registry<Rt>() -> Registry<Rt>
 where
     Rt: Runtime,
@@ -414,8 +825,11 @@ where
         signatures: [sig::into_iter, sig::as_iter],
         fns: [
             into_iter_vec, into_iter_array, as_iter_vec, as_iter_array, rev_iter,
-            map, pmap, filter, take, skip, chain, pchain, flatten, flatten_arrays, flat_map,
+            range, range_step,
+            map, pmap, filter, take, skip, step_by, take_while, skip_while, chunks, dedup,
+            chain, pchain, flatten, flatten_arrays, flat_map,
             collect, join, contains, next, find, reduce, fold, any, all,
+            count, last, nth, position, sum, product, min, max, min_by_key, max_by_key,
         ],
     }
 }

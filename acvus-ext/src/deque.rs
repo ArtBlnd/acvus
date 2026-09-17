@@ -421,6 +421,14 @@ where
     d.len() as i64
 }
 
+#[extern_fn(instance_of = container::is_empty, effect = pure)]
+fn is_empty_deque<T>(d: &Deque<T>) -> bool
+where
+    T: TyVar,
+{
+    d.is_empty()
+}
+
 #[extern_fn(instance_of = container::get, effect = pure)]
 fn get_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
 where
@@ -466,7 +474,7 @@ pub fn deque_registry<R: Runtime>() -> Registry<R> {
         fns: [
             deque, push_front, push_back, pop_front, pop_back,
             vec_deque, into_iter_deque, as_iter_deque,
-            len_deque, get_deque, get_mut_deque, first_deque, last_deque,
+            len_deque, is_empty_deque, get_deque, get_mut_deque, first_deque, last_deque,
         ],
     }
 }

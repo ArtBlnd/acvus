@@ -16,8 +16,8 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    BoxFuture, ClosureFn, Cross, EffectVar, ExternType, Fn1, FromValue, IdentityVar, Ref, Runtime,
-    TyVar,
+    BoxFuture, ClosureFn, Cross, EffectVar, Erased, ExternType, Fn1, FromValue, IdentityVar, Ref,
+    Runtime, Stored, TyVar,
 };
 use sync_wrapper::SyncWrapper;
 
@@ -92,6 +92,42 @@ where
         })
     }
 
+    /// Every `step`th element, the first included. `step` is at least one:
+    /// the ExternFn traps on zero before this is reached.
+    pub fn step_by(self, step: u64) -> Self {
+        Self::sealed(StepBy {
+            source: self,
+            step,
+            started: false,
+        })
+    }
+
+    pub fn take_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+        Self::sealed(TakeWhile {
+            source: self,
+            f,
+            done: false,
+        })
+    }
+
+    pub fn skip_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+        Self::sealed(SkipWhile {
+            source: self,
+            f,
+            skipping: true,
+        })
+    }
+
+    /// Consecutive elements in `Vec`s of `size`, the last one shorter when
+    /// the source runs out. `size` is at least one: the ExternFn traps on
+    /// zero before this is reached. One chunk is the only buffer.
+    pub fn chunks(self, size: u64) -> Iter<Vec<T>, E, I, Rt>
+    where
+        T: Cross<Rt> + FromValue<Rt>,
+    {
+        Iter::sealed(Chunks { source: self, size })
+    }
+
     pub fn chain<J, K>(self, other: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
     where
         J: IdentityVar,
@@ -144,6 +180,23 @@ where
             return Ok(None);
         };
         Ok(Some(T::from_value(rt, value)?))
+    }
+}
+
+impl<T, E, I, Rt> Iter<Erased<Rt, T>, E, I, Rt>
+where
+    T: Stored<Rt> + PartialEq + Clone,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    /// Consecutive equal elements collapsed to the first. The stage keeps a
+    /// `T` clone of the last element it yielded, never a second value.
+    pub fn dedup(self) -> Self {
+        Self::sealed(Dedup {
+            source: self,
+            last: None,
+        })
     }
 }
 
@@ -276,6 +329,179 @@ where
                 }
             }
             self.source.next_value(rt).await
+        })
+    }
+}
+
+struct StepBy<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    source: Iter<T, E, I, Rt>,
+    step: u64,
+    started: bool,
+}
+
+impl<T, E, I, Rt> Stage<Rt> for StepBy<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+        Box::pin(async move {
+            if self.started {
+                for _ in 1..self.step {
+                    if self.source.next_value(rt).await?.is_none() {
+                        return Ok(None);
+                    }
+                }
+            }
+            self.started = true;
+            self.source.next_value(rt).await
+        })
+    }
+}
+
+struct TakeWhile<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    source: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    done: bool,
+}
+
+impl<T, E, I, Rt> Stage<Rt> for TakeWhile<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+        Box::pin(async move {
+            if self.done {
+                return Ok(None);
+            }
+            let Some(value) = self.source.next_value(rt).await? else {
+                return Ok(None);
+            };
+            if self.f.call(rt, (Ref::lend(rt, &value),)).await? {
+                return Ok(Some(value));
+            }
+            self.done = true;
+            Ok(None)
+        })
+    }
+}
+
+struct SkipWhile<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    source: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    skipping: bool,
+}
+
+impl<T, E, I, Rt> Stage<Rt> for SkipWhile<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+        Box::pin(async move {
+            while self.skipping {
+                let Some(value) = self.source.next_value(rt).await? else {
+                    return Ok(None);
+                };
+                if !self.f.call(rt, (Ref::lend(rt, &value),)).await? {
+                    self.skipping = false;
+                    return Ok(Some(value));
+                }
+            }
+            self.source.next_value(rt).await
+        })
+    }
+}
+
+struct Chunks<T, E, I, Rt>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    source: Iter<T, E, I, Rt>,
+    size: u64,
+}
+
+impl<T, E, I, Rt> Stage<Rt> for Chunks<T, E, I, Rt>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+        Box::pin(async move {
+            let mut chunk = Vec::new();
+            while (chunk.len() as u64) < self.size {
+                let Some(item) = self.source.next(rt).await? else {
+                    break;
+                };
+                chunk.push(item);
+            }
+            if chunk.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(chunk.erase(rt)))
+        })
+    }
+}
+
+struct Dedup<T, E, I, Rt>
+where
+    T: Stored<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    source: Iter<Erased<Rt, T>, E, I, Rt>,
+    last: Option<T>,
+}
+
+impl<T, E, I, Rt> Stage<Rt> for Dedup<T, E, I, Rt>
+where
+    T: Stored<Rt> + PartialEq + Clone,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+        Box::pin(async move {
+            while let Some(item) = self.source.next(rt).await? {
+                let current = item.as_ref(rt);
+                if self.last.as_ref() == Some(current) {
+                    continue;
+                }
+                self.last = Some(current.clone());
+                return Ok(Some(item.into_value()));
+            }
+            Ok(None)
         })
     }
 }

@@ -1243,6 +1243,19 @@ pub enum Decision {
     /// Which conversion takes an argument to its parameter (RFC-0023):
     /// identity where the two join, else a declared cast.
     Conversion { from: InferTy, to: InferTy },
+    /// Which signature a call of an overloaded bare name is a call of
+    /// (RFC-0043).
+    Signature {
+        name: Astr,
+        call: InferTy,
+        candidates: Vec<SignatureCandidate>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SignatureCandidate {
+    pub qref: QualifiedRef,
+    pub scheme: Scheme,
 }
 
 impl Decision {
@@ -1259,6 +1272,16 @@ impl Decision {
 pub enum Answer {
     Instance(InstanceKind),
     Conversion(Conversion),
+    Signature(SettledSignature),
+}
+
+/// `bounded` is verified by the checker when the body freezes, as an
+/// `Instantiated`'s is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledSignature {
+    pub qref: QualifiedRef,
+    pub instance: Option<InstanceChoice>,
+    pub bounded: Vec<TypeBoundId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1320,6 +1343,17 @@ pub enum Unsettled {
         from: InferTy,
         to: InferTy,
     },
+    /// RFC-0043.
+    NoSignature {
+        decision: DecisionId,
+        name: Astr,
+        call: InferTy,
+    },
+    AmbiguousSignature {
+        decision: DecisionId,
+        name: Astr,
+        candidates: Vec<QualifiedRef>,
+    },
 }
 
 impl Unsettled {
@@ -1331,7 +1365,9 @@ impl Unsettled {
             | Unsettled::NoConversion { decision, .. }
             | Unsettled::AmbiguousConversion { decision, .. }
             | Unsettled::ConversionOpen { decision, .. }
-            | Unsettled::ConversionNeedsPlace { decision, .. } => *decision,
+            | Unsettled::ConversionNeedsPlace { decision, .. }
+            | Unsettled::NoSignature { decision, .. }
+            | Unsettled::AmbiguousSignature { decision, .. } => *decision,
         }
     }
 }
@@ -1387,7 +1423,11 @@ impl<'src> Solver<'src> {
     // -- Fresh variables ---------------------------------------------
 
     pub fn fresh_ty_var(&mut self) -> InferTy {
-        TyTerm::Var(self.terms.alloc_ty_var(TyVarBound::Any))
+        self.fresh_var_with(TyVarBound::Any)
+    }
+
+    pub fn fresh_var_with(&mut self, bound: TyVarBound) -> InferTy {
+        TyTerm::Var(self.terms.alloc_ty_var(bound))
     }
 
     /// A fresh variable for an integer literal: its bound is the set of
@@ -1464,6 +1504,14 @@ impl<'src> Solver<'src> {
         let mut trial = self.terms.clone();
         trial
             .join(a, b, Position::Value, JoinKind::Decision, self.registry)
+            .is_ok()
+    }
+
+    /// Whether `unify(a, b)` would succeed, on a copy of the terms.
+    pub fn would_unify(&self, a: &InferTy, b: &InferTy) -> bool {
+        let mut trial = self.terms.clone();
+        trial
+            .join(a, b, Position::Value, JoinKind::Flow, self.registry)
             .is_ok()
     }
 
@@ -1632,6 +1680,13 @@ impl<'src> Solver<'src> {
                         },
                     }
                 }
+                Decision::Signature {
+                    name, candidates, ..
+                } => Unsettled::AmbiguousSignature {
+                    decision: id,
+                    name: *name,
+                    candidates: candidates.iter().map(|c| c.qref).collect(),
+                },
             };
             self.decisions[index].state = DecisionState::Failed;
             failures.push(why);
@@ -1653,7 +1708,84 @@ impl<'src> Solver<'src> {
                 generic,
             } => self.step_instance(id, &call, candidates, generic),
             Decision::Conversion { from, to } => self.step_conversion(id, &from, &to),
+            Decision::Signature {
+                name,
+                call,
+                candidates,
+            } => self.step_signature(id, name, &call, candidates),
         }
+    }
+
+    /// A signature decision narrows to the candidates the call type would
+    /// still take (RFC-0043) and settles when one remains: that function,
+    /// instantiated as a call of it, is joined with the call type.
+    fn step_signature(
+        &mut self,
+        id: DecisionId,
+        name: Astr,
+        call: &InferTy,
+        candidates: Vec<SignatureCandidate>,
+    ) -> Progress {
+        let remaining: Vec<SignatureCandidate> = candidates
+            .iter()
+            .filter(|c| self.takes_signature(call, &c.scheme))
+            .cloned()
+            .collect();
+        let narrowed = remaining.len() != candidates.len();
+        if narrowed
+            && let Decision::Signature { candidates, .. } =
+                &mut self.decisions[id.0 as usize].decision
+        {
+            *candidates = remaining.clone();
+        }
+        match remaining.as_slice() {
+            [] => Progress::Failed(Unsettled::NoSignature {
+                decision: id,
+                name,
+                call: self.terms.resolve_ty(call),
+            }),
+            [only] => {
+                let Instantiated {
+                    ty,
+                    bounded,
+                    instance,
+                } = self.instantiate_scheme(&only.scheme);
+                match self.settle_join(call, &ty) {
+                    Ok(()) => Progress::Settled(Answer::Signature(SettledSignature {
+                        qref: only.qref,
+                        instance,
+                        bounded,
+                    })),
+                    Err(Mismatch { expected, got, .. }) => {
+                        Progress::Failed(Unsettled::InstanceMismatch {
+                            decision: id,
+                            expected,
+                            got,
+                        })
+                    }
+                }
+            }
+            _ if narrowed => Progress::Narrowed,
+            _ => Progress::Unchanged,
+        }
+    }
+
+    fn takes_signature(&self, call: &InferTy, scheme: &Scheme) -> bool {
+        if !self.terms.would_take(call, &scheme.ty, self.registry) {
+            return false;
+        }
+        let TyTerm::Fn { params, .. } = call else {
+            unreachable!("a signature decision is opened on a call type")
+        };
+        params.iter().zip(scheme.params()).all(|(param, declared)| {
+            match self.terms.shallow_resolve_ty(&param.ty) {
+                TyTerm::Var(var) => self
+                    .bound_of_var(var)
+                    .meet(&scheme.param_bound(&declared.ty))
+                    .is_some(),
+                _ => true,
+            }
+        })
     }
 
     /// An instance decision narrows to the signatures the call type would

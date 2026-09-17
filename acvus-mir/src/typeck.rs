@@ -10,7 +10,8 @@ use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
     Answer, Candidate, Conversion, Decision, DecisionId, EffectRelation, InstanceChoice,
-    InstanceKind, Mismatch, MismatchReason, ReferencePair, Unsettled,
+    InstanceKind, Mismatch, MismatchReason, ReferencePair, SettledSignature, SignatureCandidate,
+    Unsettled,
 };
 use crate::ty::{
     Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Ty, TyTerm,
@@ -56,6 +57,13 @@ struct IntLiteral {
 struct FirstArg {
     ty: InferTy,
     site: ArgSite,
+}
+
+/// Every argument's type, and whether one was refused by its parameter
+/// under `ArgumentMismatch::Refuse`.
+struct CheckedArgs {
+    types: Vec<InferTy>,
+    refused: bool,
 }
 
 /// A call argument at its site, with the place it borrows when it is
@@ -156,6 +164,21 @@ pub struct OperatorCall<C, T> {
 struct ResolvedCallee {
     qref: QualifiedRef,
     instance: Option<InstanceChoice>,
+}
+
+/// RFC-0043.
+#[derive(Debug, Clone, Copy)]
+enum CalleeChoice {
+    Resolved(ResolvedCallee),
+    Decided(DecisionId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArgumentMismatch {
+    /// RFC-0023.
+    Convert,
+    /// RFC-0043.
+    Refuse,
 }
 
 /// A coercion recorded at the value it converts.
@@ -322,7 +345,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// call type.
     coercions: Vec<PendingCoercion>,
     /// Direct call resolutions (callee AstId -> the function and instance).
-    direct_calls: FxHashMap<AstId, ResolvedCallee>,
+    direct_calls: FxHashMap<AstId, CalleeChoice>,
     operator_calls: FxHashMap<AstId, OperatorCall<ResolvedCallee, InferTy>>,
     pattern_through: bool,
     /// Accumulated errors.
@@ -918,37 +941,43 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         fn_ty: &InferTy,
         first: Option<&FirstArg>,
         args: &[Expr],
-    ) -> Vec<InferTy> {
+        on_mismatch: ArgumentMismatch,
+    ) -> CheckedArgs {
         let params: Vec<InferTy> = match fn_ty {
             TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
             _ => Vec::new(),
         };
         let offset = usize::from(first.is_some());
         let arity_holds = params.len() == args.len() + offset;
-        let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy, site: &ArgSite| {
+        let mut refused = false;
+        let mut meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy, site: &ArgSite| {
             let Some(param) = param else {
                 return;
             };
-            if arity_holds {
-                this.meet_argument(arg, param, site);
-            } else {
+            if !arity_holds {
                 let _ = this.solver.unify(param, arg);
+                return;
             }
+            if on_mismatch == ArgumentMismatch::Refuse && !this.solver.would_unify(param, arg) {
+                refused = true;
+                return;
+            }
+            this.meet_argument(arg, param, site);
         };
         let outer_holds = self.holds.len();
-        let mut arg_types = Vec::with_capacity(args.len() + offset);
+        let mut types = Vec::with_capacity(args.len() + offset);
         if let Some(first) = first {
             meet(self, params.first(), &first.ty, &first.site);
-            arg_types.push(first.ty.clone());
+            types.push(first.ty.clone());
         }
         for (i, arg) in args.iter().enumerate() {
             let expected = params.get(i + offset);
             let ty = self.check_arg(arg, expected);
             meet(self, expected, &ty, &ArgSite::of(arg));
-            arg_types.push(ty);
+            types.push(ty);
         }
         self.holds.truncate(outer_holds);
-        arg_types
+        CheckedArgs { types, refused }
     }
 
     /// A reference is never data (RFC-0018).
@@ -1029,7 +1058,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Some(InstanceChoice::Decided(decision)) => match self.solver.answer(decision)? {
                 Answer::Instance(InstanceKind::Extern(instance)) => instance,
                 Answer::Instance(InstanceKind::Intrinsic(_)) => return None,
-                Answer::Conversion(_) => {
+                Answer::Conversion(_) | Answer::Signature(_) => {
                     unreachable!("an instance decision answers with an instance")
                 }
             },
@@ -1040,18 +1069,56 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         })
     }
 
+    /// RFC-0043.
+    fn resolved_of(&self, choice: CalleeChoice) -> Option<ResolvedCallee> {
+        match choice {
+            CalleeChoice::Resolved(resolved) => Some(resolved),
+            CalleeChoice::Decided(decision) => match self.solver.answer(decision)? {
+                Answer::Signature(SettledSignature { qref, instance, .. }) => {
+                    Some(ResolvedCallee { qref, instance })
+                }
+                Answer::Instance(_) | Answer::Conversion(_) => {
+                    unreachable!("a signature decision answers with a signature")
+                }
+            },
+        }
+    }
+
+    /// Verified by `solve_body` as an instantiation's bounded variables are.
+    fn settled_signature_bounds(&self) -> Vec<BoundSite> {
+        self.direct_calls
+            .values()
+            .filter_map(|choice| {
+                let CalleeChoice::Decided(decision) = choice else {
+                    return None;
+                };
+                let Answer::Signature(SettledSignature { bounded, .. }) =
+                    self.solver.answer(*decision)?
+                else {
+                    unreachable!("a signature decision answers with a signature")
+                };
+                let span = self.decision_sites[decision];
+                Some(bounded.into_iter().map(move |var| BoundSite { var, span }))
+            })
+            .flatten()
+            .collect()
+    }
+
     /// The calls whose instance decision settled on an instruction of the
     /// language (RFC-0020).
     fn frozen_intrinsic_calls(&self) -> FxHashMap<AstId, Intrinsic> {
         self.direct_calls
             .iter()
-            .filter_map(|(id, resolved)| {
-                let Some(InstanceChoice::Decided(decision)) = resolved.instance else {
+            .filter_map(|(id, choice)| {
+                let Some(InstanceChoice::Decided(decision)) = self.resolved_of(*choice)?.instance
+                else {
                     return None;
                 };
                 match self.solver.answer(decision)? {
                     Answer::Instance(InstanceKind::Intrinsic(intrinsic)) => Some((*id, intrinsic)),
-                    Answer::Instance(InstanceKind::Extern(_)) | Answer::Conversion(_) => None,
+                    Answer::Instance(InstanceKind::Extern(_))
+                    | Answer::Conversion(_)
+                    | Answer::Signature(_) => None,
                 }
             })
             .collect()
@@ -1085,7 +1152,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn frozen_direct_calls(&self) -> DirectCallMap {
         self.direct_calls
             .iter()
-            .filter_map(|(id, resolved)| Some((*id, self.callee_of(*resolved)?)))
+            .filter_map(|(id, choice)| Some((*id, self.callee_of(self.resolved_of(*choice)?)?)))
             .collect()
     }
 
@@ -1143,6 +1210,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let unsettled = self.solver.solve();
         self.report_unsettled(unsettled);
         self.resolve_conversions();
+        let settled = self.settled_signature_bounds();
+        self.bound_sites.extend(settled);
         let sites = std::mem::take(&mut self.bound_sites);
         for site in sites {
             if let Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) =
@@ -1292,10 +1361,39 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    fn decision_span(&self, decision: DecisionId) -> Span {
+        if let Some(span) = self.decision_sites.get(&decision) {
+            return *span;
+        }
+        let parent = self.direct_calls.values().find_map(|choice| {
+            let CalleeChoice::Decided(parent) = choice else {
+                return None;
+            };
+            let Answer::Signature(SettledSignature { instance, .. }) =
+                self.solver.answer(*parent)?
+            else {
+                unreachable!("a signature decision answers with a signature")
+            };
+            (instance == Some(InstanceChoice::Decided(decision))).then_some(*parent)
+        });
+        let Some(parent) = parent else {
+            unreachable!("a decision is opened at a site or by a settled signature decision")
+        };
+        self.decision_sites[&parent]
+    }
+
+    fn shown_name(&self, qref: QualifiedRef) -> String {
+        let name = self.interner.resolve(qref.name);
+        match qref.namespace {
+            Some(ns) => format!("{}::{name}", self.interner.resolve(ns)),
+            None => name.to_string(),
+        }
+    }
+
     fn report_unsettled(&mut self, unsettled: Vec<Unsettled>) {
         for failure in unsettled {
             let decision = failure.decision();
-            let span = self.decision_sites[&decision];
+            let span = self.decision_span(decision);
             let report = self
                 .conversions
                 .iter()
@@ -1368,6 +1466,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     MirErrorKind::ConversionNeedsPlace {
                         from: self.freeze_or_error(&from),
                         to: self.freeze_or_error(&to),
+                    }
+                }
+                Unsettled::NoSignature { name, call, .. } => MirErrorKind::NoMatchingFunction {
+                    name: self.interner.resolve(name).to_string(),
+                    ty: self.freeze_or_error(&call),
+                },
+                Unsettled::AmbiguousSignature {
+                    name, candidates, ..
+                } => {
+                    let mut shown: Vec<String> =
+                        candidates.iter().map(|q| self.shown_name(*q)).collect();
+                    shown.sort();
+                    MirErrorKind::AmbiguousFunction {
+                        name: self.interner.resolve(name).to_string(),
+                        candidates: shown,
                     }
                 }
             };
@@ -1524,52 +1637,33 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let name_str = self.interner.resolve(name).to_string();
         let resolved = match self.env.resolve_fn(QualifiedRef::root(name)) {
             crate::ty::FnLookup::Found(qref, scheme) => Some((qref, scheme.clone())),
-            crate::ty::FnLookup::Ambiguous(candidates) => {
-                let shown = candidates
-                    .iter()
-                    .map(|q| match q.namespace {
-                        Some(ns) => format!("{}::{}", self.interner.resolve(ns), name_str),
-                        None => name_str.clone(),
-                    })
+            crate::ty::FnLookup::Overloaded(candidates) => {
+                let candidates: Vec<(QualifiedRef, crate::ty::Scheme)> = candidates
+                    .into_iter()
+                    .filter(|(_, scheme)| scheme.params().len() == args.len() + 1)
+                    .map(|(qref, scheme)| (qref, scheme.clone()))
                     .collect();
-                self.error(
-                    MirErrorKind::AmbiguousFunction {
-                        name: name_str,
-                        candidates: shown,
-                    },
+                let mut references = candidates
+                    .iter()
+                    .map(|(_, scheme)| first_param_reference(&scheme.ty));
+                let agreed = references
+                    .next()
+                    .flatten()
+                    .filter(|mutability| references.all(|r| r == Some(*mutability)));
+                let first = self.receiver_arg(receiver, agreed);
+                return self.check_overloaded_call(
+                    candidates,
+                    callee_id,
+                    name,
+                    Some(first),
+                    args,
                     call_span,
                 );
-                return Self::infer_error();
             }
             crate::ty::FnLookup::Missing => None,
         };
         if let Some((resolved_qref, fn_sig)) = resolved {
-            // A receiver that is a place is lent as the parameter asks; a
-            // receiver that is already a reference value is passed as it
-            // is (RFC-0030).
-            let first = match first_param_reference(&fn_sig.ty) {
-                Some(mutability) if place_of(receiver).is_some() => FirstArg {
-                    ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
-                    site: ArgSite::lent(receiver),
-                },
-                Some(_) => {
-                    let ty = self.check_expr(receiver);
-                    if !matches!(
-                        self.solver.resolve_ty(&ty),
-                        TyTerm::Ref(..) | TyTerm::Error(_)
-                    ) {
-                        self.error(MirErrorKind::NotAPlace, receiver.span());
-                    }
-                    FirstArg {
-                        ty,
-                        site: ArgSite::value(receiver),
-                    }
-                }
-                None => FirstArg {
-                    ty: self.check_expr(receiver),
-                    site: ArgSite::value(receiver),
-                },
-            };
+            let first = self.receiver_arg(receiver, first_param_reference(&fn_sig.ty));
             return self.check_resolved_call(
                 resolved_qref,
                 &fn_sig,
@@ -1593,6 +1687,129 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Self::infer_error()
     }
 
+    /// A receiver that is a place is lent as the parameter asks; a receiver
+    /// that is already a reference value is passed as it is (RFC-0030).
+    fn receiver_arg(&mut self, receiver: &Expr, first_param: Option<Mutability>) -> FirstArg {
+        match first_param {
+            Some(mutability) if place_of(receiver).is_some() => FirstArg {
+                ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
+                site: ArgSite::lent(receiver),
+            },
+            Some(_) => {
+                let ty = self.check_expr(receiver);
+                if !matches!(
+                    self.solver.resolve_ty(&ty),
+                    TyTerm::Ref(..) | TyTerm::Error(_)
+                ) {
+                    self.error(MirErrorKind::NotAPlace, receiver.span());
+                }
+                FirstArg {
+                    ty,
+                    site: ArgSite::value(receiver),
+                }
+            }
+            None => FirstArg {
+                ty: self.check_expr(receiver),
+                site: ArgSite::value(receiver),
+            },
+        }
+    }
+
+    /// RFC-0043.
+    fn check_overloaded_call(
+        &mut self,
+        candidates: Vec<(QualifiedRef, crate::ty::Scheme)>,
+        callee_id: AstId,
+        name: Astr,
+        first: Option<FirstArg>,
+        args: &[Expr],
+        call_span: Span,
+    ) -> InferTy {
+        let name_str = self.interner.resolve(name).to_string();
+        let arity = args.len() + usize::from(first.is_some());
+        let candidates: Vec<(QualifiedRef, crate::ty::Scheme)> = candidates
+            .into_iter()
+            .filter(|(_, scheme)| scheme.params().len() == arity)
+            .collect();
+        let Some((_, shape)) = candidates.first() else {
+            let CheckedArgs { types, .. } = self.check_args_in_order(
+                &Self::infer_error(),
+                first.as_ref(),
+                args,
+                ArgumentMismatch::Convert,
+            );
+            let params = types
+                .into_iter()
+                .enumerate()
+                .map(|(index, ty)| ParamTerm::new(self.interner.intern(&index.to_string()), ty))
+                .collect();
+            let call = TyTerm::Fn {
+                params,
+                ret: Box::new(self.solver.fresh_ty_var()),
+                captures: vec![],
+                effect: self.solver.fresh_effect_var(),
+            };
+            self.error(
+                MirErrorKind::NoMatchingFunction {
+                    name: name_str,
+                    ty: self.freeze_or_error(&call),
+                },
+                call_span,
+            );
+            return Self::infer_error();
+        };
+        if let [(qref, scheme)] = candidates.as_slice() {
+            return self
+                .check_resolved_call(*qref, scheme, callee_id, &name_str, first, args, call_span);
+        }
+        let params: Vec<ParamTerm<Infer>> = shape
+            .params()
+            .iter()
+            .enumerate()
+            .map(|(index, param)| {
+                let bound = candidates
+                    .iter()
+                    .map(|(_, scheme)| scheme.param_bound(&scheme.params()[index].ty))
+                    .fold(TyVarBound::OneOf(vec![]), TyVarBound::union);
+                ParamTerm::new(param.name, self.solver.fresh_var_with(bound))
+            })
+            .collect();
+        let ret = self.solver.fresh_ty_var();
+        let effect = self.solver.fresh_effect_var();
+        let call = TyTerm::Fn {
+            params,
+            ret: Box::new(ret.clone()),
+            captures: vec![],
+            effect: effect.clone(),
+        };
+        let CheckedArgs { refused, .. } =
+            self.check_args_in_order(&call, first.as_ref(), args, ArgumentMismatch::Refuse);
+        if refused {
+            self.error(
+                MirErrorKind::NoMatchingFunction {
+                    name: name_str,
+                    ty: self.freeze_or_error(&call),
+                },
+                call_span,
+            );
+            return Self::infer_error();
+        }
+        self.note_call_effect(&effect, call_span);
+        self.record(callee_id, call.clone());
+        let decision = self.solver.decide(Decision::Signature {
+            name,
+            call,
+            candidates: candidates
+                .into_iter()
+                .map(|(qref, scheme)| SignatureCandidate { qref, scheme })
+                .collect(),
+        });
+        self.decision_sites.insert(decision, call_span);
+        self.direct_calls
+            .insert(callee_id, CalleeChoice::Decided(decision));
+        ret
+    }
+
     /// A resolved named call, once its first argument (piped or a method
     /// receiver) has been checked.
     #[allow(clippy::too_many_arguments)]
@@ -1607,7 +1824,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         call_span: Span,
     ) -> InferTy {
         let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, call_span);
-        let arg_types = self.check_args_in_order(&fn_ty, first.as_ref(), args);
+        let CheckedArgs {
+            types: arg_types, ..
+        } = self.check_args_in_order(&fn_ty, first.as_ref(), args, ArgumentMismatch::Convert);
         match &fn_ty {
             TyTerm::Fn {
                 params: param_tys,
@@ -1623,10 +1842,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.record(callee_id, fn_ty.clone());
                 self.direct_calls.insert(
                     callee_id,
-                    ResolvedCallee {
+                    CalleeChoice::Resolved(ResolvedCallee {
                         qref: resolved_qref,
                         instance,
-                    },
+                    }),
                 );
                 (**ret).clone()
             }
@@ -2880,22 +3099,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let name_str = self.interner.resolve(name.name);
         let resolved = match self.env.resolve_fn(*name) {
             crate::ty::FnLookup::Found(qref, scheme) => Some((qref, scheme.clone())),
-            crate::ty::FnLookup::Ambiguous(candidates) => {
-                let shown = candidates
-                    .iter()
-                    .map(|q| match q.namespace {
-                        Some(ns) => format!("{}::{}", self.interner.resolve(ns), name_str),
-                        None => name_str.to_string(),
-                    })
+            crate::ty::FnLookup::Overloaded(candidates) => {
+                let candidates = candidates
+                    .into_iter()
+                    .map(|(qref, scheme)| (qref, scheme.clone()))
                     .collect();
-                self.error(
-                    MirErrorKind::AmbiguousFunction {
-                        name: name_str.to_string(),
-                        candidates: shown,
-                    },
+                return self.check_overloaded_call(
+                    candidates,
+                    func.id(),
+                    name.name,
+                    first,
+                    args,
                     call_span,
                 );
-                return Self::infer_error();
             }
             crate::ty::FnLookup::Missing => None,
         };
@@ -2954,7 +3170,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
 
-        let arg_types = self.check_args_in_order(func_ty, first, args);
+        let CheckedArgs {
+            types: arg_types, ..
+        } = self.check_args_in_order(func_ty, first, args, ArgumentMismatch::Convert);
 
         match func_ty {
             TyTerm::Fn {

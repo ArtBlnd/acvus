@@ -4,8 +4,10 @@ mod datetime;
 mod decimal;
 mod deque;
 mod encoding;
+mod hash;
 mod iter;
 mod iterator;
+mod num;
 mod option;
 mod panic;
 mod regex;
@@ -18,8 +20,10 @@ pub use datetime::datetime_registry;
 pub use decimal::{Decimal, decimal_registry};
 pub use deque::{Deque, deque_registry};
 pub use encoding::encoding_registry;
+pub use hash::hash_registry;
 pub use iter::Iter;
 pub use iterator::iterator_registry;
+pub use num::num_registry;
 pub use option::option_registry;
 pub use panic::panic_registry;
 pub use regex::regex_registry;
@@ -43,6 +47,8 @@ where
         option_registry(),
         panic_registry(),
         iterator_registry(),
+        num_registry(),
+        hash_registry(),
     ];
     registries.extend(from_str_registries());
     registries
