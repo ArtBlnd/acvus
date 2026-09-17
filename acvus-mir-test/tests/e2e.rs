@@ -1958,7 +1958,7 @@ fn iter_int_ty(interner: &Interner) -> Ty {
 }
 
 fn has_use_after_move(err: &str) -> bool {
-    err.contains("use of move-only value") || err.contains("UseAfterMove")
+    err.contains("after it was moved")
 }
 
 // -- Soundness: should REJECT --

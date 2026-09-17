@@ -126,7 +126,7 @@ fn run_pipeline_with_registry(
     if !early_moves.is_empty() {
         let msgs: Vec<String> = early_moves
             .iter()
-            .map(|e| format!("[validate:{}] {:?}", "test", e))
+            .map(|e| format!("[validate:{}] {}", "test", e.display(interner)))
             .collect();
         return Err(msgs.join("\n"));
     }
@@ -147,7 +147,7 @@ fn run_pipeline_with_registry(
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()
-            .map(|e| format!("{:?}", e))
+            .map(|e| format!("{}", e.display(interner)))
             .collect();
         return Err(msgs.join("\n"));
     }
@@ -506,7 +506,7 @@ pub fn compile_script_optimized(
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
-            errors.push(format!("[validate:{}] {:?}", fn_name, e));
+            errors.push(format!("[validate:{}] {}", fn_name, e.display(interner)));
         }
     }
     if !errors.is_empty() {
@@ -584,7 +584,7 @@ pub fn compile_script_mode_optimized(
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
-            errors.push(format!("[validate:{}] {:?}", fn_name, e));
+            errors.push(format!("[validate:{}] {}", fn_name, e.display(interner)));
         }
     }
     if !errors.is_empty() {
@@ -885,7 +885,7 @@ pub fn compile_multi_fn_optimized(
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
-            errors.push(format!("[validate:{}] {:?}", fn_name, e));
+            errors.push(format!("[validate:{}] {}", fn_name, e.display(interner)));
         }
     }
     if !errors.is_empty() {

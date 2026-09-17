@@ -1,7 +1,7 @@
-//! A place moved out of and then lent. A bare read of the moved place is
-//! refused at validation; a lend of it passes validation and the
-//! interpreter panics at the read instead. A test that fails is a finding,
-//! kept as it fails.
+//! A storage is read — taken, lent, stored into at a part — only while
+//! the part read is alive (RFC-0018): a move of the whole or of a part
+//! refuses every later read that overlaps it, and a store into a part
+//! revives that part.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -52,4 +52,28 @@ async fn a_lend_of_an_array_moved_into_an_object_field_is_refused() {
 async fn the_binding_an_array_moved_into_is_read() {
     let v = run("let a = [1, 2]; let b = a; b.len()").await;
     assert_eq!(v.as_int(), 2);
+}
+
+#[tokio::test]
+async fn a_part_moved_out_and_stored_back_is_lent() {
+    let v = run("let o = { v: vec([1, 2]), w: 3, }; let x = o.v; o.v = vec([4]); o.v.len()").await;
+    assert_eq!(v.as_int(), 1);
+}
+
+#[tokio::test]
+async fn a_word_part_beside_a_moved_part_is_read() {
+    let v = run("let o = { v: vec([1, 2]), w: 3, }; let x = o.v; o.w").await;
+    assert_eq!(v.as_int(), 3);
+}
+
+#[tokio::test]
+#[should_panic(expected = "use of `o` after it was moved")]
+async fn a_lend_of_a_moved_part_is_refused() {
+    run("let o = { v: vec([1, 2]), }; let x = o.v; o.v.len()").await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "use of `o` after it was moved")]
+async fn a_reference_to_a_partly_moved_storage_is_refused() {
+    run("let o = { v: vec([1, 2]), }; let x = o.v; let r = &o; r").await;
 }

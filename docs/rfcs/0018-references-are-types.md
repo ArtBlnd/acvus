@@ -117,7 +117,13 @@ call site and `*` at the read keeps every conversion in the program.
   unification of `&place : &T`.
 - Move checking treats every non-primitive type as move-only; identity no
   longer decides it. A second use of a moved binding is an error at the
-  use.
+  use. A storage is read — by a take of a place in it, by a reference to
+  one — only while the part read is alive, where two places overlap when
+  one is a prefix of the other: a take of a place moves that place, a
+  store into a place gives it and everything under it a value again, and
+  a store cannot reach through a place that is gone. A reference to a
+  moved place, and a reference to the whole of a storage some place
+  inside which has moved, are both uses after move.
 - `Ref<T>` and `RefMut<T>` are types the checker admits as the type of a
   local binding and of a parameter, and rejects inside any data type, any
   return type, and any capture. `*r` is typed only for a primitive `T`.

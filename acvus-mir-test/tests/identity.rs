@@ -46,5 +46,5 @@ fn a_derived_iterator_keeps_its_source_and_still_moves() {
         &items(&i),
     )
     .unwrap_err();
-    assert!(err.contains("UseAfterMove"), "{err}");
+    assert!(err.contains("after it was moved"), "{err}");
 }

@@ -111,7 +111,7 @@ fn object_context(i: &Interner, name: &str) -> FxHashMap<acvus_utils::Astr, Ty> 
 fn a_context_moved_out_and_not_assigned_back_is_rejected() {
     let i = Interner::new();
     let err = compile_script_ir(&i, "x = @user; x", &object_context(&i, "user")).unwrap_err();
-    assert!(err.contains("UseAfterMove"), "{err}");
+    assert!(err.contains("after it was moved"), "{err}");
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn a_context_bound_and_read_again_is_rejected_before_promotion() {
     let i = Interner::new();
     let err =
         compile_script_ir(&i, "x = @user; y = @user; 0", &object_context(&i, "user")).unwrap_err();
-    assert!(err.contains("UseAfterMove"), "{err}");
+    assert!(err.contains("after it was moved"), "{err}");
 }
 
 #[test]

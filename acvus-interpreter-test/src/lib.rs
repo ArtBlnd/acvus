@@ -207,7 +207,7 @@ where
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
-            all_errors.push(format!("[validate:{fn_name}] {:?}", e));
+            all_errors.push(format!("[validate:{fn_name}] {}", e.display(interner)));
         }
     }
     if !all_errors.is_empty() {

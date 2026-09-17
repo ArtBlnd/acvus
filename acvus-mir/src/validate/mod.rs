@@ -6,8 +6,12 @@ mod type_check;
 pub use move_check::is_move_only;
 pub use type_check::{ValidationError, ValidationErrorKind};
 
+use std::fmt;
+
+use acvus_utils::Interner;
+
 use crate::error::{MirError, MirErrorKind};
-use crate::ir::MirModule;
+use crate::ir::{MirModule, ValOrigin};
 
 /// Run all validation passes on a MIR module.
 /// Returns errors found. Empty vec means valid.
@@ -60,6 +64,7 @@ impl ValidationError {
                 value_id,
                 moved_at,
                 ty,
+                origin: _,
             } => {
                 format!(
                     "use of move-only value Val({value_id}) after move (moved at inst #{moved_at}), type: {ty:?}"
@@ -77,6 +82,53 @@ impl ValidationError {
                 message,
             },
             span: self.span,
+        }
+    }
+}
+
+/// A [`ValidationError`] rendered for a reader. A `UseAfterMove` names its
+/// subject as the source wrote it; every other kind keeps its `Debug` form.
+pub struct ValidationErrorDisplay<'a> {
+    error: &'a ValidationError,
+    interner: &'a Interner,
+}
+
+impl ValidationError {
+    pub fn display<'a>(&'a self, interner: &'a Interner) -> ValidationErrorDisplay<'a> {
+        ValidationErrorDisplay {
+            error: self,
+            interner,
+        }
+    }
+}
+
+impl fmt::Display for ValidationErrorDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.error.kind {
+            ValidationErrorKind::UseAfterMove {
+                value_id, origin, ..
+            } => {
+                let subject = match origin {
+                    Some(ValOrigin::Named(name)) => {
+                        format!("`{}`", self.interner.resolve(*name))
+                    }
+                    Some(ValOrigin::Context(name)) => {
+                        format!("`@{}`", self.interner.resolve(*name))
+                    }
+                    Some(ValOrigin::ExternParam(name)) => {
+                        format!("`${}`", self.interner.resolve(*name))
+                    }
+                    Some(
+                        ValOrigin::Field(..)
+                        | ValOrigin::RefField(..)
+                        | ValOrigin::Call(_)
+                        | ValOrigin::Expr,
+                    )
+                    | None => format!("Val({value_id})"),
+                };
+                write!(f, "use of {subject} after it was moved")
+            }
+            kind => write!(f, "{kind:?}"),
         }
     }
 }

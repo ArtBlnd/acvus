@@ -12,7 +12,9 @@
 //!   changes a value's type in place.
 //! - Generic variance is invariant: inner types must match recursively.
 
-use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId};
+use crate::ir::{
+    Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValOrigin, ValueId,
+};
 use crate::ty::{Mutability, Ty, TypeArg};
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::{Astr, LocalIdOps};
@@ -62,6 +64,9 @@ pub enum ValidationErrorKind {
         value_id: u32,
         moved_at: usize,
         ty: Ty,
+        /// The subject's `DebugInfo` origin, which names it as the source
+        /// wrote it.
+        origin: Option<ValOrigin>,
     },
     /// A storage touched while a reference to it excludes that (RFC-0018).
     BorrowConflict {
