@@ -27,6 +27,10 @@ fn at(body: &str, needle: &str) -> usize {
         .unwrap_or_else(|| panic!("no `{needle}` in:\n{body}"))
 }
 
+fn count(body: &str, needle: &str) -> usize {
+    body.matches(needle).count()
+}
+
 #[test]
 fn an_addition_in_a_loop_body_stays_below_the_test() {
     let i = Interner::new();
@@ -171,4 +175,109 @@ fn a_borrow_leaves_both_of_two_nested_loops() {
     .unwrap();
     let body = main_body(&ir);
     assert!(at(body, "ref &v") < at(body, "jump_if"), "{ir}");
+}
+
+// -- A second shared borrow in one block ----------------------------
+
+/// Two reads of one storage in one block take one borrow between them.
+#[test]
+fn a_second_borrow_in_a_block_is_the_first() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let v = deque(); v.push_back(1); \
+         let a = *v.get(0); let b = *v.get(0); \
+         a + b",
+        &n_ctx(&i),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "ref &v"), 1, "{ir}");
+}
+
+/// The same block with a `&mut` call between them: `push_back` carries a
+/// `Mut` loan of `v`, so the first borrow does not survive it.
+#[test]
+fn a_write_between_two_borrows_keeps_them_two() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let v = deque(); v.push_back(1); \
+         let a = *v.get(0); v.push_back(2); let b = *v.get(0); \
+         a + b",
+        &n_ctx(&i),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "ref &v"), 2, "{ir}");
+}
+
+/// A context is a storage like any other, and the assignment writes it.
+#[test]
+fn an_assignment_between_two_borrows_of_a_context_keeps_them_two() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let a = *@x.get(0); @x = [a, a]; let b = *@x.get(0); a + b",
+        &ctx(
+            &i,
+            &[("x", Ty::Array(Box::new(Ty::Float), LenTerm::Known(2)))],
+        ),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "ref &@x"), 2, "{ir}");
+}
+
+/// An exclusive borrow is never merged: each `&mut` is a loan of its own,
+/// and two of them may not be one value held across both calls.
+#[test]
+fn two_exclusive_borrows_are_two() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let v = deque(); v.push_back(1); v.push_back(2); *v.get(0)",
+        &n_ctx(&i),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "ref &mut v"), 2, "{ir}");
+}
+
+/// A borrow through a reference is a memory op, not a name for a storage:
+/// two of them stay two, wherever they stand.
+#[test]
+fn two_borrows_through_a_reference_are_two() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let v = deque(); v.push_back(1); \
+         let r = &v; \
+         let a = *r.get(0); let b = *r.get(0); \
+         a + b",
+        &n_ctx(&i),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "ref &(*"), 2, "{ir}");
+}
+
+/// The merge reads one block and no more. The loop writes `v`, so neither
+/// the body's borrow nor the tail's rises out of where it stands, and the
+/// two blocks keep a borrow each. A pair the hoist *can* bring into one
+/// block is the case above; across blocks the hoist decides, or nobody.
+#[test]
+fn two_borrows_in_two_blocks_stay_two() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let v = deque(); v.push_back(1); \
+         let s = 0; let i = 0; \
+         while i < @n { s = s + *v.get(0); v.push_back(s); i = i + 1; } \
+         s + *v.get(0)",
+        &n_ctx(&i),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "ref &v"), 2, "{ir}");
 }

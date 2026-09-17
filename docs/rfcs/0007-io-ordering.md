@@ -80,6 +80,15 @@ in order with the other ops through that reference, and the third walks
 into the value, which a path that would not have reached it can find in a
 shape the walk does not expect.
 
+Two such borrows of one storage that end up in the same block are one. A
+block is a straight line, so the question needs no dominance and no
+reachability: the second is the first unless something between them takes
+the storage exclusively — a write, or a `&mut` borrow, which writes nothing
+but holds the storage for as long as the reference it makes lives. The
+merge runs after the move, because it is the move that brings the pair into
+one block: every borrow a loop rebuilt each iteration meets the one already
+standing above the loop.
+
 ## Rationale
 
 Whether two IO calls may be reordered depends on what the author means by

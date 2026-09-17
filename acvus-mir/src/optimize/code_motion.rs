@@ -1,7 +1,8 @@
 //! Cross-block code motion: an instruction moves only between
 //! control-equivalent blocks - except a shared borrow of a storage, which
 //! moves under a borrow condition instead - and an Eval sinks toward its
-//! use.
+//! use. A shared borrow that lands beside one of its own kind is then
+//! merged into it, under the same borrow condition read within one block.
 //!
 //! Two blocks are control-equivalent when the destination dominates the
 //! source and the source post-dominates the destination. They then execute
@@ -37,16 +38,33 @@
 //! dominates that still reach the source, the source included, the target
 //! excluded because the instruction lands at its end - writes that storage.
 //! A write is what `Loans::storage_effect` calls one: an `Assign`, a `Take`
-//! out of a storage, a `Ref &mut`, or a call an argument carries a `Mut`
-//! loan into - including one that reaches the storage only through a
-//! reference, which `Loans::touch` resolves to the loans that reference's
-//! region holds.
+//! out of a storage, or a call an argument carries a `Mut` loan into -
+//! including one that reaches the storage only through a reference, which
+//! `Loans::touch` resolves to the loans that reference's region holds. A
+//! `Ref &mut` is not one of them: it writes nothing, and `storage_effect`
+//! reads it as a read.
 //!
 //! `Ref &mut`, a `Ref` through a reference and a `Ref` with a path stay
 //! where they are: the first takes a loan that conflicts with every other,
 //! the second is a memory op that stays in order with the other ops through
 //! that reference, and the third walks into the value, which a path that
 //! would not have reached it can find in a shape the walk does not expect.
+//!
+//! # A second shared borrow in one block
+//!
+//! Two shared borrows of one storage in one block, with nothing between
+//! them that takes the storage exclusively, name the same address: the
+//! second is the first, and its uses read the first's value. A block is a
+//! straight line, so this needs no dominance and no reachability - only a
+//! walk over the block, dropping a storage's borrow at every instruction
+//! that takes it exclusively (`taken_exclusively`: the writes above, plus a
+//! `&mut` borrow, which takes the storage for as long as the reference it
+//! makes lives even though it writes nothing).
+//!
+//! The merge runs after the hoist, not before it. In the attention kernel
+//! all four pairs are the hoist's work - each second borrow stood inside a
+//! loop until the hoist lifted it into the block that already held the
+//! first - so a merge before the hoist would find nothing.
 
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -54,8 +72,9 @@ use smallvec::SmallVec;
 use crate::analysis::domtree::{DomTree, PostDomTree};
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::cfg::{BlockIdx, CfgBody};
+use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::*;
+use crate::optimize::const_dedup::{remap_uses, remap_val, remap_vec};
 use crate::optimize::context_ops::{context_read, context_written};
 use crate::ty::Mutability;
 
@@ -69,7 +88,15 @@ pub fn run(cfg: &mut CfgBody) {
         }
     }
 
-    // Phase 2: Sink - move Eval and blocking instructions DOWN.
+    // Phase 2: within a block, a shared borrow of a storage already
+    // borrowed there is that borrow. It runs after the hoist and not
+    // before it: in the attention kernel every one of the four pairs is
+    // made by the hoist - each second borrow stood inside a loop until
+    // the hoist lifted it into the block that already held the first -
+    // so a merge before the hoist finds nothing to merge.
+    merge_pass(cfg);
+
+    // Phase 3: Sink - move Eval and blocking instructions DOWN.
     sink_pass(cfg);
 }
 
@@ -384,6 +411,129 @@ fn hoistable(kind: &InstKind) -> Hoistable {
         InstKind::LoadFunction { .. } => Hoistable::ControlEquivalent,
 
         _ => Hoistable::No,
+    }
+}
+
+// -- Merge pass -----------------------------------------------------
+
+/// Within one block, a shared borrow of a storage becomes the borrow an
+/// earlier instruction of that block already took of it, unless something
+/// between the two takes the storage exclusively.
+///
+/// A block is a straight line, so the instructions between the two borrows
+/// are exactly what runs between them: the question needs no dominance and
+/// no reachability, only a walk.
+fn merge_pass(cfg: &mut CfgBody) {
+    let loans = Loans::build(cfg);
+    let CfgBody {
+        blocks, val_types, ..
+    } = cfg;
+    let mut merged: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+
+    for block in blocks.iter_mut() {
+        // The borrow each storage currently has in this block.
+        let mut borrow_of: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+
+        for inst in block.insts.iter_mut() {
+            for storage in taken_exclusively(&loans, &inst.kind) {
+                borrow_of.remove(&storage);
+            }
+
+            // The instruction the hoist calls `SharedBorrow`, asked of the
+            // same classifier so that the two rules cannot drift apart.
+            let Hoistable::SharedBorrow { storage } = hoistable(&inst.kind) else {
+                continue;
+            };
+            let dst = *inst_info::defs(&inst.kind)
+                .first()
+                .expect("a Ref defines its destination");
+
+            // The two values must carry the same type. Two borrows of one
+            // storage with nothing between that takes it cannot differ -
+            // an `Assign` that retypes the storage is such a take - so this
+            // refuses a case the analysis says cannot arise rather than one
+            // it silently accepts.
+            let earlier = borrow_of
+                .get(&storage)
+                .copied()
+                .filter(|earlier| val_types.get(earlier) == val_types.get(&dst));
+
+            match earlier {
+                Some(earlier) => {
+                    merged.insert(dst, earlier);
+                    inst.kind = InstKind::Nop;
+                }
+                None => {
+                    borrow_of.insert(storage, dst);
+                }
+            }
+        }
+    }
+
+    if merged.is_empty() {
+        return;
+    }
+
+    // A merged value is read wherever the block it was defined in dominates,
+    // and the value it becomes is defined earlier in that same block, so
+    // every one of those reads is still dominated by a definition.
+    for block in cfg.blocks.iter_mut() {
+        for inst in block.insts.iter_mut() {
+            remap_uses(&mut inst.kind, &merged);
+        }
+        remap_terminator(&mut block.terminator, &merged);
+    }
+}
+
+/// The storages an instruction takes exclusively: a shared borrow of one of
+/// them does not survive it.
+///
+/// `Loans::storage_effect` names the writes - an `Assign`, a `Take` out of a
+/// storage, a call an argument carries a `Mut` loan into, including one that
+/// reaches the storage only through a reference. A `Ref &mut` is not among
+/// them: it writes nothing, and `storage_effect` calls it a read. It takes
+/// the storage all the same, for as long as the reference it makes lives,
+/// and `validate::borrow_check` refuses a shared loan held across it
+/// (`conflicts(Shared, Touch::Reference(Mut))`). So the exclusive takes are
+/// the writes and the `&mut` borrows together.
+fn taken_exclusively(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
+    let mut taken = loans.storage_effect(kind).writes;
+    if let InstKind::Ref {
+        target,
+        mutability: Mutability::Mut,
+        ..
+    } = kind
+    {
+        match target {
+            RefTarget::Var(storage) | RefTarget::Param(storage) => taken.push(*storage),
+            RefTarget::Through(reference) => {
+                taken.extend(loans.region(*reference).loans.iter().map(|l| l.storage));
+            }
+        }
+    }
+    taken
+}
+
+fn remap_terminator(term: &mut Terminator, remap: &FxHashMap<ValueId, ValueId>) {
+    match term {
+        Terminator::Jump { args, .. } => remap_vec(args, remap),
+        Terminator::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => {
+            remap_val(cond, remap);
+            remap_vec(then_args, remap);
+            remap_vec(else_args, remap);
+        }
+        Terminator::Return { value, order } => {
+            remap_val(value, remap);
+            if let Some(order) = order {
+                remap_val(order, remap);
+            }
+        }
+        Terminator::Fallthrough | Terminator::Diverge => {}
     }
 }
 
@@ -1392,6 +1542,89 @@ mod tests {
         assert!(
             !shared_borrow_is_below_the_test(a_loop_that_borrows_a_storage(false)),
             "nothing the borrow would span writes the storage"
+        );
+    }
+
+    // -- Merge tests -------------------------------------------------
+
+    /// One block that borrows `v(1)` shared, optionally takes it `&mut`,
+    /// and borrows it shared again. `check_borrows` refuses the `&mut`
+    /// version at the source, so the pair lives here rather than in
+    /// `acvus-mir-test`.
+    fn a_block_that_borrows_twice(takes_it_mut_between: bool) -> Vec<InstKind> {
+        let mut insts = vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Assign {
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                value: v(0),
+            },
+            InstKind::Ref {
+                dst: v(2),
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                mutability: Mutability::Shared,
+            },
+        ];
+        if takes_it_mut_between {
+            insts.push(InstKind::Ref {
+                dst: v(3),
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                mutability: Mutability::Mut,
+            });
+        }
+        insts.extend([
+            InstKind::Ref {
+                dst: v(4),
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                mutability: Mutability::Shared,
+            },
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
+        ]);
+        insts
+    }
+
+    fn shared_borrows_left(insts: Vec<InstKind>) -> usize {
+        let mut cfg = make_cfg(insts, 10);
+        run(&mut cfg);
+        let body = demoted(cfg);
+        kinds(&body)
+            .iter()
+            .filter(|k| {
+                matches!(
+                    k,
+                    InstKind::Ref {
+                        mutability: Mutability::Shared,
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_borrow_does_not_survive_an_exclusive_take_of_the_storage() {
+        assert_eq!(
+            shared_borrows_left(a_block_that_borrows_twice(true)),
+            2,
+            "the `&mut` takes the storage for the life of the reference it makes"
+        );
+    }
+
+    #[test]
+    fn the_same_block_without_that_take_keeps_one_borrow() {
+        assert_eq!(
+            shared_borrows_left(a_block_that_borrows_twice(false)),
+            1,
+            "nothing between the two takes the storage"
         );
     }
 

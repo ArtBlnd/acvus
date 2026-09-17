@@ -93,7 +93,7 @@ fn dedup_body(mut body: MirBody) -> MirBody {
     body
 }
 
-fn remap_val(v: &mut ValueId, remap: &FxHashMap<ValueId, ValueId>) {
+pub(crate) fn remap_val(v: &mut ValueId, remap: &FxHashMap<ValueId, ValueId>) {
     if let Some(&canon) = remap.get(v) {
         *v = canon;
     }
@@ -106,13 +106,16 @@ fn remap_through(target: &mut RefTarget, remap: &FxHashMap<ValueId, ValueId>) {
     }
 }
 
-fn remap_vec(vs: &mut Vec<ValueId>, remap: &FxHashMap<ValueId, ValueId>) {
+pub(crate) fn remap_vec(vs: &mut Vec<ValueId>, remap: &FxHashMap<ValueId, ValueId>) {
     for v in vs.iter_mut() {
         remap_val(v, remap);
     }
 }
 
-fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
+/// Rewrite every use-position `ValueId` of an instruction through `remap`.
+/// A def position is never rewritten: a pass that replaces a value replaces
+/// what reads it, not where it is written.
+pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
     match kind {
         // No uses
         InstKind::Const { .. }
