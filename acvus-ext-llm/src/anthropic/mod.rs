@@ -326,10 +326,19 @@ mod tests {
         let registry = anthropic_registry::<_, acvus_extern::TypesOnly>(fetch);
         let registered =
             acvus_extern::Externs::combine(vec![registry], &interner).expect("registry combines");
-        assert_eq!(registered.functions.len(), 1);
-        assert_eq!(registered.handlers.len(), 1);
-
-        let func = &registered.functions[0];
+        let mut implemented = registered.functions.iter().filter(|f| {
+            registered
+                .handlers
+                .get(&f.qref)
+                .is_some_and(|h| !h.is_empty())
+        });
+        let func = implemented
+            .next()
+            .expect("the registry implements its function");
+        assert!(
+            implemented.next().is_none(),
+            "the registry implements exactly one function; the shared signatures it combines with have no handler"
+        );
         assert_eq!(interner.resolve(func.qref.name), "anthropic");
     }
 }

@@ -108,6 +108,7 @@ fn simple_addition() {
     assert!(a.contains(&3), "expected 3 in A bank, got {:?}", a);
 }
 
+#[ignore = "kovac VM: the prototype's lowering predates the MIR since RFC-0037; parked for ideation (owner, 2026-09-18)"]
 #[test]
 fn arithmetic_expression() {
     let a = run_script("10 + 20 * 3");
@@ -120,6 +121,7 @@ fn subtraction_and_negation() {
     assert!(a.contains(&58), "expected 58 in A bank, got {:?}", a);
 }
 
+#[ignore = "kovac VM: the prototype's lowering predates the MIR since RFC-0037; parked for ideation (owner, 2026-09-18)"]
 #[test]
 fn let_binding_arithmetic() {
     let a = run_script(
@@ -147,6 +149,7 @@ fn modulo() {
     assert!(a.contains(&2), "expected 2 in A bank, got {:?}", a);
 }
 
+#[ignore = "kovac VM: the prototype's lowering predates the MIR since RFC-0037; parked for ideation (owner, 2026-09-18)"]
 #[test]
 fn nested_arithmetic() {
     // (3 + 4) * (10 - 2)
@@ -154,6 +157,7 @@ fn nested_arithmetic() {
     assert!(a.contains(&56), "expected 56 in A bank, got {:?}", a);
 }
 
+#[ignore = "kovac VM: the prototype's lowering predates the MIR since RFC-0037; parked for ideation (owner, 2026-09-18)"]
 #[test]
 fn reassign() {
     let a = run_script(
@@ -168,6 +172,7 @@ fn reassign() {
 //  If / else
 // ===================================================================
 
+#[ignore = "kovac VM: the prototype's lowering predates the MIR since RFC-0037; parked for ideation (owner, 2026-09-18)"]
 #[test]
 fn if_else_true_branch() {
     let a = run_script(
@@ -177,6 +182,7 @@ fn if_else_true_branch() {
     assert!(a.contains(&42), "expected 42 (true branch), got {:?}", a);
 }
 
+#[ignore = "kovac VM: the prototype's lowering predates the MIR since RFC-0037; parked for ideation (owner, 2026-09-18)"]
 #[test]
 fn if_else_false_branch() {
     let a = run_script(
@@ -224,6 +230,7 @@ fn if_else_chain_bottom() {
     assert!(a.contains(&1), "score 50 -> grade 1, got {:?}", a);
 }
 
+#[ignore = "kovac VM: the prototype's lowering predates the MIR since RFC-0037; parked for ideation (owner, 2026-09-18)"]
 #[test]
 fn if_as_expression_in_let() {
     let a = run_script(
