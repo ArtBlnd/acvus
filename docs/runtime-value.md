@@ -109,8 +109,8 @@ script's bare name resolves to the one extern of that name.
 
 `#[repr(C)] struct Value { kind: Kind, word: u64 }`: one byte that says what
 the word is and one word that is the bits, an address, or nothing. 16 bytes,
-not `Clone`. `Kind` is `#[repr(u8)]` over `Empty`, `Undef`, `Ref`, `Large`
-and one variant per `Inline` type (`I8`..`U64`, `F64`, `Bool`, `Unit`), so
+not `Clone`. `Kind` is `#[repr(u8)]` over `Empty`, `Undef`, `Ref`, `Large`,
+`None` and one variant per `Inline` type (`I8`..`U64`, `F64`, `Bool`, `Unit`), so
 the byte a value carries is both its discriminant and the Rust type it was
 erased from; `Kind::of::<T>()` const-folds, and the spare values above the
 last variant are the niche that keeps `Option<Value>` at 16 bytes. One
@@ -121,8 +121,17 @@ x86-64 ABI, so a `Value` — and an `Option<Value>` — is passed and returned i
 both sizes.
 
 `Empty` is the moved-out register, `Undef` the SSA initial value of a
-loop-defined variable. A type rides in the word when it fits and owns
-nothing (`size_of <= 8 && !needs_drop`, const-asserted at the `Inline` impls);
+loop-defined variable, and `None` the language's `None` — with a word that
+counts the `Some`s around it, so `Some(Some(None))` is `{None, 2}` and
+`Some(v)` for any `v` that is not one of these is `v` itself (RFC-0039).
+An option costs no allocation and no tag of its own, and neither direction
+consults a type: `Value::some` reads the payload's kind, `is_none` reads
+the word, `some_payload` undoes `some`. What that leaves the preparation
+to decide is which of three a `PathSeg::Payload` reads, since an
+`Option<Result<A, B>>` value *is* the `Result` value: `prepare::walked`
+resolves every step against the type it stands on and drops an option's
+step where the payload type is not itself an option. A type rides in the
+word when it fits and owns nothing (`size_of <= 8 && !needs_drop`, const-asserted at the `Inline` impls);
 a reference is the address of the target register under `Kind::Ref`;
 everything else is `Kind::Large`, a `Box<Slot<T>>` whose header
 carries the vtable — `type_id` (an assert only), `drop`, `debug`, and which

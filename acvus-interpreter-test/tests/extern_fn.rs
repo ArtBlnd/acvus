@@ -140,10 +140,9 @@ async fn regex_find_via_extern() {
         vec![registry],
     )
     .await;
-    // SAFETY: `regex_find` returns `Option<String>`, which crosses as the
-    // language's `Option` of a String value (RFC-0032).
-    let found = unsafe { result.value.as_option() };
-    assert_eq!(found.as_ref().map(|v| unsafe { v.as_str() }), Some("42"));
+    // SAFETY: `regex_find` returns `Option<String>`, whose `Some` is the
+    // String value itself (RFC-0022).
+    assert_eq!(unsafe { result.value.as_str() }, "42");
 }
 
 // =======================================================================

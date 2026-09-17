@@ -534,7 +534,7 @@ impl Space {
                 Ok(())
             }
             Ty::Option(inner) => {
-                if let Some(v) = unsafe { value.as_option_mut() } {
+                if let Some(v) = value.option_payload_mut() {
                     self.commit_nested(rt, inner, v, moved)?;
                 }
                 Ok(())

@@ -83,6 +83,10 @@ feeding it is lifted once at construction rather than per element. A
 consumer branches on the variant outside its loop and runs one of two
 loops. `None` is the end of the source or a trap, and the consumer does
 not need to tell them apart: the extern boundary above it reads the slot.
+That `Option<Value>` is Rust's, internal to the pipeline; where the
+*language* sees an option the boundary builds the form of RFC-0039, so a
+stage's `Some(v)` and the language's `Some(v)` are different things that
+happen to share a word.
 
 The effect in the type does not decide this. An extern's handler may be
 asynchronous while its declared effect is `Pure`: `iter::sum`,
@@ -141,9 +145,12 @@ Three consequences the format fixes:
   makes the handle and continues.
 - **`val_types` is not read at run time.** Every use the interpreter had
   for it is a preparation-time choice: the literal's width, whether a
-  `Take` clones a `String`, whether a `MakeVariant` is an `Option`, a
-  `Result` or a variant, the width a `TestLiteral` compares at, whether
-  a concatenated part or an indirect callee is a reference.
+  `Take` clones a `String`, whether a `MakeVariant`, a `TestVariant` or
+  an `UnwrapVariant` is an `Option`, a `Result` or a variant, the width a
+  `TestLiteral` compares at, whether a concatenated part or an indirect
+  callee is a reference, and which of the three a path's `Payload` step
+  reads — an option's it drops, because a `Some` is its payload's own
+  value unless the payload type is itself an option.
 
 A `while` whose head and body transfer no control is one operation. The
 preparation recognizes, in the linear `insts`, the shape the lowering
@@ -601,3 +608,38 @@ iteration is.
   64-bit target and one on wasm32 would make an operation's inline
   capacity platform-dependent; four `u32` slots and one word are the
   same shape everywhere.
+
+After the option form (2026-09-18; interleaved A/B against base binaries
+from `git archive master`, ten alternating repetitions, medians,
+`n = 1e6`):
+
+| bench | base | option in the value |
+|-------|------|---------------------|
+| accum `int while` | 21.9 ns/iteration | 22.1 ns/iteration |
+| accum `float while` | 30.5 | 30.9 |
+| accum `range \| sum` | 2.8 | 2.6 |
+| accum `map id \| sum` | 30.8 | 32.1 |
+| accum `map add \| sum` | 36.2 | 37.2 |
+| accum `extern while` | 30.3 | 30.7 |
+| accum `branch while` | 37.8 | 38.6 |
+| accum `option while` | 90.2 | **59.2** |
+| attention (64, 64) execute | 673.5 µs | 674.1 µs |
+| attention (256, 128) execute | 5286 µs | 5329 µs |
+
+`extern while` and `branch while` are the two controls that decompose the
+option case: `acc = acc + f(i)` isolates one extern call at 8.4 ns over
+the bare loop, and `if g(i) { acc = acc + i; }` adds an unpredictable
+script-level branch at 7.5 ns more. What is left is the option itself —
+52.4 ns before, 20.6 ns after. What went is the allocation: the base's
+profile spends 5.4% in the `Mutex<HashMap<TypeId, &Vtable>>` guard's drop
+and 4.3% hashing a `TypeId`, both of them `VtableRegistry::vtable_of` for
+the box, and neither appears after. The `asm_probe` erase of an
+`Option<i64>` is six instructions with no `call`, and the materialize is
+ten, branch-free, against a base materialize that called `free`.
+
+The two `map` cases are 3–4% slower and are not explained by this change:
+their per-element path is the closure frame (`fn_value_call_sync`,
+`Registers::new`) and the closure body's own operations, and no line this
+change touched lies on it. Whole-run counters go the other way — 8.9%
+fewer instructions and 9.1% fewer cycles — so the suspect is code layout,
+and it is not closed.

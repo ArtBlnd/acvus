@@ -5,13 +5,12 @@
 //! `String` read out of a storage is cloned, every other value is moved or
 //! copied by `Value::use_from`.
 
-use acvus_mir::ir::PathSeg;
 use acvus_utils::{Astr, Interner};
 
-use crate::code::{Flow, Op};
+use crate::code::{Flow, Op, Step};
 use crate::machine::{Frame, Machine};
 use crate::ops::payload;
-use crate::value::Value;
+use crate::value::{Kind, Place, PlaceMut, Value};
 
 fn field<'a>(value: &'a Value, f: Astr, interner: &Interner) -> &'a Value {
     assert!(value.is_object(), "field load on non-object: {value:?}");
@@ -29,68 +28,138 @@ fn field_mut<'a>(value: &'a mut Value, f: Astr, interner: &Interner) -> &'a mut 
         .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
 }
 
-pub fn walk_path<'a>(mut value: &'a Value, path: &[PathSeg], interner: &Interner) -> &'a Value {
+pub fn walk_path<'a>(value: &'a Value, path: &[Step], interner: &Interner) -> Place<'a> {
+    let mut at = Place::At(value);
     for seg in path {
-        value = match seg {
-            PathSeg::Field(f) => field(value, *f, interner),
-            // SAFETY: the type checker admits an index only on an array or a tuple.
-            PathSeg::Index(i) => unsafe {
-                if value.is_array() {
-                    &value.as_array()[*i]
-                } else {
-                    &value.as_tuple()[*i]
-                }
-            },
-            // SAFETY: the type checker admits a payload only on an option, a result, or a variant.
-            PathSeg::Payload => unsafe {
-                if value.is_option() {
-                    value.as_option().as_ref()
-                } else if value.is_result() {
-                    match value.as_result() {
-                        Ok(v) | Err(v) => Some(v),
-                    }
-                } else {
-                    value.as_variant().payload.as_deref()
-                }
-            }
-            .expect("a payload path names a variant that carries one"),
+        at = match at {
+            Place::At(v) => step(v, seg, interner),
+            Place::Depth(v) => depth_step(&v, seg),
         };
     }
-    value
+    at
 }
 
-pub fn walk_path_mut<'a>(
-    mut value: &'a mut Value,
-    path: &[PathSeg],
-    interner: &Interner,
-) -> &'a mut Value {
-    for seg in path {
-        value = match seg {
-            PathSeg::Field(f) => field_mut(value, *f, interner),
-            // SAFETY: the type checker admits an index only on an array or a tuple.
-            PathSeg::Index(i) => unsafe {
-                if value.is_array() {
-                    &mut value.as_array_mut().0[*i]
-                } else {
-                    &mut value.as_tuple_mut().0[*i]
-                }
-            },
-            // SAFETY: the type checker admits a payload only on an option, a result, or a variant.
-            PathSeg::Payload => unsafe {
-                if value.is_option() {
-                    value.as_option_mut().as_mut()
-                } else if value.is_result() {
-                    match value.as_result_mut() {
-                        Ok(v) | Err(v) => Some(v),
-                    }
-                } else {
-                    value.as_variant_mut().payload.as_deref_mut()
-                }
+fn step<'a>(value: &'a Value, seg: &Step, interner: &Interner) -> Place<'a> {
+    match seg {
+        Step::Field(f) => Place::At(field(value, *f, interner)),
+        // SAFETY (each arm): the preparation read the shape off the type.
+        Step::Index(i) => Place::At(unsafe {
+            if value.is_array() {
+                &value.as_array()[*i]
+            } else {
+                &value.as_tuple()[*i]
             }
-            .expect("a payload path names a variant that carries one"),
+        }),
+        Step::OptionPayload => value.option_payload().expect(PAYLOAD_OF_NONE),
+        Step::ResultPayload => Place::At(match unsafe { value.as_result() } {
+            Ok(v) | Err(v) => v,
+        }),
+        Step::VariantPayload => Place::At(
+            unsafe { value.as_variant() }
+                .payload
+                .as_deref()
+                .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE),
+        ),
+    }
+}
+
+/// A step under a `None`: the depth word is all there is, so the only step
+/// it admits is the next `Some` it stands for.
+fn depth_step<'a>(value: &Value, seg: &Step) -> Place<'a> {
+    let Step::OptionPayload = seg else {
+        panic!("{seg:?} on {value:?}")
+    };
+    Place::Depth(depth_payload(value).expect("a depth step lands on a depth"))
+}
+
+const PAYLOAD_OF_NONE: &str = "a payload path on None";
+const PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE: &str = "a payload path names a variant that carries one";
+
+/// The place a reference-typed slot names. A `Some` whose payload is a
+/// `None` has no storage to point at, so the reference to that payload is
+/// the `None` itself (RFC-0022).
+#[inline]
+pub fn through(slot: &Value) -> &Value {
+    if slot.kind() == Kind::None {
+        return slot;
+    }
+    // SAFETY: the type checker admits only a live reference here.
+    unsafe { slot.target() }
+}
+
+/// The value a `Ref` instruction leaves in its destination.
+#[inline]
+fn reference_to(place: Place<'_>) -> Value {
+    match place {
+        Place::At(v) => Value::reference(v),
+        Place::Depth(v) => v,
+    }
+}
+
+pub fn walk_path_mut<'a>(value: &'a mut Value, path: &[Step], interner: &Interner) -> PlaceMut<'a> {
+    let mut at = PlaceMut::At(value);
+    for seg in path {
+        at = match at {
+            PlaceMut::At(v) => step_mut(v, seg, interner),
+            PlaceMut::Depth(v) => match depth_step(&v, seg) {
+                Place::At(_) => unreachable!("a depth step lands on a depth"),
+                Place::Depth(v) => PlaceMut::Depth(v),
+            },
         };
     }
-    value
+    at
+}
+
+fn step_mut<'a>(value: &'a mut Value, seg: &Step, interner: &Interner) -> PlaceMut<'a> {
+    match seg {
+        Step::Field(f) => PlaceMut::At(field_mut(value, *f, interner)),
+        // SAFETY (each arm): the preparation read the shape off the type.
+        Step::Index(i) => PlaceMut::At(unsafe {
+            if value.is_array() {
+                &mut value.as_array_mut().0[*i]
+            } else {
+                &mut value.as_tuple_mut().0[*i]
+            }
+        }),
+        Step::OptionPayload => {
+            if let Some(depth) = depth_payload(value) {
+                return PlaceMut::Depth(depth);
+            }
+            PlaceMut::At(value.option_payload_mut().expect(PAYLOAD_OF_NONE))
+        }
+        Step::ResultPayload => PlaceMut::At(match unsafe { value.as_result_mut() } {
+            Ok(v) | Err(v) => v,
+        }),
+        Step::VariantPayload => PlaceMut::At(
+            unsafe { value.as_variant_mut() }
+                .payload
+                .as_deref_mut()
+                .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE),
+        ),
+    }
+}
+
+/// The value a `Some`'s payload is where it has no place of its own.
+fn depth_payload(value: &Value) -> Option<Value> {
+    match value.option_payload() {
+        Some(Place::Depth(v)) => Some(v),
+        Some(Place::At(_)) => None,
+        None => panic!("{PAYLOAD_OF_NONE}"),
+    }
+}
+
+/// The message a write through a `None` gives: a `Some` whose payload is a
+/// `None` owns nothing, so there is no place to write into.
+const NO_PLACE_UNDER_A_NONE: &str =
+    "an assignment through the payload of a Some(None): a None has no storage";
+
+/// The storage a write names.
+#[inline]
+fn place_mut(place: PlaceMut<'_>) -> &mut Value {
+    match place {
+        PlaceMut::At(v) => v,
+        PlaceMut::Depth(_) => panic!("{NO_PLACE_UNDER_A_NONE}"),
+    }
 }
 
 /// RFC-0026: a `String` is cloned out of its storage, anything else moves
@@ -123,14 +192,13 @@ pub fn ref_var(machine: &mut Machine<'_>, op: &Op) -> Flow {
 
 pub fn ref_var_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let path = payload!(machine, op, Path);
-    let reference = Value::reference(walk_path(machine.reg(op.b), path, machine.interner()));
+    let reference = reference_to(walk_path(machine.reg(op.b), path, machine.interner()));
     machine.set(op.a, reference);
     Flow::Next
 }
 
 pub fn ref_through(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    // SAFETY: the type checker admits only a live reference here.
-    let base = unsafe { machine.reg(op.b).target() };
+    let base = through(machine.reg(op.b));
     let reference = Value::reference(base);
     machine.set(op.a, reference);
     Flow::Next
@@ -138,9 +206,8 @@ pub fn ref_through(machine: &mut Machine<'_>, op: &Op) -> Flow {
 
 pub fn ref_through_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let path = payload!(machine, op, Path);
-    // SAFETY: the type checker admits only a live reference here.
-    let base = unsafe { machine.reg(op.b).target() };
-    let reference = Value::reference(walk_path(base, path, machine.interner()));
+    let base = through(machine.reg(op.b));
+    let reference = reference_to(walk_path(base, path, machine.interner()));
     machine.set(op.a, reference);
     Flow::Next
 }
@@ -170,11 +237,13 @@ impl ReadSlots {
 pub fn read_at<const CLONE: bool>(
     machine: &mut Machine<'_>,
     slots: ReadSlots,
-    path: &[PathSeg],
+    path: &[Step],
 ) -> Flow {
     let Frame { regs, interner } = machine.frame();
-    let slot = walk_path_mut(&mut regs[slots.src as usize], path, interner);
-    let value = read_slot::<CLONE>(slot);
+    let value = match walk_path_mut(&mut regs[slots.src as usize], path, interner) {
+        PlaceMut::At(slot) => read_slot::<CLONE>(slot),
+        PlaceMut::Depth(v) => v,
+    };
     machine.set(slots.dst, value);
     Flow::Next
 }
@@ -186,17 +255,16 @@ pub fn read_path<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow 
 }
 
 pub fn read_index<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    read_at::<CLONE>(machine, ReadSlots::of(op), &[PathSeg::Index(op.p)])
+    read_at::<CLONE>(machine, ReadSlots::of(op), &[Step::Index(op.p as usize)])
 }
 
 pub fn read_field<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let key = *payload!(machine, op, Name);
-    read_at::<CLONE>(machine, ReadSlots::of(op), &[PathSeg::Field(key)])
+    read_at::<CLONE>(machine, ReadSlots::of(op), &[Step::Field(key)])
 }
 
 pub fn take_through<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    // SAFETY: the type checker admits only a live reference here.
-    let at = unsafe { machine.reg(op.b).target() };
+    let at = through(machine.reg(op.b));
     let value = read_through::<CLONE>(at);
     machine.set(op.a, value);
     Flow::Next
@@ -204,10 +272,11 @@ pub fn take_through<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Fl
 
 pub fn take_through_path<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let path = payload!(machine, op, Path);
-    // SAFETY: the type checker admits only a live reference here.
-    let base = unsafe { machine.reg(op.b).target() };
-    let at = walk_path(base, path, machine.interner());
-    let value = read_through::<CLONE>(at);
+    let base = through(machine.reg(op.b));
+    let value = match walk_path(base, path, machine.interner()) {
+        Place::At(at) => read_through::<CLONE>(at),
+        Place::Depth(v) => v,
+    };
     machine.set(op.a, value);
     Flow::Next
 }
@@ -222,7 +291,7 @@ pub fn assign_var_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let path = payload!(machine, op, Path);
     let value = machine.use_val(op.b);
     let Frame { regs, interner } = machine.frame();
-    *walk_path_mut(&mut regs[op.a as usize], path, interner) = value;
+    *place_mut(walk_path_mut(&mut regs[op.a as usize], path, interner)) = value;
     Flow::Next
 }
 
@@ -241,7 +310,7 @@ pub fn assign_through_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let reference = machine.reg(op.a).copy_word();
     // SAFETY: the type checker admits only a live `&mut` here.
     let base = unsafe { reference.target_mut() };
-    *walk_path_mut(base, path, machine.interner()) = value;
+    *place_mut(walk_path_mut(base, path, machine.interner())) = value;
     Flow::Next
 }
 
@@ -250,7 +319,7 @@ pub fn field_set(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let mut object = machine.take(op.b);
     let value = machine.use_val(op.c);
     assert!(!path.is_empty(), "FieldSet with an empty path");
-    *walk_path_mut(&mut object, path, machine.interner()) = value;
+    *place_mut(walk_path_mut(&mut object, path, machine.interner())) = value;
     machine.set(op.a, object);
     Flow::Next
 }

@@ -30,7 +30,6 @@ pub enum Composite {
     Tuple,
     Object,
     Variant,
-    Option,
     Result,
     Fn,
     Handle,

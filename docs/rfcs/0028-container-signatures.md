@@ -39,7 +39,11 @@ argument — and each is the reference value itself: a body reads through
 it with `get` / `get_mut` and returns it as it is. A Rust parameter `&T` /
 `&mut T` still declares the same acvus type and is read at entry. A return
 of `Ref`, `RefMut`, or `Option` of either is passed to the runtime as the
-reference it carries.
+reference it carries — for the `Option`, literally: `Some(r)` is `r`'s own
+reference value and `None` is `Runtime::none()` (RFC-0039). A parameter
+`&Option<T>` or `&mut Option<T>` is refused where it is declared, because
+no storage is shaped like an `Option<T>`: take `Option<&T>` or the option
+by value.
 
 ## Rationale
 

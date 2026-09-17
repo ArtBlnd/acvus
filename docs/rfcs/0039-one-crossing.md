@@ -21,11 +21,23 @@ macro expands; the type says how it crosses.
 - A derived struct or enum is rebuilt field by field (RFC-0032,
   RFC-0036). It has no storage of its own type, so reading it through a
   reference is refused.
-- A container — `Option`, `Result`, `Vec`, `Array` — crosses each
+- A container — `Result`, `Vec`, `Array` — crosses each
   element by the element's own `Cross`, whatever that is: a struct inside
   a `Vec` inside a struct is rebuilt at every level. A container is read
   through a reference only when its element is the runtime's value; a
   converted container has no storage of its element type.
+- An `Option<T>` is its payload's value with no shape of its own:
+  `Runtime::none()` is `None`, `Runtime::some(v)` is `Some(v)`, and
+  `is_none` and `unwrap_some` read them back. It costs no allocation and
+  no indirection. `Cross for Option<T>` is those four calls over `T`'s
+  own crossing and nothing else — no static type, no marker, no
+  `TypeId` — so a handler at `T = Rt::Value`, which has no type to
+  consult, is correct by construction. The runtime holds the two apart
+  however it likes; the interpreter gives a `None` a word that counts the
+  `Some`s around it, so `Some(Some(None))` is one word at depth two and
+  `Some(v)` for any other `v` is `v`. No storage is shaped like an
+  `Option<T>`, so `&Option<T>` and `&mut Option<T>` are refused where an
+  extern declares them.
 - A carrier — `Ref`, `RefMut`, `Fn0`..`Fn3` — is the runtime value it
   holds.
 - The runtime's own value crosses as itself: `Runtime::Value: Cross<Self>`.
@@ -63,7 +75,16 @@ Rust; an iterator's items stay runtime values inside the pipeline
 ## Not built
 
 - A checker rule refusing `&T` parameters of converted types in extern
-  signatures; today the refusal is at run time.
+  signatures; today the refusal is at run time. `&Option<T>` is the
+  exception: the declaration macro refuses it.
+- A write through an option in Rust storage — `take`, `replace`, an
+  `&mut Option<T>` parameter. There is no such storage to write through:
+  a `Vec<Option<i64>>` crosses to a `Vec<Value>` of flat elements, and
+  the language has no spelling that reaches one either, since a pattern
+  through `&mut` binds `&T` and the checker refuses a store through it
+  ("cannot store through &i64: not a `&mut`"). If an intent ever demands
+  it, the write goes through a reference to Rust storage and
+  `Cross::deref_mut` materializes and erases across it.
 
 ## Consequences
 

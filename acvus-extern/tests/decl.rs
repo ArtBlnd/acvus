@@ -24,6 +24,9 @@ enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
+    /// The language's `Option` (RFC-0022), held as a host pleases.
+    None,
+    Some(Box<V>),
     Erased(Box<dyn Any + Send + Sync>),
     Closure(Closure),
     Reference(*const V),
@@ -82,6 +85,10 @@ where
             "peek: value is a reference, not a {}",
             std::any::type_name::<T>()
         ),
+        V::None | V::Some(_) => panic!(
+            "peek: value is an option, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::Taken => panic!("peek: the value was already taken out of its slot"),
     }
 }
@@ -108,6 +115,10 @@ where
             "materialize: value is a reference, not a {}",
             std::any::type_name::<T>()
         ),
+        V::None | V::Some(_) => panic!(
+            "materialize: value is an option, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::Taken => panic!("materialize: the value was already taken out of its slot"),
     }
 }
@@ -119,7 +130,7 @@ impl Tiny {
     fn call(&self, f: &V, args: Vec<V>) -> V {
         match f {
             V::Closure(c) => (c.0)(args),
-            V::Taken | V::Erased(_) | V::Reference(_) => {
+            V::None | V::Some(_) | V::Taken | V::Erased(_) | V::Reference(_) => {
                 panic!("call on a value that is not a closure")
             }
         }
@@ -262,6 +273,21 @@ impl Runtime for Tiny {
     }
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
+    }
+    fn none(&self) -> V {
+        V::None
+    }
+    fn some(&self, payload: V) -> V {
+        V::Some(Box::new(payload))
+    }
+    fn is_none(&self, value: &V) -> bool {
+        matches!(value, V::None)
+    }
+    fn unwrap_some(&self, value: V) -> V {
+        let V::Some(payload) = value else {
+            panic!("unwrap_some: the value is not a Some")
+        };
+        *payload
     }
     fn call_is_sync(&self, _: &V) -> bool {
         true
@@ -944,10 +970,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
     );
     let h = instance_for(&reg, &i, "first_or", &ty).unwrap();
     assert_eq!(
-        open::<String>(call_sync(
-            h,
-            vec![erased(Option::<V>::None), erased(String::from("x"))]
-        )),
+        open::<String>(call_sync(h, vec![V::None, erased(String::from("x"))])),
         "x"
     );
 
@@ -1073,7 +1096,10 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     );
     let h = instance_for(&reg, &i, "first", &on_option).unwrap();
     assert_eq!(
-        open::<String>(call_sync(h, vec![erased(Some(erased(String::from("s"))))])),
+        open::<String>(call_sync(
+            h,
+            vec![V::Some(Box::new(erased(String::from("s"))))]
+        )),
         "s"
     );
 
@@ -1110,4 +1136,40 @@ fn erased_inline_derefs_without_a_runtime() {
     assert_eq!(n.into_inner(&rt), 42);
     let s: Erased<Tiny, String> = Erased::new(&rt, "a".to_string());
     assert_eq!(s.as_ref(&rt), "a");
+}
+
+#[test]
+fn a_host_some_is_never_none_and_opens_back_to_its_payload() {
+    let rt = Tiny;
+    assert!(rt.is_none(&rt.none()));
+    for depth in 1..4 {
+        let mut v = rt.none();
+        for _ in 0..depth {
+            v = rt.some(v);
+        }
+        assert!(!rt.is_none(&v), "depth {depth}");
+        for _ in 0..depth {
+            v = rt.unwrap_some(v);
+        }
+        assert!(rt.is_none(&v), "depth {depth}");
+    }
+    let word = rt.some(erased(7i64));
+    assert!(!rt.is_none(&word));
+    assert_eq!(open::<i64>(rt.unwrap_some(word)), 7);
+}
+
+#[test]
+fn an_option_crosses_as_the_host_shaped_it() {
+    let rt = Tiny;
+    let erased_option = <Option<i64> as acvus_extern::Cross<Tiny>>::erase(Some(4), &rt);
+    assert!(matches!(erased_option, V::Some(_)));
+    assert_eq!(
+        unsafe { <Option<i64> as acvus_extern::Cross<Tiny>>::materialize(&rt, erased_option) },
+        Some(4)
+    );
+    let nested = <Option<Option<i64>> as acvus_extern::Cross<Tiny>>::erase(Some(None), &rt);
+    assert_eq!(
+        unsafe { <Option<Option<i64>> as acvus_extern::Cross<Tiny>>::materialize(&rt, nested) },
+        Some(None)
+    );
 }

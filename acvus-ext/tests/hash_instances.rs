@@ -24,6 +24,9 @@ enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
+    /// The language's `Option` (RFC-0022), held as a host pleases.
+    None,
+    Some(Box<V>),
     Word(Box<dyn Any + Send + Sync>),
     Boxed(Box<dyn Any + Send + Sync>),
     Reference(*const V),
@@ -152,7 +155,9 @@ impl Runtime for Counting {
                 self.unboxes.fetch_add(1, Ordering::SeqCst);
                 any
             }
-            V::Reference(_) => panic!("materialize: not a value: {value:?}"),
+            V::None | V::Some(_) | V::Reference(_) => {
+                panic!("materialize: not a value: {value:?}")
+            }
             V::Taken => panic!("materialize: the value was already taken out of its slot"),
         };
         match any.downcast::<T>() {
@@ -222,6 +227,21 @@ impl Runtime for Counting {
 
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
+    }
+    fn none(&self) -> V {
+        V::None
+    }
+    fn some(&self, payload: V) -> V {
+        V::Some(Box::new(payload))
+    }
+    fn is_none(&self, value: &V) -> bool {
+        matches!(value, V::None)
+    }
+    fn unwrap_some(&self, value: V) -> V {
+        let V::Some(payload) = value else {
+            panic!("unwrap_some: the value is not a Some")
+        };
+        *payload
     }
 
     fn symbol(&self, name: &str) -> acvus_extern::Astr {

@@ -111,6 +111,22 @@ impl Runtime for AcvusRuntime {
         Value::reference(target)
     }
 
+    fn none(&self) -> Value {
+        Value::NONE
+    }
+
+    fn some(&self, payload: Value) -> Value {
+        Value::some(payload)
+    }
+
+    fn is_none(&self, value: &Value) -> bool {
+        value.is_none()
+    }
+
+    fn unwrap_some(&self, value: Value) -> Value {
+        Value::some_payload(value)
+    }
+
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
         self.0.interner.intern(name)
     }

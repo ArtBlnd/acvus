@@ -9,6 +9,7 @@
 //! extern call reaches, the page key a context is stored under, where a
 //! label sits — is decided here.
 
+use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -24,7 +25,7 @@ use rustc_hash::FxHashMap;
 
 use crate::code::{
     ArgWindow, BasicBlock, Code, ConcatPart, FieldSlot, Konst, LoopBody, NO_SLOT, Op, OpFn,
-    Payload, Prepared, SlotMove,
+    Payload, Prepared, SlotMove, Step,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
@@ -284,6 +285,14 @@ impl<'a> Prepare<'a> {
         matches!(self.ty(id), Ty::Ref(..))
     }
 
+    /// A test reads through a reference, so the storage's type decides.
+    fn scrutinee_ty(&self, id: ValueId) -> &Ty {
+        match self.ty(id) {
+            Ty::Ref(_, inner) => &inner.ty,
+            ty => ty,
+        }
+    }
+
     fn is_string(&self, id: ValueId) -> bool {
         matches!(self.ty(id), Ty::String)
     }
@@ -293,8 +302,29 @@ impl<'a> Prepare<'a> {
         self.payloads.len() - 1
     }
 
-    fn path(&mut self, path: &[PathSeg]) -> usize {
+    fn path(&mut self, path: &[Step]) -> usize {
         self.put(Payload::Path(path.to_vec().into_boxed_slice()))
+    }
+
+    fn walked_under(&self, target: &RefTarget, path: &[PathSeg]) -> (u32, Vec<Step>) {
+        let (id, root) = match target {
+            RefTarget::Var(s) | RefTarget::Param(s) => (*s, self.ty(*s)),
+            RefTarget::Through(r) => (*r, self.scrutinee_ty(*r)),
+        };
+        (self.slot(id), self.walked(root, path))
+    }
+
+    /// The path under `root` with each step resolved against the type it
+    /// stands on, and the steps that read nothing dropped (RFC-0022).
+    fn walked(&self, root: &Ty, path: &[PathSeg]) -> Vec<Step> {
+        let mut at = vec![root.clone()];
+        let mut kept = Vec::with_capacity(path.len());
+        for seg in path {
+            let resolved = resolve_step(&at, seg);
+            at = step(&at, seg);
+            kept.extend(resolved);
+        }
+        kept
     }
 
     fn slots(&mut self, ids: &[ValueId]) -> usize {
@@ -617,97 +647,80 @@ impl<'a> Prepare<'a> {
 
             InstKind::Ref {
                 dst, target, path, ..
-            } => match target {
-                RefTarget::Var(s) | RefTarget::Param(s) if path.is_empty() => {
-                    Op::new(storage::ref_var)
-                        .a(self.slot(*dst))
-                        .b(self.slot(*s))
+            } => {
+                let (src, path) = self.walked_under(target, path);
+                match (target, path.is_empty()) {
+                    (RefTarget::Var(_) | RefTarget::Param(_), true) => {
+                        Op::new(storage::ref_var).a(self.slot(*dst)).b(src)
+                    }
+                    (RefTarget::Var(_) | RefTarget::Param(_), false) => {
+                        let at = self.path(&path);
+                        Op::new(storage::ref_var_path)
+                            .a(self.slot(*dst))
+                            .b(src)
+                            .p(at)
+                    }
+                    (RefTarget::Through(_), true) => {
+                        Op::new(storage::ref_through).a(self.slot(*dst)).b(src)
+                    }
+                    (RefTarget::Through(_), false) => {
+                        let at = self.path(&path);
+                        Op::new(storage::ref_through_path)
+                            .a(self.slot(*dst))
+                            .b(src)
+                            .p(at)
+                    }
                 }
-                RefTarget::Var(s) | RefTarget::Param(s) => {
-                    let at = self.path(path);
-                    Op::new(storage::ref_var_path)
-                        .a(self.slot(*dst))
-                        .b(self.slot(*s))
-                        .p(at)
-                }
-                RefTarget::Through(r) if path.is_empty() => Op::new(storage::ref_through)
-                    .a(self.slot(*dst))
-                    .b(self.slot(*r)),
-                RefTarget::Through(r) => {
-                    let at = self.path(path);
-                    Op::new(storage::ref_through_path)
-                        .a(self.slot(*dst))
-                        .b(self.slot(*r))
-                        .p(at)
-                }
-            },
+            }
             InstKind::Take { dst, target, path } => {
                 let clone = self.is_string(*dst);
-                match target {
-                    RefTarget::Var(s) | RefTarget::Param(s) if path.is_empty() => {
-                        let f: OpFn = if clone {
-                            storage::take_var::<true>
-                        } else {
-                            storage::take_var::<false>
-                        };
-                        Op::new(f).a(self.slot(*dst)).b(self.slot(*s))
+                let (src, path) = self.walked_under(target, path);
+                let f: OpFn = match (target, path.is_empty(), clone) {
+                    (RefTarget::Var(_) | RefTarget::Param(_), true, true) => {
+                        storage::take_var::<true>
                     }
-                    RefTarget::Var(s) | RefTarget::Param(s) => {
-                        let f: OpFn = if clone {
-                            storage::read_path::<true>
-                        } else {
-                            storage::read_path::<false>
-                        };
-                        let at = self.path(path);
-                        Op::new(f).a(self.slot(*dst)).b(self.slot(*s)).p(at)
+                    (RefTarget::Var(_) | RefTarget::Param(_), true, false) => {
+                        storage::take_var::<false>
                     }
-                    RefTarget::Through(r) if path.is_empty() => {
-                        let f: OpFn = if clone {
-                            storage::take_through::<true>
-                        } else {
-                            storage::take_through::<false>
-                        };
-                        Op::new(f).a(self.slot(*dst)).b(self.slot(*r))
+                    (RefTarget::Var(_) | RefTarget::Param(_), false, true) => {
+                        storage::read_path::<true>
                     }
-                    RefTarget::Through(r) => {
-                        let f: OpFn = if clone {
-                            storage::take_through_path::<true>
-                        } else {
-                            storage::take_through_path::<false>
-                        };
-                        let at = self.path(path);
-                        Op::new(f).a(self.slot(*dst)).b(self.slot(*r)).p(at)
+                    (RefTarget::Var(_) | RefTarget::Param(_), false, false) => {
+                        storage::read_path::<false>
                     }
+                    (RefTarget::Through(_), true, true) => storage::take_through::<true>,
+                    (RefTarget::Through(_), true, false) => storage::take_through::<false>,
+                    (RefTarget::Through(_), false, true) => storage::take_through_path::<true>,
+                    (RefTarget::Through(_), false, false) => storage::take_through_path::<false>,
+                };
+                let op = Op::new(f).a(self.slot(*dst)).b(src);
+                if path.is_empty() {
+                    op
+                } else {
+                    let at = self.path(&path);
+                    op.p(at)
                 }
             }
             InstKind::Assign {
                 target,
                 path,
                 value,
-            } => match target {
-                RefTarget::Var(s) | RefTarget::Param(s) if path.is_empty() => {
-                    Op::new(storage::assign_var)
-                        .a(self.slot(*s))
-                        .b(self.slot(*value))
+            } => {
+                let (dst, path) = self.walked_under(target, path);
+                let f: OpFn = match (target, path.is_empty()) {
+                    (RefTarget::Var(_) | RefTarget::Param(_), true) => storage::assign_var,
+                    (RefTarget::Var(_) | RefTarget::Param(_), false) => storage::assign_var_path,
+                    (RefTarget::Through(_), true) => storage::assign_through,
+                    (RefTarget::Through(_), false) => storage::assign_through_path,
+                };
+                let op = Op::new(f).a(dst).b(self.slot(*value));
+                if path.is_empty() {
+                    op
+                } else {
+                    let at = self.path(&path);
+                    op.p(at)
                 }
-                RefTarget::Var(s) | RefTarget::Param(s) => {
-                    let at = self.path(path);
-                    Op::new(storage::assign_var_path)
-                        .a(self.slot(*s))
-                        .b(self.slot(*value))
-                        .p(at)
-                }
-                RefTarget::Through(r) if path.is_empty() => Op::new(storage::assign_through)
-                    .a(self.slot(*r))
-                    .b(self.slot(*value)),
-                RefTarget::Through(r) => {
-                    let at = self.path(path);
-                    Op::new(storage::assign_through_path)
-                        .a(self.slot(*r))
-                        .b(self.slot(*value))
-                        .p(at)
-                }
-            },
+            }
             InstKind::Fetch { dst, context } => {
                 let at = self.put(Payload::PageKey(self.ctx.page_key(context)));
                 Op::new(storage::fetch).a(self.slot(*dst)).p(at)
@@ -738,9 +751,9 @@ impl<'a> Prepare<'a> {
                     } else {
                         storage::read_path::<false>
                     };
-                    let path: Vec<PathSeg> = std::iter::once(*field)
+                    let path: Vec<Step> = std::iter::once(*field)
                         .chain(rest.iter().copied())
-                        .map(PathSeg::Field)
+                        .map(Step::Field)
                         .collect();
                     let at = self.path(&path);
                     Op::new(f).a(self.slot(*dst)).b(self.slot(*object)).p(at)
@@ -753,9 +766,9 @@ impl<'a> Prepare<'a> {
                 rest,
                 value,
             } => {
-                let path: Vec<PathSeg> = std::iter::once(*field)
+                let path: Vec<Step> = std::iter::once(*field)
                     .chain(rest.iter().copied())
-                    .map(PathSeg::Field)
+                    .map(Step::Field)
                     .collect();
                 let at = self.path(&path);
                 Op::new(storage::field_set)
@@ -956,10 +969,14 @@ impl<'a> Prepare<'a> {
 
             InstKind::MakeVariant { dst, tag, payload } => self.make_variant(*dst, *tag, *payload),
             InstKind::TestVariant { dst, src, tag } => {
-                let f: OpFn = if self.is_ref(*src) {
-                    variant::test_variant::<true>
-                } else {
-                    variant::test_variant::<false>
+                let through = self.is_ref(*src);
+                let f: OpFn = match (variant_form(self.scrutinee_ty(*src)), through) {
+                    (VariantForm::Option, false) => variant::test_option::<false>,
+                    (VariantForm::Option, true) => variant::test_option::<true>,
+                    (VariantForm::Result, false) => variant::test_result::<false>,
+                    (VariantForm::Result, true) => variant::test_result::<true>,
+                    (VariantForm::Enum, false) => variant::test_variant::<false>,
+                    (VariantForm::Enum, true) => variant::test_variant::<true>,
                 };
                 let at = self.put(Payload::Name(*tag));
                 Op::new(f)
@@ -969,9 +986,14 @@ impl<'a> Prepare<'a> {
                     .d(u32::from(self.tag_is(*tag, "Ok")))
                     .p(at)
             }
-            InstKind::UnwrapVariant { dst, src } => Op::new(variant::unwrap_variant)
-                .a(self.slot(*dst))
-                .b(self.slot(*src)),
+            InstKind::UnwrapVariant { dst, src } => {
+                let f: OpFn = match variant_form(self.ty(*src)) {
+                    VariantForm::Option => variant::unwrap_option,
+                    VariantForm::Result => variant::unwrap_result,
+                    VariantForm::Enum => variant::unwrap_variant,
+                };
+                Op::new(f).a(self.slot(*dst)).b(self.slot(*src))
+            }
 
             InstKind::BlockLabel { .. } => Op::new(control::nop),
             InstKind::Jump { label, args } => {
@@ -1217,6 +1239,84 @@ impl ValueSet {
                 .map(move |bit| word * 64 + bit)
         })
     }
+}
+
+/// Which shape a value of `ty` carries its tag in.
+enum VariantForm {
+    Option,
+    Result,
+    Enum,
+}
+
+fn variant_form(ty: &Ty) -> VariantForm {
+    match ty {
+        Ty::Option(_) => VariantForm::Option,
+        Ty::Result(..) => VariantForm::Result,
+        Ty::Enum { .. } => VariantForm::Enum,
+        other => panic!("a variant instruction on {other:?}"),
+    }
+}
+
+/// The types a step can land on; none, when `ty` has no such step.
+fn step_tys(ty: &Ty, seg: &PathSeg) -> Vec<Ty> {
+    match (seg, ty) {
+        (PathSeg::Field(f), Ty::Object(fields)) => fields.get(f).cloned().into_iter().collect(),
+        (PathSeg::Index(_), Ty::Array(elem, _)) => vec![(**elem).clone()],
+        (PathSeg::Index(i), Ty::Tuple(elems)) => elems.get(*i).cloned().into_iter().collect(),
+        (PathSeg::Payload, Ty::Option(inner)) => vec![(**inner).clone()],
+        (PathSeg::Payload, Ty::Result(ok, err)) => vec![(**ok).clone(), (**err).clone()],
+        (PathSeg::Payload, Ty::Enum { variants, .. }) => {
+            variants.values().flatten().map(|t| (**t).clone()).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// One step of a path over every type the walk could be at. A `Result` or
+/// an `Enum` payload does not say which branch it took, so the walk carries
+/// them all and the rest of the path rules out the ones it cannot belong
+/// to.
+fn step(at: &[Ty], seg: &PathSeg) -> Vec<Ty> {
+    let next: Vec<Ty> = at.iter().flat_map(|ty| step_tys(ty, seg)).collect();
+    assert!(!next.is_empty(), "a path step {seg:?} on {at:?}");
+    next
+}
+
+/// The step the machine runs, or none where the type makes it a no-op: an
+/// option's payload is the option's own value, unless the payload type is
+/// itself an option and the depth word is what separates them (RFC-0022).
+fn resolve_step(at: &[Ty], seg: &PathSeg) -> Option<Step> {
+    match seg {
+        PathSeg::Field(f) => Some(Step::Field(*f)),
+        PathSeg::Index(i) => Some(Step::Index(*i)),
+        PathSeg::Payload => payload_step(at),
+    }
+}
+
+fn payload_step(at: &[Ty]) -> Option<Step> {
+    let shape = |ty: &Ty| match ty {
+        Ty::Option(inner) if matches!(**inner, Ty::Option(_)) => Some(Step::OptionPayload),
+        Ty::Option(_) => None,
+        Ty::Result(..) => Some(Step::ResultPayload),
+        Ty::Enum { .. } => Some(Step::VariantPayload),
+        other => panic!("a payload step on {other:?}"),
+    };
+    let mut live = at
+        .iter()
+        .filter(|ty| !step_tys(ty, &PathSeg::Payload).is_empty());
+    let first = live
+        .next()
+        .unwrap_or_else(|| panic!("a payload step on {at:?}"));
+    let answer = shape(first);
+    assert!(
+        live.all(|ty| discriminant_of(shape(ty)) == discriminant_of(answer)),
+        "a payload step reaches more than one shape: {at:?}"
+    );
+    answer
+}
+
+fn discriminant_of(step: Option<Step>) -> Option<mem::Discriminant<Step>> {
+    step.map(|s| mem::discriminant(&s))
 }
 
 fn touch(ranges: &mut [Option<LiveRange>], value: usize, at: usize) {

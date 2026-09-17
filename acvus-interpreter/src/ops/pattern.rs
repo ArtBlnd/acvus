@@ -3,9 +3,7 @@
 //! `THROUGH` is what the preparation read from the source's type: a
 //! reference is read through, a value in place.
 
-use acvus_mir::ir::PathSeg;
-
-use crate::code::{Flow, Op};
+use crate::code::{Flow, Op, Step};
 use crate::machine::Machine;
 use crate::ops::arith::Int;
 use crate::ops::payload;
@@ -75,5 +73,5 @@ pub fn array_get<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow 
         dst: op.a,
         src: op.b,
     };
-    read_at::<CLONE>(machine, slots, &[PathSeg::Index(index)])
+    read_at::<CLONE>(machine, slots, &[Step::Index(index)])
 }

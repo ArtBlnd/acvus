@@ -536,6 +536,9 @@ fn parse_params(
             Type::Reference(r) => ((*r.elem).clone(), Mode::Borrow),
             ty => (ty.clone(), Mode::Value),
         };
+        if mode != Mode::Value && names_option(&ty) {
+            return Err(syn::Error::new_spanned(&pat_type.ty, NO_OPTION_BORROW));
+        }
         params.push(RustParam::Acvus(ExternParam {
             name: ident.to_string(),
             ty,
@@ -543,6 +546,16 @@ fn parse_params(
         }));
     }
     Ok((has_runtime, params))
+}
+
+const NO_OPTION_BORROW: &str = "an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.";
+
+fn names_option(ty: &Type) -> bool {
+    let Type::Path(p) = ty else { return false };
+    p.path
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "Option")
 }
 
 fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {

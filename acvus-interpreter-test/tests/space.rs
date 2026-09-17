@@ -76,7 +76,7 @@ fn a_value_of_a_language_shape_comes_back_equal() {
                 i.intern("scores"),
                 Value::array(vec![Value::int(7), Value::int(-3)]),
             ),
-            (i.intern("tag"), Value::option(Some(Value::bool_(true)))),
+            (i.intern("tag"), Value::some(Value::bool_(true))),
         ]
         .into_iter()
         .collect(),
@@ -93,12 +93,7 @@ fn a_value_of_a_language_shape_comes_back_equal() {
             .collect::<Vec<_>>(),
         [7, -3]
     );
-    assert!(
-        unsafe { fields[&i.intern("tag")].as_option() }
-            .as_ref()
-            .unwrap()
-            .as_bool()
-    );
+    assert!(fields[&i.intern("tag")].as_bool());
 }
 
 #[test]

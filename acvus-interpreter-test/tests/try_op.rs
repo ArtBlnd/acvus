@@ -49,12 +49,9 @@ async fn a_question_mark_on_an_option_returns_none() {
     let i = Interner::new();
     let src = r#"let o = if @some { Some(4) } else { None }; let v = o?; Some(v + 1)"#;
     let v = run_script_mode(&i, src, flags(&i, &[("some", true)])).await;
-    assert_eq!(
-        unsafe { v.as_option() }.as_ref().map(|v| v.as_int()),
-        Some(5)
-    );
+    assert_eq!(v.as_int(), 5);
     let v = run_script_mode(&i, src, flags(&i, &[("some", false)])).await;
-    assert!(unsafe { v.as_option() }.is_none(), "{v:?}");
+    assert!(v.is_none(), "{v:?}");
 }
 
 #[tokio::test]

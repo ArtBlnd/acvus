@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use acvus_ast::Span;
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ir::{Label, PathSeg};
+use acvus_mir::ir::Label;
 use acvus_utils::Astr;
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
@@ -175,10 +175,24 @@ pub struct LoopBody {
     pub exit: Box<[SlotMove]>,
 }
 
+/// A path step, with the MIR's `PathSeg::Payload` resolved to the shape
+/// the preparation read from the type at that point. An option's payload
+/// step survives only where the payload type is itself an option; anywhere
+/// else a `Some` is its payload's own value and the step is dropped
+/// (RFC-0022).
+#[derive(Clone, Copy, Debug)]
+pub enum Step {
+    Field(Astr),
+    Index(usize),
+    OptionPayload,
+    ResultPayload,
+    VariantPayload,
+}
+
 /// What an operation keeps outside its inline words. The `Code` owns the
 /// table; an operation reads it by index.
 pub enum Payload {
-    Path(Box<[PathSeg]>),
+    Path(Box<[Step]>),
     /// Register slots in order: a composite's elements, a call's arguments.
     Slots(Box<[u32]>),
     Parts(Box<[ConcatPart]>),

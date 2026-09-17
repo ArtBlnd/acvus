@@ -46,8 +46,8 @@ pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
             }
             Json::Object(out)
         }
-        Ty::Option(inner) => match unsafe { value.as_option() } {
-            Some(v) => of(interner, inner, v),
+        Ty::Option(inner) => match value.option_payload() {
+            Some(v) => of(interner, inner, &v),
             None => Json::Null,
         },
         Ty::Result(ok, err) => {

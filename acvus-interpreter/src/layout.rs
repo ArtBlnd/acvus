@@ -103,10 +103,10 @@ pub fn encode(
                 encode(rt, nested, t, v, out)?;
             }
         }
-        Ty::Option(inner) => match unsafe { value.as_option() } {
+        Ty::Option(inner) => match value.option_payload() {
             Some(v) => {
                 out.push(1);
-                encode(rt, nested, inner, v, out)?;
+                encode(rt, nested, inner, &v, out)?;
             }
             None => out.push(0),
         },
@@ -209,11 +209,11 @@ pub fn decode(
             }
             Value::object(values)
         }
-        Ty::Option(inner) => Value::option(match take(input, 1)?[0] {
-            0 => None,
-            1 => Some(decode(rt, nested, inner, input)?),
+        Ty::Option(inner) => match take(input, 1)?[0] {
+            0 => Value::NONE,
+            1 => Value::some(decode(rt, nested, inner, input)?),
             other => return Err(SpaceError::new(format!("Option: tag {other}"))),
-        }),
+        },
         Ty::Result(ok, err) => Value::result(match take(input, 1)?[0] {
             0 => Ok(decode(rt, nested, ok, input)?),
             1 => Err(decode(rt, nested, err, input)?),

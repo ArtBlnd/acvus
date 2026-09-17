@@ -21,6 +21,9 @@ enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
+    /// The language's `Option` (RFC-0022), held as a host pleases.
+    None,
+    Some(Box<V>),
     Boxed(Box<dyn Any + Send + Sync>),
     Reference(*const V),
 }
@@ -202,6 +205,21 @@ impl Runtime for Counting {
 
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
+    }
+    fn none(&self) -> V {
+        V::None
+    }
+    fn some(&self, payload: V) -> V {
+        V::Some(Box::new(payload))
+    }
+    fn is_none(&self, value: &V) -> bool {
+        matches!(value, V::None)
+    }
+    fn unwrap_some(&self, value: V) -> V {
+        let V::Some(payload) = value else {
+            panic!("unwrap_some: the value is not a Some")
+        };
+        *payload
     }
 
     fn symbol(&self, name: &str) -> acvus_extern::Astr {

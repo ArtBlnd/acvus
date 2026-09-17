@@ -81,6 +81,14 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     where
         T: Send + Sync + 'static;
 
+    /// The language's `Option` (RFC-0022).
+    fn none(&self) -> Self::Value;
+    fn some(&self, payload: Self::Value) -> Self::Value;
+    fn is_none(&self, value: &Self::Value) -> bool;
+    /// # Panics
+    /// The value is `None`.
+    fn unwrap_some(&self, value: Self::Value) -> Self::Value;
+
     /// The name a field key is at run time (RFC-0032).
     fn symbol(&self, name: &str) -> acvus_utils::Astr;
 
@@ -191,6 +199,18 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     unsafe fn reference(&self, _: &()) {}
+    fn none(&self) {
+        no_values()
+    }
+    fn some(&self, _: ()) {
+        no_values()
+    }
+    fn is_none(&self, _: &()) -> bool {
+        no_values()
+    }
+    fn unwrap_some(&self, _: ()) {
+        no_values()
+    }
     fn symbol(&self, _: &str) -> acvus_utils::Astr {
         panic!("TypesOnly runtime holds no values")
     }

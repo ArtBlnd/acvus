@@ -5,6 +5,7 @@
 use std::any::TypeId;
 use std::fmt;
 use std::mem::{self, MaybeUninit};
+use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::{Arc, LazyLock};
 
@@ -31,6 +32,9 @@ macro_rules! kind {
             Undef,
             Ref,
             Large,
+            /// An option whose payload is a `None`: the word is how many
+            /// `Some`s wrap it, and zero is `None` itself (RFC-0022).
+            None,
             $($name,)*
         }
 
@@ -49,21 +53,21 @@ macro_rules! kind {
             pub fn type_id(self) -> Option<TypeId> {
                 match self {
                     $(Kind::$name => Some(TypeId::of::<$t>()),)*
-                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large => None,
+                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
                 }
             }
 
             pub fn name(self) -> Option<&'static str> {
                 match self {
                     $(Kind::$name => Some(stringify!($t)),)*
-                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large => None,
+                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
                 }
             }
 
             pub fn is_inline(self) -> bool {
                 match self {
                     $(Kind::$name)|* => true,
-                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large => false,
+                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large | Kind::None => false,
                 }
             }
         }
@@ -154,6 +158,10 @@ impl Value {
     };
     pub const UNDEF: Value = Value {
         kind: Kind::Undef,
+        word: 0,
+    };
+    pub const NONE: Value = Value {
+        kind: Kind::None,
         word: 0,
     };
 
@@ -341,7 +349,7 @@ impl Value {
             Kind::Large => slot.take(),
             Kind::Empty => panic!("use: accessed moved-out value"),
             Kind::Undef => Value::UNDEF,
-            Kind::Ref => slot.copy_word(),
+            Kind::Ref | Kind::None => slot.copy_word(),
             inline => {
                 debug_assert!(inline.is_inline(), "use: {inline:?} is not a word");
                 slot.copy_word()
@@ -358,7 +366,7 @@ impl Value {
     #[inline]
     pub fn copy_word(&self) -> Value {
         debug_assert!(
-            self.kind.is_inline() || self.kind == Kind::Ref,
+            self.kind.is_inline() || self.kind == Kind::Ref || self.kind == Kind::None,
             "copy_word: {self:?} does not copy"
         );
         Value {
@@ -414,6 +422,16 @@ impl fmt::Debug for Value {
         match self.kind {
             Kind::Empty => write!(f, "<empty>"),
             Kind::Undef => write!(f, "<undef>"),
+            Kind::None => {
+                for _ in 0..self.word {
+                    f.write_str("Some(")?;
+                }
+                f.write_str("None")?;
+                for _ in 0..self.word {
+                    f.write_str(")")?;
+                }
+                Ok(())
+            }
             Kind::Ref => write!(f, "Ref({:p})", self.word as *const Value),
             Kind::Large => {
                 let vtable = self.header().vtable;
@@ -437,6 +455,30 @@ impl PartialEq for Value {
     }
 }
 
+/// Where a read landed: a place inside a value, or the `None` that a
+/// `Some`'s payload is when it has no place of its own (RFC-0022).
+pub enum Place<'a> {
+    At(&'a Value),
+    Depth(Value),
+}
+
+impl Deref for Place<'_> {
+    type Target = Value;
+
+    fn deref(&self) -> &Value {
+        match self {
+            Place::At(v) => v,
+            Place::Depth(v) => v,
+        }
+    }
+}
+
+/// As `Place`, for a write.
+pub enum PlaceMut<'a> {
+    At(&'a mut Value),
+    Depth(Value),
+}
+
 // -- The interpreter's own composites --------------------------------
 
 /// The language's array is the extern contract's `Arr` at `T = Value`
@@ -449,10 +491,6 @@ pub type Object = acvus_extern::Obj<Value>;
 
 /// The language's variant is the extern contract's `Variant` at `V = Value`.
 pub type VariantValue = acvus_extern::Variant<Value>;
-
-/// The language's `Option<T>` is Rust's `Option` at `T = Value`, so it
-/// crosses the extern boundary as itself (RFC-0022).
-pub type OptionValue = Option<Value>;
 
 /// The language's `Result<T, E>` is Rust's `Result` at `T = E = Value`, so
 /// it crosses the extern boundary as itself (RFC-0038).
@@ -577,12 +615,6 @@ typed_debug_fn! { ResultValue;
         Err(e) => write!(f, "Err({e:?})"),
     };
 }
-typed_debug_fn! { OptionValue;
-    dbg_option = |d, f| match d {
-        Some(p) => write!(f, "Some({p:?})"),
-        None => write!(f, "None"),
-    };
-}
 typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len()); }
 
 static STRING: LazyLock<Vtable> =
@@ -595,8 +627,6 @@ static OBJECT: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<Object>("Object", Composite::Object, Some(dbg_object)));
 static VARIANT: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<VariantValue>("Variant", Composite::Variant, Some(dbg_variant)));
-static OPTION: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<OptionValue>("Option", Composite::Option, Some(dbg_option)));
 static RESULT: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<ResultValue>("Result", Composite::Result, Some(dbg_result)));
 static FN: LazyLock<Vtable> =
@@ -605,9 +635,9 @@ static HANDLE: LazyLock<Vtable> =
     LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None));
 
 /// Every composite vtable, in the order of `Composite`.
-pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 9]> = LazyLock::new(|| {
+pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 8]> = LazyLock::new(|| {
     [
-        &STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &OPTION, &RESULT, &FN, &HANDLE,
+        &STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &RESULT, &FN, &HANDLE,
     ]
 });
 
@@ -668,9 +698,34 @@ impl Value {
             },
         )
     }
-    pub fn option(payload: OptionValue) -> Self {
-        large(&OPTION, payload)
+    /// `Some(payload)`, in the one shape every option takes: the payload's
+    /// own value, unless the payload is itself a `None`, whose depth word
+    /// this `Some` raises by one (RFC-0022).
+    pub fn some(payload: Value) -> Self {
+        if payload.kind != Kind::None {
+            return payload;
+        }
+        Value {
+            kind: Kind::None,
+            word: payload.word + 1,
+        }
     }
+
+    /// The `None` check is a `debug_assert!`: every caller reaches here
+    /// having already read `Some` — the extern boundary from `is_none`,
+    /// the machine from the `TestVariant` that chose the branch.
+    #[inline]
+    pub fn some_payload(option: Value) -> Self {
+        debug_assert!(!option.is_none(), "some_payload: the value is None");
+        if option.kind != Kind::None {
+            return option;
+        }
+        Value {
+            kind: Kind::None,
+            word: option.word - 1,
+        }
+    }
+
     pub fn result(payload: ResultValue) -> Self {
         large(&RESULT, payload)
     }
@@ -696,8 +751,30 @@ impl Value {
     pub fn is_string(&self) -> bool {
         self.composite() == Some(Composite::String)
     }
-    pub fn is_option(&self) -> bool {
-        self.composite() == Some(Composite::Option)
+    pub fn is_none(&self) -> bool {
+        self.kind == Kind::None && self.word == 0
+    }
+
+    /// The payload a `Some` carries, read where it lies. A `Some` of a
+    /// `None` owns nothing, so the payload it yields is a word the reader
+    /// holds rather than a borrow of this value.
+    pub fn option_payload(&self) -> Option<Place<'_>> {
+        let Kind::None = self.kind else {
+            return Some(Place::At(self));
+        };
+        self.word.checked_sub(1).map(|depth| {
+            Place::Depth(Value {
+                kind: Kind::None,
+                word: depth,
+            })
+        })
+    }
+
+    /// The payload a `Some` owns, exclusively. `None` both for the option
+    /// `None` and for a `Some` of one, the two values with nothing under
+    /// them.
+    pub fn option_payload_mut(&mut self) -> Option<&mut Value> {
+        (self.kind != Kind::None).then_some(self)
     }
     pub fn is_result(&self) -> bool {
         self.composite() == Some(Composite::Result)
@@ -712,17 +789,6 @@ impl Value {
     pub unsafe fn as_result_mut(&mut self) -> &mut ResultValue {
         unsafe { self.peek_mut::<ResultValue>() }
     }
-    /// # Safety
-    /// The value is an `Option`.
-    pub unsafe fn as_option(&self) -> &OptionValue {
-        unsafe { self.peek::<OptionValue>() }
-    }
-    /// # Safety
-    /// The value is an `Option`.
-    pub unsafe fn as_option_mut(&mut self) -> &mut OptionValue {
-        unsafe { self.peek_mut::<OptionValue>() }
-    }
-
     /// # Safety
     /// The value is a `String`.
     pub unsafe fn as_str(&self) -> &str {
@@ -830,7 +896,7 @@ mod tests {
 
     #[test]
     fn the_kinds_that_no_rust_type_was_erased_into_name_none() {
-        for kind in [Kind::Empty, Kind::Undef, Kind::Ref, Kind::Large] {
+        for kind in [Kind::Empty, Kind::Undef, Kind::Ref, Kind::Large, Kind::None] {
             assert_eq!(kind.type_id(), None, "{kind:?}");
             assert_eq!(kind.name(), None, "{kind:?}");
             assert!(!kind.is_inline(), "{kind:?}");

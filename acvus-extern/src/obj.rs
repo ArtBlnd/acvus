@@ -315,47 +315,25 @@ where
     (stored as &mut dyn Any).downcast_mut::<T>()
 }
 
-/// An `Option` of a payload other than the runtime's value is refused, as
-/// `storage_as` says.
-const NO_OPTION_STORAGE: &str = "an Option whose payload is not the runtime's value has no Option of its own type to read through; read the stored `Option<Value>` and wrap the payload with `Erased::from_value`";
-
 impl<T, Rt> Cross<Rt> for Option<T>
 where
     T: Cross<Rt>,
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
-        let inner: Option<Rt::Value> = self.map(|v| v.erase(rt));
-        // SAFETY: the language's Option is the runtime's `Option<Value>`
-        // (RFC-0022).
-        unsafe { rt.erase::<Option<Rt::Value>>(inner) }
+        match self {
+            Some(v) => rt.some(v.erase(rt)),
+            None => rt.none(),
+        }
     }
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and `erase` boxes an `Option<Value>`.
-        let inner = unsafe { rt.materialize::<Option<Rt::Value>>(value) };
-        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
-        // from a `T`.
-        inner.map(|v| unsafe { T::materialize(rt, v) })
-    }
-
-    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
-        // SAFETY: the caller's contract, and `erase` boxes an `Option<Value>`.
-        let stored = unsafe { rt.deref::<Option<Rt::Value>>(reference) };
-        let Some(same) = storage_as::<_, Self>(stored) else {
-            panic!("{NO_OPTION_STORAGE}")
-        };
-        same
-    }
-
-    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
-        // SAFETY: the caller's contract, exclusively, and `erase` boxes an
-        // `Option<Value>`.
-        let stored = unsafe { rt.deref_mut::<Option<Rt::Value>>(reference) };
-        let Some(same) = storage_as_mut::<_, Self>(stored) else {
-            panic!("{NO_OPTION_STORAGE}")
-        };
-        same
+        if rt.is_none(&value) {
+            return None;
+        }
+        // SAFETY: the caller's contract, forwarded: `erase` put a `T`'s
+        // value under the `some`.
+        Some(unsafe { T::materialize(rt, rt.unwrap_some(value)) })
     }
 }
 
@@ -393,18 +371,19 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
-        let inner: Option<Rt::Value> = self.map(|v| v.erase(rt));
-        // SAFETY: the language's Option is the runtime's `Option<Value>`
-        // (RFC-0022).
-        unsafe { rt.erase::<Option<Rt::Value>>(inner) }
+        match self {
+            Some(v) => rt.some(v.erase(rt)),
+            None => rt.none(),
+        }
     }
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and `erase` boxes an `Option<Value>`.
-        let inner = unsafe { rt.materialize::<Option<Rt::Value>>(value) };
-        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
-        // from a `T`.
-        inner.map(|v| unsafe { T::materialize(rt, v) })
+        if rt.is_none(&value) {
+            return None;
+        }
+        // SAFETY: the caller's contract, forwarded: `erase` put a `T`'s
+        // value under the `some`.
+        Some(unsafe { T::materialize(rt, rt.unwrap_some(value)) })
     }
 }
 

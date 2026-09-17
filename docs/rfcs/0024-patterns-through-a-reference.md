@@ -21,6 +21,15 @@ source's, never the pattern's.
   for the match and nothing moves. A literal in the pattern is compared
   through the reference.
 
+  One part has no storage to lend: the payload of a `Some` whose payload
+  is a `None` is the depth word itself (RFC-0039), so `Some(v) = &opt`
+  with `opt` at `Some(None)` binds `v` to that `None` as a value. A
+  reference to a `None` is that `None`: it owns nothing, it tests the
+  same, and every op that reads a reference-typed option slot reads it
+  directly. That is `ops::storage::through`, which the tests through a
+  reference, `ref_through`, `ref_through_path`, `take_through` and
+  `take_through_path` all go through.
+
 - **An open head.** The dimension is the source's, so a source whose type
   is still a variable where the pattern is written has no dimension yet.
   The pattern is checked against a referent of its own, and the two are
