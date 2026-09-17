@@ -385,6 +385,7 @@ Priority (topological sort with `BinaryHeap`):
 
 - Phase 1, within a block: at a value's last use, if it is not live-out and the instruction does not consume it, a `Drop` follows the instruction. An unused definition is dropped right after it.
 - Phase 2, on edges: a value live-out of A that is neither forwarded to B nor live-in to B is dropped at the start of B.
+- A `Take` reaching a payload through nothing but options takes the storage's whole value — `Some(v)` *is* `v` (RFC-0039) — so neither phase drops that storage afterwards. A `Result` or an `Enum` keeps the box its payload came out of.
 
 ### SSA Pass (`optimize/ssa_pass.rs`)
 
@@ -479,7 +480,7 @@ Every instruction's operands match the types recorded in `val_types`: arity, con
 
 ### Move Check (`validate/move_check.rs`)
 
-Every non-primitive, non-reference type is move-only (`is_move_only`). Forward dataflow over a promoted clone of the body:
+Every type that is not a word is move-only (`is_move_only`); an option is a word exactly when its payload is. Forward dataflow over a promoted clone of the body:
 
 - `Take` of a storage whose value was already taken → `UseAfterMove`. The take marks the storage `Moved`.
 - `Assign` consumes its value and revives the storage (`Alive`).

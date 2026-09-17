@@ -119,15 +119,14 @@ pub fn nop(_: &mut Machine<'_>, _: &Op) -> Flow {
 
 /// Release whatever the register still owns.
 ///
-/// A flat option's payload register is the option itself (RFC-0022), so
-/// `Some(v) = o { .. }` that moves `v` out leaves `o` empty, and the drop
-/// the lowering puts on that edge arrives at an empty register. The
-/// lowering emits it because the MIR's move checker calls the source
-/// `PartlyMoved`, which under this rule is a total move; correcting that
-/// is `acvus-mir`'s, and until then this op cannot also be the
-/// double-drop check it was.
+/// Taking the register is also the double-drop check. It is sound because
+/// `acvus_mir`'s drop insertion emits no drop for a storage it saw
+/// emptied, and a take of a flat option's payload is one such emptying:
+/// the payload is the option's whole value (RFC-0022). A drop that
+/// arrives at an empty register is therefore a defect in the lowering,
+/// and this assert is where it surfaces.
 pub fn drop_value(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    drop(machine.slot_mut(op.a).take());
+    drop(machine.take(op.a));
     Flow::Next
 }
 

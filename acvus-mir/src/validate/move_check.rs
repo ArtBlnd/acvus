@@ -34,16 +34,22 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 /// Whether a type moves (RFC-0018): a primitive and a reference are words
 /// and copy; everything else moves. `None` for a type the analysis cannot
 /// classify.
+///
+/// The answer for an option is one half of a contract with the runtime's
+/// representation of one, written in RFC-0039 and `docs/runtime-value.md`:
+/// a host gives an option no storage of its own, so `Some(v)` is `v` and a
+/// `None` is a word counting the `Some`s around it. A host that gave an
+/// option a box would have to move this arm with it.
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
         Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order | Ty::Ref(..) => {
             Some(false)
         }
+        Ty::Option(payload) => is_move_only(payload),
         Ty::String
         | Ty::Handle(..)
         | Ty::UserDefined { .. }
         | Ty::Array(..)
-        | Ty::Option(..)
         | Ty::Result(..)
         | Ty::Tuple(..)
         | Ty::Object(..)
@@ -528,7 +534,7 @@ fn try_consume_value(
 }
 
 /// RFC-0026.
-fn moves_out(ty: &Ty) -> bool {
+pub(crate) fn moves_out(ty: &Ty) -> bool {
     !matches!(ty, Ty::String) && is_move_only(ty) == Some(true)
 }
 
@@ -966,7 +972,19 @@ mod tests {
     }
 
     #[test]
-    fn only_primitives_copy() {
+    fn an_option_moves_exactly_when_its_payload_does() {
+        let option = |ty| Ty::Option(Box::new(ty));
+        assert_eq!(is_move_only(&option(Ty::Float)), Some(false));
+        assert_eq!(is_move_only(&option(Ty::String)), Some(true));
+        assert_eq!(is_move_only(&option(option(Ty::Float))), Some(false));
+        assert_eq!(
+            is_move_only(&option(option(test_user_defined()))),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn words_copy_and_owners_move() {
         assert_eq!(is_move_only(&Ty::I64), Some(false));
         assert_eq!(is_move_only(&Ty::Bool), Some(false));
         assert_eq!(

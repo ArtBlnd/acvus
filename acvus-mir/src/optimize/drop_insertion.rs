@@ -3,8 +3,8 @@
 //! Runs after all optimizations. Inserts `InstKind::Drop` at the point where
 //! a move-only value's live range ends.
 //!
-//! A primitive or a reference is a word and never needs a Drop; every other
-//! value is move-only (`is_move_only`, RFC-0018) and gets one.
+//! A value that is a word owns nothing and never needs a Drop; every
+//! move-only value (`is_move_only`, RFC-0018) gets one.
 //!
 //! Two phases:
 //!
@@ -16,15 +16,19 @@
 //! successor but not another. For each edge A->B, if a value is live-out of A but
 //! NOT forwarded to B and NOT live-in to B, its life ends on that edge; where the
 //! drop then runs is `DropSite`.
+//!
+//! A take that reaches a payload through nothing but options moves the
+//! whole storage (`empties_option_storage`), so both phases see that
+//! storage as dead from the take on.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::loans::Loans;
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, InstKind, Label, ValueId};
+use crate::ir::{Inst, InstKind, Label, PathSeg, ValueId};
 use crate::ty::Ty;
-use crate::validate::move_check::is_move_only;
+use crate::validate::move_check::{is_move_only, moves_out};
 
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
 pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
@@ -52,7 +56,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 if !liveness.is_live_out(block_idx, u)
                     && is_last_use_in_block(block, ii, u, &loans)
                     && needs_drop(u, val_types)
-                    && !is_consumed_by_inst(&inst.kind, u)
+                    && !ends_ownership(&inst.kind, u, val_types)
                 {
                     drops_after.push((ii, u));
                 }
@@ -79,7 +83,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 let consumed_by_inst = block
                     .insts
                     .iter()
-                    .any(|inst| is_consumed_by_inst(&inst.kind, v));
+                    .any(|inst| ends_ownership(&inst.kind, v, val_types));
                 let consumed_by_term = is_consumed_by_terminator(&block.terminator, v);
 
                 if consumed_by_inst || consumed_by_term {
@@ -129,6 +133,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
     for bi in 0..cfg.blocks.len() {
         let live_out = liveness.live_out.get(bi).cloned().unwrap_or_default();
+        let emptied = emptied_in(&cfg.blocks[bi], val_types, &loans);
         let edges = terminator_edges(&cfg.blocks[bi].terminator);
 
         for edge in edges {
@@ -141,6 +146,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 .copied()
                 .filter(|v| {
                     !edge.forwarded.contains(v)
+                        && !emptied.contains(v)
                         && !liveness.is_live_in(target, *v)
                         && needs_drop(*v, val_types)
                 })
@@ -410,6 +416,65 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
         ],
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
+}
+
+fn ends_ownership(kind: &InstKind, val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
+    is_consumed_by_inst(kind, val) || empties_option_storage(kind, val, val_types)
+}
+
+/// A storage holding nothing but options holds nothing at all once the
+/// payload under them is taken, because the host gives an option no storage
+/// of its own and `Some(v)` is `v`: RFC-0039 and `docs/runtime-value.md`
+/// are the other half of that contract. A `String` payload is copied out
+/// rather than moved under RFC-0026, which is what `moves_out` asks.
+fn empties_option_storage(
+    kind: &InstKind,
+    val: ValueId,
+    val_types: &FxHashMap<ValueId, Ty>,
+) -> bool {
+    let InstKind::Take { target, path, .. } = kind else {
+        return false;
+    };
+    let Some(ty) = val_types.get(&val) else {
+        return false;
+    };
+    inst_info::storage(target) == Some(val) && under_options(ty, path).is_some_and(moves_out)
+}
+
+/// The type a path of payload steps reaches while every type it steps
+/// through is an option.
+fn under_options<'a>(ty: &'a Ty, path: &[PathSeg]) -> Option<&'a Ty> {
+    let mut at = ty;
+    for seg in path {
+        let (PathSeg::Payload, Ty::Option(payload)) = (seg, at) else {
+            return None;
+        };
+        at = payload;
+    }
+    Some(at)
+}
+
+/// The storages a block leaves empty: an option whose payload was taken
+/// and that nothing wrote to afterwards.
+fn emptied_in(
+    block: &Block,
+    val_types: &FxHashMap<ValueId, Ty>,
+    loans: &Loans,
+) -> FxHashSet<ValueId> {
+    let mut emptied = FxHashSet::default();
+    for inst in &block.insts {
+        if let InstKind::Take { target, .. } = &inst.kind
+            && let Some(storage) = inst_info::storage(target)
+            && empties_option_storage(&inst.kind, storage, val_types)
+        {
+            emptied.insert(storage);
+            continue;
+        }
+        for written in loans.storage_effect(&inst.kind).writes {
+            emptied.remove(&written);
+        }
+    }
+    emptied
 }
 
 /// Does this value need a Drop instruction?

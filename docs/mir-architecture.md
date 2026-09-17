@@ -225,7 +225,7 @@ The LSP is a thin wrapper over `IncrementalGraph`. **LSP diagnostics and build e
 
 **Type checking** (`validate/type_check.rs`) — Every instruction's operands match the types recorded in `val_types`. Arity, constructor shape, and the `Order` edge of a call (an effectful call carries one; a Pure call carries none).
 
-**Move checking** (`validate/move_check.rs`) — Every non-primitive value is move-only (`is_move_only`). A `Take` of a storage after its value was taken is a use after move; an `Assign` revives the storage. At a merge, `Alive` joined with `Moved` is `Moved`.
+**Move checking** (`validate/move_check.rs`) — Every value that is not a word is move-only (`is_move_only`); an option is a word exactly when its payload is, since it has no representation of its own (RFC-0039). A `Take` of a storage after its value was taken is a use after move; an `Assign` revives the storage. At a merge, `Alive` joined with `Moved` is `Moved`.
 
 **Definite assignment** (`validate/init_check.rs`) — Field-level: which fields of each storage are definitely initialized at each point, and whether a call's arguments carry every field the callee's parameter type requires. Runs on the pre-SSA `CfgBody`.
 

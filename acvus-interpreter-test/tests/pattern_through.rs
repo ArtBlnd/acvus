@@ -7,9 +7,9 @@
 //! expression.
 //!
 //! The tag form and `if let` with no `else` are one lowering, so the value
-//! side of the open head runs the same either way: a body that moves its
-//! payload out leaves the source partly moved, and the source is dropped
-//! once on each path out of the match.
+//! side of the open head runs the same either way. A body that moves an
+//! option's payload out takes the option's whole value, so that path has
+//! nothing left to drop; the path where the match failed drops it.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -126,4 +126,20 @@ async fn a_let_in_a_tag_form_body_ends_with_the_body() {
     )
     .await;
     assert_eq!(v.as_float(), 0.0);
+}
+
+#[tokio::test]
+async fn a_vec_moved_out_of_an_option_survives_the_match_that_moved_it() {
+    let i = Interner::new();
+    let v = run_script_mode(
+        &i,
+        "let f = |q| -> {
+             let out = reverse([0]);
+             Some(v) = Some(reverse([1, 2, 3])) { out = v; };
+             len(&out)
+         }; f(0)",
+        Context::default(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 3);
 }

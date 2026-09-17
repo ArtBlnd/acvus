@@ -128,8 +128,9 @@ call site and `*` at the read keeps every conversion in the program.
 - `ParamMode` is removed from function types; a parameter of reference
   type carries the mode. The argument-mode check becomes ordinary type
   unification of `&place : &T`.
-- Move checking treats every non-primitive type as move-only; identity no
-  longer decides it. A second use of a moved binding is an error at the
+- Move checking treats every type that is not a word as move-only, and an
+  option is a word exactly when its payload is, since it has no
+  representation of its own (RFC-0039); identity no longer decides it. A second use of a moved binding is an error at the
   use. A storage is read — by a take of a place in it, by a reference to
   one — only while the part read is alive, where two places overlap when
   one is a prefix of the other: a take of a place moves that place, a
