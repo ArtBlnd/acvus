@@ -53,7 +53,8 @@ qualified call — and joined with the call type, which resolves the
 parameter the conversion decision waits on; the answer names the function,
 its instance choice, and its bounded variables, which the checker verifies
 when the body freezes. None left is
-`NoMatchingFunction { name, call type }`. More than one left when the body
+`NoMatchingFunction { name, call type }`, the call type shown as written
+with an open variable closed to `!`. More than one left when the body
 is solved is `AmbiguousFunction`, listing the candidates that remain.
 Nothing is defaulted.
 

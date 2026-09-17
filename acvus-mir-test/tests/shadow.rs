@@ -268,15 +268,12 @@ fn a_parameter_alone_where_no_rule_reaches_the_extern_is_the_callee() {
 }
 
 /// The argument fixes the parameter to an `i64`, which is not callable,
-/// so the binding drops; no declared `len` takes `(i64)` either. The
-/// call's return is still open where the failure is reported, and
-/// `freeze_or_error` refuses an open variable, so the type shown is
-/// `<error>` — as it is at every `NoMatchingFunction`.
+/// so the binding drops; no declared `len` takes `(i64)` either.
 #[test]
 fn a_parameter_the_call_fixes_to_a_non_function_drops_from_the_set() {
     let i = Interner::new();
     let errors = errors_of(&i, "let f = |len| -> len(1); f(3)");
-    assert_eq!(errors, vec!["no `len` takes a call of type <error>"]);
+    assert_eq!(errors, vec!["no `len` takes a call of type Fn(i64) -> !"]);
 }
 
 #[test]

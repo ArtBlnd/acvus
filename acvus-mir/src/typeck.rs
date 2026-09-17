@@ -503,6 +503,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.solver.freeze_ty(ty).unwrap_or_else(|_| Ty::error())
     }
 
+    /// The call type a `NoMatchingFunction` report shows: the arguments as
+    /// written, an open variable closed to `!` (RFC-0043).
+    fn call_type_as_written(&self, call: &InferTy) -> Ty {
+        self.solver.close_ty(call).unwrap_or_else(|_| Ty::error())
+    }
+
     /// Freeze the internal InferTy type_map to a concrete TypeMap.
     fn freeze_type_map(&self) -> TypeMap {
         self.type_map
@@ -1570,7 +1576,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 Unsettled::NoSignature { name, call, .. } => MirErrorKind::NoMatchingFunction {
                     name: self.interner.resolve(name).to_string(),
-                    ty: self.freeze_or_error(&call),
+                    ty: self.call_type_as_written(&call),
                 },
                 Unsettled::AmbiguousSignature {
                     name, candidates, ..
@@ -1985,7 +1991,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.error(
             MirErrorKind::NoMatchingFunction {
                 name: name.to_string(),
-                ty: self.freeze_or_error(&call),
+                ty: self.call_type_as_written(&call),
             },
             call_span,
         );

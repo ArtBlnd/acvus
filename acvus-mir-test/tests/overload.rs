@@ -218,7 +218,6 @@ fn calls(checked: &Checked, callee: &str) -> usize {
 }
 
 const AMBIGUOUS_PROBE: &str = "`probe` is declared by fx_a::probe and fx_b::probe";
-const NO_PROBE: &str = "no `probe` takes a call of type";
 
 // -- 1: arity ---------------------------------------------------------------
 
@@ -389,7 +388,11 @@ fn a_lambda_never_applied_is_ambiguous_naming_both() {
 fn an_argument_no_signature_takes_is_no_matching_function() {
     let i = Interner::new();
     let errs = errors_of(&i, "probe(1, 1)");
-    assert!(errs.iter().any(|e| e.starts_with(NO_PROBE)), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e == "no `probe` takes a call of type Fn(i64, i64) -> !"),
+        "{errs:?}"
+    );
     assert!(!errs.iter().any(|e| e == AMBIGUOUS_PROBE), "{errs:?}");
 }
 
@@ -397,7 +400,11 @@ fn an_argument_no_signature_takes_is_no_matching_function() {
 fn an_arity_no_signature_has_is_no_matching_function() {
     let i = Interner::new();
     let errs = errors_of(&i, "probe(1)");
-    assert!(errs.iter().any(|e| e.starts_with(NO_PROBE)), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e == "no `probe` takes a call of type Fn(i64) -> !"),
+        "{errs:?}"
+    );
 }
 
 // -- 7: an argument a declared conversion takes to a candidate's shape ---------
