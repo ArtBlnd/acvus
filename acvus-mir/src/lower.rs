@@ -126,7 +126,6 @@ enum TouchedContexts {
     These(BTreeSet<QualifiedRef>),
 }
 
-#[derive(Clone)]
 struct Local {
     ty: Ty,
     slot: ValueId,
@@ -1906,20 +1905,22 @@ impl<'a> Lowerer<'a> {
                 let param_names: FxHashSet<Astr> = params.iter().map(|p| p.name).collect();
                 let free_vars = self.free_vars_in_expr(body, &param_names);
 
-                // Emit Ref+Load for each captured variable (snapshot current value).
-                // If the free var is an extern param in the current scope, use Param ref;
-                // otherwise use Var ref.
+                // A closure owns what it captures (RFC-0018): each capture is
+                // taken from the storage the name binds, at that storage's own
+                // type, and not at the `&T` the name reads as inside an
+                // enclosing closure body.
                 let capture_regs: Vec<ValueId> = free_vars
                     .iter()
-                    .map(|(name, var_id, var_span)| {
-                        let ty = self.type_of_id(*var_id);
+                    .map(|(name, _, var_span)| {
                         if let Some(param_reg) = self.try_param_slot(*name) {
+                            let ty = self.slot_type(param_reg);
                             let dst =
                                 self.emit_take(*var_span, RefTarget::Param(param_reg), vec![], ty);
                             self.set_origin(dst, ValOrigin::ExternParam(*name));
                             dst
                         } else {
                             let slot = self.var_slot(*name);
+                            let ty = self.slot_type(slot);
                             let dst = self.emit_take(*var_span, RefTarget::Var(slot), vec![], ty);
                             self.set_origin(dst, ValOrigin::Named(*name));
                             dst
@@ -1932,17 +1933,25 @@ impl<'a> Lowerer<'a> {
                 // Build the closure body MIR in a sub-lowerer.
                 let mut sub_body = MirBody::new();
 
-                // Captures become the first registers.
+                // Captures become the first registers. The closure owns the
+                // `T` handed to `MakeClosure` and the body sees a `&T`
+                // (RFC-0018), which is what the runtime binds the register
+                // to; a register already holding a reference is reborrowed,
+                // since no `&&T` exists (RFC-0029).
                 let mut closure_capture_regs = Vec::new();
                 let mut capture_tys = Vec::new();
                 for (i, _) in free_vars.iter().enumerate() {
                     let reg = sub_body.val_factory.next();
                     closure_capture_regs.push(reg);
-                    let cap_ty = capture_regs
+                    let given = capture_regs
                         .get(i)
                         .and_then(|r| self.body.val_types.get(r))
                         .cloned()
                         .unwrap_or(Ty::error());
+                    let cap_ty = match given {
+                        reference @ Ty::Ref(..) => reference,
+                        owned => Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(owned))),
+                    };
                     sub_body.val_types.insert(reg, cap_ty.clone());
                     capture_tys.push(cap_ty);
                 }
@@ -2471,24 +2480,39 @@ impl<'a> Lowerer<'a> {
                 RefKind::Value => {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
-                    // 1. Direct call - typeck resolved this callee to a named function.
                     if let Some(callee) = self.resolution.direct_calls.get(&func.id()).copied() {
                         let callee_ty = self.type_of_id(func.id());
                         self.emit_call_with(call_span, dst, callee, callee_ty, call);
                         return dst;
                     }
 
-                    // 2. Local variable (closure/lambda - Indirect call)
                     if self.is_defined(name.name) {
-                        let closure_ty = self.var_type(name.name);
                         let slot = self.var_slot(name.name);
-                        let closure_reg = self.emit_ref(
-                            *ident_span,
-                            RefTarget::Var(slot),
-                            vec![],
-                            Mutability::Shared,
-                            closure_ty.clone(),
-                        );
+                        // A call lends the closure (RFC-0018). A slot already
+                        // holding a `&Fn` — a capture — is reborrowed, since
+                        // no `&&Fn` exists (RFC-0029).
+                        let (closure_reg, closure_ty) = match self.var_type(name.name) {
+                            Ty::Ref(_, lent) => {
+                                let reference = Ty::Ref(Mutability::Shared, lent.clone());
+                                let reg = self.emit_take(
+                                    *ident_span,
+                                    RefTarget::Var(slot),
+                                    vec![],
+                                    reference,
+                                );
+                                (reg, lent.ty.clone())
+                            }
+                            owned => {
+                                let reg = self.emit_ref(
+                                    *ident_span,
+                                    RefTarget::Var(slot),
+                                    vec![],
+                                    Mutability::Shared,
+                                    owned.clone(),
+                                );
+                                (reg, owned)
+                            }
+                        };
                         self.set_origin(closure_reg, ValOrigin::Named(name.name));
                         self.emit_call_with(
                             call_span,

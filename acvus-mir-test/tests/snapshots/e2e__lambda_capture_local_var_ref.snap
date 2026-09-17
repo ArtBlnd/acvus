@@ -46,7 +46,7 @@ expression: ir
     ; r17 (@items) : Vec<i64>
     ; r18 (items) : Vec<i64>
     ; r19 (v11) : String
-    ; r20 (offset) : &i64
+    ; r20 (offset) : i64
     ; r21 (@items) : Vec<i64>
     ; r22 (offset) : i64
     ; r23 (v23) : String

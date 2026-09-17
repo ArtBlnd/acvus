@@ -3173,7 +3173,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
         // Check local variable with function type (indirect call).
         if let Some(var_ty) = self.lookup_var(name.name) {
-            let resolved = self.solver.shallow_resolve_ty(&var_ty);
+            let resolved = self.lent_fn(&var_ty);
             // Record callee's Fn type on the callee's AstId (indirect - no direct_calls entry).
             self.record(func.id(), resolved.clone());
             return self.check_callable(&resolved, args, first.as_ref(), call_span);
@@ -3186,6 +3186,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Self::infer_error()
     }
 
+    /// A call lends the closure a `&Fn` names instead of moving it
+    /// (RFC-0018), which is the reborrow of RFC-0029. Every other type is
+    /// its own callee.
+    fn lent_fn(&mut self, ty: &InferTy) -> InferTy {
+        let resolved = self.solver.shallow_resolve_ty(ty);
+        let TyTerm::Ref(_, inner) = &resolved else {
+            return resolved;
+        };
+        match self.solver.shallow_resolve_ty(&inner.ty) {
+            lent @ TyTerm::Fn { .. } => lent,
+            _ => resolved,
+        }
+    }
+
     fn check_callable(
         &mut self,
         func_ty: &InferTy,
@@ -3193,7 +3207,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         first: Option<&FirstArg>,
         call_span: Span,
     ) -> InferTy {
-        // Early exit for non-callable types.
+        let func_ty = &self.lent_fn(func_ty);
         match func_ty {
             TyTerm::Fn { .. } | TyTerm::Var(_) => {}
             TyTerm::Error(_) => {

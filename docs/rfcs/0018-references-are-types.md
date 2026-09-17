@@ -38,7 +38,9 @@ that names `Fn(&T) -> Bool`, fixes it.
 A closure owns what it captures, and a call borrows the closure: inside
 the lambda a captured name has type `&T`, and `f(x)` on a local `f` lends
 `f` for the call, so `f` may be called again. Passing `f` to a function
-by value moves it.
+by value moves it. Both rules reach a captured name: a lambda that
+captures a name the enclosing lambda captured captures the owned `T`, not
+the `&T` the name reads as, and a captured `f` is called as a lent `f`.
 
 A context place (`@x`, `@x.field`) is a storage like a local: reading it
 takes its value, and the place is uninitialized until it is assigned
