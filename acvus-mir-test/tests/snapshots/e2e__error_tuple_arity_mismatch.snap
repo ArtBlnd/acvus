@@ -2,5 +2,5 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-[infer:test] [0..23] pattern type <error> incompatible with source type (i64, i64)
+[infer:test] [0..23] pattern type (!, !, !) incompatible with source type (i64, i64)
 [infer:test] [26..27] undefined variable `a`

@@ -89,6 +89,27 @@ fn a_compile_error_is_reported_at_its_line_and_column_with_status_1() {
 }
 
 #[test]
+fn a_type_nothing_resolved_is_reported_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "open.acvus",
+        "let f = |k, m| -> {\n  let a = len(k);\n  k < m\n};\n0\n",
+    );
+    let out = acvus(dir.path(), &["run", "open.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = text(&out.stderr);
+    assert!(
+        err.contains("error: type mismatch in `<`: ! vs !"),
+        "a variable nothing resolved reads as `!` (RFC-0043): {err}"
+    );
+    assert!(
+        !err.contains("<error>"),
+        "`<error>` names an ErrorToken and nothing else: {err}"
+    );
+}
+
+#[test]
 fn a_runtime_error_is_the_operations_panic_message_with_status_2() {
     let dir = tempfile::tempdir().unwrap();
     write(

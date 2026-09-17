@@ -59,6 +59,15 @@ with an open variable closed to `!`. More than one left when the body
 is solved is `AmbiguousFunction`, listing the candidates that remain.
 Nothing is defaulted.
 
+A type any report shows is the type as written, every variable nothing
+resolved closed to `!` — whatever bound that variable carries, since a
+bound is the variable's range and not a type it reached. `<error>` in a
+message names an `ErrorToken`, a subexpression that already failed to
+check, and nothing else: a report never renders a type the checker
+merely had not settled. What a resolution carries into lowering is the
+stricter freeze, which refuses a variable a bound left open, because no
+shape of a bound is the program's.
+
 The lowering reads a decided call's callee through the settled answer,
 then its instance, as it reads a resolved call's; the IR has no new shape.
 
@@ -210,7 +219,11 @@ display order, not the order the registries were combined in.
   fresh_var_with, admits}` with `Admission`, the `converts` predicate, and
   `identity_within_bounds` and `awaits_signature` on a conversion
   decision.
-- `acvus-mir/src/typeck.rs`: `check_overloaded_call` over `admit_args`,
+- `acvus-mir/src/solver.rs`: `Open::AsWritten` and `Solver::written_ty`,
+  the freeze a report uses; `Solver::close_ty` stays the resolution's.
+- `acvus-mir/src/typeck.rs`: `TypeChecker::type_as_written`, which every
+  report's type goes through, and `closed_or_reported`, which every type
+  the resolution carries goes through; `check_overloaded_call` over `admit_args`,
   `call_param`, `admit_arg` and `no_matching_function`, `CalleeChoice`,
   `admit_receiver` over `CandidateReceiver`, `receiver_as`,
   `one_receiver_mode`, `receiver_in` and `receiver_arg`, with `lend_place`

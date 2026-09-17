@@ -647,16 +647,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self
     }
 
-    /// Freeze an InferTy to concrete Ty, falling back to Ty::error() on failure.
-    /// Used for error reporting where we need concrete types.
-    fn freeze_or_error(&self, ty: &InferTy) -> Ty {
-        self.solver.freeze_ty(ty).unwrap_or_else(|_| Ty::error())
+    /// The type a report shows (RFC-0043): as written, a variable
+    /// nothing constrained closed to `!`.
+    fn type_as_written(&self, ty: &InferTy) -> Ty {
+        self.solver.written_ty(ty).unwrap_or_else(|_| Ty::error())
     }
 
-    /// The call type a `NoMatchingFunction` report shows: the arguments as
-    /// written, an open variable closed to `!` (RFC-0043).
-    fn call_type_as_written(&self, call: &InferTy) -> Ty {
-        self.solver.close_ty(call).unwrap_or_else(|_| Ty::error())
+    /// A type the resolution carries into lowering (RFC-0043).
+    fn closed_or_reported(&self, ty: &InferTy) -> Ty {
+        self.solver.close_ty(ty).unwrap_or_else(|_| {
+            debug_assert!(
+                !self.errors.is_empty(),
+                "a type the resolution carries closes, or the checker reported why it could not"
+            );
+            Ty::error()
+        })
+    }
+
+    /// A type the checker left with only a bound, which `Ty` cannot
+    /// express: `@x + @y` over undeclared contexts, a `$param` a
+    /// projection only reads. No error is reported and the outcome is
+    /// `Complete`, so the resolution carries the error token. What such
+    /// an outcome should carry is unsettled (RFC-0043, Consequences).
+    fn type_the_checker_left_open(&self, ty: &InferTy) -> Ty {
+        self.solver.close_ty(ty).unwrap_or_else(|_| Ty::error())
     }
 
     /// Freeze the internal InferTy type_map to a concrete TypeMap.
@@ -705,7 +719,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .iter()
             .map(|(name, ty)| {
                 let resolved = self.solver.resolve_ty(ty);
-                (*name, self.freeze_or_error(&resolved))
+                (*name, self.type_the_checker_left_open(&resolved))
             })
             .collect();
         let effect = self.close_body_effect();
@@ -753,8 +767,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let expected = self.solver.resolve_ty(&return_ty);
                 self.error(
                     MirErrorKind::UnificationFailure {
-                        expected: self.freeze_or_error(&expected),
-                        got: self.freeze_or_error(&resolved),
+                        expected: self.type_as_written(&expected),
+                        got: self.type_as_written(&resolved),
                     },
                     tail.span(),
                 );
@@ -788,10 +802,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .iter()
             .map(|(name, ty)| {
                 let resolved = self.solver.resolve_ty(ty);
-                (*name, self.freeze_or_error(&resolved))
+                (*name, self.closed_or_reported(&resolved))
             })
             .collect();
-        let frozen_tail = self.freeze_or_error(&self.solver.resolve_ty(&tail_ty));
+        let frozen_tail = self.type_the_checker_left_open(&self.solver.resolve_ty(&tail_ty));
         let try_returns = self.frozen_try_returns();
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
@@ -1165,8 +1179,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if let Err(Mismatch { expected, got, .. }) = self.flow(&body_ty, &ret, site) {
                     self.error(
                         MirErrorKind::UnificationFailure {
-                            expected: self.freeze_or_error(&expected),
-                            got: self.freeze_or_error(&got),
+                            expected: self.type_as_written(&expected),
+                            got: self.type_as_written(&got),
                         },
                         body.span(),
                     );
@@ -1277,8 +1291,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             if let Err(Mismatch { expected, got, .. }) = self.solver.unify(&current, &partial) {
                 self.error(
                     MirErrorKind::UnificationFailure {
-                        expected: self.freeze_or_error(&got),
-                        got: self.freeze_or_error(&expected),
+                        expected: self.type_as_written(&got),
+                        got: self.type_as_written(&expected),
                     },
                     span,
                 );
@@ -1602,8 +1616,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         self.error(
             MirErrorKind::UnificationFailure {
-                expected: self.freeze_or_error(expected),
-                got: self.freeze_or_error(got),
+                expected: self.type_as_written(expected),
+                got: self.type_as_written(got),
             },
             span,
         );
@@ -1637,7 +1651,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let unsettled = self.solver.settle();
         self.report_unsettled(unsettled);
-        let callee_ty = self.freeze_or_error(&self.solver.resolve_ty(&inst));
+        let callee_ty = self.closed_or_reported(&self.solver.resolve_ty(&inst));
         PendingExternCast {
             callee: ResolvedCallee {
                 qref: fn_ref,
@@ -1705,12 +1719,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .map(|c| c.site.report);
             let kind = match failure {
                 Unsettled::NoInstance { call, .. } => MirErrorKind::NoInstance {
-                    ty: self.freeze_or_error(&call),
+                    ty: self.type_as_written(&call),
                 },
                 Unsettled::InstanceMismatch { expected, got, .. } => {
                     MirErrorKind::UnificationFailure {
-                        expected: self.freeze_or_error(&expected),
-                        got: self.freeze_or_error(&got),
+                        expected: self.type_as_written(&expected),
+                        got: self.type_as_written(&got),
                     }
                 }
                 Unsettled::AmbiguousInstance { .. } | Unsettled::ConversionOpen { .. } => {
@@ -1726,15 +1740,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     {
                         self.error(
                             MirErrorKind::TypeOutOfBound {
-                                ty: self.freeze_or_error(&from),
+                                ty: self.type_as_written(&from),
                                 bound,
                             },
                             span,
                         );
                         continue;
                     }
-                    let from = self.freeze_or_error(&from);
-                    let to = self.freeze_or_error(&to);
+                    let from = self.type_as_written(&from);
+                    let to = self.type_as_written(&to);
                     match report {
                         Some(ConversionReport::Emit) => {
                             MirErrorKind::EmitNotString { actual: from }
@@ -1762,19 +1776,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Unsettled::AmbiguousConversion {
                     from, to, rules, ..
                 } => MirErrorKind::AmbiguousConversion {
-                    from: self.freeze_or_error(&from),
-                    to: self.freeze_or_error(&to),
+                    from: self.type_as_written(&from),
+                    to: self.type_as_written(&to),
                     rules,
                 },
                 Unsettled::ConversionNeedsPlace { from, to, .. } => {
                     MirErrorKind::ConversionNeedsPlace {
-                        from: self.freeze_or_error(&from),
-                        to: self.freeze_or_error(&to),
+                        from: self.type_as_written(&from),
+                        to: self.type_as_written(&to),
                     }
                 }
                 Unsettled::NoSignature { name, call, .. } => MirErrorKind::NoMatchingFunction {
                     name: self.interner.resolve(name).to_string(),
-                    ty: self.call_type_as_written(&call),
+                    ty: self.type_as_written(&call),
                 },
                 Unsettled::AmbiguousSignature {
                     name, candidates, ..
@@ -1787,8 +1801,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Unsettled::LendMismatch { expected, got, .. }
                 | Unsettled::MatchMismatch { expected, got, .. } => {
                     MirErrorKind::UnificationFailure {
-                        expected: self.freeze_or_error(&expected),
-                        got: self.freeze_or_error(&got),
+                        expected: self.type_as_written(&expected),
+                        got: self.type_as_written(&got),
                     }
                 }
             };
@@ -1848,7 +1862,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .filter_map(|(id, call)| {
                 let callee = self.callee_of(call.callee)?;
                 let resolved = self.solver.resolve_ty(&call.ty);
-                let ty = self.freeze_or_error(&resolved);
+                let ty = self.closed_or_reported(&resolved);
                 Some((*id, OperatorCall { callee, ty }))
             })
             .collect()
@@ -1885,7 +1899,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.error(
                 MirErrorKind::MoveOutOfCapture {
                     name: self.interner.resolve(m.name).to_string(),
-                    ty: self.freeze_or_error(&owned),
+                    ty: self.type_as_written(&owned),
                 },
                 m.span,
             );
@@ -2211,7 +2225,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         {
             return false;
         }
-        let shown = self.freeze_or_error(&read);
+        let shown = self.type_as_written(&read);
         self.error(MirErrorKind::DerefOfNonPrimitive(shown), span);
         true
     }
@@ -2327,7 +2341,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.error(
             MirErrorKind::NoMatchingFunction {
                 name: name.to_string(),
-                ty: self.call_type_as_written(&call),
+                ty: self.type_as_written(&call),
             },
             call_span,
         );
@@ -2536,7 +2550,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ),
             };
             if self.solver.unify(&borrowed, param).is_err() {
-                let shown = self.freeze_or_error(operand);
+                let shown = self.type_as_written(operand);
                 self.error(MirErrorKind::NoOperatorInstance { op, ty: shown }, span);
                 return;
             }
@@ -2598,8 +2612,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.error(
             MirErrorKind::TypeMismatchBinOp {
                 op,
-                left: self.freeze_or_error(&left),
-                right: self.freeze_or_error(&right),
+                left: self.type_as_written(&left),
+                right: self.type_as_written(&right),
             },
             span,
         );
@@ -2647,7 +2661,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     ),
                     _ => self.error(
                         MirErrorKind::EmitNotString {
-                            actual: self.freeze_or_error(&resolved),
+                            actual: self.type_as_written(&resolved),
                         },
                         *span,
                     ),
@@ -2685,8 +2699,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if self.flow(&ty, &target_ty, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
-                            expected: self.freeze_or_error(&target_ty),
-                            got: self.freeze_or_error(&ty),
+                            expected: self.type_as_written(&target_ty),
+                            got: self.type_as_written(&ty),
                         },
                         *span,
                     );
@@ -2711,7 +2725,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let base = match self.solver.shallow_resolve_ty(&var_ty) {
                     TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
                     TyTerm::Ref(Mutability::Shared, _) => {
-                        let shown = self.freeze_or_error(&var_ty);
+                        let shown = self.type_as_written(&var_ty);
                         self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
                         Self::infer_error()
                     }
@@ -2726,8 +2740,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if self.flow(&ty, &target_ty, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
-                            expected: self.freeze_or_error(&target_ty),
-                            got: self.freeze_or_error(&ty),
+                            expected: self.type_as_written(&target_ty),
+                            got: self.type_as_written(&ty),
                         },
                         *span,
                     );
@@ -2746,7 +2760,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
                     TyTerm::Error(_) => Self::infer_error(),
                     other => {
-                        let shown = self.freeze_or_error(&other);
+                        let shown = self.type_as_written(&other);
                         self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
                         Self::infer_error()
                     }
@@ -2759,8 +2773,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if self.flow(&ty, &inner, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
-                            expected: self.freeze_or_error(&inner),
-                            got: self.freeze_or_error(&ty),
+                            expected: self.type_as_written(&inner),
+                            got: self.type_as_written(&ty),
                         },
                         *span,
                     );
@@ -2840,8 +2854,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if self.flow(&ty, &var_ty, site).is_err() {
                     self.error(
                         MirErrorKind::UnificationFailure {
-                            expected: self.freeze_or_error(&var_ty),
-                            got: self.freeze_or_error(&ty),
+                            expected: self.type_as_written(&var_ty),
+                            got: self.type_as_written(&ty),
                         },
                         *span,
                     );
@@ -2856,7 +2870,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: Ty::Bool,
-                            got: self.freeze_or_error(&cond_ty),
+                            got: self.type_as_written(&cond_ty),
                         },
                         *span,
                     );
@@ -3232,13 +3246,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             {
                                 inner
                             } else {
-                                let shown = self.freeze_or_error(&inner);
+                                let shown = self.type_as_written(&inner);
                                 self.error(MirErrorKind::DerefOfNonPrimitive(shown), *span);
                                 Self::infer_error()
                             }
                         }
                         _ => {
-                            let shown = self.freeze_or_error(&ot);
+                            let shown = self.type_as_written(&ot);
                             self.error(MirErrorKind::DerefOfNonReference(shown), *span);
                             Self::infer_error()
                         }
@@ -3292,7 +3306,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             if self.solver.unify(&inner.ty, &partial).is_err() {
                                 self.error(
                                     MirErrorKind::UndefinedField {
-                                        object_ty: self.freeze_or_error(&ot),
+                                        object_ty: self.type_as_written(&ot),
                                         field: field_str(),
                                     },
                                     *span,
@@ -3304,7 +3318,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         _ => {
                             self.error(
                                 MirErrorKind::UndefinedField {
-                                    object_ty: self.freeze_or_error(&ot),
+                                    object_ty: self.type_as_written(&ot),
                                     field: field_str(),
                                 },
                                 *span,
@@ -3330,7 +3344,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         if self.solver.unify(&ot_raw, &partial_obj).is_err() {
                             self.error(
                                 MirErrorKind::UndefinedField {
-                                    object_ty: self.freeze_or_error(&ot),
+                                    object_ty: self.type_as_written(&ot),
                                     field: field_str(),
                                 },
                                 *span,
@@ -3341,7 +3355,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     _ => {
                         self.error(
                             MirErrorKind::UndefinedField {
-                                object_ty: self.freeze_or_error(&ot),
+                                object_ty: self.type_as_written(&ot),
                                 field: field_str(),
                             },
                             *span,
@@ -3540,8 +3554,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 let resolved_inner = self.solver.resolve_ty(&inner_ty);
                                 self.error(
                                     MirErrorKind::UnificationFailure {
-                                        expected: self.freeze_or_error(&resolved_tp),
-                                        got: self.freeze_or_error(&resolved_inner),
+                                        expected: self.type_as_written(&resolved_tp),
+                                        got: self.type_as_written(&resolved_inner),
                                     },
                                     *span,
                                 );
@@ -3610,7 +3624,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: Ty::Bool,
-                            got: self.freeze_or_error(&cond_ty),
+                            got: self.type_as_written(&cond_ty),
                         },
                         *span,
                     );
@@ -3971,8 +3985,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if joined.is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
-                            pattern_ty: self.freeze_or_error(&ctx_ty),
-                            source_ty: self.freeze_or_error(&source_resolved),
+                            pattern_ty: self.type_as_written(&ctx_ty),
+                            source_ty: self.type_as_written(&source_resolved),
                         },
                         span,
                     );
@@ -4010,8 +4024,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if self.solver.unify_pattern(source_ty, &pat_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
-                            pattern_ty: self.freeze_or_error(&pat_ty),
-                            source_ty: self.freeze_or_error(&source_resolved),
+                            pattern_ty: self.type_as_written(&pat_ty),
+                            source_ty: self.type_as_written(&source_resolved),
                         },
                         span,
                     );
@@ -4031,8 +4045,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         if self.solver.unify_pattern(source_ty, &array_ty).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
-                                    pattern_ty: self.freeze_or_error(&array_ty),
-                                    source_ty: self.freeze_or_error(&source_resolved),
+                                    pattern_ty: self.type_as_written(&array_ty),
+                                    source_ty: self.type_as_written(&source_resolved),
                                 },
                                 span,
                             );
@@ -4082,8 +4096,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     if self.solver.unify_pattern(source_ty, &obj_ty).is_err() {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
-                                pattern_ty: self.freeze_or_error(&obj_ty),
-                                source_ty: self.freeze_or_error(&source_resolved),
+                                pattern_ty: self.type_as_written(&obj_ty),
+                                source_ty: self.type_as_written(&source_resolved),
                             },
                             span,
                         );
@@ -4095,7 +4109,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     let Some(field_ty) = obj_fields.get(key) else {
                         self.error(
                             MirErrorKind::UndefinedField {
-                                object_ty: self.freeze_or_error(&source_resolved),
+                                object_ty: self.type_as_written(&source_resolved),
                                 field: self.interner.resolve(*key).to_string(),
                             },
                             span,
@@ -4126,8 +4140,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         if self.solver.unify_pattern(source_ty, &tuple_ty).is_err() {
                             self.error(
                                 MirErrorKind::PatternTypeMismatch {
-                                    pattern_ty: self.freeze_or_error(&tuple_ty),
-                                    source_ty: self.freeze_or_error(&source_resolved),
+                                    pattern_ty: self.type_as_written(&tuple_ty),
+                                    source_ty: self.type_as_written(&source_resolved),
                                 },
                                 span,
                             );
@@ -4158,8 +4172,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     if self.solver.unify_pattern(source_ty, &enum_ty).is_err() {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
-                                pattern_ty: self.freeze_or_error(&enum_ty),
-                                source_ty: self.freeze_or_error(&source_resolved),
+                                pattern_ty: self.type_as_written(&enum_ty),
+                                source_ty: self.type_as_written(&source_resolved),
                             },
                             span,
                         );
@@ -4209,8 +4223,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 if self.solver.unify_pattern(source_ty, &enum_ty).is_err() {
                     self.error(
                         MirErrorKind::PatternTypeMismatch {
-                            pattern_ty: self.freeze_or_error(&enum_ty),
-                            source_ty: self.freeze_or_error(&source_resolved),
+                            pattern_ty: self.type_as_written(&enum_ty),
+                            source_ty: self.type_as_written(&source_resolved),
                         },
                         span,
                     );
@@ -4275,8 +4289,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if !else_ok {
             self.error(
                 MirErrorKind::UnificationFailure {
-                    expected: self.freeze_or_error(&then.ty),
-                    got: self.freeze_or_error(&else_.ty),
+                    expected: self.type_as_written(&then.ty),
+                    got: self.type_as_written(&else_.ty),
                 },
                 span,
             );
@@ -4308,7 +4322,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             ),
             TyTerm::Error(_) => return Self::infer_error(),
             other => {
-                let shown = self.freeze_or_error(other);
+                let shown = self.type_as_written(other);
                 self.error(MirErrorKind::TryOnNonResult(shown), span);
                 return Self::infer_error();
             }
@@ -4317,8 +4331,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let expected = self.solver.resolve_ty(&return_ty);
             self.error(
                 MirErrorKind::TryReturnMismatch {
-                    leaves: self.freeze_or_error(&leaves),
-                    returns: self.freeze_or_error(&expected),
+                    leaves: self.type_as_written(&leaves),
+                    returns: self.type_as_written(&expected),
                 },
                 span,
             );

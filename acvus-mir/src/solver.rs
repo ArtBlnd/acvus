@@ -2553,6 +2553,12 @@ impl<'src> Solver<'src> {
         self.freeze_ty_with(ty, Open::Refuse)
     }
 
+    /// The type a report shows: as written, every variable nothing
+    /// resolved closed to `!`, whatever bound it carries (RFC-0043).
+    pub fn written_ty(&self, ty: &InferTy) -> Result<Ty, FreezeError> {
+        self.freeze_ty_with(ty, Open::AsWritten)
+    }
+
     fn freeze_ty_with(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
         ty.try_map(
             &mut |id: TypeBoundId| {
@@ -2573,7 +2579,9 @@ impl<'src> Solver<'src> {
                     TypeBound::Unresolved { bound } => match (bound.integer_default(), bound, open)
                     {
                         (Some(k), _, _) => Ok(Ty::Int(k)),
-                        (None, TyVarBound::Any, Open::Never) => Ok(Ty::Never),
+                        (None, TyVarBound::Any, Open::Never) | (None, _, Open::AsWritten) => {
+                            Ok(Ty::Never)
+                        }
                         (None, _, _) => Err(FreezeError::UnresolvedType(root)),
                     },
                     TypeBound::Forward(_) => unreachable!("find_ty_root resolves forwards"),
@@ -3129,8 +3137,11 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
 enum Open {
     /// Before `solve`: the variable stays open, and the caller reports it.
     Refuse,
-    /// After `solve`: the variable is `!` (RFC-0038).
+    /// After `solve`: the variable is `!` (RFC-0038). A variable whose
+    /// bound names shapes is refused: no shape of it is the program's.
     Never,
+    /// In a report: every variable nothing resolved is `!` (RFC-0043).
+    AsWritten,
 }
 
 /// Error when freezing an InferTy that still contains unresolved variables.
