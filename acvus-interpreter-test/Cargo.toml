@@ -30,3 +30,7 @@ harness = false
 [[bench]]
 name = "accum"
 harness = false
+
+[[bench]]
+name = "mandelbrot"
+harness = false
