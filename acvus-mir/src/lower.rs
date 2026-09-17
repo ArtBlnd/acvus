@@ -39,6 +39,16 @@ pub struct Lowerer<'a> {
     /// The innermost `anyorder` block being lowered, if any.
     anyorder: Option<AnyorderScope>,
     context_slots: BTreeMap<QualifiedRef, ValueId>,
+    /// The places the calls being lowered have cast for their callees,
+    /// innermost last (RFC-0041).
+    holds: Vec<Held>,
+}
+
+/// A place cast for a call: until the call restores it, it holds `ty`.
+struct Held {
+    target: RefTarget,
+    path: Vec<PathSeg>,
+    ty: Ty,
 }
 
 /// An `anyorder` block while its body is lowered (RFC-0007): every
@@ -232,6 +242,7 @@ impl<'a> Lowerer<'a> {
             order_slot: None,
             anyorder: None,
             context_slots: BTreeMap::new(),
+            holds: Vec::new(),
         }
     }
 
@@ -1952,6 +1963,7 @@ impl<'a> Lowerer<'a> {
                 let saved_order_slot = self.order_slot;
                 let saved_anyorder = self.anyorder;
                 let saved_context_slots = std::mem::take(&mut self.context_slots);
+                let saved_holds = std::mem::take(&mut self.holds);
                 let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
                 self.enter_contexts(acvus_ast::direct_expr_context_refs(body), *span);
@@ -1988,6 +2000,7 @@ impl<'a> Lowerer<'a> {
                 self.order_slot = saved_order_slot;
                 self.anyorder = saved_anyorder;
                 self.context_slots = saved_context_slots;
+                self.holds = saved_holds;
 
                 closure_body_mir.captures = free_vars
                     .iter()
@@ -2262,9 +2275,10 @@ impl<'a> Lowerer<'a> {
 
     /// The reference a lent argument passes. A conversion the checker
     /// answered through the reference casts the place's value into the
-    /// callee's representation first, and leaves the place to restore
-    /// after the call; a conversion of the reference itself casts the
-    /// reference.
+    /// callee's representation first, holds the place at that type, and
+    /// leaves it to restore after the call; a lend of a held place passes
+    /// a reference at the held type; a conversion of the reference itself
+    /// casts the reference.
     fn lend_place(&mut self, lent: Lent, restores: &mut Vec<PlaceRestore>) -> ValueId {
         let Lent {
             id,
@@ -2272,9 +2286,17 @@ impl<'a> Lowerer<'a> {
             place,
             mutability,
         } = lent;
+        if let Some(held) = self.held(&place) {
+            return self.emit_ref(span, place.target, place.path, mutability, held);
+        }
         match self.coercion_lookup.get(&id).cloned() {
             Some(CastKind::ThroughRef { cast, back, .. }) => {
                 let held = self.cast_place(span, &place, &cast);
+                self.holds.push(Held {
+                    target: place.target,
+                    path: place.path.clone(),
+                    ty: held.clone(),
+                });
                 restores.push(PlaceRestore {
                     span,
                     place: Place {
@@ -2305,6 +2327,14 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn held(&self, place: &Place) -> Option<Ty> {
+        self.holds
+            .iter()
+            .rev()
+            .find(|held| held.target == place.target && held.path == place.path)
+            .map(|held| held.ty.clone())
+    }
+
     /// `place = cast(place)`: the type the place holds afterwards.
     fn cast_place(&mut self, span: Span, place: &Place, cast: &ExternCast) -> Ty {
         let value = self.emit_take(span, place.target, place.path.clone(), place.ty.clone());
@@ -2314,7 +2344,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// A call with its arguments; every place cast for the callee is
-    /// restored after it.
+    /// released and restored after it.
     fn emit_call_with(
         &mut self,
         span: Span,
@@ -2324,7 +2354,15 @@ impl<'a> Lowerer<'a> {
         args: CallArgs,
     ) {
         self.emit_call(span, dst, callee, callee_ty, args.values);
-        for restore in args.restores {
+        let Some(kept) = self.holds.len().checked_sub(args.restores.len()) else {
+            panic!("a call restores more places than it holds")
+        };
+        let released = self.holds.split_off(kept);
+        for (restore, held) in args.restores.iter().zip(&released) {
+            assert!(
+                held.target == restore.place.target && held.path == restore.place.path,
+                "a call's holds are released in the order its restores were recorded"
+            );
             self.cast_place(restore.span, &restore.place, &restore.back);
         }
     }

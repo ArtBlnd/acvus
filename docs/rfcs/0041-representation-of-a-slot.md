@@ -34,10 +34,18 @@ disagreement with its target is such an open `ρ` against a fixed
 representation is a conversion decision at that site (RFC-0042): a call
 argument, a store into a typed place, a return, a pattern's source, an
 `else` branch. It is answered by identity when the decision agrees and
-by the family's cast when it does not. At a reference argument the cast
-applies to the referenced place: cast and store before the call, cast
-back and store after, for `&` and `&mut` alike; a reference that is not
-a borrow of a place is an error naming both types.
+by the family's cast when it does not. A conversion consumes the value
+it converts. At a `&place` argument that is the place's value: taken,
+converted, stored back, and from then until the call the place holds
+the referent type the parameter names; every later lend of that place
+inside the call — a later argument, or an argument of a nested call —
+lends the held type, and after the call the place is restored to its
+binding's type, for `&` and `&mut` alike. A later lend of a held place
+is a conversion decision like the first, from the held reference to the
+parameter, whose only answer is identity, so a second representation
+demanded of a held place is a type mismatch; a take while a reference
+is live is a borrow error. A reference that is not a borrow of a place
+is an error naming both types.
 
 An extension reads and edits uniform values in place through
 `Erased<R, T>`: `repr(transparent)` over `R::Value`, made only by
@@ -77,14 +85,21 @@ one place a wrong source could have been paired with a closure.
 
 ## Not built
 
-- `ρ` on a plain concrete signature (a value no `#` consumer touches
-  being uniform from birth without a cast node); a cast for a family
-  nested under a non-family (`Option<Vec<ρ>>`); conversions at a
-  `ContextBind` nested in a compound pattern, at `?`'s leaving type,
-  at binary-operator operands; `Erased` for a derived `ExternType`
-  (bound is `Stored`); an arena for element boxes; `Iter` without the
-  stage box.
+- A cast for a family nested under a non-family (`Option<Vec<ρ>>`);
+  conversions at a `ContextBind` nested in a compound pattern, at `?`'s
+  leaving type, at binary-operator operands; `Erased` for a derived
+  `ExternType` (bound is `Stored`); an arena for element boxes; `Iter`
+  without the stage box.
 - `#` slots in a Space (`layout.rs` refuses them).
+
+## Rejected
+
+- `ρ` on a plain concrete signature and on `let` bindings, so that a
+  value no `#` consumer touches is uniform from birth without a cast
+  node. The checker is conservative: a value keeps the representation
+  it is born with, and `#` arises only by conversion at a site whose
+  instance demands it. The cost is a copy at that site; moving a
+  representation beyond it is the optimizer's, later.
 
 ## Consequences
 

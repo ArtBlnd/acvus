@@ -60,18 +60,33 @@ struct FirstArg {
 
 /// A call argument at its site, with the place it borrows when it is
 /// `&place` or a receiver lent as one: a conversion answered through the
-/// reference rewrites that place.
-#[derive(Debug, Clone, Copy)]
+/// reference consumes that place for the call.
+#[derive(Debug, Clone)]
 struct ArgSite {
     id: AstId,
     span: Span,
-    place: Option<AstId>,
+    place: Option<LentPlace>,
+}
+
+#[derive(Debug, Clone)]
+struct LentPlace {
+    id: AstId,
+    place: Place,
+}
+
+impl LentPlace {
+    fn of(expr: &Expr) -> Option<Self> {
+        place_of(expr).map(|place| Self {
+            id: expr.id(),
+            place,
+        })
+    }
 }
 
 impl ArgSite {
     fn of(expr: &Expr) -> Self {
         let place = match expr {
-            Expr::Borrow { place, .. } if place_of(place).is_some() => Some(place.id()),
+            Expr::Borrow { place, .. } => LentPlace::of(place),
             _ => None,
         };
         Self {
@@ -94,9 +109,25 @@ impl ArgSite {
         Self {
             id: expr.id(),
             span: expr.span(),
-            place: Some(expr.id()),
+            place: LentPlace::of(expr),
         }
     }
+}
+
+/// A place consumed by a call argument's conversion (RFC-0041): until the
+/// call it holds `to`, the referent type the parameter names.
+struct Hold {
+    root: HeldRoot,
+    path: Vec<Astr>,
+    to: InferTy,
+}
+
+/// The binding a held place's root resolves to.
+#[derive(Clone, PartialEq, Eq)]
+enum HeldRoot {
+    Local { name: Astr, scope: usize },
+    Param(Astr),
+    Context(QualifiedRef),
 }
 
 /// The mutability of a function's first parameter when it is a reference.
@@ -230,6 +261,9 @@ enum ConversionReport {
     Return,
     /// A pattern's source against the type the pattern names.
     Pattern,
+    /// A lend of a place a call holds (RFC-0041): the held reference
+    /// against the parameter.
+    HeldLend,
 }
 
 /// The expression a pattern's source is: a conversion of the source is a
@@ -312,6 +346,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     structural_variant_calls: FxHashSet<AstId>,
     /// Conversion decisions registered so far, at their sites.
     conversions: Vec<PendingConversion>,
+    /// The places the calls being checked have consumed, innermost last.
+    holds: Vec<Hold>,
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
@@ -348,6 +384,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             int_literals: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
             conversions: Vec::new(),
+            holds: Vec::new(),
             decision_sites: FxHashMap::default(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
@@ -613,7 +650,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// `convert_at` for a call argument: a conversion answered through the
     /// reference rewrites the place the argument borrows.
-    fn convert_argument_at(&mut self, value_ty: &InferTy, expected_ty: &InferTy, arg: ArgSite) {
+    fn convert_argument_at(&mut self, value_ty: &InferTy, expected_ty: &InferTy, arg: &ArgSite) {
         let site = ConversionSite {
             id: arg.id,
             span: arg.span,
@@ -625,8 +662,76 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             decision,
             from: value_ty.clone(),
             to: expected_ty.clone(),
-            place: arg.place,
+            place: arg.place.as_ref().map(|lent| lent.id),
         });
+    }
+
+    /// An argument meets its parameter (solver.md R1, R4). A `&place`
+    /// argument's conversion consumes the place (RFC-0041): the place holds
+    /// the parameter's referent type until the call ends, and a later lend
+    /// of it inside the call is a conversion decision from the held
+    /// reference, resolved as a `HeldLend`.
+    fn meet_argument(&mut self, arg_ty: &InferTy, param_ty: &InferTy, site: &ArgSite) {
+        let Some(lent) = &site.place else {
+            let _ = self.solver.unify(param_ty, arg_ty);
+            self.convert_argument_at(arg_ty, param_ty, site);
+            return;
+        };
+        let TyTerm::Ref(mutability, lent_referent) = self.solver.shallow_resolve_ty(arg_ty) else {
+            unreachable!("a lent argument is typed by check_borrow, a reference")
+        };
+        let Some(root) = self.held_root(&lent.place.root) else {
+            let TyTerm::Error(_) = self.solver.shallow_resolve_ty(&lent_referent.ty) else {
+                unreachable!("a place whose root is bound nowhere is an undefined name")
+            };
+            return;
+        };
+        let path = &lent.place.path;
+        if let Some(held) = self.held(&root, path) {
+            let held_lend_ty =
+                TyTerm::Ref(mutability, Box::new(TypeArg::new(lent_referent.repr, held)));
+            let site = ConversionSite {
+                id: site.id,
+                span: site.span,
+                report: ConversionReport::HeldLend,
+            };
+            self.convert_at(&held_lend_ty, param_ty, site);
+            return;
+        }
+        let _ = self.solver.unify(param_ty, arg_ty);
+        self.convert_argument_at(arg_ty, param_ty, site);
+        let to = match self.solver.shallow_resolve_ty(param_ty) {
+            TyTerm::Ref(_, param_referent) => param_referent.ty,
+            _ => lent_referent.ty,
+        };
+        self.holds.push(Hold {
+            root,
+            path: path.clone(),
+            to,
+        });
+    }
+
+    fn held_root(&self, root: &PlaceRoot) -> Option<HeldRoot> {
+        match root {
+            PlaceRoot::Context(qref) => Some(HeldRoot::Context(*qref)),
+            PlaceRoot::Local(name) => {
+                if let Some(scope) = self.scopes.iter().rposition(|s| s.contains_key(name)) {
+                    return Some(HeldRoot::Local { name: *name, scope });
+                }
+                self.param_types
+                    .iter()
+                    .any(|(param, _)| param == name)
+                    .then_some(HeldRoot::Param(*name))
+            }
+        }
+    }
+
+    fn held(&self, root: &HeldRoot, path: &[Astr]) -> Option<InferTy> {
+        self.holds
+            .iter()
+            .rev()
+            .find(|hold| hold.root == *root && hold.path == path)
+            .map(|hold| hold.to.clone())
     }
 
     fn decide_conversion(&mut self, from: &InferTy, to: &InferTy, span: Span) -> DecisionId {
@@ -728,7 +833,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let outer_effect = self.body_effect.clone();
         self.body_effect = self.solver.fresh_effect_var();
         let outer_return = self.return_ty.replace(self.solver.fresh_ty_var());
+        let outer_holds = std::mem::take(&mut self.holds);
         let body_ty = self.check_expr(body);
+        self.holds = outer_holds;
         let ret = self
             .return_ty
             .take()
@@ -801,37 +908,46 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_expr(arg)
     }
 
-    /// Every argument, the piped one first, checked left to right; each
-    /// meets its parameter as soon as it is checked, so a lambda later in
-    /// the list is checked at parameter types the earlier arguments have
-    /// already fixed. A mismatch is reported once, by `check_args`.
+    /// Every argument, the first (piped or a receiver) first, checked left
+    /// to right; each meets its parameter as soon as it is checked, so a
+    /// lambda later in the list is checked at parameter types the earlier
+    /// arguments have already fixed, and a place an earlier argument
+    /// consumed is held through the later ones.
     fn check_args_in_order(
         &mut self,
         fn_ty: &InferTy,
-        pipe_ty: Option<&InferTy>,
+        first: Option<&FirstArg>,
         args: &[Expr],
     ) -> Vec<InferTy> {
         let params: Vec<InferTy> = match fn_ty {
             TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
             _ => Vec::new(),
         };
-        let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy| {
-            if let Some(param) = param {
+        let offset = usize::from(first.is_some());
+        let arity_holds = params.len() == args.len() + offset;
+        let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy, site: &ArgSite| {
+            let Some(param) = param else {
+                return;
+            };
+            if arity_holds {
+                this.meet_argument(arg, param, site);
+            } else {
                 let _ = this.solver.unify(param, arg);
             }
         };
-        let mut arg_types = Vec::with_capacity(args.len() + 1);
-        if let Some(piped) = pipe_ty {
-            meet(self, params.first(), piped);
-            arg_types.push(piped.clone());
+        let outer_holds = self.holds.len();
+        let mut arg_types = Vec::with_capacity(args.len() + offset);
+        if let Some(first) = first {
+            meet(self, params.first(), &first.ty, &first.site);
+            arg_types.push(first.ty.clone());
         }
-        let offset = usize::from(pipe_ty.is_some());
         for (i, arg) in args.iter().enumerate() {
             let expected = params.get(i + offset);
             let ty = self.check_arg(arg, expected);
-            meet(self, expected, &ty);
+            meet(self, expected, &ty, &ArgSite::of(arg));
             arg_types.push(ty);
         }
+        self.holds.truncate(outer_holds);
         arg_types
     }
 
@@ -1053,7 +1169,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// Every conversion the solve settled on a cast becomes a coercion
-    /// through that cast at its call type.
+    /// through that cast at its call type; at a `HeldLend` a cast is the
+    /// call demanding a second representation of a place it holds, a
+    /// mismatch of the two referent types.
     fn resolve_conversions(&mut self) {
         let conversions = std::mem::take(&mut self.conversions);
         for conversion in &conversions {
@@ -1061,6 +1179,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 continue;
             };
             let span = conversion.site.span;
+            if let (
+                ConversionReport::HeldLend,
+                Conversion::Cast(_) | Conversion::ThroughRef { .. },
+            ) = (conversion.site.report, answer)
+            {
+                self.report_held_lend_mismatch(&conversion.from, &conversion.to, span);
+                continue;
+            }
             let cast = match answer {
                 Conversion::Identity => continue,
                 Conversion::Cast(fn_ref) => {
@@ -1105,6 +1231,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             });
         }
         self.conversions = conversions;
+    }
+
+    fn report_held_lend_mismatch(
+        &mut self,
+        held_lend_ty: &InferTy,
+        param_ty: &InferTy,
+        span: Span,
+    ) {
+        let held_lend_ty = self.solver.shallow_resolve_ty(held_lend_ty);
+        let param_ty = self.solver.shallow_resolve_ty(param_ty);
+        let (expected, got) = match ReferencePair::of(&held_lend_ty, &param_ty) {
+            Some(references) => (&references.to.ty, &references.from.ty),
+            None => (&param_ty, &held_lend_ty),
+        };
+        self.error(
+            MirErrorKind::UnificationFailure {
+                expected: self.freeze_or_error(expected),
+                got: self.freeze_or_error(got),
+            },
+            span,
+        );
     }
 
     fn cast_at(
@@ -1201,7 +1348,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         Some(
                             ConversionReport::Value
                             | ConversionReport::Store
-                            | ConversionReport::Return,
+                            | ConversionReport::Return
+                            | ConversionReport::HeldLend,
                         )
                         | None => MirErrorKind::UnificationFailure {
                             expected: to,
@@ -1435,14 +1583,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if let Some(var_ty) = self.lookup_var(name) {
             let resolved = self.solver.resolve_ty(&var_ty);
             self.record(callee_id, resolved.clone());
-            let recv_ty = self.check_expr(receiver);
-            return self.check_callable(
-                &resolved,
-                args,
-                &Some(recv_ty),
-                Some(ArgSite::value(receiver)),
-                call_span,
-            );
+            let first = FirstArg {
+                ty: self.check_expr(receiver),
+                site: ArgSite::value(receiver),
+            };
+            return self.check_callable(&resolved, args, Some(&first), call_span);
         }
         self.error(MirErrorKind::UndefinedFunction(name_str), call_span);
         Self::infer_error()
@@ -1462,13 +1607,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         call_span: Span,
     ) -> InferTy {
         let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, call_span);
-        let first_ty = first.as_ref().map(|f| f.ty.clone());
-        let arg_types = self.check_args_in_order(&fn_ty, first_ty.as_ref(), args);
-        let arg_sites: Vec<ArgSite> = first
-            .iter()
-            .map(|f| f.site)
-            .chain(args.iter().map(ArgSite::of))
-            .collect();
+        let arg_types = self.check_args_in_order(&fn_ty, first.as_ref(), args);
         match &fn_ty {
             TyTerm::Fn {
                 params: param_tys,
@@ -1476,8 +1615,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 effect,
                 ..
             } => {
-                let tys: Vec<InferTy> = param_tys.iter().map(|p| p.ty.clone()).collect();
-                if !self.check_args(name_str, &arg_types, &arg_sites, &tys, call_span) {
+                if !self.check_arity(name_str, arg_types.len(), param_tys.len(), call_span) {
                     return Self::infer_error();
                 }
                 let effect = effect.clone();
@@ -1593,44 +1731,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         );
     }
 
-    /// Check arity and unify argument types against parameter types.
-    /// Returns `true` if arity matched, `false` (with error emitted) if not.
-    fn check_args(
-        &mut self,
-        func: &str,
-        arg_types: &[InferTy],
-        arg_sites: &[ArgSite],
-        param_tys: &[InferTy],
-        call_span: Span,
-    ) -> bool {
-        if arg_types.len() != param_tys.len() {
-            self.error(
-                MirErrorKind::ArityMismatch {
-                    func: func.to_string(),
-                    expected: param_tys.len(),
-                    got: arg_types.len(),
-                },
-                call_span,
-            );
-            return false;
+    fn check_arity(&mut self, func: &str, got: usize, expected: usize, call_span: Span) -> bool {
+        if got == expected {
+            return true;
         }
-        for (i, (at, pt)) in arg_types.iter().zip(param_tys.iter()).enumerate() {
-            match arg_sites.get(i) {
-                Some(&site) => self.convert_argument_at(at, pt, site),
-                None => {
-                    if let Err(Mismatch { expected, got, .. }) = self.solver.unify(at, pt) {
-                        self.error(
-                            MirErrorKind::UnificationFailure {
-                                expected: self.freeze_or_error(&expected),
-                                got: self.freeze_or_error(&got),
-                            },
-                            call_span,
-                        );
-                    }
-                }
-            }
-        }
-        true
+        self.error(
+            MirErrorKind::ArityMismatch {
+                func: func.to_string(),
+                expected,
+                got,
+            },
+            call_span,
+        );
+        false
     }
 
     fn check_nodes(&mut self, nodes: &[Node]) {
@@ -2422,9 +2535,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         ..
                     } => self.check_func_call(*id, right, &[], pipe_left, *span),
                     _ => {
-                        let lt = self.check_expr(left);
+                        let first = FirstArg {
+                            ty: self.check_expr(left),
+                            site: ArgSite::of(left),
+                        };
                         let rt = self.check_expr(right);
-                        self.check_callable(&rt, &[], &Some(lt), Some(ArgSite::of(left)), *span)
+                        self.check_callable(&rt, &[], Some(&first), *span)
                     }
                 };
                 self.record_ret(*id, ty)
@@ -2742,7 +2858,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         call_span: Span,
     ) -> InferTy {
         // Collect argument types, prepending pipe_left if present.
-        let pipe_ty = pipe_left.map(|e| self.check_expr(e));
+        let first = pipe_left.map(|e| FirstArg {
+            ty: self.check_expr(e),
+            site: ArgSite::of(e),
+        });
 
         // Try to resolve as a named function (builtin or extern).
         let Expr::Ident {
@@ -2754,13 +2873,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             // Not a simple name - evaluate the function expression.
             let ft = self.check_expr(func);
             let resolved = self.solver.shallow_resolve_ty(&ft);
-            return self.check_callable(
-                &resolved,
-                args,
-                &pipe_ty,
-                pipe_left.map(ArgSite::of),
-                call_span,
-            );
+            return self.check_callable(&resolved, args, first.as_ref(), call_span);
         };
 
         // Check named functions (builtins, externs, user-defined).
@@ -2787,10 +2900,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             crate::ty::FnLookup::Missing => None,
         };
         if let Some((resolved_qref, fn_sig)) = resolved {
-            let first = pipe_left.zip(pipe_ty).map(|(e, ty)| FirstArg {
-                ty,
-                site: ArgSite::of(e),
-            });
             return self.check_resolved_call(
                 resolved_qref,
                 &fn_sig,
@@ -2810,13 +2919,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let resolved = self.solver.shallow_resolve_ty(&var_ty);
             // Record callee's Fn type on the callee's AstId (indirect - no direct_calls entry).
             self.record(func.id(), resolved.clone());
-            return self.check_callable(
-                &resolved,
-                args,
-                &pipe_ty,
-                pipe_left.map(ArgSite::of),
-                call_span,
-            );
+            return self.check_callable(&resolved, args, first.as_ref(), call_span);
         }
 
         self.error(
@@ -2830,8 +2933,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         func_ty: &InferTy,
         args: &[Expr],
-        pipe_ty: &Option<InferTy>,
-        pipe_left: Option<ArgSite>,
+        first: Option<&FirstArg>,
         call_span: Span,
     ) -> InferTy {
         // Early exit for non-callable types.
@@ -2852,11 +2954,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
 
-        let arg_types = self.check_args_in_order(func_ty, pipe_ty.as_ref(), args);
-        let arg_sites: Vec<ArgSite> = pipe_left
-            .into_iter()
-            .chain(args.iter().map(ArgSite::of))
-            .collect();
+        let arg_types = self.check_args_in_order(func_ty, first, args);
 
         match func_ty {
             TyTerm::Fn {
@@ -2865,8 +2963,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 effect,
                 ..
             } => {
-                let tys: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
-                if !self.check_args("<closure>", &arg_types, &arg_sites, &tys, call_span) {
+                if !self.check_arity("<closure>", arg_types.len(), params.len(), call_span) {
                     return Self::infer_error();
                 }
                 let effect = effect.clone();
@@ -3817,13 +3914,13 @@ mod tests {
 
 /// Where a lent argument points: a local, a context, or an extern
 /// parameter, and the field path below it (RFC-0015).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Place {
     root: PlaceRoot,
     path: Vec<Astr>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PlaceRoot {
     Local(Astr),
     Context(QualifiedRef),

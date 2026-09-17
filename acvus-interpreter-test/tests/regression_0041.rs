@@ -1,6 +1,7 @@
-//! Regression tests for RFC-0041 inside a running script (R13–R16): a
+//! Regression tests for RFC-0041 inside a running script (R13–R17): a
 //! place lent twice to one specialized call, a field place, a lend in a
-//! loop, an `Iter` pipeline built by the standard `map`/`filter`/`collect`,
+//! loop, a place lent again by a nested call, an `Iter` pipeline built by
+//! the standard `map`/`filter`/`collect`,
 //! `contains` over an `Erased` element, and the representation a `Copy`
 //! extension type takes. A test that fails is a finding, kept as it fails.
 
@@ -49,10 +50,18 @@ where
         .fold(T::ZERO, |acc, (x, y)| acc.mul_add(*x, *y))
 }
 
+#[extern_fn(effect = pure)]
+fn scale<T>(v: &Vec<T>, k: T) -> T
+where
+    T: Monomorphize<(f64,)> + Float,
+{
+    v.iter().fold(T::ZERO, |acc, x| acc.mul_add(*x, k))
+}
+
 fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "t",
-        fns: [norm, dot2],
+        fns: [norm, dot2, scale],
     }
 }
 
@@ -86,6 +95,14 @@ async fn a_lend_inside_a_loop_is_cast_back_each_iteration_and_the_sum_is_unchang
     )
     .await;
     assert_eq!(v.as_float(), 15.0);
+}
+
+// -- R17: a nested call reads the place the outer call holds ------------------
+
+#[tokio::test]
+async fn a_place_lent_to_a_call_and_again_inside_a_nested_argument_computes_as_uniform() {
+    let v = run("let x = vec([3.0, 4.0]); scale(&x, norm(&x))").await;
+    assert_eq!(v.as_float(), 35.0, "(3 + 4) * norm([3, 4]) = 7 * 5");
 }
 
 // -- R15: the standard pipeline -----------------------------------------------

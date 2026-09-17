@@ -1,4 +1,4 @@
-//! Regression tests for RFC-0041/0042 at the checker's contract (R7–R13):
+//! Regression tests for RFC-0041/0042 at the checker's contract (R7–R15):
 //! the instance a call settles, the casts the IR carries, and the type a
 //! script returns, with the standard registries beside a `Monomorphize`
 //! member registry. A test that fails is a finding, kept as it fails.
@@ -76,10 +76,32 @@ where
 const IDENT_AT_F64: usize = 0;
 const IDENT_GENERIC: usize = 1;
 
+/// A reference parameter beside a value parameter of the element type, so
+/// a call can lend a place and nest a call that lends it again.
+#[extern_fn(effect = pure)]
+fn scale<T>(v: &Vec<T>, k: T) -> T
+where
+    T: Monomorphize<(f64,)> + Float,
+{
+    v.iter().fold(T::ZERO, |acc, x| acc.mul_add(*x, k))
+}
+
+/// Two reference parameters that demand two representations of one
+/// element type: a member slot beside a plain concrete one.
+#[extern_fn(effect = pure)]
+fn mixed<T>(a: &Vec<T>, b: &Vec<f64>) -> T
+where
+    T: Monomorphize<(f64,)> + Float,
+{
+    a.iter()
+        .zip(b.iter())
+        .fold(T::ZERO, |acc, (x, _)| acc.mul_add(*x, *x))
+}
+
 fn member_registry() -> acvus_extern::Registry<TypesOnly> {
     extern_registry! {
         ns: "t",
-        fns: [dot, zeros, norm, norm2, ident],
+        fns: [dot, zeros, norm, norm2, ident, scale, mixed],
     }
 }
 
@@ -340,4 +362,36 @@ fn contains_over_an_iter_of_a_uniform_int_vec_checks_as_bool_with_no_cast() {
     assert_eq!(c.ret, Ty::Bool);
     assert_eq!(instance_of(&c, "contains"), 0, "i64 is the first member");
     assert!(c.casts.is_empty(), "{:?}", c.casts);
+}
+
+// -- R14: a nested call lends a place the outer call holds ---------------------
+
+#[test]
+fn a_place_lent_to_a_call_and_again_inside_a_nested_argument_is_cast_in_place_once() {
+    let i = Interner::new();
+    let c = checked(&i, "let x = vec([1.0, 2.0]); scale(&x, norm(&x))");
+    assert_eq!(c.ret, Ty::Float);
+    assert_eq!(instance_of(&c, "scale"), 0);
+    assert_eq!(instance_of(&c, "norm"), 0);
+    assert_eq!(
+        c.casts,
+        vec![THROUGH_REF.to_string()],
+        "the outer call's hold reaches the nested call's lend"
+    );
+}
+
+// -- R15: one place, two representations demanded by one call -----------------
+
+#[test]
+fn one_place_lent_twice_to_a_call_that_demands_two_representations_is_a_type_mismatch() {
+    let i = Interner::new();
+    let errors = check(&i, "let x = vec([1.0, 2.0]); mixed(&x, &x)")
+        .err()
+        .expect("the held place cannot be both Vec<#Float> and Vec<Float>");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("Vec<#Float>") && e.contains("Vec<Float>")),
+        "{errors:?}"
+    );
 }
