@@ -18,6 +18,8 @@ const INT_WHILE: &str = "let acc = 0; let i = 0; while i < @n { acc = acc + i; i
 const FLOAT_WHILE: &str =
     "let acc = 0.0; let i = 0; while i < @n { acc = acc + i.to_float(); i = i + 1; } acc";
 const RANGE_SUM: &str = "range(0, @n) | sum";
+const MAP_ID_SUM: &str = "range(0, @n) | map(|x| -> x) | sum";
+const MAP_ADD_SUM: &str = "range(0, @n) | map(|x| -> x + 1) | sum";
 
 struct Case {
     name: &'static str,
@@ -48,6 +50,14 @@ fn rust_float_while(n: i64) -> f64 {
 
 fn rust_range_sum(n: i64) -> f64 {
     (0..n).map(black_box).sum::<i64>() as f64
+}
+
+fn rust_map_id_sum(n: i64) -> f64 {
+    (0..n).map(black_box).map(|x| x).sum::<i64>() as f64
+}
+
+fn rust_map_add_sum(n: i64) -> f64 {
+    (0..n).map(black_box).map(|x| x + 1).sum::<i64>() as f64
 }
 
 fn context(interner: &Interner, n: i64) -> Context {
@@ -143,6 +153,18 @@ fn main() {
             name: "range | sum",
             source: RANGE_SUM,
             rust: rust_range_sum,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "map id | sum",
+            source: MAP_ID_SUM,
+            rust: rust_map_id_sum,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "map add | sum",
+            source: MAP_ADD_SUM,
+            rust: rust_map_add_sum,
             read: |v| v.as_int() as f64,
         },
     ];

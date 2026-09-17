@@ -209,6 +209,14 @@ impl Runtime for Counting {
         SYMBOLS.intern(name)
     }
 
+    fn call_is_sync(&self, _: &V) -> bool {
+        false
+    }
+
+    fn call_now(&self, _: &V, _: &mut [V], _: CallToken) -> Result<V, Trap> {
+        Err(Trap::internal("Counting runs no closures"))
+    }
+
     fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(Err(Trap::internal("Counting runs no closures")))
     }

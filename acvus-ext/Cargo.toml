@@ -21,3 +21,7 @@ serde = { version = "1", features = ["derive"] }
 acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-ast = { path = "../acvus-ast" }
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[[bench]]
+name = "iter_cost"
+harness = false

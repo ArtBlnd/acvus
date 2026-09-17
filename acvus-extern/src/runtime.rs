@@ -94,6 +94,19 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// closure it is passed to keeps it no longer than the call.
     unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
 
+    /// Whether running `f` reaches its result without suspending.
+    /// `Fn0`/`Fn1`/… ask once, when they are built, and a runtime whose
+    /// closures can always suspend answers `false`.
+    fn call_is_sync(&self, f: &Self::Value) -> bool;
+    /// Run `f` to its result now, reached only where `call_is_sync`
+    /// answered true for this same value.
+    fn call_now(
+        &self,
+        f: &Self::Value,
+        args: &mut [Self::Value],
+        token: CallToken,
+    ) -> Result<Self::Value, Self::Error>;
+
     /// Run the closure `f`; each argument moves into the callee's
     /// parameter. Only `Fn0`/`Fn1`/… reach these: the token is theirs to
     /// mint.
@@ -188,6 +201,12 @@ impl Runtime for TypesOnly {
     unsafe fn reference(&self, _: &()) {}
     fn symbol(&self, _: &str) -> acvus_utils::Astr {
         panic!("TypesOnly runtime holds no values")
+    }
+    fn call_is_sync(&self, _: &()) -> bool {
+        false
+    }
+    fn call_now(&self, _: &(), _: &mut [()], _: CallToken) -> Result<(), Trap> {
+        no_values()
     }
     fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(no_values())

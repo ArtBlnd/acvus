@@ -146,6 +146,7 @@ pub fn prepare_body(
         spans: spans.into_boxed_slice(),
         payloads: prep.payloads.into_boxed_slice(),
         frame_len,
+        may_suspend: prep.may_suspend,
         params,
         captures,
         order_param,
@@ -172,6 +173,7 @@ struct Prepare<'a> {
     payloads: Vec<Payload>,
     scratch: u32,
     scratch_used: bool,
+    may_suspend: bool,
     op_index: Vec<Option<u32>>,
 }
 
@@ -262,6 +264,7 @@ impl<'a> Prepare<'a> {
             slots,
             payloads: Vec::new(),
             scratch_used: false,
+            may_suspend: false,
             op_index: Vec::new(),
         }
     }
@@ -801,6 +804,7 @@ impl<'a> Prepare<'a> {
                 let after = order.map_or(NO_SLOT, |edge| self.slot(edge.after));
                 match callee {
                     Callee::Direct(id) => {
+                        self.may_suspend = true;
                         let at = self.put(Payload::Direct {
                             callee: *id,
                             args: args.iter().copied().map(|id| self.slot(id)).collect(),
@@ -811,13 +815,17 @@ impl<'a> Prepare<'a> {
                         let handler = self.ctx.handler(id, *instance);
                         let f: OpFn = match handler {
                             ExternHandler::Sync(_) => call::call_extern_sync,
-                            ExternHandler::Async(_) => call::call_extern_async,
+                            ExternHandler::Async(_) => {
+                                self.may_suspend = true;
+                                call::call_extern_async
+                            }
                         };
                         let window = self.slots.window(at).clone();
                         let payload = self.put(Payload::Extern { handler, window });
                         Op::new(f).a(self.slot(*dst)).d(after).p(payload)
                     }
                     Callee::Indirect(callee_slot) => {
+                        self.may_suspend = true;
                         let f: OpFn = if self.is_ref(*callee_slot) {
                             call::call_indirect::<true>
                         } else {
@@ -854,10 +862,13 @@ impl<'a> Prepare<'a> {
                 }
                 Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
             },
-            InstKind::Eval { dst, src, order } => Op::new(call::eval)
-                .a(self.slot(*dst))
-                .b(self.slot(*src))
-                .d(order.map_or(NO_SLOT, |id| self.slot(id))),
+            InstKind::Eval { dst, src, order } => {
+                self.may_suspend = true;
+                Op::new(call::eval)
+                    .a(self.slot(*dst))
+                    .b(self.slot(*src))
+                    .d(order.map_or(NO_SLOT, |id| self.slot(id)))
+            }
             InstKind::Merge { dst, .. } => Op::new(control::merge).a(self.slot(*dst)),
 
             InstKind::MakeArray { dst, elements } => {
@@ -1934,6 +1945,42 @@ mod recognizer_tests {
             id
         }
 
+        fn sync_extern(&mut self, name: &str) -> QualifiedRef {
+            let id = QualifiedRef {
+                namespace: None,
+                name: self.interner.intern(name),
+            };
+            let handler = ExternHandler::Sync(Arc::new(|_, _| {
+                panic!("the preparation must not run a handler")
+            }));
+            self.externs.insert(id, Executable::Extern(vec![handler]));
+            id
+        }
+
+        fn prepared(&self, insts: Vec<Inst>) -> Code {
+            let context_names = FxHashMap::default();
+            let ctx = PrepareCtx {
+                interner: &self.interner,
+                externs: &self.externs,
+                context_names: &context_names,
+            };
+            let mut body = body_of(insts);
+            let mentioned: Vec<ValueId> = body
+                .insts
+                .iter()
+                .flat_map(|inst| {
+                    let kind = &inst.kind;
+                    inst_info::defs(kind)
+                        .into_iter()
+                        .chain(inst_info::uses(kind))
+                })
+                .collect();
+            for id in mentioned {
+                body.val_types.insert(id, Ty::Int(IntTy::I64));
+            }
+            prepare_body(&body, &ctx, &FxHashMap::default())
+        }
+
         fn recognize(&self, insts: Vec<Inst>) -> Vec<Matched> {
             let context_names = FxHashMap::default();
             let ctx = PrepareCtx {
@@ -2036,6 +2083,35 @@ mod recognizer_tests {
             block(2),
         ];
         assert_eq!(fixture.recognize(insts), vec![]);
+    }
+
+    #[test]
+    fn a_body_of_arithmetic_and_a_synchronous_extern_cannot_suspend() {
+        let mut fixture = Fixture::new();
+        let stays = fixture.sync_extern("stays");
+        let insts = vec![add(1, 2, 3), call(4, stays)];
+        assert!(!fixture.prepared(insts).may_suspend);
+    }
+
+    #[test]
+    fn a_body_that_calls_an_asynchronous_extern_can_suspend() {
+        let mut fixture = Fixture::new();
+        let suspends = fixture.async_extern("suspends");
+        let insts = vec![add(1, 2, 3), call(4, suspends)];
+        assert!(fixture.prepared(insts).may_suspend);
+    }
+
+    #[test]
+    fn a_body_that_calls_a_closure_can_suspend_until_the_closure_is_in_hand() {
+        let fixture = Fixture::new();
+        let insts = vec![inst(InstKind::FunctionCall {
+            dst: val(1),
+            callee: Callee::Indirect(val(2)),
+            callee_ty: Ty::Unit,
+            args: Vec::new(),
+            order: None,
+        })];
+        assert!(fixture.prepared(insts).may_suspend);
     }
 
     #[test]

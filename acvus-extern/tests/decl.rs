@@ -264,6 +264,12 @@ impl Runtime for Tiny {
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
+    fn call_is_sync(&self, _: &V) -> bool {
+        true
+    }
+    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> Result<V, Trap> {
+        self.call(f, args.iter_mut().map(std::mem::take).collect())
+    }
     fn call_0<'a>(&'a self, f: &'a V, _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(self.call(f, Vec::new()))
     }

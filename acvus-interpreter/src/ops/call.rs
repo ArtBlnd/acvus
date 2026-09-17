@@ -10,7 +10,9 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use crate::code::{ArgWindow, Flow, NO_SLOT, Op, Payload, Pending};
-use crate::machine::{Machine, call_module, fn_value_call};
+use crate::error::RuntimeError;
+use crate::interpreter::lookup_module;
+use crate::machine::{Machine, call_module, call_module_sync, fn_value_call, fn_value_call_sync};
 use crate::ops::control::move_all;
 use crate::ops::payload;
 use crate::runtime::ExternHandler;
@@ -71,40 +73,72 @@ pub fn call_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
     Flow::Await(Pending { dst: op.a, fut })
 }
 
+/// A call into another body runs to its result here when that body's
+/// prepared `Code` cannot suspend, and hands a future up when it can.
 pub fn call_direct(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let Payload::Direct { callee, args } = machine.payload(op) else {
         panic!("a direct call wants a Direct payload")
     };
+    let callee = *callee;
     yield_order(machine, op.d);
     let args = arg_values(machine, args);
-    let shared = Arc::clone(machine.shared());
-    let page = Arc::clone(&machine.page);
-    Flow::Await(Pending {
-        dst: op.a,
-        fut: Box::pin(call_module(shared, page, *callee, args)),
-    })
+    let prepared = Arc::clone(lookup_module(machine.shared(), &callee));
+    if prepared.main.may_suspend {
+        let shared = Arc::clone(machine.shared());
+        let page = Arc::clone(machine.page);
+        return Flow::Await(Pending {
+            dst: op.a,
+            fut: Box::pin(call_module(shared, page, callee, args)),
+        });
+    }
+
+    let outcome = call_module_sync(machine, &prepared, callee, args);
+    finish(machine, op.a, outcome)
+}
+
+fn finish(machine: &mut Machine<'_>, dst: u32, outcome: Result<Value, RuntimeError>) -> Flow {
+    match outcome {
+        Ok(value) => {
+            machine.set(dst, value);
+            Flow::Next
+        }
+        Err(error) => machine.fail(error),
+    }
 }
 
 /// `THROUGH` is what the preparation read from the callee register's type:
 /// a reference names a closure the caller keeps, a value is one this call
-/// consumes.
+/// consumes. As `call_direct`, the closure's own `Code` decides whether
+/// this runs to a result here or hands a future up.
 pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let slots = payload!(machine, op, Slots);
     yield_order(machine, op.d);
     let mut args = arg_values(machine, slots);
-    let fut: BoxFuture<'static, _> = if THROUGH {
+    if THROUGH {
         // SAFETY: the type checker admits only a live reference to a closure
         // here; the closure's register is not written during the call, and
         // the machine holding it outlives the future the driver awaits.
         let closure: &'static FnValue =
             unsafe { &*(machine.reg(op.b).target().as_fn() as *const FnValue) };
-        Box::pin(fn_value_call(closure, &mut args))
-    } else {
-        // SAFETY: the type checker admits only a closure value here.
-        let closure = unsafe { machine.take(op.b).materialize::<FnValue>() };
-        Box::pin(async move { fn_value_call(&closure, &mut args).await })
-    };
-    Flow::Await(Pending { dst: op.a, fut })
+        if closure.code.may_suspend {
+            let fut: BoxFuture<'static, _> = Box::pin(fn_value_call(closure, &mut args));
+            return Flow::Await(Pending { dst: op.a, fut });
+        }
+
+        let outcome = fn_value_call_sync(machine, closure, &mut args);
+        return finish(machine, op.a, outcome);
+    }
+
+    // SAFETY: the type checker admits only a closure value here.
+    let closure = unsafe { machine.take(op.b).materialize::<FnValue>() };
+    if closure.code.may_suspend {
+        let fut: BoxFuture<'static, _> =
+            Box::pin(async move { fn_value_call(&closure, &mut args).await });
+        return Flow::Await(Pending { dst: op.a, fut });
+    }
+
+    let outcome = fn_value_call_sync(machine, &closure, &mut args);
+    finish(machine, op.a, outcome)
 }
 
 pub fn spawn_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
@@ -149,7 +183,7 @@ pub fn spawn_module(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let child = crate::interpreter::Interpreter::spawned(
         Arc::clone(machine.shared()),
         *callee,
-        Arc::clone(&machine.page),
+        Arc::clone(machine.page),
         args,
     );
     let handle = machine.shared().executor.spawn_interpreter(child);
@@ -175,7 +209,7 @@ pub fn make_closure(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let captured: Vec<Value> = captures.iter().map(|slot| machine.use_val(*slot)).collect();
     let closure = FnValue {
         shared: Arc::clone(machine.shared()),
-        page: Arc::clone(&machine.page),
+        page: Arc::clone(machine.page),
         code: Arc::clone(code),
         captures: captured.into(),
     };

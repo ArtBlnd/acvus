@@ -247,6 +247,10 @@ pub struct Code {
     /// The registers a run of this body needs: one per `ValueId`, and the
     /// scratch slot where a jump's moves needed one.
     pub frame_len: u32,
+    /// Whether any operation of this body can return `Flow::Await`. The
+    /// preparation sets it; `ops::call`'s synchronous path asserts it is
+    /// false on the callee it is about to run.
+    pub may_suspend: bool,
     pub params: Box<[u32]>,
     pub captures: Box<[u32]>,
     pub order_param: Option<u32>,

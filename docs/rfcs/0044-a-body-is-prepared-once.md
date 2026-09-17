@@ -36,6 +36,34 @@ call; no operation is an `async fn`, no `.await` sits between two
 synchronous operations, and no future is boxed for a body that never
 suspends.
 
+A call into a body runs to its result inside the calling operation when
+the callee's prepared `Code` cannot suspend. `Code` carries that fact as
+`may_suspend`, set while its operations are built: true if any of them is
+an asynchronous extern, an `Eval`, or a call into another body. A call
+site reads it off the callee it has in hand — the `Prepared` a `Direct`
+call names, the `FnValue` an `Indirect` call holds — and either runs the
+body on the caller's frames or hands a future up as before. At the extern
+boundary the same fact is `Runtime::call_is_sync`, asked once per closure
+when `Fn0`/`Fn1`/`Fn2`/`Fn3` is built and not again per element;
+`Runtime::call_now` is the call that follows from a true answer.
+
+The effect in the type does not decide this. An extern's handler may be
+asynchronous while its declared effect is `Pure`: `iter::sum`,
+`iter::fold` and `iter::collect` are `async fn` at `effect = E`, and `E`
+instantiates to `Pure` for a pure pipeline, so a body that calls `sum` is
+typed pure and contains an asynchronous extern operation. Asynchrony is a
+mechanism — awaiting the element closures — and purity is a semantics;
+neither implies the other.
+
+A run does not keep its frames in one growing buffer. `storage::ref_var`
+puts a raw pointer to a register in a `Value::Ref`, so a frame may not
+move while the body that owns it runs, and a buffer that reallocated to
+make room for a callee would move every frame below it. `Frames` is a
+free list of register files: a call takes one, fills it, and gives it
+back, so a call after the first allocates nothing. A `Machine` borrows
+its registers, its runtime and its page rather than owning them, so
+entering a body costs no atomic.
+
 An operation is `Op { f: OpFn, a: u32, b: u32, c: u32, d: u32, p: usize }`
 — 32 bytes on a 64-bit target, 24 on wasm32 — with
 `type OpFn = fn(&mut Machine, &Op) -> Flow`. `a..d` are register slots
@@ -264,9 +292,15 @@ is what the larger sizes show.
   not per operation.
 - An operation's operands are limited to four slots and one word
   inline; the rest goes through one index into the payload table.
-- A `Direct` or `Indirect` call in this stage runs the callee's driver
-  recursively, which boxes one future per call; the synchronous path for
-  pure bodies is a later stage.
+- A `Direct` or `Indirect` call whose callee can suspend still runs the
+  callee's driver recursively and boxes one future per call.
+- A body that contains any call into another body is `may_suspend`,
+  because the callee is not known until the call runs. A closure that
+  calls a pure closure is therefore never itself synchronous, and a
+  `while` whose body calls a closure is not one operation: the loop
+  recognizer needs a static answer and there is none. Resolving an
+  `Indirect` callee to the `MakeClosure` that produced it would give one;
+  it is not built.
 - The slot assignment is a pass per body at module load, linear in the
   body except for the liveness fixed point and the pairwise interference
   test a coalescing candidate runs over two classes. It multiplies the
@@ -296,6 +330,27 @@ is what the larger sizes show.
   the measurement then names register width.
 - **Keeping `execute_inst` beside the machine during the change.** Two
   semantics under one test suite say nothing about either.
+
+- **Choosing the synchronous call path from the callee's effect.** Stage 4
+  set out to prepare a call site synchronous when `callee_ty`'s effect is
+  `Pure`, and to assert on the callee's `may_suspend` as an ICE. The
+  assert fired on the first run of the test suite, in
+  `attention_shape`: `let dot = |k| -> as_iter(k).map(|x| -> *x).sum()`
+  is typed pure and its body calls `iter::sum`, whose handler is an
+  `async fn`. It is not a typeck defect — `sum` is pure, and it is
+  asynchronous because it awaits the element closures. A static effect
+  cannot answer a question about a mechanism, so the decision moved to
+  `Code::may_suspend`, read off the callee, where no ICE is expressible.
+
+- **One contiguous register stack with the callee's frame as a window at
+  the top.** A frame would then be `regs[base..base + frame_len]` and
+  every register access one add. It is unsound: `storage::ref_var` puts a
+  raw pointer to a register in a `Value::Ref`, and pushing a callee's
+  frame can reallocate the buffer and move every frame below it. A free
+  list of separately allocated register files reuses memory just as well,
+  keeps a frame fixed while its body runs, and leaves register access at
+  exactly the cost it had — the int `while` loop measures 10.1-10.3 ns
+  per iteration before and after.
 - **An owned argument buffer across the handler boundary
   (`Args = SmallVec<[Value; 4]>` by value).** Stage 2a set out to delete
   the `Vec<Value>` that `arg_values` allocates for every extern call.
@@ -334,6 +389,51 @@ is what the larger sizes show.
   and stage 2b lends the registers themselves, which measures a 43 % fall
   at attention (64, 64) with the same `&mut [Value]` ABI this entry
   rejected.
+
+After stage 4, the synchronous call path (2026-09-18; interleaved A/B
+against stage-2b binaries built from the same tree with the two new accum
+cases in them, three repetitions, medians; load average 1.8-2.5):
+
+| bench | stage 2b | stage 4 |
+|-------|----------|---------|
+| accum `map(\|x\| -> x) \| sum` | 93.9-99.6 ns/iteration | 66.1-66.9 ns/iteration |
+| accum `map(\|x\| -> x + 1) \| sum` | 86.1-87.1 ns/iteration | 71.4-72.0 ns/iteration |
+| accum int `while` | 10.0-10.3 ns/iteration | 10.1-10.3 ns/iteration |
+| accum float `while` | 15.9-16.1 ns/iteration | 15.9-16.2 ns/iteration |
+| accum `range \| sum` | 10.5-10.6 ns/iteration | 10.8 ns/iteration |
+| attention (64, 64) execute | 404.7-414.5 µs | 412.8-417.0 µs |
+| attention (256, 128) execute | 3133-3240 µs | 3092-3231 µs |
+| attention (64, 64) setup | 113.9-121.5 µs | 116.1-121.2 µs |
+
+The stage was designed expecting `map | sum` at 22-32 ns, on the reading
+that what a closure call costs is the boxed future, the callee's frame
+allocation and the driver's poll. `perf`, one variable apart on the accum
+benchmark: before, `drop_glue::<Machine>` is 16.17 % of the sampled
+process, `machine::fn_value_call` 11.20 % and `machine::drive` 8.74 %;
+after, all three are gone and `machine::enter` (14.68 %) and
+`Runtime::call_now` (7.73 %) stand where they were, in a process a
+quarter faster. What the band missed is the stage: `Map::next` boxes a
+future per element whether or not the closure it calls suspends, and it
+rises from 13.78 % to 19.04 % to become the largest single item. The
+pipeline's own dynamic dispatch, not the call, is what remains.
+
+A Rust-only microbench in `acvus-ext` (`benches/iter_cost.rs`) prices
+that dispatch against the value's tag, by running one `Iter` pipeline
+over two runtimes one variable apart — a value that is the bare word, and
+a value that is a tag plus a word with a box for what does not fit, the
+shape `acvus-interpreter`'s `Value` has:
+
+| case | ns/element |
+|------|------------|
+| a Rust iterator over `i64` | 0.18-0.19 |
+| `Iter<Erased<Word, i64>>` | 6.16-6.27 |
+| `Iter<Erased<TaggedWord, i64>>` | 7.10-7.15 |
+
+The stage expected the opposite split, dynamic dispatch under 1 ns and
+the tag 8-9 ns of the 10.4. The dynamic stage and its boxed future are
+6.2 ns per element and the tag is 0.9 ns on top of it. The value
+representation is not where the pipeline's cost is; the boxed future per
+element per stage is.
 
 - **Words packed as three `usize`.** Two slot indexes per word on a
   64-bit target and one on wasm32 would make an operation's inline

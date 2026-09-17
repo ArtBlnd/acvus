@@ -42,7 +42,7 @@ pub trait ClosureFn<Rt: Runtime> {
 
 macro_rules! define_fn_arg {
     ($name:ident; $($A:ident : $slot:literal),*) => {
-        pub struct $name<$($A,)* R, E, Rt>(Rt::Value, PhantomData<($($A,)* R, E)>)
+        pub struct $name<$($A,)* R, E, Rt>(Rt::Value, bool, PhantomData<($($A,)* R, E)>)
         where
             $($A: TyVar,)*
             R: TyVar,
@@ -56,18 +56,25 @@ macro_rules! define_fn_arg {
             E: EffectVar,
             Rt: Runtime,
         {
-            pub fn new(value: Rt::Value) -> Self {
-                Self(value, PhantomData)
+            pub fn new(rt: &Rt, value: Rt::Value) -> Self {
+                let sync = rt.call_is_sync(&value);
+                Self(value, sync, PhantomData)
             }
 
             pub fn into_value(self) -> Rt::Value {
                 self.0
             }
 
+            /// Whether a call reaches its result without a future,
+            /// asked of the runtime once, here.
+            pub fn is_sync(&self) -> bool {
+                self.1
+            }
+
             /// The same closure value under the erased types it has at run
             /// time, for code that keeps closures past their declaration.
             pub fn erased(self) -> $name<$(erased!($A),)* Rt::Value, (), Rt> {
-                $name(self.0, PhantomData)
+                $name(self.0, self.1, PhantomData)
             }
         }
 
@@ -82,8 +89,8 @@ macro_rules! define_fn_arg {
                 self.0
             }
 
-            unsafe fn materialize(_: &Rt, value: Rt::Value) -> Self {
-                Self::new(value)
+            unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+                Self::new(rt, value)
             }
         }
 
@@ -131,7 +138,11 @@ where
         _: (),
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
-            let out = rt.call_0(&self.0, CallToken::mint()).await?;
+            let out = if self.1 {
+                rt.call_now(&self.0, &mut [], CallToken::mint())?
+            } else {
+                rt.call_0(&self.0, CallToken::mint()).await?
+            };
             // SAFETY: the closure's declared return type is `R`.
             Ok(unsafe { R::materialize(rt, out) })
         }
@@ -147,8 +158,17 @@ where
 {
     /// The closure applied to a value the caller holds at `A`, the result
     /// left as the runtime holds it.
-    pub fn call_value<'a>(&'a self, rt: &'a Rt, a: Rt::Value) -> Rt::CallFuture<'a> {
-        rt.call_1(&self.0, a, CallToken::mint())
+    pub fn call_value<'a>(
+        &'a self,
+        rt: &'a Rt,
+        a: Rt::Value,
+    ) -> impl Future<Output = Result<Rt::Value, Rt::Error>> + Send + 'a {
+        async move {
+            if self.1 {
+                return rt.call_now(&self.0, &mut [a], CallToken::mint());
+            }
+            rt.call_1(&self.0, a, CallToken::mint()).await
+        }
     }
 }
 
@@ -167,7 +187,12 @@ where
         (a,): Self::Args,
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
-            let out = rt.call_1(&self.0, a.erase(rt), CallToken::mint()).await?;
+            let a = a.erase(rt);
+            let out = if self.1 {
+                rt.call_now(&self.0, &mut [a], CallToken::mint())?
+            } else {
+                rt.call_1(&self.0, a, CallToken::mint()).await?
+            };
             // SAFETY: the closure's declared return type is `R`.
             Ok(unsafe { R::materialize(rt, out) })
         }
@@ -191,7 +216,11 @@ where
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
             let mut args = [a.erase(rt), b.erase(rt)];
-            let out = rt.call_n(&self.0, &mut args, CallToken::mint()).await?;
+            let out = if self.1 {
+                rt.call_now(&self.0, &mut args, CallToken::mint())?
+            } else {
+                rt.call_n(&self.0, &mut args, CallToken::mint()).await?
+            };
             // SAFETY: the closure's declared return type is `R`.
             Ok(unsafe { R::materialize(rt, out) })
         }
@@ -216,7 +245,11 @@ where
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
             let mut args = [a.erase(rt), b.erase(rt), c.erase(rt)];
-            let out = rt.call_n(&self.0, &mut args, CallToken::mint()).await?;
+            let out = if self.1 {
+                rt.call_now(&self.0, &mut args, CallToken::mint())?
+            } else {
+                rt.call_n(&self.0, &mut args, CallToken::mint()).await?
+            };
             // SAFETY: the closure's declared return type is `R`.
             Ok(unsafe { R::materialize(rt, out) })
         }
