@@ -56,7 +56,7 @@ async fn a_move_on_the_trapping_path_does_not_reach_the_code_after() {
     let i = Interner::new();
     let v = run_script_mode_with_externs(
         &i,
-        r#"let s = "kept"; if @c { let t = s; boom(t) } else { 0 }; len_str(s)"#,
+        r#"let s = "kept"; if @c { let t = s; boom(t) } else { 0 }; len(&s)"#,
         flag(&i, false),
         registries(),
     )

@@ -172,15 +172,15 @@ fn inline_local_around_extern() {
 
 #[test]
 fn inline_extern_chain_preserved() {
-    // process(s) = n = s | len_str; n.to_string(); main = process("hello")
-    // After inline: both len_str and to_string remain as calls.
+    // process(s) = n = len(&s); n.to_string(); main = process("hello")
+    // After inline: both len and to_string remain as calls.
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
         ("main", r#"process("hello")"#),
         &[(
             "process",
-            "n = $s | len_str; n.to_string()",
+            "n = len(&$s); n.to_string()",
             sig(&i, &[("s", Ty::String)]),
         )],
         &[],

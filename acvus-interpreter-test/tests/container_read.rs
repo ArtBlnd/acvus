@@ -1,6 +1,7 @@
-//! The `container::` read extension and the String producers and fns of
-//! batch 1c, each at the script contract: `is_empty` over Vec, Array,
-//! Deque and String; `len` of a String in characters; `char_at`; the
+//! Reading a container through the per-type fns under one bare name
+//! (RFC-0028, RFC-0043) and the String producers and fns of batch 1c,
+//! each at the script contract: `is_empty` over Vec, Array, Deque and
+//! String; `len` of a String in characters; `char_at`; the
 //! producers `chars`, `lines`, `bytes`, `split_whitespace`; `rfind`,
 //! `pad_start`, `pad_end`, `strip_prefix`, `strip_suffix`, `split_once`,
 //! `eq_ignore_case`, `capitalize`. A trap surfaces here as a panic of the
@@ -26,7 +27,7 @@ async fn string(source: &str) -> String {
     unsafe { v.as_str() }.to_owned()
 }
 
-// -- container::is_empty --------------------------------------------------------
+// -- is_empty -------------------------------------------------------------------
 
 #[tokio::test]
 async fn is_empty_of_a_vec_is_true_only_with_no_element() {
@@ -59,12 +60,12 @@ async fn is_empty_of_a_string_is_true_only_for_the_empty_string() {
     assert!(!run("let s = \"a\"; is_empty(&s)").await.as_bool());
 }
 
-// -- container::len for String, char_at -----------------------------------------
+// -- string::len, char_at -------------------------------------------------------
 
 #[tokio::test]
-async fn len_of_a_string_counts_characters_where_len_str_counts_bytes() {
+async fn len_of_a_string_counts_characters() {
     assert_eq!(run("let s = \"héllo\"; len(&s)").await.as_int(), 5);
-    assert_eq!(run("len_str(\"héllo\")").await.as_int(), 6);
+    assert_eq!(run("let s = \"héllo\"; string::len(&s)").await.as_int(), 5);
 }
 
 #[tokio::test]

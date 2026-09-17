@@ -1244,11 +1244,14 @@ pub enum Decision {
     /// identity where the two join, else a declared cast.
     Conversion { from: InferTy, to: InferTy },
     /// Which signature a call of an overloaded bare name is a call of
-    /// (RFC-0043).
+    /// (RFC-0043). The checker opened a conversion decision at each
+    /// `converted` argument whose `to` is the call's parameter there, so
+    /// that decision settles once this one has.
     Signature {
         name: Astr,
         call: InferTy,
         candidates: Vec<SignatureCandidate>,
+        converted: Vec<ConvertedArgument>,
     },
 }
 
@@ -1256,6 +1259,19 @@ pub enum Decision {
 pub struct SignatureCandidate {
     pub qref: QualifiedRef,
     pub scheme: Scheme,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConvertedArgument {
+    pub index: usize,
+    pub ty: InferTy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    Direct,
+    Converted,
+    Refused,
 }
 
 impl Decision {
@@ -1712,7 +1728,8 @@ impl<'src> Solver<'src> {
                 name,
                 call,
                 candidates,
-            } => self.step_signature(id, name, &call, candidates),
+                converted,
+            } => self.step_signature(id, name, &call, candidates, &converted),
         }
     }
 
@@ -1725,10 +1742,11 @@ impl<'src> Solver<'src> {
         name: Astr,
         call: &InferTy,
         candidates: Vec<SignatureCandidate>,
+        converted: &[ConvertedArgument],
     ) -> Progress {
         let remaining: Vec<SignatureCandidate> = candidates
             .iter()
-            .filter(|c| self.takes_signature(call, &c.scheme))
+            .filter(|c| self.takes_signature(call, converted, &c.scheme))
             .cloned()
             .collect();
         let narrowed = remaining.len() != candidates.len();
@@ -1770,14 +1788,30 @@ impl<'src> Solver<'src> {
         }
     }
 
-    fn takes_signature(&self, call: &InferTy, scheme: &Scheme) -> bool {
-        if !self.terms.would_take(call, &scheme.ty, self.registry) {
+    fn takes_signature(
+        &self,
+        call: &InferTy,
+        converted: &[ConvertedArgument],
+        scheme: &Scheme,
+    ) -> bool {
+        let mut trial = self.terms.clone();
+        let instance = trial.instantiate_open(&scheme.ty, self.registry);
+        if trial
+            .join(
+                call,
+                &instance,
+                Position::Value,
+                JoinKind::Decision,
+                self.registry,
+            )
+            .is_err()
+        {
             return false;
         }
         let TyTerm::Fn { params, .. } = call else {
             unreachable!("a signature decision is opened on a call type")
         };
-        params.iter().zip(scheme.params()).all(|(param, declared)| {
+        let bounds_meet = params.iter().zip(scheme.params()).all(|(param, declared)| {
             match self.terms.shallow_resolve_ty(&param.ty) {
                 TyTerm::Var(var) => self
                     .bound_of_var(var)
@@ -1785,7 +1819,92 @@ impl<'src> Solver<'src> {
                     .is_some(),
                 _ => true,
             }
+        });
+        if !bounds_meet {
+            return false;
+        }
+        let TyTerm::Fn {
+            params: instance_params,
+            ..
+        } = &instance
+        else {
+            unreachable!("a candidate's scheme is a function type")
+        };
+        converted.iter().all(|argument| {
+            let param = &instance_params[argument.index].ty;
+            !conversion_rules(&trial, self.registry, &argument.ty, param).is_empty()
+                || trial
+                    .join(
+                        &argument.ty,
+                        param,
+                        Position::Value,
+                        JoinKind::Flow,
+                        self.registry,
+                    )
+                    .is_ok()
         })
+    }
+
+    pub fn admit_argument(&self, param: &InferTy, arg: &InferTy) -> Admission {
+        let by_conversion = |shapes: &[PolyTy]| {
+            let arg_head = self.terms.shallow_resolve_ty(arg);
+            if matches!(arg_head, TyTerm::Var(_)) {
+                return Admission::Refused;
+            }
+            let converts = shapes.iter().any(|shape| {
+                let mut trial = self.terms.clone();
+                let to = trial.instantiate_open(shape, self.registry);
+                !conversion_rules(&trial, self.registry, arg, &to).is_empty()
+            });
+            if converts {
+                Admission::Converted
+            } else {
+                Admission::Refused
+            }
+        };
+        let shapes = match self.terms.shallow_resolve_ty(param) {
+            TyTerm::Var(var) => match self.bound_of_var(var) {
+                TyVarBound::OneOf(shapes) => Some(shapes),
+                TyVarBound::Any | TyVarBound::Integer { .. } => None,
+            },
+            _ => None,
+        };
+        if !self.would_unify(param, arg) {
+            return match shapes {
+                Some(shapes) => by_conversion(&shapes),
+                None => Admission::Refused,
+            };
+        }
+        let Some(shapes) = shapes else {
+            return Admission::Direct;
+        };
+        if self.term_within_shapes(arg, &shapes) {
+            return Admission::Direct;
+        }
+        by_conversion(&shapes)
+    }
+
+    /// `take_other` binds a `OneOf`-bounded variable to any term and leaves
+    /// the bound to `freeze_ty_with`, so a decision that would bind one
+    /// tests the term against the shapes here first.
+    fn term_within_shapes(&self, term: &InferTy, shapes: &[PolyTy]) -> bool {
+        let term = self.terms.resolve_ty(term);
+        matches!(term, TyTerm::Var(_))
+            || shapes.iter().any(|shape| could_match_pattern(&term, shape))
+    }
+
+    fn identity_within_bounds(&self, from: &InferTy, to: &InferTy) -> bool {
+        [(from, to), (to, from)]
+            .into_iter()
+            .all(|(var_side, term_side)| {
+                let TyTerm::Var(var) = self.terms.shallow_resolve_ty(var_side) else {
+                    return true;
+                };
+                let TyVarBound::OneOf(shapes) = self.bound_of_var(var) else {
+                    return true;
+                };
+                self.term_within_shapes(term_side, &shapes)
+            })
     }
 
     /// An instance decision narrows to the signatures the call type would
@@ -1861,7 +1980,7 @@ impl<'src> Solver<'src> {
     /// pair of references is answered through the rule for what they name,
     /// and needs the rule back as well.
     fn step_conversion(&mut self, id: DecisionId, from: &InferTy, to: &InferTy) -> Progress {
-        if self.would_settle_join(from, to) {
+        if self.identity_within_bounds(from, to) && self.would_settle_join(from, to) {
             self.settle_join(from, to)
                 .expect("would_settle_join checked this join on a copy of the terms");
             return Progress::Settled(Answer::Conversion(Conversion::Identity));
@@ -1939,34 +2058,8 @@ impl<'src> Solver<'src> {
         }
     }
 
-    /// The declared conversions that could still take `from` to `to`; for
-    /// a pair of references of one mutability, those that take what they
-    /// name.
     fn conversion_rules(&self, from: &InferTy, to: &InferTy) -> Vec<CastRule> {
-        let from_r = self.terms.resolve_ty(from);
-        let to_r = self.terms.resolve_ty(to);
-        if let Some(references) = ReferencePair::of(&from_r, &to_r) {
-            return self.conversion_rules(&references.from.ty, &references.to.ty);
-        }
-        let shape = conversion_shape(&from_r, &to_r);
-        let from_rules = match &from_r {
-            TyTerm::UserDefined { id, .. } => self.registry.rules_from(*id),
-            _ => &[],
-        };
-        let to_rules = match &to_r {
-            TyTerm::UserDefined { id, .. } => self.registry.rules_to(*id),
-            _ => &[],
-        };
-        let mut rules: Vec<CastRule> = Vec::new();
-        for rule in from_rules.iter().chain(to_rules.iter()) {
-            if rules.contains(rule) {
-                continue;
-            }
-            if could_match_pattern(&shape, &conversion_shape(&rule.from, &rule.to)) {
-                rules.push(rule.clone());
-            }
-        }
-        rules
+        conversion_rules(&self.terms, self.registry, from, to)
     }
 
     // -- Freeze --------------------------------------------------------
@@ -2048,6 +2141,10 @@ impl<'src> Solver<'src> {
     /// with a type whose sources are already minted.
     fn instantiate_open(&mut self, ty: &PolyTy) -> InferTy {
         self.terms.instantiate_open(ty, self.registry)
+    }
+
+    pub fn fresh_shape(&mut self, pattern: &PolyTy) -> InferTy {
+        self.instantiate_open(pattern)
     }
 
     pub fn instantiate_scheme(&mut self, scheme: &Scheme) -> Instantiated {
@@ -2371,6 +2468,41 @@ fn identity_vars_bound_by_params(ty: &PolyTy) -> FxHashSet<u32> {
         }
     }
     found
+}
+
+/// The declared conversions that could still take `from` to `to`; for
+/// a pair of references of one mutability, those that take what they
+/// name.
+fn conversion_rules(
+    terms: &Terms,
+    registry: &TypeRegistry,
+    from: &InferTy,
+    to: &InferTy,
+) -> Vec<CastRule> {
+    let from_r = terms.resolve_ty(from);
+    let to_r = terms.resolve_ty(to);
+    if let Some(references) = ReferencePair::of(&from_r, &to_r) {
+        return conversion_rules(terms, registry, &references.from.ty, &references.to.ty);
+    }
+    let shape = conversion_shape(&from_r, &to_r);
+    let from_rules = match &from_r {
+        TyTerm::UserDefined { id, .. } => registry.rules_from(*id),
+        _ => &[],
+    };
+    let to_rules = match &to_r {
+        TyTerm::UserDefined { id, .. } => registry.rules_to(*id),
+        _ => &[],
+    };
+    let mut rules: Vec<CastRule> = Vec::new();
+    for rule in from_rules.iter().chain(to_rules.iter()) {
+        if rules.contains(rule) {
+            continue;
+        }
+        if could_match_pattern(&shape, &conversion_shape(&rule.from, &rule.to)) {
+            rules.push(rule.clone());
+        }
+    }
+    rules
 }
 
 /// `(from, to)` as one type, so one pattern match covers both sides of a

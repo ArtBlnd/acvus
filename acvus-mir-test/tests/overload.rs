@@ -2,15 +2,19 @@
 //! declare is settled by the call's evidence, and the callee the lowering
 //! reads is the settled one.
 //!
-//! The standard registries already overload `min` (`num::min(a, b)`,
-//! `std::min(it)`) and declare `std::contains(it, x)` over an iterator;
-//! this file adds `container::contains(c: &C, x: T)` with instances for
-//! `Vec<T>` and `Arr<T, N>`, and `t::apply_any`, which takes a lambda
-//! without saying what its parameter is.
+//! Against the standard registries: `min` (`num::min(a, b)`,
+//! `iter::min(it)`), `contains` over `string` and `iter`, and `len` over
+//! `vec`, `array`, `deque`, and `string`. The fixtures live in namespaces no standard
+//! registry declares and use names none declares: `fx_a::probe(&Vec<T>, T)`
+//! and `fx_b::probe(Iter<T>, T)` are a pair separated by the first
+//! argument, `fx_a::size(&Vec<T>)` and `fx_c::size(&Arr<T, N>)` a pair
+//! a second use intersects with, `fx_a::apply_any` takes a lambda without
+//! saying what its parameter is, and `fx_a::only_vec` is one shape.
 
+use acvus_ext::Iter;
 use acvus_extern::{
-    Arr, EffectVar, Externs, Fn1, LenVar, Registry, Runtime, TyVar, TypesOnly, extern_fn,
-    extern_registry,
+    Arr, EffectVar, Externs, Fn1, IdentityVar, LenVar, Registry, Runtime, TyVar, TypesOnly,
+    extern_fn, extern_registry,
 };
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
@@ -20,62 +24,96 @@ use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeRegistry};
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 
-mod sig {
-    use acvus_extern::extern_signature;
+mod fx_a {
+    use super::*;
 
-    extern_signature! {
-        ns: "container",
-        fn contains<C, T>(c: &C, x: T) -> bool
-        where
-            C: TyVar,
-            T: TyVar;
+    #[extern_fn(effect = pure)]
+    pub fn probe<T>(c: &Vec<T>, x: T) -> bool
+    where
+        T: TyVar,
+    {
+        let _ = (c, x);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn size<T>(c: &Vec<T>) -> i64
+    where
+        T: TyVar,
+    {
+        let _ = c;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn apply_any<A, E, Rt>(f: Fn1<A, bool, E, Rt>) -> bool
+    where
+        A: TyVar,
+        E: EffectVar,
+        Rt: Runtime,
+    {
+        let _ = f;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn only_vec<T>(v: &Vec<T>) -> T
+    where
+        T: TyVar,
+    {
+        let _ = v;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx_a",
+            fns: [probe, size, apply_any, only_vec],
+        }
     }
 }
 
-#[extern_fn(instance_of = sig::contains, effect = pure)]
-fn contains_vec<T>(c: &Vec<T>, x: T) -> bool
-where
-    T: TyVar,
-{
-    let _ = (c, x);
-    unreachable!("a type-only fixture is never run")
+mod fx_b {
+    use super::*;
+
+    #[extern_fn(effect = pure)]
+    pub fn probe<T, E, I, Rt>(it: Iter<T, E, I, Rt>, x: T) -> bool
+    where
+        T: TyVar + acvus_extern::Cross<Rt>,
+        E: EffectVar,
+        I: IdentityVar,
+        Rt: Runtime,
+    {
+        let _ = (it, x);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx_b",
+            fns: [probe],
+        }
+    }
 }
 
-#[extern_fn(instance_of = sig::contains, effect = pure)]
-fn contains_array<T, N>(c: &Arr<T, N>, x: T) -> bool
-where
-    T: TyVar,
-    N: LenVar,
-{
-    let _ = (c, x);
-    unreachable!("a type-only fixture is never run")
-}
+mod fx_c {
+    use super::*;
 
-#[extern_fn(effect = pure)]
-fn apply_any<A, E, Rt>(f: Fn1<A, bool, E, Rt>) -> bool
-where
-    A: TyVar,
-    E: EffectVar,
-    Rt: Runtime,
-{
-    let _ = f;
-    unreachable!("a type-only fixture is never run")
-}
+    #[extern_fn(effect = pure)]
+    pub fn size<T, N>(c: &Arr<T, N>) -> i64
+    where
+        T: TyVar,
+        N: LenVar,
+    {
+        let _ = c;
+        unreachable!("a type-only fixture is never run")
+    }
 
-#[extern_fn(effect = pure)]
-fn only_vec<T>(v: &Vec<T>) -> T
-where
-    T: TyVar,
-{
-    let _ = v;
-    unreachable!("a type-only fixture is never run")
-}
-
-fn fixture_registry() -> Registry<TypesOnly> {
-    extern_registry! {
-        ns: "t",
-        signatures: [sig::contains],
-        fns: [contains_vec, contains_array, apply_any, only_vec],
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx_c",
+            fns: [size],
+        }
     }
 }
 
@@ -153,7 +191,7 @@ fn check_functions(
 
 fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     let mut registries = acvus_ext::std_registries::<TypesOnly>();
-    registries.push(fixture_registry());
+    registries.extend([fx_a::registry(), fx_b::registry(), fx_c::registry()]);
     let Externs {
         functions, types, ..
     } = Externs::combine(registries, i).expect("registries combine");
@@ -179,8 +217,8 @@ fn calls(checked: &Checked, callee: &str) -> usize {
         .count()
 }
 
-const AMBIGUOUS_CONTAINS: &str = "`contains` is declared by container::contains and std::contains";
-const NO_CONTAINS: &str = "no `contains` takes a call of type";
+const AMBIGUOUS_PROBE: &str = "`probe` is declared by fx_a::probe and fx_b::probe";
+const NO_PROBE: &str = "no `probe` takes a call of type";
 
 // -- 1: arity ---------------------------------------------------------------
 
@@ -190,84 +228,143 @@ fn min_of_two_values_settles_num_min_by_arity() {
     let c = checked(&i, "min(3, 5)");
     assert_eq!(c.ret, Ty::I64);
     assert_eq!(calls(&c, "num::min"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "std::min"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "iter::min"), 0, "{:?}", c.callees);
 }
 
 #[test]
-fn min_of_an_iterator_settles_std_min_by_arity() {
+fn min_of_an_iterator_settles_iter_min_by_arity() {
     let i = Interner::new();
     let c = checked(&i, "into_iter([3, 5]) | min()");
     assert_eq!(c.ret, Ty::Option(Box::new(Ty::I64)));
-    assert_eq!(calls(&c, "std::min"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "iter::min"), 1, "{:?}", c.callees);
     assert_eq!(calls(&c, "num::min"), 0, "{:?}", c.callees);
 }
 
-// -- 2: the first argument's type ---------------------------------------------
+// -- 2: the first argument's type, against the standard registries -----------
 
 #[test]
-fn contains_of_a_lent_vec_settles_the_container_signature() {
+fn probe_of_a_lent_vec_settles_the_vec_probe() {
     let i = Interner::new();
-    let c = checked(&i, "let v = vec([1]); contains(&v, 1)");
+    let c = checked(&i, "let v = vec([1, 2]); probe(&v, 2)");
     assert_eq!(c.ret, Ty::Bool);
-    assert_eq!(calls(&c, "container::contains"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "std::contains"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::probe"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_b::probe"), 0, "{:?}", c.callees);
 }
 
 #[test]
-fn contains_of_an_iterator_settles_the_iterator_signature() {
+fn contains_of_a_lent_string_settles_string_contains() {
     let i = Interner::new();
-    let c = checked(&i, "contains(into_iter([1]), 1)");
+    let c = checked(&i, r#"let s = "ab"; contains(&s, "b")"#);
     assert_eq!(c.ret, Ty::Bool);
-    assert_eq!(calls(&c, "std::contains"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "container::contains"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "string::contains"), 1, "{:?}", c.callees);
+}
+
+#[test]
+fn a_qualified_name_is_that_function() {
+    let i = Interner::new();
+    let c = checked(&i, r#"let s = "ab"; string::contains(&s, "b")"#);
+    assert_eq!(c.ret, Ty::Bool);
+    assert_eq!(calls(&c, "string::contains"), 1, "{:?}", c.callees);
+}
+
+#[test]
+fn contains_of_an_iterator_settles_iter_contains() {
+    let i = Interner::new();
+    let c = checked(&i, "into_iter([1]) | contains(1)");
+    assert_eq!(c.ret, Ty::Bool);
+    assert_eq!(calls(&c, "iter::contains"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "string::contains"), 0, "{:?}", c.callees);
+}
+
+#[test]
+fn len_of_each_container_settles_its_namespace() {
+    let i = Interner::new();
+    for (source, callee) in [
+        ("let v = vec([1]); len(&v)", "vec::len"),
+        ("let a = [1]; len(&a)", "array::len"),
+        (
+            "let d = deque(); push_back(&mut d, 1); len(&d)",
+            "deque::len",
+        ),
+        (r#"let s = "a"; len(&s)"#, "string::len"),
+    ] {
+        let c = checked(&i, source);
+        assert_eq!(c.ret, Ty::I64, "{source}: {:?}", c.callees);
+        assert_eq!(calls(&c, callee), 1, "{source}: {:?}", c.callees);
+    }
 }
 
 // -- 3: a lambda's parameter, typed by the consumer ----------------------------
 
 #[test]
-fn a_lambda_wanted_over_a_lent_vec_settles_the_container_signature() {
+fn a_lambda_wanted_over_a_lent_vec_settles_the_vec_probe() {
     let i = Interner::new();
     let c = checked(
         &i,
-        "into_iter([vec([1])]) | filter(|c| -> contains(c, 1)) | count()",
+        "into_iter([vec([1])]) | filter(|c| -> probe(c, 1)) | count()",
     );
     assert_eq!(c.ret, Ty::I64);
-    assert_eq!(calls(&c, "container::contains"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "std::contains"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::probe"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_b::probe"), 0, "{:?}", c.callees);
 }
 
 #[test]
-fn a_lambda_wanted_over_an_iterator_settles_the_iterator_signature() {
+fn a_lambda_wanted_over_an_iterator_settles_the_iterator_probe() {
     let i = Interner::new();
     let c = checked(
         &i,
-        "into_iter([into_iter([1])]) | map(|c| -> contains(c, 1)) | count()",
+        "into_iter([into_iter([1])]) | map(|c| -> probe(c, 1)) | count()",
     );
     assert_eq!(c.ret, Ty::I64);
-    assert_eq!(calls(&c, "std::contains"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "container::contains"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_b::probe"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::probe"), 0, "{:?}", c.callees);
+}
+
+#[test]
+fn a_method_call_in_a_lambda_settles_when_the_lambda_is_applied_to_a_lent_vec() {
+    let i = Interner::new();
+    let c = checked(
+        &i,
+        "let f = |c, y| -> c.probe(y); let v = vec([1, 2]); f(&v, 2)",
+    );
+    assert_eq!(c.ret, Ty::Bool);
+    assert_eq!(calls(&c, "fx_a::probe"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_b::probe"), 0, "{:?}", c.callees);
+}
+
+#[test]
+fn a_method_call_in_a_lambda_settles_when_the_lambda_is_applied_to_a_lent_string() {
+    let i = Interner::new();
+    let c = checked(
+        &i,
+        r#"let f = |c, y| -> c.contains(y); let s = "ab"; f(&s, "b")"#,
+    );
+    assert_eq!(c.ret, Ty::Bool);
+    assert_eq!(calls(&c, "string::contains"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "iter::contains"), 0, "{:?}", c.callees);
 }
 
 // -- 4: the intersection of the parameter's uses --------------------------------
 
-/// `C` stays open here, so neither call has a callee (RFC-0040); the
-/// settled signature shows as the absence of `AmbiguousFunction`.
 #[test]
-fn a_second_use_that_only_a_container_takes_settles_without_the_consumer() {
+fn a_second_use_that_only_one_shape_takes_settles_both_names() {
     let i = Interner::new();
-    let c = checked(&i, "apply_any(|c| -> contains(c, 1) && len(c) > 0)");
+    let c = checked(&i, "apply_any(|c| -> probe(c, 1) && size(c) > 0)");
     assert_eq!(c.ret, Ty::Bool);
-    assert_eq!(calls(&c, "std::contains"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::probe"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::size"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_b::probe"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_c::size"), 0, "{:?}", c.callees);
 }
 
 #[test]
-fn a_second_use_with_one_instance_settles_the_signature_and_the_instance() {
+fn a_second_use_with_one_function_settles_the_signature() {
     let i = Interner::new();
-    let c = checked(&i, "apply_any(|c| -> contains(c, 1) && only_vec(c) == 1)");
+    let c = checked(&i, "apply_any(|c| -> probe(c, 1) && only_vec(c) == 1)");
     assert_eq!(c.ret, Ty::Bool);
-    assert_eq!(calls(&c, "container::contains"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "t::only_vec"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "std::contains"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::probe"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::only_vec"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_b::probe"), 0, "{:?}", c.callees);
 }
 
 // -- 5: nothing narrows ----------------------------------------------------------
@@ -275,15 +372,15 @@ fn a_second_use_with_one_instance_settles_the_signature_and_the_instance() {
 #[test]
 fn a_parameter_used_only_in_the_overloaded_call_is_ambiguous_naming_both() {
     let i = Interner::new();
-    let errs = errors_of(&i, "apply_any(|c| -> contains(c, 1))");
-    assert!(errs.iter().any(|e| e == AMBIGUOUS_CONTAINS), "{errs:?}");
+    let errs = errors_of(&i, "apply_any(|c| -> probe(c, 1))");
+    assert!(errs.iter().any(|e| e == AMBIGUOUS_PROBE), "{errs:?}");
 }
 
 #[test]
 fn a_lambda_never_applied_is_ambiguous_naming_both() {
     let i = Interner::new();
-    let errs = errors_of(&i, "let f = |c| -> contains(c, 1); true");
-    assert!(errs.iter().any(|e| e == AMBIGUOUS_CONTAINS), "{errs:?}");
+    let errs = errors_of(&i, "let f = |c| -> probe(c, 1); true");
+    assert!(errs.iter().any(|e| e == AMBIGUOUS_PROBE), "{errs:?}");
 }
 
 // -- 6: no candidate -------------------------------------------------------------
@@ -291,14 +388,34 @@ fn a_lambda_never_applied_is_ambiguous_naming_both() {
 #[test]
 fn an_argument_no_signature_takes_is_no_matching_function() {
     let i = Interner::new();
-    let errs = errors_of(&i, "contains(1, 1)");
-    assert!(errs.iter().any(|e| e.starts_with(NO_CONTAINS)), "{errs:?}");
-    assert!(!errs.iter().any(|e| e == AMBIGUOUS_CONTAINS), "{errs:?}");
+    let errs = errors_of(&i, "probe(1, 1)");
+    assert!(errs.iter().any(|e| e.starts_with(NO_PROBE)), "{errs:?}");
+    assert!(!errs.iter().any(|e| e == AMBIGUOUS_PROBE), "{errs:?}");
 }
 
 #[test]
 fn an_arity_no_signature_has_is_no_matching_function() {
     let i = Interner::new();
-    let errs = errors_of(&i, "contains(1)");
-    assert!(errs.iter().any(|e| e.starts_with(NO_CONTAINS)), "{errs:?}");
+    let errs = errors_of(&i, "probe(1)");
+    assert!(errs.iter().any(|e| e.starts_with(NO_PROBE)), "{errs:?}");
+}
+
+// -- 7: an argument a declared conversion takes to a candidate's shape ---------
+
+#[test]
+fn a_piped_vec_reaches_iter_contains_through_into_iter() {
+    let i = Interner::new();
+    let c = checked(&i, "let v = vec([1, 2]); v | contains(3)");
+    assert_eq!(c.ret, Ty::Bool);
+    assert_eq!(calls(&c, "iter::contains"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "string::contains"), 0, "{:?}", c.callees);
+}
+
+#[test]
+fn a_piped_vec_reaches_the_fixture_iterator_probe_through_into_iter() {
+    let i = Interner::new();
+    let c = checked(&i, "let v = vec([1, 2]); v | probe(3)");
+    assert_eq!(c.ret, Ty::Bool);
+    assert_eq!(calls(&c, "fx_b::probe"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "fx_a::probe"), 0, "{:?}", c.callees);
 }

@@ -527,7 +527,7 @@ fn s10_a_specialized_result_is_erased_once_for_a_generic_consumer() {
         }
     );
     let start = w.rt.counts();
-    let reversed = w.call("std", "reverse", 0, vec![z]);
+    let reversed = w.call("vec", "reverse", 0, vec![z]);
     assert_eq!(
         w.rt.since(start),
         Counts {

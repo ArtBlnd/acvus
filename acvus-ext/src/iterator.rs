@@ -820,7 +820,7 @@ where
     Rt: Runtime,
 {
     extern_registry! {
-        ns: "std",
+        ns: "iter",
         types: [Iter<_, _, _, Rt>],
         signatures: [sig::into_iter, sig::as_iter],
         fns: [

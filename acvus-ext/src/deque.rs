@@ -14,10 +14,9 @@ use acvus_extern::{
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
-use crate::container::{checked_index, sig as container};
 use crate::iter::Iter;
 use crate::iterator::{lent_iter, sig};
-use crate::vec::vec;
+use crate::vec::{checked_index, vec};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Deque<T>
@@ -413,24 +412,24 @@ where
     lent_iter(d, Deque::get)
 }
 
-#[extern_fn(instance_of = container::len, effect = pure)]
-fn len_deque<T>(d: &Deque<T>) -> i64
+#[extern_fn(effect = pure)]
+fn len<T>(d: &Deque<T>) -> i64
 where
     T: TyVar,
 {
     d.len() as i64
 }
 
-#[extern_fn(instance_of = container::is_empty, effect = pure)]
-fn is_empty_deque<T>(d: &Deque<T>) -> bool
+#[extern_fn(effect = pure)]
+fn is_empty<T>(d: &Deque<T>) -> bool
 where
     T: TyVar,
 {
     d.is_empty()
 }
 
-#[extern_fn(instance_of = container::get, effect = pure)]
-fn get_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
+#[extern_fn(effect = pure)]
+fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
 where
     T: TyVar,
     Rt: Runtime,
@@ -439,8 +438,8 @@ where
     Ok(d.map(rt, |d| &d.items[i]))
 }
 
-#[extern_fn(instance_of = container::get_mut, effect = pure)]
-fn get_mut_deque<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> Result<RefMut<T, Rt>, Trap>
+#[extern_fn(effect = pure)]
+fn get_mut<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> Result<RefMut<T, Rt>, Trap>
 where
     T: TyVar,
     Rt: Runtime,
@@ -449,8 +448,8 @@ where
     Ok(d.map_mut(rt, |d| &mut d.items[i]))
 }
 
-#[extern_fn(instance_of = container::first, effect = pure)]
-fn first_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
+#[extern_fn(effect = pure)]
+fn first<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
 where
     T: TyVar,
     Rt: Runtime,
@@ -458,8 +457,8 @@ where
     d.try_map(rt, |d| d.items.front())
 }
 
-#[extern_fn(instance_of = container::last, effect = pure)]
-fn last_deque<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
+#[extern_fn(effect = pure)]
+fn last<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
 where
     T: TyVar,
     Rt: Runtime,
@@ -467,14 +466,19 @@ where
     d.try_map(rt, |d| d.items.back())
 }
 
-pub fn deque_registry<R: Runtime>() -> Registry<R> {
+// No `deque::contains`: the reason is stated at `vec_registry`.
+
+pub fn deque_registry<R>() -> Registry<R>
+where
+    R: Runtime,
+{
     extern_registry! {
-        ns: "std",
+        ns: "deque",
         types: [Deque<_>],
         fns: [
             deque, push_front, push_back, pop_front, pop_back,
             vec_deque, into_iter_deque, as_iter_deque,
-            len_deque, is_empty_deque, get_deque, get_mut_deque, first_deque, last_deque,
+            len, is_empty, get, get_mut, first, last,
         ],
     }
 }

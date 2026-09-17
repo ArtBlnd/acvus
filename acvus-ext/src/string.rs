@@ -1,12 +1,7 @@
 //! String operations. All pure. A string is a value, not a container of
-//! characters (RFC-0028): `container::len` and `container::is_empty` have
-//! `String` instances in `container`, `container::get` has none, and a
-//! character is read out by value with `char_at`.
-//!
-//! `find` is not here: the iterator's `std::find` holds the bare name, and
-//! a second function of that name under another namespace makes every call
-//! ambiguous (`TypeEnv::resolve_fn`, RFC-0021). `rfind` has no such
-//! neighbor.
+//! characters (RFC-0028): there is no `get` returning a reference into it,
+//! because a `char` has no acvus type to be referenced as; a character is
+//! read out by value with `char_at`.
 
 use acvus_extern::{
     Cross, EffectVar, Erased, IdentityVar, Registry, Runtime, Trap, extern_fn, extern_registry,
@@ -29,9 +24,15 @@ fn shortfall(s: &str, width: i64) -> usize {
     width.saturating_sub(s.chars().count())
 }
 
+/// The length in characters.
 #[extern_fn(effect = pure)]
-fn len_str(s: String) -> i64 {
-    s.len() as i64
+fn len(s: &String) -> i64 {
+    s.chars().count() as i64
+}
+
+#[extern_fn(effect = pure)]
+fn is_empty(s: &String) -> bool {
+    s.is_empty()
 }
 
 #[extern_fn(effect = pure)]
@@ -68,7 +69,7 @@ fn lower(s: String) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn contains_str(s: String, pat: String) -> bool {
+fn contains(s: &String, pat: String) -> bool {
     s.contains(&*pat)
 }
 
@@ -199,6 +200,12 @@ where
 
 // -- Searching and shaping ---------------------------------------------
 
+/// The character index of the first `pat` in `s`.
+#[extern_fn(effect = pure)]
+fn find(s: &String, pat: String) -> Option<i64> {
+    s.find(&*pat).map(|byte| char_index(s, byte))
+}
+
 /// The character index of the last `pat` in `s`.
 #[extern_fn(effect = pure)]
 fn rfind(s: &String, pat: String) -> Option<i64> {
@@ -264,15 +271,18 @@ fn capitalize(s: String) -> String {
     out
 }
 
-pub fn string_registry<R: Runtime>() -> Registry<R> {
+pub fn string_registry<R>() -> Registry<R>
+where
+    R: Runtime,
+{
     extern_registry! {
-        ns: "std",
+        ns: "string",
         fns: [
-            len_str, concat, trim, trim_start, trim_end, upper, lower, contains_str,
+            len, is_empty, concat, trim, trim_start, trim_end, upper, lower, contains,
             starts_with_str, ends_with_str, replace_str, split_str, repeat_str,
             substring, to_bytes, to_utf8, to_utf8_lossy,
             char_at, chars, lines, bytes, split_whitespace,
-            rfind, pad_start, pad_end, strip_prefix, strip_suffix, split_once,
+            find, rfind, pad_start, pad_end, strip_prefix, strip_suffix, split_once,
             eq_ignore_case, capitalize,
         ],
     }
@@ -289,7 +299,7 @@ mod tests {
         let reg =
             Externs::combine(vec![string_registry::<TypesOnly>()], &i).expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
-        assert_eq!(reg.functions.len() - core.functions.len(), 30);
-        assert_eq!(reg.handlers.len() - core.handlers.len(), 30);
+        assert_eq!(reg.functions.len() - core.functions.len(), 32);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 32);
     }
 }

@@ -200,13 +200,16 @@ r5 = eval r0               // b ready
 
 ## Standard library
 
-All builtins are ExternFn. Organized into registries:
+All builtins are ExternFn. Each registry declares one namespace; a bare
+name several namespaces declare is settled by the call's evidence
+(RFC-0043), and `ns::name` picks one.
 
-- **Iterator**: `filter`, `map`, `find`, `reduce`, `fold`, `any`, `all`, `flatten`, `flat_map`, `join`, `contains`, `first`, `last`, `collect`, `take`, `skip`, `chain`, `iter`, `rev_iter`, `next`.
-- **List**: `len`, `reverse`.
-- **Deque**: `append`, `extend`, `consume`.
-- **Sequence**: `take`, `skip`, `chain`, `next`.
-- **String**: `contains_str`, `substring`, `len_str`, `trim`, `trim_start`, `trim_end`, `upper`, `lower`, `replace_str`, `split_str`, `starts_with_str`, `ends_with_str`, `repeat_str`.
+- **`iter`**: `into_iter`, `as_iter`, `filter`, `map`, `find`, `reduce`, `fold`, `any`, `all`, `flatten`, `flat_map`, `join`, `contains`, `last`, `collect`, `take`, `skip`, `chain`, `rev_iter`, `next`, `min`, `max`, `sum`, `count`.
+- **`vec`**: `len`, `is_empty`, `get`, `get_mut`, `first`, `last`, `reverse`.
+- **`array`**: `len`, `is_empty`, `get`, `get_mut`, `first`, `last`.
+- **`deque`**: `deque`, `push_front`, `push_back`, `pop_front`, `pop_back`, `len`, `is_empty`, `get`, `get_mut`, `first`, `last`.
+- **`string`**: `len`, `is_empty`, `contains`, `find`, `rfind`, `substring`, `trim`, `trim_start`, `trim_end`, `upper`, `lower`, `replace_str`, `split_str`, `starts_with_str`, `ends_with_str`, `repeat_str`, `char_at`, `chars`, `lines`.
+- **`core`**: `clone`, `eq`, `hash`, `to_string`, `to_int` — one shared signature each, an instance per type.
 - **Option**: `unwrap`, `unwrap_or`, `map`, `get_or_else`.
 - **Conversion**: `to_string`, `to_float`, `to_int`, `char_to_int`, `int_to_char`.
 - **Encoding**: Base64, URL encoding.

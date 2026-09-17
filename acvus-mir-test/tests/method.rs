@@ -35,10 +35,10 @@ fn tail_ty(src: &str) -> Ty {
 
 #[test]
 fn a_qualified_name_is_a_call_when_its_namespace_declares_the_function() {
-    let ir = check("xs = [1, 2]; container::len(&xs)").expect("container::len");
+    let ir = check("xs = [1, 2]; array::len(&xs)").expect("array::len");
     assert!(ir.contains("call "), "{ir}");
     assert!(!ir.contains("variant"), "{ir}");
-    check("d = deque(); std::push_back(&mut d, 1); std::push_back(&mut d, 2); len(&d)")
+    check("d = deque(); deque::push_back(&mut d, 1); deque::push_back(&mut d, 2); len(&d)")
         .expect("a qualified call takes any number of arguments");
 }
 

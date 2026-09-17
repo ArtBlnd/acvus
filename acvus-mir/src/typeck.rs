@@ -9,10 +9,11 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
-    Answer, Candidate, Conversion, Decision, DecisionId, EffectRelation, InstanceChoice,
-    InstanceKind, Mismatch, MismatchReason, ReferencePair, SettledSignature, SignatureCandidate,
-    Unsettled,
+    Admission, Answer, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
+    EffectRelation, InstanceChoice, InstanceKind, Mismatch, MismatchReason, ReferencePair,
+    SettledSignature, SignatureCandidate, Unsettled,
 };
+use crate::ty::generalize_patterns;
 use crate::ty::{
     Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Ty, TyTerm,
     TyVarBound, TypeArg, TypeEnv, lift_ty,
@@ -59,11 +60,13 @@ struct FirstArg {
     site: ArgSite,
 }
 
-/// Every argument's type, and whether one was refused by its parameter
-/// under `ArgumentMismatch::Refuse`.
+/// Every argument's type; under `ArgumentMismatch::Refuse`, whether one
+/// was refused by its parameter, and which were admitted through a
+/// declared conversion.
 struct CheckedArgs {
     types: Vec<InferTy>,
     refused: bool,
+    converted: Vec<usize>,
 }
 
 /// A call argument at its site, with the place it borrows when it is
@@ -950,7 +953,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let offset = usize::from(first.is_some());
         let arity_holds = params.len() == args.len() + offset;
         let mut refused = false;
-        let mut meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy, site: &ArgSite| {
+        let mut converted = Vec::new();
+        let mut meet = |this: &mut Self,
+                        index: usize,
+                        param: Option<&InferTy>,
+                        arg: &InferTy,
+                        site: &ArgSite| {
             let Some(param) = param else {
                 return;
             };
@@ -958,26 +966,41 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let _ = this.solver.unify(param, arg);
                 return;
             }
-            if on_mismatch == ArgumentMismatch::Refuse && !this.solver.would_unify(param, arg) {
-                refused = true;
-                return;
+            if on_mismatch == ArgumentMismatch::Refuse {
+                match this.solver.admit_argument(param, arg) {
+                    Admission::Direct => {}
+                    Admission::Converted => {
+                        converted.push(index);
+                        this.convert_argument_at(arg, param, site);
+                        return;
+                    }
+                    Admission::Refused => {
+                        refused = true;
+                        return;
+                    }
+                }
             }
             this.meet_argument(arg, param, site);
         };
         let outer_holds = self.holds.len();
         let mut types = Vec::with_capacity(args.len() + offset);
         if let Some(first) = first {
-            meet(self, params.first(), &first.ty, &first.site);
+            meet(self, 0, params.first(), &first.ty, &first.site);
             types.push(first.ty.clone());
         }
         for (i, arg) in args.iter().enumerate() {
-            let expected = params.get(i + offset);
+            let index = i + offset;
+            let expected = params.get(index);
             let ty = self.check_arg(arg, expected);
-            meet(self, expected, &ty, &ArgSite::of(arg));
+            meet(self, index, expected, &ty, &ArgSite::of(arg));
             types.push(ty);
         }
         self.holds.truncate(outer_holds);
-        CheckedArgs { types, refused }
+        CheckedArgs {
+            types,
+            refused,
+            converted,
+        }
     }
 
     /// A reference is never data (RFC-0018).
@@ -1699,7 +1722,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ty = self.check_expr(receiver);
                 if !matches!(
                     self.solver.resolve_ty(&ty),
-                    TyTerm::Ref(..) | TyTerm::Error(_)
+                    TyTerm::Ref(..) | TyTerm::Var(_) | TyTerm::Error(_)
                 ) {
                     self.error(MirErrorKind::NotAPlace, receiver.span());
                 }
@@ -1774,7 +1797,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ParamTerm::new(param.name, self.solver.fresh_var_with(bound))
             })
             .collect();
-        let ret = self.solver.fresh_ty_var();
+        let mut returns = candidates.iter().map(|(_, scheme)| scheme.ret());
+        let ret = match returns.next() {
+            Some(first) => {
+                let shape =
+                    returns.fold(first.clone(), |shape, ret| generalize_patterns(&shape, ret));
+                self.solver.fresh_shape(&shape)
+            }
+            None => self.solver.fresh_ty_var(),
+        };
         let effect = self.solver.fresh_effect_var();
         let call = TyTerm::Fn {
             params,
@@ -1782,8 +1813,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             captures: vec![],
             effect: effect.clone(),
         };
-        let CheckedArgs { refused, .. } =
-            self.check_args_in_order(&call, first.as_ref(), args, ArgumentMismatch::Refuse);
+        let CheckedArgs {
+            types,
+            refused,
+            converted,
+        } = self.check_args_in_order(&call, first.as_ref(), args, ArgumentMismatch::Refuse);
         if refused {
             self.error(
                 MirErrorKind::NoMatchingFunction {
@@ -1802,6 +1836,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             candidates: candidates
                 .into_iter()
                 .map(|(qref, scheme)| SignatureCandidate { qref, scheme })
+                .collect(),
+            converted: converted
+                .into_iter()
+                .map(|index| ConvertedArgument {
+                    index,
+                    ty: types[index].clone(),
+                })
                 .collect(),
         });
         self.decision_sites.insert(decision, call_span);

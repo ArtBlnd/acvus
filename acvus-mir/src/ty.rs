@@ -272,6 +272,13 @@ impl Scheme {
         }
     }
 
+    pub fn ret(&self) -> &PolyTy {
+        match &self.ty {
+            TyTerm::Fn { ret, .. } => ret,
+            other => other,
+        }
+    }
+
     /// The bound a call's parameter takes from this scheme's parameter
     /// (RFC-0043): every `OneOf`-bounded variable expanded to its shapes,
     /// shifted past the scheme's variables so the two sets stay apart.
@@ -815,6 +822,106 @@ impl PatternSubst {
             &mut |v| self.repr.get(&v).copied().unwrap_or(Repr::Var(v)),
         )
     }
+}
+
+/// The anti-unifier of two patterns.
+pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
+    fn fresh(next: &mut u32) -> u32 {
+        let var = *next;
+        *next += 1;
+        var
+    }
+    fn walk(a: &PolyTy, b: &PolyTy, next: &mut u32) -> PolyTy {
+        match (a, b) {
+            (TyTerm::Ref(ma, x), TyTerm::Ref(mb, y)) if ma == mb => {
+                let repr = if x.repr == y.repr {
+                    x.repr
+                } else {
+                    Repr::Var(fresh(next))
+                };
+                let ty = walk(&x.ty, &y.ty, next);
+                TyTerm::Ref(*ma, Box::new(TypeArg { repr, ty }))
+            }
+            (TyTerm::Option(x), TyTerm::Option(y)) => TyTerm::Option(Box::new(walk(x, y, next))),
+            (TyTerm::Handle(x), TyTerm::Handle(y)) => TyTerm::Handle(Box::new(walk(x, y, next))),
+            (TyTerm::Result(xa, xb), TyTerm::Result(ya, yb)) => {
+                TyTerm::Result(Box::new(walk(xa, ya, next)), Box::new(walk(xb, yb, next)))
+            }
+            (TyTerm::Array(x, la), TyTerm::Array(y, lb)) => {
+                let len = if la == lb {
+                    la.clone()
+                } else {
+                    LenTerm::Var(fresh(next))
+                };
+                TyTerm::Array(Box::new(walk(x, y, next)), len)
+            }
+            (TyTerm::Tuple(xs), TyTerm::Tuple(ys)) if xs.len() == ys.len() => {
+                TyTerm::Tuple(xs.iter().zip(ys).map(|(x, y)| walk(x, y, next)).collect())
+            }
+            (
+                TyTerm::UserDefined {
+                    id: ia,
+                    type_args: ta,
+                    effect_args: ea,
+                    identity_args: ida,
+                },
+                TyTerm::UserDefined {
+                    id: ib,
+                    type_args: tb,
+                    effect_args: eb,
+                    identity_args: idb,
+                },
+            ) if ia == ib
+                && ta.len() == tb.len()
+                && ea.len() == eb.len()
+                && ida.len() == idb.len() =>
+            {
+                let type_args = ta
+                    .iter()
+                    .zip(tb)
+                    .map(|(x, y)| TypeArg {
+                        repr: if x.repr == y.repr {
+                            x.repr
+                        } else {
+                            Repr::Var(fresh(next))
+                        },
+                        ty: walk(&x.ty, &y.ty, next),
+                    })
+                    .collect();
+                let effect_args = ea
+                    .iter()
+                    .zip(eb)
+                    .map(|(x, y)| {
+                        if x == y {
+                            x.clone()
+                        } else {
+                            EffectTerm::Var(fresh(next))
+                        }
+                    })
+                    .collect();
+                let identity_args = ida
+                    .iter()
+                    .zip(idb)
+                    .map(|(x, y)| {
+                        if x == y {
+                            *x
+                        } else {
+                            IdentityTerm::Var(fresh(next))
+                        }
+                    })
+                    .collect();
+                TyTerm::UserDefined {
+                    id: *ia,
+                    type_args,
+                    effect_args,
+                    identity_args,
+                }
+            }
+            (x, y) if x == y => x.clone(),
+            _ => TyTerm::Var(fresh(next)),
+        }
+    }
+    walk(a, b, &mut 0)
 }
 
 /// The most general pattern that has the shape of both, with the two

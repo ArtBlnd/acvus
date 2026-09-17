@@ -6,15 +6,15 @@ expression: ir
   T0 = "hello"
 
 === main ===
-     1 |   r0 = take $v1
+     1 |   r0 = ref &$v1
      2 |   r1 = call #0(r0)
      3 |   assign n = r1
      4 |   r2 = ref &n
      5 |   r3 = call #1(r2)
      6 |   return r3
 
-    ; r0 ($s) : String
-    ; r1 (len_str(...)) : i64
+    ; r0 ($param_1.) : &String
+    ; r1 (len(...)) : i64
     ; r2 (var_4.) : &i64
     ; r3 (to_string(...)) : String
     ; r4 (v1) : String

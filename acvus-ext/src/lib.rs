@@ -1,4 +1,4 @@
-mod container;
+mod array;
 mod conversion;
 mod datetime;
 mod decimal;
@@ -14,7 +14,7 @@ mod regex;
 mod string;
 mod vec;
 
-pub use container::container_registry;
+pub use array::array_registry;
 pub use conversion::{conversion_registry, from_str_registries};
 pub use datetime::datetime_registry;
 pub use decimal::{Decimal, decimal_registry};
@@ -42,7 +42,7 @@ where
         conversion_registry(),
         decimal_registry(),
         vec_registry(),
-        container_registry(),
+        array_registry(),
         deque_registry(),
         option_registry(),
         panic_registry(),

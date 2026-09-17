@@ -12,19 +12,33 @@ check time; one left is the call, as a qualified name is. Several left
 form one call: a fresh function type whose parameter variables carry
 `TyVarBound::OneOf` of the union of the candidates' parameter shapes at
 that position, a candidate's own `OneOf`-bounded variables expanded to
-their shapes, a bare variable making the position `Any`. An argument
+their shapes, a bare variable making the position `Any`; its return is
+the candidates' common return pattern (`get`'s `&T`, `first`'s
+`Option<&T>`) with fresh variables, or a bare variable where they have
+none (`min`'s `T` and `Option<T>`), so a field read or a method call on
+the result sees the reference before the signature settles. A receiver
+whose type is still a variable is passed as it is; the parameter it meets
+decides whether it was a reference. An argument
 flowing into such a parameter meets the bound as any bounded variable's
-does: two variables intersect their bounds, and an argument no shape
-admits empties the set at that argument, which is reported as
-`NoMatchingFunction` there and opens no decision.
+does: two variables intersect their bounds; an argument some shape admits
+joins the parameter; an argument no shape admits, but one declared
+conversion rule (RFC-0023) takes to a shape of the bound, leaves the
+parameter open and opens the conversion decision at that argument, as a
+direct call would; and an argument neither admits empties the set at that
+argument, which is reported as `NoMatchingFunction` there and opens no
+decision. An argument whose type is still a variable is admitted as it
+is; a conversion is admitted from a resolved head only.
 
 The call opens `Decision::Signature` over the candidates, stepped as
 `Decision::Instance` is (RFC-0040, RFC-0042): a candidate stays while the
-call type would join its type on a copy of the terms and, at every
-parameter the call still has as a variable, the variable's bound meets
-the bound the candidate's parameter gives it. One left settles: the
-candidate is instantiated as a call of it — its own instance decision and
-bounds opened, as at a qualified call — and joined with the call type;
+call type would join its type on a copy of the terms, at every parameter
+the call still has as a variable the variable's bound meets the bound the
+candidate's parameter gives it, and at every argument admitted through a
+conversion, one declared rule takes the argument to the candidate's
+parameter or the argument joins it. One left settles: the candidate is
+instantiated as a call of it — its own instance decision and bounds
+opened, as at a qualified call — and joined with the call type, which
+resolves the parameter the conversion decision waits on;
 the answer names the function, its instance choice, and its bounded
 variables, which the checker verifies when the body freezes. None left is
 `NoMatchingFunction { name, call type }`. More than one left when the body
@@ -34,9 +48,14 @@ Nothing is defaulted.
 The lowering reads a decided call's callee through the settled answer,
 then its instance, as it reads a resolved call's; the IR has no new shape.
 
-A method call or a pipe lends its receiver when every remaining candidate's
-first parameter is a reference of one mutability, and passes it as a value
-otherwise.
+A method call lends its receiver when every remaining candidate's first
+parameter is a reference of one mutability, and passes it as a value
+otherwise; a pipe passes its left side as a value.
+
+A conversion decision whose one side is a `OneOf`-bounded variable answers
+identity only where the other side could match a shape of the bound: the
+join itself binds such a variable to any term and verifies the bound when
+the variable freezes.
 
 ## Rationale
 
@@ -74,13 +93,17 @@ reference value.
 
 Each step of a signature decision joins the call type against every
 remaining candidate on a copy of the terms; the cost is that of an
-instance decision per candidate.
+instance decision per candidate, plus a rule lookup per converted
+argument on the same copy. A chain of two conversions is not searched:
+one declared rule, or none.
 
-A settled signature is a function whose instance may still be open: a
-lambda whose parameter is fixed only to `&C` settles `container::contains`
-and leaves `C` undecided, so the call has no callee (RFC-0040) and the
-ambiguity message names the candidates in sorted display order, not the
-order the registries were combined in.
+A settled signature is a function whose instance may still be open:
+`iter::contains` settles on an iterator argument while its `Monomorphize`
+member is chosen by the element type, so a call whose element stays open
+has no callee (RFC-0040). A lambda parameter used only as a container —
+`|c| -> contains(c, 1) && len(c) > 0` — stays ambiguous among the
+container namespaces, and the message names the candidates in sorted
+display order, not the order the registries were combined in.
 
 ## Rejected
 
@@ -100,14 +123,24 @@ order the registries were combined in.
 ## Consequences
 
 - `acvus-mir/src/ty.rs`: `FnLookup::Overloaded(Vec<(QualifiedRef,
-  &Scheme)>)`; `Scheme::params`, `Scheme::param_bound`; `TyVarBound::union`.
-- `acvus-mir/src/solver.rs`: `Decision::Signature`, `SignatureCandidate`,
+  &Scheme)>)`; `Scheme::{params, ret, param_bound}`; `TyVarBound::union`.
+- `acvus-mir/src/solver.rs`: `Decision::Signature` with its
+  `ConvertedArgument`s, `SignatureCandidate`,
   `Answer::Signature(SettledSignature)`, `Unsettled::{NoSignature,
   AmbiguousSignature}`, `step_signature`, `Solver::{would_unify,
-  fresh_var_with}`.
+  fresh_var_with, admit_argument}` with `Admission`, and
+  `identity_within_bounds` on a conversion decision.
 - `acvus-mir/src/typeck.rs`: `check_overloaded_call`, `CalleeChoice`,
-  `ArgumentMismatch`, `CheckedArgs`, `receiver_arg`; `report_unsettled`
-  maps the two failures; `solve_body` verifies a settled signature's bounds.
+  `ArgumentMismatch`, `CheckedArgs` with its converted positions,
+  `receiver_arg`; `report_unsettled` maps the two failures; `solve_body`
+  verifies a settled signature's bounds.
 - `acvus-mir/src/error.rs`: `MirErrorKind::NoMatchingFunction`.
 - RFC-0021's one-name rule is amended: a name two namespaces declare is a
   set, decided by this RFC.
+- A library function that exists per container type is a plain function
+  in that type's namespace (`vec::len`, `string::len`, `string::contains`
+  beside `iter::contains`), and the bare name is this RFC's set
+  (RFC-0028). `core::` — `clone`, `eq`,
+  `hash`, `to_string`, `to_int` — remains the shared-signature mechanism:
+  one signature, an instance per type, which a generic function asks for
+  by name.

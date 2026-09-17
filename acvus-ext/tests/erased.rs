@@ -340,7 +340,7 @@ fn from_value_on_a_value_of_the_type_is_the_value() {
 fn split_str_is_typed_vec_of_string() {
     let w = World::new();
     assert_eq!(
-        w.declared_return("std", "split_str"),
+        w.declared_return("string", "split_str"),
         vec_of(PolyTy::String, &w.interner)
     );
 }
@@ -350,7 +350,7 @@ fn split_str_boxes_each_element_once_and_the_vec_once() {
     let w = World::new();
     let args = vec![w.string("a,b,c"), w.string(",")];
     let start = w.rt.counts();
-    let _parts = w.call("std", "split_str", args);
+    let _parts = w.call("string", "split_str", args);
     assert_eq!(
         w.rt.since(start),
         Counts {
@@ -363,9 +363,13 @@ fn split_str_boxes_each_element_once_and_the_vec_once() {
 #[test]
 fn reverse_on_the_vec_is_one_unbox_and_one_box() {
     let w = World::new();
-    let parts = w.call("std", "split_str", vec![w.string("a,b,c"), w.string(",")]);
+    let parts = w.call(
+        "string",
+        "split_str",
+        vec![w.string("a,b,c"), w.string(",")],
+    );
     let start = w.rt.counts();
-    let _reversed = w.call("std", "reverse", vec![parts]);
+    let _reversed = w.call("vec", "reverse", vec![parts]);
     assert_eq!(
         w.rt.since(start),
         Counts {
@@ -378,8 +382,12 @@ fn reverse_on_the_vec_is_one_unbox_and_one_box() {
 #[test]
 fn join_reads_through_as_ref_with_no_unbox() {
     let w = World::new();
-    let parts = w.call("std", "split_str", vec![w.string("a,b,c"), w.string(",")]);
-    let reversed = w.call("std", "reverse", vec![parts]);
+    let parts = w.call(
+        "string",
+        "split_str",
+        vec![w.string("a,b,c"), w.string(",")],
+    );
+    let reversed = w.call("vec", "reverse", vec![parts]);
     // SAFETY: `reversed` is live and unmoved for the call.
     let lent = unsafe { w.rt.reference(&reversed) };
     let start = w.rt.counts();

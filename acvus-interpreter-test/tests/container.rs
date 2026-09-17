@@ -76,7 +76,7 @@ async fn a_method_chain_runs_as_the_calls_it_stands_for() {
         33
     );
     assert_eq!(
-        int("d = deque(); d.push_back({ x: 4, }); d.push_front({ x: 3, }); d.get(0).x * 10 + container::len(&d)").await,
+        int("d = deque(); d.push_back({ x: 4, }); d.push_front({ x: 3, }); d.get(0).x * 10 + deque::len(&d)").await,
         32
     );
 }
