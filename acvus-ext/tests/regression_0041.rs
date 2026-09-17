@@ -14,14 +14,17 @@ use std::sync::{Arc, Mutex};
 
 use acvus_ext::{Deque, Iter, vec_registry};
 use acvus_extern::{
-    Arr, CallToken, Erased, Externs, Fn1, FnKind, FromValue, Interner, Monomorphize,
-    QualifiedRef, Ref, RefMut, Registry, Runtime, Trap, extern_fn, extern_registry,
+    Arr, CallToken, Erased, Externs, Fn1, FnKind, FromValue, Interner, Monomorphize, QualifiedRef,
+    Ref, RefMut, Registry, Runtime, Trap, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum V {
+    /// The value a handler took out of its argument slot.
+    #[default]
+    Taken,
     Boxed(Box<dyn Any + Send + Sync>),
     Reference(*const V),
 }
@@ -220,7 +223,7 @@ impl Runtime for Counting {
         std::future::ready(Ok(open_ref::<UnaryClosure>(f)(self, a)))
     }
 
-    fn call_n<'a>(&'a self, _: &'a V, _: Vec<V>, _: CallToken) -> Self::CallFuture<'a> {
+    fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(Err(Trap::internal("Counting runs only unary closures")))
     }
 }
@@ -332,7 +335,13 @@ fn vec_from_value_refuses_a_deque_and_takes_a_vec_of_values_with_no_per_element_
     };
     assert!(trap.to_string().contains("Vec"), "{trap}");
 
-    let strings = erased_from(&rt, vec![erased_from(&rt, "a".to_owned()), erased_from(&rt, "b".to_owned())]);
+    let strings = erased_from(
+        &rt,
+        vec![
+            erased_from(&rt, "a".to_owned()),
+            erased_from(&rt, "b".to_owned()),
+        ],
+    );
     let start = rt.counts();
     let parts = Vec::<Erased<Counting, String>>::from_value(&rt, strings).expect("a Vec of String");
     assert_eq!(
@@ -358,7 +367,10 @@ fn arr_from_value_refuses_a_deque_and_takes_an_array_of_values_with_no_per_eleme
 
     let strings = erased_from(
         &rt,
-        Arr::<V, ()>::new(vec![erased_from(&rt, "a".to_owned()), erased_from(&rt, "b".to_owned())]),
+        Arr::<V, ()>::new(vec![
+            erased_from(&rt, "a".to_owned()),
+            erased_from(&rt, "b".to_owned()),
+        ]),
     );
     let start = rt.counts();
     let parts = Arr::<Erased<Counting, String>, ()>::from_value(&rt, strings).expect("an Arr");

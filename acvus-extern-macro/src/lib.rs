@@ -270,27 +270,39 @@ fn generate_extern_fn(
         let ret_cross = crossing(&ret.ty, member);
         let turbofish = vars.runtime_turbofish_instance(member);
         let error_ty = quote! { <__R as ::acvus_extern::Runtime>::Error };
-        let unpack_stmts: Vec<proc_macro2::TokenStream> = params
+        let arity = params.len();
+        let taken_idents: Vec<Ident> = arg_idents
+            .iter()
+            .map(|a| format_ident!("{a}_taken"))
+            .collect();
+        let take = {
+            let positions = (0..arity).map(proc_macro2::Literal::usize_unsuffixed);
+            quote! {
+                debug_assert_eq!(__args.len(), #arity, "arity checked by typeck");
+                #(let #taken_idents = ::core::mem::take(&mut __args[#positions]);)*
+            }
+        };
+        let bind_stmts: Vec<proc_macro2::TokenStream> = params
             .iter()
             .zip(&arg_idents)
+            .zip(&taken_idents)
             .zip(&rt_tys)
-            .map(|((p, a), ty)| {
+            .map(|(((p, a), taken), ty)| {
                 let cross = crossing(&p.ty, member);
-                let next = quote! { __args.next().expect("arity checked by typeck") };
                 let lent = format_ident!("{a}_lent");
                 match p.mode {
                     Mode::Value => quote! {
                         // SAFETY: typeck settled this position to this type, the instance's
                         // signature.
-                        let #a = unsafe { <#ty as #cross<__R>>::materialize(__rt, #next) };
+                        let #a = unsafe { <#ty as #cross<__R>>::materialize(__rt, #taken) };
                     },
                     Mode::Borrow => quote! {
-                        let #lent = #next;
+                        let #lent = #taken;
                         // SAFETY: the checker lends a live storage of this type (RFC-0018).
                         let #a: &#ty = unsafe { <#ty as #cross<__R>>::deref(__rt, &#lent) };
                     },
                     Mode::BorrowMut => quote! {
-                        let #lent = #next;
+                        let #lent = #taken;
                         // SAFETY: the checker lends a live storage of this type, exclusively
                         // (RFC-0018).
                         let #a: &mut #ty = unsafe { <#ty as #cross<__R>>::deref_mut(__rt, &#lent) };
@@ -298,11 +310,7 @@ fn generate_extern_fn(
                 }
             })
             .collect();
-        let unpack = quote! {
-            let mut __args = __args.into_iter();
-            #(#unpack_stmts)*
-            debug_assert!(__args.next().is_none(), "arity checked by typeck");
-        };
+        let bind = quote! { #(#bind_stmts)* };
         let mut acvus_args = arg_idents.iter();
         let passed: Vec<proc_macro2::TokenStream> = rust_params
             .iter()
@@ -336,11 +344,12 @@ fn generate_extern_fn(
             quote! {{
                 #hold_state
                 ::acvus_extern::ExternHandler::Async(::std::sync::Arc::new(
-                    move |__rt: __R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
+                    move |__rt: __R, __args: &mut [<__R as ::acvus_extern::Runtime>::Value]| {
                         #hold_state
+                        #take
                         ::std::boxed::Box::pin(async move {
                             let __rt = &__rt;
-                            #unpack
+                            #bind
                             let __r = #awaited;
                             #returned
                         })
@@ -357,8 +366,9 @@ fn generate_extern_fn(
             quote! {{
                 #hold_state
                 ::acvus_extern::ExternHandler::Sync(::std::sync::Arc::new(
-                    move |__rt: &__R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
-                        #unpack
+                    move |__rt: &__R, __args: &mut [<__R as ::acvus_extern::Runtime>::Value]| {
+                        #take
+                        #bind
                         let __r = #result;
                         #returned
                     }
@@ -381,10 +391,9 @@ fn generate_extern_fn(
                 let rt_ty = vars.to_runtime_instance(ty, Some(member));
                 let handler = |body: proc_macro2::TokenStream| quote! {
                     ::acvus_extern::ExternHandler::Sync(::std::sync::Arc::new(
-                        move |__rt: &__R, __args: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value>| {
-                            let mut __args = __args.into_iter();
-                            let __v = __args.next().expect("arity checked by typeck");
-                            debug_assert!(__args.next().is_none(), "arity checked by typeck");
+                        move |__rt: &__R, __args: &mut [<__R as ::acvus_extern::Runtime>::Value]| {
+                            debug_assert_eq!(__args.len(), 1, "arity checked by typeck");
+                            let __v = ::core::mem::take(&mut __args[0]);
                             ::core::result::Result::<_, <__R as ::acvus_extern::Runtime>::Error>::Ok(#body)
                         }
                     ))

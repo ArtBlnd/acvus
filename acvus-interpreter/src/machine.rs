@@ -6,13 +6,14 @@
 //! operation named, and re-enters the loop at the next operation. A
 //! synchronous operation costs one indirect call.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use acvus_ast::Span;
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 
-use crate::code::{Code, Flow, Op, Payload, Pending, Prepared};
+use crate::code::{ArgWindow, Code, Flow, Op, Payload, Pending, Prepared};
 use crate::error::RuntimeError;
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
@@ -97,6 +98,26 @@ impl<'c> Machine<'c> {
         Value::use_from(&mut self.regs[slot as usize])
     }
 
+    /// The registers an extern call's arguments are in, lent with the
+    /// runtime the handler is called with.
+    #[inline]
+    pub fn lend_window(&mut self, window: &ArgWindow) -> (&AcvusRuntime, &mut [Value]) {
+        let Machine { rt, regs, .. } = self;
+        (rt, &mut regs[run_of(window)])
+    }
+
+    #[inline]
+    pub fn window(&mut self, window: &ArgWindow) -> &mut [Value] {
+        &mut self.regs[run_of(window)]
+    }
+
+    /// The window's values, owned: what a spawn hands to work that
+    /// outlives this frame.
+    #[inline]
+    pub fn take_window(&mut self, window: &ArgWindow) -> Vec<Value> {
+        self.window(window).iter_mut().map(Value::take).collect()
+    }
+
     #[inline]
     pub fn slot_mut(&mut self, slot: u32) -> &mut Value {
         &mut self.regs[slot as usize]
@@ -160,6 +181,10 @@ impl<'c> Machine<'c> {
     }
 }
 
+fn run_of(window: &ArgWindow) -> std::ops::Range<usize> {
+    window.at as usize..(window.at + window.arity) as usize
+}
+
 async fn drive(mut machine: Machine<'_>) -> Result<Value, RuntimeError> {
     let mut pc = 0;
     loop {
@@ -198,7 +223,12 @@ pub async fn call_module(
     drive(machine).await
 }
 
-pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, RuntimeError> {
+/// The arguments are read into the callee's frame before the future
+/// exists, so the caller may lend registers that die at the call.
+pub fn fn_value_call<'f>(
+    f: &'f FnValue,
+    args: &mut [Value],
+) -> impl Future<Output = Result<Value, RuntimeError>> + Send + use<'f> {
     let code = &f.code;
     let mut machine = Machine::new(
         code,
@@ -212,11 +242,11 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
         machine.set(*slot, Value::reference(capture));
     }
     for (slot, arg) in code.params.iter().zip(args) {
-        machine.set(*slot, arg);
+        machine.set(*slot, arg.take());
     }
     if let Some(order) = code.order_param {
         machine.set(order, Value::unit());
     }
 
-    drive(machine).await
+    drive(machine)
 }

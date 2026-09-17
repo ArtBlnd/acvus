@@ -101,14 +101,37 @@ types, so an instruction kind added to the IR fails to compile until it
 is prepared; that `match` is where an instance is chosen, and where a
 superinstruction is recognized in a later stage.
 
-Slots in this RFC are the body's `ValueId`s as they stand: the frame is
-one `Value` per `ValueId`, sized by the body's `val_factory`, as today.
-Register selection, superinstructions (a single-exit loop or an
-`if`/`else` diamond as one operation), and a synchronous call path for
-pure closures are stages after this one, each an amendment to this RFC
-with the measurement that motivated it. They presuppose the operation
-format and the shared `Code` this RFC establishes; none of them exists
-without it.
+Slots are selected, not taken from the `ValueId`. The preparation runs
+one assignment over a body before it prepares a single operation, and
+every `slot(id)` reads it. Liveness is a backward dataflow over the
+linear `insts` with the jumps as its edges; two values may share a slot
+unless one is live where the other is written. On that relation the
+assignment does three things. A jump argument and the block parameter it
+feeds become one class when they do not interfere, so the parallel move
+is a self-move and `order_moves` drops it. Every extern call site gets a
+contiguous window of `arity` registers, and an argument whose last use is
+that call is allocated *into* its window slot, so nothing is staged; an
+argument that is live past the call is copied into its slot by a
+`SlotMove` the call carries. Everything else takes the lowest slot free
+over its live range. The extern ABI is a borrow of the window —
+`SyncFn(&R, &mut [Value])`, `AsyncFn(R, &mut [Value])`, `Runtime::call_n`
+the same — and the handler `mem::take`s each argument out of the register
+it was lent, an asynchronous one before it builds its future, because the
+future is `'static` and cannot hold the lent slice.
+
+Two values a `ValueId` cannot speak for keep one slot for the whole body:
+a storage a place names directly, because `storage::ref_var` builds a
+pointer into its register and the reference's own live range governs how
+long that pointer is read, and because a write through a path reads the
+storage it writes while `inst_info` reports it as a definition alone. A
+`Direct` or `Indirect` call keeps its argument `Vec`: its callee is a
+body that owns its parameters, not a handler that borrows them.
+
+Superinstructions (an `if`/`else` diamond as one operation) and a
+synchronous call path for pure closures are stages after this one, each
+an amendment to this RFC with the measurement that motivated it. They
+presuppose the operation format and the shared `Code` this RFC
+establishes; none of them exists without it.
 
 `execute_inst`, `run_loop`, `Frame::jump*`, `build_label_map*` and the
 per-call clones they imply are removed, not kept beside the machine.
@@ -188,6 +211,46 @@ sampled process at stage 1 and gone at stage 3, and the iteration falls
 parallel moves the loop still performs on its two edges are now the
 per-iteration cost, and they are a register-selection problem too.
 
+After stage 2b, register selection (2026-09-18; interleaved A/B against
+stage-3 binaries built from the same tree, three repetitions, medians;
+load average 2.3–3.9):
+
+| bench | stage 3 | stage 2b |
+|-------|---------|----------|
+| attention (64, 64) execute | 719.7–729.2 µs | 408.0–418.1 µs |
+| attention (256, 128) execute | 5746–6030 µs | 3181–3258 µs |
+| attention (64, 64) setup | 23.3–24.9 µs | 114.1–118.3 µs |
+| accum int `while` | 12.9–13.4 ns/iteration | 10.1–10.4 ns/iteration |
+| accum float `while` | 25.4–26.3 ns/iteration | 15.9–16.1 ns/iteration |
+| accum `range \| sum` | 10.4–10.7 ns/iteration | 10.6–10.9 ns/iteration |
+
+Attention's main body is 31 registers where it was 197, with 24 argument
+windows in it. `perf` on the execute-only mode at (64, 64), one variable
+apart: `ops::call::arg_values` is 4.89 % of the sampled process before
+and does not appear at all after, and the generated `array::get` handler
+falls from 5.72 % to below the 1.5 % cut. In accum, `arg_values` goes
+20.61 % → nothing and `control::move_all` 32.83 % → 26.27 % of a process
+that is itself a quarter faster.
+
+The stage was designed expecting attention (64, 64) at 540–620 µs and the
+accum int `while` at 6–9 ns. Attention is faster than that band and accum
+int is slower, and the same fact explains both. Every one of the six
+loops keeps exactly one back-edge move, because the lowering computes the
+next iteration's values in the *head* block, above the `JumpIf`: at the
+definition of `acc + i` the parameter `acc` is still live, since the exit
+edge leaves the loop below it and the block after reads `acc`. The two
+inner loops of attention additionally keep two entering moves each, paid
+once per outer iteration. Sinking a loop head's computation below its
+test is a lowering change, not a register-selection one. Where the design
+was underestimated is the window: of the six arguments the three extern
+calls in an attention inner loop pass, four are allocated into their
+window and cost nothing at all, and the two that are moved are moved for
+one reason, that the value is live past the call.
+
+The setup column is the assignment: five times the preparation cost at
+(64, 64), 1.79 % of the sampled process, paid once per body at module
+load against a per-iteration saving.
+
 The compile is constant in the input: the script is the same text at
 every size. The execute ratio falls with size because the fixed cost of
 a run (frames, closures made once) is amortized; the per-operation cost
@@ -204,6 +267,14 @@ is what the larger sizes show.
 - A `Direct` or `Indirect` call in this stage runs the callee's driver
   recursively, which boxes one future per call; the synchronous path for
   pure bodies is a later stage.
+- The slot assignment is a pass per body at module load, linear in the
+  body except for the liveness fixed point and the pairwise interference
+  test a coalescing candidate runs over two classes. It multiplies the
+  attention benchmark's setup by five, 24 µs to 118 µs.
+- A storage keeps its slot for the whole body, so a body that takes many
+  addresses reuses few registers. The assignment reads `ValueId`
+  liveness, not `analysis::loans`; reading loans is what would narrow
+  this, and it is not built.
 - A `while` whose head or body can suspend — an asynchronous extern, a
   call into another body, an `Eval` — is not one operation. It prepares
   as the separate operations it was before, and stays that way until the
@@ -240,7 +311,9 @@ is what the larger sizes show.
   inline buffer is not the wrong size either: a two-element one
   (40 bytes) recovers about a tenth of the gap, and a `Vec` register
   file against a `SmallVec<[Value; 16]>` one measured 1157 µs against
-  1163 µs — the frame is not where this sits.
+  1163 µs — the frame is not where this sits. What it lacked is the
+  window: a buffer of any ownership is built per call, and a window is
+  chosen once at preparation and is already where the arguments live.
 
 - **Arguments lent across the handler boundary (`&mut [Value]` over a
   stage the caller owns).** The reading that followed from the buffer
@@ -257,10 +330,10 @@ is what the larger sizes show.
   more than the allocation it replaces. Two designs one variable apart
   from each other both measure worse than the `Vec`: a 64-byte stage of
   `Value`s built and dropped per call is the cost, not its ownership.
-  What removes the stage is no staging — the callee reading its
-  arguments through a contiguous argument window the preparation lays
-  out in the register file per call site — which is register selection's
-  business (stage 2b).
+  What it lacked is the window: lending a stage still builds the stage,
+  and stage 2b lends the registers themselves, which measures a 43 % fall
+  at attention (64, 64) with the same `&mut [Value]` ABI this entry
+  rejected.
 
 - **Words packed as three `usize`.** Two slot indexes per word on a
   64-bit target and one on wasm32 would make an operation's inline

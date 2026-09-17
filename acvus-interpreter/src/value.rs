@@ -77,7 +77,9 @@ impl Tag {
 
 /// `Empty` is the moved-out sentinel and `Undef` the SSA initial value of a
 /// loop-defined variable; neither is a value the program can read.
+#[derive(Default)]
 pub enum Value {
+    #[default]
     Empty,
     Undef,
     Small(Tag, u64),
@@ -414,11 +416,11 @@ impl fmt::Debug for FnValue {
 
 impl FnValue {
     pub async fn call(&self, arg: Value) -> Result<Value, RuntimeError> {
-        crate::machine::fn_value_call(self, vec![arg]).await
+        crate::machine::fn_value_call(self, &mut [arg]).await
     }
 
     pub async fn call2(&self, arg1: Value, arg2: Value) -> Result<Value, RuntimeError> {
-        crate::machine::fn_value_call(self, vec![arg1, arg2]).await
+        crate::machine::fn_value_call(self, &mut [arg1, arg2]).await
     }
 }
 

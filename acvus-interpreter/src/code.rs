@@ -130,6 +130,7 @@ pub struct FieldSlot {
 }
 
 /// One move of a jump's parallel move.
+#[derive(Clone, Copy)]
 pub struct SlotMove {
     pub from: u32,
     pub to: u32,
@@ -157,6 +158,17 @@ impl BasicBlock {
     pub fn iter(&self) -> impl Iterator<Item = (&Op, Span)> {
         self.ops.iter().zip(self.spans.iter().copied())
     }
+}
+
+/// An extern call site's arguments as the frame holds them: `arity`
+/// contiguous registers from `at`, which the handler is lent and empties,
+/// and the moves that fill the ones no argument was allocated into
+/// (RFC-0044, stage 2b).
+#[derive(Clone)]
+pub struct ArgWindow {
+    pub at: u32,
+    pub arity: u32,
+    pub moves: Box<[SlotMove]>,
 }
 
 /// The `while` shape `prepare::recognize_loop` finds in the IR and
@@ -193,7 +205,7 @@ pub enum Payload {
     Konst(Konst),
     Extern {
         handler: ExternHandler,
-        args: Box<[u32]>,
+        window: ArgWindow,
     },
     Direct {
         callee: QualifiedRef,

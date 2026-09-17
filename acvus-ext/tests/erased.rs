@@ -16,8 +16,11 @@ use acvus_extern::{
 
 // -- A counting runtime -----------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum V {
+    /// The value a handler took out of its argument slot.
+    #[default]
+    Taken,
     Boxed(Box<dyn Any + Send + Sync>),
     Reference(*const V),
 }
@@ -214,7 +217,7 @@ impl Runtime for Counting {
         std::future::ready(Err(Trap::internal("Counting runs no closures")))
     }
 
-    fn call_n<'a>(&'a self, _: &'a V, _: Vec<V>, _: CallToken) -> Self::CallFuture<'a> {
+    fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(Err(Trap::internal("Counting runs no closures")))
     }
 }
@@ -262,13 +265,13 @@ impl World {
         }
     }
 
-    fn call(&self, ns: &str, name: &str, args: Vec<V>) -> V {
+    fn call(&self, ns: &str, name: &str, mut args: Vec<V>) -> V {
         let qref = QualifiedRef::qualified(self.interner.intern(ns), self.interner.intern(name));
         let handlers = &self.externs.handlers[&qref];
         let ExternHandler::Sync(handler) = &handlers[0] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        handler(&self.rt, args).expect("handler succeeds")
+        handler(&self.rt, &mut args).expect("handler succeeds")
     }
 
     fn string(&self, s: &str) -> V {

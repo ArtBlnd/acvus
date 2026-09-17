@@ -8,9 +8,10 @@ use crate::ops::payload;
 use crate::value::Value;
 
 /// A jump's arguments move into the block's parameters: a move-only
-/// argument leaves its register, so one owner remains.
+/// argument leaves its register, so one owner remains. An extern call's
+/// window is filled the same way.
 #[inline]
-fn move_all(machine: &mut Machine<'_>, moves: &[SlotMove]) {
+pub fn move_all(machine: &mut Machine<'_>, moves: &[SlotMove]) {
     for m in moves {
         let value = machine.use_val(m.from);
         machine.set(m.to, value);

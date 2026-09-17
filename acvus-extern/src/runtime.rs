@@ -14,7 +14,7 @@ use crate::trap::Trap;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
-    type Value: crate::Cross<Self> + crate::FromValue<Self>;
+    type Value: crate::Cross<Self> + crate::FromValue<Self> + Default;
     type Error: From<Trap> + Send + Sync + 'static;
     type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
     where
@@ -107,7 +107,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     fn call_n<'a>(
         &'a self,
         f: &'a Self::Value,
-        args: Vec<Self::Value>,
+        args: &mut [Self::Value],
         token: CallToken,
     ) -> Self::CallFuture<'a>;
 }
@@ -195,7 +195,7 @@ impl Runtime for TypesOnly {
     fn call_1<'a>(&'a self, _: &'a (), _: (), _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(no_values())
     }
-    fn call_n<'a>(&'a self, _: &'a (), _: Vec<()>, _: CallToken) -> Self::CallFuture<'a> {
+    fn call_n<'a>(&'a self, _: &'a (), _: &mut [()], _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(no_values())
     }
 }

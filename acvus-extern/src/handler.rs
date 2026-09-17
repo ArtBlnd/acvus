@@ -8,12 +8,15 @@ use acvus_mir::ty::PolyTy;
 
 use crate::runtime::Runtime;
 
-type SyncFn<R> = dyn Fn(&R, Vec<<R as Runtime>::Value>) -> Result<<R as Runtime>::Value, <R as Runtime>::Error>
+/// A handler is lent the caller's argument slots and takes each value out
+/// of the one it reads; the slice is the caller's, so what the handler
+/// leaves behind is the caller's business (RFC-0044, stage 2b).
+type SyncFn<R> = dyn Fn(&R, &mut [<R as Runtime>::Value]) -> Result<<R as Runtime>::Value, <R as Runtime>::Error>
     + Send
     + Sync;
 type AsyncFn<R> = dyn Fn(
         R,
-        Vec<<R as Runtime>::Value>,
+        &mut [<R as Runtime>::Value],
     )
         -> Pin<Box<dyn Future<Output = Result<<R as Runtime>::Value, <R as Runtime>::Error>> + Send>>
     + Send

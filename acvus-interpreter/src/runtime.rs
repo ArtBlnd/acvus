@@ -111,14 +111,19 @@ impl Runtime for AcvusRuntime {
     }
 
     fn call_0<'a>(&'a self, f: &'a Value, _: CallToken) -> Self::CallFuture<'a> {
-        self.run(f, Vec::new())
+        self.run(f, &mut [])
     }
 
     fn call_1<'a>(&'a self, f: &'a Value, a: Value, _: CallToken) -> Self::CallFuture<'a> {
-        self.run(f, vec![a])
+        self.run(f, &mut [a])
     }
 
-    fn call_n<'a>(&'a self, f: &'a Value, args: Vec<Value>, _: CallToken) -> Self::CallFuture<'a> {
+    fn call_n<'a>(
+        &'a self,
+        f: &'a Value,
+        args: &mut [Value],
+        _: CallToken,
+    ) -> Self::CallFuture<'a> {
         self.run(f, args)
     }
 }
@@ -168,10 +173,10 @@ where
 }
 
 impl AcvusRuntime {
-    fn run<'a>(&'a self, f: &'a Value, args: Vec<Value>) -> <Self as Runtime>::CallFuture<'a> {
+    fn run<'a>(&'a self, f: &'a Value, args: &mut [Value]) -> <Self as Runtime>::CallFuture<'a> {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        Box::pin(async move { crate::machine::fn_value_call(closure, args).await })
+        Box::pin(crate::machine::fn_value_call(closure, args))
     }
 }
 

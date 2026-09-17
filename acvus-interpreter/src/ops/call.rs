@@ -9,13 +9,16 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use crate::code::{Flow, NO_SLOT, Op, Payload, Pending};
+use crate::code::{ArgWindow, Flow, NO_SLOT, Op, Payload, Pending};
 use crate::machine::{Machine, call_module, fn_value_call};
+use crate::ops::control::move_all;
 use crate::ops::payload;
 use crate::runtime::ExternHandler;
 use crate::value::{FnValue, HandleValue, Value};
 
-/// The call's arguments, moved out of their registers.
+/// The call's arguments, moved out of their registers. A body is entered
+/// with the arguments it owns, so a call into one stages them; an extern
+/// handler is lent its window instead.
 fn arg_values(machine: &mut Machine<'_>, slots: &[u32]) -> Vec<Value> {
     slots.iter().map(|slot| machine.use_val(*slot)).collect()
 }
@@ -29,9 +32,9 @@ fn yield_order(machine: &mut Machine<'_>, slot: u32) {
     }
 }
 
-fn extern_payload<'c>(machine: &Machine<'c>, op: &Op) -> (&'c ExternHandler, &'c [u32]) {
+fn extern_payload<'c>(machine: &Machine<'c>, op: &Op) -> (&'c ExternHandler, &'c ArgWindow) {
     match machine.payload(op) {
-        Payload::Extern { handler, args } => (handler, args),
+        Payload::Extern { handler, window } => (handler, window),
         other => panic!(
             "a call to an extern instance wants an Extern payload, found {}",
             crate::code::payload_name(other)
@@ -40,13 +43,14 @@ fn extern_payload<'c>(machine: &Machine<'c>, op: &Op) -> (&'c ExternHandler, &'c
 }
 
 pub fn call_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, slots) = extern_payload(machine, op);
+    let (handler, window) = extern_payload(machine, op);
     let ExternHandler::Sync(f) = handler else {
         panic!("prepared as a synchronous extern call, but the handler is asynchronous")
     };
     yield_order(machine, op.d);
-    let args = arg_values(machine, slots);
-    match f(&machine.rt, args) {
+    move_all(machine, &window.moves);
+    let (rt, args) = machine.lend_window(window);
+    match f(rt, args) {
         Ok(value) => {
             machine.set(op.a, value);
             Flow::Next
@@ -56,17 +60,15 @@ pub fn call_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
 }
 
 pub fn call_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, slots) = extern_payload(machine, op);
+    let (handler, window) = extern_payload(machine, op);
     let ExternHandler::Async(f) = handler else {
         panic!("prepared as an asynchronous extern call, but the handler is synchronous")
     };
     yield_order(machine, op.d);
-    let args = arg_values(machine, slots);
+    move_all(machine, &window.moves);
     let rt = machine.rt.clone();
-    Flow::Await(Pending {
-        dst: op.a,
-        fut: f(rt, args),
-    })
+    let fut = f(rt, machine.window(window));
+    Flow::Await(Pending { dst: op.a, fut })
 }
 
 pub fn call_direct(machine: &mut Machine<'_>, op: &Op) -> Flow {
@@ -89,50 +91,52 @@ pub fn call_direct(machine: &mut Machine<'_>, op: &Op) -> Flow {
 pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let slots = payload!(machine, op, Slots);
     yield_order(machine, op.d);
-    let args = arg_values(machine, slots);
+    let mut args = arg_values(machine, slots);
     let fut: BoxFuture<'static, _> = if THROUGH {
         // SAFETY: the type checker admits only a live reference to a closure
         // here; the closure's register is not written during the call, and
         // the machine holding it outlives the future the driver awaits.
         let closure: &'static FnValue =
             unsafe { &*(machine.reg(op.b).target().as_fn() as *const FnValue) };
-        Box::pin(fn_value_call(closure, args))
+        Box::pin(fn_value_call(closure, &mut args))
     } else {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { machine.take(op.b).materialize::<FnValue>() };
-        Box::pin(async move { fn_value_call(&closure, args).await })
+        Box::pin(async move { fn_value_call(&closure, &mut args).await })
     };
     Flow::Await(Pending { dst: op.a, fut })
 }
 
 pub fn spawn_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, slots) = extern_payload(machine, op);
+    let (handler, window) = extern_payload(machine, op);
     let ExternHandler::Sync(f) = handler else {
         panic!("prepared as a synchronous extern spawn, but the handler is asynchronous")
     };
-    let args = arg_values(machine, slots);
+    move_all(machine, &window.moves);
+    let mut args = machine.take_window(window);
     let rt = machine.rt.clone();
     let f = Arc::clone(f);
     let handle = machine
         .shared()
         .executor
-        .spawn_blocking(Box::new(move || f(&rt, args)));
+        .spawn_blocking(Box::new(move || f(&rt, &mut args)));
     machine.set(op.a, Value::handle(handle));
     Flow::Next
 }
 
 pub fn spawn_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, slots) = extern_payload(machine, op);
+    let (handler, window) = extern_payload(machine, op);
     let ExternHandler::Async(f) = handler else {
         panic!("prepared as an asynchronous extern spawn, but the handler is synchronous")
     };
-    let args = arg_values(machine, slots);
+    move_all(machine, &window.moves);
+    let mut args = machine.take_window(window);
     let rt = machine.rt.clone();
     let f = Arc::clone(f);
     let handle = machine
         .shared()
         .executor
-        .spawn_async(Box::pin(async move { f(rt, args).await }));
+        .spawn_async(Box::pin(async move { f(rt, &mut args).await }));
     machine.set(op.a, Value::handle(handle));
     Flow::Next
 }

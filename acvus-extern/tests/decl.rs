@@ -19,8 +19,11 @@ use acvus_extern::{
 /// A value is a Rust value boxed whole, a closure, or a reference to
 /// another value. `Erased` never compares equal: the test runtime has no
 /// view into what it holds.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum V {
+    /// The value a handler took out of its argument slot.
+    #[default]
+    Taken,
     Erased(Box<dyn Any + Send + Sync>),
     Closure(Closure),
     Reference(*const V),
@@ -79,6 +82,7 @@ where
             "peek: value is a reference, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Taken => panic!("peek: the value was already taken out of its slot"),
     }
 }
 
@@ -104,6 +108,7 @@ where
             "materialize: value is a reference, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Taken => panic!("materialize: the value was already taken out of its slot"),
     }
 }
 
@@ -114,7 +119,7 @@ impl Tiny {
     fn call(&self, f: &V, args: Vec<V>) -> Result<V, Trap> {
         match f {
             V::Closure(c) => Ok((c.0)(args)),
-            V::Erased(_) | V::Reference(_) => {
+            V::Taken | V::Erased(_) | V::Reference(_) => {
                 Err(Trap::internal("call on a value that is not a closure"))
             }
         }
@@ -265,8 +270,8 @@ impl Runtime for Tiny {
     fn call_1<'a>(&'a self, f: &'a V, a: V, _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(self.call(f, vec![a]))
     }
-    fn call_n<'a>(&'a self, f: &'a V, args: Vec<V>, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(self.call(f, args))
+    fn call_n<'a>(&'a self, f: &'a V, args: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
+        std::future::ready(self.call(f, args.iter_mut().map(std::mem::take).collect()))
     }
 }
 
@@ -554,9 +559,9 @@ fn types_and_casts_reach_the_type_registry() {
     );
 }
 
-fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, Trap> {
+fn call_sync(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> Result<V, Trap> {
     match handler {
-        ExternHandler::Sync(f) => f(&Tiny, args),
+        ExternHandler::Sync(f) => f(&Tiny, &mut args),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
     }
 }
@@ -587,9 +592,9 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     );
 }
 
-async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> Result<V, Trap> {
+async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> Result<V, Trap> {
     match handler {
-        ExternHandler::Async(f) => f(Tiny, args).await,
+        ExternHandler::Async(f) => f(Tiny, &mut args).await,
         ExternHandler::Sync(_) => panic!("expected an async handler"),
     }
 }

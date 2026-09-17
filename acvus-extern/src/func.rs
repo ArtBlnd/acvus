@@ -190,8 +190,8 @@ where
         (a, b): Self::Args,
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
-            let args = vec![a.erase(rt), b.erase(rt)];
-            let out = rt.call_n(&self.0, args, CallToken::mint()).await?;
+            let mut args = [a.erase(rt), b.erase(rt)];
+            let out = rt.call_n(&self.0, &mut args, CallToken::mint()).await?;
             // SAFETY: the closure's declared return type is `R`.
             Ok(unsafe { R::materialize(rt, out) })
         }
@@ -215,8 +215,8 @@ where
         (a, b, c): Self::Args,
     ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
         async move {
-            let args = vec![a.erase(rt), b.erase(rt), c.erase(rt)];
-            let out = rt.call_n(&self.0, args, CallToken::mint()).await?;
+            let mut args = [a.erase(rt), b.erase(rt), c.erase(rt)];
+            let out = rt.call_n(&self.0, &mut args, CallToken::mint()).await?;
             // SAFETY: the closure's declared return type is `R`.
             Ok(unsafe { R::materialize(rt, out) })
         }

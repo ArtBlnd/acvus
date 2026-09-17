@@ -19,8 +19,11 @@ use acvus_extern::{
 
 // -- A counting runtime -----------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum V {
+    /// The value a handler took out of its argument slot.
+    #[default]
+    Taken,
     Word(Box<dyn Any + Send + Sync>),
     Boxed(Box<dyn Any + Send + Sync>),
     Reference(*const V),
@@ -151,6 +154,7 @@ impl Runtime for Counting {
                 any
             }
             V::Reference(_) => panic!("materialize: not a value: {value:?}"),
+            V::Taken => panic!("materialize: the value was already taken out of its slot"),
         };
         match any.downcast::<T>() {
             Ok(v) => *v,
@@ -233,7 +237,7 @@ impl Runtime for Counting {
         std::future::ready(Err(Trap::internal("Counting runs no closures")))
     }
 
-    fn call_n<'a>(&'a self, _: &'a V, _: Vec<V>, _: CallToken) -> Self::CallFuture<'a> {
+    fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(Err(Trap::internal("Counting runs no closures")))
     }
 }
@@ -306,12 +310,12 @@ impl World {
 
     /// Calls instance `instance` of `ns::name`, as the compiler's
     /// `Callee::Extern` numbers them (RFC-0040).
-    fn call(&self, ns: &str, name: &str, instance: usize, args: Vec<V>) -> V {
+    fn call(&self, ns: &str, name: &str, instance: usize, mut args: Vec<V>) -> V {
         let handlers = &self.externs.handlers[&self.qref(ns, name)];
         let ExternHandler::Sync(handler) = &handlers[instance] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        handler(&self.rt, args).expect("handler succeeds")
+        handler(&self.rt, &mut args).expect("handler succeeds")
     }
 
     fn function(&self, ns: &str, name: &str) -> &acvus_extern::Function {
