@@ -389,7 +389,7 @@ fn lookup_module<'a>(shared: &'a InterpreterContext, id: &QualifiedRef) -> &'a M
 fn run_loop<'s>(
     ctx: &'s mut RunContext,
     insts: &'s [Inst],
-    closures: &'s FxHashMap<Label, MirBody>,
+    closures: &'s Arc<FxHashMap<Label, MirBody>>,
     frame: &'s mut Frame,
     val_types: &'s FxHashMap<ValueId, Ty>,
 ) -> BoxFuture<'s, Result<Value, RuntimeError>> {
@@ -399,7 +399,7 @@ fn run_loop<'s>(
 async fn run_loop_inner(
     ctx: &mut RunContext,
     insts: &[Inst],
-    closures: &FxHashMap<Label, MirBody>,
+    closures: &Arc<FxHashMap<Label, MirBody>>,
     frame: &mut Frame,
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> Result<Value, RuntimeError> {
@@ -429,7 +429,7 @@ fn type_of<'a>(val_types: &'a FxHashMap<ValueId, Ty>, id: ValueId) -> &'a Ty {
 async fn execute_inst(
     ctx: &mut RunContext,
     insts: &[Inst],
-    closures: &FxHashMap<Label, MirBody>,
+    closures: &Arc<FxHashMap<Label, MirBody>>,
     pc: usize,
     frame: &mut Frame,
     val_types: &FxHashMap<ValueId, Ty>,
@@ -640,6 +640,7 @@ async fn execute_inst(
                     shared: ctx.shared.clone(),
                     page: Arc::clone(&ctx.page),
                     body: Arc::new(closure_body.clone()),
+                    closures: Arc::clone(closures),
                     captures: captured.into(),
                 }),
             );
@@ -928,7 +929,7 @@ async fn execute_function(
 ) -> Result<Value, RuntimeError> {
     let m = lookup_module(&ctx.shared, id);
     let insts: Arc<[Inst]> = m.main.insts.clone().into();
-    let closures = m.closures.clone();
+    let closures = Arc::new(m.closures.clone());
     let val_types = m.main.val_types.clone();
     let label_map = build_label_map(&m.main);
     let mut frame = Frame::new(&m.main.val_factory, label_map);
@@ -965,11 +966,10 @@ pub async fn fn_value_call(f: &FnValue, args: Vec<Value>) -> Result<Value, Runti
         frame.set(order, Value::unit());
     }
 
-    let empty_closures = FxHashMap::default();
     run_loop(
         &mut closure_ctx,
         &body.insts,
-        &empty_closures,
+        &f.closures,
         &mut frame,
         &body.val_types,
     )

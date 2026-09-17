@@ -213,18 +213,27 @@ impl Terms {
         }
     }
 
-    fn bind_ty(&mut self, id: TypeBoundId, ty: InferTy) {
+    fn bind_ty(&mut self, id: TypeBoundId, ty: InferTy) -> Result<(), Cyclic> {
         let root = self.find_ty_root(id);
+        if self.occurs_in(root, &ty) {
+            return Err(Cyclic);
+        }
         let bound = self.bound_of(root);
         self.ty_bounds[root.0 as usize] = TypeBound::Resolved { ty, bound };
+        Ok(())
     }
 
-    fn forward_ty(&mut self, from: TypeBoundId, to: TypeBoundId) {
+    fn forward_ty(&mut self, from: TypeBoundId, to: TypeBoundId) -> Result<(), Cyclic> {
         let from_root = self.find_ty_root(from);
         let to_root = self.find_ty_root(to);
-        if from_root != to_root {
-            self.ty_bounds[from_root.0 as usize] = TypeBound::Forward(to_root);
+        if from_root == to_root {
+            return Ok(());
         }
+        if self.occurs_in(from_root, &TyTerm::Var(to_root)) {
+            return Err(Cyclic);
+        }
+        self.ty_bounds[from_root.0 as usize] = TypeBound::Forward(to_root);
+        Ok(())
     }
 
     /// The root variable a type is a name of, if it is a variable.
@@ -729,29 +738,31 @@ impl Terms {
         {
             return Ok(());
         }
+        let no_join = |terms: &Self| Mismatch {
+            expected: terms.resolve_ty(a),
+            got: terms.resolve_ty(b),
+            reason: MismatchReason::NoJoin,
+        };
         if position == Position::Value {
             let a_never = matches!(self.shallow_resolve_ty(a), TyTerm::Never);
             let b_never = matches!(self.shallow_resolve_ty(b), TyTerm::Never);
             match (a_never, b_never) {
                 (true, true) => return Ok(()),
                 (true, false) => {
-                    self.yield_bottom(a_root, b, b_root);
-                    return Ok(());
+                    return self
+                        .yield_bottom(a_root, b, b_root)
+                        .map_err(|Cyclic| no_join(self));
                 }
                 (false, true) => {
-                    self.yield_bottom(b_root, a, a_root);
-                    return Ok(());
+                    return self
+                        .yield_bottom(b_root, a, a_root)
+                        .map_err(|Cyclic| no_join(self));
                 }
                 (false, false) => {}
             }
         }
         let unbound = |terms: &Self, root: Option<TypeBoundId>| {
             root.filter(|r| matches!(terms.ty_bounds[r.0 as usize], TypeBound::Unresolved { .. }))
-        };
-        let no_join = |terms: &Self| Mismatch {
-            expected: terms.resolve_ty(a),
-            got: terms.resolve_ty(b),
-            reason: MismatchReason::NoJoin,
         };
         if let Some(v) = unbound(self, a_root) {
             return self
@@ -991,26 +1002,22 @@ impl Terms {
                 .bound_of(var)
                 .meet(&self.bound_of(root))
                 .ok_or(NoJoin)?;
+            self.forward_ty(var, root).map_err(|Cyclic| NoJoin)?;
             if let TypeBound::Unresolved { bound } = &mut self.ty_bounds[root.0 as usize] {
                 *bound = merged;
             }
-            self.forward_ty(var, root);
             return Ok(());
         }
         let term = self.shallow_resolve_ty(other);
         if matches!(term, TyTerm::Error(_)) {
             return Ok(());
         }
-        if self.occurs_in(var, &term) {
-            return Err(NoJoin);
-        }
         if let TyVarBound::Integer { signed, among } = self.bound_of(var)
             && !matches!(&term, TyTerm::Int(k) if among.contains(k) && (!signed || k.signed()))
         {
             return Err(NoJoin);
         }
-        self.bind_ty(var, term);
-        Ok(())
+        self.bind_ty(var, term).map_err(|Cyclic| NoJoin)
     }
 
     /// `! ⊔ T = T` at a value position (RFC-0038): the variable that named
@@ -1021,17 +1028,24 @@ impl Terms {
         never_root: Option<TypeBoundId>,
         other: &InferTy,
         other_root: Option<TypeBoundId>,
-    ) {
+    ) -> Result<(), Cyclic> {
         let Some(root) = never_root else {
-            return;
+            return Ok(());
         };
         match other_root {
             Some(target) if self.find_ty_root(target) != root => {
                 let bound = self.bound_of(root);
-                self.ty_bounds[root.0 as usize] = TypeBound::Unresolved { bound };
-                self.forward_ty(root, target);
+                let held = std::mem::replace(
+                    &mut self.ty_bounds[root.0 as usize],
+                    TypeBound::Unresolved { bound },
+                );
+                let forwarded = self.forward_ty(root, target);
+                if forwarded.is_err() {
+                    self.ty_bounds[root.0 as usize] = held;
+                }
+                forwarded
             }
-            Some(_) => {}
+            Some(_) => Ok(()),
             None => self.bind_ty(root, other.clone()),
         }
     }
@@ -1067,14 +1081,15 @@ impl Terms {
             });
         }
         if let (Some(ra), true) = (a.root, a.grows) {
-            self.bind_ty(ra, union.clone());
+            self.bind_ty(ra, union.clone())
+                .map_err(|Cyclic| mismatch(self))?;
         }
         if let (Some(rb), true) = (b.root, b.grows)
             && !a
                 .root
                 .is_some_and(|ra| self.find_ty_root(ra) == self.find_ty_root(rb))
         {
-            self.bind_ty(rb, union);
+            self.bind_ty(rb, union).map_err(|Cyclic| mismatch(self))?;
         }
         Ok(())
     }
@@ -1158,6 +1173,12 @@ impl Terms {
 /// Two types with no join, before the types themselves are attached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NoJoin;
+
+/// A store refused because the variable it writes occurs in what would be
+/// written: `T = &&T` has no finite term, and every reader of a bound walks
+/// it to the leaves. The refusing caller reports it as its own no-join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Cyclic;
 
 /// One side of a structural union: the variable that names it, if any,
 /// and whether it lacks members the other side has.

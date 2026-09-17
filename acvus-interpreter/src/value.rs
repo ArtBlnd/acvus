@@ -9,7 +9,7 @@ use std::mem::{self, MaybeUninit};
 use std::ptr::{self, NonNull};
 use std::sync::{Arc, LazyLock};
 
-use acvus_mir::ir::MirBody;
+use acvus_mir::ir::{Label, MirBody};
 use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
@@ -393,6 +393,7 @@ pub struct FnValue {
     pub shared: InterpreterContext,
     pub page: Arc<dyn crate::journal::RuntimeContext>,
     pub body: Arc<MirBody>,
+    pub closures: Arc<FxHashMap<Label, MirBody>>,
     pub captures: Arc<[Value]>,
 }
 
@@ -402,6 +403,7 @@ impl Clone for FnValue {
             shared: self.shared.clone(),
             page: Arc::clone(&self.page),
             body: Arc::clone(&self.body),
+            closures: Arc::clone(&self.closures),
             captures: Arc::clone(&self.captures),
         }
     }
