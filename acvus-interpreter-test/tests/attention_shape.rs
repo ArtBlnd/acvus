@@ -108,6 +108,46 @@ async fn attention_of_e1_over_the_standard_basis_is_the_softmax_weighted_sum_of_
     assert_close(&second, expected[1]);
 }
 
+const ATTENTION_AS_CHAINS: &str = "
+let scale = 1.0 / @query.len().to_float().sqrt();
+
+let dot = |k| -> as_iter(k)
+    .fold({ i: 0, s: 0.0, }, |acc, x| -> { i: acc.i + 1, s: acc.s + *@query.get(acc.i) * *x, })
+    .s;
+
+let scores = @keys.as_iter().map(|k| -> dot(k) * *scale).collect();
+let peak = scores.as_iter().map(|s| -> *s).max().unwrap();
+let weights = scores.as_iter().map(|s| -> (*s - *peak).exp()).collect();
+let z = weights.as_iter().map(|w| -> *w).sum();
+
+let column = |j| -> weights.as_iter()
+    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / *z * *@values.get(acc.t).get(*j), })
+    .s;
+";
+
+#[tokio::test]
+async fn attention_written_as_chains_is_the_same_value() {
+    let expected = expected_attention_of_e1_over_the_standard_basis();
+    let first = run(&format!("{ATTENTION_AS_CHAINS} column(0)")).await;
+    let second = run(&format!("{ATTENTION_AS_CHAINS} column(1)")).await;
+    assert_close(&first, expected[0]);
+    assert_close(&second, expected[1]);
+}
+
+#[tokio::test]
+#[should_panic(expected = "a lambda cannot capture a reference")]
+async fn a_reference_parameter_captured_by_an_inner_lambda_is_refused() {
+    run("let dot = |a, b| -> range(0, 2).map(|i| -> *get(a, i) * *get(b, i)).sum(); dot(&@query, &@query)")
+        .await;
+}
+
+#[tokio::test]
+async fn a_method_call_on_a_reference_parameter_lends_it_once() {
+    let v = run("let dot = |k| -> as_iter(k).map(|x| -> *x).sum(); let dot_m = |k| -> k.as_iter().map(|x| -> *x).sum(); dot(&@query) + dot_m(&@query)")
+        .await;
+    assert_close(&v, 2.0);
+}
+
 #[tokio::test]
 async fn attention_written_as_method_calls_is_the_same_value() {
     let expected = expected_attention_of_e1_over_the_standard_basis();

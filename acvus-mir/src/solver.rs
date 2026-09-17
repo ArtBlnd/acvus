@@ -1274,6 +1274,49 @@ pub enum Decision {
         candidates: Vec<SignatureCandidate>,
         converted: Vec<ConvertedArgument>,
     },
+    /// Since no `&&T` exists (RFC-0029), what a reference to a place names
+    /// depends on whether the place itself holds a reference. The checker
+    /// opens this only where the head of `of` is still a variable; a known
+    /// head it answers on the spot, through `Solver::lend`.
+    Lend {
+        of: InferTy,
+        referent: InferTy,
+        mutability: Mutability,
+        kind: LendKind,
+    },
+}
+
+/// A reference found under the place is reborrowed (RFC-0029) for a
+/// `Borrow` and refused (RFC-0018) for a `Capture`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LendKind {
+    Borrow,
+    Capture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lend {
+    Reference,
+    Reborrow,
+}
+
+#[derive(Debug, Clone)]
+pub enum LendOutcome {
+    HeadOpen,
+    Names {
+        referent: InferTy,
+        lend: Lend,
+    },
+    Refused {
+        refusal: LendRefusal,
+        referent: InferTy,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LendRefusal {
+    MutableBorrowOfShared,
+    ReferenceCaptured,
 }
 
 #[derive(Debug, Clone)]
@@ -1310,6 +1353,7 @@ pub enum Answer {
     Instance(InstanceKind),
     Conversion(Conversion),
     Signature(SettledSignature),
+    Lend(Lend),
 }
 
 /// `bounded` is verified by the checker when the body freezes, as an
@@ -1340,7 +1384,10 @@ pub enum Conversion {
 #[derive(Debug, Clone)]
 pub enum Unsettled {
     /// No instance's signature matches the call type.
-    NoInstance { decision: DecisionId, call: InferTy },
+    NoInstance {
+        decision: DecisionId,
+        call: InferTy,
+    },
     /// The one remaining instance's signature does not join the call type.
     InstanceMismatch {
         decision: DecisionId,
@@ -1348,7 +1395,10 @@ pub enum Unsettled {
         got: InferTy,
     },
     /// Several instances still match a call type nothing narrows further.
-    AmbiguousInstance { decision: DecisionId, call: InferTy },
+    AmbiguousInstance {
+        decision: DecisionId,
+        call: InferTy,
+    },
     /// The two do not join and no declared conversion takes one to the other.
     NoConversion {
         decision: DecisionId,
@@ -1391,6 +1441,20 @@ pub enum Unsettled {
         name: Astr,
         candidates: Vec<QualifiedRef>,
     },
+    /// RFC-0018.
+    ReferenceCaptured {
+        decision: DecisionId,
+    },
+    MutableBorrowOfShared {
+        decision: DecisionId,
+    },
+    /// The place's settled type contradicts what the borrow's users
+    /// required of it.
+    LendMismatch {
+        decision: DecisionId,
+        expected: InferTy,
+        got: InferTy,
+    },
 }
 
 impl Unsettled {
@@ -1404,7 +1468,10 @@ impl Unsettled {
             | Unsettled::ConversionOpen { decision, .. }
             | Unsettled::ConversionNeedsPlace { decision, .. }
             | Unsettled::NoSignature { decision, .. }
-            | Unsettled::AmbiguousSignature { decision, .. } => *decision,
+            | Unsettled::AmbiguousSignature { decision, .. }
+            | Unsettled::ReferenceCaptured { decision }
+            | Unsettled::MutableBorrowOfShared { decision }
+            | Unsettled::LendMismatch { decision, .. } => *decision,
         }
     }
 }
@@ -1660,9 +1727,10 @@ impl<'src> Solver<'src> {
     }
 
     /// Settle, then close every decision still open by its least element
-    /// (solver.md R3): a width is `i64`, a representation `Uniform`, an
-    /// identity a source of its own; then settle again, and report every
-    /// decision that neither settled nor could take a least element.
+    /// (solver.md R3): a width is `i64`, a representation `Uniform`, a lend
+    /// a reference, an identity a source of its own; then settle again, and
+    /// report every decision that neither settled nor could take a least
+    /// element.
     pub fn solve(&mut self) -> Vec<Unsettled> {
         let mut failures = self.settle();
         for index in 0..self.terms.ty_bounds.len() {
@@ -1682,6 +1750,7 @@ impl<'src> Solver<'src> {
                 self.terms.repr_vars[index] = ReprBound::Bound(Repr::Uniform);
             }
         }
+        self.close_lends_by_least_element(&mut failures);
         failures.extend(self.settle());
         for index in 0..self.decisions.len() {
             let id = DecisionId(index as u32);
@@ -1724,6 +1793,9 @@ impl<'src> Solver<'src> {
                     name: *name,
                     candidates: candidates.iter().map(|c| c.qref).collect(),
                 },
+                Decision::Lend { .. } => {
+                    unreachable!("close_lends_by_least_element leaves no lend open")
+                }
             };
             self.decisions[index].state = DecisionState::Failed;
             failures.push(why);
@@ -1734,6 +1806,34 @@ impl<'src> Solver<'src> {
             }
         }
         failures
+    }
+
+    /// A reborrow needs the place to hold a reference (RFC-0029), and a
+    /// variable nothing made a reference is not one. This close is also
+    /// what carries a parameter's type back to a place whose type the
+    /// program states nowhere else, so an open lend is never an error.
+    fn close_lends_by_least_element(&mut self, failures: &mut Vec<Unsettled>) {
+        for index in 0..self.decisions.len() {
+            let Decision::Lend { of, referent, .. } = &self.decisions[index].decision else {
+                continue;
+            };
+            if !matches!(self.decisions[index].state, DecisionState::Open) {
+                continue;
+            }
+            let of = of.clone();
+            let referent = referent.clone();
+            self.decisions[index].state = match self.settle_join(&of, &referent) {
+                Ok(()) => DecisionState::Settled(Answer::Lend(Lend::Reference)),
+                Err(Mismatch { expected, got, .. }) => {
+                    failures.push(Unsettled::LendMismatch {
+                        decision: DecisionId(index as u32),
+                        expected,
+                        got,
+                    });
+                    DecisionState::Failed
+                }
+            };
+        }
     }
 
     fn step(&mut self, id: DecisionId) -> Progress {
@@ -1751,6 +1851,71 @@ impl<'src> Solver<'src> {
                 candidates,
                 converted,
             } => self.step_signature(id, name, &call, candidates, &converted),
+            Decision::Lend {
+                of,
+                referent,
+                mutability,
+                kind,
+            } => self.step_lend(id, &of, &referent, mutability, kind),
+        }
+    }
+
+    /// What lending a place of type `of` yields, once its head is known.
+    /// `check_borrow` reads this directly for a head it already knows, so
+    /// the decision only carries the case where it does not.
+    pub fn lend(&self, of: &InferTy, mutability: Mutability, kind: LendKind) -> LendOutcome {
+        match self.terms.shallow_resolve_ty(of) {
+            TyTerm::Var(_) => LendOutcome::HeadOpen,
+            TyTerm::Ref(_, inner) if kind == LendKind::Capture => LendOutcome::Refused {
+                refusal: LendRefusal::ReferenceCaptured,
+                referent: inner.ty,
+            },
+            TyTerm::Ref(Mutability::Shared, inner) if mutability == Mutability::Mut => {
+                LendOutcome::Refused {
+                    refusal: LendRefusal::MutableBorrowOfShared,
+                    referent: inner.ty,
+                }
+            }
+            TyTerm::Ref(_, inner) => LendOutcome::Names {
+                referent: inner.ty,
+                lend: Lend::Reborrow,
+            },
+            head => LendOutcome::Names {
+                referent: head,
+                lend: Lend::Reference,
+            },
+        }
+    }
+
+    fn step_lend(
+        &mut self,
+        id: DecisionId,
+        of: &InferTy,
+        referent: &InferTy,
+        mutability: Mutability,
+        kind: LendKind,
+    ) -> Progress {
+        match self.lend(of, mutability, kind) {
+            LendOutcome::HeadOpen => Progress::Unchanged,
+            LendOutcome::Refused {
+                refusal: LendRefusal::ReferenceCaptured,
+                ..
+            } => Progress::Failed(Unsettled::ReferenceCaptured { decision: id }),
+            LendOutcome::Refused {
+                refusal: LendRefusal::MutableBorrowOfShared,
+                ..
+            } => Progress::Failed(Unsettled::MutableBorrowOfShared { decision: id }),
+            LendOutcome::Names {
+                referent: names,
+                lend,
+            } => match self.settle_join(referent, &names) {
+                Ok(()) => Progress::Settled(Answer::Lend(lend)),
+                Err(Mismatch { expected, got, .. }) => Progress::Failed(Unsettled::LendMismatch {
+                    decision: id,
+                    expected,
+                    got,
+                }),
+            },
         }
     }
 

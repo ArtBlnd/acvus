@@ -59,6 +59,31 @@ bits in `p`; `FunctionCall { Extern }` to `call_extern_sync` or
 `execute_inst` decided per execution by matching on a `Ty` the type
 checker had fixed, the preparation decides once.
 
+Three consequences the format fixes:
+
+- **A jump is a parallel move.** Its arguments and the block's parameters
+  may overlap (`i = i + 1` at a loop head reads the slot it writes). The
+  preparation orders the moves so every source is read before it is
+  overwritten and breaks a cycle with one scratch slot appended to the
+  frame; the ordered pairs are the jump's payload, and nothing is
+  collected at run time.
+- **A pending future is `'static`.** An asynchronous extern's handler is
+  an `Arc` and its arguments are moved; `Eval` clones the `Arc<dyn
+  Executor>` into the future it hands up. `Spawn` is synchronous: it
+  makes the handle and continues.
+- **`val_types` is not read at run time.** Every use the interpreter had
+  for it is a preparation-time choice: the literal's width, whether a
+  `Take` clones a `String`, whether a `MakeVariant` is an `Option`, a
+  `Result` or a variant, the width a `TestLiteral` compares at, whether
+  a concatenated part or an indirect callee is a reference.
+
+Operations are plain functions, one per operation, `fn(&mut Machine,
+&Op) -> Flow`, with a macro for operand access and no trait. The
+preparation is one exhaustive `match` over `InstKind` and the operand
+types, so an instruction kind added to the IR fails to compile until it
+is prepared; that `match` is where an instance is chosen, and where a
+superinstruction is recognized in a later stage.
+
 Slots in this RFC are the body's `ValueId`s as they stand: the frame is
 one `Value` per `ValueId`, sized by the body's `val_factory`, as today.
 Register selection, superinstructions (a single-exit loop or an

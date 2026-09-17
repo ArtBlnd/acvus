@@ -42,6 +42,10 @@ by value moves it. Both rules reach a captured name: a lambda that
 captures a name the enclosing lambda captured captures the owned `T`, not
 the `&T` the name reads as, and a captured `f` is called as a lent `f`.
 
+A name that itself holds a reference is refused: the capture is the same
+lend RFC-0029 defines, answered `Capture`, so a name whose type is still a
+variable is refused when that type resolves to a reference and not before.
+
 Taking that owned `T` is a move out of a value the enclosing closure owns,
 and the enclosing closure is called again, so the move is admitted only
 where `T` is a word: there it is a copy. Every other type is refused at the

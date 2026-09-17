@@ -28,6 +28,16 @@ where `r: &T` is `&T` naming what `r` names, `&mut r` where `r: &mut T`
 is `&mut T`, and `&r` where `r: &mut T` is `&T`; `&mut r` where `r: &T` is
 a type error. No type `&&T` exists, in the checker or in the body.
 
+Which of the two `&place` is depends on the place's type, so where that
+type is still a variable the rule is deferred, never skipped: the lend is
+a decision, and it settles to a reborrow or to a plain reference the
+moment the place's type resolves. `&place` is a reference of the written
+mutability either way — only what it names is open — so a lend still
+carries a parameter's type back to the place. A lend nothing ever resolves
+closes on its least element, a plain reference, since a place a program
+never made a reference is not one. The same decision refuses a lambda's
+capture of a name that resolves to a reference (RFC-0018).
+
 ## Rationale
 
 The check ran after SSA promotion and missed nothing in practice only
@@ -63,3 +73,6 @@ nothing needs it: every use of `&r` wants what `r` names.
   a loan on itself.
 - The checker types `&place` of a reference-typed place as the reborrow
   and rejects `&mut` of a shared reference.
+- A place whose type is still a variable opens `Decision::Lend`, which
+  `Solver::lend` answers from the resolved head and `solve` closes on
+  `Lend::Reference` when nothing resolves it.

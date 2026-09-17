@@ -10,8 +10,8 @@ use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
     Admission, Answer, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
-    EffectRelation, InstanceChoice, InstanceKind, Mismatch, MismatchReason, ReferencePair,
-    SettledSignature, SignatureCandidate, Unsettled,
+    EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, Mismatch,
+    MismatchReason, ReferencePair, SettledSignature, SignatureCandidate, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -259,8 +259,12 @@ impl TypeResolution {
 
 struct LambdaScope {
     depth: usize,
+    body_span: Span,
     captures: Vec<InferTy>,
     moves_out_of_capture: Vec<CaptureMove>,
+    /// Indices into `captures` whose reference-ness a `Decision::Lend`
+    /// owns, so the refusal below is not also raised here.
+    captures_lent_by_decision: Vec<usize>,
 }
 
 /// A name a lambda takes out of the enclosing closure's captures: the inner
@@ -269,6 +273,7 @@ struct LambdaScope {
 struct CaptureMove {
     name: Astr,
     owned: InferTy,
+    span: Span,
 }
 
 /// Where a value meets a type it may need converting to, and how a
@@ -392,6 +397,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Nested lambdas push onto this stack; lookups record captures in ALL
     /// enclosing lambdas whose scope depth is exceeded.
     lambda_stack: Vec<LambdaScope>,
+    capture_moves: Vec<CaptureMove>,
     /// Maps lambda expression AstId -> body expression AstId.
     /// Effect variable of the body being checked; every call raises its lower bound.
     body_effect: EffectTerm<Infer>,
@@ -425,6 +431,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             context_uses: FxHashMap::default(),
             analysis: None,
             lambda_stack: Vec::new(),
+            capture_moves: Vec::new(),
             body_effect,
         }
     }
@@ -528,6 +535,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
         self.check_nodes(&template.body);
         self.solve_body();
+        self.check_moves_out_of_captures();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -608,6 +616,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             TyTerm::Unit
         };
         self.solve_body();
+        self.check_moves_out_of_captures();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -823,16 +832,36 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .last_mut()
                     .expect("a capturing lambda is on the stack");
                 if !inner.moves_out_of_capture.iter().any(|m| m.name == name) {
+                    let span = inner.body_span;
                     inner.moves_out_of_capture.push(CaptureMove {
                         name,
                         owned: ty.clone(),
+                        span,
                     });
                 }
             }
-            return Some(match capturing_lambdas {
-                0 => ty,
-                _ => TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty))),
-            });
+            if capturing_lambdas == 0 {
+                return Some(ty);
+            }
+            if !matches!(self.solver.shallow_resolve_ty(&ty), TyTerm::Var(_)) {
+                return Some(TyTerm::Ref(
+                    Mutability::Shared,
+                    Box::new(TypeArg::uniform(ty)),
+                ));
+            }
+            let inner = self
+                .lambda_stack
+                .last()
+                .expect("a capturing lambda is on the stack");
+            let body_span = inner.body_span;
+            let capture = inner.captures.len() - 1;
+            let result = self.open_lend(&ty, Mutability::Shared, LendKind::Capture, body_span);
+            self.lambda_stack
+                .last_mut()
+                .expect("a capturing lambda is on the stack")
+                .captures_lent_by_decision
+                .push(capture);
+            return Some(result);
         }
         None
     }
@@ -870,8 +899,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         self.lambda_stack.push(LambdaScope {
             depth: self.scopes.len() - 1,
+            body_span: body.span(),
             captures: Vec::new(),
             moves_out_of_capture: Vec::new(),
+            captures_lent_by_decision: Vec::new(),
         });
 
         let outer_effect = self.body_effect.clone();
@@ -920,26 +951,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let lambda_effect = self.body_effect.clone();
         self.body_effect = outer_effect;
 
-        let ls = self.lambda_stack.pop().expect("this lambda's scope");
-        for m in &ls.moves_out_of_capture {
-            let owned = self.solver.resolve_ty(&m.owned);
-            if owned.is_primitive() {
-                continue;
-            }
-            self.error(
-                MirErrorKind::MoveOutOfCapture {
-                    name: self.interner.resolve(m.name).to_string(),
-                    ty: self.freeze_or_error(&owned),
-                },
-                body.span(),
-            );
-        }
+        let mut ls = self.lambda_stack.pop().expect("this lambda's scope");
+        self.capture_moves.append(&mut ls.moves_out_of_capture);
         let capture_types: Vec<InferTy> = ls
             .captures
-            .into_iter()
-            .map(|t| self.solver.resolve_ty(&t))
+            .iter()
+            .map(|t| self.solver.resolve_ty(t))
             .collect();
-        if capture_types.iter().any(|t| matches!(t, TyTerm::Ref(..))) {
+        let captured_a_reference = capture_types.iter().enumerate().any(|(i, t)| {
+            matches!(t, TyTerm::Ref(..)) && !ls.captures_lent_by_decision.contains(&i)
+        });
+        if captured_a_reference {
             self.error(MirErrorKind::ReferenceCaptured, body.span());
         }
         if matches!(self.solver.resolve_ty(&ret), TyTerm::Ref(..)) {
@@ -1111,7 +1133,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Some(InstanceChoice::Decided(decision)) => match self.solver.answer(decision)? {
                 Answer::Instance(InstanceKind::Extern(instance)) => instance,
                 Answer::Instance(InstanceKind::Intrinsic(_)) => return None,
-                Answer::Conversion(_) | Answer::Signature(_) => {
+                Answer::Conversion(_) | Answer::Signature(_) | Answer::Lend(_) => {
                     unreachable!("an instance decision answers with an instance")
                 }
             },
@@ -1130,7 +1152,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Answer::Signature(SettledSignature { qref, instance, .. }) => {
                     Some(ResolvedCallee { qref, instance })
                 }
-                Answer::Instance(_) | Answer::Conversion(_) => {
+                Answer::Instance(_) | Answer::Conversion(_) | Answer::Lend(_) => {
                     unreachable!("a signature decision answers with a signature")
                 }
             },
@@ -1171,7 +1193,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Answer::Instance(InstanceKind::Intrinsic(intrinsic)) => Some((*id, intrinsic)),
                     Answer::Instance(InstanceKind::Extern(_))
                     | Answer::Conversion(_)
-                    | Answer::Signature(_) => None,
+                    | Answer::Signature(_)
+                    | Answer::Lend(_) => None,
                 }
             })
             .collect()
@@ -1536,6 +1559,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         candidates: shown,
                     }
                 }
+                Unsettled::ReferenceCaptured { .. } => MirErrorKind::ReferenceCaptured,
+                Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared,
+                Unsettled::LendMismatch { expected, got, .. } => MirErrorKind::UnificationFailure {
+                    expected: self.freeze_or_error(&expected),
+                    got: self.freeze_or_error(&got),
+                },
             };
             self.error(kind, span);
         }
@@ -1618,6 +1647,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.solver.freeze_ty(&resolved).ok()
     }
 
+    /// A name a lambda took out of the enclosing closure's capture
+    /// (RFC-0018). Checked after inference, as a context's data-ness is.
+    fn check_moves_out_of_captures(&mut self) {
+        let moves = std::mem::take(&mut self.capture_moves);
+        for m in &moves {
+            let owned = self.solver.resolve_ty(&m.owned);
+            if owned.is_primitive() {
+                continue;
+            }
+            self.error(
+                MirErrorKind::MoveOutOfCapture {
+                    name: self.interner.resolve(m.name).to_string(),
+                    ty: self.freeze_or_error(&owned),
+                },
+                m.span,
+            );
+        }
+    }
+
     /// A context holds only data (RFC-0014): a function, a handle, an
     /// order, or a reference cannot be kept by a host from one run to the
     /// next. Checked after inference, at the first use of each context.
@@ -1666,15 +1714,44 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         // A borrow of a reference is a reborrow of what it names
         // (RFC-0029).
-        let ty = match self.solver.shallow_resolve_ty(&ty) {
-            TyTerm::Ref(Mutability::Shared, inner) if mutable => {
-                self.error(MirErrorKind::MutableBorrowOfShared, span);
-                inner.ty
+        let referent = match self.solver.lend(&ty, mutability, LendKind::Borrow) {
+            LendOutcome::Names { referent, .. } => referent,
+            LendOutcome::Refused { refusal, referent } => {
+                self.error(
+                    match refusal {
+                        LendRefusal::MutableBorrowOfShared => MirErrorKind::MutableBorrowOfShared,
+                        LendRefusal::ReferenceCaptured => MirErrorKind::ReferenceCaptured,
+                    },
+                    span,
+                );
+                referent
             }
-            TyTerm::Ref(_, inner) => inner.ty,
-            other => other,
+            LendOutcome::HeadOpen => {
+                return self.open_lend(&ty, mutability, LendKind::Borrow, span);
+            }
         };
-        TyTerm::Ref(mutability, Box::new(TypeArg::uniform(ty)))
+        TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
+    }
+
+    /// The place's head is still a variable, so what the reference names
+    /// cannot be read off it: the solver settles that when the head
+    /// resolves, and refuses it if nothing ever does.
+    fn open_lend(
+        &mut self,
+        of: &InferTy,
+        mutability: Mutability,
+        kind: LendKind,
+        span: Span,
+    ) -> InferTy {
+        let referent = self.solver.fresh_ty_var();
+        let decision = self.solver.decide(Decision::Lend {
+            of: of.clone(),
+            referent: referent.clone(),
+            mutability,
+            kind,
+        });
+        self.decision_sites.insert(decision, span);
+        TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
     }
 
     /// `recv.f(args)` is `f(recv', args)`, `recv'` borrowed when `f`'s
