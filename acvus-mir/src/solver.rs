@@ -1283,6 +1283,50 @@ pub enum Decision {
         mutability: Mutability,
         kind: LendKind,
     },
+    /// How a pattern reads its scrutinee (RFC-0024). The checker opens
+    /// this only where the head of `scrutinee` is still a variable; a
+    /// known head it answers on the spot, through `Solver::match_mode`.
+    /// The pattern is checked against `referent` — what the scrutinee
+    /// names under `Through`, the scrutinee itself under `Value` — so
+    /// settling the mode is what joins the two and what gives every
+    /// binding under the pattern its type.
+    Match {
+        scrutinee: InferTy,
+        referent: InferTy,
+        bindings: Vec<MatchBinding>,
+    },
+}
+
+/// One name a pattern binds while its mode is still open: `binding` is
+/// the name's type, `part` the part of the referent the name stands for.
+#[derive(Debug, Clone)]
+pub struct MatchBinding {
+    pub binding: InferTy,
+    pub part: InferTy,
+}
+
+/// Rust's default binding modes (RFC-0024): a non-reference pattern
+/// against a reference scrutinee reads through the reference, and every
+/// name it binds is a reference into the referent; against anything else
+/// it reads the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMode {
+    Value,
+    Through,
+}
+
+/// What a scrutinee's known head gives the pattern: the mode it is read
+/// in, and the type the pattern's referent is then joined with.
+#[derive(Debug, Clone)]
+pub struct MatchReads {
+    pub mode: MatchMode,
+    pub names: InferTy,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchOutcome {
+    HeadOpen,
+    Reads(MatchReads),
 }
 
 /// A reference found under the place is reborrowed (RFC-0029) for a
@@ -1430,6 +1474,7 @@ pub enum Answer {
     Conversion(Conversion),
     Signature(SettledSignature),
     Lend(Lend),
+    Match(MatchMode),
 }
 
 /// `bounded` is verified by the checker when the body freezes, as an
@@ -1534,6 +1579,14 @@ pub enum Unsettled {
         expected: InferTy,
         got: InferTy,
     },
+    /// The scrutinee's settled head contradicts what the pattern or one of
+    /// its bindings required: the pattern's shape against the referent, or
+    /// a binding read as a reference where the mode settled on a value.
+    MatchMismatch {
+        decision: DecisionId,
+        expected: InferTy,
+        got: InferTy,
+    },
 }
 
 impl Unsettled {
@@ -1550,7 +1603,8 @@ impl Unsettled {
             | Unsettled::AmbiguousSignature { decision, .. }
             | Unsettled::ReferenceCaptured { decision }
             | Unsettled::MutableBorrowOfShared { decision }
-            | Unsettled::LendMismatch { decision, .. } => *decision,
+            | Unsettled::LendMismatch { decision, .. }
+            | Unsettled::MatchMismatch { decision, .. } => *decision,
         }
     }
 }
@@ -1829,6 +1883,12 @@ impl<'src> Solver<'src> {
                 self.terms.repr_vars[index] = ReprBound::Bound(Repr::Uniform);
             }
         }
+        // A pattern's mode closes before a lend does: a binding closed to
+        // a value is what a lend of that name then lends, and a lend
+        // closed first would name a referent the pattern had not yet
+        // settled, which is how a `&&T` would be formed (RFC-0029).
+        self.close_matches_by_least_element(&mut failures);
+        failures.extend(self.settle());
         self.close_lends_by_least_element(&mut failures);
         failures.extend(self.settle());
         for index in 0..self.decisions.len() {
@@ -1873,6 +1933,9 @@ impl<'src> Solver<'src> {
                 },
                 Decision::Lend { .. } => {
                     unreachable!("close_lends_by_least_element leaves no lend open")
+                }
+                Decision::Match { .. } => {
+                    unreachable!("close_matches_by_least_element leaves no match open")
                 }
             };
             self.decisions[index].state = DecisionState::Failed;
@@ -1934,6 +1997,112 @@ impl<'src> Solver<'src> {
                 mutability,
                 kind,
             } => self.step_lend(id, &of, &referent, mutability, kind),
+            Decision::Match {
+                scrutinee,
+                referent,
+                bindings,
+            } => self.step_match(id, &scrutinee, &referent, bindings),
+        }
+    }
+
+    /// How a pattern reads a scrutinee of type `of`, once its head is
+    /// known. `check_pattern` reads this directly for a head it already
+    /// knows, so the decision only carries the case where it does not.
+    pub fn match_mode(&self, of: &InferTy) -> MatchOutcome {
+        match self.terms.shallow_resolve_ty(of) {
+            TyTerm::Var(_) => MatchOutcome::HeadOpen,
+            TyTerm::Ref(_, inner) => MatchOutcome::Reads(MatchReads {
+                mode: MatchMode::Through,
+                names: inner.ty,
+            }),
+            head => MatchOutcome::Reads(MatchReads {
+                mode: MatchMode::Value,
+                names: head,
+            }),
+        }
+    }
+
+    fn step_match(
+        &mut self,
+        id: DecisionId,
+        scrutinee: &InferTy,
+        referent: &InferTy,
+        bindings: Vec<MatchBinding>,
+    ) -> Progress {
+        let MatchOutcome::Reads(reads) = self.match_mode(scrutinee) else {
+            return Progress::Unchanged;
+        };
+        let mode = reads.mode;
+        match self.settle_match(referent, reads, bindings) {
+            Ok(()) => Progress::Settled(Answer::Match(mode)),
+            Err(Mismatch { expected, got, .. }) => Progress::Failed(Unsettled::MatchMismatch {
+                decision: id,
+                expected,
+                got,
+            }),
+        }
+    }
+
+    /// The pattern was checked against `referent`, so settling its mode
+    /// joins that with what the scrutinee names and gives every binding
+    /// the part it stands for. A binding under `Through` is a shared
+    /// reference to its part whatever the scrutinee's own mutability, as
+    /// a binding under a head already known to be a reference is
+    /// (`check_pattern`).
+    fn settle_match(
+        &mut self,
+        referent: &InferTy,
+        reads: MatchReads,
+        bindings: Vec<MatchBinding>,
+    ) -> Result<(), Mismatch> {
+        self.settle_join(referent, &reads.names)?;
+        for MatchBinding { binding, part } in bindings {
+            let bound = match reads.mode {
+                MatchMode::Value => part,
+                MatchMode::Through => {
+                    TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(part)))
+                }
+            };
+            self.settle_join(&binding, &bound)?;
+        }
+        Ok(())
+    }
+
+    /// A pattern reads through a reference only where its scrutinee is
+    /// one, and a scrutinee nothing made a reference is not one: the least
+    /// element is `Value`. This close is also what carries the pattern's
+    /// shape back to a scrutinee whose type the program states nowhere
+    /// else, so an open match is never an error.
+    fn close_matches_by_least_element(&mut self, failures: &mut Vec<Unsettled>) {
+        for index in 0..self.decisions.len() {
+            let Decision::Match {
+                scrutinee,
+                referent,
+                bindings,
+            } = &self.decisions[index].decision
+            else {
+                continue;
+            };
+            if !matches!(self.decisions[index].state, DecisionState::Open) {
+                continue;
+            }
+            let reads = MatchReads {
+                mode: MatchMode::Value,
+                names: scrutinee.clone(),
+            };
+            let referent = referent.clone();
+            let bindings = bindings.clone();
+            self.decisions[index].state = match self.settle_match(&referent, reads, bindings) {
+                Ok(()) => DecisionState::Settled(Answer::Match(MatchMode::Value)),
+                Err(Mismatch { expected, got, .. }) => {
+                    failures.push(Unsettled::MatchMismatch {
+                        decision: DecisionId(index as u32),
+                        expected,
+                        got,
+                    });
+                    DecisionState::Failed
+                }
+            };
         }
     }
 

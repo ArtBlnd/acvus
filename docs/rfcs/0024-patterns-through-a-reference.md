@@ -21,6 +21,17 @@ source's, never the pattern's.
   for the match and nothing moves. A literal in the pattern is compared
   through the reference.
 
+- **An open head.** The dimension is the source's, so a source whose type
+  is still a variable where the pattern is written has no dimension yet.
+  The pattern is checked against a referent of its own, and the two are
+  joined when the head resolves: a reference reads through it, anything
+  else reads the value, and every name the pattern binds takes its type
+  from that same answer. A source nothing ever makes a reference is not
+  one, so a head that stays open to the end reads the value — the least
+  element of the two, not a default. In `f = |r| -> { 1 = r { … }; … }`
+  the literal is compared through the reference when the call lends `f`
+  its argument, and against the value when it hands one over.
+
 The `&` is written on the source and nowhere else: there is no `&[a, b]`
 and no `{ &name, .. }`. A binding through a reference is used as any
 reference: `*a` for a word, `{{ name }}` emits a `&String`, `clone(name)`
@@ -57,6 +68,16 @@ owner declined it.
 - The type checker checks a pattern against `&T` as against `T` with
   every binding wrapped in `&`; a context bind there is a
   `ReferenceInData` error.
+- A head the checker cannot read is a `Decision::Match`, which carries
+  the pattern's referent and every name it binds. Settling it joins the
+  referent with what the head names and gives each name its type —
+  `&part` through a reference, `part` on a value — and a context bind
+  under a head that settles on a reference is the same `ReferenceInData`
+  error. A match closes on its least element before any lend closes, so
+  a name closed to a value is what a lend of that name then lends, and no
+  `&&T` is formed (RFC-0029).
+- The lowering reads the frozen type of the source, which the settled
+  mode agrees with by construction, so the mode is not recorded twice.
 - Lowering, on a `&T` source, makes a `Ref` through the source for each
   part the pattern names and matches the sub-pattern against that `&part`;
   `TestLiteral`, `TestVariant`, and `TestObjectKey` read through a

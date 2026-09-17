@@ -10,9 +10,9 @@ use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
     Admission, Answer, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
-    EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, Mismatch,
-    MismatchReason, ReceiverMode, ReferencePair, SettledSignature, SignatureCandidate,
-    SignatureName, SignatureOption, Unsettled,
+    EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, MatchBinding,
+    MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair,
+    SettledSignature, SignatureCandidate, SignatureName, SignatureOption, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -429,6 +429,23 @@ enum PatternSource {
     Member,
 }
 
+/// How the pattern being checked reads its scrutinee (RFC-0024).
+/// `Deferred` is the mode of a pattern whose scrutinee's head is still a
+/// variable: a `Decision::Match` settles it into one of the other two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatternMode {
+    Value,
+    Through,
+    Deferred,
+}
+
+/// A `ContextBind` checked under an open head, with the decision whose
+/// answer says whether it is refused (RFC-0014).
+struct DeferredContextBind {
+    decision: DecisionId,
+    span: Span,
+}
+
 /// A branch of an `if`: its type and the expression whose value it is.
 struct Branch {
     ty: InferTy,
@@ -478,7 +495,16 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Direct call resolutions (callee AstId -> the function and instance).
     direct_calls: FxHashMap<AstId, CalleeChoice>,
     operator_calls: FxHashMap<AstId, OperatorCall<ResolvedCallee, InferTy>>,
-    pattern_through: bool,
+    /// How the pattern being checked reads its scrutinee (RFC-0024).
+    pattern_mode: PatternMode,
+    /// The bindings of the pattern being checked under `Deferred`, each
+    /// waiting for the mode that gives it its type.
+    deferred_bindings: Vec<MatchBinding>,
+    /// The spans of the `ContextBind`s of the pattern being checked under
+    /// `Deferred`: a context cannot hold a reference (RFC-0014), which is
+    /// a refusal only once the mode is known.
+    deferred_context_binds: Vec<Span>,
+    context_binds_under_open_head: Vec<DeferredContextBind>,
     /// Accumulated errors.
     errors: Vec<MirError>,
     in_borrow_place: bool,
@@ -529,7 +555,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             coercions: Vec::new(),
             direct_calls: FxHashMap::default(),
             operator_calls: FxHashMap::default(),
-            pattern_through: false,
+            pattern_mode: PatternMode::Value,
+            deferred_bindings: Vec::new(),
+            deferred_context_binds: Vec::new(),
+            context_binds_under_open_head: Vec::new(),
             in_borrow_place: false,
             bound_sites: Vec::new(),
             return_ty: None,
@@ -655,6 +684,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_nodes(&template.body);
         self.solve_body();
         self.check_moves_out_of_captures();
+        self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -737,6 +767,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         self.solve_body();
         self.check_moves_out_of_captures();
+        self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -1279,7 +1310,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Some(InstanceChoice::Decided(decision)) => match self.solver.answer(decision)? {
                 Answer::Instance(InstanceKind::Extern(instance)) => instance,
                 Answer::Instance(InstanceKind::Intrinsic(_)) => return None,
-                Answer::Conversion(_) | Answer::Signature(_) | Answer::Lend(_) => {
+                Answer::Conversion(_)
+                | Answer::Signature(_)
+                | Answer::Lend(_)
+                | Answer::Match(_) => {
                     unreachable!("an instance decision answers with an instance")
                 }
             },
@@ -1299,7 +1333,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Some(ResolvedCallee { qref, instance })
                 }
                 Answer::Signature(SettledSignature::Local) => None,
-                Answer::Instance(_) | Answer::Conversion(_) | Answer::Lend(_) => {
+                Answer::Instance(_)
+                | Answer::Conversion(_)
+                | Answer::Lend(_)
+                | Answer::Match(_) => {
                     unreachable!("a signature decision answers with a signature")
                 }
             },
@@ -1342,7 +1379,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Answer::Instance(InstanceKind::Extern(_))
                     | Answer::Conversion(_)
                     | Answer::Signature(_)
-                    | Answer::Lend(_) => None,
+                    | Answer::Lend(_)
+                    | Answer::Match(_) => None,
                 }
             })
             .collect()
@@ -1722,10 +1760,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 },
                 Unsettled::ReferenceCaptured { .. } => MirErrorKind::ReferenceCaptured,
                 Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared,
-                Unsettled::LendMismatch { expected, got, .. } => MirErrorKind::UnificationFailure {
-                    expected: self.freeze_or_error(&expected),
-                    got: self.freeze_or_error(&got),
-                },
+                Unsettled::LendMismatch { expected, got, .. }
+                | Unsettled::MatchMismatch { expected, got, .. } => {
+                    MirErrorKind::UnificationFailure {
+                        expected: self.freeze_or_error(&expected),
+                        got: self.freeze_or_error(&got),
+                    }
+                }
             };
             self.error(kind, span);
         }
@@ -3791,7 +3832,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// RFC-0024.
+    /// RFC-0024. A reference scrutinee is read through: the pattern is
+    /// checked against what it names, and every name under it binds a
+    /// reference. A scrutinee whose head is still a variable settles the
+    /// same question later, through a decision; a part of a pattern is
+    /// read in the mode its whole was.
     fn check_pattern(
         &mut self,
         pattern: &Pattern,
@@ -3799,13 +3844,66 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         source: PatternSource,
         span: Span,
     ) {
-        let resolved = self.solver.shallow_resolve_ty(source_ty);
-        if let TyTerm::Ref(_, inner) = &resolved {
-            let outer = std::mem::replace(&mut self.pattern_through, true);
-            self.check_pattern_inner(pattern, &inner.ty, source, span);
-            self.pattern_through = outer;
-        } else {
-            self.check_pattern_inner(pattern, source_ty, source, span);
+        match self.solver.match_mode(source_ty) {
+            MatchOutcome::Reads(reads) if reads.mode == MatchMode::Through => {
+                let outer = std::mem::replace(&mut self.pattern_mode, PatternMode::Through);
+                self.check_pattern_inner(pattern, &reads.names, source, span);
+                self.pattern_mode = outer;
+            }
+            MatchOutcome::Reads(_) => self.check_pattern_inner(pattern, source_ty, source, span),
+            MatchOutcome::HeadOpen => match source {
+                PatternSource::Expr(_) => {
+                    self.check_pattern_deferred(pattern, source_ty, source, span)
+                }
+                PatternSource::Member => self.check_pattern_inner(pattern, source_ty, source, span),
+            },
+        }
+    }
+
+    /// The scrutinee's head is still a variable, so how the pattern reads
+    /// it cannot be read off it: the pattern is checked against a referent
+    /// of its own, and the solver joins that referent with the scrutinee
+    /// -- and every name the pattern binds with the part it stands for --
+    /// once the head resolves, or on the least element if nothing ever
+    /// resolves it.
+    fn check_pattern_deferred(
+        &mut self,
+        pattern: &Pattern,
+        source_ty: &InferTy,
+        source: PatternSource,
+        span: Span,
+    ) {
+        let referent = self.solver.fresh_ty_var();
+        let outer_mode = std::mem::replace(&mut self.pattern_mode, PatternMode::Deferred);
+        let outer_bindings = std::mem::take(&mut self.deferred_bindings);
+        let outer_context_binds = std::mem::take(&mut self.deferred_context_binds);
+        self.check_pattern_inner(pattern, &referent, source, span);
+        self.pattern_mode = outer_mode;
+        let bindings = std::mem::replace(&mut self.deferred_bindings, outer_bindings);
+        let context_binds =
+            std::mem::replace(&mut self.deferred_context_binds, outer_context_binds);
+        let decision = self.solver.decide(Decision::Match {
+            scrutinee: source_ty.clone(),
+            referent,
+            bindings,
+        });
+        self.decision_sites.insert(decision, span);
+        self.context_binds_under_open_head.extend(
+            context_binds
+                .into_iter()
+                .map(|span| DeferredContextBind { decision, span }),
+        );
+    }
+
+    /// A context holds data, and data holds no reference (RFC-0014): a
+    /// context bound by a pattern that read through a reference is
+    /// refused, whether the head said so at once or only once it settled.
+    fn check_context_binds_under_open_head(&mut self) {
+        let binds = std::mem::take(&mut self.context_binds_under_open_head);
+        for DeferredContextBind { decision, span } in binds {
+            if let Some(Answer::Match(MatchMode::Through)) = self.solver.answer(decision) {
+                self.error(MirErrorKind::ReferenceInData, span);
+            }
         }
     }
 
@@ -3819,9 +3917,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let source_resolved = self.solver.resolve_ty(source_ty);
         match pattern {
             Pattern::ContextBind { name: qref, .. } => {
-                if self.pattern_through {
-                    self.error(MirErrorKind::ReferenceInData, span);
-                    return;
+                match self.pattern_mode {
+                    PatternMode::Through => {
+                        self.error(MirErrorKind::ReferenceInData, span);
+                        return;
+                    }
+                    PatternMode::Deferred => self.deferred_context_binds.push(span),
+                    PatternMode::Value => {}
                 }
                 self.note_context_use(*qref, span);
                 self.note_access(Effect::write(*qref), span);
@@ -3860,13 +3962,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                 }
                 RefKind::Value => {
-                    let ty = if self.pattern_through {
-                        TyTerm::Ref(
+                    let ty = match self.pattern_mode {
+                        PatternMode::Through => TyTerm::Ref(
                             Mutability::Shared,
                             Box::new(TypeArg::uniform(source_ty.clone())),
-                        )
-                    } else {
-                        source_ty.clone()
+                        ),
+                        PatternMode::Value => source_ty.clone(),
+                        PatternMode::Deferred => {
+                            let binding = self.solver.fresh_ty_var();
+                            self.deferred_bindings.push(MatchBinding {
+                                binding: binding.clone(),
+                                part: source_ty.clone(),
+                            });
+                            binding
+                        }
                     };
                     self.define_var(*name, ty);
                 }
