@@ -35,6 +35,12 @@ type of each parameter, reference or value, is the type the function that
 receives the lambda declares — unification, from the extern signature
 that names `Fn(&T) -> Bool`, fixes it.
 
+A lambda's captures are the names the checker read from outside it while
+checking its body, frozen into the resolution for the lowering to take as
+written; the lowering does not decide captures from the syntax, so a name
+that resolved to a function rather than to the binding it is spelled like
+is not among them.
+
 A closure owns what it captures, and a call borrows the closure: inside
 the lambda a captured name has type `&T`, and `f(x)` on a local `f` lends
 `f` for the call, so `f` may be called again. Passing `f` to a function

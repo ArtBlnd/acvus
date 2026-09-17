@@ -259,6 +259,12 @@ pub struct TypeResolution {
     pub tail_ty: Ty,
     /// Extern parameters ($name) discovered during typecheck.
     pub extern_params: Vec<(Astr, Ty)>,
+    /// A lambda's captures, keyed by the lambda's own `AstId`. The lowering
+    /// takes this list as the closure's captures, and the same lambda's
+    /// `Fn { captures }` in `type_map` holds those names' types positionally,
+    /// so the two must stay in one order: the MakeClosure arity and type
+    /// check in `validate::type_check` is where a divergence is reported.
+    pub lambda_captures: FxHashMap<AstId, Vec<Astr>>,
     /// Join of the effects of every call in the body.
     pub effect: Effect,
     pub context_types: FxHashMap<QualifiedRef, Ty>,
@@ -275,6 +281,7 @@ impl TypeResolution {
         try_returns: FxHashMap<AstId, Ty>,
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
+        lambda_captures: FxHashMap<AstId, Vec<Astr>>,
         effect: Effect,
         context_types: FxHashMap<QualifiedRef, Ty>,
     ) -> Self {
@@ -288,6 +295,7 @@ impl TypeResolution {
             try_returns,
             tail_ty,
             extern_params,
+            lambda_captures,
             effect,
             context_types,
         }
@@ -297,11 +305,31 @@ impl TypeResolution {
 struct LambdaScope {
     depth: usize,
     body_span: Span,
-    captures: Vec<InferTy>,
+    captures: Vec<Capture>,
     moves_out_of_capture: Vec<CaptureMove>,
     /// Indices into `captures` whose reference-ness a `Decision::Lend`
     /// owns, so the refusal below is not also raised here.
     captures_lent_by_decision: Vec<usize>,
+}
+
+struct Capture {
+    name: Astr,
+    ty: InferTy,
+}
+
+impl LambdaScope {
+    fn capture(&mut self, name: Astr, ty: &InferTy) -> usize {
+        match self.captures.iter().position(|c| c.name == name) {
+            Some(i) => i,
+            None => {
+                self.captures.push(Capture {
+                    name,
+                    ty: ty.clone(),
+                });
+                self.captures.len() - 1
+            }
+        }
+    }
 }
 
 /// A name a lambda takes out of the enclosing closure's captures: the inner
@@ -430,10 +458,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     decision_sites: FxHashMap<DecisionId, Span>,
     /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
     analysis: Option<AnalysisState>,
-    /// Stack of active lambda scopes. Each entry is (scope_depth, captures).
-    /// Nested lambdas push onto this stack; lookups record captures in ALL
-    /// enclosing lambdas whose scope depth is exceeded.
     lambda_stack: Vec<LambdaScope>,
+    lambda_captures: FxHashMap<AstId, Vec<Astr>>,
     capture_moves: Vec<CaptureMove>,
     /// Maps lambda expression AstId -> body expression AstId.
     /// Effect variable of the body being checked; every call raises its lower bound.
@@ -468,6 +494,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             context_uses: FxHashMap::default(),
             analysis: None,
             lambda_stack: Vec::new(),
+            lambda_captures: FxHashMap::default(),
             capture_moves: Vec::new(),
             body_effect,
         }
@@ -607,6 +634,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             FxHashMap::default(),
             Ty::String,
             extern_params,
+            self.lambda_captures,
             effect,
             context_types,
         )))
@@ -690,6 +718,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             try_returns,
             frozen_tail,
             extern_params,
+            self.lambda_captures,
             effect,
             context_types,
         )))
@@ -864,7 +893,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let mut capturing_lambdas = 0usize;
             for ls in self.lambda_stack.iter_mut() {
                 if depth < ls.depth {
-                    ls.captures.push(ty.clone());
+                    ls.capture(name, &ty);
                     capturing_lambdas += 1;
                 }
             }
@@ -897,7 +926,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .last()
                 .expect("a capturing lambda is on the stack");
             let body_span = inner.body_span;
-            let capture = inner.captures.len() - 1;
+            let capture = inner
+                .captures
+                .iter()
+                .position(|c| c.name == name)
+                .expect("the innermost capturing lambda just recorded this name");
             let result = self.open_lend(&ty, Mutability::Shared, LendKind::Capture, body_span);
             self.lambda_stack
                 .last_mut()
@@ -1041,10 +1074,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
         let mut ls = self.lambda_stack.pop().expect("this lambda's scope");
         self.capture_moves.append(&mut ls.moves_out_of_capture);
+        self.lambda_captures
+            .insert(*id, ls.captures.iter().map(|c| c.name).collect());
         let capture_types: Vec<InferTy> = ls
             .captures
             .iter()
-            .map(|t| self.solver.resolve_ty(t))
+            .map(|c| self.solver.resolve_ty(&c.ty))
             .collect();
         let captured_a_reference = capture_types.iter().enumerate().any(|(i, t)| {
             matches!(t, TyTerm::Ref(..)) && !ls.captures_lent_by_decision.contains(&i)
@@ -2779,7 +2814,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             } => {
                 let ty = match ref_kind {
                     RefKind::ExternParam => {
-                        match self.param_types.iter().find(|(n, _)| *n == name.name) {
+                        let ty = match self.param_types.iter().find(|(n, _)| *n == name.name) {
                             Some((_, ty)) => ty.clone(),
                             None => {
                                 if let Some(ref mut state) = self.analysis {
@@ -2809,7 +2844,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                     Self::infer_error()
                                 }
                             }
+                        };
+                        for ls in self.lambda_stack.iter_mut() {
+                            ls.capture(name.name, &ty);
                         }
+                        ty
                     }
                     RefKind::Value => match self.lookup_var(name.name) {
                         Some(ty) => ty,
@@ -3551,15 +3590,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A call lends the closure a `&Fn` names instead of moving it
-    /// (RFC-0018), which is the reborrow of RFC-0029. Every other type is
-    /// its own callee.
+    /// (RFC-0018), which is the reborrow of RFC-0029. A referent still open
+    /// is lent the same way, and the call is what decides it is a function.
     fn lent_fn(&mut self, ty: &InferTy) -> InferTy {
         let resolved = self.solver.shallow_resolve_ty(ty);
         let TyTerm::Ref(_, inner) = &resolved else {
             return resolved;
         };
         match self.solver.shallow_resolve_ty(&inner.ty) {
-            lent @ TyTerm::Fn { .. } => lent,
+            lent @ (TyTerm::Fn { .. } | TyTerm::Var(_)) => lent,
             _ => resolved,
         }
     }

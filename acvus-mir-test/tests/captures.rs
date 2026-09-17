@@ -164,3 +164,55 @@ fn a_captured_lambda_passed_by_value_is_still_a_reference_in_a_value_position() 
         "{errors:?}"
     );
 }
+
+const LEN_BINDING: &str = "let len = |k| -> k + 1; ";
+
+const LENT_ARRAY: &str = "let a = [[1, 2], [3, 4]]; ";
+
+#[test]
+fn a_qualified_call_of_a_name_a_binding_also_has_captures_nothing() {
+    let i = Interner::new();
+    let source = format!("{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> array::len(k)) | sum");
+    let c = checked(&i, &source);
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::I64));
+    assert_eq!(
+        c.captures_by_lambda,
+        Vec::<Vec<Ty>>::new(),
+        "a qualified name is not a read of the binding"
+    );
+    let ir = compile_script_mode_optimized(&i, &source, &FxHashMap::default());
+    assert!(ir.is_ok(), "{}", ir.unwrap_err());
+}
+
+#[test]
+fn a_method_call_that_settles_on_a_binding_captures_it() {
+    let i = Interner::new();
+    let source = format!("{LEN_BINDING}range(0, 2) | map(|t| -> t.len()) | sum");
+    let c = checked(&i, &source);
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::I64));
+    assert_eq!(c.captures_by_lambda.len(), 1, "{:?}", c.captures_by_lambda);
+    assert!(
+        matches!(c.captures_by_lambda[0].as_slice(), [Ty::Fn { .. }]),
+        "{:?}",
+        c.captures_by_lambda
+    );
+    let ir = compile_script_mode_optimized(&i, &source, &FxHashMap::default());
+    assert!(ir.is_ok(), "{}", ir.unwrap_err());
+}
+
+#[test]
+fn a_binding_read_beside_a_qualified_name_of_its_own_spelling_is_captured_once() {
+    let i = Interner::new();
+    let source =
+        format!("{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> array::len(k) + len(1)) | sum");
+    let c = checked(&i, &source);
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::I64));
+    assert_eq!(c.captures_by_lambda.len(), 1, "{:?}", c.captures_by_lambda);
+    assert!(
+        matches!(c.captures_by_lambda[0].as_slice(), [Ty::Fn { .. }]),
+        "{:?}",
+        c.captures_by_lambda
+    );
+    let ir = compile_script_mode_optimized(&i, &source, &FxHashMap::default());
+    assert!(ir.is_ok(), "{}", ir.unwrap_err());
+}

@@ -1916,31 +1916,34 @@ impl<'a> Lowerer<'a> {
                 body,
                 span,
             } => {
-                // Capture analysis: find free variables in body.
-                let param_names: FxHashSet<Astr> = params.iter().map(|p| p.name).collect();
-                let free_vars = self.free_vars_in_expr(body, &param_names);
+                let captured: Vec<Astr> = self
+                    .resolution
+                    .lambda_captures
+                    .get(id)
+                    .expect("the checker records a capture list for every lambda it checks")
+                    .clone();
 
                 // A closure owns what it captures (RFC-0018): each capture is
                 // taken from the storage the name binds, at that storage's own
                 // type, and not at the `&T` the name reads as inside an
                 // enclosing closure body.
-                let capture_regs: Vec<ValueId> = free_vars
+                let capture_regs: Vec<ValueId> = captured
                     .iter()
-                    .map(|(name, _, var_span)| {
+                    .map(|name| {
                         let taken = if let Some(param_reg) = self.try_param_slot(*name) {
                             let ty = self.slot_type(param_reg);
                             let dst =
-                                self.emit_take(*var_span, RefTarget::Param(param_reg), vec![], ty);
+                                self.emit_take(*span, RefTarget::Param(param_reg), vec![], ty);
                             self.set_origin(dst, ValOrigin::ExternParam(*name));
                             dst
                         } else {
                             let slot = self.var_slot(*name);
                             let ty = self.slot_type(slot);
-                            let dst = self.emit_take(*var_span, RefTarget::Var(slot), vec![], ty);
+                            let dst = self.emit_take(*span, RefTarget::Var(slot), vec![], ty);
                             self.set_origin(dst, ValOrigin::Named(*name));
                             dst
                         };
-                        self.own_the_captured_word(*var_span, taken)
+                        self.own_the_captured_word(*span, taken)
                     })
                     .collect();
                 // Create closure body.
@@ -1956,14 +1959,15 @@ impl<'a> Lowerer<'a> {
                 // since no `&&T` exists (RFC-0029).
                 let mut closure_capture_regs = Vec::new();
                 let mut capture_tys = Vec::new();
-                for (i, _) in free_vars.iter().enumerate() {
+                for capture_reg in capture_regs.iter() {
                     let reg = sub_body.val_factory.next();
                     closure_capture_regs.push(reg);
-                    let given = capture_regs
-                        .get(i)
-                        .and_then(|r| self.body.val_types.get(r))
-                        .cloned()
-                        .unwrap_or(Ty::error());
+                    let given = self
+                        .body
+                        .val_types
+                        .get(capture_reg)
+                        .expect("a capture register is typed where it is taken")
+                        .clone();
                     let cap_ty = match given {
                         reference @ Ty::Ref(..) => reference,
                         owned => Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(owned))),
@@ -1994,7 +1998,7 @@ impl<'a> Lowerer<'a> {
                 self.enter_contexts(acvus_ast::direct_expr_context_refs(body), *span);
 
                 // Captures and params are the closure body's first bindings.
-                for (((name, _, _), capture_reg), cap_ty) in free_vars
+                for ((name, capture_reg), cap_ty) in captured
                     .iter()
                     .zip(closure_capture_regs.iter())
                     .zip(capture_tys)
@@ -2027,11 +2031,8 @@ impl<'a> Lowerer<'a> {
                 self.context_slots = saved_context_slots;
                 self.holds = saved_holds;
 
-                closure_body_mir.captures = free_vars
-                    .iter()
-                    .map(|(name, _, _)| *name)
-                    .zip(closure_capture_regs)
-                    .collect();
+                closure_body_mir.captures =
+                    captured.iter().copied().zip(closure_capture_regs).collect();
                 closure_body_mir.params = params
                     .iter()
                     .map(|p| p.name)
@@ -3462,230 +3463,6 @@ impl<'a> Lowerer<'a> {
                     },
                 );
                 self.lower_pattern_bind_value(inner_pat, inner_val, span);
-            }
-        }
-    }
-
-    // --- Free variable analysis ---
-
-    fn free_vars_in_expr(&self, expr: &Expr, bound: &FxHashSet<Astr>) -> Vec<(Astr, AstId, Span)> {
-        let mut free = Vec::new();
-        let mut seen = FxHashSet::default();
-        self.collect_free_vars(expr, bound, &mut free, &mut seen);
-        free
-    }
-
-    fn collect_free_vars_stmts(
-        &self,
-        stmts: &[Stmt],
-        bound: &mut FxHashSet<Astr>,
-        free: &mut Vec<(Astr, AstId, Span)>,
-        seen: &mut FxHashSet<Astr>,
-    ) {
-        for stmt in stmts {
-            match stmt {
-                Stmt::Bind { name, expr, .. } => {
-                    self.collect_free_vars(expr, bound, free, seen);
-                    bound.insert(*name);
-                }
-                Stmt::DerefStore { target, expr, .. } => {
-                    self.collect_free_vars(target, bound, free, seen);
-                    self.collect_free_vars(expr, bound, free, seen);
-                }
-                Stmt::ContextStore { expr, .. }
-                | Stmt::VarFieldStore { expr, .. }
-                | Stmt::Expr(expr) => {
-                    self.collect_free_vars(expr, bound, free, seen);
-                }
-                Stmt::MatchBind { source, body, .. } | Stmt::WhileLet { source, body, .. } => {
-                    self.collect_free_vars(source, bound, free, seen);
-                    let mut inner = bound.clone();
-                    self.collect_free_vars_stmts(body, &mut inner, free, seen);
-                }
-                Stmt::LetBind { name, expr, .. } => {
-                    self.collect_free_vars(expr, bound, free, seen);
-                    bound.insert(*name);
-                }
-                Stmt::Assign { expr, .. } => {
-                    self.collect_free_vars(expr, bound, free, seen);
-                }
-                Stmt::LetUninit { name, .. } => {
-                    bound.insert(*name);
-                }
-                Stmt::While { cond, body, .. } => {
-                    self.collect_free_vars(cond, bound, free, seen);
-                    let mut inner = bound.clone();
-                    self.collect_free_vars_stmts(body, &mut inner, free, seen);
-                }
-                Stmt::Anyorder { body, .. } => {
-                    let mut inner = bound.clone();
-                    self.collect_free_vars_stmts(body, &mut inner, free, seen);
-                }
-            }
-        }
-    }
-
-    fn collect_free_vars(
-        &self,
-        expr: &Expr,
-        bound: &FxHashSet<Astr>,
-        free: &mut Vec<(Astr, AstId, Span)>,
-        seen: &mut FxHashSet<Astr>,
-    ) {
-        match expr {
-            Expr::Ident {
-                id,
-                name,
-                ref_kind: RefKind::Value,
-                span,
-            } => {
-                if bound.contains(&name.name) || seen.contains(&name.name) {
-                    return;
-                }
-                if self.is_defined(name.name) {
-                    seen.insert(name.name);
-                    free.push((name.name, *id, *span));
-                }
-            }
-            // ExternParam: must be captured since the closure body may not have
-            // access to the parent function's param_regs (ValueId-based).
-            Expr::Ident {
-                id,
-                name,
-                ref_kind: RefKind::ExternParam,
-                span,
-            } => {
-                if !bound.contains(&name.name) && !seen.contains(&name.name) {
-                    seen.insert(name.name);
-                    free.push((name.name, *id, *span));
-                }
-            }
-            // Context refs resolve globally - no capture needed.
-            Expr::ContextRef { .. } => {}
-            Expr::BinaryOp { left, right, .. } => {
-                self.collect_free_vars(left, bound, free, seen);
-                self.collect_free_vars(right, bound, free, seen);
-            }
-            Expr::UnaryOp { operand, .. } => {
-                self.collect_free_vars(operand, bound, free, seen);
-            }
-            Expr::FieldAccess { object, .. } => {
-                self.collect_free_vars(object, bound, free, seen);
-            }
-            Expr::FuncCall { func, args, .. } => {
-                self.collect_free_vars(func, bound, free, seen);
-                for a in args {
-                    self.collect_free_vars(a, bound, free, seen);
-                }
-            }
-            Expr::MethodCall { receiver, args, .. } => {
-                self.collect_free_vars(receiver, bound, free, seen);
-                for a in args {
-                    self.collect_free_vars(a, bound, free, seen);
-                }
-            }
-            Expr::Pipe { left, right, .. } => {
-                self.collect_free_vars(left, bound, free, seen);
-                self.collect_free_vars(right, bound, free, seen);
-            }
-            Expr::Lambda { params, body, .. } => {
-                let mut inner_bound = bound.clone();
-                for p in params {
-                    inner_bound.insert(p.name);
-                }
-                self.collect_free_vars(body, &inner_bound, free, seen);
-            }
-            Expr::Paren { inner, .. }
-            | Expr::Try { inner, .. }
-            | Expr::Borrow { place: inner, .. } => {
-                self.collect_free_vars(inner, bound, free, seen);
-            }
-            Expr::List { head, tail, .. } => {
-                for e in head.iter().chain(tail.iter()) {
-                    self.collect_free_vars(e, bound, free, seen);
-                }
-            }
-            Expr::Object { fields, .. } => {
-                for f in fields {
-                    self.collect_free_vars(&f.value, bound, free, seen);
-                }
-            }
-            Expr::Tuple { elements, .. } => {
-                for elem in elements {
-                    let TupleElem::Expr(e) = elem else { continue };
-                    self.collect_free_vars(e, bound, free, seen);
-                }
-            }
-            Expr::Group { elements, .. } => {
-                for e in elements {
-                    self.collect_free_vars(e, bound, free, seen);
-                }
-            }
-            Expr::Literal { .. } => {}
-            Expr::Variant {
-                payload: Some(inner),
-                ..
-            } => {
-                self.collect_free_vars(inner, bound, free, seen);
-            }
-            Expr::Variant { payload: None, .. } => {}
-            Expr::Block { stmts, tail, .. } => {
-                let mut inner_bound = bound.clone();
-                self.collect_free_vars_stmts(stmts, &mut inner_bound, free, seen);
-                self.collect_free_vars(tail, &inner_bound, free, seen);
-            }
-            Expr::If {
-                cond,
-                then_body,
-                then_tail,
-                else_branch,
-                ..
-            } => {
-                self.collect_free_vars(cond, bound, free, seen);
-                let mut inner = bound.clone();
-                self.collect_free_vars_stmts(then_body, &mut inner, free, seen);
-                if let Some(tail) = then_tail {
-                    self.collect_free_vars(tail, &inner, free, seen);
-                }
-                if let Some(eb) = else_branch {
-                    self.collect_free_vars_else_branch(eb, bound, free, seen);
-                }
-            }
-            Expr::IfLet {
-                source,
-                then_body,
-                then_tail,
-                else_branch,
-                ..
-            } => {
-                self.collect_free_vars(source, bound, free, seen);
-                let mut inner = bound.clone();
-                self.collect_free_vars_stmts(then_body, &mut inner, free, seen);
-                if let Some(tail) = then_tail {
-                    self.collect_free_vars(tail, &inner, free, seen);
-                }
-                if let Some(eb) = else_branch {
-                    self.collect_free_vars_else_branch(eb, bound, free, seen);
-                }
-            }
-        }
-    }
-
-    fn collect_free_vars_else_branch(
-        &self,
-        eb: &ElseBranch,
-        bound: &FxHashSet<Astr>,
-        free: &mut Vec<(Astr, AstId, Span)>,
-        seen: &mut FxHashSet<Astr>,
-    ) {
-        match eb {
-            ElseBranch::ElseIf(expr) => self.collect_free_vars(expr, bound, free, seen),
-            ElseBranch::Else { body, tail, .. } => {
-                let mut inner = bound.clone();
-                self.collect_free_vars_stmts(body, &mut inner, free, seen);
-                if let Some(tail) = tail {
-                    self.collect_free_vars(tail, &inner, free, seen);
-                }
             }
         }
     }
