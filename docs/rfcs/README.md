@@ -88,3 +88,6 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0040](0040-instance-chosen-by-the-compiler.md) | The compiler chooses an ExternFn's instance and the runtime indexes it | Accepted |
 | [RFC-0041](0041-representation-of-a-slot.md) | `#τ` is the representation of a slot; an extension holds values through `Erased` | Accepted |
 | [RFC-0042](0042-equality-and-decision.md) | The solver separates equality from decision | Accepted |
+| [RFC-0043](0043-a-name-is-a-set-of-signatures.md) | A bare name is a set of signatures | Accepted |
+| [RFC-0044](0044-a-body-is-prepared-once.md) | A body is prepared once | Accepted |
+| [RFC-0045](0045-let-binds-and-assignment-assigns.md) | `let` binds, `x = e;` assigns | Accepted |

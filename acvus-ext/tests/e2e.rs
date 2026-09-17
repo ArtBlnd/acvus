@@ -33,7 +33,7 @@ async fn run_ext_script_mode(
     context: TypedContext,
     registries: Vec<Registry<AcvusRuntime>>,
 ) -> Value {
-    let ast = ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse"));
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
     run_parsed(interner, ast, context, registries).await
 }
 
@@ -497,7 +497,7 @@ async fn a_container_of_objects_converts_each_element() {
     assert_eq!(v.as_int(), 30);
     let v = run_ext(
         &i,
-        "ps = pts(); ps.get(1).x + ps.len()",
+        "let ps = pts(); ps.get(1).x + ps.len()",
         TypedContext::default(),
         regs(),
     )
@@ -505,7 +505,7 @@ async fn a_container_of_objects_converts_each_element() {
     assert_eq!(v.as_int(), 22);
     let v = run_ext(
         &i,
-        "ps = pts(); ps.as_iter().map(|p| -> p.x).fold(0, |a, x| -> a + x)",
+        "let ps = pts(); ps.as_iter().map(|p| -> p.x).fold(0, |a, x| -> a + x)",
         TypedContext::default(),
         regs(),
     )
@@ -904,7 +904,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     let i = Interner::new();
     let v = run_ext(
         &i,
-        "s = \"ab\"; b = to_bytes(s); first = b.get(0); b.len() * 1000 + to_int(first)",
+        "let s = \"ab\"; let b = to_bytes(s); let first = b.get(0); b.len() * 1000 + to_int(first)",
         TypedContext::default(),
         vec![],
     )
@@ -912,7 +912,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     assert_eq!(v.as_int(), 2097);
     let v = run_ext(
         &i,
-        "s = \"héllo\"; to_utf8_lossy(to_bytes(s))",
+        "let s = \"héllo\"; to_utf8_lossy(to_bytes(s))",
         TypedContext::default(),
         vec![],
     )

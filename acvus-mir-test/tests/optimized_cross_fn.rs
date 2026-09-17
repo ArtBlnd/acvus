@@ -57,14 +57,14 @@ fn order_processing_pipeline() {
         (
             "main",
             r#"
-                subtotal = @item_count * 100;
-                discount = calc_discount(subtotal, @discount_rate);
-                tax = calc_tax(subtotal - discount, @tax_rate);
-                total = subtotal - discount + tax;
+                let subtotal = @item_count * 100;
+                let discount = calc_discount(subtotal, @discount_rate);
+                let tax = calc_tax(subtotal - discount, @tax_rate);
+                let total = subtotal - discount + tax;
                 true = total > @free_ship_min { @shipping = 0; };
                 true = total <= @free_ship_min { @shipping = @default_ship; };
-                final_total = total + @shipping;
-                receipt = format_receipt(@customer, subtotal, discount, tax, @shipping, final_total);
+                let final_total = total + @shipping;
+                let receipt = format_receipt(@customer, subtotal, discount, tax, @shipping, final_total);
                 @total_out = final_total;
                 @receipt_out = receipt;
                 send_email(receipt);
@@ -116,14 +116,14 @@ fn order_processing_pipeline() {
         (
             "main",
             r#"
-                subtotal = @item_count * 100;
-                discount = calc_discount(subtotal, @discount_rate);
-                tax = calc_tax(subtotal - discount, @tax_rate);
-                total = subtotal - discount + tax;
+                let subtotal = @item_count * 100;
+                let discount = calc_discount(subtotal, @discount_rate);
+                let tax = calc_tax(subtotal - discount, @tax_rate);
+                let total = subtotal - discount + tax;
                 true = total > @free_ship_min { @shipping = 0; };
                 true = total <= @free_ship_min { @shipping = @default_ship; };
-                final_total = total + @shipping;
-                receipt = format_receipt(@customer, subtotal, discount, tax, @shipping, final_total);
+                let final_total = total + @shipping;
+                let receipt = format_receipt(@customer, subtotal, discount, tax, @shipping, final_total);
                 @total_out = final_total;
                 @receipt_out = receipt;
                 send_email(receipt);
@@ -203,10 +203,10 @@ fn data_enrichment_multi_io() {
     let target = (
         "main",
         r#"
-                profile = fetch_profile(@user_id);
-                history = fetch_history(@user_id);
-                score = compute_score(profile, history, @weight);
-                label = format_label(profile, score);
+                let profile = fetch_profile(@user_id);
+                let history = fetch_history(@user_id);
+                let score = compute_score(profile, history, @weight);
+                let label = format_label(profile, score);
                 true = score > @threshold {
                     notify_alert(@user_id, score);
                     @alert_count = @alert_count + 1;
@@ -231,7 +231,7 @@ fn data_enrichment_multi_io() {
         ),
         (
             "format_label",
-            r#"a = "User("; b = $profile.to_string(); c = " score:"; d = $score.to_string(); e = ")"; ab = concat(&a, &b); abc = concat(&ab, &c); abcd = concat(&abc, &d); concat(&abcd, &e)"#,
+            r#"let a = "User("; let b = $profile.to_string(); let c = " score:"; let d = $score.to_string(); let e = ")"; let ab = concat(&a, &b); let abc = concat(&ab, &c); let abcd = concat(&abc, &d); concat(&abcd, &e)"#,
             sig(&i, &[("profile", Ty::I64), ("score", Ty::I64)]),
         ),
     ];
@@ -285,12 +285,12 @@ fn multi_stage_pipeline() {
     let target = (
         "main",
         r#"
-                raw = fetch_data(@source_id);
-                s1 = normalize(raw, @scale);
+                let raw = fetch_data(@source_id);
+                let s1 = normalize(raw, @scale);
                 @stage1 = s1;
-                s2 = enrich(s1, @offset);
+                let s2 = enrich(s1, @offset);
                 @stage2 = s2;
-                s3 = finalize(s2, @precision);
+                let s3 = finalize(s2, @precision);
                 @stage3 = s3;
                 log_pipeline(s1, s2, s3);
                 s3

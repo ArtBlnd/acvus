@@ -216,9 +216,9 @@ fn script(stmts: Vec<acvus_ast::Stmt>, tail: Expr) -> Script {
     }
 }
 
-/// Build a bind statement: `name = expr;`
+/// Build a binding statement: `let name = expr;`
 fn bind(interner: &Interner, name: &str, expr: Expr) -> acvus_ast::Stmt {
-    acvus_ast::Stmt::Bind {
+    acvus_ast::Stmt::LetBind {
         id: AstId::alloc(),
         name: interner.intern(name),
         expr,

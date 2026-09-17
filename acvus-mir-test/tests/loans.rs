@@ -51,7 +51,7 @@ fn a_pure_call_lent_a_place_mutably_is_kept_when_the_place_is_read_after() {
     let i = Interner::new();
     let ir = optimized(
         &i,
-        "x = 1; bump(&mut x, 2); bump(&mut x, 3); x",
+        "let x = 1; bump(&mut x, 2); bump(&mut x, 3); x",
         Effect::PURE,
     );
     let main = main_body(&ir);
@@ -62,7 +62,11 @@ fn a_pure_call_lent_a_place_mutably_is_kept_when_the_place_is_read_after() {
 #[test]
 fn a_lent_place_and_the_reference_to_it_take_different_registers() {
     let i = Interner::new();
-    let ir = optimized(&i, "x = 40; y = bump(&mut x, 2); x + y", Effect::PURE);
+    let ir = optimized(
+        &i,
+        "let x = 40; let y = bump(&mut x, 2); x + y",
+        Effect::PURE,
+    );
     let main = main_body(&ir);
     let reference = main
         .lines()
@@ -76,7 +80,11 @@ fn a_lent_place_and_the_reference_to_it_take_different_registers() {
 #[test]
 fn an_eval_does_not_sink_past_a_read_of_what_its_spawn_holds() {
     let i = Interner::new();
-    let ir = optimized(&i, "x = 40; y = bump(&mut x, 2); x + y", Effect::OPAQUE);
+    let ir = optimized(
+        &i,
+        "let x = 40; let y = bump(&mut x, 2); x + y",
+        Effect::OPAQUE,
+    );
     let main = main_body(&ir);
     let eval = main.find("eval ").expect("the eval");
     let read = main.find("take ").expect("the read of x");
@@ -116,7 +124,10 @@ fn a_reference_returned_by_a_call_keeps_the_place_it_was_lent() {
     let externs = [peek(&i), bump(&i, Effect::PURE)];
     let err = compile_multi_fn_optimized(
         &i,
-        ("main", "x = 1; r = peek(&mut x); bump(&mut x, 1); *r"),
+        (
+            "main",
+            "let x = 1; let r = peek(&mut x); bump(&mut x, 1); *r",
+        ),
         &[],
         &[],
         &externs,
@@ -127,7 +138,7 @@ fn a_reference_returned_by_a_call_keeps_the_place_it_was_lent() {
         &i,
         (
             "main",
-            "x = 1; r = peek(&mut x); y = *r; bump(&mut x, 1); y",
+            "let x = 1; let r = peek(&mut x); let y = *r; bump(&mut x, 1); y",
         ),
         &[],
         &[],

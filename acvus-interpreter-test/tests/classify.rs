@@ -23,7 +23,7 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
         (i.intern("output"), typed(Ty::String, Value::string(""))),
     ]);
     let src = r#"
-        age = @user.age;
+        let age = @user.age;
         @output = "unknown";
         true = age >= 65 { @output = "senior"; };
         true = age >= 18 { @output = "adult"; };

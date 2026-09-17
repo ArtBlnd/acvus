@@ -26,12 +26,6 @@ pub struct Script {
 /// A statement in a script.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Bind {
-        id: AstId,
-        name: Astr,
-        expr: Expr,
-        span: Span,
-    },
     ContextStore {
         id: AstId,
         name: QualifiedRef,
@@ -627,7 +621,6 @@ impl ContextRefs {
 fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
     for stmt in stmts {
         match stmt {
-            Stmt::Bind { expr, .. } => walk_expr(expr, refs),
             Stmt::ContextStore { name, expr, .. } => {
                 refs.set.insert(*name);
                 walk_expr(expr, refs);

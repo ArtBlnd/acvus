@@ -36,7 +36,7 @@ fn compile(source: &str) {
         .iter()
         .map(|(name, typed)| (*name, typed.ty.clone()))
         .collect();
-    let ast = ParsedAst::Script(acvus_ast::parse_script_mode(&i, source).expect("parse error"));
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
     compile_source_with_externs(
         &i,
         ast,

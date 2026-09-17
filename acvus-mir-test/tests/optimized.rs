@@ -64,7 +64,7 @@ fn field_read_modify_write_branch() {
         )],
     );
     let src = r#"
-        count = @stats.count + 1;
+        let count = @stats.count + 1;
         true = count > @stats.threshold {
             @stats.count = count;
             @stats.exceeded = true;
@@ -96,8 +96,8 @@ fn multi_context_dataflow() {
         ],
     );
     let src = r#"
-        sum = @a + @b;
-        scaled = sum * @scale;
+        let sum = @a + @b;
+        let scaled = sum * @scale;
         @output = scaled + @a;
         @output
     "#;
@@ -135,9 +135,9 @@ fn object_construct_from_fields() {
         ],
     );
     let src = r#"
-        score = @user.age * 2;
-        label = @user.name + " (score: " + score.to_string() + ")";
-        eligible = score > @min_score;
+        let score = @user.age * 2;
+        let label = @user.name + " (score: " + score.to_string() + ")";
+        let eligible = score > @min_score;
         @output = { label: label, score: score, eligible: eligible, };
         @output.score
     "#;
@@ -165,7 +165,7 @@ fn diamond_divergent_context_mutations() {
         ],
     );
     let src = r#"
-        x = @input;
+        let x = @input;
         true = x > 100 {
             @high = @high + 1;
             @output = x * 2;
@@ -242,7 +242,7 @@ fn destructure_multi_branch_classify() {
         ],
     );
     let src = r#"
-        age = @user.age;
+        let age = @user.age;
         @output = "unknown";
         true = age >= 65 { @output = "senior"; };
         true = age >= 18 { @output = "adult"; };

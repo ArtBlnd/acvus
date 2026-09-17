@@ -19,7 +19,7 @@ fn two_iterators_from_different_sources_do_not_unify() {
     let i = Interner::new();
     let err = compile_script_ir(
         &i,
-        "a = @items | into_iter; b = @items | into_iter; [a, b]; 0",
+        "let a = @items | into_iter; let b = @items | into_iter; [a, b]; 0",
         &items(&i),
     )
     .unwrap_err();
@@ -31,7 +31,7 @@ fn chain_joins_two_sources_into_a_new_one() {
     let i = Interner::new();
     compile_script_ir(
         &i,
-        "a = [1, 2] | into_iter; b = [1, 2] | into_iter; c = chain(a, b) | collect; len(&c)",
+        "let a = [1, 2] | into_iter; let b = [1, 2] | into_iter; let c = chain(a, b) | collect; len(&c)",
         &items(&i),
     )
     .unwrap();
@@ -42,7 +42,7 @@ fn a_derived_iterator_keeps_its_source_and_still_moves() {
     let i = Interner::new();
     let err = compile_script_ir(
         &i,
-        "it = @items | into_iter | map(|x| -> x + 1); it | collect; it | collect",
+        "let it = @items | into_iter | map(|x| -> x + 1); it | collect; it | collect",
         &items(&i),
     )
     .unwrap_err();

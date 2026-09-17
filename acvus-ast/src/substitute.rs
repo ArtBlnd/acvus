@@ -385,14 +385,6 @@ fn fold_binop(parts: Vec<Expr>, op: BinOp, span: Span) -> Expr {
 
 fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
     match stmt {
-        Stmt::Bind {
-            name, expr, span, ..
-        } => Stmt::Bind {
-            id: AstId::alloc(),
-            name,
-            expr: sub_expr(expr, subs),
-            span,
-        },
         Stmt::ContextStore {
             name,
             path,
@@ -715,9 +707,7 @@ fn validate_splice_else_branch(
 
 fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(Astr, Span)>) {
     match stmt {
-        Stmt::Bind { expr, .. }
-        | Stmt::ContextStore { expr, .. }
-        | Stmt::VarFieldStore { expr, .. } => {
+        Stmt::ContextStore { expr, .. } | Stmt::VarFieldStore { expr, .. } => {
             validate_splice_expr(expr, false, splice_names, errors);
         }
         Stmt::DerefStore { target, expr, .. } => {

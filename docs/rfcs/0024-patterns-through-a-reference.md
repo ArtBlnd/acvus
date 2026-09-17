@@ -28,7 +28,8 @@ source's, never the pattern's.
   else reads the value, and every name the pattern binds takes its type
   from that same answer. A source nothing ever makes a reference is not
   one, so a head that stays open to the end reads the value — the least
-  element of the two, not a default. In `f = |r| -> { 1 = r { … }; … }`
+  element of the two, not a default. In
+  `let f = |r| -> { 1 = r { … }; … }`
   the literal is compared through the reference when the call lends `f`
   its argument, and against the value when it hands one over.
 
@@ -61,6 +62,12 @@ owner declined it.
   never a reference (RFC-0014).
 
 ## Consequences
+
+- A tag-form body's statements are the script's statements (RFC-0045):
+  `let x = …;` introduces a binding that ends with the body, and `x = …;`
+  assigns the binding the enclosing block introduced, which stays assigned
+  after the match. `let out = 0.0; Some(v) = Some(1.5) { out = v; }; out`
+  is `1.5`, and the payload no longer has to leave through a context.
 
 - `PathSeg::{Field, Index, Payload}` replaces the field-name path of
   `Ref`/`Take`/`Assign`, so a reference can name an array element, a

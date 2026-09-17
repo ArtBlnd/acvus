@@ -572,19 +572,6 @@ impl<'a> Lowerer<'a> {
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Bind {
-                name, expr, span, ..
-            } => {
-                let val = self.lower_expr(expr);
-                let ty = self
-                    .body
-                    .val_types
-                    .get(&val)
-                    .cloned()
-                    .unwrap_or(Ty::error());
-                let slot = self.define_var(*name, ty);
-                self.emit_assign(*span, RefTarget::Var(slot), vec![], val);
-            }
             Stmt::ContextStore {
                 name,
                 path,

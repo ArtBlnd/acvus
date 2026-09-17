@@ -89,8 +89,7 @@ pub fn compile_script_mode(
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
 ) -> CompileResult {
-    let ast =
-        ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
     compile_source_with_externs(interner, ast, context_types, std_regs)
 }
@@ -358,8 +357,7 @@ pub async fn run_script_mode_with_externs(
     context: Context,
     extern_registries: Vec<Registry<AcvusRuntime>>,
 ) -> Ran {
-    let ast =
-        ParsedAst::Script(acvus_ast::parse_script_mode(interner, source).expect("parse error"));
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     run_parsed_with_externs(interner, ast, context, extern_registries, |_| {}).await
 }
 

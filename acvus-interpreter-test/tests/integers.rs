@@ -91,14 +91,14 @@ async fn a_literal_argument_takes_the_parameter_s_width() {
     assert_eq!(unsafe { v.as_str() }, "ababab");
     let v = run_script(
         &i,
-        "xs = [1, 2, 3, 4]; xs | into_iter | take(2) | fold(0, |a, x| -> a + x)",
+        "let xs = [1, 2, 3, 4]; xs | into_iter | take(2) | fold(0, |a, x| -> a + x)",
         Context::default(),
     )
     .await;
     assert_eq!(v.as_int(), 3);
     let v = run_script(
         &i,
-        "xs = [1, 2, 3, 4]; xs | into_iter | skip(3) | fold(0, |a, x| -> a + x)",
+        "let xs = [1, 2, 3, 4]; xs | into_iter | skip(3) | fold(0, |a, x| -> a + x)",
         Context::default(),
     )
     .await;

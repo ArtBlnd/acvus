@@ -35,10 +35,10 @@ fn tail_ty(src: &str) -> Ty {
 
 #[test]
 fn a_qualified_name_is_a_call_when_its_namespace_declares_the_function() {
-    let ir = check("xs = [1, 2]; array::len(&xs)").expect("array::len");
+    let ir = check("let xs = [1, 2]; array::len(&xs)").expect("array::len");
     assert!(ir.contains("call "), "{ir}");
     assert!(!ir.contains("variant"), "{ir}");
-    check("d = deque(); deque::push_back(&mut d, 1); deque::push_back(&mut d, 2); len(&d)")
+    check("let d = deque(); deque::push_back(&mut d, 1); deque::push_back(&mut d, 2); len(&d)")
         .expect("a qualified call takes any number of arguments");
 }
 
@@ -48,22 +48,22 @@ fn a_qualified_name_no_namespace_declares_is_a_structural_variant() {
     assert!(ir.contains("variant Circle"), "{ir}");
     let err = check("Shape::Circle(1, 2)").expect_err("a variant has one payload");
     assert!(err.contains("Shape::Circle"), "{err}");
-    let ir = check("xs = [1]; nope::len(&xs)").expect("`nope` is no namespace: a variant");
+    let ir = check("let xs = [1]; nope::len(&xs)").expect("`nope` is no namespace: a variant");
     assert!(ir.contains("variant len"), "{ir}");
 }
 
 #[test]
 fn a_method_call_lends_its_receiver_as_the_callee_s_first_parameter_asks() {
-    assert_eq!(tail_ty("xs = [1, 2, 3]; xs.len()"), Ty::I64);
-    let ir = check("xs = [1, 2, 3]; xs.len()").unwrap();
+    assert_eq!(tail_ty("let xs = [1, 2, 3]; xs.len()"), Ty::I64);
+    let ir = check("let xs = [1, 2, 3]; xs.len()").unwrap();
     assert!(ir.contains("ref &xs"), "{ir}");
-    let ir = check("d = deque(); d.push_back(1); d.len()").unwrap();
+    let ir = check("let d = deque(); d.push_back(1); d.len()").unwrap();
     assert!(ir.contains("ref &mut d"), "{ir}");
     assert_eq!(
-        tail_ty("xs = [1, 2, 3]; ys = xs.as_iter().map(|x| -> *x * 2).collect(); ys.len()"),
+        tail_ty("let xs = [1, 2, 3]; let ys = xs.as_iter().map(|x| -> *x * 2).collect(); ys.len()"),
         Ty::I64
     );
-    let ir = check("d = deque(); d.push_back({ x: 1, }); d.get(0).x").unwrap();
+    let ir = check("let d = deque(); d.push_back({ x: 1, }); d.get(0).x").unwrap();
     assert!(ir.contains("ref &d"), "{ir}");
 }
 
@@ -75,14 +75,14 @@ fn a_method_receiver_that_must_be_lent_is_a_place() {
 
 #[test]
 fn a_method_call_of_a_signature_picks_the_instance_by_the_receiver() {
-    let ir = check("xs = [1, 2, 3]; xs.into_iter().fold(0, |a, x| -> a + x)").unwrap();
+    let ir = check("let xs = [1, 2, 3]; xs.into_iter().fold(0, |a, x| -> a + x)").unwrap();
     assert!(ir.contains("call "), "{ir}");
-    assert_eq!(tail_ty("s = \"ab\"; s.clone()"), Ty::String);
+    assert_eq!(tail_ty("let s = \"ab\"; s.clone()"), Ty::String);
 }
 
 #[test]
 fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
-    let ir = check("xs = [\"a\", \"b\"]; xs.get(1).clone()")
+    let ir = check("let xs = [\"a\", \"b\"]; xs.get(1).clone()")
         .expect("`get` gives `&String`, `clone` takes `&T`");
     assert_eq!(
         ir.matches("ref &").count(),
@@ -90,7 +90,7 @@ fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
         "only xs is lent, for `get`:\n{ir}"
     );
     assert_eq!(
-        tail_ty("xs = [\"a\", \"b\"]; xs.get(1).clone()"),
+        tail_ty("let xs = [\"a\", \"b\"]; xs.get(1).clone()"),
         Ty::String
     );
 }

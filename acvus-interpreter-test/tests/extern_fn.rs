@@ -276,9 +276,8 @@ fn compile_io_script_mode(
     context: Vec<(&str, TypedValue)>,
 ) -> (Interner, CompileResult) {
     let i = Interner::new();
-    let ast = acvus_mir::graph::ParsedAst::Script(
-        acvus_ast::parse_script_mode(&i, source).expect("parse"),
-    );
+    let ast =
+        acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
     let context = ctx(&i, context);
     let cr = compile_io_parsed(&i, ast, context);
     (i, cr)
@@ -309,9 +308,8 @@ async fn run_io_script_mode_on(
     context: Vec<(&str, TypedValue)>,
 ) -> Value {
     let i = i.clone();
-    let ast = acvus_mir::graph::ParsedAst::Script(
-        acvus_ast::parse_script_mode(&i, source).expect("parse"),
-    );
+    let ast =
+        acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
     run_parsed_with_externs(&i, ast, ctx(&i, context), regs, |_| {})
@@ -425,7 +423,7 @@ async fn io_chain_with_independent() {
     // fetch_a() = 100, fetch_by(100) = 1000, fetch_c() = 300
     let result = run_script_with_externs(
         &i,
-        "a = fetch_a(); b = fetch_by(a); c = fetch_c(); b + c",
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); b + c",
         ctx(&i, vec![]),
         vec![io_registry()],
     )
@@ -435,7 +433,8 @@ async fn io_chain_with_independent() {
 
 #[test]
 fn io_chain_with_independent_mir() {
-    let (i, cr) = compile_io_script("a = fetch_a(); b = fetch_by(a); c = fetch_c(); b + c");
+    let (i, cr) =
+        compile_io_script("let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); b + c");
     let (spawns, evals) = dump_and_positions("chain_with_independent", &i, &cr);
 
     assert_eq!(spawns.len(), 3, "expected 3 spawns");
@@ -457,7 +456,7 @@ async fn io_diamond_dependency() {
     // fetch_a() = 100, fetch_by(100) = 1000, fetch_by(100) = 1000
     let result = run_script_with_externs(
         &i,
-        "a = fetch_a(); b = fetch_by(a); c = fetch_by(a); b + c",
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(a); b + c",
         ctx(&i, vec![]),
         vec![io_registry()],
     )
@@ -467,7 +466,8 @@ async fn io_diamond_dependency() {
 
 #[test]
 fn io_diamond_dependency_mir() {
-    let (i, cr) = compile_io_script("a = fetch_a(); b = fetch_by(a); c = fetch_by(a); b + c");
+    let (i, cr) =
+        compile_io_script("let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(a); b + c");
     let (spawns, evals) = dump_and_positions("diamond_dependency", &i, &cr);
 
     assert_eq!(spawns.len(), 3, "expected 3 spawns (fetch_a + 2x fetch_by)");
@@ -487,7 +487,7 @@ async fn io_deep_chain() {
     // 100 -> 1000 -> 10000 -> 100000
     let result = run_script_with_externs(
         &i,
-        "a = fetch_a(); b = fetch_by(a); c = fetch_by(b); d = fetch_by(c); d",
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(b); let d = fetch_by(c); d",
         ctx(&i, vec![]),
         vec![io_registry()],
     )
@@ -497,8 +497,9 @@ async fn io_deep_chain() {
 
 #[test]
 fn io_deep_chain_mir() {
-    let (i, cr) =
-        compile_io_script("a = fetch_a(); b = fetch_by(a); c = fetch_by(b); d = fetch_by(c); d");
+    let (i, cr) = compile_io_script(
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(b); let d = fetch_by(c); d",
+    );
     let (spawns, evals) = dump_and_positions("deep_chain", &i, &cr);
 
     assert_eq!(spawns.len(), 4, "4 IO calls in chain");
@@ -519,7 +520,7 @@ async fn io_two_independent_chains() {
     // chain 1: 100 -> 1000, chain 2: 300 -> 3000
     let result = run_script_with_externs(
         &i,
-        "a = fetch_a(); b = fetch_by(a); c = fetch_c(); d = fetch_by(c); b + d",
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); let d = fetch_by(c); b + d",
         ctx(&i, vec![]),
         vec![io_registry()],
     )
@@ -529,8 +530,9 @@ async fn io_two_independent_chains() {
 
 #[test]
 fn io_two_independent_chains_mir() {
-    let (i, cr) =
-        compile_io_script("a = fetch_a(); b = fetch_by(a); c = fetch_c(); d = fetch_by(c); b + d");
+    let (i, cr) = compile_io_script(
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); let d = fetch_by(c); b + d",
+    );
     let (spawns, evals) = dump_and_positions("two_independent_chains", &i, &cr);
 
     assert_eq!(spawns.len(), 4, "4 IO calls");
@@ -789,7 +791,7 @@ async fn run_on_tokio(
 ) -> Value {
     let i = Interner::new();
     let script = if script_mode {
-        acvus_ast::parse_script_mode(&i, source).expect("parse")
+        acvus_ast::parse_script(&i, source).expect("parse")
     } else {
         acvus_ast::parse_script(&i, source).expect("parse")
     };
@@ -919,7 +921,7 @@ async fn io_compiler_pipeline() {
     // result = 1200 + 300 = 1500
     let result = run_script_with_externs(
         &i,
-        "imports = fetch_a(); types = fetch_b(); refs = fetch_by(imports); checked = refs + types; extra = fetch_c(); checked + extra",
+        "let imports = fetch_a(); let types = fetch_b(); let refs = fetch_by(imports); let checked = refs + types; let extra = fetch_c(); checked + extra",
         ctx(&i, vec![]),
         vec![io_registry()],
     ).await;
@@ -929,7 +931,7 @@ async fn io_compiler_pipeline() {
 #[test]
 fn io_compiler_pipeline_mir() {
     let (i, cr) = compile_io_script(
-        "imports = fetch_a(); types = fetch_b(); refs = fetch_by(imports); checked = refs + types; extra = fetch_c(); checked + extra",
+        "let imports = fetch_a(); let types = fetch_b(); let refs = fetch_by(imports); let checked = refs + types; let extra = fetch_c(); checked + extra",
     );
     let (spawns, evals) = dump_and_positions("compiler_pipeline", &i, &cr);
 
@@ -975,7 +977,7 @@ async fn io_extern_consumes_move_only_opaque() {
 
     let result = run_script_with_externs_and_types(
         &i,
-        "t = mk_tok(); consume_tok(t)",
+        "let t = mk_tok(); consume_tok(t)",
         ctx(&i, vec![]),
         vec![registry],
         |_| {},

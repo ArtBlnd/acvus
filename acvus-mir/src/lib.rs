@@ -199,7 +199,7 @@ mod tests {
         let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
         let err = compile_script(&i, "@data", &[("data", user.clone())]).unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
-        let err = compile_script(&i, "x = @data; x", &[("data", user)]).unwrap_err();
+        let err = compile_script(&i, "let x = @data; x", &[("data", user)]).unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
     }
 
@@ -208,7 +208,7 @@ mod tests {
         let i = Interner::new();
         compile_script(
             &i,
-            r#"x = @data; @data = "new"; x"#,
+            r#"let x = @data; @data = "new"; x"#,
             &[("data", Ty::String)],
         )
         .unwrap();
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn script_bind_and_tail() {
         let i = Interner::new();
-        let module = compile_script(&i, "x = @data; x", &[("data", Ty::I64)]).unwrap();
+        let module = compile_script(&i, "let x = @data; x", &[("data", Ty::I64)]).unwrap();
         assert!(
             module
                 .main
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn script_trailing_semicolon_no_yield() {
         let i = Interner::new();
-        let module = compile_script(&i, "x = @data;", &[("data", Ty::String)]).unwrap();
+        let module = compile_script(&i, "let x = @data;", &[("data", Ty::String)]).unwrap();
         assert!(
             !module
                 .main
@@ -275,7 +275,7 @@ mod tests {
         let i = Interner::new();
         compile_script(
             &i,
-            "tmp = @count + 1; @count = tmp; @count",
+            "let tmp = @count + 1; @count = tmp; @count",
             &[("count", Ty::I64)],
         )
         .unwrap();
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn projection_copy_to_local() {
         let i = Interner::new();
-        let module = compile_script(&i, "x = @data; x", &[("data", Ty::I64)]).unwrap();
+        let module = compile_script(&i, "let x = @data; x", &[("data", Ty::I64)]).unwrap();
         let kinds = inst_kinds(&module);
         assert!(kinds.iter().any(|k| matches!(k, InstKind::Return { .. })));
     }

@@ -4,9 +4,7 @@
 //! through a reference or as the value it was handed. A pattern inside a
 //! lambda is written as the tag form `pattern = source { body };`, since
 //! `if let` is a script-mode expression and a lambda's body is an
-//! expression; the payload is carried out through a context, because a
-//! name a tag-form body binds is that body's own (`Stmt::Bind` shadows,
-//! and the script grammar has no assignment statement).
+//! expression.
 //!
 //! The tag form and `if let` with no `else` are one lowering, so the value
 //! side of the open head runs the same either way: a body that moves its
@@ -86,14 +84,44 @@ async fn a_tag_form_match_that_fails_leaves_the_context_as_it_was() {
 }
 
 #[tokio::test]
-async fn a_name_a_tag_form_body_binds_is_that_bodys_own() {
-    // The script grammar has no assignment statement: `out = v;` is a
-    // `Stmt::Bind`, and a bind in the body's scope shadows the outer `out`
-    // and ends with the scope. The payload leaves through a context.
+async fn an_assignment_in_a_tag_form_body_is_the_outer_binding() {
+    // `out = v;` assigns the `out` the body's enclosing block bound, so the
+    // payload is live after the match. The tag form and `if let` are one
+    // lowering, so the join carries it either way.
+    let i = Interner::new();
+    let in_a_lambda = run_script_mode(
+        &i,
+        "let f = |q| -> { let out = 0.0; Some(v) = Some(1.5) { out = v; }; out }; f(0)",
+        Context::default(),
+    )
+    .await;
+    assert_eq!(in_a_lambda.as_float(), 1.5);
+
+    let at_the_top_level = run_script_mode(
+        &i,
+        "let out = 0.0; Some(v) = Some(1.5) { out = v; }; out",
+        Context::default(),
+    )
+    .await;
+    assert_eq!(at_the_top_level.as_float(), 1.5);
+
+    let as_an_if_let = run_script_mode(
+        &i,
+        "let out = 0.0; if let Some(v) = Some(1.5) { out = v; }; out",
+        Context::default(),
+    )
+    .await;
+    assert_eq!(as_an_if_let.as_float(), 1.5);
+}
+
+#[tokio::test]
+async fn a_let_in_a_tag_form_body_ends_with_the_body() {
+    // `let out = v;` introduces the body's own `out`, which shadows the
+    // outer one and ends with the block.
     let i = Interner::new();
     let v = run_script_mode(
         &i,
-        "let f = |q| -> { out = 0.0; Some(v) = Some(1.5) { out = v; }; out }; f(0)",
+        "let f = |q| -> { let out = 0.0; Some(v) = Some(1.5) { let out = v; }; out }; f(0)",
         Context::default(),
     )
     .await;

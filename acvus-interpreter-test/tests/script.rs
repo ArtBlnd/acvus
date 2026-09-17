@@ -31,7 +31,7 @@ fn assert_str(v: &Value, expected: &str) {
 async fn let_simple_bind() {
     let i = Interner::new();
     let c = ctx(&i, vec![("x", int(10))]);
-    let result = run_script(&i, "y = @x + 1; y", c).await;
+    let result = run_script(&i, "let y = @x + 1; y", c).await;
     assert_eq!(result.as_int(), 11);
 }
 
@@ -39,7 +39,7 @@ async fn let_simple_bind() {
 async fn let_multiple_binds() {
     let i = Interner::new();
     let c = ctx(&i, vec![("x", int(5))]);
-    let result = run_script(&i, "a = @x; b = a + a; b", c).await;
+    let result = run_script(&i, "let a = @x; let b = a + a; b", c).await;
     assert_eq!(result.as_int(), 10);
 }
 

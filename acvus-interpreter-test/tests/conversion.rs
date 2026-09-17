@@ -48,9 +48,9 @@ async fn to_string_has_an_instance_for_every_scalar() {
 
 #[tokio::test]
 async fn to_int_reads_every_converting_scalar_through_a_reference() {
-    assert_eq!(int("x = 1.9; x.to_int()").await, 1);
-    assert_eq!(int("x = true; x.to_int()").await, 1);
-    assert_eq!(int("x = 7; x.to_int()").await, 7);
+    assert_eq!(int("let x = 1.9; x.to_int()").await, 1);
+    assert_eq!(int("let x = true; x.to_int()").await, 1);
+    assert_eq!(int("let x = 7; x.to_int()").await, 7);
 
     let i = Interner::new();
     assert_eq!(

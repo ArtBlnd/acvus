@@ -70,21 +70,16 @@ extern {
     }
 }
 
-// ── Script rule (Expr mode) ──────────────────────────────────────────
+// ── Script rule ──────────────────────────────────────────────────────
+//
+// One statement grammar for every block: `let` binds, `x = e;` assigns.
 
 pub Script: Script = {
-    <l:@L> <stmts:ScriptStmt*> <tail:Expr?> <r:@R> =>
+    <l:@L> <stmts:Stmt*> <tail:ScriptExpr?> <r:@R> =>
         Script { id: AstId::alloc(), stmts, tail: tail.map(Box::new), span: Span::new(l, r) }
 };
 
-// ── Script mode (keyword-based) ─────────────────────────────────────
-
-pub ScriptMode: Script = {
-    <l:@L> <stmts:ScriptModeStmt*> <tail:ScriptExpr?> <r:@R> =>
-        Script { id: AstId::alloc(), stmts, tail: tail.map(Box::new), span: Span::new(l, r) }
-};
-
-// Script mode expression: adds if/if-let on top of base Expr.
+// Script expression: adds if/if-let on top of base Expr.
 ScriptExpr: Expr = {
     IfExpr,
     Expr,
@@ -93,7 +88,7 @@ ScriptExpr: Expr = {
 // If expression (recursive via else-if chain).
 IfExpr: Expr = {
     // if cond { body; tail } else ...
-    <l:@L> "if" <cond:Expr> "{" <body:ScriptModeStmt*> <tail:ScriptExpr?> "}"
+    <l:@L> "if" <cond:Expr> "{" <body:Stmt*> <tail:ScriptExpr?> "}"
         <eb:ElseBranch?> <r:@R> =>
         Expr::If {
             id: AstId::alloc(),
@@ -104,7 +99,7 @@ IfExpr: Expr = {
             span: Span::new(l, r),
         },
     // if let pattern = source { body; tail } else ...
-    <l:@L> "if" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:ScriptModeStmt*> <tail:ScriptExpr?> "}"
+    <l:@L> "if" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> <tail:ScriptExpr?> "}"
         <eb:ElseBranch?> <r:@R> =>?
         Ok(Expr::IfLet {
             id: AstId::alloc(),
@@ -119,7 +114,7 @@ IfExpr: Expr = {
 
 ElseBranch: ElseBranch = {
     "else" <e:IfExpr> => ElseBranch::ElseIf(e),
-    <l:@L> "else" "{" <body:ScriptModeStmt*> <tail:ScriptExpr?> "}" <r:@R> =>
+    <l:@L> "else" "{" <body:Stmt*> <tail:ScriptExpr?> "}" <r:@R> =>
         ElseBranch::Else {
             body,
             tail: tail.map(Box::new),
@@ -127,7 +122,7 @@ ElseBranch: ElseBranch = {
         },
 };
 
-ScriptModeStmt: Stmt = {
+Stmt: Stmt = {
     // let x = expr;
     <l:@L> "let" <name:"ident"> "=" <expr:ScriptExpr> ";" <r:@R> =>
         Stmt::LetBind { id: AstId::alloc(), name, expr, span: Span::new(l, r) },
@@ -135,13 +130,10 @@ ScriptModeStmt: Stmt = {
     <l:@L> "let" <name:"ident"> ";" <r:@R> =>
         Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
     // while cond { body }
-    <l:@L> "while" <cond:Expr> "{" <body:ScriptModeStmt*> "}" <r:@R> =>
+    <l:@L> "while" <cond:Expr> "{" <body:Stmt*> "}" <r:@R> =>
         Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) },
-    // anyorder { body }
-    <l:@L> "anyorder" "{" <body:ScriptModeStmt*> "}" <r:@R> =>
-        Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
     // while let pattern = source { body }
-    <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:ScriptModeStmt*> "}" <r:@R> =>?
+    <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> "}" <r:@R> =>?
         Ok(Stmt::WhileLet {
             id: AstId::alloc(),
             pattern: expr_to_pattern(&lhs)?,
@@ -149,9 +141,22 @@ ScriptModeStmt: Stmt = {
             body,
             span: Span::new(l, r),
         }),
+    // anyorder { body }
+    <l:@L> "anyorder" "{" <body:Stmt*> "}" ";"? <r:@R> =>
+        Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
     // if expr as statement (value discarded)
     <e:IfExpr> ";" => Stmt::Expr(e),
-    // assignment: name = expr; (reassignment, context store, field store)
+    // match-bind (tag form): pattern = source { body };
+    <l:@L> <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> "}" ";" <r:@R> =>?
+        Ok(Stmt::MatchBind {
+            id: AstId::alloc(),
+            pattern: expr_to_pattern(&lhs)?,
+            source: rhs,
+            body,
+            span: Span::new(l, r),
+        }),
+    // assignment: `x = e;`, `@c.f = e;`, `a.b = e;`, `*r = e;`
+    // A bare `x = e;` assigns the `x` in scope; it never introduces one.
     <l:@L> <lhs:Expr> "=" <rhs:ScriptExpr> ";" <r:@R> =>? {
         let span = Span::new(l, r);
         fn collect_assign_path(expr: &Expr) -> (&Expr, Vec<Astr>) {
@@ -168,7 +173,6 @@ ScriptModeStmt: Stmt = {
         match root {
             Expr::Ident { name, ref_kind: RefKind::Value, .. } => {
                 if path.is_empty() {
-                    // In Script mode: bare `x = expr;` is Assign (reassignment), not Bind.
                     Ok(Stmt::Assign { id: AstId::alloc(), name: name.name, expr: rhs, span })
                 } else {
                     Ok(Stmt::VarFieldStore { id: AstId::alloc(), name: name.name, path, expr: rhs, span })
@@ -185,56 +189,6 @@ ScriptModeStmt: Stmt = {
     },
     // expression statement
     <e:Expr> ";" => Stmt::Expr(e),
-};
-
-ScriptStmt: Stmt = {
-    // anyorder { body };
-    <l:@L> "anyorder" "{" <body:ScriptStmt*> "}" ";"? <r:@R> =>
-        Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
-    // match-bind (if-let): pattern = source { body };
-    <l:@L> <lhs:Expr> "=" <rhs:Expr> "{" <body:ScriptStmt*> "}" ";" <r:@R> =>?
-        Ok(Stmt::MatchBind {
-            id: AstId::alloc(),
-            pattern: expr_to_pattern(&lhs)?,
-            source: rhs,
-            body,
-            span: Span::new(l, r),
-        }),
-    // bind / context-store / field-store: lhs = rhs;
-    <l:@L> <lhs:Expr> "=" <rhs:Expr> ";" <r:@R> =>? {
-        let span = Span::new(l, r);
-        // Flatten FieldAccess chain to (root, path).
-        fn collect_assign_path(expr: &Expr) -> (&Expr, Vec<Astr>) {
-            match expr {
-                Expr::FieldAccess { object, field, .. } => {
-                    let (root, mut path) = collect_assign_path(object);
-                    path.push(*field);
-                    (root, path)
-                }
-                other => (other, vec![]),
-            }
-        }
-        let (root, path) = collect_assign_path(&lhs);
-        match root {
-            Expr::Ident { name, ref_kind: RefKind::Value, .. } => {
-                if path.is_empty() {
-                    Ok(Stmt::Bind { id: AstId::alloc(), name: name.name, expr: rhs, span })
-                } else {
-                    Ok(Stmt::VarFieldStore { id: AstId::alloc(), name: name.name, path, expr: rhs, span })
-                }
-            }
-            Expr::ContextRef { name, .. } =>
-                Ok(Stmt::ContextStore { id: AstId::alloc(), name: *name, path, expr: rhs, span }),
-            Expr::UnaryOp { op: UnaryOp::Deref, operand, .. } if path.is_empty() =>
-                Ok(Stmt::DerefStore { id: AstId::alloc(), target: operand.clone(), expr: rhs, span }),
-            _ => Err(lalrpop_util::ParseError::User {
-                error: ParseError { kind: ParseErrorKind::InvalidAssignTarget, span },
-            }),
-        }
-    },
-    // expression statement
-    <e:Expr> ";" =>
-        Stmt::Expr(e),
 };
 
 // ── Top-level rule ─────────────────────────────────────────────────────
@@ -438,7 +392,7 @@ PrimaryExpr: Expr = {
         build_list(items, Span::new(l, r)),
 
     // Block expression with statements: { stmt; stmt; expr }
-    <l:@L> "{" <stmts:ScriptStmt+> <tail:Expr> "}" <r:@R> =>
+    <l:@L> "{" <stmts:Stmt+> <tail:Expr> "}" <r:@R> =>
         Expr::Block { id: AstId::alloc(), stmts, tail: Box::new(tail), span: Span::new(l, r) },
     // Block expression with single expression: { expr }
     <l:@L> "{" <tail:Expr> "}" <r:@R> =>

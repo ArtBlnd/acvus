@@ -13,7 +13,7 @@ use kovac_interpreter::vm::execute;
 /// Compile a script source to optimized MirModule via the graph API.
 fn compile_script(interner: &Interner, source: &str) -> MirModule {
     let test_qref = QualifiedRef::root(interner.intern("test"));
-    let ast = acvus_ast::parse_script_mode(interner, source).expect("parse failed");
+    let ast = acvus_ast::parse_script(interner, source).expect("parse failed");
     let mut functions = vec![Function {
         qref: test_qref,
         kind: FnKind::Local(ParsedAst::Script(ast)),

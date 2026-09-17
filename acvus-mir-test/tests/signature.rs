@@ -126,7 +126,7 @@ fn a_call_no_instance_matches_is_an_error_at_the_call() {
 fn the_choice_waits_for_the_argument_to_resolve() {
     let i = Interner::new();
     assert_eq!(
-        check(&i, "g = |c| -> pick(c, |x| -> x); g([1])").unwrap(),
+        check(&i, "let g = |c| -> pick(c, |x| -> x); g([1])").unwrap(),
         Ty::I64
     );
 }

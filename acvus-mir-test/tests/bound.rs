@@ -96,8 +96,11 @@ fn a_type_outside_the_bound_is_rejected_where_it_was_called() {
 #[test]
 fn the_bound_waits_for_the_argument_to_resolve() {
     let i = Interner::new();
-    assert_eq!(check(&i, "g = |x| -> add(x, 1); g(41)").unwrap(), Ty::I64);
-    let errs = check(&i, "g = |x| -> add(x, x); g(\"a\")").unwrap_err();
+    assert_eq!(
+        check(&i, "let g = |x| -> add(x, 1); g(41)").unwrap(),
+        Ty::I64
+    );
+    let errs = check(&i, "let g = |x| -> add(x, x); g(\"a\")").unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.contains("outside the declared bound")),

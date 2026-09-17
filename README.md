@@ -47,28 +47,36 @@ Default case.
 {{ @messages | filter(|m| -> m.role == "user") | len | to_string }}
 ```
 
-### Script mode
+### Scripts
 
 ```
 let count = 0;
-for item in @items {
+let it = as_iter(&@items);
+while let Some(item) = next(&mut it) {
     if item.active {
         count = count + 1;
-    }
+    };
 }
 let label = if count > 10 { "many" } else { "few" };
 label
 ```
 
-`let x = expr;` is a new binding. `x = expr;` is reassignment. Shadowing supported. `if`/`if let`/`for`/`while`/`while let` as expected.
+`let x = expr;` is a new binding and shadows an outer `x`; it ends with the
+block that introduced it. `x = expr;` assigns the `x` in scope, and never
+introduces one — assigning a name with no binding in scope is a compile
+error, as is assigning a name a lambda captured. `if`/`if let`/`while`/
+`while let`/`anyorder` and the tag form `pattern = source { body };` are
+statements of the same rule in every block: the script's top level, a
+lambda's block body, and any of those bodies.
 
-### Expression mode
+### Expressions
 
 ```
 @items | filter(|x| -> x.active) | map(|x| -> x.name) | join(", ")
 ```
 
-Same expression language used inside `{{ }}` in templates. No keywords — pipes and pattern matching only.
+The same expression language used inside `{{ }}` in templates: pipes and
+pattern matching, with no statement around them.
 
 ### References
 

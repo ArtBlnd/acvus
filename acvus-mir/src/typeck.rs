@@ -351,6 +351,16 @@ impl TypeResolution {
     }
 }
 
+/// What `x = e;` found for `x`.
+enum AssignTarget {
+    /// A binding of the body that carries the statement: its type.
+    Bound(InferTy),
+    /// Bound outside the innermost lambda, so the lambda sees a copy.
+    Captured,
+    /// No binding of that name anywhere in scope.
+    Unbound,
+}
+
 struct LambdaScope {
     depth: usize,
     body_span: Span,
@@ -942,6 +952,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn pop_scope(&mut self) {
         self.scopes.pop();
+    }
+
+    /// Where `x = e;` stores. A binding is assignable only from the body
+    /// that introduced it: a name the innermost lambda captured is the
+    /// lambda's own copy (captures are by value, RFC-0018), so a store
+    /// there would not reach the binding the writer named (RFC-0045).
+    fn assign_target(&self, name: Astr) -> AssignTarget {
+        let Some(depth) = self.scopes.iter().rposition(|s| s.contains_key(&name)) else {
+            return AssignTarget::Unbound;
+        };
+        if self.lambda_stack.iter().any(|ls| depth < ls.depth) {
+            return AssignTarget::Captured;
+        }
+        AssignTarget::Bound(self.scopes[depth][&name].clone())
     }
 
     /// A name for a value: its type is a variable of the solver, so what
@@ -2636,16 +2660,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Type-check a single script statement.
     fn check_stmt(&mut self, stmt: &acvus_ast::Stmt) {
         match stmt {
-            acvus_ast::Stmt::Bind {
-                id,
-                name,
-                expr,
-                span: _,
-            } => {
-                let ty = self.check_expr(expr);
-                self.define_var(*name, ty.clone());
-                self.record(*id, ty);
-            }
             acvus_ast::Stmt::ContextStore {
                 id,
                 name,
@@ -2801,13 +2815,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let ty = self.check_expr(expr);
-                let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
-                    self.error(
-                        MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
-                        *span,
-                    );
-                    Self::infer_error()
-                });
+                let var_ty = match self.assign_target(*name) {
+                    AssignTarget::Bound(var_ty) => var_ty,
+                    AssignTarget::Captured => {
+                        self.error(
+                            MirErrorKind::AssignToCapture(self.interner.resolve(*name).to_string()),
+                            *span,
+                        );
+                        Self::infer_error()
+                    }
+                    AssignTarget::Unbound => {
+                        self.error(
+                            MirErrorKind::AssignToUnbound(self.interner.resolve(*name).to_string()),
+                            *span,
+                        );
+                        Self::infer_error()
+                    }
+                };
                 let site = ConversionSite {
                     id: expr.id(),
                     span: *span,

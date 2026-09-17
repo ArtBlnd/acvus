@@ -1809,7 +1809,7 @@ fn iter_map_reuse_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | into_iter | map(|x| -> { @counter = x; x }); it | collect; it | collect"#,
+        r#"let it = @items | into_iter | map(|x| -> { @counter = x; x }); it | collect; it | collect"#,
         &context,
     );
     assert!(result.is_err(), "iter reuse should be rejected: {result:?}");
@@ -1831,7 +1831,7 @@ fn iter_map_single_use_ok() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @counter = x; x }) | collect"#,
+        r#"let items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @counter = x; x }) | collect"#,
         &context,
     );
     assert!(
@@ -1857,7 +1857,7 @@ fn iter_chain_reuse_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | into_iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = x; x > 0 }); it | collect; it | collect"#,
+        r#"let it = @items | into_iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = x; x > 0 }); it | collect; it | collect"#,
         &context,
     );
     assert!(
@@ -1883,7 +1883,7 @@ fn iter_chain_single_use_ok() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = *x; *x > 0 }) | collect"#,
+        r#"let items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @a = x; x }) | filter(|x| -> { @b = *x; *x > 0 }) | collect"#,
         &context,
     );
     assert!(
@@ -1905,7 +1905,7 @@ fn iter_pure_map_reuse_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | into_iter | map(|x| -> x + 1); it | collect; it | collect"#,
+        r#"let it = @items | into_iter | map(|x| -> x + 1); it | collect; it | collect"#,
         &context,
     );
     assert!(
@@ -1930,7 +1930,7 @@ fn iter_reuse_after_collect_rejected() {
     );
     let result = compile_script_ir(
         &i,
-        r#"it = @items | into_iter | map(|x| -> { @counter = x; x }); collected = it | collect; it | collect"#,
+        r#"let it = @items | into_iter | map(|x| -> { @counter = x; x }); let collected = it | collect; it | collect"#,
         &context,
     );
     assert!(
@@ -1978,7 +1978,7 @@ fn migrated_move_reject_iter_reuse() {
     );
     let result = compile_script_ir(
         &i,
-        r#"x = @items | into_iter | map(|x| -> { @counter = x; x }); x | collect; x | collect"#,
+        r#"let x = @items | into_iter | map(|x| -> { @counter = x; x }); x | collect; x | collect"#,
         &context,
     );
     assert!(result.is_err(), "should reject iter reuse");
@@ -2025,7 +2025,7 @@ fn migrated_move_reject_iter_pipe_reuse() {
     );
     let result = compile_script_ir(
         &i,
-        r#"x = @items | into_iter | map(|x| -> { @counter = x; x }); a = x | collect; b = x | collect; a"#,
+        r#"let x = @items | into_iter | map(|x| -> { @counter = x; x }); let a = x | collect; let b = x | collect; a"#,
         &context,
     );
     assert!(result.is_err());
@@ -2043,7 +2043,7 @@ fn migrated_move_reject_pure_iter_reuse() {
     let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_script_ir(
         &i,
-        "x = @src; a = x | collect; b = x | collect; a",
+        "let x = @src; let a = x | collect; let b = x | collect; a",
         &context,
     );
     assert!(
@@ -2067,7 +2067,7 @@ fn migrated_move_accept_iter_single_use() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; x = items | into_iter | map(|x| -> { @counter = x; x }); x | collect"#,
+        r#"let items = @items; @items = [1, 2, 3]; let x = items | into_iter | map(|x| -> { @counter = x; x }); x | collect"#,
         &context,
     );
     assert!(
@@ -2109,7 +2109,7 @@ fn migrated_move_accept_iter_pipe_chain() {
     );
     let result = compile_script_ir(
         &i,
-        r#"items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @counter = x; x }) | filter(|x| -> *x > 0) | map(|x| -> x * 2) | collect"#,
+        r#"let items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> { @counter = x; x }) | filter(|x| -> *x > 0) | map(|x| -> x * 2) | collect"#,
         &context,
     );
     assert!(
@@ -2122,8 +2122,12 @@ fn migrated_move_accept_iter_pipe_chain() {
 fn migrated_move_accept_fn_multiple_calls() {
     let i = Interner::new();
     let f = extern_fn(&i, "f", &[Ty::I64], Ty::I64);
-    let result =
-        compile_script_ir_with(&i, "a = f(1); b = f(2); a + b", &FxHashMap::default(), &[f]);
+    let result = compile_script_ir_with(
+        &i,
+        "let a = f(1); let b = f(2); a + b",
+        &FxHashMap::default(),
+        &[f],
+    );
     assert!(
         result.is_ok(),
         "fn without move-only captures should be callable multiple times: {result:?}"
@@ -2135,7 +2139,11 @@ fn migrated_move_reject_list_of_iter_reuse() {
     let i = Interner::new();
     let ty = Ty::Array(Box::new(iter_int_ty(&i)), acvus_mir::ty::LenTerm::Known(3));
     let context = ctx(&i, &[("src", ty)]);
-    let result = compile_script_ir(&i, "x = @src; a = len(&x); b = len(&x); a + b", &context);
+    let result = compile_script_ir(
+        &i,
+        "let x = @src; let a = len(&x); let b = len(&x); a + b",
+        &context,
+    );
     assert!(
         result.is_err(),
         "Vec containing an Iterator should be move-only"
@@ -2149,7 +2157,7 @@ fn migrated_move_reject_option_iter_reuse() {
     let context = ctx(&i, &[("src", ty)]);
     let result = compile_script_ir(
         &i,
-        "x = @src; a = x | unwrap | collect; b = x | unwrap | collect; a",
+        "let x = @src; let a = x | unwrap | collect; let b = x | unwrap | collect; a",
         &context,
     );
     assert!(result.is_err(), "Option<Iterator> should be move-only");
@@ -2225,7 +2233,7 @@ fn migrated_move_accept_pure_capture_fn_multi_call() {
     let context = ctx(&i, &[("val", Ty::I64)]);
     let result = compile_script_ir(
         &i,
-        "x = @val; f = (|a| -> *x + a); a = f(1); b = f(2); a + b",
+        "let x = @val; let f = (|a| -> *x + a); let a = f(1); let b = f(2); a + b",
         &context,
     );
     assert!(
@@ -2246,7 +2254,7 @@ fn migrated_move_accept_lambda_return_deque_as_iterator() {
     );
     let result = compile_script_ir(
         &i,
-        "items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
+        "let items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
         &context,
     );
     assert!(
@@ -2267,7 +2275,7 @@ fn migrated_move_accept_lambda_return_scalar() {
     );
     let result = compile_script_ir(
         &i,
-        "items = @items; @items = [1, 2, 3]; items | map(|x| -> x + 1) | collect",
+        "let items = @items; @items = [1, 2, 3]; items | map(|x| -> x + 1) | collect",
         &context,
     );
     assert!(
@@ -2288,7 +2296,7 @@ fn migrated_move_accept_nested_flat_map_deque_return() {
     );
     let result = compile_script_ir(
         &i,
-        "items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
+        "let items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
         &context,
     );
     assert!(
@@ -2303,7 +2311,7 @@ fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let context = items_list_context(&i);
     let result = compile_to_ir(
         &i,
-        "{{ f = (|z| -> { items = @items; @items = vec([]); collect(items | into_iter) }) }}{{ n19 = f(0) }}{{ out = len(&n19) }}{{ out.to_string() }}{{ n20 = f(0) }}{{ out = len(&n20) }}{{ out.to_string() }}",
+        "{{ f = (|z| -> { let items = @items; @items = vec([]); collect(items | into_iter) }) }}{{ n19 = f(0) }}{{ out = len(&n19) }}{{ out.to_string() }}{{ n20 = f(0) }}{{ out = len(&n20) }}{{ out.to_string() }}",
         &context,
     );
     assert!(
@@ -2318,7 +2326,7 @@ fn migrated_move_reject_fnonce_local_capture_double() {
     let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_script_ir(
         &i,
-        "x = @src; f = (|z| -> collect(x)); a = f(0); b = f(0); a",
+        "let x = @src; let f = (|z| -> collect(x)); let a = f(0); let b = f(0); a",
         &context,
     );
     assert!(
@@ -2333,7 +2341,7 @@ fn migrated_move_reject_iter_without_purify() {
     let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_script_ir(
         &i,
-        "x = @src; a = x | collect; b = x | collect; a",
+        "let x = @src; let a = x | collect; let b = x | collect; a",
         &context,
     );
     assert!(
@@ -2367,7 +2375,7 @@ fn migrated_move_reject_iter_var_without_purify() {
 #[test]
 fn projection_var_whole_read_write() {
     let i = Interner::new();
-    let ir = compile_script_ir(&i, "x = 42; x", &FxHashMap::default()).unwrap();
+    let ir = compile_script_ir(&i, "let x = 42; x", &FxHashMap::default()).unwrap();
     // After SSA: no Ref/Load/Store should remain (all promoted).
     assert!(
         !ir.contains("ref "),
@@ -2385,7 +2393,7 @@ fn projection_var_whole_read_write() {
 #[test]
 fn projection_var_multiple_writes() {
     let i = Interner::new();
-    let ir = compile_script_ir(&i, "x = 1; x = 2; x", &FxHashMap::default()).unwrap();
+    let ir = compile_script_ir(&i, "let x = 1; x = 2; x", &FxHashMap::default()).unwrap();
     assert!(
         !ir.contains("ref "),
         "Ref should be eliminated by SSA: {ir}"
@@ -2443,7 +2451,7 @@ fn projection_chained_field_access_2depth() {
 fn projection_var_in_arithmetic() {
     let i = Interner::new();
     let context = ctx(&i, &[("val", Ty::I64)]);
-    let ir = compile_script_ir(&i, "x = @val; x + 1", &context).unwrap();
+    let ir = compile_script_ir(&i, "let x = @val; x + 1", &context).unwrap();
     // SSA should promote x - no Ref for x should remain.
     assert!(ir.contains("+"), "should have addition: {ir}");
     assert!(ir.contains("return"), "should compile and return: {ir}");
@@ -2455,7 +2463,7 @@ fn projection_var_in_arithmetic() {
 fn projection_lambda_capture() {
     let i = Interner::new();
     let context = ctx(&i, &[("data", Ty::I64)]);
-    let ir = compile_script_ir(&i, "x = @data; |y| -> *x + y", &context).unwrap();
+    let ir = compile_script_ir(&i, "let x = @data; |y| -> *x + y", &context).unwrap();
     assert!(ir.contains("closure"), "should have closure: {ir}");
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
@@ -2529,7 +2537,7 @@ fn projection_soundness_reject_param_write() {
 #[test]
 fn projection_ssa_var_promoted() {
     let i = Interner::new();
-    let ir = compile_script_ir(&i, "x = 1; y = x + 2; y", &FxHashMap::default()).unwrap();
+    let ir = compile_script_ir(&i, "let x = 1; let y = x + 2; y", &FxHashMap::default()).unwrap();
     // All Ref/Load/Store for x and y should be eliminated.
     assert!(
         !ir.contains("ref "),
@@ -2740,7 +2748,12 @@ fn context_projection_store_2depth() {
 fn var_field_store_1depth() {
     let i = Interner::new();
     let context = ctx(&i, &[("obj", obj(&i, &[("x", Ty::I64)]))]);
-    let ir = compile_script_ir(&i, "a = @obj; a.x = 0; x = a.x; @obj = a; x", &context).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "let a = @obj; a.x = 0; let x = a.x; @obj = a; x",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 

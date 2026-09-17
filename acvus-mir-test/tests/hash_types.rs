@@ -487,7 +487,7 @@ fn h5_a_composite_inside_a_slot_is_one_representation() {
 #[test]
 fn h6_a_value_at_a_uniform_position_takes_the_next_demand() {
     let i = Interner::new();
-    let checked = check(&i, "s = first(k()); g(vec_array([s]))").unwrap();
+    let checked = check(&i, "let s = first(k()); g(vec_array([s]))").unwrap();
     assert_eq!(checked.ret, Ty::I64);
     assert_eq!(instance_of(&checked, "vec_array"), VEC_ARRAY_AT_SPECIALIZED);
 }
@@ -654,7 +654,7 @@ fn h11_a_uniform_value_reaches_a_specialized_instance_through_materialize() {
 #[test]
 fn h12_a_borrow_of_a_uniform_place_is_cast_in_place_for_a_specialized_parameter() {
     let i = Interner::new();
-    let checked = check_members(&i, "x = vec([1.0, 2.0]); norm(&x)");
+    let checked = check_members(&i, "let x = vec([1.0, 2.0]); norm(&x)");
     assert_eq!(checked.ret, Ty::Float);
     assert_eq!(instance_of(&checked, "norm"), 0);
     assert_eq!(checked.casts, vec!["&materialize/erase".to_string()]);
@@ -669,7 +669,12 @@ fn h13_a_reference_value_at_a_specialized_parameter_needs_a_place() {
         functions, types, ..
     } = Externs::combine(vec![acvus_ext::vec_registry(), member_registry()], &i)
         .expect("registries combine");
-    let errs = match check_functions(&i, types, functions, "x = vec([1.0, 2.0]); r = &x; norm(r)") {
+    let errs = match check_functions(
+        &i,
+        types,
+        functions,
+        "let x = vec([1.0, 2.0]); let r = &x; norm(r)",
+    ) {
         Ok(checked) => panic!("checked to {:?}", checked.ret),
         Err(errs) => errs,
     };

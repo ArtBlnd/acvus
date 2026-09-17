@@ -90,8 +90,8 @@ fn lambda_effect_counts_only_when_called() {
         &i,
         vec![
             extern_fn(&i, "fetch", Effect::OPAQUE),
-            local_fn(&i, "defines", "f = |_x| -> fetch(); 1"),
-            local_fn(&i, "calls", "f = |_x| -> fetch(); f(1)"),
+            local_fn(&i, "defines", "let f = |_x| -> fetch(); 1"),
+            local_fn(&i, "calls", "let f = |_x| -> fetch(); f(1)"),
         ],
     );
     assert_eq!(effects["defines"], Effect::PURE);

@@ -32,7 +32,7 @@ fn two_commutative_calls_merge_and_the_dump_shows_the_tree() {
     let ext = [commutative_io(&i, "io1"), commutative_io(&i, "io2")];
     let ir = compile_multi_fn_optimized(
         &i,
-        ("main", "a = io1(1); b = io2(2); a + b"),
+        ("main", "let a = io1(1); let b = io2(2); a + b"),
         &[],
         &[],
         &ext,
@@ -65,7 +65,7 @@ fn a_chain_of_calls_is_one_line() {
     };
     let ir = compile_script_ir_with(
         &i,
-        "a = io(1); io(a)",
+        "let a = io(1); io(a)",
         &rustc_hash::FxHashMap::default(),
         &[io],
     )
@@ -96,7 +96,7 @@ fn anyorder_in_a_script_merges_its_calls() {
     };
     let ir = compile_script_ir_with(
         &i,
-        "anyorder { a = io(1); b = io(2); }; 0",
+        "anyorder { let a = io(1); let b = io(2); }; 0",
         &rustc_hash::FxHashMap::default(),
         &[io],
     )

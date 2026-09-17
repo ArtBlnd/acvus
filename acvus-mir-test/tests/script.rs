@@ -4,7 +4,7 @@
 //! Tests are grouped by category with both soundness and completeness direction.
 
 use acvus_mir::ty::{Param, Ty};
-use acvus_mir_test::{compile_script_ir, compile_script_mode_raw};
+use acvus_mir_test::{compile_script_ir, compile_script_mode_raw, compile_script_optimized};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -272,4 +272,79 @@ fn only_a_place_can_be_lent() {
     let err =
         compile_script_mode_raw(&i, "next(&mut (@items | into_iter))", &items_ctx(&i)).unwrap_err();
     assert!(err.contains("can be referenced"), "{err}");
+}
+
+// =======================================================================
+//  `let` binds, `x = e;` assigns (RFC-0045)
+// =======================================================================
+
+#[test]
+fn an_assignment_to_a_name_no_binding_introduced_is_refused() {
+    let i = Interner::new();
+    let err = compile_script_mode_raw(&i, "x = 1; x", &FxHashMap::default()).unwrap_err();
+    assert!(
+        err.contains(
+            "cannot assign to `x`: no binding named `x` is in scope; `let x = ...;` binds it"
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_assignment_to_a_name_the_lambda_captured_is_refused() {
+    // A capture is by value (RFC-0018), so the store would write the
+    // lambda's copy and never reach the binding the writer named.
+    let i = Interner::new();
+    let err = compile_script_mode_raw(
+        &i,
+        "let x = 1; let f = |q| -> { x = 2; x }; f(0)",
+        &FxHashMap::default(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("cannot assign to `x`: it is captured by the lambda, not bound in it"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_name_the_lambda_bound_itself_is_assignable_in_it() {
+    let i = Interner::new();
+    compile_script_mode_raw(
+        &i,
+        "let f = |q| -> { let x = q; x = x + 1; x }; f(1)",
+        &FxHashMap::default(),
+    )
+    .expect("`x` is the lambda body's own binding");
+}
+
+#[test]
+fn a_let_in_a_nested_block_does_not_leak_past_it() {
+    // The inner `let` shadows for the block only: after it, `n` is the
+    // outer binding, and its type is the outer one's.
+    let i = Interner::new();
+    let err = compile_script_mode_raw(
+        &i,
+        "let n = 1; while n < 2 { let s = \"in\"; n = n + 1; } s",
+        &FxHashMap::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("undefined variable `s`"), "{err}");
+}
+
+#[test]
+fn an_assignment_in_a_loop_body_is_the_outer_binding() {
+    // The body writes the binding the loop's enclosing block introduced,
+    // so the loop header joins the two reaching definitions.
+    let i = Interner::new();
+    let ir = compile_script_optimized(
+        &i,
+        "let n = 0; while n < 3 { n = n + 1; } n",
+        &FxHashMap::default(),
+    )
+    .expect("`n` is assigned in the body and read after it");
+    assert!(
+        ir.contains("L0(r1: i64):"),
+        "the loop header takes the assigned `n` as a block parameter: {ir}"
+    );
 }

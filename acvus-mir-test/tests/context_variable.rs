@@ -110,7 +110,7 @@ fn object_context(i: &Interner, name: &str) -> FxHashMap<acvus_utils::Astr, Ty> 
 #[test]
 fn a_context_moved_out_and_not_assigned_back_is_rejected() {
     let i = Interner::new();
-    let err = compile_script_ir(&i, "x = @user; x", &object_context(&i, "user")).unwrap_err();
+    let err = compile_script_ir(&i, "let x = @user; x", &object_context(&i, "user")).unwrap_err();
     assert!(
         err.contains("context @user is moved out here and not assigned again before the run ends"),
         "{err}"
@@ -120,8 +120,12 @@ fn a_context_moved_out_and_not_assigned_back_is_rejected() {
 #[test]
 fn a_context_bound_and_read_again_is_rejected_before_promotion() {
     let i = Interner::new();
-    let err =
-        compile_script_ir(&i, "x = @user; y = @user; 0", &object_context(&i, "user")).unwrap_err();
+    let err = compile_script_ir(
+        &i,
+        "let x = @user; let y = @user; 0",
+        &object_context(&i, "user"),
+    )
+    .unwrap_err();
     assert!(err.contains("after it was moved"), "{err}");
 }
 
@@ -130,7 +134,7 @@ fn a_context_moved_out_and_assigned_back_is_accepted() {
     let i = Interner::new();
     compile_script_ir(
         &i,
-        "x = @user; @user = { age: 1, }; x",
+        "let x = @user; @user = { age: 1, }; x",
         &object_context(&i, "user"),
     )
     .unwrap();
@@ -139,7 +143,7 @@ fn a_context_moved_out_and_assigned_back_is_accepted() {
 #[test]
 fn a_string_context_named_twice_is_copied_before_its_first_use() {
     let i = Interner::new();
-    let ir = compile_script_ir(&i, "x = @items; x", &string_context(&i, "items")).unwrap();
+    let ir = compile_script_ir(&i, "let x = @items; x", &string_context(&i, "items")).unwrap();
     assert!(ir.contains("string_clone"), "{ir}");
 }
 
@@ -148,7 +152,7 @@ fn a_string_context_used_once_after_reassignment_is_not_copied() {
     let i = Interner::new();
     let ir = compile_script_ir(
         &i,
-        r#"x = @items; @items = "new"; x"#,
+        r#"let x = @items; @items = "new"; x"#,
         &string_context(&i, "items"),
     )
     .unwrap();

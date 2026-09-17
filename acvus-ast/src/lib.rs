@@ -24,7 +24,7 @@ mod grammar {
 pub use acvus_utils::{LocalFactory, LocalIdOps};
 pub use ast::*;
 pub use error::ParseError;
-pub use parser::{parse_expr, parse_script, parse_script_mode, parse_template};
+pub use parser::{parse_expr, parse_script, parse_template};
 pub use span::{Span, Spanned};
 
 use acvus_utils::Interner;

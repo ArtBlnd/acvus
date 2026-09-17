@@ -713,8 +713,12 @@ mod tests {
     #[test]
     fn a_stored_copy_of_a_promoted_load_defines_the_ssa_value() {
         let i = Interner::new();
-        let module =
-            compile_script(&i, "x = 1; y = x; @out = y; @out", &[("out", Ty::I64)]).unwrap();
+        let module = compile_script(
+            &i,
+            "let x = 1; let y = x; @out = y; @out",
+            &[("out", Ty::I64)],
+        )
+        .unwrap();
         let mut cfg_body = cfg::promote(module.main);
         run(&mut cfg_body);
         assert!(

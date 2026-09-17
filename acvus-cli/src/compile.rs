@@ -54,7 +54,7 @@ pub fn compile(
     registries: Vec<Registry<AcvusRuntime>>,
 ) -> Result<Compiled, Vec<Diagnostic>> {
     let parsed = match mode {
-        Mode::Script => acvus_ast::parse_script_mode(interner, source).map(ParsedAst::Script),
+        Mode::Script => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
         Mode::Expr => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
         Mode::Template => acvus_ast::parse(interner, source).map(ParsedAst::Template),
     };

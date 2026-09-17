@@ -151,7 +151,7 @@ fn inline_pipe_with_extra_args() {
 fn inline_preserves_extern_call() {
     // main calls to_string (ExternFn) - should remain as FunctionCall
     let i = Interner::new();
-    let ir = compile_inline_ir(&i, ("main", "n = 42; n.to_string()"), &[], &[]).unwrap();
+    let ir = compile_inline_ir(&i, ("main", "let n = 42; n.to_string()"), &[], &[]).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -180,7 +180,7 @@ fn inline_extern_chain_preserved() {
         ("main", r#"process("hello")"#),
         &[(
             "process",
-            "n = len(&$s); n.to_string()",
+            "let n = len(&$s); n.to_string()",
             sig(&i, &[("s", Ty::String)]),
         )],
         &[],
@@ -196,7 +196,7 @@ fn inline_mixed_local_extern() {
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
-        ("main", "n = double(3); n.to_string()"),
+        ("main", "let n = double(3); n.to_string()"),
         &[("double", "$x + $x", sig(&i, &[("x", Ty::I64)]))],
         &[],
     )
@@ -256,7 +256,7 @@ fn inline_callee_writes_caller_reads() {
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
-        ("main", "x = bump(); x + @count"),
+        ("main", "let x = bump(); x + @count"),
         &[("bump", "@count = @count + 1; @count", sig(&i, &[]))],
         &[("count", Ty::I64)],
     )
@@ -492,7 +492,7 @@ fn inline_devirt_known_closure() {
     // Indirect call to a known closure (single MakeClosure def) gets devirtualized and inlined.
     // main = { f = |x| -> x + 1; f(5) }
     let i = Interner::new();
-    let ir = compile_inline_ir(&i, ("main", "f = |x| -> x + 1; f(5)"), &[], &[]).unwrap();
+    let ir = compile_inline_ir(&i, ("main", "let f = |x| -> x + 1; f(5)"), &[], &[]).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -527,7 +527,7 @@ fn inline_string_operations() {
         ("main", r#"greet("world")"#),
         &[(
             "greet",
-            r#"h = "Hello "; concat(&h, &$name)"#,
+            r#"let h = "Hello "; concat(&h, &$name)"#,
             sig(&i, &[("name", Ty::String)]),
         )],
         &[],
@@ -575,7 +575,11 @@ fn inline_with_local_binding() {
     let ir = compile_inline_ir(
         &i,
         ("main", "compute(5)"),
-        &[("compute", "y = $x * 2; y + 1", sig(&i, &[("x", Ty::I64)]))],
+        &[(
+            "compute",
+            "let y = $x * 2; y + 1",
+            sig(&i, &[("x", Ty::I64)]),
+        )],
         &[],
     )
     .unwrap();

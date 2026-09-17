@@ -179,9 +179,7 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
     use acvus_ast::*;
     for stmt in stmts {
         match stmt {
-            Stmt::Bind { expr, .. }
-            | Stmt::ContextStore { expr, .. }
-            | Stmt::VarFieldStore { expr, .. } => {
+            Stmt::ContextStore { expr, .. } | Stmt::VarFieldStore { expr, .. } => {
                 collect_value_refs_expr(expr, refs);
             }
             Stmt::DerefStore { target, expr, .. } => {
@@ -2513,7 +2511,7 @@ mod tests {
             &i,
             &[(
                 "test",
-                r#""hello" = $x { y = 1; }; 0"#,
+                r#""hello" = $x { let y = 1; }; 0"#,
                 Some(vec![("x", Ty::String)]),
                 None,
             )],

@@ -64,7 +64,7 @@ fn a_template_prints_its_text_and_an_expression_prints_its_value() {
     let out = acvus(dir.path(), &["run", "hi.acvt", "--context", "hi.json"]);
     assert_eq!(text(&out.stdout), "Hello acvus!\n");
     assert_eq!(text(&out.stderr), "");
-    let out = acvus(dir.path(), &["run", "-e", "xs = [1, 2]; xs.len() * 10"]);
+    let out = acvus(dir.path(), &["run", "-e", "let xs = [1, 2]; xs.len() * 10"]);
     assert_eq!(text(&out.stdout), "20\n");
 }
 

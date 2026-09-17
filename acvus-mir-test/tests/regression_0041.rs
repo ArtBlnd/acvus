@@ -129,7 +129,7 @@ fn script_fn(i: &Interner, source: &str) -> Function {
     Function {
         qref: QualifiedRef::root(i.intern("script")),
         kind: FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script_mode(i, source).expect("parse"),
+            acvus_ast::parse_script(i, source).expect("parse"),
         )),
         ty: TyTerm::Fn {
             params: vec![],

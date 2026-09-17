@@ -51,32 +51,71 @@ Body         = Node*
 
 ---
 
-## Script Mode
+## Scripts
 
-A script is a sequence of semicolon-terminated statements with an optional tail expression:
+A script is a sequence of semicolon-terminated statements with an optional
+tail expression. There is one statement rule, and it is the rule of every
+block: a script's top level, a lambda's block body, a `while`/`anyorder`
+body, a tag-form match-bind body, an `if`/`else` block.
 
 ```
-Script       = ScriptStmt* Expr?
+Script       = Stmt* ScriptExpr?
+ScriptExpr   = IfExpr | Expr
 ```
 
 ### Statements
 
 ```
-ScriptStmt   = Bind | ContextStore | VarFieldStore | MatchBind | Iterate | ExprStmt
+Stmt         = LetBind | LetUninit | Assign | ContextStore | VarFieldStore
+             | DerefStore | While | WhileLet | Anyorder | MatchBind | ExprStmt
 
-Bind         = IDENT "=" Expr ";"                       ← x = 0;
-ContextStore = "@" IDENT ("." IDENT)* "=" Expr ";"      ← @a = 0; / @a.x.y = 0;
-VarFieldStore= IDENT ("." IDENT)+ "=" Expr ";"          ← a.x = 0;
-MatchBind    = Pattern "=" Expr "{" ScriptStmt* "}" ";"  ← if-let with body
-Iterate      = Pattern "in" Expr "{" ScriptStmt* "}" ";" ← for loop with body
-ExprStmt     = Expr ";"
+LetBind      = "let" IDENT "=" ScriptExpr ";"           ← let x = 0;
+LetUninit    = "let" IDENT ";"                          ← let x;
+Assign       = IDENT "=" ScriptExpr ";"                 ← x = 0;
+ContextStore = "@" IDENT ("." IDENT)* "=" ScriptExpr ";" ← @a = 0; / @a.x.y = 0;
+VarFieldStore= IDENT ("." IDENT)+ "=" ScriptExpr ";"    ← a.x = 0;
+DerefStore   = "*" Expr "=" ScriptExpr ";"              ← *r = 0;
+While        = "while" Expr "{" Stmt* "}"
+WhileLet     = "while" "let" Pattern "=" Expr "{" Stmt* "}"
+Anyorder     = "anyorder" "{" Stmt* "}" ";"?
+MatchBind    = Pattern "=" Expr "{" Stmt* "}" ";"       ← if-let with body
+ExprStmt     = Expr ";" | IfExpr ";"
 ```
 
-**Assignment LHS resolution**: The LHS FieldAccess chain is flattened to determine the root:
-- Root is `IDENT` with no path → `Bind`
+**`let` binds, `=` assigns.** `let x = e;` introduces a binding and shadows
+any outer `x`; the binding ends with the block that introduced it. `x = e;`
+stores into the `x` already in scope in the same body, and never introduces
+one: where no binding of that name is in scope the compiler reports
+
+```
+cannot assign to `x`: no binding named `x` is in scope; `let x = ...;` binds it
+```
+
+A name bound outside a lambda and assigned inside it is a capture, and a
+capture is by value (RFC-0018), so the store would write the lambda's copy:
+
+```
+cannot assign to `x`: it is captured by the lambda, not bound in it
+```
+
+A name assigned inside a `while`, `anyorder`, `if` or match-bind body is the
+outer binding, so its new value is live after the body; the join carries it.
+
+**Assignment LHS resolution**: The LHS FieldAccess chain is flattened to
+determine the root:
+- Root is `IDENT` with no path → `Assign`
 - Root is `IDENT` with path → `VarFieldStore`
 - Root is `@IDENT` → `ContextStore` (with or without path)
+- Root is `*Expr` with no path → `DerefStore`
 - Otherwise → parser error (`InvalidAssignTarget`)
+
+**MatchBind versus Assign**: both start with `Expr "="`. The trailing
+`"{" Stmt* "}" ";"` is what makes it the tag form; `x = { a, };` with an
+object literal on the right is an assignment.
+
+**A template binding is the template's.** `{{ x = expr }}` inside a template
+is a `MatchBlock` with a `Binding` pattern (see *Template Structure* above),
+not a statement: this rule does not reach it.
 
 **ContextStore path**: In `@a.x.y = 0;`, path = `[x, y]`. Empty path means identity store (`@a = 0;`).
 
@@ -242,7 +281,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `!` | logical negation |
 | `&&` `\|\|` | logical AND / OR |
 | `==` `!=` `<` `>` `<=` `>=` | comparison operators |
-| `=` | binding / assignment |
+| `=` | assignment (a statement), pattern match (a tag / a template) |
 | `in` | iteration |
 | `->` | lambda arrow |
 | `..` `..=` `=..` | range operators |
@@ -250,7 +289,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `\|` | pipe operator |
 | `::` | qualified name separator |
 | `:` | object field separator |
-| `;` | statement terminator (script mode) |
+| `;` | statement terminator |
 | `(` `)` `[` `]` `{` `}` | delimiters |
 | `,` | separator |
 

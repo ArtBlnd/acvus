@@ -261,7 +261,7 @@ fn s2_two_objects_join_to_the_union_of_their_fields() {
 #[test]
 fn s2_a_field_read_is_a_join_with_a_partial_object() {
     let i = Interner::new();
-    let checked = ok(&i, "f = |o| -> o.name; f({ name: \"n\", age: 1, })");
+    let checked = ok(&i, "let f = |o| -> o.name; f({ name: \"n\", age: 1, })");
     assert_eq!(checked.ret, Ty::String);
 }
 
@@ -336,7 +336,7 @@ fn s4_a_conversion_that_does_not_exist_names_both_types_at_the_argument() {
 #[test]
 fn s5_a_lambda_after_the_argument_sees_the_element_type_the_instance_fixed() {
     let i = Interner::new();
-    let checked = ok(&i, "vec_array([\"a\"]) ; f = |x| -> x + 1; f(1)");
+    let checked = ok(&i, "vec_array([\"a\"]) ; let f = |x| -> x + 1; f(1)");
     assert_eq!(checked.ret, Ty::I64);
     assert_eq!(
         checked.calls,
@@ -367,7 +367,7 @@ fn s6_a_field_store_grows_the_object_for_every_use() {
     let script = Function {
         qref: QualifiedRef::root(i.intern("script")),
         kind: FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script_mode(
+            acvus_ast::parse_script(
                 &i,
                 "let x = { a: 1, }; let y = if true { x.b = 0; fab(x) } else { fab(x) }; y",
             )

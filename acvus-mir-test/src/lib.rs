@@ -372,7 +372,7 @@ pub fn compile_script_mode_ir_with(
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
-    let ast = match acvus_ast::parse_script_mode(interner, source) {
+    let ast = match acvus_ast::parse_script(interner, source) {
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };
@@ -535,7 +535,7 @@ pub fn compile_script_mode_optimized(
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
-    let ast = match acvus_ast::parse_script_mode(interner, source) {
+    let ast = match acvus_ast::parse_script(interner, source) {
         Ok(ast) => ast,
         Err(e) => return Err(format!("parse error: {e:?}")),
     };

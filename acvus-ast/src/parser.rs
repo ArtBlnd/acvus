@@ -3,7 +3,7 @@ use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::grammar::{ExprParser, ScriptModeParser, ScriptParser, TagContentParser};
+use crate::grammar::{ExprParser, ScriptParser, TagContentParser};
 use crate::lexer::{ExprTokenizer, Segment, scan_template};
 use crate::span::Span;
 use crate::token::Token;
@@ -18,18 +18,12 @@ pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError>
         .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
 }
 
-/// Parse a script source string (standalone expressions with semicolons).
+/// Parse a script source string. One statement grammar: `let x = e;` binds,
+/// `x = e;` assigns the `x` in scope, and `if`/`while`/`anyorder`/the tag
+/// form are statements of the same rule in every block.
 pub fn parse_script(interner: &Interner, source: &str) -> Result<Script, ParseError> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
     ScriptParser::new()
-        .parse(interner, tokenizer)
-        .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
-}
-
-/// Parse a script mode source string (keyword-based: let, if, else, for, while).
-pub fn parse_script_mode(interner: &Interner, source: &str) -> Result<Script, ParseError> {
-    let tokenizer = ExprTokenizer::new(source, 0, interner);
-    ScriptModeParser::new()
         .parse(interner, tokenizer)
         .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
 }
@@ -857,9 +851,11 @@ mod tests {
     #[test]
     fn script_bind_and_tail() {
         let interner = Interner::new();
-        let s = parse_script(&interner, "x = @data; x").unwrap();
+        let s = parse_script(&interner, "let x = @data; x").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "x"));
+        assert!(
+            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x")
+        );
         assert!(matches!(
             s.tail.as_deref(),
             Some(Expr::Ident { name, ref_kind: RefKind::Value, .. }) if interner.resolve(name.name) == "x"
@@ -869,7 +865,7 @@ mod tests {
     #[test]
     fn script_trailing_semicolon_no_tail() {
         let interner = Interner::new();
-        let s = parse_script(&interner, "x = @data;").unwrap();
+        let s = parse_script(&interner, "let x = @data;").unwrap();
         assert_eq!(s.stmts.len(), 1);
         assert!(s.tail.is_none());
     }
@@ -877,10 +873,14 @@ mod tests {
     #[test]
     fn script_multiple_stmts_and_tail() {
         let interner = Interner::new();
-        let s = parse_script(&interner, "x = @data; y = x; y").unwrap();
+        let s = parse_script(&interner, "let x = @data; let y = x; y").unwrap();
         assert_eq!(s.stmts.len(), 2);
-        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "x"));
-        assert!(matches!(&s.stmts[1], Stmt::Bind { name, .. } if interner.resolve(*name) == "y"));
+        assert!(
+            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x")
+        );
+        assert!(
+            matches!(&s.stmts[1], Stmt::LetBind { name, .. } if interner.resolve(*name) == "y")
+        );
         assert!(s.tail.is_some());
     }
 
@@ -910,13 +910,98 @@ mod tests {
     #[test]
     fn script_pipe_in_bind() {
         let interner = Interner::new();
-        let s = parse_script(&interner, "x = @data | filter(f); x").unwrap();
+        let s = parse_script(&interner, "let x = @data | filter(f); x").unwrap();
         assert_eq!(s.stmts.len(), 1);
-        if let Stmt::Bind { expr, .. } = &s.stmts[0] {
-            assert!(matches!(expr, Expr::Pipe { .. }));
-        } else {
-            panic!("expected Bind");
-        }
+        let Stmt::LetBind { expr, .. } = &s.stmts[0] else {
+            panic!("expected LetBind");
+        };
+        assert!(matches!(expr, Expr::Pipe { .. }));
+    }
+
+    // -- One statement grammar in every block ------------------------
+
+    /// The statements of a lambda's block body are the statements of the
+    /// script: `let` binds there too.
+    #[test]
+    fn a_lambda_body_takes_let() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "let f = |q| -> { let x = q; x }; f(1)").unwrap();
+        let Stmt::LetBind {
+            expr: Expr::Lambda { body, .. },
+            ..
+        } = &s.stmts[0]
+        else {
+            panic!("expected a lambda binding");
+        };
+        let Expr::Block { stmts, .. } = body.as_ref() else {
+            panic!("expected a block body");
+        };
+        assert!(matches!(&stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x"));
+    }
+
+    /// A bare `x = e;` in a lambda body parses as an assignment, not a
+    /// binding, exactly as it does at the top level.
+    #[test]
+    fn a_bare_store_in_a_lambda_body_is_an_assignment() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "let f = |q| -> { let x = 0; x = q; x }; f(1)").unwrap();
+        let Stmt::LetBind {
+            expr: Expr::Lambda { body, .. },
+            ..
+        } = &s.stmts[0]
+        else {
+            panic!("expected a lambda binding");
+        };
+        let Expr::Block { stmts, .. } = body.as_ref() else {
+            panic!("expected a block body");
+        };
+        assert!(matches!(&stmts[1], Stmt::Assign { name, .. } if interner.resolve(*name) == "x"));
+    }
+
+    /// The tag form still parses where a bare assignment also parses: the
+    /// trailing `{ body };` is what tells them apart.
+    #[test]
+    fn the_tag_form_and_a_bare_assignment_are_both_statements() {
+        let interner = Interner::new();
+        let s = parse_script(
+            &interner,
+            "let out = 0.0; Some(v) = Some(1.5) { out = v; };",
+        )
+        .unwrap();
+        assert!(matches!(&s.stmts[0], Stmt::LetBind { .. }));
+        let Stmt::MatchBind { body, .. } = &s.stmts[1] else {
+            panic!("expected MatchBind");
+        };
+        assert!(matches!(&body[0], Stmt::Assign { name, .. } if interner.resolve(*name) == "out"));
+    }
+
+    /// A `while` body is the same statement rule: `let` and assignment both.
+    #[test]
+    fn a_while_body_takes_let_and_assignment() {
+        let interner = Interner::new();
+        let s = parse_script(
+            &interner,
+            "let i = 0; while i < 3 { let j = i; i = j + 1; }",
+        )
+        .unwrap();
+        let Stmt::While { body, .. } = &s.stmts[1] else {
+            panic!("expected While");
+        };
+        assert!(matches!(&body[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "j"));
+        assert!(matches!(&body[1], Stmt::Assign { name, .. } if interner.resolve(*name) == "i"));
+    }
+
+    /// `x = e;` with an object literal on the right is an assignment; the
+    /// tag form needs the `{ body };` after a source expression.
+    #[test]
+    fn an_object_literal_right_hand_side_stays_an_assignment() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "let o = { a, }; o = { b, };").unwrap();
+        let Stmt::Assign { name, expr, .. } = &s.stmts[1] else {
+            panic!("expected Assign");
+        };
+        assert_eq!(interner.resolve(*name), "o");
+        assert!(matches!(expr, Expr::Object { .. }));
     }
 
     // -- ContextStore ----------------------------------------------
@@ -946,9 +1031,11 @@ mod tests {
     #[test]
     fn script_mixed_bind_and_context_store() {
         let interner = Interner::new();
-        let s = parse_script(&interner, "tmp = @x + 1; @x = tmp; @x").unwrap();
+        let s = parse_script(&interner, "let tmp = @x + 1; @x = tmp; @x").unwrap();
         assert_eq!(s.stmts.len(), 2);
-        assert!(matches!(&s.stmts[0], Stmt::Bind { name, .. } if interner.resolve(*name) == "tmp"));
+        assert!(
+            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "tmp")
+        );
         assert!(
             matches!(&s.stmts[1], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x")
         );

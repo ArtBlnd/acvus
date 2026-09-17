@@ -78,6 +78,11 @@ pub enum MirErrorKind {
 
     // Name errors
     UndefinedVariable(String),
+    /// `x = e;` where no `x` is bound in this body (RFC-0045).
+    AssignToUnbound(String),
+    /// `x = e;` inside a lambda, where `x` is bound outside it. A capture is
+    /// by value, so the store would write the lambda's copy (RFC-0045).
+    AssignToCapture(String),
     UndefinedFunction(String),
     NoOperatorInstance {
         op: &'static str,
@@ -236,6 +241,18 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::UndefinedVariable(name) => {
                 write!(f, "undefined variable `{name}`")
+            }
+            MirErrorKind::AssignToUnbound(name) => {
+                write!(
+                    f,
+                    "cannot assign to `{name}`: no binding named `{name}` is in scope; `let {name} = ...;` binds it"
+                )
+            }
+            MirErrorKind::AssignToCapture(name) => {
+                write!(
+                    f,
+                    "cannot assign to `{name}`: it is captured by the lambda, not bound in it"
+                )
             }
             MirErrorKind::NotAPlace => {
                 write!(

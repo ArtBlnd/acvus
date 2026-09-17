@@ -121,7 +121,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
     let main = inferred_function(
         QualifiedRef::root(i.intern("main")),
         FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(&i, "x = get(); y = mk(); same(x, y)").expect("parse"),
+            acvus_ast::parse_script(&i, "let x = get(); let y = mk(); same(x, y)").expect("parse"),
         )),
         vec![],
     );
@@ -166,7 +166,7 @@ fn a_declared_context_never_shares_a_source_with_a_new_one() {
         "storing a new source into a context must be rejected: {result:?}"
     );
     assert!(
-        acvus_mir_test::compile_script_ir(&i, "a = @src; @src = a; 0", &ctx).is_ok(),
+        acvus_mir_test::compile_script_ir(&i, "let a = @src; @src = a; 0", &ctx).is_ok(),
         "storing the context's own source back must be accepted"
     );
 }
