@@ -54,6 +54,17 @@ An executor holds no `Order` values. Once dependencies fix a schedule, the
 values have done their work. What an executor tracks is which calls have
 not yet reached the merge that awaits them.
 
+Code motion moves an instruction only between control-equivalent blocks:
+the destination dominates the source and the source post-dominates the
+destination. The two then execute under exactly the same condition, so the
+move changes nothing the program can observe — no raise on a path that did
+not reach the instruction, no work on a path that did not need it. The rule
+is one criterion and holds for every instruction, not a list of the kinds
+that are exempt; whether an instruction can fail is not asked, because
+control equivalence already fixes the set of paths it runs on. A spawn is
+held to a stricter rule, stated under Not built: it does not move at all,
+because moving it also moves when the work starts.
+
 ## Rationale
 
 Whether two IO calls may be reordered depends on what the author means by

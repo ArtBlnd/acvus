@@ -1,38 +1,26 @@
-//! Cross-block code motion: hoist pure instructions above branch points.
+//! Cross-block code motion: an instruction moves only between
+//! control-equivalent blocks, and an Eval sinks toward its use.
 //!
-//! After SpawnSplit, IO calls are Spawn (the call is issued) + Eval (the
-//! result is awaited). This pass hoists pure instructions out of dominated
-//! blocks into their dominator ancestors and sinks Evals toward their uses.
-//! A Spawn is never hoisted across a branch: the work starts at the Spawn,
-//! and issuing it on a path that would not have reached it speculates an
-//! effect (RFC-0007).
+//! Two blocks are control-equivalent when the destination dominates the
+//! source and the source post-dominates the destination. They then execute
+//! under exactly the same condition, so the move changes nothing the program
+//! can observe: no raise on a path that did not reach the instruction, no
+//! work on a path that did not need it.
 //!
-//! # Algorithm
+//! Until `bb8207f` the criterion was purity instead, and purity is not
+//! infallibility. Integer arithmetic raises on overflow, on division by
+//! zero and on a shift past the width (RFC-0037), so hoisting `i + 1` out
+//! of a loop body made `let i = 250; while i < @n { i = i + 1; } i` with
+//! `n: u8 = 255` raise `IntegerOverflow` where the program returns `255`.
 //!
-//! Each iteration:
-//! 1. Build the dominator tree.
-//! 2. For each hoistable instruction, walk UP the dominator chain to find the
-//!    **highest ancestor** where all operands are available.
-//!    This eliminates the need for multi-iteration fixpoint on deep merge chains.
-//! 3. `def_block` is updated after each hoist decision, so later instructions
-//!    in the same block see their dependencies' new locations - operand chains
-//!    are resolved in a single pass.
-//! 4. Repeat until no more instructions can be hoisted (fixpoint for cross-block
-//!    chains, but typically converges in 1 iteration).
-//!
-//! # Hoistability (allowlist)
-//!
-//! Only provably pure instructions are hoisted. New/unknown instruction kinds
-//! default to "not hoistable" (soundness by construction).
-//!
-//! Pure: arithmetic, value construction, field access, test predicates,
-//! LoadFunction.
-//!
-//! NOT hoisted: Spawn, Eval, calls, context ops, variable ops.
+//! A Spawn is never moved: the work starts at the Spawn, and issuing it on
+//! a path that would not have reached it speculates an effect (RFC-0007).
+//! Its operands need only reach the block that issues it, which the
+//! equivalence already permits.
 
 use rustc_hash::FxHashMap;
 
-use crate::analysis::domtree::DomTree;
+use crate::analysis::domtree::{DomTree, PostDomTree};
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody};
@@ -63,14 +51,13 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     }
 
     let domtree = DomTree::build(cfg);
+    let postdom = PostDomTree::build(cfg);
     let mut def_block = build_def_block(cfg);
 
     // -- Collect hoists ---------------------------------------------
     //
-    // For each instruction, find the highest dominator ancestor where
-    // all operands are available.
-    // def_block is updated after each decision so that operand chains
-    // within a block are resolved in one pass.
+    // def_block is updated after each decision, so an operand chain within
+    // one block resolves in a single pass.
 
     let mut hoists: Vec<(usize, usize, usize)> = Vec::new(); // (src_block, inst_idx, tgt_block)
 
@@ -88,7 +75,9 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
 
             let uses = inst_info::uses(kind);
 
-            if let Some(target) = find_highest_target(BlockIdx(bi), &uses, &domtree, &def_block) {
+            if let Some(target) =
+                find_highest_target(BlockIdx(bi), &uses, &domtree, &postdom, &def_block)
+            {
                 hoists.push((bi, i, target.0));
                 for d in inst_info::defs(kind) {
                     def_block.insert(d, target);
@@ -151,12 +140,17 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
 
 // -- Target finding -------------------------------------------------
 
-/// Walk up the dominator chain from `block_idx` to find the highest ancestor
-/// where all operands are available (before the ancestor's terminator).
+/// The highest block control-equivalent to `block_idx` where every operand
+/// is already available.
+///
+/// Availability only shrinks as the walk rises - an ancestor is dominated by
+/// strictly fewer definitions than its child - so the first ancestor that
+/// lacks an operand ends the walk.
 fn find_highest_target(
     block_idx: BlockIdx,
     uses: &[ValueId],
     domtree: &DomTree,
+    postdom: &PostDomTree,
     def_block: &FxHashMap<ValueId, BlockIdx>,
 ) -> Option<BlockIdx> {
     let mut best: Option<BlockIdx> = None;
@@ -173,7 +167,9 @@ fn find_highest_target(
             break;
         }
 
-        best = Some(candidate);
+        if postdom.post_dominates(block_idx, candidate) {
+            best = Some(candidate);
+        }
 
         match domtree.idom(candidate) {
             Some(parent) => candidate = parent,
@@ -186,10 +182,13 @@ fn find_highest_target(
 
 // -- Hoistability (allowlist) ---------------------------------------
 
-/// Can this instruction be safely hoisted to a dominator block?
+/// Has no effect and reads nothing a store between the two blocks could
+/// change.
 ///
-/// Allowlist: only provably pure instructions. Unknown kinds default to
-/// not hoistable (soundness by construction).
+/// Whether the instruction can raise is deliberately not asked. Control
+/// equivalence already fixes the set of paths it runs on, so a failability
+/// test here would reject moves that change nothing. An unknown kind is not
+/// movable.
 fn is_hoistable(kind: &InstKind) -> bool {
     match kind {
         // Arithmetic / logic.
@@ -211,9 +210,7 @@ fn is_hoistable(kind: &InstKind) -> bool {
         // through it.
         InstKind::Ref { .. } => false,
 
-        // Field / element access (scalar, pure). UnwrapVariant assumes the
-        // tag its test established and ArrayGet assumes an index in range,
-        // so neither may run on a path that has not checked; they stay.
+        // Field and element access.
         InstKind::FieldGet { .. }
         | InstKind::FieldSet { .. }
         | InstKind::ObjectGet { .. }
@@ -234,15 +231,8 @@ fn is_hoistable(kind: &InstKind) -> bool {
 
 // -- Sink pass -----------------------------------------------------
 //
-// Moves Eval as late as possible - just before
-// their result is first needed. This maximizes the distance between
-// Spawn (hoisted up) and Eval (sunk down).
-//
-// Algorithm:
-// 1. Build a use map: for each ValueId, where is it used?
-// 2. For each sinkable instruction, find the latest safe position.
-// 3. Move instructions within their block (reorder down) or to a
-//    single-successor block if no in-block uses exist.
+// Sinking widens the distance between a Spawn and the Eval that awaits it,
+// which is the window the executor has to run the call concurrently.
 
 /// Position of a use: (block_idx, instruction_index_within_block or TERMINATOR).
 fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
@@ -267,12 +257,11 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
 
 // -- Sink infrastructure ---------------------------------------------
 
-/// Run the sink pass - move each Eval as late as possible within its
-/// block. A page op (`Fetch`, `Commit`) is never moved.
+/// Move each Eval as late as possible within its block. A page op
+/// (`Fetch`, `Commit`) is never moved.
 ///
-/// Processes ONE sinkable instruction per iteration, then re-scans.
-/// This avoids index invalidation from multiple moves.
-/// Repeats until no more sinking is possible (fixpoint).
+/// One Eval per iteration, then re-scan: a move invalidates the indices the
+/// rest of the scan holds.
 fn sink_pass(cfg: &mut CfgBody) {
     let max_iters = cfg.blocks.iter().map(|b| b.insts.len()).sum::<usize>() * 2;
     let mut iters = 0;
@@ -919,6 +908,166 @@ mod tests {
         assert!(
             binop_idx < jumpif_idx,
             "pure BinOp should be hoisted before branch"
+        );
+    }
+
+    /// The shape the pass exists for: the Spawn's operand rises to the block
+    /// that dominates the branch, and the Spawn itself does not follow it.
+    #[test]
+    fn a_spawn_operand_rises_to_the_dominator_and_the_spawn_stays() {
+        let i = Interner::new();
+        let (qref, ty) = io_fn_type(&i, "io_fn");
+
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::JumpIf {
+                    cond: v(0),
+                    then_label: Label(0),
+                    then_args: vec![],
+                    else_label: Label(1),
+                    else_args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::Jump {
+                    label: Label(2),
+                    args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::Jump {
+                    label: Label(2),
+                    args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(2),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::BinOp {
+                    dst: v(1),
+                    op: acvus_ast::BinOp::Add,
+                    left: v(0),
+                    right: v(0),
+                },
+                InstKind::Spawn {
+                    dst: v(2),
+                    callee: Callee::Direct(qref),
+                    callee_ty: ty,
+                    args: vec![v(1)],
+                    order: None,
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+            ],
+            10,
+        );
+
+        run(&mut cfg);
+        let body = demoted(cfg);
+        let k = kinds(&body);
+        let binop_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::BinOp { .. }))
+            .unwrap();
+        let jumpif_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::JumpIf { .. }))
+            .unwrap();
+        let spawn_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::Spawn { .. }))
+            .unwrap();
+        assert!(
+            binop_idx < jumpif_idx,
+            "the operand rises: merge and entry are control-equivalent (operand {binop_idx}, branch {jumpif_idx})"
+        );
+        assert!(
+            jumpif_idx < spawn_idx,
+            "the spawn stays where it is issued (branch {jumpif_idx}, spawn {spawn_idx})"
+        );
+    }
+
+    /// The loop head reaches the exit without the body, so the body is not
+    /// control-equivalent to it.
+    #[test]
+    fn a_loop_body_instruction_does_not_rise_into_the_head() {
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Jump {
+                    label: Label(0),
+                    args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::JumpIf {
+                    cond: v(0),
+                    then_label: Label(1),
+                    then_args: vec![],
+                    else_label: Label(2),
+                    else_args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::BinOp {
+                    dst: v(1),
+                    op: acvus_ast::BinOp::Add,
+                    left: v(0),
+                    right: v(0),
+                },
+                InstKind::Jump {
+                    label: Label(0),
+                    args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(2),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
+            ],
+            10,
+        );
+
+        run(&mut cfg);
+        let body = demoted(cfg);
+        let k = kinds(&body);
+        let binop_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::BinOp { .. }))
+            .unwrap();
+        let jumpif_idx = k
+            .iter()
+            .position(|k| matches!(k, InstKind::JumpIf { .. }))
+            .unwrap();
+        assert!(
+            jumpif_idx < binop_idx,
+            "the body's operation stays below the test (branch {jumpif_idx}, operation {binop_idx})"
         );
     }
 

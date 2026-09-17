@@ -30,10 +30,10 @@ expression: opt
     20 |   r19 = r18 + r16
     21 |   r20 = r19 > r8
     22 |   r21 = test r20 == true
-    24 |   r22 = r19 <= r8
-    25 |   r23 = test r22 == true
-    26 |   jump_if r21 then L0 else L1(r2)
-    27 | L0:
+    23 |   r22 = r19 <= r8
+    24 |   r23 = test r22 == true
+    25 |   jump_if r21 then L0 else L1(r2)
+    26 | L0:
     28 |   jump L1(0 (r24))
     29 | L1(r25: i64):
     30 |   jump_if r23 then L2 else L3(r25)

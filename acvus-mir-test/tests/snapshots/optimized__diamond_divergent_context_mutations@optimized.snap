@@ -9,24 +9,24 @@ expression: opt
      3 |   r3 = fetch @high
      5 |   r4 = r1 > 100 (r5)
      6 |   r6 = test r4 == true
-     8 |   r7 = r3 + 1 (r8)
-    10 |   r9 = r1 * 2 (r10)
-    12 |   r11 = r1 <= 100 (r12)
-    13 |   r13 = test r11 == true
-    15 |   r14 = r2 + 1 (r15)
-    17 |   r16 = r1 + 10 (r17)
-    18 |   jump_if r6 then L0 else L1(r0, r3)
-    19 | L0:
-    20 |   jump L1(r9, r7)
-    21 | L1(r18: i64, r19: i64):
-    22 |   jump_if r13 then L2 else L3(r18, r2)
-    23 | L2:
-    24 |   jump L3(r16, r14)
+     8 |   r7 = r1 <= 100 (r8)
+     9 |   r9 = test r7 == true
+    10 |   jump_if r6 then L0 else L1(r0, r3)
+    11 | L0:
+    13 |   r10 = r3 + 1 (r11)
+    15 |   r12 = r1 * 2 (r13)
+    16 |   jump L1(r12, r10)
+    17 | L1(r14: i64, r15: i64):
+    18 |   jump_if r9 then L2 else L3(r14, r2)
+    19 | L2:
+    21 |   r16 = r2 + 1 (r17)
+    23 |   r18 = r1 + 10 (r19)
+    24 |   jump L3(r18, r16)
     25 | L3(r20: i64, r21: i64):
     26 |   commit @output = r20
     27 |   commit @input = r1
     28 |   commit @low = r21
-    29 |   commit @high = r19
+    29 |   commit @high = r15
     30 |   return r20
 
     ; r0 (@output) : i64
@@ -36,19 +36,19 @@ expression: opt
     ; r4 (v13) : Bool
     ; r5 (v12) : i64
     ; r6 (v16) : Bool
-    ; r7 (v19) : i64
-    ; r8 (v18) : i64
-    ; r9 (v22) : i64
-    ; r10 (v21) : i64
-    ; r11 (v25) : Bool
-    ; r12 (v24) : i64
-    ; r13 (v28) : Bool
-    ; r14 (v31) : i64
-    ; r15 (v30) : i64
-    ; r16 (v34) : i64
-    ; r17 (v33) : i64
-    ; r18 (v50) : i64
-    ; r19 (v55) : i64
+    ; r7 (v25) : Bool
+    ; r8 (v24) : i64
+    ; r9 (v28) : Bool
+    ; r10 (v19) : i64
+    ; r11 (v18) : i64
+    ; r12 (v22) : i64
+    ; r13 (v21) : i64
+    ; r14 (v50) : i64
+    ; r15 (v55) : i64
+    ; r16 (v31) : i64
+    ; r17 (v30) : i64
+    ; r18 (v34) : i64
+    ; r19 (v33) : i64
     ; r20 (v49) : i64
     ; r21 (v53) : i64
     ; r22 (v44) : i64

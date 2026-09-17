@@ -106,3 +106,23 @@ async fn an_overflow_inside_a_while_names_the_arithmetic_not_the_loop() {
     let span = error.span.expect("the raise carries a span");
     assert_eq!(&source[span.start..span.end], "acc + @b");
 }
+
+/// Code motion on `bb8207f` hoisted `i + 1` into the loop head above the
+/// `JumpIf`, so the exit iteration evaluated `255 + 1`: this returned
+/// `RuntimeError { kind: IntegerOverflow, span: 32..37 }`, measured
+/// 2026-09-18.
+#[tokio::test]
+async fn an_operation_in_a_loop_body_does_not_run_on_the_exit_iteration() {
+    let i = Interner::new();
+    let source = "let i = 250; while i < @n { i = i + 1; } i";
+    let v = run_script_mode(&i, source, ctx(&i, "n", IntTy::U8, 255)).await;
+    assert_eq!(IntTy::U8.read(v.small()), 255);
+}
+
+#[tokio::test]
+async fn a_loop_that_is_not_entered_runs_none_of_its_body() {
+    let i = Interner::new();
+    let source = "let i = 250; while i < @n { i = i + 1; } i";
+    let v = run_script_mode(&i, source, ctx(&i, "n", IntTy::U8, 200)).await;
+    assert_eq!(IntTy::U8.read(v.small()), 250);
+}

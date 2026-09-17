@@ -15,7 +15,8 @@ Arithmetic, comparison, and the bit operators take two operands of one
 width and produce that width; nothing widens or narrows on its own. An
 overflow, a division by zero, and a shift past the width are run-time
 errors, at every width, as they were at `i64`. Negation takes a signed
-integer or a `Float`.
+integer or a `Float`. A checked operation runs only where the program wrote
+it: no pass may move it onto a path the program did not take (RFC-0007).
 
 An integer literal has no width of its own. Its type is a variable that
 only an integer type can fill; the use decides which — `@b + 1` with `@b`

@@ -56,12 +56,12 @@ expression: opt
     49 |   drop r40
     50 |   r41 = r15 > r4
     51 |   r42 = test r41 == true
-    53 |   r43 = r2 + 1 (r44)
-    54 |   jump_if r42 then L0 else L1(r12, r2)
-    55 | L0:
-    56 |   r45 = spawn #4(r5, r15) [r12 ->]
-    57 |   r46 = eval r45 [-> r47]
-    58 |   jump L1(r47, r43)
+    52 |   jump_if r42 then L0 else L1(r12, r2)
+    53 | L0:
+    54 |   r43 = spawn #4(r5, r15) [r12 ->]
+    56 |   r44 = r2 + 1 (r45)
+    57 |   r46 = eval r43 [-> r47]
+    58 |   jump L1(r47, r44)
     59 | L1(r48: Order, r49: i64):
     60 |   commit @result_label = r38
     61 |   commit @weight = r1
@@ -117,9 +117,9 @@ expression: opt
     ; r40 (e) : String
     ; r41 (v36) : Bool
     ; r42 (v39) : Bool
-    ; r43 (v47) : i64
-    ; r44 (v46) : i64
-    ; r45 (v121) : Handle<i64>
+    ; r43 (v121) : Handle<i64>
+    ; r44 (v47) : i64
+    ; r45 (v46) : i64
     ; r46 (notify_alert(...)) : i64
     ; r47 (v44) : Order
     ; r48 (v76) : Order
