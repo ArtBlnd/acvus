@@ -10,7 +10,6 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::code::Prepared;
-use crate::error::RuntimeError;
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
@@ -148,7 +147,7 @@ impl Interpreter {
 
     /// Execute the entry module and return its value. The page keeps every
     /// context the run assigned; `take_writes` hands them out.
-    pub async fn execute(&mut self) -> Result<Value, RuntimeError> {
+    pub async fn execute(&mut self) -> Value {
         let args = std::mem::take(&mut self.spawn_args);
         call_module(
             Arc::clone(&self.shared),

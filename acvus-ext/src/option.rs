@@ -1,13 +1,13 @@
 //! Option operations. All pure, polymorphic.
 
-use acvus_extern::{Registry, Runtime, Trap, TyVar, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, TyVar, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
-fn unwrap<T>(val: Option<T>) -> Result<T, Trap>
+fn unwrap<T>(val: Option<T>) -> T
 where
     T: TyVar,
 {
-    val.ok_or_else(|| Trap::call("unwrap", "called on None"))
+    val.expect("unwrap: called on None")
 }
 
 #[extern_fn(effect = pure)]

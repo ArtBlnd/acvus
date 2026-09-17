@@ -87,6 +87,14 @@ runtime was in scope, so one name carrying the value serves both.
 
 ## Consequences
 
+- `acvus-ext`: an `Iter` is one of two pipelines, and which one is settled
+  when the pipeline is built (RFC-0044). `Iter` holds `Stages { Sync, Async
+  }`; a source is `Sync`, an adaptor is `Sync` when its source is and its
+  closure answers `Fn1::is_sync`, and an `Async` adaptor lifts a `Sync`
+  source once rather than per element. A consumer reads the variant once
+  and runs one of two loops. A stage yields `Option<Rt::Value>` and no
+  `Result`: `None` is the end of the source and nothing else, because a
+  stage whose closure failed panicked and never returned (RFC-0038).
 - `acvus-extern`: `Ref<T, Rt>` and `RefMut<T, Rt>` carry `Rt::Value`;
   `Lent` is gone. The macro treats both as carriers in every position and
   unwraps `Option` of a carrier on return.

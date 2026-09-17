@@ -171,7 +171,7 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
         let (_shared, mut interp) =
             execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
         let start = Instant::now();
-        let value = rt.block_on(interp.execute()).expect("execution failed");
+        let value = rt.block_on(interp.execute());
         let elapsed = start.elapsed();
         script_value = value.as_float();
         if rep > 0 {
@@ -235,7 +235,7 @@ fn execute_only(rt: &Runtime, case: &Case) -> Duration {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute()).expect("execution failed");
+        let value = rt.block_on(interp.execute());
         let elapsed = start.elapsed();
         black_box(value);
         if rep > 0 {

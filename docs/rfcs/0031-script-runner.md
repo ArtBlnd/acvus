@@ -66,6 +66,6 @@ errors because a guessed type is a type the script did not ask for.
 
 - `acvus-ast::report`: a line index over a source and the rendering of a
   diagnostic at a span, shared by the CLI and available to the LSP.
-- `RuntimeError` carries `span: Option<Span>`, set by the run loop at the
-  failing instruction.
+- A run-time failure is a Rust panic and carries no span (RFC-0038); the
+  CLI catches it at its top and prints `error: <message>`.
 - `acvus-cli` is the crate; `acvus-mir-cli` is removed.

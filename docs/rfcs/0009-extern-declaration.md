@@ -22,7 +22,8 @@ The mapping from the Rust signature to the acvus type is fixed:
   acvus type through the `TyArg` trait, and its runtime conversion through
   `FromValue`.
 - The return type names the acvus return type the same way, through
-  `IntoValue`. A return type of `Result<R, RuntimeError>` means `R`.
+  `IntoValue`. A function that cannot produce its return panics
+  (RFC-0038), so a returned `Result<T, E>` is the language's `Result`.
 - The acvus name is the Rust identifier unless `name = "..."` overrides it.
 - The effect is `effect = pure | idempotent | <effect parameter>`; an
   undeclared effect is Opaque (RFC-0014).

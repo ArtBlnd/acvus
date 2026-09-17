@@ -5,6 +5,7 @@ mod context;
 mod json;
 mod llm;
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -192,8 +193,40 @@ fn report(path: &str, source: &str, diagnostics: &[Diagnostic]) {
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+/// A run-time failure is a panic, and this is where the process stops
+/// being a Rust program and becomes a script runner: the operation's
+/// message on one `error:` line, the same form every other failure here
+/// prints, and `EXIT_RUN`. The default hook's `thread 'main' panicked at
+/// acvus-interpreter/src/...` names this compiler's source, which is not
+/// where a script author looks; `RUST_BACKTRACE` puts it back.
+fn main() -> ExitCode {
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::panic::set_hook(Box::new(|_| {}));
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a multi-thread tokio runtime");
+    match catch_unwind(AssertUnwindSafe(|| runtime.block_on(cli()))) {
+        Ok(code) => code,
+        Err(panic) => {
+            eprintln!("error: {}", panic_message(panic.as_ref()));
+            ExitCode::from(EXIT_RUN)
+        }
+    }
+}
+
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = panic.downcast_ref::<&'static str>() {
+        return message;
+    }
+    match panic.downcast_ref::<String>() {
+        Some(message) => message,
+        None => "the run panicked with a payload that is not a message",
+    }
+}
+
+async fn cli() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&argv) {
         Ok(args) => args,
@@ -282,15 +315,13 @@ async fn main() -> ExitCode {
             print!("{}", compiled.mir_dump(&interner));
             ExitCode::SUCCESS
         }
-        Command::Run => run(&interner, &path, &source, compiled, loaded, space, &args).await,
+        Command::Run => run(&interner, compiled, loaded, space, &args).await,
         Command::Space => unreachable!("handled before compiling"),
     }
 }
 
 async fn run(
     interner: &Interner,
-    path: &str,
-    source: &str,
     compiled: Compiled,
     loaded: context::Loaded,
     space: Option<Arc<Space>>,
@@ -340,22 +371,7 @@ async fn run(
             Interpreter::new(shared, entry, InMemoryContext::new(snapshot)),
         ),
     };
-    let value = match interp.execute().await {
-        Ok(v) => v,
-        Err(e) => {
-            eprint!(
-                "{}",
-                Report {
-                    severity: Severity::Error,
-                    message: e.to_string(),
-                    path,
-                    source,
-                    span: e.span,
-                }
-            );
-            return ExitCode::from(EXIT_RUN);
-        }
-    };
+    let value = interp.execute().await;
     if let Some(page) = &page {
         match page.commit() {
             Ok(heads) => {

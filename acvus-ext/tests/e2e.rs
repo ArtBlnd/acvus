@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_ext::*;
-use acvus_extern::{ExternType, Externs, Registry, Trap, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Externs, Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
@@ -144,7 +144,7 @@ async fn run_parsed(
         InterpreterContext::new(interner, exec_fns, executor).with_context_names(context_names);
     let page = InMemoryContext::new(snapshot);
     let mut interp = Interpreter::new(shared, entry_qref, page);
-    interp.execute().await.expect("execution failed")
+    interp.execute().await
 }
 
 fn assert_str(v: &Value, expected: &str) {
@@ -741,12 +741,9 @@ fn parse_int(text: String) -> Result<i64, ParseFail> {
 }
 
 #[extern_fn(effect = pure)]
-fn must_be_even(n: i64) -> Result<i64, Trap> {
-    if n % 2 == 0 {
-        Ok(n)
-    } else {
-        Err(Trap::call("must_be_even", format!("{n} is odd")))
-    }
+fn must_be_even(n: i64) -> i64 {
+    assert!(n % 2 == 0, "must_be_even: {n} is odd");
+    n
 }
 
 fn fallible_registry() -> Registry<AcvusRuntime> {
@@ -778,7 +775,7 @@ async fn an_extern_fn_s_result_is_the_script_s_result() {
 }
 
 #[tokio::test]
-async fn a_result_of_trap_still_stops_the_run() {
+async fn an_extern_that_can_panic_returns_its_value_when_it_does_not() {
     let i = Interner::new();
     let regs = || vec![fallible_registry()];
     let v = run_ext_template(
@@ -792,8 +789,8 @@ async fn a_result_of_trap_still_stops_the_run() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "3 is odd")]
-async fn a_trap_carries_its_message() {
+#[should_panic(expected = "must_be_even: 3 is odd")]
+async fn an_extern_s_panic_carries_its_message() {
     let i = Interner::new();
     run_ext_template(
         &i,

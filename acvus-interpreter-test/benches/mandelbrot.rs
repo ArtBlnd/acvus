@@ -111,7 +111,7 @@ fn measure(rt: &Runtime, grid: &Grid) -> Timing {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute()).expect("execution failed");
+        let value = rt.block_on(interp.execute());
         let elapsed = start.elapsed();
         script_total = value.as_int();
         if rep > 0 {

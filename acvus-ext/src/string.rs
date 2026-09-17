@@ -4,7 +4,7 @@
 //! read out by value with `char_at`.
 
 use acvus_extern::{
-    Cross, EffectVar, Erased, IdentityVar, Registry, Runtime, Trap, extern_fn, extern_registry,
+    Cross, EffectVar, Erased, IdentityVar, Registry, Runtime, extern_fn, extern_registry,
 };
 
 use crate::iter::Iter;
@@ -99,14 +99,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn repeat_str(s: String, n: u64) -> Result<String, Trap> {
+fn repeat_str(s: String, n: u64) -> String {
     let Ok(n) = usize::try_from(n) else {
-        return Err(Trap::call(
-            "repeat_str",
-            format!("count {n} exceeds the address space"),
-        ));
+        panic!("repeat_str: count {n} exceeds the address space")
     };
-    Ok(s.repeat(n))
+    s.repeat(n)
 }
 
 /// Byte range `[start, end)` clamped to the string; an inverted range is empty.
@@ -134,15 +131,20 @@ fn to_utf8_lossy(bytes: Vec<u8>) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn char_at(s: &String, i: i64) -> Result<String, Trap> {
-    let out_of_range = || Trap::call("char_at", format!("index {i} out of {}", s.chars().count()));
+fn char_at(s: &String, i: i64) -> String {
+    let out_of_range = || -> ! {
+        panic!(
+            "char_at: index {i} is out of range for length {}",
+            s.chars().count()
+        )
+    };
     let Ok(index) = usize::try_from(i) else {
-        return Err(out_of_range());
+        out_of_range()
     };
     let Some(c) = s.chars().nth(index) else {
-        return Err(out_of_range());
+        out_of_range()
     };
-    Ok(c.to_string())
+    c.to_string()
 }
 
 // -- Producers ----------------------------------------------------------

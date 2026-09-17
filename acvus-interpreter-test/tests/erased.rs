@@ -31,18 +31,18 @@ async fn contains_erased<E, I, Rt>(
     rt: &Rt,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     needle: Erased<Rt, String>,
-) -> Result<bool, Rt::Error>
+) -> bool
 where
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(rt).await? {
+    while let Some(item) = it.next(rt).await {
         if item.as_ref(rt) == needle.as_ref(rt) {
-            return Ok(true);
+            return true;
         }
     }
-    Ok(false)
+    false
 }
 
 fn registry() -> Registry<AcvusRuntime> {
@@ -94,7 +94,11 @@ async fn contains_over_inline_elements_reads_them_by_their_tag() {
     assert!(run("into_iter([1, 2, 3]) | contains(3)").await.as_bool());
     assert!(!run("into_iter([1, 2, 3]) | contains(4)").await.as_bool());
     assert!(run("into_iter([1.5, 2.5]) | contains(2.5)").await.as_bool());
-    assert!(run("into_iter([true, false]) | contains(false)").await.as_bool());
+    assert!(
+        run("into_iter([true, false]) | contains(false)")
+            .await
+            .as_bool()
+    );
 }
 
 fn runtime(i: &Interner) -> AcvusRuntime {
@@ -109,7 +113,10 @@ fn type_of_reports_the_tag_of_a_small_value() {
     assert_eq!(rt.type_of(&Value::float(1.0)), Some(TypeId::of::<f64>()));
     assert_eq!(rt.type_of(&Value::bool_(true)), Some(TypeId::of::<bool>()));
     assert_eq!(rt.type_of(&Value::unit()), Some(TypeId::of::<()>()));
-    assert_eq!(rt.type_of(&Value::string("s")), Some(TypeId::of::<String>()));
+    assert_eq!(
+        rt.type_of(&Value::string("s")),
+        Some(TypeId::of::<String>())
+    );
     assert_eq!(rt.type_of(&Value::Empty), None);
     assert_eq!(rt.type_of(&Value::Undef), None);
     let target = Value::int(1);
@@ -117,29 +124,23 @@ fn type_of_reports_the_tag_of_a_small_value() {
 }
 
 #[test]
-fn from_value_on_an_int_as_a_float_traps_naming_both_types() {
+#[should_panic(expected = "expected a value erased from `f64`, found one erased from `i64`")]
+fn from_value_on_an_int_as_a_float_panics_naming_both_types() {
     let rt = runtime(&Interner::new());
-    let Err(trap) = Erased::<AcvusRuntime, f64>::from_value(&rt, Value::int(2)) else {
-        panic!("an i64 word is read back as an f64")
-    };
-    let message = trap.to_string();
-    assert!(message.contains(type_name::<f64>()), "{message}");
-    assert!(message.contains("`i64`"), "{message}");
+    Erased::<AcvusRuntime, f64>::from_value(&rt, Value::int(2));
 }
 
 #[test]
 fn from_value_on_an_int_as_an_int_is_the_value() {
     let rt = runtime(&Interner::new());
-    let erased = Erased::<AcvusRuntime, i64>::from_value(&rt, Value::int(2)).expect("an i64");
+    let erased = Erased::<AcvusRuntime, i64>::from_value(&rt, Value::int(2));
     assert_eq!(erased.get(), 2);
 }
 
 #[test]
-fn from_value_on_a_reference_traps_as_a_value_erased_from_no_type() {
+#[should_panic(expected = "found a value no Rust type was erased into")]
+fn from_value_on_a_reference_panics_as_a_value_erased_from_no_type() {
     let rt = runtime(&Interner::new());
     let target = Value::int(2);
-    let Err(trap) = Erased::<AcvusRuntime, i64>::from_value(&rt, Value::reference(&target)) else {
-        panic!("a reference is read back as an i64")
-    };
-    assert!(trap.to_string().contains("no Rust type was erased into"), "{trap}");
+    Erased::<AcvusRuntime, i64>::from_value(&rt, Value::reference(&target));
 }

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use acvus_ext::{Deque, Iter, vec_registry};
 use acvus_extern::{
     Arr, CallToken, Erased, Externs, Fn1, FnKind, FromValue, Interner, Monomorphize, QualifiedRef,
-    Ref, RefMut, Registry, Runtime, Trap, extern_fn, extern_registry,
+    Ref, RefMut, Registry, Runtime, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -115,15 +115,14 @@ impl acvus_extern::Cross<Counting> for V {
 }
 
 impl acvus_extern::FromValue<Counting> for V {
-    fn from_value(_: &Counting, value: V) -> Result<V, Trap> {
-        Ok(value)
+    fn from_value(_: &Counting, value: V) -> V {
+        value
     }
 }
 
 impl Runtime for Counting {
     type Value = V;
-    type Error = Trap;
-    type CallFuture<'a> = Ready<Result<V, Trap>>;
+    type CallFuture<'a> = Ready<V>;
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let V::Boxed(any) = value else {
@@ -219,23 +218,29 @@ impl Runtime for Counting {
         true
     }
 
-    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> Result<V, Trap> {
+    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> V {
         let [a] = args else {
-            return Err(Trap::internal("Counting runs only unary closures"));
+            return self.only_unary();
         };
-        Ok(open_ref::<UnaryClosure>(f)(self, std::mem::take(a)))
+        open_ref::<UnaryClosure>(f)(self, std::mem::take(a))
     }
 
     fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs only unary closures")))
+        std::future::ready(self.only_unary())
     }
 
     fn call_1<'a>(&'a self, f: &'a V, a: V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Ok(open_ref::<UnaryClosure>(f)(self, a)))
+        std::future::ready(open_ref::<UnaryClosure>(f)(self, a))
     }
 
     fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs only unary closures")))
+        std::future::ready(self.only_unary())
+    }
+}
+
+impl Counting {
+    fn only_unary(&self) -> V {
+        panic!("Counting runs only unary closures")
     }
 }
 
@@ -266,7 +271,7 @@ type It = Iter<V, (), (), Counting>;
 fn drain(rt: &Counting, mut it: It) -> Vec<i64> {
     futures::executor::block_on(async {
         let mut out = Vec::new();
-        while let Some(value) = it.next_value(rt).await.expect("a stage yields") {
+        while let Some(value) = it.next_value(rt).await {
             out.push(read_int(rt, &value));
         }
         out
@@ -291,8 +296,7 @@ macro_rules! inline_round_trip {
             "{} records its TypeId",
             type_name::<$t>()
         );
-        let back = Erased::<Counting, $t>::from_value(&$rt, raw)
-            .unwrap_or_else(|e| panic!("{} is read back as itself: {e}", type_name::<$t>()));
+        let back = Erased::<Counting, $t>::from_value(&$rt, raw);
         assert_eq!(back.into_inner(&$rt), value, "{} materializes", type_name::<$t>());
     } )* };
 }
@@ -318,34 +322,26 @@ fn every_inline_type_erased_records_its_type_id_and_materializes_back() {
 // -- R2: the checked exit names both types -------------------------------
 
 #[test]
-fn from_value_on_a_bool_as_an_i64_traps_naming_both() {
+#[should_panic(expected = "expected a value erased from `i64`, found a payload of TypeId")]
+fn from_value_on_a_bool_as_an_i64_panics_naming_both() {
     let rt = Counting::default();
     let holds_a_bool = erased_from(&rt, true);
-    let Err(trap) = Erased::<Counting, i64>::from_value(&rt, holds_a_bool) else {
-        panic!("a bool is read back as an i64")
-    };
-    let message = trap.to_string();
-    assert!(
-        message.contains(type_name::<i64>()),
-        "the trap names the expected type: {message}"
-    );
-    assert!(
-        message.contains(&format!("{:?}", TypeId::of::<bool>())),
-        "the trap names the found type by its TypeId, this runtime keeping no name: {message}"
-    );
+    Erased::<Counting, i64>::from_value(&rt, holds_a_bool);
 }
 
 // -- R3: container downcasts ---------------------------------------------
 
 #[test]
-fn vec_from_value_refuses_a_deque_and_takes_a_vec_of_values_with_no_per_element_unbox() {
+#[should_panic(expected = "expected a value erased from `alloc::vec::Vec<")]
+fn vec_from_value_refuses_a_deque() {
     let rt = Counting::default();
     let deque = erased_from(&rt, Deque::<V>::default());
-    let Err(trap) = Vec::<Erased<Counting, String>>::from_value(&rt, deque) else {
-        panic!("a Deque is read back as a Vec")
-    };
-    assert!(trap.to_string().contains("Vec"), "{trap}");
+    Vec::<Erased<Counting, String>>::from_value(&rt, deque);
+}
 
+#[test]
+fn vec_from_value_takes_a_vec_of_values_with_no_per_element_unbox() {
+    let rt = Counting::default();
     let strings = erased_from(
         &rt,
         vec![
@@ -354,7 +350,7 @@ fn vec_from_value_refuses_a_deque_and_takes_a_vec_of_values_with_no_per_element_
         ],
     );
     let start = rt.counts();
-    let parts = Vec::<Erased<Counting, String>>::from_value(&rt, strings).expect("a Vec of String");
+    let parts = Vec::<Erased<Counting, String>>::from_value(&rt, strings);
     assert_eq!(
         rt.since(start),
         Counts {
@@ -368,14 +364,16 @@ fn vec_from_value_refuses_a_deque_and_takes_a_vec_of_values_with_no_per_element_
 }
 
 #[test]
-fn arr_from_value_refuses_a_deque_and_takes_an_array_of_values_with_no_per_element_unbox() {
+#[should_panic(expected = "expected a value erased from `acvus_extern::len::Arr<")]
+fn arr_from_value_refuses_a_deque() {
     let rt = Counting::default();
     let deque = erased_from(&rt, Deque::<V>::default());
-    let Err(trap) = Arr::<Erased<Counting, String>, ()>::from_value(&rt, deque) else {
-        panic!("a Deque is read back as an Arr")
-    };
-    assert!(trap.to_string().contains("Arr"), "{trap}");
+    Arr::<Erased<Counting, String>, ()>::from_value(&rt, deque);
+}
 
+#[test]
+fn arr_from_value_takes_an_array_of_values_with_no_per_element_unbox() {
+    let rt = Counting::default();
     let strings = erased_from(
         &rt,
         Arr::<V, ()>::new(vec![
@@ -384,7 +382,7 @@ fn arr_from_value_refuses_a_deque_and_takes_an_array_of_values_with_no_per_eleme
         ]),
     );
     let start = rt.counts();
-    let parts = Arr::<Erased<Counting, String>, ()>::from_value(&rt, strings).expect("an Arr");
+    let parts = Arr::<Erased<Counting, String>, ()>::from_value(&rt, strings);
     assert_eq!(
         rt.since(start),
         Counts {

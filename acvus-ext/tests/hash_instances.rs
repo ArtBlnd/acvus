@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use acvus_ext::vec_registry;
 use acvus_extern::{
     CallToken, ExternHandler, Externs, FnKind, Interner, Monomorphize, PolyTy, QualifiedRef,
-    Registry, Repr, Runtime, Trap, TyTerm, TypeArg, extern_fn, extern_registry,
+    Registry, Repr, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -119,15 +119,14 @@ impl acvus_extern::Cross<Counting> for V {
 }
 
 impl acvus_extern::FromValue<Counting> for V {
-    fn from_value(_: &Counting, value: V) -> Result<V, Trap> {
-        Ok(value)
+    fn from_value(_: &Counting, value: V) -> V {
+        value
     }
 }
 
 impl Runtime for Counting {
     type Value = V;
-    type Error = Trap;
-    type CallFuture<'a> = Ready<Result<V, Trap>>;
+    type CallFuture<'a> = Ready<V>;
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let (V::Boxed(any) | V::Word(any)) = value else {
@@ -233,20 +232,20 @@ impl Runtime for Counting {
         false
     }
 
-    fn call_now(&self, _: &V, _: &mut [V], _: CallToken) -> Result<V, Trap> {
-        Err(Trap::internal("Counting runs no closures"))
+    fn call_now(&self, _: &V, _: &mut [V], _: CallToken) -> V {
+        self.no_closures()
     }
 
     fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_1<'a>(&'a self, _: &'a V, _: V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs no closures")))
+        std::future::ready(self.no_closures())
     }
 }
 
@@ -323,7 +322,7 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[instance] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        handler(&self.rt, &mut args).expect("handler succeeds")
+        handler(&self.rt, &mut args)
     }
 
     fn function(&self, ns: &str, name: &str) -> &acvus_extern::Function {
@@ -569,4 +568,10 @@ fn s11_a_specialized_producer_feeding_a_specialized_consumer_converts_nothing() 
         }
     );
     assert_eq!(w.float(r), 0.0);
+}
+
+impl Counting {
+    fn no_closures(&self) -> V {
+        panic!("Counting runs no closures")
+    }
 }

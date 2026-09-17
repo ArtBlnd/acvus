@@ -10,7 +10,7 @@ use std::sync::Arc;
 use acvus_extern::{
     Arr, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, ExternFn, ExternHandler,
     ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure, Registry,
-    Runtime, Trap, TyArg, TyVar, TypeArg, TypeRegistry, TypesOnly, extern_fn, extern_registry,
+    Runtime, TyArg, TyVar, TypeArg, TypeRegistry, TypesOnly, extern_fn, extern_registry,
     extern_signature,
 };
 
@@ -116,11 +116,11 @@ where
 struct Tiny;
 
 impl Tiny {
-    fn call(&self, f: &V, args: Vec<V>) -> Result<V, Trap> {
+    fn call(&self, f: &V, args: Vec<V>) -> V {
         match f {
-            V::Closure(c) => Ok((c.0)(args)),
+            V::Closure(c) => (c.0)(args),
             V::Taken | V::Erased(_) | V::Reference(_) => {
-                Err(Trap::internal("call on a value that is not a closure"))
+                panic!("call on a value that is not a closure")
             }
         }
     }
@@ -185,8 +185,8 @@ impl acvus_extern::Cross<Tiny> for V {
 }
 
 impl acvus_extern::FromValue<Tiny> for V {
-    fn from_value(_: &Tiny, value: V) -> Result<V, Trap> {
-        Ok(value)
+    fn from_value(_: &Tiny, value: V) -> V {
+        value
     }
 }
 
@@ -218,8 +218,7 @@ impl Runtime for Tiny {
     }
 
     type Value = V;
-    type Error = Trap;
-    type CallFuture<'a> = Ready<Result<V, Trap>>;
+    type CallFuture<'a> = Ready<V>;
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -267,7 +266,7 @@ impl Runtime for Tiny {
     fn call_is_sync(&self, _: &V) -> bool {
         true
     }
-    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> Result<V, Trap> {
+    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> V {
         self.call(f, args.iter_mut().map(std::mem::take).collect())
     }
     fn call_0<'a>(&'a self, f: &'a V, _: CallToken) -> Self::CallFuture<'a> {
@@ -320,11 +319,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-async fn apply<T, U, E, Rt>(
-    rt: &Rt,
-    v: Boxed<T, E, Rt>,
-    f: Fn1<T, U, E, Rt>,
-) -> Result<Boxed<U, E, Rt>, Rt::Error>
+async fn apply<T, U, E, Rt>(rt: &Rt, v: Boxed<T, E, Rt>, f: Fn1<T, U, E, Rt>) -> Boxed<U, E, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -334,9 +329,9 @@ where
     let f = f.erased();
     let mut out = Vec::with_capacity(v.0.len());
     for item in v.0 {
-        out.push(f.call(rt, (item,)).await?);
+        out.push(f.call(rt, (item,)).await);
     }
-    Ok(Boxed(out, PhantomData))
+    Boxed(out, PhantomData)
 }
 
 #[extern_fn(effect = pure)]
@@ -358,11 +353,11 @@ where
 }
 
 #[extern_fn]
-async fn fetch(p: Point) -> Result<Point, Trap> {
-    Ok(Point {
+async fn fetch(p: Point) -> Point {
+    Point {
         x: p.x * 2,
         label: p.label,
-    })
+    }
 }
 
 #[extern_fn(effect = idempotent)]
@@ -565,7 +560,7 @@ fn types_and_casts_reach_the_type_registry() {
     );
 }
 
-fn call_sync(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> Result<V, Trap> {
+fn call_sync(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
     match handler {
         ExternHandler::Sync(f) => f(&Tiny, &mut args),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
@@ -589,7 +584,7 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
 
     let h = handler(&reg, &i, "bump");
     let place = erased(40i64);
-    let r = call_sync(h, vec![unsafe { Tiny.reference(&place) }, erased(2i64)]).unwrap();
+    let r = call_sync(h, vec![unsafe { Tiny.reference(&place) }, erased(2i64)]);
     assert_eq!(open::<i64>(r), 42);
     assert_eq!(
         open::<i64>(place),
@@ -598,7 +593,7 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     );
 }
 
-async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> Result<V, Trap> {
+async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
     match handler {
         ExternHandler::Async(f) => f(Tiny, &mut args).await,
         ExternHandler::Sync(_) => panic!("expected an async handler"),
@@ -644,20 +639,22 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let (i, reg) = combined::<Tiny>();
 
     assert_eq!(
-        open::<i64>(
-            call_sync(handler(&reg, &i, "add"), vec![erased(40i64), erased(2i64)]).unwrap()
-        ),
+        open::<i64>(call_sync(
+            handler(&reg, &i, "add"),
+            vec![erased(40i64), erased(2i64)]
+        )),
         42
     );
     assert_eq!(
-        open::<&str>(open::<V>(
-            call_sync(handler(&reg, &i, "id_any"), vec![erased(erased("x"))]).unwrap()
-        )),
+        open::<&str>(open::<V>(call_sync(
+            handler(&reg, &i, "id_any"),
+            vec![erased(erased("x"))]
+        ))),
         "x"
     );
 
     let arr = erased(Arr::<V, ()>::new(vec![erased(1i64), erased(2i64)]));
-    let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]).unwrap();
+    let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]);
     // SAFETY: `boxed`'s glue erased its return from a `Boxed<T, Pure, Rt>`.
     let Boxed::<V, Pure, Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, boxed) };
     assert_eq!(items.len(), 2);
@@ -668,9 +665,7 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
             .unwrap_or_else(|args| panic!("double takes one argument, got {}", args.len()));
         erased(open::<i64>(n) * 2)
     })));
-    let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double])
-        .await
-        .unwrap();
+    let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double]).await;
     // SAFETY: `apply`'s glue erased its return from a `Boxed<U, E, Rt>`.
     let Boxed::<V, (), Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, out) };
     let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
@@ -686,9 +681,7 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
         .into_iter()
         .collect::<acvus_extern::FxHashMap<_, _>>(),
     ));
-    let out = call_async(handler(&reg, &i, "fetch"), vec![point])
-        .await
-        .unwrap();
+    let out = call_async(handler(&reg, &i, "fetch"), vec![point]).await;
     let acvus_extern::Obj(mut fields) = open::<acvus_extern::Obj<V>>(out);
     assert_eq!(open::<i64>(fields.remove(&Tiny.symbol("x")).unwrap()), 42);
     assert_eq!(
@@ -752,7 +745,7 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
 #[test]
 fn a_state_parameter_is_held_by_the_handler() {
     let (i, reg) = combined::<Tiny>();
-    let out = call_sync(handler(&reg, &i, "greet"), vec![erased("bob".to_string())]).unwrap();
+    let out = call_sync(handler(&reg, &i, "greet"), vec![erased("bob".to_string())]);
     assert_eq!(open::<String>(out), "hello, bob");
 }
 
@@ -929,12 +922,12 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
 
     let on_int = call_type(vec![acvus_extern::Ty::I64], acvus_extern::Ty::I64, &i);
     let h = instance_for(&reg, &i, "double", &on_int).unwrap();
-    assert_eq!(open::<i64>(call_sync(h, vec![erased(21i64)]).unwrap()), 42);
+    assert_eq!(open::<i64>(call_sync(h, vec![erased(21i64)])), 42);
 
     let on_str = call_type(vec![acvus_extern::Ty::String], acvus_extern::Ty::String, &i);
     let h = instance_for(&reg, &i, "double", &on_str).unwrap();
     assert_eq!(
-        open::<String>(call_sync(h, vec![erased(String::from("ab"))]).unwrap()),
+        open::<String>(call_sync(h, vec![erased(String::from("ab"))])),
         "abab"
     );
 
@@ -951,13 +944,10 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
     );
     let h = instance_for(&reg, &i, "first_or", &ty).unwrap();
     assert_eq!(
-        open::<String>(
-            call_sync(
-                h,
-                vec![erased(Option::<V>::None), erased(String::from("x"))]
-            )
-            .unwrap()
-        ),
+        open::<String>(call_sync(
+            h,
+            vec![erased(Option::<V>::None), erased(String::from("x"))]
+        )),
         "x"
     );
 
@@ -978,7 +968,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
         PhantomData,
     )
     .erase(&Tiny);
-    assert_eq!(open::<i64>(call_sync(h, vec![payload]).unwrap()), 2);
+    assert_eq!(open::<i64>(call_sync(h, vec![payload])), 2);
     let ty = call_type(
         vec![boxed_of(acvus_extern::Ty::Float)],
         acvus_extern::Ty::I64,
@@ -990,7 +980,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
         PhantomData,
     )
     .erase(&Tiny);
-    assert_eq!(open::<i64>(call_sync(fallback, vec![payload]).unwrap()), 3);
+    assert_eq!(open::<i64>(call_sync(fallback, vec![payload])), 3);
 }
 
 // -- Polymorphic instances (RFC-0027) ---------------------------------
@@ -998,26 +988,24 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
 extern_signature! { ns: "t", fn first<C, T>(c: C) -> T where C: TyVar, T: TyVar; }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_arr<T, N>(a: Arr<T, N>) -> Result<T, Trap>
+fn first_arr<T, N>(a: Arr<T, N>) -> T
 where
     T: TyVar,
     N: LenVar,
 {
-    a.0.into_iter()
-        .next()
-        .ok_or_else(|| Trap::call("first", "empty array"))
+    a.0.into_iter().next().expect("first: empty array")
 }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_opt<T>(v: Option<T>) -> Result<T, Trap>
+fn first_opt<T>(v: Option<T>) -> T
 where
     T: TyVar,
 {
-    v.ok_or_else(|| Trap::call("first", "none"))
+    v.expect("first: none")
 }
 
 #[extern_fn(instance_of = first, effect = pure)]
-fn first_arr_again<T, N>(a: Arr<T, N>) -> Result<T, Trap>
+fn first_arr_again<T, N>(a: Arr<T, N>) -> T
 where
     T: TyVar,
     N: LenVar,
@@ -1076,7 +1064,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     );
     let arr = erased(Arr::<V, ()>::new(vec![erased(7i64), erased(8i64)]));
     let h = instance_for(&reg, &i, "first", &on_array).unwrap();
-    assert_eq!(open::<i64>(call_sync(h, vec![arr]).unwrap()), 7);
+    assert_eq!(open::<i64>(call_sync(h, vec![arr])), 7);
 
     let on_option = call_type(
         vec![acvus_extern::Ty::Option(Box::new(acvus_extern::Ty::String))],
@@ -1085,7 +1073,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     );
     let h = instance_for(&reg, &i, "first", &on_option).unwrap();
     assert_eq!(
-        open::<String>(call_sync(h, vec![erased(Some(erased(String::from("s"))))]).unwrap()),
+        open::<String>(call_sync(h, vec![erased(Some(erased(String::from("s"))))])),
         "s"
     );
 

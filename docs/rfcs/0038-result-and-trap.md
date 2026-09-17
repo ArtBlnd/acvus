@@ -1,6 +1,6 @@
 # RFC-0038: `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error
 
-Status: Accepted (Result, `!`, and `?` built; trap to follow)
+Status: Accepted (Result, `!`, and `?` built; a trap is a Rust panic)
 Date: 2026-09-16
 Extends: RFC-0022, RFC-0023, RFC-0036
 
@@ -43,11 +43,12 @@ A failure the program can act on is a value: an extern fn returns
 enum of that function's own failure modes — and the script matches or
 `?`s it. A failure the program cannot act on is a trap: a broken
 contract, a value the checker admitted that the runtime cannot honor.
-An extern fn traps by returning `Result<T, Trap>`; the macro knows
-`Trap` by name as it knows `Result`, so `Result<T, Trap>` stops the run
-and any other `Result<T, E>` is the language's. A function that can do
-both returns `Result<Result<T, E>, Trap>`. `ExternError` is gone;
-`Runtime::Error: From<Trap>`.
+An extern fn traps by panicking, with the message the same operation
+would panic with in Rust, so every `Result<T, E>` an extern returns is
+the language's and nothing at the boundary tests for a failure
+(RFC-0044). A host that must survive one catches: `acvus-cli` wraps its
+`block_on` in `catch_unwind` and prints `error: <message>`, and a
+spawned task's panic is resumed on the thread that awaits it.
 
 ## Rationale
 
@@ -60,17 +61,17 @@ and `?` with structural merge keeps that honesty cheap: the caller's
 error type is the union of what it called, written by the compiler.
 
 A trap is not returned as a value because it has no reader: the script
-cannot proceed from a contract the runtime broke. It is not a Rust panic
-because the runtime also targets `wasm32`, where nothing unwinds; so the
-trap is the runtime's error type, carried on the same path `ExternError`
-used, under a name that says what it is.
+cannot proceed from a contract the runtime broke. Every shape that
+carried it beside the value was measured and refused (RFC-0044): a
+`Result` ABI moves 72 bytes through memory per call, and a side slot
+costs a read per call and is a thread-local, which `wasm32` refuses.
+A panic costs nothing on the path that does not fail.
 
 ## Not built
 
-- `Trap` is not yet built; `Trap` stands until it is.
-- No `Result` from an extern fn as a language value yet: the macro still
-  reads a returned `Result<T, E>` as the abort path (RFC-0023). The trap
-  step flips that.
+- A panic message names the operation, not the source position: a span
+  in it costs a store per operation in every loop body, measured at
+  about a tenth of an iteration (RFC-0044).
 - No `?` in a template, and no `!`-returning functions yet; the analyses
   do not know a diverging expression.
 - A lambda body is one expression: `if` and `let` are statements of a

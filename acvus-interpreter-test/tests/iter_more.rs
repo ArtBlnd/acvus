@@ -275,3 +275,20 @@ async fn a_pipeline_mixing_the_new_stages_and_an_aggregate() {
     let v = run("range(0, 5) | map(|x| -> x * 2) | step_by(2) | sum()").await;
     assert_eq!(v.as_int(), 12, "0, 4, 8");
 }
+
+/// The closure's own `+` panics, three synchronous stages below the
+/// boundary, and the unwinder carries it out through every stage.
+#[tokio::test]
+#[should_panic(expected = "integer overflow")]
+async fn a_panic_three_sync_stages_deep_unwinds_out_of_the_pipeline() {
+    let i = Interner::new();
+    let source = "range(0, 4) | map(|x| -> x) | map(|x| -> x) | map(|x| -> x + @big) | sum()";
+    let context: Context = [(
+        i.intern("big"),
+        typed(acvus_mir::ty::Ty::I64, Value::int(i64::MAX)),
+    )]
+    .into_iter()
+    .collect();
+
+    run_script_mode(&i, source, context).await;
+}

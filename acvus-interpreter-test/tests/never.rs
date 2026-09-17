@@ -1,12 +1,12 @@
-use acvus_extern::{Never, Registry, Trap, extern_fn, extern_registry};
+use acvus_extern::{Never, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 #[extern_fn(effect = pure)]
-fn boom(message: String) -> Result<Never, Trap> {
-    Err(Trap::call("boom", message))
+fn boom(message: String) -> Never {
+    panic!("boom: {message}")
 }
 
 fn registries() -> Vec<Registry<AcvusRuntime>> {
@@ -25,7 +25,7 @@ fn flag(i: &Interner, b: bool) -> Context {
 }
 
 #[tokio::test]
-async fn a_branch_that_traps_leaves_the_other_branch_s_type() {
+async fn a_branch_that_panics_leaves_the_other_branch_s_type() {
     let i = Interner::new();
     let v = run_script_mode_with_externs(
         &i,
@@ -39,8 +39,8 @@ async fn a_branch_that_traps_leaves_the_other_branch_s_type() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "no")]
-async fn a_trap_stops_the_run_with_its_message() {
+#[should_panic(expected = "boom: no")]
+async fn a_panic_stops_the_run_with_its_message() {
     let i = Interner::new();
     run_script_mode_with_externs(
         &i,
@@ -52,7 +52,7 @@ async fn a_trap_stops_the_run_with_its_message() {
 }
 
 #[tokio::test]
-async fn a_move_on_the_trapping_path_does_not_reach_the_code_after() {
+async fn a_move_on_the_panicking_path_does_not_reach_the_code_after() {
     let i = Interner::new();
     let v = run_script_mode_with_externs(
         &i,

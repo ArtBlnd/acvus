@@ -18,7 +18,6 @@ mod reference;
 mod registry;
 mod runtime;
 mod space;
-mod trap;
 mod ty_arg;
 mod vec;
 
@@ -39,7 +38,6 @@ pub use registry::{
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
-pub use trap::Trap;
 pub use ty_arg::{Monomorphize, Never, PolyVars, SlotRepr, Spec, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;
 

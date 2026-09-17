@@ -1,13 +1,13 @@
 //! Arithmetic and logic, one operation per operator at one operand type.
 //!
 //! Integer arithmetic is checked: an overflow, a division by zero, or a
-//! shift past the width is a run-time error, never a wrap.
+//! shift past the width panics where the same operation panics in Rust,
+//! never wraps.
 
 use acvus_ast::{BinOp, UnaryOp};
 use acvus_mir::ty::IntTy;
 
 use crate::code::{Flow, Op, OpFn};
-use crate::error::RuntimeError;
 use crate::machine::Machine;
 use crate::value::{Tag, Value};
 
@@ -144,11 +144,14 @@ where
     Value::Small(T::TAG, value.word())
 }
 
-fn shift_amount<T>(bits: u64) -> Result<u32, RuntimeError>
+const OVERFLOW: &str = "integer overflow";
+const DIVIDE_BY_ZERO: &str = "division by zero";
+
+fn shift_amount<T>(bits: u64) -> u32
 where
     T: Int,
 {
-    u32::try_from(T::read(bits).wide()).map_err(|_| RuntimeError::integer_overflow())
+    u32::try_from(T::read(bits).wide()).unwrap_or_else(|_| panic!("{OVERFLOW}"))
 }
 
 /// The word-level integer operations: the operand words, read at `T`.
@@ -159,7 +162,7 @@ pub mod word {
         ($( $name:ident ($a:ident, $b:ident) $body:block )*) => {
             $(
                 #[inline]
-                pub fn $name<T>(left: u64, right: u64) -> Result<Value, RuntimeError>
+                pub fn $name<T>(left: u64, right: u64) -> Value
                 where
                     T: Int,
                 {
@@ -173,102 +176,87 @@ pub mod word {
 
     int_words! {
         add(a, b) {
-            a.checked_add(b).map(int).ok_or_else(RuntimeError::integer_overflow)
+            int(a.checked_add(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
         }
         sub(a, b) {
-            a.checked_sub(b).map(int).ok_or_else(RuntimeError::integer_overflow)
+            int(a.checked_sub(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
         }
         mul(a, b) {
-            a.checked_mul(b).map(int).ok_or_else(RuntimeError::integer_overflow)
+            int(a.checked_mul(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
         }
         div(a, b) {
-            if b.is_zero() {
-                return Err(RuntimeError::division_by_zero());
-            }
-            a.checked_div(b).map(int).ok_or_else(RuntimeError::integer_overflow)
+            assert!(!b.is_zero(), "{DIVIDE_BY_ZERO}");
+            int(a.checked_div(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
         }
         rem(a, b) {
-            if b.is_zero() {
-                return Err(RuntimeError::division_by_zero());
-            }
-            a.checked_rem(b).map(int).ok_or_else(RuntimeError::integer_overflow)
+            assert!(!b.is_zero(), "{DIVIDE_BY_ZERO}");
+            int(a.checked_rem(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
         }
-        eq(a, b) { Ok(Value::bool_(a.eq(b))) }
-        neq(a, b) { Ok(Value::bool_(!a.eq(b))) }
-        lt(a, b) { Ok(Value::bool_(a < b)) }
-        gt(a, b) { Ok(Value::bool_(a > b)) }
-        lte(a, b) { Ok(Value::bool_(a <= b)) }
-        gte(a, b) { Ok(Value::bool_(a >= b)) }
-        bit_and(a, b) { Ok(int(a.bitand(b))) }
-        bit_or(a, b) { Ok(int(a.bitor(b))) }
-        bit_xor(a, b) { Ok(int(a.bitxor(b))) }
+        eq(a, b) { Value::bool_(a.eq(b)) }
+        neq(a, b) { Value::bool_(!a.eq(b)) }
+        lt(a, b) { Value::bool_(a < b) }
+        gt(a, b) { Value::bool_(a > b) }
+        lte(a, b) { Value::bool_(a <= b) }
+        gte(a, b) { Value::bool_(a >= b) }
+        bit_and(a, b) { int(a.bitand(b)) }
+        bit_or(a, b) { int(a.bitor(b)) }
+        bit_xor(a, b) { int(a.bitxor(b)) }
     }
 
     #[inline]
-    pub fn shl<T>(left: u64, right: u64) -> Result<Value, RuntimeError>
+    pub fn shl<T>(left: u64, right: u64) -> Value
     where
         T: Int,
     {
-        let shift = shift_amount::<T>(right)?;
-        T::read(left)
+        let shift = shift_amount::<T>(right);
+        int(T::read(left)
             .checked_shl(shift)
-            .map(int)
-            .ok_or_else(RuntimeError::integer_overflow)
+            .unwrap_or_else(|| panic!("{OVERFLOW}")))
     }
 
     #[inline]
-    pub fn shr<T>(left: u64, right: u64) -> Result<Value, RuntimeError>
+    pub fn shr<T>(left: u64, right: u64) -> Value
     where
         T: Int,
     {
-        let shift = shift_amount::<T>(right)?;
-        T::read(left)
+        let shift = shift_amount::<T>(right);
+        int(T::read(left)
             .checked_shr(shift)
-            .map(int)
-            .ok_or_else(RuntimeError::integer_overflow)
+            .unwrap_or_else(|| panic!("{OVERFLOW}")))
     }
 
     #[inline]
-    pub fn neg<T>(operand: u64) -> Result<Value, RuntimeError>
+    pub fn neg<T>(operand: u64) -> Value
     where
         T: Int,
     {
-        T::read(operand)
+        int(T::read(operand)
             .checked_neg()
-            .map(int)
-            .ok_or_else(RuntimeError::integer_overflow)
+            .unwrap_or_else(|| panic!("{OVERFLOW}")))
     }
 }
 
 #[inline]
 fn binary<F>(machine: &mut Machine<'_>, op: &Op, f: F) -> Flow
 where
-    F: FnOnce(u64, u64) -> Result<Value, RuntimeError>,
+    F: FnOnce(u64, u64) -> Value,
 {
     let left = machine.reg(op.b).small();
     let right = machine.reg(op.c).small();
-    match f(left, right) {
-        Ok(value) => {
-            machine.set(op.a, value);
-            Flow::Next
-        }
-        Err(error) => machine.fail(error),
-    }
+    let value = f(left, right);
+    machine.set(op.a, value);
+    Flow::Next
 }
 
 #[inline]
 fn unary<F>(machine: &mut Machine<'_>, op: &Op, f: F) -> Flow
 where
-    F: FnOnce(u64) -> Result<Value, RuntimeError>,
+    F: FnOnce(u64) -> Value,
 {
     let operand = machine.reg(op.b).small();
-    match f(operand) {
-        Ok(value) => {
-            machine.set(op.a, value);
-            Flow::Next
-        }
-        Err(error) => machine.fail(error),
-    }
+    let value = f(operand);
+    machine.set(op.a, value);
+    Flow::Next
 }
 
 macro_rules! int_ops {
@@ -449,11 +437,10 @@ pub fn bool_unaryop(op: UnaryOp) -> OpFn {
 #[cfg(test)]
 mod primitive_operator_tests {
     use super::*;
-    use crate::error::RuntimeErrorKind;
 
-    fn i64_op<F>(f: F, a: i64, b: i64) -> Result<Value, RuntimeError>
+    fn i64_op<F>(f: F, a: i64, b: i64) -> Value
     where
-        F: FnOnce(u64, u64) -> Result<Value, RuntimeError>,
+        F: FnOnce(u64, u64) -> Value,
     {
         f(a as u64, b as u64)
     }
@@ -466,29 +453,26 @@ mod primitive_operator_tests {
     }
 
     #[test]
-    fn int_arithmetic_is_checked() {
-        assert!(matches!(
-            i64_op(word::add::<i64>, i64::MAX, 1),
-            Err(RuntimeError {
-                kind: RuntimeErrorKind::IntegerOverflow,
-                span: None,
-            })
-        ));
-        assert!(matches!(
-            i64_op(word::mul::<i64>, i64::MIN, -1),
-            Err(RuntimeError {
-                kind: RuntimeErrorKind::IntegerOverflow,
-                span: None,
-            })
-        ));
-        assert!(matches!(
-            i64_op(word::div::<i64>, 1, 0),
-            Err(RuntimeError {
-                kind: RuntimeErrorKind::DivisionByZero,
-                span: None,
-            })
-        ));
-        assert_eq!(i64_op(word::sub::<i64>, 1, 2).unwrap().as_int(), -1);
+    fn a_subtraction_within_the_width_is_the_difference() {
+        assert_eq!(i64_op(word::sub::<i64>, 1, 2).as_int(), -1);
+    }
+
+    #[test]
+    #[should_panic(expected = "integer overflow")]
+    fn an_addition_past_the_width_panics() {
+        i64_op(word::add::<i64>, i64::MAX, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "integer overflow")]
+    fn a_multiplication_past_the_width_panics() {
+        i64_op(word::mul::<i64>, i64::MIN, -1);
+    }
+
+    #[test]
+    #[should_panic(expected = "division by zero")]
+    fn a_division_by_zero_panics() {
+        i64_op(word::div::<i64>, 1, 0);
     }
 
     #[test]
@@ -508,8 +492,13 @@ mod primitive_operator_tests {
 
     #[test]
     fn an_integer_is_read_at_its_width() {
-        assert_eq!(i64_op(word::add::<u8>, 200, 55).unwrap().as_int(), 255);
-        assert!(i64_op(word::add::<u8>, 200, 56).is_err());
+        assert_eq!(i64_op(word::add::<u8>, 200, 55).as_int(), 255);
         assert_eq!(<i8 as Int>::read(0xFF), -1);
+    }
+
+    #[test]
+    #[should_panic(expected = "integer overflow")]
+    fn an_addition_past_the_narrow_width_panics() {
+        i64_op(word::add::<u8>, 200, 56);
     }
 }

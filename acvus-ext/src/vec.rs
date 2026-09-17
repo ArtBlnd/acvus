@@ -4,7 +4,7 @@
 //! the element is in use (RFC-0028).
 
 use acvus_extern::{
-    Arr, LenVar, Ref, RefMut, Registry, Runtime, Trap, TyVar, extern_fn, extern_registry,
+    Arr, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
     extern_signature,
 };
 
@@ -17,11 +17,11 @@ extern_signature! {
         T: TyVar;
 }
 
-pub(crate) fn checked_index(name: &'static str, len: usize, index: i64) -> Result<usize, Trap> {
+pub(crate) fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
     usize::try_from(index)
         .ok()
         .filter(|i| *i < len)
-        .ok_or_else(|| Trap::call(name, format!("index {index} out of {len}")))
+        .unwrap_or_else(|| panic!("{name}: index {index} is out of range for length {len}"))
 }
 
 #[extern_fn(effect = pure)]
@@ -60,23 +60,23 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
+fn get<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>, index: i64) -> Ref<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    let i = c.with(rt, |c| checked_index("get", c.len(), index))?;
-    Ok(c.map(rt, |c| &c[i]))
+    let i = c.with(rt, |c| checked_index("get", c.len(), index));
+    c.map(rt, |c| &c[i])
 }
 
 #[extern_fn(effect = pure)]
-fn get_mut<T, Rt>(rt: &Rt, c: RefMut<Vec<T>, Rt>, index: i64) -> Result<RefMut<T, Rt>, Trap>
+fn get_mut<T, Rt>(rt: &Rt, c: RefMut<Vec<T>, Rt>, index: i64) -> RefMut<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    let i = c.with_mut(rt, |c| checked_index("get_mut", c.len(), index))?;
-    Ok(c.map_mut(rt, |c| &mut c[i]))
+    let i = c.with_mut(rt, |c| checked_index("get_mut", c.len(), index));
+    c.map_mut(rt, |c| &mut c[i])
 }
 
 #[extern_fn(effect = pure)]

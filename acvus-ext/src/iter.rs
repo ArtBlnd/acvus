@@ -1,11 +1,15 @@
 //! The `Iterator` extension type: a lazy, move-only pipeline of stages.
 //!
 //! A stage is built by one constructor that takes its source and its
-//! closure at one element type, then boxed as `dyn Stage<Rt>`, which yields
+//! closure at one element type, then boxed as a `dyn` stage, which yields
 //! the runtime's values. The box is the payload that crosses the boundary,
 //! and it names no element type: the glue erases a `Regex`'s `Iter<String>`
 //! and materializes the same box as a consumer's `Iter<T>`, so a payload
 //! that mentioned `T` would be two Rust types on the two sides.
+//!
+//! `None` is the end of the source or a trap. The trap itself is on the
+//! runtime, and the extern boundary that called the consumer is what reads
+//! it back and fails the run (RFC-0044, stage 6).
 //!
 //! `T` is the declared element type and nothing more: no value is read as a
 //! `T` on its account. The exit is `FromValue`, identity for the runtime's
@@ -24,21 +28,93 @@ use sync_wrapper::SyncWrapper;
 #[derive(ExternType)]
 #[extern_type(name = "Iterator")]
 #[repr(transparent)]
-pub struct Iter<T, E, I, Rt>(Box<dyn Stage<Rt>>, PhantomData<(T, E, I)>)
+pub struct Iter<T, E, I, Rt>(Stages<Rt>, PhantomData<(T, E, I)>)
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime;
 
-type Pulled<'a, Rt> = BoxFuture<'a, Result<Option<<Rt as Runtime>::Value>, <Rt as Runtime>::Error>>;
-
-trait Stage<Rt>: Send + Sync
+pub enum Stages<Rt>
 where
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt>;
+    Sync(Box<dyn SyncStage<Rt>>),
+    Async(Box<dyn AsyncStage<Rt>>),
 }
+
+pub trait SyncStage<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value>;
+}
+
+pub trait AsyncStage<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>>;
+}
+
+impl<Rt> SyncStage<Rt> for Box<dyn SyncStage<Rt>>
+where
+    Rt: Runtime,
+{
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        (**self).next(rt)
+    }
+}
+
+impl<Rt> AsyncStage<Rt> for Box<dyn AsyncStage<Rt>>
+where
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
+        (**self).next(rt)
+    }
+}
+
+struct Lifted<S>(S);
+
+impl<S, Rt> AsyncStage<Rt> for Lifted<S>
+where
+    S: SyncStage<Rt>,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
+        Box::pin(std::future::ready(self.0.next(rt)))
+    }
+}
+
+impl<Rt> Stages<Rt>
+where
+    Rt: Runtime,
+{
+    fn into_async(self) -> Box<dyn AsyncStage<Rt>> {
+        match self {
+            Self::Sync(stage) => Box::new(Lifted(stage)),
+            Self::Async(stage) => stage,
+        }
+    }
+}
+
+/// The body may await: both arms expand inside the consumer's own
+/// `async fn`, and only the source's `next` differs between them.
+macro_rules! drain {
+    ($it:expr, $rt:expr, |$value:pat_param| $body:block) => {
+        match $it.stages_mut() {
+            $crate::iter::Stages::Sync(stage) => {
+                while let Some($value) = $crate::iter::SyncStage::next(stage, $rt) $body
+            }
+            $crate::iter::Stages::Async(stage) => {
+                while let Some($value) = $crate::iter::AsyncStage::next(stage, $rt).await $body
+            }
+        }
+    };
+}
+
+pub(crate) use drain;
 
 impl<T, E, I, Rt> Iter<T, E, I, Rt>
 where
@@ -47,8 +123,16 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    fn sealed(stage: impl Stage<Rt> + 'static) -> Self {
-        Self(Box::new(stage), PhantomData)
+    fn sealed(stage: impl SyncStage<Rt> + 'static) -> Self {
+        Self(Stages::Sync(Box::new(stage)), PhantomData)
+    }
+
+    fn suspending(stage: impl AsyncStage<Rt> + 'static) -> Self {
+        Self(Stages::Async(Box::new(stage)), PhantomData)
+    }
+
+    pub fn stages_mut(&mut self) -> &mut Stages<Rt> {
+        &mut self.0
     }
 
     pub fn from_items(items: Vec<T>) -> Self
@@ -71,51 +155,96 @@ where
     where
         U: TyVar,
     {
-        Iter::sealed(Map { source: self, f })
+        match self.0 {
+            Stages::Sync(source) if f.is_sync() => Iter::sealed(Map { source, f }),
+            source => Iter::suspending(Map {
+                source: source.into_async(),
+                f,
+            }),
+        }
     }
 
     pub fn filter(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
-        Self::sealed(Filter { source: self, f })
+        match self.0 {
+            Stages::Sync(source) if f.is_sync() => Self::sealed(Filter { source, f }),
+            source => Self::suspending(Filter {
+                source: source.into_async(),
+                f,
+            }),
+        }
     }
 
     pub fn take(self, n: u64) -> Self {
-        Self::sealed(Take {
-            source: self,
-            remaining: n,
-        })
+        match self.0 {
+            Stages::Sync(source) => Self::sealed(Take {
+                source,
+                remaining: n,
+            }),
+            Stages::Async(source) => Self::suspending(Take {
+                source,
+                remaining: n,
+            }),
+        }
     }
 
     pub fn skip(self, n: u64) -> Self {
-        Self::sealed(Skip {
-            source: self,
-            remaining: n,
-        })
+        match self.0 {
+            Stages::Sync(source) => Self::sealed(Skip {
+                source,
+                remaining: n,
+            }),
+            Stages::Async(source) => Self::suspending(Skip {
+                source,
+                remaining: n,
+            }),
+        }
     }
 
     /// Every `step`th element, the first included. `step` is at least one:
     /// the ExternFn traps on zero before this is reached.
     pub fn step_by(self, step: u64) -> Self {
-        Self::sealed(StepBy {
-            source: self,
-            step,
-            started: false,
-        })
+        match self.0 {
+            Stages::Sync(source) => Self::sealed(StepBy {
+                source,
+                step,
+                started: false,
+            }),
+            Stages::Async(source) => Self::suspending(StepBy {
+                source,
+                step,
+                started: false,
+            }),
+        }
     }
 
     pub fn take_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
-        Self::sealed(TakeWhile {
-            source: self,
-            f,
-            done: false,
-        })
+        match self.0 {
+            Stages::Sync(source) if f.is_sync() => Self::sealed(TakeWhile {
+                source,
+                f,
+                done: false,
+            }),
+            source => Self::suspending(TakeWhile {
+                source: source.into_async(),
+                f,
+                done: false,
+            }),
+        }
     }
 
     pub fn skip_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
-        Self::sealed(SkipWhile {
-            source: self,
-            f,
-            skipping: true,
-        })
+        match self.0 {
+            Stages::Sync(source) if f.is_sync() => Self::sealed(SkipWhile {
+                source,
+                f,
+                skipping: true,
+            }),
+            source => Self::suspending(SkipWhile {
+                source: source.into_async(),
+                f,
+                skipping: true,
+            }),
+        }
     }
 
     /// Consecutive elements in `Vec`s of `size`, the last one shorter when
@@ -125,7 +254,18 @@ where
     where
         T: Cross<Rt> + FromValue<Rt>,
     {
-        Iter::sealed(Chunks { source: self, size })
+        match self.0 {
+            Stages::Sync(source) => Iter::sealed(Chunks::<_, T> {
+                source,
+                size,
+                item: PhantomData,
+            }),
+            Stages::Async(source) => Iter::suspending(Chunks::<_, T> {
+                source,
+                size,
+                item: PhantomData,
+            }),
+        }
     }
 
     pub fn chain<J, K>(self, other: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
@@ -133,18 +273,32 @@ where
         J: IdentityVar,
         K: IdentityVar,
     {
-        Iter::sealed(Chain {
-            parts: VecDeque::from([self.0, other.0]),
-        })
+        Iter::chained(VecDeque::from([self.0, other.0]))
     }
 
     pub fn chain_all<K>(parts: Vec<Self>) -> Iter<T, E, K, Rt>
     where
         K: IdentityVar,
     {
-        Iter::sealed(Chain {
-            parts: parts.into_iter().map(|part| part.0).collect(),
-        })
+        Iter::chained(parts.into_iter().map(|part| part.0).collect())
+    }
+
+    /// A chain suspends where any of its parts does: a later part is
+    /// reached only after the ones before it end, but the box that holds
+    /// them all is one stage and answers one way.
+    fn chained(parts: VecDeque<Stages<Rt>>) -> Self {
+        if parts.iter().all(|part| matches!(part, Stages::Sync(_))) {
+            let parts = parts
+                .into_iter()
+                .map(|part| match part {
+                    Stages::Sync(stage) => stage,
+                    Stages::Async(_) => unreachable!("every part answered Sync"),
+                })
+                .collect();
+            return Self::sealed(Chain { parts });
+        }
+        let parts = parts.into_iter().map(Stages::into_async).collect();
+        Self::suspending(Chain { parts })
     }
 
     pub fn flatten<U>(self) -> Iter<U, E, I, Rt>
@@ -153,10 +307,16 @@ where
         T::IntoIter: Send + Sync,
         U: Cross<Rt>,
     {
-        Iter::sealed(Flatten {
-            source: self,
-            pending: None,
-        })
+        match self.0 {
+            Stages::Sync(source) => Iter::sealed(Flatten::<_, T> {
+                source,
+                pending: None,
+            }),
+            Stages::Async(source) => Iter::suspending(Flatten::<_, T> {
+                source,
+                pending: None,
+            }),
+        }
     }
 
     pub fn flat_map<S, U>(self, f: Fn1<T, S, E, Rt>) -> Iter<U, E, I, Rt>
@@ -168,18 +328,18 @@ where
         self.map(f).flatten()
     }
 
-    pub async fn next_value(&mut self, rt: &Rt) -> Result<Option<Rt::Value>, Rt::Error> {
-        self.0.next(rt).await
+    pub async fn next_value(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        match &mut self.0 {
+            Stages::Sync(stage) => stage.next(rt),
+            Stages::Async(stage) => stage.next(rt).await,
+        }
     }
 
-    pub async fn next(&mut self, rt: &Rt) -> Result<Option<T>, Rt::Error>
+    pub async fn next(&mut self, rt: &Rt) -> Option<T>
     where
         T: FromValue<Rt>,
     {
-        let Some(value) = self.next_value(rt).await? else {
-            return Ok(None);
-        };
-        Ok(Some(T::from_value(rt, value)?))
+        Some(T::from_value(rt, self.next_value(rt).await?))
     }
 }
 
@@ -193,373 +353,489 @@ where
     /// Consecutive equal elements collapsed to the first. The stage keeps a
     /// `T` clone of the last element it yielded, never a second value.
     pub fn dedup(self) -> Self {
-        Self::sealed(Dedup {
-            source: self,
-            last: None,
-        })
+        match self.0 {
+            Stages::Sync(source) => Self::sealed(Dedup::<_, T> { source, last: None }),
+            Stages::Async(source) => Self::suspending(Dedup::<_, T> { source, last: None }),
+        }
     }
 }
 
 struct Generate<F>(SyncWrapper<F>);
 
-impl<F, T, Rt> Stage<Rt> for Generate<F>
+impl<F, T, Rt> SyncStage<Rt> for Generate<F>
 where
     F: FnMut(&Rt) -> Option<T> + Send,
     T: Cross<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
-        Box::pin(async move { Ok(self.0.get_mut()(rt).map(|item| item.erase(rt))) })
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        Some(self.0.get_mut()(rt)?.erase(rt))
     }
 }
 
-struct Map<T, U, E, I, Rt>
+struct Map<S, T, U, E, Rt>
 where
     T: TyVar,
     U: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    source: Iter<T, E, I, Rt>,
+    source: S,
     f: Fn1<T, U, E, Rt>,
 }
 
-impl<T, U, E, I, Rt> Stage<Rt> for Map<T, U, E, I, Rt>
+impl<S, T, U, E, Rt> SyncStage<Rt> for Map<S, T, U, E, Rt>
 where
+    S: SyncStage<Rt>,
     T: TyVar,
     U: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
-        Box::pin(async move {
-            let Some(value) = self.source.next_value(rt).await? else {
-                return Ok(None);
-            };
-            Ok(Some(self.f.call_value(rt, value).await?))
-        })
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        Some(self.f.call_value_now(rt, self.source.next(rt)?))
     }
 }
 
-struct Filter<T, E, I, Rt>
+impl<S, T, U, E, Rt> AsyncStage<Rt> for Map<S, T, U, E, Rt>
+where
+    S: AsyncStage<Rt>,
+    T: TyVar,
+    U: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
+        Box::pin(async move { Some(self.f.call_value(rt, self.source.next(rt).await?).await) })
+    }
+}
+
+struct Filter<S, T, E, Rt>
 where
     T: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    source: Iter<T, E, I, Rt>,
+    source: S,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for Filter<T, E, I, Rt>
+impl<S, T, E, Rt> SyncStage<Rt> for Filter<S, T, E, Rt>
 where
+    S: SyncStage<Rt>,
     T: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        while let Some(value) = self.source.next(rt) {
+            if self.f.call_now(rt, (Ref::lend(rt, &value),)) {
+                return Some(value);
+            }
+        }
+        None
+    }
+}
+
+impl<S, T, E, Rt> AsyncStage<Rt> for Filter<S, T, E, Rt>
+where
+    S: AsyncStage<Rt>,
+    T: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
-            while let Some(value) = self.source.next_value(rt).await? {
-                if self.f.call(rt, (Ref::lend(rt, &value),)).await? {
-                    return Ok(Some(value));
+            while let Some(value) = self.source.next(rt).await {
+                if self.f.call(rt, (Ref::lend(rt, &value),)).await {
+                    return Some(value);
                 }
             }
-            Ok(None)
+            None
         })
     }
 }
 
-struct Take<T, E, I, Rt>
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    source: Iter<T, E, I, Rt>,
+struct Take<S> {
+    source: S,
     remaining: u64,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for Take<T, E, I, Rt>
+impl<S, Rt> SyncStage<Rt> for Take<S>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    S: SyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        self.remaining = self.remaining.checked_sub(1)?;
+        self.source.next(rt)
+    }
+}
+
+impl<S, Rt> AsyncStage<Rt> for Take<S>
+where
+    S: AsyncStage<Rt>,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
-            if self.remaining == 0 {
-                return Ok(None);
-            }
-            self.remaining -= 1;
-            self.source.next_value(rt).await
+            self.remaining = self.remaining.checked_sub(1)?;
+            self.source.next(rt).await
         })
     }
 }
 
-struct Skip<T, E, I, Rt>
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    source: Iter<T, E, I, Rt>,
+struct Skip<S> {
+    source: S,
     remaining: u64,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for Skip<T, E, I, Rt>
+impl<S, Rt> SyncStage<Rt> for Skip<S>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    S: SyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        while self.remaining > 0 {
+            self.remaining -= 1;
+            self.source.next(rt)?;
+        }
+        self.source.next(rt)
+    }
+}
+
+impl<S, Rt> AsyncStage<Rt> for Skip<S>
+where
+    S: AsyncStage<Rt>,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             while self.remaining > 0 {
                 self.remaining -= 1;
-                if self.source.next_value(rt).await?.is_none() {
-                    return Ok(None);
-                }
+                self.source.next(rt).await?;
             }
-            self.source.next_value(rt).await
+            self.source.next(rt).await
         })
     }
 }
 
-struct StepBy<T, E, I, Rt>
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    source: Iter<T, E, I, Rt>,
+struct StepBy<S> {
+    source: S,
     step: u64,
     started: bool,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for StepBy<T, E, I, Rt>
+impl<S, Rt> SyncStage<Rt> for StepBy<S>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    S: SyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        if self.started {
+            for _ in 1..self.step {
+                self.source.next(rt)?;
+            }
+        }
+        self.started = true;
+        self.source.next(rt)
+    }
+}
+
+impl<S, Rt> AsyncStage<Rt> for StepBy<S>
+where
+    S: AsyncStage<Rt>,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             if self.started {
                 for _ in 1..self.step {
-                    if self.source.next_value(rt).await?.is_none() {
-                        return Ok(None);
-                    }
+                    self.source.next(rt).await?;
                 }
             }
             self.started = true;
-            self.source.next_value(rt).await
+            self.source.next(rt).await
         })
     }
 }
 
-struct TakeWhile<T, E, I, Rt>
+struct TakeWhile<S, T, E, Rt>
 where
     T: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    source: Iter<T, E, I, Rt>,
+    source: S,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
     done: bool,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for TakeWhile<T, E, I, Rt>
+impl<S, T, E, Rt> SyncStage<Rt> for TakeWhile<S, T, E, Rt>
 where
+    S: SyncStage<Rt>,
     T: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        if self.done {
+            return None;
+        }
+        let value = self.source.next(rt)?;
+        if self.f.call_now(rt, (Ref::lend(rt, &value),)) {
+            return Some(value);
+        }
+        self.done = true;
+        None
+    }
+}
+
+impl<S, T, E, Rt> AsyncStage<Rt> for TakeWhile<S, T, E, Rt>
+where
+    S: AsyncStage<Rt>,
+    T: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             if self.done {
-                return Ok(None);
+                return None;
             }
-            let Some(value) = self.source.next_value(rt).await? else {
-                return Ok(None);
-            };
-            if self.f.call(rt, (Ref::lend(rt, &value),)).await? {
-                return Ok(Some(value));
+            let value = self.source.next(rt).await?;
+            if self.f.call(rt, (Ref::lend(rt, &value),)).await {
+                return Some(value);
             }
             self.done = true;
-            Ok(None)
+            None
         })
     }
 }
 
-struct SkipWhile<T, E, I, Rt>
+struct SkipWhile<S, T, E, Rt>
 where
     T: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    source: Iter<T, E, I, Rt>,
+    source: S,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
     skipping: bool,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for SkipWhile<T, E, I, Rt>
+impl<S, T, E, Rt> SyncStage<Rt> for SkipWhile<S, T, E, Rt>
 where
+    S: SyncStage<Rt>,
     T: TyVar,
     E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        while self.skipping {
+            let value = self.source.next(rt)?;
+            if !self.f.call_now(rt, (Ref::lend(rt, &value),)) {
+                self.skipping = false;
+                return Some(value);
+            }
+        }
+        self.source.next(rt)
+    }
+}
+
+impl<S, T, E, Rt> AsyncStage<Rt> for SkipWhile<S, T, E, Rt>
+where
+    S: AsyncStage<Rt>,
+    T: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             while self.skipping {
-                let Some(value) = self.source.next_value(rt).await? else {
-                    return Ok(None);
-                };
-                if !self.f.call(rt, (Ref::lend(rt, &value),)).await? {
+                let value = self.source.next(rt).await?;
+                if !self.f.call(rt, (Ref::lend(rt, &value),)).await {
                     self.skipping = false;
-                    return Ok(Some(value));
+                    return Some(value);
                 }
             }
-            self.source.next_value(rt).await
+            self.source.next(rt).await
         })
     }
 }
 
-struct Chunks<T, E, I, Rt>
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    source: Iter<T, E, I, Rt>,
+struct Chunks<S, T> {
+    source: S,
     size: u64,
+    item: PhantomData<T>,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for Chunks<T, E, I, Rt>
+impl<S, T, Rt> SyncStage<Rt> for Chunks<S, T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    S: SyncStage<Rt>,
+    T: Cross<Rt> + FromValue<Rt> + Send + Sync,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        let mut chunk: Vec<T> = Vec::new();
+        while (chunk.len() as u64) < self.size {
+            let Some(value) = self.source.next(rt) else {
+                break;
+            };
+            chunk.push(T::from_value(rt, value));
+        }
+        (!chunk.is_empty()).then(|| chunk.erase(rt))
+    }
+}
+
+impl<S, T, Rt> AsyncStage<Rt> for Chunks<S, T>
+where
+    S: AsyncStage<Rt>,
+    T: Cross<Rt> + FromValue<Rt> + Send + Sync,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
-            let mut chunk = Vec::new();
+            let mut chunk: Vec<T> = Vec::new();
             while (chunk.len() as u64) < self.size {
-                let Some(item) = self.source.next(rt).await? else {
+                let Some(value) = self.source.next(rt).await else {
                     break;
                 };
-                chunk.push(item);
+                chunk.push(T::from_value(rt, value));
             }
-            if chunk.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(chunk.erase(rt)))
+            (!chunk.is_empty()).then(|| chunk.erase(rt))
         })
     }
 }
 
-struct Dedup<T, E, I, Rt>
-where
-    T: Stored<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    source: Iter<Erased<Rt, T>, E, I, Rt>,
+struct Dedup<S, T> {
+    source: S,
     last: Option<T>,
 }
 
-impl<T, E, I, Rt> Stage<Rt> for Dedup<T, E, I, Rt>
+impl<S, T, Rt> SyncStage<Rt> for Dedup<S, T>
 where
+    S: SyncStage<Rt>,
     T: Stored<Rt> + PartialEq + Clone,
-    E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        while let Some(value) = self.source.next(rt) {
+            let item = Erased::<Rt, T>::from_value(rt, value);
+            let current = item.as_ref(rt);
+            if self.last.as_ref() == Some(current) {
+                continue;
+            }
+            self.last = Some(current.clone());
+            return Some(item.into_value());
+        }
+        None
+    }
+}
+
+impl<S, T, Rt> AsyncStage<Rt> for Dedup<S, T>
+where
+    S: AsyncStage<Rt>,
+    T: Stored<Rt> + PartialEq + Clone,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
-            while let Some(item) = self.source.next(rt).await? {
+            while let Some(value) = self.source.next(rt).await {
+                let item = Erased::<Rt, T>::from_value(rt, value);
                 let current = item.as_ref(rt);
                 if self.last.as_ref() == Some(current) {
                     continue;
                 }
                 self.last = Some(current.clone());
-                return Ok(Some(item.into_value()));
+                return Some(item.into_value());
             }
-            Ok(None)
+            None
         })
     }
 }
 
-struct Chain<Rt>
-where
-    Rt: Runtime,
-{
-    parts: VecDeque<Box<dyn Stage<Rt>>>,
+struct Chain<S> {
+    parts: VecDeque<S>,
 }
 
-impl<Rt> Stage<Rt> for Chain<Rt>
+impl<S, Rt> SyncStage<Rt> for Chain<S>
 where
+    S: SyncStage<Rt> + Send + Sync,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        while let Some(front) = self.parts.front_mut() {
+            if let Some(value) = front.next(rt) {
+                return Some(value);
+            }
+            self.parts.pop_front();
+        }
+        None
+    }
+}
+
+impl<S, Rt> AsyncStage<Rt> for Chain<S>
+where
+    S: AsyncStage<Rt> + Send + Sync,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             while let Some(front) = self.parts.front_mut() {
-                if let Some(value) = front.next(rt).await? {
-                    return Ok(Some(value));
+                if let Some(value) = front.next(rt).await {
+                    return Some(value);
                 }
                 self.parts.pop_front();
             }
-            Ok(None)
+            None
         })
     }
 }
 
-struct Flatten<S, E, I, Rt>
+struct Flatten<S, T>
 where
-    S: TyVar + IntoIterator,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
+    T: IntoIterator,
 {
-    source: Iter<S, E, I, Rt>,
-    pending: Option<S::IntoIter>,
+    source: S,
+    pending: Option<T::IntoIter>,
 }
 
-impl<S, U, E, I, Rt> Stage<Rt> for Flatten<S, E, I, Rt>
+impl<S, T, U, Rt> SyncStage<Rt> for Flatten<S, T>
 where
-    S: TyVar + FromValue<Rt> + IntoIterator<Item = U>,
-    S::IntoIter: Send + Sync,
+    S: SyncStage<Rt>,
+    T: FromValue<Rt> + IntoIterator<Item = U> + Send + Sync,
+    T::IntoIter: Send + Sync,
     U: Cross<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, rt: &'a Rt) -> Pulled<'a, Rt> {
+    fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
+        loop {
+            if let Some(item) = self.pending.as_mut().and_then(Iterator::next) {
+                return Some(item.erase(rt));
+            }
+            let value = self.source.next(rt)?;
+            self.pending = Some(T::from_value(rt, value).into_iter());
+        }
+    }
+}
+
+impl<S, T, U, Rt> AsyncStage<Rt> for Flatten<S, T>
+where
+    S: AsyncStage<Rt>,
+    T: FromValue<Rt> + IntoIterator<Item = U> + Send + Sync,
+    T::IntoIter: Send + Sync,
+    U: Cross<Rt>,
+    Rt: Runtime,
+{
+    fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             loop {
                 if let Some(item) = self.pending.as_mut().and_then(Iterator::next) {
-                    return Ok(Some(item.erase(rt)));
+                    return Some(item.erase(rt));
                 }
-                let Some(value) = self.source.next_value(rt).await? else {
-                    return Ok(None);
-                };
-                self.pending = Some(S::from_value(rt, value)?.into_iter());
+                let value = self.source.next(rt).await?;
+                self.pending = Some(T::from_value(rt, value).into_iter());
             }
         })
     }

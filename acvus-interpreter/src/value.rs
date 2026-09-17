@@ -14,7 +14,6 @@ use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
 use crate::code::Code;
-use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
 use crate::vtable::{Composite, Header, Slot, Vtable, VtableRegistry};
 
@@ -415,11 +414,11 @@ impl fmt::Debug for FnValue {
 }
 
 impl FnValue {
-    pub async fn call(&self, arg: Value) -> Result<Value, RuntimeError> {
+    pub async fn call(&self, arg: Value) -> Value {
         crate::machine::fn_value_call(self, &mut [arg]).await
     }
 
-    pub async fn call2(&self, arg1: Value, arg2: Value) -> Result<Value, RuntimeError> {
+    pub async fn call2(&self, arg1: Value, arg2: Value) -> Value {
         crate::machine::fn_value_call(self, &mut [arg1, arg2]).await
     }
 }

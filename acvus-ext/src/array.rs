@@ -1,5 +1,5 @@
 use acvus_extern::{
-    Arr, LenVar, Ref, RefMut, Registry, Runtime, Trap, TyVar, extern_fn, extern_registry,
+    Arr, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
 };
 
 use crate::vec::checked_index;
@@ -23,25 +23,25 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
+fn get<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>, index: i64) -> Ref<T, Rt>
 where
     T: TyVar,
     N: LenVar,
     Rt: Runtime,
 {
-    let i = c.with(rt, |c| checked_index("get", c.0.len(), index))?;
-    Ok(c.map(rt, |c| &c.0[i]))
+    let i = c.with(rt, |c| checked_index("get", c.0.len(), index));
+    c.map(rt, |c| &c.0[i])
 }
 
 #[extern_fn(effect = pure)]
-fn get_mut<T, N, Rt>(rt: &Rt, c: RefMut<Arr<T, N>, Rt>, index: i64) -> Result<RefMut<T, Rt>, Trap>
+fn get_mut<T, N, Rt>(rt: &Rt, c: RefMut<Arr<T, N>, Rt>, index: i64) -> RefMut<T, Rt>
 where
     T: TyVar,
     N: LenVar,
     Rt: Runtime,
 {
-    let i = c.with_mut(rt, |c| checked_index("get_mut", c.0.len(), index))?;
-    Ok(c.map_mut(rt, |c| &mut c.0[i]))
+    let i = c.with_mut(rt, |c| checked_index("get_mut", c.0.len(), index));
+    c.map_mut(rt, |c| &mut c.0[i])
 }
 
 #[extern_fn(effect = pure)]

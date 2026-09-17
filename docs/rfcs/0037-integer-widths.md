@@ -13,9 +13,9 @@ Rust struct field of any of these types crosses as that type (RFC-0032).
 
 Arithmetic, comparison, and the bit operators take two operands of one
 width and produce that width; nothing widens or narrows on its own. An
-overflow, a division by zero, and a shift past the width are run-time
-errors, at every width, as they were at `i64`. Negation takes a signed
-integer or a `Float`. A checked operation runs only where the program wrote
+overflow, a division by zero, and a shift past the width panic, at every
+width, with the message the same operation panics with in Rust.
+Negation takes a signed integer or a `Float`. A checked operation runs only where the program wrote
 it: no pass may move it onto a path the program did not take (RFC-0007).
 
 An integer literal has no width of its own. Its type is a variable that

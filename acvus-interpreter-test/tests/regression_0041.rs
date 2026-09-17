@@ -8,7 +8,9 @@
 use std::any::{TypeId, type_name};
 use std::sync::Arc;
 
-use acvus_extern::{Erased, FromValue, Monomorphize, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{
+    Erased, FromValue, Monomorphize, Registry, Runtime, extern_fn, extern_registry,
+};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_utils::Interner;
@@ -126,8 +128,16 @@ async fn map_then_filter_then_collect_keeps_the_doubled_values_above_two() {
 
 #[tokio::test]
 async fn contains_over_a_uniform_int_vec_finds_a_member_and_misses_a_stranger() {
-    assert!(run("into_iter(vec([1, 2, 3])) | contains(2)").await.as_bool());
-    assert!(!run("into_iter(vec([1, 2, 3])) | contains(5)").await.as_bool());
+    assert!(
+        run("into_iter(vec([1, 2, 3])) | contains(2)")
+            .await
+            .as_bool()
+    );
+    assert!(
+        !run("into_iter(vec([1, 2, 3])) | contains(5)")
+            .await
+            .as_bool()
+    );
 }
 
 // -- R16: a Copy extension type outside the Inline set ------------------------
@@ -155,6 +165,6 @@ fn a_copy_struct_that_fits_the_word_but_is_not_inline_crosses_as_large_with_its_
     );
     assert_eq!(rt.type_of(&value), Some(TypeId::of::<Pixel>()));
     assert_eq!(rt.type_name_of(&value), Some(type_name::<Pixel>()));
-    let back = Erased::<AcvusRuntime, Pixel>::from_value(&rt, value).expect("a Pixel");
+    let back = Erased::<AcvusRuntime, Pixel>::from_value(&rt, value);
     assert_eq!(*back.as_ref(&rt), pixel);
 }

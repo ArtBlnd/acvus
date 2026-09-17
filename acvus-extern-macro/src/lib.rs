@@ -123,13 +123,6 @@ enum RustParam {
     State(StateParam),
 }
 
-/// The declared return: the acvus type, and whether the Rust function wraps
-/// it in `Result`.
-struct ExternReturn {
-    ty: Type,
-    is_result: bool,
-}
-
 fn generate_extern_fn(
     attr: ExternFnAttr,
     func: &mut ItemFn,
@@ -152,7 +145,7 @@ fn generate_extern_fn(
             RustParam::Acvus(_) => None,
         })
         .collect();
-    let ret = parse_return(&func.sig.output, vars.runtime_ident());
+    let ret = parse_return(&func.sig.output);
 
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
@@ -242,7 +235,7 @@ fn generate_extern_fn(
                 )
             }
         });
-        let comp_ret = vars.to_compile_time_instance(&ret.ty, member);
+        let comp_ret = vars.to_compile_time_instance(&ret, member);
         quote! {
             ::acvus_extern::PolyTy::Fn {
                 params: vec![#(#param_terms),*],
@@ -266,10 +259,9 @@ fn generate_extern_fn(
             .iter()
             .map(|p| vars.to_runtime_instance(&p.ty, member))
             .collect();
-        let rt_ret = vars.to_runtime_instance(&ret.ty, member);
-        let ret_cross = crossing(&ret.ty, member);
+        let rt_ret = vars.to_runtime_instance(&ret, member);
+        let ret_cross = crossing(&ret, member);
         let turbofish = vars.runtime_turbofish_instance(member);
-        let error_ty = quote! { <__R as ::acvus_extern::Runtime>::Error };
         let arity = params.len();
         let taken_idents: Vec<Ident> = arg_idents
             .iter()
@@ -329,18 +321,10 @@ fn generate_extern_fn(
         let hold_state = quote! {
             #(let #state_idents = ::std::sync::Arc::clone(&#state_idents);)*
         };
-        let ret_value = quote! { <#rt_ret as #ret_cross<__R>>::erase(__r, __rt) };
-        let returned = quote! {
-            ::core::result::Result::<_, #error_ty>::Ok(#ret_value)
-        };
+        let returned = quote! { <#rt_ret as #ret_cross<__R>>::erase(__r, __rt) };
         let rt_arg = has_runtime.then(|| quote! { __rt, });
         if is_async {
-            let call = quote! { #fn_ident #turbofish (#rt_arg #(#passed),*) };
-            let awaited = if ret.is_result {
-                quote! { (#call).await.map_err(::core::convert::Into::<#error_ty>::into)? }
-            } else {
-                quote! { (#call).await }
-            };
+            let awaited = quote! { (#fn_ident #turbofish (#rt_arg #(#passed),*)).await };
             quote! {{
                 #hold_state
                 ::acvus_extern::ExternHandler::Async(::std::sync::Arc::new(
@@ -357,12 +341,7 @@ fn generate_extern_fn(
                 ))
             }}
         } else {
-            let call = quote! { #fn_ident #turbofish (#rt_arg #(#passed),*) };
-            let result = if ret.is_result {
-                quote! { (#call).map_err(::core::convert::Into::<#error_ty>::into)? }
-            } else {
-                quote! { #call }
-            };
+            let result = quote! { #fn_ident #turbofish (#rt_arg #(#passed),*) };
             quote! {{
                 #hold_state
                 ::acvus_extern::ExternHandler::Sync(::std::sync::Arc::new(
@@ -382,7 +361,7 @@ fn generate_extern_fn(
         params
             .iter()
             .map(|p| &p.ty)
-            .chain(std::iter::once(&ret.ty))
+            .chain(std::iter::once(&ret))
             .filter(|ty| vars.mentions_mono(ty))
             .filter(|ty| seen.insert(quote! { #ty }.to_string()))
             .map(|ty| {
@@ -394,7 +373,7 @@ fn generate_extern_fn(
                         move |__rt: &__R, __args: &mut [<__R as ::acvus_extern::Runtime>::Value]| {
                             debug_assert_eq!(__args.len(), 1, "arity checked by typeck");
                             let __v = ::core::mem::take(&mut __args[0]);
-                            ::core::result::Result::<_, <__R as ::acvus_extern::Runtime>::Error>::Ok(#body)
+                            #body
                         }
                     ))
                 };
@@ -576,45 +555,10 @@ fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {
     r.mutability.is_none() && matches!(r.elem.as_ref(), Type::Path(p) if p.path.is_ident(runtime))
 }
 
-fn parse_return(output: &ReturnType, runtime: Option<&Ident>) -> ExternReturn {
+fn parse_return(output: &ReturnType) -> Type {
     match output {
-        ReturnType::Default => ExternReturn {
-            ty: syn::parse_quote! { () },
-            is_result: false,
-        },
-        ReturnType::Type(_, ty) => {
-            if let Type::Path(p) = ty.as_ref()
-                && let Some(seg) = p.path.segments.last()
-                && seg.ident == "Result"
-                && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
-                && let Some(syn::GenericArgument::Type(ok)) = args.args.first()
-                && args.args.iter().nth(1).is_some_and(|e| is_trap(e, runtime))
-            {
-                return ExternReturn {
-                    ty: ok.clone(),
-                    is_result: true,
-                };
-            }
-            ExternReturn {
-                ty: (**ty).clone(),
-                is_result: false,
-            }
-        }
-    }
-}
-
-/// Whether a generic argument names the abort path: `Trap`, or the
-/// runtime's own `R::Error`. `Result<T, Trap>` stops the run; every other
-/// `Result<T, E>` is the language's (RFC-0038).
-fn is_trap(arg: &syn::GenericArgument, runtime: Option<&Ident>) -> bool {
-    let syn::GenericArgument::Type(Type::Path(p)) = arg else {
-        return false;
-    };
-    let segments: Vec<&Ident> = p.path.segments.iter().map(|s| &s.ident).collect();
-    match segments.as_slice() {
-        [.., last] if *last == "Trap" => true,
-        [first, last] => *last == "Error" && runtime.is_some_and(|r| *first == r),
-        _ => false,
+        ReturnType::Default => syn::parse_quote! { () },
+        ReturnType::Type(_, ty) => (**ty).clone(),
     }
 }
 
@@ -1321,7 +1265,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             }
         }
     }
-    let ret = parse_return(&sig.output, vars.runtime_ident());
+    let ret = parse_return(&sig.output);
     let name = ident.to_string();
     let qref = qref_expr_in(Some(&input.ns.value()), &name);
     let types_only = |ty: &Type| {
@@ -1342,7 +1286,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             )
         }
     });
-    let comp_ret = types_only(&vars.to_compile_time_instance(&ret.ty, None));
+    let comp_ret = types_only(&vars.to_compile_time_instance(&ret, None));
     let bounds = vars.bound_exprs();
     let counts = vars.counts_expr();
     Ok(quote! {

@@ -10,7 +10,6 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use crate::code::{ArgWindow, Flow, NO_SLOT, Op, Payload, Pending};
-use crate::error::RuntimeError;
 use crate::interpreter::lookup_module;
 use crate::machine::{Machine, call_module, call_module_sync, fn_value_call, fn_value_call_sync};
 use crate::ops::control::move_all;
@@ -52,13 +51,9 @@ pub fn call_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
     yield_order(machine, op.d);
     move_all(machine, &window.moves);
     let (rt, args) = machine.lend_window(window);
-    match f(rt, args) {
-        Ok(value) => {
-            machine.set(op.a, value);
-            Flow::Next
-        }
-        Err(error) => machine.fail(error),
-    }
+    let value = f(rt, args);
+    machine.set(op.a, value);
+    Flow::Next
 }
 
 pub fn call_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
@@ -92,18 +87,9 @@ pub fn call_direct(machine: &mut Machine<'_>, op: &Op) -> Flow {
         });
     }
 
-    let outcome = call_module_sync(machine, &prepared, callee, args);
-    finish(machine, op.a, outcome)
-}
-
-fn finish(machine: &mut Machine<'_>, dst: u32, outcome: Result<Value, RuntimeError>) -> Flow {
-    match outcome {
-        Ok(value) => {
-            machine.set(dst, value);
-            Flow::Next
-        }
-        Err(error) => machine.fail(error),
-    }
+    let value = call_module_sync(machine, &prepared, callee, args);
+    machine.set(op.a, value);
+    Flow::Next
 }
 
 /// `THROUGH` is what the preparation read from the callee register's type:
@@ -125,8 +111,9 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
             return Flow::Await(Pending { dst: op.a, fut });
         }
 
-        let outcome = fn_value_call_sync(machine, closure, &mut args);
-        return finish(machine, op.a, outcome);
+        let value = fn_value_call_sync(machine, closure, &mut args);
+        machine.set(op.a, value);
+        return Flow::Next;
     }
 
     // SAFETY: the type checker admits only a closure value here.
@@ -137,8 +124,9 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
         return Flow::Await(Pending { dst: op.a, fut });
     }
 
-    let outcome = fn_value_call_sync(machine, &closure, &mut args);
-    finish(machine, op.a, outcome)
+    let value = fn_value_call_sync(machine, &closure, &mut args);
+    machine.set(op.a, value);
+    Flow::Next
 }
 
 pub fn spawn_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
@@ -167,10 +155,7 @@ pub fn spawn_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let mut args = machine.take_window(window);
     let rt = machine.rt.clone();
     let f = Arc::clone(f);
-    let handle = machine
-        .shared()
-        .executor
-        .spawn_async(Box::pin(async move { f(rt, &mut args).await }));
+    let handle = machine.shared().executor.spawn_async(f(rt, &mut args));
     machine.set(op.a, Value::handle(handle));
     Flow::Next
 }

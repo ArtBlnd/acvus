@@ -1,10 +1,11 @@
 //! The machine that runs a prepared body (RFC-0044).
 //!
-//! `Machine::run` is synchronous: it leaves its loop only to return, to
-//! raise, or to hand a future up. `drive` is the one `async fn` around it —
-//! it awaits the pending future, stores the result in the register the
-//! operation named, and re-enters the loop at the next operation. A
-//! synchronous operation costs one indirect call.
+//! `Machine::run` is synchronous: it leaves its loop only to return or to
+//! hand a future up. `drive` is the one `async fn` around it — it awaits
+//! the pending future, stores the result in the register the operation
+//! named, and re-enters the loop at the next operation. A synchronous
+//! operation costs one indirect call. A run-time failure is a panic and
+//! leaves through the unwinder, not through this loop.
 
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -16,17 +17,10 @@ use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 
 use crate::code::{ArgWindow, Code, Flow, Op, Payload, Pending, Prepared};
-use crate::error::RuntimeError;
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
 use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, Value};
-
-/// What a body left its loop with.
-enum Exit {
-    Value(Value),
-    Error(RuntimeError),
-}
 
 /// The registers and the interner a path walk needs, borrowed apart.
 pub struct Frame<'m> {
@@ -36,7 +30,7 @@ pub struct Frame<'m> {
 
 /// Where a run of the loop stopped.
 pub enum Step {
-    Done(Result<Value, RuntimeError>),
+    Done(Value),
     Await { pc: u32, pending: Pending },
 }
 
@@ -78,7 +72,7 @@ pub struct Machine<'c> {
     frames: &'c mut Frames,
     pub rt: &'c AcvusRuntime,
     pub page: &'c Arc<dyn RuntimeContext>,
-    exit: Option<Exit>,
+    exit: Option<Value>,
 }
 
 impl<'c> Machine<'c> {
@@ -107,12 +101,7 @@ impl<'c> Machine<'c> {
     /// Run `code` to its result on a frame of this run's own. The
     /// preparation chose this path from the callee's effect; `callee`
     /// names the body if the effect and the prepared code disagree.
-    pub fn call_sync<F>(
-        &mut self,
-        code: &Code,
-        callee: &dyn Debug,
-        fill: F,
-    ) -> Result<Value, RuntimeError>
+    pub fn call_sync<F>(&mut self, code: &Code, callee: &dyn Debug, fill: F) -> Value
     where
         F: FnOnce(&mut Machine<'_>),
     {
@@ -199,36 +188,14 @@ impl<'c> Machine<'c> {
     /// The body returns `value`.
     #[inline]
     pub fn finish(&mut self, value: Value) -> Flow {
-        self.exit = Some(Exit::Value(value));
+        self.exit = Some(value);
         Flow::Return
     }
 
-    /// The body raises `error`; the span of the operation that raised it is
-    /// attached when the loop is left.
-    #[inline]
-    pub fn fail(&mut self, error: RuntimeError) -> Flow {
-        self.exit = Some(Exit::Error(error));
-        Flow::Return
-    }
-
-    #[inline]
-    pub fn attach_span(&mut self, span: Span) {
-        if let Some(Exit::Error(error)) = &mut self.exit {
-            error.span = error.span.or(Some(span));
-        }
-    }
-
-    fn raised_at(&self, pc: u32, mut error: RuntimeError) -> RuntimeError {
-        error.span = error.span.or(Some(self.code.spans[pc as usize]));
-        error
-    }
-
-    fn leave(&mut self, pc: u32) -> Result<Value, RuntimeError> {
-        match self.exit.take() {
-            Some(Exit::Value(value)) => Ok(value),
-            Some(Exit::Error(error)) => Err(self.raised_at(pc, error)),
-            None => panic!("operation at {pc} left the loop with neither a value nor an error"),
-        }
+    fn leave(&mut self, pc: u32) -> Value {
+        self.exit
+            .take()
+            .unwrap_or_else(|| panic!("operation at {pc} returned without leaving a value"))
     }
 
     pub fn run(&mut self, mut pc: u32) -> Step {
@@ -242,7 +209,7 @@ impl<'c> Machine<'c> {
                 Flow::Await(pending) => return Step::Await { pc, pending },
             }
         }
-        Step::Done(Ok(Value::unit()))
+        Step::Done(Value::unit())
     }
 }
 
@@ -257,7 +224,7 @@ fn run_sync<F>(
     rt: &AcvusRuntime,
     page: &Arc<dyn RuntimeContext>,
     fill: F,
-) -> Result<Value, RuntimeError>
+) -> Value
 where
     F: FnOnce(&mut Machine<'_>),
 {
@@ -266,11 +233,11 @@ where
         "{callee:?} is typed pure, and its prepared body can suspend"
     );
     let mut regs = frames.take(code.frame_len);
-    let outcome = {
+    let value = {
         let mut machine = Machine::new(code, &mut regs, frames, rt, page);
         fill(&mut machine);
         match machine.run(0) {
-            Step::Done(outcome) => outcome,
+            Step::Done(value) => value,
             Step::Await { pc, .. } => {
                 unreachable!("{callee:?} is typed pure, and its operation {pc} handed up a future")
             }
@@ -278,19 +245,19 @@ where
     };
 
     frames.give(regs);
-    outcome
+    value
 }
 
-async fn drive(mut machine: Machine<'_>) -> Result<Value, RuntimeError> {
+async fn drive(mut machine: Machine<'_>) -> Value {
     let mut pc = 0;
     loop {
         match machine.run(pc) {
-            Step::Done(outcome) => return outcome,
+            Step::Done(value) => return value,
             Step::Await {
                 pc: at,
                 pending: Pending { dst, fut },
             } => {
-                let value = fut.await.map_err(|e| machine.raised_at(at, e))?;
+                let value = fut.await;
 
                 machine.set(dst, value);
                 pc = at + 1;
@@ -305,7 +272,7 @@ pub async fn call_module(
     page: Arc<dyn RuntimeContext>,
     id: QualifiedRef,
     args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
+) -> Value {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&shared, &id));
     let rt = AcvusRuntime(shared);
     let code = &prepared.main;
@@ -326,7 +293,7 @@ pub fn call_module_sync(
     prepared: &Prepared,
     id: QualifiedRef,
     args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
+) -> Value {
     let code = &prepared.main;
     let Machine {
         frames, rt, page, ..
@@ -346,7 +313,7 @@ pub fn call_module_sync(
 pub fn fn_value_call<'f>(
     f: &'f FnValue,
     args: &mut [Value],
-) -> impl Future<Output = Result<Value, RuntimeError>> + Send + use<'f> {
+) -> impl Future<Output = Value> + Send + use<'f> {
     let code = &f.code;
     let mut entered: Vec<Value> = (0..code.frame_len).map(|_| Value::Empty).collect();
     enter(code, f, args, &mut entered);
@@ -366,11 +333,7 @@ pub fn fn_value_call<'f>(
 
 /// Run `f` to its result on the caller's frames. The preparation chose
 /// this path from the closure's effect.
-pub fn fn_value_call_sync(
-    machine: &mut Machine<'_>,
-    f: &FnValue,
-    args: &mut [Value],
-) -> Result<Value, RuntimeError> {
+pub fn fn_value_call_sync(machine: &mut Machine<'_>, f: &FnValue, args: &mut [Value]) -> Value {
     let code = &f.code;
     run_sync(
         code,
@@ -382,10 +345,10 @@ pub fn fn_value_call_sync(
     )
 }
 
-pub fn fn_value_call_now(f: &FnValue, args: &mut [Value]) -> Result<Value, RuntimeError> {
+pub fn fn_value_call_now(f: &FnValue, args: &mut [Value]) -> Value {
     let code = &f.code;
     let mut frames = CALLBACK_FRAMES.with(|held| held.take());
-    let outcome = run_sync(
+    let value = run_sync(
         code,
         &closure_site(code),
         &mut frames,
@@ -394,7 +357,7 @@ pub fn fn_value_call_now(f: &FnValue, args: &mut [Value]) -> Result<Value, Runti
         |callee| enter(code, f, args, callee.regs),
     );
     CALLBACK_FRAMES.with(|held| held.replace(frames));
-    outcome
+    value
 }
 
 /// The span of a closure body's first operation, which is what an ICE

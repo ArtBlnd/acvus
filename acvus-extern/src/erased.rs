@@ -8,7 +8,6 @@ use acvus_utils::Interner;
 
 use crate::obj::{Cross, FromValue, Inline, Stored, TransparentOver, expect_type};
 use crate::runtime::Runtime;
-use crate::trap::Trap;
 use crate::ty_arg::{PolyVars, TyArg};
 
 /// The bound is `Stored`, not `Cross`, and there is no check in `as_ref`:
@@ -157,9 +156,9 @@ where
     R: Runtime,
     T: Stored<R>,
 {
-    fn from_value(rt: &R, value: R::Value) -> Result<Self, Trap> {
-        expect_type::<T, R>(rt, &value)?;
-        Ok(Self(value, PhantomData))
+    fn from_value(rt: &R, value: R::Value) -> Self {
+        expect_type::<T, R>(rt, &value);
+        Self(value, PhantomData)
     }
 }
 

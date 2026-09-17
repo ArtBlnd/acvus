@@ -4,7 +4,7 @@
 
 use std::cmp::Ordering;
 
-use acvus_extern::{Registry, Runtime, Trap, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, extern_fn, extern_registry};
 
 pub mod sig {
     use acvus_extern::extern_signature;
@@ -55,9 +55,9 @@ pub mod sig {
 // -- abs ----------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::abs, effect = pure)]
-fn abs_int(a: i64) -> Result<i64, Trap> {
+fn abs_int(a: i64) -> i64 {
     a.checked_abs()
-        .ok_or_else(|| Trap::call("abs", "the absolute value of i64::MIN does not fit in i64"))
+        .expect("abs: the absolute value of i64::MIN does not fit in i64")
 }
 
 #[extern_fn(instance_of = sig::abs, effect = pure)]
@@ -90,56 +90,46 @@ fn max_float(a: f64, b: f64) -> f64 {
 // -- clamp --------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::clamp, effect = pure)]
-fn clamp_int(x: i64, lo: i64, hi: i64) -> Result<i64, Trap> {
-    if lo > hi {
-        return Err(Trap::call(
-            "clamp",
-            format!("lower bound {lo} is above upper bound {hi}"),
-        ));
-    }
-    Ok(x.clamp(lo, hi))
+fn clamp_int(x: i64, lo: i64, hi: i64) -> i64 {
+    assert!(
+        lo <= hi,
+        "clamp: lower bound {lo} is above upper bound {hi}"
+    );
+    x.clamp(lo, hi)
 }
 
 #[extern_fn(instance_of = sig::clamp, effect = pure)]
-fn clamp_float(x: f64, lo: f64, hi: f64) -> Result<f64, Trap> {
+fn clamp_float(x: f64, lo: f64, hi: f64) -> f64 {
     let Some(Ordering::Less | Ordering::Equal) = lo.partial_cmp(&hi) else {
-        return Err(Trap::call(
-            "clamp",
-            format!("bounds {lo} and {hi} are not ordered"),
-        ));
+        panic!("clamp: bounds {lo} and {hi} are not ordered")
     };
-    Ok(x.clamp(lo, hi))
+    x.clamp(lo, hi)
 }
 
 // -- pow ----------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::pow, effect = pure)]
-fn pow_int(base: i64, exp: i64) -> Result<i64, Trap> {
-    if exp < 0 {
-        return Err(Trap::call(
-            "pow",
-            format!("negative exponent {exp} on an integer base"),
-        ));
-    }
+fn pow_int(base: i64, exp: i64) -> i64 {
+    assert!(exp >= 0, "pow: negative exponent {exp} on an integer base");
     let Ok(exp32) = u32::try_from(exp) else {
         return pow_with_exponent_beyond_u32(base, exp);
     };
     base.checked_pow(exp32)
-        .ok_or_else(|| pow_overflow(base, exp))
+        .unwrap_or_else(|| pow_overflow(base, exp))
 }
 
-fn pow_with_exponent_beyond_u32(base: i64, exp: i64) -> Result<i64, Trap> {
+fn pow_with_exponent_beyond_u32(base: i64, exp: i64) -> i64 {
     match base {
-        0 => Ok(0),
-        1 => Ok(1),
-        -1 if exp % 2 == 0 => Ok(1),
-        -1 => Ok(-1),
-        _ => Err(pow_overflow(base, exp)),
+        0 => 0,
+        1 => 1,
+        -1 if exp % 2 == 0 => 1,
+        -1 => -1,
+        _ => pow_overflow(base, exp),
     }
 }
 
-fn pow_overflow(base: i64, exp: i64) -> Trap {
-    Trap::call("pow", format!("{base}^{exp} overflows i64"))
+fn pow_overflow(base: i64, exp: i64) -> ! {
+    panic!("pow: {base}^{exp} overflows i64")
 }
 
 #[extern_fn(instance_of = sig::pow, effect = pure)]

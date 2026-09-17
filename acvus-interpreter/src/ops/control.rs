@@ -2,7 +2,6 @@
 //! instructions that produce no control at all.
 
 use crate::code::{BasicBlock, Flow, LoopBody, Op, Payload, SlotMove};
-use crate::error::RuntimeError;
 use crate::machine::Machine;
 use crate::ops::payload;
 use crate::value::Value;
@@ -45,16 +44,13 @@ pub fn jump_if(machine: &mut Machine<'_>, op: &Op) -> Flow {
 
 #[inline]
 fn run_block(machine: &mut Machine<'_>, block: &BasicBlock) -> Flow {
-    for (op, span) in block.iter() {
+    for op in block.iter() {
         match (op.f)(machine, op) {
             Flow::Next => {}
-            Flow::Return => {
-                machine.attach_span(span);
-                return Flow::Return;
-            }
+            Flow::Return => return Flow::Return,
             Flow::Jump(_) | Flow::Await(_) => panic!(
                 "an operation inside a loop transferred control: the recognizer admits \
-                 only operations that return Next or raise"
+                 only operations that return Next or Return"
             ),
         }
     }
@@ -103,10 +99,8 @@ pub fn ret(machine: &mut Machine<'_>, op: &Op) -> Flow {
     machine.finish(value)
 }
 
-pub fn diverge(machine: &mut Machine<'_>, _: &Op) -> Flow {
-    machine.fail(RuntimeError::internal(
-        "a call typed `!` returned: its handler must trap",
-    ))
+pub fn diverge(_: &mut Machine<'_>, _: &Op) -> Flow {
+    panic!("a call typed `!` returned: its handler must panic")
 }
 
 pub fn merge(machine: &mut Machine<'_>, op: &Op) -> Flow {

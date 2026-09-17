@@ -14,12 +14,21 @@ use std::mem::ManuallyDrop;
 use std::time::{Duration, Instant};
 
 use acvus_ext::Iter;
-use acvus_extern::{CallToken, Erased, Interner, Runtime, Trap};
+use acvus_extern::{CallToken, Erased, Interner, Runtime};
 
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
-#[derive(Default)]
+/// `Word` stays eight bytes, so absence has to live in a niche rather than
+/// in a tag beside it: the stage-4 microbench measured a 24-byte value at
+/// 22.5 ns/element against 7.1 for a 16-byte one, and widening this one
+/// would measure the widening.
 struct Word(u64);
+
+impl Default for Word {
+    fn default() -> Self {
+        Word(u64::MAX)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Words;
@@ -56,15 +65,14 @@ impl acvus_extern::Cross<Words> for Word {
 }
 
 impl acvus_extern::FromValue<Words> for Word {
-    fn from_value(_: &Words, value: Word) -> Result<Word, Trap> {
-        Ok(value)
+    fn from_value(_: &Words, value: Word) -> Word {
+        value
     }
 }
 
 impl Runtime for Words {
     type Value = Word;
-    type Error = Trap;
-    type CallFuture<'a> = Ready<Result<Word, Trap>>;
+    type CallFuture<'a> = Ready<Word>;
 
     fn type_of(&self, _: &Word) -> Option<TypeId> {
         Some(TypeId::of::<i64>())
@@ -87,7 +95,9 @@ impl Runtime for Words {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        Word(unsafe { into_word(value) })
+        let word = unsafe { into_word(value) };
+        debug_assert_ne!(word, u64::MAX, "the sentinel word is not an erased value");
+        Word(word)
     }
 
     unsafe fn value_as_ref<'a, T>(&'a self, value: &'a Word) -> &'a T
@@ -148,20 +158,26 @@ impl Runtime for Words {
         false
     }
 
-    fn call_now(&self, _: &Word, _: &mut [Word], _: CallToken) -> Result<Word, Trap> {
-        Err(Trap::internal("Words holds no closures"))
+    fn call_now(&self, _: &Word, _: &mut [Word], _: CallToken) -> Word {
+        self.no_closures()
     }
 
     fn call_0<'a>(&'a self, _: &'a Word, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Words holds no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_1<'a>(&'a self, _: &'a Word, _: Word, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Words holds no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_n<'a>(&'a self, _: &'a Word, _: &mut [Word], _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Words holds no closures")))
+        std::future::ready(self.no_closures())
+    }
+}
+
+impl Words {
+    fn no_closures(&self) -> Word {
+        panic!("Words holds no closures")
     }
 }
 
@@ -217,8 +233,8 @@ impl acvus_extern::Cross<Tags> for TaggedWord {
 }
 
 impl acvus_extern::FromValue<Tags> for TaggedWord {
-    fn from_value(_: &Tags, value: TaggedWord) -> Result<TaggedWord, Trap> {
-        Ok(value)
+    fn from_value(_: &Tags, value: TaggedWord) -> TaggedWord {
+        value
     }
 }
 
@@ -252,8 +268,7 @@ where
 
 impl Runtime for Tags {
     type Value = TaggedWord;
-    type Error = Trap;
-    type CallFuture<'a> = Ready<Result<TaggedWord, Trap>>;
+    type CallFuture<'a> = Ready<TaggedWord>;
 
     fn type_of(&self, value: &TaggedWord) -> Option<TypeId> {
         match value {
@@ -356,17 +371,12 @@ impl Runtime for Tags {
         false
     }
 
-    fn call_now(
-        &self,
-        _: &TaggedWord,
-        _: &mut [TaggedWord],
-        _: CallToken,
-    ) -> Result<TaggedWord, Trap> {
-        Err(Trap::internal("Tags holds no closures"))
+    fn call_now(&self, _: &TaggedWord, _: &mut [TaggedWord], _: CallToken) -> TaggedWord {
+        self.no_closures()
     }
 
     fn call_0<'a>(&'a self, _: &'a TaggedWord, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Tags holds no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_1<'a>(
@@ -375,7 +385,7 @@ impl Runtime for Tags {
         _: TaggedWord,
         _: CallToken,
     ) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Tags holds no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_n<'a>(
@@ -384,14 +394,19 @@ impl Runtime for Tags {
         _: &mut [TaggedWord],
         _: CallToken,
     ) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Tags holds no closures")))
+        std::future::ready(self.no_closures())
+    }
+}
+
+impl Tags {
+    fn no_closures(&self) -> TaggedWord {
+        panic!("Tags holds no closures")
     }
 }
 
 async fn iter_range_sum<Rt>(rt: &Rt, n: i64) -> i64
 where
     Rt: Runtime,
-    Rt::Error: std::fmt::Debug,
 {
     let mut next = 0i64;
     let mut it: Iter<Erased<Rt, i64>, (), (), Rt> = Iter::generate(move |rt| {
@@ -403,7 +418,7 @@ where
     });
 
     let mut acc = 0i64;
-    while let Some(item) = it.next(rt).await.expect("the pipeline does not trap") {
+    while let Some(item) = it.next(rt).await {
         acc += *item.as_ref(rt);
     }
     acc

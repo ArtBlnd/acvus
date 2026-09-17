@@ -104,7 +104,7 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute()).expect("execution failed");
+        let value = rt.block_on(interp.execute());
         let elapsed = start.elapsed();
         script_value = (case.read)(&value);
         if rep > 0 {

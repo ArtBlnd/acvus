@@ -290,7 +290,7 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
 
     let (shared, mut interp) =
         execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    let result = interp.execute().await.expect("execution failed");
+    let result = interp.execute().await;
 
     // A template yields a String; an empty one yields unit.
     match &result {
@@ -314,7 +314,7 @@ pub async fn run_script(interner: &Interner, source: &str, context: Context) -> 
     let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script(interner, source, &context_types);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    interp.execute().await.expect("execution failed")
+    interp.execute().await
 }
 
 /// Compile and execute a **script-mode** (keyword syntax: let/for/while/if), returning the result Value.
@@ -322,7 +322,7 @@ pub async fn run_script_mode(interner: &Interner, source: &str, context: Context
     let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script_mode(interner, source, &context_types);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    interp.execute().await.expect("execution failed")
+    interp.execute().await
 }
 
 /// Compile and execute a script with ExternFn registries, returning (result, context writes).
@@ -406,7 +406,7 @@ where
         declare_types,
     );
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, executor);
-    let value = interp.execute().await.expect("execution failed");
+    let value = interp.execute().await;
     let writes = interp.take_writes();
     Ran { value, writes }
 }

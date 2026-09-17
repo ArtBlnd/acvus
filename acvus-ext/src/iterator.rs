@@ -27,10 +27,10 @@
 
 use acvus_extern::{
     Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar,
-    Monomorphize, Ref, Registry, Runtime, Stored, Trap, TyVar, extern_fn, extern_registry,
+    Monomorphize, Ref, Registry, Runtime, Stored, TyVar, extern_fn, extern_registry,
 };
 
-use crate::iter::Iter;
+use crate::iter::{Iter, drain};
 
 /// The arithmetic the aggregates need of a `Monomorphize<(i64, f64)>`
 /// member; an overflowed `add`/`mul` is a trap at the aggregate.
@@ -316,7 +316,7 @@ where
 }
 
 #[extern_fn(effect = E)]
-async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Vec<T>, Rt::Error>
+async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Vec<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
@@ -324,52 +324,46 @@ where
     Rt: Runtime,
 {
     let mut items = Vec::new();
-    while let Some(item) = it.next(rt).await? {
-        items.push(item);
-    }
-    Ok(items)
+    drain!(it, rt, |value| {
+        items.push(T::from_value(rt, value));
+    });
+    items
 }
 
 #[extern_fn(effect = E)]
-async fn join<E, I, Rt>(
-    rt: &Rt,
-    mut it: Iter<Erased<Rt, String>, E, I, Rt>,
-    sep: String,
-) -> Result<String, Rt::Error>
+async fn join<E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, String>, E, I, Rt>, sep: String) -> String
 where
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    let mut parts = Vec::new();
-    while let Some(part) = it.next(rt).await? {
-        parts.push(part.into_inner(rt));
-    }
-    Ok(parts.join(&sep))
+    let mut parts: Vec<String> = Vec::new();
+    drain!(it, rt, |value| {
+        parts.push(Erased::<Rt, String>::from_value(rt, value).into_inner(rt));
+    });
+    parts.join(&sep)
 }
 
 #[extern_fn(effect = E)]
-async fn contains<T, E, I, Rt>(
-    rt: &Rt,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-    needle: T,
-) -> Result<bool, Rt::Error>
+async fn contains<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>, needle: T) -> bool
 where
     T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(rt).await? {
-        if *item.as_ref(rt) == needle {
-            return Ok(true);
+    let mut found = false;
+    drain!(it, rt, |value| {
+        if *Erased::<Rt, T>::from_value(rt, value).as_ref(rt) == needle {
+            found = true;
+            break;
         }
-    }
-    Ok(false)
+    });
+    found
 }
 
 #[extern_fn(effect = E)]
-async fn next<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
+async fn next<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
@@ -382,9 +376,9 @@ where
 #[extern_fn(effect = E)]
 async fn find<T, E, I, Rt>(
     rt: &Rt,
-    mut it: Iter<T, E, I, Rt>,
+    it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
-) -> Result<Option<T>, Rt::Error>
+) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
@@ -399,20 +393,19 @@ async fn reduce<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn2<T, T, T, E, Rt>,
-) -> Result<Option<T>, Rt::Error>
+) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    let Some(mut acc) = it.next(rt).await? else {
-        return Ok(None);
-    };
-    while let Some(item) = it.next(rt).await? {
-        acc = f.call(rt, (acc, item)).await?;
-    }
-    Ok(Some(acc))
+    let mut acc = it.next(rt).await?;
+    drain!(it, rt, |value| {
+        let item = T::from_value(rt, value);
+        acc = f.call(rt, (acc, item)).await;
+    });
+    Some(acc)
 }
 
 #[extern_fn(effect = E)]
@@ -421,7 +414,7 @@ async fn fold<T, U, E, I, Rt>(
     mut it: Iter<T, E, I, Rt>,
     init: U,
     f: Fn2<U, T, U, E, Rt>,
-) -> Result<U, Rt::Error>
+) -> U
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     U: TyVar + Cross<Rt>,
@@ -430,10 +423,11 @@ where
     Rt: Runtime,
 {
     let mut acc = init;
-    while let Some(item) = it.next(rt).await? {
-        acc = f.call(rt, (acc, item)).await?;
-    }
-    Ok(acc)
+    drain!(it, rt, |value| {
+        let item = T::from_value(rt, value);
+        acc = f.call(rt, (acc, item)).await;
+    });
+    acc
 }
 
 #[extern_fn(effect = E)]
@@ -441,19 +435,21 @@ async fn any<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
-) -> Result<bool, Rt::Error>
+) -> bool
 where
     T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next_value(rt).await? {
-        if f.call(rt, (Ref::lend(rt, &item),)).await? {
-            return Ok(true);
+    let mut found = false;
+    drain!(it, rt, |value| {
+        if f.call(rt, (Ref::lend(rt, &value),)).await {
+            found = true;
+            break;
         }
-    }
-    Ok(false)
+    });
+    found
 }
 
 #[extern_fn(effect = E)]
@@ -461,19 +457,21 @@ async fn all<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
-) -> Result<bool, Rt::Error>
+) -> bool
 where
     T: TyVar + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next_value(rt).await? {
-        if !f.call(rt, (Ref::lend(rt, &item),)).await? {
-            return Ok(false);
+    let mut holds_throughout = true;
+    drain!(it, rt, |value| {
+        if !f.call(rt, (Ref::lend(rt, &value),)).await {
+            holds_throughout = false;
+            break;
         }
-    }
-    Ok(true)
+    });
+    holds_throughout
 }
 
 /// `start..end`: empty when `end <= start`.
@@ -498,17 +496,15 @@ where
 /// `start`, `start + step`, … while short of `end`: upward for a positive
 /// `step`, downward for a negative one. A zero `step` traps.
 #[extern_fn(effect = pure)]
-fn range_step<E, I, Rt>(start: i64, end: i64, step: i64) -> Result<Iter<i64, E, I, Rt>, Trap>
+fn range_step<E, I, Rt>(start: i64, end: i64, step: i64) -> Iter<i64, E, I, Rt>
 where
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    if step == 0 {
-        return Err(Trap::call("range_step", "step is zero"));
-    }
+    assert!(step != 0, "range_step: step is zero");
     let mut current = start;
-    Ok(Iter::generate(move |_| {
+    Iter::generate(move |_| {
         let short_of_end = if step > 0 {
             current < end
         } else {
@@ -520,21 +516,19 @@ where
         let item = current;
         current = current.checked_add(step)?;
         Some(item)
-    }))
+    })
 }
 
 #[extern_fn(effect = pure)]
-fn step_by<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Result<Iter<T, E, I, Rt>, Trap>
+fn step_by<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    if n == 0 {
-        return Err(Trap::call("step_by", "step is zero"));
-    }
-    Ok(it.step_by(n))
+    assert!(n != 0, "step_by: step is zero");
+    it.step_by(n)
 }
 
 #[extern_fn(effect = pure)]
@@ -566,17 +560,15 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn chunks<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Result<Iter<Vec<T>, E, I, Rt>, Trap>
+fn chunks<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<Vec<T>, E, I, Rt>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    if n == 0 {
-        return Err(Trap::call("chunks", "chunk size is zero"));
-    }
-    Ok(it.chunks(n))
+    assert!(n != 0, "chunks: chunk size is zero");
+    it.chunks(n)
 }
 
 #[extern_fn(effect = pure)]
@@ -591,7 +583,7 @@ where
 }
 
 #[extern_fn(effect = E)]
-async fn count<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<i64, Rt::Error>
+async fn count<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> i64
 where
     T: TyVar,
     E: EffectVar,
@@ -599,14 +591,14 @@ where
     Rt: Runtime,
 {
     let mut n = 0;
-    while it.next_value(rt).await?.is_some() {
+    drain!(it, rt, |_value| {
         n += 1;
-    }
-    Ok(n)
+    });
+    n
 }
 
 #[extern_fn(effect = E)]
-async fn last<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Result<Option<T>, Rt::Error>
+async fn last<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
@@ -614,14 +606,14 @@ where
     Rt: Runtime,
 {
     let mut last = None;
-    while let Some(item) = it.next(rt).await? {
-        last = Some(item);
-    }
-    Ok(last)
+    drain!(it, rt, |value| {
+        last = Some(T::from_value(rt, value));
+    });
+    last
 }
 
 #[extern_fn(effect = E)]
-async fn nth<T, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, n: u64) -> Result<Option<T>, Rt::Error>
+async fn nth<T, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
@@ -636,7 +628,7 @@ async fn position<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
-) -> Result<Option<i64>, Rt::Error>
+) -> Option<i64>
 where
     T: TyVar,
     E: EffectVar,
@@ -644,17 +636,19 @@ where
     Rt: Runtime,
 {
     let mut index = 0;
-    while let Some(item) = it.next_value(rt).await? {
-        if f.call(rt, (Ref::lend(rt, &item),)).await? {
-            return Ok(Some(index));
+    let mut at = None;
+    drain!(it, rt, |value| {
+        if f.call(rt, (Ref::lend(rt, &value),)).await {
+            at = Some(index);
+            break;
         }
         index += 1;
-    }
-    Ok(None)
+    });
+    at
 }
 
 #[extern_fn(effect = E)]
-async fn sum<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Result<T, Rt::Error>
+async fn sum<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: EffectVar,
@@ -662,20 +656,17 @@ where
     Rt: Runtime,
 {
     let mut acc = T::ZERO;
-    while let Some(item) = it.next(rt).await? {
-        let Some(next) = acc.add(*item.as_ref(rt)) else {
-            return Err(Trap::call("sum", "integer overflow").into());
-        };
-        acc = next;
-    }
-    Ok(acc)
+    drain!(it, rt, |value| {
+        let item = Erased::<Rt, T>::from_value(rt, value);
+        acc = acc
+            .add(*item.as_ref(rt))
+            .unwrap_or_else(|| panic!("sum: integer overflow"));
+    });
+    acc
 }
 
 #[extern_fn(effect = E)]
-async fn product<T, E, I, Rt>(
-    rt: &Rt,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> Result<T, Rt::Error>
+async fn product<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: EffectVar,
@@ -683,20 +674,17 @@ where
     Rt: Runtime,
 {
     let mut acc = T::ONE;
-    while let Some(item) = it.next(rt).await? {
-        let Some(next) = acc.mul(*item.as_ref(rt)) else {
-            return Err(Trap::call("product", "integer overflow").into());
-        };
-        acc = next;
-    }
-    Ok(acc)
+    drain!(it, rt, |value| {
+        let item = Erased::<Rt, T>::from_value(rt, value);
+        acc = acc
+            .mul(*item.as_ref(rt))
+            .unwrap_or_else(|| panic!("product: integer overflow"));
+    });
+    acc
 }
 
 #[extern_fn(effect = E)]
-async fn min<T, E, I, Rt>(
-    rt: &Rt,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> Result<Option<T>, Rt::Error>
+async fn min<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: EffectVar,
@@ -704,21 +692,18 @@ where
     Rt: Runtime,
 {
     let mut best: Option<T> = None;
-    while let Some(item) = it.next(rt).await? {
-        let current = *item.as_ref(rt);
+    drain!(it, rt, |value| {
+        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
             None => current,
         });
-    }
-    Ok(best)
+    });
+    best
 }
 
 #[extern_fn(effect = E)]
-async fn max<T, E, I, Rt>(
-    rt: &Rt,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> Result<Option<T>, Rt::Error>
+async fn max<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: EffectVar,
@@ -726,14 +711,14 @@ where
     Rt: Runtime,
 {
     let mut best: Option<T> = None;
-    while let Some(item) = it.next(rt).await? {
-        let current = *item.as_ref(rt);
+    drain!(it, rt, |value| {
+        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
             None => current,
         });
-    }
-    Ok(best)
+    });
+    best
 }
 
 struct Keyed<V> {
@@ -761,7 +746,7 @@ async fn extreme_by_key<T, E, I, Rt>(
     mut it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
     extreme: Extreme,
-) -> Result<Option<T>, Rt::Error>
+) -> Option<T>
 where
     T: TyVar + FromValue<Rt>,
     E: EffectVar,
@@ -769,8 +754,8 @@ where
     Rt: Runtime,
 {
     let mut best: Option<Keyed<Rt::Value>> = None;
-    while let Some(value) = it.next_value(rt).await? {
-        let key = f.call(rt, (Ref::lend(rt, &value),)).await?;
+    drain!(it, rt, |value| {
+        let key = f.call(rt, (Ref::lend(rt, &value),)).await;
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
             None => true,
@@ -778,11 +763,8 @@ where
         if replace {
             best = Some(Keyed { value, key });
         }
-    }
-    let Some(Keyed { value, .. }) = best else {
-        return Ok(None);
-    };
-    Ok(Some(T::from_value(rt, value)?))
+    });
+    Some(T::from_value(rt, best?.value))
 }
 
 #[extern_fn(effect = E)]
@@ -790,7 +772,7 @@ async fn min_by_key<T, E, I, Rt>(
     rt: &Rt,
     it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
-) -> Result<Option<T>, Rt::Error>
+) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
@@ -805,7 +787,7 @@ async fn max_by_key<T, E, I, Rt>(
     rt: &Rt,
     it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
-) -> Result<Option<T>, Rt::Error>
+) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,

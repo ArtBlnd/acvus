@@ -33,11 +33,14 @@ impl CallToken {
 pub trait ClosureFn<Rt: Runtime> {
     type Args: Send;
     type Ret;
+
+    /// Reached only where `is_sync` answered true.
+    fn call_now(&self, rt: &Rt, args: Self::Args) -> Self::Ret;
     fn call<'a>(
         &'a self,
         rt: &'a Rt,
         args: Self::Args,
-    ) -> impl Future<Output = Result<Self::Ret, Rt::Error>> + Send + 'a;
+    ) -> impl Future<Output = Self::Ret> + Send + 'a;
 }
 
 macro_rules! define_fn_arg {
@@ -124,6 +127,16 @@ define_fn_arg!(Fn1; A: "_0");
 define_fn_arg!(Fn2; A: "_0", B: "_1");
 define_fn_arg!(Fn3; A: "_0", B: "_1", C: "_2");
 
+/// The value a call produced, read at the closure's declared return type.
+fn returned<R, Rt>(rt: &Rt, out: Rt::Value) -> R
+where
+    R: Cross<Rt>,
+    Rt: Runtime,
+{
+    // SAFETY: the closure's declared return type is `R`.
+    unsafe { R::materialize(rt, out) }
+}
+
 impl<R, E, Rt> ClosureFn<Rt> for Fn0<R, E, Rt>
 where
     R: Cross<Rt>,
@@ -132,19 +145,19 @@ where
 {
     type Args = ();
     type Ret = R;
-    fn call<'a>(
-        &'a self,
-        rt: &'a Rt,
-        _: (),
-    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+
+    fn call_now(&self, rt: &Rt, _: ()) -> R {
+        returned(rt, rt.call_now(&self.0, &mut [], CallToken::mint()))
+    }
+
+    fn call<'a>(&'a self, rt: &'a Rt, _: ()) -> impl Future<Output = R> + Send + 'a {
         async move {
             let out = if self.1 {
-                rt.call_now(&self.0, &mut [], CallToken::mint())?
+                rt.call_now(&self.0, &mut [], CallToken::mint())
             } else {
-                rt.call_0(&self.0, CallToken::mint()).await?
+                rt.call_0(&self.0, CallToken::mint()).await
             };
-            // SAFETY: the closure's declared return type is `R`.
-            Ok(unsafe { R::materialize(rt, out) })
+            returned(rt, out)
         }
     }
 }
@@ -157,12 +170,17 @@ where
     Rt: Runtime,
 {
     /// The closure applied to a value the caller holds at `A`, the result
-    /// left as the runtime holds it.
+    /// left as the runtime holds it. Reached only where `is_sync` answered
+    /// true.
+    pub fn call_value_now(&self, rt: &Rt, a: Rt::Value) -> Rt::Value {
+        rt.call_now(&self.0, &mut [a], CallToken::mint())
+    }
+
     pub fn call_value<'a>(
         &'a self,
         rt: &'a Rt,
         a: Rt::Value,
-    ) -> impl Future<Output = Result<Rt::Value, Rt::Error>> + Send + 'a {
+    ) -> impl Future<Output = Rt::Value> + Send + 'a {
         async move {
             if self.1 {
                 return rt.call_now(&self.0, &mut [a], CallToken::mint());
@@ -181,20 +199,21 @@ where
 {
     type Args = (A,);
     type Ret = R;
-    fn call<'a>(
-        &'a self,
-        rt: &'a Rt,
-        (a,): Self::Args,
-    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+
+    fn call_now(&self, rt: &Rt, (a,): Self::Args) -> R {
+        let a = a.erase(rt);
+        returned(rt, rt.call_now(&self.0, &mut [a], CallToken::mint()))
+    }
+
+    fn call<'a>(&'a self, rt: &'a Rt, (a,): Self::Args) -> impl Future<Output = R> + Send + 'a {
         async move {
             let a = a.erase(rt);
             let out = if self.1 {
-                rt.call_now(&self.0, &mut [a], CallToken::mint())?
+                rt.call_now(&self.0, &mut [a], CallToken::mint())
             } else {
-                rt.call_1(&self.0, a, CallToken::mint()).await?
+                rt.call_1(&self.0, a, CallToken::mint()).await
             };
-            // SAFETY: the closure's declared return type is `R`.
-            Ok(unsafe { R::materialize(rt, out) })
+            returned(rt, out)
         }
     }
 }
@@ -209,20 +228,21 @@ where
 {
     type Args = (A, B);
     type Ret = R;
-    fn call<'a>(
-        &'a self,
-        rt: &'a Rt,
-        (a, b): Self::Args,
-    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+
+    fn call_now(&self, rt: &Rt, (a, b): Self::Args) -> R {
+        let mut args = [a.erase(rt), b.erase(rt)];
+        returned(rt, rt.call_now(&self.0, &mut args, CallToken::mint()))
+    }
+
+    fn call<'a>(&'a self, rt: &'a Rt, (a, b): Self::Args) -> impl Future<Output = R> + Send + 'a {
         async move {
             let mut args = [a.erase(rt), b.erase(rt)];
             let out = if self.1 {
-                rt.call_now(&self.0, &mut args, CallToken::mint())?
+                rt.call_now(&self.0, &mut args, CallToken::mint())
             } else {
-                rt.call_n(&self.0, &mut args, CallToken::mint()).await?
+                rt.call_n(&self.0, &mut args, CallToken::mint()).await
             };
-            // SAFETY: the closure's declared return type is `R`.
-            Ok(unsafe { R::materialize(rt, out) })
+            returned(rt, out)
         }
     }
 }
@@ -238,20 +258,25 @@ where
 {
     type Args = (A, B, C);
     type Ret = R;
+
+    fn call_now(&self, rt: &Rt, (a, b, c): Self::Args) -> R {
+        let mut args = [a.erase(rt), b.erase(rt), c.erase(rt)];
+        returned(rt, rt.call_now(&self.0, &mut args, CallToken::mint()))
+    }
+
     fn call<'a>(
         &'a self,
         rt: &'a Rt,
         (a, b, c): Self::Args,
-    ) -> impl Future<Output = Result<R, Rt::Error>> + Send + 'a {
+    ) -> impl Future<Output = R> + Send + 'a {
         async move {
             let mut args = [a.erase(rt), b.erase(rt), c.erase(rt)];
             let out = if self.1 {
-                rt.call_now(&self.0, &mut args, CallToken::mint())?
+                rt.call_now(&self.0, &mut args, CallToken::mint())
             } else {
-                rt.call_n(&self.0, &mut args, CallToken::mint()).await?
+                rt.call_n(&self.0, &mut args, CallToken::mint()).await
             };
-            // SAFETY: the closure's declared return type is `R`.
-            Ok(unsafe { R::materialize(rt, out) })
+            returned(rt, out)
         }
     }
 }

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use acvus_ext::{string_registry, vec_registry};
 use acvus_extern::{
     CallToken, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef, Ref,
-    Registry, Runtime, Trap, TyTerm, TypeArg, extern_fn, extern_registry,
+    Registry, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -109,8 +109,8 @@ impl acvus_extern::Cross<Counting> for V {
 }
 
 impl acvus_extern::FromValue<Counting> for V {
-    fn from_value(_: &Counting, value: V) -> Result<V, Trap> {
-        Ok(value)
+    fn from_value(_: &Counting, value: V) -> V {
+        value
     }
 }
 
@@ -138,8 +138,7 @@ impl Runtime for Counting {
     }
 
     type Value = V;
-    type Error = Trap;
-    type CallFuture<'a> = Ready<Result<V, Trap>>;
+    type CallFuture<'a> = Ready<V>;
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -213,20 +212,20 @@ impl Runtime for Counting {
         false
     }
 
-    fn call_now(&self, _: &V, _: &mut [V], _: CallToken) -> Result<V, Trap> {
-        Err(Trap::internal("Counting runs no closures"))
+    fn call_now(&self, _: &V, _: &mut [V], _: CallToken) -> V {
+        self.no_closures()
     }
 
     fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_1<'a>(&'a self, _: &'a V, _: V, _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs no closures")))
+        std::future::ready(self.no_closures())
     }
 
     fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(Err(Trap::internal("Counting runs no closures")))
+        std::future::ready(self.no_closures())
     }
 }
 
@@ -279,7 +278,7 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[0] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        handler(&self.rt, &mut args).expect("handler succeeds")
+        handler(&self.rt, &mut args)
     }
 
     fn string(&self, s: &str) -> V {
@@ -314,26 +313,12 @@ fn vec_of(elem: PolyTy, interner: &Interner) -> PolyTy {
 // -- The checked exit ---------------------------------------------------
 
 #[test]
-fn from_value_on_a_value_of_another_type_traps_naming_the_expected_type() {
+#[should_panic(expected = "expected a value erased from `alloc::string::String`")]
+fn from_value_on_a_value_of_another_type_panics_naming_the_expected_type() {
     let rt = Counting::default();
     // SAFETY: stored as itself.
     let holds_an_i64 = unsafe { rt.erase::<i64>(7) };
-    let Err(trap) = Erased::<Counting, String>::from_value(&rt, holds_an_i64) else {
-        panic!("an i64 is read back as a String")
-    };
-    let message = trap.to_string();
-    assert!(
-        message.contains(type_name::<String>()),
-        "the trap names the expected type: {message}"
-    );
-    assert_eq!(
-        rt.counts(),
-        Counts {
-            boxes: 1,
-            unboxes: 0
-        },
-        "a refused value is not unboxed"
-    );
+    Erased::<Counting, String>::from_value(&rt, holds_an_i64);
 }
 
 #[test]
@@ -341,7 +326,7 @@ fn from_value_on_a_value_of_the_type_is_the_value() {
     let rt = Counting::default();
     // SAFETY: stored as itself.
     let holds_a_string = unsafe { rt.erase::<String>("s".to_owned()) };
-    let erased = Erased::<Counting, String>::from_value(&rt, holds_a_string).expect("a String");
+    let erased = Erased::<Counting, String>::from_value(&rt, holds_a_string);
     assert_eq!(erased.as_ref(&rt), "s");
 }
 
@@ -412,4 +397,10 @@ fn join_reads_through_as_ref_with_no_unbox() {
     );
     // SAFETY: `join_erased` returns a String.
     assert_eq!(unsafe { w.rt.materialize::<String>(joined) }, "c,b,a");
+}
+
+impl Counting {
+    fn no_closures(&self) -> V {
+        panic!("Counting runs no closures")
+    }
 }

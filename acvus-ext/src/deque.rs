@@ -9,8 +9,7 @@ use std::collections::VecDeque;
 use acvus_extern::{
     Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, PolyTy,
     PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError, SpaceHooks,
-    SpaceResult, Trap, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn,
-    extern_registry,
+    SpaceResult, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn, extern_registry,
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
@@ -147,7 +146,7 @@ where
     T: TyVar,
     Rt: acvus_extern::Runtime,
 {
-    fn from_value(rt: &Rt, value: Rt::Value) -> Result<Self, acvus_extern::Trap> {
+    fn from_value(rt: &Rt, value: Rt::Value) -> Self {
         acvus_extern::downcast(rt, value)
     }
 }
@@ -429,23 +428,23 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Result<Ref<T, Rt>, Trap>
+fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Ref<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    let i = d.with(rt, |d| checked_index("get", d.len(), index))?;
-    Ok(d.map(rt, |d| &d.items[i]))
+    let i = d.with(rt, |d| checked_index("get", d.len(), index));
+    d.map(rt, |d| &d.items[i])
 }
 
 #[extern_fn(effect = pure)]
-fn get_mut<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> Result<RefMut<T, Rt>, Trap>
+fn get_mut<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> RefMut<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,
 {
-    let i = d.with_mut(rt, |d| checked_index("get_mut", d.len(), index))?;
-    Ok(d.map_mut(rt, |d| &mut d.items[i]))
+    let i = d.with_mut(rt, |d| checked_index("get_mut", d.len(), index));
+    d.map_mut(rt, |d| &mut d.items[i])
 }
 
 #[extern_fn(effect = pure)]

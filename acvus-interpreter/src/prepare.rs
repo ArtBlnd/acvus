@@ -520,17 +520,16 @@ impl<'a> Prepare<'a> {
     }
 
     fn block(&mut self, range: Range<usize>, nested: &[LoopRegion]) -> BasicBlock {
-        let body = self.body;
-        let mut operations: Vec<(Op, Span)> = Vec::with_capacity(range.len());
+        let mut operations: Vec<Op> = Vec::with_capacity(range.len());
         let mut at = range.start;
         while at < range.end {
             match nested.iter().find(|region| region.start() == at) {
                 Some(region) => {
-                    operations.push((self.loop_op(region), body.insts[region.head].span));
+                    operations.push(self.loop_op(region));
                     at = region.end();
                 }
                 None => {
-                    operations.push((self.op(at), body.insts[at].span));
+                    operations.push(self.op(at));
                     at += 1;
                 }
             }

@@ -8,15 +8,13 @@ use std::any::TypeId;
 use std::future::{Future, Ready};
 
 use crate::func::CallToken;
-use crate::trap::Trap;
 
 /// The contract a host signs to run declared ExternFns. A `Value` is opaque;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
     type Value: crate::Cross<Self> + crate::FromValue<Self> + Default;
-    type Error: From<Trap> + Send + Sync + 'static;
-    type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
+    type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where
         Self: 'a;
 
@@ -24,7 +22,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// records it. `downcast` and `Erased::from_value` trust this answer
     /// with a `materialize::<T>`, so a runtime answers only from the record.
     fn type_of(&self, value: &Self::Value) -> Option<TypeId>;
-    /// The runtime's name for the type `type_of` reports, for a trap
+    /// The runtime's name for the type `type_of` reports, for a panic
     /// message; a runtime that keeps no name answers `None`.
     fn type_name_of(&self, value: &Self::Value) -> Option<&'static str>;
 
@@ -100,12 +98,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     fn call_is_sync(&self, f: &Self::Value) -> bool;
     /// Run `f` to its result now, reached only where `call_is_sync`
     /// answered true for this same value.
-    fn call_now(
-        &self,
-        f: &Self::Value,
-        args: &mut [Self::Value],
-        token: CallToken,
-    ) -> Result<Self::Value, Self::Error>;
+    fn call_now(&self, f: &Self::Value, args: &mut [Self::Value], token: CallToken) -> Self::Value;
 
     /// Run the closure `f`; each argument moves into the callee's
     /// parameter. Only `Fn0`/`Fn1`/… reach these: the token is theirs to
@@ -130,20 +123,19 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 #[derive(Clone, Copy)]
 pub struct TypesOnly;
 
-fn no_values<T>() -> Result<T, Trap> {
-    Err(Trap::internal("TypesOnly runtime holds no values"))
+fn no_values() -> ! {
+    panic!("TypesOnly runtime holds no values")
 }
 
 impl crate::FromValue<TypesOnly> for () {
-    fn from_value(_: &TypesOnly, value: ()) -> Result<(), Trap> {
-        Ok(value)
+    fn from_value(_: &TypesOnly, value: ()) {
+        value
     }
 }
 
 impl Runtime for TypesOnly {
     type Value = ();
-    type Error = Trap;
-    type CallFuture<'a> = Ready<Result<(), Trap>>;
+    type CallFuture<'a> = Ready<()>;
 
     fn type_of(&self, _: &()) -> Option<TypeId> {
         None
@@ -205,16 +197,16 @@ impl Runtime for TypesOnly {
     fn call_is_sync(&self, _: &()) -> bool {
         false
     }
-    fn call_now(&self, _: &(), _: &mut [()], _: CallToken) -> Result<(), Trap> {
+    fn call_now(&self, _: &(), _: &mut [()], _: CallToken) {
         no_values()
     }
     fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(no_values())
+        no_values()
     }
     fn call_1<'a>(&'a self, _: &'a (), _: (), _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(no_values())
+        no_values()
     }
     fn call_n<'a>(&'a self, _: &'a (), _: &mut [()], _: CallToken) -> Self::CallFuture<'a> {
-        std::future::ready(no_values())
+        no_values()
     }
 }

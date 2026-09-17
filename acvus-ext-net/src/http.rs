@@ -1,20 +1,22 @@
 //! `http::fetch_get(url)`: one GET, the body as a String.
 
-use acvus_extern::{Registry, Runtime, Trap, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, extern_fn, extern_registry};
 
 #[extern_fn]
-async fn fetch_get(#[state] client: &reqwest::Client, url: String) -> Result<String, Trap> {
-    let failed = |e: reqwest::Error| Trap::call("fetch_get", e.to_string());
+async fn fetch_get(#[state] client: &reqwest::Client, url: String) -> String {
+    fn failed<T>(e: reqwest::Error) -> T {
+        panic!("fetch_get: {e}")
+    }
     client
         .get(&url)
         .send()
         .await
-        .map_err(failed)?
+        .unwrap_or_else(failed)
         .error_for_status()
-        .map_err(failed)?
+        .unwrap_or_else(failed)
         .text()
         .await
-        .map_err(failed)
+        .unwrap_or_else(failed)
 }
 
 pub fn http_registry<R>() -> Registry<R>

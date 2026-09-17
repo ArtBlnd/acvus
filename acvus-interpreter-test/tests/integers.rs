@@ -31,8 +31,8 @@ async fn arithmetic_runs_at_the_operands_width() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "IntegerOverflow")]
-async fn an_overflow_at_the_width_is_a_runtime_error() {
+#[should_panic(expected = "integer overflow")]
+async fn an_overflow_at_the_width_panics() {
     let i = Interner::new();
     run_script(&i, "@b + 10", ctx(&i, "b", IntTy::U8, 250)).await;
 }
@@ -79,38 +79,17 @@ async fn a_literal_matches_at_the_source_s_width() {
     assert_eq!(unsafe { v.as_str() }, "other");
 }
 
-async fn raised_by(
-    interner: &Interner,
-    source: &str,
-    context: Context,
-) -> acvus_interpreter::RuntimeError {
-    let (context_types, snapshot) = split_context(interner, context);
-    let cr = compile_script_mode(interner, source, &context_types);
-    let (_, mut interp) = execute_compiled(
-        interner,
-        cr,
-        snapshot,
-        std::sync::Arc::new(acvus_interpreter::SequentialExecutor),
-    );
-    interp
-        .execute()
-        .await
-        .expect_err("the script overflows and must raise")
-}
-
 #[tokio::test]
-async fn an_overflow_inside_a_while_names_the_arithmetic_not_the_loop() {
+#[should_panic(expected = "integer overflow")]
+async fn an_overflow_inside_a_while_panics_as_the_arithmetic_does() {
     let i = Interner::new();
     let source = "let acc = @b; let k = 0; while k < 4 { acc = acc + @b; k = k + 1; } acc";
-    let error = raised_by(&i, source, ctx(&i, "b", IntTy::U8, 250)).await;
-    let span = error.span.expect("the raise carries a span");
-    assert_eq!(&source[span.start..span.end], "acc + @b");
+    run_script_mode(&i, source, ctx(&i, "b", IntTy::U8, 250)).await;
 }
 
 /// Code motion on `bb8207f` hoisted `i + 1` into the loop head above the
-/// `JumpIf`, so the exit iteration evaluated `255 + 1`: this returned
-/// `RuntimeError { kind: IntegerOverflow, span: 32..37 }`, measured
-/// 2026-09-18.
+/// `JumpIf`, so the exit iteration evaluated `255 + 1` and the run panicked
+/// with `integer overflow`, measured 2026-09-18.
 #[tokio::test]
 async fn an_operation_in_a_loop_body_does_not_run_on_the_exit_iteration() {
     let i = Interner::new();

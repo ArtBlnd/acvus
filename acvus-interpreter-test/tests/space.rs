@@ -373,7 +373,7 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
         compiled.entry_qref,
         Arc::clone(&page) as Arc<dyn acvus_interpreter::RuntimeContext>,
     );
-    let value = interp.execute().await.unwrap();
+    let value = interp.execute().await;
     assert_eq!(value.as_int(), 2);
     let committed = page.commit().unwrap();
     assert_eq!(committed.len(), 1);

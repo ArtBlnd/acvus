@@ -11,8 +11,7 @@ kovac is another, signing the same trait with its own representation.
 ```rust
 trait Runtime: Send + Sync + 'static {
     type Value: Send + Sync + 'static;
-    type Error: From<Trap> + Send + Sync + 'static;
-    type CallFuture<'a>: Future<Output = Result<Self::Value, Self::Error>> + Send + 'a
+    type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where Self: 'a;
 
     unsafe fn materialize<T: Send + Sync + 'static>(&self, v: Self::Value) -> T;
@@ -34,7 +33,10 @@ The side an extern sees, in `acvus_extern::func`:
 ```rust
 trait ClosureFn<Rt: Runtime> {
     type Args;          // Fn0: ()  Fn1: (Value,)  Fn2: (Value, Value)  Fn3: …
-    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args) -> Rt::CallFuture<'a>;
+    type Ret;
+    fn call_now(&self, rt: &Rt, args: Self::Args) -> Self::Ret;
+    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args)
+        -> impl Future<Output = Self::Ret> + Send + 'a;
 }
 ```
 

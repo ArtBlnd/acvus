@@ -47,6 +47,43 @@ boundary the same fact is `Runtime::call_is_sync`, asked once per closure
 when `Fn0`/`Fn1`/`Fn2`/`Fn3` is built and not again per element;
 `Runtime::call_now` is the call that follows from a true answer.
 
+A failure at run time is a Rust `panic!`. An integer overflow, a
+division by zero, a shift past the width, an index out of range, a
+`Diverge` reached, a broken contract an extern raises — each panics where
+it happens, with the message the same operation writes in Rust, and
+leaves through the unwinder. There is no failure channel at all: a
+handler's return is `SyncFn(&R, &mut [Value]) -> Value` and
+`AsyncFn(R, &mut [Value]) -> BoxFuture<'static, Value>`, `Flow::Return`
+carries the body's value out, and no operation, stage, consumer or
+boundary tests whether the one below it failed. A host that wants to
+survive a failing script catches: `acvus-cli` wraps its `block_on` in
+`catch_unwind` and prints the message, a test is
+`#[should_panic(expected = …)]`, and a spawned task's panic comes back
+through the `JoinHandle` and is resumed on the awaiting run's thread, so
+`Eval` sees it as its own. `Runtime` has no `Error` associated type, no
+`trap`, and no `empty`/`is_empty`.
+
+A panic message names the operation, not the source position. Carrying
+the failing operation's span would need the span, or the `pc` that
+indexes it, in a place the unwinder can read — a store per operation in
+the loop body, which is what `attach_span` was. Priced by a probe one
+variable apart, restoring only that store: accum int `while` 9.2 to
+10.1 ns per iteration and mandelbrot 37.7 to 39.6-41.4 ns. A span in a
+message costs about a tenth of every loop iteration in the language, so
+it is not kept.
+
+Whether a lazy pipeline can suspend is settled when the pipeline is
+built, once per stage. `Iter` holds `enum Stages { Sync(Box<dyn
+SyncStage>), Async(Box<dyn AsyncStage>) }`; `SyncStage::next(&mut self,
+&Rt) -> Option<Value>` is a plain function and `AsyncStage::next` returns
+a future. The sources — `range`, `as_iter`, `into_iter`, `Generate` — are
+`Sync`. An adaptor over a `Sync` source whose closure answers
+`Fn1::is_sync` is `Sync`; otherwise it is `Async`, and a `Sync` source
+feeding it is lifted once at construction rather than per element. A
+consumer branches on the variant outside its loop and runs one of two
+loops. `None` is the end of the source or a trap, and the consumer does
+not need to tell them apart: the extern boundary above it reads the slot.
+
 The effect in the type does not decide this. An extern's handler may be
 asynchronous while its declared effect is `Pure`: `iter::sum`,
 `iter::fold` and `iter::collect` are `async fn` at `effect = E`, and `E`
@@ -73,8 +110,9 @@ that needs more than the inline words keeps its rest: a `Vec<PathSeg>`,
 an argument slot list, an `ExternHandler`, a `Ty` an extern boundary
 needs, a `Label` list. The payload table is owned by the `Code`; an
 operation reads it by index, so no pointer into it is held outside the
-`Code`'s lifetime. Spans live in a parallel `Box<[Span]>` read only when
-an error is raised.
+`Code`'s lifetime. Spans live in a parallel `Box<[Span]>` on the `Code`,
+read only to name a closure body in an ICE; a `BasicBlock` inside a loop
+carries none.
 
 Specialization at prepare time is the interpreter's instance selection
 (RFC-0020, RFC-0040): the `InstKind::BinOp` at `Ty::Float` with
@@ -434,6 +472,69 @@ the tag 8-9 ns of the 10.4. The dynamic stage and its boxed future are
 6.2 ns per element and the tag is 0.9 ns on top of it. The value
 representation is not where the pipeline's cost is; the boxed future per
 element per stage is.
+
+- **Deciding ready-or-later per element (`Pull { Ready(Option<Value>),
+  Later(BoxFuture<..>) }`).** Stage 5 set out to let a stage answer
+  without a future by returning an enum the consumer matches on. Measured,
+  `range | sum` went from 10.6 ns to 26.8 ns and then 23.8 ns per element
+  with `#[inline]` probes — 2.2x slower than the base it was meant to
+  beat. Two things were wrong at once. The decision belongs at
+  construction, once per stage, not at every element: a stage that can
+  never suspend should be a plain function, not an enum a caller
+  discriminates a million times. And the payload was
+  `Result<Option<Value>, RuntimeError>` at 72 bytes, returned through
+  memory per element. The first is replaced by `Stages { Sync, Async }`
+  above; the second goes with the failure channel itself.
+
+- **A trap channel beside the value, in either shape.** Stage 6 built
+  one: handlers returning `Value` with a `Runtime::trap` side call, a
+  `Cell<bool>` flag plus a cold boxed `RuntimeError` in a thread-local,
+  and one flag read per extern call at `call_extern_sync`. The pipeline
+  half of that stage was right and stands; the channel was not. Measured
+  against `a84267f`, every loop with an extern call in it rose — accum
+  float `while` 17.6 to 21.0 ns per iteration, attention (64, 64) 414 to
+  492 us, attention (256, 128) 3206 to 3863 us — while the loops without
+  one did not move. Three probes one variable apart placed 0.7 ns of the
+  3.4 ns per call in the flag read and none of it in the handler, and
+  left 2.7 ns unattributed. The `Result<Value, RuntimeError>` ABI it
+  replaced is refused for the same reason it was: 72 bytes returned
+  through memory per call. The thread-local is also refused outright on
+  `wasm32`. Panicking removes both halves, and the same benchmarks fall
+  below the base they were measured against.
+
+After the panic (2026-09-18; interleaved A/B against binaries built from
+`a84267f` with nothing changed, three repetitions, medians,
+`n = 1_000_000`):
+
+| bench | base `a84267f` | stage 6 | panic |
+|-------|----------------|---------|-------|
+| accum `range \| sum` | 10.9 ns/iteration | 6.7 | **5.1** |
+| accum `map(\|x\| -> x) \| sum` | 67.8 ns/iteration | 41.1 | **36.9** |
+| accum `map(\|x\| -> x + 1) \| sum` | 73.7 ns/iteration | 44.7 | **40.5** |
+| accum int `while` | 10.2 ns/iteration | 10.4 | **9.4** |
+| accum float `while` | 17.4 ns/iteration | 21.0 | **16.8** |
+| mandelbrot 200x100x200 | 40.3 ns/iteration | 40.3 | **37.7** |
+| `iter_cost` `Words` | 6.22 ns/element | 1.30 | **1.30** |
+| `iter_cost` `Tags` | 7.22 ns/element | 2.12 | **2.04** |
+| attention (64, 64) execute | 413.7 us | 491.5 | **396.4** |
+| attention (256, 128) execute | 3206 us | 3863 | **3113** |
+
+The extern call is where stage 6's rise was and where it goes: accum
+float `while` is one `to_float` call per iteration, 21.0 back to 16.8,
+which is below the base's 17.4 because the handler's 72-byte return went
+with the channel. attention is `n*d` synchronous `get` calls in its inner
+loops and follows, 492 to 396 us against a base of 414. `call_extern_sync`
+is 172 disassembly lines against the base's 195, and its hot path is the
+indirect handler call, the 16-byte store into the destination register,
+and `ret` — no thread-relative load, no branch on a returned tag.
+
+The loops with no extern call in them moved too, which the band did not
+expect: int `while` 10.2 to 9.4 and mandelbrot 40.3 to 37.7. Two things
+left the loop body at once — `ops::arith::binary` no longer builds a
+`Result<Value, RuntimeError>` per operation, and `run_block` no longer
+reads a span per operation. The span probe above separates them: putting
+the span store back alone returns int `while` to 10.1 and mandelbrot to
+39.6-41.4, so the span read is most of it and the `Result` is the rest.
 
 - **Words packed as three `usize`.** Two slot indexes per word on a
   64-bit target and one on wasm32 would make an operation's inline

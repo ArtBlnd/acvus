@@ -21,7 +21,6 @@ use acvus_utils::Astr;
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
 
-use crate::error::RuntimeError;
 use crate::machine::Machine;
 use crate::runtime::ExternHandler;
 use crate::value::{Tag, Value};
@@ -96,7 +95,7 @@ pub enum Flow {
 
 pub struct Pending {
     pub dst: u32,
-    pub fut: BoxFuture<'static, Result<Value, RuntimeError>>,
+    pub fut: BoxFuture<'static, Value>,
 }
 
 /// A constant that is not one word.
@@ -138,25 +137,18 @@ pub struct SlotMove {
 
 /// A basic block without its terminator: the operation that owns one knows
 /// where control goes after it.
-pub struct BasicBlock {
-    ops: Box<[Op]>,
-    spans: Box<[Span]>,
-}
+pub struct BasicBlock(Box<[Op]>);
 
 impl BasicBlock {
     pub fn new<I>(operations: I) -> Self
     where
-        I: IntoIterator<Item = (Op, Span)>,
+        I: IntoIterator<Item = Op>,
     {
-        let (ops, spans): (Vec<Op>, Vec<Span>) = operations.into_iter().unzip();
-        Self {
-            ops: ops.into_boxed_slice(),
-            spans: spans.into_boxed_slice(),
-        }
+        Self(operations.into_iter().collect())
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Op, Span)> {
-        self.ops.iter().zip(self.spans.iter().copied())
+    pub fn iter(&self) -> impl Iterator<Item = &Op> {
+        self.0.iter()
     }
 }
 

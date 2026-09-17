@@ -6,9 +6,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_extern::{CallToken, Runtime, Trap};
+use acvus_extern::{CallToken, Runtime};
 
-use crate::error::RuntimeError;
 use crate::interpreter::InterpreterContext;
 use crate::value::{Tag, Value};
 
@@ -30,8 +29,7 @@ impl AcvusRuntime {
 
 impl Runtime for AcvusRuntime {
     type Value = Value;
-    type Error = RuntimeError;
-    type CallFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, RuntimeError>> + Send + 'a>>;
+    type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
 
     fn type_of(&self, value: &Value) -> Option<TypeId> {
         match value {
@@ -126,7 +124,7 @@ impl Runtime for AcvusRuntime {
         !unsafe { f.as_fn() }.code.may_suspend
     }
 
-    fn call_now(&self, f: &Value, args: &mut [Value], _: CallToken) -> Result<Value, RuntimeError> {
+    fn call_now(&self, f: &Value, args: &mut [Value], _: CallToken) -> Value {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
         crate::machine::fn_value_call_now(closure, args)
@@ -203,8 +201,8 @@ impl AcvusRuntime {
 }
 
 impl acvus_extern::FromValue<AcvusRuntime> for Value {
-    fn from_value(_: &AcvusRuntime, value: Value) -> Result<Value, Trap> {
-        Ok(value)
+    fn from_value(_: &AcvusRuntime, value: Value) -> Value {
+        value
     }
 }
 

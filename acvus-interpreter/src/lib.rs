@@ -1,5 +1,4 @@
 pub mod code;
-pub mod error;
 pub mod executor;
 mod interpreter;
 pub mod journal;
@@ -13,7 +12,6 @@ mod value;
 pub mod vtable;
 
 pub use code::{Code, Prepared};
-pub use error::{RuntimeError, RuntimeErrorKind};
 pub use executor::{Executor, SequentialExecutor, TokioExecutor};
 pub use interpreter::{Args, Executable, Interpreter, InterpreterContext};
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
