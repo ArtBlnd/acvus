@@ -111,7 +111,7 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
             return Flow::Await(Pending { dst: op.a, fut });
         }
 
-        let value = fn_value_call_sync(machine, closure, &mut args);
+        let value = fn_value_call_sync(closure, &mut args);
         machine.set(op.a, value);
         return Flow::Next;
     }
@@ -124,7 +124,7 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
         return Flow::Await(Pending { dst: op.a, fut });
     }
 
-    let value = fn_value_call_sync(machine, &closure, &mut args);
+    let value = fn_value_call_sync(&closure, &mut args);
     machine.set(op.a, value);
     Flow::Next
 }

@@ -123,7 +123,7 @@ impl Runtime for AcvusRuntime {
     fn call_now(&self, f: &Value, args: &mut [Value], _: CallToken) -> Value {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        crate::machine::fn_value_call_now(closure, args)
+        crate::machine::fn_value_call_sync(closure, args)
     }
 
     fn call_0<'a>(&'a self, f: &'a Value, _: CallToken) -> Self::CallFuture<'a> {

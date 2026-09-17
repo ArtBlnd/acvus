@@ -92,14 +92,16 @@ typed pure and contains an asynchronous extern operation. Asynchrony is a
 mechanism — awaiting the element closures — and purity is a semantics;
 neither implies the other.
 
-A run does not keep its frames in one growing buffer. `storage::ref_var`
-puts a raw pointer to a register in a `Value::Ref`, so a frame may not
-move while the body that owns it runs, and a buffer that reallocated to
-make room for a callee would move every frame below it. `Frames` is a
-free list of register files: a call takes one, fills it, and gives it
-back, so a call after the first allocates nothing. A `Machine` borrows
-its registers, its runtime and its page rather than owning them, so
-entering a body costs no atomic.
+A synchronous call's registers live on the Rust stack of the call, as a
+Rust function's locals do: `Registers::Stack([Value; 16])`, or a heap
+array for a body wider than sixteen registers. `storage::ref_var` puts a
+raw pointer to a register in a `Value::Ref`, so a frame may not move
+while the body that owns it runs; a stack array does not. An
+asynchronous body's registers are a `Vec` owned by its future, which
+lives across its awaits. No frame is kept between calls and no
+thread-local is read: an extern's callback enters a body exactly as a
+call operation does. A `Machine` borrows its registers, its runtime and
+its page rather than owning them, so entering a body costs no atomic.
 
 An operation is `Op { f: OpFn, a: u32, b: u32, c: u32, d: u32, p: usize }`
 — 32 bytes on a 64-bit target, 24 on wasm32 — with
@@ -384,11 +386,20 @@ is what the larger sizes show.
   the top.** A frame would then be `regs[base..base + frame_len]` and
   every register access one add. It is unsound: `storage::ref_var` puts a
   raw pointer to a register in a `Value::Ref`, and pushing a callee's
-  frame can reallocate the buffer and move every frame below it. A free
-  list of separately allocated register files reuses memory just as well,
-  keeps a frame fixed while its body runs, and leaves register access at
-  exactly the cost it had — the int `while` loop measures 10.1-10.3 ns
-  per iteration before and after.
+  frame can reallocate the buffer and move every frame below it. A stack
+  array per call keeps a frame fixed while its body runs and leaves
+  register access at exactly the cost it had.
+- **A free list of register files, and a thread-local one for an
+  extern's callback.** A call took a `Vec<Value>` from the list and gave
+  it back, and `call_now` moved the whole list out of and back into a
+  `RefCell` in a `thread_local!` around every closure call. `perf` put
+  74 % of `call_now`'s samples on the load and store beside that
+  thread-local read; a stack array in its place took `map(|x| -> x) |
+  sum` from 23.2 to 12.6 ns per element and `map(|x| -> x + 1) | sum`
+  from 21.3 to 15.6 (measured 2026-09-18, after `Value` became a scalar
+  pair). The array's width is the remaining cost — 8: 10.1, 12: 11.5,
+  16: 12.6, 32: 20.0 ns per element for `map(|x| -> x)` — and a
+  frameless body (`Code::Expr`, stage 3) is what removes it.
 - **An owned argument buffer across the handler boundary
   (`Args = SmallVec<[Value; 4]>` by value).** Stage 2a set out to delete
   the `Vec<Value>` that `arg_values` allocates for every extern call.

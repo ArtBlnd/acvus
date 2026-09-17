@@ -7,7 +7,6 @@
 //! operation costs one indirect call. A run-time failure is a panic and
 //! leaves through the unwinder, not through this loop.
 
-use std::cell::RefCell;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
@@ -34,42 +33,39 @@ pub enum Step {
     Await { pc: u32, pending: Pending },
 }
 
-/// The register files a run lends to the bodies it calls synchronously,
-/// kept for reuse so a call after the first allocates nothing.
-///
-/// A run does not keep its frames in one growing buffer.
-/// `storage::ref_var` puts a raw pointer to a register in a `Value::Ref`,
-/// and a buffer that reallocated to make room for a callee would move
-/// every frame below it and leave those references dangling. Each frame is
-/// its own allocation, so pushing one moves nothing.
-#[derive(Default)]
-pub struct Frames(Vec<Vec<Value>>);
-
-impl Frames {
-    fn take(&mut self, len: u32) -> Vec<Value> {
-        let mut regs = self.0.pop().unwrap_or_default();
-        regs.resize_with(len as usize, || Value::EMPTY);
-        regs
-    }
-
-    fn give(&mut self, mut regs: Vec<Value>) {
-        regs.clear();
-        self.0.push(regs);
-    }
+/// A synchronous call's registers live on the Rust stack of the call, as
+/// a Rust function's locals do. `storage::ref_var` puts a raw pointer to a
+/// register in a `Value::Ref`, so a frame must never move while its body
+/// runs; a stack array does not, and neither does the heap array a body
+/// wider than `INLINE` registers takes instead.
+enum Registers {
+    Stack([Value; Registers::INLINE]),
+    Heap(Vec<Value>),
 }
 
-thread_local! {
-    /// An extern's callback enters a body with no caller frame to grow
-    /// from, so it borrows this thread's frames instead. It is taken out
-    /// for the duration of the call, which is what lets a body reached
-    /// this way reach another one the same way.
-    static CALLBACK_FRAMES: RefCell<Frames> = RefCell::new(Frames::default());
+impl Registers {
+    const INLINE: usize = 16;
+
+    fn new(len: u32) -> Self {
+        let len = len as usize;
+        if len > Self::INLINE {
+            return Self::Heap((0..len).map(|_| Value::EMPTY).collect());
+        }
+        const EMPTY: Value = Value::EMPTY;
+        Self::Stack([EMPTY; Registers::INLINE])
+    }
+
+    fn regs(&mut self, len: u32) -> &mut [Value] {
+        match self {
+            Self::Stack(slots) => &mut slots[..len as usize],
+            Self::Heap(regs) => regs,
+        }
+    }
 }
 
 pub struct Machine<'c> {
     code: &'c Code,
     regs: &'c mut [Value],
-    frames: &'c mut Frames,
     pub rt: &'c AcvusRuntime,
     pub page: &'c Arc<dyn RuntimeContext>,
     exit: Option<Value>,
@@ -79,7 +75,6 @@ impl<'c> Machine<'c> {
     pub fn new(
         code: &'c Code,
         regs: &'c mut [Value],
-        frames: &'c mut Frames,
         rt: &'c AcvusRuntime,
         page: &'c Arc<dyn RuntimeContext>,
     ) -> Self {
@@ -91,24 +86,20 @@ impl<'c> Machine<'c> {
         Self {
             code,
             regs,
-            frames,
             rt,
             page,
             exit: None,
         }
     }
 
-    /// Run `code` to its result on a frame of this run's own. The
-    /// preparation chose this path from the callee's effect; `callee`
-    /// names the body if the effect and the prepared code disagree.
+    /// Run `code` to its result on a frame of its own. The preparation
+    /// chose this path from the callee's effect; `callee` names the body
+    /// if the effect and the prepared code disagree.
     pub fn call_sync<F>(&mut self, code: &Code, callee: &dyn Debug, fill: F) -> Value
     where
         F: FnOnce(&mut Machine<'_>),
     {
-        let Machine {
-            frames, rt, page, ..
-        } = self;
-        run_sync(code, callee, frames, rt, page, fill)
+        run_sync(code, callee, self.rt, self.page, fill)
     }
 
     pub fn code(&self) -> &'c Code {
@@ -220,7 +211,6 @@ fn run_of(window: &ArgWindow) -> std::ops::Range<usize> {
 fn run_sync<F>(
     code: &Code,
     callee: &dyn Debug,
-    frames: &mut Frames,
     rt: &AcvusRuntime,
     page: &Arc<dyn RuntimeContext>,
     fill: F,
@@ -232,20 +222,15 @@ where
         !code.may_suspend,
         "{callee:?} is typed pure, and its prepared body can suspend"
     );
-    let mut regs = frames.take(code.frame_len);
-    let value = {
-        let mut machine = Machine::new(code, &mut regs, frames, rt, page);
-        fill(&mut machine);
-        match machine.run(0) {
-            Step::Done(value) => value,
-            Step::Await { pc, .. } => {
-                unreachable!("{callee:?} is typed pure, and its operation {pc} handed up a future")
-            }
+    let mut registers = Registers::new(code.frame_len);
+    let mut machine = Machine::new(code, registers.regs(code.frame_len), rt, page);
+    fill(&mut machine);
+    match machine.run(0) {
+        Step::Done(value) => value,
+        Step::Await { pc, .. } => {
+            unreachable!("{callee:?} is typed pure, and its operation {pc} handed up a future")
         }
-    };
-
-    frames.give(regs);
-    value
+    }
 }
 
 async fn drive(mut machine: Machine<'_>) -> Value {
@@ -276,9 +261,8 @@ pub async fn call_module(
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&shared, &id));
     let rt = AcvusRuntime(shared);
     let code = &prepared.main;
-    let mut frames = Frames::default();
-    let mut regs = frames.take(code.frame_len);
-    let mut machine = Machine::new(code, &mut regs, &mut frames, &rt, &page);
+    let mut regs: Vec<Value> = (0..code.frame_len).map(|_| Value::EMPTY).collect();
+    let mut machine = Machine::new(code, &mut regs, &rt, &page);
     for (slot, arg) in code.params.iter().zip(args) {
         machine.set(*slot, arg);
     }
@@ -295,10 +279,7 @@ pub fn call_module_sync(
     args: Vec<Value>,
 ) -> Value {
     let code = &prepared.main;
-    let Machine {
-        frames, rt, page, ..
-    } = machine;
-    run_sync(code, &id, frames, rt, page, |callee| {
+    run_sync(code, &id, machine.rt, machine.page, |callee| {
         for (slot, arg) in code.params.iter().zip(args) {
             callee.set(*slot, arg);
         }
@@ -319,45 +300,23 @@ pub fn fn_value_call<'f>(
     enter(code, f, args, &mut entered);
 
     async move {
-        let mut frames = Frames::default();
-        let machine = Machine::new(
-            code,
-            &mut entered,
-            &mut frames,
-            AcvusRuntime::of(&f.shared),
-            &f.page,
-        );
+        let machine = Machine::new(code, &mut entered, AcvusRuntime::of(&f.shared), &f.page);
         drive(machine).await
     }
 }
 
-/// Run `f` to its result on the caller's frames. The preparation chose
-/// this path from the closure's effect.
-pub fn fn_value_call_sync(machine: &mut Machine<'_>, f: &FnValue, args: &mut [Value]) -> Value {
+/// Run `f` to its result on a frame of its own. The preparation chose
+/// this path from the closure's effect; an extern's callback takes the
+/// same path with no machine in hand.
+pub fn fn_value_call_sync(f: &FnValue, args: &mut [Value]) -> Value {
     let code = &f.code;
     run_sync(
         code,
         &closure_site(code),
-        machine.frames,
         AcvusRuntime::of(&f.shared),
         &f.page,
         |callee| enter(code, f, args, callee.regs),
     )
-}
-
-pub fn fn_value_call_now(f: &FnValue, args: &mut [Value]) -> Value {
-    let code = &f.code;
-    let mut frames = CALLBACK_FRAMES.with(|held| held.take());
-    let value = run_sync(
-        code,
-        &closure_site(code),
-        &mut frames,
-        AcvusRuntime::of(&f.shared),
-        &f.page,
-        |callee| enter(code, f, args, callee.regs),
-    );
-    CALLBACK_FRAMES.with(|held| held.replace(frames));
-    value
 }
 
 /// The span of a closure body's first operation, which is what an ICE
