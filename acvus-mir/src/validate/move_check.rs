@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 
 use acvus_ast::Span;
 use acvus_utils::{Astr, LocalIdOps};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{
