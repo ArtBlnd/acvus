@@ -228,10 +228,64 @@ fn the_conversion_that_reaches_iter_count_still_runs_with_no_binding() {
 }
 
 /// A lambda's parameter is such a binding: nothing has fixed its head
-/// where the body's call stands.
+/// where the body's call stands, and the call is what fixes it. No
+/// declared `len` takes `(i64)`, so the parameter is alone and settling
+/// on it gives it the call's function type.
 #[test]
-fn a_binding_whose_head_is_still_a_variable_does_not_join_the_set() {
+fn a_binding_whose_head_is_still_a_variable_joins_the_set() {
     let i = Interner::new();
-    let errors = errors_of(&i, "let apply = |len| -> len(1); apply(|k| -> k + 7)");
+    let c = checked(&i, "let apply = |len| -> len(1); apply(|k| -> k + 7)");
+    assert_eq!(c.ret, Ty::I64);
+    assert!(
+        c.callees.is_empty(),
+        "the parameter is called, not a namespace's `len`: {:?}",
+        c.callees
+    );
+}
+
+#[test]
+fn a_parameter_and_an_extern_that_both_take_the_call_are_ambiguous() {
+    let i = Interner::new();
+    let errors = errors_of(
+        &i,
+        "let q = [1.0, 2.0]; let f = |len| -> len(&q); f(|k| -> 7.0)",
+    );
+    assert_eq!(
+        errors,
+        vec!["`len` is declared by array::len and the binding `len`"]
+    );
+}
+
+#[test]
+fn a_parameter_alone_where_no_rule_reaches_the_extern_is_the_callee() {
+    let i = Interner::new();
+    let c = checked(
+        &i,
+        "let q = [1.0, 2.0]; let f = |count| -> count(&q); f(|k| -> 7.0)",
+    );
+    assert_eq!(c.ret, Ty::Float);
+    assert!(c.callees.is_empty(), "{:?}", c.callees);
+}
+
+/// The argument fixes the parameter to an `i64`, which is not callable,
+/// so the binding drops; no declared `len` takes `(i64)` either. The
+/// call's return is still open where the failure is reported, and
+/// `freeze_or_error` refuses an open variable, so the type shown is
+/// `<error>` — as it is at every `NoMatchingFunction`.
+#[test]
+fn a_parameter_the_call_fixes_to_a_non_function_drops_from_the_set() {
+    let i = Interner::new();
+    let errors = errors_of(&i, "let f = |len| -> len(1); f(3)");
     assert_eq!(errors, vec!["no `len` takes a call of type <error>"]);
+}
+
+#[test]
+fn a_parameter_no_namespace_declares_is_the_callee() {
+    let i = Interner::new();
+    let c = checked(
+        &i,
+        "let q = [1.0, 2.0]; let f = |g| -> g(&q); f(|k| -> 7.0)",
+    );
+    assert_eq!(c.ret, Ty::Float);
+    assert!(c.callees.is_empty(), "{:?}", c.callees);
 }

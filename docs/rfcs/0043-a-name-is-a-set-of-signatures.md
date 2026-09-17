@@ -60,18 +60,24 @@ Nothing is defaulted.
 The lowering reads a decided call's callee through the settled answer,
 then its instance, as it reads a resolved call's; the IR has no new shape.
 
-A `let` binding of a function is one more signature of its name. The
-candidates at a call of a bare name are the namespaces' signatures and the
-binding of that name in scope whose type's head is `Fn` where the call
-stands; a binding of another head (`let len = 3`) is not a signature, and
-a binding whose head is still a variable there — a lambda's parameter,
-before anything fixes it — names none either, so neither joins the set.
-The binding is decided as the rest are: the arity filter counts its `Fn`'s
-parameters, it stays while the call type would unify with that `Fn`, and
-one left settles by joining the call type with it. `AmbiguousFunction`
-lists it as ``the binding `len` ``. Settling on it names no function, so
-the call freezes no direct callee and the lowering takes the indirect path
-off the variable, as a call of a name no namespace declares already does.
+A binding of a name is one more signature of it. The candidates at a call
+of a bare name are the namespaces' signatures and the binding of that name
+in scope where the call stands, whatever its type's head — a `let` of a
+lambda, a `let` of a number, a lambda's own parameter before anything
+fixes it. The binding is decided as the rest are, and its head is what the
+decision decides: the arity filter counts the parameters of a head already
+`Fn` and keeps a head still open, whose arity the call fixes; the binding
+stays while the call type would unify with its type, which a head still
+open does and a head resolved to a non-`Fn` (`let len = 3`) does not; one
+left settles by joining the call type with it, which for a head still open
+is what fixes the binding's type to the call's `Fn`. So in `let f = |len|
+-> len(1)` no declared `len` takes `(i64)`, the parameter is alone, and
+the body's call gives it a function type taking an `i64`; `f(3)`, fixing
+it to `i64` instead, drops it — leaving no `len` that takes the call.
+`AmbiguousFunction` lists the binding as ``the binding `len` ``. Settling
+on it names no function, so the call freezes no direct callee and
+the lowering takes the indirect path off the variable, as a call of a name
+no namespace declares already does.
 
 A binding's parameters are inference types, not shapes a scheme names, so
 it gives the call's parameters `TyVarBound::Any` and contributes no return
@@ -87,10 +93,10 @@ reference.
 
 A method call lends its receiver when every remaining candidate's first
 parameter is a reference of one mutability, and passes it as a value
-otherwise; a pipe passes its left side as a value. A binding whose first
-parameter is a variable is not a reference of one mutability, so a set
-holding one passes the receiver by value, which every candidate taking
-`&C` then refuses.
+otherwise; a pipe passes its left side as a value. A binding names no such
+first parameter — its own is a variable, or its head is still open and
+names none at all — so a set holding one passes the receiver by value,
+which every candidate taking `&C` then refuses.
 
 A conversion decision whose one side is a `OneOf`-bounded variable answers
 identity only where the other side could match a shape of the bound: the
@@ -178,13 +184,15 @@ display order, not the order the registries were combined in.
   `call_param`, `admit_arg` and `no_matching_function`, `CalleeChoice`,
   `receiver_arg`; `report_unsettled` maps the two failures; `solve_body`
   verifies a settled signature's bounds.
-- A binding joins the set through `typeck.rs`'s `signature_set`, over
-  `binding_type` — `lookup_var` split so that reading a name to see
-  whether it is a signature does not capture it — with
-  `SignatureCandidate::{Named, Local}`, `SettledSignature::{Named,
-  Local}`, `SignatureName` for the message, `candidate_receiver`, and
-  `check_local_call`, which records the callee type and freezes no
-  `direct_calls` entry.
+- A binding joins the set through `typeck.rs`'s `signature_set` over
+  `local_signature`, with `SignatureCandidate::{Named, Local}`,
+  `SettledSignature::{Named, Local}`, `SignatureName` for the message,
+  `candidate_receiver`, and `check_local_call`, which records the callee
+  type and freezes no `direct_calls` entry. `SignatureCandidate::arity`
+  answers `Option<usize>`, `None` where the binding's head is still open,
+  and `takes_arity` keeps such a candidate; `call_param` names the call's
+  parameter after the first candidate that names it, and after its own
+  index where none does.
 - `lower.rs`: `lent_closure` lends the binding a call settled on, at a
   named call and at a method call alike, so `q.len()` settling on a
   binding lowers to `Callee::Indirect` of it.

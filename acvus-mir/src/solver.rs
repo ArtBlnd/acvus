@@ -1339,24 +1339,25 @@ impl SignatureCandidate {
         }
     }
 
-    fn local_params(ty: &InferTy) -> &[ParamTerm<Infer>] {
-        let TyTerm::Fn { params, .. } = ty else {
-            unreachable!("a local candidate is built from a type whose head is `Fn`")
-        };
-        params
+    fn local_params(ty: &InferTy) -> Option<&[ParamTerm<Infer>]> {
+        match ty {
+            TyTerm::Fn { params, .. } => Some(params),
+            _ => None,
+        }
     }
 
-    pub fn arity(&self) -> usize {
+    /// RFC-0043.
+    pub fn arity(&self) -> Option<usize> {
         match self {
-            Self::Named { scheme, .. } => scheme.params().len(),
-            Self::Local { ty } => Self::local_params(ty).len(),
+            Self::Named { scheme, .. } => Some(scheme.params().len()),
+            Self::Local { ty } => Self::local_params(ty).map(<[_]>::len),
         }
     }
 
     pub fn param_name(&self, index: usize) -> Option<Astr> {
         match self {
             Self::Named { scheme, .. } => scheme.params().get(index).map(|p| p.name),
-            Self::Local { ty } => Self::local_params(ty).get(index).map(|p| p.name),
+            Self::Local { ty } => Self::local_params(ty)?.get(index).map(|p| p.name),
         }
     }
 

@@ -243,3 +243,27 @@ async fn a_context_taken_into_a_local_and_written_back_is_read_in_between() {
     let v = run("let q = @query; let r = *get(&q, 0); @query = q; r").await;
     assert_close(&v, 1.0);
 }
+
+#[tokio::test]
+#[should_panic(expected = "compile failed")]
+async fn a_closure_parameter_whose_signature_overlaps_an_extern_of_the_same_name_is_ambiguous() {
+    run("let f = |len| -> len(&@query); f(|k| -> 7.0)").await;
+}
+
+#[tokio::test]
+async fn a_closure_parameter_named_like_an_extern_is_the_callee_where_the_extern_has_no_instance() {
+    let v = run("let f = |len| -> len(1); f(|k| -> k + 7)").await;
+    assert_eq!(v.as_int(), 8);
+}
+
+#[tokio::test]
+async fn a_closure_parameter_named_like_an_extern_of_another_shape_is_the_callee() {
+    let v = run("let f = |count| -> count(&@query); f(|k| -> 7.0)").await;
+    assert_close(&v, 7.0);
+}
+
+#[tokio::test]
+async fn a_closure_parameter_named_unlike_any_extern_is_the_callee() {
+    let v = run("let f = |g| -> g(&@query); f(|k| -> 7.0)").await;
+    assert_close(&v, 7.0);
+}

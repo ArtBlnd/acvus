@@ -145,6 +145,12 @@ enum HeldRoot {
     Context(QualifiedRef),
 }
 
+/// RFC-0043: a candidate whose arity is not yet known is one the call's
+/// own arity fixes, so the filter keeps it.
+fn takes_arity(candidate: &SignatureCandidate, arity: usize) -> bool {
+    candidate.arity().is_none_or(|declared| declared == arity)
+}
+
 /// The mutability of a function's first parameter when it is a reference.
 fn first_param_reference(ty: &crate::ty::PolyTy) -> Option<Mutability> {
     let TyTerm::Fn { params, .. } = ty else {
@@ -807,11 +813,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// The type a name was bound with, read without using it.
-    fn binding_type(&self, name: Astr) -> Option<&InferTy> {
-        self.scopes.iter().rev().find_map(|scope| scope.get(&name))
-    }
-
     /// The type a name has where it is used. A name captured by the
     /// innermost lambda is seen there through a shared reference: the
     /// closure owns the value, and a call borrows the closure (RFC-0018).
@@ -891,13 +892,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         candidates
     }
 
-    /// The binding that is one more signature of a bare name (RFC-0043):
-    /// a name in scope whose type's head is `Fn` where the call stands.
+    /// The binding that is one more signature of a bare name (RFC-0043).
     fn local_signature(&mut self, name: Astr) -> Option<InferTy> {
-        let stored = self.binding_type(name)?.clone();
-        if !matches!(self.lent_fn(&stored), TyTerm::Fn { .. }) {
-            return None;
-        }
         let seen = self.lookup_var(name)?;
         Some(self.lent_fn(&seen))
     }
@@ -1826,7 +1822,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             _ => {
                 let candidates: Vec<SignatureCandidate> = candidates
                     .into_iter()
-                    .filter(|candidate| candidate.arity() == args.len() + 1)
+                    .filter(|candidate| takes_arity(candidate, args.len() + 1))
                     .collect();
                 let mut references = candidates.iter().map(|c| self.candidate_receiver(c));
                 let agreed = references
@@ -1843,14 +1839,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     call_span,
                 );
             }
-        }
-        if let Some(var_ty) = self.lookup_var(name) {
-            let callable = self.solver.resolve_ty(&var_ty);
-            let first = FirstArg {
-                ty: self.check_expr(receiver),
-                site: ArgSite::value(receiver),
-            };
-            return self.check_local_call(callee_id, &callable, Some(&first), args, call_span);
         }
         self.error(MirErrorKind::UndefinedFunction(name_str), call_span);
         Self::infer_error()
@@ -1914,7 +1902,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let arity = args.len() + usize::from(first.is_some());
         let candidates: Vec<SignatureCandidate> = candidates
             .into_iter()
-            .filter(|candidate| candidate.arity() == arity)
+            .filter(|candidate| takes_arity(candidate, arity))
             .collect();
         match candidates.as_slice() {
             [] => {
@@ -2050,13 +2038,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// parameter's own range; nothing reads it to decide how an argument
     /// is admitted.
     fn call_param(&mut self, options: &[SignatureOption], index: usize) -> ParamTerm<Infer> {
-        let shape = options
-            .first()
-            .expect("a parameter is asked for while the set holds a candidate");
-        let name = shape
-            .candidate
-            .param_name(index)
-            .expect("the arity filter leaves only candidates with this parameter");
+        let name = options
+            .iter()
+            .find_map(|option| option.candidate.param_name(index))
+            .unwrap_or_else(|| self.interner.intern(&index.to_string()));
         let bound = options
             .iter()
             .map(|option| option.candidate.param_bound(index))
@@ -3414,10 +3399,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         if let Some(ns) = name.namespace {
             return self.check_structural_variant(call_id, ns, name.name, args, call_span);
-        }
-        if let Some(var_ty) = self.lookup_var(name.name) {
-            let callable = self.lent_fn(&var_ty);
-            return self.check_local_call(func.id(), &callable, first.as_ref(), args, call_span);
         }
         self.error(
             MirErrorKind::UndefinedFunction(name_str.to_string()),
