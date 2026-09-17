@@ -175,6 +175,43 @@ is what the larger sizes show.
   the measurement then names register width.
 - **Keeping `execute_inst` beside the machine during the change.** Two
   semantics under one test suite say nothing about either.
+- **An owned argument buffer across the handler boundary
+  (`Args = SmallVec<[Value; 4]>` by value).** Stage 2a set out to delete
+  the `Vec<Value>` that `arg_values` allocates for every extern call.
+  Passing an inline-capacity buffer by value instead raised attention
+  (64, 64) execute from 728 µs to 1163 µs and the accum float `while`
+  loop from 28.4 ns to 41.8 ns per iteration — +60 % and +45 %, against
+  an expected fall. `perf`, one variable apart: `malloc` + `cfree`
+  barely moved (7.79 % → 6.82 % of the sampled process) while
+  `arg_values` rose 8.87 % → 13.02 % and the generated handler closure
+  1.75 % → 5.29 %. The allocation was never the cost; moving an 80-byte
+  buffer across a `dyn Fn` boundary and again through `into_iter` is
+  dearer than a 24-byte `Vec` plus one `malloc`/`free`. A four-element
+  inline buffer is not the wrong size either: a two-element one
+  (40 bytes) recovers about a tenth of the gap, and a `Vec` register
+  file against a `SmallVec<[Value; 16]>` one measured 1157 µs against
+  1163 µs — the frame is not where this sits.
+
+- **Arguments lent across the handler boundary (`&mut [Value]` over a
+  stage the caller owns).** The reading that followed from the buffer
+  measurement — that the cost is the transfer of ownership, not the
+  allocation — is also refuted. With the handler ABI, `Runtime::call_n`
+  and the macro's generated closures all taking `&mut [Value]`, and the
+  caller staging into a local `SmallVec<[Value; 4]>`, attention (64, 64)
+  execute rose from 735 µs to 850 µs and the accum float `while` loop
+  from 28.2 ns to 33.2 ns per iteration (interleaved A/B, three
+  repetitions). The allocation did go: `malloc` + `cfree` fell 8.49 % →
+  5.58 %. It is `arg_values` (7.29 % → 10.48 %) and
+  `ops::storage::take_through::<false>` (4.37 % → 6.51 %) that rose
+  further, so building and dropping the stage in the calling frame costs
+  more than the allocation it replaces. Two designs one variable apart
+  from each other both measure worse than the `Vec`: a 64-byte stage of
+  `Value`s built and dropped per call is the cost, not its ownership.
+  What removes the stage is no staging — the callee reading its
+  arguments through a contiguous argument window the preparation lays
+  out in the register file per call site — which is register selection's
+  business (stage 2b).
+
 - **Words packed as three `usize`.** Two slot indexes per word on a
   64-bit target and one on wasm32 would make an operation's inline
   capacity platform-dependent; four `u32` slots and one word are the
