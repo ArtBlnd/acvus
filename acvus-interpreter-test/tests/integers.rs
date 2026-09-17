@@ -4,9 +4,12 @@ use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
 
 fn ctx(i: &Interner, name: &str, ty: IntTy, bits: u64) -> Context {
-    [(i.intern(name), typed(Ty::Int(ty), Value::from_bits(ty, bits)))]
-        .into_iter()
-        .collect()
+    [(
+        i.intern(name),
+        typed(Ty::Int(ty), Value::from_bits(ty, bits)),
+    )]
+    .into_iter()
+    .collect()
 }
 
 #[tokio::test]
@@ -74,4 +77,32 @@ async fn a_literal_matches_at_the_source_s_width() {
     assert_eq!(unsafe { v.as_str() }, "max");
     let v = run_script_mode(&i, src, ctx(&i, "b", IntTy::U8, 7)).await;
     assert_eq!(unsafe { v.as_str() }, "other");
+}
+
+async fn raised_by(
+    interner: &Interner,
+    source: &str,
+    context: Context,
+) -> acvus_interpreter::RuntimeError {
+    let (context_types, snapshot) = split_context(interner, context);
+    let cr = compile_script_mode(interner, source, &context_types);
+    let (_, mut interp) = execute_compiled(
+        interner,
+        cr,
+        snapshot,
+        std::sync::Arc::new(acvus_interpreter::SequentialExecutor),
+    );
+    interp
+        .execute()
+        .await
+        .expect_err("the script overflows and must raise")
+}
+
+#[tokio::test]
+async fn an_overflow_inside_a_while_names_the_arithmetic_not_the_loop() {
+    let i = Interner::new();
+    let source = "let acc = @b; let k = 0; while k < 4 { acc = acc + @b; k = k + 1; } acc";
+    let error = raised_by(&i, source, ctx(&i, "b", IntTy::U8, 250)).await;
+    let span = error.span.expect("the raise carries a span");
+    assert_eq!(&source[span.start..span.end], "acc + @b");
 }

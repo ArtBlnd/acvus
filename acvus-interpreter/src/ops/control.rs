@@ -1,7 +1,7 @@
 //! Control flow: the jumps and their parallel moves, the return, and the
 //! instructions that produce no control at all.
 
-use crate::code::{Flow, Op, Payload, SlotMove};
+use crate::code::{BasicBlock, Flow, LoopBody, Op, Payload, SlotMove};
 use crate::error::RuntimeError;
 use crate::machine::Machine;
 use crate::ops::payload;
@@ -40,6 +40,61 @@ pub fn jump_if(machine: &mut Machine<'_>, op: &Op) -> Flow {
     };
     move_all(machine, moves);
     Flow::Jump(target)
+}
+
+#[inline]
+fn run_block(machine: &mut Machine<'_>, block: &BasicBlock) -> Flow {
+    for (op, span) in block.iter() {
+        match (op.f)(machine, op) {
+            Flow::Next => {}
+            Flow::Return => {
+                machine.attach_span(span);
+                return Flow::Return;
+            }
+            Flow::Jump(_) | Flow::Await(_) => panic!(
+                "an operation inside a loop transferred control: the recognizer admits \
+                 only operations that return Next or raise"
+            ),
+        }
+    }
+    Flow::Next
+}
+
+pub fn while_loop(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let Payload::Loop(body) = machine.payload(op) else {
+        panic!(
+            "a loop operation wants a Loop payload, found {}",
+            crate::code::payload_name(machine.payload(op))
+        )
+    };
+    let LoopBody {
+        enter,
+        head,
+        cond_slot,
+        into_body,
+        body: block,
+        back,
+        exit,
+    } = body;
+
+    move_all(machine, enter);
+    loop {
+        match run_block(machine, head) {
+            Flow::Next => {}
+            stop => return stop,
+        }
+        if !machine.reg(*cond_slot).as_bool() {
+            move_all(machine, exit);
+            return Flow::Next;
+        }
+
+        move_all(machine, into_body);
+        match run_block(machine, block) {
+            Flow::Next => {}
+            stop => return stop,
+        }
+        move_all(machine, back);
+    }
 }
 
 pub fn ret(machine: &mut Machine<'_>, op: &Op) -> Flow {

@@ -135,6 +135,42 @@ pub struct SlotMove {
     pub to: u32,
 }
 
+/// A basic block without its terminator: the operation that owns one knows
+/// where control goes after it.
+pub struct BasicBlock {
+    ops: Box<[Op]>,
+    spans: Box<[Span]>,
+}
+
+impl BasicBlock {
+    pub fn new<I>(operations: I) -> Self
+    where
+        I: IntoIterator<Item = (Op, Span)>,
+    {
+        let (ops, spans): (Vec<Op>, Vec<Span>) = operations.into_iter().unzip();
+        Self {
+            ops: ops.into_boxed_slice(),
+            spans: spans.into_boxed_slice(),
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Op, Span)> {
+        self.ops.iter().zip(self.spans.iter().copied())
+    }
+}
+
+/// The `while` shape `prepare::recognize_loop` finds in the IR and
+/// `control::while_loop` runs (RFC-0044, stage 3).
+pub struct LoopBody {
+    pub enter: Box<[SlotMove]>,
+    pub head: BasicBlock,
+    pub cond_slot: u32,
+    pub into_body: Box<[SlotMove]>,
+    pub body: BasicBlock,
+    pub back: Box<[SlotMove]>,
+    pub exit: Box<[SlotMove]>,
+}
+
 /// What an operation keeps outside its inline words. The `Code` owns the
 /// table; an operation reads it by index.
 pub enum Payload {
@@ -145,6 +181,7 @@ pub enum Payload {
     Fields(Box<[FieldSlot]>),
     /// A jump's moves, in the order `prepare::order_moves` put them.
     Moves(Box<[SlotMove]>),
+    Loop(LoopBody),
     /// A variant's tag, or an object's key.
     Name(Astr),
     PageKey(Box<str>),
@@ -176,6 +213,7 @@ pub fn payload_name(payload: &Payload) -> &'static str {
         Payload::Parts(_) => "Parts",
         Payload::Fields(_) => "Fields",
         Payload::Moves(_) => "Moves",
+        Payload::Loop(_) => "Loop",
         Payload::Name(_) => "Name",
         Payload::PageKey(_) => "PageKey",
         Payload::Text(_) => "Text",

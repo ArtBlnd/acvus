@@ -77,6 +77,23 @@ Three consequences the format fixes:
   `Result` or a variant, the width a `TestLiteral` compares at, whether
   a concatenated part or an indirect callee is a reference.
 
+A `while` whose head and body transfer no control is one operation. The
+preparation recognizes, in the linear `insts`, the shape the lowering
+gives a `while` — an entering `Jump H` or a fall-through, `BlockLabel H`,
+the head, `JumpIf { cond, then: B, else: X }`, `BlockLabel B`, the body,
+`Jump H`, `BlockLabel X` — when `H` is named only by that entry and that
+back edge, `B` only by the `JumpIf`, no jump from outside names a label
+between them, and every operation in the head and the body is
+straight-line: it returns `Flow::Next` or raises. A nested loop already
+prepared as one operation is straight-line, so recognition runs
+inner-first. The four edges become parallel-move lists the operation
+holds directly, the head and the body become `BasicBlock`s, and the
+instructions the operation covers leave `code.ops`; the jumps around them
+are re-indexed. `control::while_loop` runs the whole loop in one Rust
+`loop` without returning to the machine's dispatch loop. An operation
+that raises inside gives the error the span of the instruction it came
+from, not the loop's.
+
 Operations are plain functions, one per operation, `fn(&mut Machine,
 &Op) -> Flow`, with a macro for operand access and no trait. The
 preparation is one exhaustive `match` over `InstKind` and the operand
@@ -145,6 +162,32 @@ and 32022 µs, so the execute column falls by 3.5×, 5.4× and 5.1×. The
 setup column carries the preparation of every body and rose by 3 µs at
 (64, 64).
 
+After stage 3, the `while` as one operation (2026-09-18; interleaved A/B
+against the stage-1 binaries, three repetitions, medians; all six `while`s
+in the two benchmarks are recognized):
+
+| bench | stage 1 | stage 3 |
+|-------|---------|---------|
+| attention (64, 64) execute | 742.8 µs | 721.2 µs |
+| attention (256, 128) execute | 6406.7 µs | 5840.8 µs |
+| accum int `while` | 16.9 ns/iteration | 13.0 ns/iteration |
+| accum float `while` | 28.4 ns/iteration | 26.1 ns/iteration |
+| accum `range \| sum` | 10.4 ns/iteration | 10.3 ns/iteration |
+
+The stage was designed expecting attention to reach 600–680 µs on the
+reading that dispatch was about a quarter of it. `perf`, one variable
+apart on the execute-only mode at (256, 128), refutes that reading:
+`Machine::run` is 1.28 % of the sampled process before the change and
+`control::while_loop` 2.28 % after, while `ops::call::arg_values` is
+25.4 % in both. The dispatch loop was never the cost of attention; the
+argument `Vec` of every extern call is, which is what register selection
+addresses. In accum, where no extern sits in the int loop, the four
+removed dispatches — `nop`, `nop`, `jump_if`, `jump` — are 8.8 % of the
+sampled process at stage 1 and gone at stage 3, and the iteration falls
+23 %. What remains on top there is `control::move_all` at 33 %: the
+parallel moves the loop still performs on its two edges are now the
+per-iteration cost, and they are a register-selection problem too.
+
 The compile is constant in the input: the script is the same text at
 every size. The execute ratio falls with size because the fixed cost of
 a run (frames, closures made once) is amortized; the per-operation cost
@@ -161,6 +204,13 @@ is what the larger sizes show.
 - A `Direct` or `Indirect` call in this stage runs the callee's driver
   recursively, which boxes one future per call; the synchronous path for
   pure bodies is a later stage.
+- A `while` whose head or body can suspend — an asynchronous extern, a
+  call into another body, an `Eval` — is not one operation. It prepares
+  as the separate operations it was before, and stays that way until the
+  synchronous call path admits a closure call.
+- An `if`/`else` inside a loop body is a control transfer, so the loop
+  around it is not recognized either. The diamond is its own
+  superinstruction, not part of this one.
 
 ## Rejected
 

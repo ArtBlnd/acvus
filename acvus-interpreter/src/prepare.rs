@@ -9,6 +9,7 @@
 //! extern call reaches, the page key a context is stored under, where a
 //! label sits — is decided here.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{Literal, Span};
@@ -21,7 +22,8 @@ use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
 
 use crate::code::{
-    Code, ConcatPart, FieldSlot, Konst, NO_SLOT, Op, OpFn, Payload, Prepared, SlotMove,
+    BasicBlock, Code, ConcatPart, FieldSlot, Konst, LoopBody, NO_SLOT, Op, OpFn, Payload, Prepared,
+    SlotMove,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
@@ -57,6 +59,10 @@ impl PrepareCtx<'_> {
                 )
             })
             .clone()
+    }
+
+    fn extern_is_sync(&self, id: &QualifiedRef, instance: usize) -> bool {
+        self.handler(id, instance).is_sync()
     }
 }
 
@@ -125,10 +131,29 @@ pub fn prepare_body(
         payloads: Vec::new(),
         scratch: body.val_factory.len() as u32,
         scratch_used: false,
+        op_index: Vec::new(),
     };
 
-    let ops: Vec<Op> = body.insts.iter().map(|inst| prep.op(inst)).collect();
-    let spans: Vec<Span> = body.insts.iter().map(|inst| inst.span).collect();
+    let loops = prep.loops();
+    prep.op_index = op_indexes(body.insts.len(), &loops);
+
+    let mut ops: Vec<Op> = Vec::with_capacity(body.insts.len());
+    let mut spans: Vec<Span> = Vec::with_capacity(body.insts.len());
+    let mut at = 0;
+    for region in &loops {
+        for inst in &body.insts[at..region.start()] {
+            ops.push(prep.op(inst));
+            spans.push(inst.span);
+        }
+        ops.push(prep.loop_op(region));
+        spans.push(body.insts[region.head].span);
+        at = region.end();
+    }
+    for inst in &body.insts[at..] {
+        ops.push(prep.op(inst));
+        spans.push(inst.span);
+    }
+
     let frame_len = prep.scratch + u32::from(prep.scratch_used);
 
     Code {
@@ -154,6 +179,77 @@ struct Prepare<'a> {
     payloads: Vec<Payload>,
     scratch: u32,
     scratch_used: bool,
+    op_index: Vec<Option<u32>>,
+}
+
+/// One `while` the recognizer matched, as indexes into `MirBody::insts`.
+struct LoopRegion {
+    enter_jump: Option<usize>,
+    head: usize,
+    head_block: Range<usize>,
+    head_loops: Vec<LoopRegion>,
+    jump_if: usize,
+    body_block: Range<usize>,
+    body_loops: Vec<LoopRegion>,
+    back: usize,
+}
+
+struct StraightRun {
+    stops_at: usize,
+    loops: Vec<LoopRegion>,
+}
+
+impl LoopRegion {
+    fn start(&self) -> usize {
+        self.enter_jump.unwrap_or(self.head)
+    }
+
+    fn end(&self) -> usize {
+        self.back + 1
+    }
+
+    fn covers(&self, at: usize) -> bool {
+        (self.start()..self.end()).contains(&at)
+    }
+}
+
+fn op_indexes(len: usize, loops: &[LoopRegion]) -> Vec<Option<u32>> {
+    let mut index = vec![None; len];
+    let mut next = 0;
+    let mut at = 0;
+    for region in loops {
+        for slot in index.iter_mut().take(region.start()).skip(at) {
+            *slot = Some(next);
+            next += 1;
+        }
+        index[region.start()] = Some(next);
+        next += 1;
+        at = region.end();
+    }
+    for slot in index.iter_mut().skip(at) {
+        *slot = Some(next);
+        next += 1;
+    }
+    index
+}
+
+fn targets(inst: &Inst, label: Label) -> bool {
+    match &inst.kind {
+        InstKind::Jump { label: named, .. } => *named == label,
+        InstKind::JumpIf {
+            then_label,
+            else_label,
+            ..
+        } => *then_label == label || *else_label == label,
+        _ => false,
+    }
+}
+
+fn block_label(inst: &Inst) -> Option<Label> {
+    match &inst.kind {
+        InstKind::BlockLabel { label, .. } => Some(*label),
+        _ => None,
+    }
 }
 
 impl Prepare<'_> {
@@ -192,13 +288,19 @@ impl Prepare<'_> {
             .unwrap_or_else(|| panic!("unknown label {label:?}"))
     }
 
+    fn target(&self, label: &Label) -> u32 {
+        let at = self.label(label) as usize;
+        self.op_index[at]
+            .unwrap_or_else(|| panic!("a jump names {label:?}, which a loop operation absorbed"))
+    }
+
     fn tag_is(&self, tag: Astr, name: &str) -> bool {
         self.ctx.interner.resolve(tag) == name
     }
 
     /// The moves a jump makes, ordered so every source is read before it is
     /// overwritten; a cycle is broken through the scratch slot.
-    fn moves(&mut self, label: &Label, args: &[ValueId]) -> usize {
+    fn move_list(&mut self, label: &Label, args: &[ValueId]) -> Box<[SlotMove]> {
         let target = self.label(label) as usize;
         let InstKind::BlockLabel { params, .. } = &self.body.insts[target].kind else {
             panic!("a jump names {label:?}, whose instruction is not a block label")
@@ -213,7 +315,253 @@ impl Prepare<'_> {
             .collect();
         let ordered = order_moves(pairs, self.scratch);
         self.scratch_used |= ordered.scratch_used;
-        self.put(Payload::Moves(ordered.moves.into_boxed_slice()))
+        ordered.moves.into_boxed_slice()
+    }
+
+    fn moves(&mut self, label: &Label, args: &[ValueId]) -> usize {
+        let list = self.move_list(label, args);
+        self.put(Payload::Moves(list))
+    }
+
+    /// A suspending operation is excluded along with the terminators: it
+    /// leaves the block for the driver, which the machine's dispatch loop
+    /// alone can reach.
+    fn is_straight_line(&self, inst: &Inst) -> bool {
+        match &inst.kind {
+            InstKind::Jump { .. }
+            | InstKind::JumpIf { .. }
+            | InstKind::Return { .. }
+            | InstKind::Diverge
+            | InstKind::Eval { .. }
+            | InstKind::LoadFunction { .. }
+            | InstKind::Poison { .. } => false,
+
+            InstKind::FunctionCall { callee, .. } => match callee {
+                Callee::Extern { id, instance } => self.ctx.extern_is_sync(id, *instance),
+                Callee::Direct(_) | Callee::Indirect(_) => false,
+            },
+
+            InstKind::Const { .. }
+            | InstKind::StringConcat { .. }
+            | InstKind::StringEq { .. }
+            | InstKind::StringClone { .. }
+            | InstKind::Ref { .. }
+            | InstKind::Take { .. }
+            | InstKind::Assign { .. }
+            | InstKind::Fetch { .. }
+            | InstKind::Commit { .. }
+            | InstKind::FieldGet { .. }
+            | InstKind::FieldSet { .. }
+            | InstKind::BinOp { .. }
+            | InstKind::UnaryOp { .. }
+            | InstKind::Spawn { .. }
+            | InstKind::Merge { .. }
+            | InstKind::MakeArray { .. }
+            | InstKind::MakeObject { .. }
+            | InstKind::MakeTuple { .. }
+            | InstKind::TupleIndex { .. }
+            | InstKind::TestLiteral { .. }
+            | InstKind::TestObjectKey { .. }
+            | InstKind::ArrayIndex { .. }
+            | InstKind::ArrayGet { .. }
+            | InstKind::ObjectGet { .. }
+            | InstKind::MakeClosure { .. }
+            | InstKind::MakeVariant { .. }
+            | InstKind::TestVariant { .. }
+            | InstKind::UnwrapVariant { .. }
+            | InstKind::BlockLabel { .. }
+            | InstKind::Undef { .. }
+            | InstKind::Nop
+            | InstKind::Drop { .. } => true,
+        }
+    }
+
+    fn straight_run(&self, from: usize, limit: usize) -> StraightRun {
+        let insts = self.body.insts.as_slice();
+        let mut loops = Vec::new();
+        let mut at = from;
+        while at < limit {
+            if let Some(region) = self.recognize_loop(at)
+                && region.end() <= limit
+            {
+                at = region.end();
+                loops.push(region);
+            } else if self.is_straight_line(&insts[at]) {
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        StraightRun {
+            stops_at: at,
+            loops,
+        }
+    }
+
+    fn references(&self, label: Label) -> Vec<usize> {
+        self.body
+            .insts
+            .iter()
+            .enumerate()
+            .filter(|(_, inst)| targets(inst, label))
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// The shape `acvus_mir::lower` gives a `while`. A lowering that emits
+    /// another shape does not fail here; it stops matching, and the loop
+    /// prepares as the separate operations it was before.
+    fn recognize_loop(&self, at: usize) -> Option<LoopRegion> {
+        let insts = self.body.insts.as_slice();
+        let (enter_jump, head) = match &insts.get(at)?.kind {
+            InstKind::Jump { label, .. } if block_label(insts.get(at + 1)?) == Some(*label) => {
+                (Some(at), at + 1)
+            }
+            InstKind::BlockLabel { .. } => (None, at),
+            _ => return None,
+        };
+        let header = block_label(&insts[head])?;
+
+        let back = match (enter_jump, self.references(header).as_slice()) {
+            (None, [back]) if *back > head => *back,
+            (Some(entry), [first, back]) if *first == entry && *back > head => *back,
+            _ => return None,
+        };
+        if !matches!(insts[back].kind, InstKind::Jump { .. }) {
+            return None;
+        }
+        let exit_label = block_label(insts.get(back + 1)?)?;
+
+        let StraightRun {
+            stops_at: jump_if,
+            loops: head_loops,
+        } = self.straight_run(head + 1, back);
+        let InstKind::JumpIf {
+            then_label,
+            else_label,
+            ..
+        } = &insts.get(jump_if)?.kind
+        else {
+            return None;
+        };
+        if *else_label != exit_label || block_label(insts.get(jump_if + 1)?) != Some(*then_label) {
+            return None;
+        }
+        let body_label = jump_if + 1;
+        if self.references(*then_label).as_slice() != [jump_if] {
+            return None;
+        }
+
+        let StraightRun {
+            stops_at: body_end,
+            loops: body_loops,
+        } = self.straight_run(body_label + 1, back);
+        if body_end != back {
+            return None;
+        }
+
+        let region = LoopRegion {
+            enter_jump,
+            head,
+            head_block: head + 1..jump_if,
+            head_loops,
+            jump_if,
+            body_block: body_label + 1..back,
+            body_loops,
+            back,
+        };
+        self.is_closed(&region).then_some(region)
+    }
+
+    fn is_closed(&self, region: &LoopRegion) -> bool {
+        let insts = self.body.insts.as_slice();
+        insts[region.start()..region.end()]
+            .iter()
+            .filter_map(block_label)
+            .flat_map(|label| self.references(label))
+            .all(|at| region.covers(at))
+    }
+
+    fn loops(&self) -> Vec<LoopRegion> {
+        let mut found = Vec::new();
+        let mut at = 0;
+        while at < self.body.insts.len() {
+            match self.recognize_loop(at) {
+                Some(region) => {
+                    at = region.end();
+                    found.push(region);
+                }
+                None => at += 1,
+            }
+        }
+        found
+    }
+
+    fn block(&mut self, range: Range<usize>, nested: &[LoopRegion]) -> BasicBlock {
+        let body = self.body;
+        let mut operations: Vec<(Op, Span)> = Vec::with_capacity(range.len());
+        let mut at = range.start;
+        while at < range.end {
+            match nested.iter().find(|region| region.start() == at) {
+                Some(region) => {
+                    operations.push((self.loop_op(region), body.insts[region.head].span));
+                    at = region.end();
+                }
+                None => {
+                    operations.push((self.op(&body.insts[at]), body.insts[at].span));
+                    at += 1;
+                }
+            }
+        }
+        BasicBlock::new(operations)
+    }
+
+    fn loop_op(&mut self, region: &LoopRegion) -> Op {
+        let body = self.body;
+        let InstKind::JumpIf {
+            cond,
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+        } = &body.insts[region.jump_if].kind
+        else {
+            panic!("a recognized loop's test is not a conditional jump")
+        };
+        let InstKind::Jump {
+            label: header,
+            args: back_args,
+        } = &body.insts[region.back].kind
+        else {
+            panic!("a recognized loop's back edge is not a jump")
+        };
+
+        let enter = match region.enter_jump {
+            Some(entry) => {
+                let InstKind::Jump { label, args } = &body.insts[entry].kind else {
+                    panic!("a recognized loop's entry is not a jump")
+                };
+                self.move_list(label, args)
+            }
+            None => Box::default(),
+        };
+        let into_body = self.move_list(then_label, then_args);
+        let exit = self.move_list(else_label, else_args);
+        let back = self.move_list(header, back_args);
+
+        let head = self.block(region.head_block.clone(), &region.head_loops);
+        let block = self.block(region.body_block.clone(), &region.body_loops);
+
+        let at = self.put(Payload::Loop(LoopBody {
+            enter,
+            head,
+            cond_slot: slot(*cond),
+            into_body,
+            body: block,
+            back,
+            exit,
+        }));
+        Op::new(control::while_loop).p(at)
     }
 
     fn op(&mut self, inst: &Inst) -> Op {
@@ -590,7 +938,7 @@ impl Prepare<'_> {
 
             InstKind::BlockLabel { .. } => Op::new(control::nop),
             InstKind::Jump { label, args } => {
-                let target = self.label(label);
+                let target = self.target(label);
                 let at = self.moves(label, args);
                 Op::new(control::jump).b(target).p(at)
             }
@@ -601,8 +949,8 @@ impl Prepare<'_> {
                 else_label,
                 else_args,
             } => {
-                let then_target = self.label(then_label);
-                let else_target = self.label(else_label);
+                let then_target = self.target(then_label);
+                let else_target = self.target(else_label);
                 let then_at = self.moves(then_label, then_args);
                 let else_at = self.moves(else_label, else_args);
                 Op::new(control::jump_if)
@@ -793,6 +1141,224 @@ fn order_moves(pairs: Vec<SlotMove>, scratch: u32) -> MoveOrdering {
     MoveOrdering {
         moves,
         scratch_used,
+    }
+}
+
+#[cfg(test)]
+mod recognizer_tests {
+    use acvus_ast::BinOp as AstBinOp;
+
+    use super::*;
+
+    fn inst(kind: InstKind) -> Inst {
+        Inst {
+            span: Span::ZERO,
+            kind,
+        }
+    }
+
+    fn val(n: usize) -> ValueId {
+        ValueId::from_raw(n)
+    }
+
+    fn block(label: u32) -> Inst {
+        inst(InstKind::BlockLabel {
+            label: Label(label),
+            params: Vec::new(),
+            merge_of: None,
+        })
+    }
+
+    fn jump(label: u32) -> Inst {
+        inst(InstKind::Jump {
+            label: Label(label),
+            args: Vec::new(),
+        })
+    }
+
+    fn jump_if(cond: usize, then_label: u32, else_label: u32) -> Inst {
+        inst(InstKind::JumpIf {
+            cond: val(cond),
+            then_label: Label(then_label),
+            then_args: Vec::new(),
+            else_label: Label(else_label),
+            else_args: Vec::new(),
+        })
+    }
+
+    fn add(dst: usize, left: usize, right: usize) -> Inst {
+        inst(InstKind::BinOp {
+            dst: val(dst),
+            op: AstBinOp::Add,
+            left: val(left),
+            right: val(right),
+        })
+    }
+
+    fn call(dst: usize, callee: QualifiedRef) -> Inst {
+        inst(InstKind::FunctionCall {
+            dst: val(dst),
+            callee: Callee::Extern {
+                id: callee,
+                instance: 0,
+            },
+            callee_ty: Ty::Unit,
+            args: Vec::new(),
+            order: None,
+        })
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Matched {
+        covers: Range<usize>,
+        nested: usize,
+    }
+
+    struct Fixture {
+        interner: Interner,
+        externs: FxHashMap<QualifiedRef, Executable>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                interner: Interner::new(),
+                externs: FxHashMap::default(),
+            }
+        }
+
+        fn async_extern(&mut self, name: &str) -> QualifiedRef {
+            let id = QualifiedRef {
+                namespace: None,
+                name: self.interner.intern(name),
+            };
+            let handler = ExternHandler::Async(Arc::new(|_, _| {
+                Box::pin(async { panic!("the recognizer must not run a handler") })
+            }));
+            self.externs.insert(id, Executable::Extern(vec![handler]));
+            id
+        }
+
+        fn recognize(&self, insts: Vec<Inst>) -> Vec<Matched> {
+            let context_names = FxHashMap::default();
+            let ctx = PrepareCtx {
+                interner: &self.interner,
+                externs: &self.externs,
+                context_names: &context_names,
+            };
+            let closures = FxHashMap::default();
+            let mut body = MirBody::new();
+            body.insts = insts;
+            let prep = Prepare {
+                body: &body,
+                ctx: &ctx,
+                closures: &closures,
+                labels: FxHashMap::default(),
+                payloads: Vec::new(),
+                scratch: 0,
+                scratch_used: false,
+                op_index: Vec::new(),
+            };
+            prep.loops()
+                .iter()
+                .map(|region| Matched {
+                    covers: region.start()..region.end(),
+                    nested: region.head_loops.len() + region.body_loops.len(),
+                })
+                .collect()
+        }
+    }
+
+    fn plain_while() -> Vec<Inst> {
+        vec![
+            jump(0),
+            block(0),
+            add(1, 2, 3),
+            jump_if(1, 1, 2),
+            block(1),
+            add(4, 5, 6),
+            jump(0),
+            block(2),
+        ]
+    }
+
+    #[test]
+    fn a_plain_while_is_one_operation() {
+        let fixture = Fixture::new();
+        assert_eq!(
+            fixture.recognize(plain_while()),
+            vec![Matched {
+                covers: 0..7,
+                nested: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn a_nested_while_is_one_operation_inside_another() {
+        let fixture = Fixture::new();
+        let insts = vec![
+            jump(0),
+            block(0),
+            add(1, 2, 3),
+            jump_if(1, 1, 2),
+            block(1),
+            jump(3),
+            block(3),
+            add(4, 5, 6),
+            jump_if(4, 4, 5),
+            block(4),
+            add(7, 8, 9),
+            jump(3),
+            block(5),
+            jump(0),
+            block(2),
+        ];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched {
+                covers: 0..14,
+                nested: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn an_async_extern_in_the_body_leaves_the_while_alone() {
+        let mut fixture = Fixture::new();
+        let suspends = fixture.async_extern("suspends");
+        let mut insts = plain_while();
+        insts[5] = call(4, suspends);
+        assert_eq!(fixture.recognize(insts), vec![]);
+    }
+
+    #[test]
+    fn a_branch_in_the_body_leaves_the_while_alone() {
+        let fixture = Fixture::new();
+        let insts = vec![
+            jump(0),
+            block(0),
+            add(1, 2, 3),
+            jump_if(1, 1, 2),
+            block(1),
+            jump_if(4, 3, 4),
+            block(3),
+            jump(5),
+            block(4),
+            jump(5),
+            block(5),
+            jump(0),
+            block(2),
+        ];
+        assert_eq!(fixture.recognize(insts), vec![]);
+    }
+
+    #[test]
+    fn a_jump_into_the_loop_from_outside_leaves_it_alone() {
+        let fixture = Fixture::new();
+        let mut insts = plain_while();
+        insts.push(jump(1));
+        assert_eq!(fixture.recognize(insts), vec![]);
     }
 }
 

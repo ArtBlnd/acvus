@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use acvus_ast::Span;
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 
@@ -122,6 +123,13 @@ impl<'c> Machine<'c> {
     pub fn fail(&mut self, error: RuntimeError) -> Flow {
         self.exit = Some(Exit::Error(error));
         Flow::Return
+    }
+
+    #[inline]
+    pub fn attach_span(&mut self, span: Span) {
+        if let Some(Exit::Error(error)) = &mut self.exit {
+            error.span = error.span.or(Some(span));
+        }
     }
 
     fn raised_at(&self, pc: u32, mut error: RuntimeError) -> RuntimeError {
