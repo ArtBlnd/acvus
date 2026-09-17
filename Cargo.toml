@@ -23,3 +23,9 @@ uuid = { version = "1", features = ["v4", "js"] }
 [profile.release]
 opt-level = 'z'
 lto = true
+
+[profile.bench]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1

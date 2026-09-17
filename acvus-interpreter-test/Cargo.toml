@@ -22,3 +22,7 @@ glob = "0.3"
 [[test]]
 name = "fixtures"
 harness = false
+
+[[bench]]
+name = "attention"
+harness = false

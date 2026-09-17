@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod scripts;
+
 use acvus_extern::{Externs, Registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::{
@@ -35,7 +37,9 @@ pub fn typed(ty: Ty, value: Value) -> TypedValue {
     TypedValue { ty, value }
 }
 
-fn split_context(
+/// Split a context into the types the compiler is told and the values the
+/// page is given.
+pub fn split_context(
     interner: &Interner,
     context: Context,
 ) -> (FxHashMap<Astr, Ty>, HashMap<String, Value>) {
@@ -79,7 +83,8 @@ fn compile_script(
     compile_source_with_externs(interner, ast, context_types, std_regs)
 }
 
-fn compile_script_mode(
+/// Parse a script-mode source and compile it: infer, lower, optimize.
+pub fn compile_script_mode(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
@@ -239,7 +244,8 @@ where
     }
 }
 
-fn execute_compiled(
+/// Build the runtime for a `CompileResult`: shared context, page, interpreter.
+pub fn execute_compiled(
     interner: &Interner,
     cr: CompileResult,
     snapshot: HashMap<String, Value>,
