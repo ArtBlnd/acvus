@@ -11,12 +11,12 @@ pub fn int<T>(machine: &mut Machine<'_>, op: &Op) -> Flow
 where
     T: Int,
 {
-    machine.set(op.a, Value::Small(T::TAG, op.p as u64));
+    machine.set(op.a, Value::inline(T::KIND, op.p as u64));
     Flow::Next
 }
 
 pub fn float(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::Small(crate::value::Tag::F64, op.p as u64));
+    machine.set(op.a, Value::inline(crate::value::Kind::F64, op.p as u64));
     Flow::Next
 }
 

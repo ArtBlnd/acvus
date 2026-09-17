@@ -28,7 +28,7 @@ where
     T: Int,
 {
     let want = *payload!(machine, op, Wide);
-    let matches = T::read(machine.reg(op.b).small()).wide() == want;
+    let matches = T::read(machine.reg(op.b).bits()).wide() == want;
     machine.set(op.a, Value::bool_(matches));
     Flow::Next
 }

@@ -48,7 +48,7 @@ pub struct Frames(Vec<Vec<Value>>);
 impl Frames {
     fn take(&mut self, len: u32) -> Vec<Value> {
         let mut regs = self.0.pop().unwrap_or_default();
-        regs.resize_with(len as usize, || Value::Empty);
+        regs.resize_with(len as usize, || Value::EMPTY);
         regs
     }
 
@@ -315,7 +315,7 @@ pub fn fn_value_call<'f>(
     args: &mut [Value],
 ) -> impl Future<Output = Value> + Send + use<'f> {
     let code = &f.code;
-    let mut entered: Vec<Value> = (0..code.frame_len).map(|_| Value::Empty).collect();
+    let mut entered: Vec<Value> = (0..code.frame_len).map(|_| Value::EMPTY).collect();
     enter(code, f, args, &mut entered);
 
     async move {

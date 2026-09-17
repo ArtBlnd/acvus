@@ -23,7 +23,7 @@ use rustc_hash::FxHashMap;
 
 use crate::machine::Machine;
 use crate::runtime::ExternHandler;
-use crate::value::{Tag, Value};
+use crate::value::{Kind, Value};
 
 /// The `a..d` word of an operation that names no register: a call with no
 /// order edge, a variant constructor with no payload.
@@ -100,8 +100,8 @@ pub struct Pending {
 
 /// A constant that is not one word.
 pub enum Konst {
-    /// A tagged word, as `Value::Small` holds it.
-    Word(Tag, u64),
+    /// A word and the `Kind` it carries.
+    Word(Kind, u64),
     Str(String),
     List(Box<[Konst]>),
 }
@@ -109,7 +109,7 @@ pub enum Konst {
 impl Konst {
     pub fn value(&self) -> Value {
         match self {
-            Konst::Word(tag, bits) => Value::Small(*tag, *bits),
+            Konst::Word(kind, bits) => Value::inline(*kind, *bits),
             Konst::Str(s) => Value::string(s.as_str()),
             Konst::List(items) => Value::array(items.iter().map(Konst::value).collect()),
         }

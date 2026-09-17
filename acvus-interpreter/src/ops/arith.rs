@@ -8,7 +8,7 @@ use acvus_mir::ty::IntTy;
 
 use crate::code::{Flow, Op, OpFn};
 use crate::machine::Machine;
-use crate::value::{Tag, Value};
+use crate::value::{Kind, Value};
 
 /// Runs `$body` with `$t` the Rust integer type of an `IntTy`.
 macro_rules! for_int_ty {
@@ -54,7 +54,7 @@ pub(crate) use for_int_ty;
 
 /// One integer width, as the operations at that width read and write it.
 pub trait Int: Copy + PartialOrd + 'static {
-    const TAG: Tag;
+    const KIND: Kind;
     const SHIFT_MASK: u64;
 
     fn read(bits: u64) -> Self;
@@ -78,7 +78,7 @@ pub trait Int: Copy + PartialOrd + 'static {
 macro_rules! impl_int {
     ($($t:ty => $k:ident),* $(,)?) => {
         $(impl Int for $t {
-            const TAG: Tag = Tag::$k;
+            const KIND: Kind = Kind::$k;
             const SHIFT_MASK: u64 = <$t>::BITS as u64 - 1;
 
             fn read(bits: u64) -> Self {
@@ -142,7 +142,7 @@ fn int<T>(value: T) -> Value
 where
     T: Int,
 {
-    Value::Small(T::TAG, value.word())
+    Value::inline(T::KIND, value.word())
 }
 
 const DIVIDE_BY_ZERO: &str = "attempt to divide by zero";
@@ -233,8 +233,8 @@ fn binary<F>(machine: &mut Machine<'_>, op: &Op, f: F) -> Flow
 where
     F: FnOnce(u64, u64) -> Value,
 {
-    let left = machine.reg(op.b).small();
-    let right = machine.reg(op.c).small();
+    let left = machine.reg(op.b).bits();
+    let right = machine.reg(op.c).bits();
     let value = f(left, right);
     machine.set(op.a, value);
     Flow::Next
@@ -245,7 +245,7 @@ fn unary<F>(machine: &mut Machine<'_>, op: &Op, f: F) -> Flow
 where
     F: FnOnce(u64) -> Value,
 {
-    let operand = machine.reg(op.b).small();
+    let operand = machine.reg(op.b).bits();
     let value = f(operand);
     machine.set(op.a, value);
     Flow::Next

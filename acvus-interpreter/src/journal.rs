@@ -91,7 +91,7 @@ mod tests {
     }
 
     fn is_int(v: Option<Value>, n: i64) -> bool {
-        matches!(v, Some(Value::Small(_, bits)) if bits == n as u64)
+        matches!(v, Some(value) if value.kind().is_inline() && value.bits() == n as u64)
     }
 
     fn is_str(v: Option<Value>, s: &str) -> bool {

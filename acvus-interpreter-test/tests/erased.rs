@@ -117,8 +117,8 @@ fn type_of_reports_the_tag_of_a_small_value() {
         rt.type_of(&Value::string("s")),
         Some(TypeId::of::<String>())
     );
-    assert_eq!(rt.type_of(&Value::Empty), None);
-    assert_eq!(rt.type_of(&Value::Undef), None);
+    assert_eq!(rt.type_of(&Value::EMPTY), None);
+    assert_eq!(rt.type_of(&Value::UNDEF), None);
     let target = Value::int(1);
     assert_eq!(rt.type_of(&Value::reference(&target)), None);
 }

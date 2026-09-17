@@ -8,7 +8,7 @@ use serde_json::{Map, Value as Json};
 pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
     match ty {
         Ty::Int(k) => {
-            let v = k.read(value.small());
+            let v = k.read(value.bits());
             if k.signed() {
                 Json::from(v as i64)
             } else {

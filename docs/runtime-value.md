@@ -107,14 +107,31 @@ script's bare name resolves to the one extern of that name.
 
 ## The interpreter's `Value`
 
-`Empty | Undef | Small(u64) | Large(NonNull<Header>)`, 16 bytes, not `Clone`.
+`#[repr(C)] struct Value { kind: Kind, word: u64 }`: one byte that says what
+the word is and one word that is the bits, an address, or nothing. 16 bytes,
+not `Clone`. `Kind` is `#[repr(u8)]` over `Empty`, `Undef`, `Ref`, `Large`
+and one variant per `Inline` type (`I8`..`U64`, `F64`, `Bool`, `Unit`), so
+the byte a value carries is both its discriminant and the Rust type it was
+erased from; `Kind::of::<T>()` const-folds, and the spare values above the
+last variant are the niche that keeps `Option<Value>` at 16 bytes. One
+scalar in the first word and one in the second is a `ScalarPair` in rustc's
+x86-64 ABI, so a `Value` — and an `Option<Value>` — is passed and returned in
+`rax`/`rdx` and stored with two instructions; `acvus-interpreter-test`'s
+`asm_probe` example is the contract that says so, and `value.rs` const-asserts
+both sizes.
+
 `Empty` is the moved-out register, `Undef` the SSA initial value of a
-loop-defined variable. A type rides in `Small` when it fits the word and owns
-nothing (`size_of <= 8 && !needs_drop`); a reference is `Small(address of the
-target register)`; everything else is `Large`, a `Box<Slot<T>>` whose header
+loop-defined variable. A type rides in the word when it fits and owns
+nothing (`size_of <= 8 && !needs_drop`, const-asserted at the `Inline` impls);
+a reference is the address of the target register under `Kind::Ref`;
+everything else is `Kind::Large`, a `Box<Slot<T>>` whose header
 carries the vtable — `type_id` (an assert only), `drop`, `debug`, and which
 composite it is — so `impl Drop for Value` releases the payload wherever
-Rust drops it. The interpreter's composites (`String`, `Array`, `Tuple`,
+Rust drops it. `target`, `peek`, `bits` and the `as_*` readers check the kind
+under `debug_assert!` only: the MIR type checker gives each of those slots a
+type that admits one kind, and the boundary a program can actually reach —
+`acvus_extern::expect_type` — still panics in release on a value no Rust type
+was erased into. The interpreter's composites (`String`, `Array`, `Tuple`,
 `Object`, `Variant`, `Fn`, `Handle`) are process-wide static vtables the
 `VtableRegistry` starts with; an extension type's vtable is registered on its
 first `erase` and leaked for the life of the process. The host asserts

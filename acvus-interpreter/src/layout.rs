@@ -67,7 +67,7 @@ pub fn encode(
     out: &mut Vec<u8>,
 ) -> SpaceResult<()> {
     match ty {
-        Ty::Int(k) => out.extend_from_slice(&value.small().to_le_bytes()[..k.bytes()]),
+        Ty::Int(k) => out.extend_from_slice(&value.bits().to_le_bytes()[..k.bytes()]),
         Ty::Float => out.extend_from_slice(&value.as_float().to_bits().to_le_bytes()),
         Ty::Bool => out.push(value.as_bool() as u8),
         Ty::Unit => {}

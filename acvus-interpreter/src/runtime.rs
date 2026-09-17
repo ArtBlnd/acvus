@@ -9,7 +9,7 @@ use std::sync::Arc;
 use acvus_extern::{CallToken, Runtime};
 
 use crate::interpreter::InterpreterContext;
-use crate::value::{Tag, Value};
+use crate::value::{Kind, Value};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
@@ -32,20 +32,16 @@ impl Runtime for AcvusRuntime {
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
 
     fn type_of(&self, value: &Value) -> Option<TypeId> {
-        match value {
-            Value::Small(tag, _) => Some(tag.type_id()),
-            // SAFETY: the header is live for as long as the value.
-            Value::Large(p) => Some(unsafe { p.as_ref() }.vtable.type_id),
-            Value::Ref(_) | Value::Empty | Value::Undef => None,
+        match value.kind() {
+            Kind::Large => Some(value.vtable().type_id),
+            kind => kind.type_id(),
         }
     }
 
     fn type_name_of(&self, value: &Value) -> Option<&'static str> {
-        match value {
-            Value::Small(tag, _) => Some(tag.name()),
-            // SAFETY: the header is live for as long as the value.
-            Value::Large(p) => Some(unsafe { p.as_ref() }.vtable.name),
-            Value::Ref(_) | Value::Empty | Value::Undef => None,
+        match value.kind() {
+            Kind::Large => Some(value.vtable().name),
+            kind => kind.name(),
         }
     }
 
@@ -154,16 +150,16 @@ unsafe fn read<T>(value: &Value) -> &T
 where
     T: 'static,
 {
-    match Tag::of::<T>() {
-        Some(tag) => {
+    match Kind::of::<T>() {
+        Some(kind) => {
             debug_assert_eq!(
-                value.tag(),
-                tag,
+                value.kind(),
+                kind,
                 "read: value is not a {}",
                 type_name::<T>()
             );
             // SAFETY: an `Inline` `T` was written into the word by `erase`.
-            unsafe { &*(value.small_ref() as *const u64 as *const T) }
+            unsafe { &*(value.bits_ref() as *const u64 as *const T) }
         }
         // SAFETY: a large `T` is the payload behind the header.
         None => unsafe { value.peek::<T>() },
@@ -176,16 +172,16 @@ unsafe fn read_mut<T>(value: &mut Value) -> &mut T
 where
     T: 'static,
 {
-    match Tag::of::<T>() {
-        Some(tag) => {
+    match Kind::of::<T>() {
+        Some(kind) => {
             debug_assert_eq!(
-                value.tag(),
-                tag,
+                value.kind(),
+                kind,
                 "read_mut: value is not a {}",
                 type_name::<T>()
             );
             // SAFETY: an `Inline` `T` was written into the word by `erase`.
-            unsafe { &mut *(value.small_mut() as *mut u64 as *mut T) }
+            unsafe { &mut *(value.bits_mut() as *mut u64 as *mut T) }
         }
         // SAFETY: a large `T` is the payload behind the header.
         None => unsafe { value.peek_mut::<T>() },

@@ -181,43 +181,86 @@ impl Words {
     }
 }
 
-macro_rules! define_tag {
+macro_rules! define_kind {
     ($($name:ident: $t:ty),*) => {
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Tag { $($name,)* }
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Kind { Taken, Large, $($name,)* }
 
-        impl Tag {
-            fn of<T: 'static>() -> Option<Tag> {
+        impl Kind {
+            fn of<T: 'static>() -> Option<Kind> {
                 let id = TypeId::of::<T>();
                 $(if id == TypeId::of::<$t>() {
-                    return Some(Tag::$name);
+                    return Some(Kind::$name);
                 })*
                 None
             }
 
-            fn erased_type(self) -> TypeId {
-                match self { $(Tag::$name => TypeId::of::<$t>(),)* }
+            fn erased_type(self) -> Option<TypeId> {
+                match self {
+                    $(Kind::$name => Some(TypeId::of::<$t>()),)*
+                    Kind::Taken | Kind::Large => None,
+                }
             }
 
-            fn name(self) -> &'static str {
-                match self { $(Tag::$name => stringify!($t),)* }
+            fn name(self) -> Option<&'static str> {
+                match self {
+                    $(Kind::$name => Some(stringify!($t)),)*
+                    Kind::Taken | Kind::Large => None,
+                }
+            }
+
+            fn is_inline(self) -> bool {
+                match self {
+                    $(Kind::$name)|* => true,
+                    Kind::Taken | Kind::Large => false,
+                }
             }
         }
     };
 }
 
-acvus_extern::for_each_inline!(define_tag);
+acvus_extern::for_each_inline!(define_kind);
 
-#[derive(Default)]
-enum TaggedWord {
-    #[default]
-    Taken,
-    Small(Tag, u64),
-    Large(Box<Box<dyn Any + Send + Sync>>),
+type Payload = Box<dyn Any + Send + Sync>;
+
+/// The same shape as the interpreter's `Value`: one kind byte and one word,
+/// so this bench prices the tag the interpreter actually pays.
+#[repr(C)]
+struct TaggedWord {
+    kind: Kind,
+    word: u64,
 }
 
 const _: () = assert!(size_of::<Word>() == 8);
 const _: () = assert!(size_of::<TaggedWord>() == 16);
+
+impl Default for TaggedWord {
+    fn default() -> Self {
+        TaggedWord {
+            kind: Kind::Taken,
+            word: 0,
+        }
+    }
+}
+
+impl TaggedWord {
+    /// # Safety
+    /// The word was written by `erase` for a type with no inline kind.
+    unsafe fn payload(&self) -> &Payload {
+        debug_assert_eq!(self.kind, Kind::Large, "payload: not a large value");
+        // SAFETY: the caller's contract; the word is the pointer `erase` leaked.
+        unsafe { &*(self.word as *const Payload) }
+    }
+}
+
+impl Drop for TaggedWord {
+    fn drop(&mut self) {
+        if self.kind == Kind::Large {
+            // SAFETY: the word is the pointer `erase` leaked, dropped once.
+            drop(unsafe { Box::from_raw(self.word as *mut Payload) });
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Tags;
@@ -244,11 +287,14 @@ unsafe fn read<T>(value: &TaggedWord) -> &T
 where
     T: 'static,
 {
-    match value {
+    match value.kind {
         // SAFETY: the caller's contract.
-        TaggedWord::Small(_, word) => unsafe { &*(&raw const *word).cast::<T>() },
-        TaggedWord::Large(any) => any.downcast_ref::<T>().expect("erased from this type"),
-        TaggedWord::Taken => panic!("read of a value that was taken"),
+        Kind::Large => unsafe { value.payload() }
+            .downcast_ref::<T>()
+            .expect("erased from this type"),
+        Kind::Taken => panic!("read of a value that was taken"),
+        // SAFETY: the caller's contract.
+        _ => unsafe { &*(&raw const value.word).cast::<T>() },
     }
 }
 
@@ -258,11 +304,14 @@ unsafe fn read_mut<T>(value: &mut TaggedWord) -> &mut T
 where
     T: 'static,
 {
-    match value {
+    match value.kind {
+        // SAFETY: the word is the pointer `erase` leaked and `value` is held exclusively.
+        Kind::Large => unsafe { &mut *(value.word as *mut Payload) }
+            .downcast_mut::<T>()
+            .expect("erased from this type"),
+        Kind::Taken => panic!("read of a value that was taken"),
         // SAFETY: the caller's contract.
-        TaggedWord::Small(_, word) => unsafe { &mut *(&raw mut *word).cast::<T>() },
-        TaggedWord::Large(any) => any.downcast_mut::<T>().expect("erased from this type"),
-        TaggedWord::Taken => panic!("read of a value that was taken"),
+        _ => unsafe { &mut *(&raw mut value.word).cast::<T>() },
     }
 }
 
@@ -271,34 +320,38 @@ impl Runtime for Tags {
     type CallFuture<'a> = Ready<TaggedWord>;
 
     fn type_of(&self, value: &TaggedWord) -> Option<TypeId> {
-        match value {
-            TaggedWord::Small(tag, _) => Some(tag.erased_type()),
-            TaggedWord::Large(any) => Some((***any).type_id()),
-            TaggedWord::Taken => None,
+        match value.kind {
+            // SAFETY: the word is the pointer `erase` leaked.
+            Kind::Large => Some((**unsafe { value.payload() }).type_id()),
+            kind => kind.erased_type(),
         }
     }
 
     fn type_name_of(&self, value: &TaggedWord) -> Option<&'static str> {
-        match value {
-            TaggedWord::Small(tag, _) => Some(tag.name()),
-            TaggedWord::Large(_) | TaggedWord::Taken => None,
-        }
+        value.kind.name()
     }
 
     unsafe fn materialize<T>(&self, value: TaggedWord) -> T
     where
         T: Send + Sync + 'static,
     {
-        match (Tag::of::<T>(), value) {
-            // SAFETY: the caller's contract.
-            (Some(_), TaggedWord::Small(_, word)) => unsafe { out_of_word::<T>(word) },
-            (None, TaggedWord::Large(any)) => {
-                *(*any).downcast::<T>().expect("erased from this type")
+        let value = ManuallyDrop::new(value);
+        match Kind::of::<T>() {
+            Some(kind) => {
+                debug_assert_eq!(value.kind, kind, "materialize: not how this value is held");
+                // SAFETY: the caller's contract.
+                unsafe { out_of_word::<T>(value.word) }
             }
-            _ => panic!(
-                "materialize: {} is not how this value is held",
-                std::any::type_name::<T>()
-            ),
+            None => {
+                debug_assert_eq!(
+                    value.kind,
+                    Kind::Large,
+                    "materialize: not how this value is held"
+                );
+                // SAFETY: the word is the pointer `erase` leaked, taken once.
+                let payload = unsafe { Box::from_raw(value.word as *mut Payload) };
+                *(*payload).downcast::<T>().expect("erased from this type")
+            }
         }
     }
 
@@ -306,10 +359,16 @@ impl Runtime for Tags {
     where
         T: Send + Sync + 'static,
     {
-        match Tag::of::<T>() {
-            // SAFETY: an `Inline` `T` fits the word and needs no drop.
-            Some(tag) => TaggedWord::Small(tag, unsafe { into_word(value) }),
-            None => TaggedWord::Large(Box::new(Box::new(value))),
+        match Kind::of::<T>() {
+            Some(kind) => TaggedWord {
+                kind,
+                // SAFETY: an `Inline` `T` fits the word and needs no drop.
+                word: unsafe { into_word(value) },
+            },
+            None => TaggedWord {
+                kind: Kind::Large,
+                word: Box::into_raw(Box::new(Box::new(value) as Payload)) as u64,
+            },
         }
     }
 

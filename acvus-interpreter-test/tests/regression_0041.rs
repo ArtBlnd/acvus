@@ -160,7 +160,7 @@ fn a_copy_struct_that_fits_the_word_but_is_not_inline_crosses_as_large_with_its_
     let pixel = Pixel { x: 1, y: 2 };
     let value = Erased::<AcvusRuntime, Pixel>::new(&rt, pixel).into_value();
     assert!(
-        matches!(value, Value::Large(_)),
+        value.kind() == acvus_interpreter::Kind::Large,
         "a Copy type outside the Inline set is a Large box: {value:?}"
     );
     assert_eq!(rt.type_of(&value), Some(TypeId::of::<Pixel>()));

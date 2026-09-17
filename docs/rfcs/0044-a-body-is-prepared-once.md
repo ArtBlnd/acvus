@@ -536,6 +536,56 @@ reads a span per operation. The span probe above separates them: putting
 the span store back alone returns int `while` to 10.1 and mandelbrot to
 39.6-41.4, so the span read is most of it and the `Result` is the rest.
 
+After stage 2a, the value as a scalar pair (2026-09-18; interleaved A/B
+against binaries built from `28b6033` with nothing changed, three
+repetitions, medians, `n = 1_000_000`). `Value` stopped being a Rust enum
+whose first word holds two bytes — the discriminant at offset 0 and the
+`Tag` at offset 1, which is not one scalar, so the whole aggregate went
+through memory — and became `#[repr(C)] struct Value { kind: Kind, word:
+u64 }` with `Kind` merging the discriminant and the `Tag`. The layout is
+`docs/runtime-value.md`.
+
+| bench | base `28b6033` | stage 2a |
+|-------|----------------|----------|
+| accum `range \| sum` | 5.1 ns/iteration | **1.7** |
+| accum `map(\|x\| -> x) \| sum` | 36.6 ns/iteration | **23.0** |
+| accum `map(\|x\| -> x + 1) \| sum` | 40.4 ns/iteration | **20.8** |
+| accum int `while` | 9.1 ns/iteration | **8.7** |
+| accum float `while` | 16.7 ns/iteration | **13.3** |
+| mandelbrot 200x100x200 | 37.4 ns/iteration | **35.2** |
+| `iter_cost` `iter<word>` | 1.29 ns/element | **1.30** |
+| `iter_cost` `iter<tagged>` | 1.97 ns/element | **1.66** |
+| attention (64, 64) execute | 391.2 us | **323.8** |
+| attention (256, 128) execute | 3018 us | **2591** |
+
+The pipeline benches fell about twice as far as a count of `Value` moves
+predicts, and the probe names why: `Option<Value>` is a `ScalarPair` too,
+because the niche the option's discriminant needs is a spare `Kind`. In
+the base, `probe_some_i64` is `mov %rdi,%rax; movw $0x302,(%rdi); mov
+%rdx,0x8(%rdi); ret` — an sret buffer; after, the linker folds it onto
+`probe_erase_i64`, `mov %rsi,%rdx; mov $0x7,%al; ret`, because `Some(v)`
+and `v` compile to the same code. Every `Stage::next -> Option<Value>`,
+once per element per stage, stopped going through memory.
+
+`call_extern_sync`'s hot path is now the indirect handler call with no
+sret pointer set up, the returned kind and word taken out of `rax` and
+`rdx`, and two stores into the destination register — against the base's
+sret buffer and its 1 + 4 + 4 + 8 reassembly, which the stage-6 and panic
+reports both measured and neither could remove.
+
+mandelbrot is the one bench that fell less than the stage expected
+(35.2 against a 30-34 band). It has no extern call and no `Option<Value>`,
+so its whole gain is in the arithmetic operations, and the disassembly of
+`mul_f64` shows both halves of it: each operand's kind test went from two
+branches (`test %al,%al` for `Empty`, `cmp $0x2,%al` for `Small`) to one
+(`cmpb $0x0`), and the destination store went from `movw` plus `mov` to
+`movb` plus `movsd`. Against that, LLVM now spills the product to the
+stack across the destination's drop check and reloads it, where the base
+kept it in a callee-saved GPR because the 16-byte store already needed it
+there. That spill is a register-allocation consequence, not a rule this
+stage could state differently, and it is what the remaining 1-2 ns per
+iteration is.
+
 - **Words packed as three `usize`.** Two slot indexes per word on a
   64-bit target and one on wasm32 would make an operation's inline
   capacity platform-dependent; four `u32` slots and one word are the

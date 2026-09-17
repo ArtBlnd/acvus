@@ -109,7 +109,7 @@ pub fn merge(machine: &mut Machine<'_>, op: &Op) -> Flow {
 }
 
 pub fn undef(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::Undef);
+    machine.set(op.a, Value::UNDEF);
     Flow::Next
 }
 

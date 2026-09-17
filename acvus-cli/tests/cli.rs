@@ -89,7 +89,7 @@ fn a_compile_error_is_reported_at_its_line_and_column_with_status_1() {
 }
 
 #[test]
-fn a_runtime_error_is_reported_at_the_failing_call_with_status_2() {
+fn a_runtime_error_is_the_operations_panic_message_with_status_2() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
@@ -98,10 +98,11 @@ fn a_runtime_error_is_reported_at_the_failing_call_with_status_2() {
     );
     let out = acvus(dir.path(), &["run", "boom.acvus"]);
     assert_eq!(out.status.code(), Some(2));
-    let err = text(&out.stderr);
-    assert!(err.contains("index 9 out of 3"), "{err}");
-    assert!(err.contains("--> boom.acvus:2:2"), "{err}");
-    assert!(err.contains("^^^^^^^^^^^"), "{err}");
+    assert_eq!(text(&out.stdout), "");
+    assert_eq!(
+        text(&out.stderr),
+        "error: get: index 9 is out of range for length 3\n"
+    );
 }
 
 #[test]

@@ -30,7 +30,7 @@ use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
 use crate::ops::{call, composite, constant, control, pattern, storage, string, variant};
 use crate::runtime::ExternHandler;
-use crate::value::Tag;
+use crate::value::Kind;
 
 pub struct PrepareCtx<'a> {
     pub interner: &'a Interner,
@@ -1112,11 +1112,11 @@ impl<'a> Prepare<'a> {
 
 fn konst_of(literal: &Literal, ty: &Ty) -> Konst {
     match (literal, ty) {
-        (Literal::Int(n), Ty::Int(k)) => Konst::Word(Tag::int(*k), *n as u64),
+        (Literal::Int(n), Ty::Int(k)) => Konst::Word(Kind::int(*k), *n as u64),
         (Literal::Int(n), other) => panic!("integer literal {n} typed as {other:?}"),
-        (Literal::Float(x), _) => Konst::Word(Tag::F64, x.to_bits()),
-        (Literal::Bool(b), _) => Konst::Word(Tag::Bool, u64::from(*b)),
-        (Literal::Unit, _) => Konst::Word(Tag::Unit, 0),
+        (Literal::Float(x), _) => Konst::Word(Kind::F64, x.to_bits()),
+        (Literal::Bool(b), _) => Konst::Word(Kind::Bool, u64::from(*b)),
+        (Literal::Unit, _) => Konst::Word(Kind::Unit, 0),
         (Literal::String(s), _) => Konst::Str(s.clone()),
         (Literal::List(items), Ty::Array(elem, _)) => {
             Konst::List(items.iter().map(|item| konst_of(item, elem)).collect())

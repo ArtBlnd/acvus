@@ -16,31 +16,31 @@ fn ctx(i: &Interner, name: &str, ty: IntTy, bits: u64) -> Context {
 async fn arithmetic_runs_at_the_operands_width() {
     let i = Interner::new();
     let v = run_script(&i, "@b + 5", ctx(&i, "b", IntTy::U8, 250)).await;
-    assert_eq!(IntTy::U8.read(v.small()), 255);
+    assert_eq!(IntTy::U8.read(v.bits()), 255);
     let v = run_script(
         &i,
         "@n * 3",
         ctx(&i, "n", IntTy::I32, (-7i32) as u32 as u64),
     )
     .await;
-    assert_eq!(IntTy::I32.read(v.small()), -21);
+    assert_eq!(IntTy::I32.read(v.bits()), -21);
     let v = run_script(&i, "@u - 1", ctx(&i, "u", IntTy::U64, u64::MAX)).await;
-    assert_eq!(IntTy::U64.read(v.small()), u64::MAX as i128 - 1);
+    assert_eq!(IntTy::U64.read(v.bits()), u64::MAX as i128 - 1);
     let v = run_script(&i, "-@n", ctx(&i, "n", IntTy::I16, 5)).await;
-    assert_eq!(IntTy::I16.read(v.small()), -5);
+    assert_eq!(IntTy::I16.read(v.bits()), -5);
 }
 
 #[tokio::test]
 async fn arithmetic_past_the_width_wraps_at_the_width() {
     let i = Interner::new();
     let v = run_script(&i, "@b + 10", ctx(&i, "b", IntTy::U8, 250)).await;
-    assert_eq!(IntTy::U8.read(v.small()), 4);
+    assert_eq!(IntTy::U8.read(v.bits()), 4);
     let v = run_script(&i, "@b * 2", ctx(&i, "b", IntTy::U8, 200)).await;
-    assert_eq!(IntTy::U8.read(v.small()), 144);
+    assert_eq!(IntTy::U8.read(v.bits()), 144);
     let v = run_script(&i, "@b - 1", ctx(&i, "b", IntTy::U8, 0)).await;
-    assert_eq!(IntTy::U8.read(v.small()), 255);
+    assert_eq!(IntTy::U8.read(v.bits()), 255);
     let v = run_script(&i, "-@n", ctx(&i, "n", IntTy::I8, 0x80)).await;
-    assert_eq!(IntTy::I8.read(v.small()), -128);
+    assert_eq!(IntTy::I8.read(v.bits()), -128);
     let v = run_script(&i, "@n + 1", ctx(&i, "n", IntTy::I64, i64::MAX as u64)).await;
     assert_eq!(v.as_int(), i64::MIN);
 }
@@ -120,7 +120,7 @@ async fn arithmetic_inside_a_while_wraps_as_the_arithmetic_does() {
     let i = Interner::new();
     let source = "let acc = @b; let k = 0; while k < 4 { acc = acc + @b; k = k + 1; } acc";
     let v = run_script_mode(&i, source, ctx(&i, "b", IntTy::U8, 250)).await;
-    assert_eq!(IntTy::U8.read(v.small()), 226, "250 * 5 mod 256");
+    assert_eq!(IntTy::U8.read(v.bits()), 226, "250 * 5 mod 256");
 }
 
 /// Code motion on `bb8207f` hoisted `i + 1` into the loop head above the
@@ -132,7 +132,7 @@ async fn an_operation_in_a_loop_body_does_not_run_on_the_exit_iteration() {
     let i = Interner::new();
     let source = "let i = 250; while i < @n { i = i + 1; } i";
     let v = run_script_mode(&i, source, ctx(&i, "n", IntTy::U8, 255)).await;
-    assert_eq!(IntTy::U8.read(v.small()), 255);
+    assert_eq!(IntTy::U8.read(v.bits()), 255);
 }
 
 #[tokio::test]
@@ -140,5 +140,5 @@ async fn a_loop_that_is_not_entered_runs_none_of_its_body() {
     let i = Interner::new();
     let source = "let i = 250; while i < @n { i = i + 1; } i";
     let v = run_script_mode(&i, source, ctx(&i, "n", IntTy::U8, 200)).await;
-    assert_eq!(IntTy::U8.read(v.small()), 250);
+    assert_eq!(IntTy::U8.read(v.bits()), 250);
 }
