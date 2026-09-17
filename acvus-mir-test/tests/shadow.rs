@@ -185,23 +185,45 @@ fn a_binding_made_after_the_call_is_not_in_the_set_at_it() {
     assert_eq!(c.callees, vec!["array::len".to_string()]);
 }
 
-/// RFC-0030 lends the receiver only where every candidate's first
-/// parameter is a reference of one mutability. The binding's is a
-/// variable, so the receiver is passed by value, which every declared
-/// `len` refuses.
+/// `array::len` takes the receiver lent, the binding takes it by value,
+/// and per-candidate admission (RFC-0043) leaves both.
 #[test]
-fn a_method_receiver_a_binding_may_take_is_passed_by_value() {
+fn a_method_receiver_two_candidates_take_in_different_modes_is_ambiguous() {
     let i = Interner::new();
-    let c = checked(&i, "let q = [1.0, 2.0]; let len = |k| -> 7.0; q.len()");
-    assert_eq!(c.ret, Ty::Float);
-    assert!(
-        c.callees.is_empty(),
-        "the binding is called, not a namespace's `len`: {:?}",
-        c.callees
+    let errors = errors_of(&i, "let q = [1.0, 2.0]; let len = |k| -> 7.0; q.len()");
+    assert_eq!(
+        errors,
+        vec!["`len` is declared by array::len and the binding `len`"]
     );
+}
+
+/// The modes are read at the method call, not at the call around it.
+#[test]
+fn a_method_call_of_a_shadowed_name_inside_a_call_of_it_is_ambiguous() {
+    let i = Interner::new();
+    let errors = errors_of(
+        &i,
+        "let len = |k| -> k + 7; let q = [1.0, 2.0]; len(q.len())",
+    );
+    assert_eq!(
+        errors,
+        vec!["`len` is declared by array::len and the binding `len`"]
+    );
+}
+
+/// Every candidate the receiver's type leaves lends it (RFC-0030).
+#[test]
+fn a_method_receiver_one_candidate_lends_is_lent() {
+    let i = Interner::new();
+    let c = checked(
+        &i,
+        "let mylen = |k| -> k + 7; let q = [1.0, 2.0]; mylen(q.len())",
+    );
+    assert_eq!(c.ret, Ty::I64);
+    assert_eq!(c.callees, vec!["array::len".to_string()]);
     assert!(
-        c.fn_params.contains(&vec!["Array<Float, 2>".to_string()]),
-        "the receiver arrives owned: {:?}",
+        c.fn_params.contains(&vec!["&Array<Float, 2>".to_string()]),
+        "the receiver is lent, not moved: {:?}",
         c.fn_params
     );
 }

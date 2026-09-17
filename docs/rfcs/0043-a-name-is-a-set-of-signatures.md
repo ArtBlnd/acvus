@@ -18,8 +18,9 @@ variables expanded to their shapes, a bare variable making the position
 they have none (`min`'s `T` and `Option<T>`), so a field read or a method
 call on the result sees the reference before the signature settles. That
 bound is the parameter's range and nothing more: no argument is admitted
-by reading it. A receiver whose type is still a variable is passed as it
-is; the parameter it meets decides whether it was a reference.
+by reading it. A receiver that is not a place and whose type is still a
+variable is passed as it is; the parameter it meets decides whether it
+was a reference.
 
 How an argument is taken is a property of the pair (argument, candidate),
 asked of that candidate's own parameter there. A candidate takes an
@@ -92,12 +93,25 @@ count(q)` is ambiguous between `iter::count` and the binding, and
 `count(&q)` is the binding alone, no rule reaching an iterator from a
 reference.
 
-A method call lends its receiver when every remaining candidate's first
-parameter is a reference of one mutability, and passes it as a value
-otherwise; a pipe passes its left side as a value. A binding names no such
-first parameter — its own is a variable, or its head is still open and
-names none at all — so a set holding one passes the receiver by value,
-which every candidate taking `&C` then refuses.
+A method call's receiver is one more argument, admitted per candidate
+before the mode the call takes is fixed, each candidate seeing it in its
+own mode: a candidate whose first parameter is a reference sees the
+receiver lent, of that parameter's mutability; a candidate whose first
+parameter is a value or a variable — a binding's is one, or its head is
+still open and names no parameter at all — sees the place by value. A
+candidate that refuses the receiver in its mode leaves the set there, as
+a refusal at any argument leaves it. The mode the call takes is what the
+candidates that stay agree on: every one lending, of one mutability, is
+the lend; every one taking a value is the move. A set that does not agree
+is `AmbiguousFunction` at the call over those candidates — choosing
+between a lend and a move would be a default, and there is none here. A
+pipe passes its left side as a value.
+
+Telling the modes apart needs a receiver type that distinguishes them. A
+receiver that is not a place has no lend to be admitted in, and a place
+whose head is still a variable admits every candidate in either mode, so
+in both the set's agreement alone decides: lent where every candidate's
+first parameter is a reference of one mutability, by value otherwise.
 
 A conversion decision whose one side is a `OneOf`-bounded variable answers
 identity only where the other side could match a shape of the bound: the
@@ -134,9 +148,11 @@ argument no candidate takes is reported at the call, while a disagreement
 under a shape some candidate does take is reported when the decision
 settles or fails. The report names the call type as far as it is known.
 
-A receiver whose candidates disagree on lending is passed as a value; a
-candidate wanting a reference then drops unless the receiver is already a
-reference value.
+A receiver two candidates take in different modes is reported, not
+resolved: the call is written `array::len(&q)` or the binding is renamed.
+The cost is a lend trial per distinct mutability among the candidates,
+read off the receiver's type without the borrow's bookkeeping, which is
+applied once for the mode the call takes.
 
 Checking an argument costs a shape match per candidate, and a rule lookup
 on a copy of the terms per candidate no shape of which admits it. Each
@@ -183,12 +199,16 @@ display order, not the order the registries were combined in.
   decision.
 - `acvus-mir/src/typeck.rs`: `check_overloaded_call` over `admit_args`,
   `call_param`, `admit_arg` and `no_matching_function`, `CalleeChoice`,
-  `receiver_arg`; `report_unsettled` maps the two failures; `solve_body`
+  `admit_receiver` over `CandidateReceiver`, `receiver_as`, `receiver_in`
+  and `receiver_arg`, with `lend_place` split out of `check_borrow` so the
+  receiver's place is checked once and lent only in the mode taken;
+  `report_unsettled` maps the two failures; `solve_body`
   verifies a settled signature's bounds.
 - A binding joins the set through `typeck.rs`'s `signature_set` over
   `local_signature`, with `SignatureCandidate::{Named, Local}`,
-  `SettledSignature::{Named, Local}`, `SignatureName` for the message,
-  `candidate_receiver`, and `check_local_call`, which records the callee
+  `SettledSignature::{Named, Local}`, `SignatureName` and
+  `shown_candidates` for the message, `Solver::receiver_mode` answering
+  `ReceiverMode`, and `check_local_call`, which records the callee
   type and freezes no `direct_calls` entry. `SignatureCandidate::arity`
   answers `Option<usize>`, `None` where the binding's head is still open,
   and `takes_arity` keeps such a candidate; `call_param` names the call's

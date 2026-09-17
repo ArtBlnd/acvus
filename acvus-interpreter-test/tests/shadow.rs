@@ -17,9 +17,9 @@ async fn a_binding_alone_takes_a_call_no_declared_len_takes() {
 }
 
 #[tokio::test]
-async fn a_method_receiver_a_binding_may_take_is_passed_by_value() {
-    let v = run("let q = [1.0, 2.0]; let len = |k| -> 7.0; q.len()").await;
-    assert_eq!(v.as_float(), 7.0);
+#[should_panic(expected = "`len` is declared by array::len and the binding `len`")]
+async fn a_method_receiver_two_candidates_take_in_different_modes_is_ambiguous() {
+    run("let q = [1.0, 2.0]; let len = |k| -> 7.0; q.len()").await;
 }
 
 #[tokio::test]

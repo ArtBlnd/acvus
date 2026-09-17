@@ -11,8 +11,8 @@ use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
     Admission, Answer, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
     EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, Mismatch,
-    MismatchReason, ReferencePair, SettledSignature, SignatureCandidate, SignatureName,
-    SignatureOption, Unsettled,
+    MismatchReason, ReceiverMode, ReferencePair, SettledSignature, SignatureCandidate,
+    SignatureName, SignatureOption, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -59,6 +59,27 @@ struct IntLiteral {
 struct FirstArg {
     ty: InferTy,
     site: ArgSite,
+}
+
+/// RFC-0030.
+struct CandidateReceiver {
+    candidate: SignatureCandidate,
+    mode: ReceiverMode,
+}
+
+/// RFC-0043.
+struct AdmittedReceiver {
+    candidates: Vec<SignatureCandidate>,
+    first: FirstArg,
+}
+
+impl AdmittedReceiver {
+    fn taking_every_candidate(kept: Vec<CandidateReceiver>, first: FirstArg) -> Self {
+        Self {
+            candidates: kept.into_iter().map(|seen| seen.candidate).collect(),
+            first,
+        }
+    }
 }
 
 /// What an overloaded call's arguments left of its candidate set
@@ -151,14 +172,28 @@ fn takes_arity(candidate: &SignatureCandidate, arity: usize) -> bool {
     candidate.arity().is_none_or(|declared| declared == arity)
 }
 
-/// The mutability of a function's first parameter when it is a reference.
-fn first_param_reference(ty: &crate::ty::PolyTy) -> Option<Mutability> {
+/// RFC-0030.
+fn declared_receiver_mode(ty: &crate::ty::PolyTy) -> ReceiverMode {
     let TyTerm::Fn { params, .. } = ty else {
-        return None;
+        return ReceiverMode::Value;
     };
     match params.first().map(|p| &p.ty) {
-        Some(TyTerm::Ref(mutability, _)) => Some(*mutability),
-        _ => None,
+        Some(TyTerm::Ref(mutability, _)) => ReceiverMode::Lent(*mutability),
+        _ => ReceiverMode::Value,
+    }
+}
+
+/// RFC-0043.
+fn agreed_receiver_mode(mut modes: impl Iterator<Item = ReceiverMode>) -> Option<ReceiverMode> {
+    let first = modes.next()?;
+    modes.all(|mode| mode == first).then_some(first)
+}
+
+/// RFC-0030.
+fn lent_only_if_agreed(per_candidate: &[CandidateReceiver]) -> ReceiverMode {
+    match agreed_receiver_mode(per_candidate.iter().map(|seen| seen.mode)) {
+        Some(lent @ ReceiverMode::Lent(_)) => lent,
+        Some(ReceiverMode::Value) | None => ReceiverMode::Value,
     }
 }
 
@@ -1488,6 +1523,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.decision_sites[&parent]
     }
 
+    /// RFC-0043.
+    fn shown_candidates(
+        &self,
+        name: Astr,
+        candidates: impl Iterator<Item = SignatureName>,
+    ) -> Vec<String> {
+        let bare = self.interner.resolve(name);
+        let mut shown: Vec<String> = candidates
+            .map(|candidate| match candidate {
+                SignatureName::Named(qref) => self.shown_name(qref),
+                SignatureName::Local => format!("the binding `{bare}`"),
+            })
+            .collect();
+        shown.sort();
+        shown
+    }
+
     fn shown_name(&self, qref: QualifiedRef) -> String {
         let name = self.interner.resolve(qref.name);
         match qref.namespace {
@@ -1580,21 +1632,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 },
                 Unsettled::AmbiguousSignature {
                     name, candidates, ..
-                } => {
-                    let bare = self.interner.resolve(name);
-                    let mut shown: Vec<String> = candidates
-                        .iter()
-                        .map(|candidate| match candidate {
-                            SignatureName::Named(qref) => self.shown_name(*qref),
-                            SignatureName::Local => format!("the binding `{bare}`"),
-                        })
-                        .collect();
-                    shown.sort();
-                    MirErrorKind::AmbiguousFunction {
-                        name: self.interner.resolve(name).to_string(),
-                        candidates: shown,
-                    }
-                }
+                } => MirErrorKind::AmbiguousFunction {
+                    name: self.interner.resolve(name).to_string(),
+                    candidates: self.shown_candidates(name, candidates.iter().copied()),
+                },
                 Unsettled::ReferenceCaptured { .. } => MirErrorKind::ReferenceCaptured,
                 Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared,
                 Unsettled::LendMismatch { expected, got, .. } => MirErrorKind::UnificationFailure {
@@ -1740,7 +1781,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let outer = std::mem::replace(&mut self.in_borrow_place, true);
         let ty = self.check_expr(place);
         self.in_borrow_place = outer;
-        if mutable
+        self.lend_place(&ty, place, mutability, span)
+    }
+
+    /// The reference a borrow of an already-checked place names: a borrow
+    /// of a reference is a reborrow of what it names (RFC-0029).
+    fn lend_place(
+        &mut self,
+        of: &InferTy,
+        place: &Expr,
+        mutability: Mutability,
+        span: Span,
+    ) -> InferTy {
+        if mutability == Mutability::Mut
             && let Some(Place {
                 root: PlaceRoot::Context(qref),
                 ..
@@ -1748,9 +1801,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         {
             self.note_access(Effect::write(qref), span);
         }
-        // A borrow of a reference is a reborrow of what it names
-        // (RFC-0029).
-        let referent = match self.solver.lend(&ty, mutability, LendKind::Borrow) {
+        let referent = match self.solver.lend(of, mutability, LendKind::Borrow) {
             LendOutcome::Names { referent, .. } => referent,
             LendOutcome::Refused { refusal, referent } => {
                 self.error(
@@ -1763,7 +1814,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 referent
             }
             LendOutcome::HeadOpen => {
-                return self.open_lend(&ty, mutability, LendKind::Borrow, span);
+                return self.open_lend(of, mutability, LendKind::Borrow, span);
             }
         };
         TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
@@ -1806,7 +1857,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             [] => {}
             [SignatureCandidate::Named { qref, scheme }] => {
                 let (qref, scheme) = (*qref, scheme.clone());
-                let first = self.receiver_arg(receiver, first_param_reference(&scheme.ty));
+                let first = self.receiver_arg(receiver, declared_receiver_mode(&scheme.ty));
                 return self.check_resolved_call(
                     qref,
                     &scheme,
@@ -1830,12 +1881,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .into_iter()
                     .filter(|candidate| takes_arity(candidate, args.len() + 1))
                     .collect();
-                let mut references = candidates.iter().map(|c| self.candidate_receiver(c));
-                let agreed = references
-                    .next()
-                    .flatten()
-                    .filter(|mutability| references.all(|r| r == Some(*mutability)));
-                let first = self.receiver_arg(receiver, agreed);
+                let Some(AdmittedReceiver { candidates, first }) =
+                    self.admit_receiver(candidates, receiver, name, call_span)
+                else {
+                    self.check_args_in_order(&Self::infer_error(), None, args);
+                    return Self::infer_error();
+                };
                 return self.check_overloaded_call(
                     candidates,
                     callee_id,
@@ -1852,13 +1903,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A receiver that is a place is lent as the parameter asks; a receiver
     /// that is already a reference value is passed as it is (RFC-0030).
-    fn receiver_arg(&mut self, receiver: &Expr, first_param: Option<Mutability>) -> FirstArg {
-        match first_param {
-            Some(mutability) if place_of(receiver).is_some() => FirstArg {
+    fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode) -> FirstArg {
+        match mode {
+            ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => FirstArg {
                 ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
                 site: ArgSite::lent(receiver),
             },
-            Some(_) => {
+            ReceiverMode::Lent(_) => {
                 let ty = self.check_expr(receiver);
                 if !matches!(
                     self.solver.resolve_ty(&ty),
@@ -1871,26 +1922,112 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     site: ArgSite::value(receiver),
                 }
             }
-            None => FirstArg {
+            ReceiverMode::Value => FirstArg {
                 ty: self.check_expr(receiver),
                 site: ArgSite::value(receiver),
             },
         }
     }
 
-    /// RFC-0030.
-    fn candidate_receiver(&self, candidate: &SignatureCandidate) -> Option<Mutability> {
-        match candidate {
-            SignatureCandidate::Named { scheme, .. } => first_param_reference(&scheme.ty),
-            SignatureCandidate::Local { ty } => {
-                let TyTerm::Fn { params, .. } = ty else {
-                    return None;
-                };
-                match self.solver.shallow_resolve_ty(&params.first()?.ty) {
-                    TyTerm::Ref(mutability, _) => Some(mutability),
-                    _ => None,
-                }
+    /// The receiver of a method call whose name is still a set: one more
+    /// argument, admitted per candidate in that candidate's own mode
+    /// before the mode the call takes is fixed (RFC-0043).
+    fn admit_receiver(
+        &mut self,
+        candidates: Vec<SignatureCandidate>,
+        receiver: &Expr,
+        name: Astr,
+        call_span: Span,
+    ) -> Option<AdmittedReceiver> {
+        let per_candidate: Vec<CandidateReceiver> = candidates
+            .into_iter()
+            .map(|candidate| CandidateReceiver {
+                mode: self.solver.receiver_mode(&candidate),
+                candidate,
+            })
+            .collect();
+        if place_of(receiver).is_none() {
+            let first = self.receiver_arg(receiver, lent_only_if_agreed(&per_candidate));
+            return Some(AdmittedReceiver::taking_every_candidate(
+                per_candidate,
+                first,
+            ));
+        }
+        let outer = std::mem::replace(&mut self.in_borrow_place, true);
+        let owned = self.check_expr(receiver);
+        self.in_borrow_place = outer;
+        let trials: Option<Vec<InferTy>> = per_candidate
+            .iter()
+            .map(|seen| self.receiver_as(&owned, seen.mode))
+            .collect();
+        let Some(trials) = trials else {
+            let mode = lent_only_if_agreed(&per_candidate);
+            let first = self.receiver_in(receiver, owned, mode);
+            return Some(AdmittedReceiver::taking_every_candidate(
+                per_candidate,
+                first,
+            ));
+        };
+        let kept: Vec<CandidateReceiver> = per_candidate
+            .into_iter()
+            .zip(trials)
+            .filter(|(seen, ty)| {
+                !matches!(
+                    self.solver.admits(&seen.candidate, 0, ty),
+                    Admission::Refused
+                )
+            })
+            .map(|(seen, _)| seen)
+            .collect();
+        let mode = match agreed_receiver_mode(kept.iter().map(|seen| seen.mode)) {
+            Some(mode) => mode,
+            None if kept.is_empty() => ReceiverMode::Value,
+            None => {
+                let shown = self.shown_candidates(name, kept.iter().map(|s| s.candidate.name()));
+                self.error(
+                    MirErrorKind::AmbiguousFunction {
+                        name: self.interner.resolve(name).to_string(),
+                        candidates: shown,
+                    },
+                    call_span,
+                );
+                return None;
             }
+        };
+        let first = self.receiver_in(receiver, owned, mode);
+        Some(AdmittedReceiver::taking_every_candidate(kept, first))
+    }
+
+    /// The type one candidate's mode sees the checked receiver as, or
+    /// `None` where the place's head is still a variable and the lend
+    /// cannot be read off it. No bookkeeping: this is the trial the
+    /// candidate is admitted against (RFC-0043).
+    fn receiver_as(&self, owned: &InferTy, mode: ReceiverMode) -> Option<InferTy> {
+        let ReceiverMode::Lent(mutability) = mode else {
+            return Some(owned.clone());
+        };
+        let referent = match self.solver.lend(owned, mutability, LendKind::Borrow) {
+            LendOutcome::Names { referent, .. } | LendOutcome::Refused { referent, .. } => referent,
+            LendOutcome::HeadOpen => return None,
+        };
+        Some(TyTerm::Ref(
+            mutability,
+            Box::new(TypeArg::uniform(referent)),
+        ))
+    }
+
+    /// The mode the call settled on, with its bookkeeping: the lend
+    /// (RFC-0029, RFC-0041) or the place by value.
+    fn receiver_in(&mut self, receiver: &Expr, owned: InferTy, mode: ReceiverMode) -> FirstArg {
+        match mode {
+            ReceiverMode::Lent(mutability) => FirstArg {
+                ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
+                site: ArgSite::lent(receiver),
+            },
+            ReceiverMode::Value => FirstArg {
+                ty: owned,
+                site: ArgSite::value(receiver),
+            },
         }
     }
 

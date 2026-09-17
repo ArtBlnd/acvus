@@ -267,3 +267,27 @@ async fn a_closure_parameter_named_unlike_any_extern_is_the_callee() {
     let v = run("let f = |g| -> g(&@query); f(|k| -> 7.0)").await;
     assert_close(&v, 7.0);
 }
+
+#[tokio::test]
+async fn a_method_call_of_an_extern_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name() {
+    let v = run("let len = |k| -> k + 7; @keys.as_iter().map(|k| -> k.len()).sum()").await;
+    assert_eq!(v.as_int(), 4);
+}
+
+#[tokio::test]
+async fn a_qualified_call_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name() {
+    let v = run("let len = |k| -> k + 7; @keys.as_iter().map(|k| -> array::len(k)).sum()").await;
+    assert_eq!(v.as_int(), 4);
+}
+
+#[tokio::test]
+#[should_panic(expected = "`len` is declared by array::len and the binding `len`")]
+async fn a_method_receiver_a_binding_and_an_extern_take_in_different_modes_is_ambiguous() {
+    run("let len = |k| -> k + 7; len(@query.len())").await;
+}
+
+#[tokio::test]
+async fn a_closure_parameter_captured_by_an_inner_lambda_is_callable() {
+    let v = run("let f = |h| -> |x| -> h(x); let g = f(|k| -> k + 7); g(1)").await;
+    assert_eq!(v.as_int(), 8);
+}

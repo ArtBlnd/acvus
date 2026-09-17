@@ -1318,6 +1318,13 @@ pub enum LendRefusal {
     ReferenceCaptured,
 }
 
+/// RFC-0030.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverMode {
+    Lent(Mutability),
+    Value,
+}
+
 /// RFC-0043.
 #[derive(Debug, Clone)]
 pub enum SignatureCandidate {
@@ -2106,6 +2113,26 @@ impl<'src> Solver<'src> {
                     )
                     .is_ok()
         })
+    }
+
+    /// RFC-0030, RFC-0043.
+    pub fn receiver_mode(&self, candidate: &SignatureCandidate) -> ReceiverMode {
+        let mutability = match candidate {
+            SignatureCandidate::Named { scheme, .. } => {
+                match scheme.params().first().map(|p| &p.ty) {
+                    Some(TyTerm::Ref(mutability, _)) => Some(*mutability),
+                    _ => None,
+                }
+            }
+            SignatureCandidate::Local { ty } => match SignatureCandidate::local_params(ty)
+                .and_then(<[_]>::first)
+                .map(|param| self.terms.shallow_resolve_ty(&param.ty))
+            {
+                Some(TyTerm::Ref(mutability, _)) => Some(mutability),
+                _ => None,
+            },
+        };
+        mutability.map_or(ReceiverMode::Value, ReceiverMode::Lent)
     }
 
     /// How the candidate takes the argument at `index` (RFC-0043), by one
