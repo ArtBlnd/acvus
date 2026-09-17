@@ -26,3 +26,7 @@ harness = false
 [[bench]]
 name = "attention"
 harness = false
+
+[[bench]]
+name = "accum"
+harness = false
