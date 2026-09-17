@@ -32,11 +32,10 @@ fn a_list_pattern_against_a_reference_binds_element_references() {
 }
 
 #[test]
-fn a_word_binding_through_a_reference_is_not_the_word() {
+fn a_word_binding_is_read_through_the_reference_at_an_operator() {
     let i = Interner::new();
-    let err =
-        compile_script_ir(&i, "[a, b, ..] = &@items { x = a + 1; }; 0", &items(&i)).unwrap_err();
-    assert!(!err.is_empty(), "{err}");
+    let ir = compile_script_ir(&i, "[a, b, ..] = &@items { x = a + 1; }; 0", &items(&i)).unwrap();
+    assert!(ir.contains("take (*"), "{ir}");
 }
 
 #[test]

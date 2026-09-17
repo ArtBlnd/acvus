@@ -13,11 +13,12 @@ use acvus_utils::Interner;
 use crate::error::{MirError, MirErrorKind};
 use crate::ir::{MirModule, ValOrigin};
 
-/// Run all validation passes on a MIR module.
-/// Returns errors found. Empty vec means valid.
+/// The checks that hold of a MIR module at any point in the pipeline. The
+/// move check is deliberately not among them: a move is a property of the
+/// shape the source wrote, which optimization erases, so it runs once, in
+/// pass 0 of `graph::optimize` (RFC-0029).
 pub fn validate(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = type_check::check_types(module);
-    errors.extend(move_check::check_moves(module));
     errors.extend(borrow_check::check_borrows(module));
     errors
 }

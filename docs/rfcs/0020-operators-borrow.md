@@ -47,6 +47,21 @@ type has no instance of any shared signature; `eq(&1, &2)` and `eq(&s,
 Borrowing the operands is the operator's rule and reaches no function
 call: `f(x)` with `f: Fn(&T)` stays a type error (RFC-0018).
 
+An operand that is a reference is read at what it names: `+`, `-`, `*`,
+`/`, `%`, the comparisons and the bit operators read a `&word` through the
+reference (RFC-0018), and `==`, `!=` and `+` compare or concatenate what a
+reference names at any size, keeping the reference in the IR. A `&T` whose
+`T` is not a word is not an operand of the first group.
+
+An operand the checker has not resolved yet carries the operator's bound
+away from the operator: `+`, `-`, `*`, `/`, `%` and the comparisons bound
+it by the numbers — every integer width and `Float`, with `String` for `+`
+— and the bit operators by the integer widths. The bound is the one an
+integer literal already carries (RFC-0037), so two literals meet: `k + 7`
+leaves `k` an integer and `k + 7.0` a `Float`. A type outside the bound
+that later joins the variable is refused where the bound is verified, as
+`type Array<Float, 2> is outside the declared bound one of ...`.
+
 ## Rationale
 
 `==` is the one operation a tagless word has a meaning for without any
@@ -87,11 +102,16 @@ operator's rule rather than a coercion keeps calls exact.
   is held until a need for it exists.
 - No user-declared operators. The names are fixed; a type joins one by
   declaring an instance.
-- No coercion of a `&P` operand: `*r == 1`, not `r == 1`.
+- No coercion between a value and a reference anywhere but at an
+  operator's own operand, and no implicit width or `Int`/`Float`
+  conversion: `1 + 2.0` is a type error.
 
 ## Consequences
 
-- The type checker, at `==`/`!=`/`+`, unifies the operand types; a word
+- The type checker unifies the two operand types at every operator and,
+  where the result is still a variable, meets that variable's bound with
+  the operator's (`typeck::operand_bound`) and records it for
+  verification. At `==`/`!=`/`+`, a word
   result types as `BinOp`, `String` as a string instruction, anything
   else resolves `core::eq`, instantiates it at the operand type, and
   records the call on the expression (`TypeResolution::operator_calls`).

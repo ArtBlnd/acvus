@@ -1199,11 +1199,10 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    /// A storage holding a `&T` is an enclosing closure's capture register,
-    /// and the closure being made owns a `T`. `MoveOutOfCapture` in typeck.rs
-    /// refuses that capture unless `T` is a word, so the copy this reads out
-    /// is the only `T` lowering ever has to produce here (RFC-0018).
-    fn own_the_captured_word(&mut self, span: Span, taken: ValueId) -> ValueId {
+    /// A register holding a `&T` read at `T` where `T` is a word: the word
+    /// copy of RFC-0018, which is what an operator's operand and a closure's
+    /// capture both take. A register of any other type is returned as it is.
+    fn read_word_through(&mut self, span: Span, taken: ValueId) -> ValueId {
         let Some(Ty::Ref(_, arg)) = self.body.val_types.get(&taken).cloned() else {
             return taken;
         };
@@ -1777,6 +1776,8 @@ impl<'a> Lowerer<'a> {
                 }
                 let l = self.lower_expr(left);
                 let r = self.lower_expr(right);
+                let l = self.read_word_through(*span, l);
+                let r = self.read_word_through(*span, r);
                 let dst = self.alloc_expr(*id);
                 self.emit_inst(
                     *span,
@@ -1943,7 +1944,7 @@ impl<'a> Lowerer<'a> {
                             self.set_origin(dst, ValOrigin::Named(*name));
                             dst
                         };
-                        self.own_the_captured_word(*span, taken)
+                        self.read_word_through(*span, taken)
                     })
                     .collect();
                 // Create closure body.

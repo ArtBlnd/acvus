@@ -3,9 +3,8 @@
 //! use after move, refused where the source wrote it.
 //!
 //! The harness is `compile_script_mode_optimized`: lowering, then the move
-//! and borrow checks, then the optimization pipeline and every validation.
-//! The move check runs in both of those, so a program the rule refuses is
-//! refused once per pass and the error text arrives more than once.
+//! and borrow checks on the shape the source wrote (RFC-0029), then the
+//! optimization pipeline and every validation.
 
 use acvus_mir_test::compile_script_mode_optimized;
 use acvus_utils::Interner;
@@ -21,10 +20,9 @@ fn errors(source: &str) -> Vec<String> {
 
 fn use_after_move_of_a(source: &str) {
     let errs = errors(source);
-    assert!(!errs.is_empty(), "{source}");
+    assert_eq!(errs.len(), 1, "{source}: {errs:#?}");
     assert!(
-        errs.iter()
-            .all(|e| e.contains("use of `a` after it was moved")),
+        errs[0].contains("use of `a` after it was moved"),
         "{source}: {errs:#?}"
     );
 }

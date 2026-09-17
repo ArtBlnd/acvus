@@ -21,6 +21,13 @@ error otherwise. A `&T` is never accepted where a `T` is expected, and a
 `T` never where a `&T` is: types unify exactly. Assigning through a
 `&mut T` stores into the storage it names.
 
+An operator reads a `&T` operand through the reference where `T` is a
+word: `r + 1` with `r: &Int` is the word copy `*r` and then the operation.
+This is the only read a `*` does not have to be written for, and it reaches
+arithmetic, comparison and bit operators; a `&T` whose `T` is not a word is
+not an operand of one. `==`, `!=` and `+` lend their operands instead, at
+any size (RFC-0020).
+
 A reference is not data. It is never stored in a container, an object, a
 context, or a closure's captures; it is never returned from a function;
 and it lives no longer than the function body that made it. Within that
@@ -130,6 +137,10 @@ call site and `*` at the read keeps every conversion in the program.
   a store cannot reach through a place that is gone. A reference to a
   moved place, and a reference to the whole of a storage some place
   inside which has moved, are both uses after move.
+- The type checker reads a reference operand of an operator at what it
+  names, and lowering emits `Take { Through }` before the `BinOp` where
+  the operand register holds a `&word`. A captured word therefore reaches
+  every operator: `let k = 1; |y| -> k * y` type-checks and runs.
 - `Ref<T>` and `RefMut<T>` are types the checker admits as the type of a
   local binding and of a parameter, and rejects inside any data type, any
   return type, and any capture. `*r` is typed only for a primitive `T`.

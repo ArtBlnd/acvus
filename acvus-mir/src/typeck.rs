@@ -183,6 +183,55 @@ fn declared_receiver_mode(ty: &crate::ty::PolyTy) -> ReceiverMode {
     }
 }
 
+/// RFC-0020: `StringEq` and `StringConcat` lend their operand places
+/// instead of copying them.
+fn operand_stays_lent(op: BinOp) -> bool {
+    match op {
+        BinOp::Eq | BinOp::Neq | BinOp::Add => true,
+        BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte
+        | BinOp::Xor
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::And
+        | BinOp::Or => false,
+    }
+}
+
+/// The bound an operator imposes on an operand still open at the operator
+/// (RFC-0020, RFC-0043). `Add` admits `String` because `+` on strings is
+/// the concatenation.
+fn operand_bound(op: BinOp) -> Option<TyVarBound> {
+    let integers = || crate::ty::IntTy::ALL.iter().copied().map(TyTerm::Int);
+    match op {
+        BinOp::Add => Some(TyVarBound::OneOf(
+            integers().chain([TyTerm::Float, TyTerm::String]).collect(),
+        )),
+        BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte => Some(TyVarBound::OneOf(
+            integers().chain([TyTerm::Float]).collect(),
+        )),
+        BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
+            Some(TyVarBound::OneOf(integers().collect()))
+        }
+        BinOp::Eq | BinOp::Neq | BinOp::And | BinOp::Or => None,
+    }
+}
+
 /// RFC-0043.
 fn agreed_receiver_mode(mut modes: impl Iterator<Item = ReceiverMode>) -> Option<ReceiverMode> {
     let first = modes.next()?;
@@ -2078,11 +2127,42 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
                 site: ArgSite::lent(receiver),
             },
-            ReceiverMode::Value => FirstArg {
-                ty: owned,
-                site: ArgSite::value(receiver),
-            },
+            ReceiverMode::Value => {
+                let refused = self.reads_through_reference(receiver)
+                    && self.refuse_deref_of_non_primitive(&owned, receiver.span());
+                FirstArg {
+                    ty: if refused { Self::infer_error() } else { owned },
+                    site: ArgSite::value(receiver),
+                }
+            }
         }
+    }
+
+    /// RFC-0018: a read that takes a non-primitive out of a place named
+    /// through a reference is not a copy. `true` where it was refused.
+    fn refuse_deref_of_non_primitive(&mut self, read: &InferTy, span: Span) -> bool {
+        let read = self.solver.resolve_ty(read);
+        if read.is_primitive() || matches!(read, TyTerm::String | TyTerm::Var(_) | TyTerm::Error(_))
+        {
+            return false;
+        }
+        let shown = self.freeze_or_error(&read);
+        self.error(MirErrorKind::DerefOfNonPrimitive(shown), span);
+        true
+    }
+
+    /// Whether the place names its value through a reference, which is the
+    /// case the refusal above is about: a field of an object a reference
+    /// names.
+    fn reads_through_reference(&self, place: &Expr) -> bool {
+        let Expr::FieldAccess { object, .. } = place else {
+            return false;
+        };
+        let object_ty = self
+            .type_map
+            .get(&object.id())
+            .expect("the receiver place was checked before its mode was fixed");
+        matches!(self.solver.shallow_resolve_ty(object_ty), TyTerm::Ref(..))
     }
 
     /// RFC-0043.
@@ -2405,6 +2485,48 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ty: fn_ty,
             },
         );
+    }
+
+    /// The type an operand is read at: a reference is read through it,
+    /// which is the word copy of RFC-0018 where the referent is a word and
+    /// the lend of RFC-0020 where the operator keeps the reference. A
+    /// referent still open is read through as well, because the operand
+    /// bound the operator then imposes leaves it a word.
+    fn read_operand_through(&mut self, operand: &InferTy, op: BinOp) -> InferTy {
+        let resolved = self.solver.resolve_ty(operand);
+        let TyTerm::Ref(_, inner) = &resolved else {
+            return resolved;
+        };
+        let referent = self.solver.resolve_ty(&inner.ty);
+        let word = referent.is_primitive() || matches!(referent, TyTerm::Var(_) | TyTerm::Error(_));
+        if operand_stays_lent(op) || word {
+            referent
+        } else {
+            resolved
+        }
+    }
+
+    /// RFC-0043: `false` where no type satisfies both operands and the
+    /// operator's bound.
+    fn unify_operands(&mut self, op: BinOp, lt: &InferTy, rt: &InferTy, span: Span) -> bool {
+        if self.solver.unify(lt, rt).is_err() {
+            return false;
+        }
+        let Some(bound) = operand_bound(op) else {
+            return true;
+        };
+        if !matches!(self.solver.resolve_ty(lt), TyTerm::Var(_)) {
+            return true;
+        }
+        let bounded = self.solver.fresh_var_with(bound);
+        if self.solver.unify(lt, &bounded).is_err() {
+            return false;
+        }
+        let TyTerm::Var(var) = self.solver.resolve_ty(lt) else {
+            unreachable!("two open variables unify into an open variable");
+        };
+        self.bound_sites.push(BoundSite { var, span });
+        true
     }
 
     fn binop_error(&mut self, op: &'static str, left: InferTy, right: InferTy, span: Span) {
@@ -2894,25 +3016,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 right,
                 span,
             } => {
-                let operands_are_lent = matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Add);
-                let outer = std::mem::replace(&mut self.in_borrow_place, operands_are_lent);
+                let outer = std::mem::replace(&mut self.in_borrow_place, operand_stays_lent(*op));
                 let lt = self.check_expr(left);
                 let rt = self.check_expr(right);
                 self.in_borrow_place = outer;
-                let lt = self.solver.resolve_ty(&lt);
-                let rt = self.solver.resolve_ty(&rt);
-                let through = |ty: TyTerm<Infer>| match ty {
-                    TyTerm::Ref(_, inner) => inner.ty,
-                    other => other,
-                };
-                let (lt, rt) = if operands_are_lent {
-                    (
-                        self.solver.resolve_ty(&through(lt)),
-                        self.solver.resolve_ty(&through(rt)),
-                    )
-                } else {
-                    (lt, rt)
-                };
+                let lt = self.read_operand_through(&lt, *op);
+                let rt = self.read_operand_through(&rt, *op);
 
                 // Early guard: if either operand is Error, suppress cascading errors.
                 if Self::is_error(&lt) || Self::is_error(&rt) {
@@ -2934,7 +3043,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
                 let ty = match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        if self.solver.unify(&lt, &rt).is_err() {
+                        if !self.unify_operands(*op, &lt, &rt, *span) {
                             self.binop_error(
                                 op_str(*op),
                                 self.solver.resolve_ty(&lt),
@@ -2985,7 +3094,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Bool
                     }
                     BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-                        let ok = self.solver.unify(&lt, &rt).is_ok()
+                        let ok = self.unify_operands(*op, &lt, &rt, *span)
                             && matches!(
                                 self.solver.resolve_ty(&lt),
                                 TyTerm::Int(_) | TyTerm::Var(_)
@@ -3003,7 +3112,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                        let ok = self.solver.unify(&lt, &rt).is_ok()
+                        let ok = self.unify_operands(*op, &lt, &rt, *span)
                             && matches!(
                                 self.solver.resolve_ty(&lt),
                                 TyTerm::Int(_) | TyTerm::Float | TyTerm::Var(_)
@@ -3138,16 +3247,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             return self.record_ret(*id, Self::infer_error());
                         }
                     };
-                    let field_resolved = self.solver.resolve_ty(&field_ty);
-                    if !self.in_borrow_place
-                        && !field_resolved.is_primitive()
-                        && !matches!(
-                            field_resolved,
-                            TyTerm::String | TyTerm::Var(_) | TyTerm::Error(_)
-                        )
+                    if !self.in_borrow_place && self.refuse_deref_of_non_primitive(&field_ty, *span)
                     {
-                        let shown = self.freeze_or_error(&field_resolved);
-                        self.error(MirErrorKind::DerefOfNonPrimitive(shown), *span);
                         return self.record_ret(*id, Self::infer_error());
                     }
                     return self.record_ret(*id, field_ty);

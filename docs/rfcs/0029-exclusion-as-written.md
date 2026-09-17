@@ -11,6 +11,12 @@ it, before any pass has promoted, moved, or removed an instruction, as
 the move rule already is. A pass that changes the body is checked again
 after it runs, and a conflict found only there is a defect in the pass.
 
+The move rule is not checked again: optimization erases the moves it
+reads — a binding whose only use is dead is gone, and with it the second
+use that was the error — so a second run cannot confirm the first and can
+only repeat it, under the register names the optimizer left. The move
+check runs once, on the shape the source wrote.
+
 A loan is held by whatever names the reference: a value, a storage the
 reference was assigned into, an object or closure built from it, a
 spawn's handle. A holder is live from the instruction that defines it to
@@ -67,7 +73,8 @@ nothing needs it: every use of `&r` wants what `r` names.
 ## Consequences
 
 - `optimize` runs `check_borrows` in its first pass, beside
-  `check_moves`; `validate` keeps running it after optimization.
+  `check_moves`; `validate` runs `check_borrows` after optimization and
+  does not run `check_moves`.
 - `borrow_check` counts holder uses with `Loans::uses_with_storage`.
 - `Loans::build` starts every reference-typed parameter and capture with
   a loan on itself.
