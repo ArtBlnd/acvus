@@ -58,7 +58,7 @@ fn an_assign_to_a_context_while_it_is_lent_is_rejected() {
         &[f],
     )
     .unwrap_err();
-    assert!(err.contains("BorrowConflict"), "{err}");
+    assert!(err.contains("is touched while the reference"), "{err}");
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn a_closure_writing_a_lent_context_is_rejected_at_the_call() {
         &[f],
     )
     .unwrap_err();
-    assert!(err.contains("BorrowConflict"), "{err}");
+    assert!(err.contains("is touched while the reference"), "{err}");
 }
 
 #[test]
@@ -111,7 +111,10 @@ fn object_context(i: &Interner, name: &str) -> FxHashMap<acvus_utils::Astr, Ty> 
 fn a_context_moved_out_and_not_assigned_back_is_rejected() {
     let i = Interner::new();
     let err = compile_script_ir(&i, "x = @user; x", &object_context(&i, "user")).unwrap_err();
-    assert!(err.contains("after it was moved"), "{err}");
+    assert!(
+        err.contains("context @user is moved out here and not assigned again before the run ends"),
+        "{err}"
+    );
 }
 
 #[test]

@@ -73,6 +73,12 @@ pub enum ValidationErrorKind {
         storage: String,
         reference: u32,
     },
+    /// A context moved out of and never assigned again, so the `Commit` that
+    /// ends the run finds its place empty (RFC-0025). Stated at the move.
+    ContextMovedOut {
+        context: Astr,
+        moved_at: Span,
+    },
 }
 
 // ---------------------------------------------------------------------------

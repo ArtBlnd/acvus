@@ -27,9 +27,11 @@ Inside the body, `@x`, `@x.f`, `&@x`, `&mut @x`, `@x = v`, and `let a =
 @x` are the variable rules of RFC-0018 on the local `x`, with nothing
 added: a read of a non-primitive moves out, a borrow is a `Ref` to the
 variable's storage, an assign re-initializes, and a borrow that is live
-excludes every other touch. A context left moved out at an exit is a
-use-after-move at the exit's `Take`; a context touched while a spawn that
-touches it is in flight is the same error.
+excludes every other touch. A context left moved out at an exit is reported
+at the move the source wrote, not at the exit's `Take` the source did not
+write: once per move, as `context @x is moved out here and not assigned
+again before the run ends`. A context touched while a spawn that touches it
+is in flight is a use-after-move.
 
 `Fetch` and `Commit` carry no path: a context is fetched and committed
 whole. The page stores whole values; a field of a context is a field of

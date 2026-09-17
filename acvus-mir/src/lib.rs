@@ -73,7 +73,7 @@ mod tests {
         let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
         let err = compile_template(&i, r#"{{ y = @user }}{{ z = y.age }}"#, &[("user", user)])
             .unwrap_err();
-        assert!(err.contains("UseAfterMove"), "{err}");
+        assert!(err.contains("ContextMovedOut"), "{err}");
     }
 
     #[test]
@@ -198,9 +198,9 @@ mod tests {
         let i = Interner::new();
         let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
         let err = compile_script(&i, "@data", &[("data", user.clone())]).unwrap_err();
-        assert!(err.contains("UseAfterMove"), "{err}");
+        assert!(err.contains("ContextMovedOut"), "{err}");
         let err = compile_script(&i, "x = @data; x", &[("data", user)]).unwrap_err();
-        assert!(err.contains("UseAfterMove"), "{err}");
+        assert!(err.contains("ContextMovedOut"), "{err}");
     }
 
     #[test]

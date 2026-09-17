@@ -233,7 +233,9 @@ async fn a_let_bound_lambda_named_like_an_extern_of_another_shape_is_the_callee(
 }
 
 #[tokio::test]
-#[should_panic(expected = "validation failed")]
+#[should_panic(
+    expected = "context @query is moved out here and not assigned again before the run ends"
+)]
 async fn a_context_taken_into_a_local_and_not_written_back_is_refused() {
     run("let q = @query; let dot = |k| -> *get(k, 0); dot(&q)").await;
 }

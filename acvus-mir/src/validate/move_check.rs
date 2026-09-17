@@ -16,8 +16,8 @@
 use std::collections::VecDeque;
 
 use acvus_ast::Span;
-use acvus_utils::LocalIdOps;
-use rustc_hash::FxHashMap;
+use acvus_utils::{Astr, LocalIdOps};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{
@@ -93,10 +93,19 @@ impl Liveness {
     }
 }
 
+/// Where a place left its storage: the instruction's index in its block, and
+/// the span the source wrote there. A diagnosis stated at the move needs the
+/// span, which the index alone does not give across blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MoveSite {
+    at: usize,
+    span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MovedPart {
     path: Vec<PathSeg>,
-    at: usize,
+    site: MoveSite,
 }
 
 /// Liveness of a storage slot.
@@ -104,7 +113,7 @@ struct MovedPart {
 enum StorageLiveness {
     Alive,
     PartlyMoved { parts: Vec<MovedPart> },
-    Moved { at: usize },
+    Moved { site: MoveSite },
 }
 
 /// How an instruction touches a place inside a storage.
@@ -145,20 +154,20 @@ impl StorageLiveness {
         }
     }
 
-    fn refusal(&self, touched: &[PathSeg], touch: Touch) -> Option<usize> {
+    fn refusal(&self, touched: &[PathSeg], touch: Touch) -> Option<MoveSite> {
         match self {
             StorageLiveness::Alive => None,
-            StorageLiveness::Moved { at } => refuses(&[], touched, touch).then_some(*at),
+            StorageLiveness::Moved { site } => refuses(&[], touched, touch).then_some(*site),
             StorageLiveness::PartlyMoved { parts } => parts
                 .iter()
                 .find(|part| refuses(&part.path, touched, touch))
-                .map(|part| part.at),
+                .map(|part| part.site),
         }
     }
 
-    fn moved(self, path: &[PathSeg], at: usize) -> StorageLiveness {
+    fn moved(self, path: &[PathSeg], site: MoveSite) -> StorageLiveness {
         if path.is_empty() {
-            return StorageLiveness::Moved { at };
+            return StorageLiveness::Moved { site };
         }
         let mut parts = match self {
             StorageLiveness::Moved { .. } => return self,
@@ -168,7 +177,7 @@ impl StorageLiveness {
         if !parts.iter().any(|part| part.path == path) {
             parts.push(MovedPart {
                 path: path.to_vec(),
-                at,
+                site,
             });
         }
         StorageLiveness::partly(parts)
@@ -192,12 +201,12 @@ impl StorageLiveness {
     /// Conservative join: the more moved side wins, and two partly moved
     /// sides meet in the union of their moved places. `MoveState::join_from`
     /// detects a fixpoint by comparing the result against `self`, so the
-    /// union keeps `self`'s order and `self`'s `at` for a place both sides
+    /// union keeps `self`'s order and `self`'s site for a place both sides
     /// hold.
     fn join(self, other: &StorageLiveness) -> StorageLiveness {
         match (self, other) {
-            (StorageLiveness::Moved { at }, _) => StorageLiveness::Moved { at },
-            (_, StorageLiveness::Moved { at }) => StorageLiveness::Moved { at: *at },
+            (StorageLiveness::Moved { site }, _) => StorageLiveness::Moved { site },
+            (_, StorageLiveness::Moved { site }) => StorageLiveness::Moved { site: *site },
             (StorageLiveness::Alive, StorageLiveness::Alive) => StorageLiveness::Alive,
             (StorageLiveness::Alive, partly @ StorageLiveness::PartlyMoved { .. }) => {
                 partly.clone()
@@ -314,6 +323,20 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
         return;
     }
 
+    // `Commit` is emitted by lowering alone -- RFC-0025 puts the page ops at
+    // entry, exit, around a call and around a spawn, and nowhere else -- so a
+    // `Take` whose value a `Commit` consumes is a write-back to the page and
+    // not a use the source wrote.
+    let commit_of: FxHashMap<ValueId, Astr> = cfg
+        .blocks
+        .iter()
+        .flat_map(|block| block.insts.iter())
+        .filter_map(|inst| match &inst.kind {
+            InstKind::Commit { context, value } => Some((*value, context.name)),
+            _ => None,
+        })
+        .collect();
+
     let n = cfg.blocks.len();
     let mut block_entry: Vec<MoveState> = (0..n).map(|_| MoveState::new()).collect();
     let mut block_exit: Vec<MoveState> = (0..n).map(|_| MoveState::new()).collect();
@@ -329,7 +352,16 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
 
         // Process instructions in this block
         for (i, inst) in block.insts.iter().enumerate() {
-            process_inst(scope, i, inst, &cfg.val_types, debug, &mut state, errors);
+            process_inst(
+                scope,
+                i,
+                inst,
+                &cfg.val_types,
+                &commit_of,
+                debug,
+                &mut state,
+                errors,
+            );
         }
 
         block_exit[idx.0] = state;
@@ -536,12 +568,18 @@ fn extract_part(
 /// it, by a `Ref` to it, by a store into it. A place named through a
 /// reference is not touched here -- the reference is a value operand, checked
 /// where it is used.
+///
+/// `commits_to` names the context this touch writes back to, for the `Take`
+/// that lowering emits in front of a `Commit`; the refusal of such a touch is
+/// the program's failure to assign the context again, and is stated at the
+/// move rather than at the write-back the program never wrote.
 fn touch_storage(
     scope: &str,
     inst_idx: usize,
     span: Span,
     place: Place<'_>,
     touch: Touch,
+    commits_to: Option<Astr>,
     val_types: &FxHashMap<ValueId, Ty>,
     debug: &DebugInfo,
     state: &MoveState,
@@ -550,9 +588,21 @@ fn touch_storage(
     let (RefTarget::Var(slot) | RefTarget::Param(slot)) = place.target else {
         return;
     };
-    let Some(at) = state.get_var(*slot).refusal(place.path, touch) else {
+    let Some(site) = state.get_var(*slot).refusal(place.path, touch) else {
         return;
     };
+    if let Some(context) = commits_to {
+        errors.push(ValidationError {
+            scope: scope.to_string(),
+            inst_index: inst_idx,
+            span: site.span,
+            kind: ValidationErrorKind::ContextMovedOut {
+                context,
+                moved_at: site.span,
+            },
+        });
+        return;
+    }
     let Some(ty) = val_types.get(slot) else {
         errors.push(ValidationError {
             scope: scope.to_string(),
@@ -570,7 +620,7 @@ fn touch_storage(
         span,
         kind: ValidationErrorKind::UseAfterMove {
             value_id: slot.to_raw() as u32,
-            moved_at: at,
+            moved_at: site.at,
             ty: ty.clone(),
             origin: debug.get(*slot).cloned(),
         },
@@ -583,6 +633,7 @@ fn process_inst(
     inst_idx: usize,
     inst: &Inst,
     val_types: &FxHashMap<ValueId, Ty>,
+    commit_of: &FxHashMap<ValueId, Astr>,
     debug: &DebugInfo,
     state: &mut MoveState,
     errors: &mut Vec<ValidationError>,
@@ -608,6 +659,7 @@ fn process_inst(
                 span,
                 place,
                 Touch::Read,
+                None,
                 val_types,
                 debug,
                 state,
@@ -625,6 +677,7 @@ fn process_inst(
                 span,
                 place,
                 Touch::Read,
+                commit_of.get(dst).copied(),
                 val_types,
                 debug,
                 state,
@@ -634,7 +687,8 @@ fn process_inst(
                 && let Some(ty) = val_types.get(dst)
                 && moves_out(ty)
             {
-                state.set_var(*slot, state.get_var(*slot).moved(path, inst_idx));
+                let site = MoveSite { at: inst_idx, span };
+                state.set_var(*slot, state.get_var(*slot).moved(path, site));
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -656,6 +710,7 @@ fn process_inst(
                 span,
                 place,
                 Touch::Store,
+                None,
                 val_types,
                 debug,
                 state,
@@ -1192,6 +1247,78 @@ mod tests {
 
         let errors = check_moves(&module);
         assert_eq!(errors.len(), 1, "use after move of $var should be rejected");
+    }
+
+    /// The shape lowering emits for a context whose value the source took
+    /// and never gave back: the slot is filled, taken at the source's move,
+    /// then taken again by the `Commit` that ends the run. The refusal of
+    /// that second take is stated at the first, with the source's span.
+    #[test]
+    fn a_context_committed_after_its_move_is_named_at_the_move() {
+        let i = Interner::new();
+        let mut vf = LocalFactory::<ValueId>::new();
+        let slot = vf.next();
+        let filled = vf.next();
+        let taken = vf.next();
+        let committed = vf.next();
+        let move_ty = test_user_defined();
+        let mut val_types = FxHashMap::default();
+        for v in [slot, filled, taken, committed] {
+            val_types.insert(v, move_ty.clone());
+        }
+        let query = QualifiedRef::root(i.intern("query"));
+        let moved_at = Span { start: 8, end: 14 };
+        let whole = Span { start: 0, end: 40 };
+
+        let module = make_module(
+            vec![
+                Inst {
+                    span: whole,
+                    kind: InstKind::Assign {
+                        target: RefTarget::Var(slot),
+                        path: vec![],
+                        value: filled,
+                    },
+                },
+                Inst {
+                    span: moved_at,
+                    kind: InstKind::Take {
+                        dst: taken,
+                        target: RefTarget::Var(slot),
+                        path: vec![],
+                    },
+                },
+                Inst {
+                    span: whole,
+                    kind: InstKind::Take {
+                        dst: committed,
+                        target: RefTarget::Var(slot),
+                        path: vec![],
+                    },
+                },
+                Inst {
+                    span: whole,
+                    kind: InstKind::Commit {
+                        context: query,
+                        value: committed,
+                    },
+                },
+            ],
+            val_types,
+        );
+
+        let errors = check_moves(&module);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].span, moved_at);
+        assert!(
+            matches!(
+                errors[0].kind,
+                ValidationErrorKind::ContextMovedOut { context, moved_at: at }
+                    if context == query.name && at == moved_at
+            ),
+            "{:?}",
+            errors[0].kind
+        );
     }
 
     // -- a storage's parts --

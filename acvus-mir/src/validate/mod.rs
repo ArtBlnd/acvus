@@ -74,6 +74,12 @@ impl ValidationError {
             ValidationErrorKind::BorrowConflict { storage, reference } => {
                 format!("{storage} is used while reference Val({reference}) to it is live")
             }
+            ValidationErrorKind::ContextMovedOut { moved_at, .. } => {
+                format!(
+                    "a context is moved out at [{}..{}] and not assigned again before the run ends",
+                    moved_at.start, moved_at.end
+                )
+            }
         };
 
         MirError {
@@ -87,8 +93,8 @@ impl ValidationError {
     }
 }
 
-/// A [`ValidationError`] rendered for a reader. A `UseAfterMove` names its
-/// subject as the source wrote it; every other kind keeps its `Debug` form.
+/// A [`ValidationError`] rendered for a reader: one sentence per kind, in the
+/// program's words, naming its subject as the source wrote it.
 pub struct ValidationErrorDisplay<'a> {
     error: &'a ValidationError,
     interner: &'a Interner,
@@ -129,7 +135,47 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 };
                 write!(f, "use of {subject} after it was moved")
             }
-            kind => write!(f, "{kind:?}"),
+            ValidationErrorKind::ContextMovedOut { context, .. } => write!(
+                f,
+                "context @{} is moved out here and not assigned again before the run ends",
+                self.interner.resolve(*context)
+            ),
+            ValidationErrorKind::TypeMismatch {
+                inst_name,
+                desc,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "{inst_name} takes {desc} as {expected:?}, and it is {actual:?}"
+            ),
+            ValidationErrorKind::MissingType { value_id } => {
+                write!(f, "Val({value_id}) has no type")
+            }
+            ValidationErrorKind::OrderEdge { inst_name, pure } => {
+                if *pure {
+                    write!(f, "{inst_name} is a pure call and carries an Order")
+                } else {
+                    write!(f, "{inst_name} is an effectful call and carries no Order")
+                }
+            }
+            ValidationErrorKind::ArityMismatch {
+                inst_name,
+                expected,
+                got,
+            } => write!(f, "{inst_name} takes {expected} operands and got {got}"),
+            ValidationErrorKind::InvalidConstructor {
+                inst_name,
+                expected_constructor,
+                actual,
+            } => write!(
+                f,
+                "{inst_name} takes {expected_constructor} and got {actual:?}"
+            ),
+            ValidationErrorKind::BorrowConflict { storage, reference } => write!(
+                f,
+                "{storage} is touched while the reference Val({reference}) to it is live"
+            ),
         }
     }
 }

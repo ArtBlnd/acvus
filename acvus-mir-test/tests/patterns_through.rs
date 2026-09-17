@@ -72,7 +72,10 @@ fn a_list_pattern_against_a_value_of_objects_leaves_it_partly_moved() {
         Ty::Array(Box::new(user), LenTerm::Known(2)),
     )]);
     let err = compile_script_ir(&i, "[a, b] = @users { x = 1; }; 0", &users).unwrap_err();
-    assert!(err.contains("after it was moved"), "{err}");
+    assert!(
+        err.contains("context @users is moved out here and not assigned again before the run ends"),
+        "{err}"
+    );
     let ir = compile_script_ir(&i, "[a, b] = &@users { x = a.age; }; 0", &users).unwrap();
     assert!(ir.contains("commit @users"), "{ir}");
 }
