@@ -296,7 +296,7 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[0] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        handler(&self.rt, &mut args)
+        handler.call_taking(&self.rt, &mut args)
     }
 
     fn string(&self, s: &str) -> V {

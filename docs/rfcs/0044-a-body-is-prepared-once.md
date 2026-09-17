@@ -52,8 +52,8 @@ A failure at run time is a Rust `panic!`. A division by zero, a `MIN /
 extern raises — each panics where
 it happens, with the message the same operation writes in Rust, and
 leaves through the unwinder. There is no failure channel at all: a
-handler's return is `SyncFn(&R, &mut [Value]) -> Value` and
-`AsyncFn(R, &mut [Value]) -> BoxFuture<'static, Value>`, `Flow::Return`
+handler's return is `Value` at every arity — `Arity2(&R, Value, Value)`
+and the rest — `Flow::Return`
 carries the body's value out, and no operation, stage, consumer or
 boundary tests whether the one below it failed. A host that wants to
 survive a failing script catches: `acvus-cli` wraps its `block_on` in
@@ -183,16 +183,36 @@ linear `insts` with the jumps as its edges; two values may share a slot
 unless one is live where the other is written. On that relation the
 assignment does three things. A jump argument and the block parameter it
 feeds become one class when they do not interfere, so the parallel move
-is a self-move and `order_moves` drops it. Every extern call site gets a
-contiguous window of `arity` registers, and an argument whose last use is
-that call is allocated *into* its window slot, so nothing is staged; an
-argument that is live past the call is copied into its slot by a
-`SlotMove` the call carries. Everything else takes the lowest slot free
-over its live range. The extern ABI is a borrow of the window —
-`SyncFn(&R, &mut [Value])`, `AsyncFn(R, &mut [Value])`, `Runtime::call_n`
-the same — and the handler `mem::take`s each argument out of the register
-it was lent, an asynchronous one before it builds its future, because the
-future is `'static` and cannot hold the lent slice.
+is a self-move and `order_moves` drops it. A call site whose handler
+takes a slice gets a contiguous window of `arity` registers, and an
+argument whose last use is that call is allocated *into* its window slot,
+so nothing is staged; an argument that is live past the call is copied
+into its slot by a `SlotMove` the call carries. Everything else takes the
+lowest slot free over its live range.
+
+**A synchronous handler takes its arguments by value, one Rust parameter
+each, up to three** (stage 2c). A `Value` is a scalar pair, so
+`Arity2(&R, Value, Value)` is six scalars under the `rust-call` ABI and
+every argument crosses in a register; the operation reads each out of the
+register its own `b`, `c`, `d` word names, with `Machine::use_val` — the
+read the window's moves already used, which copies an inline value or a
+reference and moves a `Large` out. Such a call site constrains no run of
+registers at all, so `window_args` reports none to the selector and the
+selector's window invariant has nothing to check there. `SyncHandler` is
+the enum of the four by-value arities plus `ArityN`, and a window is
+what `ArityN`, every `AsyncFn(R, &mut [Value])` and every spawn keep: the
+handler `mem::take`s each argument out of the register it was lent, an
+asynchronous one before it builds its future, because the future is
+`'static` and cannot hold the lent slice, and a spawn's work owns its
+arguments past the frame. `Runtime::call_n` is unchanged; it is the
+closure boundary, not the handler's.
+
+The cut is at three because the fourth argument does not fit: measured on
+the emitted code, `Arity2` passes both arguments in registers, while
+`Arity3` runs the SysV integer registers out at seven and pushes the
+third argument's two words. Two pushes is still less than a window — a
+contiguous run the selector must find, a `SlotMove` per live argument, a
+slice borrow, and a `mem::take` per argument — so three stays by value.
 
 Two values a `ValueId` cannot speak for keep one slot for the whole body:
 a storage a place names directly, because `storage::ref_var` builds a
@@ -330,6 +350,37 @@ The compile is constant in the input: the script is the same text at
 every size. The execute ratio falls with size because the fixed cost of
 a run (frames, closures made once) is amortized; the per-operation cost
 is what the larger sizes show.
+
+After stage 2c, the by-value handler ABI (2026-09-18; interleaved A/B,
+base and after alternating within each of three repetitions, medians; a
+shared and loaded machine, so the ratio is the measurement and the
+absolutes are only its scale):
+
+| bench | stage 2b | stage 2c | ratio |
+|-------|----------|----------|-------|
+| attention (64, 64) execute | 677.7 µs | 642.4 µs | 0.948 |
+| attention (256, 128) execute | 5381 µs | 5028 µs | 0.934 |
+| accum `extern while` (arity 1 per iteration) | 30.8 ns/it | 28.8 ns/it | 0.935 |
+| accum `option while` | 59.6 ns/it | 56.7 ns/it | 0.951 |
+| accum `float while` (`to_float`, arity 1) | 30.6 ns/it | 28.8 ns/it | 0.943 |
+| accum `int while` (no extern) | 22.2 ns/it | 21.7 ns/it | 0.977 |
+| accum `range \| sum` | 2.61 ns/it | 2.62 ns/it | 1.006 |
+
+`perf` on attention (256, 128) execute-only, shares normalized to the
+execute-path symbols: `ops::control::move_all` 8.07 % → **1.16 %**, which
+is what shows the base's moves were window moves and not the loops' own
+back-edge moves; `call_extern_sync` 14.33 % → `call_extern_2` 10.28 % plus
+`call_extern_1` 0.04 %; and `Range<usize>: SliceIndex<[Value]>::index_mut`,
+the window borrow, 1.15 % → absent.
+
+Two benches read **worse** than stage 2b — `mandelbrot` at 1.05 and accum
+`branch while` at 1.04 — and neither executes a line this stage changed.
+The cause is code placement, shown one variable apart: mandelbrot's
+instruction count is identical (10.480 G vs 10.488 G, the difference being
+the preparation, not the loop) while its cycles rise 5 %, and rebuilding
+both trees with `-C llvm-args=-align-all-functions=6` reverses the sign
+(mandelbrot 1.057 → 0.978 over five interleaved runs; `branch while` 1.037
+→ 0.960). What `ops::call` costs in bytes moves every function after it.
 
 ## Cost
 

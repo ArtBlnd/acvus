@@ -24,7 +24,7 @@ mod vec;
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
-pub use handler::{ExternHandler, Instance, Instances};
+pub use handler::{ExternHandler, Instance, Instances, SyncHandler};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{

@@ -342,7 +342,7 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[instance] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        handler(&self.rt, &mut args)
+        handler.call_taking(&self.rt, &mut args)
     }
 
     fn function(&self, ns: &str, name: &str) -> &acvus_extern::Function {

@@ -24,6 +24,11 @@ static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interne
 /// would measure the widening.
 struct Word(u64);
 
+/// Not built: these runtimes carry no language `Option`.
+fn no_options() -> ! {
+    panic!("the iter_cost runtimes hold no language Option")
+}
+
 impl Default for Word {
     fn default() -> Self {
         Word(u64::MAX)
@@ -154,6 +159,18 @@ impl Runtime for Words {
         SYMBOLS.intern(name)
     }
 
+    fn none(&self) -> Word {
+        no_options()
+    }
+    fn some(&self, _: Word) -> Word {
+        no_options()
+    }
+    fn is_none(&self, _: &Word) -> bool {
+        no_options()
+    }
+    fn unwrap_some(&self, _: Word) -> Word {
+        no_options()
+    }
     fn call_is_sync(&self, _: &Word) -> bool {
         false
     }
@@ -426,6 +443,18 @@ impl Runtime for Tags {
         SYMBOLS.intern(name)
     }
 
+    fn none(&self) -> TaggedWord {
+        no_options()
+    }
+    fn some(&self, _: TaggedWord) -> TaggedWord {
+        no_options()
+    }
+    fn is_none(&self, _: &TaggedWord) -> bool {
+        no_options()
+    }
+    fn unwrap_some(&self, _: TaggedWord) -> TaggedWord {
+        no_options()
+    }
     fn call_is_sync(&self, _: &TaggedWord) -> bool {
         false
     }

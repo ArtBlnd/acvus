@@ -927,3 +927,125 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     .await;
     assert_str(&v, "42");
 }
+
+// =======================================================================
+// The handler ABI, one declaration per arity (RFC-0044, stage 2c)
+// =======================================================================
+
+#[extern_fn(effect = pure)]
+fn abi0() -> i64 {
+    7
+}
+
+#[extern_fn(effect = pure)]
+fn abi1(a: i64) -> i64 {
+    a * 10
+}
+
+#[extern_fn(effect = pure)]
+fn abi2(a: &i64, b: i64) -> i64 {
+    *a * 10 + b
+}
+
+#[extern_fn(effect = pure)]
+fn abi3(a: &i64, b: i64, c: i64) -> i64 {
+    *a * 100 + b * 10 + c
+}
+
+/// Four arguments is past the by-value ABI: this one is lent the window.
+#[extern_fn(effect = pure)]
+fn abi4(a: &i64, b: i64, c: i64, d: i64) -> i64 {
+    *a * 1000 + b * 100 + c * 10 + d
+}
+
+fn abi_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [abi0, abi1, abi2, abi3, abi4],
+    }
+}
+
+#[tokio::test]
+async fn an_extern_of_each_arity_gets_its_arguments() {
+    let i = Interner::new();
+    let regs = || vec![abi_registry()];
+
+    let v = run_ext(&i, "abi0()", TypedContext::default(), regs()).await;
+    assert_eq!(v.as_int(), 7);
+
+    let v = run_ext(&i, "abi1(3)", TypedContext::default(), regs()).await;
+    assert_eq!(v.as_int(), 30);
+
+    let v = run_ext(
+        &i,
+        "let a = 4; abi2(&a, 5)",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 45);
+
+    let v = run_ext(
+        &i,
+        "let a = 1; abi3(&a, 2, 3)",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 123);
+
+    let v = run_ext(
+        &i,
+        "let a = 1; abi4(&a, 2, 3, 4)",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 1234);
+}
+
+#[tokio::test]
+async fn a_borrowed_argument_survives_the_call_at_each_arity() {
+    let i = Interner::new();
+    let regs = || vec![abi_registry()];
+
+    let v = run_ext(
+        &i,
+        "let a = 4; let r = abi2(&a, 5); r + a",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 49, "abi2 read 45 and `a` is still 4");
+
+    let v = run_ext(
+        &i,
+        "let a = 1; let r = abi3(&a, 2, 3); r + a",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 124, "abi3 read 123 and `a` is still 1");
+
+    let v = run_ext(
+        &i,
+        "let a = 1; let r = abi4(&a, 2, 3, 4); r + a",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 1235, "abi4 read 1234 and `a` is still 1");
+}
+
+#[tokio::test]
+async fn an_argument_live_after_the_call_is_not_consumed_by_it() {
+    let i = Interner::new();
+    let v = run_ext(
+        &i,
+        "let b = 5; let a = 4; abi2(&a, b) + abi2(&a, b)",
+        TypedContext::default(),
+        vec![abi_registry()],
+    )
+    .await;
+    assert_eq!(v.as_int(), 90, "each call read the same b = 5");
+}

@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use crate::code::{ArgWindow, Flow, NO_SLOT, Op, Payload, Pending};
+use crate::code::{ArgWindow, ExternArgs, ExternCall, Flow, NO_SLOT, Op, Payload, Pending};
 use crate::interpreter::lookup_module;
 use crate::machine::{Machine, call_module, call_module_sync, fn_value_call, fn_value_call_sync};
 use crate::ops::control::move_all;
 use crate::ops::payload;
-use crate::runtime::ExternHandler;
+use crate::runtime::{ExternHandler, SyncHandler};
 use crate::value::{FnValue, HandleValue, Value};
 
 /// The call's arguments, moved out of their registers. A body is entered
@@ -33,22 +33,83 @@ fn yield_order(machine: &mut Machine<'_>, slot: u32) {
     }
 }
 
-fn extern_payload<'c>(machine: &Machine<'c>, op: &Op) -> (&'c ExternHandler, &'c ArgWindow) {
-    match machine.payload(op) {
-        Payload::Extern { handler, window } => (handler, window),
-        other => panic!(
+#[inline]
+fn extern_call<'c>(machine: &Machine<'c>, op: &Op) -> &'c ExternCall {
+    let Payload::Extern(call) = machine.payload(op) else {
+        panic!(
             "a call to an extern instance wants an Extern payload, found {}",
-            crate::code::payload_name(other)
-        ),
-    }
+            crate::code::payload_name(machine.payload(op))
+        )
+    };
+    call
 }
 
-pub fn call_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, window) = extern_payload(machine, op);
-    let ExternHandler::Sync(f) = handler else {
-        panic!("prepared as a synchronous extern call, but the handler is asynchronous")
+#[inline]
+fn window_of<'c>(call: &'c ExternCall) -> &'c ArgWindow {
+    let ExternArgs::Window(window) = &call.args else {
+        panic!("this extern call site passes its arguments by value")
     };
-    yield_order(machine, op.d);
+    window
+}
+
+/// RFC-0044, stage 2c.
+pub fn call_extern_0(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(SyncHandler::Arity0(f)) = &call.handler else {
+        panic!("prepared as an arity-0 extern call, but the handler is not one")
+    };
+    yield_order(machine, call.order);
+    let value = f(&machine.rt);
+    machine.set(op.a, value);
+    Flow::Next
+}
+
+pub fn call_extern_1(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(SyncHandler::Arity1(f)) = &call.handler else {
+        panic!("prepared as an arity-1 extern call, but the handler is not one")
+    };
+    yield_order(machine, call.order);
+    let a0 = machine.use_val(op.b);
+    let value = f(&machine.rt, a0);
+    machine.set(op.a, value);
+    Flow::Next
+}
+
+pub fn call_extern_2(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(SyncHandler::Arity2(f)) = &call.handler else {
+        panic!("prepared as an arity-2 extern call, but the handler is not one")
+    };
+    yield_order(machine, call.order);
+    let a0 = machine.use_val(op.b);
+    let a1 = machine.use_val(op.c);
+    let value = f(&machine.rt, a0, a1);
+    machine.set(op.a, value);
+    Flow::Next
+}
+
+pub fn call_extern_3(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(SyncHandler::Arity3(f)) = &call.handler else {
+        panic!("prepared as an arity-3 extern call, but the handler is not one")
+    };
+    yield_order(machine, call.order);
+    let a0 = machine.use_val(op.b);
+    let a1 = machine.use_val(op.c);
+    let a2 = machine.use_val(op.d);
+    let value = f(&machine.rt, a0, a1, a2);
+    machine.set(op.a, value);
+    Flow::Next
+}
+
+pub fn call_extern_n(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(SyncHandler::ArityN(f)) = &call.handler else {
+        panic!("prepared as a window extern call, but the handler is not one")
+    };
+    let window = window_of(call);
+    yield_order(machine, call.order);
     move_all(machine, &window.moves);
     let (rt, args) = machine.lend_window(window);
     let value = f(rt, args);
@@ -57,11 +118,12 @@ pub fn call_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
 }
 
 pub fn call_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, window) = extern_payload(machine, op);
-    let ExternHandler::Async(f) = handler else {
+    let call = extern_call(machine, op);
+    let ExternHandler::Async(f) = &call.handler else {
         panic!("prepared as an asynchronous extern call, but the handler is synchronous")
     };
-    yield_order(machine, op.d);
+    let window = window_of(call);
+    yield_order(machine, call.order);
     move_all(machine, &window.moves);
     let rt = machine.rt.clone();
     let fut = f(rt, machine.window(window));
@@ -129,28 +191,32 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
     Flow::Next
 }
 
+/// A spawn's work outlives this frame, so it owns its arguments rather
+/// than borrowing registers; it keeps the window at every arity.
 pub fn spawn_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, window) = extern_payload(machine, op);
-    let ExternHandler::Sync(f) = handler else {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(f) = &call.handler else {
         panic!("prepared as a synchronous extern spawn, but the handler is asynchronous")
     };
+    let f = f.clone();
+    let window = window_of(call);
     move_all(machine, &window.moves);
     let mut args = machine.take_window(window);
     let rt = machine.rt.clone();
-    let f = Arc::clone(f);
     let handle = machine
         .shared()
         .executor
-        .spawn_blocking(Box::new(move || f(&rt, &mut args)));
+        .spawn_blocking(Box::new(move || f.call_taking(&rt, &mut args)));
     machine.set(op.a, Value::handle(handle));
     Flow::Next
 }
 
 pub fn spawn_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let (handler, window) = extern_payload(machine, op);
-    let ExternHandler::Async(f) = handler else {
+    let call = extern_call(machine, op);
+    let ExternHandler::Async(f) = &call.handler else {
         panic!("prepared as an asynchronous extern spawn, but the handler is synchronous")
     };
+    let window = window_of(call);
     move_all(machine, &window.moves);
     let mut args = machine.take_window(window);
     let rt = machine.rt.clone();

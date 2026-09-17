@@ -12,6 +12,7 @@ use crate::interpreter::InterpreterContext;
 use crate::value::{Kind, Value};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
+pub type SyncHandler = acvus_extern::SyncHandler<AcvusRuntime>;
 
 #[derive(Clone)]
 #[repr(transparent)]

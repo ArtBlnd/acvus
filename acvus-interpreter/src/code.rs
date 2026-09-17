@@ -163,6 +163,25 @@ pub struct ArgWindow {
     pub moves: Box<[SlotMove]>,
 }
 
+/// An extern call site, resolved: which handler runs, where its `Order`
+/// lands, and how its arguments reach it.
+pub struct ExternCall {
+    pub handler: ExternHandler,
+    /// `NO_SLOT` for a pure call. It lives here rather than in an `Op`
+    /// word because a by-value call spends all three words on arguments.
+    pub order: u32,
+    pub args: ExternArgs,
+}
+
+#[derive(Clone)]
+pub enum ExternArgs {
+    /// The operation's `b`, `c`, `d` words are the argument slots, in the
+    /// declaration's order, as many as the arity: what `prepare` writes
+    /// there is what `ops::call::call_extern_0..3` reads.
+    ByValue,
+    Window(ArgWindow),
+}
+
 /// The `while` shape `prepare::recognize_loop` finds in the IR and
 /// `control::while_loop` runs (RFC-0044, stage 3).
 pub struct LoopBody {
@@ -209,10 +228,7 @@ pub enum Payload {
     /// literal was written, which no inline word carries.
     Wide(i128),
     Konst(Konst),
-    Extern {
-        handler: ExternHandler,
-        window: ArgWindow,
-    },
+    Extern(ExternCall),
     Direct {
         callee: QualifiedRef,
         args: Box<[u32]>,
@@ -237,7 +253,7 @@ pub fn payload_name(payload: &Payload) -> &'static str {
         Payload::Text(_) => "Text",
         Payload::Wide(_) => "Wide",
         Payload::Konst(_) => "Konst",
-        Payload::Extern { .. } => "Extern",
+        Payload::Extern(_) => "Extern",
         Payload::Direct { .. } => "Direct",
         Payload::Closure { .. } => "Closure",
     }

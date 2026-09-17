@@ -24,13 +24,13 @@ use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
 
 use crate::code::{
-    ArgWindow, BasicBlock, Code, ConcatPart, FieldSlot, Konst, LoopBody, NO_SLOT, Op, OpFn,
-    Payload, Prepared, SlotMove, Step,
+    ArgWindow, BasicBlock, Code, ConcatPart, ExternArgs, ExternCall, FieldSlot, Konst, LoopBody,
+    NO_SLOT, Op, OpFn, Payload, Prepared, SlotMove, Step,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
 use crate::ops::{call, composite, constant, control, pattern, storage, string, variant};
-use crate::runtime::ExternHandler;
+use crate::runtime::{ExternHandler, SyncHandler};
 use crate::value::Kind;
 
 pub struct PrepareCtx<'a> {
@@ -255,7 +255,7 @@ impl<'a> Prepare<'a> {
         closures: &'a FxHashMap<Label, Arc<Code>>,
         labels: FxHashMap<Label, u32>,
     ) -> Self {
-        let slots = assign_slots(body, &labels);
+        let slots = assign_slots(body, ctx, &labels);
         Self {
             body,
             ctx,
@@ -825,16 +825,29 @@ impl<'a> Prepare<'a> {
                     }
                     Callee::Extern { id, instance } => {
                         let handler = self.ctx.handler(id, *instance);
-                        let f: OpFn = match handler {
-                            ExternHandler::Sync(_) => call::call_extern_sync,
-                            ExternHandler::Async(_) => {
-                                self.may_suspend = true;
-                                call::call_extern_async
-                            }
+                        if !handler.is_sync() {
+                            self.may_suspend = true;
+                        }
+                        let op = Op::new(extern_call_op(&handler)).a(self.slot(*dst));
+                        let call_args = if needs_window(&handler) {
+                            ExternArgs::Window(self.slots.window(at).clone())
+                        } else {
+                            ExternArgs::ByValue
                         };
-                        let window = self.slots.window(at).clone();
-                        let payload = self.put(Payload::Extern { handler, window });
-                        Op::new(f).a(self.slot(*dst)).d(after).p(payload)
+                        let op = match &call_args {
+                            ExternArgs::ByValue => {
+                                let slot_at =
+                                    |k: usize| args.get(k).map_or(NO_SLOT, |id| self.slot(*id));
+                                op.b(slot_at(0)).c(slot_at(1)).d(slot_at(2))
+                            }
+                            ExternArgs::Window(_) => op,
+                        };
+                        let payload = self.put(Payload::Extern(ExternCall {
+                            handler,
+                            order: after,
+                            args: call_args,
+                        }));
+                        op.p(payload)
                     }
                     Callee::Indirect(callee_slot) => {
                         self.may_suspend = true;
@@ -869,7 +882,11 @@ impl<'a> Prepare<'a> {
                         ExternHandler::Async(_) => call::spawn_extern_async,
                     };
                     let window = self.slots.window(at).clone();
-                    let payload = self.put(Payload::Extern { handler, window });
+                    let payload = self.put(Payload::Extern(ExternCall {
+                        handler,
+                        order: NO_SLOT,
+                        args: ExternArgs::Window(window),
+                    }));
                     Op::new(f).a(self.slot(*dst)).p(payload)
                 }
                 Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
@@ -1559,19 +1576,41 @@ fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
 }
 
 /// The arguments of the extern call or spawn at this instruction.
-fn extern_args(inst: &Inst) -> Option<&[ValueId]> {
+/// A spawn stages at every arity: its work owns its arguments past this
+/// frame (RFC-0044, stage 2c).
+fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]> {
     match &inst.kind {
         InstKind::FunctionCall {
-            callee: Callee::Extern { .. },
+            callee: Callee::Extern { id, instance },
             args,
             ..
-        }
-        | InstKind::Spawn {
+        } => needs_window(&ctx.handler(id, *instance)).then_some(args.as_slice()),
+        InstKind::Spawn {
             callee: Callee::Extern { .. },
             args,
             ..
         } => Some(args),
         _ => None,
+    }
+}
+
+/// A handler that takes a slice is lent the caller's registers, so they
+/// must be contiguous.
+fn needs_window(handler: &ExternHandler) -> bool {
+    match handler {
+        ExternHandler::Sync(f) => f.arity().is_none(),
+        ExternHandler::Async(_) => true,
+    }
+}
+
+fn extern_call_op(handler: &ExternHandler) -> OpFn {
+    match handler {
+        ExternHandler::Async(_) => call::call_extern_async,
+        ExternHandler::Sync(SyncHandler::Arity0(_)) => call::call_extern_0,
+        ExternHandler::Sync(SyncHandler::Arity1(_)) => call::call_extern_1,
+        ExternHandler::Sync(SyncHandler::Arity2(_)) => call::call_extern_2,
+        ExternHandler::Sync(SyncHandler::Arity3(_)) => call::call_extern_3,
+        ExternHandler::Sync(SyncHandler::ArityN(_)) => call::call_extern_n,
     }
 }
 
@@ -1687,7 +1726,7 @@ impl Slots {
 /// path reads the storage it writes, which `inst_info` reports as a
 /// definition alone. Until the assignment reads `analysis::loans`, the
 /// conservative range is the body.
-fn assign_slots(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Slots {
+fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, u32>) -> Slots {
     let values = body.val_factory.len();
     let edges = Edges {
         insts: body.insts.as_slice(),
@@ -1778,7 +1817,7 @@ fn assign_slots(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Slots {
     let mut occupancy = Occupancy(Vec::new());
     let mut plans: Vec<(usize, WindowPlan)> = Vec::new();
     for (at, inst) in insts.iter().enumerate() {
-        let Some(args) = extern_args(inst) else {
+        let Some(args) = window_args(inst, ctx) else {
             continue;
         };
         let mut allocated: Vec<usize> = Vec::new();
@@ -1875,14 +1914,14 @@ fn assign_slots(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Slots {
         windows,
     };
     #[cfg(debug_assertions)]
-    check_assignment(&edges, &live, &slots);
+    check_assignment(&edges, ctx, &live, &slots);
     slots
 }
 
 /// No two values live at one program point share a slot, and no value
 /// occupies a slot the call at that point writes or empties.
 #[cfg(debug_assertions)]
-fn check_assignment(edges: &Edges<'_>, live: &Live, slots: &Slots) {
+fn check_assignment(edges: &Edges<'_>, ctx: &PrepareCtx<'_>, live: &Live, slots: &Slots) {
     let mut seen: FxHashMap<u32, usize> = FxHashMap::default();
     let mut distinct = |set: &ValueSet, at: usize, which: &str| {
         seen.clear();
@@ -1905,7 +1944,7 @@ fn check_assignment(edges: &Edges<'_>, live: &Live, slots: &Slots) {
     }
 
     for (at, inst) in edges.insts.iter().enumerate() {
-        let (Some(args), Some(window)) = (extern_args(inst), slots.windows.get(&at)) else {
+        let (Some(args), Some(window)) = (window_args(inst, ctx), slots.windows.get(&at)) else {
             continue;
         };
         let run = window.at..window.at + window.arity;
@@ -2049,9 +2088,9 @@ mod recognizer_tests {
                 namespace: None,
                 name: self.interner.intern(name),
             };
-            let handler = ExternHandler::Sync(Arc::new(|_, _| {
+            let handler = ExternHandler::Sync(SyncHandler::ArityN(Arc::new(|_, _| {
                 panic!("the preparation must not run a handler")
-            }));
+            })));
             self.externs.insert(id, Executable::Extern(vec![handler]));
             id
         }
@@ -2277,20 +2316,44 @@ mod assignment_tests {
         })
     }
 
-    fn call(dst: usize, args: &[usize]) -> Inst {
+    static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
+
+    const BY_VALUE: &str = "by_value";
+    const WINDOW: &str = "window";
+
+    fn extern_ref(name: &str) -> QualifiedRef {
+        QualifiedRef {
+            namespace: None,
+            name: SYMBOLS.intern(name),
+        }
+    }
+
+    fn call(dst: usize, name: &str, args: &[usize]) -> Inst {
         inst(InstKind::FunctionCall {
             dst: val(dst),
             callee: Callee::Extern {
-                id: QualifiedRef {
-                    namespace: None,
-                    name: Interner::new().intern("f"),
-                },
+                id: extern_ref(name),
                 instance: 0,
             },
             callee_ty: Ty::Unit,
             args: args.iter().copied().map(val).collect(),
             order: None,
         })
+    }
+
+    /// One extern of each ABI: `by_value` takes its one argument in a
+    /// register, `window` is lent a slice.
+    fn externs() -> FxHashMap<QualifiedRef, Executable> {
+        let by_value = ExternHandler::Sync(SyncHandler::Arity1(Arc::new(|_, v| v)));
+        let window = ExternHandler::Sync(SyncHandler::ArityN(Arc::new(|_, args| {
+            std::mem::take(&mut args[0])
+        })));
+        [
+            (extern_ref(BY_VALUE), Executable::Extern(vec![by_value])),
+            (extern_ref(WINDOW), Executable::Extern(vec![window])),
+        ]
+        .into_iter()
+        .collect()
     }
 
     fn assign(insts: Vec<Inst>) -> Slots {
@@ -2310,7 +2373,14 @@ mod assignment_tests {
         }
         body.insts = insts;
         let labels = label_map(&body);
-        assign_slots(&body, &labels)
+        let externs = externs();
+        let context_names = FxHashMap::default();
+        let ctx = PrepareCtx {
+            interner: &SYMBOLS,
+            externs: &externs,
+            context_names: &context_names,
+        };
+        assign_slots(&body, &ctx, &labels)
     }
 
     #[test]
@@ -2337,7 +2407,7 @@ mod assignment_tests {
 
     #[test]
     fn an_argument_that_dies_at_the_call_is_allocated_into_the_window() {
-        let slots = assign(vec![konst(0), call(1, &[0]), ret(1)]);
+        let slots = assign(vec![konst(0), call(1, WINDOW, &[0]), ret(1)]);
         let window = slots.window(1);
         assert!(window.moves.is_empty());
         assert_eq!(slots.of(val(0)), window.at);
@@ -2345,12 +2415,26 @@ mod assignment_tests {
 
     #[test]
     fn an_argument_used_after_the_call_is_moved_into_the_window() {
-        let slots = assign(vec![konst(0), call(1, &[0]), add(2, 0, 1), ret(2)]);
+        let slots = assign(vec![konst(0), call(1, WINDOW, &[0]), add(2, 0, 1), ret(2)]);
         let window = slots.window(1);
         let arg = slots.of(val(0));
         assert_ne!(arg, window.at);
         let moved: Vec<(u32, u32)> = window.moves.iter().map(|m| (m.from, m.to)).collect();
         assert_eq!(moved, vec![(arg, window.at)]);
+    }
+
+    #[test]
+    fn a_by_value_call_constrains_no_slot() {
+        let slots = assign(vec![
+            konst(0),
+            call(1, BY_VALUE, &[0]),
+            add(2, 0, 1),
+            ret(2),
+        ]);
+        assert!(
+            slots.windows.is_empty(),
+            "a handler that takes its argument by value needs no window"
+        );
     }
 }
 

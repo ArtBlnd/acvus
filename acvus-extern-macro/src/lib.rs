@@ -342,17 +342,33 @@ fn generate_extern_fn(
             }}
         } else {
             let result = quote! { #fn_ident #turbofish (#rt_arg #(#passed),*) };
-            quote! {{
-                #hold_state
-                ::acvus_extern::ExternHandler::Sync(::std::sync::Arc::new(
-                    move |__rt: &__R, __args: &mut [<__R as ::acvus_extern::Runtime>::Value]| {
-                        #take
-                        #bind
-                        let __r = #result;
-                        #returned
-                    }
-                ))
-            }}
+            let body = quote! {
+                #bind
+                let __r = #result;
+                #returned
+            };
+            let value_ty = quote! { <__R as ::acvus_extern::Runtime>::Value };
+            match by_value_variant(arity) {
+                Some(variant) => quote! {{
+                    #hold_state
+                    ::acvus_extern::ExternHandler::Sync(
+                        ::acvus_extern::SyncHandler::#variant(::std::sync::Arc::new(
+                            move |__rt: &__R #(, #taken_idents: #value_ty)*| { #body }
+                        ))
+                    )
+                }},
+                None => quote! {{
+                    #hold_state
+                    ::acvus_extern::ExternHandler::Sync(
+                        ::acvus_extern::SyncHandler::ArityN(::std::sync::Arc::new(
+                            move |__rt: &__R, __args: &mut [#value_ty]| {
+                                #take
+                                #body
+                            }
+                        ))
+                    )
+                }},
+            }
         }
     };
 
@@ -369,13 +385,13 @@ fn generate_extern_fn(
                 let uniform = vars.to_compile_time_uniform(ty, member);
                 let rt_ty = vars.to_runtime_instance(ty, Some(member));
                 let handler = |body: proc_macro2::TokenStream| quote! {
-                    ::acvus_extern::ExternHandler::Sync(::std::sync::Arc::new(
-                        move |__rt: &__R, __args: &mut [<__R as ::acvus_extern::Runtime>::Value]| {
-                            debug_assert_eq!(__args.len(), 1, "arity checked by typeck");
-                            let __v = ::core::mem::take(&mut __args[0]);
-                            #body
-                        }
-                    ))
+                    ::acvus_extern::ExternHandler::Sync(
+                        ::acvus_extern::SyncHandler::Arity1(::std::sync::Arc::new(
+                            move |__rt: &__R, __v: <__R as ::acvus_extern::Runtime>::Value| {
+                                #body
+                            }
+                        ))
+                    )
                 };
                 let erase = handler(quote! {
                     <#rt_ty as ::acvus_extern::Cross<__R>>::erase(
@@ -483,6 +499,11 @@ fn generate_extern_fn(
 }
 
 /// Remove `#[name]` from the attribute list; report whether it was there.
+/// RFC-0044 stage 2c fixes the by-value cut at three.
+fn by_value_variant(arity: usize) -> Option<Ident> {
+    (arity <= 3).then(|| format_ident!("Arity{arity}"))
+}
+
 fn take_marker_attr(attrs: &mut Vec<Attribute>, name: &str) -> bool {
     let before = attrs.len();
     attrs.retain(|a| !a.path().is_ident(name));

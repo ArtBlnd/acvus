@@ -588,7 +588,7 @@ fn types_and_casts_reach_the_type_registry() {
 
 fn call_sync(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
     match handler {
-        ExternHandler::Sync(f) => f(&Tiny, &mut args),
+        ExternHandler::Sync(f) => f.call_taking(&Tiny, &mut args),
         ExternHandler::Async(_) => panic!("expected a sync handler"),
     }
 }
