@@ -268,8 +268,8 @@ impl Loans {
             InstKind::Ref { target, .. } => {
                 self.touch(&mut effect, target, Mutability::Shared);
             }
-            // A take empties the slot of a heap value: a write, whatever
-            // the type.
+            // A take out of a storage may empty its slot, whatever the type;
+            // `touch` bounds that by the reference when it goes through one.
             InstKind::Take { target, .. } => {
                 self.touch(&mut effect, target, Mutability::Mut);
             }
@@ -313,6 +313,11 @@ impl Loans {
         all
     }
 
+    /// An access through a reference is bounded by that reference's own
+    /// mutability. The interpreter is where that bound is kept:
+    /// `ops::storage::take_through` reads the referent through a `&Value`
+    /// and copies the word out of it, while `take_var` reaches its slot by
+    /// `&mut` and may empty it.
     fn touch(&self, effect: &mut StorageEffect, target: &RefTarget, mutability: Mutability) {
         match target {
             RefTarget::Var(s) | RefTarget::Param(s) => effect.add(Loan {
@@ -323,7 +328,10 @@ impl Loans {
                 for loan in &self.region(*r).loans {
                     effect.add(Loan {
                         storage: loan.storage,
-                        mutability,
+                        mutability: match (mutability, loan.mutability) {
+                            (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+                            (Mutability::Shared, _) | (_, Mutability::Shared) => Mutability::Shared,
+                        },
                     });
                 }
             }

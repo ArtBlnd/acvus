@@ -32,60 +32,60 @@ expression: opt
     22 |   r21 = test r20 == true
     23 |   r22 = r19 <= r8
     24 |   r23 = test r22 == true
-    25 |   jump_if r21 then L0 else L1(r2)
-    26 | L0:
-    28 |   jump L1(0 (r24))
-    29 | L1(r25: i64):
-    30 |   jump_if r23 then L2 else L3(r25)
-    31 | L2:
-    32 |   jump L3(r4)
-    33 | L3(r26: i64):
-    34 |   r27 = r19 + r26
-    35 |   r28 = ref &$v133
-    37 |   assign v157 = T0
-    38 |   r29 = ref &v157
-    39 |   r30 = string_concat [r28, r29]
-    40 |   drop r31
-    41 |   drop r32
-    42 |   assign v160 = r30
-    43 |   r33 = ref &v160
-    44 |   r34 = ref &$v23
-    45 |   r35 = call #0(r34)
-    46 |   assign v164 = r35
-    47 |   r36 = ref &v164
-    48 |   r37 = string_concat [r33, r36]
-    49 |   drop r38
-    50 |   drop r39
-    51 |   assign v167 = r37
-    52 |   r40 = ref &v167
-    54 |   assign v170 = T1
-    55 |   r41 = ref &v170
-    56 |   r42 = string_concat [r40, r41]
-    57 |   drop r43
-    58 |   drop r44
-    59 |   assign v173 = r42
-    60 |   r45 = ref &v173
-    61 |   r46 = ref &$v141
-    62 |   r47 = call #0(r46)
-    63 |   assign v177 = r47
-    64 |   r48 = ref &v177
-    65 |   r49 = string_concat [r45, r48]
-    66 |   drop r50
+    25 |   r24 = ref &$v133
+    26 |   r25 = ref &$v23
+    27 |   r26 = ref &$v141
+    28 |   r27 = ref &$v148
+    29 |   jump_if r21 then L0 else L1(r2)
+    30 | L0:
+    32 |   jump L1(0 (r28))
+    33 | L1(r29: i64):
+    34 |   jump_if r23 then L2 else L3(r29)
+    35 | L2:
+    36 |   jump L3(r4)
+    37 | L3(r30: i64):
+    38 |   r31 = r19 + r30
+    40 |   assign v157 = T0
+    41 |   r32 = ref &v157
+    42 |   r33 = string_concat [r24, r32]
+    43 |   drop r34
+    44 |   drop r35
+    45 |   assign v160 = r33
+    46 |   r36 = ref &v160
+    47 |   r37 = call #0(r25)
+    48 |   assign v164 = r37
+    49 |   r38 = ref &v164
+    50 |   r39 = string_concat [r36, r38]
+    51 |   drop r40
+    52 |   drop r41
+    53 |   assign v167 = r39
+    54 |   r42 = ref &v167
+    56 |   assign v170 = T1
+    57 |   r43 = ref &v170
+    58 |   r44 = string_concat [r42, r43]
+    59 |   drop r45
+    60 |   drop r46
+    61 |   assign v173 = r44
+    62 |   r47 = ref &v173
+    63 |   r48 = call #0(r26)
+    64 |   assign v177 = r48
+    65 |   r49 = ref &v177
+    66 |   r50 = string_concat [r47, r49]
     67 |   drop r51
-    68 |   assign v180 = r49
-    69 |   r52 = ref &v180
-    71 |   assign v183 = T2
-    72 |   r53 = ref &v183
-    73 |   r54 = string_concat [r52, r53]
-    74 |   drop r55
+    68 |   drop r52
+    69 |   assign v180 = r50
+    70 |   r53 = ref &v180
+    72 |   assign v183 = T2
+    73 |   r54 = ref &v183
+    74 |   r55 = string_concat [r53, r54]
     75 |   drop r56
-    76 |   assign v186 = r54
-    77 |   r57 = ref &v186
-    78 |   r58 = ref &$v148
-    79 |   r59 = call #0(r58)
+    76 |   drop r57
+    77 |   assign v186 = r55
+    78 |   r58 = ref &v186
+    79 |   r59 = call #0(r27)
     80 |   assign v190 = r59
     81 |   r60 = ref &v190
-    82 |   r61 = string_concat [r57, r60]
+    82 |   r61 = string_concat [r58, r60]
     83 |   drop r62
     84 |   drop r63
     85 |   assign v193 = r61
@@ -123,8 +123,8 @@ expression: opt
    119 |   r88 = string_clone r85
    120 |   r89 = spawn #1(r88) [r90 ->]
    121 |   commit @item_count = r0
-   122 |   commit @total_out = r27
-   123 |   commit @shipping = r26
+   122 |   commit @total_out = r31
+   123 |   commit @shipping = r30
    124 |   commit @tax_rate = r3
    125 |   commit @default_ship = r4
    126 |   commit @receipt_out = r85
@@ -132,7 +132,7 @@ expression: opt
    128 |   commit @customer = r7
    129 |   commit @free_ship_min = r8
    130 |   r91 = eval r89 [-> r92]
-   131 |   return r27 [r92]
+   131 |   return r31 [r92]
 
     ; orders: what the body's yielded Order waits for
     ;   eval@130 <- spawn@120 #1 <- r90(entry)
@@ -161,41 +161,41 @@ expression: opt
     ; r21 (v46) : Bool
     ; r22 (v50) : Bool
     ; r23 (v53) : Bool
-    ; r24 (v47) : i64
-    ; r25 (v107) : i64
-    ; r26 (v106) : i64
-    ; r27 (v57) : i64
-    ; r28 ($param_1.) : &String
-    ; r29 (@tax_rate.) : &String
-    ; r30 (v159) : String
-    ; r31 (v157) : String
-    ; r32 (v133) : String
-    ; r33 (@default_ship.) : &String
-    ; r34 ($param_2.) : &i64
-    ; r35 (to_string(...)) : String
-    ; r36 (@discount_rate.) : &String
-    ; r37 (v166) : String
-    ; r38 (v164) : String
-    ; r39 (v160) : String
-    ; r40 (@free_ship_min.) : &String
-    ; r41 (var_22.) : &String
-    ; r42 (v172) : String
-    ; r43 (v170) : String
-    ; r44 (v167) : String
-    ; r45 (subtotal.) : &String
-    ; r46 ($param_3.) : &i64
-    ; r47 (to_string(...)) : String
-    ; r48 (subtotal.) : &String
-    ; r49 (v179) : String
-    ; r50 (v177) : String
-    ; r51 (v173) : String
-    ; r52 (@tax_rate.) : &String
-    ; r53 (subtotal.) : &String
-    ; r54 (v185) : String
-    ; r55 (v183) : String
-    ; r56 (v180) : String
-    ; r57 (tax.) : &String
-    ; r58 ($param_4.) : &i64
+    ; r24 ($param_1.) : &String
+    ; r25 ($param_2.) : &i64
+    ; r26 ($param_3.) : &i64
+    ; r27 ($param_4.) : &i64
+    ; r28 (v47) : i64
+    ; r29 (v107) : i64
+    ; r30 (v106) : i64
+    ; r31 (v57) : i64
+    ; r32 (@tax_rate.) : &String
+    ; r33 (v159) : String
+    ; r34 (v157) : String
+    ; r35 (v133) : String
+    ; r36 (@default_ship.) : &String
+    ; r37 (to_string(...)) : String
+    ; r38 (@discount_rate.) : &String
+    ; r39 (v166) : String
+    ; r40 (v164) : String
+    ; r41 (v160) : String
+    ; r42 (@free_ship_min.) : &String
+    ; r43 (var_22.) : &String
+    ; r44 (v172) : String
+    ; r45 (v170) : String
+    ; r46 (v167) : String
+    ; r47 (subtotal.) : &String
+    ; r48 (to_string(...)) : String
+    ; r49 (subtotal.) : &String
+    ; r50 (v179) : String
+    ; r51 (v177) : String
+    ; r52 (v173) : String
+    ; r53 (@tax_rate.) : &String
+    ; r54 (subtotal.) : &String
+    ; r55 (v185) : String
+    ; r56 (v183) : String
+    ; r57 (v180) : String
+    ; r58 (tax.) : &String
     ; r59 (to_string(...)) : String
     ; r60 (@free_ship_min.) : &String
     ; r61 (v192) : String

@@ -65,6 +65,21 @@ control equivalence already fixes the set of paths it runs on. A spawn is
 held to a stricter rule, stated under Not built: it does not move at all,
 because moving it also moves when the work starts.
 
+One instruction carries a different criterion, because nothing it does
+reaches a path: a shared borrow of a variable or a parameter with no path
+under it writes one register with the address of another, reads nothing,
+allocates nothing and cannot raise. It moves to any dominator, and what
+bounds it is the borrow instead. `check_borrows` runs before code motion,
+so a borrow moved above a loop holds its loan through iterations the
+checker saw it outside of; the move is taken only when no block the borrow
+would newly span — the blocks the destination dominates that still reach
+the source — writes that storage. A `&mut`, a borrow through a reference
+and a borrow with a path under it do not move at all: the first takes a
+loan that conflicts with every other, the second is a memory op that stays
+in order with the other ops through that reference, and the third walks
+into the value, which a path that would not have reached it can find in a
+shape the walk does not expect.
+
 ## Rationale
 
 Whether two IO calls may be reordered depends on what the author means by

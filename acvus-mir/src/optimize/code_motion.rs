@@ -1,5 +1,7 @@
 //! Cross-block code motion: an instruction moves only between
-//! control-equivalent blocks, and an Eval sinks toward its use.
+//! control-equivalent blocks - except a shared borrow of a storage, which
+//! moves under a borrow condition instead - and an Eval sinks toward its
+//! use.
 //!
 //! Two blocks are control-equivalent when the destination dominates the
 //! source and the source post-dominates the destination. They then execute
@@ -20,8 +22,34 @@
 //! a path that would not have reached it speculates an effect (RFC-0007).
 //! Its operands need only reach the block that issues it, which the
 //! equivalence already permits.
+//!
+//! # A shared borrow of a storage
+//!
+//! `ref &v` on a variable or an extern parameter with no path under it is
+//! the one instruction that needs no control equivalence. It writes one
+//! register with the address of another (`ops::storage::ref_var`): it reads
+//! nothing, allocates nothing and cannot raise, so no path can observe that
+//! it ran. What it needs instead is a borrow condition. `check_borrows`
+//! runs before this pass (`graph/optimize.rs`), so a borrow moved above a
+//! loop holds its loan through every iteration of a program the checker
+//! only saw with the loan inside the body. The move is therefore taken
+//! only when no block the borrow would newly span - the blocks the target
+//! dominates that still reach the source, the source included, the target
+//! excluded because the instruction lands at its end - writes that storage.
+//! A write is what `Loans::storage_effect` calls one: an `Assign`, a `Take`
+//! out of a storage, a `Ref &mut`, or a call an argument carries a `Mut`
+//! loan into - including one that reaches the storage only through a
+//! reference, which `Loans::touch` resolves to the loans that reference's
+//! region holds.
+//!
+//! `Ref &mut`, a `Ref` through a reference and a `Ref` with a path stay
+//! where they are: the first takes a loan that conflicts with every other,
+//! the second is a memory op that stays in order with the other ops through
+//! that reference, and the third walks into the value, which a path that
+//! would not have reached it can find in a shape the walk does not expect.
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::analysis::domtree::{DomTree, PostDomTree};
 use crate::analysis::inst_info;
@@ -29,6 +57,7 @@ use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::*;
 use crate::optimize::context_ops::{context_read, context_written};
+use crate::ty::Mutability;
 
 // -- Entry point ----------------------------------------------------
 
@@ -55,12 +84,15 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
 
     let domtree = DomTree::build(cfg);
     let postdom = PostDomTree::build(cfg);
+    let writes = StorageWrites::of(cfg);
     let mut def_block = build_def_block(cfg);
 
     // -- Collect hoists ---------------------------------------------
     //
     // def_block is updated after each decision, so an operand chain within
-    // one block resolves in a single pass.
+    // one block resolves in a single pass. No hoistable kind writes a
+    // storage, so the decisions below stay valid against `writes` while the
+    // rest of this pass is being decided.
 
     let mut hoists: Vec<(usize, usize, usize)> = Vec::new(); // (src_block, inst_idx, tgt_block)
 
@@ -69,18 +101,39 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
             continue;
         }
 
+        let reaches_here = ReachingBlocks::of(cfg, BlockIdx(bi));
+
         for (i, inst) in block.insts.iter().enumerate() {
             let kind = &inst.kind;
 
-            if !is_hoistable(kind) || inst_info::defs(kind).is_empty() {
+            if inst_info::defs(kind).is_empty() {
                 continue;
             }
 
-            let uses = inst_info::uses(kind);
+            let source = BlockIdx(bi);
+            let target = match hoistable(kind) {
+                Hoistable::No => continue,
+                Hoistable::ControlEquivalent => {
+                    let uses = inst_info::uses(kind);
+                    find_highest_target(source, &uses, &domtree, &def_block, |candidate| {
+                        postdom.post_dominates(source, candidate)
+                    })
+                }
+                // The storage is the borrow's operand: it must be defined
+                // above the target as any other operand must.
+                Hoistable::SharedBorrow { storage } => {
+                    let uses: SmallVec<[ValueId; 4]> = inst_info::uses(kind)
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(storage))
+                        .collect();
+                    find_highest_target(source, &uses, &domtree, &def_block, |candidate| {
+                        !writes.written_in_span(&domtree, candidate, &reaches_here, storage)
+                    })
+                }
+            };
 
-            if let Some(target) =
-                find_highest_target(BlockIdx(bi), &uses, &domtree, &postdom, &def_block)
-            {
+            if let Some(target) = target {
                 hoists.push((bi, i, target.0));
                 for d in inst_info::defs(kind) {
                     def_block.insert(d, target);
@@ -143,19 +196,24 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
 
 // -- Target finding -------------------------------------------------
 
-/// The highest block control-equivalent to `block_idx` where every operand
-/// is already available.
+/// The highest dominator of `block_idx` where every operand is already
+/// available and `accept` holds.
 ///
 /// Availability only shrinks as the walk rises - an ancestor is dominated by
 /// strictly fewer definitions than its child - so the first ancestor that
-/// lacks an operand ends the walk.
-fn find_highest_target(
+/// lacks an operand ends the walk. `accept` is asked at every candidate, not
+/// only at the first: it may hold at a block and fail at its parent, and the
+/// walk keeps the highest that held.
+fn find_highest_target<A>(
     block_idx: BlockIdx,
     uses: &[ValueId],
     domtree: &DomTree,
-    postdom: &PostDomTree,
     def_block: &FxHashMap<ValueId, BlockIdx>,
-) -> Option<BlockIdx> {
+    accept: A,
+) -> Option<BlockIdx>
+where
+    A: Fn(BlockIdx) -> bool,
+{
     let mut best: Option<BlockIdx> = None;
     let mut candidate = domtree.idom(block_idx)?;
 
@@ -170,7 +228,7 @@ fn find_highest_target(
             break;
         }
 
-        if postdom.post_dominates(block_idx, candidate) {
+        if accept(candidate) {
             best = Some(candidate);
         }
 
@@ -183,52 +241,149 @@ fn find_highest_target(
     best
 }
 
+// -- The blocks a borrow would newly span ---------------------------
+
+/// The blocks from which one block is reachable, that block itself included:
+/// a hoist out of it puts the borrow above everything they hold.
+struct ReachingBlocks {
+    reaches: Vec<bool>,
+}
+
+impl ReachingBlocks {
+    fn of(cfg: &CfgBody, block: BlockIdx) -> Self {
+        let preds = cfg.predecessors();
+        let mut reaches = vec![false; cfg.blocks.len()];
+        let mut stack = vec![block];
+        reaches[block.0] = true;
+        while let Some(b) = stack.pop() {
+            let Some(ps) = preds.get(&b) else {
+                continue;
+            };
+            for &p in ps {
+                if !reaches[p.0] {
+                    reaches[p.0] = true;
+                    stack.push(p);
+                }
+            }
+        }
+        Self { reaches }
+    }
+
+    fn contains(&self, block: BlockIdx) -> bool {
+        self.reaches[block.0]
+    }
+}
+
+/// The storages each block writes (`Loans::storage_effect`).
+struct StorageWrites {
+    per_block: Vec<SmallVec<[ValueId; 4]>>,
+}
+
+impl StorageWrites {
+    fn of(cfg: &CfgBody) -> Self {
+        let loans = Loans::build(cfg);
+        Self {
+            per_block: cfg
+                .blocks
+                .iter()
+                .map(|block| {
+                    block
+                        .insts
+                        .iter()
+                        .flat_map(|inst| loans.storage_effect(&inst.kind).writes)
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+
+    /// Does anything write `storage` in the blocks a borrow hoisted from the
+    /// source to `target` would newly span?
+    ///
+    /// Those are the blocks `target` dominates that still reach the source -
+    /// `reaches_source` carries the latter. `target` itself is not one: the
+    /// instruction lands at the end of it, after everything it holds.
+    fn written_in_span(
+        &self,
+        domtree: &DomTree,
+        target: BlockIdx,
+        reaches_source: &ReachingBlocks,
+        storage: ValueId,
+    ) -> bool {
+        (0..self.per_block.len())
+            .map(BlockIdx)
+            .filter(|&b| b != target && reaches_source.contains(b) && domtree.dominates(target, b))
+            .any(|b| self.per_block[b.0].contains(&storage))
+    }
+}
+
 // -- Hoistability (allowlist) ---------------------------------------
 
-/// Has no effect and reads nothing a store between the two blocks could
-/// change.
-///
-/// Whether the instruction can raise is deliberately not asked. Control
-/// equivalence already fixes the set of paths it runs on, so a failability
-/// test here would reject moves that change nothing. An unknown kind is not
-/// movable.
-fn is_hoistable(kind: &InstKind) -> bool {
+/// What a hoist of this instruction requires of its target.
+enum Hoistable {
+    /// It does not move.
+    No,
+    /// It moves only to a block control-equivalent to its own: it has no
+    /// effect and reads nothing a store between the two blocks could change,
+    /// but it may cost work or raise, so the set of paths it runs on must
+    /// stay what it was.
+    ControlEquivalent,
+    /// It is a shared borrow of `storage`, and moves to any dominator no
+    /// block between which and it writes `storage` (see the module doc).
+    SharedBorrow { storage: ValueId },
+}
+
+/// Whether the instruction can raise is deliberately not asked of a
+/// `ControlEquivalent` kind. Control equivalence already fixes the set of
+/// paths it runs on, so a failability test here would reject moves that
+/// change nothing. An unknown kind is not movable.
+fn hoistable(kind: &InstKind) -> Hoistable {
     match kind {
         // Arithmetic / logic.
-        InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => true,
+        InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => Hoistable::ControlEquivalent,
 
         // A word constant; a heap value is built where it is used.
-        InstKind::Const { value, .. } => !matches!(
-            value,
-            acvus_ast::Literal::String(_) | acvus_ast::Literal::List(_)
-        ),
+        InstKind::Const { value, .. } => {
+            match matches!(
+                value,
+                acvus_ast::Literal::String(_) | acvus_ast::Literal::List(_)
+            ) {
+                true => Hoistable::No,
+                false => Hoistable::ControlEquivalent,
+            }
+        }
         InstKind::MakeArray { .. }
         | InstKind::MakeObject { .. }
         | InstKind::MakeTuple { .. }
         | InstKind::MakeVariant { .. }
-        | InstKind::MakeClosure { .. } => false,
+        | InstKind::MakeClosure { .. } => Hoistable::No,
 
-        // A place under a variable is an address (no-op, pure); one through
-        // a reference is a memory op and stays in order with the other ops
-        // through it.
-        InstKind::Ref { .. } => false,
+        // The address of a storage, under no path and lent shared: the one
+        // move the borrow condition carries rather than control equivalence.
+        InstKind::Ref {
+            target: RefTarget::Var(storage) | RefTarget::Param(storage),
+            path,
+            mutability: Mutability::Shared,
+            ..
+        } if path.is_empty() => Hoistable::SharedBorrow { storage: *storage },
+        InstKind::Ref { .. } => Hoistable::No,
 
         // Field and element access.
         InstKind::FieldGet { .. }
         | InstKind::FieldSet { .. }
         | InstKind::ObjectGet { .. }
         | InstKind::ArrayIndex { .. }
-        | InstKind::TupleIndex { .. } => true,
+        | InstKind::TupleIndex { .. } => Hoistable::ControlEquivalent,
 
         // Test predicates.
         InstKind::TestLiteral { .. }
         | InstKind::TestVariant { .. }
-        | InstKind::TestObjectKey { .. } => true,
+        | InstKind::TestObjectKey { .. } => Hoistable::ControlEquivalent,
 
         // Function reference.
-        InstKind::LoadFunction { .. } => true,
+        InstKind::LoadFunction { .. } => Hoistable::ControlEquivalent,
 
-        _ => false,
+        _ => Hoistable::No,
     }
 }
 
@@ -551,26 +706,70 @@ mod tests {
         assert!(spawn_idx > merge_idx, "spawn should stay in merge block");
     }
 
+    fn ref_of(target: RefTarget, path: Vec<PathSeg>, mutability: Mutability) -> InstKind {
+        InstKind::Ref {
+            dst: v(1),
+            target,
+            path,
+            mutability,
+        }
+    }
+
     #[test]
-    fn a_reference_and_a_heap_constant_are_never_hoisted() {
-        assert!(!is_hoistable(&InstKind::Ref {
-            dst: v(1),
-            target: RefTarget::Var(v(0)),
-            path: vec![],
-            mutability: crate::ty::Mutability::Shared,
-        }));
-        assert!(!is_hoistable(&InstKind::Const {
-            dst: v(1),
-            value: acvus_ast::Literal::String("a".into()),
-        }));
-        assert!(is_hoistable(&InstKind::Const {
-            dst: v(1),
-            value: acvus_ast::Literal::Int(1),
-        }));
-        assert!(!is_hoistable(&InstKind::MakeArray {
-            dst: v(1),
-            elements: vec![],
-        }));
+    fn which_borrow_carries_the_condition_and_which_does_not_move() {
+        assert!(matches!(
+            hoistable(&ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared)),
+            Hoistable::SharedBorrow { storage } if storage == v(0)
+        ));
+        assert!(matches!(
+            hoistable(&ref_of(RefTarget::Param(v(0)), vec![], Mutability::Shared)),
+            Hoistable::SharedBorrow { storage } if storage == v(0)
+        ));
+        assert!(matches!(
+            hoistable(&ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut)),
+            Hoistable::No
+        ));
+        assert!(matches!(
+            hoistable(&ref_of(
+                RefTarget::Through(v(0)),
+                vec![],
+                Mutability::Shared
+            )),
+            Hoistable::No
+        ));
+        assert!(matches!(
+            hoistable(&ref_of(
+                RefTarget::Var(v(0)),
+                vec![PathSeg::Payload],
+                Mutability::Shared
+            )),
+            Hoistable::No
+        ));
+    }
+
+    #[test]
+    fn a_heap_constant_is_never_hoisted() {
+        assert!(matches!(
+            hoistable(&InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::String("a".into()),
+            }),
+            Hoistable::No
+        ));
+        assert!(matches!(
+            hoistable(&InstKind::Const {
+                dst: v(1),
+                value: acvus_ast::Literal::Int(1),
+            }),
+            Hoistable::ControlEquivalent
+        ));
+        assert!(matches!(
+            hoistable(&InstKind::MakeArray {
+                dst: v(1),
+                elements: vec![],
+            }),
+            Hoistable::No
+        ));
     }
 
     #[test]
@@ -1071,6 +1270,128 @@ mod tests {
         assert!(
             jumpif_idx < binop_idx,
             "the body's operation stays below the test (branch {jumpif_idx}, operation {binop_idx})"
+        );
+    }
+
+    /// `v` is a storage, `v(2)` a `&mut` of it taken above the loop, and the
+    /// body holds a shared borrow of `v` and writes it - through `v(2)`, so
+    /// the write names `v` only through the reference's region. The shared
+    /// borrow stays in the body; with `writes_through_the_reference` false,
+    /// the same program hoists it to the entry.
+    fn a_loop_that_borrows_a_storage(writes_through_the_reference: bool) -> Vec<InstKind> {
+        let mut body = vec![InstKind::Ref {
+            dst: v(4),
+            target: RefTarget::Var(v(1)),
+            path: vec![],
+            mutability: Mutability::Shared,
+        }];
+        if writes_through_the_reference {
+            body.push(InstKind::Assign {
+                target: RefTarget::Through(v(2)),
+                path: vec![],
+                value: v(0),
+            });
+        }
+
+        let mut insts = vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Assign {
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                value: v(0),
+            },
+            InstKind::Ref {
+                dst: v(2),
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                mutability: Mutability::Mut,
+            },
+            InstKind::Const {
+                dst: v(3),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::Jump {
+                label: Label(0),
+                args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(0),
+                params: vec![],
+                merge_of: None,
+            },
+            InstKind::JumpIf {
+                cond: v(3),
+                then_label: Label(1),
+                then_args: vec![],
+                else_label: Label(2),
+                else_args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(1),
+                params: vec![],
+                merge_of: None,
+            },
+        ];
+        insts.extend(body);
+        insts.extend([
+            InstKind::Jump {
+                label: Label(0),
+                args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(2),
+                params: vec![],
+                merge_of: None,
+            },
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
+        ]);
+        insts
+    }
+
+    /// Where the shared borrow of `v(1)` sits, relative to the loop's test.
+    fn shared_borrow_is_below_the_test(insts: Vec<InstKind>) -> bool {
+        let mut cfg = make_cfg(insts, 10);
+        run(&mut cfg);
+        let body = demoted(cfg);
+        let k = kinds(&body);
+        let borrow = k
+            .iter()
+            .position(|k| {
+                matches!(
+                    k,
+                    InstKind::Ref {
+                        mutability: Mutability::Shared,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let test = k
+            .iter()
+            .position(|k| matches!(k, InstKind::JumpIf { .. }))
+            .unwrap();
+        borrow > test
+    }
+
+    #[test]
+    fn a_borrow_stays_when_a_reference_the_loop_holds_writes_the_storage() {
+        assert!(
+            shared_borrow_is_below_the_test(a_loop_that_borrows_a_storage(true)),
+            "the write through the `&mut` names the storage in its region"
+        );
+    }
+
+    #[test]
+    fn the_same_loop_without_that_write_lets_the_borrow_out() {
+        assert!(
+            !shared_borrow_is_below_the_test(a_loop_that_borrows_a_storage(false)),
+            "nothing the borrow would span writes the storage"
         );
     }
 
