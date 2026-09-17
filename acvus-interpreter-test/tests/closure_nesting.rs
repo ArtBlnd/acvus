@@ -32,6 +32,18 @@ async fn three_nested_maps_sum_to_the_product_of_the_levels() {
 }
 
 #[tokio::test]
+async fn a_word_reaches_the_innermost_of_three_closures_as_a_copy() {
+    let v = run("let k = 2.0; \
+         range(0, 2) \
+         | map(|a| -> range(0, 2) \
+             | map(|b| -> range(0, 2) | map(|c| -> *k) | sum) \
+             | sum) \
+         | sum")
+    .await;
+    assert_close(&v, 16.0);
+}
+
+#[tokio::test]
 async fn a_closure_returned_from_a_closure_is_called_at_the_top_level() {
     let v = run("let mk = |s| -> |x| -> x * 3.0; let triple = mk(1.0); triple(4.0)").await;
     assert_close(&v, 12.0);

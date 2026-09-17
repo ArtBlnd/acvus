@@ -125,6 +125,12 @@ pub enum MirErrorKind {
     DerefOfNonReference(Ty),
     /// `*r` where the reference names a value that is not a primitive.
     DerefOfNonPrimitive(Ty),
+    /// A lambda captured a name the enclosing lambda captured, and the
+    /// owned type is not a word (RFC-0018).
+    MoveOutOfCapture {
+        name: String,
+        ty: Ty,
+    },
     /// A lambda captured a reference.
     ReferenceCaptured,
     /// A reference inside a list, object, or tuple.
@@ -244,6 +250,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "`*` reads only a primitive; {} is used through the reference or cloned",
+                    ty.display(interner)
+                )
+            }
+            MirErrorKind::MoveOutOfCapture { name, ty } => {
+                write!(
+                    f,
+                    "cannot move `{name}` out of a closure's capture (type {}); \
+                     act through the reference, or clone it",
                     ty.display(interner)
                 )
             }

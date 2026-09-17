@@ -42,6 +42,13 @@ by value moves it. Both rules reach a captured name: a lambda that
 captures a name the enclosing lambda captured captures the owned `T`, not
 the `&T` the name reads as, and a captured `f` is called as a lent `f`.
 
+Taking that owned `T` is a move out of a value the enclosing closure owns,
+and the enclosing closure is called again, so the move is admitted only
+where `T` is a word: there it is a copy. Every other type is refused at the
+inner lambda, naming the name and the owned type; the program acts through
+the reference the name already reads as, or writes `clone(&w)` where it
+needs a value. This is the rule of Rust's `Fn` closures.
+
 A context place (`@x`, `@x.field`) is a storage like a local: reading it
 takes its value, and the place is uninitialized until it is assigned
 again. `let a = @b` moves the value out; `@b = new` puts one back. A

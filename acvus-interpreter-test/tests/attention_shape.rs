@@ -166,15 +166,29 @@ async fn a_lambda_inside_a_lambda_runs() {
     assert_close(&v, 22.0);
 }
 
+/// A closure owns what it captures, so a lambda that names the enclosing
+/// lambda's capture moves it out of a closure `map` calls again: a word
+/// copies and anything else is refused (RFC-0018). The owner settled that
+/// on 2026-09-17, after this test met it as a validation failure.
 #[tokio::test]
-async fn a_local_captured_through_two_lambdas_is_read_by_the_inner_one() {
+async fn a_word_captured_through_two_lambdas_is_read_by_the_inner_one() {
     let v = run(
-        "let w = [0.5, 0.5]; \
-         let o = range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *get(w, t) * *get(get(&@values, t), *j)) | sum) | collect; \
+        "let half = 0.5; \
+         let o = range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *half * *get(get(&@values, t), *j)) | sum) | collect; \
          *get(&o, 0) + *get(&o, 1) * 10.0",
     )
     .await;
     assert_close(&v, 32.0);
+}
+
+#[test]
+#[should_panic(expected = "cannot move `w` out of a closure's capture (type Array<Float, 2>)")]
+fn an_array_captured_through_two_lambdas_is_refused() {
+    compile(
+        "let w = [0.5, 0.5]; \
+         let o = range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *get(w, t) * *get(get(&@values, t), *j)) | sum) | collect; \
+         *get(&o, 0) + *get(&o, 1) * 10.0",
+    );
 }
 
 #[tokio::test]

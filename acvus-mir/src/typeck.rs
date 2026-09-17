@@ -260,6 +260,15 @@ impl TypeResolution {
 struct LambdaScope {
     depth: usize,
     captures: Vec<InferTy>,
+    moves_out_of_capture: Vec<CaptureMove>,
+}
+
+/// A name a lambda takes out of the enclosing closure's captures: the inner
+/// closure owns what it captures, so the name leaves a value the enclosing
+/// closure owns and is called again (RFC-0018).
+struct CaptureMove {
+    name: Astr,
+    owned: InferTy,
 }
 
 /// Where a value meets a type it may need converting to, and how a
@@ -798,23 +807,32 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// closure owns the value, and a call borrows the closure (RFC-0018).
     fn lookup_var(&mut self, name: Astr) -> Option<InferTy> {
         for (depth, scope) in self.scopes.iter().enumerate().rev() {
-            if let Some(ty) = scope.get(&name) {
-                // Record as capture in ALL enclosing lambdas whose scope
-                // depth is exceeded. This handles transitive captures:
-                // if inner lambda captures `base` from outer scope, the
-                // outer lambda also needs to capture it.
-                for ls in self.lambda_stack.iter_mut() {
-                    if depth < ls.depth {
-                        ls.captures.push(ty.clone());
-                    }
+            let Some(ty) = scope.get(&name) else { continue };
+            let ty = ty.clone();
+            let mut capturing_lambdas = 0usize;
+            for ls in self.lambda_stack.iter_mut() {
+                if depth < ls.depth {
+                    ls.captures.push(ty.clone());
+                    capturing_lambdas += 1;
                 }
-                let captured = self.lambda_stack.last().is_some_and(|ls| depth < ls.depth);
-                return Some(if captured {
-                    TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty.clone())))
-                } else {
-                    ty.clone()
-                });
             }
+            let taken_from_an_enclosing_capture = capturing_lambdas >= 2;
+            if taken_from_an_enclosing_capture {
+                let inner = self
+                    .lambda_stack
+                    .last_mut()
+                    .expect("a capturing lambda is on the stack");
+                if !inner.moves_out_of_capture.iter().any(|m| m.name == name) {
+                    inner.moves_out_of_capture.push(CaptureMove {
+                        name,
+                        owned: ty.clone(),
+                    });
+                }
+            }
+            return Some(match capturing_lambdas {
+                0 => ty,
+                _ => TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty))),
+            });
         }
         None
     }
@@ -850,10 +868,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.record(p.id, pt.clone());
             param_types.push(ParamTerm::new(p.name, pt));
         }
-        // Push lambda scope for capture tracking.
         self.lambda_stack.push(LambdaScope {
             depth: self.scopes.len() - 1,
             captures: Vec::new(),
+            moves_out_of_capture: Vec::new(),
         });
 
         let outer_effect = self.body_effect.clone();
@@ -902,8 +920,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let lambda_effect = self.body_effect.clone();
         self.body_effect = outer_effect;
 
-        // Pop this lambda's scope.
-        let ls = self.lambda_stack.pop().unwrap();
+        let ls = self.lambda_stack.pop().expect("this lambda's scope");
+        for m in &ls.moves_out_of_capture {
+            let owned = self.solver.resolve_ty(&m.owned);
+            if owned.is_primitive() {
+                continue;
+            }
+            self.error(
+                MirErrorKind::MoveOutOfCapture {
+                    name: self.interner.resolve(m.name).to_string(),
+                    ty: self.freeze_or_error(&owned),
+                },
+                body.span(),
+            );
+        }
         let capture_types: Vec<InferTy> = ls
             .captures
             .into_iter()

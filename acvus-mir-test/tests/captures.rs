@@ -6,7 +6,7 @@ use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
-use acvus_mir::ty::{LenTerm, PolyBuilder, Ty, TyTerm};
+use acvus_mir::ty::{PolyBuilder, Ty, TyTerm};
 use acvus_mir_test::compile_script_mode_optimized;
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -79,10 +79,6 @@ fn checked(i: &Interner, source: &str) -> Checked {
     check(i, source).unwrap_or_else(|e| panic!("{}", e.join("\n")))
 }
 
-fn float_pair() -> Ty {
-    Ty::Array(Box::new(Ty::Float), LenTerm::Known(2))
-}
-
 #[test]
 fn a_let_bound_lambda_is_called_from_inside_another_lambda() {
     let i = Interner::new();
@@ -100,29 +96,40 @@ fn a_let_bound_lambda_is_called_from_a_lambda_an_extern_receives() {
     assert_eq!(c.ret, Ty::Float);
 }
 
-const TWO_LEVEL: &str = "let w = [0.5, 0.5]; \
+const TWO_LEVEL_WORD: &str = "let h = 0.5; \
+     range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *h * to_float(t)) | sum) | sum";
+
+const TWO_LEVEL_LARGE: &str = "let w = [0.5, 0.5]; \
      range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *get(w, t)) | sum) | sum";
 
 #[test]
 fn a_two_level_capture_records_the_owned_type_at_both_levels() {
     let i = Interner::new();
-    let c = checked(&i, TWO_LEVEL);
+    let c = checked(&i, TWO_LEVEL_WORD);
     assert_eq!(c.ret, Ty::Float);
     assert_eq!(
         c.captures_by_lambda,
-        vec![vec![float_pair()], vec![float_pair()]],
+        vec![vec![Ty::Float], vec![Ty::Float]],
         "each lambda captures the value, never the `&T` the name reads as"
     );
 }
 
-/// Finding: the enclosing closure body holds only the `&T` its capture
-/// register is bound to, so lowering has no owned register to hand the
-/// inner `MakeClosure`. A second owner would be a copy the program never
-/// wrote (RFC-0018), and the IR has no shape that gives one.
 #[test]
-fn a_two_level_capture_lowers_to_a_closure_that_owns_its_capture() {
+fn a_two_level_capture_of_a_large_value_is_a_move_out_of_the_capture() {
     let i = Interner::new();
-    let ir = compile_script_mode_optimized(&i, TWO_LEVEL, &FxHashMap::default());
+    let errors = check(&i, TWO_LEVEL_LARGE).expect_err("the inner lambda moves `w`");
+    assert!(
+        errors.iter().any(|e| e
+            == "cannot move `w` out of a closure's capture (type Array<Float, 2>); \
+                act through the reference, or clone it"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_two_level_capture_of_a_word_lowers_to_a_closure_that_owns_its_capture() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(&i, TWO_LEVEL_WORD, &FxHashMap::default());
     assert!(ir.is_ok(), "{}", ir.unwrap_err());
 }
 

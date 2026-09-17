@@ -1,10 +1,7 @@
-//! One finding from `attention_shape.rs`, alone in its own test binary
-//! because it overflows the compiler's stack and a stack overflow aborts
-//! the whole process rather than failing one test. It is kept as it fails.
-//! The overflow needs both halves of the script: a let-bound lambda called
-//! from inside another lambda, whose call resolves to no function, and an
-//! `if let` over a `max` of the values that call produced. With the
-//! `if let` line removed the script reports the unresolved call and stops.
+//! A script whose `m`, bound by `if let Some(m) = as_iter(&scores) | max`,
+//! is `&Float`, then captured by `|s| -> exp(*s - m)`: RFC-0018 refuses a
+//! reference in a capture. In its own binary because the compile of this
+//! script must end in that report, not abort the test process.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -20,9 +17,10 @@ fn context(i: &Interner) -> Context {
 }
 
 #[tokio::test]
-async fn an_unresolved_call_inside_a_lambda_followed_by_if_let_over_max_is_reported_not_overflowed() {
+#[should_panic(expected = "a lambda cannot capture a reference")]
+async fn a_reference_captured_after_if_let_over_max_is_reported_not_overflowed() {
     let i = Interner::new();
-    let v: Value = run_script_mode(
+    let _: Value = run_script_mode(
         &i,
         "let dot = |k| -> 1.0; \
          let scores = as_iter(&@keys) | map(|k| -> dot(k)) | collect; \
@@ -32,5 +30,4 @@ async fn an_unresolved_call_inside_a_lambda_followed_by_if_let_over_max_is_repor
         context(&i),
     )
     .await;
-    assert_eq!(v.as_int(), 2);
 }

@@ -1199,6 +1199,20 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
+    /// A storage holding a `&T` is an enclosing closure's capture register,
+    /// and the closure being made owns a `T`. `MoveOutOfCapture` in typeck.rs
+    /// refuses that capture unless `T` is a word, so the copy this reads out
+    /// is the only `T` lowering ever has to produce here (RFC-0018).
+    fn own_the_captured_word(&mut self, span: Span, taken: ValueId) -> ValueId {
+        let Some(Ty::Ref(_, arg)) = self.body.val_types.get(&taken).cloned() else {
+            return taken;
+        };
+        if !arg.ty.is_primitive() {
+            return taken;
+        }
+        self.emit_take(span, RefTarget::Through(taken), vec![], arg.ty)
+    }
+
     /// A reference to a storage: a fresh `&T` / `&mut T` value.
     fn emit_ref(
         &mut self,
@@ -1912,7 +1926,7 @@ impl<'a> Lowerer<'a> {
                 let capture_regs: Vec<ValueId> = free_vars
                     .iter()
                     .map(|(name, _, var_span)| {
-                        if let Some(param_reg) = self.try_param_slot(*name) {
+                        let taken = if let Some(param_reg) = self.try_param_slot(*name) {
                             let ty = self.slot_type(param_reg);
                             let dst =
                                 self.emit_take(*var_span, RefTarget::Param(param_reg), vec![], ty);
@@ -1924,7 +1938,8 @@ impl<'a> Lowerer<'a> {
                             let dst = self.emit_take(*var_span, RefTarget::Var(slot), vec![], ty);
                             self.set_origin(dst, ValOrigin::Named(*name));
                             dst
-                        }
+                        };
+                        self.own_the_captured_word(*var_span, taken)
                     })
                     .collect();
                 // Create closure body.
