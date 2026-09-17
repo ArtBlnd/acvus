@@ -997,27 +997,29 @@ impl Terms {
         other: &InferTy,
         other_root: Option<TypeBoundId>,
     ) -> Result<(), NoJoin> {
-        if let Some(root) = other_root {
-            let merged = self
-                .bound_of(var)
-                .meet(&self.bound_of(root))
-                .ok_or(NoJoin)?;
-            self.forward_ty(var, root).map_err(|Cyclic| NoJoin)?;
-            if let TypeBound::Unresolved { bound } = &mut self.ty_bounds[root.0 as usize] {
-                *bound = merged;
+        let Some(root) = other_root else {
+            let term = self.shallow_resolve_ty(other);
+            if matches!(term, TyTerm::Error(_)) {
+                return Ok(());
             }
-            return Ok(());
-        }
-        let term = self.shallow_resolve_ty(other);
-        if matches!(term, TyTerm::Error(_)) {
-            return Ok(());
-        }
-        if let TyVarBound::Integer { signed, among } = self.bound_of(var)
-            && !matches!(&term, TyTerm::Int(k) if among.contains(k) && (!signed || k.signed()))
-        {
+            if integer_bound_refuses(&self.bound_of(var), &term) {
+                return Err(NoJoin);
+            }
+            return self.bind_ty(var, term).map_err(|Cyclic| NoJoin);
+        };
+        let merged = self
+            .bound_of(var)
+            .meet(&self.bound_of(root))
+            .ok_or(NoJoin)?;
+        let held = self.shallow_resolve_ty(&TyTerm::Var(root));
+        if integer_bound_refuses(&merged, &held) {
             return Err(NoJoin);
         }
-        self.bind_ty(var, term).map_err(|Cyclic| NoJoin)
+        self.forward_ty(var, root).map_err(|Cyclic| NoJoin)?;
+        if let TypeBound::Unresolved { bound } = &mut self.ty_bounds[root.0 as usize] {
+            *bound = merged;
+        }
+        Ok(())
     }
 
     /// `! ⊔ T = T` at a value position (RFC-0038): the variable that named
@@ -1186,6 +1188,23 @@ struct Cyclic;
 struct UnionSide {
     root: Option<TypeBoundId>,
     grows: bool,
+}
+
+/// A `OneOf` bound is passed over here, and that is a decision rather
+/// than an omission. Its shapes are patterns a term still open can grow
+/// into, so judging one against a half-built term would refuse types the
+/// solve was going to reach. Those bounds are verified instead by
+/// `freeze_ty_with`, once the term is whole, at the sites `typeck`
+/// registered. Integer widths are ground and have no such growth, so they
+/// are decided the moment a variable would come to name a term.
+fn integer_bound_refuses(bound: &TyVarBound, term: &InferTy) -> bool {
+    let TyVarBound::Integer { signed, among } = bound else {
+        return false;
+    };
+    if matches!(term, TyTerm::Var(_) | TyTerm::Error(_)) {
+        return false;
+    }
+    !matches!(term, TyTerm::Int(k) if among.contains(k) && (!*signed || k.signed()))
 }
 
 fn alloc_ty_var(ty_bounds: &mut Vec<TypeBound>, bound: TyVarBound) -> TypeBoundId {

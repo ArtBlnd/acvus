@@ -140,6 +140,30 @@ fn a_context_value_without_a_type_is_refused_before_anything_runs() {
 }
 
 #[test]
+fn a_call_against_a_parameter_a_literal_operand_fixed_is_a_compile_error() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "cat.acvus", "let f = |k| -> k + \"a\";\nf(1)\n");
+    let out = acvus(dir.path(), &["check", "cat.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = text(&out.stderr);
+    assert_eq!(
+        err.lines().next(),
+        Some("error: type mismatch: expected String, got i64")
+    );
+    assert!(err.contains("--> cat.acvus:2:3"), "{err}");
+    assert!(!err.contains("inst #"), "{err}");
+
+    write(
+        dir.path(),
+        "cat_ok.acvus",
+        "let f = |k| -> k + \"a\";\nf(\"b\")\n",
+    );
+    let out = acvus(dir.path(), &["run", "cat_ok.acvus"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "ba\n");
+}
+
+#[test]
 fn check_and_mir_compile_without_running() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "ok.acvus", "let xs = [1, 2];\nxs.len()\n");

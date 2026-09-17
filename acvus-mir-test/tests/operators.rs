@@ -187,12 +187,15 @@ fn a_string_against_an_integer_literal_operand_is_refused_as_a_mismatch() {
     );
 }
 
-/// The conversion here is the integer literal's (RFC-0037), not the
-/// operator's.
 #[test]
-fn a_float_literal_operand_takes_an_integer_literal_argument_as_a_float() {
+fn a_float_literal_operand_refuses_an_integer_literal_argument() {
     let i = Interner::new();
-    let ir = script(&i, "let f = |k| -> k + 7.0; f(1)").unwrap();
+    let err = script(&i, "let f = |k| -> k + 7.0; f(1)").unwrap_err();
+    assert!(
+        err.contains("type mismatch: expected Float, got i64"),
+        "{err}"
+    );
+    let ir = script(&i, "let f = |k| -> k + 7.0; f(1.0)").unwrap();
     assert!(ir.contains("Fn(Float) -> Float"), "{ir}");
 }
 
@@ -241,4 +244,49 @@ fn a_value_mode_receiver_of_an_owned_place_is_moved_as_before() {
     let i = Interner::new();
     let ir = script_with_value_overloads(&i, "let o = { v: vec([1]), }; o.v.consume()").unwrap();
     assert!(ir.contains("take o.v"), "{ir}");
+}
+
+// -- A literal operand fixes the parameter it meets (RFC-0020, RFC-0037) --
+
+#[test]
+fn a_string_literal_operand_fixes_the_parameter_against_an_integer_call() {
+    let i = Interner::new();
+    let err = script(&i, "let f = |k| -> k + \"a\"; f(1)").unwrap_err();
+    assert!(
+        err.contains("type mismatch: expected String, got i64"),
+        "{err}"
+    );
+    assert!(
+        err.starts_with("[infer:"),
+        "the checker refuses the call, so validate is never reached: {err}"
+    );
+}
+
+#[test]
+fn a_string_literal_operand_leaves_the_parameter_taking_a_string() {
+    let i = Interner::new();
+    let ir = script(&i, "let f = |k| -> k + \"a\"; f(\"b\")").unwrap();
+    assert!(ir.contains("Fn(String) -> String"), "{ir}");
+    assert!(ir.contains("string_concat"), "{ir}");
+}
+
+#[test]
+fn an_integer_literal_operand_refuses_a_float_call() {
+    let i = Interner::new();
+    let err = script(&i, "let g = |k| -> k + 1; g(2.5)").unwrap_err();
+    assert!(
+        err.contains("type mismatch: expected i64, got Float"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_parameter_the_body_leaves_open_takes_one_width_for_every_call() {
+    let i = Interner::new();
+    let c = FxHashMap::from_iter([(i.intern("b"), Ty::U8), (i.intern("n"), Ty::I64)]);
+    let ir = compile_script_mode_ir_with(&i, "let g = |k| -> k + 1; g(@b)", &c, &[]).unwrap();
+    assert!(ir.contains("Fn(u8) -> u8"), "{ir}");
+    let err =
+        compile_script_mode_ir_with(&i, "let g = |k| -> k + 1; g(@b); g(@n)", &c, &[]).unwrap_err();
+    assert!(err.contains("type mismatch: expected u8, got i64"), "{err}");
 }
