@@ -2,9 +2,9 @@
 /// leaving the attended row in `out`; a consumer appends the trailing
 /// expression that selects from `out`.
 pub const ATTENTION: &str = "
-let d = len(&@query);
-let n = len(&@keys);
-let scale = 1.0 / sqrt(to_float(d));
+let d = @query.len();
+let n = @keys.len();
+let scale = 1.0 / d.to_float().sqrt();
 
 let scores = deque();
 let t = 0;
@@ -12,16 +12,16 @@ while t < n {
     let s = 0.0;
     let i = 0;
     while i < d {
-        s = s + *get(&@query, i) * *get(get(&@keys, t), i);
+        s = s + *@query.get(i) * *@keys.get(t).get(i);
         i = i + 1;
     }
-    push_back(&mut scores, s * scale);
+    scores.push_back(s * scale);
     t = t + 1;
 }
 
-let m = if let Some(m) = as_iter(&scores) | map(|s| -> *s) | max { m } else { 0.0 };
-let weights = as_iter(&scores) | map(|s| -> exp(*s - *m)) | collect;
-let z = as_iter(&weights) | map(|w| -> *w) | sum;
+let m = if let Some(m) = scores.as_iter().map(|s| -> *s).max() { m } else { 0.0 };
+let weights = scores.as_iter().map(|s| -> (*s - *m).exp()).collect();
+let z = weights.as_iter().map(|w| -> *w).sum();
 
 let out = deque();
 let j = 0;
@@ -29,10 +29,10 @@ while j < d {
     let acc = 0.0;
     let t = 0;
     while t < n {
-        acc = acc + *get(&weights, t) / z * *get(get(&@values, t), j);
+        acc = acc + *weights.get(t) / z * *@values.get(t).get(j);
         t = t + 1;
     }
-    push_back(&mut out, acc);
+    out.push_back(acc);
     j = j + 1;
 }
 ";

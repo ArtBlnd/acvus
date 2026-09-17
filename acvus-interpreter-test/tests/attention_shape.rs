@@ -53,10 +53,10 @@ fn assert_close(v: &Value, expected: f64) {
     );
 }
 
-const ATTENTION_AS_METHOD_CALLS: &str = "
-let d = @query.len();
-let n = @keys.len();
-let scale = 1.0 / d.to_float().sqrt();
+const ATTENTION_AS_FUNCTION_CALLS: &str = "
+let d = len(&@query);
+let n = len(&@keys);
+let scale = 1.0 / sqrt(to_float(d));
 
 let scores = deque();
 let t = 0;
@@ -64,16 +64,16 @@ while t < n {
     let s = 0.0;
     let i = 0;
     while i < d {
-        s = s + *@query.get(i) * *@keys.get(t).get(i);
+        s = s + *get(&@query, i) * *get(get(&@keys, t), i);
         i = i + 1;
     }
-    scores.push_back(s * scale);
+    push_back(&mut scores, s * scale);
     t = t + 1;
 }
 
-let m = if let Some(m) = scores.as_iter().map(|s| -> *s).max() { m } else { 0.0 };
-let weights = scores.as_iter().map(|s| -> (*s - *m).exp()).collect();
-let z = weights.as_iter().map(|w| -> *w).sum();
+let m = if let Some(m) = as_iter(&scores) | map(|s| -> *s) | max { m } else { 0.0 };
+let weights = as_iter(&scores) | map(|s| -> exp(*s - *m)) | collect;
+let z = as_iter(&weights) | map(|w| -> *w) | sum;
 
 let out = deque();
 let j = 0;
@@ -81,10 +81,10 @@ while j < d {
     let acc = 0.0;
     let t = 0;
     while t < n {
-        acc = acc + *weights.get(t) / z * *@values.get(t).get(j);
+        acc = acc + *get(&weights, t) / z * *get(get(&@values, t), j);
         t = t + 1;
     }
-    out.push_back(acc);
+    push_back(&mut out, acc);
     j = j + 1;
 }
 ";
@@ -102,8 +102,8 @@ fn expected_attention_of_e1_over_the_standard_basis() -> [f64; 2] {
 #[tokio::test]
 async fn attention_of_e1_over_the_standard_basis_is_the_softmax_weighted_sum_of_the_rows() {
     let expected = expected_attention_of_e1_over_the_standard_basis();
-    let first = run(&format!("{ATTENTION} *get(&out, 0)")).await;
-    let second = run(&format!("{ATTENTION} *get(&out, 1)")).await;
+    let first = run(&format!("{ATTENTION} *out.get(0)")).await;
+    let second = run(&format!("{ATTENTION} *out.get(1)")).await;
     assert_close(&first, expected[0]);
     assert_close(&second, expected[1]);
 }
@@ -149,10 +149,10 @@ async fn a_method_call_on_a_reference_parameter_lends_it_once() {
 }
 
 #[tokio::test]
-async fn attention_written_as_method_calls_is_the_same_value() {
+async fn attention_written_as_function_calls_is_the_same_value() {
     let expected = expected_attention_of_e1_over_the_standard_basis();
-    let first = run(&format!("{ATTENTION_AS_METHOD_CALLS} *out.get(0)")).await;
-    let second = run(&format!("{ATTENTION_AS_METHOD_CALLS} *out.get(1)")).await;
+    let first = run(&format!("{ATTENTION_AS_FUNCTION_CALLS} *get(&out, 0)")).await;
+    let second = run(&format!("{ATTENTION_AS_FUNCTION_CALLS} *get(&out, 1)")).await;
     assert_close(&first, expected[0]);
     assert_close(&second, expected[1]);
 }
@@ -211,5 +211,35 @@ async fn a_let_bound_lambda_is_callable_from_inside_another_lambda() {
 #[tokio::test]
 async fn a_let_bound_lambda_is_callable_at_the_top_level() {
     let v = run("let dot = |k| -> *get(k, 0); dot(&@query)").await;
+    assert_close(&v, 1.0);
+}
+
+#[tokio::test]
+#[should_panic(expected = "compile failed")]
+async fn a_let_bound_lambda_whose_signature_overlaps_an_extern_of_the_same_name_is_ambiguous() {
+    run("let len = |k| -> 7.0; len(&@query)").await;
+}
+
+#[tokio::test]
+async fn a_let_bound_lambda_named_like_an_extern_is_the_callee_where_the_extern_has_no_instance() {
+    let v = run("let len = |k| -> k + 7; len(1)").await;
+    assert_eq!(v.as_int(), 8);
+}
+
+#[tokio::test]
+async fn a_let_bound_lambda_named_like_an_extern_of_another_shape_is_the_callee() {
+    let v = run("let count = |k| -> 7.0; count(&@query)").await;
+    assert_close(&v, 7.0);
+}
+
+#[tokio::test]
+#[should_panic(expected = "validation failed")]
+async fn a_context_taken_into_a_local_and_not_written_back_is_refused() {
+    run("let q = @query; let dot = |k| -> *get(k, 0); dot(&q)").await;
+}
+
+#[tokio::test]
+async fn a_context_taken_into_a_local_and_written_back_is_read_in_between() {
+    let v = run("let q = @query; let r = *get(&q, 0); @query = q; r").await;
     assert_close(&v, 1.0);
 }

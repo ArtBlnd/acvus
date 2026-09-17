@@ -135,7 +135,7 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
     let inputs = inputs(n, d);
     let json = context_json(&inputs);
     let interner = Interner::new();
-    let source = format!("{ATTENTION} *get(&out, 0)");
+    let source = format!("{ATTENTION} *out.get(0)");
     let context_types: FxHashMap<Astr, Ty> =
         split_context(&interner, context_of(&interner, &json)).0;
 
@@ -220,7 +220,7 @@ fn execute_only(rt: &Runtime, case: &Case) -> Duration {
     let inputs = inputs(n, d);
     let json = context_json(&inputs);
     let interner = Interner::new();
-    let source = format!("{ATTENTION} *get(&out, 0)");
+    let source = format!("{ATTENTION} *out.get(0)");
     let context_types: FxHashMap<Astr, Ty> =
         split_context(&interner, context_of(&interner, &json)).0;
     let cr = compile_script_mode(&interner, &source, &context_types);
