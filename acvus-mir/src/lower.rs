@@ -673,8 +673,8 @@ impl<'a> Lowerer<'a> {
 
     /// Lower a match-bind statement: `pattern = source { body; };`
     ///
-    /// Single arm, no catch-all, no value produced.
-    /// If the pattern is irrefutable (binding), skip the test.
+    /// The tag form and the `if let` expression with no `else` are the same
+    /// match run for its effect, and go through `lower_match_bind_arm`.
     fn lower_stmt_match_bind(
         &mut self,
         pattern: &Pattern,
@@ -682,50 +682,72 @@ impl<'a> Lowerer<'a> {
         body: &[Stmt],
         span: Span,
     ) {
-        let source_reg = self.pattern_source(source);
+        let src = self.pattern_source(source);
+        self.lower_match_bind_arm(pattern, src, body, None, span);
+    }
 
+    /// One arm matched for its effect: test the pattern, and on a match bind
+    /// it and run the body, joining where the failed test goes. An irrefutable
+    /// pattern has no test and no branch. No value leaves the join.
+    fn lower_match_bind_arm(
+        &mut self,
+        pattern: &Pattern,
+        src: PatSrc,
+        body: &[Stmt],
+        tail: Option<&Expr>,
+        span: Span,
+    ) {
         if pattern_is_irrefutable(pattern) {
-            // No branching needed - just bind and execute body.
-            self.push_scope();
-            self.lower_pattern_bind(pattern, source_reg.clone(), span);
-            for s in body {
-                self.lower_stmt(s);
-            }
-            self.pop_scope();
-        } else {
-            // Refutable: test -> branch -> bind + body -> merge.
-            let body_label = self.alloc_label();
-            let end_label = self.alloc_label();
-
-            let matched = self.lower_pattern_test(pattern, source_reg.clone(), span);
-            self.emit_inst(
-                span,
-                InstKind::JumpIf {
-                    cond: matched,
-                    then_label: body_label,
-                    then_args: vec![],
-                    else_label: end_label,
-                    else_args: vec![],
-                },
-            );
-
-            self.emit_label(span, body_label);
-            self.push_scope();
-            self.lower_pattern_bind(pattern, source_reg.clone(), span);
-            for s in body {
-                self.lower_stmt(s);
-            }
-            self.pop_scope();
-            self.emit_inst(
-                span,
-                InstKind::Jump {
-                    label: end_label,
-                    args: vec![],
-                },
-            );
-
-            self.emit_label(span, end_label);
+            self.lower_match_bind_body(pattern, src, body, tail, span);
+            return;
         }
+
+        let matched = self.lower_pattern_test(pattern, src.clone(), span);
+        let body_label = self.alloc_label();
+        let end_label = self.alloc_label();
+        self.emit_inst(
+            span,
+            InstKind::JumpIf {
+                cond: matched,
+                then_label: body_label,
+                then_args: vec![],
+                else_label: end_label,
+                else_args: vec![],
+            },
+        );
+
+        self.emit_label(span, body_label);
+        self.lower_match_bind_body(pattern, src, body, tail, span);
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: end_label,
+                args: vec![],
+            },
+        );
+
+        self.emit_label(span, end_label);
+    }
+
+    /// The arm's bindings and its statements, in a scope of their own. A tail
+    /// expression is run for its effect and its value discarded.
+    fn lower_match_bind_body(
+        &mut self,
+        pattern: &Pattern,
+        src: PatSrc,
+        body: &[Stmt],
+        tail: Option<&Expr>,
+        span: Span,
+    ) {
+        self.push_scope();
+        self.lower_pattern_bind(pattern, src, span);
+        for s in body {
+            self.lower_stmt(s);
+        }
+        if let Some(tail) = tail {
+            self.lower_expr(tail);
+        }
+        self.pop_scope();
     }
 
     fn lower_while(&mut self, cond: &Expr, body: &[Stmt], span: Span) {
@@ -950,13 +972,12 @@ impl<'a> Lowerer<'a> {
     ) -> ValueId {
         let result_ty = self.type_of_id(id);
         let src = self.pattern_source(source);
-        let matched = self.lower_pattern_test(pattern, src.clone(), span);
-
-        let then_label = self.alloc_label();
-        let merge_label = self.alloc_label();
 
         match else_branch {
             Some(eb) => {
+                let matched = self.lower_pattern_test(pattern, src.clone(), span);
+                let then_label = self.alloc_label();
+                let merge_label = self.alloc_label();
                 let else_label = self.alloc_label();
                 self.emit_inst(
                     span,
@@ -1014,36 +1035,9 @@ impl<'a> Lowerer<'a> {
                 result
             }
             None => {
-                self.emit_inst(
-                    span,
-                    InstKind::JumpIf {
-                        cond: matched,
-                        then_label,
-                        then_args: vec![],
-                        else_label: merge_label,
-                        else_args: vec![],
-                    },
-                );
-
-                self.emit_label(span, then_label);
-                self.push_scope();
-                self.lower_pattern_bind(pattern, src.clone(), span);
-                for s in then_body {
-                    self.lower_stmt(s);
-                }
-                if let Some(tail) = then_tail {
-                    self.lower_expr(tail);
-                }
-                self.pop_scope();
-                self.emit_inst(
-                    span,
-                    InstKind::Jump {
-                        label: merge_label,
-                        args: vec![],
-                    },
-                );
-
-                self.emit_label(span, merge_label);
+                // The same match the tag form `pattern = source { body };`
+                // writes: one arm, run for its effect.
+                self.lower_match_bind_arm(pattern, src, then_body, then_tail.as_deref(), span);
                 self.emit_unit(span)
             }
         }

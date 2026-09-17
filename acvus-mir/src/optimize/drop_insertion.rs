@@ -14,14 +14,14 @@
 //!
 //! **Phase 2 - Edge drops**: At branch points, a value may be forwarded to one
 //! successor but not another. For each edge A->B, if a value is live-out of A but
-//! NOT forwarded to B and NOT live-in to B, insert Drop at the start of B.
-//! Example: `if cond -> then(v0), else()` - v0 needs Drop at start of else.
+//! NOT forwarded to B and NOT live-in to B, its life ends on that edge; where the
+//! drop then runs is `DropSite`.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::loans::Loans;
 use crate::analysis::{inst_info, liveness};
-use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
 use crate::validate::move_check::is_move_only;
@@ -123,55 +123,215 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
     // -- Phase 2: edge drops (branch-point) -------------------------
 
-    // For each block, examine the terminator's outgoing edges.
-    // If a value is live-out of the block but NOT forwarded to a successor
-    // and NOT live-in to that successor, insert Drop at the start of that successor.
-
-    // Collect edge drops: (target_block_idx, values_to_drop).
-    let mut edge_drops: FxHashMap<usize, Vec<ValueId>> = FxHashMap::default();
+    let preds = PredCounts::of(cfg);
+    let mut head_drops: FxHashMap<BlockIdx, Vec<ValueId>> = FxHashMap::default();
+    let mut splits: Vec<EdgeSplit> = Vec::new();
 
     for bi in 0..cfg.blocks.len() {
         let live_out = liveness.live_out.get(bi).cloned().unwrap_or_default();
+        let edges = terminator_edges(&cfg.blocks[bi].terminator);
 
-        let block = &cfg.blocks[bi];
-        let edges = terminator_edges(&block.terminator);
-
-        for (label, forwarded) in edges {
-            let Some(&target_bi) = label_to_block.get(&label) else {
+        for edge in edges {
+            let Some(&target) = label_to_block.get(&edge.target) else {
                 continue;
             };
-            let target_block_idx = BlockIdx(target_bi);
-
-            for &v in &live_out {
-                if !forwarded.contains(&v)
-                    && !liveness.is_live_in(target_block_idx, v)
-                    && needs_drop(v, val_types)
-                {
-                    edge_drops.entry(target_bi).or_default().push(v);
-                }
+            let target = BlockIdx(target);
+            let dying: Vec<ValueId> = live_out
+                .iter()
+                .copied()
+                .filter(|v| {
+                    !edge.forwarded.contains(v)
+                        && !liveness.is_live_in(target, *v)
+                        && needs_drop(*v, val_types)
+                })
+                .collect();
+            if dying.is_empty() {
+                continue;
+            }
+            match DropSite::of(preds.count_of(target)) {
+                DropSite::TargetHead => head_drops.entry(target).or_default().extend(dying),
+                DropSite::SplitEdge => splits.push(EdgeSplit {
+                    from: BlockIdx(bi),
+                    edge,
+                    dying,
+                }),
             }
         }
     }
 
-    // Insert edge drops at the start of target blocks.
-    for (bi, vals) in edge_drops {
-        let block = &mut cfg.blocks[bi];
-        // Deduplicate (a value might be orphaned from multiple predecessors,
-        // but should only be dropped once).
-        let mut seen = FxHashSet::default();
-        let mut drop_insts: Vec<Inst> = Vec::new();
-        for v in vals {
-            if seen.insert(v) {
-                drop_insts.push(Inst {
-                    span: acvus_ast::Span::ZERO,
-                    kind: InstKind::Drop { src: v },
-                });
-            }
-        }
-        // Prepend drops at the start of the block.
+    for (target, vals) in head_drops {
+        let block = &mut cfg.blocks[target.0];
+        let mut drop_insts: Vec<Inst> = drop_seq(vals);
         drop_insts.extend(block.insts.drain(..));
         block.insts = drop_insts;
     }
+
+    apply_edge_splits(cfg, splits);
+}
+
+/// Where the drops of a dying edge run.
+enum DropSite {
+    /// The edge is its target's only entry, so the target's head is on that
+    /// edge and nowhere else.
+    TargetHead,
+    /// The target is a join. A drop at its head would also run for a sibling
+    /// edge along which the value is live and dropped inside its own block, so
+    /// the edge gets a block of its own.
+    SplitEdge,
+}
+
+impl DropSite {
+    fn of(target_predecessors: usize) -> Self {
+        match target_predecessors {
+            0 | 1 => Self::TargetHead,
+            _ => Self::SplitEdge,
+        }
+    }
+}
+
+/// Which of a terminator's outgoing edges this is.
+#[derive(Clone, Copy)]
+enum EdgeSlot {
+    Jump,
+    Then,
+    Else,
+}
+
+/// One outgoing edge of a block's terminator. `forwarded` keeps the order of
+/// the jump's arguments: they are the target block's parameters, by position.
+struct OutEdge {
+    slot: EdgeSlot,
+    target: Label,
+    forwarded: Vec<ValueId>,
+}
+
+/// One edge that needs a block of its own to hold its drops.
+struct EdgeSplit {
+    from: BlockIdx,
+    edge: OutEdge,
+    dying: Vec<ValueId>,
+}
+
+/// How many edges enter each block, by block index.
+struct PredCounts(Vec<usize>);
+
+impl PredCounts {
+    fn of(cfg: &CfgBody) -> Self {
+        let mut counts = vec![0usize; cfg.blocks.len()];
+        for bi in 0..cfg.blocks.len() {
+            for succ in cfg.successors(BlockIdx(bi)) {
+                counts[succ.0] += 1;
+            }
+        }
+        Self(counts)
+    }
+
+    fn count_of(&self, block: BlockIdx) -> usize {
+        self.0[block.0]
+    }
+}
+
+/// One `Drop` per distinct value, in the order given.
+fn drop_seq<I>(vals: I) -> Vec<Inst>
+where
+    I: IntoIterator<Item = ValueId>,
+{
+    let mut seen = FxHashSet::default();
+    vals.into_iter()
+        .filter(|v| seen.insert(*v))
+        .map(|v| Inst {
+            span: acvus_ast::Span::ZERO,
+            kind: InstKind::Drop { src: v },
+        })
+        .collect()
+}
+
+/// Give each split edge a block holding its drops and a jump onward, placed
+/// directly after the block it leaves so that no `Fallthrough` changes target.
+fn apply_edge_splits(cfg: &mut CfgBody, splits: Vec<EdgeSplit>) {
+    if splits.is_empty() {
+        return;
+    }
+    let mut next_label = cfg
+        .blocks
+        .iter()
+        .map(|b| b.label)
+        .filter(|l| *l != crate::cfg::ENTRY_LABEL)
+        .map(|l| l.0 + 1)
+        .max()
+        .expect("a split edge names a labelled block, so one exists");
+
+    let mut inserted: FxHashMap<BlockIdx, Vec<Block>> = FxHashMap::default();
+    for split in splits {
+        let label = Label(next_label);
+        next_label += 1;
+        inserted.entry(split.from).or_default().push(Block {
+            label,
+            params: vec![],
+            insts: drop_seq(split.dying),
+            terminator: Terminator::Jump {
+                label: split.edge.target,
+                args: split.edge.forwarded,
+            },
+            merge_of: None,
+        });
+        retarget(
+            &mut cfg.blocks[split.from.0].terminator,
+            split.edge.slot,
+            label,
+        );
+    }
+
+    let mut blocks: Vec<Block> = Vec::with_capacity(cfg.blocks.len() + inserted.len());
+    for (bi, block) in std::mem::take(&mut cfg.blocks).into_iter().enumerate() {
+        blocks.push(block);
+        blocks.extend(inserted.remove(&BlockIdx(bi)).unwrap_or_default());
+    }
+    cfg.label_to_block = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.label, BlockIdx(i)))
+        .collect();
+    cfg.blocks = blocks;
+}
+
+/// One edge of a terminator, in place.
+struct EdgeRef<'a> {
+    label: &'a mut Label,
+    args: &'a mut Vec<ValueId>,
+}
+
+impl<'a> EdgeRef<'a> {
+    fn of(term: &'a mut Terminator, slot: EdgeSlot) -> Self {
+        match (term, slot) {
+            (Terminator::Jump { label, args }, EdgeSlot::Jump)
+            | (
+                Terminator::JumpIf {
+                    then_label: label,
+                    then_args: args,
+                    ..
+                },
+                EdgeSlot::Then,
+            )
+            | (
+                Terminator::JumpIf {
+                    else_label: label,
+                    else_args: args,
+                    ..
+                },
+                EdgeSlot::Else,
+            ) => Self { label, args },
+            (term, _) => panic!("edge slot does not name an edge of {term:?}"),
+        }
+    }
+}
+
+/// Send one edge to the block that now holds its drops. The split block takes
+/// no parameters and passes the arguments on itself, so the edge loses them.
+fn retarget(term: &mut Terminator, slot: EdgeSlot, to: Label) {
+    let edge = EdgeRef::of(term, slot);
+    *edge.label = to;
+    edge.args.clear();
 }
 
 /// Check if `val` is used after `at_idx` within the block (instructions + terminator).
@@ -228,24 +388,26 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
     uses
 }
 
-/// Outgoing edges from a terminator: (target_label, forwarded_values).
-fn terminator_edges(term: &Terminator) -> Vec<(Label, FxHashSet<ValueId>)> {
+/// The outgoing edges of a terminator. A `Fallthrough` edge carries no label,
+/// so it names no edge here.
+fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
+    let edge = |slot: EdgeSlot, target: &Label, args: &Vec<ValueId>| OutEdge {
+        slot,
+        target: *target,
+        forwarded: args.clone(),
+    };
     match term {
-        Terminator::Jump { label, args } => {
-            vec![(*label, args.iter().copied().collect())]
-        }
+        Terminator::Jump { label, args } => vec![edge(EdgeSlot::Jump, label, args)],
         Terminator::JumpIf {
             then_label,
             then_args,
             else_label,
             else_args,
             ..
-        } => {
-            vec![
-                (*then_label, then_args.iter().copied().collect()),
-                (*else_label, else_args.iter().copied().collect()),
-            ]
-        }
+        } => vec![
+            edge(EdgeSlot::Then, then_label, then_args),
+            edge(EdgeSlot::Else, else_label, else_args),
+        ],
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }

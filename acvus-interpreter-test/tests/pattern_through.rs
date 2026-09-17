@@ -5,11 +5,13 @@
 //! lambda is written as the tag form `pattern = source { body };`, since
 //! `if let` is a script-mode expression and a lambda's body is an
 //! expression; the payload is carried out through a context, because a
-//! variable assigned inside a tag-form body is not live after it. The
-//! value side of the open head has no test here: a tag-form match that
-//! moves its payload out inside a lambda traps at run time whatever the
-//! head is -- `|q| -> { Some(v) = Some(1.5) { @out = v; }; 0 }`, a head
-//! the checker reads at once, traps the same way.
+//! name a tag-form body binds is that body's own (`Stmt::Bind` shadows,
+//! and the script grammar has no assignment statement).
+//!
+//! The tag form and `if let` with no `else` are one lowering, so the value
+//! side of the open head runs the same either way: a body that moves its
+//! payload out leaves the source partly moved, and the source is dropped
+//! once on each path out of the match.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -57,4 +59,43 @@ async fn a_borrowed_option_is_matched_through_and_stays_usable() {
     )
     .await;
     assert_eq!(v.as_float(), 3.0);
+}
+
+// -- A body that moves the payload out of a value source ---------------
+
+const MOVE_OUT: &str = "let f = |q| -> { Some(v) = Some(1.5) { @out = v; }; 0 }; ";
+
+#[tokio::test]
+async fn a_tag_form_body_moves_the_payload_out_and_the_source_is_dropped_once() {
+    let i = Interner::new();
+    assert_eq!(out_of(&i, &format!("{MOVE_OUT}f(0)")).await, 1.5);
+}
+
+#[tokio::test]
+async fn the_same_match_written_as_an_if_let_runs_the_same() {
+    let i = Interner::new();
+    let source = "let o = Some(1.5); if let Some(v) = o { @out = v; }; 0";
+    assert_eq!(out_of(&i, source).await, 1.5);
+}
+
+#[tokio::test]
+async fn a_tag_form_match_that_fails_leaves_the_context_as_it_was() {
+    let i = Interner::new();
+    let source = "let f = |q| -> { Some(v) = q { @out = v; }; 0 }; f(None)";
+    assert_eq!(out_of(&i, source).await, 0.0);
+}
+
+#[tokio::test]
+async fn a_name_a_tag_form_body_binds_is_that_bodys_own() {
+    // The script grammar has no assignment statement: `out = v;` is a
+    // `Stmt::Bind`, and a bind in the body's scope shadows the outer `out`
+    // and ends with the scope. The payload leaves through a context.
+    let i = Interner::new();
+    let v = run_script_mode(
+        &i,
+        "let f = |q| -> { out = 0.0; Some(v) = Some(1.5) { out = v; }; out }; f(0)",
+        Context::default(),
+    )
+    .await;
+    assert_eq!(v.as_float(), 0.0);
 }

@@ -263,6 +263,38 @@ fn a_variant_against_a_borrowed_option_binds_a_reference_and_leaves_it_owned() {
     );
 }
 
+/// A dump's instruction listing, without the value table that follows it.
+fn instructions(ir: &str) -> String {
+    ir.lines()
+        .take_while(|line| !line.trim_start().starts_with(';'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_tag_form_and_if_let_with_no_else_are_one_lowering() {
+    let i = Interner::new();
+    let out = FxHashMap::from_iter([(i.intern("out"), Ty::Float)]);
+    let tag =
+        compile_script_optimized(&i, "o = Some(1.5); Some(v) = o { @out = v; }; 0", &out).unwrap();
+    let if_let = compile_script_mode_optimized(
+        &i,
+        "let o = Some(1.5); if let Some(v) = o { @out = v; }; 0",
+        &out,
+    )
+    .unwrap();
+    assert_eq!(
+        instructions(&tag),
+        instructions(&if_let),
+        "both go through `lower_match_bind_arm`"
+    );
+    // The one difference is outside the listing: `if let` is an expression
+    // and its value is the Unit no instruction reads. The tag form is a
+    // statement and has none.
+    assert!(if_let.contains(": Unit"), "{if_let}");
+    assert!(!tag.contains(": Unit"), "{tag}");
+}
+
 #[test]
 fn a_context_bound_by_a_pattern_whose_head_settles_on_a_reference_is_refused() {
     let i = Interner::new();
