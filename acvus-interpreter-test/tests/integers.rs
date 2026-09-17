@@ -31,10 +31,46 @@ async fn arithmetic_runs_at_the_operands_width() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "integer overflow")]
-async fn an_overflow_at_the_width_panics() {
+async fn arithmetic_past_the_width_wraps_at_the_width() {
     let i = Interner::new();
-    run_script(&i, "@b + 10", ctx(&i, "b", IntTy::U8, 250)).await;
+    let v = run_script(&i, "@b + 10", ctx(&i, "b", IntTy::U8, 250)).await;
+    assert_eq!(IntTy::U8.read(v.small()), 4);
+    let v = run_script(&i, "@b * 2", ctx(&i, "b", IntTy::U8, 200)).await;
+    assert_eq!(IntTy::U8.read(v.small()), 144);
+    let v = run_script(&i, "@b - 1", ctx(&i, "b", IntTy::U8, 0)).await;
+    assert_eq!(IntTy::U8.read(v.small()), 255);
+    let v = run_script(&i, "-@n", ctx(&i, "n", IntTy::I8, 0x80)).await;
+    assert_eq!(IntTy::I8.read(v.small()), -128);
+    let v = run_script(&i, "@n + 1", ctx(&i, "n", IntTy::I64, i64::MAX as u64)).await;
+    assert_eq!(v.as_int(), i64::MIN);
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to divide by zero")]
+async fn a_division_by_zero_panics_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(&i, "@n / 0", ctx(&i, "n", IntTy::I64, 1)).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to calculate the remainder with a divisor of zero")]
+async fn a_remainder_by_zero_panics_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(&i, "@n % 0", ctx(&i, "n", IntTy::I64, 1)).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to divide with overflow")]
+async fn dividing_the_minimum_by_minus_one_panics_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(&i, "@n / -1", ctx(&i, "n", IntTy::I64, i64::MIN as u64)).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to calculate the remainder with overflow")]
+async fn the_remainder_of_the_minimum_by_minus_one_panics_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(&i, "@n % -1", ctx(&i, "n", IntTy::I64, i64::MIN as u64)).await;
 }
 
 #[tokio::test]
@@ -80,16 +116,17 @@ async fn a_literal_matches_at_the_source_s_width() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "integer overflow")]
-async fn an_overflow_inside_a_while_panics_as_the_arithmetic_does() {
+async fn arithmetic_inside_a_while_wraps_as_the_arithmetic_does() {
     let i = Interner::new();
     let source = "let acc = @b; let k = 0; while k < 4 { acc = acc + @b; k = k + 1; } acc";
-    run_script_mode(&i, source, ctx(&i, "b", IntTy::U8, 250)).await;
+    let v = run_script_mode(&i, source, ctx(&i, "b", IntTy::U8, 250)).await;
+    assert_eq!(IntTy::U8.read(v.small()), 226, "250 * 5 mod 256");
 }
 
 /// Code motion on `bb8207f` hoisted `i + 1` into the loop head above the
-/// `JumpIf`, so the exit iteration evaluated `255 + 1` and the run panicked
-/// with `integer overflow`, measured 2026-09-18.
+/// `JumpIf`, so the exit iteration evaluated `255 + 1`, measured
+/// 2026-09-18. It raised `integer overflow` then; it returns `0` now, and
+/// the returned value is what fails here either way.
 #[tokio::test]
 async fn an_operation_in_a_loop_body_does_not_run_on_the_exit_iteration() {
     let i = Interner::new();

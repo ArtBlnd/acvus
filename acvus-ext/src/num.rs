@@ -56,8 +56,7 @@ pub mod sig {
 
 #[extern_fn(instance_of = sig::abs, effect = pure)]
 fn abs_int(a: i64) -> i64 {
-    a.checked_abs()
-        .expect("abs: the absolute value of i64::MIN does not fit in i64")
+    a.wrapping_abs()
 }
 
 #[extern_fn(instance_of = sig::abs, effect = pure)]
@@ -112,24 +111,27 @@ fn clamp_float(x: f64, lo: f64, hi: f64) -> f64 {
 fn pow_int(base: i64, exp: i64) -> i64 {
     assert!(exp >= 0, "pow: negative exponent {exp} on an integer base");
     let Ok(exp32) = u32::try_from(exp) else {
-        return pow_with_exponent_beyond_u32(base, exp);
+        return wrapping_pow_wide(base, exp);
     };
-    base.checked_pow(exp32)
-        .unwrap_or_else(|| pow_overflow(base, exp))
+    base.wrapping_pow(exp32)
 }
 
-fn pow_with_exponent_beyond_u32(base: i64, exp: i64) -> i64 {
-    match base {
-        0 => 0,
-        1 => 1,
-        -1 if exp % 2 == 0 => 1,
-        -1 => -1,
-        _ => pow_overflow(base, exp),
+/// `wrapping_pow` beyond the `u32` exponent Rust's own signature admits:
+/// the same square-and-multiply, over an `i64` exponent. An even base
+/// reaches `0` on its own here, since the product's factor of two outruns
+/// the width long before the exponent is spent.
+fn wrapping_pow_wide(base: i64, exp: i64) -> i64 {
+    let mut acc: i64 = 1;
+    let mut square = base;
+    let mut rest = exp;
+    while rest > 0 {
+        if rest & 1 == 1 {
+            acc = acc.wrapping_mul(square);
+        }
+        square = square.wrapping_mul(square);
+        rest >>= 1;
     }
-}
-
-fn pow_overflow(base: i64, exp: i64) -> ! {
-    panic!("pow: {base}^{exp} overflows i64")
+    acc
 }
 
 #[extern_fn(instance_of = sig::pow, effect = pure)]

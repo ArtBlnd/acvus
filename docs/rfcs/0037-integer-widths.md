@@ -12,11 +12,17 @@ The language has eight integer types, `i8`, `i16`, `i32`, `i64`, `u8`,
 Rust struct field of any of these types crosses as that type (RFC-0032).
 
 Arithmetic, comparison, and the bit operators take two operands of one
-width and produce that width; nothing widens or narrows on its own. An
-overflow, a division by zero, and a shift past the width panic, at every
-width, with the message the same operation panics with in Rust.
-Negation takes a signed integer or a `Float`. A checked operation runs only where the program wrote
-it: no pass may move it onto a path the program did not take (RFC-0007).
+width and produce that width; nothing widens or narrows on its own. Each
+operation is what the same Rust operator does in a release build, at that
+width: `+`, `-`, `*` and negation wrap, a shift takes its amount modulo
+the width, and `/` and `%` panic on a zero divisor and at `MIN / -1`,
+with Rust's own texts — `attempt to divide by zero`, `attempt to
+calculate the remainder with a divisor of zero`, `attempt to divide with
+overflow`, `attempt to calculate the remainder with overflow`. Those two
+are the only integer operations that can fail, so RFC-0007's constraint
+— an operation that can raise runs only where the program wrote it, and
+no pass may move it onto a path the program did not take — binds `/` and
+`%` and nothing else. Negation takes a signed integer or a `Float`.
 
 An integer literal has no width of its own. Its type is a variable that
 only an integer type can fill; the use decides which — `@b + 1` with `@b`

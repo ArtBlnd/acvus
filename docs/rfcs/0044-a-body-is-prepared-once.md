@@ -47,9 +47,9 @@ boundary the same fact is `Runtime::call_is_sync`, asked once per closure
 when `Fn0`/`Fn1`/`Fn2`/`Fn3` is built and not again per element;
 `Runtime::call_now` is the call that follows from a true answer.
 
-A failure at run time is a Rust `panic!`. An integer overflow, a
-division by zero, a shift past the width, an index out of range, a
-`Diverge` reached, a broken contract an extern raises — each panics where
+A failure at run time is a Rust `panic!`. A division by zero, a `MIN /
+-1`, an index out of range, a `Diverge` reached, a broken contract an
+extern raises — each panics where
 it happens, with the message the same operation writes in Rust, and
 leaves through the unwinder. There is no failure channel at all: a
 handler's return is `SyncFn(&R, &mut [Value]) -> Value` and

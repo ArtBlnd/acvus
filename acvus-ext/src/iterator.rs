@@ -33,12 +33,13 @@ use acvus_extern::{
 use crate::iter::{Iter, drain};
 
 /// The arithmetic the aggregates need of a `Monomorphize<(i64, f64)>`
-/// member; an overflowed `add`/`mul` is a trap at the aggregate.
+/// member; `add` and `mul` are what `Iterator::sum` and `Iterator::product`
+/// do in a release build.
 trait Num: Copy + Send + Sync + 'static {
     const ZERO: Self;
     const ONE: Self;
-    fn add(self, other: Self) -> Option<Self>;
-    fn mul(self, other: Self) -> Option<Self>;
+    fn add(self, other: Self) -> Self;
+    fn mul(self, other: Self) -> Self;
     fn min(self, other: Self) -> Self;
     fn max(self, other: Self) -> Self;
 }
@@ -47,12 +48,12 @@ impl Num for i64 {
     const ZERO: Self = 0;
     const ONE: Self = 1;
 
-    fn add(self, other: Self) -> Option<Self> {
-        self.checked_add(other)
+    fn add(self, other: Self) -> Self {
+        self.wrapping_add(other)
     }
 
-    fn mul(self, other: Self) -> Option<Self> {
-        self.checked_mul(other)
+    fn mul(self, other: Self) -> Self {
+        self.wrapping_mul(other)
     }
 
     fn min(self, other: Self) -> Self {
@@ -71,12 +72,12 @@ impl Num for f64 {
     const ZERO: Self = 0.0;
     const ONE: Self = 1.0;
 
-    fn add(self, other: Self) -> Option<Self> {
-        Some(self + other)
+    fn add(self, other: Self) -> Self {
+        self + other
     }
 
-    fn mul(self, other: Self) -> Option<Self> {
-        Some(self * other)
+    fn mul(self, other: Self) -> Self {
+        self * other
     }
 
     fn min(self, other: Self) -> Self {
@@ -658,9 +659,7 @@ where
     let mut acc = T::ZERO;
     drain!(it, rt, |value| {
         let item = Erased::<Rt, T>::from_value(rt, value);
-        acc = acc
-            .add(*item.as_ref(rt))
-            .unwrap_or_else(|| panic!("sum: integer overflow"));
+        acc = acc.add(*item.as_ref(rt));
     });
     acc
 }
@@ -676,9 +675,7 @@ where
     let mut acc = T::ONE;
     drain!(it, rt, |value| {
         let item = Erased::<Rt, T>::from_value(rt, value);
-        acc = acc
-            .mul(*item.as_ref(rt))
-            .unwrap_or_else(|| panic!("product: integer overflow"));
+        acc = acc.mul(*item.as_ref(rt));
     });
     acc
 }

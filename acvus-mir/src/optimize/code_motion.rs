@@ -8,10 +8,13 @@
 //! work on a path that did not need it.
 //!
 //! Until `bb8207f` the criterion was purity instead, and purity is not
-//! infallibility. Integer arithmetic raises on overflow, on division by
-//! zero and on a shift past the width (RFC-0037), so hoisting `i + 1` out
-//! of a loop body made `let i = 250; while i < @n { i = i + 1; } i` with
-//! `n: u8 = 255` raise `IntegerOverflow` where the program returns `255`.
+//! infallibility: integer division and remainder panic at zero and at
+//! `MIN / -1` (RFC-0037), and at that time `+` was checked too, so hoisting
+//! `i + 1` out of a loop body made `let i = 250; while i < @n { i = i + 1; }
+//! i` with `n: u8 = 255` overflow where the program returns `255`. The
+//! arithmetic now wraps as Rust's release build does; the hoist would
+//! still return the wrong value, and `/` still panics off the program's
+//! path.
 //!
 //! A Spawn is never moved: the work starts at the Spawn, and issuing it on
 //! a path that would not have reached it speculates an effect (RFC-0007).

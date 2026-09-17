@@ -28,10 +28,11 @@ The meaning on words:
 - `<`, `<=`, `>`, `>=` is the total order of the representation: signed
   for `Int`, unsigned for `Byte`, `false < true`, and `f64::total_cmp`
   for `Float`, which agrees with bit equality.
-- `+`, `-`, `*` on `Int` are checked: overflow is a runtime error, as
-  division by zero is. On `Float` they are IEEE arithmetic; `NaN` is a
-  value, not an error.
-- `/`, `%` on `Int` are a runtime error at zero.
+- `+`, `-`, `*` on an integer wrap at the width, as Rust's release build
+  does (RFC-0037). On `Float` they are IEEE arithmetic; `NaN` is a value,
+  not an error.
+- `/`, `%` on an integer panic at zero and at `MIN / -1`, with Rust's
+  texts.
 
 The meaning on `String`: `==` is byte equality (`StringEq`), `+` is
 concatenation (`StringConcat`), and a template's output is one

@@ -183,9 +183,11 @@ async fn product_of_a_range_and_of_nothing() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "integer overflow")]
-async fn sum_that_overflows_an_int_traps() {
-    run("into_iter([9223372036854775807, 1]) | sum()").await;
+async fn sum_and_product_past_the_width_wrap() {
+    let v = run("into_iter([9223372036854775807, 1]) | sum()").await;
+    assert_eq!(v.as_int(), i64::MIN);
+    let v = run("into_iter([4611686018427387904, 2]) | product()").await;
+    assert_eq!(v.as_int(), i64::MIN);
 }
 
 #[tokio::test]
@@ -276,11 +278,27 @@ async fn a_pipeline_mixing_the_new_stages_and_an_aggregate() {
     assert_eq!(v.as_int(), 12, "0, 4, 8");
 }
 
-/// The closure's own `+` panics, three synchronous stages below the
+/// The closure's own `/` panics, three synchronous stages below the
 /// boundary, and the unwinder carries it out through every stage.
 #[tokio::test]
-#[should_panic(expected = "integer overflow")]
+#[should_panic(expected = "attempt to divide by zero")]
 async fn a_panic_three_sync_stages_deep_unwinds_out_of_the_pipeline() {
+    let i = Interner::new();
+    let source = "range(0, 4) | map(|x| -> x) | map(|x| -> x) | map(|x| -> x / @zero) | sum()";
+    let context: Context = [(
+        i.intern("zero"),
+        typed(acvus_mir::ty::Ty::I64, Value::int(0)),
+    )]
+    .into_iter()
+    .collect();
+
+    run_script_mode(&i, source, context).await;
+}
+
+/// `0 + MAX`, `1 + MAX`, `2 + MAX`, `3 + MAX` are `MAX`, `MIN`, `MIN + 1`,
+/// `MIN + 2`, and their sum modulo `2^64` is `2`.
+#[tokio::test]
+async fn arithmetic_three_sync_stages_deep_wraps_at_each_stage() {
     let i = Interner::new();
     let source = "range(0, 4) | map(|x| -> x) | map(|x| -> x) | map(|x| -> x + @big) | sum()";
     let context: Context = [(
@@ -290,5 +308,5 @@ async fn a_panic_three_sync_stages_deep_unwinds_out_of_the_pipeline() {
     .into_iter()
     .collect();
 
-    run_script_mode(&i, source, context).await;
+    assert_eq!(run_script_mode(&i, source, context).await.as_int(), 2);
 }

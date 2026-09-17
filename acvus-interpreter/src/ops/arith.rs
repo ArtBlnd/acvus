@@ -1,8 +1,7 @@
 //! Arithmetic and logic, one operation per operator at one operand type.
 //!
-//! Integer arithmetic is checked: an overflow, a division by zero, or a
-//! shift past the width panics where the same operation panics in Rust,
-//! never wraps.
+//! An integer operation is the same Rust operator in a release build, at
+//! the operand's width, panic messages included (RFC-0037).
 
 use acvus_ast::{BinOp, UnaryOp};
 use acvus_mir::ty::IntTy;
@@ -56,18 +55,19 @@ pub(crate) use for_int_ty;
 /// One integer width, as the operations at that width read and write it.
 pub trait Int: Copy + PartialOrd + 'static {
     const TAG: Tag;
+    const SHIFT_MASK: u64;
 
     fn read(bits: u64) -> Self;
     fn word(self) -> u64;
     fn wide(self) -> i128;
-    fn checked_add(self, other: Self) -> Option<Self>;
-    fn checked_sub(self, other: Self) -> Option<Self>;
-    fn checked_mul(self, other: Self) -> Option<Self>;
+    fn wrapping_add(self, other: Self) -> Self;
+    fn wrapping_sub(self, other: Self) -> Self;
+    fn wrapping_mul(self, other: Self) -> Self;
     fn checked_div(self, other: Self) -> Option<Self>;
     fn checked_rem(self, other: Self) -> Option<Self>;
-    fn checked_neg(self) -> Option<Self>;
-    fn checked_shl(self, shift: u32) -> Option<Self>;
-    fn checked_shr(self, shift: u32) -> Option<Self>;
+    fn wrapping_neg(self) -> Self;
+    fn wrapping_shl(self, shift: u32) -> Self;
+    fn wrapping_shr(self, shift: u32) -> Self;
     fn bitand(self, other: Self) -> Self;
     fn bitor(self, other: Self) -> Self;
     fn bitxor(self, other: Self) -> Self;
@@ -79,6 +79,7 @@ macro_rules! impl_int {
     ($($t:ty => $k:ident),* $(,)?) => {
         $(impl Int for $t {
             const TAG: Tag = Tag::$k;
+            const SHIFT_MASK: u64 = <$t>::BITS as u64 - 1;
 
             fn read(bits: u64) -> Self {
                 IntTy::$k.read(bits) as $t
@@ -89,14 +90,14 @@ macro_rules! impl_int {
             fn wide(self) -> i128 {
                 self as i128
             }
-            fn checked_add(self, other: Self) -> Option<Self> {
-                <$t>::checked_add(self, other)
+            fn wrapping_add(self, other: Self) -> Self {
+                <$t>::wrapping_add(self, other)
             }
-            fn checked_sub(self, other: Self) -> Option<Self> {
-                <$t>::checked_sub(self, other)
+            fn wrapping_sub(self, other: Self) -> Self {
+                <$t>::wrapping_sub(self, other)
             }
-            fn checked_mul(self, other: Self) -> Option<Self> {
-                <$t>::checked_mul(self, other)
+            fn wrapping_mul(self, other: Self) -> Self {
+                <$t>::wrapping_mul(self, other)
             }
             fn checked_div(self, other: Self) -> Option<Self> {
                 <$t>::checked_div(self, other)
@@ -104,14 +105,14 @@ macro_rules! impl_int {
             fn checked_rem(self, other: Self) -> Option<Self> {
                 <$t>::checked_rem(self, other)
             }
-            fn checked_neg(self) -> Option<Self> {
-                <$t>::checked_neg(self)
+            fn wrapping_neg(self) -> Self {
+                <$t>::wrapping_neg(self)
             }
-            fn checked_shl(self, shift: u32) -> Option<Self> {
-                <$t>::checked_shl(self, shift)
+            fn wrapping_shl(self, shift: u32) -> Self {
+                <$t>::wrapping_shl(self, shift)
             }
-            fn checked_shr(self, shift: u32) -> Option<Self> {
-                <$t>::checked_shr(self, shift)
+            fn wrapping_shr(self, shift: u32) -> Self {
+                <$t>::wrapping_shr(self, shift)
             }
             fn bitand(self, other: Self) -> Self {
                 self & other
@@ -144,14 +145,19 @@ where
     Value::Small(T::TAG, value.word())
 }
 
-const OVERFLOW: &str = "integer overflow";
-const DIVIDE_BY_ZERO: &str = "division by zero";
+const DIVIDE_BY_ZERO: &str = "attempt to divide by zero";
+const REM_BY_ZERO: &str = "attempt to calculate the remainder with a divisor of zero";
+const DIVIDE_OVERFLOW: &str = "attempt to divide with overflow";
+const REM_OVERFLOW: &str = "attempt to calculate the remainder with overflow";
 
+/// Rust's `<<` and `>>` take the amount modulo the width; `SHIFT_MASK` is
+/// that modulus, so the masked amount is below `64` and reaches `u32`
+/// whole, for an amount of either sign.
 fn shift_amount<T>(bits: u64) -> u32
 where
     T: Int,
 {
-    u32::try_from(T::read(bits).wide()).unwrap_or_else(|_| panic!("{OVERFLOW}"))
+    (T::read(bits).word() & T::SHIFT_MASK) as u32
 }
 
 /// The word-level integer operations: the operand words, read at `T`.
@@ -175,22 +181,16 @@ pub mod word {
     }
 
     int_words! {
-        add(a, b) {
-            int(a.checked_add(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
-        }
-        sub(a, b) {
-            int(a.checked_sub(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
-        }
-        mul(a, b) {
-            int(a.checked_mul(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
-        }
+        add(a, b) { int(a.wrapping_add(b)) }
+        sub(a, b) { int(a.wrapping_sub(b)) }
+        mul(a, b) { int(a.wrapping_mul(b)) }
         div(a, b) {
             assert!(!b.is_zero(), "{DIVIDE_BY_ZERO}");
-            int(a.checked_div(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
+            int(a.checked_div(b).unwrap_or_else(|| panic!("{DIVIDE_OVERFLOW}")))
         }
         rem(a, b) {
-            assert!(!b.is_zero(), "{DIVIDE_BY_ZERO}");
-            int(a.checked_rem(b).unwrap_or_else(|| panic!("{OVERFLOW}")))
+            assert!(!b.is_zero(), "{REM_BY_ZERO}");
+            int(a.checked_rem(b).unwrap_or_else(|| panic!("{REM_OVERFLOW}")))
         }
         eq(a, b) { Value::bool_(a.eq(b)) }
         neq(a, b) { Value::bool_(!a.eq(b)) }
@@ -208,10 +208,7 @@ pub mod word {
     where
         T: Int,
     {
-        let shift = shift_amount::<T>(right);
-        int(T::read(left)
-            .checked_shl(shift)
-            .unwrap_or_else(|| panic!("{OVERFLOW}")))
+        int(T::read(left).wrapping_shl(shift_amount::<T>(right)))
     }
 
     #[inline]
@@ -219,10 +216,7 @@ pub mod word {
     where
         T: Int,
     {
-        let shift = shift_amount::<T>(right);
-        int(T::read(left)
-            .checked_shr(shift)
-            .unwrap_or_else(|| panic!("{OVERFLOW}")))
+        int(T::read(left).wrapping_shr(shift_amount::<T>(right)))
     }
 
     #[inline]
@@ -230,9 +224,7 @@ pub mod word {
     where
         T: Int,
     {
-        int(T::read(operand)
-            .checked_neg()
-            .unwrap_or_else(|| panic!("{OVERFLOW}")))
+        int(T::read(operand).wrapping_neg())
     }
 }
 
@@ -458,21 +450,53 @@ mod primitive_operator_tests {
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow")]
-    fn an_addition_past_the_width_panics() {
-        i64_op(word::add::<i64>, i64::MAX, 1);
+    fn addition_subtraction_and_multiplication_past_the_width_wrap() {
+        assert_eq!(i64_op(word::add::<i64>, i64::MAX, 1).as_int(), i64::MIN);
+        assert_eq!(i64_op(word::sub::<i64>, i64::MIN, 1).as_int(), i64::MAX);
+        assert_eq!(i64_op(word::mul::<i64>, i64::MIN, -1).as_int(), i64::MIN);
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow")]
-    fn a_multiplication_past_the_width_panics() {
-        i64_op(word::mul::<i64>, i64::MIN, -1);
+    fn negation_of_the_minimum_is_the_minimum() {
+        assert_eq!(word::neg::<i64>(i64::MIN as u64).as_int(), i64::MIN);
     }
 
     #[test]
-    #[should_panic(expected = "division by zero")]
+    #[should_panic(expected = "attempt to divide by zero")]
     fn a_division_by_zero_panics() {
         i64_op(word::div::<i64>, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to calculate the remainder with a divisor of zero")]
+    fn a_remainder_by_zero_panics() {
+        i64_op(word::rem::<i64>, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to divide with overflow")]
+    fn dividing_the_minimum_by_minus_one_panics() {
+        i64_op(word::div::<i64>, i64::MIN, -1);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to calculate the remainder with overflow")]
+    fn the_remainder_of_the_minimum_by_minus_one_panics() {
+        i64_op(word::rem::<i64>, i64::MIN, -1);
+    }
+
+    /// Each expected value is the measured output of a `rustc -O` build of
+    /// the same expression; this test runs in debug, where `1i64 << -1`
+    /// panics instead of masking.
+    #[test]
+    fn a_shift_takes_its_amount_modulo_the_width() {
+        assert_eq!(i64_op(word::shl::<i64>, 1, -1).as_int(), i64::MIN);
+        assert_eq!(i64_op(word::shl::<i64>, 1, 64).as_int(), 1);
+        assert_eq!(i64_op(word::shl::<i64>, 1, 65).as_int(), 2);
+        assert_eq!(i64_op(word::shl::<i64>, 1, i64::MIN).as_int(), 1);
+        assert_eq!(i64_op(word::shr::<i64>, -1, -1).as_int(), -1);
+        assert_eq!(i64_op(word::shr::<i64>, 256, 65).as_int(), 128);
+        assert_eq!(i64_op(word::shl::<u8>, 1, 255).as_int(), 128);
     }
 
     #[test]
@@ -497,8 +521,8 @@ mod primitive_operator_tests {
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow")]
-    fn an_addition_past_the_narrow_width_panics() {
-        i64_op(word::add::<u8>, 200, 56);
+    fn an_addition_past_the_narrow_width_wraps() {
+        assert_eq!(i64_op(word::add::<u8>, 200, 56).as_int(), 0);
+        assert_eq!(i64_op(word::add::<u8>, 200, 57).as_int(), 1);
     }
 }

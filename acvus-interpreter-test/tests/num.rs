@@ -39,9 +39,8 @@ async fn abs_of_a_float() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "i64::MIN")]
-async fn abs_of_i64_min_traps() {
-    run("abs(-9223372036854775807 - 1)").await;
+async fn abs_of_i64_min_is_i64_min() {
+    assert_eq!(int("abs(-9223372036854775807 - 1)").await, i64::MIN);
 }
 
 // -- min / max ----------------------------------------------------------
@@ -112,9 +111,10 @@ async fn pow_of_an_int_with_a_negative_exponent_traps() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "2^63 overflows i64")]
-async fn pow_of_an_int_that_overflows_traps() {
-    run("pow(2, 63)").await;
+async fn pow_of_an_int_past_the_width_wraps() {
+    assert_eq!(int("pow(2, 63)").await, i64::MIN);
+    assert_eq!(int("pow(2, 64)").await, 0);
+    assert_eq!(int("pow(-2, 63)").await, i64::MIN);
 }
 
 #[tokio::test]
@@ -125,10 +125,14 @@ async fn pow_with_an_exponent_beyond_u32_is_finite_for_a_unit_or_zero_base() {
     assert_eq!(int("pow(-1, 4294967297)").await, -1);
 }
 
+/// The odd-base values are `pow(3, 2**32, 2**64)` and
+/// `pow(3, 2**32 + 1, 2**64)` read as an `i64`.
 #[tokio::test]
-#[should_panic(expected = "2^4294967296 overflows i64")]
-async fn pow_with_an_exponent_beyond_u32_traps_for_any_other_base() {
-    run("pow(2, 4294967296)").await;
+async fn pow_with_an_exponent_beyond_u32_wraps() {
+    assert_eq!(int("pow(2, 4294967296)").await, 0);
+    assert_eq!(int("pow(-2, 4294967296)").await, 0);
+    assert_eq!(int("pow(3, 4294967296)").await, 2491309678558969857);
+    assert_eq!(int("pow(3, 4294967297)").await, 7473929035676909571);
 }
 
 // -- signum -------------------------------------------------------------
