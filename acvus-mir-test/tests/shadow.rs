@@ -298,6 +298,62 @@ fn a_parameter_the_call_fixes_to_a_non_function_drops_from_the_set() {
     assert_eq!(errors, vec!["no `len` takes a call of type Fn(i64) -> !"]);
 }
 
+/// The place is a reference, so the lend is a reborrow and the move is a
+/// word copy: both modes see `&Array<i64, 2>`, which is one mode and no
+/// ambiguity. The decision then drops the binding, whose `k` the integer
+/// bound of `k + 7` holds and a reference does not meet, and `array::len`
+/// is alone.
+#[test]
+fn a_receiver_both_modes_see_as_one_type_is_not_ambiguous() {
+    let i = Interner::new();
+    let c = checked(
+        &i,
+        "let len = |k| -> k + 7; let a = [1, 2]; let r = &a; r.len()",
+    );
+    assert_eq!(c.ret, Ty::I64);
+    assert_eq!(c.callees, vec!["array::len".to_string()]);
+    assert!(
+        c.fn_params.contains(&vec!["i64".to_string()]),
+        "the receiver never reached the binding's `k`: {:?}",
+        c.fn_params
+    );
+}
+
+/// The receiver is a lambda parameter the consumer has already fixed to a
+/// reference of an open element, so every candidate sees the same `&?`
+/// and the five reach the decision under one mode; the element resolving
+/// to `Array<i64, 2>` is what leaves `array::len`.
+#[test]
+fn a_receiver_that_is_a_reference_to_an_open_element_drops_the_binding() {
+    let i = Interner::new();
+    let c = checked(
+        &i,
+        "let len = |k| -> k + 7; let a = [[1, 2], [3, 4]]; as_iter(&a) | map(|k| -> k.len()) | sum",
+    );
+    assert_eq!(c.ret, Ty::I64);
+    assert!(
+        c.callees.contains(&"array::len".to_string()),
+        "{:?}",
+        c.callees
+    );
+}
+
+/// Both candidates see `&Array<i64, 2>`, so the receiver settles on one
+/// mode and reports nothing; the binding's `k` is unbounded, so both take
+/// the call and `AmbiguousSignature` reports it when the decision fails.
+#[test]
+fn a_receiver_one_mode_whose_candidates_both_take_the_call_is_ambiguous_at_the_decision() {
+    let i = Interner::new();
+    let errors = errors_of(
+        &i,
+        "let len = |k| -> 7.0; let a = [1, 2]; let r = &a; r.len()",
+    );
+    assert_eq!(
+        errors,
+        vec!["`len` is declared by array::len and the binding `len`"]
+    );
+}
+
 #[test]
 fn a_parameter_no_namespace_declares_is_the_callee() {
     let i = Interner::new();

@@ -2003,7 +2003,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 first,
             ));
         };
-        let kept: Vec<CandidateReceiver> = per_candidate
+        let kept: Vec<(CandidateReceiver, InferTy)> = per_candidate
             .into_iter()
             .zip(trials)
             .filter(|(seen, ty)| {
@@ -2012,25 +2012,44 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Admission::Refused
                 )
             })
-            .map(|(seen, _)| seen)
             .collect();
-        let mode = match agreed_receiver_mode(kept.iter().map(|seen| seen.mode)) {
-            Some(mode) => mode,
-            None if kept.is_empty() => ReceiverMode::Value,
-            None => {
-                let shown = self.shown_candidates(name, kept.iter().map(|s| s.candidate.name()));
-                self.error(
-                    MirErrorKind::AmbiguousFunction {
-                        name: self.interner.resolve(name).to_string(),
-                        candidates: shown,
-                    },
-                    call_span,
-                );
-                return None;
-            }
+        let Some(mode) = self.one_receiver_mode(&kept) else {
+            let shown = self.shown_candidates(name, kept.iter().map(|(s, _)| s.candidate.name()));
+            self.error(
+                MirErrorKind::AmbiguousFunction {
+                    name: self.interner.resolve(name).to_string(),
+                    candidates: shown,
+                },
+                call_span,
+            );
+            return None;
         };
         let first = self.receiver_in(receiver, owned, mode);
+        let kept = kept.into_iter().map(|(seen, _)| seen).collect();
         Some(AdmittedReceiver::taking_every_candidate(kept, first))
+    }
+
+    /// The one mode survivors that see the receiver as one type take it
+    /// in, or `None` where the types they see differ (RFC-0043). Where one
+    /// type is both the lend and the move, the lend is the mode: that type
+    /// is the reference already.
+    fn one_receiver_mode(&self, kept: &[(CandidateReceiver, InferTy)]) -> Option<ReceiverMode> {
+        let Some((_, first)) = kept.first() else {
+            return Some(ReceiverMode::Value);
+        };
+        let first = self.solver.resolve_ty(first);
+        if kept
+            .iter()
+            .any(|(_, ty)| self.solver.resolve_ty(ty) != first)
+        {
+            return None;
+        }
+        Some(
+            kept.iter()
+                .map(|(seen, _)| seen.mode)
+                .find(|mode| matches!(mode, ReceiverMode::Lent(_)))
+                .unwrap_or(ReceiverMode::Value),
+        )
     }
 
     /// The type one candidate's mode sees the checked receiver as, or

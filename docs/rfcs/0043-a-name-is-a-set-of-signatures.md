@@ -100,18 +100,29 @@ receiver lent, of that parameter's mutability; a candidate whose first
 parameter is a value or a variable — a binding's is one, or its head is
 still open and names no parameter at all — sees the place by value. A
 candidate that refuses the receiver in its mode leaves the set there, as
-a refusal at any argument leaves it. The mode the call takes is what the
-candidates that stay agree on: every one lending, of one mutability, is
-the lend; every one taking a value is the move. A set that does not agree
-is `AmbiguousFunction` at the call over those candidates — choosing
-between a lend and a move would be a default, and there is none here. A
-pipe passes its left side as a value.
+a refusal at any argument leaves it. Narrowing at the receiver is
+admission and nothing more: the decision's own predicate is what the
+decision applies, over the call's parameter once the arguments have met
+it, and a receiver the checker sees as a variable that resolves to the
+receiver's type carries no evidence a join could read.
+
+The mode the call takes is the one the candidates that stay see, told
+apart by the type each sees and not by the form of its parameter. Two
+modes that yield one type are one mode — a receiver that is already a
+reference has a reborrow and a word copy of the same `&T`, and there is
+nothing to choose between — and that one mode is the lend, the type being
+the reference already, so a candidate settled on later takes exactly the
+type its own mode showed it. Candidates whose types differ have no mode
+in common, and that is `AmbiguousFunction` at the call over them:
+choosing between a lend and a move would be a default, and there is none
+here. A pipe passes its left side as a value.
 
 Telling the modes apart needs a receiver type that distinguishes them. A
 receiver that is not a place has no lend to be admitted in, and a place
-whose head is still a variable admits every candidate in either mode, so
-in both the set's agreement alone decides: lent where every candidate's
-first parameter is a reference of one mutability, by value otherwise.
+whose head is still a variable has no lend to read off it, so in neither
+is any candidate narrowed and the set's agreement alone decides: lent
+where every candidate's first parameter is a reference of one mutability,
+by value otherwise.
 
 A conversion decision whose one side is a `OneOf`-bounded variable answers
 identity only where the other side could match a shape of the bound: the
@@ -148,11 +159,13 @@ argument no candidate takes is reported at the call, while a disagreement
 under a shape some candidate does take is reported when the decision
 settles or fails. The report names the call type as far as it is known.
 
-A receiver two candidates take in different modes is reported, not
+A receiver two candidates see as different types is reported, not
 resolved: the call is written `array::len(&q)` or the binding is renamed.
 The cost is a lend trial per distinct mutability among the candidates,
 read off the receiver's type without the borrow's bookkeeping, which is
-applied once for the mode the call takes.
+applied once for the mode the call takes. A set the receiver leaves with
+one mode and several candidates is narrowed by the decision, as any call
+of the bare name is, and reported there.
 
 Checking an argument costs a shape match per candidate, and a rule lookup
 on a copy of the terms per candidate no shape of which admits it. Each
@@ -199,9 +212,10 @@ display order, not the order the registries were combined in.
   decision.
 - `acvus-mir/src/typeck.rs`: `check_overloaded_call` over `admit_args`,
   `call_param`, `admit_arg` and `no_matching_function`, `CalleeChoice`,
-  `admit_receiver` over `CandidateReceiver`, `receiver_as`, `receiver_in`
-  and `receiver_arg`, with `lend_place` split out of `check_borrow` so the
-  receiver's place is checked once and lent only in the mode taken;
+  `admit_receiver` over `CandidateReceiver`, `receiver_as`,
+  `one_receiver_mode`, `receiver_in` and `receiver_arg`, with `lend_place`
+  split out of `check_borrow` so the receiver's place is checked once and
+  lent only in the mode taken;
   `report_unsettled` maps the two failures; `solve_body`
   verifies a settled signature's bounds.
 - A binding joins the set through `typeck.rs`'s `signature_set` over
