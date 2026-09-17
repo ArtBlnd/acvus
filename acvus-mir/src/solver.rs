@@ -18,8 +18,8 @@ use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
-    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Mutability, Phase, Poly, PolyTy, Repr,
-    ReprVarId, Scheme, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
+    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Mutability, ParamTerm, Phase, Poly,
+    PolyTy, Repr, ReprVarId, Scheme, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
     could_match_pattern, matches_pattern,
 };
 
@@ -1265,14 +1265,13 @@ pub enum Decision {
     /// identity where the two join, else a declared cast.
     Conversion { from: InferTy, to: InferTy },
     /// Which signature a call of an overloaded bare name is a call of
-    /// (RFC-0043). The checker opened a conversion decision at each
-    /// `converted` argument whose `to` is the call's parameter there, so
-    /// that decision settles once this one has.
+    /// (RFC-0043). The checker opened one conversion decision at each
+    /// argument some option takes by conversion, whose `to` is the call's
+    /// parameter there, so that decision settles once this one has.
     Signature {
         name: Astr,
         call: InferTy,
-        candidates: Vec<SignatureCandidate>,
-        converted: Vec<ConvertedArgument>,
+        options: Vec<SignatureOption>,
     },
     /// Since no `&&T` exists (RFC-0029), what a reference to a place names
     /// depends on whether the place itself holds a reference. The checker
@@ -1319,10 +1318,78 @@ pub enum LendRefusal {
     ReferenceCaptured,
 }
 
+/// RFC-0043.
 #[derive(Debug, Clone)]
-pub struct SignatureCandidate {
-    pub qref: QualifiedRef,
-    pub scheme: Scheme,
+pub enum SignatureCandidate {
+    Named { qref: QualifiedRef, scheme: Scheme },
+    Local { ty: InferTy },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureName {
+    Named(QualifiedRef),
+    Local,
+}
+
+impl SignatureCandidate {
+    pub fn name(&self) -> SignatureName {
+        match self {
+            Self::Named { qref, .. } => SignatureName::Named(*qref),
+            Self::Local { .. } => SignatureName::Local,
+        }
+    }
+
+    fn local_params(ty: &InferTy) -> &[ParamTerm<Infer>] {
+        let TyTerm::Fn { params, .. } = ty else {
+            unreachable!("a local candidate is built from a type whose head is `Fn`")
+        };
+        params
+    }
+
+    pub fn arity(&self) -> usize {
+        match self {
+            Self::Named { scheme, .. } => scheme.params().len(),
+            Self::Local { ty } => Self::local_params(ty).len(),
+        }
+    }
+
+    pub fn param_name(&self, index: usize) -> Option<Astr> {
+        match self {
+            Self::Named { scheme, .. } => scheme.params().get(index).map(|p| p.name),
+            Self::Local { ty } => Self::local_params(ty).get(index).map(|p| p.name),
+        }
+    }
+
+    /// A binding's parameter is an inference type, not a shape a scheme
+    /// could name, so it bounds the call's parameter by nothing.
+    pub fn param_bound(&self, index: usize) -> TyVarBound {
+        match self {
+            Self::Named { scheme, .. } => match scheme.params().get(index) {
+                Some(param) => scheme.param_bound(&param.ty),
+                None => TyVarBound::Any,
+            },
+            Self::Local { .. } => TyVarBound::Any,
+        }
+    }
+}
+
+/// A candidate of a signature decision, with how it takes the call's
+/// arguments (RFC-0043).
+#[derive(Debug, Clone)]
+pub struct SignatureOption {
+    pub candidate: SignatureCandidate,
+    /// The arguments this candidate takes through one declared
+    /// conversion; every other argument it takes directly.
+    pub converted: Vec<ConvertedArgument>,
+}
+
+impl SignatureOption {
+    pub fn taking_every_argument_directly(candidate: SignatureCandidate) -> Self {
+        Self {
+            candidate,
+            converted: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1331,6 +1398,7 @@ pub struct ConvertedArgument {
     pub ty: InferTy,
 }
 
+/// How one candidate takes one argument (RFC-0043).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
     Direct,
@@ -1359,10 +1427,13 @@ pub enum Answer {
 /// `bounded` is verified by the checker when the body freezes, as an
 /// `Instantiated`'s is.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettledSignature {
-    pub qref: QualifiedRef,
-    pub instance: Option<InstanceChoice>,
-    pub bounded: Vec<TypeBoundId>,
+pub enum SettledSignature {
+    Named {
+        qref: QualifiedRef,
+        instance: Option<InstanceChoice>,
+        bounded: Vec<TypeBoundId>,
+    },
+    Local,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1439,7 +1510,7 @@ pub enum Unsettled {
     AmbiguousSignature {
         decision: DecisionId,
         name: Astr,
-        candidates: Vec<QualifiedRef>,
+        candidates: Vec<SignatureName>,
     },
     /// RFC-0018.
     ReferenceCaptured {
@@ -1762,6 +1833,7 @@ impl<'src> Solver<'src> {
                     decision: id,
                     call: self.terms.resolve_ty(call),
                 },
+                Decision::Conversion { from, to } if self.awaits_signature(to) => continue,
                 Decision::Conversion { from, to } => {
                     let rules = self.conversion_rules(from, to);
                     let from = self.terms.resolve_ty(from);
@@ -1786,12 +1858,10 @@ impl<'src> Solver<'src> {
                         },
                     }
                 }
-                Decision::Signature {
-                    name, candidates, ..
-                } => Unsettled::AmbiguousSignature {
+                Decision::Signature { name, options, .. } => Unsettled::AmbiguousSignature {
                     decision: id,
                     name: *name,
-                    candidates: candidates.iter().map(|c| c.qref).collect(),
+                    candidates: options.iter().map(|o| o.candidate.name()).collect(),
                 },
                 Decision::Lend { .. } => {
                     unreachable!("close_lends_by_least_element leaves no lend open")
@@ -1848,9 +1918,8 @@ impl<'src> Solver<'src> {
             Decision::Signature {
                 name,
                 call,
-                candidates,
-                converted,
-            } => self.step_signature(id, name, &call, candidates, &converted),
+                options,
+            } => self.step_signature(id, name, &call, options),
             Decision::Lend {
                 of,
                 referent,
@@ -1927,20 +1996,18 @@ impl<'src> Solver<'src> {
         id: DecisionId,
         name: Astr,
         call: &InferTy,
-        candidates: Vec<SignatureCandidate>,
-        converted: &[ConvertedArgument],
+        options: Vec<SignatureOption>,
     ) -> Progress {
-        let remaining: Vec<SignatureCandidate> = candidates
+        let remaining: Vec<SignatureOption> = options
             .iter()
-            .filter(|c| self.takes_signature(call, converted, &c.scheme))
+            .filter(|option| self.takes_signature(call, option))
             .cloned()
             .collect();
-        let narrowed = remaining.len() != candidates.len();
+        let narrowed = remaining.len() != options.len();
         if narrowed
-            && let Decision::Signature { candidates, .. } =
-                &mut self.decisions[id.0 as usize].decision
+            && let Decision::Signature { options, .. } = &mut self.decisions[id.0 as usize].decision
         {
-            *candidates = remaining.clone();
+            *options = remaining.clone();
         }
         match remaining.as_slice() {
             [] => Progress::Failed(Unsettled::NoSignature {
@@ -1949,17 +2016,26 @@ impl<'src> Solver<'src> {
                 call: self.terms.resolve_ty(call),
             }),
             [only] => {
-                let Instantiated {
-                    ty,
-                    bounded,
-                    instance,
-                } = self.instantiate_scheme(&only.scheme);
+                let (ty, settled) = match &only.candidate {
+                    SignatureCandidate::Named { qref, scheme } => {
+                        let Instantiated {
+                            ty,
+                            bounded,
+                            instance,
+                        } = self.instantiate_scheme(scheme);
+                        (
+                            ty,
+                            SettledSignature::Named {
+                                qref: *qref,
+                                instance,
+                                bounded,
+                            },
+                        )
+                    }
+                    SignatureCandidate::Local { ty } => (ty.clone(), SettledSignature::Local),
+                };
                 match self.settle_join(call, &ty) {
-                    Ok(()) => Progress::Settled(Answer::Signature(SettledSignature {
-                        qref: only.qref,
-                        instance,
-                        bounded,
-                    })),
+                    Ok(()) => Progress::Settled(Answer::Signature(settled)),
                     Err(Mismatch { expected, got, .. }) => {
                         Progress::Failed(Unsettled::InstanceMismatch {
                             decision: id,
@@ -1974,12 +2050,12 @@ impl<'src> Solver<'src> {
         }
     }
 
-    fn takes_signature(
-        &self,
-        call: &InferTy,
-        converted: &[ConvertedArgument],
-        scheme: &Scheme,
-    ) -> bool {
+    fn takes_signature(&self, call: &InferTy, option: &SignatureOption) -> bool {
+        let converted = option.converted.as_slice();
+        let scheme = match &option.candidate {
+            SignatureCandidate::Named { scheme, .. } => scheme,
+            SignatureCandidate::Local { ty } => return self.would_unify(call, ty),
+        };
         let mut trial = self.terms.clone();
         let instance = trial.instantiate_open(&scheme.ty, self.registry);
         if trial
@@ -2018,7 +2094,7 @@ impl<'src> Solver<'src> {
         };
         converted.iter().all(|argument| {
             let param = &instance_params[argument.index].ty;
-            !conversion_rules(&trial, self.registry, &argument.ty, param).is_empty()
+            converts(&trial, self.registry, &argument.ty, param)
                 || trial
                     .join(
                         &argument.ty,
@@ -2031,43 +2107,36 @@ impl<'src> Solver<'src> {
         })
     }
 
-    pub fn admit_argument(&self, param: &InferTy, arg: &InferTy) -> Admission {
-        let by_conversion = |shapes: &[PolyTy]| {
-            let arg_head = self.terms.shallow_resolve_ty(arg);
-            if matches!(arg_head, TyTerm::Var(_)) {
-                return Admission::Refused;
-            }
-            let converts = shapes.iter().any(|shape| {
-                let mut trial = self.terms.clone();
-                let to = trial.instantiate_open(shape, self.registry);
-                !conversion_rules(&trial, self.registry, arg, &to).is_empty()
-            });
-            if converts {
-                Admission::Converted
-            } else {
-                Admission::Refused
-            }
-        };
-        let shapes = match self.terms.shallow_resolve_ty(param) {
-            TyTerm::Var(var) => match self.bound_of_var(var) {
-                TyVarBound::OneOf(shapes) => Some(shapes),
-                TyVarBound::Any | TyVarBound::Integer { .. } => None,
-            },
-            _ => None,
-        };
-        if !self.would_unify(param, arg) {
-            return match shapes {
-                Some(shapes) => by_conversion(&shapes),
+    /// How the candidate takes the argument at `index` (RFC-0043), by one
+    /// declared rule (RFC-0023) where it converts. An argument still a
+    /// variable is admitted as it is where the two bounds intersect: a
+    /// conversion is admitted from a resolved head only.
+    pub fn admits(&self, candidate: &SignatureCandidate, index: usize, arg: &InferTy) -> Admission {
+        let bound = candidate.param_bound(index);
+        if let TyTerm::Var(var) = self.terms.shallow_resolve_ty(arg) {
+            return match self.bound_of_var(var).meet(&bound) {
+                Some(_) => Admission::Direct,
                 None => Admission::Refused,
             };
         }
-        let Some(shapes) = shapes else {
-            return Admission::Direct;
+        let shapes = match bound {
+            TyVarBound::Any => return Admission::Direct,
+            TyVarBound::OneOf(shapes) => shapes,
+            TyVarBound::Integer { among, .. } => among.into_iter().map(TyTerm::Int).collect(),
         };
         if self.term_within_shapes(arg, &shapes) {
             return Admission::Direct;
         }
-        by_conversion(&shapes)
+        let converts = shapes.iter().any(|shape| {
+            let mut trial = self.terms.clone();
+            let to = trial.instantiate_open(shape, self.registry);
+            converts(&trial, self.registry, arg, &to)
+        });
+        if converts {
+            Admission::Converted
+        } else {
+            Admission::Refused
+        }
     }
 
     /// `take_other` binds a `OneOf`-bounded variable to any term and leaves
@@ -2077,6 +2146,29 @@ impl<'src> Solver<'src> {
         let term = self.terms.resolve_ty(term);
         matches!(term, TyTerm::Var(_))
             || shapes.iter().any(|shape| could_match_pattern(&term, shape))
+    }
+
+    /// A conversion into such a parameter answers identity only by binding
+    /// it, which would decide the signature by the argument's shape
+    /// (RFC-0043).
+    fn awaits_signature(&self, to: &InferTy) -> bool {
+        let TyTerm::Var(var) = self.terms.shallow_resolve_ty(to) else {
+            return false;
+        };
+        self.decisions
+            .iter()
+            .filter(|decision| matches!(decision.state, DecisionState::Open))
+            .any(|decision| {
+                let Decision::Signature { call, .. } = &decision.decision else {
+                    return false;
+                };
+                let TyTerm::Fn { params, .. } = call else {
+                    unreachable!("a signature decision is opened on a call type")
+                };
+                params.iter().any(|param| {
+                    matches!(self.terms.shallow_resolve_ty(&param.ty), TyTerm::Var(v) if v == var)
+                })
+            })
     }
 
     fn identity_within_bounds(&self, from: &InferTy, to: &InferTy) -> bool {
@@ -2166,6 +2258,9 @@ impl<'src> Solver<'src> {
     /// pair of references is answered through the rule for what they name,
     /// and needs the rule back as well.
     fn step_conversion(&mut self, id: DecisionId, from: &InferTy, to: &InferTy) -> Progress {
+        if self.awaits_signature(to) {
+            return Progress::Unchanged;
+        }
         if self.identity_within_bounds(from, to) && self.would_settle_join(from, to) {
             self.settle_join(from, to)
                 .expect("would_settle_join checked this join on a copy of the terms");
@@ -2689,6 +2784,22 @@ fn conversion_rules(
         }
     }
     rules
+}
+
+/// One declared rule (RFC-0023) takes `from` to `to`; through a reference,
+/// the value is cast back when the call ends (RFC-0041).
+fn converts(terms: &Terms, registry: &TypeRegistry, from: &InferTy, to: &InferTy) -> bool {
+    let from_r = terms.resolve_ty(from);
+    let to_r = terms.resolve_ty(to);
+    let Some(references) = ReferencePair::of(&from_r, &to_r) else {
+        return !conversion_rules(terms, registry, from, to).is_empty();
+    };
+    [
+        (&references.from.ty, &references.to.ty),
+        (&references.to.ty, &references.from.ty),
+    ]
+    .into_iter()
+    .all(|(from, to)| !conversion_rules(terms, registry, from, to).is_empty())
 }
 
 /// `(from, to)` as one type, so one pattern match covers both sides of a

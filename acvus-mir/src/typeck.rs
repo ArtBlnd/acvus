@@ -11,7 +11,8 @@ use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
     Admission, Answer, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
     EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, Mismatch,
-    MismatchReason, ReferencePair, SettledSignature, SignatureCandidate, Unsettled,
+    MismatchReason, ReferencePair, SettledSignature, SignatureCandidate, SignatureName,
+    SignatureOption, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -60,13 +61,16 @@ struct FirstArg {
     site: ArgSite,
 }
 
-/// Every argument's type; under `ArgumentMismatch::Refuse`, whether one
-/// was refused by its parameter, and which were admitted through a
-/// declared conversion.
-struct CheckedArgs {
-    types: Vec<InferTy>,
-    refused: bool,
-    converted: Vec<usize>,
+/// What an overloaded call's arguments left of its candidate set
+/// (RFC-0043).
+enum AdmittedArgs {
+    Taken {
+        options: Vec<SignatureOption>,
+        params: Vec<ParamTerm<Infer>>,
+    },
+    Refused {
+        types: Vec<InferTy>,
+    },
 }
 
 /// A call argument at its site, with the place it borrows when it is
@@ -174,14 +178,6 @@ struct ResolvedCallee {
 enum CalleeChoice {
     Resolved(ResolvedCallee),
     Decided(DecisionId),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArgumentMismatch {
-    /// RFC-0023.
-    Convert,
-    /// RFC-0043.
-    Refuse,
 }
 
 /// A coercion recorded at the value it converts.
@@ -811,6 +807,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// The type a name was bound with, read without using it.
+    fn binding_type(&self, name: Astr) -> Option<&InferTy> {
+        self.scopes.iter().rev().find_map(|scope| scope.get(&name))
+    }
+
     /// The type a name has where it is used. A name captured by the
     /// innermost lambda is seen there through a shared reference: the
     /// closure owns the value, and a call borrows the closure (RFC-0018).
@@ -864,6 +865,56 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return Some(result);
         }
         None
+    }
+
+    /// RFC-0043.
+    fn signature_set(&mut self, name: QualifiedRef) -> Vec<SignatureCandidate> {
+        let mut candidates: Vec<SignatureCandidate> = match self.env.resolve_fn(name) {
+            crate::ty::FnLookup::Found(qref, scheme) => vec![SignatureCandidate::Named {
+                qref,
+                scheme: scheme.clone(),
+            }],
+            crate::ty::FnLookup::Overloaded(declared) => declared
+                .iter()
+                .map(|(qref, scheme)| SignatureCandidate::Named {
+                    qref: *qref,
+                    scheme: (*scheme).clone(),
+                })
+                .collect(),
+            crate::ty::FnLookup::Missing => Vec::new(),
+        };
+        if name.namespace.is_none()
+            && let Some(ty) = self.local_signature(name.name)
+        {
+            candidates.push(SignatureCandidate::Local { ty });
+        }
+        candidates
+    }
+
+    /// The binding that is one more signature of a bare name (RFC-0043):
+    /// a name in scope whose type's head is `Fn` where the call stands.
+    fn local_signature(&mut self, name: Astr) -> Option<InferTy> {
+        let stored = self.binding_type(name)?.clone();
+        if !matches!(self.lent_fn(&stored), TyTerm::Fn { .. }) {
+            return None;
+        }
+        let seen = self.lookup_var(name)?;
+        Some(self.lent_fn(&seen))
+    }
+
+    /// A call of the binding itself: no signature is named, so no
+    /// `direct_calls` entry is frozen and the lowering takes its indirect
+    /// path off the variable.
+    fn check_local_call(
+        &mut self,
+        callee_id: AstId,
+        callable: &InferTy,
+        first: Option<&FirstArg>,
+        args: &[Expr],
+        call_span: Span,
+    ) -> InferTy {
+        self.record(callee_id, callable.clone());
+        self.check_callable(callable, args, first, call_span)
     }
 
     /// A lambda's parameter types come from the parameter that receives it
@@ -996,21 +1047,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         fn_ty: &InferTy,
         first: Option<&FirstArg>,
         args: &[Expr],
-        on_mismatch: ArgumentMismatch,
-    ) -> CheckedArgs {
+    ) -> Vec<InferTy> {
         let params: Vec<InferTy> = match fn_ty {
             TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
             _ => Vec::new(),
         };
         let offset = usize::from(first.is_some());
         let arity_holds = params.len() == args.len() + offset;
-        let mut refused = false;
-        let mut converted = Vec::new();
-        let mut meet = |this: &mut Self,
-                        index: usize,
-                        param: Option<&InferTy>,
-                        arg: &InferTy,
-                        site: &ArgSite| {
+        let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy, site: &ArgSite| {
             let Some(param) = param else {
                 return;
             };
@@ -1018,41 +1062,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let _ = this.solver.unify(param, arg);
                 return;
             }
-            if on_mismatch == ArgumentMismatch::Refuse {
-                match this.solver.admit_argument(param, arg) {
-                    Admission::Direct => {}
-                    Admission::Converted => {
-                        converted.push(index);
-                        this.convert_argument_at(arg, param, site);
-                        return;
-                    }
-                    Admission::Refused => {
-                        refused = true;
-                        return;
-                    }
-                }
-            }
             this.meet_argument(arg, param, site);
         };
         let outer_holds = self.holds.len();
         let mut types = Vec::with_capacity(args.len() + offset);
         if let Some(first) = first {
-            meet(self, 0, params.first(), &first.ty, &first.site);
+            meet(self, params.first(), &first.ty, &first.site);
             types.push(first.ty.clone());
         }
         for (i, arg) in args.iter().enumerate() {
-            let index = i + offset;
-            let expected = params.get(index);
+            let expected = params.get(i + offset);
             let ty = self.check_arg(arg, expected);
-            meet(self, index, expected, &ty, &ArgSite::of(arg));
+            meet(self, expected, &ty, &ArgSite::of(arg));
             types.push(ty);
         }
         self.holds.truncate(outer_holds);
-        CheckedArgs {
-            types,
-            refused,
-            converted,
-        }
+        types
     }
 
     /// A reference is never data (RFC-0018).
@@ -1149,9 +1174,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         match choice {
             CalleeChoice::Resolved(resolved) => Some(resolved),
             CalleeChoice::Decided(decision) => match self.solver.answer(decision)? {
-                Answer::Signature(SettledSignature { qref, instance, .. }) => {
+                Answer::Signature(SettledSignature::Named { qref, instance, .. }) => {
                     Some(ResolvedCallee { qref, instance })
                 }
+                Answer::Signature(SettledSignature::Local) => None,
                 Answer::Instance(_) | Answer::Conversion(_) | Answer::Lend(_) => {
                     unreachable!("a signature decision answers with a signature")
                 }
@@ -1167,10 +1193,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let CalleeChoice::Decided(decision) = choice else {
                     return None;
                 };
-                let Answer::Signature(SettledSignature { bounded, .. }) =
-                    self.solver.answer(*decision)?
-                else {
+                let Answer::Signature(settled) = self.solver.answer(*decision)? else {
                     unreachable!("a signature decision answers with a signature")
+                };
+                let SettledSignature::Named { bounded, .. } = settled else {
+                    return None;
                 };
                 let span = self.decision_sites[decision];
                 Some(bounded.into_iter().map(move |var| BoundSite { var, span }))
@@ -1445,10 +1472,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let CalleeChoice::Decided(parent) = choice else {
                 return None;
             };
-            let Answer::Signature(SettledSignature { instance, .. }) =
-                self.solver.answer(*parent)?
-            else {
+            let Answer::Signature(settled) = self.solver.answer(*parent)? else {
                 unreachable!("a signature decision answers with a signature")
+            };
+            let SettledSignature::Named { instance, .. } = settled else {
+                return None;
             };
             (instance == Some(InstanceChoice::Decided(decision))).then_some(*parent)
         });
@@ -1551,8 +1579,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Unsettled::AmbiguousSignature {
                     name, candidates, ..
                 } => {
-                    let mut shown: Vec<String> =
-                        candidates.iter().map(|q| self.shown_name(*q)).collect();
+                    let bare = self.interner.resolve(name);
+                    let mut shown: Vec<String> = candidates
+                        .iter()
+                        .map(|candidate| match candidate {
+                            SignatureName::Named(qref) => self.shown_name(*qref),
+                            SignatureName::Local => format!("the binding `{bare}`"),
+                        })
+                        .collect();
                     shown.sort();
                     MirErrorKind::AmbiguousFunction {
                         name: self.interner.resolve(name).to_string(),
@@ -1765,17 +1799,36 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         call_span: Span,
     ) -> InferTy {
         let name_str = self.interner.resolve(name).to_string();
-        let resolved = match self.env.resolve_fn(QualifiedRef::root(name)) {
-            crate::ty::FnLookup::Found(qref, scheme) => Some((qref, scheme.clone())),
-            crate::ty::FnLookup::Overloaded(candidates) => {
-                let candidates: Vec<(QualifiedRef, crate::ty::Scheme)> = candidates
+        let candidates = self.signature_set(QualifiedRef::root(name));
+        match candidates.as_slice() {
+            [] => {}
+            [SignatureCandidate::Named { qref, scheme }] => {
+                let (qref, scheme) = (*qref, scheme.clone());
+                let first = self.receiver_arg(receiver, first_param_reference(&scheme.ty));
+                return self.check_resolved_call(
+                    qref,
+                    &scheme,
+                    callee_id,
+                    &name_str,
+                    Some(first),
+                    args,
+                    call_span,
+                );
+            }
+            [SignatureCandidate::Local { ty }] => {
+                let ty = ty.clone();
+                let first = FirstArg {
+                    ty: self.check_expr(receiver),
+                    site: ArgSite::value(receiver),
+                };
+                return self.check_local_call(callee_id, &ty, Some(&first), args, call_span);
+            }
+            _ => {
+                let candidates: Vec<SignatureCandidate> = candidates
                     .into_iter()
-                    .filter(|(_, scheme)| scheme.params().len() == args.len() + 1)
-                    .map(|(qref, scheme)| (qref, scheme.clone()))
+                    .filter(|candidate| candidate.arity() == args.len() + 1)
                     .collect();
-                let mut references = candidates
-                    .iter()
-                    .map(|(_, scheme)| first_param_reference(&scheme.ty));
+                let mut references = candidates.iter().map(|c| self.candidate_receiver(c));
                 let agreed = references
                     .next()
                     .flatten()
@@ -1790,28 +1843,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     call_span,
                 );
             }
-            crate::ty::FnLookup::Missing => None,
-        };
-        if let Some((resolved_qref, fn_sig)) = resolved {
-            let first = self.receiver_arg(receiver, first_param_reference(&fn_sig.ty));
-            return self.check_resolved_call(
-                resolved_qref,
-                &fn_sig,
-                callee_id,
-                &name_str,
-                Some(first),
-                args,
-                call_span,
-            );
         }
         if let Some(var_ty) = self.lookup_var(name) {
-            let resolved = self.solver.resolve_ty(&var_ty);
-            self.record(callee_id, resolved.clone());
+            let callable = self.solver.resolve_ty(&var_ty);
             let first = FirstArg {
                 ty: self.check_expr(receiver),
                 site: ArgSite::value(receiver),
             };
-            return self.check_callable(&resolved, args, Some(&first), call_span);
+            return self.check_local_call(callee_id, &callable, Some(&first), args, call_span);
         }
         self.error(MirErrorKind::UndefinedFunction(name_str), call_span);
         Self::infer_error()
@@ -1845,10 +1884,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// RFC-0030.
+    fn candidate_receiver(&self, candidate: &SignatureCandidate) -> Option<Mutability> {
+        match candidate {
+            SignatureCandidate::Named { scheme, .. } => first_param_reference(&scheme.ty),
+            SignatureCandidate::Local { ty } => {
+                let TyTerm::Fn { params, .. } = ty else {
+                    return None;
+                };
+                match self.solver.shallow_resolve_ty(&params.first()?.ty) {
+                    TyTerm::Ref(mutability, _) => Some(mutability),
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// RFC-0043.
     fn check_overloaded_call(
         &mut self,
-        candidates: Vec<(QualifiedRef, crate::ty::Scheme)>,
+        candidates: Vec<SignatureCandidate>,
         callee_id: AstId,
         name: Astr,
         first: Option<FirstArg>,
@@ -1857,61 +1912,48 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     ) -> InferTy {
         let name_str = self.interner.resolve(name).to_string();
         let arity = args.len() + usize::from(first.is_some());
-        let candidates: Vec<(QualifiedRef, crate::ty::Scheme)> = candidates
+        let candidates: Vec<SignatureCandidate> = candidates
             .into_iter()
-            .filter(|(_, scheme)| scheme.params().len() == arity)
+            .filter(|candidate| candidate.arity() == arity)
             .collect();
-        let Some((_, shape)) = candidates.first() else {
-            let CheckedArgs { types, .. } = self.check_args_in_order(
-                &Self::infer_error(),
-                first.as_ref(),
-                args,
-                ArgumentMismatch::Convert,
-            );
-            let params = types
-                .into_iter()
-                .enumerate()
-                .map(|(index, ty)| ParamTerm::new(self.interner.intern(&index.to_string()), ty))
-                .collect();
-            let call = TyTerm::Fn {
-                params,
-                ret: Box::new(self.solver.fresh_ty_var()),
-                captures: vec![],
-                effect: self.solver.fresh_effect_var(),
-            };
-            self.error(
-                MirErrorKind::NoMatchingFunction {
-                    name: name_str,
-                    ty: self.freeze_or_error(&call),
-                },
-                call_span,
-            );
-            return Self::infer_error();
-        };
-        if let [(qref, scheme)] = candidates.as_slice() {
-            return self
-                .check_resolved_call(*qref, scheme, callee_id, &name_str, first, args, call_span);
+        match candidates.as_slice() {
+            [] => {
+                let types = self.check_args_in_order(&Self::infer_error(), first.as_ref(), args);
+                return self.no_matching_function(&name_str, types, call_span);
+            }
+            [SignatureCandidate::Named { qref, scheme }] => {
+                let (qref, scheme) = (*qref, scheme.clone());
+                return self.check_resolved_call(
+                    qref, &scheme, callee_id, &name_str, first, args, call_span,
+                );
+            }
+            [SignatureCandidate::Local { ty }] => {
+                let ty = ty.clone();
+                return self.check_local_call(callee_id, &ty, first.as_ref(), args, call_span);
+            }
+            _ => {}
         }
-        let params: Vec<ParamTerm<Infer>> = shape
-            .params()
+        let (options, params) = match self.admit_args(candidates, first.as_ref(), args) {
+            AdmittedArgs::Taken { options, params } => (options, params),
+            AdmittedArgs::Refused { types } => {
+                return self.no_matching_function(&name_str, types, call_span);
+            }
+        };
+        let declared_returns: Option<Vec<&crate::ty::PolyTy>> = options
             .iter()
-            .enumerate()
-            .map(|(index, param)| {
-                let bound = candidates
-                    .iter()
-                    .map(|(_, scheme)| scheme.param_bound(&scheme.params()[index].ty))
-                    .fold(TyVarBound::OneOf(vec![]), TyVarBound::union);
-                ParamTerm::new(param.name, self.solver.fresh_var_with(bound))
+            .map(|option| match &option.candidate {
+                SignatureCandidate::Named { scheme, .. } => Some(scheme.ret()),
+                SignatureCandidate::Local { .. } => None,
             })
             .collect();
-        let mut returns = candidates.iter().map(|(_, scheme)| scheme.ret());
-        let ret = match returns.next() {
-            Some(first) => {
-                let shape =
-                    returns.fold(first.clone(), |shape, ret| generalize_patterns(&shape, ret));
+        let ret = match declared_returns.as_deref() {
+            Some([first, rest @ ..]) => {
+                let shape = rest.iter().fold((*first).clone(), |shape, ret| {
+                    generalize_patterns(&shape, ret)
+                });
                 self.solver.fresh_shape(&shape)
             }
-            None => self.solver.fresh_ty_var(),
+            Some([]) | None => self.solver.fresh_ty_var(),
         };
         let effect = self.solver.fresh_effect_var();
         let call = TyTerm::Fn {
@@ -1920,42 +1962,140 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             captures: vec![],
             effect: effect.clone(),
         };
-        let CheckedArgs {
-            types,
-            refused,
-            converted,
-        } = self.check_args_in_order(&call, first.as_ref(), args, ArgumentMismatch::Refuse);
-        if refused {
-            self.error(
-                MirErrorKind::NoMatchingFunction {
-                    name: name_str,
-                    ty: self.freeze_or_error(&call),
-                },
-                call_span,
-            );
-            return Self::infer_error();
-        }
         self.note_call_effect(&effect, call_span);
         self.record(callee_id, call.clone());
         let decision = self.solver.decide(Decision::Signature {
             name,
             call,
-            candidates: candidates
-                .into_iter()
-                .map(|(qref, scheme)| SignatureCandidate { qref, scheme })
-                .collect(),
-            converted: converted
-                .into_iter()
-                .map(|index| ConvertedArgument {
-                    index,
-                    ty: types[index].clone(),
-                })
-                .collect(),
+            options,
         });
         self.decision_sites.insert(decision, call_span);
         self.direct_calls
             .insert(callee_id, CalleeChoice::Decided(decision));
         ret
+    }
+
+    /// No signature of the name takes the call (RFC-0043), reported at the
+    /// call with the argument types it was written with.
+    fn no_matching_function(
+        &mut self,
+        name: &str,
+        types: Vec<InferTy>,
+        call_span: Span,
+    ) -> InferTy {
+        let params = types
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| ParamTerm::new(self.interner.intern(&index.to_string()), ty))
+            .collect();
+        let call = TyTerm::Fn {
+            params,
+            ret: Box::new(self.solver.fresh_ty_var()),
+            captures: vec![],
+            effect: self.solver.fresh_effect_var(),
+        };
+        self.error(
+            MirErrorKind::NoMatchingFunction {
+                name: name.to_string(),
+                ty: self.freeze_or_error(&call),
+            },
+            call_span,
+        );
+        Self::infer_error()
+    }
+
+    /// Every argument of an overloaded call, checked left to right against
+    /// the set that still takes it (RFC-0043), so that a candidate an
+    /// earlier argument refused bounds no later parameter.
+    fn admit_args(
+        &mut self,
+        candidates: Vec<SignatureCandidate>,
+        first: Option<&FirstArg>,
+        args: &[Expr],
+    ) -> AdmittedArgs {
+        let mut options: Vec<SignatureOption> = candidates
+            .into_iter()
+            .map(SignatureOption::taking_every_argument_directly)
+            .collect();
+        let offset = usize::from(first.is_some());
+        let mut params: Vec<ParamTerm<Infer>> = Vec::with_capacity(args.len() + offset);
+        let mut types = Vec::with_capacity(args.len() + offset);
+        let outer_holds = self.holds.len();
+        if let Some(first) = first {
+            let param = self.call_param(&options, 0);
+            self.admit_arg(&mut options, 0, &param, &first.ty, &first.site);
+            params.push(param);
+            types.push(first.ty.clone());
+        }
+        for (i, arg) in args.iter().enumerate() {
+            if options.is_empty() {
+                types.push(self.check_arg(arg, None));
+                continue;
+            }
+            let index = i + offset;
+            let param = self.call_param(&options, index);
+            let ty = self.check_arg(arg, Some(&param.ty));
+            self.admit_arg(&mut options, index, &param, &ty, &ArgSite::of(arg));
+            params.push(param);
+            types.push(ty);
+        }
+        self.holds.truncate(outer_holds);
+        if options.is_empty() {
+            return AdmittedArgs::Refused { types };
+        }
+        AdmittedArgs::Taken { options, params }
+    }
+
+    /// The call's parameter at `index` (RFC-0043). Its bound is the
+    /// parameter's own range; nothing reads it to decide how an argument
+    /// is admitted.
+    fn call_param(&mut self, options: &[SignatureOption], index: usize) -> ParamTerm<Infer> {
+        let shape = options
+            .first()
+            .expect("a parameter is asked for while the set holds a candidate");
+        let name = shape
+            .candidate
+            .param_name(index)
+            .expect("the arity filter leaves only candidates with this parameter");
+        let bound = options
+            .iter()
+            .map(|option| option.candidate.param_bound(index))
+            .fold(TyVarBound::OneOf(vec![]), TyVarBound::union);
+        ParamTerm::new(name, self.solver.fresh_var_with(bound))
+    }
+
+    /// One argument against the set (RFC-0043).
+    fn admit_arg(
+        &mut self,
+        options: &mut Vec<SignatureOption>,
+        index: usize,
+        param: &ParamTerm<Infer>,
+        ty: &InferTy,
+        site: &ArgSite,
+    ) {
+        let mut converts = false;
+        options.retain_mut(
+            |option| match self.solver.admits(&option.candidate, index, ty) {
+                Admission::Direct => true,
+                Admission::Converted => {
+                    option.converted.push(ConvertedArgument {
+                        index,
+                        ty: ty.clone(),
+                    });
+                    converts = true;
+                    true
+                }
+                Admission::Refused => false,
+            },
+        );
+        if options.is_empty() {
+            return;
+        }
+        if converts {
+            self.convert_argument_at(ty, &param.ty, site);
+        } else {
+            self.meet_argument(ty, &param.ty, site);
+        }
     }
 
     /// A resolved named call, once its first argument (piped or a method
@@ -1972,9 +2112,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         call_span: Span,
     ) -> InferTy {
         let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, call_span);
-        let CheckedArgs {
-            types: arg_types, ..
-        } = self.check_args_in_order(&fn_ty, first.as_ref(), args, ArgumentMismatch::Convert);
+        let arg_types = self.check_args_in_order(&fn_ty, first.as_ref(), args);
         match &fn_ty {
             TyTerm::Fn {
                 params: param_tys,
@@ -3243,15 +3381,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return self.check_callable(&resolved, args, first.as_ref(), call_span);
         };
 
-        // Check named functions (builtins, externs, user-defined).
         let name_str = self.interner.resolve(name.name);
-        let resolved = match self.env.resolve_fn(*name) {
-            crate::ty::FnLookup::Found(qref, scheme) => Some((qref, scheme.clone())),
-            crate::ty::FnLookup::Overloaded(candidates) => {
-                let candidates = candidates
-                    .into_iter()
-                    .map(|(qref, scheme)| (qref, scheme.clone()))
-                    .collect();
+        let candidates = self.signature_set(*name);
+        match candidates.as_slice() {
+            [] => {}
+            [SignatureCandidate::Named { qref, scheme }] => {
+                let scheme = scheme.clone();
+                return self.check_resolved_call(
+                    *qref,
+                    &scheme,
+                    func.id(),
+                    name_str,
+                    first,
+                    args,
+                    call_span,
+                );
+            }
+            [SignatureCandidate::Local { ty }] => {
+                let ty = ty.clone();
+                return self.check_local_call(func.id(), &ty, first.as_ref(), args, call_span);
+            }
+            _ => {
                 return self.check_overloaded_call(
                     candidates,
                     func.id(),
@@ -3261,33 +3411,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     call_span,
                 );
             }
-            crate::ty::FnLookup::Missing => None,
-        };
-        if let Some((resolved_qref, fn_sig)) = resolved {
-            return self.check_resolved_call(
-                resolved_qref,
-                &fn_sig,
-                func.id(),
-                name_str,
-                first,
-                args,
-                call_span,
-            );
         }
         if let Some(ns) = name.namespace {
             return self.check_structural_variant(call_id, ns, name.name, args, call_span);
         }
-
-        // Check local variable with function type (indirect call).
         if let Some(var_ty) = self.lookup_var(name.name) {
-            let resolved = self.lent_fn(&var_ty);
-            // Record callee's Fn type on the callee's AstId (indirect - no direct_calls entry).
-            self.record(func.id(), resolved.clone());
-            return self.check_callable(&resolved, args, first.as_ref(), call_span);
+            let callable = self.lent_fn(&var_ty);
+            return self.check_local_call(func.id(), &callable, first.as_ref(), args, call_span);
         }
-
         self.error(
-            MirErrorKind::UndefinedFunction(self.interner.resolve(name.name).to_string()),
+            MirErrorKind::UndefinedFunction(name_str.to_string()),
             call_span,
         );
         Self::infer_error()
@@ -3332,9 +3465,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
 
-        let CheckedArgs {
-            types: arg_types, ..
-        } = self.check_args_in_order(func_ty, first, args, ArgumentMismatch::Convert);
+        let arg_types = self.check_args_in_order(func_ty, first, args);
 
         match func_ty {
             TyTerm::Fn {

@@ -1872,10 +1872,11 @@ impl<'a> Lowerer<'a> {
                 id,
                 callee_id,
                 receiver,
+                name,
                 args,
                 span,
                 ..
-            } => self.lower_method_call(*callee_id, receiver, args, *id, *span),
+            } => self.lower_method_call(*callee_id, receiver, *name, args, *id, *span),
 
             Expr::Pipe {
                 id,
@@ -2391,12 +2392,39 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// A call lends the closure (RFC-0018). A slot already holding a
+    /// `&Fn` — a capture — is reborrowed, since no `&&Fn` exists
+    /// (RFC-0029).
+    fn lent_closure(&mut self, name: Astr, span: Span) -> (ValueId, Ty) {
+        let slot = self.var_slot(name);
+        let (reg, ty) = match self.var_type(name) {
+            Ty::Ref(_, lent) => {
+                let reference = Ty::Ref(Mutability::Shared, lent.clone());
+                let reg = self.emit_take(span, RefTarget::Var(slot), vec![], reference);
+                (reg, lent.ty.clone())
+            }
+            owned => {
+                let reg = self.emit_ref(
+                    span,
+                    RefTarget::Var(slot),
+                    vec![],
+                    Mutability::Shared,
+                    owned.clone(),
+                );
+                (reg, owned)
+            }
+        };
+        self.set_origin(reg, ValOrigin::Named(name));
+        (reg, ty)
+    }
+
     /// `recv.f(args)`: `f(recv', args)`, the receiver lent when `f`'s first
     /// parameter is a reference (RFC-0030).
     fn lower_method_call(
         &mut self,
         callee_id: AstId,
         receiver: &Expr,
+        name: Astr,
         args: &[Expr],
         call_id: AstId,
         call_span: Span,
@@ -2442,6 +2470,16 @@ impl<'a> Lowerer<'a> {
             Some(callee) => {
                 self.set_origin(dst, ValOrigin::Call(callee.id().name));
                 self.emit_call_with(call_span, dst, callee, callee_ty, call);
+            }
+            None if self.is_defined(name) => {
+                let (closure_reg, closure_ty) = self.lent_closure(name, call_span);
+                self.emit_call_with(
+                    call_span,
+                    dst,
+                    Callee::Indirect(closure_reg),
+                    closure_ty,
+                    call,
+                );
             }
             None => {
                 self.emit_inst(call_span, InstKind::Poison { dst });
@@ -2502,33 +2540,7 @@ impl<'a> Lowerer<'a> {
                     }
 
                     if self.is_defined(name.name) {
-                        let slot = self.var_slot(name.name);
-                        // A call lends the closure (RFC-0018). A slot already
-                        // holding a `&Fn` — a capture — is reborrowed, since
-                        // no `&&Fn` exists (RFC-0029).
-                        let (closure_reg, closure_ty) = match self.var_type(name.name) {
-                            Ty::Ref(_, lent) => {
-                                let reference = Ty::Ref(Mutability::Shared, lent.clone());
-                                let reg = self.emit_take(
-                                    *ident_span,
-                                    RefTarget::Var(slot),
-                                    vec![],
-                                    reference,
-                                );
-                                (reg, lent.ty.clone())
-                            }
-                            owned => {
-                                let reg = self.emit_ref(
-                                    *ident_span,
-                                    RefTarget::Var(slot),
-                                    vec![],
-                                    Mutability::Shared,
-                                    owned.clone(),
-                                );
-                                (reg, owned)
-                            }
-                        };
-                        self.set_origin(closure_reg, ValOrigin::Named(name.name));
+                        let (closure_reg, closure_ty) = self.lent_closure(name.name, *ident_span);
                         self.emit_call_with(
                             call_span,
                             dst,

@@ -10,37 +10,49 @@ A bare name that several namespaces declare resolves to the set of their
 signatures. Candidates whose arity differs from the call are dropped at
 check time; one left is the call, as a qualified name is. Several left
 form one call: a fresh function type whose parameter variables carry
-`TyVarBound::OneOf` of the union of the candidates' parameter shapes at
-that position, a candidate's own `OneOf`-bounded variables expanded to
-their shapes, a bare variable making the position `Any`; its return is
-the candidates' common return pattern (`get`'s `&T`, `first`'s
-`Option<&T>`) with fresh variables, or a bare variable where they have
-none (`min`'s `T` and `Option<T>`), so a field read or a method call on
-the result sees the reference before the signature settles. A receiver
-whose type is still a variable is passed as it is; the parameter it meets
-decides whether it was a reference. An argument
-flowing into such a parameter meets the bound as any bounded variable's
-does: two variables intersect their bounds; an argument some shape admits
-joins the parameter; an argument no shape admits, but one declared
-conversion rule (RFC-0023) takes to a shape of the bound, leaves the
-parameter open and opens the conversion decision at that argument, as a
-direct call would; and an argument neither admits empties the set at that
-argument, which is reported as `NoMatchingFunction` there and opens no
-decision. An argument whose type is still a variable is admitted as it
-is; a conversion is admitted from a resolved head only.
+`TyVarBound::OneOf` of the union of the parameter shapes the candidates
+still in the set have at that position, a candidate's own `OneOf`-bounded
+variables expanded to their shapes, a bare variable making the position
+`Any`; its return is the candidates' common return pattern (`get`'s `&T`,
+`first`'s `Option<&T>`) with fresh variables, or a bare variable where
+they have none (`min`'s `T` and `Option<T>`), so a field read or a method
+call on the result sees the reference before the signature settles. That
+bound is the parameter's range and nothing more: no argument is admitted
+by reading it. A receiver whose type is still a variable is passed as it
+is; the parameter it meets decides whether it was a reference.
+
+How an argument is taken is a property of the pair (argument, candidate),
+asked of that candidate's own parameter there. A candidate takes an
+argument one of its parameter's shapes admits directly, joining the call's
+parameter with it. An argument no shape admits, but one declared rule
+(RFC-0023) casts to a shape — through a reference, one rule each way,
+since the value is cast back when the call ends (RFC-0041) — it takes by
+conversion. Any other it refuses, and a candidate that refuses an argument
+leaves the set there, as the arity filter leaves one out at the call. An
+argument still a variable is admitted as it is where the two bounds
+intersect; a conversion is admitted from a resolved head only. A set an
+argument empties is `NoMatchingFunction` there, and opens no decision.
+
+At an argument some candidate that stays takes only by conversion, the
+call's parameter is left open and one conversion decision (RFC-0023) from
+the argument to it is opened, as a direct call would. It has no answer of
+its own: settling it to identity would bind the parameter and so decide
+the signature by the argument's shape. It waits for the signature and
+settles once that has — identity where the settled candidate took the
+argument directly, the rule where it took it by conversion.
 
 The call opens `Decision::Signature` over the candidates, stepped as
 `Decision::Instance` is (RFC-0040, RFC-0042): a candidate stays while the
 call type would join its type on a copy of the terms, at every parameter
 the call still has as a variable the variable's bound meets the bound the
-candidate's parameter gives it, and at every argument admitted through a
-conversion, one declared rule takes the argument to the candidate's
-parameter or the argument joins it. One left settles: the candidate is
-instantiated as a call of it — its own instance decision and bounds
-opened, as at a qualified call — and joined with the call type, which
-resolves the parameter the conversion decision waits on;
-the answer names the function, its instance choice, and its bounded
-variables, which the checker verifies when the body freezes. None left is
+candidate's parameter gives it, and at every argument that candidate takes
+by conversion, one declared rule takes the argument to its parameter or
+the argument joins it. One left settles: the candidate is instantiated as
+a call of it — its own instance decision and bounds opened, as at a
+qualified call — and joined with the call type, which resolves the
+parameter the conversion decision waits on; the answer names the function,
+its instance choice, and its bounded variables, which the checker verifies
+when the body freezes. None left is
 `NoMatchingFunction { name, call type }`. More than one left when the body
 is solved is `AmbiguousFunction`, listing the candidates that remain.
 Nothing is defaulted.
@@ -48,9 +60,37 @@ Nothing is defaulted.
 The lowering reads a decided call's callee through the settled answer,
 then its instance, as it reads a resolved call's; the IR has no new shape.
 
+A `let` binding of a function is one more signature of its name. The
+candidates at a call of a bare name are the namespaces' signatures and the
+binding of that name in scope whose type's head is `Fn` where the call
+stands; a binding of another head (`let len = 3`) is not a signature, and
+a binding whose head is still a variable there — a lambda's parameter,
+before anything fixes it — names none either, so neither joins the set.
+The binding is decided as the rest are: the arity filter counts its `Fn`'s
+parameters, it stays while the call type would unify with that `Fn`, and
+one left settles by joining the call type with it. `AmbiguousFunction`
+lists it as ``the binding `len` ``. Settling on it names no function, so
+the call freezes no direct callee and the lowering takes the indirect path
+off the variable, as a call of a name no namespace declares already does.
+
+A binding's parameters are inference types, not shapes a scheme names, so
+it gives the call's parameters `TyVarBound::Any` and contributes no return
+pattern. `Any` is what the union of it with any `OneOf` is, so in a set
+holding a binding every parameter is `Any` and the return is a bare
+variable. A binding takes every argument directly, which refuses nothing
+and excludes no one: a declared signature that takes an argument only
+through a cast takes the call beside it. `count(q)` over an owned array is
+`iter::count`, through `into_iter_array`; `let count = |k| -> 7.0;
+count(q)` is ambiguous between `iter::count` and the binding, and
+`count(&q)` is the binding alone, no rule reaching an iterator from a
+reference.
+
 A method call lends its receiver when every remaining candidate's first
 parameter is a reference of one mutability, and passes it as a value
-otherwise; a pipe passes its left side as a value.
+otherwise; a pipe passes its left side as a value. A binding whose first
+parameter is a variable is not a reference of one mutability, so a set
+holding one passes the receiver by value, which every candidate taking
+`&C` then refuses.
 
 A conversion decision whose one side is a `OneOf`-bounded variable answers
 identity only where the other side could match a shape of the bound: the
@@ -82,20 +122,22 @@ element, and what stays wide stays undecided.
 
 ## Cost
 
-A call with several same-arity candidates is checked at the union bound,
-so a mismatch inside it is reported when the decision settles or fails,
-not at the argument, except where the argument meets no shape of the
-union at all. The report names the call type as far as it is known.
+An argument is matched against each candidate's shapes at it, so an
+argument no candidate takes is reported at the call, while a disagreement
+under a shape some candidate does take is reported when the decision
+settles or fails. The report names the call type as far as it is known.
 
 A receiver whose candidates disagree on lending is passed as a value; a
 candidate wanting a reference then drops unless the receiver is already a
 reference value.
 
-Each step of a signature decision joins the call type against every
-remaining candidate on a copy of the terms; the cost is that of an
-instance decision per candidate, plus a rule lookup per converted
-argument on the same copy. A chain of two conversions is not searched:
-one declared rule, or none.
+Checking an argument costs a shape match per candidate, and a rule lookup
+on a copy of the terms per candidate no shape of which admits it. Each
+step of a signature decision joins the call type against every remaining
+candidate on a copy of the terms; the cost is that of an instance decision
+per candidate, plus a rule lookup per argument that candidate converts on
+the same copy. A chain of two conversions is not searched: one declared
+rule, or none.
 
 A settled signature is a function whose instance may still be open:
 `iter::contains` settles on an iterator argument while its `Monomorphize`
@@ -124,16 +166,28 @@ display order, not the order the registries were combined in.
 
 - `acvus-mir/src/ty.rs`: `FnLookup::Overloaded(Vec<(QualifiedRef,
   &Scheme)>)`; `Scheme::{params, ret, param_bound}`; `TyVarBound::union`.
-- `acvus-mir/src/solver.rs`: `Decision::Signature` with its
-  `ConvertedArgument`s, `SignatureCandidate`,
+- `acvus-mir/src/solver.rs`: `Decision::Signature` over
+  `SignatureOption`s — a `SignatureCandidate` with the
+  `ConvertedArgument`s it takes by conversion —
   `Answer::Signature(SettledSignature)`, `Unsettled::{NoSignature,
   AmbiguousSignature}`, `step_signature`, `Solver::{would_unify,
-  fresh_var_with, admit_argument}` with `Admission`, and
-  `identity_within_bounds` on a conversion decision.
-- `acvus-mir/src/typeck.rs`: `check_overloaded_call`, `CalleeChoice`,
-  `ArgumentMismatch`, `CheckedArgs` with its converted positions,
+  fresh_var_with, admits}` with `Admission`, the `converts` predicate, and
+  `identity_within_bounds` and `awaits_signature` on a conversion
+  decision.
+- `acvus-mir/src/typeck.rs`: `check_overloaded_call` over `admit_args`,
+  `call_param`, `admit_arg` and `no_matching_function`, `CalleeChoice`,
   `receiver_arg`; `report_unsettled` maps the two failures; `solve_body`
   verifies a settled signature's bounds.
+- A binding joins the set through `typeck.rs`'s `signature_set`, over
+  `binding_type` — `lookup_var` split so that reading a name to see
+  whether it is a signature does not capture it — with
+  `SignatureCandidate::{Named, Local}`, `SettledSignature::{Named,
+  Local}`, `SignatureName` for the message, `candidate_receiver`, and
+  `check_local_call`, which records the callee type and freezes no
+  `direct_calls` entry.
+- `lower.rs`: `lent_closure` lends the binding a call settled on, at a
+  named call and at a method call alike, so `q.len()` settling on a
+  binding lowers to `Callee::Indirect` of it.
 - `acvus-mir/src/error.rs`: `MirErrorKind::NoMatchingFunction`.
 - RFC-0021's one-name rule is amended: a name two namespaces declare is a
   set, decided by this RFC.
