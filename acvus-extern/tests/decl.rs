@@ -518,13 +518,16 @@ fn concrete_signature_and_declared_effect() {
         fn_ty(find(&reg.functions, &i, "digest")).effect,
         EffectTerm::Known(Effect::PURE.at_task(Task::Heavy))
     );
+    // A declaration that is not pure is split into a `Spawn` and an
+    // `Eval` before it runs, and an `Eval` awaits: its task is `Async`
+    // however synchronous its Rust body is (RFC-0046).
     assert_eq!(
         fn_ty(find(&reg.functions, &i, "take_token")).effect,
-        EffectTerm::Known(Effect::IDEMPOTENT)
+        EffectTerm::Known(Effect::IDEMPOTENT.at_task(Task::Async))
     );
     assert_eq!(
         fn_ty(find(&reg.functions, &i, "draw")).effect,
-        EffectTerm::Known(Effect::IDEMPOTENT.commutative())
+        EffectTerm::Known(Effect::IDEMPOTENT.commutative().at_task(Task::Async))
     );
 }
 
@@ -598,7 +601,8 @@ fn types_and_casts_reach_the_type_registry() {
 fn call_sync(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
     match handler {
         ExternHandler::Sync(f) => f.call_taking(&Tiny, &mut args),
-        ExternHandler::Async(_) => panic!("expected a sync handler"),
+        ExternHandler::Heavy(_) => panic!("expected a sync handler, found a heavy one"),
+        ExternHandler::Async(_) => panic!("expected a sync handler, found an async one"),
     }
 }
 
@@ -631,7 +635,8 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
 async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
     match handler {
         ExternHandler::Async(f) => f(Tiny, &mut args).await,
-        ExternHandler::Sync(_) => panic!("expected an async handler"),
+        ExternHandler::Sync(_) => panic!("expected an async handler, found a sync one"),
+        ExternHandler::Heavy(_) => panic!("expected an async handler, found a heavy one"),
     }
 }
 

@@ -11,10 +11,17 @@
 
 use crate::cfg::CfgBody;
 use crate::ir::*;
-use crate::ty::Ty;
+use crate::ty::{Task, Ty};
 
 /// Split IO FunctionCalls into Spawn + Eval pairs, in-place.
+///
+/// An `Eval` awaits, so a body this pass splits anything in runs at
+/// `Task::Async` however synchronous its callees were declared: the pass
+/// is a third source of suspension beside the two RFC-0046's table names,
+/// and it raises the body's task itself (found by the interpreter's
+/// `may_suspend` assertion, RFC-0046).
 pub fn run(cfg: &mut CfgBody) {
+    let mut split_one = false;
     for block in &mut cfg.blocks {
         let mut new_insts = Vec::with_capacity(block.insts.len() + 4);
 
@@ -53,6 +60,7 @@ pub fn run(cfg: &mut CfgBody) {
                             order: order.map(|edge| edge.after),
                         },
                     });
+                    split_one = true;
                 }
                 // Everything else: pass through.
                 _ => {
@@ -62,6 +70,9 @@ pub fn run(cfg: &mut CfgBody) {
         }
 
         block.insts = new_insts;
+    }
+    if split_one {
+        cfg.task = cfg.task.join(Task::Async);
     }
 }
 

@@ -30,7 +30,7 @@ use acvus_extern::{
     Monomorphize, Ref, Registry, Runtime, Stored, TyVar, extern_fn, extern_registry,
 };
 
-use crate::iter::{Iter, drain};
+use crate::iter::{Iter, drain, drain_now};
 
 /// The arithmetic the aggregates need of a `Monomorphize<(i64, f64)>`
 /// member; `add` and `mul` are what `Iterator::sum` and `Iterator::product`
@@ -316,7 +316,21 @@ where
     it.flat_map::<Vec<U>, U>(f)
 }
 
-#[extern_fn(effect = E)]
+fn collect_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Vec<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut items = Vec::new();
+    drain_now!(it, rt, |value| {
+        items.push(T::from_value(rt, value));
+    });
+    items
+}
+
+#[extern_fn(effect = E, sync = collect_now)]
 async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Vec<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
@@ -331,7 +345,20 @@ where
     items
 }
 
-#[extern_fn(effect = E)]
+fn join_now<E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, String>, E, I, Rt>, sep: String) -> String
+where
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut parts: Vec<String> = Vec::new();
+    drain_now!(it, rt, |value| {
+        parts.push(Erased::<Rt, String>::from_value(rt, value).into_inner(rt));
+    });
+    parts.join(&sep)
+}
+
+#[extern_fn(effect = E, sync = join_now)]
 async fn join<E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, String>, E, I, Rt>, sep: String) -> String
 where
     E: EffectVar,
@@ -345,7 +372,24 @@ where
     parts.join(&sep)
 }
 
-#[extern_fn(effect = E)]
+fn contains_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>, needle: T) -> bool
+where
+    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut found = false;
+    drain_now!(it, rt, |value| {
+        if *Erased::<Rt, T>::from_value(rt, value).as_ref(rt) == needle {
+            found = true;
+            break;
+        }
+    });
+    found
+}
+
+#[extern_fn(effect = E, sync = contains_now)]
 async fn contains<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>, needle: T) -> bool
 where
     T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
@@ -363,7 +407,17 @@ where
     found
 }
 
-#[extern_fn(effect = E)]
+fn next_now<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Option<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    it.next_now(rt)
+}
+
+#[extern_fn(effect = E, sync = next_now)]
 async fn next<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
@@ -374,7 +428,21 @@ where
     it.next(rt).await
 }
 
-#[extern_fn(effect = E)]
+fn find_now<T, E, I, Rt>(
+    rt: &Rt,
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+) -> Option<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    it.filter(f).next_now(rt)
+}
+
+#[extern_fn(effect = E, sync = find_now)]
 async fn find<T, E, I, Rt>(
     rt: &Rt,
     it: Iter<T, E, I, Rt>,
@@ -389,7 +457,22 @@ where
     it.filter(f).next(rt).await
 }
 
-#[extern_fn(effect = E)]
+fn reduce_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>, f: Fn2<T, T, T, E, Rt>) -> Option<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut acc = it.next_now(rt)?;
+    drain_now!(it, rt, |value| {
+        let item = T::from_value(rt, value);
+        acc = f.call_now(rt, (acc, item));
+    });
+    Some(acc)
+}
+
+#[extern_fn(effect = E, sync = reduce_now)]
 async fn reduce<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
@@ -409,7 +492,28 @@ where
     Some(acc)
 }
 
-#[extern_fn(effect = E)]
+fn fold_now<T, U, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<T, E, I, Rt>,
+    init: U,
+    f: Fn2<U, T, U, E, Rt>,
+) -> U
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    U: TyVar + Cross<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut acc = init;
+    drain_now!(it, rt, |value| {
+        let item = T::from_value(rt, value);
+        acc = f.call_now(rt, (acc, item));
+    });
+    acc
+}
+
+#[extern_fn(effect = E, sync = fold_now)]
 async fn fold<T, U, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
@@ -431,7 +535,24 @@ where
     acc
 }
 
-#[extern_fn(effect = E)]
+fn any_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> bool
+where
+    T: TyVar + Cross<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut found = false;
+    drain_now!(it, rt, |value| {
+        if f.call_now(rt, (Ref::lend(rt, &value),)) {
+            found = true;
+            break;
+        }
+    });
+    found
+}
+
+#[extern_fn(effect = E, sync = any_now)]
 async fn any<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
@@ -453,7 +574,24 @@ where
     found
 }
 
-#[extern_fn(effect = E)]
+fn all_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> bool
+where
+    T: TyVar + Cross<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut holds_throughout = true;
+    drain_now!(it, rt, |value| {
+        if !f.call_now(rt, (Ref::lend(rt, &value),)) {
+            holds_throughout = false;
+            break;
+        }
+    });
+    holds_throughout
+}
+
+#[extern_fn(effect = E, sync = all_now)]
 async fn all<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
@@ -583,7 +721,21 @@ where
     it.dedup()
 }
 
-#[extern_fn(effect = E)]
+fn count_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> i64
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut n = 0;
+    drain_now!(it, rt, |_value| {
+        n += 1;
+    });
+    n
+}
+
+#[extern_fn(effect = E, sync = count_now)]
 async fn count<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> i64
 where
     T: TyVar,
@@ -598,7 +750,21 @@ where
     n
 }
 
-#[extern_fn(effect = E)]
+fn last_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Option<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut last = None;
+    drain_now!(it, rt, |value| {
+        last = Some(T::from_value(rt, value));
+    });
+    last
+}
+
+#[extern_fn(effect = E, sync = last_now)]
 async fn last<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
@@ -613,7 +779,17 @@ where
     last
 }
 
-#[extern_fn(effect = E)]
+fn nth_now<T, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    it.skip(n).next_now(rt)
+}
+
+#[extern_fn(effect = E, sync = nth_now)]
 async fn nth<T, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
 where
     T: TyVar + Cross<Rt> + FromValue<Rt>,
@@ -624,7 +800,30 @@ where
     it.skip(n).next(rt).await
 }
 
-#[extern_fn(effect = E)]
+fn position_now<T, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+) -> Option<i64>
+where
+    T: TyVar,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut index = 0;
+    let mut at = None;
+    drain_now!(it, rt, |value| {
+        if f.call_now(rt, (Ref::lend(rt, &value),)) {
+            at = Some(index);
+            break;
+        }
+        index += 1;
+    });
+    at
+}
+
+#[extern_fn(effect = E, sync = position_now)]
 async fn position<T, E, I, Rt>(
     rt: &Rt,
     mut it: Iter<T, E, I, Rt>,
@@ -648,7 +847,22 @@ where
     at
 }
 
-#[extern_fn(effect = E)]
+fn sum_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut acc = T::ZERO;
+    drain_now!(it, rt, |value| {
+        let item = Erased::<Rt, T>::from_value(rt, value);
+        acc = acc.add(*item.as_ref(rt));
+    });
+    acc
+}
+
+#[extern_fn(effect = E, sync = sum_now)]
 async fn sum<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
@@ -664,7 +878,22 @@ where
     acc
 }
 
-#[extern_fn(effect = E)]
+fn product_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut acc = T::ONE;
+    drain_now!(it, rt, |value| {
+        let item = Erased::<Rt, T>::from_value(rt, value);
+        acc = acc.mul(*item.as_ref(rt));
+    });
+    acc
+}
+
+#[extern_fn(effect = E, sync = product_now)]
 async fn product<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
@@ -680,7 +909,25 @@ where
     acc
 }
 
-#[extern_fn(effect = E)]
+fn min_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut best: Option<T> = None;
+    drain_now!(it, rt, |value| {
+        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
+        best = Some(match best {
+            Some(best) => best.min(current),
+            None => current,
+        });
+    });
+    best
+}
+
+#[extern_fn(effect = E, sync = min_now)]
 async fn min<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
@@ -699,7 +946,25 @@ where
     best
 }
 
-#[extern_fn(effect = E)]
+fn max_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
+where
+    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut best: Option<T> = None;
+    drain_now!(it, rt, |value| {
+        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
+        best = Some(match best {
+            Some(best) => best.max(current),
+            None => current,
+        });
+    });
+    best
+}
+
+#[extern_fn(effect = E, sync = max_now)]
 async fn max<T, E, I, Rt>(rt: &Rt, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
@@ -764,7 +1029,47 @@ where
     Some(T::from_value(rt, best?.value))
 }
 
-#[extern_fn(effect = E)]
+fn min_by_key_now<T, E, I, Rt>(
+    rt: &Rt,
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+) -> Option<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    extreme_by_key_now(rt, it, f, Extreme::Min)
+}
+
+fn extreme_by_key_now<T, E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    extreme: Extreme,
+) -> Option<T>
+where
+    T: TyVar + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    let mut best: Option<Keyed<Rt::Value>> = None;
+    drain_now!(it, rt, |value| {
+        let key = f.call_now(rt, (Ref::lend(rt, &value),));
+        let replace = match &best {
+            Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
+            None => true,
+        };
+        if replace {
+            best = Some(Keyed { value, key });
+        }
+    });
+    Some(T::from_value(rt, best?.value))
+}
+
+#[extern_fn(effect = E, sync = min_by_key_now)]
 async fn min_by_key<T, E, I, Rt>(
     rt: &Rt,
     it: Iter<T, E, I, Rt>,
@@ -779,7 +1084,21 @@ where
     extreme_by_key(rt, it, f, Extreme::Min).await
 }
 
-#[extern_fn(effect = E)]
+fn max_by_key_now<T, E, I, Rt>(
+    rt: &Rt,
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+) -> Option<T>
+where
+    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    extreme_by_key_now(rt, it, f, Extreme::Max)
+}
+
+#[extern_fn(effect = E, sync = max_by_key_now)]
 async fn max_by_key<T, E, I, Rt>(
     rt: &Rt,
     it: Iter<T, E, I, Rt>,

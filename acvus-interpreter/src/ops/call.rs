@@ -272,8 +272,8 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
 /// than borrowing registers; it keeps the window at every arity.
 pub fn spawn_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let call = extern_call(machine, op);
-    let ExternHandler::Sync(f) = &call.handler else {
-        panic!("prepared as a synchronous extern spawn, but the handler is asynchronous")
+    let (ExternHandler::Sync(f) | ExternHandler::Heavy(f)) = &call.handler else {
+        panic!("prepared as a spawn onto the blocking pool, but the handler is asynchronous")
     };
     let f = f.clone();
     let window = window_of(call);
@@ -301,6 +301,29 @@ pub fn spawn_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let handle = machine.shared().executor.spawn_async(f(rt, &mut args));
     machine.define(op.a, Value::handle(handle));
     Flow::Next
+}
+
+/// A `heavy` extern (RFC-0046): a Rust `fn`, but one worth another thread.
+/// The work outlives this frame, so it owns its arguments as a spawn's
+/// does; the call then awaits the handle, so the call site suspends
+/// exactly as an `async fn` extern's does.
+pub fn call_extern_heavy(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Heavy(f) = &call.handler else {
+        panic!("prepared as a heavy extern call, but the handler is not a heavy one")
+    };
+    let f = f.clone();
+    let window = window_of(call);
+    yield_order(machine, call.order);
+    move_all(machine, &window.moves);
+    let mut args = machine.take_window(window);
+    let rt = machine.rt.clone();
+    let executor = Arc::clone(&machine.shared().executor);
+    let handle = executor.spawn_blocking(Box::new(move || f.call_taking(&rt, &mut args)));
+    Flow::Await(Pending {
+        dst: op.a,
+        fut: Box::pin(async move { executor.eval(handle).await }),
+    })
 }
 
 pub fn spawn_module(machine: &mut Machine<'_>, op: &Op) -> Flow {

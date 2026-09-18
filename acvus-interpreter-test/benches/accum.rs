@@ -57,6 +57,12 @@ const BRANCH_WHILE: &str =
     "let i = 0; let acc = 0; while i < @n { if even_of(i) { acc = acc + i; }; i = i + 1; } acc";
 const OPTION_WHILE: &str = "let i = 0; let acc = 0; while i < @n { if let Some(v) = some_of(i) { acc = acc + v; }; i = i + 1; } acc";
 
+/// The language's iteration idiom over a container: a `while let` head
+/// whose `next` is one extern call (RFC-0046).
+const WHILE_LET_VEC: &str = "let v = range(0, @n) | collect; let it = as_iter(&v); let acc = 0; while let Some(x) = next(&mut it) { acc = acc + *x; } acc";
+/// The same head over a lazy pipeline of synchronous stages.
+const WHILE_LET_MAP: &str = "let it = range(0, @n) | map(|x| -> x + 1); let acc = 0; while let Some(x) = next(&mut it) { acc = acc + x; } acc";
+
 /// A value diamond in the body: the collatz step, both arms non-empty and
 /// the join carrying one parameter.
 const COLLATZ_WHILE: &str = "let i = 0; let acc = 0; while i < @n { let d = if i % 2 == 0 { i / 2 } else { i * 3 + 1 }; acc = acc + d; i = i + 1; } acc";
@@ -138,6 +144,25 @@ fn rust_option_while(n: i64) -> f64 {
             acc += v;
         }
         i += 1;
+    }
+    acc as f64
+}
+
+fn rust_while_let_vec(n: i64) -> f64 {
+    let v: Vec<i64> = (0..n).collect();
+    let mut it = v.iter();
+    let mut acc = 0i64;
+    while let Some(x) = it.next() {
+        acc += black_box(*x);
+    }
+    acc as f64
+}
+
+fn rust_while_let_map(n: i64) -> f64 {
+    let mut it = (0..n).map(|x| x + 1);
+    let mut acc = 0i64;
+    while let Some(x) = it.next() {
+        acc += black_box(x);
     }
     acc as f64
 }
@@ -315,6 +340,20 @@ fn main() {
             source: OPTION_WHILE,
             registries: with_some_of,
             rust: rust_option_while,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "while let vec",
+            source: WHILE_LET_VEC,
+            registries: std_only,
+            rust: rust_while_let_vec,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "while let map",
+            source: WHILE_LET_MAP,
+            registries: std_only,
+            rust: rust_while_let_map,
             read: |v| v.as_int() as f64,
         },
         Case {

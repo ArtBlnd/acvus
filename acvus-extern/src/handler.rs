@@ -126,10 +126,14 @@ where
     }
 }
 
-/// `Sync` may run on a blocking thread pool; `Async` runs on the async
-/// runtime and owns its interner because it lives across await points.
+/// One handler per rung of `Task` (RFC-0046). `Sync` runs to its result
+/// in the caller's frame; `Heavy` is a Rust `fn` all the same, but one the
+/// runtime hands to `Executor::spawn_blocking` and awaits; `Async` runs on
+/// the async runtime and owns its interner because it lives across await
+/// points.
 pub enum ExternHandler<R: Runtime> {
     Sync(SyncHandler<R>),
+    Heavy(SyncHandler<R>),
     Async(Arc<AsyncFn<R>>),
 }
 
@@ -137,20 +141,40 @@ impl<R: Runtime> Clone for ExternHandler<R> {
     fn clone(&self) -> Self {
         match self {
             Self::Sync(f) => Self::Sync(f.clone()),
+            Self::Heavy(f) => Self::Heavy(f.clone()),
             Self::Async(f) => Self::Async(Arc::clone(f)),
         }
     }
 }
 
 impl<R: Runtime> ExternHandler<R> {
+    /// Whether the call reaches its result without the caller suspending.
+    /// A `Heavy` handler does not: it is offloaded and awaited.
     pub fn is_sync(&self) -> bool {
-        matches!(self, Self::Sync(_))
+        match self {
+            Self::Sync(_) => true,
+            Self::Heavy(_) | Self::Async(_) => false,
+        }
+    }
+
+    /// The task this handler runs at, which is the task its declaration
+    /// named.
+    pub fn task(&self) -> Task {
+        match self {
+            Self::Sync(_) => Task::Sync,
+            Self::Async(_) => Task::Async,
+            Self::Heavy(_) => Task::Heavy,
+        }
     }
 }
 
 pub struct Instance<R: Runtime> {
     pub signature: PolyTy,
     pub handler: ExternHandler<R>,
+    /// The greatest task this instance runs — a ceiling, "at most", not
+    /// the instance's own task. The `async fn` glue admits `Heavy` as well
+    /// as `Async`, because it awaits either; the plain `fn` glue admits
+    /// only `Sync`.
     pub admits: Task,
 }
 

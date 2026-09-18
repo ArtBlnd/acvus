@@ -120,7 +120,8 @@ async fn spawn_eval_basic() {
         ];
         MirModule {
             main: MirBody {
-                task: Task::Sync,
+                // An `Eval` awaits (RFC-0046).
+                task: Task::Async,
                 insts,
                 val_types: types(vec![
                     (vids[0], Ty::I64),
@@ -242,7 +243,8 @@ async fn spawn_eval_multi_args() {
         ];
         MirModule {
             main: MirBody {
-                task: Task::Sync,
+                // An `Eval` awaits (RFC-0046).
+                task: Task::Async,
                 insts,
                 val_types: types(vec![
                     (vids[0], Ty::I64),

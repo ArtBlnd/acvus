@@ -34,7 +34,8 @@ pub trait ClosureFn<Rt: Runtime> {
     type Args: Send;
     type Ret;
 
-    /// Reached only where `is_sync` answered true.
+    /// Reached where the closure's effect said `Task::Sync`; every
+    /// implementation asserts `is_sync`, the run-time answer, against it.
     fn call_now(&self, rt: &Rt, args: Self::Args) -> Self::Ret;
     fn call<'a>(
         &'a self,
@@ -147,6 +148,10 @@ where
     type Ret = R;
 
     fn call_now(&self, rt: &Rt, _: ()) -> R {
+        debug_assert!(
+            self.is_sync(),
+            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
+        );
         returned(rt, rt.call_now(&self.0, &mut [], CallToken::mint()))
     }
 
@@ -170,9 +175,12 @@ where
     Rt: Runtime,
 {
     /// The closure applied to a value the caller holds at `A`, the result
-    /// left as the runtime holds it. Reached only where `is_sync` answered
-    /// true.
+    /// left as the runtime holds it. As `ClosureFn::call_now`.
     pub fn call_value_now(&self, rt: &Rt, a: Rt::Value) -> Rt::Value {
+        debug_assert!(
+            self.is_sync(),
+            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
+        );
         rt.call_now(&self.0, &mut [a], CallToken::mint())
     }
 
@@ -201,6 +209,10 @@ where
     type Ret = R;
 
     fn call_now(&self, rt: &Rt, (a,): Self::Args) -> R {
+        debug_assert!(
+            self.is_sync(),
+            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
+        );
         let a = a.erase(rt);
         returned(rt, rt.call_now(&self.0, &mut [a], CallToken::mint()))
     }
@@ -230,6 +242,10 @@ where
     type Ret = R;
 
     fn call_now(&self, rt: &Rt, (a, b): Self::Args) -> R {
+        debug_assert!(
+            self.is_sync(),
+            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
+        );
         let mut args = [a.erase(rt), b.erase(rt)];
         returned(rt, rt.call_now(&self.0, &mut args, CallToken::mint()))
     }
@@ -260,6 +276,10 @@ where
     type Ret = R;
 
     fn call_now(&self, rt: &Rt, (a, b, c): Self::Args) -> R {
+        debug_assert!(
+            self.is_sync(),
+            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
+        );
         let mut args = [a.erase(rt), b.erase(rt), c.erase(rt)];
         returned(rt, rt.call_now(&self.0, &mut args, CallToken::mint()))
     }

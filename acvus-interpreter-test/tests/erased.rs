@@ -26,7 +26,7 @@ where
     first.as_mut(rt).make_ascii_uppercase();
 }
 
-#[extern_fn(effect = E)]
+#[extern_fn(effect = E, sync = contains_erased_now)]
 async fn contains_erased<E, I, Rt>(
     rt: &Rt,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
@@ -38,6 +38,24 @@ where
     Rt: Runtime,
 {
     while let Some(item) = it.next(rt).await {
+        if item.as_ref(rt) == needle.as_ref(rt) {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains_erased_now<E, I, Rt>(
+    rt: &Rt,
+    mut it: Iter<Erased<Rt, String>, E, I, Rt>,
+    needle: Erased<Rt, String>,
+) -> bool
+where
+    E: EffectVar,
+    I: IdentityVar,
+    Rt: Runtime,
+{
+    while let Some(item) = it.next_now(rt) {
         if item.as_ref(rt) == needle.as_ref(rt) {
             return true;
         }

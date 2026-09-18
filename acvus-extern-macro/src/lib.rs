@@ -45,6 +45,10 @@ struct ExternFnAttr {
     /// `heavy`: the call is offloaded to a blocking pool and awaited
     /// (RFC-0046).
     heavy: bool,
+    /// `sync = f`: the plain `fn` that runs this declaration when the
+    /// call's task is `Sync`, declared beside the `async fn` at the same
+    /// signature (RFC-0046).
+    sync: Option<Ident>,
 }
 
 impl Parse for ExternFnAttr {
@@ -55,6 +59,7 @@ impl Parse for ExternFnAttr {
             effect: None,
             commutative: false,
             heavy: false,
+            sync: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -79,10 +84,12 @@ impl Parse for ExternFnAttr {
                 out.instance_of = Some(input.parse()?);
             } else if key == "effect" {
                 out.effect = Some(input.parse()?);
+            } else if key == "sync" {
+                out.sync = Some(input.parse()?);
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name`, `instance_of`, `effect`, `commutative`, or `heavy`",
+                    "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, or `sync`",
                 ));
             }
             if !input.is_empty() {
@@ -180,6 +187,13 @@ fn generate_extern_fn(
             "`heavy` and `async fn` are two tasks; declare one",
         ));
     }
+    if attr.sync.is_some() && !is_async {
+        return Err(syn::Error::new(
+            fn_ident.span(),
+            "`sync` names the plain `fn` that runs this declaration at `Task::Sync`; \
+             a declaration that is not an `async fn` already is that instance",
+        ));
+    }
     let commutes = if attr.commutative {
         quote! { .commutative() }
     } else {
@@ -191,9 +205,14 @@ fn generate_extern_fn(
         (false, false) => quote! { ::acvus_extern::Task::Sync },
     };
     let at_task = quote! { .at_task(#task) };
+    // `optimize::spawn_split` rewrites every call whose effect is not Pure
+    // into a `Spawn` and an `Eval`, and an `Eval` awaits. Such a call runs
+    // at `Async` however synchronous its Rust body is, so a declaration
+    // that is not pure says so (RFC-0046).
+    let spawned = quote! { .at_task(#task.join(::acvus_extern::Task::Async)) };
     let effect = match &attr.effect {
         None => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes #at_task) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes #spawned) }
         }
         Some(e) if e == "pure" => {
             if attr.commutative {
@@ -205,10 +224,10 @@ fn generate_extern_fn(
             quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE #at_task) }
         }
         Some(e) if e == "idempotent" => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::IDEMPOTENT #commutes #at_task) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::IDEMPOTENT #commutes #spawned) }
         }
         Some(e) if e == "opaque" => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes #at_task) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes #spawned) }
         }
         Some(e) => match vars.lookup(e) {
             Some((VarKind::Effect, k)) => {
@@ -222,6 +241,16 @@ fn generate_extern_fn(
                     return Err(syn::Error::new(
                         e.span(),
                         "`heavy` cannot be declared on an effect variable: the task is the variable's",
+                    ));
+                }
+                if is_async && attr.sync.is_none() {
+                    return Err(syn::Error::new(
+                        e.span(),
+                        "an `async fn` generic in its effect takes its task from the variable, \
+                         so it needs the plain `fn` that runs it at `Task::Sync`: declare \
+                         `sync = <fn>`. Without one the glue awaits for every effect the \
+                         variable takes, and the declared task is a claim nothing keeps \
+                         (RFC-0046).",
                     ));
                 }
                 quote! { __vars.effects[#k].clone() }
@@ -283,7 +312,12 @@ fn generate_extern_fn(
             quote! { ::acvus_extern::Cross }
         }
     };
-    let glue = |member: Option<&Type>| -> proc_macro2::TokenStream {
+    let sync_variant = if attr.heavy {
+        quote! { Heavy }
+    } else {
+        quote! { Sync }
+    };
+    let glue = |member: Option<&Type>, callee: &Ident, awaits: bool| -> proc_macro2::TokenStream {
         let rt_tys: Vec<Type> = params
             .iter()
             .map(|p| vars.to_runtime_instance(&p.ty, member))
@@ -352,8 +386,8 @@ fn generate_extern_fn(
         };
         let returned = quote! { <#rt_ret as #ret_cross<__R>>::erase(__r, __rt) };
         let rt_arg = has_runtime.then(|| quote! { __rt, });
-        if is_async {
-            let awaited = quote! { (#fn_ident #turbofish (#rt_arg #(#passed),*)).await };
+        if awaits {
+            let awaited = quote! { (#callee #turbofish (#rt_arg #(#passed),*)).await };
             quote! {{
                 #hold_state
                 ::acvus_extern::ExternHandler::Async(::std::sync::Arc::new(
@@ -370,7 +404,7 @@ fn generate_extern_fn(
                 ))
             }}
         } else {
-            let result = quote! { #fn_ident #turbofish (#rt_arg #(#passed),*) };
+            let result = quote! { #callee #turbofish (#rt_arg #(#passed),*) };
             let body = quote! {
                 #bind
                 let __r = #result;
@@ -380,7 +414,7 @@ fn generate_extern_fn(
             match by_value_variant(arity) {
                 Some(variant) => quote! {{
                     #hold_state
-                    ::acvus_extern::ExternHandler::Sync(
+                    ::acvus_extern::ExternHandler::#sync_variant(
                         ::acvus_extern::SyncHandler::#variant(::std::sync::Arc::new(
                             move |__rt: &__R #(, #taken_idents: #value_ty)*| { #body }
                         ))
@@ -388,7 +422,7 @@ fn generate_extern_fn(
                 }},
                 None => quote! {{
                     #hold_state
-                    ::acvus_extern::ExternHandler::Sync(
+                    ::acvus_extern::ExternHandler::#sync_variant(
                         ::acvus_extern::SyncHandler::ArityN(::std::sync::Arc::new(
                             move |__rt: &__R, __args: &mut [#value_ty]| {
                                 #take
@@ -453,27 +487,60 @@ fn generate_extern_fn(
             .collect()
     };
 
+    // The instances one member of the declaration contributes, in the
+    // order `Instances::into_handlers` indexes them.
+    let at_member = |member: Option<&Type>| -> Vec<proc_macro2::TokenStream> {
+        let declared_sig = signature(member);
+        let declared_handler = glue(member, fn_ident, is_async);
+        let declared = quote! {
+            ::acvus_extern::Instance {
+                signature: #declared_sig,
+                handler: #declared_handler,
+                admits: ::acvus_extern::Task::Heavy,
+            }
+        };
+        let Some(sync_fn) = &attr.sync else {
+            return vec![declared];
+        };
+        let sync_sig = signature(member);
+        let sync_handler = glue(member, sync_fn, false);
+        vec![
+            quote! {
+                ::acvus_extern::Instance {
+                    signature: #sync_sig,
+                    handler: #sync_handler,
+                    admits: ::acvus_extern::Task::Sync,
+                }
+            },
+            declared,
+        ]
+    };
+
     let mut casts: Vec<proc_macro2::TokenStream> = Vec::new();
     let instances = match vars.mono_var() {
-        None => {
-            let generic = glue(None);
-            quote! { ::acvus_extern::Instances::generic(#generic) }
-        }
-        Some(mono) => {
-            let members = mono.mono.as_ref().expect("mono_var has members");
-            let concrete = members.iter().map(|member| {
-                let handler = glue(Some(member));
-                let signature = signature(Some(member));
+        None => match &attr.sync {
+            None => {
+                let generic = glue(None, fn_ident, is_async);
+                quote! { ::acvus_extern::Instances::generic(#generic) }
+            }
+            Some(_) => {
+                let concrete = at_member(None);
                 quote! {
-                    ::acvus_extern::Instance {
-                        signature: #signature,
-                        handler: #handler,
-                        admits: ::acvus_extern::Task::Heavy,
+                    ::acvus_extern::Instances {
+                        concrete: vec![#(#concrete),*],
+                        generic: ::core::option::Option::None,
                     }
                 }
-            });
+            }
+        },
+        Some(mono) => {
+            let members = mono.mono.as_ref().expect("mono_var has members");
+            let concrete: Vec<proc_macro2::TokenStream> = members
+                .iter()
+                .flat_map(|member| at_member(Some(member)))
+                .collect();
             let generic = if mono.mono_fallback {
-                let handler = glue(None);
+                let handler = glue(None, fn_ident, is_async);
                 quote! { ::core::option::Option::Some(#handler) }
             } else {
                 quote! { ::core::option::Option::None }

@@ -19,7 +19,7 @@ use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
     Callee, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
-use acvus_mir::ty::{IntTy, Ty};
+use acvus_mir::ty::{IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
 
@@ -147,6 +147,24 @@ pub fn prepare_body(
     }
 
     let emitted = prep.emit(&units);
+    // The checker's claim and this preparation's own reading, joined.
+    //
+    // RFC-0046 asks for the claim alone, with the reading kept as a
+    // `debug_assert_eq!`. Neither direction holds today, and both
+    // counterexamples are measured:
+    //
+    // - claim above reading: `range | map(|x| -> io()) | fold(0, |a, b| -> a + b)`
+    //   types the fold's closure `Async` by the demotion join, though the
+    //   closure only adds. Sound, and not worth refusing.
+    // - reading above claim: `range | map(|x| -> io()) | last` freezes
+    //   `last`'s call effect to `Pure/Sync` while the solver takes its
+    //   asynchronous instance. The same holds for `find`; `any`, `all` and
+    //   `position` on the same pipeline freeze to `Opaque/Async`. Measured
+    //   with and without the synchronous instance, so the hole is the
+    //   checker's and predates this change. Until it is closed, a body
+    //   that awaits must not be typed as one that does not, so the
+    //   reading stands beside the claim rather than under it.
+    let may_suspend = prep.may_suspend || body.task > Task::Sync;
     let mut ops: Vec<Op> = Vec::with_capacity(emitted.len());
     let mut spans: Vec<Span> = Vec::with_capacity(emitted.len());
     for Emitted { op, span } in emitted {
@@ -166,7 +184,7 @@ pub fn prepare_body(
         payloads: prep.payloads.into_boxed_slice(),
         frame_len,
         entry_konsts,
-        may_suspend: prep.may_suspend,
+        may_suspend,
         params,
         captures,
         order_param,
@@ -431,6 +449,17 @@ impl<'a> Prepare<'a> {
 
     fn is_ref(&self, id: ValueId) -> bool {
         matches!(self.ty(id), Ty::Ref(..))
+    }
+
+    /// A call into a body — another module's or a closure's — suspends
+    /// where the callee's own type puts its task above `Sync`. Read per
+    /// call site; `prepare_body` asserts the join of these against
+    /// `MirBody::task`, which is the checker's claim for the whole body.
+    fn suspends_at(&mut self, callee_ty: &Ty) {
+        let task = callee_ty.effect().map_or(Task::Sync, |effect| effect.task);
+        if task > Task::Sync {
+            self.may_suspend = true;
+        }
     }
 
     /// A test reads through a reference, so the storage's type decides.
@@ -1101,14 +1130,14 @@ impl<'a> Prepare<'a> {
             InstKind::FunctionCall {
                 dst,
                 callee,
+                callee_ty,
                 args,
                 order,
-                ..
             } => {
                 let after = order.map_or(NO_SLOT, |edge| self.slot(edge.after));
                 match callee {
                     Callee::Direct(id) => {
-                        self.may_suspend = true;
+                        self.suspends_at(callee_ty);
                         let at = self.put(Payload::Direct {
                             callee: *id,
                             args: args.iter().copied().map(|id| self.slot(id)).collect(),
@@ -1142,7 +1171,7 @@ impl<'a> Prepare<'a> {
                         op.p(payload)
                     }
                     Callee::Indirect(callee_slot) => {
-                        self.may_suspend = true;
+                        self.suspends_at(callee_ty);
                         let f: OpFn = if self.is_ref(*callee_slot) {
                             call::call_indirect::<true>
                         } else {
@@ -1170,7 +1199,7 @@ impl<'a> Prepare<'a> {
                 Callee::Extern { id, instance } => {
                     let handler = self.ctx.handler(id, *instance);
                     let f: OpFn = match handler {
-                        ExternHandler::Sync(_) => call::spawn_extern_sync,
+                        ExternHandler::Sync(_) | ExternHandler::Heavy(_) => call::spawn_extern_sync,
                         ExternHandler::Async(_) => call::spawn_extern_async,
                     };
                     let window = self.slots.window(at).clone();
@@ -1891,13 +1920,14 @@ fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]
 fn needs_window(handler: &ExternHandler) -> bool {
     match handler {
         ExternHandler::Sync(f) => f.arity().is_none(),
-        ExternHandler::Async(_) => true,
+        ExternHandler::Heavy(_) | ExternHandler::Async(_) => true,
     }
 }
 
 fn extern_call_op(handler: &ExternHandler) -> OpFn {
     match handler {
         ExternHandler::Async(_) => call::call_extern_async,
+        ExternHandler::Heavy(_) => call::call_extern_heavy,
         ExternHandler::Sync(SyncHandler::Arity0(_)) => call::call_extern_0,
         ExternHandler::Sync(SyncHandler::Arity1(_)) => call::call_extern_1,
         ExternHandler::Sync(SyncHandler::Arity2(_)) => call::call_extern_2,
@@ -2424,6 +2454,10 @@ mod recognizer_tests {
         }
 
         fn prepared(&self, insts: Vec<Inst>) -> Code {
+            self.prepared_at(insts, Task::Sync)
+        }
+
+        fn prepared_at(&self, insts: Vec<Inst>, task: Task) -> Code {
             let context_names = FxHashMap::default();
             let ctx = PrepareCtx {
                 interner: &self.interner,
@@ -2431,6 +2465,7 @@ mod recognizer_tests {
                 context_names: &context_names,
             };
             let mut body = body_of(insts);
+            body.task = task;
             let mentioned: Vec<ValueId> = body
                 .insts
                 .iter()
@@ -2650,20 +2685,41 @@ mod recognizer_tests {
         let mut fixture = Fixture::new();
         let suspends = fixture.async_extern("suspends");
         let insts = vec![add(1, 2, 3), call(4, suspends)];
-        assert!(fixture.prepared(insts).may_suspend());
+        assert!(fixture.prepared_at(insts, Task::Async).may_suspend());
     }
 
+    /// The type decides, not the call shape: an indirect call through a
+    /// closure whose effect is Sync does not suspend, and the same call
+    /// through one whose effect is Async does (RFC-0046).
     #[test]
-    fn a_body_that_calls_a_closure_can_suspend_until_the_closure_is_in_hand() {
+    fn a_closure_call_suspends_where_the_closure_type_says_so() {
+        let indirect = |task| {
+            vec![inst(InstKind::FunctionCall {
+                dst: val(1),
+                callee: Callee::Indirect(val(2)),
+                callee_ty: Ty::Fn {
+                    params: Vec::new(),
+                    ret: Box::new(Ty::Unit),
+                    captures: Vec::new(),
+                    effect: acvus_mir::ty::EffectTerm::Known(
+                        acvus_mir::ty::Effect::OPAQUE.at_task(task),
+                    ),
+                },
+                args: Vec::new(),
+                order: None,
+            })]
+        };
         let fixture = Fixture::new();
-        let insts = vec![inst(InstKind::FunctionCall {
-            dst: val(1),
-            callee: Callee::Indirect(val(2)),
-            callee_ty: Ty::Unit,
-            args: Vec::new(),
-            order: None,
-        })];
-        assert!(fixture.prepared(insts).may_suspend());
+        assert!(
+            !fixture
+                .prepared_at(indirect(Task::Sync), Task::Sync)
+                .may_suspend()
+        );
+        assert!(
+            fixture
+                .prepared_at(indirect(Task::Async), Task::Async)
+                .may_suspend()
+        );
     }
 
     #[test]

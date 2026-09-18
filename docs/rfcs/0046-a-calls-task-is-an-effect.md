@@ -156,6 +156,9 @@ builds them from IO `FunctionCall`s after typecheck. Their task therefore
 comes from the callee's declaration, which is where the RFC's table already
 put it.
 
+The table was incomplete there, and the runtime half measured it: see
+**A third source of suspension** below.
+
 ## What the second brief owes
 
 Every consumer in `acvus-ext` that is `#[extern_fn(effect = E)] async fn`
@@ -169,3 +172,83 @@ takes the `Stages::Sync` arm of `Iter::stages_mut` and calls
 arms, so the sync body is the arm that exists. The interpreter's
 `Code::may_suspend` becomes `MirBody::task > Task::Sync` with `prepare`'s own
 computation kept as a `debug_assert_eq!`.
+
+
+## What landed in the runtime
+
+**The nineteen instances.** `#[extern_fn(..., sync = <fn>)]` names the
+plain `fn` that runs an `async fn` declaration at `Task::Sync`. The macro
+builds both handlers from the one signature and emits, per member type,
+the `Task::Sync` instance first and the declared one after it, with
+`admits: Task::Heavy` — a ceiling, "at most", which `InstanceSig` now
+says. `ExternHandler` gained a `Heavy` arm, so the enum has one variant
+per rung of `Task` and `is_sync` is false for two of them.
+
+The sync bodies are the nineteen consumers written once more with
+`drain_now!` in place of `drain!` and `call_now` in place of `call`. The
+arm itself is written **once**, in `Stages::sync_mut`, whose `Async` arm
+is the `unreachable!` that states the guarantee; `drain_now!` and
+`Iter::next_now` both go through it, and no consumer matches on `Stages`
+by hand.
+
+**The shape.** `while let Some(x) = next(&mut it)` over a `Vec` is one
+`Loop` operation: 12 dispatches and a boxed future per element became 8
+and no future, and over `range | map` 11 became 7. Measured, medians of
+three alternating runs, ns per element:
+
+| case | n | before | after |
+|---|---|---|---|
+| `while let` over a `Vec` | 100 000 | 43.3 | 16.4 |
+| `while let` over a `Vec` | 1 000 000 | 43.7 | 16.6 |
+| `while let` over `range \| map` | 100 000 | 44.1 | 17.8 |
+| `while let` over `range \| map` | 1 000 000 | 45.2 | 18.0 |
+
+A synchronous consumer is also cheaper than the same loop inside a
+generator frame: `map id | sum` 4.0 → 3.6, `map add | sum` 6.3 → 5.8,
+`map cap | sum` 14.1 → 13.6. `range | sum`, attention and mandelbrot are
+unchanged.
+
+**`heavy`.** `ExternHandler::Heavy` is prepared as `call_extern_heavy`,
+which takes the window (the work outlives the frame, so it owns its
+arguments), hands the closure to `Executor::spawn_blocking` and awaits
+the handle. `SequentialExecutor` has no pool: it defers the closure and
+runs it inline at `eval`, so the await is real and the offload is not.
+A `spawn` of a `heavy` extern is `spawn_extern_sync`, which was already
+`spawn_blocking`.
+
+**A third source of suspension.** `optimize::spawn_split` rewrites every
+call whose effect is not Pure into a `Spawn` and an `Eval`, and an `Eval`
+awaits. A plain `fn` extern declared `opaque` or `idempotent` therefore
+suspends at its call site, which the table's first row denied. Two
+corrections, both measured by the interpreter's assertion: the macro
+gives a non-pure declaration `Task::Async`, and `spawn_split` raises the
+task of any body it splits. An `async fn` generic in its effect is now a
+macro error unless it names its `sync` twin, because its glue awaits for
+every effect the variable takes.
+
+**`Code::may_suspend` is the join, not the claim.** The RFC asked for
+`MirBody::task > Sync` alone with `prepare`'s own reading kept as a
+`debug_assert_eq!`. Neither direction holds, and both counterexamples are
+measured:
+
+- The claim exceeds the reading wherever demotion applies: in
+  `range | map(|x| -> io()) | fold(0, |a, b| -> a + b)` the fold's
+  closure is typed `Async` because the parameter's effect is, though the
+  closure only adds. Sound, and the RFC's own join rule.
+- The reading exceeds the claim for `find` and `last`: over a pipeline
+  whose stage suspends, the solver takes their asynchronous instance —
+  correctly — while the call's effect freezes to `Pure/Sync`, so the body
+  holding the call is typed `Task::Sync`. `any`, `all` and `position`
+  have the same parameter shape and freeze to `Opaque/Async` on the same
+  pipeline. Measured with and without the synchronous instance, so the
+  hole predates this change; it was invisible while nothing read the
+  task.
+
+Until that hole is closed, a body that awaits must not be typed as one
+that does not, so `Code::may_suspend` is `prepare`'s reading joined with
+the checker's claim. The shape the RFC bought does not depend on it: the
+`Loop` comes from the instance the solver chose.
+
+**`Fn1::is_sync`.** Every `call_now` asserts it, which is the type's claim
+checked against the run-time answer. It does not fire anywhere in the
+four crates' suites.

@@ -97,6 +97,21 @@ where
             Self::Async(stage) => stage,
         }
     }
+
+    /// The synchronous arm, for a consumer the solver chose the
+    /// `Task::Sync` instance of. This is the one place that arm is read,
+    /// so the guarantee is stated once (RFC-0046).
+    pub fn sync_mut(&mut self) -> &mut Box<dyn SyncStage<Rt>> {
+        match self {
+            Self::Sync(stage) => stage,
+            Self::Async(_) => unreachable!(
+                "an Iterator whose effect's task is Sync was built from synchronous stages \
+                 only: every constructor that takes an asynchronous source or a suspending \
+                 closure raises the task above Sync, and the checker would then have chosen \
+                 this consumer's asynchronous instance (RFC-0046)"
+            ),
+        }
+    }
 }
 
 /// The body may await: both arms expand inside the consumer's own
@@ -114,7 +129,16 @@ macro_rules! drain {
     };
 }
 
-pub(crate) use drain;
+/// The body cannot await: the consumer is the `Task::Sync` instance, and
+/// `Stages::sync_mut` is where that is checked.
+macro_rules! drain_now {
+    ($it:expr, $rt:expr, |$value:pat_param| $body:block) => {{
+        let stage = $it.stages_mut().sync_mut();
+        while let Some($value) = $crate::iter::SyncStage::next(stage, $rt) $body
+    }};
+}
+
+pub(crate) use {drain, drain_now};
 
 impl<T, E, I, Rt> Iter<T, E, I, Rt>
 where
@@ -340,6 +364,16 @@ where
         T: FromValue<Rt>,
     {
         Some(T::from_value(rt, self.next_value(rt).await?))
+    }
+
+    /// As `next`, for a consumer the solver chose the `Task::Sync`
+    /// instance of.
+    pub fn next_now(&mut self, rt: &Rt) -> Option<T>
+    where
+        T: FromValue<Rt>,
+    {
+        let value = self.0.sync_mut().next(rt)?;
+        Some(T::from_value(rt, value))
     }
 }
 
