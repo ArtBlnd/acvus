@@ -54,3 +54,7 @@ harness = false
 [[bench]]
 name = "spawn"
 harness = false
+
+[[bench]]
+name = "logs"
+harness = false
