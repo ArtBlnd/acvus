@@ -43,21 +43,22 @@ as an instruction. The machine already owns every fact `Drop` re-derives.
 explicit act of the machine — a drop instruction or the frame's exit —
 and of a Rust holder that took ownership. Everything else copies.
 
-1. **Two types, one bit pattern.** `Value` is `Copy` and has no `Drop`:
-   it is what the machine owns — registers, operation handlers, the
-   extern ABI's arguments and returns, the glue's window. `Owned` is
-   `#[repr(transparent)] struct Owned(Value)`, `!Copy`, whose `Drop`
-   releases: it is what a **Rust holder** owns — a container's elements
-   (`Vec<Owned>`), an `Erased`, a closure carrier's value, an `Iter`
-   stage's captured function. `Value::release(self)` calls the payload's
-   drop through its header for a `Large` and nothing otherwise;
-   `Owned::drop` is that call. The conversions are free: `Owned::from(v)`
-   is the identity, `Owned::into_value` is `ManuallyDrop` + copy. The
-   `Runtime` trait names both: `Word` (the `Copy` register type the ABI
-   carries) and `Value` (the owning type stores hold) — every
-   `Rt::Value` in acvus-extern/acvus-ext is one or the other by what the
-   code does with it, and the compiler enforces the split where the ABI
-   meets a store (owner, 17:05).
+1. **Two types, one bit pattern, one trait.** In the extern crate:
+   `trait Release: Copy { fn release(self); }` and `Runtime { type Word:
+   Release; .. }` — a runtime's word is `Copy`, and releasing it is the
+   one thing the boundary knows how to do with it. `Owned<R>` is
+   `#[repr(transparent)] struct Owned<R: Runtime>(ManuallyDrop<R::Word>)`
+   whose `Drop` calls `release`: **the** owning type, defined once in
+   the extern crate for every runtime, held by every Rust holder — a
+   container's elements (`Vec<Owned<R>>`), an `Erased`, a closure
+   carrier's value, an `Iter` stage's captured function. There is no
+   `Runtime::Value` any more: a type variable `T` is `Owned<R>` at run
+   time (RFC-0039's "the runtime's value" is the owning one), and the
+   ABI — handler signatures, `Ref`, `Elements`, the glue's window — is
+   `R::Word`. `Owned::from_word` is the identity, `into_word` is
+   `ManuallyDrop::take`. The interpreter's `Value` implements `Release`
+   (a `Large` drops through its header, a word does nothing) and that
+   is all it says (owner, 17:05 and 17:20).
 2. **The header keeps one thing the machine cannot know: the drop.** A
    `Large` erased from an extension type carries `drop_slot::<T>` in
    its header, because a Rust holder — an `Iter` stage owning a closure,
@@ -91,13 +92,14 @@ and of a Rust holder that took ownership. Everything else copies.
    exit iterates the set bits of `marked` and releases those slots.
    `Machine.exit` and every other machine-held `Value` outside a
    register is released where the machine lets go of it.
-7. **A Rust holder holds `Owned`.** Every type in `acvus-extern` and
-   `acvus-ext` that stores a runtime value it owns holds `Owned`, and
+7. **A Rust holder holds `Owned<R>`.** Every type in `acvus-extern` and
+   `acvus-ext` that stores a runtime value it owns holds `Owned<R>`, and
    Rust's `Drop` releases it — nothing to call, nothing to forget.
-   `Ref`, `RefMut`, `Elements` are words: they borrow and hold `Value`.
+   `Ref`, `RefMut`, `Elements` are words: they borrow and hold `R::Word`.
    The enumeration is the compiler's: a `Word` cannot be stored where an
-   `Owned` is expected without `Owned::from`, and an `Owned` cannot be
-   passed where the ABI wants a `Word` without `into_value`.
+   `Owned` is expected without `from_word`, and an `Owned` cannot be
+   passed where the ABI wants a `Word` without `into_word` — both at the
+   glue, never in a body.
 8. **A panic is an exit, not a release.** Runtime errors are panics
    (RFC-0044 stage 2c); no cleanup runs and none is owed. A host that
    catches a script's panic and lives sweeps the frame's mark word at
@@ -169,8 +171,8 @@ and of a Rust holder that took ownership. Everything else copies.
 ## Order of work
 
 Rule 7 landed first (`803d4f1a`: attention −34 %). One to-be for rules
-1–6 and 8 in the interpreter worktree: `Value: Copy` + `Owned`, the
-`Runtime::Word`/`Value` split through acvus-extern and acvus-ext, the
+1–6 and 8 in the interpreter worktree: `Release`/`Owned<R>` in the extern crate, `Runtime::Word` in place of
+`Runtime::Value` through acvus-extern and acvus-ext, the
 mark-word `Registers`, `define::<LARGE>`/`assign`, batched `take::<N>`,
 `drop_value` and the sweep, the glue's copy. Measured first: the
 landing-pad count (255 today), `ret`'s disassembly, `map cap`.
