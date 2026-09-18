@@ -22,17 +22,35 @@ use crate::value::Value;
 /// after it is overwritten, and `LARGE` is what the moved value owns, so no
 /// `run` tests a `kind`: a `Large` move is the copy plus two ops on the
 /// frame's mark word, a word move is the copy alone.
-pub struct Mov<const LARGE: bool> {
+///
+/// `WORD` is the same parameter `CallExtern1` carries: both registers were
+/// opened with their kind when the frame was made, so the move is the word
+/// (RFC-0052 rule 5).
+pub struct Mov<const LARGE: bool, const WORD: bool> {
     pub dst: Off,
     pub src: Off,
 }
 
-impl<const LARGE: bool> Op for Mov<LARGE> {
+impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
     #[inline]
     fn run(&self, m: &mut Machine<'_>) {
+        const {
+            assert!(
+                !(LARGE && WORD),
+                "a register whose kind the frame opened holds no Large"
+            )
+        }
         let regs = m.regs();
-        let value = regs.take::<LARGE>(self.src);
-        regs.define::<LARGE>(self.dst, value);
+        match WORD {
+            true => {
+                let bits = regs.take_word(self.src);
+                regs.set_word(self.dst, bits);
+            }
+            false => {
+                let value = regs.take::<LARGE>(self.src);
+                regs.define::<LARGE>(self.dst, value);
+            }
+        }
     }
 }
 
@@ -67,14 +85,23 @@ impl Terminator for JumpIf {
     }
 }
 
-pub struct Return {
+/// The body's result, read at the width its register was written at
+/// (RFC-0052 rule 5).
+pub struct Return<const WORD: bool> {
     pub slot: Off,
 }
 
-impl Terminator for Return {
+impl<const WORD: bool> Terminator for Return<WORD> {
     #[inline]
     fn next(&self, m: &mut Machine<'_>) -> BlockId {
-        let value = m.regs().take::<true>(self.slot);
+        let value = match WORD {
+            true => {
+                let regs = m.regs();
+                let kind = regs.peek(self.slot).kind();
+                Value::inline(kind, regs.take_word(self.slot))
+            }
+            false => m.regs().take::<true>(self.slot),
+        };
         m.finish(value);
         RETURN
     }

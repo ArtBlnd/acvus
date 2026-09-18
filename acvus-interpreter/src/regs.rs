@@ -291,6 +291,18 @@ impl<'f> Regs<'f> {
         *self.peek_mut(off).bits_mut() = bits;
     }
 
+    /// The word of a word-typed register, with the frame's claim untouched:
+    /// a register whose kind the frame opened holds no `Large`, so there is
+    /// no mark bit to clear (RFC-0052 §5).
+    #[inline(always)]
+    pub fn take_word(&mut self, off: Off) -> u64 {
+        debug_assert!(
+            self.marked() & off.mark() == 0,
+            "a word-typed register carries the frame's claim on a Large"
+        );
+        self.word(off)
+    }
+
     /// One store, and one `or` on the frame's mark word where the operation's
     /// type says the value owns a `Large` (RFC-0048 §4).
     #[inline(always)]

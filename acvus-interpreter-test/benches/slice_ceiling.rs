@@ -1,9 +1,8 @@
 //! The ceiling RFC-0047 buys, before either half of the compiler lands:
-//! one inner iteration, four ways, over the same data.
+//! one inner iteration, three ways, over the same data.
 //!
 //! | shape | the inner loop |
 //! |---|---|
-//! | `get` | today: two `Ref`s above the loop, two fused `get` runs with a deref tail |
 //! | `as_slice in loop` | an `AsSlice`, an `Index` and a `Drop` per element, twice |
 //! | `as_slice hoisted` | the two `AsSlice`s above the header, two `Index` in the loop |
 //! | `unchecked` | the same with the bound check removed |
@@ -25,16 +24,15 @@ use acvus_interpreter::{
     SequentialExecutor, Value, prepare_module,
 };
 use acvus_mir::ir::{
-    Callee, DebugInfo, ExternInstance, IndexMode, Inst, InstKind, Label, MirBody, MirModule,
-    RefTarget, ValueId,
+    DebugInfo, ExternInstance, IndexMode, Inst, InstKind, Label, MirBody, MirModule, RefTarget,
+    ValueId,
 };
-use acvus_mir::ty::{Effect, Mutability, Task, Ty, TypeArg};
+use acvus_mir::ty::{Mutability, Task, Ty, TypeArg};
 use acvus_utils::{Astr, Interner, LocalFactory, LocalIdOps, QualifiedRef};
 use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shape {
-    Get,
     SliceInLoop,
     SliceHoisted,
     Unchecked,
@@ -43,7 +41,6 @@ enum Shape {
 impl Shape {
     fn name(self) -> &'static str {
         match self {
-            Shape::Get => "get",
             Shape::SliceInLoop => "as_slice in loop",
             Shape::SliceHoisted => "as_slice hoisted",
             Shape::Unchecked => "unchecked",
@@ -53,18 +50,11 @@ impl Shape {
     fn hoists_the_slice(self) -> bool {
         matches!(self, Shape::SliceHoisted | Shape::Unchecked)
     }
-
-    /// The type the loop counts at. An `Index` takes `u64` and nothing
-    /// else while `vec::get` takes `i64` (RFC-0047 §4), so the test and the
-    /// increment run at one width in the `get` shape and the other in the
-    /// three slice shapes. Each is one dispatch either way.
-    fn index_ty(self) -> Ty {
-        match self {
-            Shape::Get => Ty::I64,
-            Shape::SliceInLoop | Shape::SliceHoisted | Shape::Unchecked => Ty::U64,
-        }
-    }
 }
+
+/// The type the loop counts at: an `Index` takes `u64` and nothing else
+/// (RFC-0047 §4).
+const INDEX_TY: Ty = Ty::U64;
 
 const QUERY: &str = "q";
 const KEYS: &str = "k";
@@ -209,22 +199,11 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
     let container_ref = reference(Mutability::Shared, container.clone());
     let element_ref = reference(Mutability::Shared, element.clone());
     let slice_ty = reference(Mutability::Shared, Ty::Slice(Box::new(element.clone())));
-    let index_ty = shape.index_ty();
+    let index_ty = INDEX_TY;
     let as_slice = ExternInstance {
         id: in_vec(interner, "as_slice"),
         instance: 0,
     };
-    let get = Callee::Extern {
-        id: in_vec(interner, "get"),
-        instance: 0,
-    };
-    let get_ty = Ty::Fn {
-        params: Vec::new(),
-        ret: Box::new(element_ref.clone()),
-        captures: Vec::new(),
-        effect: Effect::PURE.into(),
-    };
-
     let c = counter();
     let mut b = Build::new();
     for id in [c.zero, c.accumulator, c.product, c.sum, c.result] {
@@ -316,20 +295,6 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
 
     for operand in operands() {
         match shape {
-            Shape::Get => {
-                b.push(InstKind::FunctionCall {
-                    dst: operand.element_ref,
-                    callee: get,
-                    callee_ty: get_ty.clone(),
-                    args: vec![operand.container_ref, c.index],
-                    order: None,
-                })
-                .push(InstKind::Take {
-                    dst: operand.element,
-                    target: RefTarget::Through(operand.element_ref),
-                    path: Vec::new(),
-                });
-            }
             Shape::SliceInLoop => {
                 b.push(InstKind::AsSlice {
                     dst: operand.loop_slice,
@@ -553,15 +518,10 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 
 fn main() {
     let only = std::env::var("CEILING_SHAPE").ok();
-    let shapes: Vec<Shape> = [
-        Shape::Get,
-        Shape::SliceInLoop,
-        Shape::SliceHoisted,
-        Shape::Unchecked,
-    ]
-    .into_iter()
-    .filter(|shape| only.as_deref().is_none_or(|name| shape.name() == name))
-    .collect();
+    let shapes: Vec<Shape> = [Shape::SliceInLoop, Shape::SliceHoisted, Shape::Unchecked]
+        .into_iter()
+        .filter(|shape| only.as_deref().is_none_or(|name| shape.name() == name))
+        .collect();
     let mut samples: Vec<Vec<Duration>> = vec![Vec::new(); shapes.len()];
     let mut dispatches = vec![0usize; shapes.len()];
     for rep in 0..REPS {

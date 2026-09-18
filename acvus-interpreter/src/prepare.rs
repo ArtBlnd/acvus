@@ -676,7 +676,7 @@ impl<'a> Prepare<'a> {
                     from: self.slot(*arg),
                     to: self.slot(*param),
                 },
-                large: self.owns(*arg),
+                moved: self.moved(*arg),
             })
             .collect();
         let ordered = order_moves(pairs, self.scratch_slot());
@@ -1241,9 +1241,11 @@ impl<'a> Prepare<'a> {
                 }));
             }
             InstKind::Return { value, .. } => {
-                return Some(Box::new(control::Return {
-                    slot: self.off(*value),
-                }));
+                let slot = self.off(*value);
+                return Some(match word_kind(self.ty(*value)).is_some() {
+                    true => Box::new(control::Return::<true> { slot }) as Box<dyn Terminator>,
+                    false => Box::new(control::Return::<false> { slot }),
+                });
             }
             InstKind::Diverge => return Some(Box::new(control::Diverge)),
             InstKind::Poison { .. } => return Some(Box::new(control::Poison)),
@@ -2092,7 +2094,10 @@ impl<'a> Prepare<'a> {
                         from: self.slot(arg),
                         to: into,
                     },
-                    large: self.owns(arg),
+                    moved: match self.owns(arg) {
+                        true => Moved::Large,
+                        false => Moved::Whole,
+                    },
                 }
             })
             .collect();
@@ -2126,6 +2131,20 @@ impl<'a> Prepare<'a> {
             mask |= 1u64 << slot;
         }
         mask
+    }
+
+    /// What a move of this value between two registers the frame opened
+    /// carries. `word_kind` is the same predicate `slot_kinds` opened them
+    /// by, so a `Moved::Word` move writes the width every other write of
+    /// those registers takes.
+    fn moved(&self, arg: ValueId) -> Moved {
+        if word_kind(self.ty(arg)).is_some() {
+            return Moved::Word;
+        }
+        match self.owns(arg) {
+            true => Moved::Large,
+            false => Moved::Whole,
+        }
     }
 
     /// The register an operation writes, and whether the type it writes
@@ -2269,7 +2288,7 @@ fn carried(list: &[(Slot, Slot)]) -> Vec<Carried> {
                 from: *from,
                 to: *to,
             },
-            large: false,
+            moved: Moved::Whole,
         })
         .collect()
 }
@@ -2282,12 +2301,21 @@ struct Pair {
     to: Slot,
 }
 
-/// One move of a parallel move, with what the value it carries owns: a
-/// word is copied, a `Large` changes owner and its mark with it.
+/// What a moved value is (RFC-0052 §5).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Moved {
+    /// Both registers were opened with a kind, so the move writes the word.
+    Word,
+    /// The move changes the owner of a `Large`, and the mark word with it.
+    Large,
+    /// Neither: one whole copy, no mark.
+    Whole,
+}
+
 #[derive(Clone, Copy)]
 struct Carried {
     at: Pair,
-    large: bool,
+    moved: Moved,
 }
 
 /// The ordered move as the operation of a block (RFC-0052 rule 1): what it
@@ -2295,9 +2323,10 @@ struct Carried {
 fn mov_op(carried: &Carried) -> Box<dyn Op> {
     let dst = Off::of(carried.at.to);
     let src = Off::of(carried.at.from);
-    match carried.large {
-        true => Box::new(control::Mov::<true> { dst, src }),
-        false => Box::new(control::Mov::<false> { dst, src }),
+    match carried.moved {
+        Moved::Word => Box::new(control::Mov::<false, true> { dst, src }),
+        Moved::Large => Box::new(control::Mov::<true, false> { dst, src }),
+        Moved::Whole => Box::new(control::Mov::<false, false> { dst, src }),
     }
 }
 
@@ -2339,16 +2368,23 @@ fn order_moves(pairs: Vec<Carried>, scratch: Slot) -> MoveOrdering {
                 "a second cycle reached the scratch slot while it still held a value"
             );
             let cycled = pending[0].at.from;
-            let large = pending[0].large;
+            // The scratch register is one past the registers `assign_slots`
+            // handed out, so `slot_kinds` never opened its kind: both legs
+            // through it are written and read whole.
+            let through = match pending[0].moved {
+                Moved::Large => Moved::Large,
+                Moved::Word | Moved::Whole => Moved::Whole,
+            };
             moves.push(Carried {
                 at: Pair {
                     from: cycled,
                     to: scratch,
                 },
-                large,
+                moved: through,
             });
             for m in pending.iter_mut().filter(|m| m.at.from == cycled) {
                 m.at.from = scratch;
+                m.moved = through;
             }
             scratch_used = true;
             scratch_holds = true;

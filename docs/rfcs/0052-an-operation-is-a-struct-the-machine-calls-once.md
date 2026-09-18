@@ -187,7 +187,12 @@ and threw away.
    slot once, when the frame is made, and a word-typed operation stores
    the **word only** (`Add::run`: two loads, one store); the one kind a
    run can change is an option's (`None` is a depth word, RFC-0039),
-   and only an option-typed slot is written whole. `Value: Copy`,
+   and only an option-typed slot is written whole. A word-typed slot is
+   **read** the same way: `Return<WORD>` and `Mov<LARGE, WORD>` take the
+   same `WORD` parameter `CallExtern1` carries, and where it is set the
+   operation reads the word and leaves the frame's mark word alone,
+   because a slot the frame opened with a kind holds no `Large`.
+   `Value: Copy`,
    `Owned<R>` in every Rust store, `Release` — RFC-0048 §1–§9 unchanged;
    the register file is rewritten to those nine rules and to no more.
 
@@ -577,6 +582,16 @@ body is the single operation `CallIndirect<false, true, true>`: **17.9 →
   disassembly is the point — `<false, true>` ends in one
   `mov %rdx,0x8(%r14,%rax,1)`, where `<false, false>` writes the kind
   byte first.
+- **The read side, measured on master `92fcc405`** (`accum`, `taskset -c
+  4`, 15 alternating pinned reps). `Return<true>::next` is eight
+  instructions where `Return`'s single form was fourteen: the six of the
+  mark-word read-modify-write (`movzwl 0x22(%rsi)`, `shr`, `mov`, `rol`,
+  `shl`, `and`) are gone. On `map cap | sum`, which returns an `i64` per
+  element, that is **1,849.1 M → 1,807.1 M instructions (−2.3 %)** — and
+  **452.96 M → 452.56 M cycles**, a wash: the dispatch loop is not
+  instruction-bound there. Wall clock over all cases stays within the
+  machine's ±3 % run-to-run spread. The rule is kept for what it makes
+  unrepresentable, not for a number.
 - The chain, diamond, loop and fused run keep their measured shapes as
   structs; `AsSlice`/`Index` peepholes (RFC-0047) and the `switch`
   operation (RFC-0051) are structs added to the same trait.

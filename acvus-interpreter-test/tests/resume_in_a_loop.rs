@@ -59,7 +59,7 @@ async fn a_while_around_an_await_is_not_a_loop() {
     );
     assert_eq!(
         ends,
-        ["Goto", "JumpIf", "Eval<false>", "Goto", "Return"],
+        ["Goto", "JumpIf", "Eval<false>", "Goto", "Return<true>"],
         "entry, the head's compare, the call's block ending at the suspend, \
          the block after it, and the return"
     );
@@ -76,7 +76,7 @@ async fn the_block_after_the_call_is_where_the_resume_lands() {
     );
     assert_eq!(
         blocks[2].ops,
-        ["Mov<false>", "SpawnExternSync", "Merge"],
+        ["Mov<false, false>", "SpawnExternSync", "Merge"],
         "the call's own block puts the argument in the run it is lent, spawns \
          and merges, then leaves at the suspend"
     );

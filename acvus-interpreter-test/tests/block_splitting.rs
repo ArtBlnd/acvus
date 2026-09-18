@@ -46,7 +46,7 @@ fn loop_of(source: &str) -> Vec<BlockListing> {
     let blocks = script_listing(&interner, source, Context::default());
     assert_eq!(
         ends(&blocks),
-        ["Goto", "Return"],
+        ["Goto", "Return<true>"],
         "the whole `while` is an operation of the entry block; the block after it \
          is where the join of the loop's exit edge lands, and it returns"
     );
@@ -76,7 +76,12 @@ async fn a_tail_that_reads_neither_arm_sits_before_the_diamond() {
     let body = part_of(one_loop(&blocks), "body");
     assert_eq!(
         body.ops,
-        ["Chain2<i64, 0, 0>", "Add<i64>", "Diamond", "Mov<false>"],
+        [
+            "Chain2<i64, 0, 0>",
+            "Add<i64>",
+            "Diamond",
+            "Mov<false, true>"
+        ],
         "`n = n + 1` reads neither arm, so code_motion put it above the branch; \
          the diamond follows in the same list, and the loop's back edge is the \
          `Mov` after it"
@@ -97,7 +102,7 @@ async fn a_tail_that_reads_an_arm_sits_after_the_diamond() {
             "Add<i64>",
             "Diamond",
             "Mul<i64>",
-            "Mov<false>"
+            "Mov<false, true>"
         ],
         "`acc = acc * 2` reads what both arms wrote, so it follows the Diamond \
          in the same list, and the loop's back edge is the `Mov` after it"
@@ -125,7 +130,7 @@ async fn a_while_that_returns_is_not_a_region() {
          `while` prepares as blocks: {names:?}"
     );
     assert!(
-        ends(&blocks).contains(&"JumpIf") && ends(&blocks).contains(&"Return"),
+        ends(&blocks).contains(&"JumpIf") && ends(&blocks).contains(&"Return<false>"),
         "the loop is blocks: its test is a `JumpIf` terminator and the `?` a \
          `Return` one — {:?}",
         ends(&blocks)

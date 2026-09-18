@@ -43,7 +43,7 @@ async fn a_sync_call_is_an_operation_inside_the_loop() {
     );
     assert_eq!(
         terminators_depth_first(&blocks),
-        ["Goto", "Return"],
+        ["Goto", "Return<true>"],
         "no call terminator is left: the entry block runs the loop and goes to \
          the return"
     );
@@ -71,7 +71,7 @@ async fn a_call_above_sync_is_a_terminator_and_no_loop_is_recognized() {
             "JumpIf",
             "CallIndirectAsync<false, true>",
             "Goto",
-            "Return"
+            "Return<true>"
         ],
         "entry, the head's compare, the call's own block ending at the \
          suspend, the block the resume lands in, and the return"
