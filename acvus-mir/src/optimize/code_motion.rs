@@ -736,20 +736,15 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
 ///
 /// One Eval per iteration, then re-scan: a move invalidates the indices the
 /// rest of the scan holds.
+///
+/// The loop has no iteration cap - not an omission, a decision. Every
+/// `sink_one` that moves strictly decreases `tests::sink_measure`, the sum
+/// over every Eval of the positions left below it in its block, so the pass
+/// ends within that measure's initial value, which
+/// `the_sink_ends_within_its_measure` asserts on a body whose Evals must
+/// move in cascade.
 fn sink_pass(cfg: &mut CfgBody) {
-    let max_iters = cfg.blocks.iter().map(|b| b.insts.len()).sum::<usize>() * 2;
-    let mut iters = 0;
-    loop {
-        if !sink_one(cfg) {
-            break;
-        }
-        iters += 1;
-        if iters > max_iters {
-            #[cfg(debug_assertions)]
-            eprintln!("[sink_pass] hit max iterations ({max_iters}), stopping");
-            break;
-        }
-    }
+    while sink_one(cfg) {}
 }
 
 /// Try to sink ONE Eval. Returns true if something moved.
@@ -2368,5 +2363,124 @@ mod tests {
             store_idx < load_idx,
             "commit stays before the fetch of the same context (commit {store_idx}, fetch {load_idx})"
         );
+    }
+
+    /// The sink's measure: over every Eval, the positions left below it in
+    /// its block.
+    fn sink_measure(cfg: &CfgBody) -> usize {
+        cfg.blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .insts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, inst)| matches!(inst.kind, InstKind::Eval { .. }))
+                    .map(move |(index, _)| block.insts.len() - 1 - index)
+            })
+            .sum()
+    }
+
+    /// Three Evals in one block, each used after the Eval below it: the
+    /// first Eval reaches its use only after the third, then the second,
+    /// has moved out of its way, since an Eval is a call and so a barrier
+    /// to the Eval above it.
+    fn three_evals_whose_uses_interleave() -> CfgBody {
+        let i = Interner::new();
+        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let spawn = |dst, args| InstKind::Spawn {
+            dst,
+            callee: Callee::Direct(qref),
+            callee_ty: ty.clone(),
+            args,
+            order: None,
+        };
+        let eval = |dst, src| InstKind::Eval {
+            dst,
+            src,
+            order: None,
+        };
+        let add = |dst, left, right| InstKind::BinOp {
+            dst,
+            op: acvus_ast::BinOp::Add,
+            left,
+            right,
+        };
+        make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                spawn(v(1), vec![v(0)]),
+                spawn(v(2), vec![v(0)]),
+                spawn(v(3), vec![v(0)]),
+                eval(v(4), v(1)),
+                eval(v(5), v(2)),
+                eval(v(6), v(3)),
+                add(v(7), v(4), v(0)),
+                add(v(8), v(5), v(7)),
+                add(v(9), v(6), v(8)),
+                InstKind::Return {
+                    value: v(9),
+                    order: None,
+                },
+            ],
+            10,
+        )
+    }
+
+    /// The index of every Eval in the one block, and of the instruction
+    /// that first uses what it defines.
+    fn evals_and_their_first_uses(cfg: &CfgBody) -> Vec<(usize, usize)> {
+        let insts = &cfg.blocks[0].insts;
+        insts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, inst)| {
+                let InstKind::Eval { dst, .. } = inst.kind else {
+                    return None;
+                };
+                let use_index = insts[index + 1..]
+                    .iter()
+                    .position(|other| inst_info::uses(&other.kind).contains(&dst))
+                    .map(|offset| index + 1 + offset)
+                    .unwrap_or_else(|| panic!("no use of {dst:?} below index {index}"));
+                Some((index, use_index))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_eval_lands_immediately_before_its_first_use() {
+        let mut cfg = three_evals_whose_uses_interleave();
+        assert_eq!(
+            evals_and_their_first_uses(&cfg),
+            vec![(4, 7), (5, 8), (6, 9)],
+            "the body before the pass"
+        );
+
+        run(&mut cfg);
+
+        assert_eq!(
+            evals_and_their_first_uses(&cfg),
+            vec![(4, 5), (6, 7), (8, 9)],
+            "the body after the pass"
+        );
+    }
+
+    #[test]
+    fn the_sink_ends_within_its_measure() {
+        let mut cfg = three_evals_whose_uses_interleave();
+        let bound = sink_measure(&cfg);
+        let mut moves = 0;
+        while sink_one(&mut cfg) {
+            moves += 1;
+            assert!(
+                moves <= bound,
+                "the sink moved {moves} times, past its measure of {bound}"
+            );
+        }
+        assert_eq!(moves, 2, "the third Eval moves, then the second");
     }
 }
