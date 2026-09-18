@@ -34,9 +34,10 @@ know `Vec`'s layout, and must not.
 The machine indexes exactly one thing, a **slice** — Rust's `&[T]` /
 `&mut [T]`: a pointer and a length. A container that can be indexed says
 so by implementing **`core::as_slice`** (and `core::as_slice_mut`), a
-container signature (RFC-0028); the compiler calls it and indexes the
-result with **`Index`** / **`IndexSet`**, two instructions. There is no
-instruction that knows a container.
+container signature (RFC-0028); the compiler takes the slice with an
+**`AsSlice`** instruction and indexes it with **`Index`** /
+**`IndexSet`**. No instruction knows a container: `AsSlice` runs the
+container's own `as_slice` instance.
 
 1. **One element width.** Every container the machine can slice stores
    `Vec<Value>`: the runtime's own `Array` is `Arr<Value, ()>`, and a
@@ -48,14 +49,20 @@ instruction that knows a container.
    slice borrows the container it was taken from, holds that loan, and
    is never stored beyond it. `&mut [T]` is an exclusive take; a live
    `&[T]` refuses `as_slice_mut` and `IndexSet` on its container.
-3. **Signatures.** `core::as_slice<T>(c: &C) -> &[T]` and
+3. **Signatures and `AsSlice`.** `core::as_slice<T>(c: &C) -> &[T]` and
    `core::as_slice_mut<T>(c: &mut C) -> &mut [T]` are bare names settled
    by the container's evidence (RFC-0043). `Vec<T>` and `Array<T, N>`
    implement them in acvus-ext; `Deque<T>` (two halves) and `Map` do not.
-   The call is an ordinary `FunctionCall` — pure, panic-free, a shared
-   borrow — and the borrow hoist (`657545e3`) lifts it out of every loop
-   that does not write the container. There is no `AsSlice`
-   instruction (owner, 11:50).
+   The lowering emits **`AsSlice { dst, container, mutability, instance
+   }`**, not a `FunctionCall`: the instruction kind itself states what
+   the hoist must know — a pure, **infallible** borrow projection of its
+   container — so `code_motion` classifies it `SharedBorrow { storage }`
+   structurally, as it does `Ref`, and lifts it out of every loop that
+   does not write the container. A `FunctionCall` is never hoisted (it
+   may panic, RFC-0007), and the owner ruled (12:20) that the distinction
+   stays in the instruction rather than in a declaration marker. In
+   `prepare` an `AsSlice` is the one extern call of the resolved
+   instance, fused like any other (RFC-0044).
 4. **`Index { dst, slice, index, mode }`** reads element `index` of a
    slice. The index is **`u64`** and nothing else (owner, 11:50): the
    one check is `index < len`. `mode` is decided by the checker,
@@ -100,7 +107,7 @@ instruction that knows a container.
    `len` and the `Index` (`Loans::storage_effect`, the hoist's own
    condition). `u64` has no lower bound to prove. `a[i + 1]` and an index
    derived elsewhere stay checked; that is the correct answer, not a gap.
-8. **Motion.** The `as_slice` call hoists as a borrow; a checked `Index`
+8. **Motion.** `AsSlice` hoists as a shared borrow of its container; a checked `Index`
    does not (it may panic, RFC-0007); an `IndexUnchecked` whose slice and
    index are loop-invariant hoists as a pure instruction.
 
@@ -124,7 +131,7 @@ enumerate the dependents, nothing is patched around.
 - `Kind::Slice`, and the `head` word's split into kind and length: every
   `Kind` reader masks the low byte (`movzbl`, which most already do).
   Measured on `asm_probe` before the compiler half lands.
-- Two instructions with checked and unchecked forms; the `Copy`/`Ref`
+- `AsSlice`, and two instructions with checked and unchecked forms; the `Copy`/`Ref`
   modes are instances chosen in `prepare` from `val_types`, no run-time
   branch.
 - An interval pass, and the loan condition it borrows from the hoist.
@@ -144,9 +151,13 @@ enumerate the dependents, nothing is patched around.
 - **Three element widths (uniform 16 / inline kind / `Cross` struct)**,
   the Draft's §5: on the tree every sliceable store is `Vec<Value>` and a
   converted container has no storage; the other two widths had no case.
-- **An `AsSlice` intrinsic instruction**: a call to a bare-name signature
-  already does what it would, and the hoist already lifts a panic-free
-  borrow. One instruction fewer.
+- **`as_slice` as a plain `FunctionCall`, hoisted by a `total`
+  declaration marker** (the coordinator's 11:50 proposal): the hoist
+  moves only `Ref` today, never a call, so the call form needed a new
+  marker (`#[extern_fn(effect = pure, total)]`) and a hoist rule over
+  every pure total call. A general mechanism for one fact the instruction
+  kind already carries; the owner kept the distinction in the
+  instruction (12:20).
 - **Folding `ArrayIndex` into `Index` as a `Move` mode**: `ArrayIndex`
   acts on an owned `Array`, not a slice; two representations in one
   instruction is a run-time branch or a second instruction under one
@@ -163,8 +174,8 @@ enumerate the dependents, nothing is patched around.
 
 ## Consequences
 
-- attention's inner iteration: `as_slice(&query)` hoisted to the entry,
-  `as_slice(keys[t])` above the `i` loop, two `Index` (`Copy`, unchecked
+- attention's inner iteration: `AsSlice(query)` hoisted to the entry,
+  `AsSlice(keys[t])` above the `i` loop, two `Index` (`Copy`, unchecked
   after §7) and one chain per element — the Rust scalar shape. Measured
   after each half lands, bands from dispatch counts.
 - `for x in &v` and `while let` over a slice can be a `Loop` over
@@ -177,7 +188,8 @@ enumerate the dependents, nothing is patched around.
 ## Order of work
 
 T0 `ArrayGet` deleted (done). T1 interpreter + extern: `head` split,
-`Kind::Slice`, the slice's `Cross`, `Index`/`IndexSet` handlers with the
+`Kind::Slice`, the slice's `Cross`, `AsSlice` prepared as the instance's
+call and hoisted as a borrow, `Index`/`IndexSet` handlers with the
 probe-only unchecked forms, `as_slice`/`as_slice_mut` on `Vec`/`Array`,
 and the checked-vs-unchecked ceiling measured. T2 compiler: types,
 signatures, `a[i]` grammar and place lowering, loans, `get`/`get_mut`
