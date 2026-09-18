@@ -199,21 +199,30 @@ fn a_float_literal_operand_refuses_an_integer_literal_argument() {
     assert!(ir.contains("Fn(Float) -> Float"), "{ir}");
 }
 
-// -- A word operator reads a `&word` operand through (RFC-0018) -------------
+// -- A word operator reads a written `&word` operand through (RFC-0018) ----
 
 #[test]
-fn a_captured_word_is_read_through_the_reference_before_a_multiplication() {
+fn a_reference_the_program_wrote_is_read_through_before_a_multiplication() {
     let i = Interner::new();
-    let ir = script(&i, "let k = 1; let f = |y| -> k * y; f(2)").unwrap();
+    let ir = script(&i, "let x = 3; let r = &x; r * 2").unwrap();
     assert!(ir.contains("take (*"), "{ir}");
     assert!(ir.contains(" * "), "{ir}");
 }
 
 #[test]
-fn a_captured_word_is_read_through_the_reference_before_a_comparison() {
+fn a_captured_word_is_copied_once_however_often_the_body_reads_it() {
+    let i = Interner::new();
+    let ir = script(&i, "let k = 1; let f = |y| -> k * y + k; f(2)").unwrap();
+    assert_eq!(ir.matches("take (*").count(), 1, "{ir}");
+    assert!(ir.contains(" * "), "{ir}");
+    assert!(ir.contains(" + "), "{ir}");
+}
+
+#[test]
+fn a_captured_word_compared_is_the_word_itself() {
     let i = Interner::new();
     let ir = script(&i, "let k = 1; let f = |y| -> k < y; f(2)").unwrap();
-    assert!(ir.contains("take (*"), "{ir}");
+    assert_eq!(ir.matches("take (*").count(), 1, "{ir}");
 }
 
 #[test]

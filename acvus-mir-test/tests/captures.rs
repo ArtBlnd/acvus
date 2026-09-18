@@ -1,6 +1,7 @@
-//! A captured name is a borrow of a value the closure owns (RFC-0018), at
-//! the checker's contract and at the IR the lowering writes. A test that
-//! fails is a finding, kept as it fails.
+//! A captured name of word type is a copy of a value the closure owns and
+//! a captured name of any other type is a borrow of one (RFC-0018), at the
+//! checker's contract and at the IR the lowering writes. A test that fails
+//! is a finding, kept as it fails.
 
 use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::graph::{
@@ -97,7 +98,7 @@ fn a_let_bound_lambda_is_called_from_a_lambda_an_extern_receives() {
 }
 
 const TWO_LEVEL_WORD: &str = "let h = 0.5; \
-     range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *h * to_float(t)) | sum) | sum";
+     range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> h * to_float(t)) | sum) | sum";
 
 const TWO_LEVEL_LARGE: &str = "let w = [0.5, 0.5]; \
      as_iter(&@values) | map(|row| -> as_iter(row) | map(|x| -> w[0] * *x) | sum) | sum";
@@ -217,4 +218,33 @@ fn a_binding_read_beside_a_qualified_name_of_its_own_spelling_is_captured_once()
     );
     let ir = compile_script_mode_optimized(&i, &source, &FxHashMap::default());
     assert!(ir.is_ok(), "{}", ir.unwrap_err());
+}
+
+#[test]
+fn a_star_on_a_captured_word_names_the_word_it_is_written_on() {
+    let i = Interner::new();
+    let errors = check(&i, "let k = 1.0; let f = |y| -> *k * y; f(2.0)")
+        .expect_err("a captured word is not a reference");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e == "`*` needs a reference, got Float"),
+        "{errors:?}"
+    );
+}
+
+/// `len` takes a `&String`, so a body that passes the captured name to it
+/// with no `&` is reading it as the reference it is.
+#[test]
+fn a_captured_large_is_still_read_through_its_reference() {
+    let i = Interner::new();
+    let c = checked(&i, "let s = \"a\"; let f = |u| -> len(s) + u; f(1)");
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::U64));
+    assert!(
+        c.captures_by_lambda
+            .iter()
+            .all(|captures| captures.as_slice() == [Ty::String]),
+        "the closure owns the `String`: {:?}",
+        c.captures_by_lambda
+    );
 }

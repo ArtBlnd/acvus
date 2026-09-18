@@ -21,12 +21,15 @@ error otherwise. A `&T` is never accepted where a `T` is expected, and a
 `T` never where a `&T` is: types unify exactly. Assigning through a
 `&mut T` stores into the storage it names.
 
-An operator reads a `&T` operand through the reference where `T` is a
-word: `r + 1` with `r: &Int` is the word copy `*r` and then the operation.
-This is the only read a `*` does not have to be written for, and it reaches
-arithmetic, comparison and bit operators; a `&T` whose `T` is not a word is
-not an operand of one. `==`, `!=` and `+` lend their operands instead, at
-any size (RFC-0020).
+A `*` is written at every read through a reference but two. A captured
+name whose type is a word is seen by the lambda's body as that word and
+copied at each use, wherever the use is; a captured name of any other
+type is lent, and the body writes `*` to read it and `&` to pass it. And
+an operator reads a `&T` operand the program wrote through the reference
+where `T` is a word: `r + 1` with `r: &Int` is the word copy `*r` and
+then the operation, and it reaches arithmetic, comparison and bit
+operators; a `&T` whose `T` is not a word is not an operand of one. `==`,
+`!=` and `+` lend their operands instead, at any size (RFC-0020).
 
 A reference is not data. It is never stored in a container, an object, a
 context, or a closure's captures; it is never returned from a function;
@@ -56,15 +59,17 @@ that resolved to a function rather than to the binding it is spelled like
 is not among them.
 
 A closure owns what it captures, and a call borrows the closure: inside
-the lambda a captured name has type `&T`, and `f(x)` on a local `f` lends
-`f` for the call, so `f` may be called again. Passing `f` to a function
-by value moves it. Both rules reach a captured name: a lambda that
-captures a name the enclosing lambda captured captures the owned `T`, not
-the `&T` the name reads as, and a captured `f` is called as a lent `f`.
+the lambda a captured name of word type has that word's type and a
+captured name of any other type has type `&T`, and `f(x)` on a local `f`
+lends `f` for the call, so `f` may be called again. Passing `f` to a
+function by value moves it. Both rules reach a captured name: a lambda
+that captures a name the enclosing lambda captured captures the owned
+`T`, and a captured `f` is called as a lent `f`.
 
-A name that itself holds a reference is refused: the capture is the same
-lend RFC-0029 defines, answered `Capture`, so a name whose type is still a
-variable is refused when that type resolves to a reference and not before.
+A name that itself holds a reference is refused, and how a capture is
+read is a decision of the solver, so a name whose type is still a
+variable is read as the word or refused as a reference when that type
+resolves, and not before.
 
 Taking that owned `T` is a move out of a value the enclosing closure owns,
 and the enclosing closure is called again, so the move is admitted only
@@ -146,8 +151,7 @@ site and `*` at the read keeps every conversion in the program text.
   inside which has moved, are both uses after move.
 - The type checker reads a reference operand of an operator at what it
   names, and lowering emits `Take { Through }` before the `BinOp` where
-  the operand register holds a `&word`. A captured word therefore reaches
-  every operator: `let k = 1; |y| -> k * y` type-checks and runs.
+  the operand register holds a `&word`.
 - `Ref<T>` and `RefMut<T>` are types the checker admits as the type of a
   local binding and of a parameter, and rejects inside any data type, any
   return type, and any capture. `*r` is typed only for a primitive `T`.
@@ -165,9 +169,13 @@ site and `*` at the read keeps every conversion in the program text.
   `reference(&value)`: a reference word the host makes, used no longer
   than the call. A host reads a register by taking it; the only copy a
   host makes is of a word.
-- The captures a closure owns enter its body as references; the body's
-  types say so, and the host binds each capture register to a reference
-  into the closure value.
+- The host binds each capture register to a reference into the closure
+  value. The checker decides, once per capture, whether the body reads
+  that register as the word it names or as the reference itself, and the
+  lowering emits the reading it decided: a `Take { Through }` at the
+  body's entry for a word, so that however often the body reads the name,
+  the closure is read once; the register as it is for every other type,
+  whose body-side type is the `&T` the checker gave it.
 - Sharing in the language is an extern: `clone(&x)` for a type whose
   author implemented it. A type without one cannot be duplicated.
 - A context read hands the value out of the journal; the journal never

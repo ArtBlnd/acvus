@@ -449,16 +449,13 @@ li = li + one; \
 }
 
 /// Case 2: the same matcher as a named closure, one `CallIndirect` per line.
-/// The pattern and the line are its two arguments and it captures nothing:
-/// capturing the `u64` `plen`/`one`/`zero` from the outer body is refused,
-/// so the closure rebuilds them from `len(pp)` -- see the report's W1.
+/// The pattern and the line are its two arguments, and the `u64` `plen`,
+/// `one` and `zero` the index arithmetic needs are captures of the outer
+/// body (RFC-0018: a captured word is a copy).
 fn closure_source() -> String {
     format!(
         "{PRELUDE}\
 let matches = |pp, ln| -> {{ \
-let plen = len(pp); \
-let one = plen / plen; \
-let zero = plen - plen; \
 let slen = len(ln); \
 {matcher} \
 ok \

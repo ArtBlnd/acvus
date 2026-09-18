@@ -9,10 +9,11 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast, IndexAccess, IndexMode};
 use crate::solver::{
-    Admission, Answer, CallShape, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
-    EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, MatchBinding,
-    MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair,
-    SettledSignature, SignatureCandidate, SignatureName, SignatureOption, UndecidedCall, Unsettled,
+    Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, Conversion,
+    ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice, InstanceKind,
+    LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode,
+    ReferencePair, SettledSignature, SignatureCandidate, SignatureName, SignatureOption,
+    UndecidedCall, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -392,7 +393,7 @@ pub struct TypeResolution {
     /// `Fn { captures }` in `type_map` holds those names' types positionally,
     /// so the two must stay in one order: the MakeClosure arity and type
     /// check in `validate::type_check` is where a divergence is reported.
-    pub lambda_captures: FxHashMap<AstId, Vec<Astr>>,
+    pub lambda_captures: FxHashMap<AstId, Vec<CapturedName>>,
     /// Join of the effects of every call in the body.
     pub effect: Effect,
     pub context_types: FxHashMap<QualifiedRef, Ty>,
@@ -410,7 +411,7 @@ impl TypeResolution {
         try_returns: FxHashMap<AstId, Ty>,
         tail_ty: Ty,
         extern_params: Vec<(Astr, Ty)>,
-        lambda_captures: FxHashMap<AstId, Vec<Astr>>,
+        lambda_captures: FxHashMap<AstId, Vec<CapturedName>>,
         effect: Effect,
         context_types: FxHashMap<QualifiedRef, Ty>,
     ) -> Self {
@@ -432,6 +433,14 @@ impl TypeResolution {
     }
 }
 
+/// A name a closure captures and the reading its body was checked at, so
+/// that the lowering emits that reading rather than deciding one.
+#[derive(Debug, Clone, Copy)]
+pub struct CapturedName {
+    pub name: Astr,
+    pub read: CaptureRead,
+}
+
 /// What `x = e;` found for `x`.
 enum AssignTarget {
     /// A binding of the body that carries the statement: its type.
@@ -447,28 +456,36 @@ struct LambdaScope {
     body_span: Span,
     captures: Vec<Capture>,
     moves_out_of_capture: Vec<CaptureMove>,
-    /// Indices into `captures` whose reference-ness a `Decision::Lend`
-    /// owns, so the refusal below is not also raised here.
-    captures_lent_by_decision: Vec<usize>,
 }
 
+/// One name a lambda reads from outside its body: the type the name
+/// binds, how the body reads it, and the type it reads it at.
 struct Capture {
     name: Astr,
     ty: InferTy,
+    read: CaptureSource,
+    seen: InferTy,
+}
+
+/// The reading is the solver's answer where the captured type's head was
+/// open at the first use, and the checker's own where it was not.
+#[derive(Debug, Clone, Copy)]
+enum CaptureSource {
+    Read(CaptureRead),
+    Decided(DecisionId),
 }
 
 impl LambdaScope {
-    fn capture(&mut self, name: Astr, ty: &InferTy) -> usize {
-        match self.captures.iter().position(|c| c.name == name) {
-            Some(i) => i,
-            None => {
-                self.captures.push(Capture {
-                    name,
-                    ty: ty.clone(),
-                });
-                self.captures.len() - 1
-            }
+    fn capture(&mut self, name: Astr, ty: &InferTy, read: CaptureSource, seen: &InferTy) {
+        if self.captures.iter().any(|c| c.name == name) {
+            return;
         }
+        self.captures.push(Capture {
+            name,
+            ty: ty.clone(),
+            read,
+            seen: seen.clone(),
+        });
     }
 }
 
@@ -634,7 +651,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
     analysis: Option<AnalysisState>,
     lambda_stack: Vec<LambdaScope>,
-    lambda_captures: FxHashMap<AstId, Vec<Astr>>,
+    lambda_captures: FxHashMap<AstId, Vec<(Astr, CaptureSource)>>,
     capture_moves: Vec<CaptureMove>,
     /// Maps lambda expression AstId -> body expression AstId.
     /// Effect variable of the body being checked; every call raises its lower bound.
@@ -819,6 +836,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let operator_calls = self.frozen_operator_calls();
         let coercion_map = self.frozen_coercions();
         let direct_calls = self.frozen_direct_calls();
+        let lambda_captures = self.frozen_lambda_captures();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             coercion_map,
@@ -830,7 +848,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             FxHashMap::default(),
             Ty::String,
             extern_params,
-            self.lambda_captures,
+            lambda_captures,
             effect,
             context_types,
         )))
@@ -912,6 +930,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let operator_calls = self.frozen_operator_calls();
         let coercion_map = self.frozen_coercions();
         let direct_calls = self.frozen_direct_calls();
+        let lambda_captures = self.frozen_lambda_captures();
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             coercion_map,
@@ -923,7 +942,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             try_returns,
             frozen_tail,
             extern_params,
-            self.lambda_captures,
+            lambda_captures,
             effect,
             context_types,
         )))
@@ -1102,26 +1121,35 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// The type a name has where it is used. A name captured by the
-    /// innermost lambda is seen there through a shared reference: the
-    /// closure owns the value, and a call borrows the closure (RFC-0018).
+    /// The type a name has where it is used. A name a lambda captured is
+    /// seen in its body as the word it is, copied at each use, and as a
+    /// shared reference into the closure at every other type (RFC-0018).
     fn lookup_var(&mut self, name: Astr) -> Option<InferTy> {
         for (depth, scope) in self.scopes.iter().enumerate().rev() {
             let Some(ty) = scope.get(&name) else { continue };
             let ty = ty.clone();
-            let mut capturing_lambdas = 0usize;
-            for ls in self.lambda_stack.iter_mut() {
-                if depth < ls.depth {
-                    ls.capture(name, &ty);
-                    capturing_lambdas += 1;
-                }
+            let capturing_lambdas = self
+                .lambda_stack
+                .iter()
+                .filter(|ls| depth < ls.depth)
+                .count();
+            if capturing_lambdas == 0 {
+                return Some(ty);
             }
+            let capturing: Vec<usize> = self
+                .lambda_stack
+                .iter()
+                .enumerate()
+                .filter(|(_, ls)| depth < ls.depth)
+                .map(|(i, _)| i)
+                .collect();
+            let seen = self.captured_by(name, &ty, &capturing);
             let taken_from_an_enclosing_capture = capturing_lambdas >= 2;
             if taken_from_an_enclosing_capture {
                 let inner = self
                     .lambda_stack
                     .last_mut()
-                    .expect("a capturing lambda is on the stack");
+                    .expect("a lambda deeper than the scope is on the stack");
                 if !inner.moves_out_of_capture.iter().any(|m| m.name == name) {
                     let span = inner.body_span;
                     inner.moves_out_of_capture.push(CaptureMove {
@@ -1131,34 +1159,45 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     });
                 }
             }
-            if capturing_lambdas == 0 {
-                return Some(ty);
-            }
-            if !matches!(self.solver.shallow_resolve_ty(&ty), TyTerm::Var(_)) {
-                return Some(TyTerm::Ref(
-                    Mutability::Shared,
-                    Box::new(TypeArg::uniform(ty)),
-                ));
-            }
-            let inner = self
-                .lambda_stack
-                .last()
-                .expect("a capturing lambda is on the stack");
-            let body_span = inner.body_span;
-            let capture = inner
-                .captures
-                .iter()
-                .position(|c| c.name == name)
-                .expect("the innermost capturing lambda just recorded this name");
-            let result = self.open_lend(&ty, Mutability::Shared, LendKind::Capture, body_span);
-            self.lambda_stack
-                .last_mut()
-                .expect("a capturing lambda is on the stack")
-                .captures_lent_by_decision
-                .push(capture);
-            return Some(result);
+            return Some(seen);
         }
         None
+    }
+
+    /// Records a name of type `ty` as a capture of each lambda in
+    /// `capturing`, innermost last, and answers the type the innermost
+    /// one's body reads it at. The reading is the solver's answer where
+    /// the type's head was open at the first use and the checker's own
+    /// where it was not; a second use takes the first use's.
+    fn captured_by(&mut self, name: Astr, ty: &InferTy, capturing: &[usize]) -> InferTy {
+        let Some(&innermost) = capturing.last() else {
+            return ty.clone();
+        };
+        let inner = &self.lambda_stack[innermost];
+        let body_span = inner.body_span;
+        let (read, seen) = match inner.captures.iter().find(|c| c.name == name) {
+            Some(recorded) => (recorded.read, recorded.seen.clone()),
+            None => match self.solver.capture_read(ty) {
+                CaptureOutcome::Reads { read, seen } => (CaptureSource::Read(read), seen),
+                CaptureOutcome::Refused => (
+                    CaptureSource::Read(CaptureRead::Lent),
+                    TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty.clone()))),
+                ),
+                CaptureOutcome::HeadOpen => {
+                    let seen = self.solver.fresh_ty_var();
+                    let decision = self.solver.decide(Decision::Capture {
+                        of: ty.clone(),
+                        seen: seen.clone(),
+                    });
+                    self.decision_sites.insert(decision, body_span);
+                    (CaptureSource::Decided(decision), seen)
+                }
+            },
+        };
+        for lambda in capturing {
+            self.lambda_stack[*lambda].capture(name, ty, read, &seen);
+        }
+        seen
     }
 
     /// RFC-0043.
@@ -1186,9 +1225,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// The binding that is one more signature of a bare name (RFC-0043).
+    /// A callable is never a word, so a call of a capture whose type is
+    /// still open is a call through the reference the body reads it as
+    /// (RFC-0018).
     fn local_signature(&mut self, name: Astr) -> Option<InferTy> {
         let seen = self.lookup_var(name)?;
+        if self.is_an_open_capture(name, &seen) {
+            let lent = self.solver.fresh_ty_var();
+            let reference =
+                TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(lent.clone())));
+            self.solver
+                .unify(&seen, &reference)
+                .expect("an open capture's type takes a reference");
+            return Some(lent);
+        }
         Some(self.lent_fn(&seen))
+    }
+
+    fn is_an_open_capture(&self, name: Astr, seen: &InferTy) -> bool {
+        matches!(self.solver.shallow_resolve_ty(seen), TyTerm::Var(_))
+            && self.lambda_stack.last().is_some_and(|ls| {
+                ls.captures
+                    .iter()
+                    .any(|c| c.name == name && matches!(c.read, CaptureSource::Decided(_)))
+            })
     }
 
     /// A call of the binding itself: no signature is named, so no
@@ -1242,7 +1302,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             body_span: body.span(),
             captures: Vec::new(),
             moves_out_of_capture: Vec::new(),
-            captures_lent_by_decision: Vec::new(),
         });
 
         let outer_effect = self.body_effect.clone();
@@ -1294,14 +1353,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let mut ls = self.lambda_stack.pop().expect("this lambda's scope");
         self.capture_moves.append(&mut ls.moves_out_of_capture);
         self.lambda_captures
-            .insert(*id, ls.captures.iter().map(|c| c.name).collect());
+            .insert(*id, ls.captures.iter().map(|c| (c.name, c.read)).collect());
         let capture_types: Vec<InferTy> = ls
             .captures
             .iter()
             .map(|c| self.solver.resolve_ty(&c.ty))
             .collect();
-        let captured_a_reference = capture_types.iter().enumerate().any(|(i, t)| {
-            matches!(t, TyTerm::Ref(..)) && !ls.captures_lent_by_decision.contains(&i)
+        let captured_a_reference = capture_types.iter().zip(&ls.captures).any(|(t, c)| {
+            matches!(t, TyTerm::Ref(..)) && !matches!(c.read, CaptureSource::Decided(_))
         });
         if captured_a_reference {
             self.error(MirErrorKind::ReferenceCaptured, body.span());
@@ -1452,6 +1511,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Answer::Conversion(_)
                 | Answer::Signature { .. }
                 | Answer::Lend(_)
+                | Answer::Capture(_)
                 | Answer::Match(_) => {
                     unreachable!("an instance decision answers with an instance")
                 }
@@ -1479,6 +1539,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Answer::Instance(_)
                 | Answer::Conversion(_)
                 | Answer::Lend(_)
+                | Answer::Capture(_)
                 | Answer::Match(_) => {
                     unreachable!("a signature decision answers with a signature")
                 }
@@ -1523,6 +1584,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     | Answer::Conversion(_)
                     | Answer::Signature { .. }
                     | Answer::Lend(_)
+                    | Answer::Capture(_)
                     | Answer::Match(_) => None,
                 }
             })
@@ -1643,6 +1705,35 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 );
             }
         }
+    }
+
+    /// Every capture with the reading the body was checked at. A decided
+    /// reading is settled by now: `solve_body` reports every decision that
+    /// stayed open or failed, and a body with errors never reaches here.
+    fn frozen_lambda_captures(&mut self) -> FxHashMap<AstId, Vec<CapturedName>> {
+        let captures = std::mem::take(&mut self.lambda_captures);
+        captures
+            .into_iter()
+            .map(|(id, names)| {
+                let names = names
+                    .into_iter()
+                    .map(|(name, source)| CapturedName {
+                        name,
+                        read: match source {
+                            CaptureSource::Read(read) => read,
+                            CaptureSource::Decided(decision) => {
+                                let Some(Answer::Capture(read)) = self.solver.answer(decision)
+                                else {
+                                    unreachable!("an unsettled capture is an error of the body")
+                                };
+                                read
+                            }
+                        },
+                    })
+                    .collect();
+                (id, names)
+            })
+            .collect()
     }
 
     /// The callee of an overloaded call is typed here and nowhere else: its
@@ -2110,8 +2201,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
         let first = self.receiver_arg(object, ReceiverMode::Lent(mutability));
         // The index is a `u64` and nothing else (RFC-0047 §4), so it is the
-        // expected type here: a captured word reaches it read through, as
-        // it reaches any parameter of that type.
+        // expected type here.
         let position = TyTerm::Int(IntTy::U64);
         let index_ty = self.check_arg(index, Some(&position));
         if self.solver.unify(&index_ty, &position).is_err() {
@@ -2215,20 +2305,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         {
             self.note_access(Effect::write(qref), span);
         }
-        let referent = match self.solver.lend(of, mutability, LendKind::Borrow) {
+        let referent = match self.solver.lend(of, mutability) {
             LendOutcome::Names { referent, .. } => referent,
-            LendOutcome::Refused { refusal, referent } => {
-                self.error(
-                    match refusal {
-                        LendRefusal::MutableBorrowOfShared => MirErrorKind::MutableBorrowOfShared,
-                        LendRefusal::ReferenceCaptured => MirErrorKind::ReferenceCaptured,
-                    },
-                    span,
-                );
+            LendOutcome::MutableBorrowOfShared { referent } => {
+                self.error(MirErrorKind::MutableBorrowOfShared, span);
                 referent
             }
             LendOutcome::HeadOpen => {
-                return self.open_lend(of, mutability, LendKind::Borrow, span);
+                return self.open_lend(of, mutability, span);
             }
         };
         TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
@@ -2237,19 +2321,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// The place's head is still a variable, so what the reference names
     /// cannot be read off it: the solver settles that when the head
     /// resolves, and refuses it if nothing ever does.
-    fn open_lend(
-        &mut self,
-        of: &InferTy,
-        mutability: Mutability,
-        kind: LendKind,
-        span: Span,
-    ) -> InferTy {
+    fn open_lend(&mut self, of: &InferTy, mutability: Mutability, span: Span) -> InferTy {
         let referent = self.solver.fresh_ty_var();
         let decision = self.solver.decide(Decision::Lend {
             of: of.clone(),
             referent: referent.clone(),
             mutability,
-            kind,
         });
         self.decision_sites.insert(decision, span);
         TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
@@ -2445,8 +2522,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let ReceiverMode::Lent(mutability) = mode else {
             return Some(owned.clone());
         };
-        let referent = match self.solver.lend(owned, mutability, LendKind::Borrow) {
-            LendOutcome::Names { referent, .. } | LendOutcome::Refused { referent, .. } => referent,
+        let referent = match self.solver.lend(owned, mutability) {
+            LendOutcome::Names { referent, .. }
+            | LendOutcome::MutableBorrowOfShared { referent } => referent,
             LendOutcome::HeadOpen => return None,
         };
         Some(TyTerm::Ref(
@@ -2831,11 +2909,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         );
     }
 
-    /// The type an operand is read at: a reference is read through it,
-    /// which is the word copy of RFC-0018 where the referent is a word and
-    /// the lend of RFC-0020 where the operator keeps the reference. A
-    /// referent still open is read through as well, because the operand
-    /// bound the operator then imposes leaves it a word.
+    /// The type an operand is read at. A reference the program wrote is
+    /// read through it, which is the word copy of RFC-0018 where the
+    /// referent is a word and the lend of RFC-0020 where the operator
+    /// keeps the reference. A referent still open is read through as well,
+    /// because the operand bound the operator then imposes leaves it a
+    /// word.
     fn read_operand_through(&mut self, operand: &InferTy, op: BinOp) -> InferTy {
         let resolved = self.solver.resolve_ty(operand);
         let TyTerm::Ref(_, inner) = &resolved else {
@@ -3350,9 +3429,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 }
                             }
                         };
-                        for ls in self.lambda_stack.iter_mut() {
-                            ls.capture(name.name, &ty);
-                        }
+                        let capturing: Vec<usize> = (0..self.lambda_stack.len()).collect();
+                        self.captured_by(name.name, &ty, &capturing);
                         ty
                     }
                     RefKind::Value => match self.lookup_var(name.name) {

@@ -12,8 +12,9 @@ use crate::ir::{
     Callee, CastKind, ExternCast, ExternInstance, IndexAccess, IndexMode, Inst, InstKind, Label,
     MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
 };
+use crate::solver::CaptureRead;
 use crate::ty::{Effect, Mutability, Task, Ty, TypeArg};
-use crate::typeck::TypeResolution;
+use crate::typeck::{CapturedName, TypeResolution};
 
 pub struct Lowerer<'a> {
     body: MirBody,
@@ -2423,7 +2424,7 @@ impl<'a> Lowerer<'a> {
                 body,
                 span,
             } => {
-                let captured: Vec<Astr> = self
+                let captured: Vec<CapturedName> = self
                     .resolution
                     .lambda_captures
                     .get(id)
@@ -2436,18 +2437,19 @@ impl<'a> Lowerer<'a> {
                 // enclosing closure body.
                 let capture_regs: Vec<ValueId> = captured
                     .iter()
-                    .map(|name| {
-                        let taken = if let Some(param_reg) = self.try_param_slot(*name) {
+                    .map(|capture| {
+                        let name = capture.name;
+                        let taken = if let Some(param_reg) = self.try_param_slot(name) {
                             let ty = self.slot_type(param_reg);
                             let dst =
                                 self.emit_take(*span, RefTarget::Param(param_reg), vec![], ty);
-                            self.set_origin(dst, ValOrigin::ExternParam(*name));
+                            self.set_origin(dst, ValOrigin::ExternParam(name));
                             dst
                         } else {
-                            let slot = self.var_slot(*name);
+                            let slot = self.var_slot(name);
                             let ty = self.slot_type(slot);
                             let dst = self.emit_take(*span, RefTarget::Var(slot), vec![], ty);
-                            self.set_origin(dst, ValOrigin::Named(*name));
+                            self.set_origin(dst, ValOrigin::Named(name));
                             dst
                         };
                         self.read_word_through(*span, taken)
@@ -2460,10 +2462,11 @@ impl<'a> Lowerer<'a> {
                 let mut sub_body = MirBody::new();
 
                 // Captures become the first registers. The closure owns the
-                // `T` handed to `MakeClosure` and the body sees a `&T`
-                // (RFC-0018), which is what the runtime binds the register
-                // to; a register already holding a reference is reborrowed,
-                // since no `&&T` exists (RFC-0029).
+                // `T` handed to `MakeClosure`, and the runtime binds each
+                // of these registers to a reference into it; a register
+                // already holding a reference is reborrowed, since no
+                // `&&T` exists (RFC-0029). What the body reads out of the
+                // register is the checker's `CaptureRead`, below.
                 let mut closure_capture_regs = Vec::new();
                 let mut capture_tys = Vec::new();
                 for capture_reg in capture_regs.iter() {
@@ -2505,13 +2508,21 @@ impl<'a> Lowerer<'a> {
                 self.enter_contexts(acvus_ast::direct_expr_context_refs(body), *span);
 
                 // Captures and params are the closure body's first bindings.
-                for ((name, capture_reg), cap_ty) in captured
+                for ((capture, capture_reg), cap_ty) in captured
                     .iter()
                     .zip(closure_capture_regs.iter())
                     .zip(capture_tys)
                 {
-                    let slot = self.define_var(*name, cap_ty);
-                    self.emit_assign(*span, RefTarget::Var(slot), vec![], *capture_reg);
+                    let (bound, bound_ty) = match capture.read {
+                        CaptureRead::Word => {
+                            let word = self.read_word_through(*span, *capture_reg);
+                            let ty = self.slot_type(word);
+                            (word, ty)
+                        }
+                        CaptureRead::Lent => (*capture_reg, cap_ty),
+                    };
+                    let slot = self.define_var(capture.name, bound_ty);
+                    self.emit_assign(*span, RefTarget::Var(slot), vec![], bound);
                 }
                 for (p, param_reg) in params.iter().zip(closure_param_regs.iter()) {
                     let ty = self.type_of_id(p.id);
@@ -2538,8 +2549,11 @@ impl<'a> Lowerer<'a> {
                 self.context_slots = saved_context_slots;
                 self.holds = saved_holds;
 
-                closure_body_mir.captures =
-                    captured.iter().copied().zip(closure_capture_regs).collect();
+                closure_body_mir.captures = captured
+                    .iter()
+                    .map(|capture| capture.name)
+                    .zip(closure_capture_regs)
+                    .collect();
                 closure_body_mir.params = params
                     .iter()
                     .map(|p| p.name)

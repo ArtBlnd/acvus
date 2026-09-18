@@ -109,7 +109,7 @@ async fn a_captured_closure_releases_once_per_element() {
     let measured = Measured::start();
     let i = Interner::new();
     let source = format!(
-        "let k = 1; range(0, {ELEMENTS}) | map(|x| -> {{ let t = tracked(*k); rank(&t) }}) | sum"
+        "let k = 1; range(0, {ELEMENTS}) | map(|x| -> {{ let t = tracked(k); rank(&t) }}) | sum"
     );
     let v = run(&i, &source).await;
     assert_eq!(v.as_int(), ELEMENTS as i64);

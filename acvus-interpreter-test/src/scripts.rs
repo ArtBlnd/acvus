@@ -27,7 +27,7 @@ while t < n {
 }
 
 let m = if let Some(m) = scores.as_iter().map(|s| -> *s).max() { m } else { 0.0 };
-let weights = scores.as_iter().map(|s| -> (*s - *m).exp()).collect();
+let weights = scores.as_iter().map(|s| -> (*s - m).exp()).collect();
 let z = weights.as_iter().map(|w| -> *w).sum();
 
 let out = deque();
@@ -74,7 +74,7 @@ while t < n {
 }
 
 let m = if let Some(m) = scores.as_iter().map(|s| -> *s).max() { m } else { 0.0 };
-let weights = scores.as_iter().map(|s| -> (*s - *m).exp()).collect();
+let weights = scores.as_iter().map(|s| -> (*s - m).exp()).collect();
 let z = weights.as_iter().map(|w| -> *w).sum();
 
 let out = vec([]);

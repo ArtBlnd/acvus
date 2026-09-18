@@ -41,7 +41,7 @@ async fn a_word_reaches_the_innermost_of_three_closures_as_a_copy() {
         "let k = 2.0; \
          range(0, 2) \
          | map(|a| -> range(0, 2) \
-             | map(|b| -> range(0, 2) | map(|c| -> *k) | sum) \
+             | map(|b| -> range(0, 2) | map(|c| -> k) | sum) \
              | sum) \
          | sum",
         Ty::Float,

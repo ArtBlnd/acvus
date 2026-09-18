@@ -777,11 +777,11 @@ fn lambda_filter_comparison() {
 #[test]
 fn closure_capture_local() {
     let i = Interner::new();
-    // Closure captures local variable (not context); a capture is read
-    // through a reference (RFC-0018).
+    // Closure captures local variable (not context); a captured word is
+    // copied at each use (RFC-0018).
     let ir = compile_to_ir(
         &i,
-        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > *threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &items_list_context(&i),
     )
     .unwrap();
@@ -1071,11 +1071,11 @@ fn lambda_capture_local_var_ref() {
     let i = Interner::new();
     // offset is NOT in initial context - created as local var.
     // Lambda must capture it correctly (not fall through to StorageLoad);
-    // the capture is read through a reference (RFC-0018).
+    // a captured word is copied at each use (RFC-0018).
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > *offset) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > offset) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -2233,7 +2233,7 @@ fn migrated_move_accept_pure_capture_fn_multi_call() {
     let context = ctx(&i, &[("val", Ty::I64)]);
     let result = compile_script_ir(
         &i,
-        "let x = @val; let f = (|a| -> *x + a); let a = f(1); let b = f(2); a + b",
+        "let x = @val; let f = (|a| -> x + a); let a = f(1); let b = f(2); a + b",
         &context,
     );
     assert!(
@@ -2457,13 +2457,13 @@ fn projection_var_in_arithmetic() {
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
 
-/// Lambda captures variable: `x = @data; |y| -> *x + y` (a capture is read
-/// through a reference, RFC-0018).
+/// Lambda captures variable: `x = @data; |y| -> x + y` (a captured word is
+/// copied at each use, RFC-0018).
 #[test]
 fn projection_lambda_capture() {
     let i = Interner::new();
     let context = ctx(&i, &[("data", Ty::I64)]);
-    let ir = compile_script_ir(&i, "let x = @data; |y| -> *x + y", &context).unwrap();
+    let ir = compile_script_ir(&i, "let x = @data; |y| -> x + y", &context).unwrap();
     assert!(ir.contains("closure"), "should have closure: {ir}");
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }

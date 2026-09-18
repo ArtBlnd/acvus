@@ -1322,8 +1322,12 @@ pub enum Decision {
         of: InferTy,
         referent: InferTy,
         mutability: Mutability,
-        kind: LendKind,
     },
+    /// How a lambda's body reads a name it captured (RFC-0018). The
+    /// checker opens this only where the head of `of` is still a
+    /// variable; a known head it answers on the spot, through
+    /// `Solver::capture_read`.
+    Capture { of: InferTy, seen: InferTy },
     /// How a pattern reads its scrutinee (RFC-0024). The checker opens
     /// this only where the head of `scrutinee` is still a variable; a
     /// known head it answers on the spot, through `Solver::match_mode`.
@@ -1370,37 +1374,30 @@ pub enum MatchOutcome {
     Reads(MatchReads),
 }
 
-/// A reference found under the place is reborrowed (RFC-0029) for a
-/// `Borrow` and refused (RFC-0018) for a `Capture`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LendKind {
-    Borrow,
-    Capture,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lend {
     Reference,
     Reborrow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureRead {
+    Word,
+    Lent,
+}
+
+#[derive(Debug, Clone)]
+pub enum CaptureOutcome {
+    HeadOpen,
+    Refused,
+    Reads { read: CaptureRead, seen: InferTy },
+}
+
 #[derive(Debug, Clone)]
 pub enum LendOutcome {
     HeadOpen,
-    Names {
-        referent: InferTy,
-        lend: Lend,
-    },
-    Refused {
-        refusal: LendRefusal,
-        referent: InferTy,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LendRefusal {
-    MutableBorrowOfShared,
-    ReferenceCaptured,
+    Names { referent: InferTy, lend: Lend },
+    MutableBorrowOfShared { referent: InferTy },
 }
 
 /// RFC-0030.
@@ -1557,6 +1554,7 @@ pub enum Answer {
         callee_ty: InferTy,
     },
     Lend(Lend),
+    Capture(CaptureRead),
     Match(MatchMode),
 }
 
@@ -1981,9 +1979,9 @@ impl<'src> Solver<'src> {
 
     /// Settle, then close every decision still open by its least element
     /// (solver.md R3): a width is `i64`, a representation `Uniform`, a lend
-    /// a reference, an identity a source of its own; then settle again, and
-    /// report every decision that neither settled nor could take a least
-    /// element.
+    /// a reference, a capture a word, an identity a source of its own;
+    /// then settle again, and report every decision that neither settled
+    /// nor could take a least element.
     pub fn solve(&mut self) -> Vec<Unsettled> {
         let mut failures = self.settle();
         for index in 0..self.terms.ty_bounds.len() {
@@ -2010,6 +2008,8 @@ impl<'src> Solver<'src> {
         self.close_matches_by_least_element(&mut failures);
         failures.extend(self.settle());
         self.close_lends_by_least_element(&mut failures);
+        failures.extend(self.settle());
+        self.close_captures_by_least_element(&mut failures);
         failures.extend(self.settle());
         self.close_instances_by_task();
         failures.extend(self.settle());
@@ -2055,6 +2055,9 @@ impl<'src> Solver<'src> {
                 },
                 Decision::Lend { .. } => {
                     unreachable!("close_lends_by_least_element leaves no lend open")
+                }
+                Decision::Capture { .. } => {
+                    unreachable!("close_captures_by_least_element leaves no capture open")
                 }
                 Decision::Match { .. } => {
                     unreachable!("close_matches_by_least_element leaves no match open")
@@ -2118,8 +2121,8 @@ impl<'src> Solver<'src> {
                 of,
                 referent,
                 mutability,
-                kind,
-            } => self.step_lend(id, &of, &referent, mutability, kind),
+            } => self.step_lend(id, &of, &referent, mutability),
+            Decision::Capture { of, seen } => self.step_capture(id, &of, &seen),
             Decision::Match {
                 scrutinee,
                 referent,
@@ -2232,18 +2235,11 @@ impl<'src> Solver<'src> {
     /// What lending a place of type `of` yields, once its head is known.
     /// `check_borrow` reads this directly for a head it already knows, so
     /// the decision only carries the case where it does not.
-    pub fn lend(&self, of: &InferTy, mutability: Mutability, kind: LendKind) -> LendOutcome {
+    pub fn lend(&self, of: &InferTy, mutability: Mutability) -> LendOutcome {
         match self.terms.shallow_resolve_ty(of) {
             TyTerm::Var(_) => LendOutcome::HeadOpen,
-            TyTerm::Ref(_, inner) if kind == LendKind::Capture => LendOutcome::Refused {
-                refusal: LendRefusal::ReferenceCaptured,
-                referent: inner.ty,
-            },
             TyTerm::Ref(Mutability::Shared, inner) if mutability == Mutability::Mut => {
-                LendOutcome::Refused {
-                    refusal: LendRefusal::MutableBorrowOfShared,
-                    referent: inner.ty,
-                }
+                LendOutcome::MutableBorrowOfShared { referent: inner.ty }
             }
             TyTerm::Ref(_, inner) => LendOutcome::Names {
                 referent: inner.ty,
@@ -2262,18 +2258,12 @@ impl<'src> Solver<'src> {
         of: &InferTy,
         referent: &InferTy,
         mutability: Mutability,
-        kind: LendKind,
     ) -> Progress {
-        match self.lend(of, mutability, kind) {
+        match self.lend(of, mutability) {
             LendOutcome::HeadOpen => Progress::Unchanged,
-            LendOutcome::Refused {
-                refusal: LendRefusal::ReferenceCaptured,
-                ..
-            } => Progress::Failed(Unsettled::ReferenceCaptured { decision: id }),
-            LendOutcome::Refused {
-                refusal: LendRefusal::MutableBorrowOfShared,
-                ..
-            } => Progress::Failed(Unsettled::MutableBorrowOfShared { decision: id }),
+            LendOutcome::MutableBorrowOfShared { .. } => {
+                Progress::Failed(Unsettled::MutableBorrowOfShared { decision: id })
+            }
             LendOutcome::Names {
                 referent: names,
                 lend,
@@ -2285,6 +2275,69 @@ impl<'src> Solver<'src> {
                     got,
                 }),
             },
+        }
+    }
+
+    /// What a lambda's body reads a captured name of type `of` at, once
+    /// that type's head is known. `lookup_var` reads this directly for a
+    /// head it already knows, so the decision only carries the case where
+    /// it does not.
+    pub fn capture_read(&self, of: &InferTy) -> CaptureOutcome {
+        match self.terms.shallow_resolve_ty(of) {
+            TyTerm::Var(_) => CaptureOutcome::HeadOpen,
+            TyTerm::Ref(..) => CaptureOutcome::Refused,
+            head if head.is_primitive() => CaptureOutcome::Reads {
+                read: CaptureRead::Word,
+                seen: of.clone(),
+            },
+            _ => CaptureOutcome::Reads {
+                read: CaptureRead::Lent,
+                seen: TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(of.clone()))),
+            },
+        }
+    }
+
+    fn step_capture(&mut self, id: DecisionId, of: &InferTy, seen: &InferTy) -> Progress {
+        let (read, reads) = match self.capture_read(of) {
+            CaptureOutcome::HeadOpen => return Progress::Unchanged,
+            CaptureOutcome::Refused => {
+                return Progress::Failed(Unsettled::ReferenceCaptured { decision: id });
+            }
+            CaptureOutcome::Reads { read, seen } => (read, seen),
+        };
+        match self.settle_join(seen, &reads) {
+            Ok(()) => Progress::Settled(Answer::Capture(read)),
+            Err(Mismatch { expected, got, .. }) => Progress::Failed(Unsettled::LendMismatch {
+                decision: id,
+                expected,
+                got,
+            }),
+        }
+    }
+
+    /// A capture whose type the program states nowhere else takes the
+    /// least element of RFC-0018's two readings — the word — so the type
+    /// the body read the name at is the type the name has.
+    fn close_captures_by_least_element(&mut self, failures: &mut Vec<Unsettled>) {
+        for index in 0..self.decisions.len() {
+            let Decision::Capture { of, seen } = &self.decisions[index].decision else {
+                continue;
+            };
+            if !matches!(self.decisions[index].state, DecisionState::Open) {
+                continue;
+            }
+            let (of, seen) = (of.clone(), seen.clone());
+            self.decisions[index].state = match self.settle_join(&of, &seen) {
+                Ok(()) => DecisionState::Settled(Answer::Capture(CaptureRead::Word)),
+                Err(Mismatch { expected, got, .. }) => {
+                    failures.push(Unsettled::LendMismatch {
+                        decision: DecisionId(index as u32),
+                        expected,
+                        got,
+                    });
+                    DecisionState::Failed
+                }
+            };
         }
     }
 

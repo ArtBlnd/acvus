@@ -74,7 +74,7 @@ while t < n {
 }
 
 let m = if let Some(m) = as_iter(&scores) | map(|s| -> *s) | max { m } else { 0.0 };
-let weights = as_iter(&scores) | map(|s| -> exp(*s - *m)) | collect;
+let weights = as_iter(&scores) | map(|s| -> exp(*s - m)) | collect;
 let z = as_iter(&weights) | map(|w| -> *w) | sum;
 
 let out = deque();
@@ -118,16 +118,16 @@ let dot = |k| -> as_iter(k)
     .fold({ i: 0, s: 0.0, }, |acc, x| -> { i: acc.i + 1, s: acc.s + @query[acc.i] * *x, })
     .s;
 
-let scores = @keys.as_iter().map(|k| -> dot(k) * *scale).collect();
+let scores = @keys.as_iter().map(|k| -> dot(k) * scale).collect();
 let peak = scores.as_iter().map(|s| -> *s).max().unwrap();
-let weights = scores.as_iter().map(|s| -> (*s - *peak).exp()).collect();
+let weights = scores.as_iter().map(|s| -> (*s - peak).exp()).collect();
 let z = weights.as_iter().map(|w| -> *w).sum();
 
 let column_0 = weights.as_iter()
-    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / *z * @values[acc.t][0], })
+    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / z * @values[acc.t][0], })
     .s;
 let column_1 = weights.as_iter()
-    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / *z * @values[acc.t][1], })
+    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / z * @values[acc.t][1], })
     .s;
 ";
 
@@ -196,7 +196,7 @@ async fn a_lambda_inside_a_lambda_runs() {
 async fn a_word_captured_through_two_lambdas_is_read_by_the_inner_one() {
     let v = run(
         "let half = 0.5; \
-         as_iter(&@values) | map(|row| -> as_iter(row) | map(|x| -> *half * *x) | sum) | sum",
+         as_iter(&@values) | map(|row| -> as_iter(row) | map(|x| -> half * *x) | sum) | sum",
         Ty::Float,
     )
     .await;

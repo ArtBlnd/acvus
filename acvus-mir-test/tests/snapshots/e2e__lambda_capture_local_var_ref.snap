@@ -62,17 +62,17 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = take (*r3)
      3 |   r4 = take (*r5)
-     4 |   r6 = r2 > r4
+     4 |   r6 = r4 > r2
      5 |   return r6
 
-    ; r0 (v10) : &i64
+    ; r0 (v10) : i64
     ; r1 (v11) : &i64
-    ; r2 (v6) : i64
-    ; r3 (v2) : &i64
-    ; r4 (v8) : i64
-    ; r5 (v1) : &i64
+    ; r2 (v3) : i64
+    ; r3 (v1) : &i64
+    ; r4 (v7) : i64
+    ; r5 (v2) : &i64
     ; r6 (v9) : Bool
-    ; r7 (offset) : &i64
-    ; r8 (offset) : &i64
-    ; r9 (i) : &i64
-    ; r10 (i) : &i64
+    ; r7 (i) : &i64
+    ; r8 (i) : &i64
+    ; r9 (offset) : i64
+    ; r10 (offset) : i64
