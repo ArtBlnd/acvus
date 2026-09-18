@@ -1,6 +1,6 @@
 # RFC-0055: a constant expression folds
 
-Status: Draft — coordinator, 2026-09-19
+Status: Accepted — owner and coordinator, 2026-09-19
 Extends: RFC-0037 (an integer operation is the Rust operator at its
 width), RFC-0044 (a body is prepared once — the arithmetic chain),
 RFC-0052 (an operation is a struct the machine calls once), RFC-0053 (an
