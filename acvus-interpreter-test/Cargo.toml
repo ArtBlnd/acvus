@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "shapes"
 harness = false
+
+[[bench]]
+name = "programs"
+harness = false
