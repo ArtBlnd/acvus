@@ -10,6 +10,13 @@
 //! can observe: no raise on a path that did not reach the instruction, no
 //! work on a path that did not need it.
 //!
+//! Equivalence is "executes iff", not "executes as often". A loop's exit
+//! post-dominates its header, so post-dominance alone lets an instruction
+//! written after a loop move into the header and run once per iteration.
+//! Every target is therefore also held to the source's loop depth, the
+//! number of natural loops containing the block, so that no move - a shared
+//! borrow's included - lands deeper in the loop nest than it started.
+//!
 //! Until `bb8207f` the criterion was purity instead, and purity is not
 //! infallibility: integer division and remainder panic at zero and at
 //! `MIN / -1` (RFC-0037), and at that time `+` was checked too, so hoisting
@@ -111,6 +118,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
 
     let domtree = DomTree::build(cfg);
     let postdom = PostDomTree::build(cfg);
+    let depth = LoopDepth::of(cfg, &domtree);
     let writes = StorageWrites::of(cfg);
     let mut def_block = build_def_block(cfg);
 
@@ -142,7 +150,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
                 Hoistable::No => continue,
                 Hoistable::ControlEquivalent => {
                     let uses = inst_info::uses(kind);
-                    find_highest_target(source, &uses, &domtree, &def_block, |candidate| {
+                    find_highest_target(source, &uses, &domtree, &depth, &def_block, |candidate| {
                         postdom.post_dominates(source, candidate)
                     })
                 }
@@ -154,7 +162,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
                         .copied()
                         .chain(std::iter::once(storage))
                         .collect();
-                    find_highest_target(source, &uses, &domtree, &def_block, |candidate| {
+                    find_highest_target(source, &uses, &domtree, &depth, &def_block, |candidate| {
                         !writes.written_in_span(&domtree, candidate, &reaches_here, storage)
                     })
                 }
@@ -223,18 +231,20 @@ fn build_def_block(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
 
 // -- Target finding -------------------------------------------------
 
-/// The highest dominator of `block_idx` where every operand is already
-/// available and `accept` holds.
+/// The highest dominator of `source` where every operand is already
+/// available, the loop nest is no deeper than at `source`, and `accept`
+/// holds.
 ///
 /// Availability only shrinks as the walk rises - an ancestor is dominated by
 /// strictly fewer definitions than its child - so the first ancestor that
-/// lacks an operand ends the walk. `accept` is asked at every candidate, not
-/// only at the first: it may hold at a block and fail at its parent, and the
-/// walk keeps the highest that held.
+/// lacks an operand ends the walk. The depth clause and `accept` are asked at
+/// every candidate, not only at the first: either may hold at a block and
+/// fail at its parent, and the walk keeps the highest that held.
 fn find_highest_target<A>(
-    block_idx: BlockIdx,
+    source: BlockIdx,
     uses: &[ValueId],
     domtree: &DomTree,
+    depth: &LoopDepth,
     def_block: &FxHashMap<ValueId, BlockIdx>,
     accept: A,
 ) -> Option<BlockIdx>
@@ -242,7 +252,7 @@ where
     A: Fn(BlockIdx) -> bool,
 {
     let mut best: Option<BlockIdx> = None;
-    let mut candidate = domtree.idom(block_idx)?;
+    let mut candidate = domtree.idom(source)?;
 
     loop {
         // All operands must be available at candidate's body (before terminator).
@@ -255,7 +265,7 @@ where
             break;
         }
 
-        if accept(candidate) {
+        if depth.at(candidate) <= depth.at(source) && accept(candidate) {
             best = Some(candidate);
         }
 
@@ -266,6 +276,131 @@ where
     }
 
     best
+}
+
+// -- Loop depth -----------------------------------------------------
+
+/// How many natural loops contain each block.
+///
+/// A natural loop is named by a back edge `tail -> head` whose head dominates
+/// its tail; its body is the head together with every block that reaches the
+/// tail without passing the head.
+struct LoopDepth {
+    per_block: Vec<usize>,
+}
+
+impl LoopDepth {
+    fn of(cfg: &CfgBody, domtree: &DomTree) -> Self {
+        let n = cfg.blocks.len();
+        let preds = cfg.predecessors();
+        let mut per_block = vec![0usize; n];
+        let mut in_loop = vec![false; n];
+
+        for edge in back_edges(cfg, domtree) {
+            in_loop.fill(false);
+            in_loop[edge.head.0] = true;
+
+            let mut stack = Vec::new();
+            if !in_loop[edge.tail.0] {
+                in_loop[edge.tail.0] = true;
+                stack.push(edge.tail);
+            }
+            while let Some(b) = stack.pop() {
+                let Some(ps) = preds.get(&b) else {
+                    continue;
+                };
+                for &p in ps {
+                    if !in_loop[p.0] {
+                        in_loop[p.0] = true;
+                        stack.push(p);
+                    }
+                }
+            }
+
+            for (d, inside) in per_block.iter_mut().zip(&in_loop) {
+                *d += usize::from(*inside);
+            }
+        }
+
+        Self { per_block }
+    }
+
+    fn at(&self, block: BlockIdx) -> usize {
+        self.per_block[block.0]
+    }
+}
+
+/// An edge back to a block that is still on the walk's current path.
+struct BackEdge {
+    tail: BlockIdx,
+    head: BlockIdx,
+}
+
+/// One block of a depth-first walk, with the successor it resumes at.
+struct DfsFrame {
+    block: BlockIdx,
+    next_succ: usize,
+}
+
+/// Every back edge, found by a depth-first walk from the entry.
+///
+/// A retreating edge whose target does not dominate its source is irreducible
+/// control flow, which has no natural loop and so no depth. The lowering
+/// emits `while` and `while let` and nothing else, so this aborts rather than
+/// guess a depth for a shape the front end cannot produce.
+fn back_edges(cfg: &CfgBody, domtree: &DomTree) -> Vec<BackEdge> {
+    let n = cfg.blocks.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut edges = Vec::new();
+    let mut visited = vec![false; n];
+    let mut on_path = vec![false; n];
+    let mut stack = vec![DfsFrame {
+        block: BlockIdx(0),
+        next_succ: 0,
+    }];
+    visited[0] = true;
+    on_path[0] = true;
+
+    while let Some(frame) = stack.last_mut() {
+        let block = frame.block;
+        let succs = cfg.successors(block);
+        let Some(&succ) = succs.get(frame.next_succ) else {
+            on_path[block.0] = false;
+            stack.pop();
+            continue;
+        };
+        frame.next_succ += 1;
+
+        if on_path[succ.0] {
+            assert!(
+                domtree.dominates(succ, block),
+                "irreducible control flow: the edge from block {} back to block {} \
+                 has a head that does not dominate its tail, and the lowering emits \
+                 only structured loops",
+                block.0,
+                succ.0
+            );
+            edges.push(BackEdge {
+                tail: block,
+                head: succ,
+            });
+            continue;
+        }
+
+        if !visited[succ.0] {
+            visited[succ.0] = true;
+            on_path[succ.0] = true;
+            stack.push(DfsFrame {
+                block: succ,
+                next_succ: 0,
+            });
+        }
+    }
+
+    edges
 }
 
 // -- The blocks a borrow would newly span ---------------------------
@@ -895,6 +1030,50 @@ mod tests {
             )),
             Hoistable::No
         ));
+    }
+
+    /// A cycle with two entries has no natural loop and so no depth. The
+    /// lowering emits `while` and `while let`, neither of which can produce
+    /// one; this is what the pass does if a front end ever does.
+    #[test]
+    #[should_panic(expected = "irreducible control flow")]
+    fn an_irreducible_cycle_is_refused() {
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Bool(true),
+                },
+                InstKind::JumpIf {
+                    cond: v(0),
+                    then_label: Label(0),
+                    then_args: vec![],
+                    else_label: Label(1),
+                    else_args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::Jump {
+                    label: Label(1),
+                    args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![],
+                    merge_of: None,
+                },
+                InstKind::Jump {
+                    label: Label(0),
+                    args: vec![],
+                },
+            ],
+            10,
+        );
+
+        run(&mut cfg);
     }
 
     #[test]

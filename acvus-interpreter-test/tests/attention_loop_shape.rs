@@ -2,10 +2,13 @@
 //! operations one iteration of each `while` prepares, and how many slot
 //! moves its back edge carries.
 //!
-//! A borrow hoisted out of a loop lengthens a register's live range
-//! (`optimize::code_motion`), and a longer live range is what would force
-//! the selector to add a move on the back edge. The counts here are the
-//! evidence that it did not.
+//! `optimize::code_motion` moves work between blocks in two directions that
+//! these counts measure. A borrow hoisted out of a loop lengthens a
+//! register's live range, and a longer live range is what would force the
+//! selector to add a move on the back edge; an instruction hoisted into a
+//! loop head runs once per iteration instead of once. The counts are the
+//! evidence that the first happened without the moves and the second does
+//! not happen at all.
 
 use std::sync::Arc;
 
@@ -75,12 +78,16 @@ fn attention_loops() -> Vec<LoopShape> {
 /// head 1 body  8 back 1   the out pass, outer
 /// ```
 ///
-/// The hoist (`657545e3`) took two borrows out of each inner body; the
-/// arithmetic chain (stage 3) then folded `s + q * k` and `i + 1` into one
-/// operation each. No back edge gained a move: the two the outer loops
-/// carry are the ones they carried before.
+/// Two changes separate that from the counts below. Each inner body is two
+/// operations shorter - the two borrows it rebuilt every iteration - and no
+/// back edge gained a move: the two the outer loops carry are the ones they
+/// carried before. Then `s * scale`, written after the inner scores loop,
+/// left that loop's head for the outer body, where the source put it; it is
+/// the operation the inner head lost and the outer body gained, and it now
+/// runs once per score instead of once per element. The arithmetic chain
+/// (stage 3) then folded `s + q * k` and `i + 1` into one operation each.
 #[test]
-fn the_hoist_and_the_chain_shorten_the_bodies_and_cost_no_back_edge_move() {
+fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     let shapes: Vec<String> = attention_loops()
         .iter()
         .map(|l| {
@@ -93,11 +100,11 @@ fn the_hoist_and_the_chain_shorten_the_bodies_and_cost_no_back_edge_move() {
     assert_eq!(
         shapes,
         [
-            "head 2 body 7 back 0",
-            "head 1 body 7 back 1",
+            "head 1 body 7 back 0",
+            "head 1 body 8 back 1",
             "head 1 body 8 back 0",
             "head 1 body 7 back 1",
         ],
-        "a longer body, or a back edge that moves, is a register the hoist lengthened"
+        "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"
     );
 }

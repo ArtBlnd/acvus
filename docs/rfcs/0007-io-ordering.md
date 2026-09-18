@@ -65,6 +65,14 @@ control equivalence already fixes the set of paths it runs on. A spawn is
 held to a stricter rule, stated under Not built: it does not move at all,
 because moving it also moves when the work starts.
 
+Equivalence says the two blocks execute under the same condition, not that
+they execute equally often. A loop's exit post-dominates its header, so a
+destination may be control-equivalent to its source and still sit inside a
+loop the source has left. Every destination is therefore also held to the
+source's loop depth, the number of natural loops containing the block: a
+move never lands deeper in the loop nest than it started. This bound is on
+the destination itself and so applies to the borrow below as well.
+
 One instruction carries a different criterion, because nothing it does
 reaches a path: a shared borrow of a variable or a parameter with no path
 under it writes one register with the address of another, reads nothing,

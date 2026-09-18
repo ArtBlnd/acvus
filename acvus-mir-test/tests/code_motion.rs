@@ -72,6 +72,79 @@ fn an_addition_after_a_merge_rises_above_the_branch() {
     assert!(at(body, " + ") < at(body, "jump_if"), "{ir}");
 }
 
+// -- Loop depth -----------------------------------------------------
+
+fn jump_ifs_before(body: &str, needle: &str) -> usize {
+    count(&body[..at(body, needle)], "jump_if")
+}
+
+/// The exit post-dominates the header, so post-dominance alone would take
+/// this multiplication into the header and run it once per iteration.
+#[test]
+fn a_multiplication_after_a_loop_stays_after_it() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let i = 0; while i < @n { i = i + 1; } i * 2",
+        &ctx(&i, &[("n", Ty::I64)]),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert!(at(body, "jump_if") < at(body, " * "), "{ir}");
+}
+
+/// The same instruction one level in: written between the inner loop and
+/// the outer one, it belongs to the outer loop's body and not to the inner
+/// loop's head.
+#[test]
+fn a_multiplication_between_two_loops_stays_between_them() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let total = 1; let t = 0; \
+         while t < @n { let j = 0; while j < @n { j = j + 1; } total = total * j; t = t + 1; } \
+         total",
+        &ctx(&i, &[("n", Ty::I64)]),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(jump_ifs_before(body, " * "), 2, "{ir}");
+}
+
+/// The header post-dominates the entry and is no deeper than it, so a
+/// multiplication the condition rebuilds every iteration still leaves the
+/// loop entirely.
+#[test]
+fn a_loop_invariant_multiplication_in_the_header_rises_to_the_entry() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let s = 0; let i = 0; while i < @n * 2 { s = s + i; i = i + 1; } s",
+        &ctx(&i, &[("n", Ty::I64)]),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert!(at(body, " * ") < at(body, "jump_if"), "{ir}");
+}
+
+/// `pop_front` writes `v` in the header, which is what stops the borrow
+/// above the loop; the depth clause is what stops it inside.
+#[test]
+fn a_borrow_after_a_loop_the_header_writes_stays_after_the_loop() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let v = deque(); v.push_back(1); v.push_back(2); \
+         let s = 0; \
+         while let Some(x) = pop_front(&mut v) { s = s + x; } \
+         s + len(&v)",
+        &ctx(&i, &[("n", Ty::I64)]),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert!(at(body, "jump_if") < at(body, "ref &v"), "{ir}");
+}
+
 // -- A shared borrow of a storage -----------------------------------
 
 fn n_ctx(i: &Interner) -> FxHashMap<Astr, Ty> {
