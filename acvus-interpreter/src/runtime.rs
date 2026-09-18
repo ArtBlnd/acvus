@@ -134,7 +134,7 @@ impl Runtime for AcvusRuntime {
 
     fn call_is_sync(&self, f: &Value) -> bool {
         // SAFETY: the type checker admits only a closure value here.
-        !unsafe { f.as_fn() }.code.may_suspend
+        !unsafe { f.as_fn() }.code.may_suspend()
     }
 
     fn call_now(&self, f: &Value, args: &mut [Value], _: CallToken) -> Value {

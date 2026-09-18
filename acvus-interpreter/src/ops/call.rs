@@ -89,6 +89,20 @@ pub fn call_extern_2(machine: &mut Machine<'_>, op: &Op) -> Flow {
     Flow::Next
 }
 
+pub fn call_extern_3(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(SyncHandler::Arity3(f)) = &call.handler else {
+        panic!("prepared as an arity-3 extern call, but the handler is not one")
+    };
+    yield_order(machine, call.order);
+    let a0 = machine.use_val(op.b);
+    let a1 = machine.use_val(op.c);
+    let a2 = machine.use_val(op.d);
+    let value = f(&machine.rt, a0, a1, a2);
+    machine.set(op.a, value);
+    Flow::Next
+}
+
 pub fn call_extern_n(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let call = extern_call(machine, op);
     let ExternHandler::Sync(SyncHandler::ArityN(f)) = &call.handler else {
@@ -126,7 +140,7 @@ pub fn call_direct(machine: &mut Machine<'_>, op: &Op) -> Flow {
     yield_order(machine, op.d);
     let args = arg_values(machine, args);
     let prepared = Arc::clone(lookup_module(machine.shared(), &callee));
-    if prepared.main.may_suspend {
+    if prepared.main.may_suspend() {
         let shared = Arc::clone(machine.shared());
         let page = Arc::clone(machine.page);
         return Flow::Await(Pending {
@@ -154,7 +168,7 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
         // the machine holding it outlives the future the driver awaits.
         let closure: &'static FnValue =
             unsafe { &*(machine.reg(op.b).target().as_fn() as *const FnValue) };
-        if closure.code.may_suspend {
+        if closure.code.may_suspend() {
             let fut: BoxFuture<'static, _> = Box::pin(fn_value_call(closure, &mut args));
             return Flow::Await(Pending { dst: op.a, fut });
         }
@@ -166,7 +180,7 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
 
     // SAFETY: the type checker admits only a closure value here.
     let closure = unsafe { machine.take(op.b).materialize::<FnValue>() };
-    if closure.code.may_suspend {
+    if closure.code.may_suspend() {
         let fut: BoxFuture<'static, _> =
             Box::pin(async move { fn_value_call(&closure, &mut args).await });
         return Flow::Await(Pending { dst: op.a, fut });

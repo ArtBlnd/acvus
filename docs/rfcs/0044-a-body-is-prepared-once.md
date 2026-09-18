@@ -191,7 +191,7 @@ into its slot by a `SlotMove` the call carries. Everything else takes the
 lowest slot free over its live range.
 
 **A synchronous handler takes its arguments by value, one Rust parameter
-each, up to two** (stage 2c). A `Value` is a scalar pair, so
+each, up to three** (stage 2c). A `Value` is a scalar pair, so
 `Arity2(&R, Value, Value)` is six scalars under the `rust-call` ABI and
 every argument crosses in a register; the operation reads each out of the
 register its own `b`, `c`, `d` word names, with `Machine::use_val` — the
@@ -199,7 +199,7 @@ read the window's moves already used, which copies an inline value or a
 reference and moves a `Large` out. Such a call site constrains no run of
 registers at all, so `window_args` reports none to the selector and the
 selector's window invariant has nothing to check there. `SyncHandler` is
-the enum of the three by-value arities plus `ArityN`, and a window is
+the enum of the four by-value arities plus `ArityN`, and a window is
 what `ArityN`, every `AsyncFn(R, &mut [Value])` and every spawn keep: the
 handler `mem::take`s each argument out of the register it was lent, an
 asynchronous one before it builds its future, because the future is
@@ -207,12 +207,12 @@ asynchronous one before it builds its future, because the future is
 arguments past the frame. `Runtime::call_n` is unchanged; it is the
 closure boundary, not the handler's.
 
-The cut is at two because the third argument does not fit: measured on
-the emitted code, `Arity2` passes both arguments in registers, while an
-`Arity3` ran the SysV integer registers out at seven and pushed the third
-argument's two words. The owner set the cut where every argument is in a
-register (2026-09-18); an extern of three or more parameters takes the
-window, and none of the benches calls one.
+The cut is at three because the fourth argument does not fit: measured on
+the emitted code, `Arity2` passes both arguments in registers, while
+`Arity3` runs the SysV integer registers out at seven and pushes the
+third argument's two words. Two pushes is still less than a window — a
+contiguous run the selector must find, a `SlotMove` per live argument, a
+slice borrow, and a `mem::take` per argument — so three stays by value.
 
 Two values a `ValueId` cannot speak for keep one slot for the whole body:
 a storage a place names directly, because `storage::ref_var` builds a
@@ -415,8 +415,130 @@ both trees with `-C llvm-args=-align-all-functions=6` reverses the sign
   around it is not recognized either. The diamond is its own
   superinstruction, not part of this one.
 
+## An arithmetic chain is one operation, and a body that is one chain has no frame
+
+**Stage 5.** A maximal run of arithmetic over registers of one inline
+numeric type, whose intermediate results are each used once and by the
+next operation of the run, prepares to one operation whose payload is a
+`Chain`. A chain may end in one comparison, so a loop test and a loop body
+are each one dispatch. Intermediates never touch a register.
+
+**A constant is a register the entry fills.** A numeric literal every
+reader of which is an arithmetic or comparison instruction is given a
+register past the selector's frame, written once when the frame is
+entered, and emits no operation. A chain leaf is therefore always a
+register, and `constant::int` leaves the profile of every loop whose body
+reads a literal.
+
+**A leaf is a pre-multiplied byte offset, read unchecked.** `Chain`
+carries `slot * size_of::<Value>() + Value::WORD_OFFSET` per leaf and the
+arm reads the word at that offset from the operand space with no bounds
+test and no kind test. Three `debug_assert!`s in `ops::chain::leaf` state
+the preparation invariant the read relies on: the offset reaches a
+`Value`'s word, it is inside the space, and the register carries the
+chain's type. `prepare::check_chain` is their guarantor. The payload is
+reached the same way: `Payload::Chain` owns a `Box<Chain>` whose address
+`prepare` writes into `Op::p`, so the arm holds the chain in one load
+instead of a payload-table index, a multiply and a variant test.
+
+**A chain is at most three nodes, and its operators are instances.**
+`Shape` is the enum of the eight binary trees of one to three nodes, named
+by the preorder word that spells the tree. A run longer than three nodes
+is split from the root into pieces joined through registers. Each operator
+node of an instance is a `Slot`: a concrete operator, which compiles to
+the one machine instruction, or `Any`, which reads that node's operator
+from the payload and matches it. `ops::chain::instances!` takes the
+alphabet as its argument, so every chain hits an instance and the only
+question per node is whether its operator is in the alphabet. The
+alphabet is `{Add, Mul}`: 3 + 2*9 + 5*27 = 156 instances per type per
+entry-point set, against 356 for `{Add, Sub, Mul}`. Both were built. The
+wider alphabet costs 0.75 MB more `.text` and measured mandelbrot at 20.7
+ns against 20.6 - inside the spread - so the marginal text buys no time
+and the narrow alphabet is what ships.
+
+**`Code::Expr`.** A closure body that is exactly `params -> return` or
+`params -> one chain -> return` prepares to `Code::Expr`, which
+`fn_value_call_sync` evaluates with no `Registers`, no `Machine` and no
+operation loop. Its operand space is the arguments followed by the chain's
+constants, built on the Rust stack at the call, so one evaluator serves a
+body chain and an expression chain. A body needing more than
+`ExprChain::MAX_OPERANDS` operands keeps its frame. A body with captures
+is not one: a capture arrives as `Value::reference` and a chain leaf reads
+an inline word.
+
+Measured on this machine, 2026-09-18; interleaved A/B against binaries
+built from `master` and from the tree attempt (`chain-tree-attempt-1`),
+three repetitions, medians, ns per iteration:
+
+| bench | master | tree attempt | this stage |
+|-------|--------|--------------|------------|
+| mandelbrot (200x100x200) | 35.3 | 24.9 | 20.4 |
+| accum int `while` | 8.7 | 8.2 | 7.5 |
+| accum float `while` | 11.8 | 11.6 | 10.9 |
+| accum extern `while` | 11.8 | 11.5 | 10.7 |
+| accum `map(\|x\| -> x) \| sum` | 12.1 | 4.1 | 4.1 |
+| accum `map(\|x\| -> x + 1) \| sum` | 15.2 | 4.8 | 6.3 |
+| accum `map(\|x\| -> x + k) \| sum` | - | 16.1 | 16.5 |
+| accum `range \| sum` | 1.8 | 1.8 | 1.7 |
+| accum branch `while` | 23.5 | 22.5 | 22.0 |
+| accum option `while` | 33.1 | 32.0 | 31.6 |
+| attention (64, 64) execute | 269 us | 281 us | 266 us |
+
+Mandelbrot's inner loop is nine dispatches against master's seventeen. The
+arm the three-node shape takes is what the standard asks for: four
+`movzwl` of the leaf offsets, four `movsd` at those offsets, `mulsd`,
+`mulsd`, `subsd`. What follows them is not: overwriting the destination
+register drops whatever it held, which is a load of the old kind byte, a
+compare, a branch and an indirect call on the taken side, and the compare
+forces the result through `%rsp`. A build that writes the destination
+without dropping - unsound, because a register that held a `Large` would
+leak, and kept only as a probe - measured mandelbrot at 19.0 against 20.4.
+That 1.4 ns is the price of the drop, and removing it needs a
+preparation-side proof that a chain's destination never holds a `Large`.
+
+`map(|x| -> x + 1) | sum` is the one bench slower than the tree attempt,
+4.8 to 6.3, and the cause is rule 2a rather than noise: the attempt's leaf
+read the constant straight out of `Chain::konsts`, while a constant is now
+a register, and a frameless body has no frame to hold one - so the call
+builds an operand space. Against `master` the same bench is 15.2 to 6.3.
+
 ## Rejected
 
+- **One dispatch for a run of several pieces (`ChainSeq`).** A run split
+  into k pieces can be k operations that meet in registers, or one
+  operation whose payload is the k pieces and whose evaluator loops over
+  them calling each piece's instance through a function pointer - one
+  outer dispatch, k inner indirect calls, no `Flow` and no `pc`. Both were
+  built, one variable apart, on mandelbrot's four-node expressions:
+  separate 20.4 ns per iteration, one dispatch 23.4. The outer dispatch it
+  saves is an indirect call the machine's loop predicts well; the inner
+  call it adds is a function pointer loaded from the payload for every
+  piece. The separate form ships and the sequence payload is not built.
+- **An operator alphabet of `{Add, Sub, Mul}`.** 356 instances per type
+  per entry-point set against 156, 1.65 MB of instance text against 0.90,
+  and mandelbrot 20.7 ns against 20.6. The marginal text buys no measured
+  time.
+- **A leaf that is either an operand or a constant.** The tree attempt's
+  leaf carried a tag and the arm branched on it, then bounds-checked the
+  index: nine instructions and three branches to deliver one `movsd`, 45
+  instructions to fetch five doubles. Two repairs inside that shape were
+  measured and both lost - constants as a `Box<[Value]>` the leaf selects
+  (46.6 ns against 25.5, because the box's pointer and length reach the
+  critical path), and hoisting the leaf array out of the per-leaf loads
+  (26.1-26.6 against 25.3). The shape itself was the defect: a constant is
+  a register, and then a leaf is one offset.
+- **Four-node trees.** Twenty-two shapes, and a chain's operators as data
+  read per node. Three nodes is eight shapes, which is what makes an
+  instance per operator slot affordable; mandelbrot pays two more
+  dispatches for it and is 4.5 ns per iteration faster.
+- **A postfix stack of micro-operations for a chain.** The first attempt
+  prepared a chain as four-byte micro-operations packed two to a `u64` and
+  ran them on a fixed stack of `Rust` locals indexed by `sp`. The owner
+  refused the evaluator on sight: for two to four operators the arm is
+  hand-written straight-line Rust with `let` locals, not a runtime stack.
+  Measured afterwards on the same machine, it was also slower than
+  `master` at mandelbrot (44.2 ns against 35.1) and slower than the tree
+  at every bench.
 - **Patching the per-call clones in `execute_inst`.** Each is a symptom
   of the body being consulted at execution; a `Code` shared once makes
   them inexpressible, and a patch would leave the shape that produced

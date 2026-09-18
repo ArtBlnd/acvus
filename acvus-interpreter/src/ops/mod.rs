@@ -4,6 +4,7 @@
 
 pub mod arith;
 pub mod call;
+pub mod chain;
 pub mod composite;
 pub mod constant;
 pub mod control;

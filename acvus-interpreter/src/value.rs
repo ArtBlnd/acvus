@@ -103,6 +103,10 @@ const _: () = assert!(
     "a Value is one kind byte and one word"
 );
 const _: () = assert!(
+    mem::offset_of!(Value, word) == Value::WORD_OFFSET,
+    "a chain's pre-multiplied leaf offset reaches the word of a Value"
+);
+const _: () = assert!(
     mem::size_of::<Option<Value>>() == 16,
     "Option<Value> takes its discriminant from a spare Kind"
 );
@@ -152,6 +156,8 @@ fn large<T>(vtable: &'static Vtable, value: T) -> Value {
 }
 
 impl Value {
+    pub const WORD_OFFSET: usize = 8;
+
     pub const EMPTY: Value = Value {
         kind: Kind::Empty,
         word: 0,

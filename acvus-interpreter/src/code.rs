@@ -194,6 +194,172 @@ pub struct LoopBody {
     pub exit: Box<[SlotMove]>,
 }
 
+/// The operator of one node of a chain, applied by `Arith::apply` in
+/// `ops::chain`. `Neg` ignores its right operand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Arith {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Neg,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Compare {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+/// What a chain's root node does with the two values below it, and so
+/// what kind of value the chain produces.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Root {
+    Num(Arith),
+    Cmp(Compare),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Shape {
+    /// `(a ∘ b)`
+    NLL,
+    /// `((a ∘ b) ∘ c)`
+    NNLLL,
+    /// `(a ∘ (b ∘ c))`
+    NLNLL,
+    /// `(((a ∘ b) ∘ c) ∘ d)`
+    NNNLLLL,
+    /// `((a ∘ (b ∘ c)) ∘ d)`
+    NNLNLLL,
+    /// `((a ∘ b) ∘ (c ∘ d))`
+    NNLLNLL,
+    /// `(a ∘ ((b ∘ c) ∘ d))`
+    NLNNLLL,
+    /// `(a ∘ (b ∘ (c ∘ d)))`
+    NLNLNLL,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Shape2 {
+    NNLLL,
+    NLNLL,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Shape3 {
+    NNNLLLL,
+    NNLNLLL,
+    NNLLNLL,
+    NLNNLLL,
+    NLNLNLL,
+}
+
+impl Shape2 {
+    pub const fn read(raw: u8) -> Shape2 {
+        match raw {
+            0 => Shape2::NNLLL,
+            1 => Shape2::NLNLL,
+            _ => panic!("a two-node chain instance was parameterized by no shape"),
+        }
+    }
+}
+
+impl Shape3 {
+    pub const fn read(raw: u8) -> Shape3 {
+        match raw {
+            0 => Shape3::NNNLLLL,
+            1 => Shape3::NNLNLLL,
+            2 => Shape3::NNLLNLL,
+            3 => Shape3::NLNNLLL,
+            4 => Shape3::NLNLNLL,
+            _ => panic!("a three-node chain instance was parameterized by no shape"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Arity {
+    One,
+    Two(Shape2),
+    Three(Shape3),
+}
+
+impl Shape {
+    pub fn interior(self) -> usize {
+        match self {
+            Shape::NLL => 0,
+            Shape::NNLLL | Shape::NLNLL => 1,
+            Shape::NNNLLLL | Shape::NNLNLLL | Shape::NNLLNLL | Shape::NLNNLLL | Shape::NLNLNLL => 2,
+        }
+    }
+
+    pub fn leaves(self) -> usize {
+        self.interior() + 2
+    }
+
+    pub fn slots(self) -> usize {
+        self.interior() + 1
+    }
+
+    pub fn arity(self) -> Arity {
+        match self {
+            Shape::NLL => Arity::One,
+            Shape::NNLLL => Arity::Two(Shape2::NNLLL),
+            Shape::NLNLL => Arity::Two(Shape2::NLNLL),
+            Shape::NNNLLLL => Arity::Three(Shape3::NNNLLLL),
+            Shape::NNLNLLL => Arity::Three(Shape3::NNLNLLL),
+            Shape::NNLLNLL => Arity::Three(Shape3::NNLLNLL),
+            Shape::NLNNLLL => Arity::Three(Shape3::NLNNLLL),
+            Shape::NLNLNLL => Arity::Three(Shape3::NLNLNLL),
+        }
+    }
+
+    pub fn of_word(word: &str) -> Option<Shape> {
+        let shape = match word {
+            "NLL" => Shape::NLL,
+            "NNLLL" => Shape::NNLLL,
+            "NLNLL" => Shape::NLNLL,
+            "NNNLLLL" => Shape::NNNLLLL,
+            "NNLNLLL" => Shape::NNLNLLL,
+            "NNLLNLL" => Shape::NNLLNLL,
+            "NLNNLLL" => Shape::NLNNLLL,
+            "NLNLNLL" => Shape::NLNLNLL,
+            _ => return None,
+        };
+        Some(shape)
+    }
+}
+
+/// A run of arithmetic as one operation (RFC-0044, stage 4).
+///
+/// The chain is a pure expression. Where its value goes is the consumer's:
+/// an operation in a body writes it to `op.a`, and a `Code::Expr` returns
+/// it.
+pub struct Chain {
+    pub shape: Shape,
+    pub post_order_ops: [Arith; Chain::MAX_INTERIOR],
+    pub root: Root,
+    pub leaf_offsets: [u16; Chain::MAX_LEAVES],
+}
+
+impl Chain {
+    pub const MAX_NODES: usize = 3;
+    pub const MAX_INTERIOR: usize = Chain::MAX_NODES - 1;
+    pub const MAX_LEAVES: usize = Chain::MAX_NODES + 1;
+
+    pub fn offset(slot: u32) -> u16 {
+        let off = slot as usize * size_of::<Value>() + Value::WORD_OFFSET;
+        u16::try_from(off).expect("a chain reads a register whose offset fits a u16")
+    }
+}
+
 /// A path step, with the MIR's `PathSeg::Payload` resolved to the shape
 /// the preparation read from the type at that point. An option's payload
 /// step survives only where the payload type is itself an option; anywhere
@@ -229,6 +395,7 @@ pub enum Payload {
     Wide(i128),
     Konst(Konst),
     Extern(ExternCall),
+    Chain(Box<Chain>),
     Direct {
         callee: QualifiedRef,
         args: Box<[u32]>,
@@ -253,6 +420,7 @@ pub fn payload_name(payload: &Payload) -> &'static str {
         Payload::Text(_) => "Text",
         Payload::Wide(_) => "Wide",
         Payload::Konst(_) => "Konst",
+        Payload::Chain(_) => "Chain",
         Payload::Extern(_) => "Extern",
         Payload::Direct { .. } => "Direct",
         Payload::Closure { .. } => "Closure",
@@ -260,15 +428,76 @@ pub fn payload_name(payload: &Payload) -> &'static str {
 }
 
 /// One prepared body.
-pub struct Code {
+///
+/// A body that is exactly `params -> one chain -> return` after register
+/// selection is an `Expr`, which runs with no frame, no `Machine` and no
+/// dispatch loop; every other body is a `Body`. The distinction is decided
+/// once, at preparation, and every caller matches on it (RFC-0044,
+/// stage 4).
+pub enum Code {
+    Body(Body),
+    Expr(Expr),
+}
+
+impl Code {
+    /// Whether any operation of this body can return `Flow::Await`.
+    pub fn may_suspend(&self) -> bool {
+        match self {
+            Code::Body(body) => body.may_suspend,
+            Code::Expr(_) => false,
+        }
+    }
+
+    /// The span an ICE about this body names it by: a `Code` carries no
+    /// name.
+    pub fn site(&self) -> Span {
+        match self {
+            Code::Body(body) => body.spans.first().copied().unwrap_or(Span::ZERO),
+            Code::Expr(expr) => expr.span,
+        }
+    }
+}
+
+pub struct Expr {
+    pub arity: u32,
+    pub body: ExprBody,
+    pub span: Span,
+}
+
+pub enum ExprBody {
+    Argument(u16),
+    Chain(ExprChain),
+}
+
+pub struct ExprChain {
+    pub chain: Chain,
+    pub eval: ExprFn,
+    pub konsts: Box<[Value]>,
+}
+
+impl ExprChain {
+    pub const MAX_OPERANDS: usize = 8;
+}
+
+pub type ExprFn = fn(&Chain, &[Value]) -> Value;
+
+pub struct EntryKonst {
+    pub slot: u32,
+    pub value: Value,
+}
+
+/// A prepared body the machine runs operation by operation.
+pub struct Body {
     pub ops: Box<[Op]>,
     /// The span of the instruction each operation came from, read when an
     /// error is raised.
     pub spans: Box<[Span]>,
     pub payloads: Box<[Payload]>,
-    /// The registers a run of this body needs: one per `ValueId`, and the
-    /// scratch slot where a jump's moves needed one.
+    /// The registers a run of this body needs: one per `ValueId`, the
+    /// scratch slot where a jump's moves needed one, and one per
+    /// `entry_konsts` entry.
     pub frame_len: u32,
+    pub entry_konsts: Box<[EntryKonst]>,
     /// Whether any operation of this body can return `Flow::Await`. The
     /// preparation sets it; `ops::call`'s synchronous path asserts it is
     /// false on the callee it is about to run.

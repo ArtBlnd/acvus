@@ -13,7 +13,7 @@ use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use acvus_ast::{Literal, Span};
+use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
@@ -24,14 +24,16 @@ use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
 
 use crate::code::{
-    ArgWindow, BasicBlock, Code, ConcatPart, ExternArgs, ExternCall, FieldSlot, Konst, LoopBody,
-    NO_SLOT, Op, OpFn, Payload, Prepared, SlotMove, Step,
+    ArgWindow, Arith, BasicBlock, Body, Chain, Code, Compare, ConcatPart, EntryKonst, Expr,
+    ExprBody, ExprChain, ExternArgs, ExternCall, FieldSlot, Konst, LoopBody, NO_SLOT, Op, OpFn,
+    Payload, Prepared, Root, Shape, SlotMove, Step,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
+use crate::ops::chain::{self, ChainTy};
 use crate::ops::{call, composite, constant, control, pattern, storage, string, variant};
 use crate::runtime::{ExternHandler, SyncHandler};
-use crate::value::Kind;
+use crate::value::{Kind, Value};
 
 pub struct PrepareCtx<'a> {
     pub interner: &'a Interner,
@@ -93,13 +95,13 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
                 .collect::<Vec<_>>()
         );
         for (label, body) in ready {
-            let code = prepare_body(body, ctx, &closures);
+            let code = prepare_body(body, ctx, &closures, BodyRole::Closure);
             closures.insert(*label, Arc::new(code));
         }
         remaining.retain(|(label, _)| !closures.contains_key(label));
     }
 
-    let main = Arc::new(prepare_body(&module.main, ctx, &closures));
+    let main = Arc::new(prepare_body(&module.main, ctx, &closures, BodyRole::Entry));
     Prepared { main, closures }
 }
 
@@ -110,48 +112,63 @@ fn made_closures(body: &MirBody) -> impl Iterator<Item = Label> + '_ {
     })
 }
 
+/// Which body of a module is being prepared.
+///
+/// Only a closure body can become a `Code::Expr`. A module's entry body is
+/// entered with a frame — `call_module` fills its parameter registers and
+/// `Machine::run` walks its operations — and a chain has no frame to be
+/// entered with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BodyRole {
+    Entry,
+    Closure,
+}
+
 pub fn prepare_body(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
     closures: &FxHashMap<Label, Arc<Code>>,
+    role: BodyRole,
 ) -> Code {
     let mut prep = Prepare::new(body, ctx, closures, label_map(body));
 
+    prep.hoist_konsts();
     let loops = prep.loops();
-    prep.op_index = op_indexes(body.insts.len(), &loops);
+    let chains = prep.chains_in(0..body.insts.len(), &loops);
+    let units = prep.layout(0..body.insts.len(), &loops, &chains);
+    prep.op_index = op_indexes(body.insts.len(), &units);
 
-    let mut ops: Vec<Op> = Vec::with_capacity(body.insts.len());
-    let mut spans: Vec<Span> = Vec::with_capacity(body.insts.len());
-    let mut at = 0;
-    for region in &loops {
-        for index in at..region.start() {
-            ops.push(prep.op(index));
-            spans.push(body.insts[index].span);
-        }
-        ops.push(prep.loop_op(region));
-        spans.push(body.insts[region.head].span);
-        at = region.end();
+    if let BodyRole::Closure = role
+        && let Some(expr) = prep.expression_body()
+    {
+        return Code::Expr(expr);
     }
-    for index in at..body.insts.len() {
-        ops.push(prep.op(index));
-        spans.push(body.insts[index].span);
+
+    let emitted = prep.emit(&units);
+    let mut ops: Vec<Op> = Vec::with_capacity(emitted.len());
+    let mut spans: Vec<Span> = Vec::with_capacity(emitted.len());
+    for Emitted { op, span } in emitted {
+        ops.push(op);
+        spans.push(span);
     }
 
     let frame_len = prep.scratch + u32::from(prep.scratch_used);
     let params = body.params.iter().map(|(_, v)| prep.slot(*v)).collect();
     let captures = body.captures.iter().map(|(_, v)| prep.slot(*v)).collect();
     let order_param = body.order_param.map(|id| prep.slot(id));
+    let entry_konsts = prep.entry_konsts();
 
-    Code {
+    Code::Body(Body {
         ops: ops.into_boxed_slice(),
         spans: spans.into_boxed_slice(),
         payloads: prep.payloads.into_boxed_slice(),
         frame_len,
+        entry_konsts,
         may_suspend: prep.may_suspend,
         params,
         captures,
         order_param,
-    }
+    })
 }
 
 fn label_map(body: &MirBody) -> FxHashMap<Label, u32> {
@@ -176,6 +193,22 @@ struct Prepare<'a> {
     scratch_used: bool,
     may_suspend: bool,
     op_index: Vec<Option<u32>>,
+    def_inst: Vec<Option<usize>>,
+    use_counts: Vec<u32>,
+    konsts: Konsts,
+}
+
+#[derive(Default)]
+struct Konsts {
+    slot_of: FxHashMap<ValueId, u32>,
+    value_at: FxHashMap<u32, Value>,
+    insts: Vec<usize>,
+}
+
+impl Konsts {
+    fn holds_inst(&self, at: usize) -> bool {
+        self.insts.contains(&at)
+    }
 }
 
 /// One `while` the recognizer matched, as indexes into `MirBody::insts`.
@@ -209,22 +242,65 @@ impl LoopRegion {
     }
 }
 
-fn op_indexes(len: usize, loops: &[LoopRegion]) -> Vec<Option<u32>> {
-    let mut index = vec![None; len];
-    let mut next = 0;
-    let mut at = 0;
-    for region in loops {
-        for slot in index.iter_mut().take(region.start()).skip(at) {
-            *slot = Some(next);
-            next += 1;
+/// One operation of a body before it is prepared: the instruction it is,
+/// or the loop or the chain it collapses.
+///
+/// Both collapses remove instructions, so both move every operation after
+/// them. One layout decides the order once, and `op_indexes` and
+/// `Prepare::emit` read the same list — a jump's target cannot disagree
+/// with where the operation it names was put.
+enum Unit<'r> {
+    Inst(usize),
+    Loop(&'r LoopRegion),
+    Chain(&'r ChainRun),
+}
+
+impl Unit<'_> {
+    /// The instruction a jump naming this operation would name.
+    fn head(&self) -> usize {
+        match self {
+            Unit::Inst(at) => *at,
+            Unit::Loop(region) => region.start(),
+            Unit::Chain(run) => run.insts.end - 1,
         }
-        index[region.start()] = Some(next);
-        next += 1;
-        at = region.end();
     }
-    for slot in index.iter_mut().skip(at) {
-        *slot = Some(next);
-        next += 1;
+}
+
+impl Prepare<'_> {
+    /// The operations of `range`, in order, with each loop and each chain
+    /// one operation and each entry constant none.
+    fn layout<'r>(
+        &self,
+        range: Range<usize>,
+        loops: &'r [LoopRegion],
+        chains: &'r [ChainRun],
+    ) -> Vec<Unit<'r>> {
+        let mut units = Vec::with_capacity(range.len());
+        let mut at = range.start;
+        while at < range.end {
+            if let Some(region) = loops.iter().find(|region| region.start() == at) {
+                units.push(Unit::Loop(region));
+                at = region.end();
+                continue;
+            }
+            if let Some(run) = chains.iter().find(|run| run.insts.start == at) {
+                units.push(Unit::Chain(run));
+                at = run.insts.end;
+                continue;
+            }
+            if !self.konsts.holds_inst(at) {
+                units.push(Unit::Inst(at));
+            }
+            at += 1;
+        }
+        units
+    }
+}
+
+fn op_indexes(len: usize, units: &[Unit<'_>]) -> Vec<Option<u32>> {
+    let mut index = vec![None; len];
+    for (op, unit) in units.iter().enumerate() {
+        index[unit.head()] = Some(op as u32);
     }
     index
 }
@@ -256,6 +332,17 @@ impl<'a> Prepare<'a> {
         labels: FxHashMap<Label, u32>,
     ) -> Self {
         let slots = assign_slots(body, ctx, &labels);
+        let values = body.val_factory.len();
+        let mut def_inst: Vec<Option<usize>> = vec![None; values];
+        let mut use_counts: Vec<u32> = vec![0; values];
+        for (at, inst) in body.insts.iter().enumerate() {
+            for def in inst_info::defs(&inst.kind) {
+                def_inst[def.to_raw()] = Some(at);
+            }
+            for used in inst_info::uses(&inst.kind) {
+                use_counts[used.to_raw()] += 1;
+            }
+        }
         Self {
             body,
             ctx,
@@ -267,11 +354,17 @@ impl<'a> Prepare<'a> {
             scratch_used: false,
             may_suspend: false,
             op_index: Vec::new(),
+            def_inst,
+            use_counts,
+            konsts: Konsts::default(),
         }
     }
 
     fn slot(&self, id: ValueId) -> u32 {
-        self.slots.of(id)
+        match self.konsts.slot_of.get(&id) {
+            Some(slot) => *slot,
+            None => self.slots.of(id),
+        }
     }
 
     fn ty(&self, id: ValueId) -> &Ty {
@@ -550,21 +643,9 @@ impl<'a> Prepare<'a> {
     }
 
     fn block(&mut self, range: Range<usize>, nested: &[LoopRegion]) -> BasicBlock {
-        let mut operations: Vec<Op> = Vec::with_capacity(range.len());
-        let mut at = range.start;
-        while at < range.end {
-            match nested.iter().find(|region| region.start() == at) {
-                Some(region) => {
-                    operations.push(self.loop_op(region));
-                    at = region.end();
-                }
-                None => {
-                    operations.push(self.op(at));
-                    at += 1;
-                }
-            }
-        }
-        BasicBlock::new(operations)
+        let chains = self.chains_in(range.clone(), nested);
+        let units = self.layout(range, nested, &chains);
+        BasicBlock::new(self.emit(&units).into_iter().map(|e| e.op))
     }
 
     fn loop_op(&mut self, region: &LoopRegion) -> Op {
@@ -1609,6 +1690,7 @@ fn extern_call_op(handler: &ExternHandler) -> OpFn {
         ExternHandler::Sync(SyncHandler::Arity0(_)) => call::call_extern_0,
         ExternHandler::Sync(SyncHandler::Arity1(_)) => call::call_extern_1,
         ExternHandler::Sync(SyncHandler::Arity2(_)) => call::call_extern_2,
+        ExternHandler::Sync(SyncHandler::Arity3(_)) => call::call_extern_3,
         ExternHandler::Sync(SyncHandler::ArityN(_)) => call::call_extern_n,
     }
 }
@@ -2115,7 +2197,7 @@ mod recognizer_tests {
             for id in mentioned {
                 body.val_types.insert(id, Ty::Int(IntTy::I64));
             }
-            prepare_body(&body, &ctx, &FxHashMap::default())
+            prepare_body(&body, &ctx, &FxHashMap::default(), BodyRole::Entry)
         }
 
         fn recognize(&self, insts: Vec<Inst>) -> Vec<Matched> {
@@ -2227,7 +2309,7 @@ mod recognizer_tests {
         let mut fixture = Fixture::new();
         let stays = fixture.sync_extern("stays");
         let insts = vec![add(1, 2, 3), call(4, stays)];
-        assert!(!fixture.prepared(insts).may_suspend);
+        assert!(!fixture.prepared(insts).may_suspend());
     }
 
     #[test]
@@ -2235,7 +2317,7 @@ mod recognizer_tests {
         let mut fixture = Fixture::new();
         let suspends = fixture.async_extern("suspends");
         let insts = vec![add(1, 2, 3), call(4, suspends)];
-        assert!(fixture.prepared(insts).may_suspend);
+        assert!(fixture.prepared(insts).may_suspend());
     }
 
     #[test]
@@ -2248,7 +2330,7 @@ mod recognizer_tests {
             args: Vec::new(),
             order: None,
         })];
-        assert!(fixture.prepared(insts).may_suspend);
+        assert!(fixture.prepared(insts).may_suspend());
     }
 
     #[test]
@@ -2479,5 +2561,648 @@ mod move_ordering_tests {
         let ordering = order_moves(pairs(&[(0, 1), (1, 0), (2, 3), (3, 2)]), 9);
         assert!(ordering.scratch_used);
         assert_eq!(ordering.moves.len(), 6);
+    }
+}
+
+// -- The arithmetic-chain recognizer (RFC-0044, stage 4) ----------------
+
+/// One operation and the span of the instruction it came from.
+struct Emitted {
+    op: Op,
+    span: Span,
+}
+
+enum Tree {
+    Leaf(u16),
+    /// The right operand of a `Neg`, which the node's operator never
+    /// reads. It still becomes a leaf offset, because the generic tier
+    /// reads both operands before it knows the operator, so the offset
+    /// has to be one the operand space holds.
+    Unread,
+    Node {
+        op: Arith,
+        left: Box<Tree>,
+        right: Box<Tree>,
+    },
+}
+
+impl Tree {
+    fn word(&self, out: &mut String) {
+        match self {
+            Tree::Leaf(_) | Tree::Unread => out.push('L'),
+            Tree::Node { left, right, .. } => {
+                out.push('N');
+                left.word(out);
+                right.word(out);
+            }
+        }
+    }
+
+    fn flatten_into(&self, out: &mut Flattened) {
+        match self {
+            Tree::Leaf(slot) => out.leaves.push(Some(*slot)),
+            Tree::Unread => out.leaves.push(None),
+            Tree::Node { op, left, right } => {
+                left.flatten_into(out);
+                right.flatten_into(out);
+                out.ops.push(*op);
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct Flattened {
+    ops: Vec<Arith>,
+    leaves: Vec<Option<u16>>,
+}
+
+/// A chain's root: the operator it applies and the two subtrees below it.
+struct RootNode {
+    op: Root,
+    left: Tree,
+    right: Tree,
+}
+
+impl RootNode {
+    fn word(&self) -> String {
+        let mut word = String::from("N");
+        self.left.word(&mut word);
+        self.right.word(&mut word);
+        word
+    }
+
+    fn flatten(&self) -> Flattened {
+        let mut out = Flattened::default();
+        self.left.flatten_into(&mut out);
+        self.right.flatten_into(&mut out);
+        out
+    }
+}
+
+/// A chain the recognizer matched: the instructions it replaces, and the
+/// tree that replaces them.
+struct ChainRun {
+    /// The instructions of the body this chain stands for, contiguous and
+    /// ending at its root.
+    insts: Range<usize>,
+    dst: ValueId,
+    ty: ChainTy,
+    node: RootNode,
+}
+
+impl ChainRun {
+    /// How many instructions the root absorbed. A chain that absorbed none
+    /// is one operation written a longer way, so the recognizer does not
+    /// make it.
+    fn absorbed(&self) -> usize {
+        self.insts.len() - 1
+    }
+
+    fn chain(&self, remap: &dyn Fn(u16) -> u16) -> Chain {
+        let word = self.node.word();
+        let shape = Shape::of_word(&word).unwrap_or_else(|| {
+            panic!(
+                "a chain of preorder shape {word} has more than {} nodes",
+                Chain::MAX_NODES
+            )
+        });
+
+        let Flattened { ops: found, leaves } = self.node.flatten();
+        assert_eq!(
+            found.len(),
+            shape.interior(),
+            "shape {shape:?} and its operators disagree"
+        );
+        assert_eq!(
+            leaves.len(),
+            shape.leaves(),
+            "shape {shape:?} and its leaves disagree"
+        );
+
+        let read = leaves
+            .iter()
+            .flatten()
+            .next()
+            .copied()
+            .unwrap_or_else(|| panic!("a chain of shape {shape:?} reads no register"));
+        let in_space = |slot: u16| Chain::offset(u32::from(remap(slot)));
+
+        let mut post_order_ops = [Arith::Add; Chain::MAX_INTERIOR];
+        post_order_ops[..found.len()].copy_from_slice(&found);
+        let mut leaf_offsets = [in_space(read); Chain::MAX_LEAVES];
+        for (offset, leaf) in leaf_offsets.iter_mut().zip(&leaves) {
+            *offset = in_space(leaf.unwrap_or(read));
+        }
+
+        Chain {
+            shape,
+            post_order_ops,
+            root: self.node.op,
+            leaf_offsets,
+        }
+    }
+}
+
+/// The operator a binary operator becomes inside a chain.
+///
+/// Exhaustive over `BinOp`: the operators the chain claims are the five
+/// arithmetic ones. A comparison is a chain's root, not an interior node,
+/// and the bitwise and shift operators and the boolean connectives are not
+/// claimed at all — an instruction carrying one stops the recognizer.
+fn arith_of(op: BinOp) -> Option<Arith> {
+    match op {
+        BinOp::Add => Some(Arith::Add),
+        BinOp::Sub => Some(Arith::Sub),
+        BinOp::Mul => Some(Arith::Mul),
+        BinOp::Div => Some(Arith::Div),
+        BinOp::Mod => Some(Arith::Rem),
+        BinOp::Eq
+        | BinOp::Neq
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::Xor
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::And
+        | BinOp::Or => None,
+    }
+}
+
+/// The comparison a chain's root applies, for the operators that are one.
+///
+/// Exhaustive over `BinOp` for the same reason `arith_of` is.
+fn compare_of(op: BinOp) -> Option<Compare> {
+    match op {
+        BinOp::Lt => Some(Compare::Lt),
+        BinOp::Lte => Some(Compare::Le),
+        BinOp::Gt => Some(Compare::Gt),
+        BinOp::Gte => Some(Compare::Ge),
+        BinOp::Eq => Some(Compare::Eq),
+        BinOp::Neq => Some(Compare::Ne),
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::Xor
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::And
+        | BinOp::Or => None,
+    }
+}
+
+/// The type a chain runs at, for the types a chain runs at.
+fn chain_ty(ty: &Ty) -> Option<ChainTy> {
+    match ty {
+        Ty::Int(k) => Some(ChainTy::Int(*k)),
+        Ty::Float => Some(ChainTy::Float),
+        _ => None,
+    }
+}
+
+/// The state of one descent from a chain's root.
+struct Growing<'a> {
+    prep: &'a Prepare<'a>,
+    ty: ChainTy,
+    /// The lowest instruction this descent may absorb. A retry raises it
+    /// past whatever broke the run's contiguity.
+    floor: usize,
+    root: usize,
+    absorbed: Vec<usize>,
+    /// The operator nodes committed so far, the root included.
+    nodes: usize,
+}
+
+impl Growing<'_> {
+    /// Whether the instruction at `at` may become part of this chain: it is
+    /// inside the window, its value is read once and only by this chain,
+    /// and it is an arithmetic operation or a constant at the chain's type.
+    fn absorbable(&self, value: ValueId) -> Option<usize> {
+        let at = self.prep.def_at(value)?;
+        if at < self.floor || at >= self.root || self.prep.use_count(value) != 1 {
+            return None;
+        }
+        let kind = &self.prep.body.insts[at].kind;
+        match kind {
+            InstKind::BinOp { op, left, .. } => {
+                let same = chain_ty(self.prep.ty(*left)) == Some(self.ty);
+                (same && arith_of(*op).is_some()).then_some(at)
+            }
+            InstKind::UnaryOp { op, operand, .. } => {
+                let same = chain_ty(self.prep.ty(*operand)) == Some(self.ty);
+                (same && matches!(op, UnaryOp::Neg)).then_some(at)
+            }
+            _ => None,
+        }
+    }
+
+    /// How many operator nodes absorbing `value` whole would add.
+    fn nodes_of(&self, value: ValueId) -> usize {
+        let Some(at) = self.absorbable(value) else {
+            return 0;
+        };
+        match &self.prep.body.insts[at].kind {
+            InstKind::BinOp { left, right, .. } => 1 + self.nodes_of(*left) + self.nodes_of(*right),
+            InstKind::UnaryOp { operand, .. } => 1 + self.nodes_of(*operand),
+            other => panic!("absorbable admitted {other:?}, which is not a chain step"),
+        }
+    }
+
+    /// The subtree for `value`. An operand the chain does not absorb — one
+    /// read twice, one outside the window, one of another type, or one
+    /// whose subtree would carry the chain past `Chain::MAX_NODES` — is a
+    /// leaf reading the register the operation that computes it writes.
+    fn emit(&mut self, value: ValueId) -> Tree {
+        let admitted = self
+            .absorbable(value)
+            .filter(|_| self.nodes + self.nodes_of(value) <= Chain::MAX_NODES);
+        let Some(at) = admitted else {
+            return Tree::Leaf(self.prep.leaf_slot(value));
+        };
+        self.absorbed.push(at);
+        match &self.prep.body.insts[at].kind {
+            InstKind::BinOp {
+                op, left, right, ..
+            } => {
+                let (op, left, right) = (*op, *left, *right);
+                let op = arith_of(op)
+                    .unwrap_or_else(|| panic!("absorbable admitted {op:?}, which is not a node"));
+                self.nodes += 1;
+                let left = self.emit(left);
+                let right = self.emit(right);
+                Tree::Node {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }
+            }
+            InstKind::UnaryOp { operand, .. } => {
+                let operand = *operand;
+                self.nodes += 1;
+                let left = self.emit(operand);
+                let right = Tree::Unread;
+                Tree::Node {
+                    op: Arith::Neg,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }
+            }
+            other => panic!("absorbable admitted {other:?}, which is not a chain step"),
+        }
+    }
+}
+
+/// The word a numeric literal of an inline numeric type becomes, for the
+/// literals and types a register can hold as one word.
+fn konst_value(literal: &Literal, ty: &Ty) -> Option<Value> {
+    match (literal, ty) {
+        (Literal::Int(n), Ty::Int(k)) => Some(Value::inline(Kind::int(*k), *n as u64)),
+        (Literal::Float(x), Ty::Float) => Some(Value::inline(Kind::F64, x.to_bits())),
+        (Literal::Int(_), _)
+        | (Literal::Float(_), _)
+        | (Literal::Bool(_), _)
+        | (Literal::Unit, _)
+        | (Literal::String(_), _)
+        | (Literal::List(_), _) => None,
+    }
+}
+
+impl Prepare<'_> {
+    fn every_reader_is_arithmetic(&self, value: ValueId) -> bool {
+        self.body.insts.iter().all(|inst| {
+            let reads = inst_info::uses(&inst.kind)
+                .iter()
+                .any(|used| *used == value);
+            !reads || matches!(inst.kind, InstKind::BinOp { .. } | InstKind::UnaryOp { .. })
+        })
+    }
+
+    fn hoist_konsts(&mut self) {
+        for at in 0..self.body.insts.len() {
+            let InstKind::Const { dst, value } = &self.body.insts[at].kind else {
+                continue;
+            };
+            let (dst, value) = (*dst, value.clone());
+            let Some(word) = konst_value(&value, self.ty(dst)) else {
+                continue;
+            };
+            if !self.every_reader_is_arithmetic(dst) {
+                continue;
+            }
+            let slot = self.scratch;
+            self.scratch += 1;
+            self.konsts.slot_of.insert(dst, slot);
+            self.konsts.value_at.insert(slot, word);
+            self.konsts.insts.push(at);
+        }
+    }
+
+    fn entry_konsts(&self) -> Box<[EntryKonst]> {
+        let mut found: Vec<EntryKonst> = self
+            .konsts
+            .value_at
+            .iter()
+            .map(|(slot, value)| EntryKonst {
+                slot: *slot,
+                value: value.copy_word(),
+            })
+            .collect();
+        found.sort_by_key(|konst| konst.slot);
+        found.into_boxed_slice()
+    }
+}
+
+impl<'a> Prepare<'a> {
+    fn def_at(&self, value: ValueId) -> Option<usize> {
+        self.def_inst[value.to_raw()]
+    }
+
+    fn use_count(&self, value: ValueId) -> u32 {
+        self.use_counts[value.to_raw()]
+    }
+
+    fn leaf_slot(&self, value: ValueId) -> u16 {
+        u16::try_from(self.slot(value)).expect("a chain reads a register below u16::MAX")
+    }
+
+    /// The chain rooted at `root`, if there is one: the descent absorbs
+    /// what it can, and a retry raises the floor past anything that broke
+    /// the run's contiguity, until the absorbed instructions are exactly
+    /// the window below the root.
+    fn chain_at(&self, window: Range<usize>, root: usize) -> Option<ChainRun> {
+        let kind = &self.body.insts[root].kind;
+        let (ty, dst) = match kind {
+            InstKind::BinOp { dst, op, left, .. } => {
+                let ty = chain_ty(self.ty(*left))?;
+                match (arith_of(*op), compare_of(*op)) {
+                    (Some(_), None) | (None, Some(_)) => {}
+                    (None, None) => return None,
+                    (Some(_), Some(_)) => panic!("{op:?} is both a chain node and a chain's root"),
+                }
+                (ty, *dst)
+            }
+            InstKind::UnaryOp {
+                dst, op, operand, ..
+            } if matches!(op, UnaryOp::Neg) => (chain_ty(self.ty(*operand))?, *dst),
+            _ => return None,
+        };
+
+        let mut floor = window.start;
+        loop {
+            let mut growing = Growing {
+                prep: self,
+                ty,
+                floor,
+                root,
+                absorbed: Vec::new(),
+                nodes: 1,
+            };
+            let node = match &self.body.insts[root].kind {
+                InstKind::BinOp {
+                    op, left, right, ..
+                } => {
+                    let root_op = match (arith_of(*op), compare_of(*op)) {
+                        (Some(op), None) => Root::Num(op),
+                        (None, Some(how)) => Root::Cmp(how),
+                        _ => panic!("the root changed kind"),
+                    };
+                    let left = growing.emit(*left);
+                    let right = growing.emit(*right);
+                    RootNode {
+                        op: root_op,
+                        left,
+                        right,
+                    }
+                }
+                InstKind::UnaryOp { operand, .. } => {
+                    let left = growing.emit(*operand);
+                    let right = Tree::Unread;
+                    RootNode {
+                        op: Root::Num(Arith::Neg),
+                        left,
+                        right,
+                    }
+                }
+                other => panic!("a chain root is not an arithmetic instruction: {other:?}"),
+            };
+
+            let lowest = growing.absorbed.iter().copied().min().unwrap_or(root);
+            let gap = (lowest..root)
+                .rev()
+                .find(|at| !growing.absorbed.contains(at) && !self.konsts.holds_inst(*at));
+            if let Some(at) = gap {
+                floor = at + 1;
+                continue;
+            }
+
+            assert!(
+                growing.nodes <= Chain::MAX_NODES,
+                "a chain of {} nodes was prepared, past the tree it runs on",
+                growing.nodes
+            );
+            return Some(ChainRun {
+                insts: lowest..root + 1,
+                dst,
+                ty,
+                node,
+            });
+        }
+    }
+
+    /// Every chain of a straight-line window, latest root first so each one
+    /// is maximal, returned lowest first.
+    fn chain_runs(&self, window: Range<usize>) -> Vec<ChainRun> {
+        let mut found: Vec<ChainRun> = Vec::new();
+        let mut root = window.end;
+        while root > window.start {
+            root -= 1;
+            let Some(run) = self.chain_at(window.start..root + 1, root) else {
+                continue;
+            };
+            if run.absorbed() == 0 {
+                continue;
+            }
+            root = run.insts.start;
+            found.push(run);
+        }
+        found.reverse();
+        found
+    }
+
+    fn chain_op(&mut self, run: &ChainRun) -> Op {
+        self.check_chain(run);
+        let chain = Box::new(run.chain(&|slot| slot));
+        let f = chain::instance(run.ty, &chain).op;
+        let held = std::ptr::from_ref::<Chain>(&chain) as usize;
+        let at = self.put(Payload::Chain(chain));
+        let at = u32::try_from(at).expect("a body holds at most u32::MAX payloads");
+        Op::new(f).a(self.slot(run.dst)).b(at).p(held)
+    }
+
+    /// Every chain of `range`, in the straight-line windows the loops of
+    /// `nested` leave between them.
+    fn chains_in(&self, range: Range<usize>, nested: &[LoopRegion]) -> Vec<ChainRun> {
+        let mut found = Vec::new();
+        let mut at = range.start;
+        while at < range.end {
+            if let Some(region) = nested.iter().find(|region| region.start() == at) {
+                at = region.end();
+                continue;
+            }
+            let stop = nested
+                .iter()
+                .map(LoopRegion::start)
+                .find(|start| *start > at)
+                .unwrap_or(range.end);
+            found.extend(self.chain_runs(at..stop));
+            at = stop;
+        }
+        found
+    }
+
+    /// The operations of a laid-out range: the loops and the chains one
+    /// operation each, and everything else one for one.
+    fn emit(&mut self, units: &[Unit<'_>]) -> Vec<Emitted> {
+        let mut out: Vec<Emitted> = Vec::with_capacity(units.len());
+        for unit in units {
+            let span = self.body.insts[unit.head()].span;
+            let op = match unit {
+                Unit::Inst(at) => self.op(*at),
+                Unit::Loop(region) => self.loop_op(region),
+                Unit::Chain(run) => self.chain_op(run),
+            };
+            out.push(Emitted { op, span });
+        }
+        out
+    }
+
+    /// Every register a chain reads is live where the chain runs and
+    /// carries the chain's own type — the chain-shaped half of what
+    /// `check_assignment` states for slots.
+    fn check_chain(&self, run: &ChainRun) {
+        for leaf in run.node.flatten().leaves {
+            let Some(slot) = leaf else {
+                continue;
+            };
+            assert!(
+                u32::from(slot) < self.scratch + u32::from(self.scratch_used),
+                "a chain reads register {slot}, which its body's frame does not have"
+            );
+            let read = (self.body.insts[run.insts.start..run.insts.end])
+                .iter()
+                .flat_map(|inst| inst_info::uses(&inst.kind))
+                .find(|value| self.leaf_slot(*value) == slot)
+                .unwrap_or_else(|| {
+                    panic!("a chain reads register {slot}, which no instruction it replaces reads")
+                });
+            assert_eq!(
+                chain_ty(self.ty(read)),
+                Some(run.ty),
+                "a chain reads register {slot} at another type than its own"
+            );
+        }
+    }
+}
+
+/// Where `konst` sits in the operand space's constant tail, appending it
+/// if this is the first leaf to read it.
+fn intern(konsts: &mut Vec<Value>, konst: &Value) -> usize {
+    let same = |held: &Value| held.kind() == konst.kind() && held.bits() == konst.bits();
+    match konsts.iter().position(same) {
+        Some(at) => at,
+        None => {
+            konsts.push(konst.copy_word());
+            konsts.len() - 1
+        }
+    }
+}
+
+impl Prepare<'_> {
+    /// The body as a `Code::Expr`, when it is exactly `params -> one chain
+    /// -> return` or `params -> return`.
+    ///
+    /// A body with captures is not one: a capture reaches the body as
+    /// `Value::reference`, which a chain leaf cannot read as an inline
+    /// word. A body with an order parameter is not one either: it has an
+    /// effect to sequence, and a chain has none.
+    fn expression_body(&mut self) -> Option<Expr> {
+        let body = self.body;
+        if !body.captures.is_empty() || body.order_param.is_some() {
+            return None;
+        }
+        let (last, rest) = body.insts.split_last()?;
+        let InstKind::Return { value, order: None } = &last.kind else {
+            return None;
+        };
+        let value = *value;
+        let arity = u32::try_from(body.params.len()).expect("a body has at most u32::MAX params");
+        let at_of = |target: ValueId| -> Option<u16> {
+            let at = body.params.iter().position(|(_, id)| *id == target)?;
+            Some(u16::try_from(at).expect("a body has at most u16::MAX params"))
+        };
+
+        if rest.is_empty() {
+            return Some(Expr {
+                arity,
+                body: ExprBody::Argument(at_of(value)?),
+                span: last.span,
+            });
+        }
+
+        let run = self.chain_at(0..rest.len(), rest.len() - 1)?;
+        if run.insts.end != rest.len() || run.dst != value {
+            return None;
+        }
+        if !(0..run.insts.start).all(|at| self.konsts.holds_inst(at)) {
+            return None;
+        }
+
+        let mut konsts: Vec<Value> = Vec::new();
+        let mut in_space: FxHashMap<u16, u16> = FxHashMap::default();
+        for leaf in run.node.flatten().leaves.iter().flatten() {
+            let at = match body
+                .params
+                .iter()
+                .position(|(_, id)| u32::from(*leaf) == self.slot(*id))
+            {
+                Some(at) => at,
+                None => {
+                    let konst = self.konsts.value_at.get(&u32::from(*leaf))?;
+                    body.params.len() + intern(&mut konsts, konst)
+                }
+            };
+            in_space.insert(
+                *leaf,
+                u16::try_from(at).expect("a body reads at most u16::MAX operands"),
+            );
+        }
+        if body.params.len() + konsts.len() > ExprChain::MAX_OPERANDS {
+            return None;
+        }
+
+        self.check_chain(&run);
+        let chain = run.chain(&|slot| {
+            *in_space
+                .get(&slot)
+                .unwrap_or_else(|| panic!("register {slot} is neither a parameter nor a constant"))
+        });
+        let eval = chain::instance(run.ty, &chain).expr;
+        Some(Expr {
+            arity,
+            body: ExprBody::Chain(ExprChain {
+                chain,
+                eval,
+                konsts: konsts.into_boxed_slice(),
+            }),
+            span: last.span,
+        })
     }
 }

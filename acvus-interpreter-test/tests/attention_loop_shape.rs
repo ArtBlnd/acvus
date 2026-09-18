@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use acvus_interpreter::code::Code;
 use acvus_interpreter::code::Payload;
 use acvus_interpreter::{PrepareCtx, prepare_module};
 use acvus_interpreter_test::scripts::ATTENTION;
@@ -49,9 +50,10 @@ fn attention_loops() -> Vec<LoopShape> {
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
     let prepared = Arc::new(prepare_module(module, &ctx));
 
-    prepared
-        .main
-        .payloads
+    let Code::Body(main) = &*prepared.main else {
+        panic!("the entry module's main is a body, not a one-chain expression")
+    };
+    main.payloads
         .iter()
         .filter_map(|payload| match payload {
             Payload::Loop(body) => Some(LoopShape {
@@ -73,11 +75,12 @@ fn attention_loops() -> Vec<LoopShape> {
 /// head 1 body  8 back 1   the out pass, outer
 /// ```
 ///
-/// Each inner body is two operations shorter now - the two borrows it
-/// rebuilt every iteration - and no back edge gained a move: the two the
-/// outer loops carry are the ones they carried before.
+/// The hoist (`657545e3`) took two borrows out of each inner body; the
+/// arithmetic chain (stage 3) then folded `s + q * k` and `i + 1` into one
+/// operation each. No back edge gained a move: the two the outer loops
+/// carry are the ones they carried before.
 #[test]
-fn the_hoisted_borrows_shorten_the_inner_bodies_and_cost_no_back_edge_move() {
+fn the_hoist_and_the_chain_shorten_the_bodies_and_cost_no_back_edge_move() {
     let shapes: Vec<String> = attention_loops()
         .iter()
         .map(|l| {
@@ -90,10 +93,10 @@ fn the_hoisted_borrows_shorten_the_inner_bodies_and_cost_no_back_edge_move() {
     assert_eq!(
         shapes,
         [
-            "head 2 body 9 back 0",
-            "head 1 body 8 back 1",
-            "head 1 body 10 back 0",
-            "head 1 body 8 back 1",
+            "head 2 body 7 back 0",
+            "head 1 body 7 back 1",
+            "head 1 body 8 back 0",
+            "head 1 body 7 back 1",
         ],
         "a longer body, or a back edge that moves, is a register the hoist lengthened"
     );

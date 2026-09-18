@@ -9,13 +9,16 @@
 
 use std::fmt::Debug;
 use std::future::Future;
+use std::mem::MaybeUninit;
+use std::slice;
 use std::sync::Arc;
 
-use acvus_ast::Span;
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 
-use crate::code::{ArgWindow, Code, Flow, Op, Payload, Pending, Prepared};
+use crate::code::{
+    ArgWindow, Body, Code, Expr, ExprBody, ExprChain, Flow, Op, Payload, Pending, Prepared,
+};
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
 use crate::runtime::AcvusRuntime;
@@ -64,7 +67,7 @@ impl Registers {
 }
 
 pub struct Machine<'c> {
-    code: &'c Code,
+    code: &'c Body,
     regs: &'c mut [Value],
     pub rt: &'c AcvusRuntime,
     pub page: &'c Arc<dyn RuntimeContext>,
@@ -73,7 +76,7 @@ pub struct Machine<'c> {
 
 impl<'c> Machine<'c> {
     pub fn new(
-        code: &'c Code,
+        code: &'c Body,
         regs: &'c mut [Value],
         rt: &'c AcvusRuntime,
         page: &'c Arc<dyn RuntimeContext>,
@@ -95,14 +98,14 @@ impl<'c> Machine<'c> {
     /// Run `code` to its result on a frame of its own. The preparation
     /// chose this path from the callee's effect; `callee` names the body
     /// if the effect and the prepared code disagree.
-    pub fn call_sync<F>(&mut self, code: &Code, callee: &dyn Debug, fill: F) -> Value
+    pub fn call_sync<F>(&mut self, code: &Body, callee: &dyn Debug, fill: F) -> Value
     where
         F: FnOnce(&mut Machine<'_>),
     {
         run_sync(code, callee, self.rt, self.page, fill)
     }
 
-    pub fn code(&self) -> &'c Code {
+    pub fn code(&self) -> &'c Body {
         self.code
     }
 
@@ -128,6 +131,20 @@ impl<'c> Machine<'c> {
     #[inline]
     pub fn set(&mut self, slot: u32, value: Value) {
         self.regs[slot as usize] = value;
+    }
+
+    #[inline(always)]
+    pub fn store(&mut self, slot: u32, value: Value) {
+        debug_assert!(
+            (slot as usize) < self.regs.len(),
+            "a chain writes register {slot}, which its body's frame does not have"
+        );
+        // SAFETY: `prepare::check_assignment` states that every slot an
+        // operation names is below the body's `frame_len`, and
+        // `Machine::new` asserts the frame it runs on has that length.
+        unsafe {
+            *self.regs.get_unchecked_mut(slot as usize) = value;
+        }
     }
 
     #[inline]
@@ -161,6 +178,12 @@ impl<'c> Machine<'c> {
     #[inline]
     pub fn take_window(&mut self, window: &ArgWindow) -> Vec<Value> {
         self.window(window).iter_mut().map(Value::take).collect()
+    }
+
+    /// The frame itself, which a chain's `Push` micro-ops read.
+    #[inline]
+    pub fn regs(&self) -> &[Value] {
+        self.regs
     }
 
     #[inline]
@@ -209,7 +232,7 @@ fn run_of(window: &ArgWindow) -> std::ops::Range<usize> {
 }
 
 fn run_sync<F>(
-    code: &Code,
+    code: &Body,
     callee: &dyn Debug,
     rt: &AcvusRuntime,
     page: &Arc<dyn RuntimeContext>,
@@ -260,8 +283,11 @@ pub async fn call_module(
 ) -> Value {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&shared, &id));
     let rt = AcvusRuntime(shared);
-    let code = &prepared.main;
+    let Code::Body(code) = prepared.main.as_ref() else {
+        panic!("a module's entry body is one chain, which no call into a module can be")
+    };
     let mut regs: Vec<Value> = (0..code.frame_len).map(|_| Value::EMPTY).collect();
+    fill_entry_konsts(code, &mut regs);
     let mut machine = Machine::new(code, &mut regs, &rt, &page);
     for (slot, arg) in code.params.iter().zip(args) {
         machine.set(*slot, arg);
@@ -278,8 +304,11 @@ pub fn call_module_sync(
     id: QualifiedRef,
     args: Vec<Value>,
 ) -> Value {
-    let code = &prepared.main;
+    let Code::Body(code) = prepared.main.as_ref() else {
+        panic!("a module's entry body is one chain, which no call into a module can be")
+    };
     run_sync(code, &id, machine.rt, machine.page, |callee| {
+        fill_entry_konsts(code, callee.regs);
         for (slot, arg) in code.params.iter().zip(args) {
             callee.set(*slot, arg);
         }
@@ -295,13 +324,36 @@ pub fn fn_value_call<'f>(
     f: &'f FnValue,
     args: &mut [Value],
 ) -> impl Future<Output = Value> + Send + use<'f> {
-    let code = &f.code;
-    let mut entered: Vec<Value> = (0..code.frame_len).map(|_| Value::EMPTY).collect();
-    enter(code, f, args, &mut entered);
-
+    let entry = Entry::of(&f.code, f, args);
     async move {
-        let machine = Machine::new(code, &mut entered, AcvusRuntime::of(&f.shared), &f.page);
-        drive(machine).await
+        match entry {
+            Entry::Frame { code, mut regs } => {
+                let machine = Machine::new(code, &mut regs, AcvusRuntime::of(&f.shared), &f.page);
+                drive(machine).await
+            }
+            Entry::Done(value) => value,
+        }
+    }
+}
+
+/// What a closure call has to do after its arguments are read: run a body
+/// on a frame, or — for a `Code::Expr` — nothing, because the chain has
+/// already produced the value.
+enum Entry<'c> {
+    Frame { code: &'c Body, regs: Vec<Value> },
+    Done(Value),
+}
+
+impl<'c> Entry<'c> {
+    fn of(code: &'c Code, f: &FnValue, args: &mut [Value]) -> Self {
+        match code {
+            Code::Body(body) => {
+                let mut regs: Vec<Value> = (0..body.frame_len).map(|_| Value::EMPTY).collect();
+                enter(body, f, args, &mut regs);
+                Entry::Frame { code: body, regs }
+            }
+            Code::Expr(expr) => Entry::Done(expr_value(expr, args)),
+        }
     }
 }
 
@@ -309,25 +361,86 @@ pub fn fn_value_call<'f>(
 /// this path from the closure's effect; an extern's callback takes the
 /// same path with no machine in hand.
 pub fn fn_value_call_sync(f: &FnValue, args: &mut [Value]) -> Value {
-    let code = &f.code;
-    run_sync(
-        code,
-        &closure_site(code),
-        AcvusRuntime::of(&f.shared),
-        &f.page,
-        |callee| enter(code, f, args, callee.regs),
-    )
+    match f.code.as_ref() {
+        Code::Expr(expr) => expr_value(expr, args),
+        Code::Body(body) => run_sync(
+            body,
+            &f.code.site(),
+            AcvusRuntime::of(&f.shared),
+            &f.page,
+            |callee| enter(body, f, args, callee.regs),
+        ),
+    }
 }
 
-/// The span of a closure body's first operation, which is what an ICE
-/// about that body has to name it by: a `Code` carries no name.
-fn closure_site(code: &Code) -> Span {
-    code.spans.first().copied().unwrap_or(Span::ZERO)
+/// A body that is one chain runs with no registers, no `Machine` and no
+/// dispatch loop (RFC-0044, stage 4).
+#[inline]
+fn expr_value(expr: &Expr, args: &mut [Value]) -> Value {
+    assert_eq!(
+        args.len(),
+        expr.arity as usize,
+        "an expression body is called with the arguments it reads"
+    );
+    match &expr.body {
+        ExprBody::Argument(at) => args[*at as usize].take(),
+        ExprBody::Chain(body) => chain_value(body, args),
+    }
+}
+
+/// The `#[inline(never)]` is a measurement, not a taste. The operand space
+/// is `MAX_OPERANDS` `Value`s wide; while this was inlined, its frame was
+/// part of every frameless call, and `map(|x| -> x) | sum` — which builds
+/// no operand space at all — measured 4.8 ns per iteration instead of 4.1,
+/// and `range | sum` 2.0 instead of 1.8. Splitting it restored both.
+#[inline(never)]
+fn chain_value(body: &ExprChain, args: &[Value]) -> Value {
+    let space = OperandSpace::of(args, &body.konsts);
+    (body.eval)(&body.chain, space.as_slice())
+}
+
+struct OperandSpace {
+    values: [MaybeUninit<Value>; ExprChain::MAX_OPERANDS],
+    len: usize,
+}
+
+impl OperandSpace {
+    /// The arguments, then the constants, which is the order
+    /// `prepare::expression_body` assigned the chain's leaf offsets in.
+    fn of(args: &[Value], konsts: &[Value]) -> OperandSpace {
+        let len = args.len() + konsts.len();
+        debug_assert!(
+            len <= ExprChain::MAX_OPERANDS,
+            "an expression body reads {len} operands, past the {} a frameless call builds",
+            ExprChain::MAX_OPERANDS
+        );
+        let mut values = [const { MaybeUninit::uninit() }; ExprChain::MAX_OPERANDS];
+        for (slot, value) in values.iter_mut().zip(args.iter().chain(konsts)) {
+            slot.write(word_or_unread(value));
+        }
+        OperandSpace { values, len }
+    }
+
+    fn as_slice(&self) -> &[Value] {
+        // SAFETY: `prepare::expression_body` refuses a body whose operands
+        // outnumber `ExprChain::MAX_OPERANDS`, and `expr_value` asserts the
+        // call brought the arity that body was prepared with, so `of` wrote
+        // exactly `len` values into an array that holds them. Every one is
+        // a word that owns nothing, so the prefix needs no drop.
+        unsafe { slice::from_raw_parts(self.values.as_ptr().cast::<Value>(), self.len) }
+    }
+}
+
+fn word_or_unread(value: &Value) -> Value {
+    if value.kind().is_inline() {
+        return value.copy_word();
+    }
+    Value::EMPTY
 }
 
 /// The closure owns its captures; the body sees each through a reference
 /// (RFC-0018).
-fn enter(code: &Code, f: &FnValue, args: &mut [Value], regs: &mut [Value]) {
+fn enter(code: &Body, f: &FnValue, args: &mut [Value], regs: &mut [Value]) {
     for (slot, capture) in code.captures.iter().zip(f.captures.iter()) {
         regs[*slot as usize] = Value::reference(capture);
     }
@@ -336,5 +449,12 @@ fn enter(code: &Code, f: &FnValue, args: &mut [Value], regs: &mut [Value]) {
     }
     if let Some(order) = code.order_param {
         regs[order as usize] = Value::unit();
+    }
+    fill_entry_konsts(code, regs);
+}
+
+fn fill_entry_konsts(code: &Body, regs: &mut [Value]) {
+    for konst in &code.entry_konsts {
+        regs[konst.slot as usize] = konst.value.copy_word();
     }
 }

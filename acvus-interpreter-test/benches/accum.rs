@@ -50,6 +50,7 @@ const FLOAT_WHILE: &str =
 const RANGE_SUM: &str = "range(0, @n) | sum";
 const MAP_ID_SUM: &str = "range(0, @n) | map(|x| -> x) | sum";
 const MAP_ADD_SUM: &str = "range(0, @n) | map(|x| -> x + 1) | sum";
+const MAP_CAP_SUM: &str = "let k = 1; range(0, @n) | map(|x| -> x + k) | sum";
 const EXTERN_WHILE: &str =
     "let i = 0; let acc = 0; while i < @n { acc = acc + id_of(i); i = i + 1; } acc";
 const BRANCH_WHILE: &str =
@@ -94,6 +95,11 @@ fn rust_map_id_sum(n: i64) -> f64 {
 
 fn rust_map_add_sum(n: i64) -> f64 {
     (0..n).map(black_box).map(|x| x + 1).sum::<i64>() as f64
+}
+
+fn rust_map_cap_sum(n: i64) -> f64 {
+    let k = 1i64;
+    (0..n).map(black_box).map(|x| x + k).sum::<i64>() as f64
 }
 
 fn rust_extern_while(n: i64) -> f64 {
@@ -243,6 +249,13 @@ fn main() {
             source: MAP_ADD_SUM,
             registries: std_only,
             rust: rust_map_add_sum,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "map cap | sum",
+            source: MAP_CAP_SUM,
+            registries: std_only,
+            rust: rust_map_cap_sum,
             read: |v| v.as_int() as f64,
         },
         Case {
