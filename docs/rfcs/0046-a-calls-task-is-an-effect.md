@@ -242,16 +242,14 @@ crates' suites (`io_in_iteration`,
 `last` over a suspending pipeline took their asynchronous instance while
 their call froze to `Pure` — not `Pure/Sync`: the whole effect was lost,
 reissue and contexts with the task. The origin is not in those consumers
-and not in the task. A call settles on the signature it took through a
-decision's join, and `TermStore::join`'s function arm related the two
-effects in one direction only — the value's at most what the position
-allows, which is RFC-0017's demotion and is right for a function value
-flowing into a parameter. At a call it is the wrong way round: the caller
-runs what the callee does. A name only one declaration owns never showed
-it, because there the call type *is* the instantiated declaration and
-carries its effect term; an **overloaded** name goes through a
-`Decision::Signature` opened on a call type with a fresh effect variable,
-and nothing ever flowed the callee's effect into it. `find`, `last` and
+and not in the task. A name only one declaration owns never showed it,
+because there the call type *is* the instantiated declaration and carries
+its effect term; an **overloaded** name went through a
+`Decision::Signature` opened on a call type holding a fresh effect variable
+of its own. That variable was related to the instance's effect in one
+direction only — the value's at most what the position allows, which is
+RFC-0017's demotion — so nothing held it up and it froze at its lower
+bound. `find`, `last` and
 `contains` share their bare names with `str::find`, `vec::last` and
 `str::contains`; the other sixteen consumers do not. That, and not the
 `Fn1` parameter or the `Option<T>` return, is the whole of the split —
@@ -259,13 +257,34 @@ and nothing ever flowed the callee's effect into it. `find`, `last` and
 a two-declaration extern with no iterator in it reproduces the loss on its
 own.
 
-The rule: at the top of a decision's own join the effect runs both ways.
-Nested positions keep the demotion direction, so a `Sync` closure passed
-where the parameter is `Async` still joins in. With it, every consumer's
-call carries the task of the instance the solver chose, and the entry
-body's task is exactly the join over its calls and its `Spawn`/`Eval`s; a
-closure body's is that join or the demotion above it. Measured in
-`acvus-mir-test/tests/consumer_task.rs`.
+The rule: **a call has no effect of its own.** A signature decision is
+opened on a `CallShape` — the arguments the call passes and where its result
+goes — which has no field for an effect and is not a function type: until
+the decision settles there is no function type anywhere in it, so there is
+none for a reader to find and none to record. At the settle the instance's
+effect term makes one, that type is joined with the instance, and the callee
+is recorded then and only then, as the instance's type. The effect the
+enclosing body is raised by is the same term, raised by the decision,
+because the checker has nothing to raise it by at the call. There is no
+second term for one effect, so there is nothing left to freeze below the
+instance and no join is asked to keep the two in step.
+
+`TermStore::join` is therefore untouched: its function arm relates effects
+in the one direction RFC-0017 gives it, and a `Sync` closure passed where
+the parameter is `Async` still joins in. Making that join symmetric at a
+decision's own `Position::Value` was tried and is wrong, because such a join
+is not only "call meets instance" — a closure argument's function type
+reaches it too, and the symmetry refused
+`a_closure_writing_a_lent_context_is_rejected_at_the_call` and
+`a_context_read_after_a_call_whose_closure_writes_it_is_fetched_again`.
+
+Every consumer's call now carries the task of the instance the solver chose,
+and the entry body's task is exactly the join over its calls and its
+`Spawn`/`Eval`s; a closure body's is that join or the demotion above it.
+Measured in `acvus-mir-test/tests/consumer_task.rs`, where
+`a_calls_effect_is_the_term_of_its_instance` states the structure rather
+than the outcome: two declarations of one name running different effects,
+and the call carries the settled one's, never the other and never `Pure`.
 
 **`Fn1::is_sync`.** Every `call_now` asserts it, which is the type's claim
 checked against the run-time answer. It does not fire anywhere in the

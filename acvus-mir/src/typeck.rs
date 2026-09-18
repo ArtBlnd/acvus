@@ -9,10 +9,10 @@ use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast};
 use crate::solver::{
-    Admission, Answer, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
+    Admission, Answer, CallShape, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
     EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, MatchBinding,
     MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair,
-    SettledSignature, SignatureCandidate, SignatureName, SignatureOption, Unsettled,
+    SettledSignature, SignatureCandidate, SignatureName, SignatureOption, UndecidedCall, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -1349,7 +1349,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Answer::Instance(InstanceKind::Extern(instance)) => instance,
                 Answer::Instance(InstanceKind::Intrinsic(_)) => return None,
                 Answer::Conversion(_)
-                | Answer::Signature(_)
+                | Answer::Signature { .. }
                 | Answer::Lend(_)
                 | Answer::Match(_) => {
                     unreachable!("an instance decision answers with an instance")
@@ -1367,10 +1367,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         match choice {
             CalleeChoice::Resolved(resolved) => Some(resolved),
             CalleeChoice::Decided(decision) => match self.solver.answer(decision)? {
-                Answer::Signature(SettledSignature::Named { qref, instance, .. }) => {
-                    Some(ResolvedCallee { qref, instance })
-                }
-                Answer::Signature(SettledSignature::Local) => None,
+                Answer::Signature {
+                    settled: SettledSignature::Named { qref, instance, .. },
+                    ..
+                } => Some(ResolvedCallee { qref, instance }),
+                Answer::Signature {
+                    settled: SettledSignature::Local,
+                    ..
+                } => None,
                 Answer::Instance(_)
                 | Answer::Conversion(_)
                 | Answer::Lend(_)
@@ -1389,7 +1393,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let CalleeChoice::Decided(decision) = choice else {
                     return None;
                 };
-                let Answer::Signature(settled) = self.solver.answer(*decision)? else {
+                let Answer::Signature { settled, .. } = self.solver.answer(*decision)? else {
                     unreachable!("a signature decision answers with a signature")
                 };
                 let SettledSignature::Named { bounded, .. } = settled else {
@@ -1416,7 +1420,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Answer::Instance(InstanceKind::Intrinsic(intrinsic)) => Some((*id, intrinsic)),
                     Answer::Instance(InstanceKind::Extern(_))
                     | Answer::Conversion(_)
-                    | Answer::Signature(_)
+                    | Answer::Signature { .. }
                     | Answer::Lend(_)
                     | Answer::Match(_) => None,
                 }
@@ -1510,6 +1514,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn solve_body(&mut self) {
         let unsettled = self.solver.solve();
         self.report_unsettled(unsettled);
+        self.record_decided_call_types();
         self.resolve_conversions();
         let settled = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
@@ -1535,6 +1540,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     span,
                 );
             }
+        }
+    }
+
+    /// The callee of an overloaded call is typed here and nowhere else: its
+    /// type is the instance the decision settled on, which does not exist
+    /// before the solve.
+    fn record_decided_call_types(&mut self) {
+        let settled: Vec<(AstId, InferTy)> = self
+            .direct_calls
+            .iter()
+            .filter_map(|(id, choice)| {
+                let CalleeChoice::Decided(decision) = choice else {
+                    return None;
+                };
+                Some((*id, self.solver.settled_callee_ty(*decision)?))
+            })
+            .collect();
+        for (id, ty) in settled {
+            self.record(id, ty);
         }
     }
 
@@ -1670,7 +1694,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let CalleeChoice::Decided(parent) = choice else {
                 return None;
             };
-            let Answer::Signature(settled) = self.solver.answer(*parent)? else {
+            let Answer::Signature { settled, .. } = self.solver.answer(*parent)? else {
                 unreachable!("a signature decision answers with a signature")
             };
             let SettledSignature::Named { instance, .. } = settled else {
@@ -1792,8 +1816,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 Unsettled::NoSignature { name, call, .. } => MirErrorKind::NoMatchingFunction {
                     name: self.interner.resolve(name).to_string(),
-                    ty: self.type_as_written(&call),
+                    ty: self.call_type_as_written(&call),
                 },
+                Unsettled::EffectExceeded { conflict, .. } => {
+                    MirErrorKind::EffectExceeded(conflict)
+                }
                 Unsettled::AmbiguousSignature {
                     name, candidates, ..
                 } => MirErrorKind::AmbiguousFunction {
@@ -2303,19 +2330,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             Some([]) | None => self.solver.fresh_ty_var(),
         };
-        let effect = self.solver.fresh_effect_var();
-        let call = TyTerm::Fn {
-            params,
-            ret: Box::new(ret.clone()),
-            captures: vec![],
-            effect: effect.clone(),
-        };
-        self.note_call_effect(&effect, call_span);
-        self.record(callee_id, call.clone());
-        let decision = self.solver.decide(Decision::Signature {
+        let decision = self.solver.decide_signature(UndecidedCall {
             name,
-            call,
+            call: CallShape {
+                params,
+                ret: ret.clone(),
+            },
             options,
+            body_effect: self.body_effect.clone(),
         });
         self.decision_sites.insert(decision, call_span);
         self.direct_calls
@@ -2331,25 +2353,38 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         types: Vec<InferTy>,
         call_span: Span,
     ) -> InferTy {
-        let params = types
-            .into_iter()
-            .enumerate()
-            .map(|(index, ty)| ParamTerm::new(self.interner.intern(&index.to_string()), ty))
-            .collect();
-        let call = TyTerm::Fn {
-            params,
-            ret: Box::new(self.solver.fresh_ty_var()),
-            captures: vec![],
-            effect: self.solver.fresh_effect_var(),
+        let call = CallShape {
+            params: types
+                .into_iter()
+                .enumerate()
+                .map(|(index, ty)| ParamTerm::new(self.interner.intern(&index.to_string()), ty))
+                .collect(),
+            ret: self.solver.fresh_ty_var(),
         };
         self.error(
             MirErrorKind::NoMatchingFunction {
                 name: name.to_string(),
-                ty: self.type_as_written(&call),
+                ty: self.call_type_as_written(&call),
             },
             call_span,
         );
         Self::infer_error()
+    }
+
+    /// The function type the call was written as. A call that matched no
+    /// signature ran no instance, so it has no effect, and `Effect::PURE`
+    /// is what the printer writes as nothing.
+    fn call_type_as_written(&self, call: &CallShape) -> Ty {
+        Ty::Fn {
+            params: call
+                .params
+                .iter()
+                .map(|param| ParamTerm::new(param.name, self.type_as_written(&param.ty)))
+                .collect(),
+            ret: Box::new(self.type_as_written(&call.ret)),
+            captures: vec![],
+            effect: EffectTerm::Known(Effect::PURE),
+        }
     }
 
     /// Every argument of an overloaded call, checked left to right against

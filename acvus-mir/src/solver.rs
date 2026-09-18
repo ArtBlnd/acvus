@@ -952,12 +952,6 @@ impl Terms {
                 if let Err(conflict) = self.unify_effect(ea, eb, EffectRelation::AtMost) {
                     return Err(mismatch_for(self, task_reason(&conflict)));
                 }
-                let settling_a_call = kind == JoinKind::Decision && position == Position::Value;
-                if settling_a_call
-                    && let Err(conflict) = self.unify_effect(eb, ea, EffectRelation::AtMost)
-                {
-                    return Err(mismatch_for(self, task_reason(&conflict)));
-                }
                 Ok(())
             }
             (
@@ -1313,8 +1307,9 @@ pub enum Decision {
     /// parameter there, so that decision settles once this one has.
     Signature {
         name: Astr,
-        call: InferTy,
+        call: CallShape,
         options: Vec<SignatureOption>,
+        body_effect: EffectTerm<Infer>,
     },
     /// Since no `&&T` exists (RFC-0029), what a reference to a place names
     /// depends on whether the place itself holds a reference. The checker
@@ -1493,6 +1488,45 @@ pub struct ConvertedArgument {
     pub ty: InferTy,
 }
 
+/// A call of an overloaded bare name as the call site wrote it (RFC-0043).
+/// There is no effect here, and that is a decision rather than an omission.
+/// A call runs what the instance it settles on runs, so before the
+/// signature decision settles there is no effect to hold; a field holding
+/// one would be a second term for one effect, and the settle joins the two
+/// under RFC-0017's demotion, which leaves the call's free to freeze below
+/// the instance's. That is how `find` and `last` over a suspending pipeline
+/// took their asynchronous instance while the call froze to `Pure`,
+/// carrying neither the task nor the contexts.
+/// `a_calls_effect_is_the_term_of_its_instance` is the test that fails when
+/// an effect of the call's own comes back.
+#[derive(Debug, Clone)]
+pub struct CallShape {
+    pub params: Vec<ParamTerm<Infer>>,
+    pub ret: InferTy,
+}
+
+impl CallShape {
+    fn at_effect(&self, effect: EffectTerm<Infer>) -> InferTy {
+        TyTerm::Fn {
+            params: self.params.clone(),
+            ret: Box::new(self.ret.clone()),
+            captures: vec![],
+            effect,
+        }
+    }
+}
+
+/// `body_effect` travels with the call for the same reason the effect is
+/// absent from `CallShape`: the effect the enclosing body must be raised by
+/// is the instance's, unknown until the decision settles, so the decision
+/// raises it and the checker cannot.
+pub struct UndecidedCall {
+    pub name: Astr,
+    pub call: CallShape,
+    pub options: Vec<SignatureOption>,
+    pub body_effect: EffectTerm<Infer>,
+}
+
 /// How one candidate takes one argument (RFC-0043).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
@@ -1515,7 +1549,10 @@ impl Decision {
 pub enum Answer {
     Instance(InstanceKind),
     Conversion(Conversion),
-    Signature(SettledSignature),
+    Signature {
+        settled: SettledSignature,
+        callee_ty: InferTy,
+    },
     Lend(Lend),
     Match(MatchMode),
 }
@@ -1608,12 +1645,18 @@ pub enum Unsettled {
     NoSignature {
         decision: DecisionId,
         name: Astr,
-        call: InferTy,
+        call: CallShape,
     },
     AmbiguousSignature {
         decision: DecisionId,
         name: Astr,
         candidates: Vec<SignatureName>,
+    },
+    /// The settled instance's effect is above what the body the call runs
+    /// in allows (RFC-0046).
+    EffectExceeded {
+        decision: DecisionId,
+        conflict: EffectConflict,
     },
     /// RFC-0018.
     ReferenceCaptured {
@@ -1652,6 +1695,7 @@ impl Unsettled {
             | Unsettled::ConversionNeedsPlace { decision, .. }
             | Unsettled::NoSignature { decision, .. }
             | Unsettled::AmbiguousSignature { decision, .. }
+            | Unsettled::EffectExceeded { decision, .. }
             | Unsettled::ReferenceCaptured { decision }
             | Unsettled::MutableBorrowOfShared { decision }
             | Unsettled::LendMismatch { decision, .. }
@@ -1744,6 +1788,30 @@ impl<'src> Solver<'src> {
 
     pub fn fresh_effect_var(&mut self) -> EffectTerm<Infer> {
         EffectTerm::Var(self.terms.alloc_effect_var())
+    }
+
+    pub fn decide_signature(&mut self, call: UndecidedCall) -> DecisionId {
+        let UndecidedCall {
+            name,
+            call,
+            options,
+            body_effect,
+        } = call;
+        self.decide(Decision::Signature {
+            name,
+            call,
+            options,
+            body_effect,
+        })
+    }
+
+    pub fn settled_callee_ty(&self, id: DecisionId) -> Option<InferTy> {
+        let DecisionState::Settled(Answer::Signature { callee_ty, .. }) =
+            &self.decisions[id.0 as usize].state
+        else {
+            return None;
+        };
+        Some(self.terms.resolve_ty(callee_ty))
     }
 
     pub fn fresh_len_var(&mut self) -> LenTerm<Infer> {
@@ -2041,7 +2109,8 @@ impl<'src> Solver<'src> {
                 name,
                 call,
                 options,
-            } => self.step_signature(id, name, &call, options),
+                body_effect,
+            } => self.step_signature(id, name, &call, options, &body_effect),
             Decision::Lend {
                 of,
                 referent,
@@ -2216,15 +2285,17 @@ impl<'src> Solver<'src> {
         }
     }
 
-    /// A signature decision narrows to the candidates the call type would
-    /// still take (RFC-0043) and settles when one remains: that function,
-    /// instantiated as a call of it, is joined with the call type.
+    /// A signature decision narrows to the candidates the call would still
+    /// take (RFC-0043) and settles when one remains: the call takes that
+    /// instance's effect, and the function type it thereby has is joined
+    /// with the instance.
     fn step_signature(
         &mut self,
         id: DecisionId,
         name: Astr,
-        call: &InferTy,
+        call: &CallShape,
         options: Vec<SignatureOption>,
+        body_effect: &EffectTerm<Infer>,
     ) -> Progress {
         let remaining: Vec<SignatureOption> = options
             .iter()
@@ -2241,7 +2312,7 @@ impl<'src> Solver<'src> {
             [] => Progress::Failed(Unsettled::NoSignature {
                 decision: id,
                 name,
-                call: self.terms.resolve_ty(call),
+                call: self.resolve_shape(call),
             }),
             [only] => {
                 let (ty, settled) = match &only.candidate {
@@ -2262,8 +2333,21 @@ impl<'src> Solver<'src> {
                     }
                     SignatureCandidate::Local { ty } => (ty.clone(), SettledSignature::Local),
                 };
-                match self.settle_join(call, &ty) {
-                    Ok(()) => Progress::Settled(Answer::Signature(settled)),
+                let effect = self.effect_of_instance(&ty);
+                if let Err(conflict) =
+                    self.terms
+                        .unify_effect(&effect, body_effect, EffectRelation::AtMost)
+                {
+                    return Progress::Failed(Unsettled::EffectExceeded {
+                        decision: id,
+                        conflict,
+                    });
+                }
+                match self.settle_join(&call.at_effect(effect), &ty) {
+                    Ok(()) => Progress::Settled(Answer::Signature {
+                        settled,
+                        callee_ty: ty,
+                    }),
                     Err(Mismatch { expected, got, .. }) => {
                         Progress::Failed(Unsettled::InstanceMismatch {
                             decision: id,
@@ -2278,17 +2362,45 @@ impl<'src> Solver<'src> {
         }
     }
 
-    fn takes_signature(&self, call: &InferTy, option: &SignatureOption) -> bool {
+    fn resolve_shape(&self, call: &CallShape) -> CallShape {
+        CallShape {
+            params: call
+                .params
+                .iter()
+                .map(|param| ParamTerm::new(param.name, self.terms.resolve_ty(&param.ty)))
+                .collect(),
+            ret: self.terms.resolve_ty(&call.ret),
+        }
+    }
+
+    /// A local binding used as a signature (RFC-0043) can still be an open
+    /// variable with no function head, so there is no declared effect to
+    /// read. The variable made here is that binding's own: `settle_join`
+    /// below gives an unbound instance this very call type, which is how
+    /// the binding comes to carry this term.
+    fn effect_of_instance(&mut self, instance: &InferTy) -> EffectTerm<Infer> {
+        match self.terms.shallow_resolve_ty(instance) {
+            TyTerm::Fn { effect, .. } => effect,
+            _ => self.fresh_effect_var(),
+        }
+    }
+
+    fn takes_signature(&self, call: &CallShape, option: &SignatureOption) -> bool {
         let converted = option.converted.as_slice();
+        let mut trial = self.terms.clone();
+        let call_ty = call.at_effect(EffectTerm::Var(trial.alloc_effect_var()));
         let scheme = match &option.candidate {
             SignatureCandidate::Named { scheme, .. } => scheme,
-            SignatureCandidate::Local { ty } => return self.would_unify(call, ty),
+            SignatureCandidate::Local { ty } => {
+                return trial
+                    .join(&call_ty, ty, Position::Value, JoinKind::Flow, self.registry)
+                    .is_ok();
+            }
         };
-        let mut trial = self.terms.clone();
         let instance = trial.instantiate_open(&scheme.ty, self.registry);
         if trial
             .join(
-                call,
+                &call_ty,
                 &instance,
                 Position::Value,
                 JoinKind::Decision,
@@ -2298,18 +2410,19 @@ impl<'src> Solver<'src> {
         {
             return false;
         }
-        let TyTerm::Fn { params, .. } = call else {
-            unreachable!("a signature decision is opened on a call type")
-        };
-        let bounds_meet = params.iter().zip(scheme.params()).all(|(param, declared)| {
-            match self.terms.shallow_resolve_ty(&param.ty) {
-                TyTerm::Var(var) => self
-                    .bound_of_var(var)
-                    .meet(&scheme.param_bound(&declared.ty))
-                    .is_some(),
-                _ => true,
-            }
-        });
+        let bounds_meet =
+            call.params
+                .iter()
+                .zip(scheme.params())
+                .all(
+                    |(param, declared)| match self.terms.shallow_resolve_ty(&param.ty) {
+                        TyTerm::Var(var) => self
+                            .bound_of_var(var)
+                            .meet(&scheme.param_bound(&declared.ty))
+                            .is_some(),
+                        _ => true,
+                    },
+                );
         if !bounds_meet {
             return false;
         }
@@ -2410,10 +2523,7 @@ impl<'src> Solver<'src> {
                 let Decision::Signature { call, .. } = &decision.decision else {
                     return false;
                 };
-                let TyTerm::Fn { params, .. } = call else {
-                    unreachable!("a signature decision is opened on a call type")
-                };
-                params.iter().any(|param| {
+                call.params.iter().any(|param| {
                     matches!(self.terms.shallow_resolve_ty(&param.ty), TyTerm::Var(v) if v == var)
                 })
             })

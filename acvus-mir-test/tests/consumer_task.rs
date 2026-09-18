@@ -353,13 +353,17 @@ fn effect_of(i: &Interner, functions: Vec<Function>, name: &str) -> Effect {
         .expect("a function type")
 }
 
-fn step(i: &Interner, ns: &str, param: Ty) -> Function {
+fn step_running(i: &Interner, ns: &str, param: Ty, effect: Effect) -> Function {
     extern_at(
         i,
         QualifiedRef::qualified(i.intern(ns), i.intern("step")),
         param,
-        Effect::OPAQUE.at_task(Task::Async),
+        effect,
     )
+}
+
+fn step(i: &Interner, ns: &str, param: Ty) -> Function {
+    step_running(i, ns, param, Effect::OPAQUE.at_task(Task::Async))
 }
 
 /// The name is one declaration's alone: the call type carries the declared
@@ -392,6 +396,58 @@ fn a_call_to_an_overloaded_name_takes_the_effect_it_settled_on() {
     );
     assert_eq!(effect.task, Task::Async);
     assert!(!effect.is_pure());
+}
+
+/// The structure under the two rows above, rather than their outcome: the
+/// call's effect term is the settled instance's, so whatever that one
+/// declaration carries the call carries, whole - contexts, purity and task.
+/// The two declarations run different effects and neither is the bottom of
+/// the lattice, so the assertion separates three answers a call could give:
+/// the instance's, the other declaration's, and the `Pure/Sync` a term of
+/// the call's own would freeze to. Only the first passes, and a name one
+/// declaration owns is read by the same assertion.
+#[test]
+fn a_calls_effect_is_the_term_of_its_instance() {
+    struct Declaration {
+        namespace: &'static str,
+        param: Ty,
+        effect: Effect,
+        argument: &'static str,
+    }
+    let declarations = [
+        Declaration {
+            namespace: "one",
+            param: Ty::I64,
+            effect: Effect::OPAQUE.at_task(Task::Heavy),
+            argument: "1",
+        },
+        Declaration {
+            namespace: "two",
+            param: Ty::Bool,
+            effect: Effect::IDEMPOTENT.at_task(Task::Async),
+            argument: "true",
+        },
+    ];
+
+    let i = Interner::new();
+    let declared: Vec<Function> = declarations
+        .iter()
+        .map(|d| step_running(&i, d.namespace, d.param.clone(), d.effect.clone()))
+        .collect();
+    for (n, d) in declarations.iter().enumerate() {
+        for externs in [&declared[n..=n], &declared[..]] {
+            let module = lowered_script_module(&i, &format!("step({})", d.argument), externs)
+                .expect("lowers");
+            assert_eq!(
+                call_effect_of(&module, &i, "step"),
+                d.effect,
+                "`step({})`, the name shared by {} declaration(s): the call's effect is the \
+                 term of the instance it settled on",
+                d.argument,
+                externs.len()
+            );
+        }
+    }
 }
 
 // -- The same rule over the RFC-0046 compiler tests' programs -----------
