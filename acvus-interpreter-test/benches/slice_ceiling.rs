@@ -18,8 +18,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::Externs;
-use acvus_interpreter::code::{Code, Op, Payload};
+use acvus_extern::{Externs, Owned};
+use acvus_interpreter::code::{Block, Code, Op};
 use acvus_interpreter::{
     AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,
@@ -410,27 +410,36 @@ fn drop_the_bound_check(code: &mut Code) {
     let Code::Body(body) = code else {
         panic!("a body with a loop prepares as a Body")
     };
-    let checked = acvus_interpreter::index_handlers::checked(IndexMode::Copy);
-    let unchecked = acvus_interpreter::index_handlers::unchecked(IndexMode::Copy);
-    let swap = |ops: &mut [Op]| {
-        ops.iter_mut()
-            .filter(|op| std::ptr::fn_addr_eq(op.f, checked))
-            .map(|op| op.f = unchecked)
-            .count()
-    };
-    let swapped: usize = body
-        .payloads
-        .iter_mut()
-        .filter_map(|payload| match payload {
-            Payload::Loop(region) => Some(region),
-            _ => None,
-        })
-        .map(|region| swap(region.head.ops_mut()) + swap(region.body.ops_mut()))
-        .sum();
+    let swapped = swap_in_blocks(&mut body.blocks);
     assert_eq!(swapped, 2, "both element reads lost their bound check");
 }
 
-fn page(n: usize) -> HashMap<String, Value> {
+/// Every checked `Index` of these blocks and of the parts their regions
+/// hold, replaced by the unchecked form of the same read.
+fn swap_in_blocks(blocks: &mut [Block]) -> usize {
+    let mut swapped = 0;
+    for block in blocks {
+        swapped += swap_in_ops(&mut block.ops);
+    }
+    swapped
+}
+
+fn swap_in_ops(ops: &mut [Box<dyn Op>]) -> usize {
+    let mut swapped = 0;
+    for op in ops.iter_mut() {
+        if let Some(read) = op.index_read() {
+            *op = acvus_interpreter::index_handlers::unchecked(IndexMode::Copy, read);
+            swapped += 1;
+            continue;
+        }
+        for owned in op.owns_mut() {
+            swapped += swap_in_ops(owned);
+        }
+    }
+    swapped
+}
+
+fn page(n: usize) -> HashMap<String, Owned<AcvusRuntime>> {
     let run = |offset: f64| {
         let values: Vec<Value> = (0..n).map(|i| Value::float(i as f64 + offset)).collect();
         // SAFETY: read back only as this same `Vec<Value>`, which is what
@@ -443,6 +452,7 @@ fn page(n: usize) -> HashMap<String, Value> {
         (LENGTH.to_string(), Value::int(n as i64)),
     ]
     .into_iter()
+    .map(|(name, value)| (name, Owned::from_value(value)))
     .collect()
 }
 
@@ -458,13 +468,24 @@ fn dispatches_per_iteration(code: &Code) -> usize {
     let Code::Body(body) = code else {
         panic!("a body with a loop prepares as a Body")
     };
-    body.payloads
+    body.blocks
         .iter()
-        .filter_map(|payload| match payload {
-            Payload::Loop(region) => Some(region),
-            _ => None,
+        .flat_map(|block| block.ops.iter())
+        .flat_map(|op| op.owns())
+        .map(|owned| ops_in(owned.ops))
+        .sum()
+}
+
+/// The operations a region's part runs, its nested regions included.
+fn ops_in(ops: &[Box<dyn Op>]) -> usize {
+    ops.iter()
+        .map(|op| {
+            1 + op
+                .owns()
+                .into_iter()
+                .map(|owned| ops_in(owned.ops))
+                .sum::<usize>()
         })
-        .map(|region| region.head.iter().count() + region.body.iter().count())
         .sum()
 }
 

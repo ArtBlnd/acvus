@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use acvus_extern::{NodeHash, SpaceError, SpaceResult};
+use acvus_extern::{NodeHash, Owned, SpaceError, SpaceResult};
 use acvus_mir::ty::Ty;
 
 use crate::layout::{self, Nested};
@@ -611,7 +611,7 @@ pub struct SpacePage {
     space: Arc<Space>,
     rt: AcvusRuntime,
     types: HashMap<String, Ty>,
-    held: Mutex<HashMap<String, Value>>,
+    held: Mutex<HashMap<String, Owned<AcvusRuntime>>>,
 }
 
 impl SpacePage {
@@ -620,7 +620,7 @@ impl SpacePage {
     pub fn new(
         space: Arc<Space>,
         rt: AcvusRuntime,
-        seed: HashMap<String, (Ty, Value)>,
+        seed: HashMap<String, (Ty, Owned<AcvusRuntime>)>,
     ) -> SpaceResult<Self> {
         let mut types: HashMap<String, Ty> = space.identities()?.into_iter().collect();
         let mut held = HashMap::new();
@@ -661,7 +661,7 @@ impl SpacePage {
 }
 
 impl crate::journal::RuntimeContext for SpacePage {
-    fn take(&self, key: &str) -> Option<Value> {
+    fn take(&self, key: &str) -> Option<Owned<AcvusRuntime>> {
         if let Some(v) = self.held.lock().expect("page").remove(key) {
             return Some(v);
         }
@@ -669,9 +669,10 @@ impl crate::journal::RuntimeContext for SpacePage {
         self.space
             .load(&self.rt, key, ty)
             .unwrap_or_else(|e| panic!("context fetch: @{key}: {e}"))
+            .map(Owned::from_value)
     }
 
-    fn set(&self, key: &str, value: Value) {
+    fn set(&self, key: &str, value: Owned<AcvusRuntime>) {
         self.held
             .lock()
             .expect("page")

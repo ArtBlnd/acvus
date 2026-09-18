@@ -155,6 +155,22 @@ and of a Rust holder that took ownership. Everything else copies.
 
 ## Consequences
 
+- **Rules 1–9 are implemented under RFC-0052, and the frame is the cell
+  this RFC drew.** `Cell { slots: [MaybeUninit<Value>; 15], marked: u64
+  }`, `#[repr(align(64))]`, 256 bytes; a `Store` is an array of them and
+  a call's frame is the next cell, proved by one capacity compare. There
+  is no chain-wide bitmap: an intermediate design that made the window a
+  **bit offset** into one made `own_mask`/`take_mask` compute a word and
+  a variable shift at run time, with a straddle half and a
+  `panic_bounds_check` edge on `CallExtern1::run`'s path before the
+  call, and was measured at `int while` 153 instructions per iteration
+  against master's 128. It was cut back to the drawn shape, which
+  measures 130.
+- An element's position is `Owned<R>`; the two holders (a container's
+  elements and an iterator stage's captured closure) are what call
+  `Release`, and a runtime value is `Copy` — a fixture runtime that had
+  an `impl Drop` has an `impl Release` instead (`acvus-ext/benches/
+  iter_cost.rs`). `Ref::map`'s bound is the same `Copy + Release`.
 - Measured after it lands: `ops::control::ret` frame and pads; the
   landing-pad count in extern glue (189 → the number); `drop_glue::
   <Registers>` gone from every profile; `map cap | sum` (`ret` 6.3 % +

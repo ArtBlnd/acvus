@@ -5,10 +5,9 @@
 //! where the arm that must not run is an extern call rather than a
 //! division.
 
-use std::sync::Arc;
-
-use acvus_interpreter::code::{Code, Diamond, Payload, payload_name};
-use acvus_interpreter::{PrepareCtx, prepare_module};
+use acvus_interpreter_test::listing::{
+    RegionListing, ops_of_anywhere, regions_named, script_listing,
+};
 use acvus_interpreter_test::*;
 use acvus_utils::Interner;
 
@@ -19,52 +18,38 @@ struct DiamondShape {
     join_moves: usize,
 }
 
-fn prepared_payloads(source: &str) -> Vec<String> {
-    let interner = Interner::new();
-    let (context_types, _snapshot) = split_context(&interner, Context::default());
-    let cr = compile_script_mode(&interner, source, &context_types);
-    let ctx = PrepareCtx {
-        interner: &interner,
-        externs: &cr.extern_executables,
-        context_names: &cr.context_names,
-    };
-    let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
-    let prepared = Arc::new(prepare_module(module, &ctx));
-    let Code::Body(main) = &*prepared.main else {
-        panic!("the entry module's main is a body, not a one-chain expression")
-    };
-    main.payloads
-        .iter()
-        .map(|payload| match payload {
-            Payload::Diamond(Diamond { on_true, on_false }) => {
-                assert_eq!(
-                    on_true.join.len(),
-                    on_false.join.len(),
-                    "both arms of a diamond feed the same join parameters"
-                );
-                format!(
-                    "{:?}",
-                    DiamondShape {
-                        on_true_ops: on_true.block.iter().count(),
-                        on_false_ops: on_false.block.iter().count(),
-                        join_moves: on_true.join.len(),
-                    }
-                )
-            }
-            other => payload_name(other).to_string(),
-        })
-        .collect()
+fn shape_of(region: &RegionListing) -> DiamondShape {
+    let on_true = region
+        .part("on_true")
+        .expect("a Diamond holds an on_true arm");
+    let on_false = region
+        .part("on_false")
+        .expect("a Diamond holds an on_false arm");
+    assert_eq!(
+        on_true.leaves_with, on_false.leaves_with,
+        "both arms of a diamond feed the same join parameters"
+    );
+    DiamondShape {
+        on_true_ops: on_true.ops.len(),
+        on_false_ops: on_false.ops.len(),
+        join_moves: on_true.leaves_with,
+    }
 }
 
 fn diamonds_innermost_first(source: &str) -> Vec<String> {
-    prepared_payloads(source)
-        .into_iter()
-        .filter(|name| name.starts_with("DiamondShape"))
-        .collect()
+    let interner = Interner::new();
+    regions_named(
+        &script_listing(&interner, source, Context::default()),
+        "Diamond",
+    )
+    .into_iter()
+    .map(|region| format!("{:?}", shape_of(region)))
+    .collect()
 }
 
 fn loop_count(source: &str) -> usize {
-    prepared_payloads(source)
+    let interner = Interner::new();
+    ops_of_anywhere(&script_listing(&interner, source, Context::default()))
         .iter()
         .filter(|name| *name == "Loop")
         .count()
@@ -114,7 +99,21 @@ async fn an_if_nested_in_an_arm_is_a_diamond_inside_a_diamond() {
     assert_eq!(
         diamonds_innermost_first(source),
         vec![shape(1, 1, 0), shape(2, 1, 0)],
-        "the outer arm holds the inner test's compare and then the inner diamond"
+        "the outer arm counts the inner diamond among its own operations"
+    );
+    let interner = Interner::new();
+    let outer = script_listing(&interner, source, Context::default());
+    let outer = regions_named(&outer, "Diamond");
+    let arm = outer
+        .last()
+        .expect("the outer diamond")
+        .part("on_true")
+        .expect("its true arm");
+    assert_eq!(
+        arm.ops,
+        vec!["Gt<i64>", "Diamond"],
+        "the outer arm is one operation: the inner diamond, which reads the inner \
+         test's word and runs its own arm straight"
     );
 }
 

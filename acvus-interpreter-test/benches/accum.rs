@@ -6,7 +6,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::{Registry, extern_fn, extern_registry};
+use acvus_extern::{Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
 use acvus_interpreter_test::{
     Context, compile_source_with_externs, execute_compiled, split_context, typed,
@@ -205,7 +205,7 @@ fn context(interner: &Interner, n: i64) -> Context {
         .collect()
 }
 
-fn snapshot(interner: &Interner, n: i64) -> HashMap<String, Value> {
+fn snapshot(interner: &Interner, n: i64) -> HashMap<String, Owned<AcvusRuntime>> {
     split_context(interner, context(interner, n)).1
 }
 
@@ -380,16 +380,23 @@ fn main() {
         .iter()
         .filter(|c| only.as_deref().is_none_or(|o| c.name == o))
     {
-        for size in [
-            Size {
-                n: 100_000,
-                reps: 20,
-            },
-            Size {
-                n: 1_000_000,
-                reps: 5,
-            },
-        ] {
+        let sizes = match std::env::var("ACCUM_N").ok() {
+            Some(n) => vec![Size {
+                n: n.parse().expect("ACCUM_N is an integer"),
+                reps: 1,
+            }],
+            None => vec![
+                Size {
+                    n: 100_000,
+                    reps: 20,
+                },
+                Size {
+                    n: 1_000_000,
+                    reps: 5,
+                },
+            ],
+        };
+        for size in sizes {
             let Timing { execute, rust } = measure(&rt, case, &size);
             let n = size.n;
             println!(

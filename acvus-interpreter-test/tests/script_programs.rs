@@ -3,6 +3,7 @@
 //! Each test loads a `.acvus` script via `include_str!` and executes it
 //! with different contexts. Run with `--nocapture` to see printed results.
 
+use acvus_extern::Owned;
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
 use acvus_mir::ty::{LenTerm, Ty};
@@ -64,8 +65,8 @@ const GRADE_CLASSIFIER: &str = include_str!("scripts/grade_classifier.acvus");
 
 fn student(i: &Interner, name: &str, score: i64) -> Value {
     Value::object(FxHashMap::from_iter([
-        (i.intern("name"), Value::string(name)),
-        (i.intern("score"), Value::int(score)),
+        (i.intern("name"), Owned::from_value(Value::string(name))),
+        (i.intern("score"), Owned::from_value(Value::int(score))),
     ]))
 }
 
@@ -80,7 +81,7 @@ fn students(i: &Interner, items: Vec<Value>) -> TypedValue {
     let len = items.len();
     typed(
         Ty::Array(Box::new(student_ty(i)), LenTerm::Known(len)),
-        Value::array(items),
+        Value::array(items.into_iter().map(Owned::from_value).collect()),
     )
 }
 

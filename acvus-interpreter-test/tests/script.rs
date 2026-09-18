@@ -1,5 +1,6 @@
 //! Interpreter e2e tests for script-mode: let, for-loop, if-let, context writes.
 
+use acvus_extern::Owned;
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
 use acvus_mir::ty::{LenTerm, Ty};
@@ -89,7 +90,11 @@ fn ints_ty(len: usize) -> Ty {
 }
 
 fn ints_value(xs: &[i64]) -> Value {
-    Value::array(xs.iter().map(|&x| Value::int(x)).collect())
+    Value::array(
+        xs.iter()
+            .map(|&x| Owned::from_value(Value::int(x)))
+            .collect(),
+    )
 }
 
 fn ints(xs: &[i64]) -> TypedValue {
@@ -127,7 +132,10 @@ async fn iter_nested() {
     let i = Interner::new();
     let matrix = typed(
         Ty::Array(Box::new(ints_ty(2)), LenTerm::Known(2)),
-        Value::array(vec![ints_value(&[1, 2]), ints_value(&[3, 4])]),
+        Value::array(vec![
+            Owned::from_value(ints_value(&[1, 2])),
+            Owned::from_value(ints_value(&[3, 4])),
+        ]),
     );
     let c = ctx(&i, vec![("matrix", matrix), ("sum", int(0))]);
     let result = run_script_mode(
@@ -211,7 +219,10 @@ async fn iter_field_then_loop() {
     let items = i.intern("items");
     let data = typed(
         Ty::Object(FxHashMap::from_iter([(items, ints_ty(2))])),
-        Value::object(FxHashMap::from_iter([(items, ints_value(&[10, 20]))])),
+        Value::object(FxHashMap::from_iter([(
+            items,
+            Owned::from_value(ints_value(&[10, 20])),
+        )])),
     );
     let c = ctx(&i, vec![("data", data), ("sum", int(0))]);
     let result = run_script_mode(

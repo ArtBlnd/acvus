@@ -3,7 +3,7 @@
 //! goes through the hooks its registry declared, and a nested extension
 //! value is written as the head of its own log, which the space supplies.
 
-use acvus_extern::{NodeHash, SpaceError, SpaceHooks, SpaceResult};
+use acvus_extern::{NodeHash, Owned, SpaceError, SpaceHooks, SpaceResult};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::{LenTerm, Repr, Ty};
 use acvus_utils::Astr;
@@ -198,20 +198,20 @@ pub fn decode(
             }
             Value::array(
                 (0..count)
-                    .map(|_| decode(rt, nested, elem, input))
+                    .map(|_| decode(rt, nested, elem, input).map(Owned::from_value))
                     .collect::<SpaceResult<_>>()?,
             )
         }
         Ty::Tuple(elems) => Value::tuple(
             elems
                 .iter()
-                .map(|t| decode(rt, nested, t, input))
+                .map(|t| decode(rt, nested, t, input).map(Owned::from_value))
                 .collect::<SpaceResult<_>>()?,
         ),
         Ty::Object(fields) => {
             let mut values = FxHashMap::default();
             for (k, t) in sorted_fields(rt, fields) {
-                values.insert(*k, decode(rt, nested, t, input)?);
+                values.insert(*k, Owned::from_value(decode(rt, nested, t, input)?));
             }
             Value::object(values)
         }
@@ -221,8 +221,8 @@ pub fn decode(
             other => return Err(SpaceError::new(format!("Option: tag {other}"))),
         },
         Ty::Result(ok, err) => Value::result(match take(input, 1)?[0] {
-            0 => Ok(decode(rt, nested, ok, input)?),
-            1 => Err(decode(rt, nested, err, input)?),
+            0 => Ok(Owned::from_value(decode(rt, nested, ok, input)?)),
+            1 => Err(Owned::from_value(decode(rt, nested, err, input)?)),
             other => return Err(SpaceError::new(format!("Result: tag {other}"))),
         }),
         Ty::Enum { variants, .. } => {
@@ -232,7 +232,7 @@ pub fn decode(
                 .get(index)
                 .ok_or_else(|| SpaceError::new("variant index out of its enum type"))?;
             let payload = match payload_ty {
-                Some(t) => Some(decode(rt, nested, t, input)?),
+                Some(t) => Some(Owned::from_value(decode(rt, nested, t, input)?)),
                 None => None,
             };
             Value::variant(**tag, payload)

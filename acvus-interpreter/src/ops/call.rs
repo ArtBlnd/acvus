@@ -1,385 +1,729 @@
 //! Calls: the extern instances, the named functions, the closures, the
 //! spawns, and the closure constructor.
 //!
-//! A synchronous extern runs inside the loop. Everything that can suspend —
-//! an asynchronous extern, a call into another body, an `Eval` — hands a
-//! `'static` future up to the driver.
+//! A synchronous extern is an operation and runs inside the block. Everything
+//! that can suspend — an asynchronous extern, a heavy extern, a call into
+//! another body, an `Eval` — is a terminator: it hands a `'static` future to
+//! the driver and leaves the block at `SUSPEND`.
+//!
+//! `prepare` reads a handler's `SyncAbi`/`StateAbi` once, picks the operation
+//! by the arity it names, and moves the bare `fn` in as a field; a `run` here
+//! calls it with no decision in between (RFC-0052 §6).
 
 use std::sync::Arc;
 
-use futures::future::BoxFuture;
+use acvus_extern::{AsyncCall, Elements, Owned, State, StateRef, erase_elements};
+use acvus_mir::graph::QualifiedRef;
+use smallvec::SmallVec;
 
-use crate::code::{
-    ArgWindow, ExternArgs, ExternCall, Flow, FusedCall, NO_SLOT, Op, OpFn, PREVIOUS, Payload,
-    Pending,
-};
+use crate::code::{BlockId, Deref, Off, Op, SUSPEND, Terminator};
 use crate::interpreter::lookup_module;
-use crate::machine::{Machine, call_module, call_module_sync, fn_value_call, fn_value_call_sync};
-use crate::ops::control::move_all;
-use crate::ops::payload;
-use crate::runtime::{ExternHandler, SyncHandler};
+use crate::machine::{Machine, call_module, call_module_sync, fn_value_call};
+use crate::runtime::{AcvusRuntime, SyncCall};
 use crate::value::{FnValue, HandleValue, Value};
 
-/// The call's arguments, moved out of their registers. A body is entered
-/// with the arguments it owns, so a call into one stages them; an extern
-/// handler is lent its window instead.
-fn arg_values(machine: &mut Machine<'_>, slots: &[u32]) -> Vec<Value> {
-    slots.iter().map(|slot| machine.use_val(*slot)).collect()
+pub type Sync0 = acvus_extern::Sync0<AcvusRuntime>;
+pub type Sync1 = acvus_extern::Sync1<AcvusRuntime>;
+pub type Sync2 = acvus_extern::Sync2<AcvusRuntime>;
+pub type Sync3 = acvus_extern::Sync3<AcvusRuntime>;
+pub type SyncWindow = acvus_extern::SyncWindow<AcvusRuntime>;
+pub type SyncSlice = acvus_extern::SyncSlice<AcvusRuntime>;
+
+/// `acvus_extern::handler` declares these six as `State0<R>..StateSlice<R>`
+/// but exports neither them nor its module, so they are spelled here at
+/// `R = AcvusRuntime`. A `StateAbi` destructured in `prepare` is assigned
+/// straight into these fields, which is where a divergence from the
+/// declarations would surface.
+pub type State0 = fn(StateRef<'_>, &AcvusRuntime) -> Value;
+pub type State1 = fn(StateRef<'_>, &AcvusRuntime, Value) -> Value;
+pub type State2 = fn(StateRef<'_>, &AcvusRuntime, Value, Value) -> Value;
+pub type State3 = fn(StateRef<'_>, &AcvusRuntime, Value, Value, Value) -> Value;
+pub type StateWindow = fn(StateRef<'_>, &AcvusRuntime, &[Value]) -> Value;
+pub type StateSlice = fn(StateRef<'_>, &AcvusRuntime, Value) -> Elements<AcvusRuntime>;
+
+pub type Async = acvus_extern::Async<AcvusRuntime>;
+pub type AsyncState = acvus_extern::AsyncState<AcvusRuntime>;
+
+/// A body is entered with the arguments it owns, so a call into one stages
+/// them: each read where it stands, and the frame's claim on the ones this
+/// call consumes dropped in one mask.
+#[inline]
+fn staged(m: &mut Machine<'_>, slots: &[Off], takes: u64) -> Vec<Value> {
+    let regs = m.regs();
+    let args = slots.iter().map(|slot| regs.read(*slot)).collect();
+    regs.take_mask(takes);
+    args
 }
 
-/// The `Order` an effectful call yields is the unit value (RFC-0007); a
-/// Pure call names no order register.
-#[inline]
-fn yield_order(machine: &mut Machine<'_>, slot: u32) {
-    if slot != NO_SLOT {
-        machine.define(slot, Value::unit());
+/// The run of registers a call's arguments sit in: `prepare` laid them out
+/// contiguously and emitted the `Mov`s that put them there as operations
+/// before this call, so what is left here is where the run starts, how wide
+/// it is, and the frame's claim on the arguments the call consumes.
+pub struct ArgWindow {
+    pub at: Off,
+    pub arity: u16,
+    pub takes: u64,
+}
+
+impl ArgWindow {
+    /// The registers themselves, lent to a handler that runs before this
+    /// frame moves on (RFC-0044, stage 2b).
+    #[inline]
+    fn lend<'r>(&self, m: &'r mut Machine<'_>) -> &'r [Value] {
+        let regs = m.regs();
+        regs.take_mask(self.takes);
+        regs.run_of(self.at, self.arity)
+    }
+
+    /// The arguments owned, for work that outlives this frame.
+    fn own(&self, m: &mut Machine<'_>) -> Vec<Value> {
+        self.lend(m).to_vec()
+    }
+}
+
+pub struct CallExtern0<const LARGE: bool> {
+    pub dst: Off,
+    pub f: Sync0,
+}
+
+impl<const LARGE: bool> Op for CallExtern0<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let value = (self.f)(m.rt);
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+pub struct CallExtern1<const LARGE: bool, const WORD: bool> {
+    pub dst: Off,
+    pub a: Off,
+    pub takes: u64,
+    pub f: Sync1,
+}
+
+impl<const LARGE: bool, const WORD: bool> Op for CallExtern1<LARGE, WORD> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        regs.take_mask(self.takes);
+        let value = (self.f)(m.rt, a);
+        m.regs().store::<LARGE, WORD>(self.dst, value);
+    }
+}
+
+pub struct CallExtern2<const LARGE: bool> {
+    pub dst: Off,
+    pub a: Off,
+    pub b: Off,
+    pub takes: u64,
+    pub f: Sync2,
+}
+
+impl<const LARGE: bool> Op for CallExtern2<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        regs.take_mask(self.takes);
+        let value = (self.f)(m.rt, a, b);
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+pub struct CallExtern3<const LARGE: bool> {
+    pub dst: Off,
+    pub a: Off,
+    pub b: Off,
+    pub c: Off,
+    pub takes: u64,
+    pub f: Sync3,
+}
+
+impl<const LARGE: bool> Op for CallExtern3<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        let c = regs.read(self.c);
+        regs.take_mask(self.takes);
+        let value = (self.f)(m.rt, a, b, c);
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+/// A declaration of four or more parameters is called through its window.
+pub struct CallWindow<const LARGE: bool> {
+    pub dst: Off,
+    pub window: ArgWindow,
+    pub f: SyncWindow,
+}
+
+impl<const LARGE: bool> Op for CallWindow<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let rt = m.rt;
+        let value = (self.f)(rt, self.window.lend(m));
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+/// A slice return comes back in two registers and is boxed here (RFC-0047 §6).
+/// The boxed `Elements` is a `Large`, which is why this call carries no `LARGE`
+/// parameter.
+pub struct CallSlice {
+    pub dst: Off,
+    pub a: Off,
+    pub takes: u64,
+    pub f: SyncSlice,
+}
+
+impl Op for CallSlice {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        regs.take_mask(self.takes);
+        let run = (self.f)(m.rt, a);
+        let value = erase_elements(m.rt, run);
+        m.regs().define::<true>(self.dst, value);
+    }
+}
+
+pub struct CallState0<const LARGE: bool> {
+    pub dst: Off,
+    pub state: State,
+    pub f: State0,
+}
+
+impl<const LARGE: bool> Op for CallState0<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let value = (self.f)(&*self.state, m.rt);
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+pub struct CallState1<const LARGE: bool> {
+    pub dst: Off,
+    pub a: Off,
+    pub takes: u64,
+    pub state: State,
+    pub f: State1,
+}
+
+impl<const LARGE: bool> Op for CallState1<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        regs.take_mask(self.takes);
+        let value = (self.f)(&*self.state, m.rt, a);
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+pub struct CallState2<const LARGE: bool> {
+    pub dst: Off,
+    pub a: Off,
+    pub b: Off,
+    pub takes: u64,
+    pub state: State,
+    pub f: State2,
+}
+
+impl<const LARGE: bool> Op for CallState2<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        regs.take_mask(self.takes);
+        let value = (self.f)(&*self.state, m.rt, a, b);
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+pub struct CallState3<const LARGE: bool> {
+    pub dst: Off,
+    pub a: Off,
+    pub b: Off,
+    pub c: Off,
+    pub takes: u64,
+    pub state: State,
+    pub f: State3,
+}
+
+impl<const LARGE: bool> Op for CallState3<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        let c = regs.read(self.c);
+        regs.take_mask(self.takes);
+        let value = (self.f)(&*self.state, m.rt, a, b, c);
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+pub struct CallStateWindow<const LARGE: bool> {
+    pub dst: Off,
+    pub window: ArgWindow,
+    pub state: State,
+    pub f: StateWindow,
+}
+
+impl<const LARGE: bool> Op for CallStateWindow<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let rt = m.rt;
+        let value = (self.f)(&*self.state, rt, self.window.lend(m));
+        m.regs().define::<LARGE>(self.dst, value);
+    }
+}
+
+pub struct CallStateSlice {
+    pub dst: Off,
+    pub a: Off,
+    pub takes: u64,
+    pub state: State,
+    pub f: StateSlice,
+}
+
+impl Op for CallStateSlice {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        regs.take_mask(self.takes);
+        let run = (self.f)(&*self.state, m.rt, a);
+        let value = erase_elements(m.rt, run);
+        m.regs().define::<true>(self.dst, value);
+    }
+}
+
+/// The argument of a fused call that reads what the call before it produced
+/// rather than a register (RFC-0044, stage 6).
+pub const PREVIOUS: Off = Off::PREVIOUS;
+
+/// One call of a fused run, at the shapes `prepare::FusableCall` admits:
+/// three or fewer arguments including the held value, and a slice return.
+pub enum Call {
+    Nullary { f: Sync0 },
+    Unary { f: Sync1, a: Off },
+    Binary { f: Sync2, a: Off, b: Off },
+    Slice { f: SyncSlice, a: Off },
+}
+
+impl Call {
+    #[inline]
+    fn invoke(&self, m: &mut Machine<'_>, held: &mut Value) -> Value {
+        let rt = m.rt;
+        match *self {
+            Call::Nullary { f } => f(rt),
+            Call::Unary { f, a } => {
+                let a = arg(m, held, a);
+                f(rt, a)
+            }
+            Call::Binary { f, a, b } => {
+                let a = arg(m, held, a);
+                let b = arg(m, held, b);
+                f(rt, a, b)
+            }
+            Call::Slice { f, a } => {
+                let a = arg(m, held, a);
+                erase_elements(rt, f(rt, a))
+            }
+        }
     }
 }
 
 #[inline]
-fn extern_call<'c>(machine: &Machine<'c>, op: &Op) -> &'c ExternCall {
-    let Payload::Extern(call) = machine.payload(op) else {
-        panic!(
-            "a call to an extern instance wants an Extern payload, found {}",
-            crate::code::payload_name(machine.payload(op))
-        )
-    };
-    call
-}
-
-#[inline]
-fn window_of<'c>(call: &'c ExternCall) -> &'c ArgWindow {
-    let ExternArgs::Window(window) = &call.args else {
-        panic!("this extern call site passes its arguments by value")
-    };
-    window
-}
-
-/// RFC-0044, stage 2c.
-pub fn call_extern_0(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Sync(SyncHandler::Arity0(f)) = &call.handler else {
-        panic!("prepared as an arity-0 extern call, but the handler is not one")
-    };
-    yield_order(machine, call.order);
-    let value = f(&machine.rt);
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-pub fn call_extern_1(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Sync(SyncHandler::Arity1(f)) = &call.handler else {
-        panic!("prepared as an arity-1 extern call, but the handler is not one")
-    };
-    yield_order(machine, call.order);
-    let a0 = machine.use_val(op.b);
-    let value = f(&machine.rt, a0);
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-pub fn call_extern_2(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Sync(SyncHandler::Arity2(f)) = &call.handler else {
-        panic!("prepared as an arity-2 extern call, but the handler is not one")
-    };
-    yield_order(machine, call.order);
-    let a0 = machine.use_val(op.b);
-    let a1 = machine.use_val(op.c);
-    let value = f(&machine.rt, a0, a1);
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-pub fn call_extern_3(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Sync(SyncHandler::Arity3(f)) = &call.handler else {
-        panic!("prepared as an arity-3 extern call, but the handler is not one")
-    };
-    yield_order(machine, call.order);
-    let a0 = machine.use_val(op.b);
-    let a1 = machine.use_val(op.c);
-    let a2 = machine.use_val(op.d);
-    let value = f(&machine.rt, a0, a1, a2);
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-pub fn call_extern_n(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Sync(SyncHandler::ArityN(f)) = &call.handler else {
-        panic!("prepared as a window extern call, but the handler is not one")
-    };
-    let window = window_of(call);
-    yield_order(machine, call.order);
-    move_all(machine, &window.moves);
-    let (rt, args) = machine.lend_window(window);
-    let value = f(rt, args);
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-pub fn call_extern_slice(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Sync(SyncHandler::Slice(f)) = &call.handler else {
-        panic!("prepared as a slice-returning extern call, but the handler is not one")
-    };
-    yield_order(machine, call.order);
-    let a0 = machine.use_val(op.b);
-    let value = f.boxed(machine.rt, a0);
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-#[inline]
-fn fused_arg(machine: &mut Machine<'_>, held: &mut Value, slot: u32) -> Value {
-    if slot == PREVIOUS {
-        return held.take();
-    }
-    machine.use_val(slot)
-}
-
-fn fused_call(machine: &mut Machine<'_>, call: &FusedCall, held: &mut Value) -> Value {
-    let rt = machine.rt;
-    match &call.handler {
-        SyncHandler::Arity0(f) => f(rt),
-        SyncHandler::Arity1(f) => {
-            let a0 = fused_arg(machine, held, call.args[0]);
-            f(rt, a0)
-        }
-        SyncHandler::Arity2(f) => {
-            let a0 = fused_arg(machine, held, call.args[0]);
-            let a1 = fused_arg(machine, held, call.args[1]);
-            f(rt, a0, a1)
-        }
-        SyncHandler::Slice(f) => {
-            let a0 = fused_arg(machine, held, call.args[0]);
-            f.boxed(rt, a0)
-        }
-        SyncHandler::Arity3(_) | SyncHandler::ArityN(_) => {
-            panic!("a fused run holds a call the fusion rule does not admit")
-        }
+fn arg(m: &mut Machine<'_>, held: &mut Value, at: Off) -> Value {
+    match at {
+        PREVIOUS => std::mem::take(held),
+        at => m.regs().read(at),
     }
 }
 
 /// RFC-0044, stage 6.
 ///
-/// `CALLS` and `TAIL` are the run's shape, which the preparation resolved
-/// like every other static fact: a body of this instance holds no loop
-/// bound and no test the payload would have to answer.
-pub fn fused<const CALLS: usize, const TAIL: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let Payload::Fused(run) = machine.payload(op) else {
-        panic!(
-            "a fused run wants a Fused payload, found {}",
-            crate::code::payload_name(machine.payload(op))
-        )
-    };
-    debug_assert_eq!(run.calls.len(), CALLS, "a fused instance of another length");
-    let mut held = Value::EMPTY;
-    for call in &run.calls[..CALLS] {
-        held = fused_call(machine, call, &mut held);
-    }
-    let value = if TAIL {
-        let Some(read) = run.tail else {
-            panic!("a fused instance with a tail holds none")
+/// `CALLS` and `TAIL` are the run's shape, which `prepare` resolved like every
+/// other static fact: a body of this instance holds no loop bound.
+pub struct Fused<const CALLS: usize, const TAIL: bool, const LARGE: bool> {
+    pub dst: Off,
+    pub calls: SmallVec<[Call; 2]>,
+    pub tail: Option<Deref>,
+    pub takes: u64,
+}
+
+impl<const CALLS: usize, const TAIL: bool, const LARGE: bool> Op for Fused<CALLS, TAIL, LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        debug_assert_eq!(
+            self.calls.len(),
+            CALLS,
+            "a fused instance of another length"
+        );
+        m.regs().take_mask(self.takes);
+        let mut held = Value::UNDEF;
+        for call in &self.calls[..CALLS] {
+            held = call.invoke(m, &mut held);
+        }
+        let value = match TAIL {
+            true => {
+                let read = self.tail.expect("a fused instance with a tail holds none");
+                read(&held)
+            }
+            false => held,
         };
-        read(&held)
-    } else {
-        held
-    };
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-/// The instance a run of `calls` calls, with or without a deref, runs as.
-/// `prepare::FusedRegion` builds no other shape: a lone call with no deref
-/// is not a run, and the recognizer stops at `MAX_CALLS`.
-pub fn fused_instance(calls: usize, tail: bool) -> OpFn {
-    match (calls, tail) {
-        (1, true) => fused::<1, true>,
-        (2, true) => fused::<2, true>,
-        (3, true) => fused::<3, true>,
-        (2, false) => fused::<2, false>,
-        (3, false) => fused::<3, false>,
-        (1, false) => panic!("a lone call with no deref is not a fused run"),
-        (calls, _) => panic!("a fused run of {calls} calls has no instance"),
+        m.regs().define::<LARGE>(self.dst, value);
     }
 }
 
-/// The longest run `fused_instance` holds an instance for.
+/// The longest run `fused` holds an instance for.
 pub const MAX_CALLS: usize = 3;
 
-pub fn call_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Async(f) = &call.handler else {
-        panic!("prepared as an asynchronous extern call, but the handler is synchronous")
-    };
-    let window = window_of(call);
-    yield_order(machine, call.order);
-    move_all(machine, &window.moves);
-    let rt = machine.rt.clone();
-    let fut = f(rt, machine.window(window));
-    Flow::Await(Pending { dst: op.a, fut })
-}
-
-/// A call into another body runs to its result here when that body's
-/// prepared `Code` cannot suspend, and hands a future up when it can.
-pub fn call_direct(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let Payload::Direct { callee, args } = machine.payload(op) else {
-        panic!("a direct call wants a Direct payload")
-    };
-    let callee = *callee;
-    yield_order(machine, op.d);
-    let args = arg_values(machine, args);
-    let prepared = Arc::clone(lookup_module(machine.shared(), &callee));
-    if prepared.main.may_suspend() {
-        let shared = Arc::clone(machine.shared());
-        let page = Arc::clone(machine.page);
-        return Flow::Await(Pending {
-            dst: op.a,
-            fut: Box::pin(call_module(shared, page, callee, args)),
-        });
+/// The instance a run of `calls.len()` calls, with or without a deref, runs
+/// as. `prepare::FusedRegion` builds no other shape: a lone call with no deref
+/// is not a run, and the recognizer stops at `MAX_CALLS`.
+pub fn fused(
+    large: bool,
+    dst: Off,
+    calls: SmallVec<[Call; 2]>,
+    tail: Option<Deref>,
+    takes: u64,
+) -> Box<dyn Op> {
+    match large {
+        true => shape::<true>(dst, calls, tail, takes),
+        false => shape::<false>(dst, calls, tail, takes),
     }
-
-    let value = call_module_sync(machine, &prepared, callee, args);
-    machine.define(op.a, value);
-    Flow::Next
 }
 
-/// `THROUGH` is what the preparation read from the callee register's type:
-/// a reference names a closure the caller keeps, a value is one this call
-/// consumes. As `call_direct`, the closure's own `Code` decides whether
-/// this runs to a result here or hands a future up.
-pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let slots = payload!(machine, op, Slots);
-    yield_order(machine, op.d);
-    let mut args = arg_values(machine, slots);
-    if THROUGH {
-        // SAFETY: the type checker admits only a live reference to a closure
-        // here; the closure's register is not written during the call, and
-        // the machine holding it outlives the future the driver awaits.
-        let closure: &'static FnValue =
-            unsafe { &*(machine.reg(op.b).target().as_fn() as *const FnValue) };
-        if closure.code.may_suspend() {
-            let fut: BoxFuture<'static, _> = Box::pin(fn_value_call(closure, &mut args));
-            return Flow::Await(Pending { dst: op.a, fut });
+/// The two facts that pick a fused instance, read off the run `prepare` built.
+struct Instance {
+    calls: usize,
+    tail: bool,
+}
+
+fn shape<const LARGE: bool>(
+    dst: Off,
+    calls: SmallVec<[Call; 2]>,
+    tail: Option<Deref>,
+    takes: u64,
+) -> Box<dyn Op> {
+    let instance = Instance {
+        calls: calls.len(),
+        tail: tail.is_some(),
+    };
+    match instance {
+        Instance {
+            calls: 1,
+            tail: true,
+        } => Box::new(Fused::<1, true, LARGE> {
+            dst,
+            calls,
+            tail,
+            takes,
+        }),
+        Instance {
+            calls: 2,
+            tail: true,
+        } => Box::new(Fused::<2, true, LARGE> {
+            dst,
+            calls,
+            tail,
+            takes,
+        }),
+        Instance {
+            calls: 3,
+            tail: true,
+        } => Box::new(Fused::<3, true, LARGE> {
+            dst,
+            calls,
+            tail,
+            takes,
+        }),
+        Instance {
+            calls: 2,
+            tail: false,
+        } => Box::new(Fused::<2, false, LARGE> {
+            dst,
+            calls,
+            tail,
+            takes,
+        }),
+        Instance {
+            calls: 3,
+            tail: false,
+        } => Box::new(Fused::<3, false, LARGE> {
+            dst,
+            calls,
+            tail,
+            takes,
+        }),
+        Instance {
+            calls: 1,
+            tail: false,
+        } => {
+            panic!("a lone call with no deref is not a fused run")
         }
-
-        let value = fn_value_call_sync(closure, &mut args);
-        machine.define(op.a, value);
-        return Flow::Next;
+        Instance { calls, .. } => panic!("a fused run of {calls} calls has no instance"),
     }
-
-    // SAFETY: the type checker admits only a closure value here.
-    let closure = unsafe { machine.take(op.b).materialize::<FnValue>() };
-    if closure.code.may_suspend() {
-        let fut: BoxFuture<'static, _> =
-            Box::pin(async move { fn_value_call(&closure, &mut args).await });
-        return Flow::Await(Pending { dst: op.a, fut });
-    }
-
-    let value = fn_value_call_sync(&closure, &mut args);
-    machine.define(op.a, value);
-    Flow::Next
 }
 
-/// A spawn's work outlives this frame, so it owns its arguments rather
-/// than borrowing registers; it keeps the window at every arity.
-pub fn spawn_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let (ExternHandler::Sync(f) | ExternHandler::Heavy(f)) = &call.handler else {
-        panic!("prepared as a spawn onto the blocking pool, but the handler is asynchronous")
-    };
-    let f = f.clone();
-    let window = window_of(call);
-    move_all(machine, &window.moves);
-    let mut args = machine.take_window(window);
-    let rt = machine.rt.clone();
-    let handle = machine
-        .shared()
-        .executor
-        .spawn_blocking(Box::new(move || f.call_taking(&rt, &mut args)));
-    machine.define(op.a, Value::handle(handle));
-    Flow::Next
+pub struct CallExternAsync<const LARGE: bool> {
+    pub dst: Off,
+    pub window: ArgWindow,
+    pub f: Async,
+    pub next: BlockId,
 }
 
-pub fn spawn_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Async(f) = &call.handler else {
-        panic!("prepared as an asynchronous extern spawn, but the handler is synchronous")
-    };
-    let window = window_of(call);
-    move_all(machine, &window.moves);
-    let mut args = machine.take_window(window);
-    let rt = machine.rt.clone();
-    let f = Arc::clone(f);
-    let handle = machine.shared().executor.spawn_async(f(rt, &mut args));
-    machine.define(op.a, Value::handle(handle));
-    Flow::Next
+impl<const LARGE: bool> Terminator for CallExternAsync<LARGE> {
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        let rt = m.rt.clone();
+        let fut = (self.f)(rt, self.window.lend(m));
+        m.suspend::<LARGE>(self.dst, self.next, fut);
+        SUSPEND
+    }
+}
+
+pub struct CallStateAsync<const LARGE: bool> {
+    pub dst: Off,
+    pub window: ArgWindow,
+    pub state: State,
+    pub f: AsyncState,
+    pub next: BlockId,
+}
+
+impl<const LARGE: bool> Terminator for CallStateAsync<LARGE> {
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        let rt = m.rt.clone();
+        let state = Arc::clone(&self.state);
+        let fut = (self.f)(state, rt, self.window.lend(m));
+        m.suspend::<LARGE>(self.dst, self.next, fut);
+        SUSPEND
+    }
 }
 
 /// A `heavy` extern (RFC-0046): a Rust `fn`, but one worth another thread.
-/// The work outlives this frame, so it owns its arguments as a spawn's
-/// does; the call then awaits the handle, so the call site suspends
-/// exactly as an `async fn` extern's does.
-pub fn call_extern_heavy(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let call = extern_call(machine, op);
-    let ExternHandler::Heavy(f) = &call.handler else {
-        panic!("prepared as a heavy extern call, but the handler is not a heavy one")
-    };
-    let f = f.clone();
-    let window = window_of(call);
-    yield_order(machine, call.order);
-    move_all(machine, &window.moves);
-    let mut args = machine.take_window(window);
-    let rt = machine.rt.clone();
-    let executor = Arc::clone(&machine.shared().executor);
-    let handle = executor.spawn_blocking(Box::new(move || f.call_taking(&rt, &mut args)));
-    Flow::Await(Pending {
-        dst: op.a,
-        fut: Box::pin(async move { executor.eval(handle).await }),
-    })
+/// The work outlives this frame, so it owns its arguments as a spawn's does;
+/// the call then awaits the handle, so the site suspends exactly as an
+/// `async fn` extern's does.
+pub struct CallHeavy<const LARGE: bool> {
+    pub dst: Off,
+    pub window: ArgWindow,
+    pub f: SyncCall,
+    pub next: BlockId,
 }
 
-pub fn spawn_module(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let Payload::Direct { callee, args } = machine.payload(op) else {
-        panic!("a module spawn wants a Direct payload")
-    };
-    let args = arg_values(machine, args);
-    let child = crate::interpreter::Interpreter::spawned(
-        Arc::clone(machine.shared()),
-        *callee,
-        Arc::clone(machine.page),
-        args,
-    );
-    let handle = machine.shared().executor.spawn_interpreter(child);
-    machine.define(op.a, Value::handle(handle));
-    Flow::Next
+impl<const LARGE: bool> Terminator for CallHeavy<LARGE> {
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        let args = self.window.own(m);
+        let rt = m.rt.clone();
+        let f = self.f.clone();
+        let executor = Arc::clone(&m.shared().executor);
+        let handle = executor.spawn_blocking(Box::new(move || f.call_taking(&rt, &args)));
+        m.suspend::<LARGE>(
+            self.dst,
+            self.next,
+            Box::pin(async move { executor.eval(handle).await }),
+        );
+        SUSPEND
+    }
 }
 
-pub fn eval(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    yield_order(machine, op.d);
-    // SAFETY: the type checker admits only a handle value here.
-    let handle = unsafe { machine.take(op.b).materialize::<HandleValue>() };
-    let executor = Arc::clone(&machine.shared().executor);
-    Flow::Await(Pending {
-        dst: op.a,
-        fut: Box::pin(async move { executor.eval(handle).await }),
-    })
+/// A call into another body runs to its result here when that body's prepared
+/// `Code` cannot suspend, and hands a future up when it can. That is the one
+/// decision left to run time: the callee is reached through the module table,
+/// and a caller's `prepare` cannot read a body it may be compiled before.
+pub struct CallDirect<const LARGE: bool> {
+    pub dst: Off,
+    pub callee: QualifiedRef,
+    pub args: Box<[Off]>,
+    pub takes: u64,
+    pub next: BlockId,
 }
 
-pub fn make_closure(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let Payload::Closure { code, captures } = machine.payload(op) else {
-        panic!("a closure constructor wants a Closure payload")
-    };
-    let captured: Vec<Value> = captures.iter().map(|slot| machine.use_val(*slot)).collect();
-    let closure = FnValue {
-        shared: Arc::clone(machine.shared()),
-        page: Arc::clone(machine.page),
-        code: Arc::clone(code),
-        captures: captured.into(),
-    };
-    machine.define(op.a, Value::closure(closure));
-    Flow::Next
+impl<const LARGE: bool> Terminator for CallDirect<LARGE> {
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        let args = staged(m, &self.args, self.takes);
+        let prepared = Arc::clone(lookup_module(m.shared(), &self.callee));
+        if prepared.main.may_suspend() {
+            let shared = Arc::clone(m.shared());
+            let page = Arc::clone(m.page);
+            let fut = Box::pin(call_module(shared, page, self.callee, args));
+            m.suspend::<LARGE>(self.dst, self.next, fut);
+            return SUSPEND;
+        }
+
+        let value = call_module_sync(m, &prepared, self.callee, args);
+        m.regs().define::<LARGE>(self.dst, value);
+        self.next
+    }
+}
+
+/// `THROUGH` is what `prepare` read from the callee register's type: a
+/// reference names a closure the caller keeps, a value is one this call
+/// consumes — which is why the value form takes the register here and
+/// `takes` covers the arguments alone. As `CallDirect`, the closure's own
+/// `Code` decides whether this runs to a result or hands a future up.
+pub struct CallIndirect<const LARGE: bool, const THROUGH: bool> {
+    pub dst: Off,
+    pub callee: Off,
+    pub args: Box<[Off]>,
+    pub takes: u64,
+    pub next: BlockId,
+}
+
+impl<const LARGE: bool, const THROUGH: bool> Terminator for CallIndirect<LARGE, THROUGH> {
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        let mut args = staged(m, &self.args, self.takes);
+        if THROUGH {
+            // SAFETY: the type checker admits only a live reference to a
+            // closure here; the closure's register is not written during the
+            // call, and the machine holding it outlives the future the driver
+            // awaits.
+            let closure: &'static FnValue = unsafe {
+                let target = m.regs().peek(self.callee).target();
+                &*(target.as_fn() as *const FnValue)
+            };
+            if closure.code.may_suspend() {
+                let fut = Box::pin(fn_value_call(closure, &mut args));
+                m.suspend::<LARGE>(self.dst, self.next, fut);
+                return SUSPEND;
+            }
+
+            let value = m.call_fn_sync(closure, &mut args);
+            m.regs().define::<LARGE>(self.dst, value);
+            return self.next;
+        }
+
+        // SAFETY: the type checker admits only a closure value here.
+        let closure = unsafe { m.regs().take::<true>(self.callee).materialize::<FnValue>() };
+        if closure.code.may_suspend() {
+            let fut = Box::pin(async move { fn_value_call(&closure, &mut args).await });
+            m.suspend::<LARGE>(self.dst, self.next, fut);
+            return SUSPEND;
+        }
+
+        let value = m.call_fn_sync(&closure, &mut args);
+        m.regs().define::<LARGE>(self.dst, value);
+        self.next
+    }
+}
+
+pub struct Eval<const LARGE: bool> {
+    pub dst: Off,
+    pub handle: Off,
+    pub next: BlockId,
+}
+
+impl<const LARGE: bool> Terminator for Eval<LARGE> {
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        // SAFETY: the type checker admits only a handle value here.
+        let handle = unsafe {
+            m.regs()
+                .take::<true>(self.handle)
+                .materialize::<HandleValue>()
+        };
+        let executor = Arc::clone(&m.shared().executor);
+        m.suspend::<LARGE>(
+            self.dst,
+            self.next,
+            Box::pin(async move { executor.eval(handle).await }),
+        );
+        SUSPEND
+    }
+}
+
+/// A spawn's work outlives this frame, so it owns its arguments rather than
+/// borrowing registers; it keeps the window at every arity, and the handler
+/// takes each argument out of it.
+pub struct SpawnExternSync {
+    pub dst: Off,
+    pub window: ArgWindow,
+    pub f: SyncCall,
+}
+
+impl Op for SpawnExternSync {
+    fn run(&self, m: &mut Machine<'_>) {
+        let args = self.window.own(m);
+        let rt = m.rt.clone();
+        let f = self.f.clone();
+        let handle = m
+            .shared()
+            .executor
+            .spawn_blocking(Box::new(move || f.call_taking(&rt, &args)));
+        m.regs().define::<true>(self.dst, Value::handle(handle));
+    }
+}
+
+pub struct SpawnExternAsync {
+    pub dst: Off,
+    pub window: ArgWindow,
+    pub f: AsyncCall<AcvusRuntime>,
+}
+
+impl Op for SpawnExternAsync {
+    fn run(&self, m: &mut Machine<'_>) {
+        let mut args = self.window.own(m);
+        let rt = m.rt.clone();
+        let fut = match &self.f {
+            AsyncCall::Plain(f) => f(rt, &mut args),
+            AsyncCall::Stateful { state, f } => f(Arc::clone(state), rt, &mut args),
+        };
+        let handle = m.shared().executor.spawn_async(fut);
+        m.regs().define::<true>(self.dst, Value::handle(handle));
+    }
+}
+
+pub struct SpawnModule {
+    pub dst: Off,
+    pub callee: QualifiedRef,
+    pub args: Box<[Off]>,
+    pub takes: u64,
+}
+
+impl Op for SpawnModule {
+    fn run(&self, m: &mut Machine<'_>) {
+        let args = staged(m, &self.args, self.takes);
+        let child = crate::interpreter::Interpreter::spawned(
+            Arc::clone(m.shared()),
+            self.callee,
+            Arc::clone(m.page),
+            args,
+        );
+        let handle = m.shared().executor.spawn_interpreter(child);
+        m.regs().define::<true>(self.dst, Value::handle(handle));
+    }
+}
+
+pub struct MakeClosure {
+    pub dst: Off,
+    pub code: Arc<crate::code::Code>,
+    pub captures: Box<[Off]>,
+    pub takes: u64,
+}
+
+impl Op for MakeClosure {
+    fn run(&self, m: &mut Machine<'_>) {
+        let captures: Arc<[Owned<AcvusRuntime>]> = {
+            let regs = m.regs();
+            let captures = self
+                .captures
+                .iter()
+                .map(|slot| Owned::from_value(regs.read(*slot)))
+                .collect();
+            regs.take_mask(self.takes);
+            captures
+        };
+        let closure = FnValue {
+            shared: Arc::clone(m.shared()),
+            page: Arc::clone(m.page),
+            code: Arc::clone(&self.code),
+            captures,
+        };
+        m.regs().define::<true>(self.dst, Value::closure(closure));
+    }
 }

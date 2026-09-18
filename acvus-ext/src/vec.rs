@@ -4,8 +4,8 @@
 //! the element is in use (RFC-0028).
 
 use acvus_extern::{
-    Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TyVar, extern_fn,
-    extern_registry, extern_signature,
+    Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TransparentOver, TyVar,
+    extern_fn, extern_registry, extern_signature,
 };
 
 // A container demotes to a vec (RFC-0027).
@@ -121,7 +121,7 @@ where
 #[extern_fn(effect = pure)]
 fn first<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     Rt: Runtime,
 {
     c.try_map(rt, |c| c.first())
@@ -130,7 +130,7 @@ where
 #[extern_fn(effect = pure)]
 fn last<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     Rt: Runtime,
 {
     c.try_map(rt, |c| c.last())

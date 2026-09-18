@@ -8,10 +8,10 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Arr, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, Elements, ExternFn,
-    ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure,
-    Ref, Registry, Runtime, Slice, SyncHandler, Task, TyArg, TyVar, TypeArg, TypeRegistry,
-    TypesOnly, extern_fn, extern_registry, extern_signature,
+    Arr, AsyncCall, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, Elements,
+    ExternFn, ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar,
+    Owned, PolyTy, Pure, Ref, Registry, Runtime, Slice, SyncAbi, SyncCall, Task, TyArg, TyVar,
+    TypeArg, TypeRegistry, TypesOnly, erase_elements, extern_fn, extern_registry, extern_signature,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -19,15 +19,15 @@ use acvus_extern::{
 /// A value is a Rust value boxed whole, a closure, or a reference to
 /// another value. `Erased` never compares equal: the test runtime has no
 /// view into what it holds.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
     /// The language's `Option` (RFC-0022), held as a host pleases.
     None,
-    Some(Box<V>),
-    Erased(Box<dyn Any + Send + Sync>),
+    Some(*mut V),
+    Erased(*mut (dyn Any + Send + Sync)),
     Closure(Closure),
     Reference(*const V),
 }
@@ -36,18 +36,37 @@ enum V {
 unsafe impl Send for V {}
 unsafe impl Sync for V {}
 
+impl acvus_extern::Release for V {
+    fn release(self) {
+        match self {
+            // SAFETY: an owning pointer comes from `Box::into_raw` and
+            // reaches `release` once (RFC-0048).
+            V::Some(payload) => (*unsafe { Box::from_raw(payload) }).release(),
+            V::Erased(any) => drop(unsafe { Box::from_raw(any) }),
+            V::Closure(c) => drop(unsafe { Box::from_raw(c.0) }),
+            V::Taken | V::None | V::Reference(_) => {}
+        }
+    }
+}
+
 impl PartialEq for V {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (V::Closure(a), V::Closure(b)) => Arc::ptr_eq(&a.0, &b.0),
+            (V::Closure(a), V::Closure(b)) => std::ptr::addr_eq(a.0, b.0),
             (V::Reference(a), V::Reference(b)) => std::ptr::eq(*a, *b),
             _ => false,
         }
     }
 }
 
-#[derive(Clone)]
-struct Closure(Arc<dyn Fn(Vec<V>) -> V + Send + Sync>);
+#[derive(Clone, Copy)]
+struct Closure(*mut (dyn Fn(Vec<V>) -> V + Send + Sync));
+
+impl Closure {
+    fn new(f: impl Fn(Vec<V>) -> V + Send + Sync + 'static) -> Self {
+        Closure(Box::into_raw(Box::new(f)))
+    }
+}
 
 impl std::fmt::Debug for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -63,7 +82,7 @@ where
         let boxed: Box<dyn std::any::Any> = Box::new(value);
         return *boxed.downcast::<V>().expect("T is V");
     }
-    V::Erased(Box::new(value))
+    V::Erased(Box::into_raw(Box::new(value)))
 }
 
 /// A copy of the Rust value inside a lent `Erased`, or a panic naming the
@@ -73,7 +92,7 @@ where
     T: Clone + Send + Sync + 'static,
 {
     match value {
-        V::Erased(any) => any
+        V::Erased(any) => unsafe { &**any }
             .downcast_ref::<T>()
             .unwrap_or_else(|| panic!("peek: value is not a {}", std::any::type_name::<T>()))
             .clone(),
@@ -103,7 +122,7 @@ where
         return *boxed.downcast::<T>().expect("T is V");
     }
     match value {
-        V::Erased(any) => match any.downcast::<T>() {
+        V::Erased(any) => match unsafe { Box::from_raw(any) }.downcast::<T>() {
             Ok(v) => *v,
             Err(_) => panic!("materialize: value is not a {}", std::any::type_name::<T>()),
         },
@@ -129,7 +148,7 @@ struct Tiny;
 impl Tiny {
     fn call(&self, f: &V, args: Vec<V>) -> V {
         match f {
-            V::Closure(c) => (c.0)(args),
+            V::Closure(c) => (unsafe { &*c.0 })(args),
             V::None | V::Some(_) | V::Taken | V::Erased(_) | V::Reference(_) => {
                 panic!("call on a value that is not a closure")
             }
@@ -152,7 +171,7 @@ where
     T: Send + Sync + 'static,
 {
     match value {
-        V::Erased(any) => any
+        V::Erased(any) => unsafe { &**any }
             .downcast_ref::<T>()
             .unwrap_or_else(|| panic!("open_ref: value is not a {}", std::any::type_name::<T>())),
         other => panic!("open_ref: not a value: {other:?}"),
@@ -164,7 +183,7 @@ where
     T: Send + Sync + 'static,
 {
     match value {
-        V::Erased(any) => any
+        V::Erased(any) => unsafe { &mut **any }
             .downcast_mut::<T>()
             .unwrap_or_else(|| panic!("open_mut: value is not a {}", std::any::type_name::<T>())),
         other => panic!("open_mut: not a value: {other:?}"),
@@ -206,7 +225,7 @@ impl Runtime for Tiny {
         let V::Erased(any) = value else {
             return None;
         };
-        Some((**any).type_id())
+        Some(unsafe { &**any }.type_id())
     }
     fn type_name_of(&self, _: &V) -> Option<&'static str> {
         None
@@ -278,7 +297,7 @@ impl Runtime for Tiny {
         V::None
     }
     fn some(&self, payload: V) -> V {
-        V::Some(Box::new(payload))
+        V::Some(Box::into_raw(Box::new(payload)))
     }
     fn is_none(&self, value: &V) -> bool {
         matches!(value, V::None)
@@ -287,7 +306,7 @@ impl Runtime for Tiny {
         let V::Some(payload) = value else {
             panic!("unwrap_some: the value is not a Some")
         };
-        *payload
+        *unsafe { Box::from_raw(payload) }
     }
     fn call_is_sync(&self, _: &V) -> bool {
         true
@@ -364,16 +383,12 @@ where
 #[extern_cast]
 fn boxed<T, N, Rt>(rt: &Rt, items: Arr<T, N>) -> Boxed<T, Pure, Rt>
 where
-    T: TyVar,
+    T: TyVar + Cross<Rt>,
     N: LenVar,
     Rt: Runtime,
 {
     Boxed(
-        items
-            .0
-            .into_iter()
-            .map(|v| unsafe { rt.erase::<T>(v) })
-            .collect(),
+        items.0.into_iter().map(|v| v.erase(rt)).collect(),
         PhantomData,
     )
 }
@@ -437,13 +452,10 @@ fn eq_point(a: &Point, b: &Point) -> bool {
 #[extern_fn(effect = pure)]
 fn same<T, R>(rt: &R, a: T, b: T) -> Boxed<T, Pure, R>
 where
-    T: TyVar + HasInstance<eq>,
+    T: TyVar + Cross<R> + HasInstance<eq>,
     R: Runtime,
 {
-    Boxed(
-        vec![unsafe { rt.erase::<T>(a) }, unsafe { rt.erase::<T>(b) }],
-        PhantomData,
-    )
+    Boxed(vec![a.erase(rt), b.erase(rt)], PhantomData)
 }
 
 /// A greeting held by the handler: what a `#[state]` parameter carries.
@@ -644,15 +656,20 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
 #[test]
 fn the_unboxed_and_the_boxed_entry_report_one_run() {
     let (i, reg) = combined::<Tiny>();
-    let ExternHandler::Sync(SyncHandler::Slice(entry)) = handler(&reg, &i, "as_slice") else {
+    let ExternHandler::Sync(SyncCall::Plain(SyncAbi::Slice(entry))) = handler(&reg, &i, "as_slice")
+    else {
         panic!("a declaration returning a slice has the unboxed entry (RFC-0047 §6)")
     };
-    let storage = erased(vec![erased(1i64), erased(2i64), erased(3i64)]);
+    let storage = erased(vec![
+        Owned::<Tiny>::from_value(erased(1i64)),
+        Owned::<Tiny>::from_value(erased(2i64)),
+        Owned::<Tiny>::from_value(erased(3i64)),
+    ]);
     // SAFETY: `storage` outlives every run taken from it here (RFC-0018).
     let container = || unsafe { Tiny.reference(&storage) };
 
-    let unboxed = entry.elements(&Tiny, container());
-    let boxed = open::<Elements<Tiny>>(entry.boxed(&Tiny, container()));
+    let unboxed = entry(&Tiny, container());
+    let boxed = open::<Elements<Tiny>>(erase_elements(&Tiny, entry(&Tiny, container())));
     assert_eq!(unboxed.len(), 3);
     assert_eq!(boxed.len(), unboxed.len());
     for at in 0..unboxed.len() {
@@ -662,13 +679,19 @@ fn the_unboxed_and_the_boxed_entry_report_one_run() {
             std::ptr::eq(unboxed, boxed),
             "element {at} is one place in the container's own storage"
         );
-        assert!(std::ptr::eq(unboxed, &open_ref::<Vec<V>>(&storage)[at]));
+        assert!(std::ptr::eq(
+            unboxed,
+            &*open_ref::<Vec<Owned<Tiny>>>(&storage)[at]
+        ));
     }
 }
 
 async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
     match handler {
-        ExternHandler::Async(f) => f(Tiny, &mut args).await,
+        ExternHandler::Async(AsyncCall::Plain(f)) => f(Tiny, &mut args).await,
+        ExternHandler::Async(AsyncCall::Stateful { state, f }) => {
+            f(std::sync::Arc::clone(state), Tiny, &mut args).await
+        }
         ExternHandler::Sync(_) => panic!("expected an async handler, found a sync one"),
         ExternHandler::Heavy(_) => panic!("expected an async handler, found a heavy one"),
     }
@@ -727,18 +750,21 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
         "x"
     );
 
-    let arr = erased(Arr::<V, ()>::new(vec![erased(1i64), erased(2i64)]));
+    let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
+        Owned::from_value(erased(1i64)),
+        Owned::from_value(erased(2i64)),
+    ]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]);
     // SAFETY: `boxed`'s glue erased its return from a `Boxed<T, Pure, Rt>`.
     let Boxed::<V, Pure, Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, boxed) };
     assert_eq!(items.len(), 2);
     let boxed = Boxed::<V, (), Tiny>(items, PhantomData).erase(&Tiny);
 
-    let double = V::Closure(Closure(Arc::new(|args| {
+    let double = V::Closure(Closure::new(|args| {
         let [n] = <[V; 1]>::try_from(args)
             .unwrap_or_else(|args| panic!("double takes one argument, got {}", args.len()));
         erased(open::<i64>(n) * 2)
-    })));
+    }));
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double]).await;
     // SAFETY: `apply`'s glue erased its return from a `Boxed<U, E, Rt>`.
     let Boxed::<V, (), Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, out) };
@@ -746,20 +772,26 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     assert_eq!(doubled, vec![2, 4]);
 
     // An object crosses as its fields (RFC-0032): the handler receives
-    // `Obj<V>` and returns one.
+    // `Obj<Owned<Tiny>>` and returns one.
     let point = erased(acvus_extern::Obj(
         [
-            (Tiny.symbol("x"), erased(21i64)),
-            (Tiny.symbol("label"), erased("p".to_owned())),
+            (Tiny.symbol("x"), Owned::<Tiny>::from_value(erased(21i64))),
+            (
+                Tiny.symbol("label"),
+                Owned::from_value(erased("p".to_owned())),
+            ),
         ]
         .into_iter()
         .collect::<acvus_extern::FxHashMap<_, _>>(),
     ));
     let out = call_async(handler(&reg, &i, "fetch"), vec![point]).await;
-    let acvus_extern::Obj(mut fields) = open::<acvus_extern::Obj<V>>(out);
-    assert_eq!(open::<i64>(fields.remove(&Tiny.symbol("x")).unwrap()), 42);
+    let acvus_extern::Obj(mut fields) = open::<acvus_extern::Obj<Owned<Tiny>>>(out);
     assert_eq!(
-        open::<String>(fields.remove(&Tiny.symbol("label")).unwrap()),
+        open::<i64>(fields.remove(&Tiny.symbol("x")).unwrap().into_value()),
+        42
+    );
+    assert_eq!(
+        open::<String>(fields.remove(&Tiny.symbol("label")).unwrap().into_value()),
         "p"
     );
     assert!(fields.is_empty());
@@ -1133,7 +1165,10 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         acvus_extern::Ty::I64,
         &i,
     );
-    let arr = erased(Arr::<V, ()>::new(vec![erased(7i64), erased(8i64)]));
+    let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
+        Owned::from_value(erased(7i64)),
+        Owned::from_value(erased(8i64)),
+    ]));
     let h = instance_for(&reg, &i, "first", &on_array).unwrap();
     assert_eq!(open::<i64>(call_sync(h, vec![arr])), 7);
 
@@ -1146,7 +1181,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     assert_eq!(
         open::<String>(call_sync(
             h,
-            vec![V::Some(Box::new(erased(String::from("s"))))]
+            vec![V::Some(Box::into_raw(Box::new(erased(String::from("s")))))]
         )),
         "s"
     );

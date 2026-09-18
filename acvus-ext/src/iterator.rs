@@ -27,7 +27,8 @@
 
 use acvus_extern::{
     Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar,
-    Monomorphize, Ref, Registry, Runtime, Stored, TyVar, extern_fn, extern_registry,
+    Monomorphize, Ref, Registry, Runtime, Stored, TransparentOver, TyVar, extern_fn,
+    extern_registry,
 };
 
 use crate::iter::{Iter, drain, drain_now};
@@ -125,7 +126,7 @@ pub(crate) fn lent_iter<C, T, E, I, Rt>(
 ) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
     C: TyVar,
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -166,7 +167,7 @@ where
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_vec<T, E, I, Rt>(items: Ref<Vec<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -177,7 +178,7 @@ where
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_array<T, N, E, I, Rt>(items: Ref<Arr<T, N>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,

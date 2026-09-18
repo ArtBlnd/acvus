@@ -3,7 +3,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_interpreter::{SequentialExecutor, Value};
+use acvus_extern::Owned;
+use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
 use acvus_interpreter_test::scripts::ATTENTION;
 use acvus_interpreter_test::{
     Context, compile_script_mode, execute_compiled, split_context, value_from_json,
@@ -68,7 +69,10 @@ fn context_of(interner: &Interner, json: &serde_json::Value) -> Context {
 
 /// `Value` is not `Clone`, so each run that consumes a page snapshot rebuilds
 /// one from the JSON rather than cloning it.
-fn snapshot_of(interner: &Interner, json: &serde_json::Value) -> HashMap<String, Value> {
+fn snapshot_of(
+    interner: &Interner,
+    json: &serde_json::Value,
+) -> HashMap<String, Owned<AcvusRuntime>> {
     split_context(interner, context_of(interner, json)).1
 }
 

@@ -1,37 +1,34 @@
-//! Constants: the literal's word is in the operation, and a literal that
-//! is not one word is a `Konst` in the payload.
+//! Constants: the literal an operation defines its destination with.
 
-use crate::code::{Flow, Op};
+use crate::code::{Konst, Off, Op};
 use crate::machine::Machine;
-use crate::ops::arith::Int;
-use crate::ops::payload;
-use crate::value::Value;
 
-pub fn int<T>(machine: &mut Machine<'_>, op: &Op) -> Flow
-where
-    T: Int,
-{
-    machine.define(op.a, Value::inline(T::KIND, op.p as u64));
-    Flow::Next
+/// The word of an integer, a float, a bool or unit. The slot's kind was
+/// written when the frame was made (RFC-0052 §5), so the literal's type is
+/// not in this operation at all.
+pub struct Const {
+    pub dst: Off,
+    pub word: u64,
 }
 
-pub fn float(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.define(op.a, Value::inline(crate::value::Kind::F64, op.p as u64));
-    Flow::Next
+impl Op for Const {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        m.regs().set_word(self.dst, self.word);
+    }
 }
 
-pub fn boolean(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.define(op.a, Value::bool_(op.p != 0));
-    Flow::Next
+/// A string or a list literal. The value is built at every run and owned by
+/// the frame, not shared from the prepared body: the program may mutate what
+/// a literal defined, and a shared one would need a copy at the first write.
+pub struct ConstLarge {
+    pub dst: Off,
+    pub konst: Konst,
 }
 
-pub fn unit(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.define(op.a, Value::unit());
-    Flow::Next
-}
-
-pub fn konst(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = payload!(machine, op, Konst).value();
-    machine.define(op.a, value);
-    Flow::Next
+impl Op for ConstLarge {
+    fn run(&self, m: &mut Machine<'_>) {
+        let value = self.konst.value();
+        m.regs().define::<true>(self.dst, value);
+    }
 }

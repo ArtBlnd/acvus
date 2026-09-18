@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::Externs;
+use acvus_extern::{Externs, Owned};
 use acvus_interpreter::{
     AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx, Value,
     prepare_module,
@@ -95,7 +95,11 @@ fn as_slice_of(interner: &Interner, namespace: &str, name: &str) -> ExternInstan
     }
 }
 
-async fn run_with(interner: &Interner, body: MirBody, page: HashMap<String, Value>) -> Value {
+async fn run_with(
+    interner: &Interner,
+    body: MirBody,
+    page: HashMap<String, Owned<AcvusRuntime>>,
+) -> Value {
     let combined = Externs::combine(acvus_ext::std_registries::<AcvusRuntime>(), interner)
         .expect("the standard registries combine");
     let mut functions: FxHashMap<QualifiedRef, Executable> = combined
@@ -199,7 +203,8 @@ fn array_body(interner: &Interner, mode: IndexMode, index: u64, dst_ty: Ty) -> M
 }
 
 /// `Vec<i64>` fetched whole out of the page: its storage is the runtime's
-/// `Vec<Value>`, which is what `vec::as_slice` reads (RFC-0039).
+/// `Vec<Owned<AcvusRuntime>>`, which is what `vec::as_slice` reads
+/// (RFC-0039).
 fn vec_body(interner: &Interner, mode: IndexMode, index: u64, dst_ty: Ty) -> MirBody {
     let elem = Ty::Int(IntTy::I64);
     let vec_ty = acvus_extern::vec_ty(interner, elem.clone());
@@ -260,16 +265,21 @@ fn slice(mutability: Mutability, element: Ty) -> Ty {
     reference(mutability, Ty::Slice(Box::new(element)))
 }
 
-/// A `Vec<i64>` as the runtime holds it: one box over a `Vec<Value>`.
+/// A `Vec<i64>` as the runtime holds it: one box over a
+/// `Vec<Owned<AcvusRuntime>>`.
 fn stored_vec(items: &[i64]) -> Value {
-    let values: Vec<Value> = items.iter().copied().map(Value::int).collect();
-    // SAFETY: read back only as this same `Vec<Value>`, which is what
-    // `vec::as_slice`'s glue derefs.
+    let values: Vec<Owned<AcvusRuntime>> = items
+        .iter()
+        .copied()
+        .map(|n| Owned::from_value(Value::int(n)))
+        .collect();
+    // SAFETY: read back only as this same `Vec<Owned<AcvusRuntime>>`, which
+    // is what `vec::as_slice`'s glue derefs.
     unsafe { Value::erase(values) }
 }
 
-fn page_with(items: &[i64]) -> HashMap<String, Value> {
-    [(CONTAINER.to_string(), stored_vec(items))]
+fn page_with(items: &[i64]) -> HashMap<String, Owned<AcvusRuntime>> {
+    [(CONTAINER.to_string(), Owned::from_value(stored_vec(items)))]
         .into_iter()
         .collect()
 }
@@ -354,12 +364,17 @@ fn counted_ty(interner: &Interner) -> Ty {
     }
 }
 
-fn counted_page(len: usize) -> HashMap<String, Value> {
+fn counted_page(len: usize) -> HashMap<String, Owned<AcvusRuntime>> {
     // SAFETY: each element is read back only as this same `Counted`, and
-    // the buffer only as the `Vec<Value>` `vec::as_slice_mut` derefs.
-    let values: Vec<Value> = (0..len).map(|_| unsafe { Value::erase(Counted) }).collect();
+    // the buffer only as the `Vec<Owned<AcvusRuntime>>` `vec::as_slice_mut`
+    // derefs.
+    let values: Vec<Owned<AcvusRuntime>> = (0..len)
+        .map(|_| Owned::from_value(unsafe { Value::erase(Counted) }))
+        .collect();
     let stored = unsafe { Value::erase(values) };
-    [(CONTAINER.to_string(), stored)].into_iter().collect()
+    [(CONTAINER.to_string(), Owned::from_value(stored))]
+        .into_iter()
+        .collect()
 }
 
 /// `c[0] = Counted` over a `&mut [Counted]` taken from the page.
@@ -421,7 +436,10 @@ async fn index_set_drops_the_element_it_replaces() {
     let interner = Interner::new();
     let mut page = counted_page(3);
     // SAFETY: as `counted_page`.
-    page.insert(REPLACEMENT.to_string(), unsafe { Value::erase(Counted) });
+    page.insert(
+        REPLACEMENT.to_string(),
+        Owned::from_value(unsafe { Value::erase(Counted) }),
+    );
 
     ELEMENTS_DROPPED.store(0, Ordering::Relaxed);
     let got = run_with(&interner, index_set_body(&interner), page).await;

@@ -7,9 +7,10 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, PolyTy,
-    PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError, SpaceHooks,
-    SpaceResult, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit, extern_fn, extern_registry,
+    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, Owned,
+    PolyTy, PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError,
+    SpaceHooks, SpaceResult, TransparentOver, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit,
+    extern_fn, extern_registry,
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
@@ -185,7 +186,7 @@ where
     where
         R: Runtime,
     {
-        Some(SpaceHooks::of::<Deque<R::Value>>())
+        Some(SpaceHooks::of::<Deque<Owned<R>>>())
     }
 }
 
@@ -233,7 +234,7 @@ fn read_u64(input: &mut &[u8]) -> SpaceResult<u64> {
 /// then the element for a push. Pushes at one end are recorded in push
 /// order; a pop of a settled item is a pop op, a pop of an item pushed
 /// since the last take cancels that push.
-impl<Rt> Journaled<Rt> for Deque<Rt::Value>
+impl<Rt> Journaled<Rt> for Deque<Owned<Rt>>
 where
     Rt: Runtime,
 {
@@ -262,7 +263,7 @@ where
         let count = read_u64(input)?;
         let mut d = Deque::default();
         for _ in 0..count {
-            d.items.push_back(elem(ty, input)?);
+            d.items.push_back(Owned::from_value(elem(ty, input)?));
         }
         d.settle();
         Ok(d)
@@ -313,8 +314,8 @@ where
         *op = rest;
         let empty = || SpaceError::new("Deque: a pop on an empty deque in the log");
         match Op::from_byte(*tag)? {
-            Op::PushFront => self.items.push_front(elem(ty, op)?),
-            Op::PushBack => self.items.push_back(elem(ty, op)?),
+            Op::PushFront => self.items.push_front(Owned::from_value(elem(ty, op)?)),
+            Op::PushBack => self.items.push_back(Owned::from_value(elem(ty, op)?)),
             Op::PopFront => drop(self.items.pop_front().ok_or_else(empty)?),
             Op::PopBack => drop(self.items.pop_back().ok_or_else(empty)?),
         }
@@ -403,7 +404,7 @@ where
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_deque<T, E, I, Rt>(d: Ref<Deque<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -439,7 +440,7 @@ fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
 #[extern_fn(effect = pure)]
 fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Ref<T, Rt>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     Rt: Runtime,
 {
     let i = d.with(rt, |d| checked_index("get", d.len(), index));
@@ -449,7 +450,7 @@ where
 #[extern_fn(effect = pure)]
 fn get_mut<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> RefMut<T, Rt>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     Rt: Runtime,
 {
     let i = d.with_mut(rt, |d| checked_index("get_mut", d.len(), index));
@@ -459,7 +460,7 @@ where
 #[extern_fn(effect = pure)]
 fn first<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     Rt: Runtime,
 {
     d.try_map(rt, |d| d.items.front())
@@ -468,7 +469,7 @@ where
 #[extern_fn(effect = pure)]
 fn last<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     Rt: Runtime,
 {
     d.try_map(rt, |d| d.items.back())

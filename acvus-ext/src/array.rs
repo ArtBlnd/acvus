@@ -1,5 +1,6 @@
 use acvus_extern::{
-    Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TyVar, extern_fn, extern_registry,
+    Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TransparentOver, TyVar,
+    extern_fn, extern_registry,
 };
 
 #[extern_fn(effect = pure)]
@@ -43,7 +44,7 @@ where
 #[extern_fn(effect = pure)]
 fn first<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     N: LenVar,
     Rt: Runtime,
 {
@@ -53,7 +54,7 @@ where
 #[extern_fn(effect = pure)]
 fn last<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar,
+    T: TyVar + TransparentOver<Rt>,
     N: LenVar,
     Rt: Runtime,
 {

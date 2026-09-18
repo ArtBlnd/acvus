@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use acvus_extern::{ExternType, IdentityVar, Registry, extern_fn, extern_registry};
-use acvus_interpreter::code::{Code, Payload};
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, Value, prepare_module};
+use acvus_interpreter_test::listing::{code_listing, ops_of_anywhere};
 use acvus_interpreter_test::{
     Context, compile_source_with_externs, run_parsed_with_externs, split_context, value_from_json,
 };
@@ -157,21 +157,25 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
         let prepared = prepare_module(module, &ctx);
         let bodies = std::iter::once(&prepared.main).chain(prepared.closures.values());
         for code in bodies {
-            let payloads: &[Payload] = match &**code {
-                Code::Body(body) => &body.payloads,
-                Code::Expr(_) => &[],
-            };
-            for payload in payloads {
-                if let Payload::Fused(run) = payload {
-                    found.push(RunShape {
-                        calls: run.calls.len(),
-                        tail: run.tail.is_some(),
-                    });
+            for op in ops_of_anywhere(&code_listing(code)) {
+                if let Some(shape) = fused_shape(&op) {
+                    found.push(shape);
                 }
             }
         }
     }
     found
+}
+
+/// `Fused<CALLS, TAIL, LARGE>` carries its own shape in its type: RFC-0052
+/// made the call count and the tail const parameters, so the instance name
+/// is the shape and nothing has to be read out of a payload.
+fn fused_shape(op: &str) -> Option<RunShape> {
+    let args = op.strip_prefix("Fused<")?.strip_suffix('>')?;
+    let mut args = args.split(',').map(str::trim);
+    let calls = args.next()?.parse().expect("a Fused call count");
+    let tail = args.next()? == "true";
+    Some(RunShape { calls, tail })
 }
 
 async fn value_of(source: &str) -> Value {

@@ -9,33 +9,42 @@
 //! extern call reaches, the page key a context is stored under, where a
 //! label sits — is decided here.
 
+use std::marker::PhantomData;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use acvus_ast::{BinOp, Literal, Span, UnaryOp};
+use acvus_ast::{BinOp, Literal, UnaryOp};
+use acvus_extern::AsyncCall;
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, ExternInstance, IndexMode, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
-    RefTarget, ValueId,
+    Callee, ExternInstance, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
 use acvus_mir::ty::{IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::code::{
-    ArgWindow, Arith, BasicBlock, Body, Chain, Code, Compare, ConcatPart, Deref, Diamond,
-    DiamondArm, EntryKonst, Expr, ExprBody, ExprChain, ExternArgs, ExternCall, FieldSlot,
-    FusedCall, FusedRun, Konst, LoopBody, NO_SLOT, Op, OpFn, PREVIOUS, Payload, Prepared, Root,
-    Shape, SlotMove, Step,
+    Arith, Block, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
+    ExprBody, ExprChain, FieldSlot, Konst, Off, Op, Prepared, Root, Shape, Slot, SlotKind, Step,
+    Terminator,
 };
 use crate::interpreter::Executable;
-use crate::ops::arith::{self, for_int_ty};
-use crate::ops::chain::{self, ChainTy};
+use crate::ops::arith::{self, Binary, Unary, for_int_ty};
+use crate::ops::chain::{self, ChainTy, Plan};
 use crate::ops::{call, composite, constant, control, index, pattern, storage, string, variant};
-use crate::runtime::{ExternHandler, SyncHandler};
+use crate::runtime::{ExternHandler, StateAbi, SyncAbi, SyncCall};
 use crate::value::{Kind, Value};
+
+/// The slot table's empty entry: a value that is neither defined nor live.
+const NO_SLOT: u32 = u32::MAX;
+
+const _: () = assert!(
+    NO_SLOT > crate::regs::MAX_FRAME_SLOTS as u32,
+    "the empty slot entry is not a register index"
+);
 
 pub struct PrepareCtx<'a> {
     pub interner: &'a Interner,
@@ -136,10 +145,6 @@ pub fn prepare_body(
 
     prep.hoist_konsts();
     let regions = prep.regions();
-    let runs = prep.fused_in(0..body.insts.len(), &regions);
-    let chains = prep.chains_in(0..body.insts.len(), &regions);
-    let units = prep.layout(0..body.insts.len(), &regions, &runs, &chains);
-    prep.op_index = op_indexes(body.insts.len(), &units);
 
     if let BodyRole::Closure = role
         && let Some(expr) = prep.expression_body()
@@ -147,7 +152,7 @@ pub fn prepare_body(
         return Code::Expr(expr);
     }
 
-    let emitted = prep.emit(&units);
+    let blocks = prep.blocks(0..body.insts.len(), &regions);
     // RFC-0046 asked for equality here. It does not hold, and
     // `io_in_iteration` (acvus-interpreter-test/tests/extern_fn.rs)
     // measures the gap: a closure demoted to the parameter's effect is
@@ -158,29 +163,32 @@ pub fn prepare_body(
         !prep.may_suspend || may_suspend,
         "body {role:?}: the prepared operations await and the checker's task does not say so"
     );
-    let mut ops: Vec<Op> = Vec::with_capacity(emitted.len());
-    let mut spans: Vec<Span> = Vec::with_capacity(emitted.len());
-    for Emitted { op, span } in emitted {
-        ops.push(op);
-        spans.push(span);
-    }
 
-    let frame_len = prep.scratch + u32::from(prep.scratch_used);
-    let params = body.params.iter().map(|(_, v)| prep.slot(*v)).collect();
-    let captures = body.captures.iter().map(|(_, v)| prep.slot(*v)).collect();
-    let order_param = body.order_param.map(|id| prep.slot(id));
+    let frame_len = prep.frame_len();
+    let param_ids: Vec<ValueId> = body.params.iter().map(|(_, v)| *v).collect();
+    let param_marks = prep.take_mask(&param_ids);
+    let params = param_ids.iter().map(|id| prep.off(*id)).collect();
+    let captures = body.captures.iter().map(|(_, v)| prep.off(*v)).collect();
+    let order_param = body.order_param.map(|id| prep.off(id));
     let entry_konsts = prep.entry_konsts();
+    let slot_kinds = prep.slot_kinds(frame_len);
 
     Code::Body(Body {
-        ops: ops.into_boxed_slice(),
-        spans: spans.into_boxed_slice(),
-        payloads: prep.payloads.into_boxed_slice(),
+        blocks,
+        entry: 0,
         frame_len,
         entry_konsts,
+        slot_kinds,
         may_suspend,
         params,
+        param_marks,
         captures,
         order_param,
+        span: body
+            .insts
+            .first()
+            .unwrap_or_else(|| panic!("body {role:?} holds no instruction, so it cannot return"))
+            .span,
     })
 }
 
@@ -201,14 +209,30 @@ struct Prepare<'a> {
     closures: &'a FxHashMap<Label, Arc<Code>>,
     labels: FxHashMap<Label, u32>,
     slots: Slots,
-    payloads: Vec<Payload>,
     scratch: u32,
     scratch_used: bool,
     may_suspend: bool,
-    op_index: Vec<Option<u32>>,
+    /// The block array being emitted. A region owns its blocks, so the
+    /// array a jump's target names is the innermost one being built, and
+    /// `blocks` saves and restores this around every nested region.
+    level: Level,
     def_inst: Vec<Option<usize>>,
     use_counts: Vec<u32>,
     konsts: Konsts,
+}
+
+/// Where each instruction of the block array under construction begins.
+/// Only a `BlockLabel` a jump can name is in it; every other instruction
+/// sits inside a block rather than starting one.
+#[derive(Default)]
+struct Level {
+    block_of_inst: FxHashMap<usize, BlockId>,
+    /// The first id past the array's own blocks, which is where the edge
+    /// blocks below are numbered from.
+    blocks_len: BlockId,
+    /// One block per conditional edge that carries a parallel move: the
+    /// `Mov`s and a `Goto`. An edge with no move names its target directly.
+    edges: Vec<Block>,
 }
 
 #[derive(Default)]
@@ -363,12 +387,24 @@ impl Prepare<'_> {
     }
 }
 
-fn op_indexes(len: usize, units: &[Unit<'_>]) -> Vec<Option<u32>> {
-    let mut index = vec![None; len];
-    for (op, unit) in units.iter().enumerate() {
-        index[unit.head()] = Some(op as u32);
+fn block_heads(units: &[Unit<'_>], split: &Split) -> FxHashMap<usize, BlockId> {
+    units
+        .iter()
+        .enumerate()
+        .map(|(at, unit)| (unit.head(), split.block_of[at]))
+        .collect()
+}
+
+/// The block the unit being emitted continues into.
+#[derive(Clone, Copy)]
+struct Next(Option<BlockId>);
+
+impl Next {
+    fn block(self) -> BlockId {
+        self.0.expect(
+            "an operation continues past the last block of a body, which has to return instead",
+        )
     }
-    index
 }
 
 fn targets(inst: &Inst, label: Label) -> bool {
@@ -416,21 +452,51 @@ impl<'a> Prepare<'a> {
             labels,
             scratch: slots.frame,
             slots,
-            payloads: Vec::new(),
             scratch_used: false,
             may_suspend: false,
-            op_index: Vec::new(),
+            level: Level::default(),
             def_inst,
             use_counts,
             konsts: Konsts::default(),
         }
     }
 
-    fn slot(&self, id: ValueId) -> u32 {
-        match self.konsts.slot_of.get(&id) {
+    fn slot(&self, id: ValueId) -> Slot {
+        let raw = match self.konsts.slot_of.get(&id) {
             Some(slot) => *slot,
             None => self.slots.of(id),
-        }
+        };
+        Slot::try_from(raw)
+            .unwrap_or_else(|_| panic!("value {id:?} is in register {raw}, past a frame's reach"))
+    }
+
+    /// The byte displacement of `id`'s register: what every operation holds
+    /// (RFC-0052 §5). `slot` is the index, and it stays inside `prepare`.
+    fn off(&self, id: ValueId) -> Off {
+        Off::of(self.slot(id))
+    }
+
+    /// The register `order_moves` breaks a cycle through.
+    fn scratch_slot(&self) -> Slot {
+        Slot::try_from(self.scratch).unwrap_or_else(|_| {
+            panic!(
+                "a body of {} registers has no scratch register within a frame",
+                self.scratch
+            )
+        })
+    }
+
+    fn frame_len(&self) -> u16 {
+        let len = self.scratch + u32::from(self.scratch_used);
+        u16::try_from(len)
+            .unwrap_or_else(|_| panic!("a body of {len} registers is past a frame's reach"))
+    }
+
+    /// Whether a value of this type holds a `Large` its register owns
+    /// (RFC-0048 §4), which is the `LARGE` parameter of every operation
+    /// that writes or empties a register.
+    fn owns(&self, id: ValueId) -> bool {
+        owns_large(self.ty(id))
     }
 
     fn ty(&self, id: ValueId) -> &Ty {
@@ -467,40 +533,105 @@ impl<'a> Prepare<'a> {
         matches!(self.ty(id), Ty::String)
     }
 
-    fn put(&mut self, payload: Payload) -> usize {
-        self.payloads.push(payload);
-        self.payloads.len() - 1
-    }
-
-    fn path(&mut self, path: &[Step]) -> usize {
-        self.put(Payload::Path(path.to_vec().into_boxed_slice()))
-    }
-
-    fn walked_under(&self, target: &RefTarget, path: &[PathSeg]) -> (u32, Vec<Step>) {
+    fn walked_under(&self, target: &RefTarget, path: &[PathSeg]) -> Under {
         let (id, root) = match target {
             RefTarget::Var(s) | RefTarget::Param(s) => (*s, self.ty(*s)),
             RefTarget::Through(r) => (*r, self.scrutinee_ty(*r)),
         };
-        (self.slot(id), self.walked(root, path))
+        Under {
+            base: self.off(id),
+            path: self.walked(root, path),
+        }
     }
 
     /// The path under `root` with each step resolved against the type it
     /// stands on, and the steps that read nothing dropped (RFC-0022).
-    fn walked(&self, root: &Ty, path: &[PathSeg]) -> Vec<Step> {
+    fn walked(&self, root: &Ty, path: &[PathSeg]) -> Vec<Walked> {
         let mut at = vec![root.clone()];
         let mut kept = Vec::with_capacity(path.len());
         for seg in path {
-            let resolved = resolve_step(&at, seg);
+            if let Some(resolved) = resolve_step(&at, seg) {
+                kept.push(Walked {
+                    step: resolved,
+                    array: matches!(resolved, Step::Index(_)) && on_array(&at, seg),
+                });
+            }
             at = step(&at, seg);
-            kept.extend(resolved);
         }
         kept
     }
 
-    fn slots(&mut self, ids: &[ValueId]) -> usize {
-        self.put(Payload::Slots(
-            ids.iter().copied().map(|id| self.slot(id)).collect(),
-        ))
+    /// The kind every word-typed register is opened with when the frame is
+    /// made, so that each `set_word` after it writes the word alone
+    /// (RFC-0052 §5).
+    ///
+    /// The table is complete by construction: `assign_slots` gives a
+    /// register only to values of one kind class, and a value whose type
+    /// `val_types` does not hold is a refusal in `ty` naming it.
+    fn slot_kinds(&self, frame_len: u16) -> Box<[SlotKind]> {
+        let mut opened: Vec<Option<Kind>> = vec![None; usize::from(frame_len)];
+        let mut open = |slot: Slot, kind: Kind| {
+            let held = &mut opened[usize::from(slot)];
+            match *held {
+                None => *held = Some(kind),
+                Some(other) => assert_eq!(
+                    other, kind,
+                    "register {slot} is opened as {other:?} and written as {kind:?}"
+                ),
+            }
+        };
+        for (id, ty) in &self.body.val_types {
+            let Some(kind) = word_kind(ty) else {
+                continue;
+            };
+            let raw = self.slots.raw(*id);
+            if raw == NO_SLOT {
+                continue;
+            }
+            let slot = Slot::try_from(raw)
+                .unwrap_or_else(|_| panic!("value {id:?} is in register {raw}, past a frame"));
+            open(slot, kind);
+        }
+        for (raw, value) in &self.konsts.value_at {
+            let slot = Slot::try_from(*raw).unwrap_or_else(|_| {
+                panic!("an entry constant sits in register {raw}, past a frame")
+            });
+            open(slot, value.kind());
+        }
+        opened
+            .into_iter()
+            .enumerate()
+            .filter_map(|(slot, kind)| {
+                let slot = Slot::try_from(slot).expect("a frame's registers fit a Slot");
+                kind.map(|kind| SlotKind {
+                    slot: Off::of(slot),
+                    kind,
+                })
+            })
+            .collect()
+    }
+
+    /// The registers of a list of operands, and the mask of the ones this
+    /// operation takes the frame's claim on (RFC-0048 §5).
+    fn taken(&self, ids: &[ValueId]) -> Operands {
+        Operands {
+            slots: ids.iter().map(|id| self.off(*id)).collect(),
+            takes: self.take_mask(ids),
+        }
+    }
+
+    /// The bit of every operand whose type owns a `Large`, in the frame's
+    /// mark word. `Off::of` is where the width one mark word reaches is
+    /// asserted, so `Off::mark` is total here.
+    fn take_mask(&self, ids: &[ValueId]) -> u64 {
+        let mut mask = 0u64;
+        for id in ids {
+            if !self.owns(*id) {
+                continue;
+            }
+            mask |= self.off(*id).mark();
+        }
+        mask
     }
 
     fn label(&self, label: &Label) -> u32 {
@@ -510,39 +641,61 @@ impl<'a> Prepare<'a> {
             .unwrap_or_else(|| panic!("unknown label {label:?}"))
     }
 
-    fn target(&self, label: &Label) -> u32 {
+    /// The block a jump naming `label` goes to, in the array being emitted.
+    ///
+    /// Every jump's target is decided here and nowhere else, so a block
+    /// array and the terminators that name it cannot disagree.
+    fn target(&self, label: &Label) -> BlockId {
         let at = self.label(label) as usize;
-        self.op_index[at]
-            .unwrap_or_else(|| panic!("a jump names {label:?}, which a loop operation absorbed"))
+        *self.level.block_of_inst.get(&at).unwrap_or_else(|| {
+            panic!("a jump names {label:?}, which is not the head of a block of this array")
+        })
     }
 
     fn tag_is(&self, tag: Astr, name: &str) -> bool {
         self.ctx.interner.resolve(tag) == name
     }
 
-    /// The moves a jump makes, ordered so every source is read before it is
-    /// overwritten; a cycle is broken through the scratch slot.
-    fn move_list(&mut self, label: &Label, args: &[ValueId]) -> Box<[SlotMove]> {
+    /// The moves a jump makes, as the `Mov` operations of the block they
+    /// belong to, ordered so every source is read before it is overwritten;
+    /// a cycle is broken through the scratch register.
+    ///
+    /// Each move carries its own `LARGE`, so the order is the whole of the
+    /// correctness argument: there is no second run for it to cross into.
+    fn move_ops(&mut self, label: &Label, args: &[ValueId]) -> Vec<Box<dyn Op>> {
         let target = self.label(label) as usize;
         let InstKind::BlockLabel { params, .. } = &self.body.insts[target].kind else {
             panic!("a jump names {label:?}, whose instruction is not a block label")
         };
-        let pairs: Vec<SlotMove> = params
+        let pairs: Vec<Carried> = params
             .iter()
             .zip(args)
-            .map(|(param, arg)| SlotMove {
-                from: self.slot(*arg),
-                to: self.slot(*param),
+            .map(|(param, arg)| Carried {
+                at: Pair {
+                    from: self.slot(*arg),
+                    to: self.slot(*param),
+                },
+                large: self.owns(*arg),
             })
             .collect();
-        let ordered = order_moves(pairs, self.scratch);
+        let ordered = order_moves(pairs, self.scratch_slot());
         self.scratch_used |= ordered.scratch_used;
-        ordered.moves.into_boxed_slice()
+        ordered.moves.iter().map(mov_op).collect()
     }
 
-    fn moves(&mut self, label: &Label, args: &[ValueId]) -> usize {
-        let list = self.move_list(label, args);
-        self.put(Payload::Moves(list))
+    /// The block a conditional edge goes to: its own, holding the edge's
+    /// `Mov`s, where it carries any; the target itself where it carries none.
+    fn edge(&mut self, moves: Vec<Box<dyn Op>>, target: BlockId) -> BlockId {
+        if moves.is_empty() {
+            return target;
+        }
+        let made = BlockId::try_from(self.level.edges.len())
+            .expect("a block array with more edge blocks than a BlockId counts");
+        let at = self.level.blocks_len + made;
+        self.level
+            .edges
+            .push(Block::new(moves, Box::new(control::Goto { target })));
+        at
     }
 
     /// A suspending operation is excluded along with the terminators: it
@@ -838,14 +991,116 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    fn block(&mut self, range: Range<usize>, nested: &[Region]) -> BasicBlock {
+    /// The body's blocks, with every jump inside it resolved against them.
+    fn blocks(&mut self, range: Range<usize>, nested: &[Region]) -> Box<[Block]> {
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
         let units = self.layout(range, nested, &runs, &chains);
-        BasicBlock::new(self.emit(&units).into_iter().map(|e| e.op))
+        let split = self.split(&units);
+        self.level = Level {
+            block_of_inst: block_heads(&units, &split),
+            blocks_len: split.blocks,
+            edges: Vec::new(),
+        };
+
+        let mut blocks: Vec<Block> = Vec::with_capacity(split.blocks as usize);
+        let mut ops: Vec<Box<dyn Op>> = Vec::new();
+        for (at, unit) in units.iter().enumerate() {
+            let next = Next(match at + 1 < units.len() {
+                true => Some(split.block_of[at + 1]),
+                false => None,
+            });
+            let end = self.unit(unit, next, &mut ops);
+            if end.is_some() {
+                assert!(
+                    split.last_of_block(at),
+                    "the terminator at unit {at} is not the last unit of its block"
+                );
+            }
+            let end = match (end, split.last_of_block(at)) {
+                (Some(end), _) => end,
+                (None, true) => Box::new(control::Goto {
+                    target: next.block(),
+                }),
+                (None, false) => continue,
+            };
+            blocks.push(Block::new(mem::take(&mut ops), end));
+        }
+        assert!(
+            ops.is_empty(),
+            "the last block of a body was left open with {} operations",
+            ops.len()
+        );
+        assert_eq!(
+            blocks.len() as BlockId,
+            split.blocks,
+            "a body's blocks were emitted with a length its split did not plan"
+        );
+        blocks.append(&mut self.level.edges);
+        assert!(!blocks.is_empty(), "a body prepared to no block at all");
+        blocks.into_boxed_slice()
     }
 
-    fn loop_op(&mut self, region: &LoopRegion) -> Op {
+    /// Obligation across artifacts: the assert below is unreachable because
+    /// `straight_run` admits a region's part only where every instruction is
+    /// straight-line, and `Next(None)` is what would panic if one of them
+    /// asked for a continuation.
+    fn straight(
+        &mut self,
+        range: Range<usize>,
+        nested: &[Region],
+        leaving: Vec<Box<dyn Op>>,
+    ) -> Box<[Box<dyn Op>]> {
+        let runs = self.fused_in(range.clone(), nested);
+        let chains = self.chains_in(range.clone(), nested);
+        let units = self.layout(range, nested, &runs, &chains);
+        let mut ops: Vec<Box<dyn Op>> = Vec::new();
+        for unit in &units {
+            let end = self.unit(unit, Next(None), &mut ops);
+            assert!(
+                end.is_none(),
+                "a region's part holds a terminator, which `straight_run` does not admit"
+            );
+        }
+        ops.extend(leaving);
+        ops.into_boxed_slice()
+    }
+
+    /// The operations this unit appends, and the terminator it is where it
+    /// is one. A call that yields an RFC-0007 `Order` appends the `Merge`
+    /// that writes it and then ends the block, which is why a unit hands
+    /// its operations to the block rather than returning one.
+    fn unit(
+        &mut self,
+        unit: &Unit<'_>,
+        next: Next,
+        ops: &mut Vec<Box<dyn Op>>,
+    ) -> Option<Box<dyn Terminator>> {
+        match unit {
+            Unit::Inst(at) => self.op(*at, next, ops),
+            Unit::Region(Region::Loop(region)) => {
+                self.loop_op(region, ops);
+                None
+            }
+            Unit::Region(Region::Diamond(region)) => {
+                let op = self.diamond_op(region);
+                ops.push(op);
+                None
+            }
+            Unit::Fused(region) => {
+                let op = self.fused_op(region);
+                ops.push(op);
+                None
+            }
+            Unit::Chain(run) => {
+                let op = self.chain_op(run);
+                ops.push(op);
+                None
+            }
+        }
+    }
+
+    fn loop_op(&mut self, region: &LoopRegion, ops: &mut Vec<Box<dyn Op>>) {
         let body = self.body;
         let InstKind::JumpIf {
             cond,
@@ -865,35 +1120,39 @@ impl<'a> Prepare<'a> {
             panic!("a recognized loop's back edge is not a jump")
         };
 
-        let enter = match region.enter_jump {
-            Some(entry) => {
-                let InstKind::Jump { label, args } = &body.insts[entry].kind else {
-                    panic!("a recognized loop's entry is not a jump")
-                };
-                self.move_list(label, args)
-            }
-            None => Box::default(),
-        };
-        let into_body = self.move_list(then_label, then_args);
-        let exit = self.move_list(else_label, else_args);
-        let back = self.move_list(header, back_args);
+        if let Some(entry) = region.enter_jump {
+            let InstKind::Jump { label, args } = &body.insts[entry].kind else {
+                panic!("a recognized loop's entry is not a jump")
+            };
+            let (label, args) = (*label, args.clone());
+            let entering = self.move_ops(&label, &args);
+            ops.extend(entering);
+        }
+        let into_body = self.move_ops(then_label, then_args);
+        let exit = self.move_ops(else_label, else_args);
+        let back = self.move_ops(header, back_args);
+        let cond = self.off(*cond);
 
-        let head = self.block(region.head_block.clone(), &region.head_regions);
-        let block = self.block(region.body_block.clone(), &region.body_regions);
+        let head = self.straight(region.head_block.clone(), &region.head_regions, Vec::new());
+        let ran = self.straight(region.body_block.clone(), &region.body_regions, back);
+        debug_assert_eq!(
+            self.references(*then_label),
+            vec![region.jump_if],
+            "the move into a loop's body is placed at the head of the body, \
+             which `recognize_loop` admits only where the test above is its one entry"
+        );
+        let mut held: Vec<Box<dyn Op>> = into_body;
+        held.extend(ran);
 
-        let at = self.put(Payload::Loop(LoopBody {
-            enter,
+        ops.push(Box::new(control::Loop {
             head,
-            cond_slot: self.slot(*cond),
-            into_body,
-            body: block,
-            back,
-            exit,
+            cond,
+            body: held.into_boxed_slice(),
         }));
-        Op::new(control::while_loop).p(at)
+        ops.extend(exit);
     }
 
-    fn diamond_op(&mut self, region: &DiamondRegion) -> Op {
+    fn diamond_op(&mut self, region: &DiamondRegion) -> Box<dyn Op> {
         let InstKind::JumpIf {
             cond,
             then_label,
@@ -905,126 +1164,196 @@ impl<'a> Prepare<'a> {
             panic!("a recognized diamond's test is not a conditional jump")
         };
 
-        let cond_slot = self.slot(*cond);
+        let cond = self.off(*cond);
         let on_true = self.arm(&region.on_true, then_label, then_args);
         let on_false = self.arm(&region.on_false, else_label, else_args);
 
-        let at = self.put(Payload::Diamond(Diamond { on_true, on_false }));
-        Op::new(control::diamond).a(cond_slot).p(at)
+        Box::new(control::Diamond {
+            cond,
+            on_true,
+            on_false,
+        })
     }
 
     /// `label` and `args` are the diamond's own edge into this arm, which
     /// a `Direct` arm takes all the way to the join.
-    fn arm(&mut self, region: &ArmRegion, label: &Label, args: &[ValueId]) -> DiamondArm {
+    fn arm(&mut self, region: &ArmRegion, label: &Label, args: &[ValueId]) -> Box<[Box<dyn Op>]> {
         let ArmRegion::Block {
             block,
             regions,
             jump,
         } = region
         else {
-            return DiamondArm {
-                block: BasicBlock::new([]),
-                join: self.move_list(label, args),
-            };
+            let join = self.move_ops(label, args);
+            return join.into_boxed_slice();
         };
         let InstKind::Jump { label, args } = &self.body.insts[*jump].kind else {
             panic!("a recognized diamond's arm does not end in a jump")
         };
-        DiamondArm {
-            join: self.move_list(label, args),
-            block: self.block(block.clone(), regions),
-        }
+        let (label, args) = (*label, args.clone());
+        let join = self.move_ops(&label, &args);
+        self.straight(block.clone(), regions, join)
     }
 
-    fn op(&mut self, at: usize) -> Op {
+    fn op(
+        &mut self,
+        at: usize,
+        next: Next,
+        ops: &mut Vec<Box<dyn Op>>,
+    ) -> Option<Box<dyn Terminator>> {
         let body = self.body;
         let inst = &body.insts[at];
-        match &inst.kind {
+        let op: Box<dyn Op> = match &inst.kind {
             InstKind::Switch { .. } => todo!(
                 "the machine has no `switch` operation yet (RFC-0051, second half); \
                  `optimize::switch_expand` replaces every Switch before prepare runs"
             ),
 
+            // -- The terminators ----------------------------------------
+            InstKind::Jump { label, args } => {
+                let target = self.target(label);
+                let (label, args) = (*label, args.clone());
+                let moves = self.move_ops(&label, &args);
+                ops.extend(moves);
+                return Some(Box::new(control::Goto { target }));
+            }
+            InstKind::JumpIf {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+            } => {
+                let cond = self.off(*cond);
+                let on_true = self.target(then_label);
+                let on_false = self.target(else_label);
+                let then_moves = self.move_ops(then_label, then_args);
+                let else_moves = self.move_ops(else_label, else_args);
+                let on_true = self.edge(then_moves, on_true);
+                let on_false = self.edge(else_moves, on_false);
+                return Some(Box::new(control::JumpIf {
+                    cond,
+                    on_true,
+                    on_false,
+                }));
+            }
+            InstKind::Return { value, .. } => {
+                return Some(Box::new(control::Return {
+                    slot: self.off(*value),
+                }));
+            }
+            InstKind::Diverge => return Some(Box::new(control::Diverge)),
+            InstKind::Poison { .. } => return Some(Box::new(control::Poison)),
+
+            InstKind::LoadFunction { .. } => panic!(
+                "a function named as a value has no operation: the machine reaches a body \
+                 only through a closure or a qualified call, and RFC-0044 leaves \
+                 LoadFunction without a lowering"
+            ),
+
+            InstKind::Eval { dst, src, order } => {
+                self.may_suspend = true;
+                self.merge(*order, ops);
+                let slot = self.off(*dst);
+                let handle = self.off(*src);
+                let resume = next.block();
+                return Some(match self.owns(*dst) {
+                    true => Box::new(call::Eval::<true> {
+                        dst: slot,
+                        handle,
+                        next: resume,
+                    }),
+                    false => Box::new(call::Eval::<false> {
+                        dst: slot,
+                        handle,
+                        next: resume,
+                    }),
+                });
+            }
+            InstKind::FunctionCall {
+                dst,
+                callee,
+                callee_ty,
+                args,
+                order,
+            } => {
+                let site = CallSite {
+                    at,
+                    dst: *dst,
+                    callee,
+                    callee_ty,
+                    args,
+                    order: order.map(|edge| edge.after),
+                };
+                return self.call_op(&site, next, ops);
+            }
+
+            // -- The operations -----------------------------------------
+            InstKind::BlockLabel { .. } | InstKind::Nop => return None,
+
             InstKind::Const { dst, value } => self.constant(*dst, value),
 
             InstKind::StringConcat { dst, parts } => {
-                let parts: Box<[ConcatPart]> = parts
+                let owns_large = self.take_mask(parts);
+                let held: Box<[ConcatPart]> = parts
                     .iter()
                     .map(|part| ConcatPart {
-                        slot: self.slot(*part),
+                        slot: self.off(*part),
                         through_reference: self.is_ref(*part),
                     })
                     .collect();
-                let at = self.put(Payload::Parts(parts));
-                Op::new(string::concat).a(self.slot(*dst)).p(at)
+                Box::new(string::Concat {
+                    dst: self.off(*dst),
+                    parts: held,
+                    owns_large,
+                })
             }
-            InstKind::StringEq { dst, a, b } => Op::new(string::string_eq)
-                .a(self.slot(*dst))
-                .b(self.slot(*a))
-                .c(self.slot(*b)),
+            InstKind::StringEq { dst, a, b } => Box::new(string::StringEq {
+                slots: Binary {
+                    dst: self.off(*dst),
+                    l: self.off(*a),
+                    r: self.off(*b),
+                },
+            }),
             InstKind::StringClone { dst, src } => {
-                let f: OpFn = if self.is_ref(*src) {
-                    string::clone_string::<true>
-                } else {
-                    string::clone_string::<false>
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*src),
                 };
-                Op::new(f).a(self.slot(*dst)).b(self.slot(*src))
+                match self.is_ref(*src) {
+                    true => Box::new(string::CloneString::<true> { slots }),
+                    false => Box::new(string::CloneString::<false> { slots }),
+                }
             }
 
             InstKind::Ref {
                 dst, target, path, ..
             } => {
-                let (src, path) = self.walked_under(target, path);
-                match (target, path.is_empty()) {
-                    (RefTarget::Var(_) | RefTarget::Param(_), true) => {
-                        Op::new(storage::ref_var).a(self.slot(*dst)).b(src)
-                    }
-                    (RefTarget::Var(_) | RefTarget::Param(_), false) => {
-                        let at = self.path(&path);
-                        Op::new(storage::ref_var_path)
-                            .a(self.slot(*dst))
-                            .b(src)
-                            .p(at)
-                    }
-                    (RefTarget::Through(_), true) => {
-                        Op::new(storage::ref_through).a(self.slot(*dst)).b(src)
-                    }
-                    (RefTarget::Through(_), false) => {
-                        let at = self.path(&path);
-                        Op::new(storage::ref_through_path)
-                            .a(self.slot(*dst))
-                            .b(src)
-                            .p(at)
-                    }
-                }
+                let under = self.walked_under(target, path);
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: under.base,
+                };
+                make_ref(slots, through_target(target), &under.path)
             }
             InstKind::Take { dst, target, path } => {
                 let clone = self.is_string(*dst);
-                let (src, path) = self.walked_under(target, path);
-                let f: OpFn = match (target, path.is_empty(), clone) {
-                    (RefTarget::Var(_) | RefTarget::Param(_), true, true) => {
-                        storage::take_var::<true>
-                    }
-                    (RefTarget::Var(_) | RefTarget::Param(_), true, false) => {
-                        storage::take_var::<false>
-                    }
-                    (RefTarget::Var(_) | RefTarget::Param(_), false, true) => {
-                        storage::read_path::<true>
-                    }
-                    (RefTarget::Var(_) | RefTarget::Param(_), false, false) => {
-                        storage::read_path::<false>
-                    }
-                    (RefTarget::Through(_), true, true) => storage::take_through::<true>,
-                    (RefTarget::Through(_), true, false) => storage::take_through::<false>,
-                    (RefTarget::Through(_), false, true) => storage::take_through_path::<true>,
-                    (RefTarget::Through(_), false, false) => storage::take_through_path::<false>,
+                let through = through_target(target);
+                let how = Reading::of(self.ty(*dst), through);
+                let under = self.walked_under(target, path);
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: under.base,
                 };
-                let op = Op::new(f).a(self.slot(*dst)).b(src);
-                if path.is_empty() {
-                    op
-                } else {
-                    let at = self.path(&path);
-                    op.p(at)
+                match (under.path.is_empty(), through, clone) {
+                    (true, false, true) => Box::new(string::CloneString::<false> { slots }),
+                    (true, true, true) => Box::new(string::CloneString::<true> { slots }),
+                    (true, true, false) => Box::new(storage::TakeThrough { slots }),
+                    (true, false, false) => match self.owns(*dst) {
+                        true => Box::new(storage::TakeVar::<true> { slots }),
+                        false => Box::new(storage::TakeVar::<false> { slots }),
+                    },
+                    (false, _, _) => read_place(slots, how, &under.path),
                 }
             }
             InstKind::Assign {
@@ -1032,28 +1361,30 @@ impl<'a> Prepare<'a> {
                 path,
                 value,
             } => {
-                let (dst, path) = self.walked_under(target, path);
-                let f: OpFn = match (target, path.is_empty()) {
-                    (RefTarget::Var(_) | RefTarget::Param(_), true) => storage::assign_var,
-                    (RefTarget::Var(_) | RefTarget::Param(_), false) => storage::assign_var_path,
-                    (RefTarget::Through(_), true) => storage::assign_through,
-                    (RefTarget::Through(_), false) => storage::assign_through_path,
+                let through = through_target(target);
+                let large = self.owns(*value);
+                let under = self.walked_under(target, path);
+                let slots = storage::Write {
+                    target: under.base,
+                    value: self.off(*value),
                 };
-                let op = Op::new(f).a(dst).b(self.slot(*value));
-                if path.is_empty() {
-                    op
-                } else {
-                    let at = self.path(&path);
-                    op.p(at)
-                }
+                assign_place(slots, Writing { through, large }, &under.path)
             }
             InstKind::Fetch { dst, context } => {
-                let at = self.put(Payload::PageKey(self.ctx.page_key(context)));
-                Op::new(storage::fetch).a(self.slot(*dst)).p(at)
+                let key = self.ctx.page_key(context);
+                let slot = self.off(*dst);
+                match self.owns(*dst) {
+                    true => Box::new(storage::Fetch::<true> { dst: slot, key }),
+                    false => Box::new(storage::Fetch::<false> { dst: slot, key }),
+                }
             }
             InstKind::Commit { context, value } => {
-                let at = self.put(Payload::PageKey(self.ctx.page_key(context)));
-                Op::new(storage::commit).a(self.slot(*value)).p(at)
+                let key = self.ctx.page_key(context);
+                let src = self.off(*value);
+                match self.owns(*value) {
+                    true => Box::new(storage::Commit::<true> { src, key }),
+                    false => Box::new(storage::Commit::<false> { src, key }),
+                }
             }
 
             InstKind::FieldGet {
@@ -1062,28 +1393,24 @@ impl<'a> Prepare<'a> {
                 field,
                 rest,
             } => {
-                let clone = self.is_string(*dst);
-                if rest.is_empty() {
-                    let f: OpFn = if clone {
-                        storage::read_field::<true>
-                    } else {
-                        storage::read_field::<false>
-                    };
-                    let at = self.put(Payload::Name(*field));
-                    Op::new(f).a(self.slot(*dst)).b(self.slot(*object)).p(at)
-                } else {
-                    let f: OpFn = if clone {
-                        storage::read_path::<true>
-                    } else {
-                        storage::read_path::<false>
-                    };
-                    let path: Vec<Step> = std::iter::once(*field)
-                        .chain(rest.iter().copied())
-                        .map(Step::Field)
-                        .collect();
-                    let at = self.path(&path);
-                    Op::new(f).a(self.slot(*dst)).b(self.slot(*object)).p(at)
-                }
+                let how = Reading::of(self.ty(*dst), self.is_ref(*object));
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*object),
+                };
+                let path: Vec<Walked> = std::iter::once(*field)
+                    .chain(rest.iter().copied())
+                    .map(field_step)
+                    .collect();
+                read_place(slots, how, &path)
+            }
+            InstKind::ObjectGet { dst, object, key } => {
+                let how = Reading::of(self.ty(*dst), self.is_ref(*object));
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*object),
+                };
+                read_place(slots, how, &[field_step(*key)])
             }
             InstKind::FieldSet {
                 dst,
@@ -1092,16 +1419,17 @@ impl<'a> Prepare<'a> {
                 rest,
                 value,
             } => {
-                let path: Vec<Step> = std::iter::once(*field)
+                let large = self.owns(*value);
+                let slots = storage::Update {
+                    dst: self.off(*dst),
+                    object: self.off(*object),
+                    value: self.off(*value),
+                };
+                let path: Vec<Walked> = std::iter::once(*field)
                     .chain(rest.iter().copied())
-                    .map(Step::Field)
+                    .map(field_step)
                     .collect();
-                let at = self.path(&path);
-                Op::new(storage::field_set)
-                    .a(self.slot(*dst))
-                    .b(self.slot(*object))
-                    .c(self.slot(*value))
-                    .p(at)
+                set_place(slots, large, &path)
             }
 
             InstKind::BinOp {
@@ -1110,171 +1438,137 @@ impl<'a> Prepare<'a> {
                 left,
                 right,
             } => {
-                let f = match self.ty(*left) {
-                    Ty::Int(k) => arith::int_binop(*op, *k),
-                    Ty::Float => arith::float_binop(*op),
-                    Ty::Bool => arith::bool_binop(*op),
-                    other => panic!("binop {op:?} on {other:?}"),
+                let slots = Binary {
+                    dst: self.off(*dst),
+                    l: self.off(*left),
+                    r: self.off(*right),
                 };
-                Op::new(f)
-                    .a(self.slot(*dst))
-                    .b(self.slot(*left))
-                    .c(self.slot(*right))
+                match self.ty(*left) {
+                    Ty::Int(k) => arith::int_binop(*op, *k, slots),
+                    Ty::Float => arith::float_binop(*op, slots),
+                    Ty::Bool => arith::bool_binop(*op, slots),
+                    other => panic!("binop {op:?} on {other:?}"),
+                }
             }
             InstKind::UnaryOp { dst, op, operand } => {
-                let f = match self.ty(*operand) {
-                    Ty::Int(k) => arith::int_unaryop(*op, *k),
-                    Ty::Float => arith::float_unaryop(*op),
-                    Ty::Bool => arith::bool_unaryop(*op),
-                    other => panic!("unary {op:?} on {other:?}"),
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*operand),
                 };
-                Op::new(f).a(self.slot(*dst)).b(self.slot(*operand))
+                match self.ty(*operand) {
+                    Ty::Int(k) => arith::int_unaryop(*op, *k, slots),
+                    Ty::Float => arith::float_unaryop(*op, slots),
+                    Ty::Bool => arith::bool_unaryop(*op, slots),
+                    other => panic!("unary {op:?} on {other:?}"),
+                }
             }
 
-            InstKind::LoadFunction { .. } => Op::new(control::load_function),
-            InstKind::FunctionCall {
-                dst,
-                callee,
-                callee_ty,
-                args,
-                order,
+            InstKind::Spawn {
+                dst, callee, args, ..
             } => {
-                let after = order.map_or(NO_SLOT, |edge| self.slot(edge.after));
+                let dst = self.off(*dst);
                 match callee {
                     Callee::Direct(id) => {
-                        self.suspends_at(callee_ty);
-                        let at = self.put(Payload::Direct {
+                        let Operands { slots, takes } = self.taken(args);
+                        Box::new(call::SpawnModule {
+                            dst,
                             callee: *id,
-                            args: args.iter().copied().map(|id| self.slot(id)).collect(),
-                        });
-                        Op::new(call::call_direct).a(self.slot(*dst)).d(after).p(at)
+                            args: slots,
+                            takes,
+                        })
                     }
                     Callee::Extern { id, instance } => {
                         let handler = self.ctx.handler(id, *instance);
-                        if !handler.is_sync() {
-                            self.may_suspend = true;
-                        }
-                        let op = Op::new(extern_call_op(&handler)).a(self.slot(*dst));
-                        let call_args = if needs_window(&handler) {
-                            ExternArgs::Window(self.slots.window(at).clone())
-                        } else {
-                            ExternArgs::ByValue
-                        };
-                        let op = match &call_args {
-                            ExternArgs::ByValue => {
-                                let slot_at =
-                                    |k: usize| args.get(k).map_or(NO_SLOT, |id| self.slot(*id));
-                                op.b(slot_at(0)).c(slot_at(1)).d(slot_at(2))
+                        let window = self.window(at, args, ops);
+                        match handler {
+                            ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
+                                Box::new(call::SpawnExternSync { dst, window, f })
                             }
-                            ExternArgs::Window(_) => op,
-                        };
-                        let payload = self.put(Payload::Extern(ExternCall {
-                            handler,
-                            order: after,
-                            args: call_args,
-                        }));
-                        op.p(payload)
+                            ExternHandler::Async(f) => {
+                                Box::new(call::SpawnExternAsync { dst, window, f })
+                            }
+                        }
                     }
-                    Callee::Indirect(callee_slot) => {
-                        self.suspends_at(callee_ty);
-                        let f: OpFn = if self.is_ref(*callee_slot) {
-                            call::call_indirect::<true>
-                        } else {
-                            call::call_indirect::<false>
-                        };
-                        let at = self.slots(args);
-                        Op::new(f)
-                            .a(self.slot(*dst))
-                            .b(self.slot(*callee_slot))
-                            .d(after)
-                            .p(at)
-                    }
+                    Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
                 }
             }
-            InstKind::Spawn {
-                dst, callee, args, ..
-            } => match callee {
-                Callee::Direct(id) => {
-                    let at = self.put(Payload::Direct {
-                        callee: *id,
-                        args: args.iter().copied().map(|id| self.slot(id)).collect(),
-                    });
-                    Op::new(call::spawn_module).a(self.slot(*dst)).p(at)
-                }
-                Callee::Extern { id, instance } => {
-                    let handler = self.ctx.handler(id, *instance);
-                    let f: OpFn = match handler {
-                        ExternHandler::Sync(_) | ExternHandler::Heavy(_) => call::spawn_extern_sync,
-                        ExternHandler::Async(_) => call::spawn_extern_async,
-                    };
-                    let window = self.slots.window(at).clone();
-                    let payload = self.put(Payload::Extern(ExternCall {
-                        handler,
-                        order: NO_SLOT,
-                        args: ExternArgs::Window(window),
-                    }));
-                    Op::new(f).a(self.slot(*dst)).p(payload)
-                }
-                Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
-            },
-            InstKind::Eval { dst, src, order } => {
-                self.may_suspend = true;
-                Op::new(call::eval)
-                    .a(self.slot(*dst))
-                    .b(self.slot(*src))
-                    .d(order.map_or(NO_SLOT, |id| self.slot(id)))
-            }
-            InstKind::Merge { dst, .. } => Op::new(control::merge).a(self.slot(*dst)),
+            InstKind::Merge { dst, .. } => Box::new(control::Merge {
+                dst: self.off(*dst),
+            }),
 
             InstKind::MakeArray { dst, elements } => {
-                let at = self.slots(elements);
-                Op::new(composite::make_array).a(self.slot(*dst)).p(at)
+                let Operands {
+                    slots,
+                    takes: owns_large,
+                } = self.taken(elements);
+                Box::new(composite::MakeArray {
+                    dst: self.off(*dst),
+                    elements: composite::Elements { slots, owns_large },
+                })
+            }
+            InstKind::MakeTuple { dst, elements } => {
+                let Operands {
+                    slots,
+                    takes: owns_large,
+                } = self.taken(elements);
+                Box::new(composite::MakeTuple {
+                    dst: self.off(*dst),
+                    elements: composite::Elements { slots, owns_large },
+                })
             }
             InstKind::MakeObject { dst, fields } => {
-                let fields: Box<[FieldSlot]> = fields
+                let values: Vec<ValueId> = fields.iter().map(|(_, value)| *value).collect();
+                let owns_large = self.take_mask(&values);
+                let held: Box<[FieldSlot]> = fields
                     .iter()
                     .map(|(key, value)| FieldSlot {
                         key: *key,
-                        slot: self.slot(*value),
+                        slot: self.off(*value),
                     })
                     .collect();
-                let at = self.put(Payload::Fields(fields));
-                Op::new(composite::make_object).a(self.slot(*dst)).p(at)
-            }
-            InstKind::MakeTuple { dst, elements } => {
-                let at = self.slots(elements);
-                Op::new(composite::make_tuple).a(self.slot(*dst)).p(at)
+                Box::new(composite::MakeObject {
+                    dst: self.off(*dst),
+                    fields: held,
+                    owns_large,
+                })
             }
             InstKind::TupleIndex { dst, tuple, index } => {
-                let f: OpFn = if self.is_string(*dst) {
-                    storage::read_index::<true>
-                } else {
-                    storage::read_index::<false>
+                let how = Reading::of(self.ty(*dst), self.is_ref(*tuple));
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*tuple),
                 };
-                Op::new(f).a(self.slot(*dst)).b(self.slot(*tuple)).p(*index)
-            }
-
-            InstKind::TestLiteral { dst, src, value } => self.test_literal(*dst, *src, value),
-            InstKind::TestObjectKey { dst, src, key } => {
-                let f: OpFn = if self.is_ref(*src) {
-                    pattern::test_object_key::<true>
-                } else {
-                    pattern::test_object_key::<false>
-                };
-                let at = self.put(Payload::Name(*key));
-                Op::new(f).a(self.slot(*dst)).b(self.slot(*src)).p(at)
+                read_place(slots, how, &[index_step(*index, false)])
             }
             InstKind::ArrayIndex { dst, array, index } => {
-                let f: OpFn = if self.is_string(*dst) {
-                    storage::read_index::<true>
-                } else {
-                    storage::read_index::<false>
+                let how = Reading::of(self.ty(*dst), self.is_ref(*array));
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*array),
                 };
-                Op::new(f).a(self.slot(*dst)).b(self.slot(*array)).p(*index)
+                read_place(slots, how, &[index_step(*index, true)])
+            }
+
+            InstKind::TestLiteral { dst, src, value } => self.test_literal(
+                Tested {
+                    dst: *dst,
+                    src: *src,
+                },
+                value,
+            ),
+            InstKind::TestObjectKey { dst, src, key } => {
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*src),
+                };
+                match self.is_ref(*src) {
+                    true => Box::new(pattern::TestObjectKey::<true> { slots, key: *key }),
+                    false => Box::new(pattern::TestObjectKey::<false> { slots, key: *key }),
+                }
             }
 
             // An `AsSlice` is the one call of the instance the checker
-            // settled on, prepared exactly as `call_extern_1` of that
+            // settled on, prepared exactly as the extern call of that
             // handler would be, so a fused run sees it as a call
             // (RFC-0044, RFC-0047 §3).
             InstKind::AsSlice {
@@ -1284,41 +1578,53 @@ impl<'a> Prepare<'a> {
                 ..
             } => {
                 let handler = self.ctx.handler(&instance.id, instance.instance);
-                let op = Op::new(extern_call_op(&handler))
-                    .a(self.slot(*dst))
-                    .b(self.slot(*container));
-                let payload = self.put(Payload::Extern(ExternCall {
-                    handler,
-                    order: NO_SLOT,
-                    args: ExternArgs::ByValue,
-                }));
-                op.p(payload)
+                let into = self.dest(*dst);
+                let args = std::slice::from_ref(container);
+                match handler {
+                    ExternHandler::Sync(SyncCall::Plain(abi)) => {
+                        self.plain_call(at, into, args, abi, ops)
+                    }
+                    ExternHandler::Sync(SyncCall::Stateful { state, abi }) => {
+                        self.state_call(at, into, args, state, abi, ops)
+                    }
+                    ExternHandler::Heavy(_) | ExternHandler::Async(_) => panic!(
+                        "an AsSlice names a handler that is not synchronous, so lending a \
+                         container's run would outlive the borrow it stands on (RFC-0047 §3)"
+                    ),
+                }
             }
             InstKind::Index {
                 dst,
                 slice,
                 index,
                 mode,
-            } => Op::new(index::checked(*mode))
-                .a(self.slot(*dst))
-                .b(self.slot(*slice))
-                .c(self.slot(*index)),
+            } => index::checked(
+                *mode,
+                index::Read {
+                    dst: self.off(*dst),
+                    slice: self.off(*slice),
+                    index: self.off(*index),
+                },
+            ),
             InstKind::IndexSet {
                 slice,
                 index,
                 value,
-            } => Op::new(index::index_set::<true>)
-                .a(self.slot(*slice))
-                .b(self.slot(*index))
-                .c(self.slot(*value)),
-            InstKind::ObjectGet { dst, object, key } => {
-                let f: OpFn = if self.is_string(*dst) {
-                    storage::read_field::<true>
-                } else {
-                    storage::read_field::<false>
-                };
-                let at = self.put(Payload::Name(*key));
-                Op::new(f).a(self.slot(*dst)).b(self.slot(*object)).p(at)
+            } => {
+                let large = self.owns(*value);
+                let (slice, index, held) = (self.off(*slice), self.off(*index), self.off(*value));
+                match large {
+                    true => Box::new(index::IndexSet::<true, true> {
+                        slice,
+                        index,
+                        value: held,
+                    }),
+                    false => Box::new(index::IndexSet::<true, false> {
+                        slice,
+                        index,
+                        value: held,
+                    }),
+                }
             }
 
             InstKind::MakeClosure {
@@ -1331,176 +1637,600 @@ impl<'a> Prepare<'a> {
                         .get(body)
                         .unwrap_or_else(|| panic!("closure body not found: {body:?}")),
                 );
-                let at = self.put(Payload::Closure {
+                let Operands { slots, takes } = self.taken(captures);
+                Box::new(call::MakeClosure {
+                    dst: self.off(*dst),
                     code,
-                    captures: captures.iter().copied().map(|id| self.slot(id)).collect(),
-                });
-                Op::new(call::make_closure).a(self.slot(*dst)).p(at)
+                    captures: slots,
+                    takes,
+                })
             }
 
             InstKind::MakeVariant { dst, tag, payload } => self.make_variant(*dst, *tag, *payload),
             InstKind::TestVariant { dst, src, tag } => {
-                let through = self.is_ref(*src);
-                let f: OpFn = match (variant_form(self.scrutinee_ty(*src)), through) {
-                    (VariantForm::Option, false) => variant::test_option::<false>,
-                    (VariantForm::Option, true) => variant::test_option::<true>,
-                    (VariantForm::Result, false) => variant::test_result::<false>,
-                    (VariantForm::Result, true) => variant::test_result::<true>,
-                    (VariantForm::Enum, false) => variant::test_variant::<false>,
-                    (VariantForm::Enum, true) => variant::test_variant::<true>,
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*src),
                 };
-                let at = self.put(Payload::Name(*tag));
-                Op::new(f)
-                    .a(self.slot(*dst))
-                    .b(self.slot(*src))
-                    .c(u32::from(self.tag_is(*tag, "Some")))
-                    .d(u32::from(self.tag_is(*tag, "Ok")))
-                    .p(at)
+                let through = self.is_ref(*src);
+                let form = variant_form(self.scrutinee_ty(*src));
+                match (form, through) {
+                    (VariantForm::Option, true) => {
+                        test_option::<true>(slots, self.tag_is(*tag, "Some"))
+                    }
+                    (VariantForm::Option, false) => {
+                        test_option::<false>(slots, self.tag_is(*tag, "Some"))
+                    }
+                    (VariantForm::Result, true) => {
+                        test_result::<true>(slots, self.tag_is(*tag, "Ok"))
+                    }
+                    (VariantForm::Result, false) => {
+                        test_result::<false>(slots, self.tag_is(*tag, "Ok"))
+                    }
+                    (VariantForm::Enum, true) => {
+                        Box::new(variant::TestVariant::<true> { slots, tag: *tag })
+                    }
+                    (VariantForm::Enum, false) => {
+                        Box::new(variant::TestVariant::<false> { slots, tag: *tag })
+                    }
+                }
             }
             InstKind::UnwrapVariant { dst, src } => {
-                let f: OpFn = match variant_form(self.ty(*src)) {
-                    VariantForm::Option => variant::unwrap_option,
-                    VariantForm::Result => variant::unwrap_result,
-                    VariantForm::Enum => variant::unwrap_variant,
+                let slots = Unary {
+                    dst: self.off(*dst),
+                    src: self.off(*src),
                 };
-                Op::new(f).a(self.slot(*dst)).b(self.slot(*src))
+                match (variant_form(self.ty(*src)), self.owns(*dst)) {
+                    (VariantForm::Option, true) => {
+                        Box::new(variant::UnwrapOption::<true> { slots })
+                    }
+                    (VariantForm::Option, false) => {
+                        Box::new(variant::UnwrapOption::<false> { slots })
+                    }
+                    (VariantForm::Result, true) => {
+                        Box::new(variant::UnwrapResult::<true> { slots })
+                    }
+                    (VariantForm::Result, false) => {
+                        Box::new(variant::UnwrapResult::<false> { slots })
+                    }
+                    (VariantForm::Enum, true) => Box::new(variant::UnwrapVariant::<true> { slots }),
+                    (VariantForm::Enum, false) => {
+                        Box::new(variant::UnwrapVariant::<false> { slots })
+                    }
+                }
             }
 
-            InstKind::BlockLabel { .. } => Op::new(control::nop),
-            InstKind::Jump { label, args } => {
-                let target = self.target(label);
-                let at = self.moves(label, args);
-                Op::new(control::jump).b(target).p(at)
+            InstKind::Undef { dst } => {
+                let slot = self.off(*dst);
+                match word_kind(self.ty(*dst)).is_some() {
+                    true => Box::new(control::Undef::<true> { dst: slot }),
+                    false => Box::new(control::Undef::<false> { dst: slot }),
+                }
             }
-            InstKind::JumpIf {
-                cond,
-                then_label,
-                then_args,
-                else_label,
-                else_args,
-            } => {
-                let then_target = self.target(then_label);
-                let else_target = self.target(else_label);
-                let then_at = self.moves(then_label, then_args);
-                let else_at = self.moves(else_label, else_args);
-                Op::new(control::jump_if)
-                    .a(self.slot(*cond))
-                    .b(then_target)
-                    .c(else_target)
-                    .d(else_at as u32)
-                    .p(then_at)
+            InstKind::Drop { src } => Box::new(control::DropValue {
+                slot: self.off(*src),
+            }),
+        };
+        ops.push(op);
+        None
+    }
+
+    /// The `Order` an effectful call yields, written by its own operation
+    /// ahead of the call (RFC-0007). No call instance carries the register,
+    /// so no call tests for one.
+    fn merge(&mut self, order: Option<ValueId>, ops: &mut Vec<Box<dyn Op>>) {
+        let Some(after) = order else {
+            return;
+        };
+        let dst = self.off(after);
+        ops.push(Box::new(control::Merge { dst }));
+    }
+
+    fn call_op(
+        &mut self,
+        site: &CallSite<'_>,
+        next: Next,
+        ops: &mut Vec<Box<dyn Op>>,
+    ) -> Option<Box<dyn Terminator>> {
+        let CallSite {
+            at,
+            callee,
+            callee_ty,
+            args,
+            ..
+        } = *site;
+        self.merge(site.order, ops);
+        let into = self.dest(site.dst);
+        let Dest {
+            slot,
+            large,
+            word: _,
+        } = into;
+        match callee {
+            Callee::Direct(id) => {
+                self.suspends_at(callee_ty);
+                let id = *id;
+                let Operands { slots, takes } = self.taken(args);
+                let resume = next.block();
+                Some(match large {
+                    true => Box::new(call::CallDirect::<true> {
+                        dst: slot,
+                        callee: id,
+                        args: slots,
+                        takes,
+                        next: resume,
+                    }),
+                    false => Box::new(call::CallDirect::<false> {
+                        dst: slot,
+                        callee: id,
+                        args: slots,
+                        takes,
+                        next: resume,
+                    }),
+                })
             }
-            InstKind::Return { value, .. } => Op::new(control::ret).a(self.slot(*value)),
-            InstKind::Diverge => Op::new(control::diverge),
-            InstKind::Undef { dst } => Op::new(control::undef).a(self.slot(*dst)),
-            InstKind::Nop => Op::new(control::nop),
-            InstKind::Drop { src } => Op::new(control::drop_value).a(self.slot(*src)),
-            InstKind::Poison { .. } => Op::new(control::poison),
+            Callee::Indirect(handle) => {
+                self.suspends_at(callee_ty);
+                let through = self.is_ref(*handle);
+                let handle = self.off(*handle);
+                let operands = self.taken(args);
+                let resume = next.block();
+                Some(indirect_call(into, through, handle, operands, resume))
+            }
+            Callee::Extern { id, instance } => {
+                let handler = self.ctx.handler(id, *instance);
+                if !handler.is_sync() {
+                    self.may_suspend = true;
+                }
+                match handler {
+                    ExternHandler::Sync(SyncCall::Plain(abi)) => {
+                        let op = self.plain_call(at, into, args, abi, ops);
+                        ops.push(op);
+                        None
+                    }
+                    ExternHandler::Sync(SyncCall::Stateful { state, abi }) => {
+                        let op = self.state_call(at, into, args, state, abi, ops);
+                        ops.push(op);
+                        None
+                    }
+                    ExternHandler::Heavy(f) => {
+                        let window = self.window(at, args, ops);
+                        let resume = next.block();
+                        Some(match large {
+                            true => Box::new(call::CallHeavy::<true> {
+                                dst: slot,
+                                window,
+                                f,
+                                next: resume,
+                            }),
+                            false => Box::new(call::CallHeavy::<false> {
+                                dst: slot,
+                                window,
+                                f,
+                                next: resume,
+                            }),
+                        })
+                    }
+                    ExternHandler::Async(AsyncCall::Plain(f)) => {
+                        let window = self.window(at, args, ops);
+                        let resume = next.block();
+                        Some(match large {
+                            true => Box::new(call::CallExternAsync::<true> {
+                                dst: slot,
+                                window,
+                                f,
+                                next: resume,
+                            }),
+                            false => Box::new(call::CallExternAsync::<false> {
+                                dst: slot,
+                                window,
+                                f,
+                                next: resume,
+                            }),
+                        })
+                    }
+                    ExternHandler::Async(AsyncCall::Stateful { state, f }) => {
+                        let window = self.window(at, args, ops);
+                        let resume = next.block();
+                        Some(match large {
+                            true => Box::new(call::CallStateAsync::<true> {
+                                dst: slot,
+                                window,
+                                state,
+                                f,
+                                next: resume,
+                            }),
+                            false => Box::new(call::CallStateAsync::<false> {
+                                dst: slot,
+                                window,
+                                state,
+                                f,
+                                next: resume,
+                            }),
+                        })
+                    }
+                }
+            }
         }
     }
 
-    fn constant(&mut self, dst: ValueId, value: &Literal) -> Op {
-        let out = self.slot(dst);
-        match (value, self.ty(dst)) {
-            (Literal::Int(n), Ty::Int(k)) => {
-                let f = for_int_ty!(*k, |T| constant::int::<T> as OpFn);
-                Op::new(f).a(out).p(*n as u64 as usize)
+    fn plain_call(
+        &mut self,
+        at: usize,
+        into: Dest,
+        args: &[ValueId],
+        abi: SyncAbi,
+        ops: &mut Vec<Box<dyn Op>>,
+    ) -> Box<dyn Op> {
+        let Dest {
+            slot: dst,
+            large,
+            word,
+        } = into;
+        let takes = self.take_mask(args);
+        let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
+        match abi {
+            SyncAbi::Arity0(f) => match large {
+                true => Box::new(call::CallExtern0::<true> { dst, f }),
+                false => Box::new(call::CallExtern0::<false> { dst, f }),
+            },
+            SyncAbi::Arity1(f) => {
+                let a = nth(&slots, 0);
+                match (large, word) {
+                    (true, _) => Box::new(call::CallExtern1::<true, false> { dst, a, takes, f }),
+                    (false, true) => {
+                        Box::new(call::CallExtern1::<false, true> { dst, a, takes, f })
+                    }
+                    (false, false) => {
+                        Box::new(call::CallExtern1::<false, false> { dst, a, takes, f })
+                    }
+                }
             }
+            SyncAbi::Arity2(f) => {
+                let (a, b) = (nth(&slots, 0), nth(&slots, 1));
+                match large {
+                    true => Box::new(call::CallExtern2::<true> {
+                        dst,
+                        a,
+                        b,
+                        takes,
+                        f,
+                    }),
+                    false => Box::new(call::CallExtern2::<false> {
+                        dst,
+                        a,
+                        b,
+                        takes,
+                        f,
+                    }),
+                }
+            }
+            SyncAbi::Arity3(f) => {
+                let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
+                match large {
+                    true => Box::new(call::CallExtern3::<true> {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        takes,
+                        f,
+                    }),
+                    false => Box::new(call::CallExtern3::<false> {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        takes,
+                        f,
+                    }),
+                }
+            }
+            SyncAbi::Slice(f) => Box::new(call::CallSlice {
+                dst,
+                a: nth(&slots, 0),
+                takes,
+                f,
+            }),
+            SyncAbi::Window(f) => {
+                let window = self.window(at, args, ops);
+                match large {
+                    true => Box::new(call::CallWindow::<true> { dst, window, f }),
+                    false => Box::new(call::CallWindow::<false> { dst, window, f }),
+                }
+            }
+        }
+    }
+
+    fn state_call(
+        &mut self,
+        at: usize,
+        into: Dest,
+        args: &[ValueId],
+        state: acvus_extern::State,
+        abi: StateAbi,
+        ops: &mut Vec<Box<dyn Op>>,
+    ) -> Box<dyn Op> {
+        let Dest {
+            slot: dst,
+            large,
+            word: _,
+        } = into;
+        let takes = self.take_mask(args);
+        let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
+        match abi {
+            StateAbi::Arity0(f) => match large {
+                true => Box::new(call::CallState0::<true> { dst, state, f }),
+                false => Box::new(call::CallState0::<false> { dst, state, f }),
+            },
+            StateAbi::Arity1(f) => {
+                let a = nth(&slots, 0);
+                match large {
+                    true => Box::new(call::CallState1::<true> {
+                        dst,
+                        a,
+                        takes,
+                        state,
+                        f,
+                    }),
+                    false => Box::new(call::CallState1::<false> {
+                        dst,
+                        a,
+                        takes,
+                        state,
+                        f,
+                    }),
+                }
+            }
+            StateAbi::Arity2(f) => {
+                let (a, b) = (nth(&slots, 0), nth(&slots, 1));
+                match large {
+                    true => Box::new(call::CallState2::<true> {
+                        dst,
+                        a,
+                        b,
+                        takes,
+                        state,
+                        f,
+                    }),
+                    false => Box::new(call::CallState2::<false> {
+                        dst,
+                        a,
+                        b,
+                        takes,
+                        state,
+                        f,
+                    }),
+                }
+            }
+            StateAbi::Arity3(f) => {
+                let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
+                match large {
+                    true => Box::new(call::CallState3::<true> {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        takes,
+                        state,
+                        f,
+                    }),
+                    false => Box::new(call::CallState3::<false> {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        takes,
+                        state,
+                        f,
+                    }),
+                }
+            }
+            StateAbi::Slice(f) => Box::new(call::CallStateSlice {
+                dst,
+                a: nth(&slots, 0),
+                takes,
+                state,
+                f,
+            }),
+            StateAbi::Window(f) => {
+                let window = self.window(at, args, ops);
+                match large {
+                    true => Box::new(call::CallStateWindow::<true> {
+                        dst,
+                        window,
+                        state,
+                        f,
+                    }),
+                    false => Box::new(call::CallStateWindow::<false> {
+                        dst,
+                        window,
+                        state,
+                        f,
+                    }),
+                }
+            }
+        }
+    }
+
+    /// The argument run `assign_slots` placed for the call at `at`, and the
+    /// `Mov` operations that put the arguments in it — which the caller
+    /// pushes before the call's own operation (RFC-0052 rule 1).
+    fn window(
+        &mut self,
+        at: usize,
+        args: &[ValueId],
+        ops: &mut Vec<Box<dyn Op>>,
+    ) -> call::ArgWindow {
+        let plan = self.slots.window(at);
+        let (base, arity) = (plan.base, plan.arity);
+        let moved: Vec<PendingMove> = plan.moved.clone();
+        let base = Slot::try_from(base)
+            .unwrap_or_else(|_| panic!("an argument run at register {base} is past a frame"));
+        let arity = u16::try_from(arity)
+            .unwrap_or_else(|_| panic!("a call of {arity} arguments is past a frame"));
+
+        let pairs: Vec<Carried> = moved
+            .iter()
+            .copied()
+            .map(|PendingMove { arg, to }| {
+                let into = Slot::try_from(to).unwrap_or_else(|_| {
+                    panic!("an argument moves into register {to}, which is past a frame")
+                });
+                Carried {
+                    at: Pair {
+                        from: self.slot(arg),
+                        to: into,
+                    },
+                    large: self.owns(arg),
+                }
+            })
+            .collect();
+        let ordered = order_moves(pairs, self.scratch_slot());
+        self.scratch_used |= ordered.scratch_used;
+
+        ops.extend(ordered.moves.iter().map(mov_op));
+        call::ArgWindow {
+            at: Off::of(base),
+            arity,
+            takes: self.window_take_mask(base, args),
+        }
+    }
+
+    /// The claim the frame drops when a handler is lent its run: the run's
+    /// own registers, because the moves above put every argument there.
+    fn window_take_mask(&self, base: Slot, args: &[ValueId]) -> u64 {
+        let mut mask = 0u64;
+        for (k, id) in args.iter().enumerate() {
+            if !self.owns(*id) {
+                continue;
+            }
+            let at = u16::try_from(k).expect("a call's arity fits a register index");
+            let slot = base
+                .checked_add(at)
+                .unwrap_or_else(|| panic!("an argument run at register {base} leaves a frame"));
+            assert!(
+                slot < crate::regs::MAX_FRAME_SLOTS,
+                "an argument run reaches register {slot}, which one frame's marks do not reach"
+            );
+            mask |= 1u64 << slot;
+        }
+        mask
+    }
+
+    /// The register an operation writes, and whether the type it writes
+    /// makes the frame the owner of a `Large` (RFC-0048 §4).
+    fn dest(&self, dst: ValueId) -> Dest {
+        Dest {
+            slot: self.off(dst),
+            large: self.owns(dst),
+            word: word_kind(self.ty(dst)).is_some(),
+        }
+    }
+
+    fn constant(&mut self, dst: ValueId, value: &Literal) -> Box<dyn Op> {
+        let out = self.off(dst);
+        let word = match (value, self.ty(dst)) {
+            (Literal::Int(n), Ty::Int(_)) => *n as u64,
             (Literal::Int(n), other) => panic!("integer literal {n} typed as {other:?}"),
-            (Literal::Float(x), _) => Op::new(constant::float).a(out).p(x.to_bits() as usize),
-            (Literal::Bool(b), _) => Op::new(constant::boolean).a(out).p(usize::from(*b)),
-            (Literal::Unit, _) => Op::new(constant::unit).a(out),
+            (Literal::Float(x), _) => x.to_bits(),
+            (Literal::Bool(b), _) => u64::from(*b),
+            (Literal::Unit, _) => 0,
             (Literal::String(s), _) => {
-                let at = self.put(Payload::Konst(Konst::Str(s.clone())));
-                Op::new(constant::konst).a(out).p(at)
+                return Box::new(constant::ConstLarge {
+                    dst: out,
+                    konst: Konst::Str(s.clone()),
+                });
             }
             (Literal::List(items), Ty::Array(elem, _)) => {
                 let konst = Konst::List(items.iter().map(|item| konst_of(item, elem)).collect());
-                let at = self.put(Payload::Konst(konst));
-                Op::new(constant::konst).a(out).p(at)
+                return Box::new(constant::ConstLarge { dst: out, konst });
             }
             (Literal::List(_), other) => panic!("list literal typed as {other:?}"),
-        }
+        };
+        Box::new(constant::Const { dst: out, word })
     }
 
-    fn test_literal(&mut self, dst: ValueId, src: ValueId, value: &Literal) -> Op {
+    fn test_literal(&mut self, at: Tested, value: &Literal) -> Box<dyn Op> {
+        let Tested { dst, src } = at;
         let through = self.is_ref(src);
-        let (f, word): (OpFn, usize) = match value {
+        let slots = Unary {
+            dst: self.off(dst),
+            src: self.off(src),
+        };
+        match value {
             Literal::Int(n) => {
                 let Ty::Int(k) = self.ty(src) else {
                     panic!("TestLiteral: an integer literal against a non-integer")
                 };
-                (
-                    for_int_ty!(*k, |T| pattern::test_int::<T> as OpFn),
-                    self.put(Payload::Wide(*n)),
-                )
+                let want = *n;
+                for_int_ty!(*k, |T| Box::new(pattern::TestInt::<T>::new(slots, want))
+                    as Box<dyn Op>)
             }
-            Literal::Float(x) => (
-                if through {
-                    pattern::test_float::<true>
-                } else {
-                    pattern::test_float::<false>
-                },
-                x.to_bits() as usize,
-            ),
-            Literal::Bool(b) => (
-                if through {
-                    pattern::test_bool::<true>
-                } else {
-                    pattern::test_bool::<false>
-                },
-                usize::from(*b),
-            ),
-            Literal::String(s) => (
-                if through {
-                    pattern::test_string::<true>
-                } else {
-                    pattern::test_string::<false>
-                },
-                self.put(Payload::Text(s.clone())),
-            ),
-            Literal::Unit => (pattern::test_unit, 0),
+            Literal::Float(x) => {
+                let want = *x;
+                match through {
+                    true => Box::new(pattern::TestFloat::<true> { slots, want }),
+                    false => Box::new(pattern::TestFloat::<false> { slots, want }),
+                }
+            }
+            Literal::Bool(b) => {
+                let want = *b;
+                match through {
+                    true => Box::new(pattern::TestBool::<true> { slots, want }),
+                    false => Box::new(pattern::TestBool::<false> { slots, want }),
+                }
+            }
+            Literal::String(s) => {
+                let want = s.clone();
+                match through {
+                    true => Box::new(pattern::TestString::<true> { slots, want }),
+                    false => Box::new(pattern::TestString::<false> { slots, want }),
+                }
+            }
+            Literal::Unit => Box::new(pattern::TestUnit { dst: slots.dst }),
             Literal::List(_) => panic!("TestLiteral on a list literal"),
-        };
-        Op::new(f).a(self.slot(dst)).b(self.slot(src)).p(word)
+        }
     }
 
-    fn make_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Op {
-        let carries = payload.is_some();
-        let (f, word): (OpFn, usize) = match self.ty(dst) {
-            Ty::Option(_) => (
-                if carries {
-                    variant::make_option::<true>
-                } else {
-                    variant::make_option::<false>
-                },
-                0,
-            ),
-            Ty::Result(..) => {
-                assert!(carries, "Ok and Err carry a payload");
-                (
-                    if self.tag_is(tag, "Ok") {
-                        variant::make_result::<true>
-                    } else {
-                        variant::make_result::<false>
-                    },
-                    0,
-                )
-            }
-            _ => (
-                if carries {
-                    variant::make_variant::<true>
-                } else {
-                    variant::make_variant::<false>
-                },
-                self.put(Payload::Name(tag)),
-            ),
-        };
-        Op::new(f)
-            .a(self.slot(dst))
-            .b(payload.map_or(NO_SLOT, |id| self.slot(id)))
-            .p(word)
+    fn make_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Box<dyn Op> {
+        let out = self.off(dst);
+        let carried = payload.map(|id| Unary {
+            dst: out,
+            src: self.off(id),
+        });
+        // An option is its payload's own value (RFC-0022), and a `Result`
+        // or an enum boxes whatever it carries, so `LARGE` here is always
+        // the payload's own ownership.
+        let large = payload.is_some_and(|id| self.owns(id));
+        match (self.ty(dst), carried) {
+            (Ty::Option(_), Some(slots)) => match large {
+                true => Box::new(variant::MakeSome::<true> { slots }),
+                false => Box::new(variant::MakeSome::<false> { slots }),
+            },
+            (Ty::Option(_), None) => Box::new(variant::MakeNone { dst: out }),
+            (Ty::Result(..), Some(slots)) => match (self.tag_is(tag, "Ok"), large) {
+                (true, true) => Box::new(variant::MakeOk::<true> { slots }),
+                (true, false) => Box::new(variant::MakeOk::<false> { slots }),
+                (false, true) => Box::new(variant::MakeErr::<true> { slots }),
+                (false, false) => Box::new(variant::MakeErr::<false> { slots }),
+            },
+            (Ty::Result(..), None) => panic!("Ok and Err carry a payload"),
+            (_, Some(slots)) => match large {
+                true => Box::new(variant::MakeVariant::<true> { slots, tag }),
+                false => Box::new(variant::MakeVariant::<false> { slots, tag }),
+            },
+            (_, None) => Box::new(variant::MakeUnitVariant { dst: out, tag }),
+        }
     }
+}
+
+/// The two values a `TestLiteral` names, so that neither can take the
+/// other's place at the call.
+#[derive(Clone, Copy)]
+struct Tested {
+    dst: ValueId,
+    src: ValueId,
 }
 
 fn konst_of(literal: &Literal, ty: &Ty) -> Konst {
@@ -1518,17 +2248,60 @@ fn konst_of(literal: &Literal, ty: &Ty) -> Konst {
     }
 }
 
+/// The moves of a jump, all carrying a word: what a test of the ordering
+/// alone states, where what each move carries is `mov_op`'s subject rather
+/// than the ordering's.
+#[cfg(test)]
+fn carried(list: &[(Slot, Slot)]) -> Vec<Carried> {
+    list.iter()
+        .map(|(from, to)| Carried {
+            at: Pair {
+                from: *from,
+                to: *to,
+            },
+            large: false,
+        })
+        .collect()
+}
+
+/// One move of a parallel move, in the register indexes the ordering is
+/// written in.
+#[derive(Clone, Copy)]
+struct Pair {
+    from: Slot,
+    to: Slot,
+}
+
+/// One move of a parallel move, with what the value it carries owns: a
+/// word is copied, a `Large` changes owner and its mark with it.
+#[derive(Clone, Copy)]
+struct Carried {
+    at: Pair,
+    large: bool,
+}
+
+/// The ordered move as the operation of a block (RFC-0052 rule 1): what it
+/// carries is its type, not a field a `run` reads.
+fn mov_op(carried: &Carried) -> Box<dyn Op> {
+    let dst = Off::of(carried.at.to);
+    let src = Off::of(carried.at.from);
+    match carried.large {
+        true => Box::new(control::Mov::<true> { dst, src }),
+        false => Box::new(control::Mov::<false> { dst, src }),
+    }
+}
+
 /// A jump's moves, ordered, and whether the scratch slot carried a cycle.
 struct MoveOrdering {
-    moves: Vec<SlotMove>,
+    moves: Vec<Carried>,
     scratch_used: bool,
 }
 
 /// Order a parallel move: every source is read before it is overwritten,
 /// and a cycle is broken by moving one source into `scratch` first.
-fn order_moves(pairs: Vec<SlotMove>, scratch: u32) -> MoveOrdering {
-    let mut pending: Vec<SlotMove> = pairs.into_iter().filter(|m| m.from != m.to).collect();
-    let mut moves: Vec<SlotMove> = Vec::with_capacity(pending.len());
+fn order_moves(pairs: Vec<Carried>, scratch: Slot) -> MoveOrdering {
+    let mut pending: Vec<Carried> = pairs.into_iter().filter(|m| m.at.from != m.at.to).collect();
+    let mut moves: Vec<Carried> = Vec::with_capacity(pending.len());
     let mut scratch_used = false;
     let mut scratch_holds = false;
 
@@ -1536,16 +2309,16 @@ fn order_moves(pairs: Vec<SlotMove>, scratch: u32) -> MoveOrdering {
         let emitted = moves.len();
         let mut i = 0;
         while i < pending.len() {
-            let overwrites = pending[i].to;
+            let overwrites = pending[i].at.to;
             let read_later = pending
                 .iter()
                 .enumerate()
-                .any(|(j, m)| j != i && m.from == overwrites);
+                .any(|(j, m)| j != i && m.at.from == overwrites);
             if read_later {
                 i += 1;
             } else {
                 let m = pending.remove(i);
-                scratch_holds &= m.from != scratch;
+                scratch_holds &= m.at.from != scratch;
                 moves.push(m);
             }
         }
@@ -1555,13 +2328,17 @@ fn order_moves(pairs: Vec<SlotMove>, scratch: u32) -> MoveOrdering {
                 !scratch_holds,
                 "a second cycle reached the scratch slot while it still held a value"
             );
-            let cycled = pending[0].from;
-            moves.push(SlotMove {
-                from: cycled,
-                to: scratch,
+            let cycled = pending[0].at.from;
+            let large = pending[0].large;
+            moves.push(Carried {
+                at: Pair {
+                    from: cycled,
+                    to: scratch,
+                },
+                large,
             });
-            for m in pending.iter_mut().filter(|m| m.from == cycled) {
-                m.from = scratch;
+            for m in pending.iter_mut().filter(|m| m.at.from == cycled) {
+                m.at.from = scratch;
             }
             scratch_used = true;
             scratch_holds = true;
@@ -1661,6 +2438,21 @@ fn resolve_step(at: &[Ty], seg: &PathSeg) -> Option<Step> {
         PathSeg::Field(f) => Some(Step::Field(*f)),
         PathSeg::Index(i) => Some(Step::Index(*i)),
         PathSeg::Payload => payload_step(at),
+    }
+}
+
+/// Whether an index step stands on an array rather than a tuple, over the
+/// candidate types the walk carries. A candidate set holding both is a
+/// checker gap surfaced here, not a shape to decide at run time.
+fn on_array(at: &[Ty], seg: &PathSeg) -> bool {
+    let live = || at.iter().filter(|ty| !step_tys(ty, seg).is_empty());
+    let arrays = live().filter(|ty| matches!(ty, Ty::Array(..))).count();
+    let tuples = live().filter(|ty| matches!(ty, Ty::Tuple(_))).count();
+    match (arrays, tuples) {
+        (0, 0) => panic!("an index step on {at:?}, which is neither an array nor a tuple"),
+        (_, 0) => true,
+        (0, _) => false,
+        _ => panic!("an index step whose candidates hold both an array and a tuple: {at:?}"),
     }
 }
 
@@ -1957,19 +2749,6 @@ fn needs_window(handler: &ExternHandler) -> bool {
     }
 }
 
-fn extern_call_op(handler: &ExternHandler) -> OpFn {
-    match handler {
-        ExternHandler::Async(_) => call::call_extern_async,
-        ExternHandler::Heavy(_) => call::call_extern_heavy,
-        ExternHandler::Sync(SyncHandler::Arity0(_)) => call::call_extern_0,
-        ExternHandler::Sync(SyncHandler::Arity1(_)) => call::call_extern_1,
-        ExternHandler::Sync(SyncHandler::Arity2(_)) => call::call_extern_2,
-        ExternHandler::Sync(SyncHandler::Arity3(_)) => call::call_extern_3,
-        ExternHandler::Sync(SyncHandler::ArityN(_)) => call::call_extern_n,
-        ExternHandler::Sync(SyncHandler::Slice(_)) => call::call_extern_slice,
-    }
-}
-
 /// What one argument position of a window holds until the call.
 enum ArgPlace {
     /// The argument value itself lives here, from its definition to the
@@ -1991,6 +2770,7 @@ impl ArgPlace {
 
 /// An argument that could not be allocated into its window slot, and the
 /// slot the call moves it into.
+#[derive(Clone, Copy)]
 struct PendingMove {
     arg: ValueId,
     to: u32,
@@ -2002,42 +2782,78 @@ struct WindowPlan {
     moved: Vec<PendingMove>,
 }
 
-/// Which ranges of instructions each frame slot is already spoken for.
-struct Occupancy(Vec<Vec<LiveRange>>);
+/// The kind a register was claimed for. `Free` is a register nothing has
+/// taken yet; `Held(None)` one whose values are written whole.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Claim {
+    Free,
+    Held(Option<Kind>),
+}
+
+/// Which ranges of instructions each frame slot is already spoken for, and
+/// the kind class it was claimed for.
+///
+/// A register's kind byte is written once, when the frame is made
+/// (RFC-0052 §5), and every `set_word` after it writes the word alone. So
+/// two values may share a register only where `word_kind` gives them the
+/// same answer: this is where that rule holds, and `Prepare::slot_kinds`
+/// is the table it makes complete.
+struct Occupancy {
+    taken: Vec<Vec<LiveRange>>,
+    claimed: Vec<Claim>,
+}
 
 impl Occupancy {
-    fn free(&self, slot: usize, range: LiveRange) -> bool {
-        match self.0.get(slot) {
+    fn new() -> Occupancy {
+        Occupancy {
+            taken: Vec::new(),
+            claimed: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.taken.len()
+    }
+
+    fn free(&self, slot: usize, range: LiveRange, want: Option<Kind>) -> bool {
+        let clear = match self.taken.get(slot) {
             Some(taken) => !taken.iter().any(|held| held.overlaps(range)),
             None => true,
+        };
+        let fits = match self.claimed.get(slot) {
+            Some(Claim::Held(held)) => *held == want,
+            Some(Claim::Free) | None => true,
+        };
+        clear && fits
+    }
+
+    fn take(&mut self, slot: usize, range: LiveRange, want: Option<Kind>) {
+        if self.taken.len() <= slot {
+            self.taken.resize_with(slot + 1, Vec::new);
+            self.claimed.resize(slot + 1, Claim::Free);
         }
+        self.taken[slot].push(range);
+        self.claimed[slot] = Claim::Held(want);
     }
 
-    fn take(&mut self, slot: usize, range: LiveRange) {
-        if self.0.len() <= slot {
-            self.0.resize_with(slot + 1, Vec::new);
-        }
-        self.0[slot].push(range);
+    fn lowest_free(&self, range: LiveRange, want: Option<Kind>) -> usize {
+        (0..self.len())
+            .find(|slot| self.free(*slot, range, want))
+            .unwrap_or(self.len())
     }
 
-    fn lowest_free(&self, range: LiveRange) -> usize {
-        (0..self.0.len())
-            .find(|slot| self.free(*slot, range))
-            .unwrap_or(self.0.len())
-    }
-
-    /// The lowest base whose `arity` slots are each free over the range
-    /// that position will hold.
-    fn lowest_free_run(&self, places: &[ArgPlace], call: usize) -> usize {
+    /// The lowest base whose positions are each free over the range that
+    /// position will hold and for the kind it will carry.
+    fn lowest_free_run(&self, places: &[ArgPlace], call: usize, wants: &[Option<Kind>]) -> usize {
         let fits = |base: usize| {
             places
                 .iter()
                 .enumerate()
-                .all(|(k, place)| self.free(base + k, place.occupies(call)))
+                .all(|(k, place)| self.free(base + k, place.occupies(call), wants[k]))
         };
-        (0..self.0.len())
+        (0..self.len())
             .find(|base| fits(*base))
-            .unwrap_or(self.0.len())
+            .unwrap_or(self.len())
     }
 }
 
@@ -2051,7 +2867,7 @@ struct ClassRange {
 pub struct Slots {
     of: Box<[u32]>,
     frame: u32,
-    windows: FxHashMap<usize, ArgWindow>,
+    windows: FxHashMap<usize, WindowPlan>,
 }
 
 impl Slots {
@@ -2064,7 +2880,13 @@ impl Slots {
         slot
     }
 
-    fn window(&self, call: usize) -> &ArgWindow {
+    /// The register table's entry as it stands, empty entry included: what
+    /// `slot_kinds` walks, where `of` is what an operation asks.
+    fn raw(&self, id: ValueId) -> u32 {
+        self.of[id.to_raw()]
+    }
+
+    fn window(&self, call: usize) -> &WindowPlan {
         self.windows
             .get(&call)
             .unwrap_or_else(|| panic!("instruction {call} is an extern call with no window"))
@@ -2140,6 +2962,14 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         }
     }
 
+    let kinds: Vec<Option<Kind>> = (0..values)
+        .map(|value| {
+            body.val_types
+                .get(&ValueId::from_raw(value))
+                .and_then(word_kind)
+        })
+        .collect();
+
     let mut classes = Classes::new(values);
     let interference = Interference {
         def_sites: &def_sites,
@@ -2148,6 +2978,9 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
     for EdgeMove { arg, param } in edge_moves(&edges) {
         let (arg, param) = (arg.to_raw(), param.to_raw());
         if pinned[arg] || pinned[param] || ranges[arg].is_none() || ranges[param].is_none() {
+            continue;
+        }
+        if kinds[arg] != kinds[param] {
             continue;
         }
         let (a, b) = (classes.find(arg), classes.find(param));
@@ -2168,9 +3001,25 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         });
     }
 
+    let mut class_kind: Vec<Option<Kind>> = vec![None; values];
+    for value in 0..values {
+        if ranges[value].is_none() {
+            continue;
+        }
+        let root = classes.find(value);
+        match class_kind[root] {
+            None => class_kind[root] = kinds[value],
+            Some(held) => assert_eq!(
+                Some(held),
+                kinds[value],
+                "value {value} joined a register class opened as {held:?}"
+            ),
+        }
+    }
+
     // The windows first: a contiguous run is the constrained resource.
     let mut slot_of: Vec<Option<u32>> = vec![None; values];
-    let mut occupancy = Occupancy(Vec::new());
+    let mut occupancy = Occupancy::new();
     let mut plans: Vec<(usize, WindowPlan)> = Vec::new();
     for (at, inst) in insts.iter().enumerate() {
         let Some(args) = window_args(inst, ctx) else {
@@ -2192,11 +3041,12 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
                 }
             })
             .collect();
-        let base = occupancy.lowest_free_run(&places, at);
+        let wants: Vec<Option<Kind>> = args.iter().map(|arg| kinds[arg.to_raw()]).collect();
+        let base = occupancy.lowest_free_run(&places, at, &wants);
 
         let mut moved = Vec::new();
         for (k, (place, arg)) in places.iter().zip(args).enumerate() {
-            occupancy.take(base + k, place.occupies(at));
+            occupancy.take(base + k, place.occupies(at), wants[k]);
             match place {
                 ArgPlace::Allocated { class, .. } => slot_of[*class] = Some((base + k) as u32),
                 ArgPlace::Moved => moved.push(PendingMove {
@@ -2221,8 +3071,9 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         .collect();
     rest.sort_by_key(|entry| (entry.range.lo, entry.range.hi, entry.class));
     for ClassRange { class, range } in rest {
-        let slot = occupancy.lowest_free(range);
-        occupancy.take(slot, range);
+        let want = class_kind[class];
+        let slot = occupancy.lowest_free(range, want);
+        occupancy.take(slot, range, want);
         slot_of[class] = Some(slot as u32);
     }
 
@@ -2242,27 +3093,7 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         .max()
         .unwrap_or(0);
 
-    let windows = plans
-        .into_iter()
-        .map(|(at, plan)| {
-            let moves = plan
-                .moved
-                .into_iter()
-                .map(|PendingMove { arg, to }| SlotMove {
-                    from: of[arg.to_raw()],
-                    to,
-                })
-                .collect();
-            (
-                at,
-                ArgWindow {
-                    at: plan.base,
-                    arity: plan.arity,
-                    moves,
-                },
-            )
-        })
-        .collect();
+    let windows = plans.into_iter().collect();
 
     let slots = Slots {
         of: of.into_boxed_slice(),
@@ -2303,7 +3134,7 @@ fn check_assignment(edges: &Edges<'_>, ctx: &PrepareCtx<'_>, live: &Live, slots:
         let (Some(args), Some(window)) = (window_args(inst, ctx), slots.windows.get(&at)) else {
             continue;
         };
-        let run = window.at..window.at + window.arity;
+        let run = window.base..window.base + window.arity;
         let args: Vec<usize> = args.iter().map(|arg| arg.to_raw()).collect();
         for value in live.live_in[at].iter() {
             assert!(
@@ -2324,7 +3155,7 @@ fn check_assignment(edges: &Edges<'_>, ctx: &PrepareCtx<'_>, live: &Live, slots:
 
 #[cfg(test)]
 mod recognizer_tests {
-    use acvus_ast::BinOp as AstBinOp;
+    use acvus_ast::{BinOp as AstBinOp, Span};
 
     use super::*;
 
@@ -2382,6 +3213,15 @@ mod recognizer_tests {
             },
             callee_ty: Ty::Unit,
             args: Vec::new(),
+            order: None,
+        })
+    }
+
+    /// Every lowered body ends in one, and the preparation reads that: a
+    /// body's last block is its terminator.
+    fn ret(value: usize) -> Inst {
+        inst(InstKind::Return {
+            value: val(value),
             order: None,
         })
     }
@@ -2468,7 +3308,7 @@ mod recognizer_tests {
                 namespace: None,
                 name: self.interner.intern(name),
             };
-            let handler = ExternHandler::Async(Arc::new(|_, _| {
+            let handler = ExternHandler::Async(AsyncCall::Plain(|_, _| {
                 Box::pin(async { panic!("the recognizer must not run a handler") })
             }));
             self.externs.insert(id, Executable::Extern(vec![handler]));
@@ -2480,7 +3320,7 @@ mod recognizer_tests {
                 namespace: None,
                 name: self.interner.intern(name),
             };
-            let handler = ExternHandler::Sync(SyncHandler::ArityN(Arc::new(|_, _| {
+            let handler = ExternHandler::Sync(SyncCall::Plain(SyncAbi::Window(|_, _| {
                 panic!("the preparation must not run a handler")
             })));
             self.externs.insert(id, Executable::Extern(vec![handler]));
@@ -2710,7 +3550,7 @@ mod recognizer_tests {
     fn a_body_of_arithmetic_and_a_synchronous_extern_cannot_suspend() {
         let mut fixture = Fixture::new();
         let stays = fixture.sync_extern("stays");
-        let insts = vec![add(1, 2, 3), call(4, stays)];
+        let insts = vec![add(1, 2, 3), call(4, stays), ret(4)];
         assert!(!fixture.prepared(insts).may_suspend());
     }
 
@@ -2718,7 +3558,7 @@ mod recognizer_tests {
     fn a_body_that_calls_an_asynchronous_extern_can_suspend() {
         let mut fixture = Fixture::new();
         let suspends = fixture.async_extern("suspends");
-        let insts = vec![add(1, 2, 3), call(4, suspends)];
+        let insts = vec![add(1, 2, 3), call(4, suspends), ret(4)];
         assert!(fixture.prepared_at(insts, Task::Async).may_suspend());
     }
 
@@ -2728,20 +3568,23 @@ mod recognizer_tests {
     #[test]
     fn a_closure_call_suspends_where_the_closure_type_says_so() {
         let indirect = |task| {
-            vec![inst(InstKind::FunctionCall {
-                dst: val(1),
-                callee: Callee::Indirect(val(2)),
-                callee_ty: Ty::Fn {
-                    params: Vec::new(),
-                    ret: Box::new(Ty::Unit),
-                    captures: Vec::new(),
-                    effect: acvus_mir::ty::EffectTerm::Known(
-                        acvus_mir::ty::Effect::OPAQUE.at_task(task),
-                    ),
-                },
-                args: Vec::new(),
-                order: None,
-            })]
+            vec![
+                inst(InstKind::FunctionCall {
+                    dst: val(1),
+                    callee: Callee::Indirect(val(2)),
+                    callee_ty: Ty::Fn {
+                        params: Vec::new(),
+                        ret: Box::new(Ty::Unit),
+                        captures: Vec::new(),
+                        effect: acvus_mir::ty::EffectTerm::Known(
+                            acvus_mir::ty::Effect::OPAQUE.at_task(task),
+                        ),
+                    },
+                    args: Vec::new(),
+                    order: None,
+                }),
+                ret(1),
+            ]
         };
         let fixture = Fixture::new();
         assert!(
@@ -2767,7 +3610,7 @@ mod recognizer_tests {
 
 #[cfg(test)]
 mod assignment_tests {
-    use acvus_ast::BinOp as AstBinOp;
+    use acvus_ast::{BinOp as AstBinOp, Span};
 
     use super::*;
 
@@ -2848,10 +3691,8 @@ mod assignment_tests {
     /// One extern of each ABI: `by_value` takes its one argument in a
     /// register, `window` is lent a slice.
     fn externs() -> FxHashMap<QualifiedRef, Executable> {
-        let by_value = ExternHandler::Sync(SyncHandler::Arity1(Arc::new(|_, v| v)));
-        let window = ExternHandler::Sync(SyncHandler::ArityN(Arc::new(|_, args| {
-            std::mem::take(&mut args[0])
-        })));
+        let by_value = ExternHandler::Sync(SyncCall::Plain(SyncAbi::Arity1(|_, v| v)));
+        let window = ExternHandler::Sync(SyncCall::Plain(SyncAbi::Window(|_, args| args[0])));
         [
             (extern_ref(BY_VALUE), Executable::Extern(vec![by_value])),
             (extern_ref(WINDOW), Executable::Extern(vec![window])),
@@ -2903,18 +3744,19 @@ mod assignment_tests {
             add(4, 2, 3),
             jump(0, &[3, 2]),
         ]);
-        let (a, b) = (slots.of(val(2)), slots.of(val(3)));
+        let fits = |raw: u32| Slot::try_from(raw).expect("the fixture's frame fits a Slot");
+        let (a, b) = (fits(slots.of(val(2))), fits(slots.of(val(3))));
         assert_ne!(a, b, "a swap's two parameters cannot share one slot");
-        let pairs = vec![SlotMove { from: b, to: a }, SlotMove { from: a, to: b }];
-        assert!(order_moves(pairs, slots.frame).scratch_used);
+        let pairs = carried(&[(b, a), (a, b)]);
+        assert!(order_moves(pairs, fits(slots.frame)).scratch_used);
     }
 
     #[test]
     fn an_argument_that_dies_at_the_call_is_allocated_into_the_window() {
         let slots = assign(vec![konst(0), call(1, WINDOW, &[0]), ret(1)]);
         let window = slots.window(1);
-        assert!(window.moves.is_empty());
-        assert_eq!(slots.of(val(0)), window.at);
+        assert!(window.moved.is_empty());
+        assert_eq!(slots.of(val(0)), window.base);
     }
 
     #[test]
@@ -2922,9 +3764,13 @@ mod assignment_tests {
         let slots = assign(vec![konst(0), call(1, WINDOW, &[0]), add(2, 0, 1), ret(2)]);
         let window = slots.window(1);
         let arg = slots.of(val(0));
-        assert_ne!(arg, window.at);
-        let moved: Vec<(u32, u32)> = window.moves.iter().map(|m| (m.from, m.to)).collect();
-        assert_eq!(moved, vec![(arg, window.at)]);
+        assert_ne!(arg, window.base);
+        let moved: Vec<(u32, u32)> = window
+            .moved
+            .iter()
+            .map(|m| (slots.of(m.arg), m.to))
+            .collect();
+        assert_eq!(moved, vec![(arg, window.base)]);
     }
 
     #[test]
@@ -2946,42 +3792,37 @@ mod assignment_tests {
 mod move_ordering_tests {
     use super::*;
 
-    fn pairs(list: &[(u32, u32)]) -> Vec<SlotMove> {
-        list.iter()
-            .map(|(from, to)| SlotMove {
-                from: *from,
-                to: *to,
-            })
+    fn emitted(ordering: &MoveOrdering) -> Vec<(Slot, Slot)> {
+        ordering
+            .moves
+            .iter()
+            .map(|m| (m.at.from, m.at.to))
             .collect()
-    }
-
-    fn emitted(ordering: &MoveOrdering) -> Vec<(u32, u32)> {
-        ordering.moves.iter().map(|m| (m.from, m.to)).collect()
     }
 
     #[test]
     fn a_source_is_read_before_it_is_overwritten() {
-        let ordering = order_moves(pairs(&[(0, 1), (1, 2)]), 9);
+        let ordering = order_moves(carried(&[(0, 1), (1, 2)]), 9);
         assert_eq!(emitted(&ordering), vec![(1, 2), (0, 1)]);
         assert!(!ordering.scratch_used);
     }
 
     #[test]
     fn a_cycle_goes_through_the_scratch_slot() {
-        let ordering = order_moves(pairs(&[(0, 1), (1, 0)]), 9);
+        let ordering = order_moves(carried(&[(0, 1), (1, 0)]), 9);
         assert_eq!(emitted(&ordering), vec![(0, 9), (1, 0), (9, 1)]);
         assert!(ordering.scratch_used);
     }
 
     #[test]
     fn a_self_move_is_no_move() {
-        let ordering = order_moves(pairs(&[(3, 3)]), 9);
+        let ordering = order_moves(carried(&[(3, 3)]), 9);
         assert!(ordering.moves.is_empty());
     }
 
     #[test]
     fn two_cycles_reuse_the_one_scratch_slot() {
-        let ordering = order_moves(pairs(&[(0, 1), (1, 0), (2, 3), (3, 2)]), 9);
+        let ordering = order_moves(carried(&[(0, 1), (1, 0), (2, 3), (3, 2)]), 9);
         assert!(ordering.scratch_used);
         assert_eq!(ordering.moves.len(), 6);
     }
@@ -2989,14 +3830,8 @@ mod move_ordering_tests {
 
 // -- The arithmetic-chain recognizer (RFC-0044, stage 4) ----------------
 
-/// One operation and the span of the instruction it came from.
-struct Emitted {
-    op: Op,
-    span: Span,
-}
-
 enum Tree {
-    Leaf(u16),
+    Leaf(Off),
     /// The right operand of a `Neg`, which the node's operator never
     /// reads. It still becomes a leaf offset, because the generic tier
     /// reads both operands before it knows the operator, so the offset
@@ -3037,7 +3872,7 @@ impl Tree {
 #[derive(Default)]
 struct Flattened {
     ops: Vec<Arith>,
-    leaves: Vec<Option<u16>>,
+    leaves: Vec<Option<Off>>,
 }
 
 /// A chain's root: the operator it applies and the two subtrees below it.
@@ -3082,12 +3917,24 @@ impl ChainRun {
         self.insts.len() - 1
     }
 
-    fn chain(&self, remap: &dyn Fn(u16) -> u16) -> Chain {
+    /// The kind the chain's root writes: the operand type's for an
+    /// arithmetic root, `Bool` for a comparison.
+    fn kind(&self) -> Kind {
+        match self.node.op {
+            Root::Cmp(_) => Kind::Bool,
+            Root::Num(_) => match self.ty {
+                ChainTy::Int(k) => Kind::int(k),
+                ChainTy::Float => Kind::F64,
+            },
+        }
+    }
+
+    fn plan(&self, remap: &dyn Fn(Off) -> Off) -> Plan {
         let word = self.node.word();
         let shape = Shape::of_word(&word).unwrap_or_else(|| {
             panic!(
                 "a chain of preorder shape {word} has more than {} nodes",
-                Chain::MAX_NODES
+                ChainBounds::MAX_NODES
             )
         });
 
@@ -3109,20 +3956,20 @@ impl ChainRun {
             .next()
             .copied()
             .unwrap_or_else(|| panic!("a chain of shape {shape:?} reads no register"));
-        let in_space = |slot: u16| Chain::offset(u32::from(remap(slot)));
+        let in_space = |at: Off| ChainBounds::byte_offset_of_word(remap(at));
 
-        let mut post_order_ops = [Arith::Add; Chain::MAX_INTERIOR];
-        post_order_ops[..found.len()].copy_from_slice(&found);
-        let mut leaf_offsets = [in_space(read); Chain::MAX_LEAVES];
-        for (offset, leaf) in leaf_offsets.iter_mut().zip(&leaves) {
+        let mut ops = [Arith::Add; ChainBounds::MAX_INTERIOR];
+        ops[..found.len()].copy_from_slice(&found);
+        let mut offsets = [in_space(read); ChainBounds::MAX_LEAVES];
+        for (offset, leaf) in offsets.iter_mut().zip(&leaves) {
             *offset = in_space(leaf.unwrap_or(read));
         }
 
-        Chain {
+        Plan {
             shape,
-            post_order_ops,
             root: self.node.op,
-            leaf_offsets,
+            ops,
+            leaves: offsets,
         }
     }
 }
@@ -3246,7 +4093,7 @@ impl Growing<'_> {
     fn emit(&mut self, value: ValueId) -> Tree {
         let admitted = self
             .absorbable(value)
-            .filter(|_| self.nodes + self.nodes_of(value) <= Chain::MAX_NODES);
+            .filter(|_| self.nodes + self.nodes_of(value) <= ChainBounds::MAX_NODES);
         let Some(at) = admitted else {
             return Tree::Leaf(self.prep.leaf_slot(value));
         };
@@ -3280,6 +4127,71 @@ impl Growing<'_> {
             }
             other => panic!("absorbable admitted {other:?}, which is not a chain step"),
         }
+    }
+}
+
+/// `None` is a type whose register is written whole every time, so the
+/// frame writes no kind ahead of it and no operation on it is a `set_word`
+/// (RFC-0052 §5).
+fn word_kind(ty: &Ty) -> Option<Kind> {
+    match ty {
+        Ty::Int(k) => Some(Kind::int(*k)),
+        Ty::Float => Some(Kind::F64),
+        Ty::Bool => Some(Kind::Bool),
+        Ty::Unit => Some(Kind::Unit),
+        _ => None,
+    }
+}
+
+/// Where a body's blocks begin and end (RFC-0052 §1). A block begins at the
+/// entry, at every label a jump names, and after every terminator; it ends
+/// at its terminator, or falls through to the next block with a `Goto`.
+struct Split {
+    /// The block the unit at this index belongs to.
+    block_of: Vec<BlockId>,
+    blocks: u32,
+}
+
+impl Split {
+    /// Whether the unit at this index is the last one of its block.
+    fn last_of_block(&self, at: usize) -> bool {
+        at + 1 == self.block_of.len() || self.block_of[at + 1] != self.block_of[at]
+    }
+}
+
+impl Prepare<'_> {
+    fn unit_terminates(&self, unit: &Unit<'_>) -> bool {
+        match unit {
+            Unit::Inst(at) => !self.is_straight_line(&self.body.insts[*at]),
+            Unit::Region(_) | Unit::Fused(_) | Unit::Chain(_) => false,
+        }
+    }
+
+    fn split(&self, units: &[Unit<'_>]) -> Split {
+        let mut starts = vec![false; units.len()];
+        if !units.is_empty() {
+            starts[0] = true;
+        }
+        for (at, unit) in units.iter().enumerate() {
+            if let Unit::Inst(inst) = unit
+                && let Some(label) = block_label(&self.body.insts[*inst])
+                && !self.references(label).is_empty()
+            {
+                starts[at] = true;
+            }
+            if self.unit_terminates(unit) && at + 1 < units.len() {
+                starts[at + 1] = true;
+            }
+        }
+        let mut block_of = Vec::with_capacity(units.len());
+        let mut blocks = 0;
+        for start in &starts {
+            if *start {
+                blocks += 1;
+            }
+            block_of.push(blocks - 1);
+        }
+        Split { block_of, blocks }
     }
 }
 
@@ -3340,8 +4252,10 @@ impl Prepare<'_> {
             .value_at
             .iter()
             .map(|(slot, value)| EntryKonst {
-                slot: *slot,
-                value: value.copy_word(),
+                slot: Off::of(Slot::try_from(*slot).unwrap_or_else(|_| {
+                    panic!("an entry constant sits in register {slot}, past a frame")
+                })),
+                value: *value,
             })
             .collect();
         found.sort_by_key(|konst| konst.slot);
@@ -3355,7 +4269,7 @@ impl Prepare<'_> {
 struct FusableCall<'a> {
     dst: ValueId,
     args: &'a [ValueId],
-    handler: SyncHandler,
+    abi: SyncAbi,
 }
 
 /// A run of extern calls the recognizer matched, as indexes into
@@ -3393,13 +4307,22 @@ impl<'a> Prepare<'a> {
             } => (*dst, id, *instance, std::slice::from_ref(container)),
             _ => return None,
         };
-        let ExternHandler::Sync(handler) = self.ctx.handler(id, instance) else {
+        // A stateful instance has no `call::Call` variant: a fused run
+        // holds bare `fn` pointers, and the state would be a field the run
+        // has nowhere to put (RFC-0044, stage 6).
+        let ExternHandler::Sync(SyncCall::Plain(abi)) = self.ctx.handler(id, instance) else {
             return None;
         };
-        if handler.arity() != Some(args.len()) || args.len() > 2 {
+        let arity = match abi {
+            SyncAbi::Arity0(_) => 0,
+            SyncAbi::Arity1(_) | SyncAbi::Slice(_) => 1,
+            SyncAbi::Arity2(_) => 2,
+            SyncAbi::Arity3(_) | SyncAbi::Window(_) => return None,
+        };
+        if arity != args.len() {
             return None;
         }
-        Some(FusableCall { dst, args, handler })
+        Some(FusableCall { dst, args, abi })
     }
 
     /// The `*r` closing a run whose last call left `last`: the read of a
@@ -3505,24 +4428,37 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    fn fused_op(&mut self, region: &FusedRegion) -> Op {
-        let mut calls: Vec<FusedCall> = Vec::with_capacity(region.calls.len());
+    fn fused_op(&mut self, region: &FusedRegion) -> Box<dyn Op> {
+        let mut calls: SmallVec<[call::Call; 2]> = SmallVec::new();
+        let mut read: Vec<ValueId> = Vec::new();
         let mut previous: Option<ValueId> = None;
         for at in &region.calls {
-            let call = self
+            let found = self
                 .fusable_call(*at)
                 .expect("a recognized run holds a fusable call at every index it named");
-            let mut args = [NO_SLOT; 3];
-            for (word, id) in args.iter_mut().zip(call.args) {
+            let mut args = [call::PREVIOUS; 2];
+            for (word, id) in args.iter_mut().zip(found.args) {
                 *word = match previous {
-                    Some(held) if *id == held => PREVIOUS,
-                    Some(_) | None => self.slot(*id),
+                    Some(held) if *id == held => call::PREVIOUS,
+                    Some(_) | None => {
+                        read.push(*id);
+                        self.off(*id)
+                    }
                 };
             }
-            previous = Some(call.dst);
-            calls.push(FusedCall {
-                handler: call.handler,
-                args,
+            previous = Some(found.dst);
+            calls.push(match found.abi {
+                SyncAbi::Arity0(f) => call::Call::Nullary { f },
+                SyncAbi::Arity1(f) => call::Call::Unary { f, a: args[0] },
+                SyncAbi::Arity2(f) => call::Call::Binary {
+                    f,
+                    a: args[0],
+                    b: args[1],
+                },
+                SyncAbi::Slice(f) => call::Call::Slice { f, a: args[0] },
+                SyncAbi::Arity3(_) | SyncAbi::Window(_) => {
+                    panic!("fusable_call admitted an arity a fused run holds no shape for")
+                }
             });
         }
         let last = previous.expect("a recognized run holds at least one call");
@@ -3541,15 +4477,8 @@ impl<'a> Prepare<'a> {
             None => (last, None),
         };
 
-        let slot = self.slot(dst);
-        let tail_present = tail.is_some();
-        let payload = self.put(Payload::Fused(FusedRun {
-            calls: calls.into_boxed_slice(),
-            tail,
-        }));
-        Op::new(call::fused_instance(region.calls.len(), tail_present))
-            .a(slot)
-            .p(payload)
+        let takes = self.take_mask(&read);
+        call::fused(self.owns(dst), self.off(dst), calls, tail, takes)
     }
 
     fn def_at(&self, value: ValueId) -> Option<usize> {
@@ -3560,8 +4489,8 @@ impl<'a> Prepare<'a> {
         self.use_counts[value.to_raw()]
     }
 
-    fn leaf_slot(&self, value: ValueId) -> u16 {
-        u16::try_from(self.slot(value)).expect("a chain reads a register below u16::MAX")
+    fn leaf_slot(&self, value: ValueId) -> Off {
+        self.off(value)
     }
 
     /// The chain rooted at `root`, if there is one: the descent absorbs
@@ -3635,7 +4564,7 @@ impl<'a> Prepare<'a> {
             }
 
             assert!(
-                growing.nodes <= Chain::MAX_NODES,
+                growing.nodes <= ChainBounds::MAX_NODES,
                 "a chain of {} nodes was prepared, past the tree it runs on",
                 growing.nodes
             );
@@ -3668,14 +4597,9 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    fn chain_op(&mut self, run: &ChainRun) -> Op {
+    fn chain_op(&mut self, run: &ChainRun) -> Box<dyn Op> {
         self.check_chain(run);
-        let chain = Box::new(run.chain(&|slot| slot));
-        let f = chain::instance(run.ty, &chain).op;
-        let held = std::ptr::from_ref::<Chain>(&chain) as usize;
-        let at = self.put(Payload::Chain(chain));
-        let at = u32::try_from(at).expect("a body holds at most u32::MAX payloads");
-        Op::new(f).a(self.slot(run.dst)).b(at).p(held)
+        chain::chain_op(run.ty, self.off(run.dst), run.plan(&|slot| slot))
     }
 
     /// Every chain of `range`, in the straight-line windows the regions of
@@ -3699,24 +4623,6 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    /// The operations of a laid-out range: the regions and the chains one
-    /// operation each, and everything else one for one.
-    fn emit(&mut self, units: &[Unit<'_>]) -> Vec<Emitted> {
-        let mut out: Vec<Emitted> = Vec::with_capacity(units.len());
-        for unit in units {
-            let span = self.body.insts[unit.head()].span;
-            let op = match unit {
-                Unit::Inst(at) => self.op(*at),
-                Unit::Region(Region::Loop(region)) => self.loop_op(region),
-                Unit::Region(Region::Diamond(region)) => self.diamond_op(region),
-                Unit::Fused(region) => self.fused_op(region),
-                Unit::Chain(run) => self.chain_op(run),
-            };
-            out.push(Emitted { op, span });
-        }
-        out
-    }
-
     /// Every register a chain reads is live where the chain runs and
     /// carries the chain's own type — the chain-shaped half of what
     /// `check_assignment` states for slots.
@@ -3726,20 +4632,25 @@ impl<'a> Prepare<'a> {
                 continue;
             };
             assert!(
-                u32::from(slot) < self.scratch + u32::from(self.scratch_used),
-                "a chain reads register {slot}, which its body's frame does not have"
+                (slot.index() as u32) < self.scratch + u32::from(self.scratch_used),
+                "a chain reads register {}, which its body's frame does not have",
+                slot.index()
             );
             let read = (self.body.insts[run.insts.start..run.insts.end])
                 .iter()
                 .flat_map(|inst| inst_info::uses(&inst.kind))
                 .find(|value| self.leaf_slot(*value) == slot)
                 .unwrap_or_else(|| {
-                    panic!("a chain reads register {slot}, which no instruction it replaces reads")
+                    panic!(
+                        "a chain reads register {}, which no instruction it replaces reads",
+                        slot.index()
+                    )
                 });
             assert_eq!(
                 chain_ty(self.ty(read)),
                 Some(run.ty),
-                "a chain reads register {slot} at another type than its own"
+                "a chain reads register {} at another type than its own",
+                slot.index()
             );
         }
     }
@@ -3752,7 +4663,7 @@ fn intern(konsts: &mut Vec<Value>, konst: &Value) -> usize {
     match konsts.iter().position(same) {
         Some(at) => at,
         None => {
-            konsts.push(konst.copy_word());
+            konsts.push(*konst);
             konsts.len() - 1
         }
     }
@@ -3799,43 +4710,426 @@ impl Prepare<'_> {
         }
 
         let mut konsts: Vec<Value> = Vec::new();
-        let mut in_space: FxHashMap<u16, u16> = FxHashMap::default();
+        let mut in_space: FxHashMap<Off, Off> = FxHashMap::default();
         for leaf in run.node.flatten().leaves.iter().flatten() {
             let at = match body
                 .params
                 .iter()
-                .position(|(_, id)| u32::from(*leaf) == self.slot(*id))
+                .position(|(_, id)| *leaf == self.off(*id))
             {
                 Some(at) => at,
                 None => {
-                    let konst = self.konsts.value_at.get(&u32::from(*leaf))?;
+                    let raw = u32::try_from(leaf.index())
+                        .expect("a frame's register index fits the konst table's key");
+                    let konst = self.konsts.value_at.get(&raw)?;
                     body.params.len() + intern(&mut konsts, konst)
                 }
             };
-            in_space.insert(
-                *leaf,
-                u16::try_from(at).expect("a body reads at most u16::MAX operands"),
-            );
+            let at = u16::try_from(at).expect("a body reads at most u16::MAX operands");
+            in_space.insert(*leaf, Off::of(at));
         }
         if body.params.len() + konsts.len() > ExprChain::MAX_OPERANDS {
             return None;
         }
 
         self.check_chain(&run);
-        let chain = run.chain(&|slot| {
-            *in_space
-                .get(&slot)
-                .unwrap_or_else(|| panic!("register {slot} is neither a parameter nor a constant"))
+        let plan = run.plan(&|at| {
+            *in_space.get(&at).unwrap_or_else(|| {
+                panic!(
+                    "register {} is neither a parameter nor a constant",
+                    at.index()
+                )
+            })
         });
-        let eval = chain::instance(run.ty, &chain).expr;
+        let eval = chain::chain_eval(run.ty, &plan);
         Some(Expr {
             arity,
             body: ExprBody::Chain(ExprChain {
-                chain,
+                kind: run.kind(),
+                plan,
                 eval,
                 konsts: konsts.into_boxed_slice(),
             }),
             span: last.span,
         })
+    }
+}
+
+// -- What an instruction's operands become -----------------------------
+
+/// The registers an operation's operands sit in, and the frame's claim on
+/// the ones it consumes (RFC-0048 §5).
+struct Operands {
+    slots: Box<[Off]>,
+    takes: u64,
+}
+
+/// The register an operation writes, and whether the frame owns a `Large`
+/// once it has.
+#[derive(Clone, Copy)]
+struct Dest {
+    slot: Off,
+    large: bool,
+    /// `word_kind`, the same predicate `slot_kinds` opened the register by.
+    word: bool,
+}
+
+/// A place under a register: the register the walk starts at, and the
+/// resolved path to the place.
+struct Under {
+    base: Off,
+    path: Vec<Walked>,
+}
+
+/// The three facts a read of a place is chosen by, each off a type:
+/// RFC-0026 for `clone`, RFC-0018 for `owned`.
+#[derive(Clone, Copy)]
+struct Reading {
+    through: bool,
+    clone: bool,
+    owned: bool,
+}
+
+impl Reading {
+    fn of(ty: &Ty, through: bool) -> Self {
+        Self {
+            through,
+            clone: matches!(ty, Ty::String),
+            owned: owns_large(ty),
+        }
+    }
+}
+
+/// The two facts a write to a place is chosen by: whether the base register
+/// holds a reference, and whether the written value owns a `Large`.
+#[derive(Clone, Copy)]
+struct Writing {
+    through: bool,
+    large: bool,
+}
+
+/// One `InstKind::FunctionCall`, as the emitters read it. The IR gives the
+/// call as an enum variant, which has no type of its own to pass.
+struct CallSite<'i> {
+    at: usize,
+    dst: ValueId,
+    callee: &'i Callee,
+    callee_ty: &'i Ty,
+    args: &'i [ValueId],
+    order: Option<ValueId>,
+}
+
+/// One resolved path step, and — for an index — whether the type it stands
+/// on is an array, which picks `ops::storage::Index<ARRAY>`.
+///
+/// `code::Step` does not carry `array`: a boxed walk asks the value, which
+/// is the decision `ops::storage::walk` records rather than instantiate the
+/// whole storage family once per path shape a program writes.
+#[derive(Clone, Copy)]
+struct Walked {
+    step: Step,
+    array: bool,
+}
+
+fn field_step(field: Astr) -> Walked {
+    Walked {
+        step: Step::Field(field),
+        array: false,
+    }
+}
+
+fn index_step(index: usize, array: bool) -> Walked {
+    Walked {
+        step: Step::Index(index),
+        array,
+    }
+}
+
+fn through_target(target: &RefTarget) -> bool {
+    matches!(target, RefTarget::Through(_))
+}
+
+fn steps_of(path: &[Walked]) -> Box<[Step]> {
+    path.iter().map(|walked| walked.step).collect()
+}
+
+fn nth(slots: &[Off], k: usize) -> Off {
+    *slots.get(k).unwrap_or_else(|| {
+        panic!(
+            "an extern of arity {} is called with {} arguments",
+            k + 1,
+            slots.len()
+        )
+    })
+}
+
+/// Whether a register holding a value of this type owns a `Large` the frame
+/// has to release (RFC-0048 §4).
+fn owns_large(ty: &Ty) -> bool {
+    match ty {
+        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => false,
+        // A reference is a word. The run an `AsSlice` boxed is not: it
+        // reaches its register as the erased `Elements` (RFC-0047 §6).
+        Ty::Ref(_, target) => matches!(target.ty, Ty::Slice(_)),
+        // RFC-0022: an option is its payload's own value, so it owns what
+        // the payload owns and nothing else.
+        Ty::Option(inner) => owns_large(inner),
+        Ty::String
+        | Ty::Array(..)
+        | Ty::Object(_)
+        | Ty::Tuple(_)
+        | Ty::Result(..)
+        | Ty::Enum { .. }
+        | Ty::Fn { .. }
+        | Ty::Handle(_)
+        | Ty::UserDefined { .. } => true,
+        Ty::Slice(_) => panic!(
+            "a slice has no storage of its own: it reaches a register under a reference \
+             (RFC-0047)"
+        ),
+        Ty::Error(_) | Ty::Var(_) => panic!("prepare reached the unresolved type {ty:?}"),
+    }
+}
+
+// -- One step as the `Segment` type that reaches it --------------------
+
+/// Runs `$body` with `$seg` bound to the `Segment` value of one resolved
+/// step, so that the operation built from it holds no `match` of its own.
+macro_rules! at_step {
+    ($walked:expr, |$seg:ident| $body:expr) => {{
+        let walked: Walked = $walked;
+        match (walked.step, walked.array) {
+            (Step::Field(f), _) => {
+                let $seg = storage::Field(f);
+                $body
+            }
+            (Step::Index(i), true) => {
+                let $seg = storage::Index::<true>(i);
+                $body
+            }
+            (Step::Index(i), false) => {
+                let $seg = storage::Index::<false>(i);
+                $body
+            }
+            (Step::OptionPayload, _) => {
+                let $seg = storage::OptionPayload;
+                $body
+            }
+            (Step::ResultPayload, _) => {
+                let $seg = storage::ResultPayload;
+                $body
+            }
+            (Step::VariantPayload, _) => {
+                let $seg = storage::VariantPayload;
+                $body
+            }
+        }
+    }};
+}
+
+fn make_ref_step<const THROUGH: bool>(slots: Unary, one: Walked) -> Box<dyn Op> {
+    at_step!(
+        one,
+        |step| Box::new(storage::MakeRefStep::<_, THROUGH> { slots, step }) as Box<dyn Op>
+    )
+}
+
+fn read_step<M>(slots: Unary, one: Walked) -> Box<dyn Op>
+where
+    M: storage::Reads,
+{
+    at_step!(one, |step| Box::new(storage::ReadStep::<_, M> {
+        slots,
+        step,
+        mode: PhantomData,
+    }) as Box<dyn Op>)
+}
+
+fn assign_step<const THROUGH: bool, const LARGE: bool>(
+    slots: storage::Write,
+    one: Walked,
+) -> Box<dyn Op> {
+    at_step!(
+        one,
+        |step| Box::new(storage::AssignStep::<_, THROUGH, LARGE> { slots, step }) as Box<dyn Op>
+    )
+}
+
+fn set_step<const LARGE: bool>(slots: storage::Update, one: Walked) -> Box<dyn Op> {
+    at_step!(
+        one,
+        |step| Box::new(storage::SetStep::<_, LARGE> { slots, step }) as Box<dyn Op>
+    )
+}
+
+// -- The place operations ----------------------------------------------
+
+fn make_ref(slots: Unary, through: bool, path: &[Walked]) -> Box<dyn Op> {
+    match (through, path) {
+        (false, []) => Box::new(storage::MakeRef::<false> { slots }),
+        (true, []) => Box::new(storage::MakeRef::<true> { slots }),
+        (false, [one]) => make_ref_step::<false>(slots, *one),
+        (true, [one]) => make_ref_step::<true>(slots, *one),
+        (false, many) => Box::new(storage::MakeRefPath::<false> {
+            slots,
+            steps: steps_of(many),
+        }),
+        (true, many) => Box::new(storage::MakeRefPath::<true> {
+            slots,
+            steps: steps_of(many),
+        }),
+    }
+}
+
+fn read_place(slots: Unary, how: Reading, path: &[Walked]) -> Box<dyn Op> {
+    assert!(
+        !path.is_empty(),
+        "a read of a place with no step is a read of the register itself"
+    );
+    assert!(
+        !(how.owned && !how.clone && how.through),
+        "a part is moved out of a storage, never through a borrow of one"
+    );
+    match how {
+        Reading {
+            clone: false,
+            owned: true,
+            ..
+        } => read_at::<storage::Moved>(slots, path),
+        Reading {
+            clone: true,
+            through: false,
+            ..
+        } => read_at::<storage::Cloned<false>>(slots, path),
+        Reading {
+            clone: true,
+            through: true,
+            ..
+        } => read_at::<storage::Cloned<true>>(slots, path),
+        Reading { through: false, .. } => read_at::<storage::Copied<false>>(slots, path),
+        Reading { through: true, .. } => read_at::<storage::Copied<true>>(slots, path),
+    }
+}
+
+fn read_at<M>(slots: Unary, path: &[Walked]) -> Box<dyn Op>
+where
+    M: storage::Reads,
+{
+    match path {
+        [one] => read_step::<M>(slots, *one),
+        many => Box::new(storage::ReadPath::<M> {
+            slots,
+            steps: steps_of(many),
+            mode: PhantomData,
+        }),
+    }
+}
+
+fn assign_place(slots: storage::Write, how: Writing, path: &[Walked]) -> Box<dyn Op> {
+    match (how.through, how.large, path) {
+        (false, false, []) => Box::new(storage::AssignVar::<false> { slots }),
+        (false, true, []) => Box::new(storage::AssignVar::<true> { slots }),
+        (true, false, []) => Box::new(storage::AssignThrough::<false> { slots }),
+        (true, true, []) => Box::new(storage::AssignThrough::<true> { slots }),
+        (false, false, [one]) => assign_step::<false, false>(slots, *one),
+        (false, true, [one]) => assign_step::<false, true>(slots, *one),
+        (true, false, [one]) => assign_step::<true, false>(slots, *one),
+        (true, true, [one]) => assign_step::<true, true>(slots, *one),
+        (false, false, many) => Box::new(storage::AssignPath::<false, false> {
+            slots,
+            steps: steps_of(many),
+        }),
+        (false, true, many) => Box::new(storage::AssignPath::<false, true> {
+            slots,
+            steps: steps_of(many),
+        }),
+        (true, false, many) => Box::new(storage::AssignPath::<true, false> {
+            slots,
+            steps: steps_of(many),
+        }),
+        (true, true, many) => Box::new(storage::AssignPath::<true, true> {
+            slots,
+            steps: steps_of(many),
+        }),
+    }
+}
+
+fn set_place(slots: storage::Update, large: bool, path: &[Walked]) -> Box<dyn Op> {
+    assert!(
+        !path.is_empty(),
+        "a field set with no step names no field to write"
+    );
+    match (large, path) {
+        (false, [one]) => set_step::<false>(slots, *one),
+        (true, [one]) => set_step::<true>(slots, *one),
+        (false, many) => Box::new(storage::SetPath::<false> {
+            slots,
+            steps: steps_of(many),
+        }),
+        (true, many) => Box::new(storage::SetPath::<true> {
+            slots,
+            steps: steps_of(many),
+        }),
+    }
+}
+
+// -- The variant tests -------------------------------------------------
+
+fn test_option<const THROUGH: bool>(slots: Unary, some: bool) -> Box<dyn Op> {
+    match some {
+        true => Box::new(variant::TestOption::<THROUGH, true> { slots }),
+        false => Box::new(variant::TestOption::<THROUGH, false> { slots }),
+    }
+}
+
+fn test_result<const THROUGH: bool>(slots: Unary, ok: bool) -> Box<dyn Op> {
+    match ok {
+        true => Box::new(variant::TestResult::<THROUGH, true> { slots }),
+        false => Box::new(variant::TestResult::<THROUGH, false> { slots }),
+    }
+}
+
+fn indirect_call(
+    into: Dest,
+    through: bool,
+    callee: Off,
+    operands: Operands,
+    next: BlockId,
+) -> Box<dyn Terminator> {
+    let Dest {
+        slot: dst,
+        large,
+        word: _,
+    } = into;
+    let Operands { slots: args, takes } = operands;
+    match (large, through) {
+        (false, false) => Box::new(call::CallIndirect::<false, false> {
+            dst,
+            callee,
+            args,
+            takes,
+            next,
+        }),
+        (false, true) => Box::new(call::CallIndirect::<false, true> {
+            dst,
+            callee,
+            args,
+            takes,
+            next,
+        }),
+        (true, false) => Box::new(call::CallIndirect::<true, false> {
+            dst,
+            callee,
+            args,
+            takes,
+            next,
+        }),
+        (true, true) => Box::new(call::CallIndirect::<true, true> {
+            dst,
+            callee,
+            args,
+            takes,
+            next,
+        }),
     }
 }

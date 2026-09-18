@@ -1,160 +1,246 @@
-//! Control flow: the jumps and their parallel moves, the return, and the
-//! instructions that produce no control at all.
+//! Control flow: the terminators that choose a block, the two recognized
+//! regions that run their own operations straight, and the instructions that
+//! produce no control at all.
+//!
+//! Obligation across artifacts (RFC-0052 §3): a region's parts are operation
+//! lists, so nothing here chooses a `BlockId` inside a region — and it is
+//! `prepare::straight_run` that stops a region at the first instruction which
+//! is not straight-line, so that no part ever needs one.
+//!
+//! Decided against: a flag a region tests for a `return` inside it. A `return`
+//! is not straight-line, so the recognizer stops at it and the shape prepares
+//! as the blocks it was (`a_while_that_returns_is_not_a_region`).
 
-use crate::code::{BasicBlock, Flow, LoopBody, Op, Payload, SlotMove};
+#[cfg(any(debug_assertions, feature = "probe"))]
+use crate::code::OwnedOps;
+use crate::code::{BlockId, Off, Op, RETURN, Terminator};
 use crate::machine::Machine;
-use crate::ops::payload;
 use crate::value::Value;
 
-/// A jump's arguments move into the block's parameters: a move-only
-/// argument leaves its register, so one owner remains. An extern call's
-/// window is filled the same way.
-#[inline]
-pub fn move_all(machine: &mut Machine<'_>, moves: &[SlotMove]) {
-    for m in moves {
-        let value = machine.use_val(m.from);
-        machine.define(m.to, value);
+/// One move of a parallel move, as an operation of the block it belongs to
+/// (RFC-0052 rule 1). `prepare` ordered the sequence, so no source is read
+/// after it is overwritten, and `LARGE` is what the moved value owns, so no
+/// `run` tests a `kind`: a `Large` move is the copy plus two ops on the
+/// frame's mark word, a word move is the copy alone.
+pub struct Mov<const LARGE: bool> {
+    pub dst: Off,
+    pub src: Off,
+}
+
+impl<const LARGE: bool> Op for Mov<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.src);
+        regs.define::<LARGE>(self.dst, value);
     }
 }
 
-pub fn jump(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    move_all(machine, payload!(machine, op, Moves));
-    Flow::Jump(op.b)
+/// The edge that carries no arguments, which is most of them.
+pub struct Goto {
+    pub target: BlockId,
 }
 
-/// `p` holds the moves of the `then` side, `d` the index of the `else`
-/// side's.
-pub fn jump_if(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let taken = machine.reg(op.a).as_bool();
-    let (target, at) = if taken {
-        (op.b, op.p)
-    } else {
-        (op.c, op.d as usize)
-    };
-    let moves = match &machine.code().payloads[at] {
-        Payload::Moves(moves) => moves,
-        other => panic!(
-            "a conditional jump wants a Moves payload, found {}",
-            crate::code::payload_name(other)
-        ),
-    };
-    move_all(machine, moves);
-    Flow::Jump(target)
-}
-
-#[inline]
-fn run_block(machine: &mut Machine<'_>, block: &BasicBlock) -> Flow {
-    for op in block.iter() {
-        match (op.f)(machine, op) {
-            Flow::Next => {}
-            Flow::Return => return Flow::Return,
-            Flow::Jump(_) | Flow::Await(_) => panic!(
-                "an operation inside a recognized region transferred control: the recognizer \
-                 admits only operations that return Next or Return"
-            ),
-        }
-    }
-    Flow::Next
-}
-
-pub fn diamond(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let Payload::Diamond(arms) = machine.payload(op) else {
-        panic!(
-            "a diamond operation wants a Diamond payload, found {}",
-            crate::code::payload_name(machine.payload(op))
-        )
-    };
-    let arm = if machine.reg(op.a).as_bool() {
-        &arms.on_true
-    } else {
-        &arms.on_false
-    };
-
-    match run_block(machine, &arm.block) {
-        Flow::Next => {}
-        stop => return stop,
-    }
-    move_all(machine, &arm.join);
-    Flow::Next
-}
-
-pub fn while_loop(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let Payload::Loop(body) = machine.payload(op) else {
-        panic!(
-            "a loop operation wants a Loop payload, found {}",
-            crate::code::payload_name(machine.payload(op))
-        )
-    };
-    let LoopBody {
-        enter,
-        head,
-        cond_slot,
-        into_body,
-        body: block,
-        back,
-        exit,
-    } = body;
-
-    move_all(machine, enter);
-    loop {
-        match run_block(machine, head) {
-            Flow::Next => {}
-            stop => return stop,
-        }
-        if !machine.reg(*cond_slot).as_bool() {
-            move_all(machine, exit);
-            return Flow::Next;
-        }
-
-        move_all(machine, into_body);
-        match run_block(machine, block) {
-            Flow::Next => {}
-            stop => return stop,
-        }
-        move_all(machine, back);
+impl Terminator for Goto {
+    #[inline]
+    fn next(&self, _: &mut Machine<'_>) -> BlockId {
+        self.target
     }
 }
 
-pub fn ret(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = machine.take(op.a);
-    machine.finish(value)
+/// The two edges of a conditional jump. Where an edge carries a parallel
+/// move, `prepare` gives that edge a block of its own holding the `Mov`s, so
+/// this terminator is one word load, one test and one `cmov`.
+pub struct JumpIf {
+    pub cond: Off,
+    pub on_true: BlockId,
+    pub on_false: BlockId,
 }
 
-pub fn diverge(_: &mut Machine<'_>, _: &Op) -> Flow {
-    panic!("a call typed `!` returned: its handler must panic")
+impl Terminator for JumpIf {
+    #[inline]
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        match m.regs().word(self.cond) != 0 {
+            true => self.on_true,
+            false => self.on_false,
+        }
+    }
 }
 
-pub fn merge(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.define(op.a, Value::unit());
-    Flow::Next
+pub struct Return {
+    pub slot: Off,
 }
 
-pub fn undef(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.define(op.a, Value::UNDEF);
-    Flow::Next
+impl Terminator for Return {
+    #[inline]
+    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+        let value = m.regs().take::<true>(self.slot);
+        m.finish(value);
+        RETURN
+    }
 }
 
-pub fn nop(_: &mut Machine<'_>, _: &Op) -> Flow {
-    Flow::Next
+/// The operations of one part of a region, run in order.
+#[inline(always)]
+fn run_part(ops: &[Box<dyn Op>], m: &mut Machine<'_>) {
+    for op in ops {
+        op.run(m);
+    }
 }
 
-/// Release whatever the register still owns.
+/// The `while` shape `prepare::recognize_loop` finds in the IR (RFC-0044,
+/// stage 3), as one operation holding its two op lists.
 ///
-/// Taking the register is also the double-drop check. It is sound because
-/// `acvus_mir`'s drop insertion emits no drop for a storage it saw
-/// emptied, and a take of a flat option's payload is one such emptying:
-/// the payload is the option's whole value (RFC-0022). A drop that
-/// arrives at an empty register is therefore a defect in the lowering,
-/// and this assert is where it surfaces.
-pub fn drop_value(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    drop(machine.take(op.a));
-    Flow::Next
+/// Every move this shape used to interpret is an operation `prepare` placed:
+/// the entering move before this operation, the move into the body at the head
+/// of `body`, the back edge at the end of `body`, and the exiting move after
+/// this operation.
+pub struct Loop {
+    pub head: Box<[Box<dyn Op>]>,
+    pub cond: Off,
+    pub body: Box<[Box<dyn Op>]>,
 }
 
-pub fn poison(_: &mut Machine<'_>, _: &Op) -> Flow {
-    panic!("reached poison instruction")
+impl Op for Loop {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        loop {
+            run_part(&self.head, m);
+            if m.regs().word(self.cond) == 0 {
+                return;
+            }
+            run_part(&self.body, m);
+        }
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        vec![
+            OwnedOps {
+                part: "head",
+                ops: &self.head,
+            },
+            OwnedOps {
+                part: "body",
+                ops: &self.body,
+            },
+        ]
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut [Box<dyn Op>]> {
+        vec![&mut self.head, &mut self.body]
+    }
 }
 
-pub fn load_function(_: &mut Machine<'_>, _: &Op) -> Flow {
-    todo!("LoadFunction: graph-level function references not yet supported at runtime")
+/// The `if/else` shape `prepare::recognize_diamond` finds in the IR
+/// (RFC-0044, stage 5), as one operation holding both arms. The moves the
+/// join edge carries are the last operations of each arm.
+pub struct Diamond {
+    pub cond: Off,
+    pub on_true: Box<[Box<dyn Op>]>,
+    pub on_false: Box<[Box<dyn Op>]>,
+}
+
+impl Op for Diamond {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let arm = match m.regs().word(self.cond) != 0 {
+            true => &self.on_true,
+            false => &self.on_false,
+        };
+        run_part(arm, m);
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        vec![
+            OwnedOps {
+                part: "on_true",
+                ops: &self.on_true,
+            },
+            OwnedOps {
+                part: "on_false",
+                ops: &self.on_false,
+            },
+        ]
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut [Box<dyn Op>]> {
+        vec![&mut self.on_true, &mut self.on_false]
+    }
+}
+
+/// A call typed `!`. It is a terminator because nothing follows it: the
+/// handler panics, and a block that held this as an operation would have a
+/// successor no path reaches.
+pub struct Diverge;
+
+impl Terminator for Diverge {
+    fn next(&self, _: &mut Machine<'_>) -> BlockId {
+        panic!("a call typed `!` returned: its handler must panic")
+    }
+}
+
+pub struct Merge {
+    pub dst: Off,
+}
+
+impl Op for Merge {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        m.regs().define::<false>(self.dst, Value::unit());
+    }
+}
+
+/// RFC-0052 §5 fixes a word-typed slot's kind at the frame's making; which
+/// word sits under it here does not matter, `acvus_mir::ir::InstKind::Undef`
+/// being UB to read as a concrete value.
+pub struct Undef<const WORD: bool> {
+    pub dst: Off,
+}
+
+impl Op for Undef<true> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        m.regs().set_word(self.dst, 0);
+    }
+}
+
+impl Op for Undef<false> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        m.regs().define::<false>(self.dst, Value::UNDEF);
+    }
+}
+
+/// Release whatever the register still owns (RFC-0041's drop instruction).
+///
+/// `prepare` emits this only where the value's type owns a `Large`, which is
+/// why the take is `take::<true>`: `acvus_mir`'s drop insertion emits no drop
+/// for a storage it saw emptied, and a take of a flat option's payload is one
+/// such emptying — the payload is the option's whole value (RFC-0022). A drop
+/// arriving at a slot the frame no longer marks is therefore a defect in the
+/// lowering, and `Regs::take`'s debug assert is where it surfaces.
+pub struct DropValue {
+    pub slot: Off,
+}
+
+impl Op for DropValue {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        use acvus_extern::Release;
+        m.regs().take::<true>(self.slot).release();
+    }
+}
+
+/// A terminator for the same reason `Diverge` is: the lowering put it where
+/// no path may arrive, so no block follows it.
+pub struct Poison;
+
+impl Terminator for Poison {
+    fn next(&self, _: &mut Machine<'_>) -> BlockId {
+        panic!("reached poison instruction")
+    }
 }

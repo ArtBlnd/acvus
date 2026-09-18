@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::{ExternType, Registry, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Executable, TokioExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
@@ -33,7 +33,11 @@ fn string(s: &str) -> TypedValue {
 fn ints(xs: &[i64]) -> TypedValue {
     typed(
         Ty::Array(Box::new(Ty::I64), LenTerm::Known(xs.len())),
-        Value::array(xs.iter().map(|&x| Value::int(x)).collect()),
+        Value::array(
+            xs.iter()
+                .map(|&x| Owned::from_value(Value::int(x)))
+                .collect(),
+        ),
     )
 }
 
@@ -562,7 +566,10 @@ async fn a_field_of_a_context_is_a_place() {
     let n = i.intern("n");
     let a = typed(
         Ty::Object(FxHashMap::from_iter([(n, Ty::I64)])),
-        Value::object(FxHashMap::from_iter([(n, Value::int(1))])),
+        Value::object(FxHashMap::from_iter([(
+            n,
+            Owned::from_value(Value::int(1)),
+        )])),
     );
     let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", vec![("a", a)]).await;
     assert_eq!(v.as_int(), 2);
@@ -999,8 +1006,9 @@ async fn io_inside_iterator_pipeline() {
         |_| {},
     )
     .await;
-    // SAFETY: `collect` returns a `Vec<T>` and `T` is erased as `Value`.
-    let list: Vec<Value> = unsafe { result.value.materialize() };
-    let items: Vec<i64> = list.iter().map(Value::as_int).collect();
+    // SAFETY: `collect` returns a `Vec<T>`, and the store of an owned
+    // runtime value is `Owned<AcvusRuntime>` (RFC-0048).
+    let list: Vec<Owned<AcvusRuntime>> = unsafe { result.value.materialize() };
+    let items: Vec<i64> = list.iter().map(|v| v.as_int()).collect();
     assert_eq!(items, vec![10, 20, 30]);
 }

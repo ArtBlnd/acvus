@@ -1,21 +1,17 @@
-//! An arithmetic chain as one operation (RFC-0044, stage 4).
+//! An arithmetic chain as one operation (RFC-0044, stage 4; RFC-0052).
 //!
-//! Every instance is named by its shape and by one `Slot` per operator
-//! node: a concrete operator compiles to the one machine instruction, and
-//! `Any` reads that node's operator from the payload. The alphabet the
-//! `instances!` invocation lists is the knob, and it is deliberately
-//! small: every operator outside it still runs, through `Any`, at one
-//! predicted branch for that node.
+//! An instance is named by its operand type and by one `Node` per operator
+//! it fixed in the type. Its shape is a field, not a parameter.
 
+use std::marker::PhantomData;
 use std::mem::size_of;
 
 use acvus_mir::ty::IntTy;
 
-use crate::code::{
-    Arith, Arity, Chain, Compare, ExprFn, Flow, Op, OpFn, Payload, Root, Shape, Shape2, Shape3,
-};
+use crate::code::{Arith, ChainBounds, Compare, ExprChain, ExprFn, Off, Op, Root, Shape};
 use crate::machine::Machine;
 use crate::ops::arith::{Int, for_int_ty};
+use crate::regs::Regs;
 use crate::value::{Kind, Value};
 
 /// One numeric type a chain runs at: the integer widths and `f64`.
@@ -68,8 +64,7 @@ macro_rules! impl_num_for_int {
                     crate::ops::arith::word::div::<$t>(
                         <$t as Int>::word(self),
                         <$t as Int>::word(other),
-                    )
-                    .bits(),
+                    ),
                 )
             }
             #[inline(always)]
@@ -78,8 +73,7 @@ macro_rules! impl_num_for_int {
                     crate::ops::arith::word::rem::<$t>(
                         <$t as Int>::word(self),
                         <$t as Int>::word(other),
-                    )
-                    .bits(),
+                    ),
                 )
             }
             #[inline(always)]
@@ -154,7 +148,35 @@ impl Num for f64 {
     }
 }
 
-pub type Operands<'a> = &'a [Value];
+/// The run a chain reads. Its offsets are byte displacements produced by
+/// `code::ChainBounds::byte_offset_of_word`, which is what fixes the stride
+/// and the word position this indexes by.
+#[derive(Clone, Copy)]
+pub struct Operands<'a> {
+    base: *const Value,
+    len: usize,
+    borrow: PhantomData<&'a Value>,
+}
+
+impl<'a> Operands<'a> {
+    #[inline(always)]
+    pub fn of(values: &'a [Value]) -> Operands<'a> {
+        Operands {
+            base: values.as_ptr(),
+            len: values.len(),
+            borrow: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    fn of_frame(regs: &'a Regs<'_>) -> Operands<'a> {
+        Operands {
+            base: regs.as_ptr(),
+            len: regs.len(),
+            borrow: PhantomData,
+        }
+    }
+}
 
 #[inline(always)]
 fn leaf<T>(operands: Operands<'_>, offset: u16) -> T
@@ -167,19 +189,16 @@ where
         "a chain leaf offset does not reach the word of a Value"
     );
     debug_assert!(
-        at + size_of::<u64>() <= operands.len() * size_of::<Value>(),
+        at + size_of::<u64>() <= operands.len * size_of::<Value>(),
         "a chain leaf reads past the operand space its preparation sized"
-    );
-    debug_assert!(
-        operands[at / size_of::<Value>()].kind() == T::KIND,
-        "a chain leaf reads a register of another kind than the chain's"
     );
     // SAFETY: `prepare::Prepare::check_chain` states that every slot a
     // chain reads is below the operand space's length and carries the
-    // chain's own type, and `Chain::offset` is the only writer of these
-    // offsets, so the address is inside the space and aligned to a `Value`
-    // word. The three assertions above are that statement, executed.
-    unsafe { T::read(operands.as_ptr().cast::<u8>().add(at).cast::<u64>().read()) }
+    // chain's own type, and `ChainBounds::byte_offset_of_word` is the only
+    // writer of these offsets, so the address is inside the space and
+    // aligned to a `Value` word. The two assertions above are that
+    // statement, executed.
+    unsafe { T::read(operands.base.cast::<u8>().add(at).cast::<u64>().read()) }
 }
 
 #[inline(always)]
@@ -197,46 +216,45 @@ where
     }
 }
 
-pub struct Slots {
-    pub shape: Shape,
-    pub ops: [Slot; Chain::MAX_INTERIOR],
-    pub root: Slot,
-}
-
-pub struct SlotCount {
-    pub concrete: usize,
-    pub total: usize,
+pub struct Nodes {
+    pub ops: [Node; ChainBounds::MAX_INTERIOR],
+    pub root: Node,
 }
 
 macro_rules! instances {
     (concrete: [$($v:ident => $m:ident),* $(,)?], generic: [$($g:ident),* $(,)?] $(,)?) => {
+        /// The operator a chain instance carries in its type at one node.
+        /// `Any` reads that node's operator from the instance's `ops` field
+        /// instead, at one predicted branch; the alphabet the `instances!`
+        /// invocation lists is the knob, and it is deliberately small
+        /// because every operator outside it still runs through `Any`.
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         #[repr(u8)]
-        pub enum Slot {
+        pub enum Node {
             Any,
             $($v),*
         }
 
-        impl Slot {
-            pub fn of(op: Arith) -> Slot {
+        impl Node {
+            pub fn of(op: Arith) -> Node {
                 match op {
-                    $(Arith::$v => Slot::$v,)*
-                    $(Arith::$g => Slot::Any,)*
+                    $(Arith::$v => Node::$v,)*
+                    $(Arith::$g => Node::Any,)*
                 }
             }
 
-            pub fn of_root(root: Root) -> Slot {
+            pub fn of_root(root: Root) -> Node {
                 match root {
-                    Root::Num(op) => Slot::of(op),
-                    Root::Cmp(_) => Slot::Any,
+                    Root::Num(op) => Node::of(op),
+                    Root::Cmp(_) => Node::Any,
                 }
             }
 
-            const fn read(raw: u8) -> Slot {
+            const fn read(raw: u8) -> Node {
                 match raw {
-                    0 => Slot::Any,
-                    $(x if x == Slot::$v as u8 => Slot::$v,)*
-                    _ => panic!("a chain instance was parameterized by no slot"),
+                    0 => Node::Any,
+                    $(x if x == Node::$v as u8 => Node::$v,)*
+                    _ => panic!("a chain instance was parameterized by no node"),
                 }
             }
         }
@@ -246,120 +264,106 @@ macro_rules! instances {
         where
             T: Num,
         {
-            match Slot::read(O) {
-                Slot::Any => any(op, left, right),
-                $(Slot::$v => {
+            match Node::read(O) {
+                Node::Any => any(op, left, right),
+                $(Node::$v => {
                     debug_assert_eq!(
                         op,
                         Arith::$v,
-                        "a chain instance ran a node whose operator is not its slot's"
+                        "a chain instance ran a node whose operator is not its own"
                     );
                     left.$m(right)
                 })*
             }
         }
 
+        /// The destination slot's kind was written when the frame was made,
+        /// so the caller stores these eight bytes and nothing else
+        /// (RFC-0052 §5).
         #[inline(always)]
-        fn finish<T, const R: u8>(root: Root, left: T, right: T) -> Value
+        fn finish<T, const R: u8>(root: Root, left: T, right: T) -> u64
         where
             T: Num,
         {
-            match Slot::read(R) {
-                Slot::Any => match root {
-                    Root::Num(op) => Value::inline(T::KIND, any(op, left, right).word()),
-                    Root::Cmp(how) => Value::bool_(left.compare(right, how)),
+            match Node::read(R) {
+                Node::Any => match root {
+                    Root::Num(op) => any(op, left, right).word(),
+                    Root::Cmp(how) => left.compare(right, how) as u64,
                 },
-                $(Slot::$v => {
+                $(Node::$v => {
                     debug_assert_eq!(
                         root,
                         Root::Num(Arith::$v),
-                        "a chain instance ran a root whose operator is not its slot's"
+                        "a chain instance ran a root whose operator is not its own"
                     );
-                    Value::inline(T::KIND, left.$m(right).word())
+                    left.$m(right).word()
                 })*
             }
         }
 
-        fn pick1<T>(slots: &Slots) -> Instance
+        fn pick1<T, B>(nodes: &Nodes, make: &mut B) -> B::Out
         where
             T: Num,
+            B: Build<T>,
         {
-            match slots.root {
-                Slot::Any => one_of::<T, { Slot::Any as u8 }>(),
-                $(Slot::$v => one_of::<T, { Slot::$v as u8 }>(),)*
+            match nodes.root {
+                Node::Any => make.one::<{ Node::Any as u8 }>(),
+                $(Node::$v => make.one::<{ Node::$v as u8 }>(),)*
             }
         }
 
-        fn pick2<T>(shape: Shape2, slots: &Slots) -> Instance
+        fn pick2<T, B>(nodes: &Nodes, make: &mut B) -> B::Out
         where
             T: Num,
+            B: Build<T>,
         {
-            match shape {
-                Shape2::NNLLL => pick2_op::<T, { Shape2::NNLLL as u8 }>(slots),
-                Shape2::NLNLL => pick2_op::<T, { Shape2::NLNLL as u8 }>(slots),
+            match nodes.ops[0] {
+                Node::Any => pick2_root::<T, B, { Node::Any as u8 }>(nodes, make),
+                $(Node::$v => pick2_root::<T, B, { Node::$v as u8 }>(nodes, make),)*
             }
         }
 
-        fn pick2_op<T, const S: u8>(slots: &Slots) -> Instance
+        fn pick2_root<T, B, const O0: u8>(nodes: &Nodes, make: &mut B) -> B::Out
         where
             T: Num,
+            B: Build<T>,
         {
-            match slots.ops[0] {
-                Slot::Any => pick2_root::<T, S, { Slot::Any as u8 }>(slots),
-                $(Slot::$v => pick2_root::<T, S, { Slot::$v as u8 }>(slots),)*
+            match nodes.root {
+                Node::Any => make.two::<O0, { Node::Any as u8 }>(),
+                $(Node::$v => make.two::<O0, { Node::$v as u8 }>(),)*
             }
         }
 
-        fn pick2_root<T, const S: u8, const O0: u8>(slots: &Slots) -> Instance
+        fn pick3<T, B>(nodes: &Nodes, make: &mut B) -> B::Out
         where
             T: Num,
+            B: Build<T>,
         {
-            match slots.root {
-                Slot::Any => two_of::<T, S, O0, { Slot::Any as u8 }>(),
-                $(Slot::$v => two_of::<T, S, O0, { Slot::$v as u8 }>(),)*
+            match nodes.ops[0] {
+                Node::Any => pick3_op1::<T, B, { Node::Any as u8 }>(nodes, make),
+                $(Node::$v => pick3_op1::<T, B, { Node::$v as u8 }>(nodes, make),)*
             }
         }
 
-        fn pick3<T>(shape: Shape3, slots: &Slots) -> Instance
+        fn pick3_op1<T, B, const O0: u8>(nodes: &Nodes, make: &mut B) -> B::Out
         where
             T: Num,
+            B: Build<T>,
         {
-            match shape {
-                Shape3::NNNLLLL => pick3_op0::<T, { Shape3::NNNLLLL as u8 }>(slots),
-                Shape3::NNLNLLL => pick3_op0::<T, { Shape3::NNLNLLL as u8 }>(slots),
-                Shape3::NNLLNLL => pick3_op0::<T, { Shape3::NNLLNLL as u8 }>(slots),
-                Shape3::NLNNLLL => pick3_op0::<T, { Shape3::NLNNLLL as u8 }>(slots),
-                Shape3::NLNLNLL => pick3_op0::<T, { Shape3::NLNLNLL as u8 }>(slots),
+            match nodes.ops[1] {
+                Node::Any => pick3_root::<T, B, O0, { Node::Any as u8 }>(nodes, make),
+                $(Node::$v => pick3_root::<T, B, O0, { Node::$v as u8 }>(nodes, make),)*
             }
         }
 
-        fn pick3_op0<T, const S: u8>(slots: &Slots) -> Instance
+        fn pick3_root<T, B, const O0: u8, const O1: u8>(nodes: &Nodes, make: &mut B) -> B::Out
         where
             T: Num,
+            B: Build<T>,
         {
-            match slots.ops[0] {
-                Slot::Any => pick3_op1::<T, S, { Slot::Any as u8 }>(slots),
-                $(Slot::$v => pick3_op1::<T, S, { Slot::$v as u8 }>(slots),)*
-            }
-        }
-
-        fn pick3_op1<T, const S: u8, const O0: u8>(slots: &Slots) -> Instance
-        where
-            T: Num,
-        {
-            match slots.ops[1] {
-                Slot::Any => pick3_root::<T, S, O0, { Slot::Any as u8 }>(slots),
-                $(Slot::$v => pick3_root::<T, S, O0, { Slot::$v as u8 }>(slots),)*
-            }
-        }
-
-        fn pick3_root<T, const S: u8, const O0: u8, const O1: u8>(slots: &Slots) -> Instance
-        where
-            T: Num,
-        {
-            match slots.root {
-                Slot::Any => three_of::<T, S, O0, O1, { Slot::Any as u8 }>(),
-                $(Slot::$v => three_of::<T, S, O0, O1, { Slot::$v as u8 }>(),)*
+            match nodes.root {
+                Node::Any => make.three::<O0, O1, { Node::Any as u8 }>(),
+                $(Node::$v => make.three::<O0, O1, { Node::$v as u8 }>(),)*
             }
         }
     };
@@ -377,144 +381,290 @@ instances!(
     generic: [Div, Rem, Neg],
 );
 
-#[inline(always)]
-fn tree1<T, const R: u8>(chain: &Chain, operands: Operands<'_>) -> Value
-where
-    T: Num,
-{
-    let offsets = chain.leaf_offsets;
-    let a: T = leaf(operands, offsets[0]);
-    let b: T = leaf(operands, offsets[1]);
-    finish::<T, R>(chain.root, a, b)
+fn wrong_shape(shape: Shape, nodes: usize) -> ! {
+    panic!(
+        "a chain instance of {nodes} nodes ran shape {shape:?}, which has {}",
+        shape.nodes()
+    )
 }
 
 #[inline(always)]
-fn tree2<T, const S: u8, const O0: u8, const R: u8>(chain: &Chain, operands: Operands<'_>) -> Value
+fn tree1<T, const R: u8>(plan: &Plan, operands: Operands<'_>) -> u64
 where
     T: Num,
 {
-    let offsets = chain.leaf_offsets;
-    let a: T = leaf(operands, offsets[0]);
-    let b: T = leaf(operands, offsets[1]);
-    let c: T = leaf(operands, offsets[2]);
-    let ops = chain.post_order_ops;
-    match Shape2::read(S) {
-        Shape2::NNLLL => {
-            let n0 = apply::<T, O0>(ops[0], a, b);
-            finish::<T, R>(chain.root, n0, c)
+    let a: T = leaf(operands, plan.leaves[0]);
+    let b: T = leaf(operands, plan.leaves[1]);
+    finish::<T, R>(plan.root, a, b)
+}
+
+#[inline(always)]
+fn tree2<T, const O0: u8, const R: u8>(plan: &Plan, operands: Operands<'_>) -> u64
+where
+    T: Num,
+{
+    let a: T = leaf(operands, plan.leaves[0]);
+    let b: T = leaf(operands, plan.leaves[1]);
+    let c: T = leaf(operands, plan.leaves[2]);
+    match plan.shape {
+        Shape::NNLLL => {
+            let n0 = apply::<T, O0>(plan.ops[0], a, b);
+            finish::<T, R>(plan.root, n0, c)
         }
-        Shape2::NLNLL => {
-            let n0 = apply::<T, O0>(ops[0], b, c);
-            finish::<T, R>(chain.root, a, n0)
+        Shape::NLNLL => {
+            let n0 = apply::<T, O0>(plan.ops[0], b, c);
+            finish::<T, R>(plan.root, a, n0)
         }
+        shape => wrong_shape(shape, 2),
     }
 }
 
 #[inline(always)]
-fn tree3<T, const S: u8, const O0: u8, const O1: u8, const R: u8>(
-    chain: &Chain,
-    operands: Operands<'_>,
-) -> Value
+fn tree3<T, const O0: u8, const O1: u8, const R: u8>(plan: &Plan, operands: Operands<'_>) -> u64
 where
     T: Num,
 {
-    let offsets = chain.leaf_offsets;
-    let a: T = leaf(operands, offsets[0]);
-    let b: T = leaf(operands, offsets[1]);
-    let c: T = leaf(operands, offsets[2]);
-    let d: T = leaf(operands, offsets[3]);
-    let ops = chain.post_order_ops;
-    match Shape3::read(S) {
-        Shape3::NNNLLLL => {
+    let a: T = leaf(operands, plan.leaves[0]);
+    let b: T = leaf(operands, plan.leaves[1]);
+    let c: T = leaf(operands, plan.leaves[2]);
+    let d: T = leaf(operands, plan.leaves[3]);
+    let ops = plan.ops;
+    match plan.shape {
+        Shape::NNNLLLL => {
             let n0 = apply::<T, O0>(ops[0], a, b);
             let n1 = apply::<T, O1>(ops[1], n0, c);
-            finish::<T, R>(chain.root, n1, d)
+            finish::<T, R>(plan.root, n1, d)
         }
-        Shape3::NNLNLLL => {
+        Shape::NNLNLLL => {
             let n0 = apply::<T, O0>(ops[0], b, c);
             let n1 = apply::<T, O1>(ops[1], a, n0);
-            finish::<T, R>(chain.root, n1, d)
+            finish::<T, R>(plan.root, n1, d)
         }
-        Shape3::NNLLNLL => {
+        Shape::NNLLNLL => {
             let n0 = apply::<T, O0>(ops[0], a, b);
             let n1 = apply::<T, O1>(ops[1], c, d);
-            finish::<T, R>(chain.root, n0, n1)
+            finish::<T, R>(plan.root, n0, n1)
         }
-        Shape3::NLNNLLL => {
+        Shape::NLNNLLL => {
             let n0 = apply::<T, O0>(ops[0], b, c);
             let n1 = apply::<T, O1>(ops[1], n0, d);
-            finish::<T, R>(chain.root, a, n1)
+            finish::<T, R>(plan.root, a, n1)
         }
-        Shape3::NLNLNLL => {
+        Shape::NLNLNLL => {
             let n0 = apply::<T, O0>(ops[0], c, d);
             let n1 = apply::<T, O1>(ops[1], b, n0);
-            finish::<T, R>(chain.root, a, n1)
+            finish::<T, R>(plan.root, a, n1)
         }
+        shape => wrong_shape(shape, 3),
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Instance {
-    pub op: OpFn,
-    pub expr: ExprFn,
+/// RFC-0044 made the shape a type parameter of the chain operation. Under
+/// RFC-0052 it is a field, and the chain family fell from 1404 instances
+/// per entry to 351.
+pub struct Plan {
+    pub shape: Shape,
+    pub root: Root,
+    pub ops: [Arith; ChainBounds::MAX_INTERIOR],
+    pub leaves: [u16; ChainBounds::MAX_LEAVES],
 }
 
-#[inline(always)]
-fn chain_of<'c>(machine: &Machine<'c>, op: &Op) -> &'c Chain {
-    // SAFETY: `prepare::Prepare::chain_op` writes the address of the
-    // `Chain` that the payload at `op.b` owns through a `Box`, so the
-    // address is fixed when the payload table is built, and the `Body`
-    // that owns the table outlives every run of these operations. The
-    // table is never mutated after preparation.
-    let chain = unsafe { &*(op.p as *const Chain) };
-    debug_assert!(
-        matches!(
-            &machine.code().payloads[op.b as usize],
-            Payload::Chain(owned) if std::ptr::eq(&**owned, chain)
-        ),
-        "a chain operation's payload pointer is not the chain its payload owns"
-    );
-    chain
+pub struct Chain1<T, const R: u8>
+where
+    T: Num,
+{
+    pub dst: Off,
+    pub plan: Plan,
+    pub at: PhantomData<fn() -> T>,
 }
 
-macro_rules! entry_points {
-    ($($tree:ident => ($run:ident, $eval:ident, $of:ident) [$($c:ident),*]),* $(,)?) => {
-        $(
-            fn $run<T, $(const $c: u8),*>(machine: &mut Machine<'_>, op: &Op) -> Flow
-            where
-                T: Num,
-            {
-                let chain = chain_of(machine, op);
-                let value = $tree::<T, $($c),*>(chain, machine.regs());
-                machine.define(op.a, value);
-                Flow::Next
-            }
-
-            fn $eval<T, $(const $c: u8),*>(chain: &Chain, operands: Operands<'_>) -> Value
-            where
-                T: Num,
-            {
-                $tree::<T, $($c),*>(chain, operands)
-            }
-
-            fn $of<T, $(const $c: u8),*>() -> Instance
-            where
-                T: Num,
-            {
-                Instance {
-                    op: $run::<T, $($c),*>,
-                    expr: $eval::<T, $($c),*>,
-                }
-            }
-        )*
-    };
+pub struct Chain2<T, const O0: u8, const R: u8>
+where
+    T: Num,
+{
+    pub dst: Off,
+    pub plan: Plan,
+    pub at: PhantomData<fn() -> T>,
 }
 
-entry_points!(
-    tree1 => (run1, eval1, one_of) [R],
-    tree2 => (run2, eval2, two_of) [S, O0, R],
-    tree3 => (run3, eval3, three_of) [S, O0, O1, R],
-);
+pub struct Chain3<T, const O0: u8, const O1: u8, const R: u8>
+where
+    T: Num,
+{
+    pub dst: Off,
+    pub plan: Plan,
+    pub at: PhantomData<fn() -> T>,
+}
+
+impl<T, const R: u8> Op for Chain1<T, R>
+where
+    T: Num,
+{
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let bits = tree1::<T, R>(&self.plan, Operands::of_frame(m.regs()));
+        m.regs().set_word(self.dst, bits);
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn chain(&self) -> Option<crate::code::ChainProbe<'_>> {
+        Some(crate::code::ChainProbe {
+            dst: self.dst,
+            plan: &self.plan,
+        })
+    }
+}
+
+impl<T, const O0: u8, const R: u8> Op for Chain2<T, O0, R>
+where
+    T: Num,
+{
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let bits = tree2::<T, O0, R>(&self.plan, Operands::of_frame(m.regs()));
+        m.regs().set_word(self.dst, bits);
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn chain(&self) -> Option<crate::code::ChainProbe<'_>> {
+        Some(crate::code::ChainProbe {
+            dst: self.dst,
+            plan: &self.plan,
+        })
+    }
+}
+
+impl<T, const O0: u8, const O1: u8, const R: u8> Op for Chain3<T, O0, O1, R>
+where
+    T: Num,
+{
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let bits = tree3::<T, O0, O1, R>(&self.plan, Operands::of_frame(m.regs()));
+        m.regs().set_word(self.dst, bits);
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn chain(&self) -> Option<crate::code::ChainProbe<'_>> {
+        Some(crate::code::ChainProbe {
+            dst: self.dst,
+            plan: &self.plan,
+        })
+    }
+}
+
+fn eval1<T, const R: u8>(chain: &ExprChain, operands: &[Value]) -> u64
+where
+    T: Num,
+{
+    tree1::<T, R>(&chain.plan, Operands::of(operands))
+}
+
+fn eval2<T, const O0: u8, const R: u8>(chain: &ExprChain, operands: &[Value]) -> u64
+where
+    T: Num,
+{
+    tree2::<T, O0, R>(&chain.plan, Operands::of(operands))
+}
+
+fn eval3<T, const O0: u8, const O1: u8, const R: u8>(chain: &ExprChain, operands: &[Value]) -> u64
+where
+    T: Num,
+{
+    tree3::<T, O0, O1, R>(&chain.plan, Operands::of(operands))
+}
+
+/// What the picker's walk ends in. The walk is one `match` per node, and
+/// its leaf is the only place the node operators are const generics, so
+/// each caller reaches that leaf with its own builder and takes its own
+/// result type out of it.
+trait Build<T>
+where
+    T: Num,
+{
+    type Out;
+
+    fn one<const R: u8>(&mut self) -> Self::Out;
+    fn two<const O0: u8, const R: u8>(&mut self) -> Self::Out;
+    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Self::Out;
+}
+
+struct BuildOp<T>
+where
+    T: Num,
+{
+    dst: Off,
+    plan: Option<Plan>,
+    at: PhantomData<fn() -> T>,
+}
+
+impl<T> BuildOp<T>
+where
+    T: Num,
+{
+    fn take(&mut self) -> Plan {
+        self.plan
+            .take()
+            .expect("a chain instance is built once from its plan")
+    }
+}
+
+impl<T> Build<T> for BuildOp<T>
+where
+    T: Num,
+{
+    type Out = Box<dyn Op>;
+
+    fn one<const R: u8>(&mut self) -> Box<dyn Op> {
+        Box::new(Chain1::<T, R> {
+            dst: self.dst,
+            plan: self.take(),
+            at: PhantomData,
+        })
+    }
+
+    fn two<const O0: u8, const R: u8>(&mut self) -> Box<dyn Op> {
+        Box::new(Chain2::<T, O0, R> {
+            dst: self.dst,
+            plan: self.take(),
+            at: PhantomData,
+        })
+    }
+
+    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Box<dyn Op> {
+        Box::new(Chain3::<T, O0, O1, R> {
+            dst: self.dst,
+            plan: self.take(),
+            at: PhantomData,
+        })
+    }
+}
+
+struct BuildExpr<T>
+where
+    T: Num,
+{
+    at: PhantomData<fn() -> T>,
+}
+
+impl<T> Build<T> for BuildExpr<T>
+where
+    T: Num,
+{
+    type Out = ExprFn;
+
+    fn one<const R: u8>(&mut self) -> ExprFn {
+        eval1::<T, R>
+    }
+
+    fn two<const O0: u8, const R: u8>(&mut self) -> ExprFn {
+        eval2::<T, O0, R>
+    }
+
+    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> ExprFn {
+        eval3::<T, O0, O1, R>
+    }
+}
 
 /// The numeric type a chain runs at, decided at preparation from the
 /// types of the operations it collapses.
@@ -524,47 +674,75 @@ pub enum ChainTy {
     Float,
 }
 
-impl Slots {
-    pub fn of(chain: &Chain) -> Slots {
-        let mut ops = [Slot::Any; Chain::MAX_INTERIOR];
-        let used = chain.shape.interior();
-        for (slot, op) in ops[..used].iter_mut().zip(&chain.post_order_ops[..used]) {
-            *slot = Slot::of(*op);
+impl Nodes {
+    pub fn of(plan: &Plan) -> Nodes {
+        let mut ops = [Node::Any; ChainBounds::MAX_INTERIOR];
+        let used = plan.shape.interior();
+        for (node, op) in ops[..used].iter_mut().zip(&plan.ops[..used]) {
+            *node = Node::of(*op);
         }
-        Slots {
-            shape: chain.shape,
+        Nodes {
             ops,
-            root: Slot::of_root(chain.root),
+            root: Node::of_root(plan.root),
         }
     }
 
-    pub fn count(&self) -> SlotCount {
-        let ops = self.ops[..self.shape.interior()]
+    pub fn concrete(&self, shape: Shape) -> usize {
+        let ops = self.ops[..shape.interior()]
             .iter()
-            .filter(|slot| **slot != Slot::Any)
+            .filter(|node| **node != Node::Any)
             .count();
-        SlotCount {
-            concrete: ops + usize::from(self.root != Slot::Any),
-            total: self.shape.slots(),
-        }
+        ops + usize::from(self.root != Node::Any)
     }
 }
 
-pub fn instance(ty: ChainTy, chain: &Chain) -> Instance {
-    match ty {
-        ChainTy::Int(k) => for_int_ty!(k, |T| instance_at::<T>(chain)),
-        ChainTy::Float => instance_at::<f64>(chain),
-    }
-}
-
-fn instance_at<T>(chain: &Chain) -> Instance
+fn pick<T, B>(shape: Shape, nodes: &Nodes, make: &mut B) -> B::Out
 where
     T: Num,
+    B: Build<T>,
 {
-    let slots = Slots::of(chain);
-    match chain.shape.arity() {
-        Arity::One => pick1::<T>(&slots),
-        Arity::Two(shape) => pick2::<T>(shape, &slots),
-        Arity::Three(shape) => pick3::<T>(shape, &slots),
+    match shape.nodes() {
+        1 => pick1::<T, B>(nodes, make),
+        2 => pick2::<T, B>(nodes, make),
+        _ => pick3::<T, B>(nodes, make),
+    }
+}
+
+pub fn chain_op(ty: ChainTy, dst: Off, plan: Plan) -> Box<dyn Op> {
+    let nodes = Nodes::of(&plan);
+    let shape = plan.shape;
+    match ty {
+        ChainTy::Int(k) => for_int_ty!(k, |T| {
+            let mut make = BuildOp::<T> {
+                dst,
+                plan: Some(plan),
+                at: PhantomData,
+            };
+            pick::<T, BuildOp<T>>(shape, &nodes, &mut make)
+        }),
+        ChainTy::Float => {
+            let mut make = BuildOp::<f64> {
+                dst,
+                plan: Some(plan),
+                at: PhantomData,
+            };
+            pick::<f64, BuildOp<f64>>(shape, &nodes, &mut make)
+        }
+    }
+}
+
+/// The evaluator a frameless chain body runs (RFC-0044, stage 4).
+pub fn chain_eval(ty: ChainTy, plan: &Plan) -> ExprFn {
+    let nodes = Nodes::of(plan);
+    let shape = plan.shape;
+    match ty {
+        ChainTy::Int(k) => for_int_ty!(k, |T| {
+            let mut make = BuildExpr::<T> { at: PhantomData };
+            pick::<T, BuildExpr<T>>(shape, &nodes, &mut make)
+        }),
+        ChainTy::Float => {
+            let mut make = BuildExpr::<f64> { at: PhantomData };
+            pick::<f64, BuildExpr<f64>>(shape, &nodes, &mut make)
+        }
     }
 }

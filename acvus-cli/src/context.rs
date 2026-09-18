@@ -3,7 +3,8 @@
 
 use std::path::Path;
 
-use acvus_interpreter::{ContextWrite, Value};
+use acvus_extern::Owned;
+use acvus_interpreter::{AcvusRuntime, ContextWrite, Value};
 use acvus_mir::ty::{IntTy, LenTerm, Ty};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
@@ -11,7 +12,7 @@ use rustc_hash::FxHashMap;
 #[derive(Default)]
 pub struct Loaded {
     pub types: FxHashMap<Astr, Ty>,
-    pub snapshot: std::collections::HashMap<String, Value>,
+    pub snapshot: std::collections::HashMap<String, Owned<AcvusRuntime>>,
     /// Each context as the file wrote it, to tell a write from a commit
     /// of the loaded value.
     pub raw: std::collections::HashMap<String, serde_json::Value>,
@@ -66,7 +67,7 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
                     }
                     Some(_) => {}
                 }
-                values.push(t.value);
+                values.push(Owned::from_value(t.value));
             }
             let elem = elem.ok_or_else(|| format!("{at}: an empty array has no element type"))?;
             Typed {
@@ -81,7 +82,7 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
                 let t = typed(interner, &format!("{at}.{k}"), v)?;
                 let key = interner.intern(k);
                 tys.insert(key, t.ty);
-                values.insert(key, t.value);
+                values.insert(key, Owned::from_value(t.value));
             }
             Typed {
                 ty: Ty::Object(tys),
@@ -101,7 +102,9 @@ pub fn load(interner: &Interner, path: &Path) -> Result<Loaded, String> {
     for (k, v) in &fields {
         let t = typed(interner, &format!("@{k}"), v)?;
         loaded.types.insert(interner.intern(k), t.ty);
-        loaded.snapshot.insert(k.clone(), t.value);
+        loaded
+            .snapshot
+            .insert(k.clone(), Owned::from_value(t.value));
         loaded.raw.insert(k.clone(), v.clone());
     }
     Ok(loaded)

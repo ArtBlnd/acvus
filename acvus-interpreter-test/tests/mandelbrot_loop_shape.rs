@@ -2,21 +2,22 @@
 //! bench runs: how many operations one iteration of each prepares, and how
 //! many of them the short-circuit diamond in the innermost head holds.
 //!
+//! Under RFC-0052 §3 a region is an operation of the list it sits in, so
+//! each count includes the regions that list holds: the innermost head is
+//! its compare and its short-circuit `Diamond`, and each outer body counts
+//! the nested `Loop` among its own operations.
+//!
 //! The counts are also the hoist guard. `total = total + i` is written
 //! after the innermost `while` and belongs to the middle loop's body.
 //! `optimize::code_motion` used to hoist it into the innermost head, where
 //! it ran once per escape step instead of once per pixel, because a loop's
 //! exit post-dominates its header and post-dominance was the whole hoist
 //! condition. That hoist would show here as an innermost head of three and
-//! a middle body of eighteen.
+//! a middle body of seventeen.
 
-use std::sync::Arc;
-
-use acvus_interpreter::code::Code;
-use acvus_interpreter::code::Payload;
-use acvus_interpreter::prepare_module;
-use acvus_interpreter::{PrepareCtx, Value};
-use acvus_interpreter_test::{Context, compile_script_mode, split_context, typed};
+use acvus_interpreter::Value;
+use acvus_interpreter_test::listing::{regions_named, script_listing};
+use acvus_interpreter_test::{Context, typed};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
@@ -65,33 +66,18 @@ fn mandelbrot_loops() -> Vec<LoopShape> {
     ]
     .into_iter()
     .collect();
-    let (context_types, _snapshot) = split_context(&interner, context);
 
-    let cr = compile_script_mode(&interner, MANDELBROT, &context_types);
-    let ctx = PrepareCtx {
-        interner: &interner,
-        externs: &cr.extern_executables,
-        context_names: &cr.context_names,
-    };
-    let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
-    let prepared = Arc::new(prepare_module(module, &ctx));
-
-    let Code::Body(main) = &*prepared.main else {
-        panic!("the entry module's main is a body, not a one-chain expression")
-    };
-    main.payloads
-        .iter()
-        .filter_map(|payload| match payload {
-            Payload::Loop(body) => Some(LoopShape {
-                head_ops: body.head.iter().count(),
-                body_ops: body.body.iter().count(),
-                diamonds_in_head: body
-                    .head
-                    .iter()
-                    .filter(|op| matches!(&main.payloads[op.p], Payload::Diamond(_)))
-                    .count(),
-            }),
-            _ => None,
+    let blocks = script_listing(&interner, MANDELBROT, context);
+    regions_named(&blocks, "Loop")
+        .into_iter()
+        .map(|region| {
+            let head = region.part("head").expect("a Loop holds a head");
+            let body = region.part("body").expect("a Loop holds a body");
+            LoopShape {
+                head_ops: head.ops.len(),
+                body_ops: body.ops.len(),
+                diamonds_in_head: head.ops.iter().filter(|name| *name == "Diamond").count(),
+            }
         })
         .collect()
 }
@@ -103,12 +89,12 @@ fn every_while_is_one_loop_operation_and_the_diamond_is_one_more() {
         vec![
             LoopShape {
                 head_ops: 2,
-                body_ops: 4,
+                body_ops: 5,
                 diamonds_in_head: 1,
             },
             LoopShape {
                 head_ops: 1,
-                body_ops: 19,
+                body_ops: 18,
                 diamonds_in_head: 0,
             },
             LoopShape {

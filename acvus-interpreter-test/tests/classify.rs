@@ -1,5 +1,6 @@
 //! A context read through references while temporaries are built from it (RFC-0018).
 
+use acvus_extern::Owned;
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -14,8 +15,8 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
     let user = typed(
         Ty::Object(FxHashMap::from_iter([(name, Ty::String), (age, Ty::I64)])),
         Value::object(FxHashMap::from_iter([
-            (name, Value::string("alice")),
-            (age, Value::int(30)),
+            (name, Owned::from_value(Value::string("alice"))),
+            (age, Owned::from_value(Value::int(30))),
         ])),
     );
     let c = FxHashMap::from_iter([

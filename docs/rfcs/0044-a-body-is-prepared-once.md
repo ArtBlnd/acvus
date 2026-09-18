@@ -1,6 +1,13 @@
 # RFC-0044: A body is prepared once
 
-Status: Accepted
+Status: Accepted; the machine representation of stage 1 is superseded by
+RFC-0052 — `Op`, `OpFn`, `Flow`, `Payload` and the payload table are gone,
+and a body is `Block`s of `Box<dyn Op>` with a `Terminator` each. A
+recognized region's parallel moves are gone with them: a jump's arguments
+are `Mov` operations of the block the edge leaves from, and `Loop` and
+`Diamond` own blocks and ids only. Everything
+else here stands: prepare-once, the recognizers, and what stages 2–6
+produce.
 Date: 2026-09-17
 Extends: RFC-0007, RFC-0018, RFC-0020, RFC-0040
 

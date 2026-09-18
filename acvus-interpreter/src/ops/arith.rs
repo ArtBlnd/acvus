@@ -1,14 +1,18 @@
 //! Arithmetic and logic, one operation per operator at one operand type.
 //!
 //! An integer operation is the same Rust operator in a release build, at
-//! the operand's width, panic messages included (RFC-0037).
+//! the operand's width, panic messages included (RFC-0037). Every operand
+//! and every result here is a word, so a run is two `word` loads and one
+//! `set_word` store, and the kind byte the frame wrote stands (RFC-0052 §5).
+
+use std::marker::PhantomData;
 
 use acvus_ast::{BinOp, UnaryOp};
 use acvus_mir::ty::IntTy;
 
-use crate::code::{Flow, Op, OpFn};
+use crate::code::{Off, Op};
 use crate::machine::Machine;
-use crate::value::{Kind, Value};
+use crate::value::Kind;
 
 /// Runs `$body` with `$t` the Rust integer type of an `IntTy`.
 macro_rules! for_int_ty {
@@ -51,6 +55,21 @@ macro_rules! for_int_ty {
 }
 
 pub(crate) use for_int_ty;
+
+/// The registers a two-operand operation names.
+#[derive(Clone, Copy)]
+pub struct Binary {
+    pub dst: Off,
+    pub l: Off,
+    pub r: Off,
+}
+
+/// The registers a one-operand operation names.
+#[derive(Clone, Copy)]
+pub struct Unary {
+    pub dst: Off,
+    pub src: Off,
+}
 
 /// One integer width, as the operations at that width read and write it.
 pub trait Int: Copy + PartialOrd + 'static {
@@ -138,13 +157,6 @@ impl_int! {
     u8 => U8, u16 => U16, u32 => U32, u64 => U64,
 }
 
-fn int<T>(value: T) -> Value
-where
-    T: Int,
-{
-    Value::inline(T::KIND, value.word())
-}
-
 const DIVIDE_BY_ZERO: &str = "attempt to divide by zero";
 const REM_BY_ZERO: &str = "attempt to calculate the remainder with a divisor of zero";
 const DIVIDE_OVERFLOW: &str = "attempt to divide with overflow";
@@ -160,7 +172,8 @@ where
     (T::read(bits).word() & T::SHIFT_MASK) as u32
 }
 
-/// The word-level integer operations: the operand words, read at `T`.
+/// The word-level integer operations: the operand words, read at `T`, and
+/// the result word a register holds under the kind its frame wrote.
 pub mod word {
     use super::*;
 
@@ -168,7 +181,23 @@ pub mod word {
         ($( $name:ident ($a:ident, $b:ident) $body:block )*) => {
             $(
                 #[inline]
-                pub fn $name<T>(left: u64, right: u64) -> Value
+                pub fn $name<T>(left: u64, right: u64) -> u64
+                where
+                    T: Int,
+                {
+                    let $a = T::read(left);
+                    let $b = T::read(right);
+                    $body
+                }
+            )*
+        };
+    }
+
+    macro_rules! int_compares {
+        ($( $name:ident ($a:ident, $b:ident) $body:block )*) => {
+            $(
+                #[inline]
+                pub fn $name<T>(left: u64, right: u64) -> bool
                 where
                     T: Int,
                 {
@@ -181,243 +210,377 @@ pub mod word {
     }
 
     int_words! {
-        add(a, b) { int(a.wrapping_add(b)) }
-        sub(a, b) { int(a.wrapping_sub(b)) }
-        mul(a, b) { int(a.wrapping_mul(b)) }
+        add(a, b) { a.wrapping_add(b).word() }
+        sub(a, b) { a.wrapping_sub(b).word() }
+        mul(a, b) { a.wrapping_mul(b).word() }
         div(a, b) {
             assert!(!b.is_zero(), "{DIVIDE_BY_ZERO}");
-            int(a.checked_div(b).unwrap_or_else(|| panic!("{DIVIDE_OVERFLOW}")))
+            a.checked_div(b).unwrap_or_else(|| panic!("{DIVIDE_OVERFLOW}")).word()
         }
         rem(a, b) {
             assert!(!b.is_zero(), "{REM_BY_ZERO}");
-            int(a.checked_rem(b).unwrap_or_else(|| panic!("{REM_OVERFLOW}")))
+            a.checked_rem(b).unwrap_or_else(|| panic!("{REM_OVERFLOW}")).word()
         }
-        eq(a, b) { Value::bool_(a.eq(b)) }
-        neq(a, b) { Value::bool_(!a.eq(b)) }
-        lt(a, b) { Value::bool_(a < b) }
-        gt(a, b) { Value::bool_(a > b) }
-        lte(a, b) { Value::bool_(a <= b) }
-        gte(a, b) { Value::bool_(a >= b) }
-        bit_and(a, b) { int(a.bitand(b)) }
-        bit_or(a, b) { int(a.bitor(b)) }
-        bit_xor(a, b) { int(a.bitxor(b)) }
+        bit_and(a, b) { a.bitand(b).word() }
+        bit_or(a, b) { a.bitor(b).word() }
+        bit_xor(a, b) { a.bitxor(b).word() }
+    }
+
+    int_compares! {
+        eq(a, b) { a.eq(b) }
+        neq(a, b) { !a.eq(b) }
+        lt(a, b) { a < b }
+        gt(a, b) { a > b }
+        lte(a, b) { a <= b }
+        gte(a, b) { a >= b }
     }
 
     #[inline]
-    pub fn shl<T>(left: u64, right: u64) -> Value
+    pub fn shl<T>(left: u64, right: u64) -> u64
     where
         T: Int,
     {
-        int(T::read(left).wrapping_shl(shift_amount::<T>(right)))
+        T::read(left).wrapping_shl(shift_amount::<T>(right)).word()
     }
 
     #[inline]
-    pub fn shr<T>(left: u64, right: u64) -> Value
+    pub fn shr<T>(left: u64, right: u64) -> u64
     where
         T: Int,
     {
-        int(T::read(left).wrapping_shr(shift_amount::<T>(right)))
+        T::read(left).wrapping_shr(shift_amount::<T>(right)).word()
     }
 
     #[inline]
-    pub fn neg<T>(operand: u64) -> Value
+    pub fn neg<T>(operand: u64) -> u64
     where
         T: Int,
     {
-        int(T::read(operand).wrapping_neg())
+        T::read(operand).wrapping_neg().word()
     }
 }
 
-#[inline]
-fn binary<F>(machine: &mut Machine<'_>, op: &Op, f: F) -> Flow
-where
-    F: FnOnce(u64, u64) -> Value,
-{
-    let left = machine.reg(op.b).bits();
-    let right = machine.reg(op.c).bits();
-    let value = f(left, right);
-    machine.define(op.a, value);
-    Flow::Next
-}
+/// The float operations on their operands.
+pub mod float_word {
+    #[inline]
+    pub fn add_f64(a: f64, b: f64) -> f64 {
+        a + b
+    }
+    #[inline]
+    pub fn sub_f64(a: f64, b: f64) -> f64 {
+        a - b
+    }
+    #[inline]
+    pub fn mul_f64(a: f64, b: f64) -> f64 {
+        a * b
+    }
+    #[inline]
+    pub fn div_f64(a: f64, b: f64) -> f64 {
+        a / b
+    }
+    #[inline]
+    pub fn rem_f64(a: f64, b: f64) -> f64 {
+        a % b
+    }
+    #[inline]
+    pub fn neg_f64(a: f64) -> f64 {
+        -a
+    }
 
-#[inline]
-fn unary<F>(machine: &mut Machine<'_>, op: &Op, f: F) -> Flow
-where
-    F: FnOnce(u64) -> Value,
-{
-    let operand = machine.reg(op.b).bits();
-    let value = f(operand);
-    machine.define(op.a, value);
-    Flow::Next
+    #[inline]
+    pub fn eq_f64(a: f64, b: f64) -> bool {
+        a.to_bits() == b.to_bits()
+    }
+    #[inline]
+    pub fn neq_f64(a: f64, b: f64) -> bool {
+        a.to_bits() != b.to_bits()
+    }
+    #[inline]
+    pub fn lt_f64(a: f64, b: f64) -> bool {
+        a.total_cmp(&b).is_lt()
+    }
+    #[inline]
+    pub fn gt_f64(a: f64, b: f64) -> bool {
+        a.total_cmp(&b).is_gt()
+    }
+    #[inline]
+    pub fn lte_f64(a: f64, b: f64) -> bool {
+        a.total_cmp(&b).is_le()
+    }
+    #[inline]
+    pub fn gte_f64(a: f64, b: f64) -> bool {
+        a.total_cmp(&b).is_ge()
+    }
 }
 
 macro_rules! int_ops {
-    ($( $name:ident ),* $(,)?) => {
+    ($( $op:ident = $f:ident -> $result:ident ),* $(,)?) => {
         $(
-            pub fn $name<T>(machine: &mut Machine<'_>, op: &Op) -> Flow
+            pub struct $op<T>
             where
                 T: Int,
             {
-                binary(machine, op, word::$name::<T>)
+                slots: Binary,
+                width: PhantomData<fn() -> T>,
+            }
+
+            impl<T> $op<T>
+            where
+                T: Int,
+            {
+                pub fn new(slots: Binary) -> $op<T> {
+                    $op {
+                        slots,
+                        width: PhantomData,
+                    }
+                }
+            }
+
+            impl<T> Op for $op<T>
+            where
+                T: Int,
+            {
+                #[inline]
+                fn run(&self, m: &mut Machine<'_>) {
+                    let regs = m.regs();
+                    let bits = word::$f::<T>(regs.word(self.slots.l), regs.word(self.slots.r));
+                    regs.set_word(self.slots.dst, $result(bits));
+                }
             }
         )*
     };
+}
+
+#[inline(always)]
+fn as_word(bits: u64) -> u64 {
+    bits
+}
+
+#[inline(always)]
+fn as_bool_word(held: bool) -> u64 {
+    held as u64
 }
 
 int_ops!(
-    add, sub, mul, div, rem, eq, neq, lt, gt, lte, gte, bit_and, bit_or, bit_xor, shl, shr
+    Add = add -> as_word,
+    Sub = sub -> as_word,
+    Mul = mul -> as_word,
+    Div = div -> as_word,
+    Rem = rem -> as_word,
+    BitAnd = bit_and -> as_word,
+    BitOr = bit_or -> as_word,
+    BitXor = bit_xor -> as_word,
+    Shl = shl -> as_word,
+    Shr = shr -> as_word,
+    Eq = eq -> as_bool_word,
+    Neq = neq -> as_bool_word,
+    Lt = lt -> as_bool_word,
+    Gt = gt -> as_bool_word,
+    Lte = lte -> as_bool_word,
+    Gte = gte -> as_bool_word,
 );
 
-pub fn neg<T>(machine: &mut Machine<'_>, op: &Op) -> Flow
+pub struct Neg<T>
 where
     T: Int,
 {
-    unary(machine, op, word::neg::<T>)
+    slots: Unary,
+    width: PhantomData<fn() -> T>,
+}
+
+impl<T> Neg<T>
+where
+    T: Int,
+{
+    pub fn new(slots: Unary) -> Neg<T> {
+        Neg {
+            slots,
+            width: PhantomData,
+        }
+    }
+}
+
+impl<T> Op for Neg<T>
+where
+    T: Int,
+{
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let bits = word::neg::<T>(regs.word(self.slots.src));
+        regs.set_word(self.slots.dst, bits);
+    }
 }
 
 macro_rules! float_ops {
-    ($( $name:ident ($a:ident, $b:ident) $body:block )*) => {
-        /// The float operations on their operands.
-        pub mod float_word {
-            use super::*;
-
-            $( #[inline] pub fn $name($a: f64, $b: f64) -> Value $body )*
-        }
-
+    ($( $op:ident = $f:ident -> $result:ident ),* $(,)?) => {
         $(
-            pub fn $name(machine: &mut Machine<'_>, op: &Op) -> Flow {
-                let left = machine.reg(op.b).as_float();
-                let right = machine.reg(op.c).as_float();
-                machine.define(op.a, float_word::$name(left, right));
-                Flow::Next
+            pub struct $op {
+                pub slots: Binary,
+            }
+
+            impl Op for $op {
+                #[inline]
+                fn run(&self, m: &mut Machine<'_>) {
+                    let regs = m.regs();
+                    let left = f64::from_bits(regs.word(self.slots.l));
+                    let right = f64::from_bits(regs.word(self.slots.r));
+                    regs.set_word(self.slots.dst, $result(float_word::$f(left, right)));
+                }
             }
         )*
     };
 }
 
-float_ops! {
-    add_f64(a, b) { Value::float(a + b) }
-    sub_f64(a, b) { Value::float(a - b) }
-    mul_f64(a, b) { Value::float(a * b) }
-    div_f64(a, b) { Value::float(a / b) }
-    rem_f64(a, b) { Value::float(a % b) }
-    eq_f64(a, b) { Value::bool_(a.to_bits() == b.to_bits()) }
-    neq_f64(a, b) { Value::bool_(a.to_bits() != b.to_bits()) }
-    lt_f64(a, b) { Value::bool_(a.total_cmp(&b).is_lt()) }
-    gt_f64(a, b) { Value::bool_(a.total_cmp(&b).is_gt()) }
-    lte_f64(a, b) { Value::bool_(a.total_cmp(&b).is_le()) }
-    gte_f64(a, b) { Value::bool_(a.total_cmp(&b).is_ge()) }
+#[inline(always)]
+fn as_float_word(held: f64) -> u64 {
+    held.to_bits()
+}
+
+float_ops!(
+    AddF64 = add_f64 -> as_float_word,
+    SubF64 = sub_f64 -> as_float_word,
+    MulF64 = mul_f64 -> as_float_word,
+    DivF64 = div_f64 -> as_float_word,
+    RemF64 = rem_f64 -> as_float_word,
+    EqF64 = eq_f64 -> as_bool_word,
+    NeqF64 = neq_f64 -> as_bool_word,
+    LtF64 = lt_f64 -> as_bool_word,
+    GtF64 = gt_f64 -> as_bool_word,
+    LteF64 = lte_f64 -> as_bool_word,
+    GteF64 = gte_f64 -> as_bool_word,
+);
+
+pub struct NegF64 {
+    pub slots: Unary,
+}
+
+impl Op for NegF64 {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let operand = f64::from_bits(regs.word(self.slots.src));
+        regs.set_word(self.slots.dst, float_word::neg_f64(operand).to_bits());
+    }
 }
 
 macro_rules! bool_ops {
-    ($( $name:ident ($a:ident, $b:ident) $body:block )*) => {
+    ($( $op:ident ($a:ident, $b:ident) $body:block )*) => {
         $(
-            pub fn $name(machine: &mut Machine<'_>, op: &Op) -> Flow {
-                let $a = machine.reg(op.b).as_bool();
-                let $b = machine.reg(op.c).as_bool();
-                machine.define(op.a, $body);
-                Flow::Next
+            pub struct $op {
+                pub slots: Binary,
+            }
+
+            impl Op for $op {
+                #[inline]
+                fn run(&self, m: &mut Machine<'_>) {
+                    let regs = m.regs();
+                    let $a = regs.word(self.slots.l) != 0;
+                    let $b = regs.word(self.slots.r) != 0;
+                    regs.set_word(self.slots.dst, as_bool_word($body));
+                }
             }
         )*
     };
 }
 
 bool_ops! {
-    eq_bool(a, b) { Value::bool_(a == b) }
-    neq_bool(a, b) { Value::bool_(a != b) }
-    xor_bool(a, b) { Value::bool_(a ^ b) }
+    EqBool(a, b) { a == b }
+    NeqBool(a, b) { a != b }
+    XorBool(a, b) { a ^ b }
 }
 
-pub fn neg_f64(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = Value::float(-machine.reg(op.b).as_float());
-    machine.define(op.a, value);
-    Flow::Next
+pub struct NotBool {
+    pub slots: Unary,
 }
 
-pub fn not_bool(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = Value::bool_(!machine.reg(op.b).as_bool());
-    machine.define(op.a, value);
-    Flow::Next
+impl Op for NotBool {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let held = regs.word(self.slots.src) != 0;
+        regs.set_word(self.slots.dst, as_bool_word(!held));
+    }
 }
 
-fn int_op<T>(op: BinOp) -> OpFn
+fn int_op<T>(op: BinOp, slots: Binary) -> Box<dyn Op>
 where
     T: Int,
 {
     match op {
-        BinOp::Add => add::<T>,
-        BinOp::Sub => sub::<T>,
-        BinOp::Mul => mul::<T>,
-        BinOp::Div => div::<T>,
-        BinOp::Mod => rem::<T>,
-        BinOp::Eq => eq::<T>,
-        BinOp::Neq => neq::<T>,
-        BinOp::Lt => lt::<T>,
-        BinOp::Gt => gt::<T>,
-        BinOp::Lte => lte::<T>,
-        BinOp::Gte => gte::<T>,
-        BinOp::BitAnd => bit_and::<T>,
-        BinOp::BitOr => bit_or::<T>,
-        BinOp::Xor => bit_xor::<T>,
-        BinOp::Shl => shl::<T>,
-        BinOp::Shr => shr::<T>,
+        BinOp::Add => Box::new(Add::<T>::new(slots)),
+        BinOp::Sub => Box::new(Sub::<T>::new(slots)),
+        BinOp::Mul => Box::new(Mul::<T>::new(slots)),
+        BinOp::Div => Box::new(Div::<T>::new(slots)),
+        BinOp::Mod => Box::new(Rem::<T>::new(slots)),
+        BinOp::Eq => Box::new(Eq::<T>::new(slots)),
+        BinOp::Neq => Box::new(Neq::<T>::new(slots)),
+        BinOp::Lt => Box::new(Lt::<T>::new(slots)),
+        BinOp::Gt => Box::new(Gt::<T>::new(slots)),
+        BinOp::Lte => Box::new(Lte::<T>::new(slots)),
+        BinOp::Gte => Box::new(Gte::<T>::new(slots)),
+        BinOp::BitAnd => Box::new(BitAnd::<T>::new(slots)),
+        BinOp::BitOr => Box::new(BitOr::<T>::new(slots)),
+        BinOp::Xor => Box::new(BitXor::<T>::new(slots)),
+        BinOp::Shl => Box::new(Shl::<T>::new(slots)),
+        BinOp::Shr => Box::new(Shr::<T>::new(slots)),
         other => panic!("unsupported int binop {other:?}"),
     }
 }
 
 /// The operation a binary operator at an integer width prepares to.
-pub fn int_binop(op: BinOp, k: IntTy) -> OpFn {
-    for_int_ty!(k, |T| int_op::<T>(op))
+pub fn int_binop(op: BinOp, k: IntTy, slots: Binary) -> Box<dyn Op> {
+    for_int_ty!(k, |T| int_op::<T>(op, slots))
 }
 
 /// The operation a binary operator at `Float` prepares to.
-pub fn float_binop(op: BinOp) -> OpFn {
+pub fn float_binop(op: BinOp, slots: Binary) -> Box<dyn Op> {
     match op {
-        BinOp::Add => add_f64,
-        BinOp::Sub => sub_f64,
-        BinOp::Mul => mul_f64,
-        BinOp::Div => div_f64,
-        BinOp::Mod => rem_f64,
-        BinOp::Eq => eq_f64,
-        BinOp::Neq => neq_f64,
-        BinOp::Lt => lt_f64,
-        BinOp::Gt => gt_f64,
-        BinOp::Lte => lte_f64,
-        BinOp::Gte => gte_f64,
+        BinOp::Add => Box::new(AddF64 { slots }),
+        BinOp::Sub => Box::new(SubF64 { slots }),
+        BinOp::Mul => Box::new(MulF64 { slots }),
+        BinOp::Div => Box::new(DivF64 { slots }),
+        BinOp::Mod => Box::new(RemF64 { slots }),
+        BinOp::Eq => Box::new(EqF64 { slots }),
+        BinOp::Neq => Box::new(NeqF64 { slots }),
+        BinOp::Lt => Box::new(LtF64 { slots }),
+        BinOp::Gt => Box::new(GtF64 { slots }),
+        BinOp::Lte => Box::new(LteF64 { slots }),
+        BinOp::Gte => Box::new(GteF64 { slots }),
         other => panic!("unsupported float binop {other:?}"),
     }
 }
 
 /// The operation a binary operator at `Bool` prepares to.
-pub fn bool_binop(op: BinOp) -> OpFn {
+pub fn bool_binop(op: BinOp, slots: Binary) -> Box<dyn Op> {
     match op {
-        BinOp::Eq => eq_bool,
-        BinOp::Neq => neq_bool,
-        BinOp::Xor => xor_bool,
+        BinOp::Eq => Box::new(EqBool { slots }),
+        BinOp::Neq => Box::new(NeqBool { slots }),
+        BinOp::Xor => Box::new(XorBool { slots }),
         other => panic!("unsupported bool binop {other:?}"),
     }
 }
 
 /// The operation a unary operator at an integer width prepares to.
-pub fn int_unaryop(op: UnaryOp, k: IntTy) -> OpFn {
+pub fn int_unaryop(op: UnaryOp, k: IntTy, slots: Unary) -> Box<dyn Op> {
     match op {
-        UnaryOp::Neg => for_int_ty!(k, |T| neg::<T> as OpFn),
+        UnaryOp::Neg => for_int_ty!(k, |T| Box::new(Neg::<T>::new(slots)) as Box<dyn Op>),
         other => panic!("unary {other:?} on an integer"),
     }
 }
 
 /// The operation a unary operator at `Float` prepares to.
-pub fn float_unaryop(op: UnaryOp) -> OpFn {
+pub fn float_unaryop(op: UnaryOp, slots: Unary) -> Box<dyn Op> {
     match op {
-        UnaryOp::Neg => neg_f64,
+        UnaryOp::Neg => Box::new(NegF64 { slots }),
         other => panic!("unary {other:?} on a float"),
     }
 }
 
 /// The operation a unary operator at `Bool` prepares to.
-pub fn bool_unaryop(op: UnaryOp) -> OpFn {
+pub fn bool_unaryop(op: UnaryOp, slots: Unary) -> Box<dyn Op> {
     match op {
-        UnaryOp::Not => not_bool,
+        UnaryOp::Not => Box::new(NotBool { slots }),
         other => panic!("unary {other:?} on a bool"),
     }
 }
@@ -426,35 +589,28 @@ pub fn bool_unaryop(op: UnaryOp) -> OpFn {
 mod primitive_operator_tests {
     use super::*;
 
-    fn i64_op<F>(f: F, a: i64, b: i64) -> Value
+    fn i64_op<F>(f: F, a: i64, b: i64) -> i64
     where
-        F: FnOnce(u64, u64) -> Value,
+        F: FnOnce(u64, u64) -> u64,
     {
-        f(a as u64, b as u64)
-    }
-
-    fn float<F>(f: F, a: f64, b: f64) -> bool
-    where
-        F: FnOnce(f64, f64) -> Value,
-    {
-        f(a, b).as_bool()
+        f(a as u64, b as u64) as i64
     }
 
     #[test]
     fn a_subtraction_within_the_width_is_the_difference() {
-        assert_eq!(i64_op(word::sub::<i64>, 1, 2).as_int(), -1);
+        assert_eq!(i64_op(word::sub::<i64>, 1, 2), -1);
     }
 
     #[test]
     fn addition_subtraction_and_multiplication_past_the_width_wrap() {
-        assert_eq!(i64_op(word::add::<i64>, i64::MAX, 1).as_int(), i64::MIN);
-        assert_eq!(i64_op(word::sub::<i64>, i64::MIN, 1).as_int(), i64::MAX);
-        assert_eq!(i64_op(word::mul::<i64>, i64::MIN, -1).as_int(), i64::MIN);
+        assert_eq!(i64_op(word::add::<i64>, i64::MAX, 1), i64::MIN);
+        assert_eq!(i64_op(word::sub::<i64>, i64::MIN, 1), i64::MAX);
+        assert_eq!(i64_op(word::mul::<i64>, i64::MIN, -1), i64::MIN);
     }
 
     #[test]
     fn negation_of_the_minimum_is_the_minimum() {
-        assert_eq!(word::neg::<i64>(i64::MIN as u64).as_int(), i64::MIN);
+        assert_eq!(word::neg::<i64>(i64::MIN as u64) as i64, i64::MIN);
     }
 
     #[test]
@@ -486,39 +642,39 @@ mod primitive_operator_tests {
     /// panics instead of masking.
     #[test]
     fn a_shift_takes_its_amount_modulo_the_width() {
-        assert_eq!(i64_op(word::shl::<i64>, 1, -1).as_int(), i64::MIN);
-        assert_eq!(i64_op(word::shl::<i64>, 1, 64).as_int(), 1);
-        assert_eq!(i64_op(word::shl::<i64>, 1, 65).as_int(), 2);
-        assert_eq!(i64_op(word::shl::<i64>, 1, i64::MIN).as_int(), 1);
-        assert_eq!(i64_op(word::shr::<i64>, -1, -1).as_int(), -1);
-        assert_eq!(i64_op(word::shr::<i64>, 256, 65).as_int(), 128);
-        assert_eq!(i64_op(word::shl::<u8>, 1, 255).as_int(), 128);
+        assert_eq!(i64_op(word::shl::<i64>, 1, -1), i64::MIN);
+        assert_eq!(i64_op(word::shl::<i64>, 1, 64), 1);
+        assert_eq!(i64_op(word::shl::<i64>, 1, 65), 2);
+        assert_eq!(i64_op(word::shl::<i64>, 1, i64::MIN), 1);
+        assert_eq!(i64_op(word::shr::<i64>, -1, -1), -1);
+        assert_eq!(i64_op(word::shr::<i64>, 256, 65), 128);
+        assert_eq!(i64_op(word::shl::<u8>, 1, 255), 128);
     }
 
     #[test]
     fn float_equality_is_bit_identity() {
-        assert!(float(float_word::eq_f64, f64::NAN, f64::NAN));
-        assert!(float(float_word::neq_f64, 0.0, -0.0));
-        assert!(float(float_word::eq_f64, 1.5, 1.5));
+        assert!(float_word::eq_f64(f64::NAN, f64::NAN));
+        assert!(float_word::neq_f64(0.0, -0.0));
+        assert!(float_word::eq_f64(1.5, 1.5));
     }
 
     #[test]
     fn float_order_is_the_total_order() {
-        assert!(float(float_word::lt_f64, -0.0, 0.0));
-        assert!(float(float_word::lt_f64, f64::INFINITY, f64::NAN));
-        assert!(float(float_word::gt_f64, -1.0, -f64::NAN));
-        assert!(float(float_word::lte_f64, 2.0, 2.0));
+        assert!(float_word::lt_f64(-0.0, 0.0));
+        assert!(float_word::lt_f64(f64::INFINITY, f64::NAN));
+        assert!(float_word::gt_f64(-1.0, -f64::NAN));
+        assert!(float_word::lte_f64(2.0, 2.0));
     }
 
     #[test]
     fn an_integer_is_read_at_its_width() {
-        assert_eq!(i64_op(word::add::<u8>, 200, 55).as_int(), 255);
+        assert_eq!(i64_op(word::add::<u8>, 200, 55), 255);
         assert_eq!(<i8 as Int>::read(0xFF), -1);
     }
 
     #[test]
     fn an_addition_past_the_narrow_width_wraps() {
-        assert_eq!(i64_op(word::add::<u8>, 200, 56).as_int(), 0);
-        assert_eq!(i64_op(word::add::<u8>, 200, 57).as_int(), 1);
+        assert_eq!(i64_op(word::add::<u8>, 200, 56), 0);
+        assert_eq!(i64_op(word::add::<u8>, 200, 57), 1);
     }
 }

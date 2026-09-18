@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_ext::*;
-use acvus_extern::{ExternType, Externs, Registry, extern_fn, extern_registry};
+use acvus_extern::{Arr, ExternType, Externs, LenVar, Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
@@ -148,9 +148,9 @@ async fn run_parsed(
         })
         .collect();
     exec_fns.extend(prepared);
-    let snapshot: HashMap<String, Value> = context
+    let snapshot: HashMap<String, Owned<AcvusRuntime>> = context
         .into_iter()
-        .map(|(k, (_, v))| (interner.resolve(k).to_string(), v))
+        .map(|(k, (_, v))| (interner.resolve(k).to_string(), Owned::from_value(v)))
         .collect();
 
     let executor = Arc::new(SequentialExecutor);
@@ -168,8 +168,9 @@ fn assert_str(v: &Value, expected: &str) {
 }
 
 fn strings_of(v: Value) -> Vec<String> {
-    // SAFETY: `collect` returns a `Vec<T>` and `T` is erased as `Value`.
-    let list: Vec<Value> = unsafe { v.materialize() };
+    // SAFETY: `collect` returns a `Vec<T>`, whose store is the run of
+    // `Owned` the element type erases to (RFC-0048 §1).
+    let list: Vec<Owned<AcvusRuntime>> = unsafe { v.materialize() };
     list.iter()
         .map(|item| {
             assert!(item.is_string(), "expected a String, got {item:?}");
@@ -1066,6 +1067,98 @@ async fn a_borrowed_argument_survives_the_call_at_each_arity() {
     )
     .await;
     assert_eq!(v.as_int(), 1235, "abi4 read 1234 and `a` is still 1");
+}
+
+// =======================================================================
+//  An array crosses both ways (RFC-0048 §7)
+// =======================================================================
+
+/// A handler body cannot ask whether what crossed is an array: the macro
+/// takes a runtime only as a generic parameter bounded by `Runtime`, so no
+/// body names `acvus_interpreter::Value` and none reaches `is_array` or
+/// `composite`. Those are asserted below, on the value the run returns.
+#[extern_fn(effect = pure)]
+fn reversed<N>(xs: Arr<i64, N>) -> Arr<i64, N>
+where
+    N: LenVar,
+{
+    assert_eq!(
+        xs.0,
+        vec![1, 2, 3],
+        "the handler reads the script's elements"
+    );
+    Arr::new(xs.0.into_iter().rev().collect())
+}
+
+/// The returned elements are allocated in Rust; the parameter is what
+/// binds the length variable of the returned array's type.
+#[extern_fn(effect = pure)]
+fn labels<N>(xs: Arr<i64, N>) -> Arr<String, N>
+where
+    N: LenVar,
+{
+    Arr::new(xs.0.into_iter().map(|n| format!("#{n}")).collect())
+}
+
+fn array_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "t",
+        fns: [reversed, labels],
+    }
+}
+
+#[tokio::test]
+async fn an_array_the_script_built_crosses_into_a_handler_and_back() {
+    let i = Interner::new();
+    let regs = || vec![array_registry()];
+
+    let v = run_ext(
+        &i,
+        "let xs = [1, 2, 3]; let ys = reversed(xs); ys[0]",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 3, "the script indexed the handler's array");
+
+    let v = run_ext(&i, "reversed([1, 2, 3])", TypedContext::default(), regs()).await;
+    assert!(v.is_array(), "the crossed value is an array, got {v:?}");
+    assert_eq!(
+        v.composite(),
+        Some(Composite::Array),
+        "its composite form is Some(Array)"
+    );
+    // SAFETY: `is_array` above read the vtable's composite, which only an
+    // `Array` payload carries.
+    let items: Vec<i64> = unsafe { v.as_array() }.iter().map(|e| e.as_int()).collect();
+    assert_eq!(items, vec![3, 2, 1], "the elements read back reversed");
+}
+
+#[tokio::test]
+async fn an_array_a_handler_builds_in_rust_is_indexed_by_the_script() {
+    let i = Interner::new();
+    let regs = || vec![array_registry()];
+
+    let v = run_ext(
+        &i,
+        "let zs = labels([1, 2, 3]); zs[2].len()",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 2, "the script indexed to \"#3\"");
+
+    let v = run_ext(&i, "labels([1, 2, 3])", TypedContext::default(), regs()).await;
+    assert!(v.is_array(), "the Rust-built value is an array, got {v:?}");
+    // SAFETY: as above.
+    let items = unsafe { v.as_array() };
+    // SAFETY: the handler returned a `String` at every element.
+    let texts: Vec<&str> = items.iter().map(|e| unsafe { e.as_str() }).collect();
+    assert_eq!(
+        texts,
+        vec!["#1", "#2", "#3"],
+        "the elements the handler put there"
+    );
 }
 
 #[tokio::test]

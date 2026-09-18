@@ -5,15 +5,23 @@
 //! the container's `Vec<Value>` and a length. Reading element `i` is one
 //! dependent load and one compare — no call, no layout.
 
-use acvus_extern::Elements;
+use acvus_extern::{Elements, Release};
 use acvus_mir::ir::IndexMode;
 
-use crate::code::{Flow, Op, OpFn};
+use crate::code::{Off, Op};
 use crate::machine::Machine;
 use crate::runtime::AcvusRuntime;
-use crate::value::Value;
+use crate::value::{Kind, Value};
 
 type Run = Elements<AcvusRuntime>;
+
+/// The registers an indexed read names.
+#[derive(Clone, Copy)]
+pub struct Read {
+    pub dst: Off,
+    pub slice: Off,
+    pub index: Off,
+}
 
 /// The text Rust's own slice index gives; a test pins it byte for byte.
 fn out_of_bounds(len: usize, index: u64) -> String {
@@ -62,49 +70,98 @@ unsafe fn element<'a, const CHECKED: bool>(slice: &Value, index: u64) -> &'a Val
     unsafe { run.at(at) }
 }
 
-pub fn index_copy<const CHECKED: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let index = machine.reg(op.c).bits();
-    // SAFETY: the slice holds its container's loan.
-    let value = unsafe { element::<CHECKED>(machine.reg(op.b), index) }.copy_word();
-    machine.define(op.a, value);
-    Flow::Next
+pub struct IndexCopy<const CHECKED: bool> {
+    pub read: Read,
 }
 
-pub fn index_ref<const CHECKED: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let index = machine.reg(op.c).bits();
-    // SAFETY: as `index_copy`.
-    let reference = Value::reference(unsafe { element::<CHECKED>(machine.reg(op.b), index) });
-    machine.define(op.a, reference);
-    Flow::Next
-}
+impl<const CHECKED: bool> Op for IndexCopy<CHECKED> {
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn index_read(&self) -> Option<Read> {
+        CHECKED.then_some(self.read)
+    }
 
-pub fn index_set<const CHECKED: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let index = machine.reg(op.b).bits();
-    let value = machine.use_val(op.c);
-    let run = run(machine.reg(op.a));
-    let at = position::<CHECKED>(run, index);
-    // SAFETY: the operand is a `&mut [T]`, so its run is named once here,
-    // and `position` put `at` within it.
-    let slot = unsafe { run.at_mut(at) };
-    *slot = value;
-    Flow::Next
-}
-
-pub fn checked(mode: IndexMode) -> OpFn {
-    match mode {
-        IndexMode::Copy => index_copy::<true>,
-        IndexMode::Ref => index_ref::<true>,
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let index = regs.word(self.read.index);
+        // SAFETY: the slice holds its container's loan.
+        let value = *unsafe { element::<CHECKED>(regs.peek(self.read.slice), index) };
+        debug_assert_ne!(
+            value.kind(),
+            Kind::Large,
+            "an indexed copy leaves the container owning the element"
+        );
+        regs.define::<false>(self.read.dst, value);
     }
 }
 
-/// The same handler without the bound check (RFC-0047 §7). Nothing in
+pub struct IndexRef<const CHECKED: bool> {
+    pub read: Read,
+}
+
+impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn index_read(&self) -> Option<Read> {
+        CHECKED.then_some(self.read)
+    }
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let index = regs.word(self.read.index);
+        // SAFETY: as `IndexCopy`.
+        let target = unsafe { element::<CHECKED>(regs.peek(self.read.slice), index) };
+        regs.define::<false>(self.read.dst, Value::reference(target));
+    }
+}
+
+/// An element assignment releases what it overwrites (RFC-0045), which is
+/// `LARGE`: what the preparation read from the element type.
+pub struct IndexSet<const CHECKED: bool, const LARGE: bool> {
+    pub slice: Off,
+    pub index: Off,
+    pub value: Off,
+}
+
+impl<const CHECKED: bool, const LARGE: bool> Op for IndexSet<CHECKED, LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let index = regs.word(self.index);
+        let value = regs.take::<LARGE>(self.value);
+        let slice = run(regs.peek(self.slice));
+        let at = position::<CHECKED>(slice, index);
+        // SAFETY: the operand is a `&mut [T]`, so its run is named once
+        // here, and `position` put `at` within it.
+        let slot = unsafe { slice.at_mut(at) };
+        let overwritten = *slot;
+        *slot = value;
+        release_if::<LARGE>(overwritten);
+    }
+}
+
+#[inline(always)]
+fn release_if<const LARGE: bool>(value: Value) {
+    if LARGE {
+        value.release();
+    }
+}
+
+/// The operation an `Index` instruction prepares to.
+pub fn checked(mode: IndexMode, read: Read) -> Box<dyn Op> {
+    match mode {
+        IndexMode::Copy => Box::new(IndexCopy::<true> { read }),
+        IndexMode::Ref => Box::new(IndexRef::<true> { read }),
+    }
+}
+
+/// The same operation without the bound check (RFC-0047 §7). Nothing in
 /// `prepare` reaches it: the MIR holds no unchecked instruction, and until
 /// the interval pass carries its own proof the only way to run one is for a
 /// probe to substitute it into a prepared body.
 #[cfg(any(test, feature = "probe"))]
-pub fn unchecked(mode: IndexMode) -> OpFn {
+pub fn unchecked(mode: IndexMode, read: Read) -> Box<dyn Op> {
     match mode {
-        IndexMode::Copy => index_copy::<false>,
-        IndexMode::Ref => index_ref::<false>,
+        IndexMode::Copy => Box::new(IndexCopy::<false> { read }),
+        IndexMode::Ref => Box::new(IndexRef::<false> { read }),
     }
 }

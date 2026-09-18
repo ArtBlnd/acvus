@@ -3,8 +3,9 @@
 //! or that a run too long for one tree becomes several, no value can show
 //! it, so those tests read the prepared code as well.
 
-use acvus_interpreter::code::{Chain, Code, ExprBody, Payload, Prepared, Shape};
+use acvus_interpreter::code::{ChainBounds, Code, ExprBody, Off, Prepared, Shape};
 use acvus_interpreter::{PrepareCtx, Value, prepare_module};
+use acvus_interpreter_test::listing::{ChainShape, chains_of};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::ty::{IntTy, Ty};
@@ -43,19 +44,8 @@ fn prepared(i: &Interner, source: &str, context: Context) -> Prepared {
     prepare_module(module, &ctx)
 }
 
-/// Every chain of a body, those inside its loops included: a loop's
-/// operations carry indexes into this same payload table.
-fn chains(code: &Code) -> Vec<&Chain> {
-    let Code::Body(body) = code else {
-        return Vec::new();
-    };
-    body.payloads
-        .iter()
-        .filter_map(|payload| match payload {
-            Payload::Chain(chain) => Some(chain.as_ref()),
-            _ => None,
-        })
-        .collect()
+fn chains(code: &Code) -> Vec<ChainShape> {
+    chains_of(code)
 }
 
 fn only_closure(prepared: &Prepared) -> &Code {
@@ -234,10 +224,12 @@ async fn a_chain_reads_a_constant_from_a_register_the_entry_filled() {
     );
     let chain = chains(&module.main);
     let chain = chain.first().expect("one chain");
-    let konst_slots: Vec<u32> = body.entry_konsts.iter().map(|konst| konst.slot).collect();
-    let reads_a_konst = chain.leaf_offsets[..chain.shape.leaves()]
-        .iter()
-        .any(|off| konst_slots.iter().any(|slot| Chain::offset(*slot) == *off));
+    let konst_slots: Vec<Off> = body.entry_konsts.iter().map(|konst| konst.slot).collect();
+    let reads_a_konst = chain.leaves.iter().any(|off| {
+        konst_slots
+            .iter()
+            .any(|at| ChainBounds::byte_offset_of_word(*at) == *off)
+    });
     assert!(reads_a_konst, "no leaf reads a constant's register");
 }
 
@@ -269,7 +261,7 @@ async fn a_lambda_that_is_one_chain_runs_without_a_frame() {
     let ExprBody::Chain(body) = &expr.body else {
         panic!("a lambda with an operator is a chain, not a bare argument")
     };
-    assert_eq!(body.chain.shape, Shape::NNLLL);
+    assert_eq!(body.plan.shape, Shape::NNLLL);
     assert_eq!(
         body.konsts.len(),
         2,
@@ -329,7 +321,7 @@ async fn a_run_of_more_than_three_nodes_is_several_chains_through_a_register() {
     );
     for chain in &found {
         assert!(
-            chain.shape.interior() + 1 <= Chain::MAX_NODES,
+            chain.shape.interior() + 1 <= ChainBounds::MAX_NODES,
             "a prepared chain has {} nodes",
             chain.shape.interior() + 1
         );
@@ -337,11 +329,13 @@ async fn a_run_of_more_than_three_nodes_is_several_chains_through_a_register() {
     let Code::Body(body) = &*module.main else {
         panic!("a script's entry body runs on a frame")
     };
-    let written: Vec<u32> = body.ops.iter().map(|op| op.a).collect();
+    let written: Vec<u16> = found.iter().map(|chain| chain.dst).collect();
     let through_a_register = found.iter().any(|chain| {
-        chain.leaf_offsets[..chain.shape.leaves()]
-            .iter()
-            .any(|off| written.iter().any(|slot| Chain::offset(*slot) == *off))
+        chain.leaves.iter().any(|off| {
+            written
+                .iter()
+                .any(|at| ChainBounds::byte_offset_of_word(Off::of(*at)) == *off)
+        })
     });
     assert!(
         through_a_register,
@@ -367,7 +361,7 @@ fn every_binary_tree_of_at_most_three_nodes_has_its_own_shape() {
         }
         out
     }
-    let words: Vec<String> = (1..=Chain::MAX_NODES).flat_map(trees).collect();
+    let words: Vec<String> = (1..=ChainBounds::MAX_NODES).flat_map(trees).collect();
     assert_eq!(words.len(), 8);
     let mut shapes: Vec<String> = words
         .iter()
@@ -409,9 +403,9 @@ fn every_chain_leaf_is_inside_the_frame_it_reads_unchecked() {
         panic!("a script's entry body runs on a frame")
     };
     for chain in chains(&module.main) {
-        for offset in &chain.leaf_offsets[..chain.shape.leaves()] {
+        for offset in &chain.leaves {
             assert!(
-                *offset < Chain::offset(body.frame_len),
+                *offset < ChainBounds::byte_offset_of_word(Off::of(body.frame_len)),
                 "a chain reads at offset {offset}, past the frame of {} registers",
                 body.frame_len
             );

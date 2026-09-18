@@ -5,7 +5,6 @@
 //! reference, returns it, or takes it inside a lambda or an iterator. Its
 //! region is the caller's.
 
-use std::any::Any;
 use std::marker::PhantomData;
 
 use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
@@ -13,6 +12,7 @@ use acvus_utils::Interner;
 
 use crate::len::{Arr, LenVar};
 use crate::obj::TransparentOver;
+use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
@@ -59,7 +59,7 @@ where
     /// signature proves the part lives in the same storage.
     pub fn map<U>(&self, rt: &Rt, f: impl for<'a> FnOnce(&'a T) -> &'a U) -> Ref<U, Rt>
     where
-        U: TyVar,
+        U: TransparentOver<Rt>,
     {
         self.with(rt, |target| reference_to(rt, f(target)))
     }
@@ -71,7 +71,7 @@ where
         f: impl for<'a> FnOnce(&'a T) -> Option<&'a U>,
     ) -> Option<Ref<U, Rt>>
     where
-        U: TyVar,
+        U: TransparentOver<Rt>,
     {
         self.with(rt, |target| f(target).map(|part| reference_to(rt, part)))
     }
@@ -104,7 +104,7 @@ where
         f: impl for<'a> FnOnce(&'a mut T) -> &'a mut U,
     ) -> RefMut<U, Rt>
     where
-        U: TyVar,
+        U: TransparentOver<Rt>,
     {
         self.with_mut(rt, |target| {
             // SAFETY: as `reference_to`.
@@ -119,13 +119,14 @@ where
     Rt: Runtime,
 {
     /// The elements, read in place: the storage is the runtime's
-    /// `Vec<Value>`, and a `Vec<T>` of them is not a view the language
+    /// `Vec<Owned<Rt>>`, and a `Vec<T>` of them is not a view the language
     /// promises, so the typed view is the slice.
     pub fn as_slice<'a>(&'a self, rt: &Rt) -> &'a [T] {
-        // SAFETY: as `with`: the storage holds a `Vec<Value>` and is live.
-        let values = unsafe { rt.deref::<Vec<Rt::Value>>(&self.0) };
-        // SAFETY: `T: TransparentOver<Rt>`: `[T]` and `[Rt::Value]` are one
-        // layout.
+        // SAFETY: as `with`: the storage holds a `Vec<Owned<Rt>>` and is live.
+        let values = unsafe { rt.deref::<Vec<Owned<Rt>>>(&self.0) };
+        // SAFETY: `T: TransparentOver<Rt>` and `Owned<Rt>` is
+        // `repr(transparent)` over `Rt::Value`: `[T]` and `[Owned<Rt>]` are
+        // one layout.
         unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<T>(), values.len()) }
     }
 }
@@ -136,19 +137,20 @@ where
     Rt: Runtime,
 {
     /// As `Ref::as_slice`; the elements are edited in place, and the
-    /// length is changed only through the stored `Vec<Rt::Value>`.
+    /// length is changed only through the stored `Vec<Owned<Rt>>`.
     pub fn as_mut_slice<'a>(&'a mut self, rt: &Rt) -> &'a mut [T] {
-        // SAFETY: as `with_mut`: the storage holds a `Vec<Value>`, is live,
-        // and the loan is exclusive.
-        let values = unsafe { rt.deref_mut::<Vec<Rt::Value>>(&self.0) };
-        // SAFETY: `T: TransparentOver<Rt>`: `[T]` and `[Rt::Value]` are one
-        // layout.
+        // SAFETY: as `with_mut`: the storage holds a `Vec<Owned<Rt>>`, is
+        // live, and the loan is exclusive.
+        let values = unsafe { rt.deref_mut::<Vec<Owned<Rt>>>(&self.0) };
+        // SAFETY: `T: TransparentOver<Rt>` and `Owned<Rt>` is
+        // `repr(transparent)` over `Rt::Value`: `[T]` and `[Owned<Rt>]` are
+        // one layout.
         unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<T>(), values.len()) }
     }
 }
 
-/// A sliceable container's storage is a `Vec` of the runtime's own values
-/// whatever its element type is (RFC-0039), which is why one slice width
+/// A sliceable container's storage is a `Vec<Owned<Rt>>` whatever its
+/// element type is (RFC-0039), which is why one slice width
 /// serves every container (RFC-0047 §1). `elements` is that storage, read
 /// in place; `as_slice` above it is the same run seen at an element type
 /// that promises the layout.
@@ -158,8 +160,9 @@ where
     Rt: Runtime,
 {
     pub fn elements<'a>(&'a self, rt: &Rt) -> &'a [Rt::Value] {
-        // SAFETY: as `with`: the storage holds a `Vec<Value>` and is live.
-        unsafe { rt.deref::<Vec<Rt::Value>>(&self.0) }
+        // SAFETY: as `with`: the storage holds a `Vec<Owned<Rt>>` and is live.
+        let owned = unsafe { rt.deref::<Vec<Owned<Rt>>>(&self.0) };
+        borrowed(owned)
     }
 }
 
@@ -171,7 +174,8 @@ where
     pub fn elements_mut<'a>(&'a self, rt: &Rt) -> &'a mut [Rt::Value] {
         // SAFETY: as `with_mut`: the loan is exclusive, so nothing else
         // names the storage while this slice lives.
-        unsafe { rt.deref_mut::<Vec<Rt::Value>>(&self.0) }
+        let owned = unsafe { rt.deref_mut::<Vec<Owned<Rt>>>(&self.0) };
+        borrowed_mut(owned)
     }
 }
 
@@ -183,8 +187,8 @@ where
 {
     pub fn elements<'a>(&'a self, rt: &Rt) -> &'a [Rt::Value] {
         // SAFETY: as `Ref::<Vec<T>>::elements`; the language's array is
-        // `Arr<Value, ()>` (RFC-0022).
-        &unsafe { rt.deref::<Arr<Rt::Value, ()>>(&self.0) }.0
+        // `Arr<Owned<Rt>, ()>` (RFC-0022, RFC-0048 §7).
+        borrowed(&unsafe { rt.deref::<Arr<Owned<Rt>, ()>>(&self.0) }.0)
     }
 }
 
@@ -196,14 +200,37 @@ where
 {
     pub fn elements_mut<'a>(&'a self, rt: &Rt) -> &'a mut [Rt::Value] {
         // SAFETY: as `RefMut::<Vec<T>>::elements_mut`.
-        &mut unsafe { rt.deref_mut::<Arr<Rt::Value, ()>>(&self.0) }.0
+        borrowed_mut(&mut unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(&self.0) }.0)
     }
+}
+
+/// A run of owned elements seen as the run of values it is: `Elements` is
+/// on the ABI side of RFC-0048 §1, where a value owes no release, and the
+/// storage keeps the obligation.
+fn borrowed<Rt>(owned: &[Owned<Rt>]) -> &[Rt::Value]
+where
+    Rt: Runtime,
+{
+    // SAFETY: `Owned<Rt>` is `repr(transparent)` over `Rt::Value`.
+    unsafe { std::slice::from_raw_parts(owned.as_ptr().cast::<Rt::Value>(), owned.len()) }
+}
+
+/// As `borrowed`, exclusively. The storage still owes the release for
+/// every element, so a caller that writes an element through this slice
+/// releases the one it replaced; the interpreter's `IndexSet` is that
+/// caller (RFC-0048 §1).
+fn borrowed_mut<Rt>(owned: &mut [Owned<Rt>]) -> &mut [Rt::Value]
+where
+    Rt: Runtime,
+{
+    // SAFETY: as `borrowed`, with the caller's exclusive loan.
+    unsafe { std::slice::from_raw_parts_mut(owned.as_mut_ptr().cast::<Rt::Value>(), owned.len()) }
 }
 
 /// A reference to `part`, which lives in storage a live loan names.
 fn reference_to<U, Rt>(rt: &Rt, part: &U) -> Ref<U, Rt>
 where
-    U: TyVar,
+    U: TransparentOver<Rt>,
     Rt: Runtime,
 {
     // SAFETY: `part` is borrowed from storage the caller's reference
@@ -265,22 +292,12 @@ where
     }
 }
 
-/// The runtime value a type variable's item is. The glue substitutes
-/// `Rt::Value` for a type variable of the ExternFn (RFC-0022), and this
-/// downcast is where that substitution is checked; a `U` of any other type,
-/// `Erased<..>` included, is refused here rather than cast, because a
-/// `repr(transparent)` promise cannot be a bound on `U` while the glue also
-/// instantiates `U` as the uninhabited `Typeck<N>`.
 fn value_of<U, Rt>(item: &U) -> &Rt::Value
 where
-    U: TyVar,
+    U: TransparentOver<Rt>,
     Rt: Runtime,
 {
-    let Some(value) = (item as &dyn Any).downcast_ref::<Rt::Value>() else {
-        panic!(
-            "a part reached through a reference is a type variable's item and so the runtime's value; `{}` is not",
-            std::any::type_name::<U>()
-        )
-    };
-    value
+    // SAFETY: `U: TransparentOver<Rt>` is the promise that `U` is
+    // `repr(transparent)` over `Rt::Value`.
+    unsafe { &*(item as *const U).cast::<Rt::Value>() }
 }

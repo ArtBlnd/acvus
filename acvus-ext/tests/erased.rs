@@ -11,26 +11,41 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use acvus_ext::{string_registry, vec_registry};
 use acvus_extern::{
     CallToken, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef, Ref,
-    Registry, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
+    Registry, Release, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
 
-#[derive(Debug, Default)]
+/// `Release: Copy` forbids a value that owns its payload inline, so an
+/// owning shape here is one word naming a cell that `release` frees.
+#[derive(Clone, Copy, Debug, Default)]
 enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
     /// The language's `Option` (RFC-0022), held as a host pleases.
     None,
-    Some(Box<V>),
-    Boxed(Box<dyn Any + Send + Sync>),
+    Some(*mut V),
+    Boxed(*mut (dyn Any + Send + Sync)),
     Reference(*const V),
 }
 
-// SAFETY: a `Reference` is used only while its target is live (RFC-0018).
+// SAFETY: a cell is reached only through the value that owns it, and a
+// `Reference` only while its target is live (RFC-0018).
 unsafe impl Send for V {}
 unsafe impl Sync for V {}
+
+impl Release for V {
+    fn release(self) {
+        match self {
+            V::Taken | V::None | V::Reference(_) => {}
+            // SAFETY: `some` leaked this cell and nothing else releases it.
+            V::Some(cell) => unsafe { *Box::from_raw(cell) }.release(),
+            // SAFETY: `erase` leaked this cell and nothing else frees it.
+            V::Boxed(cell) => drop(unsafe { Box::from_raw(cell) }),
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 struct Counting {
@@ -65,10 +80,12 @@ fn open_ref<T>(value: &V) -> &T
 where
     T: Send + Sync + 'static,
 {
-    let V::Boxed(any) = value else {
+    let V::Boxed(cell) = value else {
         panic!("open_ref: not a value: {value:?}")
     };
-    any.downcast_ref::<T>()
+    // SAFETY: the value is live, so its cell is.
+    unsafe { &**cell }
+        .downcast_ref::<T>()
         .unwrap_or_else(|| panic!("open_ref: value is not a {}", type_name::<T>()))
 }
 
@@ -76,10 +93,12 @@ fn open_mut<T>(value: &mut V) -> &mut T
 where
     T: Send + Sync + 'static,
 {
-    let V::Boxed(any) = value else {
+    let V::Boxed(cell) = value else {
         panic!("open_mut: not a value: {value:?}")
     };
-    any.downcast_mut::<T>()
+    // SAFETY: `&mut V` is the exclusive name of the value and its cell.
+    unsafe { &mut **cell }
+        .downcast_mut::<T>()
         .unwrap_or_else(|| panic!("open_mut: value is not a {}", type_name::<T>()))
 }
 
@@ -119,10 +138,11 @@ impl acvus_extern::FromValue<Counting> for V {
 
 impl Runtime for Counting {
     fn type_of(&self, value: &V) -> Option<TypeId> {
-        let V::Boxed(any) = value else {
+        let V::Boxed(cell) = value else {
             return None;
         };
-        Some((**any).type_id())
+        // SAFETY: the value is live, so its cell is.
+        Some(unsafe { &**cell }.type_id())
     }
     fn type_name_of(&self, _: &V) -> Option<&'static str> {
         None
@@ -152,9 +172,11 @@ impl Runtime for Counting {
             return *boxed.downcast::<T>().expect("T is V");
         }
         self.unboxes.fetch_add(1, Ordering::SeqCst);
-        let V::Boxed(any) = value else {
+        let V::Boxed(cell) = value else {
             panic!("materialize: not a value: {value:?}")
         };
+        // SAFETY: the caller's contract; the cell is taken, not released.
+        let any = unsafe { Box::from_raw(cell) };
         match any.downcast::<T>() {
             Ok(v) => *v,
             Err(_) => panic!("materialize: value is not a {}", type_name::<T>()),
@@ -170,7 +192,8 @@ impl Runtime for Counting {
             return *boxed.downcast::<V>().expect("T is V");
         }
         self.boxes.fetch_add(1, Ordering::SeqCst);
-        V::Boxed(Box::new(value))
+        let boxed: Box<dyn Any + Send + Sync> = Box::new(value);
+        V::Boxed(Box::into_raw(boxed))
     }
 
     unsafe fn value_as_ref<'a, T>(&'a self, value: &'a V) -> &'a T
@@ -210,16 +233,17 @@ impl Runtime for Counting {
         V::None
     }
     fn some(&self, payload: V) -> V {
-        V::Some(Box::new(payload))
+        V::Some(Box::into_raw(Box::new(payload)))
     }
     fn is_none(&self, value: &V) -> bool {
         matches!(value, V::None)
     }
     fn unwrap_some(&self, value: V) -> V {
-        let V::Some(payload) = value else {
+        let V::Some(cell) = value else {
             panic!("unwrap_some: the value is not a Some")
         };
-        *payload
+        // SAFETY: `some` leaked this cell; the payload moves out of it.
+        *unsafe { Box::from_raw(cell) }
     }
 
     fn symbol(&self, name: &str) -> acvus_extern::Astr {

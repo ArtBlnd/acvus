@@ -13,6 +13,7 @@ use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
 use crate::len::{Arr, LenVar};
+use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{Never, TyVar};
 
@@ -344,23 +345,24 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
-        let inner: Result<Rt::Value, Rt::Value> =
-            self.map(|v| v.erase(rt)).map_err(|e| e.erase(rt));
-        // SAFETY: the language's Result is the runtime's `Result<Value, Value>`
-        // (RFC-0038).
-        unsafe { rt.erase::<Result<Rt::Value, Rt::Value>>(inner) }
+        let inner: Result<Owned<Rt>, Owned<Rt>> = self
+            .map(|v| Owned::from_value(v.erase(rt)))
+            .map_err(|e| Owned::from_value(e.erase(rt)));
+        // SAFETY: the language's Result is the runtime's
+        // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 §7).
+        unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
     }
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
         // SAFETY: the caller's contract, and `erase` boxes a
-        // `Result<Value, Value>`.
-        let inner = unsafe { rt.materialize::<Result<Rt::Value, Rt::Value>>(value) };
+        // `Result<Owned<Rt>, Owned<Rt>>`.
+        let inner = unsafe { rt.materialize::<Result<Owned<Rt>, Owned<Rt>>>(value) };
         // SAFETY: the caller's contract, forwarded: `erase` erased the payload
         // from a `T` or an `E`.
         unsafe {
             inner
-                .map(|v| T::materialize(rt, v))
-                .map_err(|e| E::materialize(rt, e))
+                .map(|v| T::materialize(rt, v.into_value()))
+                .map_err(|e| E::materialize(rt, e.into_value()))
         }
     }
 }
@@ -394,23 +396,24 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
-        let inner: Result<Rt::Value, Rt::Value> =
-            self.map(|v| v.erase(rt)).map_err(|e| e.erase(rt));
-        // SAFETY: the language's Result is the runtime's `Result<Value, Value>`
-        // (RFC-0038).
-        unsafe { rt.erase::<Result<Rt::Value, Rt::Value>>(inner) }
+        let inner: Result<Owned<Rt>, Owned<Rt>> = self
+            .map(|v| Owned::from_value(v.erase(rt)))
+            .map_err(|e| Owned::from_value(e.erase(rt)));
+        // SAFETY: the language's Result is the runtime's
+        // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 §7).
+        unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
     }
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
         // SAFETY: the caller's contract, and `erase` boxes a
-        // `Result<Value, Value>`.
-        let inner = unsafe { rt.materialize::<Result<Rt::Value, Rt::Value>>(value) };
+        // `Result<Owned<Rt>, Owned<Rt>>`.
+        let inner = unsafe { rt.materialize::<Result<Owned<Rt>, Owned<Rt>>>(value) };
         // SAFETY: the caller's contract, forwarded: `erase` erased the payload
         // from a `T` or an `E`.
         unsafe {
             inner
-                .map(|v| T::materialize(rt, v))
-                .map_err(|e| E::materialize(rt, e))
+                .map(|v| T::materialize(rt, v.into_value()))
+                .map_err(|e| E::materialize(rt, e.into_value()))
         }
     }
 }
@@ -422,21 +425,27 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
-        let items: Vec<Rt::Value> = self.0.into_iter().map(|v| v.erase(rt)).collect();
-        // SAFETY: the language's array is `Arr<Value, ()>` (RFC-0022).
-        unsafe { rt.erase::<Arr<Rt::Value, ()>>(Arr::new(items)) }
+        let items: Vec<Owned<Rt>> = self
+            .0
+            .into_iter()
+            .map(|v| Owned::from_value(v.erase(rt)))
+            .collect();
+        // SAFETY: the language's array is `Arr<Owned<Rt>, ()>` (RFC-0022,
+        // RFC-0048 §7).
+        unsafe { rt.erase::<Arr<Owned<Rt>, ()>>(Arr::new(items)) }
     }
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and `erase` boxes an `Arr<Value, ()>`.
-        let items = unsafe { rt.materialize::<Arr<Rt::Value, ()>>(value) };
+        // SAFETY: the caller's contract, and `erase` boxes an
+        // `Arr<Owned<Rt>, ()>`.
+        let items = unsafe { rt.materialize::<Arr<Owned<Rt>, ()>>(value) };
         // SAFETY: the caller's contract, forwarded: `erase` erased every
         // element from a `T`.
         Arr::new(
             items
                 .0
                 .into_iter()
-                .map(|v| unsafe { T::materialize(rt, v) })
+                .map(|v| unsafe { T::materialize(rt, v.into_value()) })
                 .collect(),
         )
     }
@@ -449,28 +458,35 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
-        let items: Vec<Rt::Value> = self.0.into_iter().map(|v| v.erase(rt)).collect();
-        // SAFETY: the language's array is `Arr<Value, ()>` (RFC-0022).
-        unsafe { rt.erase::<Arr<Rt::Value, ()>>(Arr::new(items)) }
+        let items: Vec<Owned<Rt>> = self
+            .0
+            .into_iter()
+            .map(|v| Owned::from_value(v.erase(rt)))
+            .collect();
+        // SAFETY: the language's array is `Arr<Owned<Rt>, ()>` (RFC-0022,
+        // RFC-0048 §7).
+        unsafe { rt.erase::<Arr<Owned<Rt>, ()>>(Arr::new(items)) }
     }
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and `erase` boxes an `Arr<Value, ()>`.
-        let items = unsafe { rt.materialize::<Arr<Rt::Value, ()>>(value) };
+        // SAFETY: the caller's contract, and `erase` boxes an
+        // `Arr<Owned<Rt>, ()>`.
+        let items = unsafe { rt.materialize::<Arr<Owned<Rt>, ()>>(value) };
         // SAFETY: the caller's contract, forwarded: `erase` erased every
         // element from a `T`.
         Arr::new(
             items
                 .0
                 .into_iter()
-                .map(|v| unsafe { T::materialize(rt, v) })
+                .map(|v| unsafe { T::materialize(rt, v.into_value()) })
                 .collect(),
         )
     }
 
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
-        // SAFETY: the caller's contract, and `erase` boxes an `Arr<Value, ()>`.
-        let stored = unsafe { rt.deref::<Arr<Rt::Value, ()>>(reference) };
+        // SAFETY: the caller's contract, and `erase` boxes an
+        // `Arr<Owned<Rt>, ()>`.
+        let stored = unsafe { rt.deref::<Arr<Owned<Rt>, ()>>(reference) };
         let Some(items) = storage_as::<_, Vec<T>>(&stored.0) else {
             panic!("{NO_STORAGE}")
         };
@@ -480,8 +496,8 @@ where
 
     unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
         // SAFETY: the caller's contract, exclusively, and `erase` boxes an
-        // `Arr<Value, ()>`.
-        let stored = unsafe { rt.deref_mut::<Arr<Rt::Value, ()>>(reference) };
+        // `Arr<Owned<Rt>, ()>`.
+        let stored = unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(reference) };
         let Some(items) = storage_as_mut::<_, Vec<T>>(&mut stored.0) else {
             panic!("{NO_STORAGE}")
         };
@@ -492,21 +508,22 @@ where
 
 /// The elements of a checked container box, each taken by its own
 /// `FromValue`; the buffer itself is reused when the element is the value.
-fn elements_from_values<E, Rt>(rt: &Rt, items: Vec<Rt::Value>) -> Vec<E>
+fn elements_from_values<E, Rt>(rt: &Rt, items: Vec<Owned<Rt>>) -> Vec<E>
 where
     E: FromValue<Rt> + 'static,
     Rt: Runtime,
 {
     if TypeId::of::<E>() == TypeId::of::<Rt::Value>() {
         let mut items = ManuallyDrop::new(items);
-        // SAFETY: `E` is `Rt::Value`: one element type, one allocator.
+        // SAFETY: `E` is `Rt::Value` and `Owned<Rt>` is `repr(transparent)`
+        // over it: one element layout, one allocator.
         return unsafe {
             Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity())
         };
     }
     items
         .into_iter()
-        .map(|item| E::from_value(rt, item))
+        .map(|item| E::from_value(rt, item.into_value()))
         .collect()
 }
 
@@ -516,7 +533,7 @@ where
     Rt: Runtime,
 {
     fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        let items = downcast::<Vec<Rt::Value>, Rt>(rt, value);
+        let items = downcast::<Vec<Owned<Rt>>, Rt>(rt, value);
         elements_from_values(rt, items)
     }
 }
@@ -528,19 +545,19 @@ where
     Rt: Runtime,
 {
     fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        let items = downcast::<Arr<Rt::Value, ()>, Rt>(rt, value);
+        let items = downcast::<Arr<Owned<Rt>, ()>, Rt>(rt, value);
         Arr::new(elements_from_values(rt, items.0))
     }
 }
 
 /// The field of a derived object, crossed by its own type; what the derive
 /// calls for each field.
-pub fn erase_field<T, Rt>(rt: &Rt, value: T) -> Rt::Value
+pub fn erase_field<T, Rt>(rt: &Rt, value: T) -> Owned<Rt>
 where
     T: Cross<Rt>,
     Rt: Runtime,
 {
-    value.erase(rt)
+    Owned::from_value(value.erase(rt))
 }
 
 /// # Safety
@@ -551,7 +568,7 @@ where
 /// the declared type.
 pub unsafe fn materialize_field<T, Rt>(
     rt: &Rt,
-    fields: &mut FxHashMap<Astr, Rt::Value>,
+    fields: &mut FxHashMap<Astr, Owned<Rt>>,
     name: &str,
 ) -> T
 where
@@ -564,7 +581,7 @@ where
         )
     });
     // SAFETY: the caller's contract.
-    unsafe { T::materialize(rt, value) }
+    unsafe { T::materialize(rt, value.into_value()) }
 }
 
 /// # Panics
@@ -583,11 +600,11 @@ pub fn take_payload<V>(payload: Option<Box<V>>, tag: &str) -> V {
 ///
 /// # Safety
 /// The payload of variant `tag` was erased from a `T`.
-pub unsafe fn materialize_payload<T, Rt>(rt: &Rt, payload: Option<Box<Rt::Value>>, tag: &str) -> T
+pub unsafe fn materialize_payload<T, Rt>(rt: &Rt, payload: Option<Box<Owned<Rt>>>, tag: &str) -> T
 where
     T: Cross<Rt>,
     Rt: Runtime,
 {
     // SAFETY: the caller's contract.
-    unsafe { T::materialize(rt, take_payload(payload, tag)) }
+    unsafe { T::materialize(rt, take_payload(payload, tag).into_value()) }
 }

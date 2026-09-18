@@ -9,12 +9,14 @@ use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
+use acvus_extern::{Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
 use crate::code::Code;
 use crate::interpreter::InterpreterContext;
+use crate::runtime::AcvusRuntime;
 use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
 
 // -- Kind -------------------------------------------------------------
@@ -26,8 +28,6 @@ macro_rules! kind {
         #[repr(u8)]
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         pub enum Kind {
-            /// The register a `Take` moved out of.
-            Empty,
             /// The SSA initial value of a loop-defined variable.
             Undef,
             Ref,
@@ -53,21 +53,21 @@ macro_rules! kind {
             pub fn type_id(self) -> Option<TypeId> {
                 match self {
                     $(Kind::$name => Some(TypeId::of::<$t>()),)*
-                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
                 }
             }
 
             pub fn name(self) -> Option<&'static str> {
                 match self {
                     $(Kind::$name => Some(stringify!($t)),)*
-                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
                 }
             }
 
             pub fn is_inline(self) -> bool {
                 match self {
                     $(Kind::$name)|* => true,
-                    Kind::Empty | Kind::Undef | Kind::Ref | Kind::Large | Kind::None => false,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::None => false,
                 }
             }
         }
@@ -93,6 +93,7 @@ impl Kind {
 // -- Value ------------------------------------------------------------
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Value {
     kind: Kind,
     word: u64,
@@ -117,7 +118,7 @@ const _: () = assert!(
 
 impl Default for Value {
     fn default() -> Value {
-        Value::EMPTY
+        Value::UNDEF
     }
 }
 
@@ -127,8 +128,8 @@ impl Default for Value {
 unsafe impl Send for Value {}
 unsafe impl Sync for Value {}
 
-impl Drop for Value {
-    fn drop(&mut self) {
+impl Release for Value {
+    fn release(self) {
         if self.kind == Kind::Large {
             let p = self.payload();
             // SAFETY: the payload is live and is not used after this.
@@ -158,10 +159,6 @@ fn large<T>(vtable: &'static Vtable, value: T) -> Value {
 impl Value {
     pub const WORD_OFFSET: usize = 8;
 
-    pub const EMPTY: Value = Value {
-        kind: Kind::Empty,
-        word: 0,
-    };
     pub const UNDEF: Value = Value {
         kind: Kind::Undef,
         word: 0,
@@ -219,10 +216,8 @@ impl Value {
         T: Send + Sync + 'static,
     {
         if TypeId::of::<T>() == TypeId::of::<Value>() {
-            // SAFETY: T is Value; the copy takes over and self is forgotten.
-            let same: T = unsafe { mem::transmute_copy(&self) };
-            mem::forget(self);
-            return same;
+            // SAFETY: T is Value, one bit pattern under another name.
+            return unsafe { mem::transmute_copy(&self) };
         }
         match Kind::of::<T>() {
             Some(kind) => {
@@ -233,7 +228,6 @@ impl Value {
                     std::any::type_name::<T>()
                 );
                 let word = self.word;
-                mem::forget(self);
                 let mut out = MaybeUninit::<T>::uninit();
                 // SAFETY: erase wrote T's bytes into the low bytes of the word.
                 unsafe {
@@ -253,7 +247,6 @@ impl Value {
                     std::any::type_name::<T>()
                 );
                 let p = self.payload();
-                mem::forget(self);
                 // SAFETY: the payload was allocated by `large` as Box<Slot<T>>.
                 let slot = unsafe { Box::from_raw(p.cast::<Slot<T>>().as_ptr()) };
                 let Slot { value, .. } = *slot;
@@ -337,50 +330,6 @@ impl Value {
         &mut self.word
     }
 
-    #[inline]
-    pub fn take(&mut self) -> Value {
-        mem::replace(self, Value::EMPTY)
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.kind == Kind::Empty
-    }
-
-    /// The word copy a primitive gets (RFC-0018); a `Large` value moves out
-    /// of its storage, which is left `Empty`.
-    #[inline]
-    pub fn use_from(slot: &mut Value) -> Value {
-        match slot.kind {
-            Kind::Large => slot.take(),
-            Kind::Empty => panic!("use: accessed moved-out value"),
-            Kind::Undef => Value::UNDEF,
-            Kind::Ref | Kind::None => slot.copy_word(),
-            inline => {
-                debug_assert!(inline.is_inline(), "use: {inline:?} is not a word");
-                slot.copy_word()
-            }
-        }
-    }
-
-    /// The copy an inline value or a reference gets: the two kinds that are
-    /// their word and own nothing.
-    ///
-    /// The kind check is a `debug_assert!`: `use_from` is the only caller
-    /// that does not already hold the kind, and it reaches here only from
-    /// `Kind::Ref` and the inline kinds.
-    #[inline]
-    pub fn copy_word(&self) -> Value {
-        debug_assert!(
-            self.kind.is_inline() || self.kind == Kind::Ref || self.kind == Kind::None,
-            "copy_word: {self:?} does not copy"
-        );
-        Value {
-            kind: self.kind,
-            word: self.word,
-        }
-    }
-
     // -- References (RFC-0018) ------------------------------------
 
     #[inline]
@@ -426,7 +375,6 @@ impl Value {
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
-            Kind::Empty => write!(f, "<empty>"),
             Kind::Undef => write!(f, "<undef>"),
             Kind::None => {
                 for _ in 0..self.word {
@@ -487,20 +435,29 @@ pub enum PlaceMut<'a> {
 
 // -- The interpreter's own composites --------------------------------
 
-/// The language's array is the extern contract's `Arr` at `T = Value`
-/// (RFC-0022): it crosses without a copy.
-pub type Array = acvus_extern::Arr<Value, ()>;
-pub struct Tuple(pub Vec<Value>);
-/// The language's object is the extern contract's `Obj` at `V = Value`
-/// (RFC-0032).
-pub type Object = acvus_extern::Obj<Value>;
+/// The language's array is the extern contract's `Arr` at
+/// `T = Owned<AcvusRuntime>` (RFC-0022, RFC-0048 §7): it crosses without a
+/// copy.
+///
+/// A crossing erases and materializes this composite by its `TypeId`, so
+/// `acvus-extern`'s `Arr<Owned<Rt>, ()>` and this alias must name the same
+/// Rust type. Spell one of them `Rt::Value` and both crates still compile
+/// while every array that crosses the boundary misses this vtable.
+pub type Array = acvus_extern::Arr<Owned<AcvusRuntime>, ()>;
+pub struct Tuple(pub Vec<Owned<AcvusRuntime>>);
+/// The language's object is the extern contract's `Obj` at
+/// `V = Owned<AcvusRuntime>` (RFC-0032), under the same obligation as
+/// `Array`.
+pub type Object = acvus_extern::Obj<Owned<AcvusRuntime>>;
 
-/// The language's variant is the extern contract's `Variant` at `V = Value`.
-pub type VariantValue = acvus_extern::Variant<Value>;
+/// The language's variant is the extern contract's `Variant` at
+/// `V = Owned<AcvusRuntime>`, under the same obligation as `Array`.
+pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 
-/// The language's `Result<T, E>` is Rust's `Result` at `T = E = Value`, so
-/// it crosses the extern boundary as itself (RFC-0038).
-pub type ResultValue = Result<Value, Value>;
+/// The language's `Result<T, E>` is Rust's `Result` at
+/// `T = E = Owned<AcvusRuntime>`, so it crosses the extern boundary as
+/// itself (RFC-0038), under the same obligation as `Array`.
+pub type ResultValue = Result<Owned<AcvusRuntime>, Owned<AcvusRuntime>>;
 
 /// A self-contained callable: execution context, prepared body, captures.
 ///
@@ -511,7 +468,7 @@ pub struct FnValue {
     pub shared: Arc<InterpreterContext>,
     pub page: Arc<dyn crate::journal::RuntimeContext>,
     pub code: Arc<Code>,
-    pub captures: Arc<[Value]>,
+    pub captures: Arc<[Owned<AcvusRuntime>]>,
 }
 
 impl Clone for FnValue {
@@ -695,16 +652,16 @@ impl Value {
     pub fn string(s: impl Into<String>) -> Self {
         large(&STRING, s.into())
     }
-    pub fn array(items: Vec<Value>) -> Self {
+    pub fn array(items: Vec<Owned<AcvusRuntime>>) -> Self {
         large(&ARRAY, Array::new(items))
     }
-    pub fn tuple(items: Vec<Value>) -> Self {
+    pub fn tuple(items: Vec<Owned<AcvusRuntime>>) -> Self {
         large(&TUPLE, Tuple(items))
     }
-    pub fn object(fields: FxHashMap<Astr, Value>) -> Self {
+    pub fn object(fields: FxHashMap<Astr, Owned<AcvusRuntime>>) -> Self {
         large(&OBJECT, acvus_extern::Obj(fields))
     }
-    pub fn variant(tag: Astr, payload: Option<Value>) -> Self {
+    pub fn variant(tag: Astr, payload: Option<Owned<AcvusRuntime>>) -> Self {
         large(
             &VARIANT,
             VariantValue {
@@ -811,17 +768,17 @@ impl Value {
     }
     /// # Safety
     /// The value is an `Array`.
-    pub unsafe fn as_array(&self) -> &[Value] {
+    pub unsafe fn as_array(&self) -> &[Owned<AcvusRuntime>] {
         unsafe { &self.peek::<Array>().0 }
     }
     /// # Safety
     /// The value is a `Tuple`.
-    pub unsafe fn as_tuple(&self) -> &[Value] {
+    pub unsafe fn as_tuple(&self) -> &[Owned<AcvusRuntime>] {
         unsafe { &self.peek::<Tuple>().0 }
     }
     /// # Safety
     /// The value is an `Object`.
-    pub unsafe fn as_object(&self) -> &FxHashMap<Astr, Value> {
+    pub unsafe fn as_object(&self) -> &FxHashMap<Astr, Owned<AcvusRuntime>> {
         unsafe { &self.peek::<Object>().0 }
     }
     /// # Safety
@@ -836,7 +793,7 @@ impl Value {
     }
     /// # Safety
     /// The value is an `Object`.
-    pub unsafe fn as_object_mut(&mut self) -> &mut FxHashMap<Astr, Value> {
+    pub unsafe fn as_object_mut(&mut self) -> &mut FxHashMap<Astr, Owned<AcvusRuntime>> {
         unsafe { &mut self.peek_mut::<Object>().0 }
     }
     /// # Safety
@@ -935,7 +892,7 @@ mod tests {
 
     #[test]
     fn the_kinds_that_no_rust_type_was_erased_into_name_none() {
-        for kind in [Kind::Empty, Kind::Undef, Kind::Ref, Kind::Large, Kind::None] {
+        for kind in [Kind::Undef, Kind::Ref, Kind::Large, Kind::None] {
             assert_eq!(kind.type_id(), None, "{kind:?}");
             assert_eq!(kind.name(), None, "{kind:?}");
             assert!(!kind.is_inline(), "{kind:?}");
@@ -948,7 +905,6 @@ mod tests {
         let r = Value::reference(&v);
         assert_eq!(r.kind(), Kind::Ref);
         assert_eq!(unsafe { r.target() }.as_int(), 3);
-        assert_eq!(r.copy_word(), r);
     }
 
     #[test]
@@ -967,14 +923,6 @@ mod tests {
     }
 
     #[test]
-    fn take_leaves_empty() {
-        let mut v = Value::int(42);
-        let taken = v.take();
-        assert!(v.is_empty());
-        assert_eq!(taken.as_int(), 42);
-    }
-
-    #[test]
     fn erase_materialize_round_trip() {
         let v = unsafe { Value::erase(7i64) };
         assert_eq!(unsafe { v.materialize::<i64>() }, 7);
@@ -982,15 +930,28 @@ mod tests {
         assert_eq!(unsafe { v.materialize::<String>() }, "hi");
     }
 
+    struct Counted(Arc<()>);
+
     #[test]
-    fn dropping_a_vec_of_values_releases_them() {
-        struct Counted(Arc<()>);
+    fn dropping_a_vec_of_owned_releases_them() {
         let alive = Arc::new(());
-        let values: Vec<Value> = (0..3)
-            .map(|_| unsafe { Value::erase(Counted(Arc::clone(&alive))) })
+        let values: Vec<Owned<AcvusRuntime>> = (0..3)
+            .map(|_| Owned::from_value(unsafe { Value::erase(Counted(Arc::clone(&alive))) }))
             .collect();
         assert_eq!(Arc::strong_count(&alive), 4);
         drop(values);
+        assert_eq!(Arc::strong_count(&alive), 1);
+    }
+
+    #[test]
+    fn a_value_leaving_scope_releases_nothing_and_release_does() {
+        let alive = Arc::new(());
+        let large = unsafe { Value::erase(Counted(Arc::clone(&alive))) };
+        {
+            let _copy = large;
+        }
+        assert_eq!(Arc::strong_count(&alive), 2);
+        large.release();
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 }

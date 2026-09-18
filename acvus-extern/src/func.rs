@@ -15,6 +15,7 @@ use acvus_utils::Interner;
 
 use crate::effect::{EffectArg, EffectVar};
 use crate::obj::Cross;
+use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
@@ -46,7 +47,7 @@ pub trait ClosureFn<Rt: Runtime> {
 
 macro_rules! define_fn_arg {
     ($name:ident; $($A:ident : $slot:literal),*) => {
-        pub struct $name<$($A,)* R, E, Rt>(Rt::Value, bool, PhantomData<($($A,)* R, E)>)
+        pub struct $name<$($A,)* R, E, Rt>(Owned<Rt>, bool, PhantomData<($($A,)* R, E)>)
         where
             $($A: TyVar,)*
             R: TyVar,
@@ -62,11 +63,11 @@ macro_rules! define_fn_arg {
         {
             pub fn new(rt: &Rt, value: Rt::Value) -> Self {
                 let sync = rt.call_is_sync(&value);
-                Self(value, sync, PhantomData)
+                Self(Owned::from_value(value), sync, PhantomData)
             }
 
             pub fn into_value(self) -> Rt::Value {
-                self.0
+                self.0.into_value()
             }
 
             /// Whether a call reaches its result without a future,
@@ -90,7 +91,7 @@ macro_rules! define_fn_arg {
             Rt: Runtime,
         {
             fn erase(self, _: &Rt) -> Rt::Value {
-                self.0
+                self.0.into_value()
             }
 
             unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {

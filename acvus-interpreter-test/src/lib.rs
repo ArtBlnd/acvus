@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod listing;
 pub mod scripts;
 
-use acvus_extern::{Externs, Registry};
+use acvus_extern::{Externs, Owned, Registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::{
     ContextWrite, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
@@ -42,12 +43,12 @@ pub fn typed(ty: Ty, value: Value) -> TypedValue {
 pub fn split_context(
     interner: &Interner,
     context: Context,
-) -> (FxHashMap<Astr, Ty>, HashMap<String, Value>) {
+) -> (FxHashMap<Astr, Ty>, HashMap<String, Owned<AcvusRuntime>>) {
     let mut types = FxHashMap::default();
     let mut snapshot = HashMap::new();
     for (name, TypedValue { ty, value }) in context {
         types.insert(name, ty);
-        snapshot.insert(interner.resolve(name).to_string(), value);
+        snapshot.insert(interner.resolve(name).to_string(), Owned::from_value(value));
     }
     (types, snapshot)
 }
@@ -242,7 +243,7 @@ where
 pub fn execute_compiled(
     interner: &Interner,
     cr: CompileResult,
-    snapshot: HashMap<String, Value>,
+    snapshot: HashMap<String, Owned<AcvusRuntime>>,
     executor: Arc<dyn acvus_interpreter::Executor>,
 ) -> (InterpreterContext, Interpreter) {
     let mut functions = cr.extern_executables;
@@ -431,7 +432,12 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
             let len = items.len();
             typed(
                 Ty::Array(Box::new(elem), LenTerm::Known(len)),
-                Value::array(items.into_iter().map(|t| t.value).collect()),
+                Value::array(
+                    items
+                        .into_iter()
+                        .map(|t| Owned::from_value(t.value))
+                        .collect(),
+                ),
             )
         }
         serde_json::Value::Object(fields) => {
@@ -441,7 +447,7 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
                 let key = interner.intern(k);
                 let TypedValue { ty, value } = value_from_json(interner, v);
                 tys.insert(key, ty);
-                values.insert(key, value);
+                values.insert(key, Owned::from_value(value));
             }
             typed(Ty::Object(tys), Value::object(values))
         }
@@ -474,9 +480,9 @@ pub fn user_context(interner: &Interner) -> Context {
                 (email, Ty::String),
             ])),
             Value::object(FxHashMap::from_iter([
-                (name, Value::string("alice")),
-                (age, Value::int(30)),
-                (email, Value::string("alice@example.com")),
+                (name, Owned::from_value(Value::string("alice"))),
+                (age, Owned::from_value(Value::int(30))),
+                (email, Owned::from_value(Value::string("alice@example.com"))),
             ])),
         ),
     )])
@@ -488,7 +494,12 @@ pub fn items_context(interner: &Interner, items: Vec<i64>) -> Context {
         interner.intern("items"),
         typed(
             Ty::Array(Box::new(Ty::I64), LenTerm::Known(len)),
-            Value::array(items.into_iter().map(Value::int).collect()),
+            Value::array(
+                items
+                    .into_iter()
+                    .map(|n| Owned::from_value(Value::int(n)))
+                    .collect(),
+            ),
         ),
     )])
 }

@@ -343,7 +343,7 @@ fn generate_extern_fn(
             let positions = (0..arity).map(proc_macro2::Literal::usize_unsuffixed);
             quote! {
                 debug_assert_eq!(__args.len(), #arity, "arity checked by typeck");
-                #(let #taken_idents = ::core::mem::take(&mut __args[#positions]);)*
+                #(let #taken_idents = __args[#positions];)*
             }
         };
         let bind_stmts: Vec<proc_macro2::TokenStream> = params
@@ -376,6 +376,7 @@ fn generate_extern_fn(
             .collect();
         let bind = quote! { #(#bind_stmts)* };
         let mut acvus_args = arg_idents.iter();
+        let mut state_at = 0usize;
         let passed: Vec<proc_macro2::TokenStream> = rust_params
             .iter()
             .map(|p| match p {
@@ -383,35 +384,82 @@ fn generate_extern_fn(
                     let a = acvus_args.next().expect("one ident per acvus parameter");
                     quote! { #a }
                 }
-                RustParam::State(st) => {
-                    let ident = &st.ident;
-                    quote! { &*#ident }
+                RustParam::State(_) => {
+                    let at = proc_macro2::Literal::usize_unsuffixed(state_at);
+                    state_at += 1;
+                    quote! { &__state.#at }
                 }
             })
             .collect();
-        let state_idents: Vec<&Ident> = states.iter().map(|st| &st.ident).collect();
-        let hold_state = quote! {
-            #(let #state_idents = ::std::sync::Arc::clone(&#state_idents);)*
+        let state_tys: Vec<&Type> = states.iter().map(|st| &st.ty).collect();
+        let unpack_state = quote! {
+            let __state = __st
+                .downcast_ref::<(#(#state_tys,)*)>()
+                .expect("a stateful extern's state is the tuple its declaration takes");
         };
         let returned = quote! { <#rt_ret as #ret_cross<__R>>::erase(__r, __rt) };
         let rt_arg = has_runtime.then(|| quote! { __rt, });
+        let stateful = !states.is_empty();
+        let state_param = stateful.then(|| quote! { __st: ::acvus_extern::StateRef<'_>, });
+        let state_prelude = stateful.then(|| unpack_state.clone());
+        let abi_enum = if stateful {
+            quote! { ::acvus_extern::StateAbi }
+        } else {
+            quote! { ::acvus_extern::SyncAbi }
+        };
+        let sync_call = |abi: proc_macro2::TokenStream| -> proc_macro2::TokenStream {
+            if stateful {
+                quote! {
+                    ::acvus_extern::SyncCall::Stateful {
+                        state: ::std::sync::Arc::clone(&__state_arc),
+                        abi: #abi,
+                    }
+                }
+            } else {
+                quote! { ::acvus_extern::SyncCall::Plain(#abi) }
+            }
+        };
         if awaits {
             let awaited = quote! { (#callee #turbofish (#rt_arg #(#passed),*)).await };
-            quote! {{
-                #hold_state
-                ::acvus_extern::ExternHandler::Async(::std::sync::Arc::new(
-                    move |__rt: __R, __args: &mut [<__R as ::acvus_extern::Runtime>::Value]| {
-                        #hold_state
-                        #take
-                        ::std::boxed::Box::pin(async move {
-                            let __rt = &__rt;
-                            #bind
-                            let __r = #awaited;
-                            #returned
-                        })
+            let async_call = if stateful {
+                let alias = quote! { ::acvus_extern::AsyncState };
+                quote! {
+                    ::acvus_extern::AsyncCall::Stateful {
+                        state: ::std::sync::Arc::clone(&__state_arc),
+                        f: {
+                            let __f: #alias<__R> = |__st_owned, __rt, __args| {
+                                #take
+                                ::std::boxed::Box::pin(async move {
+                                    let __st: ::acvus_extern::StateRef<'_> = __st_owned.as_ref();
+                                    #unpack_state
+                                    let __rt = &__rt;
+                                    #bind
+                                    let __r = #awaited;
+                                    #returned
+                                })
+                            };
+                            __f
+                        },
                     }
-                ))
-            }}
+                }
+            } else {
+                let alias = quote! { ::acvus_extern::Async };
+                quote! {
+                    ::acvus_extern::AsyncCall::Plain({
+                        let __f: #alias<__R> = |__rt, __args| {
+                            #take
+                            ::std::boxed::Box::pin(async move {
+                                let __rt = &__rt;
+                                #bind
+                                let __r = #awaited;
+                                #returned
+                            })
+                        };
+                        __f
+                    })
+                }
+            };
+            quote! { ::acvus_extern::ExternHandler::Async(#async_call) }
         } else {
             let result = quote! { #callee #turbofish (#rt_arg #(#passed),*) };
             let body = quote! {
@@ -419,45 +467,65 @@ fn generate_extern_fn(
                 let __r = #result;
                 #returned
             };
-            let value_ty = quote! { <__R as ::acvus_extern::Runtime>::Value };
             if unboxed_slice {
                 let container = &taken_idents[0];
-                return quote! {{
-                    #hold_state
-                    ::acvus_extern::ExternHandler::Sync(
-                        ::acvus_extern::SyncHandler::Slice(
-                            ::acvus_extern::SliceHandler::new(
-                                move |__rt: &__R, #container: #value_ty| {
-                                    #bind
-                                    let __r = #result;
-                                    __r.into_elements()
-                                }
-                            )
-                        )
-                    )
-                }};
+                let alias = if stateful {
+                    quote! { ::acvus_extern::StateSlice }
+                } else {
+                    quote! { ::acvus_extern::SyncSlice }
+                };
+                let abi = quote! {
+                    #abi_enum::Slice({
+                        let __f: #alias<__R> = |#state_param __rt, #container| {
+                            #state_prelude
+                            #bind
+                            let __r = #result;
+                            __r.into_elements()
+                        };
+                        __f
+                    })
+                };
+                let call = sync_call(abi);
+                return quote! { ::acvus_extern::ExternHandler::Sync(#call) };
             }
-            match by_value_variant(arity) {
-                Some(variant) => quote! {{
-                    #hold_state
-                    ::acvus_extern::ExternHandler::#sync_variant(
-                        ::acvus_extern::SyncHandler::#variant(::std::sync::Arc::new(
-                            move |__rt: &__R #(, #taken_idents: #value_ty)*| { #body }
-                        ))
-                    )
-                }},
-                None => quote! {{
-                    #hold_state
-                    ::acvus_extern::ExternHandler::#sync_variant(
-                        ::acvus_extern::SyncHandler::ArityN(::std::sync::Arc::new(
-                            move |__rt: &__R, __args: &mut [#value_ty]| {
+            let abi = match by_value_variant(arity) {
+                Some(variant) => {
+                    let alias = if stateful {
+                        format_ident!("State{arity}")
+                    } else {
+                        format_ident!("Sync{arity}")
+                    };
+                    quote! {
+                        #abi_enum::#variant({
+                            let __f: ::acvus_extern::#alias<__R> =
+                                |#state_param __rt #(, #taken_idents)*| {
+                                    #state_prelude
+                                    #body
+                                };
+                            __f
+                        })
+                    }
+                }
+                None => {
+                    let alias = if stateful {
+                        quote! { ::acvus_extern::StateWindow }
+                    } else {
+                        quote! { ::acvus_extern::SyncWindow }
+                    };
+                    quote! {
+                        #abi_enum::Window({
+                            let __f: #alias<__R> = |#state_param __rt, __args| {
+                                #state_prelude
                                 #take
                                 #body
-                            }
-                        ))
-                    )
-                }},
-            }
+                            };
+                            __f
+                        })
+                    }
+                }
+            };
+            let call = sync_call(abi);
+            quote! { ::acvus_extern::ExternHandler::#sync_variant(#call) }
         }
     };
 
@@ -474,13 +542,12 @@ fn generate_extern_fn(
                 let uniform = vars.to_compile_time_uniform(ty, member);
                 let rt_ty = vars.to_runtime_instance(ty, Some(member));
                 let handler = |body: proc_macro2::TokenStream| quote! {
-                    ::acvus_extern::ExternHandler::Sync(
-                        ::acvus_extern::SyncHandler::Arity1(::std::sync::Arc::new(
-                            move |__rt: &__R, __v: <__R as ::acvus_extern::Runtime>::Value| {
-                                #body
-                            }
-                        ))
-                    )
+                    ::acvus_extern::ExternHandler::Sync(::acvus_extern::SyncCall::Plain(
+                        ::acvus_extern::SyncAbi::Arity1({
+                            let __f: ::acvus_extern::Sync1<__R> = |__rt, __v| { #body };
+                            __f
+                        })
+                    ))
                 };
                 let erase = handler(quote! {
                     <#rt_ty as ::acvus_extern::Cross<__R>>::erase(
@@ -588,6 +655,12 @@ fn generate_extern_fn(
     let rt_bounds = quote! { __R: ::acvus_extern::Runtime, };
     let state_idents: Vec<&Ident> = states.iter().map(|st| &st.ident).collect();
     let state_tys: Vec<&Type> = states.iter().map(|st| &st.ty).collect();
+    let state_arc = (!states.is_empty()).then(|| {
+        quote! {
+            let __state_arc: ::acvus_extern::State =
+                ::std::sync::Arc::new((#(#state_idents,)*));
+        }
+    });
     Ok(quote! {
         #func
 
@@ -602,7 +675,7 @@ fn generate_extern_fn(
             #(#state_tys: ::core::marker::Send + ::core::marker::Sync + 'static,)*
         {
             let __vars = ::acvus_extern::PolyVars::fresh(#counts);
-            #(let #state_idents = ::std::sync::Arc::new(#state_idents);)*
+            #state_arc
             let mut __casts: ::std::vec::Vec<::acvus_extern::ExternFn<__R>> = ::std::vec::Vec::new();
             #(#casts)*
             let __declared = ::acvus_extern::ExternFn {
@@ -1087,9 +1160,10 @@ impl<'a> ObjectShape<'a> {
                     ::acvus_extern::erase_field::<#tys, __R>(__rt, #owner.#idents),
                 );
             )*
-            // SAFETY: the language's object is `Obj<Value>` (RFC-0032).
+            // SAFETY: the language's object is `Obj<Owned<R>>` (RFC-0032,
+            // RFC-0048 §7).
             unsafe {
-                __rt.erase::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(
+                __rt.erase::<::acvus_extern::Obj<::acvus_extern::Owned<__R>>>(
                     ::acvus_extern::Obj(__fields),
                 )
             }
@@ -1107,9 +1181,10 @@ impl<'a> ObjectShape<'a> {
                     ::acvus_extern::erase_field::<#tys, __R>(__rt, #idents),
                 );
             )*
-            // SAFETY: the language's object is `Obj<Value>` (RFC-0032).
+            // SAFETY: the language's object is `Obj<Owned<R>>` (RFC-0032,
+            // RFC-0048 §7).
             unsafe {
-                __rt.erase::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(
+                __rt.erase::<::acvus_extern::Obj<::acvus_extern::Owned<__R>>>(
                     ::acvus_extern::Obj(__fields),
                 )
             }
@@ -1124,9 +1199,9 @@ impl<'a> ObjectShape<'a> {
     ) -> proc_macro2::TokenStream {
         let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
         quote! {{
-            // SAFETY: the caller's contract, and `erase` boxes an `Obj<Value>`.
+            // SAFETY: the caller's contract, and `erase` boxes an `Obj<Owned<R>>`.
             let ::acvus_extern::Obj(mut __fields) = unsafe {
-                __rt.materialize::<::acvus_extern::Obj<<__R as ::acvus_extern::Runtime>::Value>>(#value)
+                __rt.materialize::<::acvus_extern::Obj<::acvus_extern::Owned<__R>>>(#value)
             };
             #path {
                 // SAFETY: the caller's contract, forwarded: `erase` erased each field
@@ -1200,7 +1275,7 @@ fn generate_enum_ty_arg(
                 let ty = shape.poly_ty();
                 let erase = shape.erase_bound();
                 let materialize = shape.materialize(
-                    quote! { ::acvus_extern::take_payload(__payload, #tag) },
+                    quote! { ::acvus_extern::take_payload(__payload, #tag).into_value() },
                     quote! { Self::#v },
                 );
                 variant_tys.push(quote! {
@@ -1209,7 +1284,9 @@ fn generate_enum_ty_arg(
                 erase_arms.push(quote! {
                     Self::#v { #(#idents),* } => (
                         __rt.symbol(#tag),
-                        ::core::option::Option::Some(::std::boxed::Box::new(#erase)),
+                        ::core::option::Option::Some(::std::boxed::Box::new(
+                            ::acvus_extern::Owned::from_value(#erase),
+                        )),
                     )
                 });
                 materialize_arms.push(quote! { if __tag == __rt.symbol(#tag) { #materialize } });
@@ -1225,17 +1302,18 @@ fn generate_enum_ty_arg(
     };
     let erase = quote! {{
         let (__tag, __payload) = match self { #(#erase_arms,)* };
-        // SAFETY: the language's variant is `Variant<Value>`.
+        // SAFETY: the language's variant is `Variant<Owned<R>>` (RFC-0048 §7).
         unsafe {
-            __rt.erase::<::acvus_extern::Variant<<__R as ::acvus_extern::Runtime>::Value>>(
+            __rt.erase::<::acvus_extern::Variant<::acvus_extern::Owned<__R>>>(
                 ::acvus_extern::Variant { tag: __tag, payload: __payload },
             )
         }
     }};
     let materialize = quote! {{
-        // SAFETY: the caller's contract, and `erase` boxes a `Variant<Value>`.
+        // SAFETY: the caller's contract, and `erase` boxes a
+        // `Variant<Owned<R>>`.
         let ::acvus_extern::Variant { tag: __tag, payload: __payload } = unsafe {
-            __rt.materialize::<::acvus_extern::Variant<<__R as ::acvus_extern::Runtime>::Value>>(__value)
+            __rt.materialize::<::acvus_extern::Variant<::acvus_extern::Owned<__R>>>(__value)
         };
         #(#materialize_arms else)*
         {

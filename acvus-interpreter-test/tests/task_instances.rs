@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::thread::ThreadId;
 
 use acvus_extern::{Externs, Registry, extern_fn, extern_registry};
-use acvus_interpreter::code::{Code, Payload};
+use acvus_interpreter::code::Code;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, TokioExecutor, Value, prepare_module};
+use acvus_interpreter_test::listing::{code_listing, ops_of_anywhere};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::{ParsedAst, QualifiedRef};
 use acvus_mir::ir::MirBody;
@@ -359,12 +360,9 @@ async fn a_pipeline_over_a_heavy_extern_is_asynchronous() {
 // -- The shape the type bought ------------------------------------------
 
 fn loop_count(code: &Code) -> usize {
-    let Code::Body(body) = code else {
-        panic!("a module entry is a Body")
-    };
-    body.payloads
+    ops_of_anywhere(&code_listing(code))
         .iter()
-        .filter(|payload| matches!(payload, Payload::Loop(_)))
+        .filter(|name| *name == "Loop")
         .count()
 }
 

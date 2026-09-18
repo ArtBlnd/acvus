@@ -12,7 +12,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::{Registry, extern_fn, extern_registry};
+use acvus_extern::{Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
 use acvus_interpreter_test::{
     Context, compile_source_with_externs, execute_compiled, split_context, typed,
@@ -159,7 +159,7 @@ fn context(interner: &Interner, n: i64) -> Context {
         .collect()
 }
 
-fn snapshot(interner: &Interner, n: i64) -> HashMap<String, Value> {
+fn snapshot(interner: &Interner, n: i64) -> HashMap<String, Owned<AcvusRuntime>> {
     split_context(interner, context(interner, n)).1
 }
 

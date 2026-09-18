@@ -123,8 +123,9 @@ async fn bool_of(source: &str) -> bool {
 async fn strings_of(source: &str) -> Vec<String> {
     let i = Interner::new();
     let v = run(&i, source).await;
-    // SAFETY: the script's result is a `Vec<T>` and `T` is erased as `Value`.
-    let items: Vec<Value> = unsafe { v.materialize() };
+    // SAFETY: the script's result is a `Vec<T>`, whose store is the run of
+    // `Owned` the element type erases to (RFC-0048 §1).
+    let items: Vec<acvus_extern::Owned<AcvusRuntime>> = unsafe { v.materialize() };
     items
         .iter()
         .map(|item| {

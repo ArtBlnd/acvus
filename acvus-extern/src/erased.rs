@@ -7,6 +7,7 @@ use acvus_mir::ty::PolyTy;
 use acvus_utils::Interner;
 
 use crate::obj::{Cross, FromValue, Inline, Stored, TransparentOver, expect_type};
+use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg};
 
@@ -14,7 +15,7 @@ use crate::ty_arg::{PolyVars, TyArg};
 /// a type converted on the way in (a derived struct, stored as an `Obj`)
 /// has no `T` in storage to read, so it is refused at the type.
 #[repr(transparent)]
-pub struct Erased<R, T>(R::Value, PhantomData<T>)
+pub struct Erased<R, T>(Owned<R>, PhantomData<T>)
 where
     R: Runtime,
     T: Stored<R>;
@@ -25,7 +26,7 @@ where
     T: Stored<R>,
 {
     pub fn new(rt: &R, value: T) -> Self {
-        Self(value.erase(rt), PhantomData)
+        Self(Owned::from_value(value.erase(rt)), PhantomData)
     }
 
     pub fn as_ref<'a>(&'a self, rt: &'a R) -> &'a T {
@@ -41,11 +42,11 @@ where
 
     pub fn into_inner(self, rt: &R) -> T {
         // SAFETY: `new` erased the value from a `T`.
-        unsafe { T::materialize(rt, self.0) }
+        unsafe { T::materialize(rt, self.0.into_value()) }
     }
 
     pub fn into_value(self) -> R::Value {
-        self.0
+        self.0.into_value()
     }
 
     pub fn get(&self) -> T
@@ -119,11 +120,11 @@ where
     const STORED_AS_VALUE: bool = true;
 
     fn erase(self, _: &R) -> R::Value {
-        self.0
+        self.0.into_value()
     }
 
     unsafe fn materialize(_: &R, value: R::Value) -> Self {
-        Self(value, PhantomData)
+        Self(Owned::from_value(value), PhantomData)
     }
 
     unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
@@ -142,8 +143,8 @@ where
     }
 }
 
-// SAFETY: `#[repr(transparent)]` above, with `R::Value` the one
-// non-zero-sized field.
+// SAFETY: `#[repr(transparent)]` above, over `Owned<R>`, itself
+// `#[repr(transparent)]` over `R::Value`.
 unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
 where
     R: Runtime,
@@ -158,7 +159,7 @@ where
 {
     fn from_value(rt: &R, value: R::Value) -> Self {
         expect_type::<T, R>(rt, &value);
-        Self(value, PhantomData)
+        Self(Owned::from_value(value), PhantomData)
     }
 }
 

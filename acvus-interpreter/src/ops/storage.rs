@@ -1,18 +1,135 @@
-//! Storage: references, reads, assignments, contexts, and field access
+//! Storage: references, reads, assignments, contexts and field access
 //! (RFC-0018, RFC-0024, RFC-0025).
 //!
-//! `CLONE` is what the preparation read from the destination's type: a
-//! `String` read out of a storage is cloned, every other value is moved or
-//! copied by `Value::use_from`.
+//! `THROUGH`, `CLONE`, `LARGE` and the `Segment` type parameter are the four
+//! facts `prepare` reads off the types at every storage instruction; nothing
+//! in this file re-derives them, so a wrong one is a defect in `prepare`.
 
+use acvus_extern::{Owned, Release};
 use acvus_utils::{Astr, Interner};
 
-use crate::code::{Flow, Op, Step};
+use std::marker::PhantomData;
+use std::mem;
+
+use crate::code::{Off, Op, Step};
 use crate::machine::{Frame, Machine};
-use crate::ops::payload;
+use crate::ops::arith::Unary;
+use crate::ops::variant::scrutinee;
+use crate::regs::Regs;
 use crate::value::{Kind, Place, PlaceMut, Value};
 
-fn field<'a>(value: &'a Value, f: Astr, interner: &Interner) -> &'a Value {
+// -- Segments ---------------------------------------------------------
+
+/// One resolved path segment as a type, so that a path of exactly one step
+/// reaches its place with no branch.
+pub trait Segment: Send + Sync + 'static {
+    fn at<'v>(&self, value: &'v Value, interner: &Interner) -> Place<'v>;
+    fn at_mut<'v>(&self, value: &'v mut Value, interner: &Interner) -> PlaceMut<'v>;
+}
+
+pub struct Field(pub Astr);
+
+impl Segment for Field {
+    #[inline]
+    fn at<'v>(&self, value: &'v Value, interner: &Interner) -> Place<'v> {
+        Place::At(field(value, self.0, interner))
+    }
+
+    #[inline]
+    fn at_mut<'v>(&self, value: &'v mut Value, interner: &Interner) -> PlaceMut<'v> {
+        PlaceMut::At(field_mut(value, self.0, interner))
+    }
+}
+
+/// An array and a tuple hold their elements in two different Rust types, and
+/// `ARRAY` is which one the preparation read from the type the step stands
+/// on. `code::Step::Index` does not record it, which is why the boxed walk
+/// below has to ask the value and this form does not.
+pub struct Index<const ARRAY: bool>(pub usize);
+
+impl<const ARRAY: bool> Segment for Index<ARRAY> {
+    #[inline]
+    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+        // SAFETY (both arms): the preparation read the shape off the type.
+        Place::At(match ARRAY {
+            true => unsafe { &value.as_array()[self.0] },
+            false => unsafe { &value.as_tuple()[self.0] },
+        })
+    }
+
+    #[inline]
+    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+        // SAFETY (both arms): the preparation read the shape off the type.
+        PlaceMut::At(match ARRAY {
+            true => unsafe { &mut value.as_array_mut().0[self.0] },
+            false => unsafe { &mut value.as_tuple_mut().0[self.0] },
+        })
+    }
+}
+
+pub struct OptionPayload;
+
+impl Segment for OptionPayload {
+    #[inline]
+    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+        value.option_payload().expect(PAYLOAD_OF_NONE)
+    }
+
+    #[inline]
+    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+        if let Some(depth) = depth_payload(value) {
+            return PlaceMut::Depth(depth);
+        }
+        PlaceMut::At(value.option_payload_mut().expect(PAYLOAD_OF_NONE))
+    }
+}
+
+pub struct ResultPayload;
+
+impl Segment for ResultPayload {
+    #[inline]
+    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+        // SAFETY: the preparation read `Result` from the type.
+        let (Ok(payload) | Err(payload)) = unsafe { value.as_result() };
+        Place::At(payload)
+    }
+
+    #[inline]
+    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+        // SAFETY: the preparation read `Result` from the type.
+        let (Ok(payload) | Err(payload)) = unsafe { value.as_result_mut() };
+        PlaceMut::At(payload)
+    }
+}
+
+pub struct VariantPayload;
+
+impl Segment for VariantPayload {
+    #[inline]
+    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+        // SAFETY: the preparation read an enum from the type.
+        let held = unsafe { value.as_variant() }
+            .payload
+            .as_deref()
+            .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE);
+        Place::At(held)
+    }
+
+    #[inline]
+    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+        // SAFETY: the preparation read an enum from the type.
+        let held = unsafe { value.as_variant_mut() }
+            .payload
+            .as_deref_mut()
+            .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE);
+        PlaceMut::At(held)
+    }
+}
+
+const PAYLOAD_OF_NONE: &str = "a payload path on None";
+const PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE: &str = "a payload path names a variant that carries one";
+
+fn field<'v>(value: &'v Value, f: Astr, interner: &Interner) -> &'v Value {
     assert!(value.is_object(), "field load on non-object: {value:?}");
     // SAFETY: is_object checked the vtable id.
     unsafe { value.as_object() }
@@ -20,7 +137,7 @@ fn field<'a>(value: &'a Value, f: Astr, interner: &Interner) -> &'a Value {
         .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
 }
 
-fn field_mut<'a>(value: &'a mut Value, f: Astr, interner: &Interner) -> &'a mut Value {
+fn field_mut<'v>(value: &'v mut Value, f: Astr, interner: &Interner) -> &'v mut Value {
     assert!(value.is_object(), "field access on non-object: {value:?}");
     // SAFETY: is_object checked the vtable id.
     unsafe { value.as_object_mut() }
@@ -28,80 +145,46 @@ fn field_mut<'a>(value: &'a mut Value, f: Astr, interner: &Interner) -> &'a mut 
         .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
 }
 
-pub fn walk_path<'a>(value: &'a Value, path: &[Step], interner: &Interner) -> Place<'a> {
+// -- The path walk ----------------------------------------------------
+
+/// A path of more than one step, walked step by step.
+///
+/// The `match` per step is the one RFC-0052 leaves standing, and it is a
+/// decision not to build rather than an omission: unrolling a path into a
+/// type would instantiate this whole family once per path shape a program
+/// writes, to save one predicted jump on a walk that already pays a
+/// dependent load per step. A path of exactly one step never arrives here —
+/// it is a `Segment` the preparation names.
+pub fn walk<'v>(value: &'v Value, steps: &[Step], interner: &Interner) -> Place<'v> {
     let mut at = Place::At(value);
-    for seg in path {
+    for step in steps {
         at = match at {
-            Place::At(v) => step(v, seg, interner),
-            Place::Depth(v) => depth_step(&v, seg),
+            Place::At(v) => segment(v, step, interner),
+            Place::Depth(v) => depth_step(&v, step),
         };
     }
     at
 }
 
-fn step<'a>(value: &'a Value, seg: &Step, interner: &Interner) -> Place<'a> {
-    match seg {
-        Step::Field(f) => Place::At(field(value, *f, interner)),
-        // SAFETY (each arm): the preparation read the shape off the type.
-        Step::Index(i) => Place::At(unsafe {
-            if value.is_array() {
-                &value.as_array()[*i]
-            } else {
-                &value.as_tuple()[*i]
-            }
-        }),
-        Step::OptionPayload => value.option_payload().expect(PAYLOAD_OF_NONE),
-        Step::ResultPayload => Place::At(match unsafe { value.as_result() } {
-            Ok(v) | Err(v) => v,
-        }),
-        Step::VariantPayload => Place::At(
-            unsafe { value.as_variant() }
-                .payload
-                .as_deref()
-                .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE),
-        ),
+fn segment<'v>(value: &'v Value, step: &Step, interner: &Interner) -> Place<'v> {
+    match step {
+        Step::Field(f) => Field(*f).at(value, interner),
+        Step::Index(i) => match value.is_array() {
+            true => Index::<true>(*i).at(value, interner),
+            false => Index::<false>(*i).at(value, interner),
+        },
+        Step::OptionPayload => OptionPayload.at(value, interner),
+        Step::ResultPayload => ResultPayload.at(value, interner),
+        Step::VariantPayload => VariantPayload.at(value, interner),
     }
 }
 
-/// A step under a `None`: the depth word is all there is, so the only step
-/// it admits is the next `Some` it stands for.
-fn depth_step<'a>(value: &Value, seg: &Step) -> Place<'a> {
-    let Step::OptionPayload = seg else {
-        panic!("{seg:?} on {value:?}")
-    };
-    Place::Depth(depth_payload(value).expect("a depth step lands on a depth"))
-}
-
-const PAYLOAD_OF_NONE: &str = "a payload path on None";
-const PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE: &str = "a payload path names a variant that carries one";
-
-/// The place a reference-typed slot names. A `Some` whose payload is a
-/// `None` has no storage to point at, so the reference to that payload is
-/// the `None` itself (RFC-0022).
-#[inline]
-pub fn through(slot: &Value) -> &Value {
-    if slot.kind() == Kind::None {
-        return slot;
-    }
-    // SAFETY: the type checker admits only a live reference here.
-    unsafe { slot.target() }
-}
-
-/// The value a `Ref` instruction leaves in its destination.
-#[inline]
-fn reference_to(place: Place<'_>) -> Value {
-    match place {
-        Place::At(v) => Value::reference(v),
-        Place::Depth(v) => v,
-    }
-}
-
-pub fn walk_path_mut<'a>(value: &'a mut Value, path: &[Step], interner: &Interner) -> PlaceMut<'a> {
+pub fn walk_mut<'v>(value: &'v mut Value, steps: &[Step], interner: &Interner) -> PlaceMut<'v> {
     let mut at = PlaceMut::At(value);
-    for seg in path {
+    for step in steps {
         at = match at {
-            PlaceMut::At(v) => step_mut(v, seg, interner),
-            PlaceMut::Depth(v) => match depth_step(&v, seg) {
+            PlaceMut::At(v) => segment_mut(v, step, interner),
+            PlaceMut::Depth(v) => match depth_step(&v, step) {
                 Place::At(_) => unreachable!("a depth step lands on a depth"),
                 Place::Depth(v) => PlaceMut::Depth(v),
             },
@@ -110,36 +193,30 @@ pub fn walk_path_mut<'a>(value: &'a mut Value, path: &[Step], interner: &Interne
     at
 }
 
-fn step_mut<'a>(value: &'a mut Value, seg: &Step, interner: &Interner) -> PlaceMut<'a> {
-    match seg {
-        Step::Field(f) => PlaceMut::At(field_mut(value, *f, interner)),
-        // SAFETY (each arm): the preparation read the shape off the type.
-        Step::Index(i) => PlaceMut::At(unsafe {
-            if value.is_array() {
-                &mut value.as_array_mut().0[*i]
-            } else {
-                &mut value.as_tuple_mut().0[*i]
-            }
-        }),
-        Step::OptionPayload => {
-            if let Some(depth) = depth_payload(value) {
-                return PlaceMut::Depth(depth);
-            }
-            PlaceMut::At(value.option_payload_mut().expect(PAYLOAD_OF_NONE))
-        }
-        Step::ResultPayload => PlaceMut::At(match unsafe { value.as_result_mut() } {
-            Ok(v) | Err(v) => v,
-        }),
-        Step::VariantPayload => PlaceMut::At(
-            unsafe { value.as_variant_mut() }
-                .payload
-                .as_deref_mut()
-                .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE),
-        ),
+fn segment_mut<'v>(value: &'v mut Value, step: &Step, interner: &Interner) -> PlaceMut<'v> {
+    match step {
+        Step::Field(f) => Field(*f).at_mut(value, interner),
+        Step::Index(i) => match value.is_array() {
+            true => Index::<true>(*i).at_mut(value, interner),
+            false => Index::<false>(*i).at_mut(value, interner),
+        },
+        Step::OptionPayload => OptionPayload.at_mut(value, interner),
+        Step::ResultPayload => ResultPayload.at_mut(value, interner),
+        Step::VariantPayload => VariantPayload.at_mut(value, interner),
     }
 }
 
-/// The value a `Some`'s payload is where it has no place of its own.
+/// A step under a `None`: the depth word is all there is, so the only step it
+/// admits is the next `Some` it stands for.
+fn depth_step<'v>(value: &Value, step: &Step) -> Place<'v> {
+    let Step::OptionPayload = step else {
+        panic!("{step:?} on {value:?}")
+    };
+    Place::Depth(depth_payload(value).expect("a depth step lands on a depth"))
+}
+
+/// `None` where the payload has a place of its own; the depth word where it
+/// has not (RFC-0022).
 fn depth_payload(value: &Value) -> Option<Value> {
     match value.option_payload() {
         Some(Place::Depth(v)) => Some(v),
@@ -148,201 +225,446 @@ fn depth_payload(value: &Value) -> Option<Value> {
     }
 }
 
-/// The message a write through a `None` gives: a `Some` whose payload is a
-/// `None` owns nothing, so there is no place to write into.
+// -- Reading and writing a place --------------------------------------
+
+/// RFC-0026: a `String` is cloned out of the storage it is read from, and
+/// every other value is copied.
+#[inline]
+fn read<const CLONE: bool>(at: &Value) -> Value {
+    if CLONE {
+        // SAFETY: the preparation read `String` from the destination's type.
+        return Value::string(unsafe { at.as_str() }.to_string());
+    }
+    debug_assert_ne!(
+        at.kind(),
+        Kind::Large,
+        "a read leaves the storage owning what it holds"
+    );
+    *at
+}
+
+/// A `Some` whose payload is a `None` has no storage of its own, and the
+/// depth word the walk built is then the whole of what is read (RFC-0022).
+#[inline]
+fn read_place<const CLONE: bool>(place: Place<'_>) -> Value {
+    match place {
+        Place::At(at) => read::<CLONE>(at),
+        Place::Depth(v) => v,
+    }
+}
+
+/// RFC-0018: a part read out of a storage the frame owns *moves* — the part
+/// is left `Undef`, so the storage no longer owns what the destination now
+/// does. The depth word of a `Some(None)` has no storage to empty.
+#[inline]
+fn move_place(place: PlaceMut<'_>) -> Value {
+    match place {
+        PlaceMut::At(at) => mem::replace(at, Value::UNDEF),
+        PlaceMut::Depth(v) => v,
+    }
+}
+
+/// The word a `*r` reads, as a function of the reference alone: what
+/// `TakeThrough` does to a register, and what a fused run's tail does to the
+/// `Value` its last call returned without one.
+pub fn deref_word<const CLONE: bool>(reference: &Value) -> Value {
+    read::<CLONE>(scrutinee::<true>(reference))
+}
+
+// -- How a read leaves the place it read ------------------------------
+//
+// Decision (RFC-0052 §2): moving a part out through a borrow was not built.
+// A borrow does not own what it names, so `Moved` carries no `THROUGH`
+// parameter and that fourth combination has no name.
+
+/// The mode a read of a place runs in: which place it reaches, what the
+/// place keeps, and where the destination's frame is left owning a `Large`.
+pub trait Reads: Send + Sync + 'static {
+    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    where
+        S: Segment;
+
+    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value;
+
+    /// The destination, marked exactly where this mode hands it a `Large`.
+    fn define(regs: &mut Regs, dst: Off, value: Value);
+}
+
+/// A word (or a reference) copied out of a place the read does not disturb.
+/// The place keeps whatever it holds, so what is copied owns nothing.
+pub struct Copied<const THROUGH: bool>;
+
+impl<const THROUGH: bool> Reads for Copied<THROUGH> {
+    #[inline]
+    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    where
+        S: Segment,
+    {
+        read_place::<false>(step.at(scrutinee::<THROUGH>(slot), interner))
+    }
+
+    #[inline]
+    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value {
+        read_place::<false>(walk(scrutinee::<THROUGH>(slot), steps, interner))
+    }
+
+    #[inline]
+    fn define(regs: &mut Regs, dst: Off, value: Value) {
+        regs.define::<false>(dst, value);
+    }
+}
+
+/// RFC-0026: a `String` read out of a place is cloned, and the place keeps
+/// its own.
+pub struct Cloned<const THROUGH: bool>;
+
+impl<const THROUGH: bool> Reads for Cloned<THROUGH> {
+    #[inline]
+    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    where
+        S: Segment,
+    {
+        read_place::<true>(step.at(scrutinee::<THROUGH>(slot), interner))
+    }
+
+    #[inline]
+    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value {
+        read_place::<true>(walk(scrutinee::<THROUGH>(slot), steps, interner))
+    }
+
+    #[inline]
+    fn define(regs: &mut Regs, dst: Off, value: Value) {
+        regs.define::<true>(dst, value);
+    }
+}
+
+/// A `Large` part moved out of a storage the frame owns: the part is left
+/// `Undef` and the destination takes the ownership with it.
+pub struct Moved;
+
+impl Reads for Moved {
+    #[inline]
+    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    where
+        S: Segment,
+    {
+        move_place(step.at_mut(slot, interner))
+    }
+
+    #[inline]
+    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value {
+        move_place(walk_mut(slot, steps, interner))
+    }
+
+    #[inline]
+    fn define(regs: &mut Regs, dst: Off, value: Value) {
+        regs.define::<true>(dst, value);
+    }
+}
+
+#[inline]
+fn reference_to(place: Place<'_>) -> Value {
+    match place {
+        Place::At(at) => Value::reference(at),
+        Place::Depth(v) => v,
+    }
+}
+
 const NO_PLACE_UNDER_A_NONE: &str =
     "an assignment through the payload of a Some(None): a None has no storage";
 
-/// The storage a write names.
 #[inline]
 fn place_mut(place: PlaceMut<'_>) -> &mut Value {
     match place {
-        PlaceMut::At(v) => v,
+        PlaceMut::At(at) => at,
         PlaceMut::Depth(_) => panic!("{NO_PLACE_UNDER_A_NONE}"),
     }
 }
 
-/// RFC-0026: a `String` is cloned out of its storage, anything else moves
-/// or is copied.
+/// RFC-0045: the value a write replaces is released.
 #[inline]
-fn read_slot<const CLONE: bool>(slot: &mut Value) -> Value {
-    if CLONE {
-        // SAFETY: the preparation read `String` from the destination's type.
-        Value::string(unsafe { slot.as_str() }.to_string())
-    } else {
-        Value::use_from(slot)
+fn overwrite<const LARGE: bool>(at: &mut Value, value: Value) {
+    let replaced = *at;
+    *at = value;
+    if LARGE {
+        replaced.release();
     }
 }
 
-#[inline]
-fn read_through<const CLONE: bool>(at: &Value) -> Value {
-    if CLONE {
-        // SAFETY: the preparation read `String` from the destination's type.
-        Value::string(unsafe { at.as_str() }.to_string())
-    } else {
-        at.copy_word()
+#[inline(always)]
+fn write_base<const THROUGH: bool>(slot: &mut Value) -> &mut Value {
+    if !THROUGH {
+        return slot;
     }
-}
-
-pub fn ref_var(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let reference = Value::reference(machine.reg(op.b));
-    machine.define(op.a, reference);
-    Flow::Next
-}
-
-pub fn ref_var_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let path = payload!(machine, op, Path);
-    let reference = reference_to(walk_path(machine.reg(op.b), path, machine.interner()));
-    machine.define(op.a, reference);
-    Flow::Next
-}
-
-pub fn ref_through(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let base = through(machine.reg(op.b));
-    let reference = Value::reference(base);
-    machine.define(op.a, reference);
-    Flow::Next
-}
-
-pub fn ref_through_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let path = payload!(machine, op, Path);
-    let base = through(machine.reg(op.b));
-    let reference = reference_to(walk_path(base, path, machine.interner()));
-    machine.define(op.a, reference);
-    Flow::Next
-}
-
-pub fn take_var<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = read_slot::<CLONE>(machine.slot_mut(op.b));
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-/// Where a read puts its value and which register it reads.
-pub struct ReadSlots {
-    pub dst: u32,
-    pub src: u32,
-}
-
-impl ReadSlots {
-    fn of(op: &Op) -> Self {
-        Self {
-            dst: op.a,
-            src: op.b,
-        }
-    }
-}
-
-#[inline]
-pub fn read_at<const CLONE: bool>(
-    machine: &mut Machine<'_>,
-    slots: ReadSlots,
-    path: &[Step],
-) -> Flow {
-    let Frame { regs, interner } = machine.frame();
-    let value = match walk_path_mut(&mut regs[slots.src as usize], path, interner) {
-        PlaceMut::At(slot) => read_slot::<CLONE>(slot),
-        PlaceMut::Depth(v) => v,
-    };
-    machine.define(slots.dst, value);
-    Flow::Next
-}
-
-/// A read at a path under a storage: `Take` through a path, and `FieldGet`
-/// at a path of more than one field.
-pub fn read_path<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    read_at::<CLONE>(machine, ReadSlots::of(op), payload!(machine, op, Path))
-}
-
-pub fn read_index<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    read_at::<CLONE>(machine, ReadSlots::of(op), &[Step::Index(op.p as usize)])
-}
-
-pub fn read_field<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let key = *payload!(machine, op, Name);
-    read_at::<CLONE>(machine, ReadSlots::of(op), &[Step::Field(key)])
-}
-
-/// The word a `*r` reads, as a function of the reference alone: what
-/// `take_through` does to a register, and what a fused run's tail does to
-/// the `Value` its last call returned without one.
-pub fn deref_word<const CLONE: bool>(reference: &Value) -> Value {
-    read_through::<CLONE>(through(reference))
-}
-
-pub fn take_through<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = deref_word::<CLONE>(machine.reg(op.b));
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-pub fn take_through_path<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let path = payload!(machine, op, Path);
-    let base = through(machine.reg(op.b));
-    let value = match walk_path(base, path, machine.interner()) {
-        Place::At(at) => read_through::<CLONE>(at),
-        Place::Depth(v) => v,
-    };
-    machine.define(op.a, value);
-    Flow::Next
-}
-
-pub fn assign_var(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = machine.use_val(op.b);
-    machine.assign(op.a, value);
-    Flow::Next
-}
-
-pub fn assign_var_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let path = payload!(machine, op, Path);
-    let value = machine.use_val(op.b);
-    let Frame { regs, interner } = machine.frame();
-    *place_mut(walk_path_mut(&mut regs[op.a as usize], path, interner)) = value;
-    Flow::Next
-}
-
-pub fn assign_through(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = machine.use_val(op.b);
-    let reference = machine.reg(op.a).copy_word();
     // SAFETY: the type checker admits only a live `&mut` here.
-    let base = unsafe { reference.target_mut() };
-    *base = value;
-    Flow::Next
+    unsafe { slot.target_mut() }
 }
 
-pub fn assign_through_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let path = payload!(machine, op, Path);
-    let value = machine.use_val(op.b);
-    let reference = machine.reg(op.a).copy_word();
-    // SAFETY: the type checker admits only a live `&mut` here.
-    let base = unsafe { reference.target_mut() };
-    *place_mut(walk_path_mut(base, path, machine.interner())) = value;
-    Flow::Next
+// -- References -------------------------------------------------------
+
+pub struct MakeRef<const THROUGH: bool> {
+    pub slots: Unary,
 }
 
-pub fn field_set(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let path = payload!(machine, op, Path);
-    let mut object = machine.take(op.b);
-    let value = machine.use_val(op.c);
-    assert!(!path.is_empty(), "FieldSet with an empty path");
-    *place_mut(walk_path_mut(&mut object, path, machine.interner())) = value;
-    machine.define(op.a, object);
-    Flow::Next
+impl<const THROUGH: bool> Op for MakeRef<THROUGH> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let reference = Value::reference(scrutinee::<THROUGH>(regs.peek(self.slots.src)));
+        regs.define::<false>(self.slots.dst, reference);
+    }
 }
 
-pub fn fetch(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let key: &str = payload!(machine, op, PageKey);
-    let value = machine
-        .page
-        .take(key)
-        .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"));
-    machine.define(op.a, value);
-    Flow::Next
+pub struct MakeRefStep<S, const THROUGH: bool>
+where
+    S: Segment,
+{
+    pub slots: Unary,
+    pub step: S,
 }
 
-pub fn commit(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let key: &str = payload!(machine, op, PageKey);
-    let value = machine.use_val(op.a);
-    machine.page.set(key, value);
-    Flow::Next
+impl<S, const THROUGH: bool> Op for MakeRefStep<S, THROUGH>
+where
+    S: Segment,
+{
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        let reference = reference_to(self.step.at(base, interner));
+        regs.define::<false>(self.slots.dst, reference);
+    }
+}
+
+pub struct MakeRefPath<const THROUGH: bool> {
+    pub slots: Unary,
+    pub steps: Box<[Step]>,
+}
+
+impl<const THROUGH: bool> Op for MakeRefPath<THROUGH> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        let reference = reference_to(walk(base, &self.steps, interner));
+        regs.define::<false>(self.slots.dst, reference);
+    }
+}
+
+// -- Reads ------------------------------------------------------------
+
+/// The `String` form of this read is `string::CloneString<false>`, the same
+/// operation under the name the clone already had.
+pub struct TakeVar<const LARGE: bool> {
+    pub slots: Unary,
+}
+
+impl<const LARGE: bool> Op for TakeVar<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.src);
+        regs.define::<LARGE>(self.slots.dst, value);
+    }
+}
+
+/// The storage the reference names keeps whatever it owns, so this read owns
+/// nothing. Its `String` form is `string::CloneString<true>`.
+pub struct TakeThrough {
+    pub slots: Unary,
+}
+
+impl Op for TakeThrough {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let value = deref_word::<false>(regs.peek(self.slots.src));
+        regs.define::<false>(self.slots.dst, value);
+    }
+}
+
+pub struct ReadStep<S, M>
+where
+    S: Segment,
+    M: Reads,
+{
+    pub slots: Unary,
+    pub step: S,
+    pub mode: PhantomData<M>,
+}
+
+impl<S, M> Op for ReadStep<S, M>
+where
+    S: Segment,
+    M: Reads,
+{
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let value = M::at(regs.peek_mut(self.slots.src), &self.step, interner);
+        M::define(regs, self.slots.dst, value);
+    }
+}
+
+pub struct ReadPath<M>
+where
+    M: Reads,
+{
+    pub slots: Unary,
+    pub steps: Box<[Step]>,
+    pub mode: PhantomData<M>,
+}
+
+impl<M> Op for ReadPath<M>
+where
+    M: Reads,
+{
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let value = M::walked(regs.peek_mut(self.slots.src), &self.steps, interner);
+        M::define(regs, self.slots.dst, value);
+    }
+}
+
+// -- Assignments ------------------------------------------------------
+
+#[derive(Clone, Copy)]
+pub struct Write {
+    pub target: Off,
+    pub value: Off,
+}
+
+pub struct AssignVar<const LARGE: bool> {
+    pub slots: Write,
+}
+
+impl<const LARGE: bool> Op for AssignVar<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.value);
+        regs.assign::<LARGE>(self.slots.target, value);
+    }
+}
+
+pub struct AssignThrough<const LARGE: bool> {
+    pub slots: Write,
+}
+
+impl<const LARGE: bool> Op for AssignThrough<LARGE> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.value);
+        overwrite::<LARGE>(write_base::<true>(regs.peek_mut(self.slots.target)), value);
+    }
+}
+
+pub struct AssignStep<S, const THROUGH: bool, const LARGE: bool>
+where
+    S: Segment,
+{
+    pub slots: Write,
+    pub step: S,
+}
+
+impl<S, const THROUGH: bool, const LARGE: bool> Op for AssignStep<S, THROUGH, LARGE>
+where
+    S: Segment,
+{
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let value = regs.take::<LARGE>(self.slots.value);
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target));
+        overwrite::<LARGE>(place_mut(self.step.at_mut(base, interner)), value);
+    }
+}
+
+pub struct AssignPath<const THROUGH: bool, const LARGE: bool> {
+    pub slots: Write,
+    pub steps: Box<[Step]>,
+}
+
+impl<const THROUGH: bool, const LARGE: bool> Op for AssignPath<THROUGH, LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let value = regs.take::<LARGE>(self.slots.value);
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target));
+        overwrite::<LARGE>(place_mut(walk_mut(base, &self.steps, interner)), value);
+    }
+}
+
+// -- Field set --------------------------------------------------------
+
+/// `LARGE` on the operations that take this is what the written field owns,
+/// not what the object does: an object is a `Large` whichever field is set.
+#[derive(Clone, Copy)]
+pub struct Update {
+    pub dst: Off,
+    pub object: Off,
+    pub value: Off,
+}
+
+pub struct SetStep<S, const LARGE: bool>
+where
+    S: Segment,
+{
+    pub slots: Update,
+    pub step: S,
+}
+
+impl<S, const LARGE: bool> Op for SetStep<S, LARGE>
+where
+    S: Segment,
+{
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let mut object = regs.take::<true>(self.slots.object);
+        let value = regs.take::<LARGE>(self.slots.value);
+        overwrite::<LARGE>(place_mut(self.step.at_mut(&mut object, interner)), value);
+        regs.define::<true>(self.slots.dst, object);
+    }
+}
+
+pub struct SetPath<const LARGE: bool> {
+    pub slots: Update,
+    pub steps: Box<[Step]>,
+}
+
+impl<const LARGE: bool> Op for SetPath<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let Frame { regs, interner } = m.frame();
+        let mut object = regs.take::<true>(self.slots.object);
+        let value = regs.take::<LARGE>(self.slots.value);
+        let at = place_mut(walk_mut(&mut object, &self.steps, interner));
+        overwrite::<LARGE>(at, value);
+        regs.define::<true>(self.slots.dst, object);
+    }
+}
+
+// -- Contexts ---------------------------------------------------------
+
+pub struct Fetch<const LARGE: bool> {
+    pub dst: Off,
+    pub key: Box<str>,
+}
+
+impl<const LARGE: bool> Op for Fetch<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let key = &self.key;
+        let held = m
+            .page
+            .take(key)
+            .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"));
+        m.regs().define::<LARGE>(self.dst, held.into_value());
+    }
+}
+
+pub struct Commit<const LARGE: bool> {
+    pub src: Off,
+    pub key: Box<str>,
+}
+
+impl<const LARGE: bool> Op for Commit<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let value = m.regs().take::<LARGE>(self.src);
+        m.page.set(&self.key, Owned::from_value(value));
+    }
 }

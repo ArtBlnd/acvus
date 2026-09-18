@@ -22,7 +22,14 @@ static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interne
 /// in a tag beside it: the stage-4 microbench measured a 24-byte value at
 /// 22.5 ns/element against 7.1 for a 16-byte one, and widening this one
 /// would measure the widening.
+#[derive(Clone, Copy)]
 struct Word(u64);
+
+/// A word owns nothing, so leaving a register releases nothing (RFC-0048
+/// §4): what makes this runtime the floor the tagged one is measured against.
+impl acvus_extern::Release for Word {
+    fn release(self) {}
+}
 
 /// Not built: these runtimes carry no language `Option`.
 fn no_options() -> ! {
@@ -242,6 +249,7 @@ type Payload = Box<dyn Any + Send + Sync>;
 
 /// The same shape as the interpreter's `Value`: one kind byte and one word,
 /// so this bench prices the tag the interpreter actually pays.
+#[derive(Clone, Copy)]
 #[repr(C)]
 struct TaggedWord {
     kind: Kind,
@@ -270,10 +278,12 @@ impl TaggedWord {
     }
 }
 
-impl Drop for TaggedWord {
-    fn drop(&mut self) {
+/// RFC-0048 §4: a runtime value is `Copy` and owns nothing by falling out
+/// of scope. The `Owned<R>` at every Rust store is what calls this.
+impl acvus_extern::Release for TaggedWord {
+    fn release(self) {
         if self.kind == Kind::Large {
-            // SAFETY: the word is the pointer `erase` leaked, dropped once.
+            // SAFETY: the word is the pointer `erase` leaked, released once.
             drop(unsafe { Box::from_raw(self.word as *mut Payload) });
         }
     }

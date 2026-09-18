@@ -13,7 +13,7 @@ use crate::func::CallToken;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
-    type Value: crate::Cross<Self> + crate::FromValue<Self> + Default;
+    type Value: crate::Cross<Self> + crate::FromValue<Self> + crate::Release + Copy + Default;
     type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where
         Self: 'a;
@@ -130,6 +130,10 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 /// nothing will ever run.
 #[derive(Clone, Copy)]
 pub struct TypesOnly;
+
+impl crate::Release for () {
+    fn release(self) {}
+}
 
 fn no_values() -> ! {
     panic!("TypesOnly runtime holds no values")

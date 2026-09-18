@@ -7,7 +7,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_interpreter::{SequentialExecutor, Value};
+use acvus_extern::Owned;
+use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
 use acvus_interpreter_test::{
     Context, compile_script_mode, execute_compiled, split_context, typed,
 };
@@ -88,7 +89,7 @@ fn context(interner: &Interner, grid: &Grid) -> Context {
     .collect()
 }
 
-fn snapshot(interner: &Interner, grid: &Grid) -> HashMap<String, Value> {
+fn snapshot(interner: &Interner, grid: &Grid) -> HashMap<String, Owned<AcvusRuntime>> {
     split_context(interner, context(interner, grid)).1
 }
 

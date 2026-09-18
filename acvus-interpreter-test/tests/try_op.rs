@@ -77,7 +77,7 @@ async fn a_script_returns_early_through_a_question_mark() {
     );
     let v = run_script_mode(&i, src, flags(&i, &[("ok", false)])).await;
     assert_eq!(
-        unsafe { v.as_result() }.as_ref().err().map(text_ref),
+        unsafe { v.as_result() }.as_ref().err().map(|e| text_ref(e)),
         Some("bad".to_owned())
     );
 }

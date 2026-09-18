@@ -1,117 +1,98 @@
-//! The machine that runs a prepared body (RFC-0044).
+//! The machine that runs a prepared body (RFC-0052 §2).
 //!
-//! `Machine::run` is synchronous: it leaves its loop only to return or to
-//! hand a future up. `drive` is the one `async fn` around it — it awaits
-//! the pending future, stores the result in the register the operation
-//! named, and re-enters the loop at the next operation. A synchronous
-//! operation costs one indirect call. A run-time failure is a panic and
-//! leaves through the unwinder, not through this loop.
+//! `Machine::run` is synchronous and is one loop with one compare: a block
+//! runs its operations straight through and its terminator names the next
+//! block. `drive` is the one `async fn` around it — it awaits the future a
+//! `Suspend` left behind, stores the result in the slot that terminator named,
+//! and re-enters the loop at the block after it. A run-time failure is a panic
+//! and leaves through the unwinder, not through this loop.
 
 use std::fmt::Debug;
 use std::future::Future;
 use std::mem::MaybeUninit;
-use std::ptr;
 use std::slice;
 use std::sync::Arc;
 
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
+use futures::future::BoxFuture;
 
 use crate::code::{
-    ArgWindow, Body, Code, Expr, ExprBody, ExprChain, Flow, Op, Payload, Pending, Prepared,
+    Block, BlockId, Body, Code, EntryKonst, Expr, ExprBody, ExprChain, Off, Pending, Prepared,
+    RETURN, SENTINEL, SUSPEND,
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
+use crate::regs::{Regs, Store};
 use crate::runtime::AcvusRuntime;
-use crate::value::{FnValue, Kind, Value};
+use crate::value::{FnValue, Value};
 
 /// The registers and the interner a path walk needs, borrowed apart.
-pub struct Frame<'m> {
-    pub regs: &'m mut [Value],
+pub struct Frame<'m, 'f> {
+    pub regs: &'m mut Regs<'f>,
     pub interner: &'m Interner,
 }
 
-/// Where a run of the loop stopped.
-pub enum Step {
-    Done(Value),
-    Await { pc: u32, pending: Pending },
-}
-
-/// A synchronous call's registers live on the Rust stack of the call, as
-/// a Rust function's locals do. `storage::ref_var` puts a raw pointer to a
-/// register in a `Value::Ref`, so a frame must never move while its body
-/// runs; a stack array does not, and neither does the heap array a body
-/// wider than `INLINE` registers takes instead.
-enum Registers {
-    Stack([Value; Registers::INLINE]),
-    Heap(Vec<Value>),
-}
-
-impl Registers {
-    const INLINE: usize = 16;
-
-    fn new(len: u32) -> Self {
-        let len = len as usize;
-        if len > Self::INLINE {
-            return Self::Heap((0..len).map(|_| Value::EMPTY).collect());
-        }
-        const EMPTY: Value = Value::EMPTY;
-        Self::Stack([EMPTY; Registers::INLINE])
-    }
-
-    fn regs(&mut self, len: u32) -> &mut [Value] {
-        match self {
-            Self::Stack(slots) => &mut slots[..len as usize],
-            Self::Heap(regs) => regs,
-        }
-    }
-}
-
 pub struct Machine<'c> {
-    code: &'c Body,
-    regs: &'c mut [Value],
+    body: &'c Body,
+    regs: Regs<'c>,
     pub rt: &'c AcvusRuntime,
     pub page: &'c Arc<dyn RuntimeContext>,
-    exit: Option<Value>,
+    exit: Value,
+    /// The block `run` enters at. A suspension writes the block after
+    /// itself here, so the driver's next `run` resumes rather than
+    /// re-entering the body.
+    at: BlockId,
+    pending: Option<Pending>,
 }
 
 impl<'c> Machine<'c> {
     pub fn new(
-        code: &'c Body,
-        regs: &'c mut [Value],
+        body: &'c Body,
+        regs: Regs<'c>,
         rt: &'c AcvusRuntime,
         page: &'c Arc<dyn RuntimeContext>,
-    ) -> Self {
-        assert_eq!(
-            regs.len(),
-            code.frame_len as usize,
-            "a body runs on a frame of its own length"
-        );
-        Self {
-            code,
+    ) -> Machine<'c> {
+        Machine {
+            body,
             regs,
             rt,
             page,
-            exit: None,
+            exit: Value::unit(),
+            at: body.entry,
+            pending: None,
         }
     }
 
-    /// Run `code` to its result on a frame of its own. The preparation
-    /// chose this path from the callee's effect; `callee` names the body
-    /// if the effect and the prepared code disagree.
-    pub fn call_sync<F>(&mut self, code: &Body, callee: &dyn Debug, fill: F) -> Value
-    where
-        F: FnOnce(&mut Machine<'_>),
-    {
-        run_sync(code, callee, self.rt, self.page, fill)
+    /// One compare per block. The block index is unchecked because every
+    /// terminator's target was resolved by `prepare` against this same
+    /// `blocks` array, and the two sentinels are what the compare catches.
+    pub fn run(&mut self) -> BlockId {
+        let body = self.body;
+        let mut at = self.at;
+        loop {
+            debug_assert!(
+                (at as usize) < body.blocks.len(),
+                "a terminator names block {at}, which this body does not have"
+            );
+            // SAFETY: `prepare::link` resolves every terminator target to an
+            // index of this array or to a sentinel, and a sentinel leaves the
+            // loop at the compare below before it is used as an index.
+            let block: &Block = unsafe { body.blocks.get_unchecked(at as usize) };
+            at = block.run(self);
+            if at >= SENTINEL {
+                return at;
+            }
+        }
     }
 
-    pub fn code(&self) -> &'c Body {
-        self.code
+    pub fn body(&self) -> &'c Body {
+        self.body
     }
 
-    pub fn payload(&self, op: &Op) -> &'c Payload {
-        &self.code.payloads[op.p]
+    #[inline(always)]
+    pub fn regs(&mut self) -> &mut Regs<'c> {
+        &mut self.regs
     }
 
     pub fn shared(&self) -> &Arc<InterpreterContext> {
@@ -123,126 +104,99 @@ impl<'c> Machine<'c> {
     }
 
     #[inline]
-    pub fn reg(&self, slot: u32) -> &Value {
-        let value = &self.regs[slot as usize];
-        assert!(!value.is_empty(), "read of register {slot}: already moved");
-        value
-    }
-
-    #[inline(always)]
-    pub fn define(&mut self, slot: u32, value: Value) {
-        define_slot(self.regs, slot, value);
-    }
-
-    #[inline]
-    pub fn assign(&mut self, slot: u32, value: Value) {
-        self.regs[slot as usize] = value;
-    }
-
-    #[inline]
-    pub fn take(&mut self, slot: u32) -> Value {
-        let value = self.regs[slot as usize].take();
-        assert!(!value.is_empty(), "take of register {slot}: already moved");
-        value
-    }
-
-    /// A word is copied; a `Large` value leaves its register (RFC-0018).
-    #[inline]
-    pub fn use_val(&mut self, slot: u32) -> Value {
-        Value::use_from(&mut self.regs[slot as usize])
-    }
-
-    /// The registers an extern call's arguments are in, lent with the
-    /// runtime the handler is called with.
-    #[inline]
-    pub fn lend_window(&mut self, window: &ArgWindow) -> (&AcvusRuntime, &mut [Value]) {
-        let Machine { rt, regs, .. } = self;
-        (rt, &mut regs[run_of(window)])
-    }
-
-    #[inline]
-    pub fn window(&mut self, window: &ArgWindow) -> &mut [Value] {
-        &mut self.regs[run_of(window)]
-    }
-
-    /// The window's values, owned: what a spawn hands to work that
-    /// outlives this frame.
-    #[inline]
-    pub fn take_window(&mut self, window: &ArgWindow) -> Vec<Value> {
-        self.window(window).iter_mut().map(Value::take).collect()
-    }
-
-    /// The frame itself, which a chain's `Push` micro-ops read.
-    #[inline]
-    pub fn regs(&self) -> &[Value] {
-        self.regs
-    }
-
-    #[inline]
-    pub fn slot_mut(&mut self, slot: u32) -> &mut Value {
-        &mut self.regs[slot as usize]
-    }
-
-    #[inline]
-    pub fn frame(&mut self) -> Frame<'_> {
+    pub fn frame(&mut self) -> Frame<'_, 'c> {
         Frame {
-            regs: &mut self.regs[..],
+            regs: &mut self.regs,
             interner: &self.rt.0.interner,
         }
     }
 
-    /// The body returns `value`.
+    /// The body returns this value; the `Return` terminator leaves the loop.
     #[inline]
-    pub fn finish(&mut self, value: Value) -> Flow {
-        self.exit = Some(value);
-        Flow::Return
+    pub fn finish(&mut self, value: Value) {
+        self.exit = value;
     }
 
-    fn leave(&mut self, pc: u32) -> Value {
-        self.exit
-            .take()
-            .unwrap_or_else(|| panic!("operation at {pc} returned without leaving a value"))
+    /// The future the driver awaits, the slot its result lands in, and the
+    /// block the body goes on at once it has (RFC-0046).
+    #[inline]
+    pub fn suspend<const LARGE: bool>(
+        &mut self,
+        dst: Off,
+        resume: BlockId,
+        fut: BoxFuture<'static, Value>,
+    ) {
+        self.at = resume;
+        self.pending = Some(Pending {
+            dst,
+            owns_large: LARGE,
+            fut,
+        });
     }
 
-    pub fn run(&mut self, mut pc: u32) -> Step {
-        let code = self.code;
-        while (pc as usize) < code.ops.len() {
-            let op = &code.ops[pc as usize];
-            match (op.f)(self, op) {
-                Flow::Next => pc += 1,
-                Flow::Jump(target) => pc = target,
-                Flow::Return => return Step::Done(self.leave(pc)),
-                Flow::Await(pending) => return Step::Await { pc, pending },
-            }
+    /// Run `callee` to its result in the window above this frame (RFC-0052
+    /// rule 7): no allocation, one mask store to enter and one sweep to leave.
+    ///
+    /// # Panics
+    /// `callee` is typed pure and its prepared body can suspend, which is a
+    /// disagreement between the effect the checker read and the body
+    /// `prepare` produced.
+    pub fn call_sync<F>(&mut self, callee: &Body, named: &dyn Debug, fill: F) -> Value
+    where
+        F: FnOnce(&mut Machine<'_>),
+    {
+        if self.regs.fits_above(callee.frame_len) {
+            let window = self.regs.window();
+            return run_frame(callee, named, window, self.rt, self.page, fill);
         }
-        Step::Done(Value::unit())
+        run_body(callee, named, self.rt, self.page, fill)
+    }
+
+    pub fn call_fn_sync(&mut self, f: &FnValue, args: &mut [Value]) -> Value {
+        match f.code.as_ref() {
+            Code::Expr(expr) => expr_value(expr, args),
+            Code::Body(body) => self.call_sync(body, &f.code.site(), |callee| {
+                enter(body, f, args, &mut callee.regs)
+            }),
+        }
     }
 }
 
-#[inline(always)]
-fn define_slot(regs: &mut [Value], slot: u32, value: Value) {
-    debug_assert!(
-        (slot as usize) < regs.len(),
-        "a definition writes register {slot}, which its body's frame does not have"
-    );
-    debug_assert!(
-        regs[slot as usize].kind() != Kind::Large,
-        "a definition writes register {slot}, which holds the undropped {:?}",
-        regs[slot as usize]
-    );
-    // SAFETY: `prepare::check_assignment` states that every slot an
-    // operation names is below the body's `frame_len`, and `Machine::new`
-    // asserts the frame it runs on has that length.
-    unsafe { ptr::write(regs.as_mut_ptr().add(slot as usize), value) }
+/// A body's registers at entry: the captures, the arguments, the order token
+/// and the entry constants, and the one mask of which of them own a `Large`.
+fn open_frame(body: &Body, regs: &mut Regs<'_>) {
+    for kind in &body.slot_kinds {
+        regs.open(kind.slot, Value::inline(kind.kind, 0));
+    }
+    for EntryKonst { slot, value } in &body.entry_konsts {
+        regs.open(*slot, *value);
+    }
+    regs.own_mask(body.param_marks);
 }
 
-fn run_of(window: &ArgWindow) -> std::ops::Range<usize> {
-    window.at as usize..(window.at + window.arity) as usize
+fn run_body<F>(
+    body: &Body,
+    named: &dyn Debug,
+    rt: &AcvusRuntime,
+    page: &Arc<dyn RuntimeContext>,
+    fill: F,
+) -> Value
+where
+    F: FnOnce(&mut Machine<'_>),
+{
+    let mut store = Store::new(body.frame_len);
+    let regs = store.borrow();
+    run_frame(body, named, regs, rt, page, fill)
 }
 
-fn run_sync<F>(
-    code: &Body,
-    callee: &dyn Debug,
+/// # Panics
+/// `body` is typed pure and its prepared body can suspend, which is a
+/// disagreement between the effect the checker read and the body `prepare`
+/// produced.
+fn run_frame<F>(
+    body: &Body,
+    named: &dyn Debug,
+    mut regs: Regs<'_>,
     rt: &AcvusRuntime,
     page: &Arc<dyn RuntimeContext>,
     fill: F,
@@ -251,34 +205,43 @@ where
     F: FnOnce(&mut Machine<'_>),
 {
     assert!(
-        !code.may_suspend,
-        "{callee:?} is typed pure, and its prepared body can suspend"
+        !body.may_suspend,
+        "{named:?} is typed pure, and its prepared body can suspend"
     );
-    let mut registers = Registers::new(code.frame_len);
-    let mut machine = Machine::new(code, registers.regs(code.frame_len), rt, page);
+    open_frame(body, &mut regs);
+    let mut machine = Machine::new(body, regs, rt, page);
     fill(&mut machine);
-    match machine.run(0) {
-        Step::Done(value) => value,
-        Step::Await { pc, .. } => {
-            unreachable!("{callee:?} is typed pure, and its operation {pc} handed up a future")
-        }
-    }
+    let stop = machine.run();
+    assert_eq!(
+        stop, RETURN,
+        "{named:?} is typed pure, and its body left the machine at {stop}"
+    );
+    let value = machine.exit;
+    machine.regs.sweep();
+    value
 }
 
 async fn drive(mut machine: Machine<'_>) -> Value {
-    let mut pc = 0;
     loop {
-        match machine.run(pc) {
-            Step::Done(value) => return value,
-            Step::Await {
-                pc: at,
-                pending: Pending { dst, fut },
-            } => {
-                let value = fut.await;
-
-                machine.define(dst, value);
-                pc = at + 1;
-            }
+        let stop = machine.run();
+        if stop == RETURN {
+            let value = machine.exit;
+            machine.regs.sweep();
+            return value;
+        }
+        debug_assert_eq!(stop, SUSPEND, "a body left the machine at {stop}");
+        let Pending {
+            dst,
+            owns_large,
+            fut,
+        } = machine
+            .pending
+            .take()
+            .expect("a Suspend terminator left no future for the driver");
+        let value = fut.await;
+        match owns_large {
+            true => machine.regs.define::<true>(dst, value),
+            false => machine.regs.define::<false>(dst, value),
         }
     }
 }
@@ -292,19 +255,19 @@ pub async fn call_module(
 ) -> Value {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&shared, &id));
     let rt = AcvusRuntime(shared);
-    let Code::Body(code) = prepared.main.as_ref() else {
+    let Code::Body(body) = prepared.main.as_ref() else {
         panic!("a module's entry body is one chain, which no call into a module can be")
     };
-    let mut regs: Vec<Value> = (0..code.frame_len).map(|_| Value::EMPTY).collect();
-    fill_entry_konsts(code, &mut regs);
-    let mut machine = Machine::new(code, &mut regs, &rt, &page);
-    for (slot, arg) in code.params.iter().zip(args) {
-        machine.define(*slot, arg);
+    let mut store = Store::new(body.frame_len);
+    let mut regs = store.borrow();
+    open_frame(body, &mut regs);
+    for (slot, arg) in body.params.iter().zip(args) {
+        regs.define::<false>(*slot, arg);
     }
-    if let Some(order) = code.order_param {
-        machine.define(order, Value::unit());
+    if let Some(order) = body.order_param {
+        regs.define::<false>(order, Value::unit());
     }
-    drive(machine).await
+    drive(Machine::new(body, regs, &rt, &page)).await
 }
 
 pub fn call_module_sync(
@@ -313,22 +276,21 @@ pub fn call_module_sync(
     id: QualifiedRef,
     args: Vec<Value>,
 ) -> Value {
-    let Code::Body(code) = prepared.main.as_ref() else {
+    let Code::Body(body) = prepared.main.as_ref() else {
         panic!("a module's entry body is one chain, which no call into a module can be")
     };
-    run_sync(code, &id, machine.rt, machine.page, |callee| {
-        fill_entry_konsts(code, callee.regs);
-        for (slot, arg) in code.params.iter().zip(args) {
-            callee.define(*slot, arg);
+    machine.call_sync(body, &id, |callee| {
+        for (slot, arg) in body.params.iter().zip(args) {
+            callee.regs.define::<false>(*slot, arg);
         }
-        if let Some(order) = code.order_param {
-            callee.define(order, Value::unit());
+        if let Some(order) = body.order_param {
+            callee.regs.define::<false>(order, Value::unit());
         }
     })
 }
 
-/// The arguments are read into the callee's frame before the future
-/// exists, so the caller may lend registers that die at the call.
+/// The arguments are read into the callee's frame before the future exists, so
+/// the caller may lend registers that die at the call.
 pub fn fn_value_call<'f>(
     f: &'f FnValue,
     args: &mut [Value],
@@ -336,8 +298,9 @@ pub fn fn_value_call<'f>(
     let entry = Entry::of(&f.code, f, args);
     async move {
         match entry {
-            Entry::Frame { code, mut regs } => {
-                let machine = Machine::new(code, &mut regs, AcvusRuntime::of(&f.shared), &f.page);
+            Entry::Frame { body, mut store } => {
+                let regs = store.borrow();
+                let machine = Machine::new(body, regs, AcvusRuntime::of(&f.shared), &f.page);
                 drive(machine).await
             }
             Entry::Done(value) => value,
@@ -345,45 +308,68 @@ pub fn fn_value_call<'f>(
     }
 }
 
-/// What a closure call has to do after its arguments are read: run a body
-/// on a frame, or — for a `Code::Expr` — nothing, because the chain has
-/// already produced the value.
+/// What a closure call has to do after its arguments are read: run a body on a
+/// frame, or — for a `Code::Expr` — nothing, because the chain has already
+/// produced the value.
 enum Entry<'c> {
-    Frame { code: &'c Body, regs: Vec<Value> },
+    Frame { body: &'c Body, store: Store },
     Done(Value),
 }
 
 impl<'c> Entry<'c> {
-    fn of(code: &'c Code, f: &FnValue, args: &mut [Value]) -> Self {
+    fn of(code: &'c Code, f: &FnValue, args: &mut [Value]) -> Entry<'c> {
         match code {
-            Code::Body(body) => {
-                let mut regs: Vec<Value> = (0..body.frame_len).map(|_| Value::EMPTY).collect();
-                enter(body, f, args, &mut regs);
-                Entry::Frame { code: body, regs }
-            }
             Code::Expr(expr) => Entry::Done(expr_value(expr, args)),
+            Code::Body(body) => {
+                let mut store = Store::new(body.frame_len);
+                {
+                    let mut regs = store.borrow();
+                    enter(body, f, args, &mut regs);
+                }
+                Entry::Frame { body, store }
+            }
         }
     }
 }
 
-/// Run `f` to its result on a frame of its own. The preparation chose
-/// this path from the closure's effect; an extern's callback takes the
-/// same path with no machine in hand.
+/// Run `f` to its result with no caller frame in hand. Obligation across
+/// artifacts: rule 7's window comes from the calling `Machine`, and an extern
+/// handler's ABI is `fn(&Rt, Value) -> Value` (RFC-0052 rule 6) — it is handed
+/// the runtime, never the machine — so a closure an extern calls back roots a
+/// store of its own. Widen that ABI and this function has no callers left.
 pub fn fn_value_call_sync(f: &FnValue, args: &mut [Value]) -> Value {
     match f.code.as_ref() {
         Code::Expr(expr) => expr_value(expr, args),
-        Code::Body(body) => run_sync(
+        Code::Body(body) => run_body(
             body,
             &f.code.site(),
             AcvusRuntime::of(&f.shared),
             &f.page,
-            |callee| enter(body, f, args, callee.regs),
+            |callee| enter(body, f, args, &mut callee.regs),
         ),
+    }
+}
+
+/// The closure owns its captures; the body sees each through a reference
+/// (RFC-0018).
+fn enter(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
+    open_frame(body, regs);
+    for (slot, capture) in body.captures.iter().zip(f.captures.iter()) {
+        regs.define::<false>(*slot, Value::reference(capture));
+    }
+    for (slot, arg) in body.params.iter().zip(args) {
+        regs.define::<false>(*slot, *arg);
+    }
+    if let Some(order) = body.order_param {
+        regs.define::<false>(order, Value::unit());
     }
 }
 
 /// A body that is one chain runs with no registers, no `Machine` and no
 /// dispatch loop (RFC-0044, stage 4).
+///
+/// # Panics
+/// The call brought an arity the body was not prepared with.
 #[inline]
 fn expr_value(expr: &Expr, args: &mut [Value]) -> Value {
     assert_eq!(
@@ -392,20 +378,20 @@ fn expr_value(expr: &Expr, args: &mut [Value]) -> Value {
         "an expression body is called with the arguments it reads"
     );
     match &expr.body {
-        ExprBody::Argument(at) => args[*at as usize].take(),
-        ExprBody::Chain(body) => chain_value(body, args),
+        ExprBody::Argument(at) => args[*at as usize],
+        ExprBody::Chain(chain) => chain_value(chain, args),
     }
 }
 
-/// The `#[inline(never)]` is a measurement, not a taste. The operand space
-/// is `MAX_OPERANDS` `Value`s wide; while this was inlined, its frame was
-/// part of every frameless call, and `map(|x| -> x) | sum` — which builds
-/// no operand space at all — measured 4.8 ns per iteration instead of 4.1,
-/// and `range | sum` 2.0 instead of 1.8. Splitting it restored both.
+/// The `#[inline(never)]` is a measurement, not a taste. The operand space is
+/// `MAX_OPERANDS` `Value`s wide; while this was inlined, its frame was part of
+/// every frameless call, and `map(|x| -> x) | sum` — which builds no operand
+/// space at all — measured 4.8 ns per iteration instead of 4.1, and
+/// `range | sum` 2.0 instead of 1.8. Splitting it restored both.
 #[inline(never)]
-fn chain_value(body: &ExprChain, args: &[Value]) -> Value {
-    let space = OperandSpace::of(args, &body.konsts);
-    (body.eval)(&body.chain, space.as_slice())
+fn chain_value(chain: &ExprChain, args: &[Value]) -> Value {
+    let space = OperandSpace::of(args, &chain.konsts);
+    Value::inline(chain.kind, (chain.eval)(chain, space.as_slice()))
 }
 
 struct OperandSpace {
@@ -425,7 +411,7 @@ impl OperandSpace {
         );
         let mut values = [const { MaybeUninit::uninit() }; ExprChain::MAX_OPERANDS];
         for (slot, value) in values.iter_mut().zip(args.iter().chain(konsts)) {
-            slot.write(word_or_unread(value));
+            slot.write(*value);
         }
         OperandSpace { values, len }
     }
@@ -434,36 +420,7 @@ impl OperandSpace {
         // SAFETY: `prepare::expression_body` refuses a body whose operands
         // outnumber `ExprChain::MAX_OPERANDS`, and `expr_value` asserts the
         // call brought the arity that body was prepared with, so `of` wrote
-        // exactly `len` values into an array that holds them. Every one is
-        // a word that owns nothing, so the prefix needs no drop.
+        // exactly `len` values into an array that holds them.
         unsafe { slice::from_raw_parts(self.values.as_ptr().cast::<Value>(), self.len) }
-    }
-}
-
-fn word_or_unread(value: &Value) -> Value {
-    if value.kind().is_inline() {
-        return value.copy_word();
-    }
-    Value::EMPTY
-}
-
-/// The closure owns its captures; the body sees each through a reference
-/// (RFC-0018).
-fn enter(code: &Body, f: &FnValue, args: &mut [Value], regs: &mut [Value]) {
-    for (slot, capture) in code.captures.iter().zip(f.captures.iter()) {
-        define_slot(regs, *slot, Value::reference(capture));
-    }
-    for (slot, arg) in code.params.iter().zip(args) {
-        define_slot(regs, *slot, arg.take());
-    }
-    if let Some(order) = code.order_param {
-        define_slot(regs, order, Value::unit());
-    }
-    fill_entry_konsts(code, regs);
-}
-
-fn fill_entry_konsts(code: &Body, regs: &mut [Value]) {
-    for konst in &code.entry_konsts {
-        define_slot(regs, konst.slot, konst.value.copy_word());
     }
 }

@@ -14,6 +14,7 @@ mod handler;
 mod identity;
 mod len;
 mod obj;
+mod owned;
 mod reference;
 mod registry;
 mod runtime;
@@ -25,13 +26,18 @@ mod vec;
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
-pub use handler::{ExternHandler, Instance, Instances, SliceHandler, SyncHandler};
+pub use handler::{
+    Async, AsyncCall, AsyncState, ExternHandler, Instance, Instances, State, State0, State1,
+    State2, State3, StateAbi, StateRef, StateSlice, StateWindow, Sync0, Sync1, Sync2, Sync3,
+    SyncAbi, SyncCall, SyncSlice, SyncWindow, erase_elements,
+};
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
     Cross, CrossSpecialized, FromValue, Inline, Obj, Stored, TransparentOver, Variant, downcast,
     erase_field, expect_type, materialize_field, materialize_payload, take_payload,
 };
+pub use owned::{Owned, Release};
 pub use reference::{Ref, RefMut};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,

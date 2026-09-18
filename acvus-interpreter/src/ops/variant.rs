@@ -1,111 +1,195 @@
 //! Variants: the language's `Option` and `Result`, and the tagged union
 //! every other variant type is.
 //!
-//! Which shape a constructor builds and which test a scrutinee takes is the
-//! destination's or the source's type as the preparation read it; `Ok`
-//! against `Err` and `Some` against `None` are the tag resolved there.
+//! Which shape a constructor builds and which tag a test resolved to are
+//! the destination's and the source's types as the preparation read them.
 
-use crate::code::{Flow, Op};
+use acvus_extern::Owned;
+use acvus_utils::Astr;
+
+use crate::code::{Off, Op};
 use crate::machine::Machine;
-use crate::ops::{payload, storage};
+use crate::ops::arith::Unary;
 use crate::value::{Kind, ResultValue, Value, VariantValue};
 
-#[inline]
-fn payload_value<const HAS_PAYLOAD: bool>(machine: &mut Machine<'_>, op: &Op) -> Option<Value> {
-    HAS_PAYLOAD.then(|| machine.use_val(op.b))
+/// The place a variant test reads. A `Some` whose payload is a `None` has
+/// no storage to point at, so a reference to it is the depth word itself
+/// (RFC-0022) and `THROUGH` does not reach a target.
+#[inline(always)]
+pub(crate) fn scrutinee<const THROUGH: bool>(value: &Value) -> &Value {
+    if !THROUGH || value.kind() == Kind::None {
+        return value;
+    }
+    // SAFETY: the type checker admits only a live reference here.
+    unsafe { value.target() }
 }
 
-#[inline]
-fn place<'a, const THROUGH: bool>(machine: &'a Machine<'_>, slot: u32) -> &'a Value {
-    let source = machine.reg(slot);
-    if THROUGH {
-        storage::through(source)
-    } else {
-        source
+/// `LARGE` is what the preparation read from the payload's type: an option
+/// is its payload's own value (RFC-0022), so the option owns a `Large`
+/// exactly when its payload does.
+pub struct MakeSome<const LARGE: bool> {
+    pub slots: Unary,
+}
+
+impl<const LARGE: bool> Op for MakeSome<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let payload = regs.take::<LARGE>(self.slots.src);
+        regs.define::<LARGE>(self.slots.dst, Value::some(payload));
     }
 }
 
-/// A scrutinee is a value the checker gave a variant type and a definite
-/// initialization, so neither the kind a `Take` leaves behind nor the SSA
-/// initial value of a loop variable can reach a variant test.
-#[inline]
-fn scrutinee<'a, const THROUGH: bool>(machine: &'a Machine<'_>, slot: u32) -> &'a Value {
-    let source = place::<THROUGH>(machine, slot);
-    debug_assert!(
-        source.kind() != Kind::Empty && source.kind() != Kind::Undef,
-        "variant test on {source:?}"
-    );
-    source
+pub struct MakeNone {
+    pub dst: Off,
 }
 
-pub fn make_option<const HAS_PAYLOAD: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let value = match payload_value::<HAS_PAYLOAD>(machine, op) {
-        Some(payload) => Value::some(payload),
-        None => Value::NONE,
-    };
-    machine.define(op.a, value);
-    Flow::Next
+impl Op for MakeNone {
+    fn run(&self, m: &mut Machine<'_>) {
+        m.regs().define::<false>(self.dst, Value::NONE);
+    }
 }
 
-/// `OK` is the tag: `Ok` carries the value on the left, `Err` on the right.
-pub fn make_result<const OK: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let payload = machine.use_val(op.b);
-    let result = if OK { Ok(payload) } else { Err(payload) };
-    machine.define(op.a, Value::result(result));
-    Flow::Next
+/// `Value::result` boxes either side, so the destination owns a `Large`
+/// whatever `LARGE` — the payload's own ownership — says.
+pub struct MakeOk<const LARGE: bool> {
+    pub slots: Unary,
 }
 
-pub fn make_variant<const HAS_PAYLOAD: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let tag = *payload!(machine, op, Name);
-    let payload = payload_value::<HAS_PAYLOAD>(machine, op);
-    machine.define(op.a, Value::variant(tag, payload));
-    Flow::Next
+impl<const LARGE: bool> Op for MakeOk<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
+        regs.define::<true>(self.slots.dst, Value::result(Ok(payload)));
+    }
 }
 
-/// `THROUGH` is what the preparation read from the source's type. `c` is
-/// what the tag resolved to at preparation: whether it is `Some`.
-pub fn test_option<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let is_some = !scrutinee::<THROUGH>(machine, op.b).is_none();
-    machine.define(op.a, Value::bool_(is_some == (op.c != 0)));
-    Flow::Next
+pub struct MakeErr<const LARGE: bool> {
+    pub slots: Unary,
 }
 
-/// `d` is what the tag resolved to at preparation: whether it is `Ok`.
-pub fn test_result<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let source = scrutinee::<THROUGH>(machine, op.b);
-    // SAFETY: the preparation read `Result` from the source's type.
-    let is_ok = unsafe { source.as_result() }.is_ok();
-    machine.define(op.a, Value::bool_(is_ok == (op.d != 0)));
-    Flow::Next
+impl<const LARGE: bool> Op for MakeErr<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
+        regs.define::<true>(self.slots.dst, Value::result(Err(payload)));
+    }
 }
 
-pub fn test_variant<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let tag = *payload!(machine, op, Name);
-    let source = scrutinee::<THROUGH>(machine, op.b);
-    // SAFETY: the preparation read an enum from the source's type.
-    let matches = unsafe { source.as_variant() }.tag == tag;
-    machine.define(op.a, Value::bool_(matches));
-    Flow::Next
+pub struct MakeVariant<const LARGE: bool> {
+    pub slots: Unary,
+    pub tag: Astr,
 }
 
-pub fn unwrap_option(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let source = machine.take(op.b);
-    machine.define(op.a, Value::some_payload(source));
-    Flow::Next
+impl<const LARGE: bool> Op for MakeVariant<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
+        let value = Value::variant(self.tag, Some(payload));
+        regs.define::<true>(self.slots.dst, value);
+    }
 }
 
-pub fn unwrap_result(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let source = machine.take(op.b);
-    // SAFETY: the preparation read `Result` from the source's type.
-    let (Ok(payload) | Err(payload)) = unsafe { source.materialize::<ResultValue>() };
-    machine.define(op.a, payload);
-    Flow::Next
+pub struct MakeUnitVariant {
+    pub dst: Off,
+    pub tag: Astr,
 }
 
-pub fn unwrap_variant(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let source = machine.take(op.b);
-    // SAFETY: the preparation read an enum from the source's type.
-    let payload = unsafe { source.materialize::<VariantValue>() }.payload;
-    machine.define(op.a, payload.map_or_else(Value::unit, |p| *p));
-    Flow::Next
+impl Op for MakeUnitVariant {
+    fn run(&self, m: &mut Machine<'_>) {
+        let value = Value::variant(self.tag, None);
+        m.regs().define::<true>(self.dst, value);
+    }
+}
+
+/// `SOME` is what the tag the arm tests for resolved to at preparation.
+pub struct TestOption<const THROUGH: bool, const SOME: bool> {
+    pub slots: Unary,
+}
+
+impl<const THROUGH: bool, const SOME: bool> Op for TestOption<THROUGH, SOME> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let is_some = !scrutinee::<THROUGH>(regs.peek(self.slots.src)).is_none();
+        regs.set_word(self.slots.dst, (is_some == SOME) as u64);
+    }
+}
+
+/// `OK` is what the tag the arm tests for resolved to at preparation.
+pub struct TestResult<const THROUGH: bool, const OK: bool> {
+    pub slots: Unary,
+}
+
+impl<const THROUGH: bool, const OK: bool> Op for TestResult<THROUGH, OK> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        // SAFETY: the preparation read `Result` from the source's type.
+        let is_ok = unsafe { source.as_result() }.is_ok();
+        regs.set_word(self.slots.dst, (is_ok == OK) as u64);
+    }
+}
+
+pub struct TestVariant<const THROUGH: bool> {
+    pub slots: Unary,
+    pub tag: Astr,
+}
+
+impl<const THROUGH: bool> Op for TestVariant<THROUGH> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        // SAFETY: the preparation read an enum from the source's type.
+        let matches = unsafe { source.as_variant() }.tag == self.tag;
+        regs.set_word(self.slots.dst, matches as u64);
+    }
+}
+
+/// `LARGE` is the payload's ownership, which is the option's own: an
+/// unwrap moves it from one slot to another and the mark travels with it.
+pub struct UnwrapOption<const LARGE: bool> {
+    pub slots: Unary,
+}
+
+impl<const LARGE: bool> Op for UnwrapOption<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let option = regs.take::<LARGE>(self.slots.src);
+        regs.define::<LARGE>(self.slots.dst, Value::some_payload(option));
+    }
+}
+
+/// The `Result` box is the frame's, whichever side it carries; `LARGE` is
+/// the payload's ownership, which leaves the box for the destination.
+pub struct UnwrapResult<const LARGE: bool> {
+    pub slots: Unary,
+}
+
+impl<const LARGE: bool> Op for UnwrapResult<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let result = regs.take::<true>(self.slots.src);
+        // SAFETY: the preparation read `Result` from the source's type.
+        let (Ok(payload) | Err(payload)) = unsafe { result.materialize::<ResultValue>() };
+        regs.define::<LARGE>(self.slots.dst, payload.into_value());
+    }
+}
+
+/// Whether the arm's variant carries a payload is not a type parameter
+/// here, and that is a limit of the instruction rather than a choice: the
+/// MIR's `UnwrapVariant` names a destination and a source and no tag, so
+/// the preparation has no tag to resolve the arm against. Give the
+/// instruction its tag and the `map_or_else` below becomes a second const.
+pub struct UnwrapVariant<const LARGE: bool> {
+    pub slots: Unary,
+}
+
+impl<const LARGE: bool> Op for UnwrapVariant<LARGE> {
+    fn run(&self, m: &mut Machine<'_>) {
+        let regs = m.regs();
+        let variant = regs.take::<true>(self.slots.src);
+        // SAFETY: the preparation read an enum from the source's type.
+        let payload = unsafe { variant.materialize::<VariantValue>() }.payload;
+        let value = payload.map_or_else(Value::unit, |held| (*held).into_value());
+        regs.define::<LARGE>(self.slots.dst, value);
+    }
 }

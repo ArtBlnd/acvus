@@ -1,6 +1,6 @@
 //! Which of the standard declarations cross a run unboxed (RFC-0047 §6).
 
-use acvus_extern::{ExternHandler, Externs, Interner, QualifiedRef, SyncHandler, TypesOnly};
+use acvus_extern::{ExternHandler, Externs, Interner, QualifiedRef, SyncAbi, SyncCall, TypesOnly};
 
 fn name(i: &Interner, qref: &QualifiedRef) -> String {
     match qref.namespace {
@@ -20,7 +20,7 @@ fn the_unboxed_entry_is_the_slice_returning_declarations_and_nothing_else() {
         .filter(|(_, handlers)| {
             handlers
                 .iter()
-                .any(|h| matches!(h, ExternHandler::Sync(SyncHandler::Slice(_))))
+                .any(|h| matches!(h, ExternHandler::Sync(SyncCall::Plain(SyncAbi::Slice(_)))))
         })
         .map(|(qref, _)| name(&i, qref))
         .collect();

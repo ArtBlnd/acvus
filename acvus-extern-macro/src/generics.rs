@@ -274,9 +274,15 @@ impl Vars {
         }
     }
 
+    /// The Rust type a variable is instantiated at when the glue calls the
+    /// handler. Obligation across crates: a runtime declares the Rust type
+    /// it erases a container through (`acvus-interpreter`'s `value::Array`
+    /// is `Arr<Owned<AcvusRuntime>, ()>`), and this substitution is what
+    /// makes a handler's `Arr<T, N>` that same type. Change one and the
+    /// other must follow; both compile either way.
     fn runtime_stand_in(v: &Var) -> Type {
         match v.kind {
-            VarKind::Ty => syn::parse_quote! { <__R as ::acvus_extern::Runtime>::Value },
+            VarKind::Ty => syn::parse_quote! { ::acvus_extern::Owned<__R> },
             VarKind::Effect | VarKind::Len | VarKind::Identity => syn::parse_quote! { () },
             VarKind::Runtime => syn::parse_quote! { __R },
         }

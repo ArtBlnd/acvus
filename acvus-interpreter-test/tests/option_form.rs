@@ -286,7 +286,7 @@ fn a_some_is_never_none_and_opens_back_to_its_payload() {
 
     let mut ladder = rt.none();
     for depth in 0..4 {
-        let wrapped = rt.some(ladder.copy_word());
+        let wrapped = rt.some(ladder);
         assert!(!rt.is_none(&wrapped), "depth {depth}: {wrapped:?}");
         assert_eq!(rt.unwrap_some(wrapped), ladder, "depth {depth}");
         ladder = rt.some(ladder);

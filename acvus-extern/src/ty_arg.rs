@@ -142,6 +142,10 @@ where
 
 impl<const N: usize, Rt> crate::Stored<Rt> for Typeck<N> where Rt: crate::Runtime {}
 
+// SAFETY: `Typeck<N>` is uninhabited, so no `&Typeck<N>` exists and the
+// layout claim is never read.
+unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Typeck<N> where Rt: crate::Runtime {}
+
 impl<T, Rt> crate::Cross<Rt> for Spec<T>
 where
     T: Send + Sync + 'static,
@@ -157,6 +161,14 @@ where
 }
 
 impl<T, Rt> crate::Stored<Rt> for Spec<T>
+where
+    T: Send + Sync + 'static,
+    Rt: crate::Runtime,
+{
+}
+
+// SAFETY: as `Typeck<N>`: `Spec<T>` holds a `Never` and is uninhabited.
+unsafe impl<T, Rt> crate::TransparentOver<Rt> for Spec<T>
 where
     T: Send + Sync + 'static,
     Rt: crate::Runtime,

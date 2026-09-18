@@ -1,5 +1,6 @@
 //! Type-erased handlers, ready for a runtime to call.
 
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,144 +10,192 @@ use acvus_mir::ty::{PolyTy, Task};
 use crate::runtime::Runtime;
 use crate::slice::Elements;
 
-/// A synchronous handler takes its arguments **by value, one Rust
-/// parameter each, up to three** (RFC-0044, stage 2c). A `Value` is a
-/// scalar pair, so `(&R, Value, Value, Value)` is seven scalars under the
-/// `rust-call` ABI and the caller passes each argument in a register
-/// rather than staging it into a contiguous run of its own registers.
-///
-/// Four or more arguments do not fit that ABI, so `ArityN` keeps the
-/// window: the handler is lent the caller's argument slots and takes each
-/// value out of the one it reads, and what it leaves behind is the
-/// caller's business (stage 2b).
-///
-/// The return carries no failure. A handler that could not produce a
-/// result leaves its trap on the runtime through `Runtime::trap` and
-/// returns `Runtime::empty`, which is what the caller tests for.
-type Sync0<R> = dyn Fn(&R) -> <R as Runtime>::Value + Send + Sync;
-type Sync1<R> = dyn Fn(&R, <R as Runtime>::Value) -> <R as Runtime>::Value + Send + Sync;
-type Sync2<R> =
-    dyn Fn(&R, <R as Runtime>::Value, <R as Runtime>::Value) -> <R as Runtime>::Value + Send + Sync;
-type Sync3<R> = dyn Fn(
-        &R,
-        <R as Runtime>::Value,
-        <R as Runtime>::Value,
-        <R as Runtime>::Value,
-    ) -> <R as Runtime>::Value
-    + Send
-    + Sync;
-type SyncN<R> = dyn Fn(&R, &mut [<R as Runtime>::Value]) -> <R as Runtime>::Value + Send + Sync;
-type ElementsFn<R> = dyn Fn(&R, <R as Runtime>::Value) -> Elements<R> + Send + Sync;
-type AsyncFn<R> = dyn Fn(
-        R,
-        &mut [<R as Runtime>::Value],
-    ) -> Pin<Box<dyn Future<Output = <R as Runtime>::Value> + Send>>
-    + Send
-    + Sync;
+/// A `#[state]` parameter, supplied when the registry is built and read
+/// by the handler as its first argument. The call operation holds the
+/// `Arc` as a field, so the operation's type says a state exists and the
+/// handler runs without testing for one (RFC-0052 §6).
+pub type State = Arc<dyn Any + Send + Sync>;
+pub type StateRef<'a> = &'a (dyn Any + Send + Sync);
 
-/// A declaration that returns a slice, at the one arity such a
-/// declaration has: its container reference in, the run's pointer and
-/// length out as a Rust `ScalarPair`, in two machine registers with no
-/// `Value` and no allocation (RFC-0047 §6).
-pub struct SliceHandler<R>
+pub type Sync0<R> = fn(&R) -> <R as Runtime>::Value;
+pub type Sync1<R> = fn(&R, <R as Runtime>::Value) -> <R as Runtime>::Value;
+pub type Sync2<R> = fn(&R, <R as Runtime>::Value, <R as Runtime>::Value) -> <R as Runtime>::Value;
+pub type Sync3<R> = fn(
+    &R,
+    <R as Runtime>::Value,
+    <R as Runtime>::Value,
+    <R as Runtime>::Value,
+) -> <R as Runtime>::Value;
+pub type SyncWindow<R> = fn(&R, &[<R as Runtime>::Value]) -> <R as Runtime>::Value;
+pub type SyncSlice<R> = fn(&R, <R as Runtime>::Value) -> Elements<R>;
+
+pub type State0<R> = fn(StateRef<'_>, &R) -> <R as Runtime>::Value;
+pub type State1<R> = fn(StateRef<'_>, &R, <R as Runtime>::Value) -> <R as Runtime>::Value;
+pub type State2<R> =
+    fn(StateRef<'_>, &R, <R as Runtime>::Value, <R as Runtime>::Value) -> <R as Runtime>::Value;
+pub type State3<R> = fn(
+    StateRef<'_>,
+    &R,
+    <R as Runtime>::Value,
+    <R as Runtime>::Value,
+    <R as Runtime>::Value,
+) -> <R as Runtime>::Value;
+pub type StateWindow<R> = fn(StateRef<'_>, &R, &[<R as Runtime>::Value]) -> <R as Runtime>::Value;
+pub type StateSlice<R> = fn(StateRef<'_>, &R, <R as Runtime>::Value) -> Elements<R>;
+
+pub type Async<R> =
+    fn(R, &[<R as Runtime>::Value]) -> Pin<Box<dyn Future<Output = <R as Runtime>::Value> + Send>>;
+pub type AsyncState<R> = fn(
+    State,
+    R,
+    &[<R as Runtime>::Value],
+) -> Pin<Box<dyn Future<Output = <R as Runtime>::Value> + Send>>;
+
+/// Which `fn` shape a declaration compiled to. A declaration of three or
+/// fewer parameters takes each in a register; four or more take the
+/// caller's argument window, and a slice return takes its run back in two
+/// registers with no boxing (RFC-0047 §6).
+///
+/// `prepare` reads this once, to pick the call operation's type; the
+/// operation then holds the bare `fn` pointer and calls it with no
+/// decision in between.
+pub enum SyncAbi<R>
 where
     R: Runtime,
 {
-    elements: Arc<ElementsFn<R>>,
+    Arity0(Sync0<R>),
+    Arity1(Sync1<R>),
+    Arity2(Sync2<R>),
+    Arity3(Sync3<R>),
+    Window(SyncWindow<R>),
+    Slice(SyncSlice<R>),
 }
 
-impl<R> SliceHandler<R>
+pub enum StateAbi<R>
 where
     R: Runtime,
 {
-    pub fn new<F>(elements: F) -> Self
-    where
-        F: Fn(&R, R::Value) -> Elements<R> + Send + Sync + 'static,
-    {
-        Self {
-            elements: Arc::new(elements),
-        }
-    }
-
-    pub fn elements(&self, rt: &R, container: R::Value) -> Elements<R> {
-        (self.elements)(rt, container)
-    }
-
-    pub fn boxed(&self, rt: &R, container: R::Value) -> R::Value {
-        // SAFETY: `Slice::materialize` reads the box back as this same
-        // `Elements<R>`, which is the only crossing either slice type has.
-        unsafe { rt.erase::<Elements<R>>(self.elements(rt, container)) }
-    }
+    Arity0(State0<R>),
+    Arity1(State1<R>),
+    Arity2(State2<R>),
+    Arity3(State3<R>),
+    Window(StateWindow<R>),
+    Slice(StateSlice<R>),
 }
 
-impl<R> Clone for SliceHandler<R>
+pub enum SyncCall<R>
+where
+    R: Runtime,
+{
+    Plain(SyncAbi<R>),
+    Stateful { state: State, abi: StateAbi<R> },
+}
+
+pub enum AsyncCall<R>
+where
+    R: Runtime,
+{
+    Plain(Async<R>),
+    Stateful { state: State, f: AsyncState<R> },
+}
+
+impl<R> Clone for SyncAbi<R>
 where
     R: Runtime,
 {
     fn clone(&self) -> Self {
-        Self {
-            elements: Arc::clone(&self.elements),
+        match *self {
+            Self::Arity0(f) => Self::Arity0(f),
+            Self::Arity1(f) => Self::Arity1(f),
+            Self::Arity2(f) => Self::Arity2(f),
+            Self::Arity3(f) => Self::Arity3(f),
+            Self::Window(f) => Self::Window(f),
+            Self::Slice(f) => Self::Slice(f),
         }
     }
 }
 
-/// The by-value ABI. The variant is fixed when the handler is built: the
-/// macro reads the arity and the return type off the signature, and the
-/// caller's operation is chosen to match.
-pub enum SyncHandler<R>
+impl<R> Clone for StateAbi<R>
 where
     R: Runtime,
 {
-    Arity0(Arc<Sync0<R>>),
-    Arity1(Arc<Sync1<R>>),
-    Arity2(Arc<Sync2<R>>),
-    Arity3(Arc<Sync3<R>>),
-    ArityN(Arc<SyncN<R>>),
-    Slice(SliceHandler<R>),
+    fn clone(&self) -> Self {
+        match *self {
+            Self::Arity0(f) => Self::Arity0(f),
+            Self::Arity1(f) => Self::Arity1(f),
+            Self::Arity2(f) => Self::Arity2(f),
+            Self::Arity3(f) => Self::Arity3(f),
+            Self::Window(f) => Self::Window(f),
+            Self::Slice(f) => Self::Slice(f),
+        }
+    }
 }
 
-impl<R> Clone for SyncHandler<R>
+impl<R> Clone for SyncCall<R>
 where
     R: Runtime,
 {
     fn clone(&self) -> Self {
         match self {
-            Self::Arity0(f) => Self::Arity0(Arc::clone(f)),
-            Self::Arity1(f) => Self::Arity1(Arc::clone(f)),
-            Self::Arity2(f) => Self::Arity2(Arc::clone(f)),
-            Self::Arity3(f) => Self::Arity3(Arc::clone(f)),
-            Self::ArityN(f) => Self::ArityN(Arc::clone(f)),
-            Self::Slice(f) => Self::Slice(f.clone()),
+            Self::Plain(abi) => Self::Plain(abi.clone()),
+            Self::Stateful { state, abi } => Self::Stateful {
+                state: Arc::clone(state),
+                abi: abi.clone(),
+            },
         }
     }
 }
 
-impl<R> SyncHandler<R>
+impl<R> Clone for AsyncCall<R>
+where
+    R: Runtime,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Plain(f) => Self::Plain(*f),
+            Self::Stateful { state, f } => Self::Stateful {
+                state: Arc::clone(state),
+                f: *f,
+            },
+        }
+    }
+}
+
+impl<R> SyncCall<R>
 where
     R: Runtime,
 {
     /// The arity the ABI names, and `None` for the window form, whose
     /// arity is whatever the caller's slice holds.
     pub fn arity(&self) -> Option<usize> {
+        let at = |plain: &SyncAbi<R>| match plain {
+            SyncAbi::Arity0(_) => Some(0),
+            SyncAbi::Arity1(_) | SyncAbi::Slice(_) => Some(1),
+            SyncAbi::Arity2(_) => Some(2),
+            SyncAbi::Arity3(_) => Some(3),
+            SyncAbi::Window(_) => None,
+        };
         match self {
-            Self::Arity0(_) => Some(0),
-            Self::Arity1(_) => Some(1),
-            Self::Arity2(_) => Some(2),
-            Self::Arity3(_) => Some(3),
-            Self::Slice(_) => Some(1),
-            Self::ArityN(_) => None,
+            Self::Plain(abi) => at(abi),
+            Self::Stateful { abi, .. } => match abi {
+                StateAbi::Arity0(_) => Some(0),
+                StateAbi::Arity1(_) | StateAbi::Slice(_) => Some(1),
+                StateAbi::Arity2(_) => Some(2),
+                StateAbi::Arity3(_) => Some(3),
+                StateAbi::Window(_) => None,
+            },
         }
     }
 
     /// Calls the handler with its arguments in a slice, taking each out of
-    /// its place. This is for a caller that does not know the arity where
-    /// it stands — a spawn that must own the arguments, a test. The
-    /// interpreter's call path does not come here: it reads each argument
+    /// its place: for a caller that does not know the arity where it
+    /// stands — a spawn that must own the arguments, a test. The
+    /// interpreter's call path does not come here; it reads each argument
     /// from the register the operation names and passes it by value.
     ///
     /// # Panics
     /// `args` is not as long as the arity the handler names.
-    pub fn call_taking(&self, rt: &R, args: &mut [R::Value]) -> R::Value {
+    pub fn call_taking(&self, rt: &R, args: &[R::Value]) -> R::Value {
         if let Some(arity) = self.arity() {
             assert_eq!(
                 args.len(),
@@ -155,30 +204,58 @@ where
                 args.len()
             );
         }
+        let take = |args: &[R::Value], at: usize| args[at];
         match self {
-            Self::Arity0(f) => f(rt),
-            Self::Arity1(f) => {
-                let a0 = std::mem::take(&mut args[0]);
-                f(rt, a0)
+            Self::Plain(abi) => match abi {
+                SyncAbi::Arity0(f) => f(rt),
+                SyncAbi::Arity1(f) => f(rt, take(args, 0)),
+                SyncAbi::Arity2(f) => {
+                    let a0 = take(args, 0);
+                    let a1 = take(args, 1);
+                    f(rt, a0, a1)
+                }
+                SyncAbi::Arity3(f) => {
+                    let a0 = take(args, 0);
+                    let a1 = take(args, 1);
+                    let a2 = take(args, 2);
+                    f(rt, a0, a1, a2)
+                }
+                SyncAbi::Window(f) => f(rt, args),
+                SyncAbi::Slice(f) => erase_elements(rt, f(rt, take(args, 0))),
+            },
+            Self::Stateful { state, abi } => {
+                let s: StateRef<'_> = state.as_ref();
+                match abi {
+                    StateAbi::Arity0(f) => f(s, rt),
+                    StateAbi::Arity1(f) => f(s, rt, take(args, 0)),
+                    StateAbi::Arity2(f) => {
+                        let a0 = take(args, 0);
+                        let a1 = take(args, 1);
+                        f(s, rt, a0, a1)
+                    }
+                    StateAbi::Arity3(f) => {
+                        let a0 = take(args, 0);
+                        let a1 = take(args, 1);
+                        let a2 = take(args, 2);
+                        f(s, rt, a0, a1, a2)
+                    }
+                    StateAbi::Window(f) => f(s, rt, args),
+                    StateAbi::Slice(f) => erase_elements(rt, f(s, rt, take(args, 0))),
+                }
             }
-            Self::Arity2(f) => {
-                let a0 = std::mem::take(&mut args[0]);
-                let a1 = std::mem::take(&mut args[1]);
-                f(rt, a0, a1)
-            }
-            Self::Arity3(f) => {
-                let a0 = std::mem::take(&mut args[0]);
-                let a1 = std::mem::take(&mut args[1]);
-                let a2 = std::mem::take(&mut args[2]);
-                f(rt, a0, a1, a2)
-            }
-            Self::Slice(f) => {
-                let a0 = std::mem::take(&mut args[0]);
-                f.boxed(rt, a0)
-            }
-            Self::ArityN(f) => f(rt, args),
         }
     }
+}
+
+/// The run a slice-returning declaration produced, as a value: the form a
+/// caller takes when it wants a `Value` rather than the two registers.
+pub fn erase_elements<R>(rt: &R, elements: Elements<R>) -> R::Value
+where
+    R: Runtime,
+{
+    // SAFETY: `Slice::materialize` reads the box back as this same
+    // `Elements<R>`, which is the only crossing either slice type has.
+    unsafe { rt.erase::<Elements<R>>(elements) }
 }
 
 /// One handler per rung of `Task` (RFC-0046). `Sync` runs to its result
@@ -187,9 +264,9 @@ where
 /// the async runtime and owns its interner because it lives across await
 /// points.
 pub enum ExternHandler<R: Runtime> {
-    Sync(SyncHandler<R>),
-    Heavy(SyncHandler<R>),
-    Async(Arc<AsyncFn<R>>),
+    Sync(SyncCall<R>),
+    Heavy(SyncCall<R>),
+    Async(AsyncCall<R>),
 }
 
 impl<R: Runtime> Clone for ExternHandler<R> {
@@ -197,7 +274,7 @@ impl<R: Runtime> Clone for ExternHandler<R> {
         match self {
             Self::Sync(f) => Self::Sync(f.clone()),
             Self::Heavy(f) => Self::Heavy(f.clone()),
-            Self::Async(f) => Self::Async(Arc::clone(f)),
+            Self::Async(f) => Self::Async(f.clone()),
         }
     }
 }

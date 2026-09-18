@@ -150,6 +150,24 @@ first `erase` and leaked for the life of the process. The host asserts
 `unsafe impl Send + Sync for Value`: every payload entered through
 `erase<T: Send + Sync>`, and vtables are shared statics.
 
+A frame is one **cell**: fifteen registers and the one word marking which
+of them own a `Large`, 256 bytes and four cache lines, starting one
+(RFC-0048 §3, RFC-0052 §5). A call's frame is the next cell of the same
+`Store`, taken after one capacity compare; a body wider than fifteen
+registers, or a chain deeper than the store's cells, gets a frame of its
+own. An operation names a register by its **byte displacement** inside the
+frame (`code::Off`, `slot * 16`, multiplied once by `prepare`), never by
+its index: `Slot` is the language-level index and it does not leave
+`prepare`.
+
+A register whose type is a word — an integer, a float, a `Bool`, a `Unit`
+— is opened once with its kind when the frame is made (`Body::slot_kinds`),
+and every write to it afterwards stores the word alone. `Regs::store::<LARGE,
+WORD>` is the one store that says which of the two a result takes; the pair
+`LARGE && WORD` is a `const` assert, because a register the frame gave a kind
+holds no `Large`. `prepare::Dest` reads `word_kind` for `WORD` — the same
+predicate `slot_kinds` opened the register by.
+
 Every storage is a register: a variable slot, a temporary, a parameter. A
 `Take` moves out of one (`use_from`), an `Assign` moves in, a `Ref` makes
 the word naming one; through a reference (`RefTarget::Through`) a `Take`

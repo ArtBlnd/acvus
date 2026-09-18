@@ -10,16 +10,10 @@
 //! evidence that the first happened without the moves and the second does
 //! not happen at all.
 
-use std::sync::Arc;
-
-use acvus_interpreter::code::Code;
-use acvus_interpreter::code::Payload;
-use acvus_interpreter::{PrepareCtx, prepare_module};
+use acvus_interpreter_test::listing::{regions_named, script_listing};
 use acvus_interpreter_test::scripts::ATTENTION;
-use acvus_interpreter_test::{compile_script_mode, split_context, value_from_json};
-use acvus_mir::ty::Ty;
-use acvus_utils::{Astr, Interner};
-use rustc_hash::FxHashMap;
+use acvus_interpreter_test::value_from_json;
+use acvus_utils::Interner;
 
 /// One `while` as the machine runs it.
 struct LoopShape {
@@ -41,35 +35,30 @@ fn attention_loops() -> Vec<LoopShape> {
         .iter()
         .map(|(name, value)| (interner.intern(name), value_from_json(&interner, value)))
         .collect();
-    let (context_types, _snapshot): (FxHashMap<Astr, Ty>, _) = split_context(&interner, contexts);
 
     let source = format!("{ATTENTION} *out.get(0)");
-    let cr = compile_script_mode(&interner, &source, &context_types);
-    let ctx = PrepareCtx {
-        interner: &interner,
-        externs: &cr.extern_executables,
-        context_names: &cr.context_names,
-    };
-    let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
-    let prepared = Arc::new(prepare_module(module, &ctx));
-
-    let Code::Body(main) = &*prepared.main else {
-        panic!("the entry module's main is a body, not a one-chain expression")
-    };
-    main.payloads
-        .iter()
-        .filter_map(|payload| match payload {
-            Payload::Loop(body) => Some(LoopShape {
-                head_ops: body.head.iter().count(),
-                body_ops: body.body.iter().count(),
-                back_moves: body.back.len(),
-            }),
-            _ => None,
+    let blocks = script_listing(&interner, &source, contexts);
+    regions_named(&blocks, "Loop")
+        .into_iter()
+        .map(|region| {
+            let head = region.part("head").expect("a Loop holds a head");
+            let body = region.part("body").expect("a Loop holds a body");
+            LoopShape {
+                head_ops: head.ops.len(),
+                body_ops: body.ops.len(),
+                back_moves: body.leaves_with,
+            }
         })
         .collect()
 }
 
-/// History. On `63b31a42`, before the borrows left the loops, the four
+/// History. A region is an operation of the list it sits in (RFC-0052 §3),
+/// so each of the two outer bodies that hold a nested `while` counts the
+/// nested `Loop` among its own operations: 10 -> 11 and 6 -> 7 against the
+/// run that made a region a terminator. The heads and the back edges did not
+/// move.
+///
+/// On `63b31a42`, before the borrows left the loops, the four
 /// loops were `head 2 body 11 back 0`, `head 1 body 8 back 1`,
 /// `head 1 body 12 back 0`, `head 1 body 8 back 1`. Hoisting the borrows,
 /// moving `s * scale` out of the inner head, and folding the arithmetic
@@ -98,7 +87,7 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
         shapes,
         [
             "head 1 body 4 back 0",
-            "head 1 body 12 back 0",
+            "head 1 body 11 back 0",
             "head 1 body 9 back 0",
             "head 1 body 7 back 1",
         ],
