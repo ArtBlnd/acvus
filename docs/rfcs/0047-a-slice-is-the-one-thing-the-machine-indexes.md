@@ -185,7 +185,17 @@ enumerate the dependents, nothing is patched around.
   parameter; the box costs one load and keeps the boundary uniform.
 - **The length in `Value`'s head word** — as a byte-array struct
   (memory class, `sret`, +122 %) and as a `NonZeroU64` (store-forwarding
-  stall on whole-`Value` copies, +17 %): both measured, see §6.
+  stall on whole-`Value` copies, +17 %): both measured, see §6. Retried
+  on the RFC-0052 machine (2026-09-19, four runs) as `Value { head: u64,
+  word: u64 }` with the kind in the head's low byte and `len` above it:
+  the slice side works (attention −12 %, `IndexCopy` three dependent
+  loads → one, the ABI class kept) and its price is the head's niche —
+  `Option<Value>` grows to 24 bytes and returns through `sret` on the
+  stage protocol, and the flat-option protocol that replaces it costs a
+  `some`/`unwrap_some` per element (the `map` family +5–20 %). The owner
+  decided against it: a slice's load is what hoisting removes, a
+  `Value` layout is what every architecture pays; the slice stays boxed
+  and `Option<Value>` keeps its niche.
 - **The length as a third operand of `Index`** (proposed when the
   byte-array head was refuted): keeps `Value` untouched, but every
   crossing of a slice — a call, a capture, a store — must carry the
