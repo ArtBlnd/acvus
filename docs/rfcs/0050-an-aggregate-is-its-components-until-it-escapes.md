@@ -117,16 +117,28 @@ object lives.
    cannot coincide, and the RFC says so rather than promising zero.
 
 6. **At a Rust boundary the glue converts, and nothing is heap-
-   allocated** (amended 2026-09-20: no `Context` type). An object by
-   `&`/`&mut`: the handler receives the projection as `&[Value]` +
-   shape (`&mut` writes through it — the wide run is the object). An
+   allocated** (amended 2026-09-20: no `Context` type; projection types
+   replace the stack temporary). **An aggregate crosses as a projection
+   type the derive generates**: `#[derive(TyArg)]` on `struct S { a: A,
+   b: B }` emits `SRef<'a> { a: A::Ref<'a>, b: B::Ref<'a> }` and
+   `SMut<'a>`, and a handler that declares `&S` / `&mut S` receives them.
+   `Cross` has `type Ref<'a>` and `type Mut<'a>`: `&'a T` / `&'a mut T`
+   for a plain type (built by `Runtime::inline_mut` / `value_as_mut` on
+   the field's `Value`), a view for a flat option (rule 9 — a Rust
+   `Option<T>` has another layout), the derived projection for a nested
+   aggregate (its sub-run, rule 8). Field offsets come from the settled
+   shape at `prepare` and reach the glue as a table in the op; the glue
+   builds the projection by `split_at_mut` over the run — **no name
+   lookup at call time**; a partial projection borrows only the fields
+   it names. An enum derives `ERef<'a>` / `EMut<'a>` — real Rust enums
+   whose payloads are borrowed — from the tag and the payload's run;
+   `EMut::set(E)` rewrites `[tag, payload…]` in place by `into_run`,
+   the layout being the widest variant's. `Rt::Object<'a>` /
+   `Rt::Enum<'a>` name the runtime's representation these are built
+   from. By value: `from_run` / `into_run` (rule 6's ABI paragraph). An
    object by value into a Rust container: rule 4's realization, at the
-   glue. An enum: the glue builds a **real Rust enum** — `#[acvus::
-   enum]` on the Rust type declares variant ↔ tag — by value from
-   `(tag, payload)`; `&E` a stack temporary; `&mut E` a temporary plus
-   write-back of `(tag, payload)`; a returned Rust enum is split back
-   (a payload that is itself an aggregate goes to the payload's run, by
-   rule 8's layout). An extern that **returns** an object receives its
+   glue. The stack-temporary `&E` and the `&mut E` write-back are
+   withdrawn (owner, 2026-09-20). An extern that **returns** an object receives its
    destination as `Out<'_, Rt>` — a `&mut [Value]` over the caller's
    destination run, lent for the call's duration — and writes the
    components; it is not a heap object either. The frame owns the run;
