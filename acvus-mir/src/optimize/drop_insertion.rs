@@ -17,18 +17,20 @@
 //! NOT forwarded to B and NOT live-in to B, its life ends on that edge; where the
 //! drop then runs is `DropSite`.
 //!
-//! A take that reaches a payload through nothing but options moves the
-//! whole storage (`empties_option_storage`), so both phases see that
-//! storage as dead from the take on.
+//! A register a payload has left owns nothing from there on
+//! (`move_check::emptied_by`, the statement this pass shares with the move
+//! check), and both phases read it: an option's storage after a take that
+//! reached its payload through nothing but options, and an unwrap's source
+//! in every variant form.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::loans::Loans;
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, InstKind, Label, PathSeg, ValueId};
+use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
-use crate::validate::move_check::{is_move_only, moves_out};
+use crate::validate::move_check::{emptied_by, is_move_only};
 
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
 pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
@@ -452,44 +454,18 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
     }
 }
 
-fn ends_ownership(kind: &InstKind, val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
-    is_consumed_by_inst(kind, val) || empties_option_storage(kind, val, val_types)
-}
-
-/// A storage holding nothing but options holds nothing at all once the
-/// payload under them is taken, because the host gives an option no storage
-/// of its own and `Some(v)` is `v`: RFC-0039 and `docs/runtime-value.md`
-/// are the other half of that contract. A `String` payload is copied out
-/// rather than moved under RFC-0026, which is what `moves_out` asks.
-fn empties_option_storage(
+/// Whether `val` leaves this instruction owning nothing, by either road: the
+/// instruction took it, or the payload that was all it held left it.
+pub(crate) fn ends_ownership(
     kind: &InstKind,
     val: ValueId,
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> bool {
-    let InstKind::Take { target, path, .. } = kind else {
-        return false;
-    };
-    let Some(ty) = val_types.get(&val) else {
-        return false;
-    };
-    inst_info::storage(target) == Some(val) && under_options(ty, path).is_some_and(moves_out)
+    is_consumed_by_inst(kind, val) || emptied_by(kind, val_types) == Some(val)
 }
 
-/// The type a path of payload steps reaches while every type it steps
-/// through is an option.
-fn under_options<'a>(ty: &'a Ty, path: &[PathSeg]) -> Option<&'a Ty> {
-    let mut at = ty;
-    for seg in path {
-        let (PathSeg::Payload, Ty::Option(payload)) = (seg, at) else {
-            return None;
-        };
-        at = payload;
-    }
-    Some(at)
-}
-
-/// The storages a block leaves empty: an option whose payload was taken
-/// and that nothing wrote to afterwards.
+/// The registers a block leaves empty: the payload left them, and nothing
+/// wrote to them afterwards.
 fn emptied_in(
     block: &Block,
     val_types: &FxHashMap<ValueId, Ty>,
@@ -497,11 +473,8 @@ fn emptied_in(
 ) -> FxHashSet<ValueId> {
     let mut emptied = FxHashSet::default();
     for inst in &block.insts {
-        if let InstKind::Take { target, .. } = &inst.kind
-            && let Some(storage) = inst_info::storage(target)
-            && empties_option_storage(&inst.kind, storage, val_types)
-        {
-            emptied.insert(storage);
+        if let Some(register) = emptied_by(&inst.kind, val_types) {
+            emptied.insert(register);
             continue;
         }
         for written in loans.storage_effect(&inst.kind).writes {
@@ -523,7 +496,7 @@ fn needs_drop(val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
 ///
 /// Consumed = the instruction takes ownership. No Drop needed after.
 /// Read = the instruction borrows. Drop still needed if this is the last use.
-pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
+fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
     match kind {
         // Function calls consume all arguments (ownership transfer to callee).
         InstKind::FunctionCall { callee, args, .. } => {
@@ -540,8 +513,6 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::Take { target, path, .. } => {
             path.is_empty() && inst_info::storage(target) == Some(val)
         }
-        // Unwrap moves the payload out of the variant.
-        InstKind::UnwrapVariant { src, .. } => *src == val,
         // Assign and Commit consume the value; the reference an Assign
         // goes through is only read.
         InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => *value == val,
@@ -559,6 +530,10 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::FieldSet { object, value, .. } => *object == val || *value == val,
         // Drop consumes src.
         InstKind::Drop { src } => *src == val,
+        // An unwrap's source is `move_check::emptied_by`'s answer, which
+        // both passes read; `false` here is this function declining to give
+        // a second one, not a claim that an unwrap keeps its source.
+        InstKind::UnwrapVariant { .. } => false,
 
         // Read-only: these don't consume the value.
         InstKind::FieldGet { .. }

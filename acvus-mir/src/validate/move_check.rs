@@ -569,6 +569,46 @@ pub(crate) fn moves_out(ty: &Ty) -> bool {
     !matches!(ty, Ty::String) && is_move_only(ty) == Some(true)
 }
 
+/// The register this instruction leaves owning nothing, and the one
+/// statement of it that the move check and drop insertion both read: what
+/// one calls "consumed here" the other calls "no drop after here", and a
+/// register with two answers is a register released twice or not at all.
+///
+/// An option has no storage of its own — `Some(v)` is `v` and a `None` is a
+/// word counting the `Some`s around it (RFC-0039, `docs/runtime-value.md`) —
+/// so a take that reaches a payload through nothing but options empties the
+/// whole storage. A `String` payload is copied out rather than moved under
+/// RFC-0026, which is what `moves_out` asks. An unwrap empties its source in
+/// every variant form: `variant::unwrap_option`, `unwrap_result` and
+/// `unwrap_variant` each open with `machine.take(op.b)` and hand the payload
+/// on, so the box a `Result` or an enum carried is gone with them.
+pub(crate) fn emptied_by(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Option<ValueId> {
+    match kind {
+        InstKind::Take { target, path, .. } => {
+            let storage = crate::analysis::inst_info::storage(target)?;
+            let ty = val_types.get(&storage)?;
+            under_options(ty, path)
+                .is_some_and(moves_out)
+                .then_some(storage)
+        }
+        InstKind::UnwrapVariant { src, .. } => Some(*src),
+        _ => None,
+    }
+}
+
+/// The type a path of payload steps reaches while every type it steps
+/// through is an option.
+fn under_options<'a>(ty: &'a Ty, path: &[PathSeg]) -> Option<&'a Ty> {
+    let mut at = ty;
+    for seg in path {
+        let (PathSeg::Payload, Ty::Option(payload)) = (seg, at) else {
+            return None;
+        };
+        at = payload;
+    }
+    Some(at)
+}
+
 fn extract_part(
     scope: &str,
     inst_idx: usize,
@@ -725,7 +765,12 @@ fn process_inst(
                 && moves_out(ty)
             {
                 let site = MoveSite { at: inst_idx, span };
-                state.set_var(*slot, state.get_var(*slot).moved(path, site));
+                let whole: &[PathSeg] = &[];
+                let moved = match emptied_by(&inst.kind, val_types) == Some(*slot) {
+                    true => whole,
+                    false => path,
+                };
+                state.set_var(*slot, state.get_var(*slot).moved(moved, site));
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -891,9 +936,10 @@ fn process_inst(
                 scope, inst_idx, span, *value, val_types, debug, state, errors,
             );
         }
-        // Unwrap moves the payload out of the variant: the variant is consumed.
         InstKind::UnwrapVariant { dst, src } => {
-            try_consume_value(scope, inst_idx, span, *src, val_types, debug, state, errors);
+            if emptied_by(&inst.kind, val_types) == Some(*src) {
+                try_consume_value(scope, inst_idx, span, *src, val_types, debug, state, errors);
+            }
             state.set_value(*dst, Liveness::Alive);
         }
 

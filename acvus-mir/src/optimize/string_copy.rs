@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, ValueId};
-use crate::optimize::drop_insertion::is_consumed_by_inst;
+use crate::optimize::drop_insertion::ends_ownership;
 use crate::optimize::ssa_pass::map_uses;
 use crate::ty::Ty;
 
@@ -23,7 +23,7 @@ pub fn run(cfg: &mut CfgBody) {
             let consumed: Vec<ValueId> = inst_info::uses(&inst.kind)
                 .iter()
                 .copied()
-                .filter(|v| is_consumed_by_inst(&inst.kind, *v))
+                .filter(|v| ends_ownership(&inst.kind, *v, &cfg.val_types))
                 .collect();
             let copies = copies_for(cfg, &live_after[ii], consumed.into_iter());
             for (src, dst) in &copies.clones {

@@ -50,6 +50,30 @@ fn after_the_take_in_its_block(ir: &str, storage: &str) -> Vec<String> {
         .collect()
 }
 
+fn register_of(ir: &str, opcode: &str) -> String {
+    body(ir)
+        .iter()
+        .find_map(|line| {
+            let (_, op) = line.split_once(" = ")?;
+            let rest = op.strip_prefix(opcode)?.strip_prefix(' ')?;
+            Some(rest.split_whitespace().next()?.to_string())
+        })
+        .unwrap_or_else(|| panic!("no {opcode} in\n{ir}"))
+}
+
+fn after_the_unwrap_in_its_block(ir: &str) -> Vec<String> {
+    let lines = body(ir);
+    let at = lines
+        .iter()
+        .position(|line| line.contains("= unwrap "))
+        .unwrap_or_else(|| panic!("no unwrap in\n{ir}"));
+    lines[at + 1..]
+        .iter()
+        .take_while(|line| !line.starts_with("jump"))
+        .cloned()
+        .collect()
+}
+
 #[test]
 fn an_option_of_a_word_is_never_dropped() {
     let i = Interner::new();
@@ -110,4 +134,58 @@ fn a_result_keeps_its_box_after_its_payload_is_taken() {
         after_the_take_in_its_block(&ir, "r").contains(&format!("drop {r}")),
         "{ir}"
     );
+}
+
+// -- The unwrap shape: a temporary scrutinee (`a8ec35e0`) ---------------
+
+#[test]
+fn an_unwrapped_option_is_not_dropped_after_the_unwrap() {
+    let i = Interner::new();
+    let ir = compile_script_optimized(
+        &i,
+        "let n = 0; if let Some(s) = strip_prefix(\"abc\", \"zz\") { n = s.len(); }; n",
+        &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
+    )
+    .unwrap();
+    let scrutinee = register_of(&ir, "unwrap");
+    assert!(
+        !after_the_unwrap_in_its_block(&ir).contains(&format!("drop {scrutinee}")),
+        "{ir}"
+    );
+}
+
+/// `variant::unwrap_result` takes its source apart as `unwrap_option` does,
+/// so the box is gone with the unwrap and a drop of it would be a second
+/// release: a boxed variant differs from a flat option in what the unwrap
+/// yields, not in what it consumes.
+#[test]
+fn an_unwrapped_result_is_not_dropped_after_the_unwrap() {
+    let i = Interner::new();
+    let ir = compile_script_optimized(
+        &i,
+        "let n = 0; if let Ok(c) = int_to_char(65) { n = c.len(); }; n",
+        &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
+    )
+    .unwrap();
+    let scrutinee = register_of(&ir, "unwrap");
+    assert!(
+        !after_the_unwrap_in_its_block(&ir).contains(&format!("drop {scrutinee}")),
+        "{ir}"
+    );
+}
+
+/// The path the variant test refused still carries a drop of the option,
+/// and what it drops there is a `None`: a word that owns nothing. The drop
+/// releases nothing and costs one dispatch.
+#[test]
+fn an_option_that_tested_none_is_dropped_on_that_edge() {
+    let i = Interner::new();
+    let ir = compile_script_optimized(
+        &i,
+        "let n = 0; if let Some(s) = strip_prefix(\"abc\", \"zz\") { n = s.len(); }; n",
+        &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
+    )
+    .unwrap();
+    let scrutinee = register_of(&ir, "unwrap");
+    assert_eq!(drops_of(&ir, &scrutinee), 1, "{ir}");
 }
