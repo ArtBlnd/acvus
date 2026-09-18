@@ -7,7 +7,7 @@ use std::fmt;
 use std::mem::{self, MaybeUninit};
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
@@ -15,7 +15,7 @@ use rustc_hash::FxHashMap;
 
 use crate::code::Code;
 use crate::interpreter::InterpreterContext;
-use crate::vtable::{Composite, Header, Slot, Vtable, VtableRegistry};
+use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
 
 // -- Kind -------------------------------------------------------------
 
@@ -184,7 +184,7 @@ impl Value {
 
     /// # Safety
     /// The value may only be materialized back as this same `T`.
-    pub unsafe fn erase<T>(table: &VtableRegistry, value: T) -> Value
+    pub unsafe fn erase<T>(value: T) -> Value
     where
         T: Send + Sync + 'static,
     {
@@ -208,7 +208,7 @@ impl Value {
                 mem::forget(value);
                 Value { kind, word }
             }
-            None => large(table.vtable_of::<T>(), value),
+            None => large(vtable_of::<T>(), value),
         }
     }
 
@@ -444,7 +444,7 @@ impl fmt::Debug for Value {
                 match vtable.debug {
                     // SAFETY: the payload is a live value of the witnessed type.
                     Some(dbg) => unsafe { dbg(self.payload(), f) },
-                    None => write!(f, "<{}>", vtable.name),
+                    None => write!(f, "<{}>", (vtable.name)()),
                 }
             }
             kind => write!(f, "{kind:?}({:#x})", self.word),
@@ -575,15 +575,13 @@ impl fmt::Debug for HandleValue {
 
 // -- Composite vtables ------------------------------------------------
 
-fn vtable<T: 'static>(
-    name: &'static str,
-    composite: Composite,
-    debug: Option<crate::vtable::DebugFn>,
-) -> Vtable {
+const fn vtable<T: 'static>(name: NameFn, composite: Composite, debug: Option<DebugFn>) -> Vtable {
     Vtable {
+        type_id: TypeId::of::<T>(),
+        name,
         composite: Some(composite),
+        drop: drop_slot::<T>,
         debug,
-        ..Vtable::drop_only::<T>(name)
     }
 }
 
@@ -623,29 +621,40 @@ typed_debug_fn! { ResultValue;
 }
 typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len()); }
 
-static STRING: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<String>("String", Composite::String, Some(dbg_string)));
-static ARRAY: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<Array>("Array", Composite::Array, Some(dbg_array)));
-static TUPLE: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<Tuple>("Tuple", Composite::Tuple, Some(dbg_tuple)));
-static OBJECT: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<Object>("Object", Composite::Object, Some(dbg_object)));
-static VARIANT: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<VariantValue>("Variant", Composite::Variant, Some(dbg_variant)));
-static RESULT: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<ResultValue>("Result", Composite::Result, Some(dbg_result)));
-static FN: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<FnValue>("Fn", Composite::Fn, Some(dbg_fn)));
-static HANDLE: LazyLock<Vtable> =
-    LazyLock::new(|| vtable::<HandleValue>("Handle", Composite::Handle, None));
+static STRING: Vtable = vtable::<String>(|| "String", Composite::String, Some(dbg_string));
+static ARRAY: Vtable = vtable::<Array>(|| "Array", Composite::Array, Some(dbg_array));
+static TUPLE: Vtable = vtable::<Tuple>(|| "Tuple", Composite::Tuple, Some(dbg_tuple));
+static OBJECT: Vtable = vtable::<Object>(|| "Object", Composite::Object, Some(dbg_object));
+static VARIANT: Vtable =
+    vtable::<VariantValue>(|| "Variant", Composite::Variant, Some(dbg_variant));
+static RESULT: Vtable = vtable::<ResultValue>(|| "Result", Composite::Result, Some(dbg_result));
+static FN: Vtable = vtable::<FnValue>(|| "Fn", Composite::Fn, Some(dbg_fn));
+static HANDLE: Vtable = vtable::<HandleValue>(|| "Handle", Composite::Handle, None);
 
-/// Every composite vtable, in the order of `Composite`.
-pub(crate) static COMPOSITE_VTABLES: LazyLock<[&'static Vtable; 8]> = LazyLock::new(|| {
-    [
+/// The vtable `T` is erased through: a composite's own static, else the
+/// drop-only constant every type has.
+pub fn vtable_of<T>() -> &'static Vtable
+where
+    T: 'static,
+{
+    composite_vtable::<T>().unwrap_or(&<T as HasVtable>::VTABLE)
+}
+
+/// The `TypeId` chain folds at the monomorphization, as `Kind::of` does.
+fn composite_vtable<T>() -> Option<&'static Vtable>
+where
+    T: 'static,
+{
+    let id = TypeId::of::<T>();
+    for vtable in [
         &STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &RESULT, &FN, &HANDLE,
-    ]
-});
+    ] {
+        if id == vtable.type_id {
+            return Some(vtable);
+        }
+    }
+    None
+}
 
 // -- Constructors -----------------------------------------------------
 
@@ -851,6 +860,32 @@ impl Value {
 mod tests {
     use super::*;
 
+    fn assert_composite(vtable: &Vtable, composite: Composite, name: &str) {
+        assert_eq!(vtable.composite, Some(composite));
+        assert_eq!((vtable.name)(), name);
+    }
+
+    #[test]
+    fn a_composite_reaches_its_own_vtable_and_not_the_blanket_constant() {
+        assert_composite(vtable_of::<String>(), Composite::String, "String");
+        assert_composite(vtable_of::<Array>(), Composite::Array, "Array");
+        assert_composite(vtable_of::<Tuple>(), Composite::Tuple, "Tuple");
+        assert_composite(vtable_of::<Object>(), Composite::Object, "Object");
+        assert_composite(vtable_of::<VariantValue>(), Composite::Variant, "Variant");
+        assert_composite(vtable_of::<ResultValue>(), Composite::Result, "Result");
+        assert_composite(vtable_of::<FnValue>(), Composite::Fn, "Fn");
+        assert_composite(vtable_of::<HandleValue>(), Composite::Handle, "Handle");
+    }
+
+    #[test]
+    fn a_type_the_language_does_not_name_reaches_the_drop_only_constant() {
+        struct Extension;
+        let vtable = vtable_of::<Extension>();
+        assert_eq!(vtable.composite, None);
+        assert_eq!(vtable.type_id, TypeId::of::<Extension>());
+        assert!(*vtable == Vtable::drop_only::<Extension>());
+    }
+
     #[test]
     fn a_value_is_a_kind_byte_and_a_word() {
         assert_eq!(mem::size_of::<Value>(), 16);
@@ -874,20 +909,18 @@ mod tests {
         #[derive(Clone, Copy)]
         struct Word(u32);
         assert!(!is_inline::<Word>());
-        let table = VtableRegistry::default();
-        let v = unsafe { Value::erase(&table, Word(9)) };
+        let v = unsafe { Value::erase(Word(9)) };
         assert_eq!(v.kind(), Kind::Large);
         assert_eq!(unsafe { v.materialize::<Word>() }.0, 9);
     }
 
     #[test]
     fn erase_writes_the_kind_of_the_type() {
-        let table = VtableRegistry::default();
-        assert_eq!(unsafe { Value::erase(&table, 7i64) }.kind(), Kind::I64);
-        assert_eq!(unsafe { Value::erase(&table, 7u8) }.kind(), Kind::U8);
-        assert_eq!(unsafe { Value::erase(&table, 1.5f64) }.kind(), Kind::F64);
-        assert_eq!(unsafe { Value::erase(&table, true) }.kind(), Kind::Bool);
-        assert_eq!(unsafe { Value::erase(&table, ()) }.kind(), Kind::Unit);
+        assert_eq!(unsafe { Value::erase(7i64) }.kind(), Kind::I64);
+        assert_eq!(unsafe { Value::erase(7u8) }.kind(), Kind::U8);
+        assert_eq!(unsafe { Value::erase(1.5f64) }.kind(), Kind::F64);
+        assert_eq!(unsafe { Value::erase(true) }.kind(), Kind::Bool);
+        assert_eq!(unsafe { Value::erase(()) }.kind(), Kind::Unit);
     }
 
     #[test]
@@ -926,8 +959,7 @@ mod tests {
 
     #[test]
     fn erased_string_is_the_composite_string() {
-        let table = VtableRegistry::default();
-        let v = unsafe { Value::erase(&table, String::from("hi")) };
+        let v = unsafe { Value::erase(String::from("hi")) };
         assert!(v.is_string());
         assert_eq!(unsafe { v.as_str() }, "hi");
         let r = Value::reference(&v);
@@ -944,10 +976,9 @@ mod tests {
 
     #[test]
     fn erase_materialize_round_trip() {
-        let table = VtableRegistry::default();
-        let v = unsafe { Value::erase(&table, 7i64) };
+        let v = unsafe { Value::erase(7i64) };
         assert_eq!(unsafe { v.materialize::<i64>() }, 7);
-        let v = unsafe { Value::erase(&table, String::from("hi")) };
+        let v = unsafe { Value::erase(String::from("hi")) };
         assert_eq!(unsafe { v.materialize::<String>() }, "hi");
     }
 
@@ -955,9 +986,8 @@ mod tests {
     fn dropping_a_vec_of_values_releases_them() {
         struct Counted(Arc<()>);
         let alive = Arc::new(());
-        let table = VtableRegistry::default();
         let values: Vec<Value> = (0..3)
-            .map(|_| unsafe { Value::erase(&table, Counted(Arc::clone(&alive))) })
+            .map(|_| unsafe { Value::erase(Counted(Arc::clone(&alive))) })
             .collect();
         assert_eq!(Arc::strong_count(&alive), 4);
         drop(values);

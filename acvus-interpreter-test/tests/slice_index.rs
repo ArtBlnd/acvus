@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use acvus_extern::Externs;
 use acvus_interpreter::{
     AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx, Value,
-    VtableRegistry, prepare_module,
+    prepare_module,
 };
 use acvus_mir::ir::{
     DebugInfo, ExternInstance, IndexMode, Inst, InstKind, MirBody, MirModule, RefTarget, ValueId,
@@ -262,11 +262,10 @@ fn slice(mutability: Mutability, element: Ty) -> Ty {
 
 /// A `Vec<i64>` as the runtime holds it: one box over a `Vec<Value>`.
 fn stored_vec(items: &[i64]) -> Value {
-    let table = VtableRegistry::default();
     let values: Vec<Value> = items.iter().copied().map(Value::int).collect();
     // SAFETY: read back only as this same `Vec<Value>`, which is what
     // `vec::as_slice`'s glue derefs.
-    unsafe { Value::erase(&table, values) }
+    unsafe { Value::erase(values) }
 }
 
 fn page_with(items: &[i64]) -> HashMap<String, Value> {
@@ -355,13 +354,11 @@ fn counted_ty(interner: &Interner) -> Ty {
     }
 }
 
-fn counted_page(table: &VtableRegistry, len: usize) -> HashMap<String, Value> {
+fn counted_page(len: usize) -> HashMap<String, Value> {
     // SAFETY: each element is read back only as this same `Counted`, and
     // the buffer only as the `Vec<Value>` `vec::as_slice_mut` derefs.
-    let values: Vec<Value> = (0..len)
-        .map(|_| unsafe { Value::erase(table, Counted) })
-        .collect();
-    let stored = unsafe { Value::erase(table, values) };
+    let values: Vec<Value> = (0..len).map(|_| unsafe { Value::erase(Counted) }).collect();
+    let stored = unsafe { Value::erase(values) };
     [(CONTAINER.to_string(), stored)].into_iter().collect()
 }
 
@@ -422,12 +419,9 @@ const REPLACEMENT: &str = "r";
 #[tokio::test]
 async fn index_set_drops_the_element_it_replaces() {
     let interner = Interner::new();
-    let table = VtableRegistry::default();
-    let mut page = counted_page(&table, 3);
+    let mut page = counted_page(3);
     // SAFETY: as `counted_page`.
-    page.insert(REPLACEMENT.to_string(), unsafe {
-        Value::erase(&table, Counted)
-    });
+    page.insert(REPLACEMENT.to_string(), unsafe { Value::erase(Counted) });
 
     ELEMENTS_DROPPED.store(0, Ordering::Relaxed);
     let got = run_with(&interner, index_set_body(&interner), page).await;

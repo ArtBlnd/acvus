@@ -22,7 +22,7 @@ use acvus_extern::Externs;
 use acvus_interpreter::code::{Code, Op, Payload};
 use acvus_interpreter::{
     AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
-    SequentialExecutor, Value, VtableRegistry, prepare_module,
+    SequentialExecutor, Value, prepare_module,
 };
 use acvus_mir::ir::{
     Callee, DebugInfo, ExternInstance, IndexMode, Inst, InstKind, Label, MirBody, MirModule,
@@ -430,12 +430,12 @@ fn drop_the_bound_check(code: &mut Code) {
     assert_eq!(swapped, 2, "both element reads lost their bound check");
 }
 
-fn page(table: &VtableRegistry, n: usize) -> HashMap<String, Value> {
+fn page(n: usize) -> HashMap<String, Value> {
     let run = |offset: f64| {
         let values: Vec<Value> = (0..n).map(|i| Value::float(i as f64 + offset)).collect();
         // SAFETY: read back only as this same `Vec<Value>`, which is what
         // `vec::get` and `vec::as_slice` deref.
-        unsafe { Value::erase(table, values) }
+        unsafe { Value::erase(values) }
     };
     [
         (QUERY.to_string(), run(1.0)),
@@ -505,8 +505,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
 
     let shared = InterpreterContext::new(&interner, functions, Arc::new(SequentialExecutor))
         .with_context_names(context_names);
-    let table = VtableRegistry::default();
-    let mut interpreter = Interpreter::new(shared, entry, InMemoryContext::new(page(&table, n)));
+    let mut interpreter = Interpreter::new(shared, entry, InMemoryContext::new(page(n)));
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()

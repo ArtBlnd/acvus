@@ -14,7 +14,6 @@ use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
 use crate::value::Value;
-use crate::vtable::VtableRegistry;
 
 /// Call arguments. Stack-allocated for <=4 args.
 pub type Args = SmallVec<[Value; 4]>;
@@ -43,7 +42,6 @@ pub struct InterpreterContext {
     pub fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
     pub context_names: Freeze<FxHashMap<QualifiedRef, Astr>>,
     pub executor: Arc<dyn crate::executor::Executor>,
-    pub vtables: Arc<VtableRegistry>,
     /// Space hooks by extension type (RFC-0033).
     pub space: Arc<crate::layout::Hooks>,
 }
@@ -60,7 +58,6 @@ impl InterpreterContext {
             fn_types: Freeze::new(FxHashMap::default()),
             context_names: Freeze::new(FxHashMap::default()),
             executor,
-            vtables: Arc::new(VtableRegistry::default()),
             space: Arc::new(crate::layout::Hooks::default()),
         }
     }

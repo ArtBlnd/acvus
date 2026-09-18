@@ -27,4 +27,4 @@ pub use space::{DirStore, Head, MemoryStore, Mode, Space, SpacePage, Store, hex}
 pub use value::{
     Array, FnValue, HandleValue, Kind, Object, Place, ResultValue, Tuple, Value, VariantValue,
 };
-pub use vtable::{Composite, Vtable, VtableRegistry};
+pub use vtable::{Composite, Vtable};

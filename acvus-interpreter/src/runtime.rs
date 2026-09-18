@@ -1,5 +1,4 @@
-//! This interpreter as a `Runtime`: the shared context is the host, and
-//! its vtable registry is what `erase` consults for an extension type.
+//! This interpreter as a `Runtime`: the shared context is the host.
 
 use std::any::{TypeId, type_name};
 use std::future::Future;
@@ -41,7 +40,7 @@ impl Runtime for AcvusRuntime {
 
     fn type_name_of(&self, value: &Value) -> Option<&'static str> {
         match value.kind() {
-            Kind::Large => Some(value.vtable().name),
+            Kind::Large => Some((value.vtable().name)()),
             kind => kind.name(),
         }
     }
@@ -57,7 +56,7 @@ impl Runtime for AcvusRuntime {
     where
         T: Send + Sync + 'static,
     {
-        unsafe { Value::erase(&self.0.vtables, value) }
+        unsafe { Value::erase(value) }
     }
 
     unsafe fn value_as_ref<'a, T>(&'a self, value: &'a Value) -> &'a T
