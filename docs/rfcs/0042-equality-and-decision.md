@@ -33,12 +33,13 @@ messages (`solve`). Check reads the solver only through
 
 ## Rationale
 
-Every question the language asks after a join — width, instance,
-effect, representation, conversion — used to be answered at the join
-by its own device, with eight snapshot/rollback pairs where the answer
-had to be guessed. One shape for a decision and one settlement remove
-the devices, the polarity machinery and the mid-body settlement, and
-make a message name the final type.
+Width, instance, effect, representation and conversion are five questions
+the language asks after a join, and each answered at the join by a device of
+its own: eight snapshot/rollback pairs, a polarity, and a settlement in the
+middle of a body, each having to guess an answer the terms had not yet
+resolved. One shape for a decision and one settlement remove the devices,
+the polarity machinery and the mid-body settlement, and let a message name
+the final type instead of the type at the guess.
 
 ## Not built
 
@@ -48,12 +49,11 @@ built".
 
 ## Consequences
 
-- `acvus-mir/src/solver.rs` rewritten: `Terms` union-find over type,
-  effect, length, identity and representation; `join(a, b, Position,
-  JoinKind, registry)`; `Decision::{Instance, Conversion}`, `Answer`,
-  `Unsettled`; `settle`, `solve`, `freeze_ty`. `Polarity`, `lub`,
-  `coerce`, `settle_choices`, `settle_pending_choices`, `as_generic`
-  and every snapshot are gone. RFC-0040's `Solver::settle_pending_
-  choices`/`settled_instance` are `Decision::Instance` and `answer(id)`.
+- `acvus-mir/src/solver.rs` holds `Terms`, the union-find over type,
+  effect, length, identity and representation, with
+  `join(a, b, Position, JoinKind, registry)`; `Decision`, `Answer`,
+  `Unsettled`; `settle`, `solve`, `freeze_ty`. It holds no `Polarity`, no
+  `lub`, no `coerce` and no snapshot outside a decision's own step.
+  RFC-0040's instance choice is `Decision::Instance`, read by `answer(id)`.
 - `acvus-mir/src/typeck.rs`: `flow`, `convert_at`, `solve_body`,
   `report_unsettled`, `resolve_conversions`; `Intrinsic` in `ir.rs`.

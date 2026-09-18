@@ -86,16 +86,18 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0038](0038-result-and-trap.md) | `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error | Accepted (Result, `!`, `?` built; trap to follow) |
 | [RFC-0039](0039-one-crossing.md) | One crossing at the boundary | Accepted |
 | [RFC-0040](0040-instance-chosen-by-the-compiler.md) | The compiler chooses an ExternFn's instance and the runtime indexes it | Accepted |
-| [RFC-0041](0041-representation-of-a-slot.md) | `#τ` is the representation of a slot; an extension holds values through `Erased` | Accepted |
-| [RFC-0042](0042-equality-and-decision.md) | The solver separates equality from decision | Accepted |
-| [RFC-0043](0043-a-name-is-a-set-of-signatures.md) | A bare name is a set of signatures | Accepted |
-| [RFC-0044](0044-a-body-is-prepared-once.md) | A body is prepared once | Accepted |
-| [RFC-0045](0045-let-binds-and-assignment-assigns.md) | `let` binds, `x = e;` assigns | Accepted |
+| [RFC-0041](0041-representation-of-a-slot.md) | `#τ` is the representation of a slot, and an extension holds a uniform value through `Erased` | Accepted |
+| [RFC-0042](0042-equality-and-decision.md) | The solver separates equality from decision: one join, one settlement | Accepted |
+| [RFC-0043](0043-a-name-is-a-set-of-signatures.md) | A bare name is a set of signatures, decided as an instance is | Accepted |
+| [RFC-0044](0044-a-body-is-prepared-once.md) | A body is prepared once, and a failure at run time is a panic | Accepted |
+| [RFC-0045](0045-let-binds-and-assignment-assigns.md) | `let` binds, `x = e;` assigns, in one statement grammar | Accepted |
 | [RFC-0046](0046-a-calls-task-is-an-effect.md) | A call's task is an effect: `Task::{Sync, Async, Heavy}` | Accepted |
-| [RFC-0047](0047-a-slice-is-the-one-thing-the-machine-indexes.md) | A slice is the one thing the machine indexes: `AsSlice`, `Index`/`IndexSet`, `a[i]`, bounds proved by an interval domain | Accepted |
-| [RFC-0048](0048-ownership-is-the-machines.md) | Ownership is the machine's: `Value: Copy` with an explicit `release`, a register written once, a mark word per frame, static batched takes | Accepted |
-| [RFC-0050](0050-an-aggregate-is-its-components-until-it-escapes.md) | An aggregate is its components until it escapes: component registers, a wide register class (3×64 + 2×32 B) as the projection's home, the heap as the spill, multi-value return, real Rust enums at the glue | Accepted |
-| [RFC-0051](0051-a-match-is-one-dispatch-and-is-exhaustive.md) | A `match` is one dispatch and is exhaustive: `Switch`, exhaustiveness in `validate` where the variant set is known, `MatchBind` removed | Draft |
-| [RFC-0052](0052-an-operation-is-a-struct-the-machine-calls-once.md) | An operation is a struct the machine calls once: `dyn Op`, straight-line blocks with one terminator, a plain op loop, regions as operations, no `Flow`/`Payload`/`OpFn` | Accepted |
-| [RFC-0053](0053-an-aggregate-that-does-not-escape-never-exists.md) | An aggregate that does not escape never exists: one escape predicate, scalar replacement over `SsaVar::Part`, no `MakeObject` and no field lookup for a storage the body never lets out | Accepted |
-| [RFC-0054](0054-the-host-declares-what-main-returns.md) | The host declares what `main` returns: the entry's declared `ret` in the graph, joined against every return by the solver's shared path, carried to `validate` as `MirModule::ret`, and `!` for a host that states no type | Accepted |
+| [RFC-0047](0047-a-slice-is-the-one-thing-the-machine-indexes.md) | A slice is the one thing the machine indexes, and a bound is proved by an interval | Accepted |
+| [RFC-0048](0048-ownership-is-the-machines.md) | Ownership is the machine's: a value copies, a register is written once | Accepted |
+| [RFC-0050](0050-an-aggregate-is-its-components-until-it-escapes.md) | An aggregate is its components until it escapes, and the heap is the spill | Accepted |
+| [RFC-0051](0051-a-match-is-one-dispatch-and-is-exhaustive.md) | A `match` is one dispatch, and it is exhaustive where the variant set is known | Draft |
+| [RFC-0052](0052-an-operation-is-a-struct-the-machine-calls-once.md) | An operation is a struct the machine calls once, and it holds its successor | Accepted |
+| [RFC-0053](0053-an-aggregate-that-does-not-escape-never-exists.md) | An aggregate that does not escape never exists | Accepted |
+| [RFC-0054](0054-the-host-declares-what-main-returns.md) | The host declares what `main` returns, and the compilation holds the body to it | Accepted |
+| [RFC-0055](0055-a-constant-expression-folds.md) | A constant expression folds | Accepted |
+| [RFC-0056](0056-a-loop-multiplies-once.md) | A loop multiplies once | Accepted |

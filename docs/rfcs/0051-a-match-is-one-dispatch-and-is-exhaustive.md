@@ -121,48 +121,35 @@ rest goes.
 
 ## Consequences
 
-- RFC-0050 (object/enum layout) builds on `Switch`: a `Variant` with a
-  tag word and a payload slot is what `switch` reads.
+- `match` is in the grammar and `MatchBind` is gone, with every use in the
+  tree moved to `match` or `if let`. The arm rule (§2) is in `typeck`; the
+  exhaustiveness pass (§3–§4) is `validate::exhaustive`, run in pass 0 of
+  `graph::optimize`, where it reads `InstKind::Switch`.
+- **The lowering emits `Switch`, and one pass expands it.** The chain the
+  tag form used to emit does not name a `match`: it is the same shape an
+  `if let` without an `else` writes, and a pass that refused on it would
+  refuse every `if let`. So `lower_match_expr` writes the `Switch` — the one
+  shape that names a dispatch — and `optimize::switch_expand`, the first
+  step of pass 1, replaces every one with the `TestVariant` + `JumpIf` chain
+  before any other pass or the interpreter sees it.
+- **Measured** (`benches/shapes.rs`, `enum match`, n = 1e5 and 1e6): 39.4 ns
+  per iteration before, **36.5–36.8 ns** now, 99× Rust. The chain is one
+  `test_variant` per arm but the last, which is the chain's else, so the two
+  arms of `E{A, B}` cost one test where the tag form cost two, and one
+  diamond where it cost two.
+- A `match` whose arms are not one dispatch over a tag — a literal arm, a
+  nested refutable payload — has no `Switch` to read, so `typeck` refuses it
+  outright unless it has a `_` arm, which is the same sentence the `Open`
+  case writes. Nested positions are not asked separately; the `_` is asked
+  for at the `match`.
+- RFC-0050 (object and enum layout) builds on `Switch`: a variant with a tag
+  word and a payload slot is what `switch` reads.
 - The later exhaustiveness stage is one function's widening.
 
-### What the first half landed (compiler)
+## What is left
 
-`match` is in the grammar and `MatchBind` is gone, with every use in the
-tree moved to `match` or `if let`. The arm rule (§2) is in `typeck`; the
-exhaustiveness pass (§3-§4) is `validate::exhaustive`, run in pass 0 of
-`graph::optimize`, where it reads `InstKind::Switch`.
-
-**The lowering emits `Switch` now, and one pass expands it.** The chain
-the tag form used to emit does not name a `match`: it is the same shape an
-`if let` without an `else` writes, and a pass that refused on it would
-refuse every `if let`. So `lower_match_expr` writes the `Switch` — the
-one shape that names a dispatch — and `optimize::switch_expand`, the
-first step of pass 1, replaces every one with the `TestVariant` + `JumpIf`
-chain before any other pass or the interpreter sees it. `prepare` carries
-a `todo!` arm it never reaches.
-
-**The exact hook the second half replaces**: delete the
-`optimize::switch_expand::run(&mut cfg);` line at the top of
-`graph::optimize::run_pass1_body`, delete the pass, and add the `switch`
-handler in `acvus-interpreter/src/prepare.rs` (the `todo!` arm in
-`Prepare::op`, plus `is_straight_line`, which already answers `false`).
-
-**Measured** (`benches/shapes.rs`, `enum match`, n=1e5 and 1e6): 39.4 ns
-per iteration before, **36.5-36.8 ns** now, 99x Rust. The chain is one
-`test_variant` per arm but the last, which is the chain's else; the two
-arms of `E{A, B}` cost one test where the tag form cost two, and one
-`diamond` where it cost two. The `switch` takes the last one.
-
-**Not decided here**: a `match` whose arms are not one dispatch over a tag
-(a literal arm, a nested refutable payload) has no `Switch` to read, so
-`typeck` refuses it outright unless it has a `_` arm -- the same sentence
-the `Open` case writes. Nested positions are not asked separately; the
-`_` is asked for at the `match`.
-
-## Order of work
-
-One to-be in the compiler worktree (grammar, typeck, lowering,
-validate pass, `Switch` through the MIR passes, migration of every
-`MatchBind`), then the interpreter's `switch` operation (one arm in
-`prepare`, one handler) in the interpreter worktree after RFC-0048
-round 2.
+The machine's `switch` operation: delete the `optimize::switch_expand::run`
+call at the top of `graph::optimize::run_pass1_body`, delete the pass, and
+add the `switch` handler in `acvus-interpreter/src/prepare.rs` — the `todo!`
+arm in `Prepare::op`, plus `is_straight_line`, which already answers
+`false`. The two artifacts move together.

@@ -166,7 +166,9 @@ registers, each at its own last use.
 **A scalar-replaced representation.** Keeping the aggregate but laying
 it out as a shape table plus a `Box<[Value]>` — RFC-0050 — leaves one
 allocation and one query per access, because a structural type's field
-offset is not fixed by the type (`.claude/queue-2026-09-18.md:96`). It
+offset is not fixed by the type: two objects that meet join to the union
+of their fields, so one field sits at different positions in different
+values of one type. It
 is the right answer for an aggregate that genuinely lives past the body
 that built it; it is the wrong answer for one that does not live at all.
 The two do not overlap: of the six `shapes` cases, three are reached by

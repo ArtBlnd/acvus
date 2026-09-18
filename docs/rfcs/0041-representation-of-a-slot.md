@@ -21,7 +21,7 @@ Monomorphize<(f64,)>>(Vec<T>) -> Vec<T>` has the concrete instance
 `reverse@#f64 : Vec<#f64> -> Vec<#f64>` and, when `T` has no other
 bound, the generic instance `Vec<ρT> -> Vec<ρT>`, where `ρ` is the one
 representation variable of the signature. A plain concrete signature
-(`-> Vec<String>`) stays uniform, as before this RFC. The compiler
+(`-> Vec<String>`) stays uniform. The compiler
 chooses the instance by type (RFC-0040); a member's glue crosses the
 family whole (`CrossSpecialized`: one box, O(1)); every family a member
 names declares its two casts `F<#m> -> F<m>` (erase) and `F<m> -> F<#m>`
@@ -55,7 +55,7 @@ an `Inline` type (one that fits the value word) by `Deref`, `get`,
 runtime's `Vec<Value>` and crosses whole. A value leaves an extension
 type by identity (`T` is the runtime's value) or by a checked downcast
 (`FromValue`: the value's `TypeId`, carried by a `Large` payload's
-vtable and by a `Small` value's tag, must equal `T`'s); nothing else
+vtable and by an inline value's kind byte, must equal `T`'s); nothing else
 reinterprets a `Value`. A reference into storage is read only through a
 layout the language promises: the same type, `repr(transparent)`, or a
 slice under `TransparentOver`. `Cross::materialize` is `unsafe fn` with
@@ -72,14 +72,14 @@ and is never read from a `Value` except through `FromValue`.
 Two representations of one type need one rule for where they meet.
 Putting `#` on the slot keeps it structural (RFC-0022's `Vec<Value>` is
 `Vec<T>` with a uniform slot) and lets the solver treat it as one more
-component of a type; making it only by `Monomorphize` keeps the default
-program exactly today's and confines the second box to fns that ask for
-native layout (`&[f64]`, `Vec<T>` by value into a Rust API). Deciding
-`ρ` by instance choice rather than by flow is what lets a `#` value
-reach a generic-only fn through one erase instead of a mismatch, and
-what lets a uniform value reach a member through one materialize.
-`Erased` removes the reason an extension ever needed to name a Rust
-`T` for a uniform value; `FromValue` and the `Small` tag make the one
+component of a type; making it only by `Monomorphize` leaves a program
+that asks for no native layout unchanged and confines the second box to
+fns that ask for it (`&[f64]`, `Vec<T>` by value into a Rust API). Deciding
+`ρ` by instance choice rather than by flow is what takes a `#` value to a
+generic-only fn through one erase instead of a mismatch, and a uniform
+value to a member through one materialize.
+`Erased` is what lets an extension hold a uniform value without naming a
+Rust `T` for it; `FromValue` and the value's own tag make the one
 remaining reinterpretation checked; sealing `Iter`'s stages closes the
 one place a wrong source could have been paired with a closure.
 
@@ -114,8 +114,10 @@ one place a wrong source could have been paired with a closure.
   `FromValue`, `TransparentOver`, `Runtime::{value_as_ref, value_as_mut,
   inline_ref, inline_mut, type_of, type_name_of}`, `Arr`
   `repr(transparent)`, `Cross::materialize` unsafe.
-- `acvus-interpreter`: `Value::Small(Tag, u64)`, `Value::Ref`; a `Copy`
-  type outside the `Inline` set is a `Large` box.
+- `acvus-interpreter`: a value that fits the word carries its Rust type
+  in its kind byte (`Value { kind, word }`, one `Kind` per `Inline`
+  type, and `Kind::Ref`); a `Copy` type outside the `Inline` set is a
+  `Large` box.
 - `acvus-ext`: `Iter` as sealed stages in `iter.rs`; `split_str` returns
   `Vec<Erased<Rt, String>>`; `contains` on `Iter<Erased<Rt, T>>`; no
   `unsafe`.

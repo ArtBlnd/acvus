@@ -192,8 +192,6 @@ extra check on the tail. A branch for the entry would have left `?` unheld.
 
 ## Consequences
 
-- `acvus-mir`, `acvus-mir-test`, `acvus-interpreter-test`, `acvus-ext`,
-  `acvus-ext-net`, `acvus-cli`, `kovac-interpreter` green.
 - A body with no tail now states `Unit` to the checker, so a host declaring
   a non-unit return for a script that ends in a statement is refused where
   before nothing was said.

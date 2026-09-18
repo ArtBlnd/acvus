@@ -67,18 +67,20 @@ and of a Rust holder that took ownership. Everything else copies.
    instruction stands at that release. The rest of today's vtable
    (registry, `type_id`, `composite`, `name`) is the next RFC's cut
    (owner, 15:05: after this one).
-3. **`Registers { slots: [Value; 15], marked: u64 }`, `#[repr(align(64))]`**
-   — 248 bytes padded to 256, four cache lines. Bit `i` of `marked` is
-   "slot `i` owns a `Large`". `Heap { slots: Vec<Value>, marked: Vec<u64>
-   }` above 15, one word per 64 slots. The slots are `MaybeUninit` (or
-   `ManuallyDrop`): nothing runs per slot at frame end but the sweep.
+3. **A frame is one aligned cell with a mark word.**
+   `#[repr(C, align(64))] Cell { slots: [MaybeUninit<Value>; 16] }` — 256
+   bytes, four cache lines, starting one. Bit `i` of the frame's mark word
+   is "register `i` owns a `Large`", and the word sits in the one slot past
+   the frame's registers, so a frame of `n` registers takes the cells that
+   `n + 1` slots reach and one word covers it: `MAX_FRAME_SLOTS` is 64, and
+   a wider body is a preparation refusal. The slots are `MaybeUninit`:
+   nothing runs per slot at frame end but the sweep.
 4. **A register is written exactly once per definition.** `define` of a
    move-only type (`prepare` knows: `define::<LARGE>`) writes the slot
    and sets its bit; `define` of a word writes the slot. `assign`
    (RFC-0045) releases the old value if the bit is set, writes, and
-   sets or clears. Nothing writes `EMPTY` after a take; `Kind::Empty`
-   and `Kind::Undef` as run-time states go — `Undef` was an SSA
-   definition and is emitted as one.
+   sets or clears. Nothing writes `EMPTY` after a take, and `Kind::Empty`
+   goes with it; `Undef` stays, as the SSA definition it always was.
 5. **A take is static and batched.** `prepare` emits which operand
    slots each operation consumes; `take::<N>` reads `N` slots into a
    tuple and clears their bits with one constant mask the operation
@@ -155,40 +157,26 @@ and of a Rust holder that took ownership. Everything else copies.
 
 ## Consequences
 
-- **Rules 1–9 are implemented under RFC-0052, and the frame is the cell
-  this RFC drew.** `Cell { slots: [MaybeUninit<Value>; 15], marked: u64
-  }`, `#[repr(align(64))]`, 256 bytes; a `Store` is an array of them and
-  a call's frame is the next cell, proved by one capacity compare. There
-  is no chain-wide bitmap: an intermediate design that made the window a
-  **bit offset** into one made `own_mask`/`take_mask` compute a word and
-  a variable shift at run time, with a straddle half and a
-  `panic_bounds_check` edge on `CallExtern1::run`'s path before the
-  call, and was measured at `int while` 153 instructions per iteration
-  against master's 128. It was cut back to the drawn shape, which
-  measures 130.
+- **The rules above are implemented under RFC-0052, and the frame is the
+  cell this RFC drew.** A `Store` is an array of cells, and a call's frame
+  is the cells above the caller's, proved by one capacity compare. There
+  is no chain-wide bitmap: a design that made the window a **bit offset**
+  into one made `own_mask`/`take_mask` compute a word and a variable
+  shift at run time, with a straddle half and a `panic_bounds_check` edge
+  on the extern call's path before the call, and measured `int while` at
+  153 instructions per iteration against master's 128. Cut back to the
+  drawn shape, it measures 130.
 - An element's position is `Owned<R>`; the two holders (a container's
   elements and an iterator stage's captured closure) are what call
   `Release`, and a runtime value is `Copy` — a fixture runtime that had
   an `impl Drop` has an `impl Release` instead (`acvus-ext/benches/
   iter_cost.rs`). `Ref::map`'s bound is the same `Copy + Release`.
-- Measured after it lands: `ops::control::ret` frame and pads; the
-  landing-pad count in extern glue (189 → the number); `drop_glue::
-  <Registers>` gone from every profile; `map cap | sum` (`ret` 6.3 % +
-  `drop_glue` 4.2 % of its base profile); attention and mandelbrot.
 - `use_from`, `Value::EMPTY`-after-take, `Kind::Empty`'s panic, the
   arity-N `mem::take` are gone; the glue reads `__args[i]` by copy.
-- The next RFC cuts the vtable to the header's one drop word: the
-  registry (a mutex and a `TypeId` hash on every `Large` erase, 86 % of
-  an `AsSlice`-in-loop shape), `type_id`, `composite` (into `Kind`),
-  `name`, and the release-mode `expect_type`.
+- The vtable registry is cut: a vtable is a constant of the type it
+  describes, so erasing a `Large` takes no mutex and hashes no `TypeId`,
+  where that lookup was 86 % of an `AsSlice`-in-loop shape. What the
+  header still carries beside `drop` — `type_id`, `name`, `composite`,
+  `debug` — is the next cut.
 - kovac inherits a value that is a `Copy` word pair and a register file
   whose ownership is a bitmask — lane ownership (RFC-0044 reflections).
-
-## Order of work
-
-Rule 7 landed first (`803d4f1a`: attention −34 %). One to-be for rules
-1–6 and 8 in the interpreter worktree: `Release`/`Owned<R>` in the extern crate and `Owned` at every store in
-acvus-extern and acvus-ext, the
-mark-word `Registers`, `define::<LARGE>`/`assign`, batched `take::<N>`,
-`drop_value` and the sweep, the glue's copy. Measured first: the
-landing-pad count (255 today), `ret`'s disassembly, `map cap`.

@@ -189,17 +189,20 @@ whole-typed and `Release` decides by kind; there is no conditional
 
 ## Consequences
 
-- `enum match`: `MakeVariant` gone, `Switch` on a tag register, payload
-  phi — counted 6–9 ns (from 13.6). `vec of objects`: field reads by
-  projection into the element, no hash — counted ~4–6 ns (from 9.6).
-  `option match` unchanged (flat). The Brainfuck bench's `program[pc]`
-  read becomes two loads through a projection; its row A becomes a
-  `Switch`.
+Nothing here is built yet; the first three are expectations, each with the
+count it rests on, and the measured table replaces them when the
+implementation lands.
+
+- **Expected** `enum match` at 6–9 ns, from 13.6: `MakeVariant` gone, a
+  `Switch` on a tag register, the payload a phi. **Expected** `vec of
+  objects` at 4–6 ns, from 9.6: field reads by projection into the element,
+  no hash. `option match` holds no aggregate and is expected flat. The
+  Brainfuck bench's `program[pc]` read becomes two loads through a
+  projection, and its dispatch row becomes a `Switch`.
 - `&Obj` handlers become expressible; a Rust handler receives a real
   Rust enum.
 - A frame overflow of either class is a `prepare` refusal naming the
-  body, never a run-time panic (today `code.rs:47`).
-- The measured table is filled when the implementation lands.
+  body, never a run-time panic.
 
 ## Order of work
 
