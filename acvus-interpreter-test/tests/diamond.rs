@@ -119,10 +119,12 @@ async fn an_if_nested_in_an_arm_is_a_diamond_inside_a_diamond() {
         .expect("its true arm");
     assert_eq!(
         arm.ops,
-        vec!["Gt<i64, Slot, Slot, R0>", "Diamond<R0>"],
+        vec!["Const", "Diamond<Slot>"],
         "the outer arm is one operation: the inner diamond, which reads the inner \
-         test's word — and reads it in the argument register, because the test is \
-         the operation just before it in the same chain (RFC-0052 rule 5)"
+         test's word and runs its own arm straight. `n` is a constant, so RFC-0055 \
+         folds the inner `n > 8` to a constant; a constant is defined into its slot \
+         and the diamond reads the slot (a `Const` is not a chain producer, so the \
+         word does not ride)"
     );
 }
 

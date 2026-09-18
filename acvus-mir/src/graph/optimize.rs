@@ -121,6 +121,10 @@ fn run_pass2(cfg: &mut CfgBody) {
     optimize::sroa::run(cfg);
     optimize::ssa_pass::run(cfg);
     optimize::string_copy::run(cfg);
+    // RFC-0055: after `ssa_pass`, which brings a constant and its reader
+    // into one body; before `dse`/`dce`, which sweep the operands a fold
+    // left with no reader.
+    optimize::fold::run(cfg);
     optimize::dse::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);

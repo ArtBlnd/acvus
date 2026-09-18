@@ -1,5 +1,5 @@
 ---
-source: acvus-mir-test/tests/sroa.rs
+source: acvus-mir-test/tests/fold.rs
 expression: listing
 ---
 === main ===
