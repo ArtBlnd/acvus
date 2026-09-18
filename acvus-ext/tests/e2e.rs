@@ -8,7 +8,7 @@ use acvus_extern::{ExternType, Externs, Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
-use acvus_mir::graph::{extract, infer, lower as graph_lower};
+use acvus_mir::graph::{extract, infer, lower as graph_lower, optimize as graph_optimize};
 use acvus_mir::ty::{Ty, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use base64::Engine;
@@ -98,18 +98,32 @@ async fn run_parsed(
         &FxHashMap::default(),
         Freeze::new(type_registry),
     );
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let lowered = graph_lower::lower(interner, &graph, &ext, &inf);
 
     let errs: Vec<String> = inf
         .errors()
         .into_iter()
         .flat_map(|(_, errs)| errs.iter())
-        .chain(result.errors.iter().flat_map(|e| e.errors.iter()))
+        .chain(lowered.errors.iter().flat_map(|e| e.errors.iter()))
         .map(|e| format!("{}", e.display(interner)))
         .collect();
     if !errs.is_empty() {
         panic!("compile failed: {}", errs.join("; "));
     }
+
+    // Drops are inserted by the optimize pipeline and nowhere else, and a
+    // value the frame does not drop trips `Machine::define_slot` when the
+    // slot is written again. A run here is the run the CLI does.
+    let result = graph_optimize::optimize(
+        lowered.modules.into_iter().collect(),
+        &FxHashMap::default(),
+        &Default::default(),
+    );
+    assert!(
+        result.errors.is_empty(),
+        "validation failed: {:?}",
+        result.errors
+    );
 
     let mut exec_fns: FxHashMap<QualifiedRef, Executable> = handlers
         .into_iter()
@@ -497,12 +511,20 @@ async fn a_container_of_objects_converts_each_element() {
     assert_eq!(v.as_int(), 30);
     let v = run_ext(
         &i,
-        "let ps = pts(); ps.get(1).x + ps.len()",
+        "let ps = pts(); ps[1].x",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_eq!(v.as_int(), 22);
+    assert_eq!(v.as_int(), 20);
+    let v = run_ext(
+        &i,
+        "let ps = pts(); ps.len()",
+        TypedContext::default(),
+        regs(),
+    )
+    .await;
+    assert_eq!(v.as_int(), 2);
     let v = run_ext(
         &i,
         "let ps = pts(); ps.as_iter().map(|p| -> p.x).fold(0, |a, x| -> a + x)",
@@ -904,12 +926,21 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     let i = Interner::new();
     let v = run_ext(
         &i,
-        "let s = \"ab\"; let b = to_bytes(s); let first = b.get(0); b.len() * 1000 + to_int(first)",
+        "let s = \"ab\"; let b = to_bytes(s); to_int(&b[0])",
         TypedContext::default(),
         vec![],
     )
     .await;
-    assert_eq!(v.as_int(), 2097);
+    assert_eq!(v.as_int(), 97, "b\"ab\" is 97, 98");
+    let v = run_ext(
+        &i,
+        "let s = \"ab\"; let b = to_bytes(s); b.len()",
+        TypedContext::default(),
+        vec![],
+    )
+    .await;
+    assert_eq!(v.as_int(), 2);
+
     let v = run_ext(
         &i,
         "let s = \"héllo\"; to_utf8_lossy(to_bytes(s))",

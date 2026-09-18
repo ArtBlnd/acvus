@@ -199,7 +199,7 @@ fn a_borrow_of_a_context_the_loop_assigns_stays() {
     let ir = compile_script_mode_optimized(
         &i,
         "let s = 0.0; let i = 0; \
-         while i < @n { s = s + *@x.get(0); @x = [s, s]; i = i + 1; } \
+         while i < @n { s = s + @x[0]; @x = [s, s]; i = i + 1; } \
          s",
         &ctx(
             &i,
@@ -291,7 +291,7 @@ fn an_assignment_between_two_borrows_of_a_context_keeps_them_two() {
     let i = Interner::new();
     let ir = compile_script_mode_optimized(
         &i,
-        "let a = *@x.get(0); @x = [a, a]; let b = *@x.get(0); a + b",
+        "let a = @x[0]; @x = [a, a]; let b = @x[0]; a + b",
         &ctx(
             &i,
             &[("x", Ty::Array(Box::new(Ty::Float), LenTerm::Known(2)))],

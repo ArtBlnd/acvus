@@ -118,6 +118,19 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             span,
         },
 
+        Expr::Index {
+            object,
+            index,
+            span,
+            ..
+        } => Expr::Index {
+            id: AstId::alloc(),
+            callee_id: AstId::alloc(),
+            object: Box::new(sub_expr(*object, subs)),
+            index: Box::new(sub_expr(*index, subs)),
+            span,
+        },
+
         Expr::MethodCall {
             receiver,
             name,
@@ -419,6 +432,14 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             expr: sub_expr(expr, subs),
             span,
         },
+        Stmt::IndexStore {
+            place, expr, span, ..
+        } => Stmt::IndexStore {
+            id: AstId::alloc(),
+            place: Box::new(sub_expr(*place, subs)),
+            expr: sub_expr(expr, subs),
+            span,
+        },
         Stmt::Expr(expr) => Stmt::Expr(sub_expr(expr, subs)),
         Stmt::MatchBind {
             pattern,
@@ -591,6 +612,10 @@ fn validate_splice_expr(
         Expr::FieldAccess { object, .. } => {
             validate_splice_expr(object, false, splice_names, errors);
         }
+        Expr::Index { object, index, .. } => {
+            validate_splice_expr(object, false, splice_names, errors);
+            validate_splice_expr(index, false, splice_names, errors);
+        }
         Expr::FuncCall { func, args, .. } => {
             validate_splice_expr(func, false, splice_names, errors);
             for arg in args {
@@ -712,6 +737,10 @@ fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(As
         }
         Stmt::DerefStore { target, expr, .. } => {
             validate_splice_expr(target, false, splice_names, errors);
+            validate_splice_expr(expr, false, splice_names, errors);
+        }
+        Stmt::IndexStore { place, expr, .. } => {
+            validate_splice_expr(place, false, splice_names, errors);
             validate_splice_expr(expr, false, splice_names, errors);
         }
         Stmt::Expr(expr) => {

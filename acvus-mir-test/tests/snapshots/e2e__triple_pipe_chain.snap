@@ -43,12 +43,12 @@ expression: ir
     ; r11 (map(...)) : Iterator<i64, Pure, #IdentityId(0)>
     ; r12 (collect(...)) : Vec<i64>
     ; r13 (x.) : &Vec<i64>
-    ; r14 (len(...)) : i64
-    ; r15 (out.) : &i64
+    ; r14 (len(...)) : u64
+    ; r15 (out.) : &u64
     ; r16 (to_string(...)) : String
     ; r17 (v26) : String
     ; r18 (@items) : Vec<i64>
-    ; r19 (out) : i64
+    ; r19 (out) : u64
     ; r20 (items) : Vec<i64>
     ; r21 (v8) : String
     ; r22 (@items) : Vec<i64>

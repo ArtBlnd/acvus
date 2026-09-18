@@ -169,9 +169,17 @@ QualifiedExpr = IDENT "::" IDENT "(" Expr ")"  ← qualified variant with payloa
               | PostfixExpr
 
 PostfixExpr  = PostfixExpr "." IDENT       ← field access
+             | PostfixExpr "[" Expr "]"    ← index (RFC-0047)
              | PostfixExpr "(" CommaSep<Expr> ")"  ← function call
              | PrimaryExpr
 ```
+
+`a[i]` is a place, as `a.f` is: `&a[i]`, `a[i][j]`, `a[i].f`, `a[i]` as a
+method receiver, and `a[i] = v` on the left of an assignment. The index is
+a `u64` and the container is a `Vec`, an `Array`, or a reference to one;
+any other container is refused. A statement that begins with `[` is an
+array literal, and a postfix `[` binds to the expression before it — every
+statement ends in `;` or in a block, so the two never meet.
 
 ### Primary Expressions
 
@@ -286,6 +294,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `->` | lambda arrow |
 | `..` `..=` `=..` | range operators |
 | `.` | field access |
+| `[` `]` | index, and array literal |
 | `\|` | pipe operator |
 | `::` | qualified name separator |
 | `:` | object field separator |

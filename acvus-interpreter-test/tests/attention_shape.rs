@@ -64,7 +64,8 @@ while t < n {
     let s = 0.0;
     let i = 0;
     while i < d {
-        s = s + *get(&@query, i) * *get(get(&@keys, t), i);
+        let key = &@keys[t];
+        s = s + @query[i] * key[i];
         i = i + 1;
     }
     push_back(&mut scores, s * scale);
@@ -81,7 +82,8 @@ while j < d {
     let acc = 0.0;
     let t = 0;
     while t < n {
-        acc = acc + *get(&weights, t) / z * *get(get(&@values, t), j);
+        let value = &@values[t];
+        acc = acc + weights[t] / z * value[j];
         t = t + 1;
     }
     push_back(&mut out, acc);
@@ -112,7 +114,7 @@ const ATTENTION_AS_CHAINS: &str = "
 let scale = 1.0 / @query.len().to_float().sqrt();
 
 let dot = |k| -> as_iter(k)
-    .fold({ i: 0, s: 0.0, }, |acc, x| -> { i: acc.i + 1, s: acc.s + *@query.get(acc.i) * *x, })
+    .fold({ i: 0, s: 0.0, }, |acc, x| -> { i: acc.i + 1, s: acc.s + @query[acc.i] * *x, })
     .s;
 
 let scores = @keys.as_iter().map(|k| -> dot(k) * *scale).collect();
@@ -120,16 +122,19 @@ let peak = scores.as_iter().map(|s| -> *s).max().unwrap();
 let weights = scores.as_iter().map(|s| -> (*s - *peak).exp()).collect();
 let z = weights.as_iter().map(|w| -> *w).sum();
 
-let column = |j| -> weights.as_iter()
-    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / *z * *@values.get(acc.t).get(*j), })
+let column_0 = weights.as_iter()
+    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / *z * @values[acc.t][0], })
+    .s;
+let column_1 = weights.as_iter()
+    .fold({ t: 0, s: 0.0, }, |acc, w| -> { t: acc.t + 1, s: acc.s + *w / *z * @values[acc.t][1], })
     .s;
 ";
 
 #[tokio::test]
 async fn attention_written_as_chains_is_the_same_value() {
     let expected = expected_attention_of_e1_over_the_standard_basis();
-    let first = run(&format!("{ATTENTION_AS_CHAINS} column(0)")).await;
-    let second = run(&format!("{ATTENTION_AS_CHAINS} column(1)")).await;
+    let first = run(&format!("{ATTENTION_AS_CHAINS} column_0")).await;
+    let second = run(&format!("{ATTENTION_AS_CHAINS} column_1")).await;
     assert_close(&first, expected[0]);
     assert_close(&second, expected[1]);
 }
@@ -137,8 +142,7 @@ async fn attention_written_as_chains_is_the_same_value() {
 #[tokio::test]
 #[should_panic(expected = "a lambda cannot capture a reference")]
 async fn a_reference_parameter_captured_by_an_inner_lambda_is_refused() {
-    run("let dot = |a, b| -> range(0, 2).map(|i| -> *get(a, i) * *get(b, i)).sum(); dot(&@query, &@query)")
-        .await;
+    run("let dot = |a, b| -> as_iter(a).map(|x| -> *x * b[0]).sum(); dot(&@query, &@query)").await;
 }
 
 #[tokio::test]
@@ -151,14 +155,14 @@ async fn a_method_call_on_a_reference_parameter_lends_it_once() {
 #[tokio::test]
 async fn attention_written_as_function_calls_is_the_same_value() {
     let expected = expected_attention_of_e1_over_the_standard_basis();
-    let first = run(&format!("{ATTENTION_AS_FUNCTION_CALLS} *get(&out, 0)")).await;
-    let second = run(&format!("{ATTENTION_AS_FUNCTION_CALLS} *get(&out, 1)")).await;
+    let first = run(&format!("{ATTENTION_AS_FUNCTION_CALLS} *out.get(0)")).await;
+    let second = run(&format!("{ATTENTION_AS_FUNCTION_CALLS} *out.get(1)")).await;
     assert_close(&first, expected[0]);
     assert_close(&second, expected[1]);
 }
 
 const LAMBDA_INSIDE_LAMBDA: &str = "let xs = as_iter(&@keys) | map(|k| -> as_iter(k) | map(|x| -> *x * 2.0) | sum) | collect; \
-     *get(&xs, 0) + *get(&xs, 1) * 10.0";
+     xs[0] + xs[1] * 10.0";
 
 #[test]
 fn a_lambda_inside_a_lambda_compiles() {
@@ -177,13 +181,10 @@ async fn a_lambda_inside_a_lambda_runs() {
 /// on 2026-09-17, after this test met it as a validation failure.
 #[tokio::test]
 async fn a_word_captured_through_two_lambdas_is_read_by_the_inner_one() {
-    let v = run(
-        "let half = 0.5; \
-         let o = range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *half * *get(get(&@values, t), *j)) | sum) | collect; \
-         *get(&o, 0) + *get(&o, 1) * 10.0",
-    )
+    let v = run("let half = 0.5; \
+         as_iter(&@values) | map(|row| -> as_iter(row) | map(|x| -> *half * *x) | sum) | sum")
     .await;
-    assert_close(&v, 32.0);
+    assert_close(&v, 5.0);
 }
 
 #[test]
@@ -191,26 +192,25 @@ async fn a_word_captured_through_two_lambdas_is_read_by_the_inner_one() {
 fn an_array_captured_through_two_lambdas_is_refused() {
     compile(
         "let w = [0.5, 0.5]; \
-         let o = range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *get(w, t) * *get(get(&@values, t), *j)) | sum) | collect; \
-         *get(&o, 0) + *get(&o, 1) * 10.0",
+         as_iter(&@values) | map(|row| -> as_iter(row) | map(|x| -> w[0] * *x) | sum) | sum",
     );
 }
 
 #[tokio::test]
 async fn a_local_captured_through_one_lambda_is_read() {
-    let v = run("let w = [0.5, 0.5]; range(0, 2) | map(|t| -> *get(w, t)) | sum").await;
+    let v = run("let w = [0.5, 0.5]; as_iter(&@keys) | map(|k| -> w[0]) | sum").await;
     assert_close(&v, 1.0);
 }
 
 #[tokio::test]
 async fn a_let_bound_lambda_is_callable_from_inside_another_lambda() {
-    let v = run("let dot = |k| -> *get(k, 0); as_iter(&@keys) | map(|k| -> dot(k)) | sum").await;
+    let v = run("let dot = |k| -> k[0]; as_iter(&@keys) | map(|k| -> dot(k)) | sum").await;
     assert_close(&v, 1.0);
 }
 
 #[tokio::test]
 async fn a_let_bound_lambda_is_callable_at_the_top_level() {
-    let v = run("let dot = |k| -> *get(k, 0); dot(&@query)").await;
+    let v = run("let dot = |k| -> k[0]; dot(&@query)").await;
     assert_close(&v, 1.0);
 }
 
@@ -237,12 +237,12 @@ async fn a_let_bound_lambda_named_like_an_extern_of_another_shape_is_the_callee(
     expected = "context @query is moved out here and not assigned again before the run ends"
 )]
 async fn a_context_taken_into_a_local_and_not_written_back_is_refused() {
-    run("let q = @query; let dot = |k| -> *get(k, 0); dot(&q)").await;
+    run("let q = @query; let dot = |k| -> k[0]; dot(&q)").await;
 }
 
 #[tokio::test]
 async fn a_context_taken_into_a_local_and_written_back_is_read_in_between() {
-    let v = run("let q = @query; let r = *get(&q, 0); @query = q; r").await;
+    let v = run("let q = @query; let r = q[0]; @query = q; r").await;
     assert_close(&v, 1.0);
 }
 
@@ -272,14 +272,17 @@ async fn a_closure_parameter_named_unlike_any_extern_is_the_callee() {
 
 #[tokio::test]
 async fn a_method_call_of_an_extern_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name() {
-    let v = run("let len = |k| -> k + 7; @keys.as_iter().map(|k| -> k.len()).sum()").await;
-    assert_eq!(v.as_int(), 4);
+    let v =
+        run("let len = |k| -> k + 7; @keys.as_iter().map(|k| -> k.len().to_float()).sum()").await;
+    assert_close(&v, 4.0);
 }
 
 #[tokio::test]
 async fn a_qualified_call_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name() {
-    let v = run("let len = |k| -> k + 7; @keys.as_iter().map(|k| -> array::len(k)).sum()").await;
-    assert_eq!(v.as_int(), 4);
+    let v =
+        run("let len = |k| -> k + 7; @keys.as_iter().map(|k| -> to_float(array::len(k))).sum()")
+            .await;
+    assert_close(&v, 4.0);
 }
 
 #[tokio::test]

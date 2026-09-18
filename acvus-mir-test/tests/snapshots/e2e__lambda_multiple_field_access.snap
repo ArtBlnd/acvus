@@ -35,8 +35,8 @@ expression: ir
     ; r7 (map(...)) : Iterator<(String, i64), Pure, #IdentityId(0)>
     ; r8 (collect(...)) : Vec<(String, i64)>
     ; r9 (x.) : &Vec<(String, i64)>
-    ; r10 (len(...)) : i64
-    ; r11 (out.) : &i64
+    ; r10 (len(...)) : u64
+    ; r11 (out.) : &u64
     ; r12 (to_string(...)) : String
     ; r13 (v22) : String
     ; r14 (@users) : Vec<{age: i64, name: String}>
@@ -44,7 +44,7 @@ expression: ir
     ; r16 (users) : Vec<{age: i64, name: String}>
     ; r17 (v15) : String
     ; r18 (users) : Vec<{age: i64, name: String}>
-    ; r19 (out) : i64
+    ; r19 (out) : u64
     ; r20 (@users) : Vec<{age: i64, name: String}>
     ; r21 (v23) : Vec<{age: i64, name: String}>
     ; r22 (v5) : String

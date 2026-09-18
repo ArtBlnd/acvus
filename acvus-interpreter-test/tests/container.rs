@@ -27,20 +27,17 @@ async fn len_reads_every_container_through_a_reference() {
 
 #[tokio::test]
 async fn get_yields_a_reference_into_the_container() {
-    assert_eq!(int("let xs = [10, 20, 30]; *get(&xs, 1)").await, 20);
+    assert_eq!(int("let xs = [10, 20, 30]; xs[1]").await, 20);
     assert_eq!(
-        int("let xs = [10, 20, 30] | into_iter | collect; *get(&xs, 2)").await,
+        int("let xs = [10, 20, 30] | into_iter | collect; xs[2]").await,
         30
     );
     assert_eq!(int("let d = deque(); push_back(&mut d, { x: 10, }); push_front(&mut d, { x: 5, }); get(&d, 0).x").await, 5);
 }
 
 #[tokio::test]
-async fn a_write_through_get_mut_lands_in_the_container() {
-    assert_eq!(
-        int("let xs = [1, 2, 3]; *get_mut(&mut xs, 1) = 9; *get(&xs, 1)").await,
-        9
-    );
+async fn a_write_through_an_element_lands_in_the_container() {
+    assert_eq!(int("let xs = [1, 2, 3]; xs[1] = 9; xs[1]").await, 9);
     assert_eq!(
         int("let d = deque(); push_back(&mut d, 1); push_back(&mut d, 2); *get_mut(&mut d, 0) = 7; *get(&d, 0) + *get(&d, 1)").await,
         9
@@ -70,7 +67,7 @@ async fn first_and_last_are_none_on_an_empty_container_and_references_otherwise(
 async fn a_method_chain_runs_as_the_calls_it_stands_for() {
     assert_eq!(
         int(
-            "let xs = [1, 2, 3]; let ys = xs.as_iter().map(|x| -> *x * 10).collect(); ys.len() + *ys.get(2)"
+            "let xs = [1, 2, 3]; let ys = xs.as_iter().map(|x| -> *x * 10).collect(); ys.len() + ys[2]"
         )
         .await,
         33

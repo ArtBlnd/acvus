@@ -27,6 +27,13 @@ pub mod sig {
         where
             T: TyVar;
     }
+
+    extern_signature! {
+        ns: "core",
+        fn to_float<T>(n: T) -> f64
+        where
+            T: TyVar;
+    }
 }
 
 // -- to_string ----------------------------------------------------------
@@ -154,9 +161,18 @@ where
 
 // -- the rest -----------------------------------------------------------
 
-#[extern_fn(effect = pure)]
-fn to_float(n: i64) -> f64 {
-    n as f64
+macro_rules! to_float_ints {
+    ($($name:ident: $t:ty),* $(,)?) => {$(
+        #[extern_fn(instance_of = sig::to_float, effect = pure)]
+        fn $name(n: $t) -> f64 {
+            n as f64
+        }
+    )*};
+}
+
+to_float_ints! {
+    to_float_i8: i8, to_float_i16: i16, to_float_i32: i32, to_float_int: i64,
+    to_float_u8: u8, to_float_u16: u16, to_float_u32: u32, to_float_u64: u64,
 }
 
 #[derive(TyArg)]
@@ -188,7 +204,7 @@ fn int_to_char(n: i64) -> Result<String, CharError> {
 pub fn conversion_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
-        signatures: [sig::to_string, sig::to_int],
+        signatures: [sig::to_string, sig::to_int, sig::to_float],
         fns: [
             to_string_i8, to_string_i16, to_string_i32, to_string_int,
             to_string_u8, to_string_u16, to_string_u32, to_string_u64,
@@ -196,7 +212,9 @@ pub fn conversion_registry<R: Runtime>() -> Registry<R> {
             to_int_i8, to_int_i16, to_int_i32, to_int_int,
             to_int_byte, to_int_u16, to_int_u32,
             to_int_float, to_int_bool,
-            to_float, char_to_int, int_to_char,
+            to_float_i8, to_float_i16, to_float_i32, to_float_int,
+            to_float_u8, to_float_u16, to_float_u32, to_float_u64,
+            char_to_int, int_to_char,
         ],
     }
 }

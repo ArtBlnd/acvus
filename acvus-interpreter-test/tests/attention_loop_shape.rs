@@ -69,29 +69,20 @@ fn attention_loops() -> Vec<LoopShape> {
         .collect()
 }
 
-/// Measured on `63b31a42`, before the borrows left the loops:
+/// History. On `63b31a42`, before the borrows left the loops, the four
+/// loops were `head 2 body 11 back 0`, `head 1 body 8 back 1`,
+/// `head 1 body 12 back 0`, `head 1 body 8 back 1`. Hoisting the borrows,
+/// moving `s * scale` out of the inner head, and folding the arithmetic
+/// chain took the inner bodies to 4 and 5.
 ///
-/// ```text
-/// head 2 body 11 back 0   the scores pass, inner
-/// head 1 body  8 back 1   the scores pass, outer
-/// head 1 body 12 back 0   the out pass, inner
-/// head 1 body  8 back 1   the out pass, outer
-/// ```
-///
-/// Three changes separate that from the counts below. Each inner body lost
-/// the two borrows it rebuilt every iteration, and no back edge gained a
-/// move: the two the outer loops carry are the ones they carried before.
-/// Then `s * scale`, written after the inner scores loop, left that loop's
-/// head for the outer body, where the source put it; it is the operation the
-/// inner head lost and the outer body gained, and it now runs once per score
-/// instead of once per element. The arithmetic chain (stage 4) then folded
-/// `s + q * k` and `i + 1` into one operation each.
-///
-/// The inner bodies are what stage 6 shrinks. The scores body's
-/// `*@query.get(i)` is one call and its deref, and `*@keys.get(t).get(i)` is
-/// two calls and its deref: five operations become two, and the body goes 7
-/// to 4. The out body holds the same two runs with `/ z` between them, and
-/// goes 8 to 5. Neither outer body changes: `push_back` feeds no call.
+/// RFC-0047 then replaced `get` with `a[i]`. The scores pass reads
+/// `@keys[t]` once per row into a binding, so its outer body grew by the
+/// row's `Index` and `AsSlice` while its inner body kept 4. The out pass
+/// indexes `@values[t]` with `t` as the *inner* variable, so its row is
+/// taken inside the inner loop and that body grew from 5 to 9. That is the
+/// cost of the loop order, not of the instruction: an `AsSlice` hoists out
+/// of a loop that does not define its container, and here the container is
+/// defined by the loop itself.
 #[test]
 fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     let shapes: Vec<String> = attention_loops()
@@ -107,8 +98,8 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
         shapes,
         [
             "head 1 body 4 back 0",
-            "head 1 body 8 back 1",
-            "head 1 body 5 back 0",
+            "head 1 body 12 back 0",
+            "head 1 body 9 back 0",
             "head 1 body 7 back 1",
         ],
         "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"

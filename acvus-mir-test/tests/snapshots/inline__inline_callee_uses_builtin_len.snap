@@ -13,5 +13,5 @@ expression: ir
     ; r2 (v2) : i64
     ; r3 (v3) : i64
     ; r4 ($param_1.) : &Array<i64, 3>
-    ; r5 (len(...)) : i64
-    ; r6 (count(...)) : i64
+    ; r5 (len(...)) : u64
+    ; r6 (count(...)) : u64

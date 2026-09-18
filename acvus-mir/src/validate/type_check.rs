@@ -526,7 +526,7 @@ impl CheckCtx {
                 let index_ty = ty!(*index);
                 self.assert_match(pc, span, "Index", "index", &Ty::U64, index_ty, errors);
                 let slice_ty = ty!(*slice);
-                let Some((_, element)) = slice_of(slice_ty) else {
+                let Some((mutability, element)) = slice_of(slice_ty) else {
                     self.invalid(pc, span, "Index", "Ref(_, Slice)", slice_ty, errors);
                     return;
                 };
@@ -546,10 +546,10 @@ impl CheckCtx {
                         }
                     }
                     IndexMode::Ref => {
-                        let expected = Ty::Ref(
-                            Mutability::Shared,
-                            Box::new(TypeArg::uniform(element.clone())),
-                        );
+                        // The element is reached through the slice, so it
+                        // is reached at the slice's own mutability.
+                        let expected =
+                            Ty::Ref(mutability, Box::new(TypeArg::uniform(element.clone())));
                         self.assert_match(pc, span, "Index", "dst", &expected, dst_ty, errors);
                     }
                 }

@@ -43,6 +43,15 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    /// Store into an element: `a[i] = 0;` (RFC-0047). `place` is the
+    /// `Expr::Index` itself, so the `as_slice_mut` instance it settles is
+    /// recorded where every other index expression records one.
+    IndexStore {
+        id: AstId,
+        place: Box<Expr>,
+        expr: Expr,
+        span: Span,
+    },
     /// Store through a `&mut`: `*r = 0;`.
     DerefStore {
         id: AstId,
@@ -203,6 +212,16 @@ pub enum Expr {
         field: Astr,
         span: Span,
     },
+    /// Index: `a[i]` (RFC-0047). A place, as `a.f` is. `callee_id` is the
+    /// id the checker records the `as_slice` / `as_slice_mut` instance
+    /// under, the same way a method call records its callee.
+    Index {
+        id: AstId,
+        callee_id: AstId,
+        object: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
     /// Function call: `f(args)`.
     FuncCall {
         id: AstId,
@@ -356,6 +375,7 @@ impl Expr {
             | Expr::BinaryOp { id, .. }
             | Expr::UnaryOp { id, .. }
             | Expr::FieldAccess { id, .. }
+            | Expr::Index { id, .. }
             | Expr::FuncCall { id, .. }
             | Expr::MethodCall { id, .. }
             | Expr::Pipe { id, .. }
@@ -382,6 +402,7 @@ impl Expr {
             | Expr::BinaryOp { span, .. }
             | Expr::UnaryOp { span, .. }
             | Expr::FieldAccess { span, .. }
+            | Expr::Index { span, .. }
             | Expr::FuncCall { span, .. }
             | Expr::MethodCall { span, .. }
             | Expr::Pipe { span, .. }
@@ -630,6 +651,10 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
                 walk_expr(target, refs);
                 walk_expr(expr, refs);
             }
+            Stmt::IndexStore { place, expr, .. } => {
+                walk_expr(place, refs);
+                walk_expr(expr, refs);
+            }
             Stmt::Expr(expr) => walk_expr(expr, refs),
             Stmt::MatchBind {
                 pattern,
@@ -752,6 +777,10 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
             walk_expr(operand, refs);
         }
         Expr::FieldAccess { object, .. } => walk_expr(object, refs),
+        Expr::Index { object, index, .. } => {
+            walk_expr(object, refs);
+            walk_expr(index, refs);
+        }
         Expr::MethodCall { receiver, args, .. } => {
             walk_expr(receiver, refs);
             for a in args {

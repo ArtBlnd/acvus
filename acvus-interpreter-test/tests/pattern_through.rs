@@ -50,8 +50,8 @@ async fn a_borrowed_option_is_matched_through_and_stays_usable() {
     let v = run_script_mode(
         &i,
         "let o = Some([1.0, 2.0]);
-         let second = if let Some(v) = &o { *get(v, 1) } else { 0.0 };
-         let first = if let Some(u) = o { *get(&u, 0) } else { 0.0 };
+         let second = if let Some(v) = &o { v[1] } else { 0.0 };
+         let first = if let Some(u) = o { u[0] } else { 0.0 };
          second + first",
         Context::default(),
     )

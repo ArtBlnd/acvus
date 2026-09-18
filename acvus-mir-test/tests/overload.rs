@@ -288,7 +288,12 @@ fn len_of_each_container_settles_its_namespace() {
         (r#"let s = "a"; len(&s)"#, "string::len"),
     ] {
         let c = checked(&i, source);
-        assert_eq!(c.ret, Ty::I64, "{source}: {:?}", c.callees);
+        assert_eq!(
+            c.ret,
+            Ty::Int(acvus_mir::ty::IntTy::U64),
+            "{source}: {:?}",
+            c.callees
+        );
         assert_eq!(calls(&c, callee), 1, "{source}: {:?}", c.callees);
     }
 }

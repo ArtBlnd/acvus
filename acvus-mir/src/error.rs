@@ -130,6 +130,15 @@ pub enum MirErrorKind {
     },
     /// `&` or `&mut` on something that is not a place.
     NotAPlace,
+    /// `a[i]` where `a`'s type has no `as_slice` instance (RFC-0047 §2).
+    CannotIndex {
+        ty: Ty,
+    },
+    /// `a[i]` read as a value where the element type moves (RFC-0047 §5);
+    /// `clone(&a[i])` is the way (RFC-0028).
+    MoveOutOfIndex {
+        ty: Ty,
+    },
     /// `*r` where `r` is not a reference.
     DerefOfNonReference(Ty),
     /// `*r` where the reference names a value that is not a primitive.
@@ -269,6 +278,16 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "only a variable, a context, or a field of one can be referenced"
                 )
+            }
+            MirErrorKind::CannotIndex { ty } => {
+                write!(
+                    f,
+                    "cannot index into a value of type `{}`",
+                    ty.display(interner)
+                )
+            }
+            MirErrorKind::MoveOutOfIndex { ty } => {
+                write!(f, "cannot move out of index of `{}`", ty.display(interner))
             }
             MirErrorKind::DerefOfNonReference(ty) => {
                 write!(f, "`*` needs a reference, got {}", ty.display(interner))

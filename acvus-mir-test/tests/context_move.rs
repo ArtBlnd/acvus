@@ -28,7 +28,7 @@ fn errors(source: &str) -> Vec<String> {
 
 #[test]
 fn a_context_taken_into_a_local_and_never_assigned_again_is_named_at_the_move() {
-    let errs = errors("let q = @query; let dot = |k| -> *get(k, 0); dot(&q)");
+    let errs = errors("let q = @query; let dot = |k| -> k[0]; dot(&q)");
     assert_eq!(errs.len(), 1, "{errs:#?}");
     assert!(errs[0].ends_with(MOVED_OUT), "{errs:#?}");
 }
@@ -36,12 +36,8 @@ fn a_context_taken_into_a_local_and_never_assigned_again_is_named_at_the_move() 
 #[test]
 fn a_context_assigned_again_before_the_run_ends_is_accepted() {
     let i = Interner::new();
-    compile_script_mode_optimized(
-        &i,
-        "let q = @query; @query = q; *get(&@query, 0)",
-        &query(&i),
-    )
-    .expect("the assignment gives the context its value again");
+    compile_script_mode_optimized(&i, "let q = @query; @query = q; @query[0]", &query(&i))
+        .expect("the assignment gives the context its value again");
 }
 
 #[test]

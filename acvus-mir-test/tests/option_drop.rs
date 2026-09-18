@@ -68,7 +68,7 @@ fn an_option_of_a_vec_is_dropped_only_where_it_was_not_matched() {
     let ir = compile_script_optimized(
         &i,
         "let o = Some(reverse([1, 2, 3])); Some(v) = o { @out = len(&v); }; 0",
-        &ctx(&i, &[("out", Ty::I64)]),
+        &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();
     let o = legend_register_of(&ir, "o");
@@ -85,7 +85,7 @@ fn an_option_of_an_option_of_a_vec_is_dropped_only_where_it_was_not_matched() {
     let ir = compile_script_optimized(
         &i,
         "let o = Some(Some(reverse([1, 2, 3]))); Some(Some(v)) = o { @out = len(&v); }; 0",
-        &ctx(&i, &[("out", Ty::I64)]),
+        &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();
     let o = legend_register_of(&ir, "o");
@@ -102,7 +102,7 @@ fn a_result_keeps_its_box_after_its_payload_is_taken() {
     let ir = compile_script_optimized(
         &i,
         "let r = decimal(\"1.5\"); Ok(v) = r { @out = 1; }; 0",
-        &ctx(&i, &[("out", Ty::I64)]),
+        &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();
     let r = legend_register_of(&ir, "r");

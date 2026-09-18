@@ -170,7 +170,7 @@ fn a_binding_no_namespace_declares_is_called_as_before() {
 fn a_binding_that_is_not_a_function_does_not_join_the_set() {
     let i = Interner::new();
     let c = checked(&i, "let len = 3; let q = [1.0, 2.0]; len(&q)");
-    assert_eq!(c.ret, Ty::I64);
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::U64));
     assert_eq!(c.callees, vec!["array::len".to_string()]);
 }
 
@@ -181,7 +181,7 @@ fn a_binding_made_after_the_call_is_not_in_the_set_at_it() {
         &i,
         "let q = [1.0, 2.0]; let n = len(&q); let len = |k| -> 7.0; n",
     );
-    assert_eq!(c.ret, Ty::I64);
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::U64));
     assert_eq!(c.callees, vec!["array::len".to_string()]);
 }
 
@@ -219,7 +219,7 @@ fn a_method_receiver_one_candidate_lends_is_lent() {
         &i,
         "let mylen = |k| -> k + 7; let q = [1.0, 2.0]; mylen(q.len())",
     );
-    assert_eq!(c.ret, Ty::I64);
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::U64));
     assert_eq!(c.callees, vec!["array::len".to_string()]);
     assert!(
         c.fn_params.contains(&vec!["&Array<Float, 2>".to_string()]),
@@ -310,7 +310,7 @@ fn a_receiver_both_modes_see_as_one_type_is_not_ambiguous() {
         &i,
         "let len = |k| -> k + 7; let a = [1, 2]; let r = &a; r.len()",
     );
-    assert_eq!(c.ret, Ty::I64);
+    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::U64));
     assert_eq!(c.callees, vec!["array::len".to_string()]);
     assert!(
         c.fn_params.contains(&vec!["i64".to_string()]),
@@ -328,9 +328,9 @@ fn a_receiver_that_is_a_reference_to_an_open_element_drops_the_binding() {
     let i = Interner::new();
     let c = checked(
         &i,
-        "let len = |k| -> k + 7; let a = [[1, 2], [3, 4]]; as_iter(&a) | map(|k| -> k.len()) | sum",
+        "let len = |k| -> k + 7; let a = [[1, 2], [3, 4]]; as_iter(&a) | map(|k| -> to_float(k.len())) | sum",
     );
-    assert_eq!(c.ret, Ty::I64);
+    assert_eq!(c.ret, Ty::Float);
     assert!(
         c.callees.contains(&"array::len".to_string()),
         "{:?}",

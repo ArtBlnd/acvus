@@ -244,6 +244,54 @@ probe, not assumed:
 - kovac inherits a static, layout-free indexing instruction with a
   static bound proof.
 
+### T2 landed, and what it measured
+
+The compiler's half is in: `Expr::Index` and `Stmt::IndexStore` in the
+grammar, `check_index` in `typeck.rs`, `lower_index` / `take_slice` in
+`lower.rs`, `Vec`/`Array` `get` and `get_mut` deleted, every caller
+rewritten.
+
+**A slice never reaches user code, and the shape is a table, not a check.**
+`TypeEnv` holds two maps: `functions`, which `resolve_fn` reads and which is
+the only place a script's name can resolve, and `machine`, which holds the
+`as_slice` / `as_slice_mut` declarations and which `resolve_fn` does not
+read. `as_slice(&v)` is `undefined function` because the name is in no
+table the lookup searches. §2's `is_move_only(&[T]) == true` therefore stays
+invisible: the only `&[T]` in a body is an `AsSlice`'s dst, read by an
+`Index` beside it.
+
+**A length is a `u64`.** §4 fixes the index at `u64` and §7 proves
+`i.hi < n` with `n = len(&c)`; with `len` returning `i64` the two can never
+meet and `while i < len(&v) { v[i] }` is a unification refusal. `len` on
+`Vec`, `Array`, `Deque` and `String` now returns `u64`, and `core::to_float`
+became a shared signature with an instance per integer type. `to_int` still
+has no `u64` instance (conversion.rs's own decision), so a length and an
+`i64` element cannot be added; several tests now assert the two apart. This
+is a language change beyond the RFC as accepted and is the owner's to judge.
+
+**attention regressed.** 64x64 execute: base 174.6 us, T2 199.4 us
+(**+14%**); 256x128: 1352.0 -> 1506.2 (**+11%**). Medians of three
+alternating reps, two `--profile bench` binaries. mandelbrot 17.1 -> 17.0
+ns/iteration and every accum case within 3%.
+
+The reason is the out pass's loop order, and `attention_loop_shape`'s four
+loops name it: `head 1 body 4 back 0`, `head 1 body 12 back 0`,
+`head 1 body 9 back 0`, `head 1 body 7 back 1` against the `get` shape's
+4, 8, 5, 7. The scores pass reads `@keys[t]` once per row into a binding, so
+`AsSlice(query)` and `AsSlice(keys)` sit at the body entry and the row's
+slice sits between the loops -- the shape §8 predicts. The out pass indexes
+`@values[t]` with `t` as the **inner** variable, so the row's `AsSlice` is
+defined by the loop that would have to hoist it, and nothing rises above its
+own operand: its inner body went 5 -> 9. At T1's ceiling an un-hoisted
+`AsSlice` costs (50.505 - 9.016) / 2 = 20.7 ns, and the out pass runs
+n*d = 4096 of them at 64x64: about +85 us, against about -29 us the scores
+pass saves. The measured +25 us is the same sign and the same order.
+
+86% of that 20.7 ns is `VtableRegistry::vtable_of` -- a `Mutex` and a
+`TypeId` hash inside `Value::erase` for every `Large` (T1's `perf`). The
+instruction is not what costs; erasing an extension type in a loop is. Until
+that lock is gone, `a[i]` pays wherever the container is the loop's own.
+
 ## Order of work
 
 T0 `ArrayGet` deleted (done). T1 interpreter + extern: the `Slice` extension type and its

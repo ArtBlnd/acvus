@@ -33,8 +33,9 @@ async fn range_with_end_not_after_start_is_empty() {
 
 #[tokio::test]
 async fn range_step_counts_up_by_the_step_short_of_the_end() {
-    let v = run("let xs = range_step(0, 10, 3) | collect; xs.len() * 100 + *xs.get(3)").await;
-    assert_eq!(v.as_int(), 409, "0, 3, 6, 9");
+    let count = run("range_step(0, 10, 3) | count()").await;
+    let last = run("let xs = range_step(0, 10, 3) | collect; xs[3]").await;
+    assert_eq!((count.as_int(), last.as_int()), (4, 9), "0, 3, 6, 9");
 }
 
 #[tokio::test]
@@ -56,8 +57,9 @@ async fn range_step_with_a_zero_step_traps() {
 
 #[tokio::test]
 async fn step_by_keeps_the_first_and_every_nth_after_it() {
-    let v = run("let xs = range(0, 10) | step_by(3) | collect; xs.len() * 100 + *xs.get(3)").await;
-    assert_eq!(v.as_int(), 409, "0, 3, 6, 9");
+    let count = run("range(0, 10) | step_by(3) | count()").await;
+    let last = run("let xs = range(0, 10) | step_by(3) | collect; xs[3]").await;
+    assert_eq!((count.as_int(), last.as_int()), (4, 9), "0, 3, 6, 9");
 }
 
 #[tokio::test]

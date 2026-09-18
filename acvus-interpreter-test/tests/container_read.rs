@@ -183,8 +183,10 @@ async fn strip_prefix_and_strip_suffix_are_none_without_the_pattern() {
 
 #[tokio::test]
 async fn split_once_gives_the_text_around_the_first_pattern() {
-    let v =
-        run("let p = split_once(\"a=b=c\", \"=\") | unwrap; concat(get(&p, 0), get(&p, 1))").await;
+    let v = run(
+        "let p = split_once(\"a=b=c\", \"=\") | unwrap; let a = &p[0]; let b = &p[1]; concat(a, b)",
+    )
+    .await;
     assert_eq!(unsafe { v.as_str() }, "ab=c");
     assert_eq!(
         run("let p = split_once(\"a=b\", \"=\") | unwrap; len(&p)")
@@ -193,7 +195,7 @@ async fn split_once_gives_the_text_around_the_first_pattern() {
         2
     );
     assert_eq!(
-        string("let p = split_once(\"ab\", \"=\") | unwrap_or(vec([\"x\", \"y\"])); concat(get(&p, 0), get(&p, 1))")
+        string("let p = split_once(\"ab\", \"=\") | unwrap_or(vec([\"x\", \"y\"])); let a = &p[0]; let b = &p[1]; concat(a, b)")
             .await,
         "xy"
     );

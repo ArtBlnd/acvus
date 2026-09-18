@@ -35,8 +35,8 @@ expression: ir
     ; r7 (map(...)) : Iterator<Float, Pure, #IdentityId(0)>
     ; r8 (collect(...)) : Vec<Float>
     ; r9 (x.) : &Vec<Float>
-    ; r10 (len(...)) : i64
-    ; r11 (out.) : &i64
+    ; r10 (len(...)) : u64
+    ; r11 (out.) : &u64
     ; r12 (to_string(...)) : String
     ; r13 (v22) : String
     ; r14 (@vals) : Vec<Float>
@@ -44,7 +44,7 @@ expression: ir
     ; r16 (vals) : Vec<Float>
     ; r17 (v15) : String
     ; r18 (vals) : Vec<Float>
-    ; r19 (out) : i64
+    ; r19 (out) : u64
     ; r20 (@vals) : Vec<Float>
     ; r21 (v23) : Vec<Float>
     ; r22 (v5) : String

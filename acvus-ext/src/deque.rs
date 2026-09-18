@@ -15,7 +15,7 @@ use acvus_mir::ty::{Ty, TypeArg};
 
 use crate::iter::Iter;
 use crate::iterator::{lent_iter, sig};
-use crate::vec::{checked_index, vec};
+use crate::vec::vec;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Deque<T>
@@ -412,11 +412,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn len<T>(d: &Deque<T>) -> i64
+fn len<T>(d: &Deque<T>) -> u64
 where
     T: TyVar,
 {
-    d.len() as i64
+    d.len() as u64
 }
 
 #[extern_fn(effect = pure)]
@@ -425,6 +425,15 @@ where
     T: TyVar,
 {
     d.is_empty()
+}
+
+/// A deque is two halves, so it has no slice and no `Index`: its element
+/// access stays a call with the bound check inside it (RFC-0047).
+fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
+    usize::try_from(index)
+        .ok()
+        .filter(|i| *i < len)
+        .unwrap_or_else(|| panic!("{name}: index {index} is out of range for length {len}"))
 }
 
 #[extern_fn(effect = pure)]

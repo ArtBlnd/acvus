@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
-use crate::ir::{Callee, CastKind, ExternCast};
+use crate::ir::{Callee, CastKind, ExternCast, IndexAccess, IndexMode};
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, Conversion, ConvertedArgument, Decision, DecisionId,
     EffectRelation, InstanceChoice, InstanceKind, LendKind, LendOutcome, LendRefusal, MatchBinding,
@@ -16,8 +16,8 @@ use crate::solver::{
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Task, Ty,
-    TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
+    Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, Param, ParamTerm, Solver, Task,
+    Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -59,6 +59,81 @@ struct IntLiteral {
 struct FirstArg {
     ty: InferTy,
     site: ArgSite,
+}
+
+/// One `a[i]` whose refusal waits for the solve (RFC-0047).
+struct IndexUse {
+    id: AstId,
+    span: Span,
+    container: InferTy,
+    element: InferTy,
+    demand: PlaceDemand,
+}
+
+/// One `a[i]` as the checker reads it (RFC-0047).
+struct IndexSite<'a> {
+    id: AstId,
+    callee_id: AstId,
+    object: &'a Expr,
+    index: &'a Expr,
+    span: Span,
+    demand: PlaceDemand,
+}
+
+/// What a `&C` names, and `C` itself where the type is not a reference.
+fn referent_of(ty: &InferTy) -> &InferTy {
+    match ty {
+        TyTerm::Ref(_, referent) => &referent.ty,
+        other => other,
+    }
+}
+
+/// Whether one of the container's own `as_slice` signatures takes this
+/// container. A head that is still open is nobody's refusal yet.
+fn takes_container(candidates: &[SignatureCandidate], container: &InferTy) -> bool {
+    let Some(head) = sliceable_head(container) else {
+        return true;
+    };
+    candidates.iter().any(|candidate| {
+        let SignatureCandidate::Named { scheme, .. } = candidate else {
+            return true;
+        };
+        match scheme.params().first().map(|param| &param.ty) {
+            Some(TyTerm::Ref(_, takes)) => sliceable_head(&takes.ty) == Some(head),
+            _ => false,
+        }
+    })
+}
+
+/// A container the machine can slice is named by its head alone: two
+/// `Vec`s of different elements have one `as_slice` between them.
+fn sliceable_head<V>(ty: &TyTerm<V>) -> Option<Option<QualifiedRef>>
+where
+    V: crate::ty::Phase,
+{
+    match ty {
+        TyTerm::UserDefined { id, .. } => Some(Some(*id)),
+        TyTerm::Array(..) => Some(None),
+        _ => None,
+    }
+}
+
+/// What an expression under check is read for (RFC-0018): its value, or a
+/// reference to the place it names, at that mutability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaceDemand {
+    Value,
+    Borrow(Mutability),
+}
+
+impl PlaceDemand {
+    /// The slice `a[i]` takes of its container under this demand.
+    fn slice_mutability(self) -> Mutability {
+        match self {
+            Self::Value | Self::Borrow(Mutability::Shared) => Mutability::Shared,
+            Self::Borrow(Mutability::Mut) => Mutability::Mut,
+        }
+    }
 }
 
 /// RFC-0030.
@@ -301,6 +376,10 @@ pub struct TypeResolution {
     pub direct_calls: DirectCallMap,
     pub operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
     pub intrinsic_calls: FxHashMap<AstId, Intrinsic>,
+    /// How each `a[i]` reaches its element (RFC-0047). The checker decided
+    /// it from the container's evidence and the element type; the lowering
+    /// reads it and decides nothing.
+    pub index_access: FxHashMap<AstId, IndexAccess>,
     /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
     pub structural_variant_calls: FxHashSet<AstId>,
     /// The return type of the function each `?` leaves early from (RFC-0038).
@@ -326,6 +405,7 @@ impl TypeResolution {
         direct_calls: DirectCallMap,
         operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
         intrinsic_calls: FxHashMap<AstId, Intrinsic>,
+        index_access: FxHashMap<AstId, IndexAccess>,
         structural_variant_calls: FxHashSet<AstId>,
         try_returns: FxHashMap<AstId, Ty>,
         tail_ty: Ty,
@@ -340,6 +420,7 @@ impl TypeResolution {
             direct_calls,
             operator_calls,
             intrinsic_calls,
+            index_access,
             structural_variant_calls,
             try_returns,
             tail_ty,
@@ -505,6 +586,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Direct call resolutions (callee AstId -> the function and instance).
     direct_calls: FxHashMap<AstId, CalleeChoice>,
     operator_calls: FxHashMap<AstId, OperatorCall<ResolvedCallee, InferTy>>,
+    /// How each `a[i]` reaches its element (RFC-0047), keyed by the index
+    /// expression's own id.
+    index_access: FxHashMap<AstId, IndexAccess>,
     /// How the pattern being checked reads its scrutinee (RFC-0024).
     pattern_mode: PatternMode,
     /// The bindings of the pattern being checked under `Deferred`, each
@@ -517,7 +601,10 @@ pub struct TypeChecker<'a, 's, 'src> {
     context_binds_under_open_head: Vec<DeferredContextBind>,
     /// Accumulated errors.
     errors: Vec<MirError>,
-    in_borrow_place: bool,
+    /// What the expression under check is read for. One field, so
+    /// "borrowed" and "at which mutability" cannot disagree: `a[i]`
+    /// settles `as_slice` or `as_slice_mut` on it (RFC-0047 §3).
+    demand: PlaceDemand,
     /// Every context the program names, at the span of its first use. A
     /// context's type must be data (RFC-0014); the check runs once the
     /// types are known.
@@ -536,6 +623,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     structural_variant_calls: FxHashSet<AstId>,
     /// Conversion decisions registered so far, at their sites.
     conversions: Vec<PendingConversion>,
+    /// Every `a[i]`, kept for the refusals that can only name their type
+    /// once the body is solved (RFC-0047 §2, §5).
+    index_uses: Vec<IndexUse>,
     /// The places the calls being checked have consumed, innermost last.
     holds: Vec<Hold>,
     /// Decisions instantiated so far, each at the span that will report a
@@ -565,17 +655,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             coercions: Vec::new(),
             direct_calls: FxHashMap::default(),
             operator_calls: FxHashMap::default(),
+            index_access: FxHashMap::default(),
             pattern_mode: PatternMode::Value,
             deferred_bindings: Vec::new(),
             deferred_context_binds: Vec::new(),
             context_binds_under_open_head: Vec::new(),
-            in_borrow_place: false,
+            demand: PlaceDemand::Value,
             bound_sites: Vec::new(),
             return_ty: None,
             try_sites: FxHashMap::default(),
             int_literals: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
             conversions: Vec::new(),
+            index_uses: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
             errors: Vec::new(),
@@ -733,6 +825,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             direct_calls,
             operator_calls,
             self.frozen_intrinsic_calls(),
+            self.index_access.clone(),
             self.structural_variant_calls,
             FxHashMap::default(),
             Ty::String,
@@ -818,6 +911,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             direct_calls,
             operator_calls,
             self.frozen_intrinsic_calls(),
+            self.index_access.clone(),
             self.structural_variant_calls,
             try_returns,
             frozen_tail,
@@ -1516,6 +1610,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.report_unsettled(unsettled);
         self.record_decided_call_types();
         self.resolve_conversions();
+        self.settle_index_uses();
         let settled = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
         let sites = std::mem::take(&mut self.bound_sites);
@@ -1972,10 +2067,128 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         } else {
             Mutability::Shared
         };
-        let outer = std::mem::replace(&mut self.in_borrow_place, true);
+        let outer = std::mem::replace(&mut self.demand, PlaceDemand::Borrow(mutability));
         let ty = self.check_expr(place);
-        self.in_borrow_place = outer;
+        self.demand = outer;
         self.lend_place(&ty, place, mutability, span)
+    }
+
+    /// `a[i]` (RFC-0047): the container's own `as_slice` settled by its
+    /// evidence, the element read at `i: u64`. The instance goes on
+    /// `callee_id`, where every other resolved call's does, and the mode
+    /// on the expression's own id, so the lowering decides nothing.
+    fn check_index(&mut self, site: IndexSite<'_>) -> InferTy {
+        let IndexSite {
+            id,
+            callee_id,
+            object,
+            index,
+            span,
+            demand,
+        } = site;
+        let mutability = demand.slice_mutability();
+        let name = self.interner.intern(match mutability {
+            Mutability::Shared => "as_slice",
+            Mutability::Mut => "as_slice_mut",
+        });
+        let candidates: Vec<SignatureCandidate> = self
+            .env
+            .machine_set(name)
+            .into_iter()
+            .map(|(qref, scheme)| SignatureCandidate::Named {
+                qref,
+                scheme: scheme.clone(),
+            })
+            .collect();
+
+        let first = self.receiver_arg(object, ReceiverMode::Lent(mutability));
+        // The index is a `u64` and nothing else (RFC-0047 §4), so it is the
+        // expected type here: a captured word reaches it read through, as
+        // it reaches any parameter of that type.
+        let position = TyTerm::Int(IntTy::U64);
+        let index_ty = self.check_arg(index, Some(&position));
+        if self.solver.unify(&index_ty, &position).is_err() {
+            self.error(
+                MirErrorKind::UnificationFailure {
+                    expected: Ty::Int(IntTy::U64),
+                    got: self.type_as_written(&index_ty),
+                },
+                index.span(),
+            );
+        }
+
+        let container = self.solver.resolve_ty(&first.ty);
+        if !takes_container(
+            &candidates,
+            &self.solver.resolve_ty(referent_of(&container)),
+        ) {
+            self.index_uses.push(IndexUse {
+                id,
+                span,
+                container,
+                element: Self::infer_error(),
+                demand,
+            });
+            return self.record_ret(id, Self::infer_error());
+        }
+        let slice = self.check_overloaded_call(candidates, callee_id, name, Some(first), &[], span);
+        let element = match self.solver.shallow_resolve_ty(&slice) {
+            TyTerm::Ref(_, inner) => match self.solver.shallow_resolve_ty(&inner.ty) {
+                TyTerm::Slice(element) => *element,
+                _ => Self::infer_error(),
+            },
+            _ => Self::infer_error(),
+        };
+        self.index_uses.push(IndexUse {
+            id,
+            span,
+            container,
+            element: element.clone(),
+            demand,
+        });
+        self.record_ret(id, element)
+    }
+
+    /// How every `a[i]` yields its element, and the refusals that name a
+    /// type. A container's element type and its representation are not
+    /// settled where the index is written, so both wait for the solve.
+    fn settle_index_uses(&mut self) {
+        let uses = std::mem::take(&mut self.index_uses);
+        for IndexUse {
+            id,
+            span,
+            container,
+            element,
+            demand,
+        } in uses
+        {
+            let referent = self.solver.resolve_ty(referent_of(&container));
+            if Self::is_error(&element) {
+                let ty = self.type_the_checker_left_open(&referent);
+                self.error(MirErrorKind::CannotIndex { ty }, span);
+                continue;
+            }
+            let Ok(element) = self.solver.freeze_ty(&element) else {
+                continue;
+            };
+            let moves = crate::validate::is_move_only(&element) == Some(true);
+            self.index_access.insert(
+                id,
+                IndexAccess {
+                    mutability: demand.slice_mutability(),
+                    mode: match moves {
+                        // A word is the element itself; anything else is a
+                        // reference into the slice (RFC-0047 §4).
+                        false => IndexMode::Copy,
+                        true => IndexMode::Ref,
+                    },
+                },
+            );
+            if moves && demand == PlaceDemand::Value {
+                let ty = self.type_the_checker_left_open(&referent);
+                self.error(MirErrorKind::MoveOutOfIndex { ty }, span);
+            }
+        }
     }
 
     /// The reference a borrow of an already-checked place names: a borrow
@@ -2147,9 +2360,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 first,
             ));
         }
-        let outer = std::mem::replace(&mut self.in_borrow_place, true);
+        let outer = std::mem::replace(
+            &mut self.demand,
+            match lent_only_if_agreed(&per_candidate) {
+                ReceiverMode::Lent(mutability) => PlaceDemand::Borrow(mutability),
+                ReceiverMode::Value => PlaceDemand::Borrow(Mutability::Shared),
+            },
+        );
         let owned = self.check_expr(receiver);
-        self.in_borrow_place = outer;
+        self.demand = outer;
         let trials: Option<Vec<InferTy>> = per_candidate
             .iter()
             .map(|seen| self.receiver_as(&owned, seen.mode))
@@ -2820,6 +3039,47 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 self.record(*id, ty);
             }
+            acvus_ast::Stmt::IndexStore {
+                id,
+                place,
+                expr,
+                span,
+            } => {
+                let Expr::Index {
+                    id: index_id,
+                    callee_id,
+                    object,
+                    index,
+                    span: index_span,
+                } = place.as_ref()
+                else {
+                    unreachable!("the parser builds an IndexStore from an index expression")
+                };
+                let ty = self.check_expr(expr);
+                let element = self.check_index(IndexSite {
+                    id: *index_id,
+                    callee_id: *callee_id,
+                    object,
+                    index,
+                    span: *index_span,
+                    demand: PlaceDemand::Borrow(Mutability::Mut),
+                });
+                let site = ConversionSite {
+                    id: expr.id(),
+                    span: *span,
+                    report: ConversionReport::Store,
+                };
+                if self.flow(&ty, &element, site).is_err() {
+                    self.error(
+                        MirErrorKind::UnificationFailure {
+                            expected: self.type_as_written(&element),
+                            got: self.type_as_written(&ty),
+                        },
+                        *span,
+                    );
+                }
+                self.record(*id, ty);
+            }
             acvus_ast::Stmt::Expr(expr) => {
                 self.check_expr(expr);
             }
@@ -3134,10 +3394,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 right,
                 span,
             } => {
-                let outer = std::mem::replace(&mut self.in_borrow_place, operand_stays_lent(*op));
+                let outer = std::mem::replace(
+                    &mut self.demand,
+                    match operand_stays_lent(*op) {
+                        true => PlaceDemand::Borrow(Mutability::Shared),
+                        false => PlaceDemand::Value,
+                    },
+                );
                 let lt = self.check_expr(left);
                 let rt = self.check_expr(right);
-                self.in_borrow_place = outer;
+                self.demand = outer;
                 let lt = self.read_operand_through(&lt, *op);
                 let rt = self.read_operand_through(&rt, *op);
 
@@ -3322,13 +3588,36 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.record_ret(*id, ty)
             }
 
+            Expr::Index {
+                id,
+                callee_id,
+                object,
+                index,
+                span,
+            } => {
+                let demand = self.demand;
+                self.check_index(IndexSite {
+                    id: *id,
+                    callee_id: *callee_id,
+                    object,
+                    index,
+                    span: *span,
+                    demand,
+                })
+            }
+
             Expr::FieldAccess {
                 id,
                 object,
                 field,
                 span,
             } => {
+                // `a.f` reads a place: the object is borrowed, not moved,
+                // so an `a[i]` below it takes a reference (RFC-0047 §3).
+                let outer =
+                    std::mem::replace(&mut self.demand, PlaceDemand::Borrow(Mutability::Shared));
                 let ot_raw = self.check_expr(object);
+                self.demand = outer;
                 let ot = self.solver.shallow_resolve_ty(&ot_raw);
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
@@ -3365,7 +3654,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             return self.record_ret(*id, Self::infer_error());
                         }
                     };
-                    if !self.in_borrow_place && self.refuse_deref_of_non_primitive(&field_ty, *span)
+                    if self.demand == PlaceDemand::Value
+                        && self.refuse_deref_of_non_primitive(&field_ty, *span)
                     {
                         return self.record_ret(*id, Self::infer_error());
                     }
@@ -4512,6 +4802,7 @@ mod tests {
         let env = crate::ty::TypeEnv {
             contexts: qref_contexts,
             functions: qref_functions,
+            machine: FxHashMap::default(),
         };
         let checker = TypeChecker::new(interner, &env, &mut solver);
         let resolution = checker.check_template(&template).map_err(|errs| {
@@ -4946,6 +5237,10 @@ fn place_of(expr: &Expr) -> Option<Place> {
             place.path.push(*field);
             Some(place)
         }
+        // `a[i]` is the place `a` with the index left off: two elements of
+        // one container are one loan, which is what the slice holds
+        // (RFC-0047 §3).
+        Expr::Index { object, .. } => place_of(object),
         Expr::Paren { inner, .. } => place_of(inner),
         _ => None,
     }

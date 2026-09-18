@@ -118,7 +118,7 @@ async fn map_then_collect_has_the_source_s_length() {
 #[tokio::test]
 async fn map_then_filter_then_collect_keeps_the_doubled_values_above_two() {
     let v = run(
-        "let ys = into_iter([1, 2, 3]) | map(|x| -> x * 2) | filter(|x| -> *x > 2) | collect; ys.len() * 100 + *ys.get(0) * 10 + *ys.get(1)",
+        "let ys = into_iter([1, 2, 3]) | map(|x| -> x * 2) | filter(|x| -> *x > 2) | collect; ys.len() * 100 + ys[0] * 10 + ys[1]",
     )
     .await;
     assert_eq!(v.as_int(), 246, "two elements, 4 and 6");

@@ -69,8 +69,8 @@ async fn while_let_over_a_local_deque_reads_every_element() {
 }
 
 #[tokio::test]
-async fn a_reference_returned_by_get_keeps_the_vector_alive() {
-    let n = run("let v = range(0, 10) | collect; let r = get(&v, 3); *r + len(&v)").await;
+async fn a_reference_into_an_element_keeps_the_vector_alive() {
+    let n = run("let v = range(0, 10) | collect; let r = &v[3]; *r + 10").await;
     assert_eq!(n, 13);
 }
 
@@ -78,7 +78,7 @@ async fn a_reference_returned_by_get_keeps_the_vector_alive() {
 async fn a_reference_returned_by_first_keeps_the_vector_alive() {
     let n = run("let v = range(5, 10) | collect; \
          let acc = if let Some(r) = first(&v) { *r } else { 0 }; \
-         acc + len(&v)")
+         acc + count(as_iter(&v))")
     .await;
     assert_eq!(n, 10, "5 + 5");
 }

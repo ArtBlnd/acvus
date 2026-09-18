@@ -44,6 +44,6 @@ async fn a_deque_is_consumed_through_into_iter() {
 #[tokio::test]
 async fn a_deque_demotes_to_a_list_where_one_is_expected() {
     let i = Interner::new();
-    let src = "let d = deque(); push_back(&mut d, 1); push_back(&mut d, 2); push_back(&mut d, 3); let xs = reverse(d); *get(&xs, 0)";
+    let src = "let d = deque(); push_back(&mut d, 1); push_back(&mut d, 2); push_back(&mut d, 3); let xs = reverse(d); xs[0]";
     assert_eq!(run_script(&i, src, FxHashMap::default()).await.as_int(), 3);
 }

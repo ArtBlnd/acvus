@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::QualifiedRef;
 use crate::ir::{
-    Callee, CastKind, ExternCast, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg,
-    RefTarget, ValOrigin, ValueId,
+    Callee, CastKind, ExternCast, ExternInstance, IndexAccess, IndexMode, Inst, InstKind, Label,
+    MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
 };
 use crate::ty::{Effect, Mutability, Task, Ty, TypeArg};
 use crate::typeck::TypeResolution;
@@ -638,6 +638,37 @@ impl<'a> Lowerer<'a> {
             } => {
                 self.lower_deref_store(target, expr, *span);
             }
+            Stmt::IndexStore {
+                place, expr, span, ..
+            } => {
+                let Expr::Index {
+                    id,
+                    callee_id,
+                    object,
+                    index,
+                    span: index_span,
+                } = place.as_ref()
+                else {
+                    unreachable!("the parser builds an IndexStore from an index expression")
+                };
+                let value = self.lower_expr(expr);
+                let taken = self.take_slice(
+                    object,
+                    *callee_id,
+                    *id,
+                    self.index_access(*id).mutability,
+                    *index_span,
+                );
+                let index = self.lower_expr(index);
+                self.emit_inst(
+                    *span,
+                    InstKind::IndexSet {
+                        slice: taken,
+                        index,
+                        value,
+                    },
+                );
+            }
             Stmt::Expr(expr) => {
                 self.lower_expr(expr);
             }
@@ -1160,12 +1191,146 @@ impl<'a> Lowerer<'a> {
         self.emit_ref(span, RefTarget::Var(owned), vec![], Mutability::Shared, ty)
     }
 
+    /// `a[i]` (RFC-0047): the container's slice, then the element. The
+    /// mode is the checker's, from `index_modes`; nothing here decides how
+    /// the element comes back.
+    fn lower_index(
+        &mut self,
+        id: AstId,
+        callee_id: AstId,
+        object: &Expr,
+        index: &Expr,
+        span: Span,
+    ) -> ValueId {
+        let access = self.index_access(id);
+        self.lower_index_as(access, id, callee_id, object, index, span)
+    }
+
+    fn index_access(&self, id: AstId) -> IndexAccess {
+        self.resolution
+            .index_access
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| panic!("type checking settles every index expression"))
+    }
+
+    /// The element as a reference into the slice, whatever its type: what
+    /// a place below an `a[i]` names — `&a[i]`, `a[i][j]`, `a[i].f`, and a
+    /// method receiver.
+    fn lower_index_as(
+        &mut self,
+        access: IndexAccess,
+        id: AstId,
+        callee_id: AstId,
+        object: &Expr,
+        index: &Expr,
+        span: Span,
+    ) -> ValueId {
+        let IndexAccess { mutability, mode } = access;
+        let slice = self.take_slice(object, callee_id, id, mutability, span);
+        let index = self.lower_expr(index);
+        let element = self.type_of_id(id);
+        let dst = self.alloc_val();
+        self.set_val_type(
+            dst,
+            match mode {
+                IndexMode::Copy => element,
+                IndexMode::Ref => Ty::Ref(mutability, Box::new(TypeArg::uniform(element))),
+            },
+        );
+        self.emit_inst(
+            span,
+            InstKind::Index {
+                dst,
+                slice,
+                index,
+                mode,
+            },
+        );
+        dst
+    }
+
+    /// The whole run of a container's elements, at the instance the checker
+    /// settled on the index expression's callee id.
+    fn take_slice(
+        &mut self,
+        object: &Expr,
+        callee_id: AstId,
+        id: AstId,
+        mutability: Mutability,
+        span: Span,
+    ) -> ValueId {
+        let Some(Callee::Extern { id: qref, instance }) =
+            self.resolution.direct_calls.get(&callee_id).copied()
+        else {
+            panic!("type checking settles an `as_slice` instance on every index expression")
+        };
+        // A container that is already a reference is passed as it is
+        // (RFC-0030): reborrowing it would put a `Ref` of its own in every
+        // iteration, which the `AsSlice` could then never rise above.
+        let container = match crate::typeck::is_place(object)
+            && !matches!(self.type_of_id(object.id()), Ty::Ref(..))
+        {
+            true => {
+                let mut restores = Vec::new();
+                let lent = Lent {
+                    id: object.id(),
+                    span: object.span(),
+                    place: self.place(object),
+                    mutability,
+                };
+                let container = self.lend_place(lent, &mut restores);
+                debug_assert!(
+                    restores.is_empty(),
+                    "a container lent for a slice crosses no boundary, so it is not cast back"
+                );
+                container
+            }
+            false => self.lower_expr(object),
+        };
+        let dst = self.alloc_val();
+        self.set_val_type(
+            dst,
+            Ty::Ref(
+                mutability,
+                Box::new(TypeArg::uniform(Ty::Slice(Box::new(self.type_of_id(id))))),
+            ),
+        );
+        self.emit_inst(
+            span,
+            InstKind::AsSlice {
+                dst,
+                container,
+                mutability,
+                instance: ExternInstance { id: qref, instance },
+            },
+        );
+        dst
+    }
+
     /// The storage a root expression names, through the reference it holds
     /// when it holds one.
     /// The place a root names: its storage, or, when the root is a
     /// reference (a storage holding one, or any expression of `&T`), the
     /// storage through that reference (RFC-0024).
     fn storage_through(&mut self, root: &Expr) -> Option<RefTarget> {
+        // `a[i]` names the element the `Index` leaves a reference into
+        // (RFC-0047 §3): the place is that reference, as `*r`'s is.
+        if let Expr::Index {
+            id,
+            callee_id,
+            object,
+            index,
+            span,
+        } = root
+        {
+            let access = IndexAccess {
+                mode: IndexMode::Ref,
+                ..self.index_access(*id)
+            };
+            let reference = self.lower_index_as(access, *id, *callee_id, object, index, *span);
+            return Some(RefTarget::Through(reference));
+        }
         let ty = self.type_of_id(root.id());
         match (self.storage_of(root), matches!(ty, Ty::Ref(..))) {
             (Some(target), false) => Some(target),
@@ -1911,6 +2076,14 @@ impl<'a> Lowerer<'a> {
                 self.emit_inst(*span, kind);
                 dst
             }
+
+            Expr::Index {
+                id,
+                callee_id,
+                object,
+                index,
+                span,
+            } => self.lower_index(*id, *callee_id, object, index, *span),
 
             Expr::FieldAccess {
                 id,

@@ -180,9 +180,9 @@ async fn unwrap_opens_each_level_of_a_nested_option() {
 #[tokio::test]
 async fn an_option_of_a_vec_is_its_vec() {
     let i = Interner::new();
-    let src = |n: i64| format!("if let Some(v) = maybe_ints({n}) {{ len(&v) }} else {{ -1 }}");
+    let src = |n: i64| format!("if let Some(v) = maybe_ints({n}) {{ len(&v) }} else {{ 99 }}");
     assert_eq!(run(&i, &src(3)).await.as_int(), 3);
-    assert_eq!(run(&i, &src(0)).await.as_int(), -1);
+    assert_eq!(run(&i, &src(0)).await.as_int(), 99);
 }
 
 #[tokio::test]
@@ -222,8 +222,7 @@ async fn a_vec_of_options_stores_each_element_flat() {
 #[tokio::test]
 async fn an_element_of_a_vec_of_options_is_read_back_through_a_pattern() {
     let i = Interner::new();
-    let src =
-        |k: i64| format!("let v = evens(4); if let Some(n) = get(&v, {k}) {{ *n }} else {{ -1 }}");
+    let src = |k: i64| format!("let v = evens(4); if let Some(n) = v[{k}] {{ n }} else {{ -1 }}");
     assert_eq!(run(&i, &src(0)).await.as_int(), 0);
     assert_eq!(run(&i, &src(1)).await.as_int(), -1);
     assert_eq!(run(&i, &src(2)).await.as_int(), 2);

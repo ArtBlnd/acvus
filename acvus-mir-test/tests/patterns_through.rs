@@ -263,7 +263,7 @@ fn a_binding_read_through_a_reference_before_the_mode_settles_refuses_the_value(
 #[test]
 fn a_variant_against_a_borrowed_option_binds_a_reference_and_leaves_it_owned() {
     let i = Interner::new();
-    let source = "let o = Some([1.0, 2.0]); let out = 0.0; Some(v) = &o { out = *get(v, 1); }; out";
+    let source = "let o = Some([1.0, 2.0]); let out = 0.0; Some(v) = &o { out = v[1]; }; out";
     let ir = compile_script_ir(&i, source, &FxHashMap::default()).unwrap();
     assert!(ir.contains("(v) : &Array<Float, 2>"), "{ir}");
     assert!(

@@ -26,8 +26,8 @@ fn shortfall(s: &str, width: i64) -> usize {
 
 /// The length in characters.
 #[extern_fn(effect = pure)]
-fn len(s: &String) -> i64 {
-    s.chars().count() as i64
+fn len(s: &String) -> u64 {
+    s.chars().count() as u64
 }
 
 #[extern_fn(effect = pure)]

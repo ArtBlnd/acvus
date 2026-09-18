@@ -38,11 +38,11 @@ expression: ir
     ; r9 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
     ; r10 (collect(...)) : Vec<i64>
     ; r11 (x.) : &Vec<i64>
-    ; r12 (len(...)) : i64
-    ; r13 (out.) : &i64
+    ; r12 (len(...)) : u64
+    ; r13 (out.) : &u64
     ; r14 (to_string(...)) : String
     ; r15 (v26) : String
-    ; r16 (out) : i64
+    ; r16 (out) : u64
     ; r17 (@items) : Vec<i64>
     ; r18 (items) : Vec<i64>
     ; r19 (v11) : String

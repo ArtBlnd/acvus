@@ -2,15 +2,13 @@ use acvus_extern::{
     Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TyVar, extern_fn, extern_registry,
 };
 
-use crate::vec::checked_index;
-
 #[extern_fn(effect = pure)]
-fn len<T, N>(c: &Arr<T, N>) -> i64
+fn len<T, N>(c: &Arr<T, N>) -> u64
 where
     T: TyVar,
     N: LenVar,
 {
-    c.0.len() as i64
+    c.0.len() as u64
 }
 
 #[extern_fn(effect = pure)]
@@ -22,29 +20,6 @@ where
     c.0.is_empty()
 }
 
-#[extern_fn(effect = pure)]
-fn get<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>, index: i64) -> Ref<T, Rt>
-where
-    T: TyVar,
-    N: LenVar,
-    Rt: Runtime,
-{
-    let i = c.with(rt, |c| checked_index("get", c.0.len(), index));
-    c.map(rt, |c| &c.0[i])
-}
-
-#[extern_fn(effect = pure)]
-fn get_mut<T, N, Rt>(rt: &Rt, c: RefMut<Arr<T, N>, Rt>, index: i64) -> RefMut<T, Rt>
-where
-    T: TyVar,
-    N: LenVar,
-    Rt: Runtime,
-{
-    let i = c.with_mut(rt, |c| checked_index("get_mut", c.0.len(), index));
-    c.map_mut(rt, |c| &mut c.0[i])
-}
-
-/// As `vec::as_slice` (RFC-0047).
 #[extern_fn(effect = pure)]
 fn as_slice<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Slice<T, Rt>
 where
@@ -93,6 +68,6 @@ where
 {
     extern_registry! {
         ns: "array",
-        fns: [len, is_empty, get, get_mut, as_slice, as_slice_mut, first, last],
+        fns: [len, is_empty, as_slice, as_slice_mut, first, last],
     }
 }

@@ -1838,7 +1838,19 @@ pub struct TypeEnv {
     /// Context variable types - may contain inference variables (Solver-scoped).
     pub contexts: FxHashMap<QualifiedRef, InferTy>,
     /// Function type schemes - polymorphic, instantiated per call site.
+    /// Every name a script can write resolves here and nowhere else.
     pub functions: FxHashMap<QualifiedRef, Scheme>,
+    /// The signatures the compiler settles for instructions of its own:
+    /// `a[i]` settles `as_slice` or `as_slice_mut` here (RFC-0047 §5).
+    /// `resolve_fn` does not read this map, so a script cannot name one.
+    pub machine: FxHashMap<QualifiedRef, Scheme>,
+}
+
+/// Whether an extern declaration is the machine's rather than the
+/// language's: `a[i]` runs `as_slice` as part of an instruction, and no
+/// script names it (RFC-0047 §5).
+pub fn is_machine_signature(interner: &Interner, qref: QualifiedRef) -> bool {
+    matches!(interner.resolve(qref.name), "as_slice" | "as_slice_mut")
 }
 
 /// What a name resolves to among the environment's functions.
@@ -1878,10 +1890,27 @@ impl TypeEnv {
         }
     }
 
+    /// Every declaration of `name` among the machine's own signatures, in
+    /// a stable order. A script's name resolution never reaches these.
+    pub fn machine_set(&self, name: Astr) -> Vec<(QualifiedRef, &Scheme)> {
+        let mut found: Vec<QualifiedRef> = self
+            .machine
+            .keys()
+            .filter(|q| q.name == name)
+            .copied()
+            .collect();
+        found.sort();
+        found
+            .into_iter()
+            .map(|qref| (qref, &self.machine[&qref]))
+            .collect()
+    }
+
     pub fn new() -> Self {
         Self {
             contexts: FxHashMap::default(),
             functions: FxHashMap::default(),
+            machine: FxHashMap::default(),
         }
     }
 }

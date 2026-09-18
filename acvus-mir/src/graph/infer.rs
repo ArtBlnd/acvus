@@ -186,6 +186,10 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
                 collect_value_refs_expr(target, refs);
                 collect_value_refs_expr(expr, refs);
             }
+            Stmt::IndexStore { place, expr, .. } => {
+                collect_value_refs_expr(place, refs);
+                collect_value_refs_expr(expr, refs);
+            }
             Stmt::Expr(expr) => collect_value_refs_expr(expr, refs),
             Stmt::MatchBind { source, body, .. } | Stmt::WhileLet { source, body, .. } => {
                 collect_value_refs_expr(source, refs);
@@ -257,6 +261,10 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
         }
         Expr::UnaryOp { operand, .. } => collect_value_refs_expr(operand, refs),
         Expr::FieldAccess { object, .. } => collect_value_refs_expr(object, refs),
+        Expr::Index { object, index, .. } => {
+            collect_value_refs_expr(object, refs);
+            collect_value_refs_expr(index, refs);
+        }
         Expr::FuncCall { func, args, .. } => {
             collect_value_refs_expr(func, refs);
             for a in args {
@@ -479,6 +487,21 @@ pub struct Declared {
 
 /// The scheme a function's type is instantiated under: its declaration
 /// when it is an Extern, the bare type otherwise.
+/// The half of the extern declarations that only the compiler resolves:
+/// every script name is in `TypeEnv::functions`, and these are in
+/// `TypeEnv::machine`, which name resolution does not read (RFC-0047 §5).
+fn machine_signatures(
+    interner: &Interner,
+    resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
+    declared: &FxHashMap<QualifiedRef, Declared>,
+) -> FxHashMap<QualifiedRef, Scheme> {
+    resolved_fn_types
+        .iter()
+        .filter(|(qref, _)| crate::ty::is_machine_signature(interner, **qref))
+        .map(|(&qref, ty)| (qref, declared_scheme(declared.get(&qref), ty.clone())))
+        .collect()
+}
+
 fn declared_scheme(declared: Option<&Declared>, ty: PolyTy) -> Scheme {
     match declared {
         Some(declared) => Scheme {
@@ -546,8 +569,10 @@ pub fn infer_scc(
         scc_fn_types.insert(func.qref, fn_ty);
     }
 
+    let machine_signatures = machine_signatures(interner, resolved_fn_types, &declared);
     let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
         .iter()
+        .filter(|(k, _)| !crate::ty::is_machine_signature(interner, **k))
         .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
         .collect();
     env_functions.extend(
@@ -566,6 +591,7 @@ pub fn infer_scc(
         let env = crate::ty::TypeEnv {
             contexts: known_ctx_infer.clone(),
             functions: env_functions.clone(),
+            machine: machine_signatures.clone(),
         };
 
         // Extract ret and params from func.ty.
@@ -780,8 +806,10 @@ pub fn infer(
             );
         }
 
+        let machine_signatures = machine_signatures(interner, &resolved_fn_types, &declared);
         let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
             .iter()
+            .filter(|(k, _)| !crate::ty::is_machine_signature(interner, **k))
             .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
             .collect();
         env_functions.extend(
@@ -799,6 +827,7 @@ pub fn infer(
             let env = crate::ty::TypeEnv {
                 contexts: known_ctx.clone(),
                 functions: env_functions.clone(),
+                machine: machine_signatures.clone(),
             };
 
             // Extract ret and params from func.ty.

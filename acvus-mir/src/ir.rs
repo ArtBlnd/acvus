@@ -121,6 +121,15 @@ pub enum IndexMode {
     Ref,
 }
 
+/// How one `a[i]` reaches its element: which slice the container gives up,
+/// and how the element comes back (RFC-0047 §3, §4). The checker settles
+/// both; the lowering reads them and decides neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexAccess {
+    pub mutability: crate::ty::Mutability,
+    pub mode: IndexMode,
+}
+
 /// The `Order` a call waits for and the `Order` it yields (RFC-0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderEdge {

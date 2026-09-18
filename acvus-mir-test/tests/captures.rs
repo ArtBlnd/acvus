@@ -100,7 +100,7 @@ const TWO_LEVEL_WORD: &str = "let h = 0.5; \
      range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *h * to_float(t)) | sum) | sum";
 
 const TWO_LEVEL_LARGE: &str = "let w = [0.5, 0.5]; \
-     range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> *get(w, t)) | sum) | sum";
+     as_iter(&@values) | map(|row| -> as_iter(row) | map(|x| -> w[0] * *x) | sum) | sum";
 
 #[test]
 fn a_two_level_capture_records_the_owned_type_at_both_levels() {
@@ -139,7 +139,7 @@ fn a_lambda_capturing_a_lent_parameter_is_rejected() {
     let errors = check(
         &i,
         "let a = [[0.5, 0.5]]; \
-         as_iter(&a) | map(|k| -> range(0, 2) | map(|t| -> *get(k, t)) | sum) | sum",
+         as_iter(&a) | map(|k| -> range(0, 2) | map(|t| -> k[0] + to_float(t)) | sum) | sum",
     )
     .expect_err("a lambda cannot capture a reference");
     assert!(
@@ -172,9 +172,10 @@ const LENT_ARRAY: &str = "let a = [[1, 2], [3, 4]]; ";
 #[test]
 fn a_qualified_call_of_a_name_a_binding_also_has_captures_nothing() {
     let i = Interner::new();
-    let source = format!("{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> array::len(k)) | sum");
+    let source =
+        format!("{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> to_float(array::len(k))) | sum");
     let c = checked(&i, &source);
-    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::I64));
+    assert_eq!(c.ret, Ty::Float);
     assert_eq!(
         c.captures_by_lambda,
         Vec::<Vec<Ty>>::new(),
@@ -203,10 +204,11 @@ fn a_method_call_that_settles_on_a_binding_captures_it() {
 #[test]
 fn a_binding_read_beside_a_qualified_name_of_its_own_spelling_is_captured_once() {
     let i = Interner::new();
-    let source =
-        format!("{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> array::len(k) + len(1)) | sum");
+    let source = format!(
+        "{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> to_float(array::len(k)) + to_float(len(1))) | sum"
+    );
     let c = checked(&i, &source);
-    assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::I64));
+    assert_eq!(c.ret, Ty::Float);
     assert_eq!(c.captures_by_lambda.len(), 1, "{:?}", c.captures_by_lambda);
     assert!(
         matches!(c.captures_by_lambda[0].as_slice(), [Ty::Fn { .. }]),

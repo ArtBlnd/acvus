@@ -112,17 +112,13 @@ fn a_type_nothing_resolved_is_reported_as_written() {
 #[test]
 fn a_runtime_error_is_the_operations_panic_message_with_status_2() {
     let dir = tempfile::tempdir().unwrap();
-    write(
-        dir.path(),
-        "boom.acvus",
-        "let xs = [1, 2, 3];\n*get(&xs, 9)\n",
-    );
+    write(dir.path(), "boom.acvus", "let xs = [1, 2, 3];\nxs[9]\n");
     let out = acvus(dir.path(), &["run", "boom.acvus"]);
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(text(&out.stdout), "");
     assert_eq!(
         text(&out.stderr),
-        "error: get: index 9 is out of range for length 3\n"
+        "error: index out of bounds: the len is 3 but the index is 9\n"
     );
 }
 

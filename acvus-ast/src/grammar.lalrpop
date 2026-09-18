@@ -180,6 +180,8 @@ Stmt: Stmt = {
             }
             Expr::ContextRef { name, .. } =>
                 Ok(Stmt::ContextStore { id: AstId::alloc(), name: *name, path, expr: rhs, span }),
+            Expr::Index { .. } if path.is_empty() =>
+                Ok(Stmt::IndexStore { id: AstId::alloc(), place: Box::new(lhs.clone()), expr: rhs, span }),
             Expr::UnaryOp { op: UnaryOp::Deref, operand, .. } if path.is_empty() =>
                 Ok(Stmt::DerefStore { id: AstId::alloc(), target: operand.clone(), expr: rhs, span }),
             _ => Err(lalrpop_util::ParseError::User {
@@ -329,6 +331,17 @@ PostfixExpr: Expr = {
     // `e?`: the Ok or Some payload, or an early return of the Err or None (RFC-0038).
     <l:@L> <inner:PostfixExpr> "?" <r:@R> =>
         Expr::Try { id: AstId::alloc(), inner: Box::new(inner), span: Span::new(l, r) },
+    // `a[i]`: a place, binding like `.field` (RFC-0047). A statement that
+    // begins with `[` is an array literal; every statement ends in `;` or
+    // in a block, so the two never meet.
+    <l:@L> <obj:PostfixExpr> "[" <index:Expr> "]" <r:@R> =>
+        Expr::Index {
+            id: AstId::alloc(),
+            callee_id: AstId::alloc(),
+            object: Box::new(obj),
+            index: Box::new(index),
+            span: Span::new(l, r),
+        },
     CalleeExpr,
 };
 

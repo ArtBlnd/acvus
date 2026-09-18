@@ -126,7 +126,7 @@ fn an_inner_lambda_capturing_a_lent_parameter_is_refused_once() {
     let i = Interner::new();
     let errors = recorded_types(
         &i,
-        &format!("{OWNED}let f = |a| -> range(0, 2) | map(|i| -> *get(a, i)) | sum; f(&q)"),
+        &format!("{OWNED}let f = |a| -> range(0, 2) | map(|i| -> a[0]) | sum; f(&q)"),
     )
     .expect_err("the inner lambda captures `a`, a reference");
     assert_eq!(
@@ -140,7 +140,7 @@ fn an_inner_lambda_capturing_a_lent_parameter_is_refused_once() {
     assert_eq!(
         errors.len(),
         2,
-        "the refusal leaves `a` open, and `get` is ambiguous on an open \
+        "the refusal leaves `a` open, and `as_slice` is ambiguous on an open \
          receiver: {errors:?}"
     );
 }
@@ -148,10 +148,7 @@ fn an_inner_lambda_capturing_a_lent_parameter_is_refused_once() {
 #[test]
 fn the_same_lambda_over_an_owned_argument_captures_the_value_and_checks() {
     let i = Interner::new();
-    let types = checked(
-        &i,
-        &format!("{OWNED}let f = |a| -> range(0, 2) | map(|i| -> *get(a, i)) | sum; f(q)"),
-    );
+    let types = checked(&i, &format!("{OWNED}let f = |a| -> a[0] + 0.0; f(q)"));
     assert!(
         !types.iter().any(is_double_reference),
         "no `&&T` exists (RFC-0029): {types:?}"
@@ -163,7 +160,7 @@ fn a_lambda_expecting_a_reference_called_with_an_owned_value_names_both_types() 
     let i = Interner::new();
     let errors = recorded_types(
         &i,
-        "let q = [1.0, 1.0]; let f = |k| -> *get(k, 0) + 0.0; let r = &q; f(r); f(q)",
+        "let q = [1.0, 1.0]; let f = |k| -> k[0] + 0.0; let r = &q; f(r); f(q)",
     )
     .expect_err("`q` is not the `&Array<Float, 2>` the first call fixed `k` to");
     assert!(

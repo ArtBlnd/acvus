@@ -25,7 +25,7 @@ async fn a_reference_to_a_moved_storage_does_not_run() {
 #[tokio::test]
 #[should_panic(expected = "use of `a` after it was moved")]
 async fn a_reference_bound_from_a_moved_storage_does_not_run() {
-    run("let a = [1, 2]; let b = a; let r = &a; *get(r, 0)").await;
+    run("let a = [1, 2]; let b = a; let r = &a; r[0]").await;
 }
 
 #[tokio::test]

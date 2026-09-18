@@ -216,26 +216,30 @@ fn two_calls_and_no_deref() -> RunShape {
 
 #[tokio::test]
 async fn a_call_whose_result_the_next_call_reads_is_one_operation_with_it() {
-    assert_eq!(run_shapes("*@m.get(1).get(0)"), [two_calls_and_a_deref()]);
-    assert_eq!(
-        value_of("*@m.get(1).get(0)").await.as_int(),
-        element_at(Cell { row: 1, column: 0 })
-    );
+    assert_eq!(run_shapes("double(double(1))"), [two_calls_and_no_deref()]);
+    assert_eq!(value_of("double(double(1))").await.as_int(), 4);
 }
 
 #[tokio::test]
 async fn every_index_of_a_run_reaches_the_call_the_source_gave_it() {
-    for row in 0..SIDE {
-        for column in 0..SIDE {
-            let source = format!("*@m.get({row}).get({column})");
-            assert_eq!(run_shapes(&source), [two_calls_and_a_deref()]);
-            assert_eq!(
-                value_of(&source).await.as_int(),
-                element_at(Cell { row, column }),
-                "{source}"
-            );
-        }
+    let _guard = row_scripts();
+    for index in 0..SIDE {
+        let source = format!("row_at(pure_row({SIDE}), {index})");
+        assert_eq!(run_shapes(&source), [two_calls_and_no_deref()], "{source}");
+        assert_eq!(value_of(&source).await.as_int(), index, "{source}");
     }
+}
+
+/// An element access is no longer a run: `a[i]` is one `AsSlice` per index
+/// expression, and nothing reads an `AsSlice`'s result but the `Index`
+/// beside it, which is an operation and not a call (RFC-0047 §3).
+#[tokio::test]
+async fn an_index_expression_is_no_run_at_all() {
+    assert_eq!(run_shapes("@m[1][0]"), []);
+    assert_eq!(
+        value_of("@m[1][0]").await.as_int(),
+        element_at(Cell { row: 1, column: 0 })
+    );
 }
 
 /// One test, because `ELEMENTS_DROPPED` is one counter: two tests reading
@@ -282,16 +286,20 @@ fn a_large_intermediate_moves_into_the_next_call_and_is_dropped_once() {
 
 #[tokio::test]
 async fn a_second_reader_of_an_intermediate_leaves_the_outer_call_unfused() {
-    let source = "let r = @m.get(1); *r.get(0) + *r.get(2)";
+    let _guard = row_scripts();
+    let source = &format!("let r = pure_row({SIDE}); row_at(r, 0) + 0");
     assert_eq!(
         run_shapes(source),
-        [one_call_and_a_deref(), one_call_and_a_deref()],
-        "the row `r` is read twice, so `@m.get(1)` joins neither run"
+        [two_calls_and_no_deref()],
+        "one reader fuses the row into the call that reads it"
     );
+    let shared = &format!("let n = double(1); double(n) + double(n)");
     assert_eq!(
-        value_of(source).await.as_int(),
-        element_at(Cell { row: 1, column: 0 }) + element_at(Cell { row: 1, column: 2 })
+        run_shapes(shared),
+        [],
+        "`n` is read twice, so `double(1)` joins neither run"
     );
+    assert_eq!(value_of(shared).await.as_int(), 8);
 }
 
 #[tokio::test]
@@ -310,24 +318,23 @@ async fn a_call_whose_result_arithmetic_reads_is_not_a_run() {
 
 #[tokio::test]
 async fn a_run_inside_a_loop_body_is_one_operation() {
-    let source =
-        "let acc = 0; let i = 0; while i < 3 { acc = acc + *@m.get(i).get(i); i = i + 1; } acc";
-    assert_eq!(run_shapes(source), [two_calls_and_a_deref()]);
-    let diagonal: i64 = (0..SIDE)
-        .map(|i| element_at(Cell { row: i, column: i }))
-        .sum();
-    assert_eq!(value_of(source).await.as_int(), diagonal);
+    let _guard = row_scripts();
+    let source = &format!(
+        "let acc = 0; let i = 0; while i < 3 {{ acc = acc + row_at(pure_row({SIDE}), i); i = i + 1; }} acc"
+    );
+    assert_eq!(run_shapes(source), [two_calls_and_no_deref()]);
+    assert_eq!(value_of(source).await.as_int(), (0..SIDE).sum::<i64>());
 }
 
 #[tokio::test]
 async fn a_run_inside_a_diamond_arm_is_one_operation() {
-    let source = "let v = if @flag { *@m.get(0).get(1) } else { *@m.get(2).get(0) }; v";
+    let _guard = row_scripts();
+    let source = &format!(
+        "let v = if @flag {{ row_at(pure_row({SIDE}), 1) }} else {{ row_at(pure_row({SIDE}), 2) }}; v"
+    );
     assert_eq!(
         run_shapes(source),
-        [two_calls_and_a_deref(), two_calls_and_a_deref()]
+        [two_calls_and_no_deref(), two_calls_and_no_deref()]
     );
-    assert_eq!(
-        value_of(source).await.as_int(),
-        element_at(Cell { row: 0, column: 1 })
-    );
+    assert_eq!(value_of(source).await.as_int(), 1);
 }

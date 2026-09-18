@@ -44,7 +44,7 @@ fn a_reference_to_a_moved_storage_is_refused() {
 
 #[test]
 fn a_reference_bound_from_a_moved_storage_is_refused() {
-    use_after_move_of_a("let a = [1, 2]; let b = a; let r = &a; *get(r, 0)");
+    use_after_move_of_a("let a = [1, 2]; let b = a; let r = &a; r[0]");
 }
 
 #[test]

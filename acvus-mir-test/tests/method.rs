@@ -18,9 +18,8 @@ fn tail_ty(src: &str) -> Ty {
         compile_script_optimized(&i, src, &FxHashMap::default()).unwrap_or_else(|e| panic!("{e}"));
     let line = ir
         .lines()
-        .rev()
         .find(|l| l.contains("return "))
-        .expect("a return");
+        .expect("a return of the entry body, which is printed before any closure's");
     let reg = line.split("return ").nth(1).unwrap().trim();
     let ty = ir
         .lines()
@@ -28,6 +27,7 @@ fn tail_ty(src: &str) -> Ty {
         .expect("the returned value's type");
     match ty.split(" : ").nth(1).unwrap().trim() {
         "i64" => Ty::I64,
+        "u64" => Ty::Int(acvus_mir::ty::IntTy::U64),
         "String" => Ty::String,
         other => panic!("unexpected tail type {other}"),
     }
@@ -54,14 +54,17 @@ fn a_qualified_name_no_namespace_declares_is_a_structural_variant() {
 
 #[test]
 fn a_method_call_lends_its_receiver_as_the_callee_s_first_parameter_asks() {
-    assert_eq!(tail_ty("let xs = [1, 2, 3]; xs.len()"), Ty::I64);
+    assert_eq!(
+        tail_ty("let xs = [1, 2, 3]; xs.len()"),
+        Ty::Int(acvus_mir::ty::IntTy::U64)
+    );
     let ir = check("let xs = [1, 2, 3]; xs.len()").unwrap();
     assert!(ir.contains("ref &xs"), "{ir}");
     let ir = check("let d = deque(); d.push_back(1); d.len()").unwrap();
     assert!(ir.contains("ref &mut d"), "{ir}");
     assert_eq!(
         tail_ty("let xs = [1, 2, 3]; let ys = xs.as_iter().map(|x| -> *x * 2).collect(); ys.len()"),
-        Ty::I64
+        Ty::Int(acvus_mir::ty::IntTy::U64)
     );
     let ir = check("let d = deque(); d.push_back({ x: 1, }); d.get(0).x").unwrap();
     assert!(ir.contains("ref &d"), "{ir}");
@@ -82,15 +85,15 @@ fn a_method_call_of_a_signature_picks_the_instance_by_the_receiver() {
 
 #[test]
 fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
-    let ir = check("let xs = [\"a\", \"b\"]; xs.get(1).clone()")
-        .expect("`get` gives `&String`, `clone` takes `&T`");
+    let ir = check("let xs = [\"a\", \"b\"]; xs[1].clone()")
+        .expect("`xs[1]` gives `&String`, `clone` takes `&T`");
     assert_eq!(
         ir.matches("ref &").count(),
-        1,
-        "only xs is lent, for `get`:\n{ir}"
+        2,
+        "xs is lent for its slice, and the element is reborrowed as the receiver:\n{ir}"
     );
     assert_eq!(
-        tail_ty("let xs = [\"a\", \"b\"]; xs.get(1).clone()"),
+        tail_ty("let xs = [\"a\", \"b\"]; xs[1].clone()"),
         Ty::String
     );
 }

@@ -17,13 +17,6 @@ extern_signature! {
         T: TyVar;
 }
 
-pub(crate) fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
-    usize::try_from(index)
-        .ok()
-        .filter(|i| *i < len)
-        .unwrap_or_else(|| panic!("{name}: index {index} is out of range for length {len}"))
-}
-
 #[extern_fn(effect = pure)]
 fn reverse<T>(mut items: Vec<T>) -> Vec<T>
 where
@@ -44,11 +37,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn len<T>(c: &Vec<T>) -> i64
+fn len<T>(c: &Vec<T>) -> u64
 where
     T: TyVar,
 {
-    c.len() as i64
+    c.len() as u64
 }
 
 #[extern_fn(effect = pure)]
@@ -57,26 +50,6 @@ where
     T: TyVar,
 {
     c.is_empty()
-}
-
-#[extern_fn(effect = pure)]
-fn get<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>, index: i64) -> Ref<T, Rt>
-where
-    T: TyVar,
-    Rt: Runtime,
-{
-    let i = c.with(rt, |c| checked_index("get", c.len(), index));
-    c.map(rt, |c| &c[i])
-}
-
-#[extern_fn(effect = pure)]
-fn get_mut<T, Rt>(rt: &Rt, c: RefMut<Vec<T>, Rt>, index: i64) -> RefMut<T, Rt>
-where
-    T: TyVar,
-    Rt: Runtime,
-{
-    let i = c.with_mut(rt, |c| checked_index("get_mut", c.len(), index));
-    c.map_mut(rt, |c| &mut c[i])
 }
 
 /// The whole run of elements, borrowed in place (RFC-0047): the machine
@@ -138,7 +111,7 @@ where
         types: [Vec<_>],
         signatures: [vec],
         fns: [
-            reverse, vec_array, len, is_empty, get, get_mut, as_slice, as_slice_mut, first, last,
+            reverse, vec_array, len, is_empty, as_slice, as_slice_mut, first, last,
         ],
     }
 }
