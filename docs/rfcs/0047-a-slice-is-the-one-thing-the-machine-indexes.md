@@ -80,14 +80,19 @@ knows a container: `AsSlice` runs the container's own `as_slice` instance.
    that `Ref<Vec<T>>` as its `&C`. `a[i] = v` is `as_slice_mut` +
    `IndexSet`. A statement beginning with `[` is an array literal; a postfix
    `[` binds to the expression before it.
-6. **Representation.** A slice is an extension type like any other:
-   `Slice { ptr: *const Value, len: usize }`, crossing as a `Large`
-   (RFC-0039), so `Value` does not change — its layout, its `ScalarPair` ABI
-   and its `Option` niche are what they were. `Index` reads `word` to the
-   `Slice`, compares `index < len`, and reads the element at
-   `ptr + index * 16`: one dependent load more than a register word, no
-   call, no layout. The one allocation is `AsSlice`'s, and `AsSlice` is
-   hoisted, so it is paid once per loop entry (owner, 13:05).
+6. **Representation.** A slice is **two registers in the machine**
+   (amended 2026-09-20; first form: one `Large` box). `prepare` gives a
+   slice-typed value two adjacent slots — `ptr` then `len`, `SlicePair`
+   in `code.rs`, the second fixed at prepare time and never computed in a
+   `run`. `AsSlice` stores the handler's `Elements` return (`rax`/`rdx`,
+   no `Value` in between) to the pair; `Index`/`IndexRef`/`IndexSet` read
+   `ptr`, `len`, `index`, compare `index < len`, and read the element at
+   `ptr + index * 16`: register loads, no box, no allocation, no drop.
+   `Value` does not change and a slice never is one: a slice-typed value
+   is not a `Value` in a container or a capture (loans refuse a borrow
+   that outlives its body). A slice reference copies like every other
+   reference (`move_check`: `&[T]` owns nothing). Both pair registers
+   open as `Kind::U64` — `Value::inline` carries no `Kind::Ref`.
 7. **Bounds-check elimination is an interval domain and nothing more**
    (owner, 11:40). Each `Int` value carries `[lo, hi]` whose endpoints are
    constants or one other SSA value. Transfer: constants and `± constant`
@@ -172,10 +177,17 @@ enumerate the dependents, nothing is patched around.
   domain with one symbolic endpoint covers `while i < len { a[i] … i = i + 1 }`,
   which is the shape in every bench.
 - **A fat-pointer `Value` (24 B)**: nothing widens.
-- **A two-register slice** (`ptr` and `len` in two machine registers): it
-  saves the load and keeps `Value` untouched, but a slice then cannot cross
-  an extern boundary in either direction, so `as_slice` could not be an
-  extern and `Slice` could not be a parameter.
+- **A one-box slice** (`Slice { ptr, len }` erased as a `Large`): the
+  first form, built and measured. Every `AsSlice` allocated and every
+  slice dropped; `Index` read through the box. It was rejected for the
+  two-register form on 2026-09-20 when the reason recorded here against
+  two registers — "a slice then cannot cross an extern boundary in either
+  direction" — was disproven for the return direction by disassembly:
+  `Elements` returns in `rax`/`rdx` and `AsSlice` stores them to the pair
+  (attention −21 %, `as_slice in loop` −42.5 %). The parameter direction
+  (a `Slice<T>` parameter reading two registers, `f(&v)`) is not built;
+  `acvus-extern` has no accessor for a register word, so it needs a
+  `Runtime` method — its own brief.
 - **The length inside `Value`'s head word.** Three forms, all measured. A
   `{ kind: u8, len: [u8; 7] }` head falls to memory class and returns
   through `sret` from every handler (attention +122 %); a
