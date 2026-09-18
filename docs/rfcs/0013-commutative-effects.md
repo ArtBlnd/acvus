@@ -12,7 +12,8 @@ Commutativity is a second axis of `Effect`, independent of the chain
 `Pure < Idempotent < Opaque` of RFC-0014. `Pure` commutes by definition;
 every other level may be declared commutative or not. The default is not.
 
-    Effect = { reissue: Pure | Idempotent | Opaque, commutes: bool }
+    reissue: Pure | Idempotent | Opaque
+    commutes: bool
 
 The join of two effects is the join on each axis: the higher level, and
 commutative only if both are. A function's effect is the join of its calls,
@@ -58,10 +59,9 @@ commutes and is not re-issuable; a put to one key is re-issuable and does
 not commute; a fresh identifier is both. Each of the four combinations
 exists, so the two facts are declared separately.
 
-The library is curated. The macro of RFC-0009 exists so that an ExternFn
-is written once, by someone who knows the function, and that person
-declares what the function is. The cost of a wrong declaration lands where
-the knowledge was, which is the only place it can be checked.
+An ExternFn is written once, by someone who knows the function, and that
+person declares what the function is. The cost of a wrong declaration lands
+where the knowledge is.
 
 ## Not built
 
@@ -76,7 +76,7 @@ the knowledge was, which is the only place it can be checked.
 
 ## Consequences
 
-- `Effect` carries two axes; its solver bounds, joins, and display carry
+- `Effect` carries the two axes; its solver bounds, joins, and display carry
   both. The type of a function shows `commutative` when it holds.
 - The ExternFn declaration takes `commutative` next to its level:
   `#[extern_fn(effect = idempotent, commutative)]`.

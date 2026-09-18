@@ -33,14 +33,12 @@ matches the resolved call type. A script sees one name.
 
 ## Rationale
 
-The solver had a slot for a finite-domain bound since the type-scheme
-rewrite, but no declaration ever filled it, so the checks around it were
-dead and one of them deferred a check that nothing resumed. Filling the
-slot from declarations makes the mechanism that inference already uses
-serve declared polymorphism too, instead of adding a second mechanism at
-the call site. An overload set resolved by trial at each call cannot wait
-for an argument whose type is not yet known; a bound on a variable waits
-for free.
+The solver already carries a finite-domain bound on a variable and meets
+bounds when it unifies. Declaring bounds makes that mechanism serve declared
+polymorphism too, instead of a second mechanism at the call site. An overload
+set resolved by trial at each call has to decide before an argument whose
+type is not yet known resolves; a bound on a variable is checked when the
+variable freezes.
 
 Rust has no overloading, so a body over several concrete types is written
 once against a trait, and the declaration lists the types. Instantiating
@@ -49,8 +47,8 @@ system does the choosing.
 
 ## Not built
 
-- No capability bounds (`Cloneable` and kin). Nothing declared or checked
-  them; they are removed with the dead slot.
+- No capability bounds (`Cloneable` and kin). Nothing declares them and
+  nothing checks them.
 - No bound on effect or length variables. Their solvers carry their own
   ranges (RFC-0014, array lengths); nothing declares a finite set of either.
 

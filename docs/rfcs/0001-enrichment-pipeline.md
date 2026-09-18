@@ -7,34 +7,29 @@ Supersedes: none
 ## Ruling
 
 acvus is an enrichment pipeline, not a lowering compiler. Parsing discards
-surface syntax only. Every pass after it discovers a property that was implicit
-in the source and records it in the MIR. Information moves in a U shape: one
-drop at parsing, then accumulation until execution.
-
-Information is lost at exactly one place, the execution boundary. Everything is
-visible up to that boundary and validation stands immediately before it.
+surface syntax and nothing else. Every pass after it records in the MIR a
+property that was implicit in the source, and no pass removes a property.
+Information is lost at one place, the execution boundary, and validation
+stands immediately before it.
 
 ## Rationale
 
 A lowering chain loses information at every stage, so a wrong result cannot be
-blamed on a stage without reconstructing what each stage threw away. With one
-discrete cliff, blame is always decidable at once: either the MIR is wrong or
-the materialization of the MIR is wrong.
-
-Decomposition in this pipeline is a homomorphism. The meaning of the pieces,
-recombined, is exactly the meaning of the whole. That is what allows pieces to
-be placed independently, including across execution topologies.
+attributed to a stage without reconstructing what each stage discarded. With
+one discrete cliff, a wrong result is either a wrong MIR or a wrong
+materialization of the MIR.
 
 The pipeline separates two languages. Rust is the implementation language and
-acvus is the composition language. Because the composition language describes
-the implementation language's semantics through signatures, composition is
-optimized without loss. The same pattern holds between the template surface and
-the expression surface inside acvus itself.
+acvus is the composition language. The composition language describes the
+implementation language's semantics through signatures, so a composition is
+optimized without reading a Rust body. The same split holds between the
+template surface and the expression surface inside acvus.
 
 ## Not built
 
 - No lowering dialects between the MIR and execution. A lower dialect would
-  reintroduce gradual loss and undecidable blame.
+  reintroduce loss at each stage, and a wrong result would again name no
+  stage.
 - No runtime type tags. The MIR accumulates the type information that makes
   erasure at the execution boundary sound.
 
@@ -42,13 +37,12 @@ the expression surface inside acvus itself.
 
 - A pass may add facts to the MIR and may not remove facts another pass could
   still use.
-- Validation runs on the MIR as it stands at the execution boundary, on the
-  most informed form of the program.
-- Any new feature must answer "does this lose information?" and is admitted
-  only in the enrichment direction.
+- Validation runs on the MIR as it stands at the execution boundary.
+- A new feature is admitted only in the enrichment direction: it answers
+  "does this lose information?" with no.
 
 ## Open questions
 
-- The subsumption direction: if a stricter language T's type system subsumes a
-  language X, X can be implemented inside T at no cost, and one middle end
-  serves every easier language. This is a direction, not a proven claim.
+- The subsumption direction: whether a language T whose type system subsumes a
+  language X can host X at no cost, so that one middle end serves every easier
+  language. A direction; nothing here establishes it.

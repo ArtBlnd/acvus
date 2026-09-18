@@ -38,10 +38,9 @@ wants on many types with one name, and the ruling that only a primitive
 copies (RFC-0018) made the first of them a call: `clone(&x)`. A
 `Monomorphize` function already gives one name many instances, but its
 member list is written where the function is declared, and `Regex`'s
-`clone` is written where `Regex` is. Opening the member list to other
-registries, and closing it again when they are combined, is the whole
-difference; the solver then sees exactly the `OneOf` bound it already
-carries.
+`clone` is written where `Regex` is. This ruling opens the member list to
+other registries and closes it again when they are combined; the solver then
+sees the `OneOf` bound it already carries.
 
 Traits with implementation blocks and dynamic dispatch would make a value
 carry what it can do. Here a type's abilities are a fact of the registry,

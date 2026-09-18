@@ -87,30 +87,29 @@ and is never aliased.
 ## Rationale
 
 The runtime contract lends closure arguments (`call_1(f, &a)`), and a
-handler's value is a name for storage the host owns. On the language side
-the same fact had no type: a lambda's parameter was always a value, so a
-host had to copy every lent argument into the callee's frame — a copy the
-IR never asked for — and an extern iterating a `&mut` collection could
-not hand the loop body a reference to an element. The gap was one missing
-type, not a missing mechanism — the IR already carries `Ref`, and the
-checker already knows each value's last use.
+handler's value is a name for storage the host owns. Without a reference
+type on the language side a lambda's parameter is always a value, so a host
+copies every lent argument into the callee's frame — a copy the IR never
+asked for — and an extern iterating a `&mut` collection cannot hand the loop
+body a reference to an element. What that needs is the type, not a new
+mechanism: the IR already carries `Ref`, and the checker already knows each
+value's last use.
 
-RFC-0015 kept references out of the type system because no two names ever
-denoted one storage, so nothing needed checking. It paid for that with a
-copy at every binding of a non-identity value, made by the runtime with no
-instruction naming it, and with a `Clone` the runtime needed from every
-extension type. The rule here is Rust's: a copy exists only where the
-type is a word, and every other duplication is a call the program wrote.
-No two names denote one storage except through a reference, and a
-reference is the one thing checked. That check is one exclusion over a
-single function body with known liveness — a local dataflow check, not a
-lifetime system. Keeping references out of data, returns, and captures is
-what keeps it local.
+RFC-0015 kept references out of the type system: no two names denoted one
+storage, so nothing needed checking. Its cost was a copy at every binding of
+a non-identity value, made by the runtime with no instruction naming it, and
+a `Clone` required of every extension type. The rule here is Rust's: a copy
+exists only where the type is a word, and every other duplication is a call
+the program wrote. No two names denote one storage except through a
+reference, and a reference is the one thing checked. That check is one
+exclusion over a single function body with known liveness — a local dataflow
+check, not a lifetime system. Keeping references out of data, returns, and
+captures is what keeps it local.
 
-Exact unification is what keeps the solver honest: a rule that reads `&T`
-as `T` or `T` as `&T` would make the lambda parameter a type the solver
-can no longer pin from the extern signature alone. Spelling `&` at the
-call site and `*` at the read keeps every conversion in the program.
+Exact unification is what lets the solver pin a lambda's parameter type from
+the extern signature alone; a rule that read `&T` as `T` or `T` as `&T`
+would leave two candidates at every such parameter. Spelling `&` at the call
+site and `*` at the read keeps every conversion in the program text.
 
 ## Not built
 

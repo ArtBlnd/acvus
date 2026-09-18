@@ -36,14 +36,13 @@ precondition of that rewrite and never its justification.
 
 ## Rationale
 
-The previous design carried identity as a type of its own that could sit
-in any position, including a struct field, and paired it with a runtime
-notion of provenance it never built. Nothing produced such a type outside
-tests, and every user-defined type was move-only by fiat, which made a
-regular expression unusable twice. Making identity a parameter kind puts
-it where effect already lives, gives the move rule a declared source, and
-leaves the compiler with exactly the three variable kinds it already
-solves in the same shape.
+Identity as a type of its own sits in any position, including a struct
+field, and needs a runtime notion of provenance to mean anything there; and
+with every user-defined type move-only, a value such as a regular expression
+cannot be used twice. As a parameter kind, identity sits where effect already
+sits, the move rule has a declared source to read, and the compiler solves
+identity variables in the shape it solves type, effect, and length
+variables.
 
 ## Not built
 

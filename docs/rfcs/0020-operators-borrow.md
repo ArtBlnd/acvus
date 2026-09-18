@@ -72,31 +72,28 @@ that later joins the variable is refused where the bound is verified, as
 ## Rationale
 
 `==` is the one operation a tagless word has a meaning for without any
-definition: the two words are the same. Everything that needs a
-definition — an IEEE comparison, a saturating sum — is a definition, and
-a definition has a name. Giving the operator the tagless meaning and the
-definitions their names keeps each meaning in exactly one place; the
-prior state, where the interpreter compared `Float` by IEEE and wrapped
-`Int` on overflow while the language said nothing, was two unnamed
-definitions hiding behind one symbol.
+definition: the two words are the same. Everything else — an IEEE
+comparison, a saturating sum — is a definition, and a definition has a name.
+Giving the operator the tagless meaning and the definitions their names keeps
+each meaning in one place; an operator that silently carried a definition
+would be a definition the language does not name, and the definition the
+interpreter chose would be the one that holds.
 
 Defining the language's own operators in the compiler rather than as
 `core::add` instances that a host inlines keeps one definition per
 operation. A Rust body that is the specification plus a fast path that
-reimplements it is two definitions of one thing, and the fast path wins
-silently when they drift.
+reimplements it is two definitions of one operation, and the fast path is the
+one that runs when they differ.
 
-`String` is language-owned because its literals are: a type the compiler
-constructs is the compiler's, and a language that hands half of its
-string to a library keeps the other half anyway. Its operators are named
-instructions rather than a `BinOp` that dispatches on the operand type,
-so the IR says what it does and the interpreter has one arm per meaning.
+`String` is language-owned because its literals are: the compiler constructs
+the value, so the compiler owns the type. Its operators are named
+instructions rather than a `BinOp` that dispatches on the operand type, so
+the IR names the operation and the interpreter has one arm per meaning.
 
 For an extension type, comparing is a function of two references, as
-`PartialEq::eq(&self, &other)` is, and once it is a function it is a
-shared signature: `Regex` compares by its own instance. Borrowing the
-operands is what a reader expects of `a == b`, and making it the
-operator's rule rather than a coercion keeps calls exact.
+`PartialEq::eq(&self, &other)` is, and once it is a function it is a shared
+signature: `Regex` compares by its own instance. The borrow is the operator's
+rule rather than a coercion, so `f(x)` with `f: Fn(&T)` stays an error.
 
 ## Not built
 
@@ -133,6 +130,7 @@ operator's rule rather than a coercion keeps calls exact.
   part is tested only while the parts before it have matched.
 - `core::eq` and `core::clone` are declared in `acvus_extern::core` with
   no instances; `Externs::combine` always includes that registry.
-- The interpreter's `Int` arithmetic is checked (`IntegerOverflow`), its
-  `Float` comparisons are bit equality and `total_cmp`, and `BinOp` has
+- The interpreter's integer `+`, `-`, `*` wrap and its `/` and `%` panic at
+  zero and at `MIN / -1` with Rust's texts; its `Float` equality is bit
+  equality and its `Float` ordering is `total_cmp`; its `BinOp` dispatch has
   no `String` arm and no `And`/`Or` arm.

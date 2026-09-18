@@ -6,15 +6,17 @@ Supersedes: none
 
 ## Ruling
 
-The interpreter reaches JIT-class performance without a JIT. Because the type
-system fixes every type at compile time, values carry no runtime tag. On top
-of that: fixed registers held as host-language locals so the host compiler
+The interpreter mediates every execution. Nothing is lowered to native code,
+and no JIT is built.
+
+The specializations a JIT would perform at runtime are performed ahead of
+time, because the information they need is already in the MIR. Because the
+type system fixes every type at compile time, values carry no runtime tag. On
+top of that: fixed registers held as host-language locals so the host compiler
 promotes them to physical registers; short instructions whose operands are
 encoded in the opcode; bytecode fusion that matches a run of instructions as
 one integer; and dispatch in fixed-size chunks. Each step depends on the one
 before it.
-
-The interpreter mediates every execution. Nothing is lowered to native code.
 
 ## Rationale
 
@@ -24,8 +26,8 @@ information lets the same specializations happen ahead of time.
 
 Mediating every execution is also the precondition for verification. Only an
 interpreter that owns scheduling can run a script under an adversarial
-schedule and observe whether a declared ordering freedom is honest. Native code
-hands scheduling to the OS and the hardware, and that control is gone.
+schedule and observe whether a declared ordering freedom holds. Native code
+hands scheduling to the OS and the hardware.
 
 ## Not built
 
@@ -38,11 +40,11 @@ hands scheduling to the OS and the hardware, and that control is gone.
 
 - The value representation at execution is a fixed-size slot; the MIR, not the
   value, knows the type.
-- Instruction encoding must keep operands inside the opcode so that fusion can
-  be an integer comparison.
-- A verification mode of the interpreter may reorder any operations the program
-  has declared order-irrelevant, and a difference in result is reported as a
-  wrong declaration.
+- Instruction encoding keeps operands inside the opcode so that fusion is an
+  integer comparison.
+- A verification mode of the interpreter reorders operations the program has
+  declared order-irrelevant, and reports a difference in result as a wrong
+  declaration.
 
 ## Open questions
 

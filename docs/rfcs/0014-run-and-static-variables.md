@@ -51,8 +51,8 @@ world without its record reaching a static variable.
 
 Dumping a run in the middle needs a serialized form of everything the run
 holds: values that wrap Rust payloads, closures, calls in flight, and a
-version for all of it. Each of those is a decision with no good answer,
-and every one disappears when the run is the unit. What the host keeps
+version for all of it. This ruling makes none of those decisions, and
+the run as the unit raises none of them. What the host keeps
 between runs is what it already keeps: the values of static variables,
 which are data. The author decides how fine the units are by how much one
 program does; a crash costs at most one run.

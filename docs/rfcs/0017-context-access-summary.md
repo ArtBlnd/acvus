@@ -30,19 +30,19 @@ A context is a static variable, and a callee's access to one is a fact
 about the callee that the caller cannot see in its body. Inlining makes
 the access visible by copying the body, and SSA then orders it against
 the caller's stores by value flow; a call that is not inlined leaves
-the caller blind. The previous rule, that every call reads and writes
+the caller blind. The default rule, that every call reads and writes
 every context, is sound and is what dead-store elimination and sinking
-use; the commutative run of RFC-0013 assumed the opposite, that a
-commutative call touches nothing, which is true of an ExternFn and
-false of a local function that reads a context. The two assumptions
-meet in one place: a summary the caller can ask.
+use; the commutative run of RFC-0013 takes the opposite, that a
+commutative call touches nothing, which holds for an ExternFn and not
+for a local function that reads a context. One summary the caller can
+ask answers both.
 
-This is how a compiler that keeps globals in memory treats calls: not by
-threading the global through every call as a value, which grows with
-call depth and fails at recursion and indirect calls, but by a per-
-function mod/ref summary computed bottom-up over the call graph and
-consulted by every pass that reorders. The effect chain already takes
-that shape here, and the summary rides beside it.
+A compiler that keeps globals in memory answers the same question with a
+per-function mod/ref summary computed bottom-up over the call graph and
+consulted by every pass that reorders, rather than by threading the global
+through every call as a value, which grows with call depth and has no form
+at recursion or at an indirect call. The effect term is computed in that
+shape here, and the summary is computed with it.
 
 The summary lives in the type, not in a side table, because a closure is
 a value: which contexts a call may touch depends on which closure it was
@@ -62,7 +62,7 @@ given, and only the type follows the value.
 
 ## Consequences
 
-- The Fn type carries read and write sets of contexts next to its effect;
+- The Fn type carries read and write sets of contexts in its effect term;
   the polymorphic phases carry them as terms with variables. A summary
   term unifies where and with the polarity the effect term does: where
   two function values join, at a branch or a phi, the joined type's

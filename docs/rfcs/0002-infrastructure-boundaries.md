@@ -8,7 +8,7 @@ Supersedes: none
 
 acvus is compiler infrastructure for DSLs, not a scripting language for one
 use case. The MIR is parametric over the front end (the AST) and the back end
-(the runtime context); replacing those two hosts any DSL.
+(the runtime context); replacing those two hosts another DSL.
 
 Three things are renounced: acvus is not a general-purpose language, it has no
 C FFI, and it has no JIT. ExternFn is the only door to the outside world, and
@@ -16,26 +16,24 @@ everything inside that door is required to be sound.
 
 ## Rationale
 
-Each layer leans on the best-solved problem below it and solves directly only
-what nobody has solved. User scripts lean on ExternFn, ExternFn on the Rust
+Each layer stands on the layer below it and solves directly only what the
+layer below does not. User scripts stand on ExternFn, ExternFn on the Rust
 ecosystem, the acvus compiler on the interpreter, the interpreter on LLVM
-through Rust, and all of it on Rust's memory safety. Renouncing a C FFI is what
-keeps the bottom of that stack Rust rather than C, so safety is guaranteed from
-below and acvus only has to add ordering on top.
+through Rust, and all of it on Rust's memory safety. Renouncing a C FFI is
+what keeps the bottom of that stack Rust rather than C, so acvus adds ordering
+on top of a memory-safe base rather than establishing memory safety itself.
 
-Because ExternFn physically separates the people who write extensions from the
-people who write scripts, difficulty can be placed asymmetrically: the hard
-declarations go to the ExternFn author, and the script user learns nothing. A
-general-purpose language cannot do this because its implementers and users are
-the same population.
+ExternFn separates the people who write extensions from the people who write
+scripts, so the declarations can be placed on one side: the ExternFn author
+writes them, and the script author writes none.
 
 ## Not built
 
 - No general-purpose language features. The composition language stays small
   so every extension goes through ExternFn.
 - No C FFI. Native calls would move scheduling out of the interpreter's hands
-  and break the safety chain below acvus.
-- No JIT. Executable memory is never allocated, so generated code can never
+  and put a non-Rust layer below acvus.
+- No JIT. Executable memory is never allocated, so generated code cannot
   become code injection, and the interpreter keeps control of every execution.
   This is a decision not to build, not a property the IR enforces: the MIR is
   typed SSA over words and pointers, and a fork that wants a native backend
@@ -45,11 +43,11 @@ the same population.
 
 - Every extension enters through ExternFn and is a first-class citizen of the
   SSA once inside; nothing enters halfway.
-- A new feature is judged by whether it is generic at the MIR level or bound to
-  a particular DSL; DSL-bound behavior belongs in the front end or the runtime
-  context, not in the MIR.
-- Complexity may be placed on the ExternFn author without a simplification
-  pressure, because there is no average user on that side of the door.
+- A new feature is judged by whether it is generic at the MIR level or bound
+  to a particular DSL; DSL-bound behavior belongs in the front end or the
+  runtime context, not in the MIR.
+- Complexity may be placed on the ExternFn author; there is no average user on
+  that side of the door.
 
 ## Open questions
 

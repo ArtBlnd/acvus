@@ -18,14 +18,14 @@ A bot and its prompt are baked into one unit.
 
 ## Rationale
 
-Type checking and ordering relations already verify generated source, so
-generating source is safe and every static analysis applies to it unchanged.
-Freezing the language keeps that guarantee: an orchestration feature that needed
-new syntax would be a feature the analyses do not know.
+Type checking and ordering relations verify generated source as they verify
+written source, so every static analysis applies to it unchanged. Freezing the
+language keeps that: an orchestration feature that needed new syntax would be
+a feature the analyses do not know.
 
-Baking removes three problems at once. There is no memory ownership question,
-no scoping question, and no display boundary question, because there is no
-seam between bot and prompt for them to live on.
+Baking answers three questions by removing the seam they live on: there is no
+memory ownership question, no scoping question, and no display boundary
+question between a bot and its prompt.
 
 Axioms the design rests on: history is a sequence of messages with every
 snapshot kept; display is a pure function from history to a view; the pipeline
