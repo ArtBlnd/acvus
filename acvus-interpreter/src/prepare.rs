@@ -24,9 +24,10 @@ use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
 
 use crate::code::{
-    ArgWindow, Arith, BasicBlock, Body, Chain, Code, Compare, ConcatPart, Diamond, DiamondArm,
-    EntryKonst, Expr, ExprBody, ExprChain, ExternArgs, ExternCall, FieldSlot, Konst, LoopBody,
-    NO_SLOT, Op, OpFn, Payload, Prepared, Root, Shape, SlotMove, Step,
+    ArgWindow, Arith, BasicBlock, Body, Chain, Code, Compare, ConcatPart, Deref, Diamond,
+    DiamondArm, EntryKonst, Expr, ExprBody, ExprChain, ExternArgs, ExternCall, FieldSlot,
+    FusedCall, FusedRun, Konst, LoopBody, NO_SLOT, Op, OpFn, PREVIOUS, Payload, Prepared, Root,
+    Shape, SlotMove, Step,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
@@ -134,8 +135,9 @@ pub fn prepare_body(
 
     prep.hoist_konsts();
     let regions = prep.regions();
+    let runs = prep.fused_in(0..body.insts.len(), &regions);
     let chains = prep.chains_in(0..body.insts.len(), &regions);
-    let units = prep.layout(0..body.insts.len(), &regions, &chains);
+    let units = prep.layout(0..body.insts.len(), &regions, &runs, &chains);
     prep.op_index = op_indexes(body.insts.len(), &units);
 
     if let BodyRole::Closure = role
@@ -297,6 +299,7 @@ impl Region {
 enum Unit<'r> {
     Inst(usize),
     Region(&'r Region),
+    Fused(&'r FusedRegion),
     Chain(&'r ChainRun),
 }
 
@@ -306,6 +309,7 @@ impl Unit<'_> {
         match self {
             Unit::Inst(at) => *at,
             Unit::Region(region) => region.start(),
+            Unit::Fused(region) => region.insts.start,
             Unit::Chain(run) => run.insts.end - 1,
         }
     }
@@ -318,6 +322,7 @@ impl Prepare<'_> {
         &self,
         range: Range<usize>,
         regions: &'r [Region],
+        runs: &'r [FusedRegion],
         chains: &'r [ChainRun],
     ) -> Vec<Unit<'r>> {
         let mut units = Vec::with_capacity(range.len());
@@ -326,6 +331,11 @@ impl Prepare<'_> {
             if let Some(region) = regions.iter().find(|region| region.start() == at) {
                 units.push(Unit::Region(region));
                 at = region.end();
+                continue;
+            }
+            if let Some(region) = runs.iter().find(|region| region.insts.start == at) {
+                units.push(Unit::Fused(region));
+                at = region.insts.end;
                 continue;
             }
             if let Some(run) = chains.iter().find(|run| run.insts.start == at) {
@@ -800,8 +810,9 @@ impl<'a> Prepare<'a> {
     }
 
     fn block(&mut self, range: Range<usize>, nested: &[Region]) -> BasicBlock {
+        let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
-        let units = self.layout(range, nested, &chains);
+        let units = self.layout(range, nested, &runs, &chains);
         BasicBlock::new(self.emit(&units).into_iter().map(|e| e.op))
     }
 
@@ -3198,12 +3209,18 @@ fn konst_value(literal: &Literal, ty: &Ty) -> Option<Value> {
 }
 
 impl Prepare<'_> {
-    fn every_reader_is_arithmetic(&self, value: ValueId) -> bool {
-        self.body.insts.iter().all(|inst| {
+    /// Whether every instruction that reads `value` reads it as a word out
+    /// of a fixed register: an arithmetic operand, or an argument of a call
+    /// the fusion rule admits. A window call is neither, and its argument
+    /// registers are the ones `assign_slots` placed.
+    fn every_reader_takes_a_word(&self, value: ValueId) -> bool {
+        self.body.insts.iter().enumerate().all(|(at, inst)| {
             let reads = inst_info::uses(&inst.kind)
                 .iter()
                 .any(|used| *used == value);
-            !reads || matches!(inst.kind, InstKind::BinOp { .. } | InstKind::UnaryOp { .. })
+            !reads
+                || matches!(inst.kind, InstKind::BinOp { .. } | InstKind::UnaryOp { .. })
+                || self.fusable_call(at).is_some()
         })
     }
 
@@ -3216,7 +3233,7 @@ impl Prepare<'_> {
             let Some(word) = konst_value(&value, self.ty(dst)) else {
                 continue;
             };
-            if !self.every_reader_is_arithmetic(dst) {
+            if !self.every_reader_takes_a_word(dst) {
                 continue;
             }
             let slot = self.scratch;
@@ -3242,7 +3259,207 @@ impl Prepare<'_> {
     }
 }
 
+/// One extern call the fusion rule admits: synchronous, its arguments in
+/// the call's own words rather than a window, and carrying no RFC-0007
+/// order edge for the run to reorder.
+struct FusableCall<'a> {
+    dst: ValueId,
+    args: &'a [ValueId],
+    handler: SyncHandler,
+}
+
+/// A run of extern calls the recognizer matched, as indexes into
+/// `MirBody::insts`. A hoisted literal may sit inside `insts` between two
+/// of them; it is no operation, so it does not break the run.
+struct FusedRegion {
+    insts: Range<usize>,
+    calls: Vec<usize>,
+    deref: Option<usize>,
+}
+
+impl FusedRegion {
+    /// A lone call with no deref is the operation `call_extern_k` already
+    /// is, written through one more indirection, so it is not a run.
+    fn is_run(&self) -> bool {
+        self.calls.len() > 1 || (self.calls.len() == 1 && self.deref.is_some())
+    }
+}
+
 impl<'a> Prepare<'a> {
+    fn fusable_call(&self, at: usize) -> Option<FusableCall<'a>> {
+        let InstKind::FunctionCall {
+            dst,
+            callee: Callee::Extern { id, instance },
+            args,
+            order: None,
+            ..
+        } = &self.body.insts.get(at)?.kind
+        else {
+            return None;
+        };
+        let ExternHandler::Sync(handler) = self.ctx.handler(id, *instance) else {
+            return None;
+        };
+        if handler.arity() != Some(args.len()) || args.len() > 2 {
+            return None;
+        }
+        Some(FusableCall {
+            dst: *dst,
+            args,
+            handler,
+        })
+    }
+
+    /// The `*r` closing a run whose last call left `last`: the read of a
+    /// word through that reference, which the run holds instead of the
+    /// register `take_through` would have read it from.
+    fn fusable_deref(&self, at: usize, last: ValueId) -> Option<Deref> {
+        let InstKind::Take { dst, target, path } = &self.body.insts.get(at)?.kind else {
+            return None;
+        };
+        let RefTarget::Through(source) = target else {
+            return None;
+        };
+        if *source != last || !self.walked(self.scrutinee_ty(*source), path).is_empty() {
+            return None;
+        }
+        let read: Deref = if self.is_string(*dst) {
+            storage::deref_word::<true>
+        } else {
+            storage::deref_word::<false>
+        };
+        Some(read)
+    }
+
+    /// The run starting at `at`: calls while each one's result is read
+    /// exactly once and by the next call, then the deref that may close it.
+    fn fused_at(&self, at: usize, limit: usize) -> Option<FusedRegion> {
+        let mut calls = Vec::new();
+        let mut deref = None;
+        let mut previous: Option<ValueId> = None;
+        let mut index = at;
+        let mut end = at;
+        while index < limit {
+            if self.konsts.holds_inst(index) {
+                index += 1;
+                continue;
+            }
+            if let Some(last) = previous
+                && self.use_count(last) == 1
+                && self.fusable_deref(index, last).is_some()
+            {
+                deref = Some(index);
+                end = index + 1;
+                break;
+            }
+            if calls.len() == call::MAX_CALLS {
+                break;
+            }
+            let Some(call) = self.fusable_call(index) else {
+                break;
+            };
+            if let Some(held) = previous
+                && (self.use_count(held) != 1 || !call.args.contains(&held))
+            {
+                break;
+            }
+            previous = Some(call.dst);
+            calls.push(index);
+            index += 1;
+            end = index;
+        }
+
+        let region = FusedRegion {
+            insts: at..end,
+            calls,
+            deref,
+        };
+        region.is_run().then_some(region)
+    }
+
+    fn fused_runs(&self, window: Range<usize>) -> Vec<FusedRegion> {
+        let mut found = Vec::new();
+        let mut at = window.start;
+        while at < window.end {
+            match self.fused_at(at, window.end) {
+                Some(region) => {
+                    at = region.insts.end;
+                    found.push(region);
+                }
+                None => at += 1,
+            }
+        }
+        found
+    }
+
+    /// Every fused run of `range`, in the windows the regions of `nested`
+    /// leave between them.
+    fn fused_in(&self, range: Range<usize>, nested: &[Region]) -> Vec<FusedRegion> {
+        let mut found = Vec::new();
+        let mut at = range.start;
+        while at < range.end {
+            if let Some(region) = nested.iter().find(|region| region.start() == at) {
+                at = region.end();
+                continue;
+            }
+            let stop = nested
+                .iter()
+                .map(Region::start)
+                .find(|start| *start > at)
+                .unwrap_or(range.end);
+            found.extend(self.fused_runs(at..stop));
+            at = stop;
+        }
+        found
+    }
+
+    fn fused_op(&mut self, region: &FusedRegion) -> Op {
+        let mut calls: Vec<FusedCall> = Vec::with_capacity(region.calls.len());
+        let mut previous: Option<ValueId> = None;
+        for at in &region.calls {
+            let call = self
+                .fusable_call(*at)
+                .expect("a recognized run holds a fusable call at every index it named");
+            let mut args = [NO_SLOT; 3];
+            for (word, id) in args.iter_mut().zip(call.args) {
+                *word = match previous {
+                    Some(held) if *id == held => PREVIOUS,
+                    Some(_) | None => self.slot(*id),
+                };
+            }
+            previous = Some(call.dst);
+            calls.push(FusedCall {
+                handler: call.handler,
+                args,
+            });
+        }
+        let last = previous.expect("a recognized run holds at least one call");
+
+        let (dst, tail) = match region.deref {
+            Some(at) => {
+                let InstKind::Take { dst, .. } = &self.body.insts[at].kind else {
+                    panic!("a recognized run's deref is not a take")
+                };
+                let dst = *dst;
+                let read = self
+                    .fusable_deref(at, last)
+                    .expect("a recognized run's deref is the one the recognizer matched");
+                (dst, Some(read))
+            }
+            None => (last, None),
+        };
+
+        let slot = self.slot(dst);
+        let tail_present = tail.is_some();
+        let payload = self.put(Payload::Fused(FusedRun {
+            calls: calls.into_boxed_slice(),
+            tail,
+        }));
+        Op::new(call::fused_instance(region.calls.len(), tail_present))
+            .a(slot)
+            .p(payload)
+    }
+
     fn def_at(&self, value: ValueId) -> Option<usize> {
         self.def_inst[value.to_raw()]
     }
@@ -3400,6 +3617,7 @@ impl<'a> Prepare<'a> {
                 Unit::Inst(at) => self.op(*at),
                 Unit::Region(Region::Loop(region)) => self.loop_op(region),
                 Unit::Region(Region::Diamond(region)) => self.diamond_op(region),
+                Unit::Fused(region) => self.fused_op(region),
                 Unit::Chain(run) => self.chain_op(run),
             };
             out.push(Emitted { op, span });

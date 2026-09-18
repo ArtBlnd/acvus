@@ -263,9 +263,15 @@ pub fn read_field<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow
     read_at::<CLONE>(machine, ReadSlots::of(op), &[Step::Field(key)])
 }
 
+/// The word a `*r` reads, as a function of the reference alone: what
+/// `take_through` does to a register, and what a fused run's tail does to
+/// the `Value` its last call returned without one.
+pub fn deref_word<const CLONE: bool>(reference: &Value) -> Value {
+    read_through::<CLONE>(through(reference))
+}
+
 pub fn take_through<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let at = through(machine.reg(op.b));
-    let value = read_through::<CLONE>(at);
+    let value = deref_word::<CLONE>(machine.reg(op.b));
     machine.define(op.a, value);
     Flow::Next
 }

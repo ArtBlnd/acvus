@@ -78,14 +78,20 @@ fn attention_loops() -> Vec<LoopShape> {
 /// head 1 body  8 back 1   the out pass, outer
 /// ```
 ///
-/// Two changes separate that from the counts below. Each inner body is two
-/// operations shorter - the two borrows it rebuilt every iteration - and no
-/// back edge gained a move: the two the outer loops carry are the ones they
-/// carried before. Then `s * scale`, written after the inner scores loop,
-/// left that loop's head for the outer body, where the source put it; it is
-/// the operation the inner head lost and the outer body gained, and it now
-/// runs once per score instead of once per element. The arithmetic chain
-/// (stage 3) then folded `s + q * k` and `i + 1` into one operation each.
+/// Three changes separate that from the counts below. Each inner body lost
+/// the two borrows it rebuilt every iteration, and no back edge gained a
+/// move: the two the outer loops carry are the ones they carried before.
+/// Then `s * scale`, written after the inner scores loop, left that loop's
+/// head for the outer body, where the source put it; it is the operation the
+/// inner head lost and the outer body gained, and it now runs once per score
+/// instead of once per element. The arithmetic chain (stage 4) then folded
+/// `s + q * k` and `i + 1` into one operation each.
+///
+/// The inner bodies are what stage 6 shrinks. The scores body's
+/// `*@query.get(i)` is one call and its deref, and `*@keys.get(t).get(i)` is
+/// two calls and its deref: five operations become two, and the body goes 7
+/// to 4. The out body holds the same two runs with `/ z` between them, and
+/// goes 8 to 5. Neither outer body changes: `push_back` feeds no call.
 #[test]
 fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     let shapes: Vec<String> = attention_loops()
@@ -100,9 +106,9 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     assert_eq!(
         shapes,
         [
-            "head 1 body 7 back 0",
+            "head 1 body 4 back 0",
             "head 1 body 8 back 1",
-            "head 1 body 8 back 0",
+            "head 1 body 5 back 0",
             "head 1 body 7 back 1",
         ],
         "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"

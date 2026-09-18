@@ -22,7 +22,7 @@ use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
 
 use crate::machine::Machine;
-use crate::runtime::ExternHandler;
+use crate::runtime::{ExternHandler, SyncHandler};
 use crate::value::{Kind, Value};
 
 /// The `a..d` word of an operation that names no register: a call with no
@@ -180,6 +180,27 @@ pub enum ExternArgs {
     /// there is what `ops::call::call_extern_0..3` reads.
     ByValue,
     Window(ArgWindow),
+}
+
+/// The `args` entry naming the call before this one in the run, whose
+/// result never reached a register.
+pub const PREVIOUS: u32 = u32::MAX - 1;
+
+/// One call of a fused run, in the shape `call_extern_k` reads its own: the
+/// handler decides the arity, and `args` holds that many register slots,
+/// `NO_SLOT` past them.
+pub struct FusedCall {
+    pub handler: SyncHandler,
+    pub args: [u32; 3],
+}
+
+pub type Deref = fn(&Value) -> Value;
+
+/// A run of extern calls each feeding the next, and the deref that may
+/// close it, as one operation (RFC-0044, stage 6).
+pub struct FusedRun {
+    pub calls: Box<[FusedCall]>,
+    pub tail: Option<Deref>,
 }
 
 /// The `while` shape `prepare::recognize_loop` finds in the IR and
@@ -408,6 +429,7 @@ pub enum Payload {
     Wide(i128),
     Konst(Konst),
     Extern(ExternCall),
+    Fused(FusedRun),
     Chain(Box<Chain>),
     Direct {
         callee: QualifiedRef,
@@ -436,6 +458,7 @@ pub fn payload_name(payload: &Payload) -> &'static str {
         Payload::Konst(_) => "Konst",
         Payload::Chain(_) => "Chain",
         Payload::Extern(_) => "Extern",
+        Payload::Fused(_) => "Fused",
         Payload::Direct { .. } => "Direct",
         Payload::Closure { .. } => "Closure",
     }

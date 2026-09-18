@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use crate::code::{ArgWindow, ExternArgs, ExternCall, Flow, NO_SLOT, Op, Payload, Pending};
+use crate::code::{
+    ArgWindow, ExternArgs, ExternCall, Flow, FusedCall, NO_SLOT, Op, OpFn, PREVIOUS, Payload,
+    Pending,
+};
 use crate::interpreter::lookup_module;
 use crate::machine::{Machine, call_module, call_module_sync, fn_value_call, fn_value_call_sync};
 use crate::ops::control::move_all;
@@ -116,6 +119,80 @@ pub fn call_extern_n(machine: &mut Machine<'_>, op: &Op) -> Flow {
     machine.define(op.a, value);
     Flow::Next
 }
+
+#[inline]
+fn fused_arg(machine: &mut Machine<'_>, held: &mut Value, slot: u32) -> Value {
+    if slot == PREVIOUS {
+        return held.take();
+    }
+    machine.use_val(slot)
+}
+
+fn fused_call(machine: &mut Machine<'_>, call: &FusedCall, held: &mut Value) -> Value {
+    let rt = machine.rt;
+    match &call.handler {
+        SyncHandler::Arity0(f) => f(rt),
+        SyncHandler::Arity1(f) => {
+            let a0 = fused_arg(machine, held, call.args[0]);
+            f(rt, a0)
+        }
+        SyncHandler::Arity2(f) => {
+            let a0 = fused_arg(machine, held, call.args[0]);
+            let a1 = fused_arg(machine, held, call.args[1]);
+            f(rt, a0, a1)
+        }
+        SyncHandler::Arity3(_) | SyncHandler::ArityN(_) => {
+            panic!("a fused run holds a call the fusion rule does not admit")
+        }
+    }
+}
+
+/// RFC-0044, stage 6.
+///
+/// `CALLS` and `TAIL` are the run's shape, which the preparation resolved
+/// like every other static fact: a body of this instance holds no loop
+/// bound and no test the payload would have to answer.
+pub fn fused<const CALLS: usize, const TAIL: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let Payload::Fused(run) = machine.payload(op) else {
+        panic!(
+            "a fused run wants a Fused payload, found {}",
+            crate::code::payload_name(machine.payload(op))
+        )
+    };
+    debug_assert_eq!(run.calls.len(), CALLS, "a fused instance of another length");
+    let mut held = Value::EMPTY;
+    for call in &run.calls[..CALLS] {
+        held = fused_call(machine, call, &mut held);
+    }
+    let value = if TAIL {
+        let Some(read) = run.tail else {
+            panic!("a fused instance with a tail holds none")
+        };
+        read(&held)
+    } else {
+        held
+    };
+    machine.define(op.a, value);
+    Flow::Next
+}
+
+/// The instance a run of `calls` calls, with or without a deref, runs as.
+/// `prepare::FusedRegion` builds no other shape: a lone call with no deref
+/// is not a run, and the recognizer stops at `MAX_CALLS`.
+pub fn fused_instance(calls: usize, tail: bool) -> OpFn {
+    match (calls, tail) {
+        (1, true) => fused::<1, true>,
+        (2, true) => fused::<2, true>,
+        (3, true) => fused::<3, true>,
+        (2, false) => fused::<2, false>,
+        (3, false) => fused::<3, false>,
+        (1, false) => panic!("a lone call with no deref is not a fused run"),
+        (calls, _) => panic!("a fused run of {calls} calls has no instance"),
+    }
+}
+
+/// The longest run `fused_instance` holds an instance for.
+pub const MAX_CALLS: usize = 3;
 
 pub fn call_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let call = extern_call(machine, op);

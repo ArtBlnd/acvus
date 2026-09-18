@@ -651,6 +651,88 @@ not to coalesce an arm it might speculate, which lengthens two live
 ranges and adds a move per diamond to buy one predicted branch; that
 trade was not taken here.
 
+## A run of extern calls and its deref is one operation
+
+`@keys.get(t).get(i)` is three operations: a call, a call reading the
+first's result out of a register, and a `Take` reading the word through the
+second's. The two intermediates are references that live in a register for
+exactly one instruction. A maximal run of synchronous by-value extern calls
+in one block, where each call's result is used exactly once and by the next
+call, optionally closed by one `Take` through the last result, prepares as
+one operation. The handlers are the same `Arity1`/`Arity2` a lone call
+reaches; what disappears is the register round trip and the dispatch between
+them. An intermediate is a Rust local moved into its consumer, so it is
+never written to a register and never dropped separately.
+
+A call carrying an RFC-0007 order edge stays unfused: the run is for
+externs whose order the MIR does not constrain. So does a window-form or
+asynchronous call, and a result read a second time — the "used exactly once"
+condition is `use_count`, the same count the chain recognizer reads.
+
+The literals the arguments read do not break the run. `acvus_mir::lower`
+emits each one as its own `Const` directly before the call that reads it, so
+`*@m.get(1).get(0)` is call, const, call, take in the instruction list.
+`hoist_konsts` already lifts a one-word literal whose every reader takes it
+out of a fixed register; the rule this stage adds is that a fusable call's
+argument is such a reader. The `Const` then leaves the operation list
+entirely and the run is contiguous.
+
+Measured on this machine, 2026-09-18; interleaved A/B against binaries built
+from `master` 68f01254 in its own tree, three repetitions, medians.
+
+| bench | master | this rule | ratio |
+|-------|--------|-----------|-------|
+| attention (64, 64) execute | 190.1 µs | 179.5 µs | 0.944 |
+| attention (256, 128) execute | 1462.3 µs | 1375.6 µs | 0.941 |
+| mandelbrot (200x100x200) | 16.20 | 16.20 | 1.000 |
+| accum `int while` | 5.10 | 5.10 | 1.000 |
+| accum `extern while` | 7.70 | 8.10 | 1.052 |
+| accum `option while` | 15.00 | 14.30 | 0.953 |
+| accum `range \| sum` | 1.70 | 1.70 | 1.000 |
+
+attention's inner scores body goes from seven operations to four and its
+inner out body from eight to five. `call_extern_2` was 27 % of execute and
+`take_through` 21 %; after, the first is 0.5 % — `push_back` and the
+top-level `*out.get(0)`, which are O(n) and not O(nd) — and the second does
+not appear. The execute-side symbols are 30.5 % of the sampled process
+before and 28.8 % after, which is the 0.94 the clock measures.
+
+**A dispatch removed from this loop is worth about half a nanosecond, not
+two.** 65 536 inner iterations lose three operations each, and 256x128 loses
+86.7 µs: 0.44 ns per removed dispatch, roughly two cycles. `accum`'s `int
+while` runs three operations in 6.1 ns, and it is tempting to read 2 ns per
+operation as the dispatch; it is not. The indirect call through `op.f` is
+perfectly predicted and the out-of-order engine hides it behind the
+handler's work. What the 2 ns measures is the register reads and writes and
+the arithmetic, which fusing does not remove.
+
+**The operation must be specialized on the run's shape, or it wins nothing.**
+The first form iterated a `Box<[FusedArg]>` per call and held the
+intermediate in an `Option<Value>`. It ran attention 5 % *slower* than
+master, and `perf stat` said why: the same instruction count and the same
+branch count as the three separate operations, because a payload walked at
+run time costs what a dispatch costs. With `CALLS` and `TAIL` const
+parameters and the arguments a `[u32; 3]` of slots — `PREVIOUS` for the call
+before, exactly as `call_extern_k`'s words are register slots — the same
+benchmark runs 0.941. The shape is a prepared fact like every other one in
+this RFC.
+
+`extern while` is the one bench that got slower, and it is not the rule:
+`acc + id_of(i)` prepares to the same four operations with the same slots
+before and after, `perf stat` over the whole `accum` binary counts
+21.0250 G instructions against 21.0259 G, and the extra 1.9 % of cycles
+comes with 21 % more L1 icache misses and a `call_extern_1` that fat LTO
+re-inlined to a different size. It is binary layout, the same effect
+`range | sum` showed in the definition-drop stage.
+
+**The intermediate does reach memory, and it is free.** The disassembly of
+`fused::<2, true>` is two calls to `fused_call` with the held `Value` passed
+by pointer to a stack slot, one indirect call for the deref, and one 16-byte
+store for the `define`. Marking `fused_call` `#[inline(always)]` keeps the
+intermediate in registers between the two handler calls and measures
+1371 µs against 1370 — store-to-load forwarding covers it — so it is not
+done.
+
 ## Rejected
 
 - **One dispatch for a run of several pieces (`ChainSeq`).** A run split

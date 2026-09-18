@@ -218,10 +218,21 @@ fn main() {
             value: Value::int(50),
         },
     ];
-    let context: Context = names
+    let mut context: Context = names
         .into_iter()
         .map(|ContextName { name, ty, value }| (interner.intern(name), typed(ty, value)))
         .collect();
+    let rows = serde_json::json!({
+        "query": [0.1, 0.2],
+        "keys": [[0.1, 0.2], [0.3, 0.4]],
+        "values": [[1.0, 2.0], [3.0, 4.0]],
+    });
+    for (name, value) in rows.as_object().expect("an object of contexts") {
+        context.insert(
+            interner.intern(name),
+            acvus_interpreter_test::value_from_json(&interner, value),
+        );
+    }
     let (context_types, _snapshot): (_, HashMap<String, Value>) = split_context(&interner, context);
     let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, &source).expect("parse error"));
     let cr = compile_source_with_externs(&interner, ast, &context_types, registries());
