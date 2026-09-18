@@ -89,13 +89,22 @@ container's own `as_slice` instance.
    `a[i] = v` is `as_slice_mut` + `IndexSet`. A statement beginning with
    `[` is an array literal, as in Rust; a postfix `[` binds to the
    expression before it.
-6. **Representation.** A slice `Value` is `{ head, word }` with `head =
-   { kind: Kind::Slice, len: [u8; 7] }` (`repr(C)`; the seven padding
-   bytes of today's `kind` become the length, and `Kind` keeps its niche
-   so `Option<Value>` stays 16 bytes), `word` the pointer. `Index` reads
-   the length from `head >> 8`, the pointer from `word`, the element at
-   `ptr + index * 16` — three fields, no call, no layout. Length is 56
-   bits (owner, 11:50).
+6. **Representation.** A slice `Value` is `{ head, word }` with `head:
+   NonZeroU64` — the low byte is the `Kind` (no kind is zero), the high
+   56 bits the length (zero for every non-slice value) — and `word` the
+   pointer. `Value` stays two scalars: rustc keeps it a `ScalarPair`,
+   returned in two registers from every handler, and `Option<Value>`
+   stays 16 bytes through the zero niche. `Index` reads the length from
+   `head >> 8`, the pointer from `word`, the element at `ptr + index *
+   16` — three fields, no call, no layout. Length is 56 bits (owner,
+   11:50).
+
+   The first form, `head = { kind: u8, len: [u8; 7] }`, was measured
+   (T1, 12:40) and refuted: a byte array is not a scalar, so the
+   aggregate fell to memory class and every handler returned its
+   `Value` through `sret` — attention +122 %, `while let` +125 %. The
+   padding bytes are free in size, not in ABI; the head must be one
+   scalar.
 7. **Bounds-check elimination is an interval domain and nothing more**
    (owner, 11:40: induction variables and recurrences are far future).
    Each `Int` value carries `[lo, hi]` whose endpoints are constants or
@@ -128,9 +137,10 @@ enumerate the dependents, nothing is patched around.
 
 ## What it costs
 
-- `Kind::Slice`, and the `head` word's split into kind and length: every
-  `Kind` reader masks the low byte (`movzbl`, which most already do).
-  Measured on `asm_probe` before the compiler half lands.
+- `Kind::Slice`, and `kind: Kind` becoming the low byte of a `NonZeroU64`
+  head: every `Kind` reader masks the low byte (`movzbl`, which most
+  already do), and `Kind` starts at 1. Measured on `asm_probe` and the
+  benches before anything else is built on it.
 - `AsSlice`, and two instructions with checked and unchecked forms; the `Copy`/`Ref`
   modes are instances chosen in `prepare` from `val_types`, no run-time
   branch.
@@ -167,8 +177,15 @@ enumerate the dependents, nothing is patched around.
 - **Induction-variable / recurrence analysis for bounds**: far future;
   the interval domain with one symbolic endpoint covers `while i < len
   { a[i] … i = i + 1 }`, which is the shape in every bench.
-- **A fat-pointer `Value` (24 B) or a two-register slice**: the padding
-  bytes hold the length; nothing widens.
+- **A fat-pointer `Value` (24 B) or a two-register slice**: the head
+  word holds the length; nothing widens.
+- **The length as a third operand of `Index`** (proposed when the
+  byte-array head was refuted): keeps `Value` untouched, but every
+  crossing of a slice — a call, a capture, a store — must carry the
+  length beside it in the compiler's hands, where the value carries it
+  for free in its head word.
+- **A `Head { kind: u8, len: [u8; 7] }` struct**: measured, memory
+  class; see §6.
 - **Unchecked indexing as a language-level `unsafe`**: only the
   compiler's proof emits the unchecked form.
 
