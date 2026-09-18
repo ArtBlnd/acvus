@@ -1,7 +1,7 @@
 # RFC-0047: a slice is the one thing the machine indexes
 
 Status: Accepted — owner and coordinator, 2026-09-18 (Draft the same
-morning; the decisions below were settled at 11:50)
+morning; decisions settled 11:50–13:05)
 Extends: RFC-0018 (references), RFC-0028 (container signatures), RFC-0039
 (one crossing), RFC-0043 (a bare name is settled by evidence), RFC-0044
 (a body is prepared once), RFC-0007 (motion)
@@ -89,22 +89,23 @@ container's own `as_slice` instance.
    `a[i] = v` is `as_slice_mut` + `IndexSet`. A statement beginning with
    `[` is an array literal, as in Rust; a postfix `[` binds to the
    expression before it.
-6. **Representation.** A slice `Value` is `{ head, word }` with `head:
-   NonZeroU64` — the low byte is the `Kind` (no kind is zero), the high
-   56 bits the length (zero for every non-slice value) — and `word` the
-   pointer. `Value` stays two scalars: rustc keeps it a `ScalarPair`,
-   returned in two registers from every handler, and `Option<Value>`
-   stays 16 bytes through the zero niche. `Index` reads the length from
-   `head >> 8`, the pointer from `word`, the element at `ptr + index *
-   16` — three fields, no call, no layout. Length is 56 bits (owner,
-   11:50).
+6. **Representation.** A slice is an extension type like any other:
+   `Slice { ptr: *const Value, len: usize }` in the extern crate, crossing
+   as a `Large` (RFC-0039), so `Value` does not change — its layout, its
+   `ScalarPair` ABI and its `Option` niche are what they were, and every
+   number measured on them stands. `Index` reads `word` to the `Slice`,
+   compares `index < len`, and reads the element at `ptr + index * 16`:
+   one dependent load more than a register word, no call, no layout.
+   The one allocation is `AsSlice`'s, and `AsSlice` is hoisted (§3), so
+   it is paid once per loop entry, not per element (owner, 13:05).
 
-   The first form, `head = { kind: u8, len: [u8; 7] }`, was measured
-   (T1, 12:40) and refuted: a byte array is not a scalar, so the
-   aggregate fell to memory class and every handler returned its
-   `Value` through `sret` — attention +122 %, `while let` +125 %. The
-   padding bytes are free in size, not in ABI; the head must be one
-   scalar.
+   Two forms that put the length in `Value` itself were measured and
+   refused (T1, 12:40 and 13:00): a `{ kind: u8, len: [u8; 7] }` head
+   fell to memory class and returned through `sret` from every handler
+   (attention +122 %); a `{ NonZeroU64, u64 }` head kept the ABI but
+   made every whole-`Value` copy a 16-byte load over two 8-byte stores,
+   which does not forward (`map cap | sum` +17 %). How rustc copies a
+   `Value` is not ours to steer; the `Value` stays as it is.
 7. **Bounds-check elimination is an interval domain and nothing more**
    (owner, 11:40: induction variables and recurrences are far future).
    Each `Int` value carries `[lo, hi]` whose endpoints are constants or
@@ -137,10 +138,9 @@ enumerate the dependents, nothing is patched around.
 
 ## What it costs
 
-- `Kind::Slice`, and `kind: Kind` becoming the low byte of a `NonZeroU64`
-  head: every `Kind` reader masks the low byte (`movzbl`, which most
-  already do), and `Kind` starts at 1. Measured on `asm_probe` and the
-  benches before anything else is built on it.
+- One `Large` allocation per `AsSlice` execution, and one dependent load
+  per `Index` to reach `ptr` and `len`. Both measured against today's
+  `get` before the compiler half lands.
 - `AsSlice`, and two instructions with checked and unchecked forms; the `Copy`/`Ref`
   modes are instances chosen in `prepare` from `val_types`, no run-time
   branch.
@@ -177,15 +177,21 @@ enumerate the dependents, nothing is patched around.
 - **Induction-variable / recurrence analysis for bounds**: far future;
   the interval domain with one symbolic endpoint covers `while i < len
   { a[i] … i = i + 1 }`, which is the shape in every bench.
-- **A fat-pointer `Value` (24 B) or a two-register slice**: the head
-  word holds the length; nothing widens.
+- **A fat-pointer `Value` (24 B)**: nothing widens.
+- **A two-register slice** (`ptr` and `len` in two machine registers, no
+  `Value` for the slice): keeps `Value` untouched and saves the load,
+  but a slice then cannot cross an extern boundary in either direction,
+  so `as_slice` could not be an extern and `Slice` could not be a
+  parameter; the box costs one load and keeps the boundary uniform.
+- **The length in `Value`'s head word** — as a byte-array struct
+  (memory class, `sret`, +122 %) and as a `NonZeroU64` (store-forwarding
+  stall on whole-`Value` copies, +17 %): both measured, see §6.
 - **The length as a third operand of `Index`** (proposed when the
   byte-array head was refuted): keeps `Value` untouched, but every
   crossing of a slice — a call, a capture, a store — must carry the
   length beside it in the compiler's hands, where the value carries it
   for free in its head word.
-- **A `Head { kind: u8, len: [u8; 7] }` struct**: measured, memory
-  class; see §6.
+
 - **Unchecked indexing as a language-level `unsafe`**: only the
   compiler's proof emits the unchecked form.
 
@@ -204,8 +210,8 @@ enumerate the dependents, nothing is patched around.
 
 ## Order of work
 
-T0 `ArrayGet` deleted (done). T1 interpreter + extern: `head` split,
-`Kind::Slice`, the slice's `Cross`, `AsSlice` prepared as the instance's
+T0 `ArrayGet` deleted (done). T1 interpreter + extern: the `Slice` extension type and its
+`Cross`, `AsSlice` prepared as the instance's
 call and hoisted as a borrow, `Index`/`IndexSet` handlers with the
 probe-only unchecked forms, `as_slice`/`as_slice_mut` on `Vec`/`Array`,
 and the checked-vs-unchecked ceiling measured. T2 compiler: types,
