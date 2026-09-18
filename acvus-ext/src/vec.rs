@@ -4,8 +4,8 @@
 //! the element is in use (RFC-0028).
 
 use acvus_extern::{
-    Arr, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
-    extern_signature,
+    Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TyVar, extern_fn,
+    extern_registry, extern_signature,
 };
 
 // A container demotes to a vec (RFC-0027).
@@ -79,6 +79,27 @@ where
     c.map_mut(rt, |c| &mut c[i])
 }
 
+/// The whole run of elements, borrowed in place (RFC-0047): the machine
+/// indexes this and nothing else. No copy — the slice is a pointer and a
+/// length into the container's own storage.
+#[extern_fn(effect = pure)]
+fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Slice<T, Rt>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    Slice::of(c.elements(rt))
+}
+
+#[extern_fn(effect = pure)]
+fn as_slice_mut<T, Rt>(rt: &Rt, c: RefMut<Vec<T>, Rt>) -> SliceMut<T, Rt>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    SliceMut::of(c.elements_mut(rt))
+}
+
 #[extern_fn(effect = pure)]
 fn first<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
 where
@@ -116,6 +137,8 @@ where
         ns: "vec",
         types: [Vec<_>],
         signatures: [vec],
-        fns: [reverse, vec_array, len, is_empty, get, get_mut, first, last],
+        fns: [
+            reverse, vec_array, len, is_empty, get, get_mut, as_slice, as_slice_mut, first, last,
+        ],
     }
 }

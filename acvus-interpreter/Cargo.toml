@@ -6,6 +6,9 @@ edition = "2024"
 [features]
 default = []
 chain-alphabet-add-sub-mul = []
+# The unchecked index handler, which no MIR instruction produces: a probe
+# substitutes it into a prepared body to price the bound check (RFC-0047).
+probe = []
 
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }

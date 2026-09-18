@@ -1,5 +1,5 @@
 use acvus_extern::{
-    Arr, LenVar, Ref, RefMut, Registry, Runtime, TyVar, extern_fn, extern_registry,
+    Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TyVar, extern_fn, extern_registry,
 };
 
 use crate::vec::checked_index;
@@ -44,6 +44,27 @@ where
     c.map_mut(rt, |c| &mut c.0[i])
 }
 
+/// As `vec::as_slice` (RFC-0047).
+#[extern_fn(effect = pure)]
+fn as_slice<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Slice<T, Rt>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    Slice::of(c.elements(rt))
+}
+
+#[extern_fn(effect = pure)]
+fn as_slice_mut<T, N, Rt>(rt: &Rt, c: RefMut<Arr<T, N>, Rt>) -> SliceMut<T, Rt>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    SliceMut::of(c.elements_mut(rt))
+}
+
 #[extern_fn(effect = pure)]
 fn first<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Option<Ref<T, Rt>>
 where
@@ -72,6 +93,6 @@ where
 {
     extern_registry! {
         ns: "array",
-        fns: [len, is_empty, get, get_mut, first, last],
+        fns: [len, is_empty, get, get_mut, as_slice, as_slice_mut, first, last],
     }
 }

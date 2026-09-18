@@ -11,6 +11,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::len::{Arr, LenVar};
 use crate::obj::TransparentOver;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
@@ -143,6 +144,59 @@ where
         // SAFETY: `T: TransparentOver<Rt>`: `[T]` and `[Rt::Value]` are one
         // layout.
         unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<T>(), values.len()) }
+    }
+}
+
+/// A sliceable container's storage is a `Vec` of the runtime's own values
+/// whatever its element type is (RFC-0039), which is why one slice width
+/// serves every container (RFC-0047 §1). `elements` is that storage, read
+/// in place; `as_slice` above it is the same run seen at an element type
+/// that promises the layout.
+impl<T, Rt> Ref<Vec<T>, Rt>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    pub fn elements<'a>(&'a self, rt: &Rt) -> &'a [Rt::Value] {
+        // SAFETY: as `with`: the storage holds a `Vec<Value>` and is live.
+        unsafe { rt.deref::<Vec<Rt::Value>>(&self.0) }
+    }
+}
+
+impl<T, Rt> RefMut<Vec<T>, Rt>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    pub fn elements_mut<'a>(&'a self, rt: &Rt) -> &'a mut [Rt::Value] {
+        // SAFETY: as `with_mut`: the loan is exclusive, so nothing else
+        // names the storage while this slice lives.
+        unsafe { rt.deref_mut::<Vec<Rt::Value>>(&self.0) }
+    }
+}
+
+impl<T, N, Rt> Ref<Arr<T, N>, Rt>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    pub fn elements<'a>(&'a self, rt: &Rt) -> &'a [Rt::Value] {
+        // SAFETY: as `Ref::<Vec<T>>::elements`; the language's array is
+        // `Arr<Value, ()>` (RFC-0022).
+        &unsafe { rt.deref::<Arr<Rt::Value, ()>>(&self.0) }.0
+    }
+}
+
+impl<T, N, Rt> RefMut<Arr<T, N>, Rt>
+where
+    T: TyVar,
+    N: LenVar,
+    Rt: Runtime,
+{
+    pub fn elements_mut<'a>(&'a self, rt: &Rt) -> &'a mut [Rt::Value] {
+        // SAFETY: as `RefMut::<Vec<T>>::elements_mut`.
+        &mut unsafe { rt.deref_mut::<Arr<Rt::Value, ()>>(&self.0) }.0
     }
 }
 

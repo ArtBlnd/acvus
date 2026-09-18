@@ -362,6 +362,37 @@ fn remap_inst(
             path: path.clone(),
             value: r(*value),
         },
+        InstKind::AsSlice {
+            dst,
+            container,
+            mutability,
+            instance,
+        } => InstKind::AsSlice {
+            dst: r(*dst),
+            container: r(*container),
+            mutability: *mutability,
+            instance: *instance,
+        },
+        InstKind::Index {
+            dst,
+            slice,
+            index,
+            mode,
+        } => InstKind::Index {
+            dst: r(*dst),
+            slice: r(*slice),
+            index: r(*index),
+            mode: *mode,
+        },
+        InstKind::IndexSet {
+            slice,
+            index,
+            value,
+        } => InstKind::IndexSet {
+            slice: r(*slice),
+            index: r(*index),
+            value: r(*value),
+        },
         InstKind::Fetch { dst, context } => InstKind::Fetch {
             dst: r(*dst),
             context: *context,

@@ -160,6 +160,21 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
 
         InstKind::ArrayIndex { array: list, .. } => remap_val(list, remap),
 
+        InstKind::AsSlice { container, .. } => remap_val(container, remap),
+        InstKind::Index { slice, index, .. } => {
+            remap_val(slice, remap);
+            remap_val(index, remap);
+        }
+        InstKind::IndexSet {
+            slice,
+            index,
+            value,
+        } => {
+            remap_val(slice, remap);
+            remap_val(index, remap);
+            remap_val(value, remap);
+        }
+
         InstKind::ObjectGet { object, .. } => remap_val(object, remap),
 
         // Two uses

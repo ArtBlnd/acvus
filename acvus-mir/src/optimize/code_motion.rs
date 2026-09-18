@@ -77,8 +77,10 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::analysis::domtree::{DomTree, PostDomTree};
+use std::mem::{Discriminant, discriminant};
+
 use crate::analysis::inst_info;
-use crate::analysis::loans::Loans;
+use crate::analysis::loans::{Loan, Loans};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::*;
 use crate::optimize::const_dedup::{remap_uses, remap_val, remap_vec};
@@ -120,6 +122,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     let postdom = PostDomTree::build(cfg);
     let depth = LoopDepth::of(cfg, &domtree);
     let writes = StorageWrites::of(cfg);
+    let loans = Loans::build(cfg);
     let mut def_block = build_def_block(cfg);
 
     // -- Collect hoists ---------------------------------------------
@@ -146,7 +149,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
             }
 
             let source = BlockIdx(bi);
-            let target = match hoistable(kind) {
+            let target = match hoistable(&loans, kind) {
                 Hoistable::No => continue,
                 Hoistable::ControlEquivalent => {
                     let uses = inst_info::uses(kind);
@@ -499,7 +502,7 @@ enum Hoistable {
 /// `ControlEquivalent` kind. Control equivalence already fixes the set of
 /// paths it runs on, so a failability test here would reject moves that
 /// change nothing. An unknown kind is not movable.
-fn hoistable(kind: &InstKind) -> Hoistable {
+fn hoistable(loans: &Loans, kind: &InstKind) -> Hoistable {
     match kind {
         // Arithmetic / logic.
         InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => Hoistable::ControlEquivalent,
@@ -529,6 +532,31 @@ fn hoistable(kind: &InstKind) -> Hoistable {
             ..
         } if path.is_empty() => Hoistable::SharedBorrow { storage: *storage },
         InstKind::Ref { .. } => Hoistable::No,
+
+        // A shared `AsSlice` is the same borrow one level down: pure,
+        // infallible, and a projection of the storage its container names
+        // (RFC-0047 §3). The container is a reference value, so the storage
+        // behind it is the one its region holds; a container whose region
+        // holds anything but one storage is not named, and does not move.
+        // An exclusive take does not move at all.
+        InstKind::AsSlice {
+            container,
+            mutability: Mutability::Shared,
+            ..
+        } => match loans.region(*container).loans.as_slice() {
+            [
+                Loan {
+                    storage,
+                    mutability: Mutability::Shared,
+                },
+            ] => Hoistable::SharedBorrow { storage: *storage },
+            _ => Hoistable::No,
+        },
+        InstKind::AsSlice { .. } => Hoistable::No,
+
+        // A checked `Index` may panic (RFC-0007), and an `IndexSet` writes
+        // the slice's storage.
+        InstKind::Index { .. } | InstKind::IndexSet { .. } => Hoistable::No,
 
         // Field and element access.
         InstKind::FieldGet { .. }
@@ -566,41 +594,42 @@ fn merge_pass(cfg: &mut CfgBody) {
     let mut merged: FxHashMap<ValueId, ValueId> = FxHashMap::default();
 
     for block in blocks.iter_mut() {
-        // The borrow each storage currently has in this block.
-        let mut borrow_of: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+        // The borrows each storage currently has in this block, by the
+        // instruction that took each. A storage is borrowed in more than
+        // one way at once - a `&Vec<T>` and the `&[T]` an `AsSlice` of it
+        // takes - and a borrow replaces only one taken the same way.
+        let mut borrows_of: FxHashMap<ValueId, Vec<(Discriminant<InstKind>, ValueId)>> =
+            FxHashMap::default();
 
         for inst in block.insts.iter_mut() {
             for storage in taken_exclusively(&loans, &inst.kind) {
-                borrow_of.remove(&storage);
+                borrows_of.remove(&storage);
             }
 
             // The instruction the hoist calls `SharedBorrow`, asked of the
             // same classifier so that the two rules cannot drift apart.
-            let Hoistable::SharedBorrow { storage } = hoistable(&inst.kind) else {
+            let Hoistable::SharedBorrow { storage } = hoistable(&loans, &inst.kind) else {
                 continue;
             };
             let dst = *inst_info::defs(&inst.kind)
                 .first()
-                .expect("a Ref defines its destination");
+                .expect("a shared borrow defines its destination");
 
-            // The two values must carry the same type. Two borrows of one
-            // storage with nothing between that takes it cannot differ -
-            // an `Assign` that retypes the storage is such a take - so this
-            // refuses a case the analysis says cannot arise rather than one
-            // it silently accepts.
-            let earlier = borrow_of
-                .get(&storage)
-                .copied()
-                .filter(|earlier| val_types.get(earlier) == val_types.get(&dst));
+            let taken_by = discriminant(&inst.kind);
+            let held = borrows_of.entry(storage).or_default();
+            let earlier = held
+                .iter()
+                .find(|(by, earlier)| {
+                    *by == taken_by && val_types.get(earlier) == val_types.get(&dst)
+                })
+                .map(|(_, earlier)| *earlier);
 
             match earlier {
                 Some(earlier) => {
                     merged.insert(dst, earlier);
                     inst.kind = InstKind::Nop;
                 }
-                None => {
-                    borrow_of.insert(storage, dst);
-                }
+                None => held.push((taken_by, dst)),
             }
         }
     }
@@ -639,6 +668,8 @@ fn taken_exclusively(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         ..
     } = kind
     {
+        // An exclusive `AsSlice` reaches here as a write, through
+        // `storage_effect`; a `Ref &mut` writes nothing and does not.
         match target {
             RefTarget::Var(storage) | RefTarget::Param(storage) => taken.push(*storage),
             RefTarget::Through(reference) => {
@@ -1001,34 +1032,105 @@ mod tests {
         }
     }
 
+    /// How the hoist classifies the last instruction of a body, with the
+    /// regions that body gives its values.
+    fn classified(insts: Vec<InstKind>) -> Hoistable {
+        let last = insts.last().expect("a body to classify").clone();
+        let cfg = make_cfg(insts, 8);
+        hoistable(&Loans::build(&cfg), &last)
+    }
+
+    fn as_slice_of(container: ValueId, mutability: Mutability) -> InstKind {
+        InstKind::AsSlice {
+            dst: v(2),
+            container,
+            mutability,
+            instance: ExternInstance {
+                id: QualifiedRef::root(Interner::new().intern("as_slice")),
+                instance: 0,
+            },
+        }
+    }
+
     #[test]
     fn which_borrow_carries_the_condition_and_which_does_not_move() {
         assert!(matches!(
-            hoistable(&ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared)),
+            classified(vec![ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared)]),
             Hoistable::SharedBorrow { storage } if storage == v(0)
         ));
         assert!(matches!(
-            hoistable(&ref_of(RefTarget::Param(v(0)), vec![], Mutability::Shared)),
+            classified(vec![ref_of(RefTarget::Param(v(0)), vec![], Mutability::Shared)]),
             Hoistable::SharedBorrow { storage } if storage == v(0)
         ));
         assert!(matches!(
-            hoistable(&ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut)),
+            classified(vec![ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut)]),
             Hoistable::No
         ));
         assert!(matches!(
-            hoistable(&ref_of(
+            classified(vec![ref_of(
                 RefTarget::Through(v(0)),
                 vec![],
                 Mutability::Shared
-            )),
+            )]),
             Hoistable::No
         ));
         assert!(matches!(
-            hoistable(&ref_of(
+            classified(vec![ref_of(
                 RefTarget::Var(v(0)),
                 vec![PathSeg::Payload],
                 Mutability::Shared
-            )),
+            )]),
+            Hoistable::No
+        ));
+    }
+
+    #[test]
+    fn a_shared_as_slice_is_a_borrow_of_the_storage_its_container_names() {
+        assert!(matches!(
+            classified(vec![
+                ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared),
+                as_slice_of(v(1), Mutability::Shared),
+            ]),
+            Hoistable::SharedBorrow { storage } if storage == v(0)
+        ));
+    }
+
+    #[test]
+    fn an_exclusive_as_slice_does_not_move() {
+        assert!(matches!(
+            classified(vec![
+                ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut),
+                as_slice_of(v(1), Mutability::Mut),
+            ]),
+            Hoistable::No
+        ));
+    }
+
+    #[test]
+    fn an_as_slice_of_a_container_no_one_storage_backs_does_not_move() {
+        assert!(matches!(
+            classified(vec![as_slice_of(v(7), Mutability::Shared)]),
+            Hoistable::No
+        ));
+    }
+
+    #[test]
+    fn indexing_does_not_move() {
+        assert!(matches!(
+            classified(vec![InstKind::Index {
+                dst: v(3),
+                slice: v(2),
+                index: v(1),
+                mode: IndexMode::Copy,
+            }]),
+            Hoistable::No
+        ));
+        assert!(matches!(
+            classified(vec![InstKind::IndexSet {
+                slice: v(2),
+                index: v(1),
+                value: v(0),
+            }]),
             Hoistable::No
         ));
     }
@@ -1080,24 +1182,24 @@ mod tests {
     #[test]
     fn a_heap_constant_is_never_hoisted() {
         assert!(matches!(
-            hoistable(&InstKind::Const {
+            classified(vec![InstKind::Const {
                 dst: v(1),
                 value: acvus_ast::Literal::String("a".into()),
-            }),
+            }]),
             Hoistable::No
         ));
         assert!(matches!(
-            hoistable(&InstKind::Const {
+            classified(vec![InstKind::Const {
                 dst: v(1),
                 value: acvus_ast::Literal::Int(1),
-            }),
+            }]),
             Hoistable::ControlEquivalent
         ));
         assert!(matches!(
-            hoistable(&InstKind::MakeArray {
+            classified(vec![InstKind::MakeArray {
                 dst: v(1),
                 elements: vec![],
-            }),
+            }]),
             Hoistable::No
         ));
     }
@@ -1723,6 +1825,138 @@ mod tests {
             !shared_borrow_is_below_the_test(a_loop_that_borrows_a_storage(false)),
             "nothing the borrow would span writes the storage"
         );
+    }
+
+    /// The shape RFC-0047 §3 exists for: a loop that reads `v(1)` through
+    /// an `AsSlice` and an `Index`, with or without a write to the
+    /// container in the body.
+    fn a_loop_that_slices_a_container(writes_the_container: bool) -> Vec<InstKind> {
+        let mut body = vec![
+            InstKind::Ref {
+                dst: v(4),
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                mutability: Mutability::Shared,
+            },
+            as_slice_of(v(4), Mutability::Shared),
+            InstKind::Index {
+                dst: v(6),
+                slice: v(2),
+                index: v(0),
+                mode: IndexMode::Copy,
+            },
+        ];
+        if writes_the_container {
+            body.push(InstKind::Assign {
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                value: v(0),
+            });
+        }
+
+        let mut insts = vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Assign {
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                value: v(0),
+            },
+            InstKind::Const {
+                dst: v(3),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::Jump {
+                label: Label(0),
+                args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(0),
+                params: vec![],
+                merge_of: None,
+            },
+            InstKind::JumpIf {
+                cond: v(3),
+                then_label: Label(1),
+                then_args: vec![],
+                else_label: Label(2),
+                else_args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(1),
+                params: vec![],
+                merge_of: None,
+            },
+        ];
+        insts.extend(body);
+        insts.extend([
+            InstKind::Jump {
+                label: Label(0),
+                args: vec![],
+            },
+            InstKind::BlockLabel {
+                label: Label(2),
+                params: vec![],
+                merge_of: None,
+            },
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
+        ]);
+        insts
+    }
+
+    /// Where the `AsSlice` sits, relative to the loop's test.
+    fn as_slice_is_below_the_test(insts: Vec<InstKind>) -> bool {
+        let mut cfg = make_cfg(insts, 10);
+        run(&mut cfg);
+        let body = demoted(cfg);
+        let k = kinds(&body);
+        let taken = k
+            .iter()
+            .position(|k| matches!(k, InstKind::AsSlice { .. }))
+            .expect("the body still takes a slice");
+        let test = k
+            .iter()
+            .position(|k| matches!(k, InstKind::JumpIf { .. }))
+            .expect("the loop still tests");
+        taken > test
+    }
+
+    #[test]
+    fn a_slice_of_a_container_the_loop_does_not_write_leaves_the_loop() {
+        assert!(
+            !as_slice_is_below_the_test(a_loop_that_slices_a_container(false)),
+            "nothing the borrow would span writes the container"
+        );
+    }
+
+    #[test]
+    fn a_slice_stays_where_the_loop_writes_the_container() {
+        assert!(
+            as_slice_is_below_the_test(a_loop_that_slices_a_container(true)),
+            "the body writes the storage the slice borrows"
+        );
+    }
+
+    #[test]
+    fn an_index_never_leaves_the_loop() {
+        let mut cfg = make_cfg(a_loop_that_slices_a_container(false), 10);
+        run(&mut cfg);
+        let body = demoted(cfg);
+        let k = kinds(&body);
+        let indexed = k
+            .iter()
+            .position(|k| matches!(k, InstKind::Index { .. }))
+            .expect("the body still indexes");
+        let test = k
+            .iter()
+            .position(|k| matches!(k, InstKind::JumpIf { .. }))
+            .expect("the loop still tests");
+        assert!(indexed > test, "a checked Index may panic (RFC-0007)");
     }
 
     // -- Merge tests -------------------------------------------------

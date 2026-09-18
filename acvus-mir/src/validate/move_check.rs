@@ -42,9 +42,12 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 /// option a box would have to move this arm with it.
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
-        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order | Ty::Ref(..) => {
-            Some(false)
-        }
+        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => Some(false),
+        // A `&[T]` carries the boxed pointer and length its `AsSlice`
+        // allocated (RFC-0047 §6), so it owns that box and moves; every
+        // other reference is a word the runtime copies.
+        Ty::Ref(_, target) => Some(matches!(target.ty, Ty::Slice(_))),
+        Ty::Slice(_) => Some(true),
         Ty::Option(payload) => is_move_only(payload),
         Ty::String
         | Ty::Handle(..)
@@ -846,6 +849,18 @@ fn process_inst(
         InstKind::ArrayIndex { dst, array, .. } => {
             extract_part(
                 scope, inst_idx, span, *array, *dst, val_types, debug, state, errors,
+            );
+        }
+
+        // Slices (RFC-0047). A slice borrows its container and an `Index`
+        // borrows the slice, as a `Ref` borrows a place; `IndexSet` is the
+        // one that moves, and what it moves is the element written.
+        InstKind::AsSlice { dst, .. } | InstKind::Index { dst, .. } => {
+            state.set_value(*dst, Liveness::Alive);
+        }
+        InstKind::IndexSet { value, .. } => {
+            try_consume_value(
+                scope, inst_idx, span, *value, val_types, debug, state, errors,
             );
         }
         // Unwrap moves the payload out of the variant: the variant is consumed.

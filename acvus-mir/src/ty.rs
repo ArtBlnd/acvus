@@ -465,7 +465,9 @@ where
             (TyTerm::Result(t, e), TyTerm::Result(pt, pe)) => {
                 go(t, pt, seen, unknowns) && go(e, pe, seen, unknowns)
             }
-            (TyTerm::Handle(i), TyTerm::Handle(pi)) => go(i, pi, seen, unknowns),
+            (TyTerm::Handle(i), TyTerm::Handle(pi)) | (TyTerm::Slice(i), TyTerm::Slice(pi)) => {
+                go(i, pi, seen, unknowns)
+            }
             (TyTerm::Ref(m, i), TyTerm::Ref(pm, pi)) => {
                 m == pm && arg_matches(i, pi, seen, unknowns)
             }
@@ -741,9 +743,9 @@ impl PatternSubst {
             (TyTerm::Array(ea, la), TyTerm::Array(eb, lb)) => {
                 self.unify_len(la, lb) && self.unify(ea, eb)
             }
-            (TyTerm::Option(ia), TyTerm::Option(ib)) | (TyTerm::Handle(ia), TyTerm::Handle(ib)) => {
-                self.unify(ia, ib)
-            }
+            (TyTerm::Option(ia), TyTerm::Option(ib))
+            | (TyTerm::Handle(ia), TyTerm::Handle(ib))
+            | (TyTerm::Slice(ia), TyTerm::Slice(ib)) => self.unify(ia, ib),
             (TyTerm::Result(ta, ea), TyTerm::Result(tb, eb)) => {
                 self.unify(ta, tb) && self.unify(ea, eb)
             }
@@ -861,6 +863,7 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
             }
             (TyTerm::Option(x), TyTerm::Option(y)) => TyTerm::Option(Box::new(walk(x, y, next))),
             (TyTerm::Handle(x), TyTerm::Handle(y)) => TyTerm::Handle(Box::new(walk(x, y, next))),
+            (TyTerm::Slice(x), TyTerm::Slice(y)) => TyTerm::Slice(Box::new(walk(x, y, next))),
             (TyTerm::Result(xa, xb), TyTerm::Result(ya, yb)) => {
                 TyTerm::Result(Box::new(walk(xa, ya, next)), Box::new(walk(xb, yb, next)))
             }
@@ -998,6 +1001,7 @@ enum TyHead {
     Enum,
     Handle,
     Ref,
+    Slice,
     /// A user-defined type with the representation of each argument: two
     /// cast rules between `Vec<#T>` and `Vec<T>` have distinct heads.
     UserDefined(QualifiedRef, Vec<Repr<Poly>>),
@@ -1022,6 +1026,7 @@ fn ty_head(ty: &PolyTy) -> TyHead {
         TyTerm::Enum { .. } => TyHead::Enum,
         TyTerm::Handle(..) => TyHead::Handle,
         TyTerm::Ref(..) => TyHead::Ref,
+        TyTerm::Slice(_) => TyHead::Slice,
         TyTerm::UserDefined { id, type_args, .. } => {
             TyHead::UserDefined(*id, type_args.iter().map(|a| a.repr).collect())
         }
@@ -1565,7 +1570,12 @@ impl TyTerm<Concrete> {
                 .values()
                 .all(|p| p.as_ref().is_none_or(|ty| ty.is_data())),
             Ty::UserDefined { type_args, .. } => type_args.iter().all(|a| a.ty.is_data()),
-            Ty::Fn { .. } | Ty::Handle(..) | Ty::Order | Ty::Ref(..) | Ty::Error(_) => false,
+            Ty::Fn { .. }
+            | Ty::Handle(..)
+            | Ty::Order
+            | Ty::Ref(..)
+            | Ty::Slice(_)
+            | Ty::Error(_) => false,
             Ty::Var(v) => match *v {},
         }
     }
@@ -1651,6 +1661,7 @@ where
         match self.ty {
             TyTerm::Int(k) => write!(f, "{}", k.name()),
             TyTerm::Order => write!(f, "Order"),
+            TyTerm::Slice(elem) => write!(f, "[{}]", elem.display(self.interner)),
             TyTerm::Float => write!(f, "Float"),
             TyTerm::String => write!(f, "String"),
             TyTerm::Bool => write!(f, "Bool"),
@@ -2115,6 +2126,10 @@ pub enum TyTerm<V: Phase> {
         name: Astr,
         variants: FxHashMap<Astr, Option<Box<TyTerm<V>>>>,
     },
+    /// `[T]`: the run of elements a container lends. Unsized — no value
+    /// has this type and no storage holds one; it appears only under a
+    /// `Ref`, as `&[T]` and `&mut [T]` (RFC-0047).
+    Slice(Box<TyTerm<V>>),
     // Resources
     Handle(Box<TyTerm<V>>),
     /// `&T` or `&mut T`: a second name for a storage holding a `T`
@@ -2219,6 +2234,13 @@ impl<V: Phase> TyTerm<V> {
                 Box::new(inner.map(on_var, on_identity, on_effect, on_len, on_repr)),
                 len.map(on_len),
             ),
+            TyTerm::Slice(elem) => TyTerm::Slice(Box::new(elem.map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+                on_repr,
+            ))),
             TyTerm::Object(fields) => TyTerm::Object(
                 fields
                     .iter()
@@ -2324,6 +2346,13 @@ impl<V: Phase> TyTerm<V> {
                 Box::new(inner.try_map(on_var, on_identity, on_effect, on_len, on_repr)?),
                 len.try_map(on_len)?,
             )),
+            TyTerm::Slice(elem) => Ok(TyTerm::Slice(Box::new(elem.try_map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+                on_repr,
+            )?))),
             TyTerm::Object(fields) => {
                 let mapped: Result<FxHashMap<_, _>, E> = fields
                     .iter()
@@ -2482,6 +2511,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
             Ty::Never => TyTerm::Never,
             Ty::Order => TyTerm::Order,
             Ty::Array(inner, len) => TyTerm::Array(Box::new(go(inner, builder)), lift_ty_len(len)),
+            Ty::Slice(elem) => TyTerm::Slice(Box::new(go(elem, builder))),
             Ty::Object(fields) => {
                 TyTerm::Object(fields.iter().map(|(k, v)| (*k, go(v, builder))).collect())
             }

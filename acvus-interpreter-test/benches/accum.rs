@@ -375,7 +375,11 @@ fn main() {
         "{:>12} {:>10} {:>14} {:>12} {:>12} {:>14}",
         "case", "n", "execute/us", "rust/us", "ratio", "ns/iteration"
     );
-    for case in &cases {
+    let only = std::env::var("ACCUM_CASE").ok();
+    for case in cases
+        .iter()
+        .filter(|c| only.as_deref().is_none_or(|o| c.name == o))
+    {
         for size in [
             Size {
                 n: 100_000,

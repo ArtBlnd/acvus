@@ -8,6 +8,7 @@ pub mod chain;
 pub mod composite;
 pub mod constant;
 pub mod control;
+pub mod index;
 pub mod pattern;
 pub mod storage;
 pub mod string;

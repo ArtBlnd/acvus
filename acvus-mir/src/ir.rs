@@ -97,6 +97,30 @@ impl Callee {
     }
 }
 
+/// An ExternFn at the instance the checker settled on (RFC-0040), for an
+/// instruction that runs one without being a `FunctionCall`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExternInstance {
+    pub id: QualifiedRef,
+    pub instance: usize,
+}
+
+impl From<ExternInstance> for Callee {
+    fn from(ExternInstance { id, instance }: ExternInstance) -> Callee {
+        Callee::Extern { id, instance }
+    }
+}
+
+/// How an `Index` yields its element (RFC-0047 §4). The checker decides it
+/// from the element type, so no run-time branch reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexMode {
+    /// The element type is a word: `dst` is the element value itself.
+    Copy,
+    /// `dst` is a reference into the slice's storage, carrying its loan.
+    Ref,
+}
+
 /// The `Order` a call waits for and the `Order` it yields (RFC-0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderEdge {
@@ -153,6 +177,38 @@ pub enum InstKind {
         path: Vec<PathSeg>,
         value: ValueId,
     },
+    // -- Slices (RFC-0047) ------------------------------------------
+    /// Take the whole run of `container`'s elements: `dst` is a
+    /// `Ref(mutability, Slice(T))` holding the loan `container` holds, and
+    /// `instance` is the `core::as_slice` / `core::as_slice_mut` the
+    /// container's own evidence settled on.
+    ///
+    /// It is not a `FunctionCall` because the kind itself states what the
+    /// hoist must know: a pure, infallible borrow projection, so
+    /// `code_motion` lifts a shared one out of every loop that does not
+    /// write the container, which it may never do for a call.
+    AsSlice {
+        dst: ValueId,
+        container: ValueId,
+        mutability: Mutability,
+        instance: ExternInstance,
+    },
+    /// Element `index` of `slice`. The index is `u64`; the one check is
+    /// `index < len`, and every `Index` the MIR holds is checked.
+    Index {
+        dst: ValueId,
+        slice: ValueId,
+        index: ValueId,
+        mode: IndexMode,
+    },
+    /// Write `value` into element `index` of a `&mut [T]`, dropping the
+    /// element that was there.
+    IndexSet {
+        slice: ValueId,
+        index: ValueId,
+        value: ValueId,
+    },
+
     /// Move a context's whole value out of the page into `dst` (RFC-0025).
     Fetch {
         dst: ValueId,

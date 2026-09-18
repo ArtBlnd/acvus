@@ -136,7 +136,13 @@ pub fn encode(
             let head = nested.commit(rt, ty, value)?;
             out.extend_from_slice(&head.0);
         }
-        Ty::Fn { .. } | Ty::Handle(_) | Ty::Ref(..) | Ty::Order | Ty::Never | Ty::Error(_) => {
+        Ty::Fn { .. }
+        | Ty::Handle(_)
+        | Ty::Ref(..)
+        | Ty::Slice(_)
+        | Ty::Order
+        | Ty::Never
+        | Ty::Error(_) => {
             return Err(not_held(rt, ty));
         }
         Ty::Var(v) => match *v {},
@@ -236,7 +242,13 @@ pub fn decode(
                 take(input, NodeHash::LEN)?.try_into().expect("32 bytes");
             nested.load(rt, ty, NodeHash(bytes))?
         }
-        Ty::Fn { .. } | Ty::Handle(_) | Ty::Ref(..) | Ty::Order | Ty::Never | Ty::Error(_) => {
+        Ty::Fn { .. }
+        | Ty::Handle(_)
+        | Ty::Ref(..)
+        | Ty::Slice(_)
+        | Ty::Order
+        | Ty::Never
+        | Ty::Error(_) => {
             return Err(not_held(rt, ty));
         }
         Ty::Var(v) => match *v {},

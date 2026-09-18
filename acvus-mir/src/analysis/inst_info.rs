@@ -31,6 +31,8 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::TestLiteral { dst, .. }
         | InstKind::TestObjectKey { dst, .. }
         | InstKind::ArrayIndex { dst, .. }
+        | InstKind::AsSlice { dst, .. }
+        | InstKind::Index { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
         | InstKind::MakeVariant { dst, .. }
@@ -58,6 +60,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
 
         InstKind::Commit { .. }
         | InstKind::Drop { .. }
+        | InstKind::IndexSet { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Return { .. }
@@ -112,6 +115,15 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::BinOp { left, right, .. } => smallvec![*left, *right],
         InstKind::TestObjectKey { src, .. } => smallvec![*src],
         InstKind::ArrayIndex { array: list, .. } => smallvec![*list],
+
+        // Slices (RFC-0047)
+        InstKind::AsSlice { container, .. } => smallvec![*container],
+        InstKind::Index { slice, index, .. } => smallvec![*slice, *index],
+        InstKind::IndexSet {
+            slice,
+            index,
+            value,
+        } => smallvec![*slice, *index, *value],
 
         // Composite constructors
         InstKind::MakeArray { elements, .. } => elements.iter().copied().collect(),

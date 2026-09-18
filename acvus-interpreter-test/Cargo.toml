@@ -7,7 +7,7 @@ edition = "2024"
 acvus-ast = { path = "../acvus-ast" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
-acvus-interpreter = { path = "../acvus-interpreter" }
+acvus-interpreter = { path = "../acvus-interpreter", features = ["probe"] }
 acvus-extern = { path = "../acvus-extern" }
 acvus-ext = { path = "../acvus-ext" }
 rustc-hash = { workspace = true }
@@ -33,4 +33,8 @@ harness = false
 
 [[bench]]
 name = "mandelbrot"
+harness = false
+
+[[bench]]
+name = "slice_ceiling"
 harness = false

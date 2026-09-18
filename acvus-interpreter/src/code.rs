@@ -150,6 +150,13 @@ impl BasicBlock {
     pub fn iter(&self) -> impl Iterator<Item = &Op> {
         self.0.iter()
     }
+
+    /// The operations, to substitute one handler for another: how a probe
+    /// runs a handler `prepare` does not emit (RFC-0047 §7).
+    #[cfg(any(test, feature = "probe"))]
+    pub fn ops_mut(&mut self) -> &mut [Op] {
+        &mut self.0
+    }
 }
 
 /// An extern call site's arguments as the frame holds them: `arity`

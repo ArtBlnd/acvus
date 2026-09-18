@@ -15,7 +15,9 @@
 use crate::ir::{
     Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValOrigin, ValueId,
 };
+use crate::ir::{ExternInstance, IndexMode};
 use crate::ty::{Mutability, Ty, TypeArg};
+use crate::validate::move_check::is_move_only;
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::{Astr, LocalIdOps};
 use rustc_hash::FxHashMap;
@@ -138,7 +140,7 @@ fn types_match(a: &Ty, b: &Ty) -> bool {
 
         // Containers (invariant inner)
         (Ty::Array(a, la), Ty::Array(b, lb)) => la == lb && types_match(a, b),
-        (Ty::Option(a), Ty::Option(b)) => types_match(a, b),
+        (Ty::Option(a), Ty::Option(b)) | (Ty::Slice(a), Ty::Slice(b)) => types_match(a, b),
         (Ty::Result(ta, ea), Ty::Result(tb, eb)) => types_match(ta, tb) && types_match(ea, eb),
         (Ty::Ref(ma, a), Ty::Ref(mb, b)) => {
             ma == mb && a.repr == b.repr && types_match(&a.ty, &b.ty)
@@ -395,6 +397,28 @@ impl CheckCtx {
         Some((*m, at))
     }
 
+    /// A type whose head is not the one the instruction is built on.
+    fn invalid(
+        &self,
+        pc: usize,
+        span: Span,
+        inst_name: &str,
+        expected_constructor: &str,
+        actual: &Ty,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        errors.push(ValidationError {
+            scope: self.scope_name.clone(),
+            inst_index: pc,
+            span,
+            kind: ValidationErrorKind::InvalidConstructor {
+                inst_name: inst_name.to_string(),
+                expected_constructor: expected_constructor.to_string(),
+                actual: actual.clone(),
+            },
+        });
+    }
+
     fn assert_match(
         &self,
         pc: usize,
@@ -464,6 +488,86 @@ impl CheckCtx {
             InstKind::Drop { src } => {
                 // Just validate src exists and has a type.
                 let _ = self.ty_of(*src, vt, span, pc, errors);
+            }
+
+            // === Slices (RFC-0047) ===
+            InstKind::AsSlice {
+                dst,
+                container,
+                mutability,
+                instance: ExternInstance { .. },
+            } => {
+                let container_ty = ty!(*container);
+                let Ty::Ref(held, _) = container_ty else {
+                    self.invalid(pc, span, "AsSlice", "Ref", container_ty, errors);
+                    return;
+                };
+                if *mutability == Mutability::Mut && *held != Mutability::Mut {
+                    self.invalid(pc, span, "AsSlice", "Ref(Mut)", container_ty, errors);
+                }
+                let dst_ty = ty!(*dst);
+                if slice_of(dst_ty).map(|(m, _)| m) != Some(*mutability) && !dst_ty.is_error() {
+                    self.invalid(
+                        pc,
+                        span,
+                        "AsSlice",
+                        &format!("Ref({mutability:?}, Slice)"),
+                        dst_ty,
+                        errors,
+                    );
+                }
+            }
+            InstKind::Index {
+                dst,
+                slice,
+                index,
+                mode,
+            } => {
+                let index_ty = ty!(*index);
+                self.assert_match(pc, span, "Index", "index", &Ty::U64, index_ty, errors);
+                let slice_ty = ty!(*slice);
+                let Some((_, element)) = slice_of(slice_ty) else {
+                    self.invalid(pc, span, "Index", "Ref(_, Slice)", slice_ty, errors);
+                    return;
+                };
+                let dst_ty = ty!(*dst);
+                match mode {
+                    IndexMode::Copy => {
+                        self.assert_match(pc, span, "Index", "dst", element, dst_ty, errors);
+                        if is_move_only(element) == Some(true) {
+                            self.invalid(
+                                pc,
+                                span,
+                                "Index",
+                                "a word element, which Copy mode reads",
+                                element,
+                                errors,
+                            );
+                        }
+                    }
+                    IndexMode::Ref => {
+                        let expected = Ty::Ref(
+                            Mutability::Shared,
+                            Box::new(TypeArg::uniform(element.clone())),
+                        );
+                        self.assert_match(pc, span, "Index", "dst", &expected, dst_ty, errors);
+                    }
+                }
+            }
+            InstKind::IndexSet {
+                slice,
+                index,
+                value,
+            } => {
+                let index_ty = ty!(*index);
+                self.assert_match(pc, span, "IndexSet", "index", &Ty::U64, index_ty, errors);
+                let slice_ty = ty!(*slice);
+                let Some((Mutability::Mut, element)) = slice_of(slice_ty) else {
+                    self.invalid(pc, span, "IndexSet", "Ref(Mut, Slice)", slice_ty, errors);
+                    return;
+                };
+                let value_ty = ty!(*value);
+                self.assert_match(pc, span, "IndexSet", "value", element, value_ty, errors);
             }
 
             // === Const ===
@@ -1506,6 +1610,17 @@ impl CheckCtx {
             }
         }
     }
+}
+
+/// The mutability and element type of a `&[T]` or `&mut [T]`.
+fn slice_of(ty: &Ty) -> Option<(Mutability, &Ty)> {
+    let Ty::Ref(mutability, target) = ty else {
+        return None;
+    };
+    let Ty::Slice(element) = &target.ty else {
+        return None;
+    };
+    Some((*mutability, element))
 }
 
 #[cfg(test)]

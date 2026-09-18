@@ -17,7 +17,8 @@ use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
+    Callee, ExternInstance, IndexMode, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
+    RefTarget, ValueId,
 };
 use acvus_mir::ty::{IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -32,7 +33,7 @@ use crate::code::{
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
 use crate::ops::chain::{self, ChainTy};
-use crate::ops::{call, composite, constant, control, pattern, storage, string, variant};
+use crate::ops::{call, composite, constant, control, index, pattern, storage, string, variant};
 use crate::runtime::{ExternHandler, SyncHandler};
 use crate::value::{Kind, Value};
 
@@ -584,6 +585,9 @@ impl<'a> Prepare<'a> {
             | InstKind::TestLiteral { .. }
             | InstKind::TestObjectKey { .. }
             | InstKind::ArrayIndex { .. }
+            | InstKind::AsSlice { .. }
+            | InstKind::Index { .. }
+            | InstKind::IndexSet { .. }
             | InstKind::ObjectGet { .. }
             | InstKind::MakeClosure { .. }
             | InstKind::MakeVariant { .. }
@@ -1258,6 +1262,45 @@ impl<'a> Prepare<'a> {
                 };
                 Op::new(f).a(self.slot(*dst)).b(self.slot(*array)).p(*index)
             }
+
+            // An `AsSlice` is the one call of the instance the checker
+            // settled on, prepared exactly as `call_extern_1` of that
+            // handler would be, so a fused run sees it as a call
+            // (RFC-0044, RFC-0047 §3).
+            InstKind::AsSlice {
+                dst,
+                container,
+                instance,
+                ..
+            } => {
+                let handler = self.ctx.handler(&instance.id, instance.instance);
+                let op = Op::new(extern_call_op(&handler))
+                    .a(self.slot(*dst))
+                    .b(self.slot(*container));
+                let payload = self.put(Payload::Extern(ExternCall {
+                    handler,
+                    order: NO_SLOT,
+                    args: ExternArgs::ByValue,
+                }));
+                op.p(payload)
+            }
+            InstKind::Index {
+                dst,
+                slice,
+                index,
+                mode,
+            } => Op::new(index::checked(*mode))
+                .a(self.slot(*dst))
+                .b(self.slot(*slice))
+                .c(self.slot(*index)),
+            InstKind::IndexSet {
+                slice,
+                index,
+                value,
+            } => Op::new(index::index_set::<true>)
+                .a(self.slot(*slice))
+                .b(self.slot(*index))
+                .c(self.slot(*value)),
             InstKind::ObjectGet { dst, object, key } => {
                 let f: OpFn = if self.is_string(*dst) {
                     storage::read_field::<true>
@@ -3323,27 +3366,29 @@ impl FusedRegion {
 
 impl<'a> Prepare<'a> {
     fn fusable_call(&self, at: usize) -> Option<FusableCall<'a>> {
-        let InstKind::FunctionCall {
-            dst,
-            callee: Callee::Extern { id, instance },
-            args,
-            order: None,
-            ..
-        } = &self.body.insts.get(at)?.kind
-        else {
-            return None;
+        let (dst, id, instance, args) = match &self.body.insts.get(at)?.kind {
+            InstKind::FunctionCall {
+                dst,
+                callee: Callee::Extern { id, instance },
+                args,
+                order: None,
+                ..
+            } => (*dst, id, *instance, args.as_slice()),
+            InstKind::AsSlice {
+                dst,
+                container,
+                instance: ExternInstance { id, instance },
+                ..
+            } => (*dst, id, *instance, std::slice::from_ref(container)),
+            _ => return None,
         };
-        let ExternHandler::Sync(handler) = self.ctx.handler(id, *instance) else {
+        let ExternHandler::Sync(handler) = self.ctx.handler(id, instance) else {
             return None;
         };
         if handler.arity() != Some(args.len()) || args.len() > 2 {
             return None;
         }
-        Some(FusableCall {
-            dst: *dst,
-            args,
-            handler,
-        })
+        Some(FusableCall { dst, args, handler })
     }
 
     /// The `*r` closing a run whose last call left `last`: the read of a

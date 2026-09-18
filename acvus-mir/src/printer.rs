@@ -4,7 +4,7 @@ use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::ir::{Callee, IndexMode, InstKind, Label, MirBody, MirModule, ValueId};
 
 /// Normalizes ValueIds to sequential order of first appearance.
 struct ValNormalizer {
@@ -522,6 +522,45 @@ fn write_body(
                 vn.fmt_val(*dst),
                 vn.fmt_use(*src, &consts, &texts),
                 ctx.interner.resolve(*key),
+            )?,
+            InstKind::AsSlice {
+                dst,
+                container,
+                mutability,
+                ..
+            } => writeln!(
+                f,
+                "{} = as_slice {}{}",
+                vn.fmt_val(*dst),
+                mutability.prefix(),
+                vn.fmt_use(*container, &consts, &texts)
+            )?,
+            InstKind::Index {
+                dst,
+                slice,
+                index,
+                mode,
+            } => writeln!(
+                f,
+                "{} = {}{}[{}]",
+                vn.fmt_val(*dst),
+                match mode {
+                    IndexMode::Copy => "",
+                    IndexMode::Ref => "&",
+                },
+                vn.fmt_use(*slice, &consts, &texts),
+                vn.fmt_use(*index, &consts, &texts)
+            )?,
+            InstKind::IndexSet {
+                slice,
+                index,
+                value,
+            } => writeln!(
+                f,
+                "{}[{}] = {}",
+                vn.fmt_use(*slice, &consts, &texts),
+                vn.fmt_use(*index, &consts, &texts),
+                vn.fmt_use(*value, &consts, &texts)
             )?,
             InstKind::ArrayIndex {
                 dst,

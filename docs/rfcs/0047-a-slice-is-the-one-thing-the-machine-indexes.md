@@ -201,6 +201,42 @@ enumerate the dependents, nothing is patched around.
   `AsSlice(keys[t])` above the `i` loop, two `Index` (`Copy`, unchecked
   after §7) and one chain per element — the Rust scalar shape. Measured
   after each half lands, bands from dispatch counts.
+
+### T1 landed, and what it measured
+
+The interpreter's half is in: `Slice`/`SliceMut` over one `Elements<Rt>`
+payload in acvus-extern, `Ty::Slice`, `AsSlice`/`Index`/`IndexSet` through
+the MIR passes, the handlers, `as_slice`/`as_slice_mut` on `Vec` and
+`Arr`, and the probe-only unchecked form. `Value` is untouched.
+
+The ceiling probe (`benches/slice_ceiling.rs`) runs `acc += q[i] * k[i]`
+over two `Vec<f64>` of a million elements, four ways, on one binary,
+medians of six alternating reps. The dispatch counts are printed by the
+probe, not assumed:
+
+| shape | dispatches | ns / element pair |
+|---|---|---|
+| `get` | 5 | 16.78 |
+| `as_slice` in the loop | 9 | 50.51 |
+| `as_slice` hoisted | 5 | 9.02 |
+| hoisted, unchecked | 5 | 8.63 |
+
+- **The instruction is worth −7.77 ns** against today's `get`, at an
+  unchanged dispatch count of 5. `perf` puts 58 % of the `get` shape in
+  `fused_call`, `fused::<1, true>` and `vec::get`'s own closure: ≈5 ns per
+  call, of which none is dispatch. It is the two `deref`s, the
+  `Value::reference` build, the deref tail, and the `dyn Any` downcast in
+  `Ref::map`'s `value_of`.
+- **The hoist is worth −41.5 ns**, which is why §3 puts the fact in the
+  instruction. `perf` puts 86 % of the un-hoisted shape in
+  `VtableRegistry::vtable_of` — a `Mutex` and a `HashMap<TypeId, &Vtable>`
+  lookup inside `Value::erase` on every `Large` — and not in the
+  allocator. Every extension type erased in a loop pays this today; a
+  per-type cache would remove it, and is not part of this RFC.
+- **The check is worth −0.38 ns**, inside a band of 0 to 0.5. T3, the
+  interval pass, buys 4 % of this loop. It pays, but it is the smallest
+  of the three numbers by an order of magnitude, and the order of work
+  should follow that.
 - `for x in &v` and `while let` over a slice can be a `Loop` over
   `IndexUnchecked` later (an iterator stage over a slice is `(ptr, len,
   i)`, `Task::Sync`) — the remaining half of the iteration idiom's cost,

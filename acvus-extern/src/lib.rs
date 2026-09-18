@@ -17,6 +17,7 @@ mod obj;
 mod reference;
 mod registry;
 mod runtime;
+mod slice;
 mod space;
 mod ty_arg;
 mod vec;
@@ -37,6 +38,7 @@ pub use registry::{
     Manifest, MemberType, Registry, SharedSignature, SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
+pub use slice::{Elements, Slice, SliceMut};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use ty_arg::{Monomorphize, Never, PolyVars, SlotRepr, Spec, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;

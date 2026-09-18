@@ -303,6 +303,7 @@ impl Terms {
                 self.occurs_in(id, inner)
             }
             TyTerm::Ref(_, inner) => self.occurs_in(id, &inner.ty),
+            TyTerm::Slice(elem) => self.occurs_in(id, elem),
             TyTerm::Result(ok, err) => self.occurs_in(id, ok) || self.occurs_in(id, err),
             TyTerm::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
             TyTerm::Object(fields) => fields.values().any(|v| self.occurs_in(id, v)),
@@ -904,7 +905,9 @@ impl Terms {
                 }
                 self.join(ea, eb, Position::Argument, kind, registry)
             }
-            (TyTerm::Option(ia), TyTerm::Option(ib)) | (TyTerm::Handle(ia), TyTerm::Handle(ib)) => {
+            (TyTerm::Option(ia), TyTerm::Option(ib))
+            | (TyTerm::Handle(ia), TyTerm::Handle(ib))
+            | (TyTerm::Slice(ia), TyTerm::Slice(ib)) => {
                 self.join(ia, ib, Position::Argument, kind, registry)
             }
             (TyTerm::Result(ta, ea), TyTerm::Result(tb, eb)) => {
@@ -3304,6 +3307,7 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
         },
         TyTerm::Ref(m, inner) => TyTerm::Ref(m, Box::new(arg(*inner, true, registry))),
         TyTerm::Array(inner, len) => TyTerm::Array(Box::new(uniform_slots(*inner, registry)), len),
+        TyTerm::Slice(elem) => TyTerm::Slice(Box::new(uniform_slots(*elem, registry))),
         TyTerm::Option(inner) => TyTerm::Option(Box::new(uniform_slots(*inner, registry))),
         TyTerm::Result(ok, err) => TyTerm::Result(
             Box::new(uniform_slots(*ok, registry)),

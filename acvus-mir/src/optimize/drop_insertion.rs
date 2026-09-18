@@ -538,6 +538,11 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::TupleIndex { .. }
         | InstKind::Merge { .. } => false,
 
+        // A slice borrows its container and an `Index` borrows the slice;
+        // only the element written through `IndexSet` changes owner.
+        InstKind::AsSlice { .. } | InstKind::Index { .. } => false,
+        InstKind::IndexSet { value, .. } => *value == val,
+
         // These don't consume a value; a Ref only reads the reference a
         // place goes through.
         InstKind::Const { .. }

@@ -287,6 +287,20 @@ impl Loans {
             InstKind::Eval { src, .. } => {
                 self.region(*src).loans.iter().for_each(|l| effect.add(*l));
             }
+            // A slice is a borrow of its container taken with the slice's
+            // own mutability; indexing touches the run that borrow names
+            // (RFC-0047).
+            InstKind::AsSlice {
+                container,
+                mutability,
+                ..
+            } => self.touch_region(&mut effect, *container, *mutability),
+            InstKind::Index { slice, .. } => {
+                self.touch_region(&mut effect, *slice, Mutability::Shared)
+            }
+            InstKind::IndexSet { slice, .. } => {
+                self.touch_region(&mut effect, *slice, Mutability::Mut)
+            }
             _ => {}
         }
         effect
@@ -334,17 +348,20 @@ impl Loans {
                 storage: *s,
                 mutability,
             }),
-            RefTarget::Through(r) => {
-                for loan in &self.region(*r).loans {
-                    effect.add(Loan {
-                        storage: loan.storage,
-                        mutability: match (mutability, loan.mutability) {
-                            (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
-                            (Mutability::Shared, _) | (_, Mutability::Shared) => Mutability::Shared,
-                        },
-                    });
-                }
-            }
+            RefTarget::Through(r) => self.touch_region(effect, *r, mutability),
+        }
+    }
+
+    /// As `touch`, for a storage reached only through `reference`.
+    fn touch_region(&self, effect: &mut StorageEffect, reference: ValueId, mutability: Mutability) {
+        for loan in &self.region(reference).loans {
+            effect.add(Loan {
+                storage: loan.storage,
+                mutability: match (mutability, loan.mutability) {
+                    (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+                    (Mutability::Shared, _) | (_, Mutability::Shared) => Mutability::Shared,
+                },
+            });
         }
     }
 }
