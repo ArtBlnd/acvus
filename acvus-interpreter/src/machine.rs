@@ -19,8 +19,8 @@ use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::code::{
-    BlockId, Body, Code, EntryKonst, Expr, ExprBody, ExprChain, Off, Op, Pending, Prepared, RETURN,
-    SENTINEL, SUSPEND,
+    BlockId, Body, Code, EntryKonst, Exit, Expr, ExprBody, ExprChain, Off, Op, Pending, Prepared,
+    RETURN, SENTINEL, SUSPEND,
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
@@ -68,9 +68,9 @@ impl<'c> Machine<'c> {
     /// One compare per joint. The index is unchecked because every
     /// terminator's target was resolved by `prepare` against this same
     /// `heads` array, and the two sentinels are what the compare catches.
-    pub fn run(&mut self) -> BlockId {
+    pub fn run(&mut self) -> Exit {
         let body = self.body;
-        let mut at = self.at;
+        let mut at: Exit = self.at.into();
         loop {
             debug_assert!(
                 (at as usize) < body.heads.len(),

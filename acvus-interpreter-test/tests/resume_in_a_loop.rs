@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
-use acvus_interpreter_test::listing::{script_listing_with_externs, terminators_depth_first};
+use acvus_interpreter_test::listing::{
+    family_of, script_listing_with_externs, terminators_depth_first,
+};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -54,7 +56,7 @@ async fn a_while_around_an_await_is_not_a_loop() {
     );
     let ends = terminators_depth_first(&blocks);
     assert_eq!(
-        ends.iter().filter(|name| *name == "Loop").count(),
+        ends.iter().filter(|name| family_of(name) == "Loop").count(),
         0,
         "the recognizer refuses a body holding a call above Sync, so this \
          `while` is blocks and jumps: {ends:?}"

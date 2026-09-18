@@ -9,7 +9,7 @@ use std::mem::size_of;
 use acvus_mir::ty::IntTy;
 
 use crate::code::{
-    Arith, BlockId, ChainBounds, Compare, ExprChain, ExprFn, Op, Root, Shape, Where, successor,
+    Arith, ChainBounds, Compare, Exit, ExprChain, ExprFn, Op, Root, Shape, Where, successor,
 };
 use crate::machine::Machine;
 use crate::ops::arith::{Int, for_int_ty};
@@ -513,7 +513,7 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
         let bits = tree1::<T, R>(&self.plan, Operands::of_frame(m.regs()));
         let carried = D::write(m.regs(), self.dst, bits);
         self.next.run(m, carried)
@@ -536,7 +536,7 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
         let bits = tree2::<T, O0, R>(&self.plan, Operands::of_frame(m.regs()));
         let carried = D::write(m.regs(), self.dst, bits);
         self.next.run(m, carried)
@@ -559,7 +559,7 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
         let bits = tree3::<T, O0, O1, R>(&self.plan, Operands::of_frame(m.regs()));
         let carried = D::write(m.regs(), self.dst, bits);
         self.next.run(m, carried)

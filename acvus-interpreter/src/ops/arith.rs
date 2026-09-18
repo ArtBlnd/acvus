@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use acvus_ast::{BinOp, UnaryOp};
 use acvus_mir::ty::IntTy;
 
-use crate::code::{BlockId, Off, Op, successor};
+use crate::code::{Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::place::{self, BinaryAt, Place, UnaryAt, at_binary, at_unary};
 use crate::value::Kind;
@@ -359,7 +359,7 @@ macro_rules! int_ops {
                 successor!();
 
                 #[inline]
-                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
                     let regs = m.regs();
                     let bits = word::$f::<T>(
                         L::read(regs, self.l, r0),
@@ -439,7 +439,7 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let bits = word::neg::<T>(S::read(regs, self.src, r0));
         let carried = D::write(regs, self.dst, bits);
@@ -489,7 +489,7 @@ macro_rules! float_ops {
                 successor!();
 
                 #[inline]
-                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
                     let regs = m.regs();
                     let left = f64::from_bits(L::read(regs, self.l, r0));
                     let right = f64::from_bits(R::read(regs, self.r, r0));
@@ -558,7 +558,7 @@ macro_rules! float_unary_ops {
                 successor!();
 
                 #[inline]
-                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
                     let regs = m.regs();
                     let operand = f64::from_bits(S::read(regs, self.src, r0));
                     let bits = $result(float_word::$f(operand));
@@ -614,7 +614,7 @@ macro_rules! bool_ops {
                 successor!();
 
                 #[inline]
-                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
                     let regs = m.regs();
                     let $a = L::read(regs, self.l, r0) != 0;
                     let $b = R::read(regs, self.r, r0) != 0;
@@ -666,7 +666,7 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let held = S::read(regs, self.src, r0) != 0;
         let carried = D::write(regs, self.dst, as_bool_word(!held));

@@ -6,7 +6,7 @@
 //! division.
 
 use acvus_interpreter_test::listing::{
-    RegionListing, ops_of_anywhere, regions_named, script_listing,
+    RegionListing, family_of, ops_of_anywhere, regions_named, script_listing,
 };
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -57,7 +57,7 @@ fn loop_count(source: &str) -> usize {
         Ty::I64,
     ))
     .iter()
-    .filter(|name| *name == "Loop")
+    .filter(|name| family_of(name) == "Loop")
     .count()
 }
 

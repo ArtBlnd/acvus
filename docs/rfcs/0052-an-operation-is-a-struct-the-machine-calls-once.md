@@ -70,15 +70,17 @@ and threw away.
 
    ```rust
    pub trait Op: Send + Sync {
-       fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId;
+       fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit;
    }
    ```
 
    A straight-line run is a **chain**: each operation holds the next as
    a field and ends by calling it, and that call is a tail call, so the
-   whole run is a line of `jmp *`. An operation with no successor is a
-   terminator — it returns the `BlockId` instead. There is no separate
-   `Terminator` trait and no `Block`.
+   whole run is a line of `jmp *`. An operation with no successor ends
+   the chain, and what it hands back is the chain's `Exit` — a word. At
+   a joint that word is the `BlockId` the machine enters next; inside a
+   region it is the word the part computed last (§3). There is no
+   separate `Terminator` trait and no `Block`.
 
    The stream is `Body::heads: Box<[Box<dyn Op>]>` indexed by `BlockId`:
    one chain head per **joint**, a joint being a place where control
@@ -105,19 +107,35 @@ and threw away.
    loop, fused run) and produce
 
    ```rust
-   pub struct Loop { head: Box<dyn Op>, cond: Off, body: Box<dyn Op>, next: Box<dyn Op> }
+   pub struct Loop<C: Place> { head: Box<dyn Op>, cond: C::At, body: Box<dyn Op>, next: Box<dyn Op> }
    pub struct Diamond<C: Place> { cond: C::At, on_true: Box<dyn Op>, on_false: Box<dyn Op>, next: Box<dyn Op> }
    ```
 
-   Each part is the head of its own chain, ended by `PartEnd` — the
-   node with no successor that returns the `BlockId` the region
-   discards. `Loop::run` is `loop { head chain; if m.word(cond) == 0
-   { break } body chain }` and then its own tail call to `next`;
-   `Diamond::run` is one word read, one arm picked, one arm chain, then
+   Each part is the head of its own chain, ended by `Yield` — the node
+   with no successor that hands the region the word the part computed
+   last. `Loop::run` is `loop { let c = head.run(m, r0); if C::read(
+   regs, cond, c) == 0 { break } body.run(m, r0) }` and then its own
+   tail call to `next`; `Diamond::run` is one word read, one arm
+   picked, one arm chain whose word is handed to the successor, then
    its tail call. The head's `JumpIf` and the body's back `Jump` are not
    terminators a region dispatches — they are those two lines. A nested
    region is one more operation of the chain it sits in, so no id is
    chosen inside a region and no `BlockId` leaves one.
+
+   **A region part hands its word forward.** A `while`'s condition is
+   produced by the last operation of the head chain and read by the
+   region above it, so under the block form it crossed a joint: the
+   head stored it to a frame register and `Loop::run` loaded it back.
+   Because the part now *returns* its word, the condition rides out in
+   the register the `ret` already uses, and `Loop` is specialized on
+   where it reads it: `C = R0` where the head's last operation produced
+   the condition, `C = Slot` where it did not — a head whose last word
+   is not the condition, as in mandelbrot's `i < max && x * x + y * y <
+   4.0`, whose head ends in a `Diamond`. `prepare` chooses between the
+   two, so neither `run` holds a test. Measured on the bench bodies:
+   every `while` body rides its condition (`Loop<R0>`), one ride per
+   loop, and that removes **3 to 4.7 instructions per iteration** with
+   no change to the branch count (below).
 
    **A region's parts hold no terminator, and that is structural.**
    `prepare::straight_run` walks a candidate range and stops at the
@@ -481,6 +499,63 @@ body is the single operation `CallIndirect<false, true, true>`: **17.9 →
 
 ## Consequences
 
+- **A region part that hands its word forward removes three to five
+  instructions per loop iteration, and the wall clock does not follow.**
+  Measured on `a5ae3283` (the two points above, as merged) against the
+  same tree plus this one change: a part ends in `Yield`, `Loop<C>` is
+  specialized on where the condition is, `Diamond` hands its arm's word
+  to its successor. Every `while` body of the bench set now rides its
+  condition — eight of eight, one ride per loop, counted on the prepared
+  listings, and mandelbrot goes from five rides to seven.
+
+  What the ride removes is exact and is visible in two places. In
+  `Lt::<i64, Slot, Slot, R0>::run`, the destination's `Off` load and the
+  store are gone (13 → 11 instructions); in `Loop<R0>::run` the frame
+  base load and the `cmpq` against a cell become `test %rax, %rax`, the
+  word arriving in the register the `ret` already used. Nothing lies
+  between the `Yield` and the test. `perf stat`, n = 1e7, instructions
+  per iteration:
+
+  | case | base | after | per iteration |
+  |---|---:|---:|---:|
+  | `int while` | 58.62 | 55.62 | **−3.0** |
+  | `float while` | 97.64 | 94.64 | −3.0 |
+  | `extern while` | 92.63 | 89.63 | −3.0 |
+  | `call while` | 274.66 | 271.66 | −3.0 |
+  | `branch while` | 128.66 | 124.66 | **−4.0** |
+  | `option while` | 144.17 | 140.17 | −4.0 |
+  | `collatz while` | 173.20 | 169.20 | −4.0 |
+  | `grade while` | 205.10 | 200.44 | **−4.7** |
+  | `while let vec` / `map`, `range \| sum`, `map *` | — | — | 0 |
+
+  Branch counts are unchanged to within 0.0002 %, as expected: the ride
+  removes a store and a load, not a jump. The bodies that get nothing
+  are the ones whose loop is a `while let` over an iterator — their
+  condition is an `Option` test on a call's result, not the head's last
+  word — and the pipelines, which hold no `Loop` at all.
+
+  **The wall clock does not follow the instruction count, and two cases
+  are slower than base.** Three alternating pinned reps on core 15,
+  median, ns per iteration: `branch while` 5.3 → 5.0, `option while`
+  5.8 → 5.4, `extern while` 3.9 → 3.7, `while let vec` 7.9 → 7.4,
+  `int while` 2.7 → 2.4, shapes `field read` 2.4 → 2.1 — and
+  **mandelbrot 9.2 → 9.5 (+3 %)** and **`grade while` 10.7 → 10.9
+  (+2 %)**. Both slower cases execute *fewer* instructions than base
+  (mandelbrot −0.4 %, `grade while` −2.3 %) and more cycles (+1.4 %,
+  +2.2 %); mandelbrot's branch misses are +0.4 % and `grade while`'s
+  +21 % of a count that is 0.007 per iteration. The cause is therefore
+  neither the instruction count nor the prediction of the loop test: it
+  is placement, the same axis that moved `range | sum` in the point-1
+  round. It is named and not tuned.
+
+  The wider reading: at 55 instructions and 16 cycles per iteration this
+  loop retires 3.5 instructions per cycle, so it is bound by the
+  dependence chain through the indirect calls, not by instruction
+  count — removing three instructions from a chain that is not the
+  critical path buys nothing on its own. The run-9 model that put
+  `int while` at 1.9–2.2 ns once the store and the load were gone
+  counted instructions; the machine does not.
+
 - **The machine as measured, three points, one variable apart.** Base
   is `798d574b` — the block form, dispatch seven instructions per
   operation. Point 1 is the chain: an operation holds its successor and
@@ -798,6 +873,14 @@ body is the single operation `CallIndirect<false, true, true>`: **17.9 →
   the `call`/`ret` pair from all of them and close the probe's exception
   list. `CallIndirect` is the queue's next target at 247 instructions
   per call.
-- **The three cases `r0` did not reach**, each named under Consequences:
-  a loop's condition across a joint, a call's argument window, and the
-  `Switch` operation (RFC-0051, the one `todo!` in the machine).
+- **The two cases `r0` does not reach**, each named under Consequences:
+  a call's argument window, and the `Switch` operation (RFC-0051, the
+  one `todo!` in the machine). The third — a loop's condition across a
+  joint — is closed: a region part hands its word forward (§3).
+- **A `Diamond` arm's value does not ride out of the region.** The arms
+  already write the join's register directly, so no phi `Mov` stands
+  between them and the successor; what remains is the store and the
+  load, which a `Diamond` whose arms yield to `R0` would remove. Not
+  built. It is also what would let mandelbrot's inner `while`, whose
+  head is a short-circuit `&&` ending in a `Diamond`, ride its
+  condition instead of taking `Loop<Slot>`.

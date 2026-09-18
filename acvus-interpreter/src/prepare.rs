@@ -485,6 +485,12 @@ impl Rides {
     fn holds(&self, value: ValueId) -> bool {
         self.0.contains(&value)
     }
+
+    /// The word a region's part hands its region, which `Prepare::part`
+    /// added after `rides_in` had the pairs inside the part.
+    fn add(&mut self, value: ValueId) {
+        self.0.insert(value);
+    }
 }
 
 /// The block the unit being emitted continues into.
@@ -1147,10 +1153,52 @@ impl<'a> Prepare<'a> {
         nested: &[Region],
         leaving: Vec<Node>,
     ) -> Box<dyn Op> {
+        self.part(range, nested, leaving, None).0
+    }
+
+    /// The part whose region reads the word it ends with — a `while`'s head
+    /// and the condition the `Loop` tests. Where that word is what the
+    /// part's last operation produced, it rides out of the part in the
+    /// argument register the `Yield` hands back, and the region is built at
+    /// `Where::Register`; otherwise it reaches its frame register as any
+    /// other value does.
+    fn handing(
+        &mut self,
+        range: Range<usize>,
+        nested: &[Region],
+        leaving: Vec<Node>,
+        hands: ValueId,
+    ) -> (Box<dyn Op>, Where) {
+        let (head, rode) = self.part(range, nested, leaving, Some(hands));
+        let at = match rode {
+            true => Where::Register,
+            false => Where::Frame(self.off(hands)),
+        };
+        (head, at)
+    }
+
+    /// One region part as a chain, and whether the word it hands its region
+    /// rode out of it.
+    fn part(
+        &mut self,
+        range: Range<usize>,
+        nested: &[Region],
+        leaving: Vec<Node>,
+        hands: Option<ValueId>,
+    ) -> (Box<dyn Op>, bool) {
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
         let units = self.layout(range, nested, &runs, &chains);
-        let rides = self.rides_in(&units, None);
+        let mut rides = self.rides_in(&units, None);
+        // The part's last operation is the one whose word `Yield` hands
+        // back, so a word rides out only where that operation produced it
+        // and no move follows it.
+        let rode = hands.is_some()
+            && leaving.is_empty()
+            && units.last().and_then(|unit| self.rides_from(unit)) == hands;
+        if let (true, Some(value)) = (rode, hands) {
+            rides.add(value);
+        }
         let mut ops: Vec<Node> = Vec::new();
         for unit in &units {
             let end = self.unit(unit, Next(None), &rides, &mut ops);
@@ -1160,7 +1208,7 @@ impl<'a> Prepare<'a> {
             );
         }
         ops.extend(leaving);
-        chain(ops, Box::new(control::PartEnd))
+        (chain(ops, Box::new(control::Yield)), rode)
     }
 
     /// The operations this unit appends, and the terminator it is where it
@@ -1229,9 +1277,13 @@ impl<'a> Prepare<'a> {
         let into_body = self.move_ops(then_label, then_args);
         let exit = self.move_ops(else_label, else_args);
         let back = self.move_ops(header, back_args);
-        let cond = self.off(*cond);
 
-        let head = self.straight(region.head_block.clone(), &region.head_regions, Vec::new());
+        let (head, cond) = self.handing(
+            region.head_block.clone(),
+            &region.head_regions,
+            Vec::new(),
+            *cond,
+        );
         let ran = self.straight(region.body_block.clone(), &region.body_regions, back);
         debug_assert_eq!(
             self.references(*then_label),
@@ -1241,11 +1293,21 @@ impl<'a> Prepare<'a> {
         );
         let body = chain(into_body, ran);
 
-        ops.push(node(move |next| control::Loop {
-            head,
-            cond,
-            body,
-            next,
+        ops.push(made(move |next| match cond {
+            Where::Frame(off) => Box::new(control::Loop::<place::Slot> {
+                head,
+                cond: off,
+                body,
+                next,
+                at: PhantomData,
+            }) as Box<dyn Op>,
+            Where::Register => Box::new(control::Loop::<place::R0> {
+                head,
+                cond: (),
+                body,
+                next,
+                at: PhantomData,
+            }),
         }));
         ops.extend(exit);
     }
@@ -1294,7 +1356,7 @@ impl<'a> Prepare<'a> {
         } = region
         else {
             let join = self.move_ops(label, args);
-            return chain(join, Box::new(control::PartEnd));
+            return chain(join, Box::new(control::Yield));
         };
         let InstKind::Jump { label, args } = &self.body.insts[*jump].kind else {
             panic!("a recognized diamond's arm does not end in a jump")

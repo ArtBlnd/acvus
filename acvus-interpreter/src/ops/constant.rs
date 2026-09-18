@@ -1,6 +1,6 @@
 //! Constants: the literal an operation defines its destination with.
 
-use crate::code::{BlockId, Konst, Off, Op, successor};
+use crate::code::{Exit, Konst, Off, Op, successor};
 use crate::machine::Machine;
 
 /// The word of an integer, a float, a bool or unit. The slot's kind was
@@ -16,7 +16,7 @@ impl Op for Const {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().set_word(self.dst, self.word);
         self.next.run(m, r0)
     }
@@ -34,7 +34,7 @@ pub struct ConstLarge {
 impl Op for ConstLarge {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = self.konst.value();
         m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)

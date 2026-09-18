@@ -91,14 +91,23 @@ pub enum Where {
 
 pub type BlockId = u32;
 
+/// The word a chain hands back when it ends (RFC-0052 §3).
+///
+/// A chain that ends at a joint hands back the block the machine enters
+/// next; a region's part ends in `ops::control::Yield` and hands the region
+/// that owns it the word its last operation computed. The two never meet:
+/// `Machine::run` reads only the chains of `Body::heads`, and a region reads
+/// only the chains it owns.
+pub type Exit = u64;
+
 /// The body returns what it left in `Machine::exit`.
-pub const RETURN: BlockId = BlockId::MAX;
+pub const RETURN: Exit = BlockId::MAX as Exit;
 
 /// The body left a future in `Machine::pending` for the driver.
-pub const SUSPEND: BlockId = BlockId::MAX - 1;
+pub const SUSPEND: Exit = RETURN - 1;
 
 /// `Machine::run` is one compare against this per block.
-pub const SENTINEL: BlockId = SUSPEND;
+pub const SENTINEL: Exit = SUSPEND;
 
 const _: () = assert!(
     RETURN >= SENTINEL && SUSPEND >= SENTINEL,
@@ -134,7 +143,7 @@ where
 /// (RFC-0052 rule 5, `Place::R0`).
 #[cfg(any(debug_assertions, feature = "probe"))]
 pub trait Op: Named + Send + Sync {
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId;
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit;
 
     fn chain(&self) -> Option<ChainProbe<'_>> {
         None
@@ -211,7 +220,7 @@ pub struct OwnedOps<'o> {
 
 #[cfg(not(any(debug_assertions, feature = "probe")))]
 pub trait Op: Send + Sync {
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId;
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit;
 }
 
 /// The one writer of the three probe methods, over the `next` field the tail

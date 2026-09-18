@@ -22,7 +22,7 @@ const NO_SUCCESSOR: &[&str] = &[
     "control::Return",
     "control::Diverge",
     "control::Poison",
-    "control::PartEnd",
+    "control::Yield",
     "call::CallExternAsync",
     "call::CallStateAsync",
     "call::CallHeavy",

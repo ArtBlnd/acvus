@@ -18,7 +18,8 @@
 //! operations in them — and the value the script computes.
 
 use acvus_interpreter_test::listing::{
-    BlockListing, PartListing, RegionListing, ops_of_anywhere, regions_named, script_listing,
+    BlockListing, PartListing, RegionListing, family_of, ops_of_anywhere, regions_named,
+    script_listing,
 };
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -65,9 +66,11 @@ async fn a_regions_head_is_one_operation_list() {
     let blocks = loop_of(TAIL_ABOVE_THE_BRANCH);
     assert_eq!(
         part_of(one_loop(&blocks), "head").ops,
-        ["Lt<i64, Slot, Slot, Slot>"],
+        ["Lt<i64, Slot, Slot, R0>"],
         "the head is the condition alone: no terminator, because the head's \
-         `JumpIf` is the `cond` the Loop reads itself"
+         `JumpIf` is the `cond` the Loop reads itself — and the head's last \
+         operation writes it to the argument register, which `Yield` hands \
+         the `Loop` (RFC-0052 §3)"
     );
 }
 
@@ -134,7 +137,7 @@ async fn a_while_that_returns_is_not_a_region() {
     );
     let names = ops_of_anywhere(&blocks);
     assert!(
-        !names.iter().any(|name| name == "Loop"),
+        !names.iter().any(|name| family_of(name) == "Loop"),
         "a `return` is not straight-line, so `straight_run` stops at it and the \
          `while` prepares as blocks: {names:?}"
     );

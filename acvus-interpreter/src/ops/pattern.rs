@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use acvus_utils::Astr;
 
-use crate::code::{BlockId, Off, Op, successor};
+use crate::code::{Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::{Int, Unary};
 use crate::value::Value;
@@ -53,7 +53,7 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let matches = T::read(regs.word(self.slots.src)).wide() == self.want;
         regs.set_word(self.slots.dst, matches as u64);
@@ -70,7 +70,7 @@ pub struct TestFloat<const THROUGH: bool> {
 impl<const THROUGH: bool> Op for TestFloat<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let matches = place::<THROUGH>(regs.peek(self.slots.src)).as_float() == self.want;
         regs.set_word(self.slots.dst, matches as u64);
@@ -87,7 +87,7 @@ pub struct TestBool<const THROUGH: bool> {
 impl<const THROUGH: bool> Op for TestBool<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let matches = place::<THROUGH>(regs.peek(self.slots.src)).as_bool() == self.want;
         regs.set_word(self.slots.dst, matches as u64);
@@ -104,7 +104,7 @@ pub struct TestString<const THROUGH: bool> {
 impl<const THROUGH: bool> Op for TestString<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let source = place::<THROUGH>(regs.peek(self.slots.src));
         // SAFETY: the type checker matches a string literal against a string.
@@ -123,7 +123,7 @@ pub struct TestUnit {
 impl Op for TestUnit {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().set_word(self.dst, true as u64);
         self.next.run(m, r0)
     }
@@ -138,7 +138,7 @@ pub struct TestObjectKey<const THROUGH: bool> {
 impl<const THROUGH: bool> Op for TestObjectKey<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let source = place::<THROUGH>(regs.peek(self.slots.src));
         // SAFETY: is_object checked the vtable id.

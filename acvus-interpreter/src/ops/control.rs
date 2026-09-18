@@ -15,7 +15,7 @@
 use crate::code::OwnedOps;
 use std::marker::PhantomData;
 
-use crate::code::{BlockId, Off, Op, RETURN, successor};
+use crate::code::{BlockId, Exit, Off, Op, RETURN, successor};
 use crate::machine::Machine;
 use crate::ops::place::Place;
 use crate::value::Value;
@@ -39,7 +39,7 @@ impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         const {
             assert!(
                 !(LARGE && WORD),
@@ -68,8 +68,8 @@ pub struct Goto {
 
 impl Op for Goto {
     #[inline]
-    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
-        self.target
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
+        self.target.into()
     }
 }
 
@@ -91,10 +91,10 @@ where
     C: Place,
 {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         match C::read(m.regs(), self.cond, r0) != 0 {
-            true => self.on_true,
-            false => self.on_false,
+            true => self.on_true.into(),
+            false => self.on_false.into(),
         }
     }
 }
@@ -107,7 +107,7 @@ pub struct Return<const WORD: bool> {
 
 impl<const WORD: bool> Op for Return<WORD> {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let value = match WORD {
             true => {
                 let regs = m.regs();
@@ -121,18 +121,19 @@ impl<const WORD: bool> Op for Return<WORD> {
     }
 }
 
-/// The last node of a region's inner chain. A part chooses no block, so the
-/// `BlockId` this returns is the one the region discards.
-pub struct PartEnd;
+/// The last node of a region's inner chain: it hands the word the chain
+/// computed last to the region that owns the chain (RFC-0052 §3).
+///
+/// A part chooses no block, so what it hands back is a word and not a
+/// `BlockId`; where the part's last operation wrote its result to the frame
+/// instead, the word here is whatever rode into the chain, and the region
+/// that reads a frame register — `Loop<Slot>` — never looks at it.
+pub struct Yield;
 
-/// What `PartEnd` returns. `Machine::run` never sees it: a region is an
-/// operation of a chain, and the chain's own end is what names a block.
-pub const PART: BlockId = 0;
-
-impl Op for PartEnd {
+impl Op for Yield {
     #[inline]
-    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
-        PART
+    fn run(&self, _: &mut Machine<'_>, r0: u64) -> Exit {
+        r0
     }
 }
 
@@ -143,21 +144,34 @@ impl Op for PartEnd {
 /// the entering move before this operation, the move into the body at the head
 /// of `body`, the back edge at the end of `body`, and the exiting move after
 /// this operation.
-pub struct Loop {
+/// `C` is where the head's condition is: `place::R0` where the head chain's
+/// last operation produced it — the word rides out of the part into the test
+/// here, which is why the head is run for its return value — and
+/// `place::Slot` where it does not, which is the head whose last word is not
+/// the condition (a call tested later, an `Option` test). `prepare` chose
+/// between them, so this `run` holds no test of its own.
+pub struct Loop<C>
+where
+    C: Place,
+{
     pub head: Box<dyn Op>,
-    pub cond: Off,
+    pub cond: C::At,
     pub body: Box<dyn Op>,
     pub next: Box<dyn Op>,
+    pub at: PhantomData<fn() -> C>,
 }
 
-impl Op for Loop {
+impl<C> Op for Loop<C>
+where
+    C: Place,
+{
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         loop {
-            self.head.run(m, r0);
-            if m.regs().word(self.cond) == 0 {
+            let word = self.head.run(m, r0);
+            if C::read(m.regs(), self.cond, word) == 0 {
                 break;
             }
             self.body.run(m, r0);
@@ -206,13 +220,13 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let arm = match C::read(m.regs(), self.cond, r0) != 0 {
             true => self.on_true.as_ref(),
             false => self.on_false.as_ref(),
         };
-        arm.run(m, r0);
-        self.next.run(m, r0)
+        let word = arm.run(m, r0);
+        self.next.run(m, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -241,7 +255,7 @@ where
 pub struct Diverge;
 
 impl Op for Diverge {
-    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         panic!("a call typed `!` returned: its handler must panic")
     }
 }
@@ -255,7 +269,7 @@ impl Op for Merge {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().define::<false>(self.dst, Value::unit());
         self.next.run(m, r0)
     }
@@ -273,7 +287,7 @@ impl Op for Undef<true> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().set_word(self.dst, 0);
         self.next.run(m, r0)
     }
@@ -283,7 +297,7 @@ impl Op for Undef<false> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().define::<false>(self.dst, Value::UNDEF);
         self.next.run(m, r0)
     }
@@ -306,7 +320,7 @@ impl Op for DropValue {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         use acvus_extern::Release;
         m.regs().take::<true>(self.slot).release();
         self.next.run(m, r0)
@@ -318,7 +332,7 @@ impl Op for DropValue {
 pub struct Poison;
 
 impl Op for Poison {
-    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         panic!("reached poison instruction")
     }
 }

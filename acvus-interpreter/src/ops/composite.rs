@@ -3,7 +3,7 @@
 use acvus_extern::Owned;
 use rustc_hash::FxHashMap;
 
-use crate::code::{BlockId, FieldSlot, Off, Op, successor};
+use crate::code::{Exit, FieldSlot, Off, Op, successor};
 use crate::machine::Machine;
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -38,7 +38,7 @@ pub struct MakeArray {
 impl Op for MakeArray {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let items = self.elements.take(m);
         m.regs().define::<true>(self.dst, Value::array(items));
         self.next.run(m, r0)
@@ -54,7 +54,7 @@ pub struct MakeTuple {
 impl Op for MakeTuple {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let items = self.elements.take(m);
         m.regs().define::<true>(self.dst, Value::tuple(items));
         self.next.run(m, r0)
@@ -72,7 +72,7 @@ pub struct MakeObject {
 impl Op for MakeObject {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let object: FxHashMap<_, Owned<AcvusRuntime>> = self
             .fields

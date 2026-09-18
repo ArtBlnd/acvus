@@ -8,7 +8,7 @@
 use acvus_extern::{Elements, Release};
 use acvus_mir::ir::IndexMode;
 
-use crate::code::{BlockId, Off, Op, successor};
+use crate::code::{Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
@@ -84,7 +84,7 @@ impl<const CHECKED: bool> Op for IndexCopy<CHECKED> {
     }
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let index = regs.word(self.read.index);
         // SAFETY: the slice holds its container's loan.
@@ -113,7 +113,7 @@ impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
     }
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let index = regs.word(self.read.index);
         // SAFETY: as `IndexCopy`.
@@ -135,7 +135,7 @@ pub struct IndexSet<const CHECKED: bool, const LARGE: bool> {
 impl<const CHECKED: bool, const LARGE: bool> Op for IndexSet<CHECKED, LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let index = regs.word(self.index);
         let value = regs.take::<LARGE>(self.value);

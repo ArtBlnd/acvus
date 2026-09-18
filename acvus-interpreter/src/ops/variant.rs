@@ -7,7 +7,7 @@
 use acvus_extern::Owned;
 use acvus_utils::Astr;
 
-use crate::code::{BlockId, Off, Op, successor};
+use crate::code::{Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
 use crate::value::{Kind, ResultValue, Value, VariantValue};
@@ -35,7 +35,7 @@ pub struct MakeSome<const LARGE: bool> {
 impl<const LARGE: bool> Op for MakeSome<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let payload = regs.take::<LARGE>(self.slots.src);
         regs.define::<LARGE>(self.slots.dst, Value::some(payload));
@@ -51,7 +51,7 @@ pub struct MakeNone {
 impl Op for MakeNone {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().define::<false>(self.dst, Value::NONE);
         self.next.run(m, r0)
     }
@@ -67,7 +67,7 @@ pub struct MakeOk<const LARGE: bool> {
 impl<const LARGE: bool> Op for MakeOk<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
         regs.define::<true>(self.slots.dst, Value::result(Ok(payload)));
@@ -83,7 +83,7 @@ pub struct MakeErr<const LARGE: bool> {
 impl<const LARGE: bool> Op for MakeErr<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
         regs.define::<true>(self.slots.dst, Value::result(Err(payload)));
@@ -100,7 +100,7 @@ pub struct MakeVariant<const LARGE: bool> {
 impl<const LARGE: bool> Op for MakeVariant<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
         let value = Value::variant(self.tag, Some(payload));
@@ -118,7 +118,7 @@ pub struct MakeUnitVariant {
 impl Op for MakeUnitVariant {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = Value::variant(self.tag, None);
         m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)
@@ -134,7 +134,7 @@ pub struct TestOption<const THROUGH: bool, const SOME: bool> {
 impl<const THROUGH: bool, const SOME: bool> Op for TestOption<THROUGH, SOME> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let is_some = !scrutinee::<THROUGH>(regs.peek(self.slots.src)).is_none();
         regs.set_word(self.slots.dst, (is_some == SOME) as u64);
@@ -151,7 +151,7 @@ pub struct TestResult<const THROUGH: bool, const OK: bool> {
 impl<const THROUGH: bool, const OK: bool> Op for TestResult<THROUGH, OK> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let source = scrutinee::<THROUGH>(regs.peek(self.slots.src));
         // SAFETY: the preparation read `Result` from the source's type.
@@ -170,7 +170,7 @@ pub struct TestVariant<const THROUGH: bool> {
 impl<const THROUGH: bool> Op for TestVariant<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let source = scrutinee::<THROUGH>(regs.peek(self.slots.src));
         // SAFETY: the preparation read an enum from the source's type.
@@ -190,7 +190,7 @@ pub struct UnwrapOption<const LARGE: bool> {
 impl<const LARGE: bool> Op for UnwrapOption<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let option = regs.take::<LARGE>(self.slots.src);
         regs.define::<LARGE>(self.slots.dst, Value::some_payload(option));
@@ -208,7 +208,7 @@ pub struct UnwrapResult<const LARGE: bool> {
 impl<const LARGE: bool> Op for UnwrapResult<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let result = regs.take::<true>(self.slots.src);
         // SAFETY: the preparation read `Result` from the source's type.
@@ -231,7 +231,7 @@ pub struct UnwrapVariant<const LARGE: bool> {
 impl<const LARGE: bool> Op for UnwrapVariant<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let variant = regs.take::<true>(self.slots.src);
         // SAFETY: the preparation read an enum from the source's type.

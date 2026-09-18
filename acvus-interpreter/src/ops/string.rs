@@ -3,7 +3,7 @@
 
 use acvus_extern::Release;
 
-use crate::code::{BlockId, ConcatPart, Off, Op, successor};
+use crate::code::{ConcatPart, Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::{Binary, Unary};
 use crate::value::Value;
@@ -27,7 +27,7 @@ pub struct CloneString<const THROUGH: bool> {
 impl<const THROUGH: bool> Op for CloneString<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let source = place::<THROUGH>(regs.peek(self.slots.src));
         // SAFETY: the type checker admits only a `String` here.
@@ -45,7 +45,7 @@ pub struct StringEq {
 impl Op for StringEq {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         // SAFETY: the type checker admits only live `&String`s here.
         let equal = unsafe {
@@ -68,7 +68,7 @@ pub struct Concat {
 impl Op for Concat {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let mut out = String::new();
         for part in &self.parts {

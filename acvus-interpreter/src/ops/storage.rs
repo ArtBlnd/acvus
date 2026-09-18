@@ -11,7 +11,7 @@ use acvus_utils::{Astr, Interner};
 use std::marker::PhantomData;
 use std::mem;
 
-use crate::code::{BlockId, Off, Op, Step, successor};
+use crate::code::{Exit, Off, Op, Step, successor};
 use crate::machine::{Frame, Machine};
 use crate::ops::arith::Unary;
 use crate::ops::variant::scrutinee;
@@ -411,7 +411,7 @@ impl<const THROUGH: bool> Op for MakeRef<THROUGH> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let reference = Value::reference(scrutinee::<THROUGH>(regs.peek(self.slots.src)));
         regs.define::<false>(self.slots.dst, reference);
@@ -434,7 +434,7 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let base = scrutinee::<THROUGH>(regs.peek(self.slots.src));
         let reference = reference_to(self.step.at(base, interner));
@@ -452,7 +452,7 @@ pub struct MakeRefPath<const THROUGH: bool> {
 impl<const THROUGH: bool> Op for MakeRefPath<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let base = scrutinee::<THROUGH>(regs.peek(self.slots.src));
         let reference = reference_to(walk(base, &self.steps, interner));
@@ -474,7 +474,7 @@ impl<const LARGE: bool> Op for TakeVar<LARGE> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.src);
         regs.define::<LARGE>(self.slots.dst, value);
@@ -493,7 +493,7 @@ impl Op for TakeThrough {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let value = deref_word::<false>(regs.peek(self.slots.src));
         regs.define::<false>(self.slots.dst, value);
@@ -519,7 +519,7 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let value = M::at(regs.peek_mut(self.slots.src), &self.step, interner);
         M::define(regs, self.slots.dst, value);
@@ -543,7 +543,7 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let value = M::walked(regs.peek_mut(self.slots.src), &self.steps, interner);
         M::define(regs, self.slots.dst, value);
@@ -568,7 +568,7 @@ impl<const LARGE: bool> Op for AssignVar<LARGE> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
         regs.assign::<LARGE>(self.slots.target, value);
@@ -585,7 +585,7 @@ impl<const LARGE: bool> Op for AssignThrough<LARGE> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
         overwrite::<LARGE>(write_base::<true>(regs.peek_mut(self.slots.target)), value);
@@ -608,7 +608,7 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let value = regs.take::<LARGE>(self.slots.value);
         let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target));
@@ -626,7 +626,7 @@ pub struct AssignPath<const THROUGH: bool, const LARGE: bool> {
 impl<const THROUGH: bool, const LARGE: bool> Op for AssignPath<THROUGH, LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let value = regs.take::<LARGE>(self.slots.value);
         let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target));
@@ -661,7 +661,7 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let mut object = regs.take::<true>(self.slots.object);
         let value = regs.take::<LARGE>(self.slots.value);
@@ -680,7 +680,7 @@ pub struct SetPath<const LARGE: bool> {
 impl<const LARGE: bool> Op for SetPath<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let mut object = regs.take::<true>(self.slots.object);
         let value = regs.take::<LARGE>(self.slots.value);
@@ -702,7 +702,7 @@ pub struct Fetch<const LARGE: bool> {
 impl<const LARGE: bool> Op for Fetch<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let key = &self.key;
         let held = m
             .page
@@ -722,7 +722,7 @@ pub struct Commit<const LARGE: bool> {
 impl<const LARGE: bool> Op for Commit<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = m.regs().take::<LARGE>(self.src);
         m.page.set(&self.key, Owned::from_value(value));
         self.next.run(m, r0)
