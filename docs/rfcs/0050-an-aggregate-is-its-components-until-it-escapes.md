@@ -1,6 +1,6 @@
 # RFC-0050: an aggregate is its components until it escapes
 
-Status: Accepted — owner and coordinator, 2026-09-19 ("이렇게 가자"; the owner reviews the code after it is built)
+Status: Accepted — owner and coordinator, 2026-09-19 ("이렇게 가자"; the owner reviews the code after it is built); rules 2, 3, 5, 6 amended and 8, 9 added 2026-09-20 ("동의할게")
 Extends: RFC-0053 (an aggregate that does not escape never exists — the
 storage-slot form of this rule), RFC-0052 (§5 the register file, §6 the
 frame, §7 the window), RFC-0048 (`Value: Copy`, `Release`, the mark
@@ -53,29 +53,42 @@ object lives.
    aggregate SSA value, and a `Return` and a borrowed argument are no
    longer escapes (rules 4 and 5).
 
-2. **The frame has a wide register class.** Beside the `Value`
-   registers, every frame has one wide `Cell` (256 bytes, 64-aligned)
-   divided into **three 64-byte and two 32-byte slots** (offsets 0, 64,
-   128 and 192, 224). A wide slot holds an aggregate in its **field
-   layout**: `[Value; n]` in shape order (a variant: `[tag, payload…]`),
-   so a 64-byte slot holds up to four fields and a 32-byte slot two.
-   `prepare` chooses the class by the shape's size, which the type
-   fixes, and assigns slots by live range as it assigns registers; a
-   32-byte aggregate may take a 64-byte slot, never the reverse. An
-   aggregate goes to a wide slot when its address is needed (rule 3)
-   and stays in registers otherwise. The wide slot is owned by the
-   frame: its `Large` fields are marked in the slot's own mark bits
-   and released by the frame's sweep like any register.
+2. **The frame has a wide region, sized per body** (amended 2026-09-20).
+   Above a body's 64 general registers its frame has a **wide region**:
+   registers laid out exactly as the general ones (`Cell`s of sixteen
+   `Value`s, `Off` addressing), allocated not one register at a time but
+   as **runs**, one run per aggregate that needs an address (rule 3). A
+   run holds the aggregate in its **flattened field layout** (rule 8).
+   `prepare` sizes the region from the body's runs and their live ranges
+   as it colors registers — a body with no addressed aggregate has no
+   region — and the region is bounded at **256 `Value`s (4 KB)** per
+   body; the earlier fixed cut (one 256-byte `Cell` as three 64-byte and
+   two 32-byte slots) is what a body of two or three small aggregates
+   will still get, as the allocator's result, not as a layout fact. When
+   a body's runs exceed the bound, aggregates are spilled to the heap
+   (rule 4) **in ascending loop depth**, the shallowest first, ties
+   broken by the longest live range first: what a loop touches stays in
+   the frame. The region is owned by the frame like every register: a
+   frame has ⌈(64 + wide) / 64⌉ mark words, laid after its registers
+   where today's one is, and the sweep releases a run's `Large` fields
+   by its marks. The projection into a run is `Regs::run_of` — nothing
+   new in the machine reads it.
 
-3. **A reference to an aggregate is a projection.** `&obj` / `&mut obj`
-   is one word, `Kind::LargeRef`, pointing at the aggregate's field
-   layout — in a wide slot or on the heap (rule 4) — and a reader does
-   not know which: field `i` is `base + i * 16` in both. `Regs::run_of`
-   (a contiguous run lent as `&[Value]`) is the machine's form of it
-   today. A projection never outlives its frame: the loans that forbid
-   a borrow from escaping its body are the guarantee, and a `Vec`
-   buffer's stability under a move is stated as an invariant where a
-   projection is held across a suspension.
+3. **A reference to an aggregate is a projection, and an addressed
+   aggregate has one home.** `&obj` / `&mut obj` is one word,
+   `Kind::LargeRef`, pointing at the aggregate's flattened layout — in a
+   wide run or on the heap (rule 4) — and a reader does not know which:
+   field `i` is `base + off(i)` in both. An aggregate SSA variable whose
+   address is taken anywhere in its body **lives in its wide run for its
+   whole live range**: every read of a component after that point is a
+   load from the run, every write a store to it, so a write through a
+   projection is never stale against a register copy. An aggregate never
+   addressed stays in registers (rule 1). `prepare` decides the home
+   once per variable; a `run` never tests which. A projection never
+   outlives its frame: the loans that forbid a borrow from escaping its
+   body are the guarantee, and a `Vec` buffer's stability under a move
+   is stated as an invariant where a projection is held across a
+   suspension.
 
 4. **The heap is the spill.** An aggregate is realized on the heap —
    one `Large` holding the same `[Value; n]` — only where its value
@@ -91,34 +104,40 @@ object lives.
    more than four fields that must be addressed, spills to the heap the
    same way — listed by `prepare`, never a panic.
 
-5. **Return is multi-value, read by the caller.** A body returning an
-   aggregate leaves its components in its own registers; the caller
-   reads them at static window offsets (`prepare` knows the callee's
-   `frame_len` and the component registers) into its destinations. The
-   copy is n reads; rule 7's window starts above the caller's frame, so
-   the registers cannot coincide, and the RFC says so rather than
-   promising zero.
+5. **Return is multi-value, at the window's run** (amended 2026-09-20).
+   The run of registers at the window boundary — where a call lays its
+   arguments (`callindirect-without-a-heap`, RFC-0052 §7) — is also
+   where a callee leaves an aggregate result: the arguments are consumed
+   by then, the callee writes the components at `window_base + i`, and
+   the caller reads them into its destinations from offsets it knows
+   statically **without knowing the callee** — which is what a
+   `CallIndirect` through a closure value requires, since two bodies of
+   one type assign their own registers differently. The copy is n
+   reads; the window starts above the caller's frame, so the registers
+   cannot coincide, and the RFC says so rather than promising zero.
 
 6. **At a Rust boundary the glue converts, and nothing is heap-
-   allocated.** An object by `&`/`&mut`: the handler receives the
-   projection as `&[Value]` + shape (`&mut` writes through it — the wide
-   slot is the object). An object by value into a Rust container: rule
-   4's realization, at the glue. An enum: the glue builds a **real Rust
-   enum** — `#[acvus::enum]` on the Rust type declares variant ↔ tag —
-   by value from `(tag, payload)`; `&E` a stack temporary; `&mut E` a
-   temporary plus write-back of `(tag, payload)`; a returned Rust enum
-   is split back. An extern that **returns** an object writes it into
-   the caller's wide slot through `Context` — an associated type of the
-   runtime beside `Frame` (RFC-0052 §6), **owned by the frame**: it is
-   the frame's wide `Cell`, made with the frame and dropped with it,
-   never held by `Rt` (which is shared, `&`). A handler receives it as
-   `&mut Rt::Context` beside `&Rt` for the call's duration, so a
-   returned object is not a heap object either. A new frame is a new
-   `Context`; a callee body has its own; the async path's future owns
-   its frame and so its `Context`. Two frames never see one `Context`,
-   which is what makes a second `&mut` unwritable — the isolation a
-   multi-threaded runtime needs is the type's, not a rule's (`Context:
-   Send`, not `Sync`).
+   allocated** (amended 2026-09-20: no `Context` type). An object by
+   `&`/`&mut`: the handler receives the projection as `&[Value]` +
+   shape (`&mut` writes through it — the wide run is the object). An
+   object by value into a Rust container: rule 4's realization, at the
+   glue. An enum: the glue builds a **real Rust enum** — `#[acvus::
+   enum]` on the Rust type declares variant ↔ tag — by value from
+   `(tag, payload)`; `&E` a stack temporary; `&mut E` a temporary plus
+   write-back of `(tag, payload)`; a returned Rust enum is split back
+   (a payload that is itself an aggregate goes to the payload's run, by
+   rule 8's layout). An extern that **returns** an object receives its
+   destination as `Out<'_, Rt>` — a `&mut [Value]` over the caller's
+   destination run, lent for the call's duration — and writes the
+   components; it is not a heap object either. The frame owns the run;
+   `Out` is a borrow of it, so two callers cannot hold one and no
+   runtime-level `Context` type is needed to say so. **The frame a
+   handler receives to call a closure is the `Window` above the
+   caller's `frame_len`** (`Runtime::call_now`'s `&mut Frame` narrows
+   to it), disjoint by type from the caller's registers, its wide
+   region and `Out` — so a handler holding `Out` may call back into the
+   machine, and the callee's own region lives in its window. The async
+   path's future owns its window the same way.
 
 7. **A container's element is realized, and a container is never a
    component set.** `Vec`, arrays, deques: their elements are heap
@@ -128,6 +147,27 @@ object lives.
    fields, and treating it as one is a wrong implementation, not an
    optimization (owner, 2026-09-19).
 
+8. **An aggregate's layout is flat** (added 2026-09-20). The layout of
+   an aggregate is the concatenation of its fields' layouts: a word or
+   `Large` field is one `Value`, a nested aggregate field is its own
+   layout inline, an enum is `[tag, payload layout]`, and `off(i)` is
+   the prefix sum — fixed by the settled type (the union type, RFC-0041:
+   one field order and one tag numbering per program), known to
+   `prepare` and to the glue alike. `&line.a` is `base + off(a)`, a
+   projection into the middle of a run. A heap realization (rule 4)
+   holds the same flat `[Value; n]` behind its header, so a reader is
+   the same either way. In registers (rule 1) the same flattening is
+   what SROA does today one level down (`sroa.rs`: `[PathSeg::Field]`),
+   widened to a path of any depth. A field the settled union type has
+   and a construction lacks is `Undef` at its offset — whether the
+   checker admits a read of it is the type system's question, listed
+   under Order of work, not answered here.
+
+9. **`Option<Aggregate>` is flat over the run**: the run's first
+   `Value` is `Kind::None` for `None` and the payload's first component
+   otherwise, the rest `Undef` — RFC-0039's rule (an option is its
+   payload) at the width of the payload.
+
 Rule 5 of RFC-0052 stands: a register holds one kind class. A payload
 register whose variants disagree in class (`A(i64) | B(String)`) is
 whole-typed and `Release` decides by kind; there is no conditional
@@ -135,19 +175,23 @@ whole-typed and `Release` decides by kind; there is no conditional
 
 ## What it costs
 
-- The allocator gains a second register class and a size-class choice
-  per aggregate; the frame's wide `Cell` is 256 bytes per frame,
-  present whether used or not (a body with no aggregate still pays the
-  space, not the time).
+- The allocator gains run allocation over a per-body region with a
+  spill order (loop depth, then live range); a frame's size is no
+  longer one number per program but one per body, up to 4 KB more, and
+  a frame with more than 64 slots carries more than one mark word — the
+  sweep and `prepare`'s 64-register stop both change.
 - Two forms of every aggregate read: register (component) and
-  projection (`base + i*16`). `prepare` picks per site; a `run` never
-  tests which.
-- `Machine::exit` and `Return` become multi-value; every host that
-  reads a returned aggregate reads components.
+  projection (`base + off(i)`). `prepare` picks once per variable (rule
+  3); a `run` never tests which.
+- `Machine::exit` and `Return` become multi-value at the window's run;
+  every host that reads a returned aggregate reads components there.
+- Every handler ABI form (`SyncAbi::Arity0..3/Window`, `StateAbi`, the
+  slice and heavy forms) changes twice: the frame parameter narrows to
+  the `Window`, and an aggregate-returning form gains `Out`.
 - The extern crate gains a projection crossing (`Obj<V>`'s first `impl`
   block), an enum glue (`#[acvus::enum]`, new — `#[derive(TyArg)]` is
   its nearest form and refuses generics), a `&mut` write-back mechanism
-  (new: today `Cross::deref_mut` on an aggregate panics), and `Context`.
+  (new: today `Cross::deref_mut` on an aggregate panics), and `Out`.
 - The escape predicate changes its verdicts on `Return` and borrowed
   arguments; `exhaustive` shares it (RFC-0053), so `match` verdicts are
   re-run on the test set and reported.
@@ -186,6 +230,29 @@ whole-typed and `Release` decides by kind; there is no conditional
 - **The slice inside this RFC**: a slice is one MIR value given two
   registers by the machine — RFC-0047's amendment; it needs neither a
   wide slot nor the escape predicate.
+- **A fixed 256-byte wide `Cell` cut into three 64-byte and two 32-byte
+  slots** (the design as accepted on 2026-09-19): four fields per
+  aggregate before a heap spill, and a nested aggregate (rule 8) fills
+  it faster; the cost of the size itself — cache lines per call, the
+  frame `Vec` growing — is why the region is sized per body and bounded
+  at 4 KB rather than fixed larger (owner, 2026-09-20: "256이 작은 건
+  동의, 4 KB보다 더 키우는 건 반대"; the spill order by loop depth is the
+  owner's).
+- **A `Context` associated type on the runtime** (the design as
+  accepted): the frame's whole wide `Cell` handed to a handler as
+  `&mut`. The handler does not know which slot is its destination, so an
+  offset travels beside it and the pair is `&mut [Value]` — `Out`; and a
+  handler holding `&mut Context` while passing `&mut Store` to `call_now`
+  (`runtime.rs:147`) is two `&mut` into one frame, which Rust refuses —
+  the `Window` narrowing is what makes both borrows hold at once.
+- **Return in the callee's own component registers**: unreadable by a
+  caller through a closure value, whose body is not known to `prepare`.
+- **A per-site choice of register or projection for one aggregate**:
+  a write through a projection then leaves a register copy stale; the
+  home is one per variable (rule 3).
+- **Nested aggregates realized as the outer's `Large` fields**: the
+  literal reading of rule 4 before rule 8; a `Line` of two `Point`s
+  would box both on every `&line`.
 
 ## Consequences
 
@@ -207,10 +274,17 @@ implementation lands.
 ## Order of work
 
 No code before every site's form is written. The enumeration (94 rows)
-is the checklist; this RFC's rules are the answers. Order: RFC-0051's
-`Switch` operation → the wide register class and `LargeRef` in the
-machine (with the projection read and the frame-owned sweep) → the
-escape predicate widened to SSA values with `Return` and borrowed
-arguments removed, and `prepare` emitting realization only at the
-escape sites → multi-value return → the extern glue (`&[Value]` + shape,
-`#[acvus::enum]`, `&mut` write-back, `Context`) → the benches.
+is the checklist, re-read against rules 2–9 as amended on 2026-09-20;
+this RFC's rules are the answers. Two questions are settled before the
+first brief: whether the checker admits a read of a union-type field a
+construction lacks (rule 8's `Undef`), and the `Window` narrowing of
+every handler's frame parameter, which `callindirect-without-a-heap`
+(running) sets the argument-run half of. Order: RFC-0051's `Switch`
+operation (done, `347268d8`) → the wide region and `LargeRef` in the
+machine (run allocation, the spill order, the mark words, the
+projection read, the frame-owned sweep) → the escape predicate widened
+to SSA values with `Return` and borrowed arguments removed, SROA over a
+path of any depth (rule 8), and `prepare` emitting realization only at
+the escape sites with rule 3's one home → multi-value return at the
+window's run → the extern glue (`Window`, `Out`, `&[Value]` + shape,
+`#[acvus::enum]`, `&mut` write-back) → the benches.
