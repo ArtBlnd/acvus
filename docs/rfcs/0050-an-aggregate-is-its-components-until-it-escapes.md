@@ -108,9 +108,17 @@ object lives.
    by value from `(tag, payload)`; `&E` a stack temporary; `&mut E` a
    temporary plus write-back of `(tag, payload)`; a returned Rust enum
    is split back. An extern that **returns** an object writes it into
-   the caller's wide slot through the runtime's `Context` (an associated
-   type beside `Frame`, RFC-0052 §6), so a returned object is not a
-   heap object either.
+   the caller's wide slot through `Context` — an associated type of the
+   runtime beside `Frame` (RFC-0052 §6), **owned by the frame**: it is
+   the frame's wide `Cell`, made with the frame and dropped with it,
+   never held by `Rt` (which is shared, `&`). A handler receives it as
+   `&mut Rt::Context` beside `&Rt` for the call's duration, so a
+   returned object is not a heap object either. A new frame is a new
+   `Context`; a callee body has its own; the async path's future owns
+   its frame and so its `Context`. Two frames never see one `Context`,
+   which is what makes a second `&mut` unwritable — the isolation a
+   multi-threaded runtime needs is the type's, not a rule's (`Context:
+   Send`, not `Sync`).
 
 7. **A container's element is realized, and a container is never a
    component set.** `Vec`, arrays, deques: their elements are heap
