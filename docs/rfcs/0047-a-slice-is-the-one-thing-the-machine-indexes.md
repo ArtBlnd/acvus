@@ -132,7 +132,7 @@ enumerate the dependents, nothing is patched around.
 | `InstKind::ArrayIndex` | **stays**: it moves an element out of an owned scrutinee at a constant position — pattern destructuring, not indexing a borrowed container. It exists without `get`, so it is not taint |
 | `Vec::get`, `Vec::get_mut`, `Array::get`, `Array::get_mut` (acvus-ext) | `as_slice`/`as_slice_mut` + `Index`/`IndexSet`; deleted when the lowering emits the instructions (a transition where both exist is a defect, not a stage) |
 | `first`, `last` on `Vec`/`Array` | stay as externs (`Option<&T>`); a later RFC may make them `Index` with a bound test — recorded, not decided |
-| `len`, `is_empty` on `Vec`/`Array` | stay as externs; a slice knows its length (`head >> 8`), so `len(&v)` could become `as_slice` + `Len` — **measure before adding** (the interval pass needs `len(&c)` as a value either way) |
+| `len`, `is_empty` on `Vec`/`Array` | stay as externs; a `Slice` knows its length, so `len(&v)` could become `as_slice` + `Len` — **measure before adding** (the interval pass needs `len(&c)` as a value either way) |
 | the `*get(..)` read-through (`Take { Through }` after a call) at every indexing site | gone for word elements: `Index` in `Copy` mode yields the value; in `Ref` mode the `Ref` is the one `get` returned |
 | `Deque::get` and any container without `as_slice` | unchanged: a call with its check inside, never hoisted — the cost of not being a slice, by the container's own choice; `a[i]` on it is refused at the checker (`cannot index into a value of type `Deque<T>``) |
 
@@ -189,8 +189,8 @@ enumerate the dependents, nothing is patched around.
 - **The length as a third operand of `Index`** (proposed when the
   byte-array head was refuted): keeps `Value` untouched, but every
   crossing of a slice — a call, a capture, a store — must carry the
-  length beside it in the compiler's hands, where the value carries it
-  for free in its head word.
+  length beside it in the compiler's hands; the box carries it in one
+  value.
 
 - **Unchecked indexing as a language-level `unsafe`**: only the
   compiler's proof emits the unchecked form.
