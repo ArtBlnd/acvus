@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use acvus_extern::Owned;
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
-use acvus_interpreter_test::scripts::ATTENTION;
+use acvus_interpreter_test::listing::{regions_named, script_listing};
+use acvus_interpreter_test::scripts::{ATTENTION, ATTENTION_VEC};
 use acvus_interpreter_test::{
     Context, compile_script_mode, execute_compiled, split_context, value_from_json,
 };
@@ -119,13 +120,49 @@ fn median(mut samples: Vec<Duration>) -> Duration {
     samples[samples.len() / 2]
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Container {
+    Deque,
+    Vec,
+}
+
+impl Container {
+    fn script(self) -> &'static str {
+        match self {
+            Container::Deque => ATTENTION,
+            Container::Vec => ATTENTION_VEC,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Container::Deque => "deque",
+            Container::Vec => "vec",
+        }
+    }
+}
+
+/// `*out.get(0)`, the read `ATTENTION`'s own tests use, is not available to
+/// both variants: the `vec` registry exports no `get`, and the `deque`
+/// registry exports no `as_slice`, so `out[0]` has no instance to lower
+/// through either. `first` is the one read both registries do export, so the
+/// bench uses it and the two variants differ in the container alone.
+fn source_of(container: Container) -> String {
+    format!(
+        "{} if let Some(x) = out.first() {{ *x }} else {{ 0.0 }}",
+        container.script()
+    )
+}
+
 struct Case {
+    container: Container,
     n: usize,
     d: usize,
     reps: usize,
 }
 
 struct Row {
+    container: Container,
     n: usize,
     d: usize,
     compile: Duration,
@@ -135,11 +172,16 @@ struct Row {
 }
 
 fn measure(rt: &Runtime, case: &Case) -> Row {
-    let Case { n, d, reps } = *case;
+    let Case {
+        container,
+        n,
+        d,
+        reps,
+    } = *case;
     let inputs = inputs(n, d);
     let json = context_json(&inputs);
     let interner = Interner::new();
-    let source = format!("{ATTENTION} *out.get(0)");
+    let source = source_of(container);
     let context_types: FxHashMap<Astr, Ty> =
         split_context(&interner, context_of(&interner, &json)).0;
 
@@ -198,11 +240,13 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
     let difference = (script_value - rust_value).abs();
     assert!(
         difference < 1e-9,
-        "n={n} d={d}: script produced {script_value:.17e}, \
-         Rust reference produced {rust_value:.17e}, abs diff {difference:.17e}"
+        "{} n={n} d={d}: script produced {script_value:.17e}, \
+         Rust reference produced {rust_value:.17e}, abs diff {difference:.17e}",
+        container.name()
     );
 
     Row {
+        container,
         n,
         d,
         compile: median(compile_samples),
@@ -220,11 +264,16 @@ fn micros(d: Duration) -> f64 {
 /// bench, `perf record` attributes most of the process to the compiler, and
 /// the interpreter symbols the stage is about sit under the noise.
 fn execute_only(rt: &Runtime, case: &Case) -> Duration {
-    let Case { n, d, reps } = *case;
+    let Case {
+        container,
+        n,
+        d,
+        reps,
+    } = *case;
     let inputs = inputs(n, d);
     let json = context_json(&inputs);
     let interner = Interner::new();
-    let source = format!("{ATTENTION} *out.get(0)");
+    let source = source_of(container);
     let context_types: FxHashMap<Astr, Ty> =
         split_context(&interner, context_of(&interner, &json)).0;
     let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
@@ -250,12 +299,48 @@ fn execute_only(rt: &Runtime, case: &Case) -> Duration {
     median(samples)
 }
 
+/// The operations the register selector leaves in each `while`, nested loops
+/// first, so a difference between the two containers can be read off the
+/// inner loops instead of inferred from a duration.
+fn print_loop_listing(container: Container) {
+    let interner = Interner::new();
+    let json = context_json(&inputs(2, 2));
+    let blocks = script_listing(
+        &interner,
+        &source_of(container),
+        context_of(&interner, &json),
+        Ty::Float,
+    );
+    for (index, region) in regions_named(&blocks, "Loop").into_iter().enumerate() {
+        let head = region.part("head").expect("a Loop holds a head");
+        let body = region.part("body").expect("a Loop holds a body");
+        println!(
+            "{} loop {index}: head [{}] body [{}]",
+            container.name(),
+            head.ops.join(", "),
+            body.ops.join(", ")
+        );
+    }
+}
+
+fn container_from_env() -> Container {
+    match std::env::var("ATTENTION_CONTAINER")
+        .unwrap_or_else(|_| "deque".to_string())
+        .as_str()
+    {
+        "deque" => Container::Deque,
+        "vec" => Container::Vec,
+        other => panic!("ATTENTION_CONTAINER is deque or vec, got {other:?}"),
+    }
+}
+
 fn case_from_env() -> Case {
     let size = std::env::var("ATTENTION_SIZE").unwrap_or_else(|_| "64x64".to_string());
     let (n, d) = size
         .split_once('x')
         .unwrap_or_else(|| panic!("ATTENTION_SIZE is <n>x<d>, got {size:?}"));
     Case {
+        container: container_from_env(),
         n: n.parse()
             .unwrap_or_else(|e| panic!("ATTENTION_SIZE n {n:?}: {e}")),
         d: d.parse()
@@ -274,37 +359,40 @@ fn main() {
         .build()
         .expect("a current-thread tokio runtime");
 
-    if std::env::var("ATTENTION_PHASE").as_deref() == Ok("execute") {
-        println!("{:.1}", micros(execute_only(&rt, &case_from_env())));
-        return;
+    match std::env::var("ATTENTION_PHASE").as_deref() {
+        Ok("execute") => {
+            println!("{:.1}", micros(execute_only(&rt, &case_from_env())));
+            return;
+        }
+        Ok("listing") => {
+            print_loop_listing(container_from_env());
+            return;
+        }
+        _ => {}
     }
 
-    let cases = [
-        Case {
-            n: 2,
-            d: 2,
-            reps: 20,
-        },
-        Case {
-            n: 64,
-            d: 64,
-            reps: 20,
-        },
-        Case {
-            n: 256,
-            d: 128,
-            reps: 5,
-        },
-    ];
+    let sizes = [(2, 2, 20), (64, 64, 20), (256, 128, 5)];
+    let cases: Vec<Case> = [Container::Deque, Container::Vec]
+        .into_iter()
+        .flat_map(|container| {
+            sizes.into_iter().map(move |(n, d, reps)| Case {
+                container,
+                n,
+                d,
+                reps,
+            })
+        })
+        .collect();
     let rows: Vec<Row> = cases.iter().map(|case| measure(&rt, case)).collect();
 
     println!(
-        "{:>10}  {:>12}  {:>12}  {:>12}  {:>12}  {:>12}",
-        "size", "compile/us", "setup/us", "execute/us", "rust/us", "execute/rust"
+        "{:>8}  {:>10}  {:>12}  {:>12}  {:>12}  {:>12}  {:>12}",
+        "container", "size", "compile/us", "setup/us", "execute/us", "rust/us", "execute/rust"
     );
     for row in &rows {
         println!(
-            "{:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.1}",
+            "{:>8}  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.1}",
+            row.container.name(),
             format!("{}x{}", row.n, row.d),
             micros(row.compile),
             micros(row.setup),
