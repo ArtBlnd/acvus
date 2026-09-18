@@ -514,11 +514,12 @@ impl<'a> Prepare<'a> {
     /// where the callee's own type puts its task above `Sync`. Read per
     /// call site; `prepare_body` asserts the join of these against
     /// `MirBody::task`, which is the checker's claim for the whole body.
-    fn suspends_at(&mut self, callee_ty: &Ty) {
-        let task = callee_ty.effect().map_or(Task::Sync, |effect| effect.task);
-        if task > Task::Sync {
+    fn suspends_at(&mut self, callee_ty: &Ty) -> bool {
+        let suspends = call_task(callee_ty) > Task::Sync;
+        if suspends {
             self.may_suspend = true;
         }
+        suspends
     }
 
     /// A test reads through a reference, so the storage's type decides.
@@ -716,9 +717,11 @@ impl<'a> Prepare<'a> {
             | InstKind::LoadFunction { .. }
             | InstKind::Poison { .. } => false,
 
-            InstKind::FunctionCall { callee, .. } => match callee {
+            InstKind::FunctionCall {
+                callee, callee_ty, ..
+            } => match callee {
                 Callee::Extern { id, instance } => self.ctx.extern_is_sync(id, *instance),
-                Callee::Direct(_) | Callee::Indirect(_) => false,
+                Callee::Direct(_) | Callee::Indirect(_) => call_task(callee_ty) <= Task::Sync,
             },
 
             InstKind::Const { .. }
@@ -1748,19 +1751,23 @@ impl<'a> Prepare<'a> {
         } = into;
         match callee {
             Callee::Direct(id) => {
-                self.suspends_at(callee_ty);
                 let id = *id;
-                let Operands { slots, takes } = self.taken(args);
+                let operands = self.taken(args);
+                if !self.suspends_at(callee_ty) {
+                    ops.push(direct_call(into, id, operands));
+                    return None;
+                }
                 let resume = next.block();
+                let Operands { slots, takes } = operands;
                 Some(match large {
-                    true => Box::new(call::CallDirect::<true> {
+                    true => Box::new(call::CallDirectAsync::<true> {
                         dst: slot,
                         callee: id,
                         args: slots,
                         takes,
                         next: resume,
                     }),
-                    false => Box::new(call::CallDirect::<false> {
+                    false => Box::new(call::CallDirectAsync::<false> {
                         dst: slot,
                         callee: id,
                         args: slots,
@@ -1770,12 +1777,15 @@ impl<'a> Prepare<'a> {
                 })
             }
             Callee::Indirect(handle) => {
-                self.suspends_at(callee_ty);
                 let through = self.is_ref(*handle);
                 let handle = self.off(*handle);
                 let operands = self.taken(args);
+                if !self.suspends_at(callee_ty) {
+                    ops.push(indirect_call(into, through, handle, operands));
+                    return None;
+                }
                 let resume = next.block();
-                Some(indirect_call(into, through, handle, operands, resume))
+                Some(indirect_call_async(into, through, handle, operands, resume))
             }
             Callee::Extern { id, instance } => {
                 let handler = self.ctx.handler(id, *instance);
@@ -5089,7 +5099,92 @@ fn test_result<const THROUGH: bool>(slots: Unary, ok: bool) -> Box<dyn Op> {
     }
 }
 
-fn indirect_call(
+/// The task the checker settled for a called body, read off the callee
+/// register's type (RFC-0046). A type with no effect is `Sync`.
+fn call_task(callee_ty: &Ty) -> Task {
+    callee_ty.effect().map_or(Task::Sync, |effect| effect.task)
+}
+
+/// The `(large, word)` pair every call's result store is picked by, the same
+/// three forms `CallExtern1` has: a `Large` the frame takes ownership of, a
+/// word whose kind the frame opened, or neither.
+fn direct_call(into: Dest, callee: QualifiedRef, operands: Operands) -> Box<dyn Op> {
+    let Dest {
+        slot: dst,
+        large,
+        word,
+    } = into;
+    let Operands { slots: args, takes } = operands;
+    match (large, word) {
+        (true, _) => Box::new(call::CallDirect::<true, false> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+        (false, true) => Box::new(call::CallDirect::<false, true> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+        (false, false) => Box::new(call::CallDirect::<false, false> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+    }
+}
+
+fn indirect_call(into: Dest, through: bool, callee: Off, operands: Operands) -> Box<dyn Op> {
+    let Dest {
+        slot: dst,
+        large,
+        word,
+    } = into;
+    let Operands { slots: args, takes } = operands;
+    match (large, word, through) {
+        (true, _, false) => Box::new(call::CallIndirect::<true, false, false> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+        (true, _, true) => Box::new(call::CallIndirect::<true, false, true> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+        (false, true, false) => Box::new(call::CallIndirect::<false, true, false> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+        (false, true, true) => Box::new(call::CallIndirect::<false, true, true> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+        (false, false, false) => Box::new(call::CallIndirect::<false, false, false> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+        (false, false, true) => Box::new(call::CallIndirect::<false, false, true> {
+            dst,
+            callee,
+            args,
+            takes,
+        }),
+    }
+}
+
+fn indirect_call_async(
     into: Dest,
     through: bool,
     callee: Off,
@@ -5103,28 +5198,28 @@ fn indirect_call(
     } = into;
     let Operands { slots: args, takes } = operands;
     match (large, through) {
-        (false, false) => Box::new(call::CallIndirect::<false, false> {
+        (false, false) => Box::new(call::CallIndirectAsync::<false, false> {
             dst,
             callee,
             args,
             takes,
             next,
         }),
-        (false, true) => Box::new(call::CallIndirect::<false, true> {
+        (false, true) => Box::new(call::CallIndirectAsync::<false, true> {
             dst,
             callee,
             args,
             takes,
             next,
         }),
-        (true, false) => Box::new(call::CallIndirect::<true, false> {
+        (true, false) => Box::new(call::CallIndirectAsync::<true, false> {
             dst,
             callee,
             args,
             takes,
             next,
         }),
-        (true, true) => Box::new(call::CallIndirect::<true, true> {
+        (true, true) => Box::new(call::CallIndirectAsync::<true, true> {
             dst,
             callee,
             args,

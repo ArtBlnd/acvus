@@ -281,6 +281,49 @@ site a panic names comes from the callable that panicked.
 `Resume` replaces the old `Entry` on the asynchronous path, built by the
 same trait method rather than by a second `match`.
 
+## A synchronous call is an operation
+
+Rule 2 says a block is straight-line and only its terminator chooses, and
+rule 4 keeps a suspending operation out of a region. A call into another
+body used to be a terminator on both counts — but on a run-time test:
+`CallDirect` looked the callee's prepared `Code` up, asked
+`may_suspend()`, and either suspended or ran the callee to its value.
+Every user-function call therefore ended a block, paid a terminator
+dispatch and a `Machine.at` round trip, and could not sit in a region.
+
+The fact is static. The callee's task is in the type the checker settled
+(RFC-0046), and `prepare` reads it off the callee register:
+`call_task(callee_ty)`, `Sync` where the type carries no effect.
+
+- A call whose task is `Sync` is an **operation**. `CallDirect<LARGE,
+  WORD>` and `CallIndirect<LARGE, WORD, THROUGH>` run the callee to its
+  value inside `run`, through the window above the caller's frame
+  (`Machine::call_sync`, `call_fn_sync` — rule 7), and store the result
+  with `Regs::store::<LARGE, WORD>`, the same three forms `CallExtern1`
+  has. The callee is still reached by index at run time: `CallDirect`
+  looks its module up through the table, because a caller's `prepare`
+  may run before the callee's body exists. What it does not ask is
+  whether that body can suspend.
+- A call whose task is above `Sync` is `CallDirectAsync<LARGE>` or
+  `CallIndirectAsync<LARGE, THROUGH>` — a terminator that hands the
+  driver a future and leaves the block at `SUSPEND`, with no arm that
+  runs to a value.
+- `is_straight_line` admits the first and refuses the second, so rule 4
+  now lets a region hold a non-suspending call.
+
+`Body::may_suspend` stays, with one reader left: the assert in
+`run_frame` that a body entered synchronously is one that cannot
+suspend. That assert is what would catch a disagreement between the
+effect the checker read and the body `prepare` produced; it is the guard
+the removed run-time test used to be, moved to where the frame is
+entered and paid once per call rather than consulted per decision.
+
+The measurement is `accum`'s `call while` — `let step = |x| -> x + 1;
+while i < n { i = step(i) }` — which went from five blocks with the call
+its own terminator to two blocks, the `while` one `Loop` region whose
+body is the single operation `CallIndirect<false, true, true>`: **17.9 →
+10.4 ns per iteration, −41.9 %**.
+
 ## What it costs
 
 - One vtable-slot load per operation (`(*data).vtable.run`) that a
@@ -380,6 +423,19 @@ same trait method rather than by a second `match`.
   the count above, so **the band is the model's error, not the
   machine's**: at seven instructions of dispatch per operation and three
   operations, 3.1–3.7 ns is what this shape costs, and 3.3 is inside it.
+
+- **A synchronous call costs one operation.** `accum`'s `call while`
+  (`let step = |x| -> x + 1; while i < n { i = step(i) }`), against the
+  `a6f1d50d` base, five alternating pinned reps per case: **18.6 → 10.9
+  ns per iteration, −41.4 %**. The body went from five blocks — the
+  head's compare, the call's own block, the back edge — to two, the
+  `while` a single `Loop` region whose body is the one operation
+  `CallIndirect<false, true, true>`. What the iteration no longer pays:
+  one terminator dispatch, two block entries and the `Machine.at` round
+  trip between them, and the run-time `may_suspend()` load and branch.
+  Every other case in the table is inside ±3 % of the base when measured
+  per case; the whole-binary sweep on a loaded box is not, and the
+  per-case alternating form is what the numbers above are taken with.
 
 - **Measured, against the master base (`scratchpad/expected-52.md`),
   three alternating pinned reps, median of three.** Twenty of

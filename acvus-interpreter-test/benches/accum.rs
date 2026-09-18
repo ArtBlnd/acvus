@@ -63,6 +63,9 @@ const WHILE_LET_VEC: &str = "let v = range(0, @n) | collect; let it = as_iter(&v
 /// The same head over a lazy pipeline of synchronous stages.
 const WHILE_LET_MAP: &str = "let it = range(0, @n) | map(|x| -> x + 1); let acc = 0; while let Some(x) = next(&mut it) { acc = acc + x; } acc";
 
+/// The measurement RFC-0052 §"a synchronous call is an operation" is judged
+/// against: a `Sync` call to a user function, once per iteration.
+const CALL_WHILE: &str = "let step = |x| -> x + 1; let i = 0; while i < @n { i = step(i); } i";
 /// A value diamond in the body: the collatz step, both arms non-empty and
 /// the join carrying one parameter.
 const COLLATZ_WHILE: &str = "let i = 0; let acc = 0; while i < @n { let d = if i % 2 == 0 { i / 2 } else { i * 3 + 1 }; acc = acc + d; i = i + 1; } acc";
@@ -165,6 +168,18 @@ fn rust_while_let_map(n: i64) -> f64 {
         acc += black_box(x);
     }
     acc as f64
+}
+
+fn step(i: i64) -> i64 {
+    i + 1
+}
+
+fn rust_call_while(n: i64) -> f64 {
+    let mut i = 0i64;
+    while i < n {
+        i = step(black_box(i));
+    }
+    i as f64
 }
 
 fn rust_collatz_while(n: i64) -> f64 {
@@ -354,6 +369,13 @@ fn main() {
             source: WHILE_LET_MAP,
             registries: std_only,
             rust: rust_while_let_map,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "call while",
+            source: CALL_WHILE,
+            registries: std_only,
+            rust: rust_call_while,
             read: |v| v.as_int() as f64,
         },
         Case {

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use acvus_extern::{AsyncCall, Elements, Owned, State, StateRef, erase_elements};
 use acvus_mir::graph::QualifiedRef;
+use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
 use crate::code::{BlockId, Deref, Off, Op, SUSPEND, Terminator};
@@ -533,11 +534,31 @@ impl<const LARGE: bool> Terminator for CallHeavy<LARGE> {
     }
 }
 
-/// A call into another body runs to its result here when that body's prepared
-/// `Code` cannot suspend, and hands a future up when it can. That is the one
-/// decision left to run time: the callee is reached through the module table,
-/// and a caller's `prepare` cannot read a body it may be compiled before.
-pub struct CallDirect<const LARGE: bool> {
+/// A call into another body whose type says `Sync` (RFC-0046): the callee is
+/// reached through the module table at run time, as it always was, and run to
+/// its value on the window above this frame (RFC-0052 rule 7). Whether the
+/// callee *may* suspend is not asked — the checker settled it.
+pub struct CallDirect<const LARGE: bool, const WORD: bool> {
+    pub dst: Off,
+    pub callee: QualifiedRef,
+    pub args: Box<[Off]>,
+    pub takes: u64,
+}
+
+impl<const LARGE: bool, const WORD: bool> Op for CallDirect<LARGE, WORD> {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let args = staged(m, &self.args, self.takes);
+        let prepared = Arc::clone(lookup_module(m.shared(), &self.callee));
+        let value = call_module_sync(m, &prepared, self.callee, args);
+        m.regs().store::<LARGE, WORD>(self.dst, value);
+    }
+}
+
+/// The same call where the callee's task is above `Sync`: it hands the driver
+/// a future and leaves the block, which is why this one is a terminator and
+/// `CallDirect` is not.
+pub struct CallDirectAsync<const LARGE: bool> {
     pub dst: Off,
     pub callee: QualifiedRef,
     pub args: Box<[Off]>,
@@ -545,30 +566,70 @@ pub struct CallDirect<const LARGE: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool> Terminator for CallDirect<LARGE> {
+impl<const LARGE: bool> Terminator for CallDirectAsync<LARGE> {
     fn next(&self, m: &mut Machine<'_>) -> BlockId {
         let args = staged(m, &self.args, self.takes);
-        let prepared = Arc::clone(lookup_module(m.shared(), &self.callee));
-        if prepared.main.may_suspend() {
-            let shared = Arc::clone(m.shared());
-            let page = Arc::clone(m.page);
-            let fut = Box::pin(call_module(shared, page, self.callee, args));
-            m.suspend::<LARGE>(self.dst, self.next, fut);
-            return SUSPEND;
-        }
-
-        let value = call_module_sync(m, &prepared, self.callee, args);
-        m.regs().define::<LARGE>(self.dst, value);
-        self.next
+        let shared = Arc::clone(m.shared());
+        let page = Arc::clone(m.page);
+        let fut = Box::pin(call_module(shared, page, self.callee, args));
+        m.suspend::<LARGE>(self.dst, self.next, fut);
+        SUSPEND
     }
 }
 
-/// `THROUGH` is what `prepare` read from the callee register's type: a
-/// reference names a closure the caller keeps, a value is one this call
-/// consumes — which is why the value form takes the register here and
-/// `takes` covers the arguments alone. As `CallDirect`, the closure's own
-/// `Code` decides whether this runs to a result or hands a future up.
-pub struct CallIndirect<const LARGE: bool, const THROUGH: bool> {
+/// How a call reaches the closure its callee register holds, which `prepare`
+/// read off that register's type: `THROUGH` is a reference the caller keeps,
+/// its absence a value this call consumes — which is why the value form takes
+/// the register and `takes` covers the arguments alone.
+///
+/// # Safety
+/// The type checker admits only a closure in the callee register, and only a
+/// live reference to one under `THROUGH`: the closure's register is not
+/// written during the call, and the machine holding it outlives the call.
+#[inline(always)]
+unsafe fn call_closure<const THROUGH: bool>(
+    m: &mut Machine<'_>,
+    callee: Off,
+    args: &mut [Value],
+) -> Value {
+    match THROUGH {
+        true => {
+            let closure: &FnValue = unsafe {
+                let target = m.regs().peek(callee).target();
+                &*(target.as_fn() as *const FnValue)
+            };
+            m.call_fn_sync(closure, args)
+        }
+        false => {
+            let closure = unsafe { m.regs().take::<true>(callee).materialize::<FnValue>() };
+            m.call_fn_sync(&closure, args)
+        }
+    }
+}
+
+/// A closure call whose type says `Sync`: as `CallDirect`, run to its value
+/// inside the block, with no test of the closure's own `Code`.
+pub struct CallIndirect<const LARGE: bool, const WORD: bool, const THROUGH: bool> {
+    pub dst: Off,
+    pub callee: Off,
+    pub args: Box<[Off]>,
+    pub takes: u64,
+}
+
+impl<const LARGE: bool, const WORD: bool, const THROUGH: bool> Op
+    for CallIndirect<LARGE, WORD, THROUGH>
+{
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>) {
+        let mut args = staged(m, &self.args, self.takes);
+        // SAFETY: as `call_closure` states.
+        let value = unsafe { call_closure::<THROUGH>(m, self.callee, &mut args) };
+        m.regs().store::<LARGE, WORD>(self.dst, value);
+    }
+}
+
+/// A closure call whose task is above `Sync`: the future goes to the driver.
+pub struct CallIndirectAsync<const LARGE: bool, const THROUGH: bool> {
     pub dst: Off,
     pub callee: Off,
     pub args: Box<[Off]>,
@@ -576,40 +637,30 @@ pub struct CallIndirect<const LARGE: bool, const THROUGH: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool, const THROUGH: bool> Terminator for CallIndirect<LARGE, THROUGH> {
+impl<const LARGE: bool, const THROUGH: bool> Terminator for CallIndirectAsync<LARGE, THROUGH> {
     fn next(&self, m: &mut Machine<'_>) -> BlockId {
         let mut args = staged(m, &self.args, self.takes);
-        if THROUGH {
+        let fut: BoxFuture<'static, Value> = match THROUGH {
             // SAFETY: the type checker admits only a live reference to a
             // closure here; the closure's register is not written during the
             // call, and the machine holding it outlives the future the driver
             // awaits.
-            let closure: &'static FnValue = unsafe {
-                let target = m.regs().peek(self.callee).target();
-                &*(target.as_fn() as *const FnValue)
-            };
-            if closure.entry.may_suspend() {
-                let fut = Box::pin(fn_value_call(closure, &mut args));
-                m.suspend::<LARGE>(self.dst, self.next, fut);
-                return SUSPEND;
+            true => {
+                let closure: &'static FnValue = unsafe {
+                    let target = m.regs().peek(self.callee).target();
+                    &*(target.as_fn() as *const FnValue)
+                };
+                Box::pin(fn_value_call(closure, &mut args))
             }
-
-            let value = m.call_fn_sync(closure, &mut args);
-            m.regs().define::<LARGE>(self.dst, value);
-            return self.next;
-        }
-
-        // SAFETY: the type checker admits only a closure value here.
-        let closure = unsafe { m.regs().take::<true>(self.callee).materialize::<FnValue>() };
-        if closure.entry.may_suspend() {
-            let fut = Box::pin(async move { fn_value_call(&closure, &mut args).await });
-            m.suspend::<LARGE>(self.dst, self.next, fut);
-            return SUSPEND;
-        }
-
-        let value = m.call_fn_sync(&closure, &mut args);
-        m.regs().define::<LARGE>(self.dst, value);
-        self.next
+            // SAFETY: the type checker admits only a closure value here.
+            false => {
+                let closure =
+                    unsafe { m.regs().take::<true>(self.callee).materialize::<FnValue>() };
+                Box::pin(async move { fn_value_call(&closure, &mut args).await })
+            }
+        };
+        m.suspend::<LARGE>(self.dst, self.next, fut);
+        SUSPEND
     }
 }
 
