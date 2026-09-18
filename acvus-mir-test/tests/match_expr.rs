@@ -56,10 +56,19 @@ fn a_match_over_a_locally_closed_enum_needs_no_catch_all() {
     // arm but the last, which is the chain's else.
     let optimized = compile_script_optimized(&i, &source, &flag(&i)).unwrap();
     assert!(!optimized.contains("switch "), "{optimized}");
+    assert!(
+        !optimized.contains("variant "),
+        "an enum this body never lets out is never built: {optimized}"
+    );
     assert_eq!(
         optimized.matches("is A").count() + optimized.matches("is B").count(),
-        1,
-        "two arms cost one tag test: {optimized}"
+        0,
+        "no instruction reads a tag out of a value that does not exist: {optimized}"
+    );
+    assert_eq!(
+        optimized.matches("jump_if").count(),
+        2,
+        "one branch chooses the constructor and one tag test chooses the arm: {optimized}"
     );
 }
 

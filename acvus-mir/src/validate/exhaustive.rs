@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use acvus_utils::Astr;
 use rustc_hash::FxHashSet;
 
-use crate::analysis::inst_info;
+use crate::analysis::{escape, inst_info};
 use crate::ir::{Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
 use crate::ty::Ty;
 use crate::validate::type_check::{ValidationError, ValidationErrorKind};
@@ -133,7 +133,9 @@ pub fn known_variants(body: &MirBody, value: ValueId) -> Known {
     let Some(storage) = local_storage(body, value) else {
         return Known::Open;
     };
-    if escapes(body, storage) {
+    // What a callee reached could write a new variant back, and this stage
+    // cannot see whether it did.
+    if escape::of_insts(body.insts.iter().map(|inst| &inst.kind)).escapes(storage) {
         return Known::Open;
     }
     let mut tags = BTreeSet::new();
@@ -212,33 +214,6 @@ fn defines(inst: &Inst, value: ValueId) -> bool {
         InstKind::Assign { target, .. } => *target == RefTarget::Var(value),
         kind => inst_info::defs(kind).contains(&value),
     }
-}
-
-/// Does anything outside this body reach the storage? A lend or a read of
-/// it that becomes a call's argument, a spawn's argument, or a closure's
-/// capture is what this stage decides on. What it cannot decide is whether
-/// such a callee writes a new variant back, so every one of them is `Open`.
-fn escapes(body: &MirBody, storage: ValueId) -> bool {
-    let reads: FxHashSet<ValueId> = body
-        .insts
-        .iter()
-        .filter_map(|inst| match &inst.kind {
-            InstKind::Ref { dst, target, .. } | InstKind::Take { dst, target, .. }
-                if *target == RefTarget::Var(storage) =>
-            {
-                Some(*dst)
-            }
-            _ => None,
-        })
-        .collect();
-    let escaped = |v: &ValueId| reads.contains(v) || *v == storage;
-    body.insts.iter().any(|inst| match &inst.kind {
-        InstKind::FunctionCall { args, .. } | InstKind::Spawn { args, .. } => {
-            args.iter().any(escaped)
-        }
-        InstKind::MakeClosure { captures, .. } => captures.iter().any(escaped),
-        _ => false,
-    })
 }
 
 /// The tags a value is built from: one `MakeVariant`, or a join of them

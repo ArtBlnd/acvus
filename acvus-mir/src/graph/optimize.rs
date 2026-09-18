@@ -115,6 +115,10 @@ fn run_pass2_body(body: &mut crate::ir::MirBody) {
 fn run_pass2(cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
+    // RFC-0053: an aggregate no use lets out of the body never exists.
+    // Before `ssa_pass`, whose builder places the phis its parts need;
+    // before `dce`, which sweeps the constructor left with no reader.
+    optimize::sroa::run(cfg);
     optimize::ssa_pass::run(cfg);
     optimize::string_copy::run(cfg);
     optimize::dse::run(cfg);

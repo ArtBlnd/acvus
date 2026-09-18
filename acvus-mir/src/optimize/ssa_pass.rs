@@ -599,7 +599,7 @@ fn materialize_entry_defs(cfg: &mut CfgBody, entry_defs: EntryDefs) {
 
 // -- Step 3: Patch instructions --------------------------------------
 
-fn patch_instructions(cfg: &mut CfgBody, phi_insertions: &[super::ssa::PhiInsertion]) {
+pub(super) fn patch_instructions(cfg: &mut CfgBody, phi_insertions: &[super::ssa::PhiInsertion]) {
     // PHI lookup tables.
     let mut block_phis: BTreeMap<Label, Vec<&super::ssa::PhiInsertion>> = BTreeMap::default();
     for phi in phi_insertions {

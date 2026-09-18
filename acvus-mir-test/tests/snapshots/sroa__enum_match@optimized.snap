@@ -1,0 +1,104 @@
+---
+source: acvus-mir-test/tests/sroa.rs
+expression: listing
+---
+=== main ===
+     0 |   r0 = fetch @n
+     3 |   jump L0(0 (r1), 0 (r2))
+     4 | L0(r3: i64, r4: i64):
+     5 |   r5 = r4 < r0
+     6 |   jump_if r5 then L1 else L2
+     7 | L1:
+     9 |   r6 = r4 % 2 (r7)
+    11 |   r8 = r6 == 0 (r9)
+    14 |   r10 = r4 + 1 (r11)
+    15 |   jump_if r8 then L3 else L5
+    16 | L3:
+    18 |   jump L4(1 (r12), r4)
+    19 | L5:
+    21 |   r13 = r4 + 1 (r14)
+    23 |   jump L4(0 (r15), r13)
+    24 | L4(r16: i64, r17: i64):
+    25 |   r18 = r16 == 1 (r19)
+    26 |   jump_if r18 then L7 else L8
+    27 | L7:
+    28 |   r20 = r3 + r17
+    29 |   jump L6(r20)
+    30 | L8:
+    31 |   r21 = r3 + r17
+    32 |   jump L6(r21)
+    33 | L6(r22: i64):  ; merge_of L7
+    34 |   jump L0(r22, r10)
+    35 | L2:
+    36 |   commit @n = r0
+    37 |   return r3
+
+    ; r0 (@n) : i64
+    ; r1 (v3) : i64
+    ; r2 (v5) : i64
+    ; r3 (v51) : i64
+    ; r4 (v48) : i64
+    ; r5 (v9) : Bool
+    ; r6 (v12) : i64
+    ; r7 (v11) : i64
+    ; r8 (v14) : Bool
+    ; r9 (v13) : i64
+    ; r10 (v39) : i64
+    ; r11 (v38) : i64
+    ; r12 (v65) : i64
+    ; r13 (v19) : i64
+    ; r14 (v18) : i64
+    ; r15 (v66) : i64
+    ; r16 (v67) : i64
+    ; r17 (v69) : i64
+    ; r18 (v42) : Bool
+    ; r19 (v68) : i64
+    ; r20 (v28) : i64
+    ; r21 (v34) : i64
+    ; r22 (v56) : i64
+    ; r23 (v) : i64
+    ; r24 (v44) : i64
+    ; r25 (i) : i64
+    ; r26 (v50) : i64
+    ; r27 (v60) : i64
+    ; r28 (v20) : E{B(i64)}
+    ; r29 (acc) : i64
+    ; r30 (acc) : i64
+    ; r31 (v) : i64
+    ; r32 (i) : i64
+    ; r33 (v62) : i64
+    ; r34 (v43) : i64
+    ; r35 (v) : i64
+    ; r36 (v49) : i64
+    ; r37 (v) : i64
+    ; r38 (v55) : i64
+    ; r39 (v36) : Unit
+    ; r40 (i) : i64
+    ; r41 (v61) : i64
+    ; r42 (e.) : &E{A(i64), B(i64)}
+    ; r43 (acc) : i64
+    ; r44 (v29) : Unit
+    ; r45 (i) : i64
+    ; r46 (v54) : i64
+    ; r47 (v35) : Unit
+    ; r48 (v16) : E{A(i64)}
+    ; r49 (v41) : i64
+    ; r50 (e) : E{A(i64), B(i64)}
+    ; r51 (v47) : i64
+    ; r52 (v53) : i64
+    ; r53 (i) : i64
+    ; r54 (v59) : i64
+    ; r55 (acc) : i64
+    ; r56 (v21) : E{A(i64), B(i64)}
+    ; r57 (v46) : i64
+    ; r58 (v) : i64
+    ; r59 (@n) : i64
+    ; r60 (v52) : i64
+    ; r61 (v) : i64
+    ; r62 (v58) : i64
+    ; r63 (v64) : i64
+    ; r64 (@n) : i64
+    ; r65 (v45) : i64
+    ; r66 (i) : i64
+    ; r67 (v57) : i64
+    ; r68 (v63) : i64

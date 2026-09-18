@@ -23,7 +23,18 @@
 
 use crate::graph::QualifiedRef;
 use crate::ir::{Label, ValueId};
+use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+/// One scalar an aggregate is made of, once the aggregate itself is gone
+/// (RFC-0053). A tag is not a [`crate::ir::PathSeg`] because no place names
+/// one: it is which variant the value holds, and it exists only here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Part {
+    Field(Astr),
+    Tag,
+    Payload,
+}
 
 /// Key for SSA tracking: either a context variable or a local variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -32,6 +43,7 @@ pub enum SsaVar {
     Context(QualifiedRef),
     /// Local variable or extern param, identified by storage slot ValueId.
     Local(ValueId),
+    Part(ValueId, Part),
 }
 
 /// A pending PHI that needs to be resolved when the block is sealed.

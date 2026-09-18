@@ -1,0 +1,23 @@
+---
+source: acvus-mir-test/tests/sroa.rs
+expression: listing
+---
+=== main ===
+     0 |   r0 = fetch @n
+     2 |   r1 = r0 + 1 (r2)
+     3 |   r3 = object {x: r0, y: r1}
+     4 |   commit @n = r0
+     5 |   return r3
+
+    ; r0 (@n) : i64
+    ; r1 (v6) : i64
+    ; r2 (v5) : i64
+    ; r3 (v7) : {x: i64, y: i64}
+    ; r4 (v11) : i64
+    ; r5 (@n) : i64
+    ; r6 (v10) : i64
+    ; r7 (o) : {x: i64, y: i64}
+    ; r8 (@n) : i64
+    ; r9 (v12) : {x: i64, y: i64}
+    ; r10 (o) : {x: i64, y: i64}
+    ; r11 (@n) : i64
