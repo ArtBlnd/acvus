@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "asm_probe"
 harness = false
+
+[[bench]]
+name = "spawn"
+harness = false
