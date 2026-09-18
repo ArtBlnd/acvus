@@ -91,3 +91,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0043](0043-a-name-is-a-set-of-signatures.md) | A bare name is a set of signatures | Accepted |
 | [RFC-0044](0044-a-body-is-prepared-once.md) | A body is prepared once | Accepted |
 | [RFC-0045](0045-let-binds-and-assignment-assigns.md) | `let` binds, `x = e;` assigns | Accepted |
+| [RFC-0046](0046-a-calls-task-is-an-effect.md) | A call's task is an effect: `Task::{Sync, Async, Heavy}` | Accepted |
