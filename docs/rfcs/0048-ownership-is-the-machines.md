@@ -1,6 +1,6 @@
 # RFC-0048: ownership is the machine's — a value copies, a register is written once
 
-Status: Draft — owner and coordinator, 2026-09-18
+Status: Accepted — owner and coordinator, 2026-09-18 (rule 7 landed first, `803d4f1a`)
 Extends: RFC-0018 (references), RFC-0039 (one crossing), RFC-0041 (drop
 insertion), RFC-0044 (a body is prepared once), RFC-0045 (`let` binds,
 `=` assigns)
@@ -43,11 +43,21 @@ as an instruction. The machine already owns every fact `Drop` re-derives.
 explicit act of the machine — a drop instruction or the frame's exit —
 and of a Rust holder that took ownership. Everything else copies.
 
-1. **`Value: Copy`.** `impl Drop for Value` is removed. `Value::release
-   (self)` calls the payload's drop through its header when the kind is
-   `Large` and does nothing otherwise. `Runtime::Value: Copy` and the
-   release are the two facts the extern boundary knows; extern glue
-   assumes no interpreter (owner, 13:45).
+1. **Two types, one bit pattern.** `Value` is `Copy` and has no `Drop`:
+   it is what the machine owns — registers, operation handlers, the
+   extern ABI's arguments and returns, the glue's window. `Owned` is
+   `#[repr(transparent)] struct Owned(Value)`, `!Copy`, whose `Drop`
+   releases: it is what a **Rust holder** owns — a container's elements
+   (`Vec<Owned>`), an `Erased`, a closure carrier's value, an `Iter`
+   stage's captured function. `Value::release(self)` calls the payload's
+   drop through its header for a `Large` and nothing otherwise;
+   `Owned::drop` is that call. The conversions are free: `Owned::from(v)`
+   is the identity, `Owned::into_value` is `ManuallyDrop` + copy. The
+   `Runtime` trait names both: `Word` (the `Copy` register type the ABI
+   carries) and `Value` (the owning type stores hold) — every
+   `Rt::Value` in acvus-extern/acvus-ext is one or the other by what the
+   code does with it, and the compiler enforces the split where the ABI
+   meets a store (owner, 17:05).
 2. **The header keeps one thing the machine cannot know: the drop.** A
    `Large` erased from an extension type carries `drop_slot::<T>` in
    its header, because a Rust holder — an `Iter` stage owning a closure,
@@ -81,13 +91,13 @@ and of a Rust holder that took ownership. Everything else copies.
    exit iterates the set bits of `marked` and releases those slots.
    `Machine.exit` and every other machine-held `Value` outside a
    register is released where the machine lets go of it.
-7. **A Rust holder releases what it owns.** Every type in `acvus-extern`
-   and `acvus-ext` that stores an `Rt::Value` it owns — `Erased`, the
-   `Fn*` carriers, `Iter`'s stages, `Deque`, the containers' `Vec<Value>`
-   through their own drop — calls `release` in its `Drop`. `Ref`,
-   `RefMut`, `Elements` borrow and release nothing. The list is
-   enumerated by the implementation (grep `Rt::Value`/`R::Value` fields)
-   and stated in Consequences.
+7. **A Rust holder holds `Owned`.** Every type in `acvus-extern` and
+   `acvus-ext` that stores a runtime value it owns holds `Owned`, and
+   Rust's `Drop` releases it — nothing to call, nothing to forget.
+   `Ref`, `RefMut`, `Elements` are words: they borrow and hold `Value`.
+   The enumeration is the compiler's: a `Word` cannot be stored where an
+   `Owned` is expected without `Owned::from`, and an `Owned` cannot be
+   passed where the ABI wants a `Word` without `into_value`.
 8. **A panic is an exit, not a release.** Runtime errors are panics
    (RFC-0044 stage 2c); no cleanup runs and none is owed. A host that
    catches a script's panic and lives sweeps the frame's mark word at
@@ -95,11 +105,10 @@ and of a Rust holder that took ownership. Everything else copies.
 
 ## What it costs
 
-- Ownership on the Rust side is manual: a holder that forgets `release`
-  leaks silently. The debug sweep asserts nothing is left marked at
-  frame exit; a leak inside a Rust holder has no such check — a drop
-  counter test per holder type is the contract (as `option_string_drop`
-  does today).
+- Two names for one bit pattern, and a conversion at every store
+  boundary — free at run time, a line in the source. The debug sweep
+  asserts nothing is left marked at frame exit; a Rust holder cannot
+  leak by omission, since `Owned` drops itself.
 - `mem::drop(v)` on a `Copy` value is a no-op that reads like a release;
   the method is named `release` so the two do not read alike (owner,
   15:20).
@@ -123,6 +132,13 @@ and of a Rust holder that took ownership. Everything else copies.
 - **`Value: Drop` kept, with `ManuallyDrop` only inside the register
   file**: removes the frame scan, keeps the 189 landing pads and the
   address requirement in every handler.
+- **`Value: Copy` with manual `release` in every holder's `Drop`** (an
+  explicit `Release` trait per type, or the composites' drop only via a
+  `TypeId` list): `Value: Copy` does not break the build, so the ~30
+  holders cannot be enumerated by the compiler and each can forget —
+  measured 16:45 when the first attempt stopped on `Arr<T, N>: TyVar`'s
+  blanket impl, which admits no per-type `release`. `Owned` makes the
+  omission unwritable.
 - **The drop fn in the operation instead of the header** (fully static
   release): right for every value a register holds and for nested
   containers whose element type the language names; wrong for a value a
@@ -152,8 +168,9 @@ and of a Rust holder that took ownership. Everything else copies.
 
 ## Order of work
 
-One to-be, in the interpreter worktree, after RFC-0047 T2 lands (they
-share `machine.rs`, `call.rs`, the glue): `Value: Copy` + `release`, the
+Rule 7 landed first (`803d4f1a`: attention −34 %). One to-be for rules
+1–6 and 8 in the interpreter worktree: `Value: Copy` + `Owned`, the
+`Runtime::Word`/`Value` split through acvus-extern and acvus-ext, the
 mark-word `Registers`, `define::<LARGE>`/`assign`, batched `take::<N>`,
-`drop_value` and the sweep, the Rust holders' `release`, the glue's copy.
-Measured first: the landing-pad count, `ret`'s disassembly, `map cap`.
+`drop_value` and the sweep, the glue's copy. Measured first: the
+landing-pad count (255 today), `ret`'s disassembly, `map cap`.
