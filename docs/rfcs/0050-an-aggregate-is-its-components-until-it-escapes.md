@@ -139,6 +139,21 @@ object lives.
    machine, and the callee's own region lives in its window. The async
    path's future owns its window the same way.
 
+   **The ABI is the runtime's contract, not the macro's** (owner,
+   2026-09-20: "내부 계약이라 내부 함수로 푸는 게 맞다"). Every fact about
+   how a value lies in registers — how many slots a crossing takes, how
+   a slice pair becomes `Elements`, how components are written to `Out`,
+   how a result is read at the window's run — is a `Runtime` method or
+   a `Cross` constant (`const WIDTH: usize`, `from_run`/`into_run`), and
+   the macro emits only calls to them. Today the macro decides the ABI
+   form by counting parameters (`SyncAbi::Arity1` at `extern-macro/src/
+   lib.rs:555`) and detects a slice return by reading the type's last
+   path segment (`returns_slice`, `lib.rs:801` — an alias defeats it);
+   both go: the form is picked by the library from the sum of the
+   parameters' `WIDTH`s, and a type says how it crosses. Multi-value
+   return (rule 5) is the same contract from the machine's side:
+   `Return` writes `WIDTH` values at the run, the caller reads `WIDTH`.
+
 7. **A container's element is realized, and a container is never a
    component set.** `Vec`, arrays, deques: their elements are heap
    aggregates (rule 4), read by projection (`&v[i]` is a `LargeRef`
