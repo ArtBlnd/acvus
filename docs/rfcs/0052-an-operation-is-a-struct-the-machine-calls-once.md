@@ -230,6 +230,28 @@ threw away.
    fit, or a chain deeper than the store's cells, roots a `Store` of its
    own.
 
+   **A call's arguments are the callee's first registers.** `prepare` gives a
+   body's parameters the frame's first registers, and the window begins at
+   the cell above the caller's, so the caller writes each argument straight
+   into the register the callee will read it from — one `LayArg` operation
+   apiece, ahead of the call, exactly as `ArgWindow`'s `Mov`s do for an
+   extern. `enter` copies no parameter, the frame's claim on them is the one
+   `param_marks` store `Regs::of` already made, and there is no `Vec` and no
+   `&mut [Value]` between the two frames: `CallDirect` and `CallIndirect`
+   hold an `arity`, not an argument array (`Fused` never staged one: its
+   operands are read from their registers at the call). A body that is one chain
+   (`Code::Expr`) reads the run as `&[Value]` where it lies and `chain_value`
+   runs on it, with no frame bound. Every frame keeps one cell above itself
+   for that run, so `fits_above` asks for the callee's cells and that one;
+   the rooted fallback copies the run into the frame it makes. The window
+   also remembers, per calling frame, the body last bound above it, so a
+   second call to the same body skips `open_frame` — `Store::bind`'s answer
+   for a rooted frame, one compare on the machine's side.
+
+   A call whose future outlives the frame — `CallDirectAsync`,
+   `CallIndirectAsync`, the spawns, `CallHeavy` — still owns its arguments as
+   a `Vec`, because the driver reads them after this frame is gone.
+
 ## The caller owns the frame, and a closure knows its entry
 
 `Runtime` carries `type Frame` and `fn frame(&self) -> Self::Frame`, and
@@ -487,6 +509,28 @@ decision.
   further shrinking of `Machine` reaches 7; what reaches it is fewer
   operations per element.
 
+- **A call's arguments cost one operation each and no allocation.** Against
+  master `641cd5cc`, three alternating pinned reps, median, `taskset -c 15`:
+  `call while` **10.3 → 6.9 ns** (−33 %), `bf call` **22.1 → 20.3 ns/step**
+  (−8.1 %), `logs` within the box's noise on every case (coordinator's
+  re-measure against a base rebuilt at `641cd5cc`), every other case of
+  `accum` and `programs` inside ±3 % except `map cap | sum` at +3.7 %. `perf stat`, n = 1e7: `call
+  while` runs **269.6 → 169.6 instructions** and **56.5 → 38.2 cycles** per
+  iteration, and `CallIndirect::<false, true, true>::run` is **128 → 38
+  instructions** ending in `jmp *`. `perf record` on it: `malloc` and `cfree`
+  were 37.7 % of the case's cycles and are absent; what is left is
+  `chain_value` 57.2 %, the call operation 17.5 %, `Expr::call_in` 9.9 %,
+  `LayArg` 1.8 % — the two indirect calls and the operand space, not the
+  arguments. The rooted fallback is never taken by the bench set: a
+  `panic!` in it ran `accum`, `programs`, `logs`, `attention`, `mandelbrot`,
+  `shapes` and `slice_ceiling` through without firing.
+
+  `map cap | sum` is the one case above the band, at +2.0 instructions and
+  +2.7 % cycles per element. Its closure is reached from an extern stage
+  through `Callable::call_on`, which is handed `&mut [Value]` and fills the
+  parameters itself: that path does not take rule 1, so the case gets none of
+  the win, and the two instructions were not localized.
+
 - **A `Vec` frame gives back what an inline one cost a frameless closure.**
   `map id` and `map add` call `Expr` bodies, which run with no registers at
   all (RFC-0044). An inline four-cell `Store` charged them 1 KiB inside the
@@ -527,10 +571,16 @@ decision.
 - **The arena.** `prepare` lays a body's operations in one bump arena in
   chain order, so a successor is adjacent and the fat pointer's data load is
   a sequential line. Not built; measured one variable apart.
-- **The eight families that hold a stack address.** Staging a call's
-  argument run in the frame window rather than on the stack would remove the
-  `call`/`ret` pair from all of them and close the probe's exception list.
-  `CallIndirect` is the next target at 247 instructions per call.
+- **The eight families that hold a stack address.** Staging the argument run
+  in the frame window was expected to close the list and did not: it removed
+  the argument array, and each family turned out to hold a *different* stack
+  local across its callee. Nineteen instances remain, down from twenty-two.
+  `CallIndirect` tail-jumps in its three `THROUGH` instances and holds the
+  `FnValue` it materialized out of the callee register in the other three;
+  `CallDirect` holds the `Arc<Prepared>` the module table hands back, which
+  it must also drop after the call; `Fused`'s is the held `Value`, whose
+  address the tail `Deref` takes. Closing the list means removing those
+  three locals, not the argument run.
 - **The `Switch` operation** (RFC-0051), the one `todo!` in the machine.
 - **A `Diamond` arm's value does not ride out of the region.** The arms
   already write the join's register directly, so no phi `Mov` stands between

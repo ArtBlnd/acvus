@@ -174,7 +174,7 @@ pub fn prepare_body(
     let captures = body.captures.iter().map(|(_, v)| prep.off(*v)).collect();
     let order_param = body.order_param.map(|id| prep.off(id));
     let entry_konsts = prep.entry_konsts();
-    let slot_kinds = prep.slot_kinds(frame_len);
+    let slot_kinds = prep.slot_kinds(frame_len, prep.param_run());
 
     Code::Body(Arc::new(Body {
         heads: blocks,
@@ -605,6 +605,24 @@ impl<'a> Prepare<'a> {
             .unwrap_or_else(|_| panic!("a body of {len} registers is past a frame's reach"))
     }
 
+    /// # Panics
+    /// A parameter sits elsewhere, which is `assign_slots`'s first phase
+    /// disagreeing with the argument run `Prepare::laid` lays.
+    fn param_run(&self) -> u16 {
+        let mut run: u16 = 0;
+        for (_, id) in &self.body.params {
+            assert_eq!(
+                self.off(*id).index(),
+                usize::from(run),
+                "parameter {id:?} is in register {}, not the {run} its argument lands in",
+                self.off(*id).index()
+            );
+            run += u16::try_from(SlotClass::of(self.ty(*id)).width())
+                .expect("a register class is two registers at most");
+        }
+        run
+    }
+
     /// Whether a value of this type holds a `Large` its register owns
     /// (RFC-0048 §4), which is the `LARGE` parameter of every operation
     /// that writes or empties a register.
@@ -682,7 +700,12 @@ impl<'a> Prepare<'a> {
     /// The table is complete by construction: `assign_slots` gives a
     /// register only to values of one kind class, and a value whose type
     /// `val_types` does not hold is a refusal in `ty` naming it.
-    fn slot_kinds(&self, frame_len: u16) -> Box<[SlotKind]> {
+    ///
+    /// The parameter run is not in it. A caller writes those registers whole
+    /// before the frame is entered, so `machine::open_frame` opening them
+    /// would overwrite the arguments it was handed; the kind the frame would
+    /// have written is the kind the caller's value carries.
+    fn slot_kinds(&self, frame_len: u16, param_run: u16) -> Box<[SlotKind]> {
         let mut opened: Vec<Option<Kind>> = vec![None; usize::from(frame_len)];
         let mut open = |slot: Slot, kind: Kind| {
             let held = &mut opened[usize::from(slot)];
@@ -722,6 +745,7 @@ impl<'a> Prepare<'a> {
         opened
             .into_iter()
             .enumerate()
+            .skip(usize::from(param_run))
             .filter_map(|(slot, kind)| {
                 let slot = Slot::try_from(slot).expect("a frame's registers fit a Slot");
                 kind.map(|kind| SlotKind {
@@ -730,6 +754,42 @@ impl<'a> Prepare<'a> {
                 })
             })
             .collect()
+    }
+
+    /// A synchronous call into a body lays its arguments in the window above
+    /// this frame, which is the callee's frame (RFC-0052 rule 7).
+    ///
+    /// # Panics
+    /// The run leaves the cell the window begins with, which is the widest
+    /// argument list a call can lay.
+    fn laid(&mut self, args: &[ValueId], ops: &mut Vec<Node>) -> Laid {
+        let mut arity: Slot = 0;
+        for id in args {
+            let src = self.off(*id);
+            let at = Off::of(arity);
+            let class = SlotClass::of(self.ty(*id));
+            ops.push(match class {
+                SlotClass::Slice => node(move |next| call::LayPair {
+                    at: SlicePair::at(at),
+                    src: SlicePair::at(src),
+                    next,
+                }),
+                SlotClass::Word(_) | SlotClass::Whole => {
+                    node(move |next| call::LayArg { at, src, next })
+                }
+            });
+            arity += u16::try_from(class.width()).expect("a register class is two wide at most");
+            assert!(
+                arity <= crate::regs::CELL_SLOTS,
+                "a call of {arity} argument registers is past the {} one window's first cell \
+                 holds",
+                crate::regs::CELL_SLOTS
+            );
+        }
+        Laid {
+            arity,
+            takes: self.take_mask(args),
+        }
     }
 
     /// The registers of a list of operands, and the mask of the ones this
@@ -2146,13 +2206,13 @@ impl<'a> Prepare<'a> {
         match callee {
             Callee::Direct(id) => {
                 let id = *id;
-                let operands = self.taken(args);
                 if !self.suspends_at(callee_ty) {
-                    ops.push(direct_call(into, id, operands));
+                    let laid = self.laid(args, ops);
+                    ops.push(direct_call(into, id, laid));
                     return None;
                 }
                 let resume = next.block();
-                let Operands { slots, takes } = operands;
+                let Operands { slots, takes } = self.taken(args);
                 Some(match large {
                     true => Box::new(call::CallDirectAsync::<true> {
                         dst: slot,
@@ -2173,12 +2233,13 @@ impl<'a> Prepare<'a> {
             Callee::Indirect(handle) => {
                 let through = self.is_ref(*handle);
                 let handle = self.off(*handle);
-                let operands = self.taken(args);
                 if !self.suspends_at(callee_ty) {
-                    ops.push(indirect_call(into, through, handle, operands));
+                    let laid = self.laid(args, ops);
+                    ops.push(indirect_call(into, through, handle, laid));
                     return None;
                 }
                 let resume = next.block();
+                let operands = self.taken(args);
                 Some(indirect_call_async(into, through, handle, operands, resume))
             }
             Callee::Extern { id, instance } => {
@@ -3596,9 +3657,41 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         }
     }
 
-    // The windows first: a contiguous run is the constrained resource.
     let mut slot_of: Vec<Option<u32>> = vec![None; values];
     let mut occupancy = Occupancy::new();
+
+    // The parameters first: a caller lays the argument run it hands the call
+    // in the frame's first registers (RFC-0052 rule 7, `Prepare::laid`).
+    let mut run: u32 = 0;
+    for (_, id) in &body.params {
+        let value = id.to_raw();
+        let root = classes.find(value);
+        assert!(
+            slot_of[root].is_none(),
+            "parameter {id:?} shares a register class with a parameter before it"
+        );
+        let range = class_ranges[root]
+            .expect("a parameter is live from the entry, which gives its class a range");
+        let want =
+            class_class[root].expect("a parameter's class holds the kind the parameter is of");
+        let width = u32::try_from(classes_of[value].width())
+            .expect("a register class is two registers at most");
+        let over = run + width;
+        assert!(
+            over <= u32::from(crate::regs::MAX_FRAME_SLOTS),
+            "the parameters of one body reach register {over}, past the frame's {}",
+            crate::regs::MAX_FRAME_SLOTS
+        );
+        occupancy.hold(
+            usize::try_from(run).expect("a frame's registers fit a usize"),
+            range,
+            want,
+        );
+        slot_of[root] = Some(run);
+        run = over;
+    }
+
+    // The windows next: a contiguous run is the constrained resource.
     let mut plans: Vec<(usize, WindowPlan)> = Vec::new();
     for (at, inst) in insts.iter().enumerate() {
         let Some(args) = window_args(inst, ctx) else {
@@ -5457,6 +5550,13 @@ struct Operands {
     takes: u64,
 }
 
+/// The registers an argument run occupies in the callee's frame, and the mask
+/// of the caller's registers the call takes the frame's claim on.
+struct Laid {
+    arity: u16,
+    takes: u64,
+}
+
 /// The register an operation writes, and whether the frame owns a `Large`
 /// once it has.
 #[derive(Clone, Copy)]
@@ -5801,85 +5901,85 @@ fn call_task(callee_ty: &Ty) -> Task {
 /// The `(large, word)` pair every call's result store is picked by, the same
 /// three forms `CallExtern1` has: a `Large` the frame takes ownership of, a
 /// word whose kind the frame opened, or neither.
-fn direct_call(into: Dest, callee: QualifiedRef, operands: Operands) -> Node {
+fn direct_call(into: Dest, callee: QualifiedRef, laid: Laid) -> Node {
     let Dest {
         slot: dst,
         large,
         word,
     } = into;
-    let Operands { slots: args, takes } = operands;
+    let Laid { arity, takes } = laid;
     match (large, word) {
         (true, _) => node(move |next| call::CallDirect::<true, false> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
         (false, true) => node(move |next| call::CallDirect::<false, true> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
         (false, false) => node(move |next| call::CallDirect::<false, false> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
     }
 }
 
-fn indirect_call(into: Dest, through: bool, callee: Off, operands: Operands) -> Node {
+fn indirect_call(into: Dest, through: bool, callee: Off, laid: Laid) -> Node {
     let Dest {
         slot: dst,
         large,
         word,
     } = into;
-    let Operands { slots: args, takes } = operands;
+    let Laid { arity, takes } = laid;
     match (large, word, through) {
         (true, _, false) => node(move |next| call::CallIndirect::<true, false, false> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
         (true, _, true) => node(move |next| call::CallIndirect::<true, false, true> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
         (false, true, false) => node(move |next| call::CallIndirect::<false, true, false> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
         (false, true, true) => node(move |next| call::CallIndirect::<false, true, true> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
         (false, false, false) => node(move |next| call::CallIndirect::<false, false, false> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),
         (false, false, true) => node(move |next| call::CallIndirect::<false, false, true> {
             dst,
             callee,
-            args,
+            arity,
             takes,
             next,
         }),

@@ -45,15 +45,54 @@ pub type StateSlice = fn(StateRef<'_>, &AcvusRuntime, Value) -> Elements<AcvusRu
 pub type Async = acvus_extern::Async<AcvusRuntime>;
 pub type AsyncState = acvus_extern::AsyncState<AcvusRuntime>;
 
-/// A body is entered with the arguments it owns, so a call into one stages
-/// them: each read where it stands, and the frame's claim on the ones this
-/// call consumes dropped in one mask.
+/// A call the driver runs hands its arguments to a future that outlives this
+/// frame, so it owns them rather than lending registers.
 #[inline]
 fn staged(m: &mut Machine<'_>, slots: &[Off], takes: u64) -> Vec<Value> {
     let regs = m.regs();
     let args = slots.iter().map(|slot| regs.read(*slot)).collect();
     regs.take_mask(takes);
     args
+}
+
+/// One argument of a synchronous call into a body, moved into the register the
+/// callee reads it from. `prepare` gives a body's parameters its first
+/// registers, and those are the registers the window above this frame begins
+/// with, so the callee enters with its arguments in place (RFC-0052 rule 7).
+pub struct LayArg {
+    pub at: Off,
+    pub src: Off,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for LayArg {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = regs.read(self.src);
+        regs.lay(self.at, value);
+        self.next.run(m, r0)
+    }
+}
+
+/// A slice argument of the same call: two adjacent registers (RFC-0047
+/// amended, rule 4).
+pub struct LayPair {
+    pub at: SlicePair,
+    pub src: SlicePair,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for LayPair {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        m.regs().lay_pair(self.at, self.src);
+        self.next.run(m, r0)
+    }
 }
 
 /// The run of registers a call's arguments sit in: `prepare` laid them out
@@ -602,7 +641,7 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
 pub struct CallDirect<const LARGE: bool, const WORD: bool> {
     pub dst: Off,
     pub callee: QualifiedRef,
-    pub args: Box<[Off]>,
+    pub arity: u16,
     pub takes: u64,
     pub next: Box<dyn Op>,
 }
@@ -612,9 +651,9 @@ impl<const LARGE: bool, const WORD: bool> Op for CallDirect<LARGE, WORD> {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let args = staged(m, &self.args, self.takes);
+        m.regs().take_mask(self.takes);
         let prepared = Arc::clone(lookup_module(m.shared(), &self.callee));
-        let value = call_module_sync(m, &prepared, self.callee, args);
+        let value = call_module_sync(m, &prepared, self.callee, self.arity);
         m.regs().store::<LARGE, WORD>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -652,22 +691,18 @@ impl<const LARGE: bool> Op for CallDirectAsync<LARGE> {
 /// live reference to one under `THROUGH`: the closure's register is not
 /// written during the call, and the machine holding it outlives the call.
 #[inline(always)]
-unsafe fn call_closure<const THROUGH: bool>(
-    m: &mut Machine<'_>,
-    callee: Off,
-    args: &mut [Value],
-) -> Value {
+unsafe fn call_closure<const THROUGH: bool>(m: &mut Machine<'_>, callee: Off, arity: u16) -> Value {
     match THROUGH {
         true => {
             let closure: &FnValue = unsafe {
                 let target = m.regs().peek(callee).target();
                 &*(target.as_fn() as *const FnValue)
             };
-            m.call_fn_sync(closure, args)
+            m.call_fn_sync(closure, arity)
         }
         false => {
             let closure = unsafe { m.regs().take::<true>(callee).materialize::<FnValue>() };
-            m.call_fn_sync(&closure, args)
+            m.call_fn_sync(&closure, arity)
         }
     }
 }
@@ -677,7 +712,7 @@ unsafe fn call_closure<const THROUGH: bool>(
 pub struct CallIndirect<const LARGE: bool, const WORD: bool, const THROUGH: bool> {
     pub dst: Off,
     pub callee: Off,
-    pub args: Box<[Off]>,
+    pub arity: u16,
     pub takes: u64,
     pub next: Box<dyn Op>,
 }
@@ -689,9 +724,9 @@ impl<const LARGE: bool, const WORD: bool, const THROUGH: bool> Op
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let mut args = staged(m, &self.args, self.takes);
+        m.regs().take_mask(self.takes);
         // SAFETY: as `call_closure` states.
-        let value = unsafe { call_closure::<THROUGH>(m, self.callee, &mut args) };
+        let value = unsafe { call_closure::<THROUGH>(m, self.callee, self.arity) };
         m.regs().store::<LARGE, WORD>(self.dst, value);
         self.next.run(m, r0)
     }

@@ -24,7 +24,7 @@ use crate::code::{
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
-use crate::regs::{Regs, Store};
+use crate::regs::{BoundTo, Regs, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, Value};
 
@@ -45,6 +45,7 @@ pub struct Machine<'c> {
     /// re-entering the body.
     at: BlockId,
     pending: Option<Pending>,
+    above: BoundTo,
 }
 
 impl<'c> Machine<'c> {
@@ -62,6 +63,7 @@ impl<'c> Machine<'c> {
             exit: Value::unit(),
             at: body.entry,
             pending: None,
+            above: BoundTo::NONE,
         }
     }
 
@@ -137,24 +139,45 @@ impl<'c> Machine<'c> {
 
     /// Run `callee` to its result in the window above this frame (RFC-0052
     /// rule 7): no allocation, one mask store to enter and one sweep to leave.
+    /// The arguments are already in the window's first registers, where the
+    /// call's `LayArg` operations put them.
     ///
     /// # Panics
     /// `callee` is typed pure and its prepared body can suspend, which is a
     /// disagreement between the effect the checker read and the body
     /// `prepare` produced.
-    pub fn call_sync<F>(&mut self, callee: &Body, named: &dyn Debug, fill: F) -> Value
+    pub fn call_sync<F>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> Value
     where
         F: FnOnce(&mut Machine<'_>),
     {
         if self.regs.fits_above(callee.frame_len) {
+            let opened = self.above.rebind(callee);
             let window = self.regs.window(callee);
-            return run_frame(callee, named, window, self.rt, self.page, fill);
+            return run_frame(callee, named, window, self.rt, self.page, opened, fill);
         }
-        run_body(callee, named, self.rt, self.page, fill)
+        self.call_rooted(callee, named, arity, fill)
     }
 
-    pub fn call_fn_sync(&mut self, f: &FnValue, args: &mut [Value]) -> Value {
-        f.entry.call_in(f, args, self)
+    /// The callee does not fit the window above this frame, so it roots a
+    /// `Store` of its own and the argument run is copied into it.
+    #[cold]
+    #[inline(never)]
+    fn call_rooted<F>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> Value
+    where
+        F: FnOnce(&mut Machine<'_>),
+    {
+        let mut store = Store::new();
+        let (mut regs, _) = store.bind(callee);
+        open_frame(callee, &mut regs);
+        for (at, arg) in self.regs.laid(arity).iter().enumerate() {
+            let slot = u16::try_from(at).expect("an argument run is at most one cell wide");
+            regs.open(Off::of(slot), *arg);
+        }
+        run_frame(callee, named, regs, self.rt, self.page, true, fill)
+    }
+
+    pub fn call_fn_sync(&mut self, f: &FnValue, arity: u16) -> Value {
+        f.entry.call_in(f, arity, self)
     }
 }
 
@@ -171,21 +194,6 @@ fn open_frame(body: &Body, regs: &mut Regs<'_>) {
     }
 }
 
-fn run_body<F>(
-    body: &Body,
-    named: &dyn Debug,
-    rt: &AcvusRuntime,
-    page: &Arc<dyn RuntimeContext>,
-    fill: F,
-) -> Value
-where
-    F: FnOnce(&mut Machine<'_>),
-{
-    let mut store = Store::new();
-    let (regs, _) = store.bind(body);
-    run_frame(body, named, regs, rt, page, fill)
-}
-
 /// # Panics
 /// `body` is typed pure and its prepared body can suspend, which is a
 /// disagreement between the effect the checker read and the body `prepare`
@@ -196,6 +204,7 @@ fn run_frame<F>(
     mut regs: Regs<'_>,
     rt: &AcvusRuntime,
     page: &Arc<dyn RuntimeContext>,
+    opened: bool,
     fill: F,
 ) -> Value
 where
@@ -205,7 +214,9 @@ where
         !body.may_suspend,
         "{named:?} is typed pure, and its prepared body can suspend"
     );
-    open_frame(body, &mut regs);
+    if !opened {
+        open_frame(body, &mut regs);
+    }
     let mut machine = Machine::new(body, regs, rt, page);
     fill(&mut machine);
     let stop = machine.run();
@@ -271,15 +282,12 @@ pub fn call_module_sync(
     machine: &mut Machine<'_>,
     prepared: &Prepared,
     id: QualifiedRef,
-    args: Vec<Value>,
+    arity: u16,
 ) -> Value {
     let Code::Body(body) = prepared.main.as_ref() else {
         panic!("a module's entry body is one chain, which no call into a module can be")
     };
-    machine.call_sync(body, &id, |callee| {
-        for (slot, arg) in body.params.iter().zip(args) {
-            callee.regs.define::<false>(*slot, arg);
-        }
+    machine.call_sync(body, &id, arity, |callee| {
         if let Some(order) = body.order_param {
             callee.regs.define::<false>(order, Value::unit());
         }
@@ -295,8 +303,9 @@ pub trait Callable: Send + Sync {
     /// holds instead is this frame, made once where it was built.
     fn call_on(&self, f: &FnValue, args: &mut [Value], frame: &mut Store) -> Value;
 
-    /// Run in the window above the calling frame (RFC-0052 rule 7).
-    fn call_in(&self, f: &FnValue, args: &mut [Value], m: &mut Machine<'_>) -> Value;
+    /// Run in the window above the calling frame, on the argument run the
+    /// caller laid in that window's first `arity` registers (RFC-0052 rule 7).
+    fn call_in(&self, f: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value;
 
     /// The arguments read into the callee's frame before the future exists,
     /// so the caller may lend registers that die at the call.
@@ -343,9 +352,9 @@ impl Callable for Body {
         value
     }
 
-    fn call_in(&self, f: &FnValue, args: &mut [Value], m: &mut Machine<'_>) -> Value {
-        m.call_sync(self, &self.span, |callee| {
-            fill(self, f, args, &mut callee.regs)
+    fn call_in(&self, f: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value {
+        m.call_sync(self, &self.span, arity, |callee| {
+            bind_captures(self, f, &mut callee.regs)
         })
     }
 
@@ -373,8 +382,8 @@ impl Callable for Expr {
         expr_value(self, args)
     }
 
-    fn call_in(&self, _: &FnValue, args: &mut [Value], _: &mut Machine<'_>) -> Value {
-        expr_value(self, args)
+    fn call_in(&self, _: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value {
+        expr_value(self, m.regs().laid(arity))
     }
 
     fn start<'c>(&'c self, _: &FnValue, args: &mut [Value]) -> Resume<'c> {
@@ -413,15 +422,22 @@ pub fn fn_value_call_sync(f: &FnValue, args: &mut [Value], frame: &mut Store) ->
 
 /// The closure owns its captures; the body sees each through a reference
 /// (RFC-0018).
-fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
+fn bind_captures(body: &Body, f: &FnValue, regs: &mut Regs<'_>) {
     for (slot, capture) in body.captures.iter().zip(f.captures.iter()) {
         regs.define::<false>(*slot, Value::reference(capture));
     }
-    for (slot, arg) in body.params.iter().zip(args) {
-        regs.define::<false>(*slot, *arg);
-    }
     if let Some(order) = body.order_param {
         regs.define::<false>(order, Value::unit());
+    }
+}
+
+/// The same, for the paths that are handed their arguments as values rather
+/// than as a run of the caller's registers: an extern's frame
+/// (`Callable::call_on`) and the driver's (`Callable::start`).
+fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
+    bind_captures(body, f, regs);
+    for (slot, arg) in body.params.iter().zip(args) {
+        regs.define::<false>(*slot, *arg);
     }
 }
 
@@ -431,7 +447,7 @@ fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
 /// # Panics
 /// The call brought an arity the body was not prepared with.
 #[inline]
-fn expr_value(expr: &Expr, args: &mut [Value]) -> Value {
+fn expr_value(expr: &Expr, args: &[Value]) -> Value {
     assert_eq!(
         args.len(),
         expr.arity as usize,

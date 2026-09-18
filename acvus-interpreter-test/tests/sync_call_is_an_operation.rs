@@ -43,9 +43,10 @@ async fn a_sync_call_is_an_operation_inside_the_loop() {
     let body = loops[0].part("body").expect("a `Loop` owns its body");
     assert_eq!(
         body.ops,
-        ["CallIndirect<false, true, true>"],
-        "the call is the body's operation: its result is a word the frame \
-         opened, and the callee is reached through a reference the caller keeps"
+        ["LayArg", "CallIndirect<false, true, true>"],
+        "the body lays the one argument in the callee's first register and then \
+         calls: the result is a word the frame opened, and the callee is \
+         reached through a reference the caller keeps"
     );
     assert_eq!(
         terminators_depth_first(&blocks),

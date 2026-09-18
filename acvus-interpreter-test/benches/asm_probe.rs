@@ -50,21 +50,21 @@ struct Exception {
 /// frame.
 ///
 /// Decision not to build: every one is a boundary operation costing 50–250
-/// instructions, where one `call`/`ret` pair is a fraction. Staging the
-/// argument run in the frame window rather than on the stack would remove
-/// them, and that is RFC-0052's queued Consequences entry, not this run's.
+/// instructions, where one `call`/`ret` pair is a fraction.
 const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
     Exception {
         family: "call::Fused",
-        stack_address: "the SmallVec<[Value; 2]> of staged arguments, handed to the callee",
+        stack_address: "the held `Value`, `&held` into the run's tail `Deref`",
     },
     Exception {
         family: "call::CallIndirect",
-        stack_address: "the staged argument array, `&mut args` to the callee",
+        stack_address: "the `FnValue` materialized out of the callee register, `&closure` into \
+                        `call_fn_sync`",
     },
     Exception {
         family: "call::CallDirect",
-        stack_address: "the staged argument array, `&mut args` to the callee",
+        stack_address: "the `Arc<Prepared>` the module table hands back, `&prepared` into \
+                        `call_module_sync`",
     },
     Exception {
         family: "storage::SetStep",

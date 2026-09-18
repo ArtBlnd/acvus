@@ -12,7 +12,7 @@ use std::mem::MaybeUninit;
 
 use acvus_extern::Release;
 
-use crate::code::{Body, Off};
+use crate::code::{Body, Off, SlicePair};
 use crate::value::Value;
 
 /// The registers one cell holds: four cache lines of `Value`s.
@@ -31,6 +31,12 @@ const MARK_SLOTS: u16 = 1;
 /// a chain deeper than this roots a `Store` of its own at the call
 /// (`Machine::call_sync`).
 const WINDOW_CELLS: usize = 3;
+
+/// The cell a call lays its argument run in, which every bound frame keeps
+/// above itself. Decision not to charge it to the callee: the run is written
+/// before the caller knows whether the callee's whole frame fits above it, so
+/// a frame that cannot offer this cell cannot host a call at all.
+const ARG_CELLS: usize = 1;
 
 /// One cell: four cache lines of registers, starting one. It holds no mark
 /// word — a frame wider than a cell has to be one run of `Value`s, and an
@@ -56,6 +62,10 @@ const _: () = assert!(
     MAX_FRAME_SLOTS == Off::MAX_INDEX + 1,
     "the widest frame and the widest byte displacement are the same bound"
 );
+const _: () = assert!(
+    ARG_CELLS <= WINDOW_CELLS,
+    "a bound frame's window holds the cell its calls lay their arguments in"
+);
 
 /// The cells a frame of `slots` registers occupies, its mark word included.
 #[inline(always)]
@@ -67,27 +77,42 @@ const fn cells_for(slots: u16) -> usize {
 /// callee can ask of a window, and the cap `above_cap` is read against.
 const MAX_FRAME_CELLS: usize = cells_for(MAX_FRAME_SLOTS);
 
+/// Which body a frame is bound to, and so whether it already carries that
+/// body's slot kinds and entry constants (`machine::open_frame`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BoundTo(usize);
+
+impl BoundTo {
+    pub const NONE: BoundTo = BoundTo(0);
+
+    /// Whether the frame was already bound to `body`, and bound to it now.
+    #[inline]
+    pub fn rebind(&mut self, body: &Body) -> bool {
+        let key = BoundTo(std::ptr::from_ref(body).addr());
+        debug_assert_ne!(key, BoundTo::NONE, "a body is not at address zero");
+        std::mem::replace(self, key) == key
+    }
+}
+
 /// The frame a call chain runs in: one `Vec`, owned by the caller and lent
 /// per call (RFC-0052 §6).
 pub struct Store {
     cells: Vec<Cell>,
-    bound: usize,
+    bound: BoundTo,
 }
-
-const UNBOUND: usize = 0;
 
 impl Store {
     /// A frame bound to no body: no cells, no allocation.
     pub fn new() -> Store {
         Store {
             cells: Vec::new(),
-            bound: UNBOUND,
+            bound: BoundTo::NONE,
         }
     }
 
     /// The frame `body` runs in, its mark word carrying `body`'s claim on its
     /// parameters, and whether the frame already carries `body`'s slot kinds
-    /// and entry constants (`machine::open_frame`).
+    /// and entry constants.
     ///
     /// Binding is what sizes the `Vec`, so no caller can borrow a frame
     /// narrower than the body it runs.
@@ -97,11 +122,8 @@ impl Store {
     /// emit.
     #[inline]
     pub fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
-        let key = std::ptr::from_ref(body).addr();
-        debug_assert_ne!(key, UNBOUND, "a body is not at address zero");
-        let same = self.bound == key;
+        let same = self.bound.rebind(body);
         if !same {
-            self.bound = key;
             self.widen(body.frame_len);
         }
         (Regs::of(&mut self.cells, body), same)
@@ -157,14 +179,15 @@ impl<'f> Regs<'f> {
     /// (RFC-0052 rule 7).
     ///
     /// # Panics
-    /// `cells` is narrower than a frame of `body.frame_len` registers, which
-    /// `Store::bind` and `fits_above` answer before this is reached.
+    /// `cells` is narrower than a frame of `body.frame_len` registers and the
+    /// cell its calls lay their arguments in, which `Store::bind` and
+    /// `fits_above` answer before this is reached.
     #[inline]
     fn of(cells: &'f mut [Cell], body: &Body) -> Regs<'f> {
         let len = body.frame_len;
         let own = cells_for(len);
         assert!(
-            own <= cells.len(),
+            own + ARG_CELLS <= cells.len(),
             "a frame of {len} registers was borrowed from {} cells",
             cells.len()
         );
@@ -179,10 +202,11 @@ impl<'f> Regs<'f> {
     }
 
     /// The one capacity compare a call makes: whether the cells above this
-    /// frame hold a callee frame of `callee_len` registers.
+    /// frame hold a callee frame of `callee_len` registers and the cell that
+    /// frame's own calls lay their arguments in.
     #[inline(always)]
     pub fn fits_above(&self, callee_len: u16) -> bool {
-        cells_for(callee_len) <= usize::from(self.above_cells)
+        cells_for(callee_len) + ARG_CELLS <= usize::from(self.above_cells)
     }
 
     /// The callee's frame: the cells above this one.
@@ -193,6 +217,55 @@ impl<'f> Regs<'f> {
     #[inline(always)]
     pub fn window(&mut self, callee: &Body) -> Regs<'_> {
         Regs::of(&mut self.cells[usize::from(self.own)..], callee)
+    }
+
+    /// The register `at` of the frame the window above this one begins.
+    #[inline(always)]
+    fn above(&self, at: Off) -> *mut Value {
+        debug_assert!(
+            at.index() < CELL_SLOTS as usize * ARG_CELLS,
+            "a call lays an argument in the callee's register {}, past the cell the window \
+             begins with",
+            at.index()
+        );
+        // SAFETY: `Regs::of` refuses a frame without the cell this writes, and
+        // the debug assertion above holds the displacement inside it.
+        unsafe {
+            self.cells
+                .as_ptr()
+                .add(usize::from(self.own))
+                .cast::<u8>()
+                .add(at.byte())
+                .cast::<Value>()
+                .cast_mut()
+        }
+    }
+
+    /// One argument of a call, written to the register the callee reads it
+    /// from (RFC-0052 rule 7).
+    #[inline(always)]
+    pub fn lay(&mut self, at: Off, value: Value) {
+        // SAFETY: as `above`. The callee's frame is unbound until the call, so
+        // nothing owns what this overwrites.
+        unsafe { self.above(at).write(value) };
+    }
+
+    /// The two registers of a slice argument (RFC-0047 amended, rule 4).
+    #[inline(always)]
+    pub fn lay_pair(&mut self, at: SlicePair, value: SlicePair) {
+        let (ptr, len) = (self.read(value.ptr), self.read(value.len));
+        self.lay(at.ptr, ptr);
+        self.lay(at.len, len);
+    }
+
+    /// The argument run a caller laid, read where the callee's body is one
+    /// chain and has no frame to read it from (RFC-0044, stage 4).
+    #[inline]
+    pub fn laid(&self, arity: u16) -> &[Value] {
+        let first = self.above(Off::of(0));
+        // SAFETY: `lay` wrote every register of the run, and `above` holds the
+        // widest of them inside the cell the window begins with.
+        unsafe { std::slice::from_raw_parts(first, usize::from(arity)) }
     }
 
     /// The register's first byte. No arithmetic: the operation's field is
