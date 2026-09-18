@@ -21,7 +21,7 @@ use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
     Callee, ExternInstance, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
-use acvus_mir::ty::{IntTy, Task, Ty};
+use acvus_mir::ty::{IntTy, NumTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -33,10 +33,10 @@ use crate::code::{
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Binary, Unary, for_int_ty};
-use crate::ops::chain::{self, ChainTy, Plan};
+use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
 use crate::ops::place;
 use crate::ops::{
-    call, composite, constant, control, index, pattern, storage, string, switch, variant,
+    call, cast, composite, constant, control, index, pattern, storage, string, switch, variant,
 };
 use crate::runtime::{ExternHandler, StateAbi, SyncAbi, SyncCall};
 use crate::value::{Kind, Value};
@@ -405,9 +405,9 @@ impl Prepare<'_> {
     fn rides_from(&self, unit: &Unit<'_>) -> Option<ValueId> {
         match unit {
             Unit::Inst(at) => match &self.body.insts[*at].kind {
-                InstKind::BinOp { dst, .. } | InstKind::UnaryOp { dst, .. } => {
-                    self.rides_word(*dst)
-                }
+                InstKind::BinOp { dst, .. }
+                | InstKind::UnaryOp { dst, .. }
+                | InstKind::Cast { dst, .. } => self.rides_word(*dst),
                 _ => None,
             },
             Unit::Chain(run) => self.rides_word(run.dst),
@@ -421,6 +421,7 @@ impl Prepare<'_> {
         match &self.body.insts[at].kind {
             InstKind::BinOp { left, right, .. } => *left == value || *right == value,
             InstKind::UnaryOp { operand, .. } => *operand == value,
+            InstKind::Cast { src, .. } => *src == value,
             InstKind::JumpIf { cond, .. } => *cond == value,
             _ => false,
         }
@@ -934,6 +935,7 @@ impl<'a> Prepare<'a> {
             | InstKind::FieldSet { .. }
             | InstKind::BinOp { .. }
             | InstKind::UnaryOp { .. }
+            | InstKind::Cast { .. }
             | InstKind::Spawn { .. }
             | InstKind::Merge { .. }
             | InstKind::MakeArray { .. }
@@ -1761,6 +1763,18 @@ impl<'a> Prepare<'a> {
                     Ty::Bool => arith::bool_unaryop(op, places, next),
                     other => panic!("unary {op:?} on {other:?}"),
                 })
+            }
+
+            InstKind::Cast { dst, src, to } => {
+                let places = place::Unary {
+                    dst: self.place_of(rides, *dst),
+                    src: self.place_of(rides, *src),
+                };
+                let from = NumTy::of_ty(self.ty(*src)).unwrap_or_else(|| {
+                    panic!("a cast reads {:?}, which is not a number", self.ty(*src))
+                });
+                let conversion = cast::Conversion { from, into: *to };
+                made(move |next| cast::cast_op(conversion, places, next))
             }
 
             InstKind::Spawn {
@@ -4291,7 +4305,7 @@ mod move_ordering_tests {
 // -- The arithmetic-chain recognizer (RFC-0044, stage 4) ----------------
 
 enum Tree {
-    Leaf(Off),
+    Leaf(Off, LeafRead),
     /// The right operand of a `Neg`, which the node's operator never
     /// reads. It still becomes a leaf offset, because the generic tier
     /// reads both operands before it knows the operator, so the offset
@@ -4307,7 +4321,7 @@ enum Tree {
 impl Tree {
     fn word(&self, out: &mut String) {
         match self {
-            Tree::Leaf(_) | Tree::Unread => out.push('L'),
+            Tree::Leaf(..) | Tree::Unread => out.push('L'),
             Tree::Node { left, right, .. } => {
                 out.push('N');
                 left.word(out);
@@ -4318,7 +4332,10 @@ impl Tree {
 
     fn flatten_into(&self, out: &mut Flattened) {
         match self {
-            Tree::Leaf(slot) => out.leaves.push(Some(*slot)),
+            Tree::Leaf(slot, read) => out.leaves.push(Some(Leaf {
+                slot: *slot,
+                read: *read,
+            })),
             Tree::Unread => out.leaves.push(None),
             Tree::Node { op, left, right } => {
                 left.flatten_into(out);
@@ -4329,10 +4346,19 @@ impl Tree {
     }
 }
 
+/// One leaf of a chain: the register it reads, and the type it reads it
+/// at, which is the chain's own unless a cast the chain absorbed says
+/// otherwise (RFC-0049).
+#[derive(Clone, Copy)]
+struct Leaf {
+    slot: Off,
+    read: LeafRead,
+}
+
 #[derive(Default)]
 struct Flattened {
     ops: Vec<Arith>,
-    leaves: Vec<Option<Off>>,
+    leaves: Vec<Option<Leaf>>,
 }
 
 /// A chain's root: the operator it applies and the two subtrees below it.
@@ -4410,7 +4436,7 @@ impl ChainRun {
             "shape {shape:?} and its leaves disagree"
         );
 
-        let read = leaves
+        let any = leaves
             .iter()
             .flatten()
             .next()
@@ -4420,9 +4446,12 @@ impl ChainRun {
 
         let mut ops = [Arith::Add; ChainBounds::MAX_INTERIOR];
         ops[..found.len()].copy_from_slice(&found);
-        let mut offsets = [in_space(read); ChainBounds::MAX_LEAVES];
-        for (offset, leaf) in offsets.iter_mut().zip(&leaves) {
-            *offset = in_space(leaf.unwrap_or(read));
+        let mut offsets = [in_space(any.slot); ChainBounds::MAX_LEAVES];
+        let mut reads = [any.read; ChainBounds::MAX_LEAVES];
+        for ((offset, read), leaf) in offsets.iter_mut().zip(reads.iter_mut()).zip(&leaves) {
+            let leaf = leaf.unwrap_or(any);
+            *offset = in_space(leaf.slot);
+            *read = leaf.read;
         }
 
         Plan {
@@ -4430,6 +4459,7 @@ impl ChainRun {
             root: self.node.op,
             ops,
             leaves: offsets,
+            reads: Reads::of(reads),
         }
     }
 }
@@ -4534,6 +4564,32 @@ impl Growing<'_> {
         }
     }
 
+    /// The leaf `value` becomes. A cast into the chain's own type is the
+    /// leaf's read and adds no node (RFC-0049 rule 3), so a chain that
+    /// absorbs one stays at one `T`; anything else reads the register the
+    /// operation that computes it writes.
+    fn leaf(&mut self, value: ValueId) -> Tree {
+        let Some((at, src, from)) = self.cast_into(value) else {
+            return Tree::Leaf(self.prep.leaf_slot(value), LeafRead::Own);
+        };
+        self.absorbed.push(at);
+        Tree::Leaf(self.prep.leaf_slot(src), LeafRead::Cast(from))
+    }
+
+    /// The cast `value` is, where it is one this chain may read through:
+    /// its instruction, the register it reads, and the type it reads at.
+    fn cast_into(&self, value: ValueId) -> Option<(usize, ValueId, ChainTy)> {
+        let at = self.prep.def_at(value)?;
+        if at < self.floor || at >= self.root || self.prep.use_count(value) != 1 {
+            return None;
+        }
+        let InstKind::Cast { src, to, .. } = &self.prep.body.insts[at].kind else {
+            return None;
+        };
+        let from = chain_ty(self.prep.ty(*src))?;
+        (chain_ty(&Ty::from(*to)) == Some(self.ty)).then_some((at, *src, from))
+    }
+
     /// How many operator nodes absorbing `value` whole would add.
     fn nodes_of(&self, value: ValueId) -> usize {
         let Some(at) = self.absorbable(value) else {
@@ -4555,7 +4611,7 @@ impl Growing<'_> {
             .absorbable(value)
             .filter(|_| self.nodes + self.nodes_of(value) <= ChainBounds::MAX_NODES);
         let Some(at) = admitted else {
-            return Tree::Leaf(self.prep.leaf_slot(value));
+            return self.leaf(value);
         };
         self.absorbed.push(at);
         match &self.prep.body.insts[at].kind {
@@ -5087,11 +5143,12 @@ impl<'a> Prepare<'a> {
     }
 
     /// Every register a chain reads is live where the chain runs and
-    /// carries the chain's own type — the chain-shaped half of what
-    /// `check_assignment` states for slots.
+    /// carries the type its leaf reads it at — the chain's own, or the
+    /// source type of a cast the chain absorbed (RFC-0049). This is the
+    /// chain-shaped half of what `check_assignment` states for slots.
     fn check_chain(&self, run: &ChainRun) {
         for leaf in run.node.flatten().leaves {
-            let Some(slot) = leaf else {
+            let Some(Leaf { slot, read }) = leaf else {
                 continue;
             };
             assert!(
@@ -5099,7 +5156,7 @@ impl<'a> Prepare<'a> {
                 "a chain reads register {}, which its body's frame does not have",
                 slot.index()
             );
-            let read = (self.body.insts[run.insts.start..run.insts.end])
+            let value = (self.body.insts[run.insts.start..run.insts.end])
                 .iter()
                 .flat_map(|inst| inst_info::uses(&inst.kind))
                 .find(|value| self.leaf_slot(*value) == slot)
@@ -5109,10 +5166,14 @@ impl<'a> Prepare<'a> {
                         slot.index()
                     )
                 });
+            let expected = match read {
+                LeafRead::Own => run.ty,
+                LeafRead::Cast(from) => from,
+            };
             assert_eq!(
-                chain_ty(self.ty(read)),
-                Some(run.ty),
-                "a chain reads register {} at another type than its own",
+                chain_ty(self.ty(value)),
+                Some(expected),
+                "a chain reads register {} at another type than its leaf names",
                 slot.index()
             );
         }
@@ -5174,22 +5235,22 @@ impl Prepare<'_> {
 
         let mut konsts: Vec<Value> = Vec::new();
         let mut in_space: FxHashMap<Off, Off> = FxHashMap::default();
-        for leaf in run.node.flatten().leaves.iter().flatten() {
+        for Leaf { slot, .. } in run.node.flatten().leaves.iter().flatten() {
             let at = match body
                 .params
                 .iter()
-                .position(|(_, id)| *leaf == self.off(*id))
+                .position(|(_, id)| *slot == self.off(*id))
             {
                 Some(at) => at,
                 None => {
-                    let raw = u32::try_from(leaf.index())
+                    let raw = u32::try_from(slot.index())
                         .expect("a frame's register index fits the konst table's key");
                     let konst = self.konsts.value_at.get(&raw)?;
                     body.params.len() + intern(&mut konsts, konst)
                 }
             };
             let at = u16::try_from(at).expect("a body reads at most u16::MAX operands");
-            in_space.insert(*leaf, Off::of(at));
+            in_space.insert(*slot, Off::of(at));
         }
         if body.params.len() + konsts.len() > ExprChain::MAX_OPERANDS {
             return None;

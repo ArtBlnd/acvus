@@ -446,6 +446,11 @@ fn remap_inst(
             op: *op,
             operand: r(*operand),
         },
+        InstKind::Cast { dst, src, to } => InstKind::Cast {
+            dst: r(*dst),
+            src: r(*src),
+            to: *to,
+        },
 
         // Functions
         InstKind::LoadFunction { dst, id } => InstKind::LoadFunction {

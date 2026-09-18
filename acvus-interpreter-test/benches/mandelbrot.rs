@@ -22,8 +22,8 @@ let py = 0;
 while py < @h {
     let px = 0;
     while px < @w {
-        let cx = -2.0 + 3.0 * px.to_float() / @w.to_float();
-        let cy = -1.2 + 2.4 * py.to_float() / @h.to_float();
+        let cx = -2.0 + 3.0 * px as f64 / @w as f64;
+        let cy = -1.2 + 2.4 * py as f64 / @h as f64;
         let x = 0.0;
         let y = 0.0;
         let i = 0;

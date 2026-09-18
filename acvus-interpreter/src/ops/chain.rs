@@ -13,6 +13,7 @@ use crate::code::{
 };
 use crate::machine::Machine;
 use crate::ops::arith::{Int, for_int_ty};
+use crate::ops::cast::AsNum;
 use crate::ops::place::Place;
 use crate::regs::Regs;
 use crate::value::{Kind, Value};
@@ -34,6 +35,59 @@ pub trait Num: Copy + 'static {
     fn rem(self, other: Self) -> Self;
     fn neg(self) -> Self;
     fn compare(self, other: Self, how: Compare) -> bool;
+
+    fn of_i8(v: i8) -> Self;
+    fn of_i16(v: i16) -> Self;
+    fn of_i32(v: i32) -> Self;
+    fn of_i64(v: i64) -> Self;
+    fn of_u8(v: u8) -> Self;
+    fn of_u16(v: u16) -> Self;
+    fn of_u32(v: u32) -> Self;
+    fn of_u64(v: u64) -> Self;
+    fn of_f64(v: f64) -> Self;
+}
+
+/// `Num`'s nine constructors at one target type, each the Rust `as`
+/// expression for its pair (RFC-0049).
+macro_rules! num_of {
+    ($t:ty) => {
+        #[inline(always)]
+        fn of_i8(v: i8) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_i16(v: i16) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_i32(v: i32) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_i64(v: i64) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_u8(v: u8) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_u16(v: u16) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_u32(v: u32) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_u64(v: u64) -> Self {
+            v as $t
+        }
+        #[inline(always)]
+        fn of_f64(v: f64) -> Self {
+            v as $t
+        }
+    };
 }
 
 macro_rules! impl_num_for_int {
@@ -94,6 +148,8 @@ macro_rules! impl_num_for_int {
                     Compare::Ne => self != other,
                 }
             }
+
+            num_of!($t);
         })*
     };
 }
@@ -149,6 +205,8 @@ impl Num for f64 {
             Compare::Ne => self.to_bits() != other.to_bits(),
         }
     }
+
+    num_of!(f64);
 }
 
 /// The run a chain reads. Its offsets are byte displacements produced by
@@ -181,11 +239,44 @@ impl<'a> Operands<'a> {
     }
 }
 
+/// The type one leaf reads its slot at: the chain's own, or the type a
+/// cast the chain absorbed read (RFC-0049). A cast is a leaf and never a
+/// node, so absorbing one leaves `Chain{1,2,3}<T>` at one `T`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LeafRead {
+    Own,
+    Cast(ChainTy),
+}
+
+/// How a chain reads its leaves. `Own` is every leaf at the chain's own
+/// type, and it is a variant rather than an array of `LeafRead::Own`
+/// because it is the one a chain that absorbed no cast runs: the test is
+/// one branch for the whole chain instead of one per leaf, which is what
+/// `range | sum` measured (RFC-0049, "What it costs").
+#[derive(Clone, Copy)]
+pub enum Reads {
+    Own,
+    Leafwise([LeafRead; ChainBounds::MAX_LEAVES]),
+}
+
+impl Reads {
+    pub fn of(leafwise: [LeafRead; ChainBounds::MAX_LEAVES]) -> Reads {
+        match leafwise.iter().all(|read| *read == LeafRead::Own) {
+            true => Reads::Own,
+            false => Reads::Leafwise(leafwise),
+        }
+    }
+
+    pub fn leafwise(self) -> [LeafRead; ChainBounds::MAX_LEAVES] {
+        match self {
+            Reads::Own => [LeafRead::Own; ChainBounds::MAX_LEAVES],
+            Reads::Leafwise(held) => held,
+        }
+    }
+}
+
 #[inline(always)]
-fn leaf<T>(operands: Operands<'_>, offset: u16) -> T
-where
-    T: Num,
-{
+fn word(operands: Operands<'_>, offset: u16) -> u64 {
     let at = offset as usize;
     debug_assert!(
         at % size_of::<Value>() == Value::WORD_OFFSET,
@@ -196,12 +287,118 @@ where
         "a chain leaf reads past the operand space its preparation sized"
     );
     // SAFETY: `prepare::Prepare::check_chain` states that every slot a
-    // chain reads is below the operand space's length and carries the
-    // chain's own type, and `ChainBounds::byte_offset_of_word` is the only
-    // writer of these offsets, so the address is inside the space and
+    // chain reads is below the operand space's length and carries the type
+    // its `LeafRead` names, and `ChainBounds::byte_offset_of_word` is the
+    // only writer of these offsets, so the address is inside the space and
     // aligned to a `Value` word. The two assertions above are that
     // statement, executed.
-    unsafe { T::read(operands.base.cast::<u8>().add(at).cast::<u64>().read()) }
+    unsafe { operands.base.cast::<u8>().add(at).cast::<u64>().read() }
+}
+
+#[inline(always)]
+fn converted<T>(bits: u64, read: LeafRead) -> T
+where
+    T: Num,
+{
+    match read {
+        LeafRead::Own => T::read(bits),
+        LeafRead::Cast(ChainTy::Int(k)) => for_int_ty!(k, |S| <S as Num>::read(bits).as_num()),
+        LeafRead::Cast(ChainTy::Float) => f64::from_bits(bits).as_num(),
+    }
+}
+
+#[inline(always)]
+fn own<T>(plan: &Plan, operands: Operands<'_>, at: usize) -> T
+where
+    T: Num,
+{
+    T::read(word(operands, plan.leaves[at]))
+}
+
+#[inline(always)]
+fn cast<T>(plan: &Plan, operands: Operands<'_>, at: usize, read: LeafRead) -> T
+where
+    T: Num,
+{
+    converted(word(operands, plan.leaves[at]), read)
+}
+
+/// Two leaves, in leaf order.
+///
+/// `PLAIN` is the caller's knowledge that this chain absorbed no cast.
+/// Where the caller has it — a body that is one chain, whose evaluator
+/// `chain_eval` chooses once at preparation — the reads compile to what
+/// they were before `as` existed. Where it does not, the chain reads
+/// `plan.reads` at one branch for the whole chain rather than one per
+/// leaf; RFC-0049's "What it costs" carries the measurement that decided
+/// between those two.
+#[inline(always)]
+fn pair<T, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> (T, T)
+where
+    T: Num,
+{
+    if PLAIN {
+        return (own(plan, operands, 0), own(plan, operands, 1));
+    }
+    match plan.reads {
+        Reads::Own => (own(plan, operands, 0), own(plan, operands, 1)),
+        Reads::Leafwise(r) => (cast(plan, operands, 0, r[0]), cast(plan, operands, 1, r[1])),
+    }
+}
+
+#[inline(always)]
+fn triple<T, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> (T, T, T)
+where
+    T: Num,
+{
+    if PLAIN {
+        return (
+            own(plan, operands, 0),
+            own(plan, operands, 1),
+            own(plan, operands, 2),
+        );
+    }
+    match plan.reads {
+        Reads::Own => (
+            own(plan, operands, 0),
+            own(plan, operands, 1),
+            own(plan, operands, 2),
+        ),
+        Reads::Leafwise(r) => (
+            cast(plan, operands, 0, r[0]),
+            cast(plan, operands, 1, r[1]),
+            cast(plan, operands, 2, r[2]),
+        ),
+    }
+}
+
+#[inline(always)]
+fn quad<T, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> (T, T, T, T)
+where
+    T: Num,
+{
+    if PLAIN {
+        return (
+            own(plan, operands, 0),
+            own(plan, operands, 1),
+            own(plan, operands, 2),
+            own(plan, operands, 3),
+        );
+    }
+    match plan.reads {
+        Reads::Own => (
+            own(plan, operands, 0),
+            own(plan, operands, 1),
+            own(plan, operands, 2),
+            own(plan, operands, 3),
+        ),
+        Reads::Leafwise(r) => (
+            cast(plan, operands, 0, r[0]),
+            cast(plan, operands, 1, r[1]),
+            cast(plan, operands, 2, r[2]),
+            cast(plan, operands, 3, r[3]),
+        ),
+    }
 }
 
 #[inline(always)]
@@ -392,23 +589,23 @@ fn wrong_shape(shape: Shape, nodes: usize) -> ! {
 }
 
 #[inline(always)]
-fn tree1<T, const R: u8>(plan: &Plan, operands: Operands<'_>) -> u64
+fn tree1<T, const R: u8, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> u64
 where
     T: Num,
 {
-    let a: T = leaf(operands, plan.leaves[0]);
-    let b: T = leaf(operands, plan.leaves[1]);
+    let (a, b) = pair::<T, PLAIN>(plan, operands);
     finish::<T, R>(plan.root, a, b)
 }
 
 #[inline(always)]
-fn tree2<T, const O0: u8, const R: u8>(plan: &Plan, operands: Operands<'_>) -> u64
+fn tree2<T, const O0: u8, const R: u8, const PLAIN: bool>(
+    plan: &Plan,
+    operands: Operands<'_>,
+) -> u64
 where
     T: Num,
 {
-    let a: T = leaf(operands, plan.leaves[0]);
-    let b: T = leaf(operands, plan.leaves[1]);
-    let c: T = leaf(operands, plan.leaves[2]);
+    let (a, b, c) = triple::<T, PLAIN>(plan, operands);
     match plan.shape {
         Shape::NNLLL => {
             let n0 = apply::<T, O0>(plan.ops[0], a, b);
@@ -423,14 +620,14 @@ where
 }
 
 #[inline(always)]
-fn tree3<T, const O0: u8, const O1: u8, const R: u8>(plan: &Plan, operands: Operands<'_>) -> u64
+fn tree3<T, const O0: u8, const O1: u8, const R: u8, const PLAIN: bool>(
+    plan: &Plan,
+    operands: Operands<'_>,
+) -> u64
 where
     T: Num,
 {
-    let a: T = leaf(operands, plan.leaves[0]);
-    let b: T = leaf(operands, plan.leaves[1]);
-    let c: T = leaf(operands, plan.leaves[2]);
-    let d: T = leaf(operands, plan.leaves[3]);
+    let (a, b, c, d) = quad::<T, PLAIN>(plan, operands);
     let ops = plan.ops;
     match plan.shape {
         Shape::NNNLLLL => {
@@ -470,6 +667,7 @@ pub struct Plan {
     pub root: Root,
     pub ops: [Arith; ChainBounds::MAX_INTERIOR],
     pub leaves: [u16; ChainBounds::MAX_LEAVES],
+    pub reads: Reads,
 }
 
 pub struct Chain1<T, D, const R: u8>
@@ -514,7 +712,7 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
-        let bits = tree1::<T, R>(&self.plan, Operands::of_frame(m.regs()));
+        let bits = tree1::<T, R, false>(&self.plan, Operands::of_frame(m.regs()));
         let carried = D::write(m.regs(), self.dst, bits);
         self.next.run(m, carried)
     }
@@ -537,7 +735,7 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
-        let bits = tree2::<T, O0, R>(&self.plan, Operands::of_frame(m.regs()));
+        let bits = tree2::<T, O0, R, false>(&self.plan, Operands::of_frame(m.regs()));
         let carried = D::write(m.regs(), self.dst, bits);
         self.next.run(m, carried)
     }
@@ -560,7 +758,7 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
-        let bits = tree3::<T, O0, O1, R>(&self.plan, Operands::of_frame(m.regs()));
+        let bits = tree3::<T, O0, O1, R, false>(&self.plan, Operands::of_frame(m.regs()));
         let carried = D::write(m.regs(), self.dst, bits);
         self.next.run(m, carried)
     }
@@ -574,25 +772,31 @@ where
     }
 }
 
-fn eval1<T, const R: u8>(chain: &ExprChain, operands: &[Value]) -> u64
+fn eval1<T, const R: u8, const PLAIN: bool>(chain: &ExprChain, operands: &[Value]) -> u64
 where
     T: Num,
 {
-    tree1::<T, R>(&chain.plan, Operands::of(operands))
+    tree1::<T, R, PLAIN>(&chain.plan, Operands::of(operands))
 }
 
-fn eval2<T, const O0: u8, const R: u8>(chain: &ExprChain, operands: &[Value]) -> u64
+fn eval2<T, const O0: u8, const R: u8, const PLAIN: bool>(
+    chain: &ExprChain,
+    operands: &[Value],
+) -> u64
 where
     T: Num,
 {
-    tree2::<T, O0, R>(&chain.plan, Operands::of(operands))
+    tree2::<T, O0, R, PLAIN>(&chain.plan, Operands::of(operands))
 }
 
-fn eval3<T, const O0: u8, const O1: u8, const R: u8>(chain: &ExprChain, operands: &[Value]) -> u64
+fn eval3<T, const O0: u8, const O1: u8, const R: u8, const PLAIN: bool>(
+    chain: &ExprChain,
+    operands: &[Value],
+) -> u64
 where
     T: Num,
 {
-    tree3::<T, O0, O1, R>(&chain.plan, Operands::of(operands))
+    tree3::<T, O0, O1, R, PLAIN>(&chain.plan, Operands::of(operands))
 }
 
 /// What the picker's walk ends in. The walk is one `match` per node, and
@@ -677,10 +881,14 @@ where
     }
 }
 
+/// A body that is one chain is called through this function pointer and
+/// does nothing else, so whether its leaves hold a cast is settled here,
+/// once, rather than read on every call.
 struct BuildExpr<T>
 where
     T: Num,
 {
+    plain: bool,
     at: PhantomData<fn() -> T>,
 }
 
@@ -691,15 +899,24 @@ where
     type Out = ExprFn;
 
     fn one<const R: u8>(&mut self) -> ExprFn {
-        eval1::<T, R>
+        match self.plain {
+            true => eval1::<T, R, true>,
+            false => eval1::<T, R, false>,
+        }
     }
 
     fn two<const O0: u8, const R: u8>(&mut self) -> ExprFn {
-        eval2::<T, O0, R>
+        match self.plain {
+            true => eval2::<T, O0, R, true>,
+            false => eval2::<T, O0, R, false>,
+        }
     }
 
     fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> ExprFn {
-        eval3::<T, O0, O1, R>
+        match self.plain {
+            true => eval3::<T, O0, O1, R, true>,
+            false => eval3::<T, O0, O1, R, false>,
+        }
     }
 }
 
@@ -787,13 +1004,20 @@ pub fn chain_op(ty: ChainTy, dst: Where, plan: Plan, next: Box<dyn Op>) -> Box<d
 pub fn chain_eval(ty: ChainTy, plan: &Plan) -> ExprFn {
     let nodes = Nodes::of(plan);
     let shape = plan.shape;
+    let plain = matches!(plan.reads, Reads::Own);
     match ty {
         ChainTy::Int(k) => for_int_ty!(k, |T| {
-            let mut make = BuildExpr::<T> { at: PhantomData };
+            let mut make = BuildExpr::<T> {
+                plain,
+                at: PhantomData,
+            };
             pick::<T, BuildExpr<T>>(shape, &nodes, &mut make)
         }),
         ChainTy::Float => {
-            let mut make = BuildExpr::<f64> { at: PhantomData };
+            let mut make = BuildExpr::<f64> {
+                plain,
+                at: PhantomData,
+            };
             pick::<f64, BuildExpr<f64>>(shape, &nodes, &mut make)
         }
     }

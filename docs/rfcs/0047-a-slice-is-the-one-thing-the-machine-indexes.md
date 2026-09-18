@@ -136,7 +136,9 @@ enumerate the dependents, nothing is patched around.
   `core::to_float` became a shared signature with an instance per integer
   type. `to_int` has no `u64` instance, so a length and an `i64` element
   cannot be added. This is a language change beyond the RFC as accepted, and
-  it is the owner's to judge.
+  it is the owner's to judge. **RFC-0049 replaced both signatures**: a
+  length reaches an `i64` and an `i64` reaches a `u64` by `as`, and
+  `core::to_float` is gone.
 - **A slice never reaches user code.** `TypeEnv` holds two maps:
   `functions`, which `resolve_fn` reads and which is the only place a
   script's name can resolve, and `machine`, which holds the `as_slice` /

@@ -17,8 +17,8 @@ use crate::solver::{
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, Param, ParamTerm, Solver, Task,
-    Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
+    Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, NumTy, Param, ParamTerm,
+    Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -52,6 +52,13 @@ struct BoundSite {
 struct IntLiteral {
     ty: InferTy,
     value: i128,
+    span: Span,
+}
+
+/// An `e as T`, kept until the solve, because whether `e` is a number is
+/// a question its type answers only once the body is solved (RFC-0049).
+struct CastSite {
+    from: InferTy,
     span: Span,
 }
 
@@ -635,6 +642,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Each `?` with the return type it leaves through (RFC-0038).
     try_sites: FxHashMap<AstId, InferTy>,
     int_literals: Vec<IntLiteral>,
+    casts: Vec<CastSite>,
     /// Calls `ns::tag(payload)` that resolved to a structural variant
     /// (RFC-0030), for the lowering.
     structural_variant_calls: FxHashSet<AstId>,
@@ -682,6 +690,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return_ty: None,
             try_sites: FxHashMap::default(),
             int_literals: Vec::new(),
+            casts: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
             conversions: Vec::new(),
             index_uses: Vec::new(),
@@ -1688,6 +1697,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.solver.freeze_ty(&TyTerm::Var(site.var))
             {
                 self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
+            }
+        }
+        let casts = std::mem::take(&mut self.casts);
+        for CastSite { from, span } in casts {
+            let Ok(from) = self.solver.freeze_ty(&from) else {
+                continue;
+            };
+            if NumTy::of_ty(&from).is_none() && !from.is_error() {
+                self.error(MirErrorKind::CastOfNonNumber(from), span);
             }
         }
         let literals = std::mem::take(&mut self.int_literals);
@@ -3815,6 +3833,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Expr::Paren { id, inner, span: _ } => {
                 let ty = self.check_expr(inner);
                 self.record_ret(*id, ty)
+            }
+
+            Expr::Cast {
+                id,
+                expr,
+                target,
+                target_span,
+                span: _,
+            } => {
+                let from = self.check_expr(expr);
+                let Some(to) = NumTy::of_name(self.interner.resolve(*target)) else {
+                    let name = self.interner.resolve(*target).to_string();
+                    self.error(MirErrorKind::CastToUnknownType(name), *target_span);
+                    return self.record_ret(*id, Self::infer_error());
+                };
+                self.casts.push(CastSite {
+                    from,
+                    span: expr.span(),
+                });
+                self.record_ret(*id, InferTy::from(to))
             }
 
             Expr::Try { id, inner, span } => {

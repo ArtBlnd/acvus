@@ -26,7 +26,7 @@ async fn three_nested_maps_sum_to_the_product_of_the_levels() {
     let v = run(
         "range(1, 4) \
          | map(|a| -> range(1, 4) \
-             | map(|b| -> range(1, 4) | map(|c| -> to_float(c)) | sum) \
+             | map(|b| -> range(1, 4) | map(|c| -> c as f64) | sum) \
              | sum) \
          | sum",
         Ty::Float,

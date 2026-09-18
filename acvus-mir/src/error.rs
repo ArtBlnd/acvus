@@ -150,6 +150,11 @@ pub enum MirErrorKind {
     MoveOutOfIndex {
         ty: Ty,
     },
+    /// `e as T` where `T` is not one of the types `as` converts between
+    /// (RFC-0049).
+    CastToUnknownType(String),
+    /// `e as T` where `e` is not a number.
+    CastOfNonNumber(Ty),
     /// `*r` where `r` is not a reference.
     DerefOfNonReference(Ty),
     /// `*r` where the reference names a value that is not a primitive.
@@ -299,6 +304,19 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::MoveOutOfIndex { ty } => {
                 write!(f, "cannot move out of index of `{}`", ty.display(interner))
+            }
+            MirErrorKind::CastToUnknownType(name) => {
+                write!(
+                    f,
+                    "`as` converts to i8, i16, i32, i64, u8, u16, u32, u64 or f64, not to `{name}`"
+                )
+            }
+            MirErrorKind::CastOfNonNumber(ty) => {
+                write!(
+                    f,
+                    "`as` converts a number; {} is not one",
+                    ty.display(interner)
+                )
             }
             MirErrorKind::DerefOfNonReference(ty) => {
                 write!(f, "`*` needs a reference, got {}", ty.display(interner))

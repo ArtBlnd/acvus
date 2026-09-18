@@ -159,6 +159,7 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         | InstKind::Take { .. }
         | InstKind::BinOp { .. }
         | InstKind::UnaryOp { .. }
+        | InstKind::Cast { .. }
         | InstKind::FieldGet { .. }
         | InstKind::Merge { .. }
         | InstKind::StringEq { .. }

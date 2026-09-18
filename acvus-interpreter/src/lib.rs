@@ -18,7 +18,7 @@ pub use interpreter::{Args, Executable, Interpreter, InterpreterContext};
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub use layout::Hooks as SpaceHooksByType;
 pub use machine::fn_value_call;
-pub use ops::chain::{Node as ChainNode, Nodes as ChainNodes};
+pub use ops::chain::{ChainTy, LeafRead, Node as ChainNode, Nodes as ChainNodes, Reads};
 /// The handlers an `Index` runs, and the unchecked form beside them that
 /// `prepare` never emits (RFC-0047 §7).
 pub use ops::index as index_handlers;

@@ -927,7 +927,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     let i = Interner::new();
     let v = run_ext(
         &i,
-        "let s = \"ab\"; let b = to_bytes(s); to_int(&b[0])",
+        "let s = \"ab\"; let b = to_bytes(s); b[0] as i64",
         TypedContext::default(),
         vec![],
     )

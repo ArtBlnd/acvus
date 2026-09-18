@@ -98,7 +98,7 @@ fn a_let_bound_lambda_is_called_from_a_lambda_an_extern_receives() {
 }
 
 const TWO_LEVEL_WORD: &str = "let h = 0.5; \
-     range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> h * to_float(t)) | sum) | sum";
+     range(0, 2) | map(|j| -> range(0, 2) | map(|t| -> h * t as f64) | sum) | sum";
 
 const TWO_LEVEL_LARGE: &str = "let w = [0.5, 0.5]; \
      as_iter(&@values) | map(|row| -> as_iter(row) | map(|x| -> w[0] * *x) | sum) | sum";
@@ -140,7 +140,7 @@ fn a_lambda_capturing_a_lent_parameter_is_rejected() {
     let errors = check(
         &i,
         "let a = [[0.5, 0.5]]; \
-         as_iter(&a) | map(|k| -> range(0, 2) | map(|t| -> k[0] + to_float(t)) | sum) | sum",
+         as_iter(&a) | map(|k| -> range(0, 2) | map(|t| -> k[0] + t as f64) | sum) | sum",
     )
     .expect_err("a lambda cannot capture a reference");
     assert!(
@@ -174,7 +174,7 @@ const LENT_ARRAY: &str = "let a = [[1, 2], [3, 4]]; ";
 fn a_qualified_call_of_a_name_a_binding_also_has_captures_nothing() {
     let i = Interner::new();
     let source =
-        format!("{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> to_float(array::len(k))) | sum");
+        format!("{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> array::len(k) as f64) | sum");
     let c = checked(&i, &source);
     assert_eq!(c.ret, Ty::Float);
     assert_eq!(
@@ -206,7 +206,7 @@ fn a_method_call_that_settles_on_a_binding_captures_it() {
 fn a_binding_read_beside_a_qualified_name_of_its_own_spelling_is_captured_once() {
     let i = Interner::new();
     let source = format!(
-        "{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> to_float(array::len(k)) + to_float(len(1))) | sum"
+        "{LEN_BINDING}{LENT_ARRAY}as_iter(&a) | map(|k| -> array::len(k) as f64 + len(1) as f64) | sum"
     );
     let c = checked(&i, &source);
     assert_eq!(c.ret, Ty::Float);

@@ -95,6 +95,7 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0046](0046-a-calls-task-is-an-effect.md) | A call's task is an effect: `Task::{Sync, Async, Heavy}` | Accepted |
 | [RFC-0047](0047-a-slice-is-the-one-thing-the-machine-indexes.md) | A slice is the one thing the machine indexes, and a bound is proved by an interval | Accepted |
 | [RFC-0048](0048-ownership-is-the-machines.md) | Ownership is the machine's: a value copies, a register is written once | Accepted |
+| [RFC-0049](0049-a-cast-is-a-leaf.md) | `expr as T` is Rust's `as`, and inside a chain it is a leaf | Accepted |
 | [RFC-0050](0050-an-aggregate-is-its-components-until-it-escapes.md) | An aggregate is its components until it escapes, and the heap is the spill | Accepted |
 | [RFC-0051](0051-a-match-is-one-dispatch-and-is-exhaustive.md) | A `match` is one dispatch, and it is exhaustive where the variant set is known | Accepted |
 | [RFC-0052](0052-an-operation-is-a-struct-the-machine-calls-once.md) | An operation is a struct the machine calls once, and it holds its successor | Accepted |

@@ -4,7 +4,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::graph::QualifiedRef;
-use crate::ty::{Mutability, Task, Ty};
+use crate::ty::{Mutability, NumTy, Task, Ty};
 
 /// A call that is an instruction of the language (RFC-0020): the
 /// compiler's own instance of a shared signature.
@@ -256,6 +256,20 @@ pub enum InstKind {
         dst: ValueId,
         op: UnaryOp,
         operand: ValueId,
+    },
+    /// `src as to` (RFC-0049), total, with Rust's `as` values.
+    ///
+    /// It carries no source type, and that is a decision: `src`'s own type
+    /// is the one every reader already holds, and a second copy of it here
+    /// could disagree with it.
+    ///
+    /// `CastKind` above is not reused because it is not this: it names a
+    /// pure ExternFn performing a declared coercion between user-defined
+    /// types (RFC-0016), which is a call, not a width.
+    Cast {
+        dst: ValueId,
+        src: ValueId,
+        to: NumTy,
     },
 
     // Functions

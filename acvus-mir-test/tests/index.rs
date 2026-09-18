@@ -135,7 +135,7 @@ fn a_container_without_a_slice_is_not_indexed() {
 #[test]
 fn an_index_that_is_not_a_u64_is_the_ordinary_unification_refusal() {
     assert_eq!(
-        refusal("let a = [1, 2, 3]; let x = 1.5; let n = to_int(&x); a[n]"),
+        refusal("let a = [1, 2, 3]; let x = 1.5; let n = x as i64; a[n]"),
         "type mismatch: expected u64, got i64"
     );
 }

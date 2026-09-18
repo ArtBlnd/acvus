@@ -617,7 +617,7 @@ fn boolean_not() {
     insta::assert_snapshot!(ir);
 }
 
-// -- Edge case: to_float / to_int conversion ---------------------
+// -- Edge case: `as` conversion (RFC-0049) -----------------------
 
 #[test]
 fn to_float_conversion() {
@@ -625,7 +625,7 @@ fn to_float_conversion() {
     let context = ctx(&i, &[("n", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @n | to_float }}{{ x.to_string() }}{{_}}{{/}}"#,
+        r#"{{ x = @n as f64 }}{{ x.to_string() }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -638,7 +638,7 @@ fn to_int_conversion() {
     let context = ctx(&i, &[("f", Ty::Float)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @f.to_int() }}{{ x.to_string() }}{{_}}{{/}}"#,
+        r#"{{ x = @f as i64 }}{{ x.to_string() }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();

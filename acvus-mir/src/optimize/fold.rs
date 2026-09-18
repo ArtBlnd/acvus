@@ -24,7 +24,7 @@ use rustc_hash::FxHashMap;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{InstKind, ValueId};
-use crate::ty::{IntTy, Ty};
+use crate::ty::{IntTy, NumTy, Ty};
 
 pub fn run(cfg: &mut CfgBody) {
     while rewrite_once(cfg) {}
@@ -71,7 +71,10 @@ fn rewrite_once(cfg: &mut CfgBody) -> bool {
         })
     });
     for site in sites.collect::<Vec<Site>>() {
-        if fold_constant(cfg, &facts, site) || join_constants(cfg, &facts, site) {
+        if fold_constant(cfg, &facts, site)
+            || fold_cast(cfg, &facts, site)
+            || join_constants(cfg, &facts, site)
+        {
             return true;
         }
     }
@@ -184,6 +187,61 @@ fn fold_constant(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     };
     *kind_mut(cfg, site) = InstKind::Const { dst, value };
     true
+}
+
+// -- A cast of a constant is the constant (RFC-0049) -------------------
+
+fn fold_cast(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
+    let InstKind::Cast { dst, src, to } = kind_at(cfg, site) else {
+        return false;
+    };
+    let Some(from) = cfg.val_types.get(&src).and_then(NumTy::of_ty) else {
+        return false;
+    };
+    let Some(value) = facts
+        .literal(src)
+        .and_then(|held| cast_result(from, to, held))
+    else {
+        return false;
+    };
+    *kind_mut(cfg, site) = InstKind::Const { dst, value };
+    true
+}
+
+/// The value `src as to` has, where `src` is a constant of type `from`.
+///
+/// Every arm is the Rust `as` expression `ops::cast`'s instance for the
+/// same pair runs, so the two agree by construction;
+/// `acvus-interpreter-test/tests/fold_agreement.rs` runs both.
+fn cast_result(from: NumTy, to: NumTy, held: &Literal) -> Option<Literal> {
+    match (from, held) {
+        (NumTy::Int(k), Literal::Int(a)) => Some(int_cast(k.read(register_word(*a)), to)),
+        (NumTy::F64, Literal::Float(x)) => Some(float_cast(*x, to)),
+        _ => None,
+    }
+}
+
+fn int_cast(a: i128, to: NumTy) -> Literal {
+    match to {
+        NumTy::Int(j) => Literal::Int(j.read(register_word(a))),
+        NumTy::F64 => Literal::Float(a as f64),
+    }
+}
+
+fn float_cast(x: f64, to: NumTy) -> Literal {
+    let NumTy::Int(j) = to else {
+        return Literal::Float(x);
+    };
+    Literal::Int(match j {
+        IntTy::I8 => i128::from(x as i8),
+        IntTy::I16 => i128::from(x as i16),
+        IntTy::I32 => i128::from(x as i32),
+        IntTy::I64 => i128::from(x as i64),
+        IntTy::U8 => i128::from(x as u8),
+        IntTy::U16 => i128::from(x as u16),
+        IntTy::U32 => i128::from(x as u32),
+        IntTy::U64 => i128::from(x as u64),
+    })
 }
 
 // -- Two constants under one associative operator join ----------------

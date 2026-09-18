@@ -145,6 +145,7 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
         InstKind::Commit { value, .. } => remap_val(value, remap),
 
         InstKind::UnaryOp { operand, .. } => remap_val(operand, remap),
+        InstKind::Cast { src, .. } => remap_val(src, remap),
 
         InstKind::FieldGet { object, .. } => remap_val(object, remap),
         InstKind::FieldSet { object, value, .. } => {

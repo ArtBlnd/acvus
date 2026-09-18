@@ -1,8 +1,8 @@
-//! The conversion signatures (RFC-0019) at the contract: `to_string` and
-//! `to_int` are one name each, read through a reference, with an instance
-//! per scalar whose every value converts. Text is parsed by the integer
-//! type's own `from_str`, and a failure is a `Result` the script matches
-//! (RFC-0038).
+//! The conversion signatures (RFC-0019) at the contract: `to_string` is
+//! one name read through a reference, with an instance per scalar, and
+//! `to_int` is the same name for the one conversion `as` does not do, a
+//! `Bool` to an `i64` (RFC-0049). Text is parsed by the integer type's own
+//! `from_str`, and a failure is a `Result` the script matches (RFC-0038).
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -49,14 +49,19 @@ async fn to_string_has_an_instance_for_every_scalar() {
 }
 
 #[tokio::test]
-async fn to_int_reads_every_converting_scalar_through_a_reference() {
-    assert_eq!(int("let x = 1.9; x.to_int()").await, 1);
+async fn to_int_reads_a_bool_through_a_reference() {
     assert_eq!(int("let x = true; x.to_int()").await, 1);
-    assert_eq!(int("let x = 7; x.to_int()").await, 7);
+    assert_eq!(int("let x = false; x.to_int()").await, 0);
+}
+
+#[tokio::test]
+async fn as_reads_every_number_at_the_named_type() {
+    assert_eq!(int("let x = 1.9; x as i64").await, 1);
+    assert_eq!(int("let x = 7; x as i64").await, 7);
 
     let i = Interner::new();
     assert_eq!(
-        run_script(&i, "@b.to_int()", byte_context(&i, 65), Ty::I64)
+        run_script(&i, "@b as i64", byte_context(&i, 65), Ty::I64)
             .await
             .as_int(),
         65

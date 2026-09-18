@@ -51,6 +51,8 @@ label
 - Containers: `vec([])`, `push`, `pop`, `len`, `v[i]` (a `u64` index),
   `as_slice`. Iterators: `as_iter`, `next`, `map`, `filter`, `fold`,
   `sum`, `collect`, and the pipe form below.
+- `expr as T` converts between numbers — the eight integer widths and
+  `f64` — with Rust's `as` values: `i as f64`, `n as u8`, `x as i64`.
 - References: `&x` and `&mut x` borrow; a value passed by value moves.
   Use after move is a compile error.
 

@@ -60,7 +60,9 @@ as a `u8` with one rule.
 - No conversion between widths in the language; `to_int` still reads
   every width into an `i64`, and `to_string` prints every width. Named
   conversions (`u32::from_str`, narrowing with a range check) come with
-  the standard library work.
+  the standard library work. **RFC-0049 built the conversion**: `expr as T`
+  reaches every width in both directions with Rust's `as` values, and
+  `to_int` kept only its `Bool` instance.
 - No `f32`.
 - No integer suffix on literals.
 

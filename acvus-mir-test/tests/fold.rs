@@ -55,3 +55,41 @@ fn a_remainder_and_a_division_by_a_power_of_two_stand() {
     assert!(!listing.contains(" & "), "a mask appeared: {listing}");
     insta::assert_snapshot!("collatz@folded", listing);
 }
+
+/// A cast of a constant is the constant (RFC-0049), so no `as` survives
+/// the pass where its source is one. The values are the ones
+/// `acvus-interpreter-test/tests/fold_agreement.rs` runs against the
+/// machine; what this states is that the folded spelling is folded, which
+/// that test cannot see.
+#[test]
+fn a_cast_of_a_constant_leaves_no_cast() {
+    let widest = optimized("(0 - 1) as u64 as f64", signed_n);
+    assert!(
+        !widest.contains(" as "),
+        "a cast of a constant stood: {widest}"
+    );
+    assert!(
+        widest.contains("1.8446744073709552e19"),
+        "the folded value is not `u64::MAX as f64`: {widest}"
+    );
+
+    let narrowed = optimized("300 as u8", signed_n);
+    assert!(
+        !narrowed.contains(" as "),
+        "a cast of a constant stood: {narrowed}"
+    );
+    assert!(
+        narrowed.contains("44"),
+        "the folded value is not 44: {narrowed}"
+    );
+}
+
+/// A cast whose source is not a constant stands, and a `NaN` is never a
+/// constant a body holds (RFC-0055), so `(0.0 / 0.0) as i64` keeps both
+/// its division and its cast.
+#[test]
+fn a_cast_of_a_value_the_pass_cannot_read_stands() {
+    let listing = optimized("let x = @n as f64; (x / 0.0) as i64", signed_n);
+    assert!(listing.contains(" as f64"), "the cast moved: {listing}");
+    assert!(listing.contains(" as i64"), "the cast moved: {listing}");
+}

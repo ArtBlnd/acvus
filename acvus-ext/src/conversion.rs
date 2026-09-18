@@ -1,11 +1,11 @@
 //! Type conversions. All pure.
 //!
 //! `core::to_string` and `core::to_int` are shared signatures (RFC-0019).
-//! `to_int` has no instance for `String` or `u64`, and that is a decision:
-//! a conversion does not fail, and both of those can. Parsing text is
-//! `i64::from_str(s)`, one `from_str` under each integer type's namespace,
-//! and it returns a `Result` (RFC-0038); a `u64` that is not an `i64` has
-//! no conversion.
+//! `to_int` converts a `Bool` and nothing else: every number-to-number
+//! conversion is `expr as T` in the language (RFC-0049), which is total,
+//! reaches every width in both directions, and is a chain leaf rather than
+//! a call. Parsing text is `i64::from_str(s)`, one `from_str` under each
+//! integer type's namespace, and it returns a `Result` (RFC-0038).
 
 use std::num::IntErrorKind;
 
@@ -24,13 +24,6 @@ pub mod sig {
     extern_signature! {
         ns: "core",
         fn to_int<T>(a: &T) -> i64
-        where
-            T: TyVar;
-    }
-
-    extern_signature! {
-        ns: "core",
-        fn to_float<T>(n: T) -> f64
         where
             T: TyVar;
     }
@@ -70,32 +63,8 @@ fn to_string_string(a: &String) -> String {
 // -- to_int -------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_int(a: &i64) -> i64 {
-    *a
-}
-
-#[extern_fn(instance_of = sig::to_int, effect = pure)]
-fn to_int_float(a: &f64) -> i64 {
-    *a as i64
-}
-
-#[extern_fn(instance_of = sig::to_int, effect = pure)]
 fn to_int_bool(a: &bool) -> i64 {
     i64::from(*a)
-}
-
-macro_rules! to_int_widens {
-    ($($name:ident: $t:ty),* $(,)?) => {$(
-        #[extern_fn(instance_of = sig::to_int, effect = pure)]
-        fn $name(a: &$t) -> i64 {
-            i64::from(*a)
-        }
-    )*};
-}
-
-to_int_widens! {
-    to_int_i8: i8, to_int_i16: i16, to_int_i32: i32,
-    to_int_byte: u8, to_int_u16: u16, to_int_u32: u32,
 }
 
 // -- from_str -----------------------------------------------------------
@@ -161,20 +130,6 @@ where
 
 // -- the rest -----------------------------------------------------------
 
-macro_rules! to_float_ints {
-    ($($name:ident: $t:ty),* $(,)?) => {$(
-        #[extern_fn(instance_of = sig::to_float, effect = pure)]
-        fn $name(n: $t) -> f64 {
-            n as f64
-        }
-    )*};
-}
-
-to_float_ints! {
-    to_float_i8: i8, to_float_i16: i16, to_float_i32: i32, to_float_int: i64,
-    to_float_u8: u8, to_float_u16: u16, to_float_u32: u32, to_float_u64: u64,
-}
-
 #[derive(TyArg)]
 pub enum CharError {
     NotOneChar(String),
@@ -204,16 +159,12 @@ fn int_to_char(n: i64) -> Result<String, CharError> {
 pub fn conversion_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
-        signatures: [sig::to_string, sig::to_int, sig::to_float],
+        signatures: [sig::to_string, sig::to_int],
         fns: [
             to_string_i8, to_string_i16, to_string_i32, to_string_int,
             to_string_u8, to_string_u16, to_string_u32, to_string_u64,
             to_string_float, to_string_bool, to_string_string,
-            to_int_i8, to_int_i16, to_int_i32, to_int_int,
-            to_int_byte, to_int_u16, to_int_u32,
-            to_int_float, to_int_bool,
-            to_float_i8, to_float_i16, to_float_i32, to_float_int,
-            to_float_u8, to_float_u16, to_float_u32, to_float_u64,
+            to_int_bool,
             char_to_int, int_to_char,
         ],
     }
@@ -231,7 +182,7 @@ mod tests {
             .expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
         let signatures = 2;
-        let plain_fns = 3;
+        let plain_fns = 2;
         assert_eq!(
             reg.functions.len() - core.functions.len(),
             signatures + plain_fns

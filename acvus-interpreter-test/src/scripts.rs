@@ -10,7 +10,7 @@
 pub const ATTENTION: &str = "
 let d = @query.len();
 let n = @keys.len();
-let scale = 1.0 / d.to_float().sqrt();
+let scale = 1.0 / (d as f64).sqrt();
 
 let scores = deque();
 let t = 0;
@@ -57,7 +57,7 @@ while j < d {
 pub const ATTENTION_VEC: &str = "
 let d = @query.len();
 let n = @keys.len();
-let scale = 1.0 / d.to_float().sqrt();
+let scale = 1.0 / (d as f64).sqrt();
 
 let scores = vec([]);
 let t = 0;

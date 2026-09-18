@@ -309,6 +309,15 @@ pub enum Expr {
         payload: Option<Box<Expr>>,
         span: Span,
     },
+    /// `expr as T`, whose value is Rust's `as` at `target`'s type
+    /// (RFC-0049).
+    Cast {
+        id: AstId,
+        expr: Box<Expr>,
+        target: Astr,
+        target_span: Span,
+        span: Span,
+    },
     /// `inner?`: the `Ok` or `Some` payload, or an early return of the
     /// `Err` or `None` (RFC-0038).
     Try {
@@ -393,6 +402,7 @@ impl Expr {
             | Expr::Pipe { id, .. }
             | Expr::Lambda { id, .. }
             | Expr::Paren { id, .. }
+            | Expr::Cast { id, .. }
             | Expr::Try { id, .. }
             | Expr::Borrow { id, .. }
             | Expr::List { id, .. }
@@ -421,6 +431,7 @@ impl Expr {
             | Expr::Pipe { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::Paren { span, .. }
+            | Expr::Cast { span, .. }
             | Expr::Try { span, .. }
             | Expr::Borrow { span, .. }
             | Expr::List { span, .. }
@@ -781,6 +792,7 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
         }
         Expr::UnaryOp { operand, .. }
         | Expr::Paren { inner: operand, .. }
+        | Expr::Cast { expr: operand, .. }
         | Expr::Try { inner: operand, .. }
         | Expr::Borrow { place: operand, .. } => {
             walk_expr(operand, refs);

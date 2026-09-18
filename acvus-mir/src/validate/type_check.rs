@@ -16,7 +16,7 @@ use crate::ir::{
     Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValOrigin, ValueId,
 };
 use crate::ir::{ExternInstance, IndexMode};
-use crate::ty::{Mutability, Ty, TypeArg};
+use crate::ty::{Mutability, NumTy, Ty, TypeArg};
 use crate::validate::move_check::is_move_only;
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::{Astr, LocalIdOps};
@@ -1010,6 +1010,25 @@ impl CheckCtx {
                             errors,
                         );
                     }
+                }
+            }
+
+            // === Cast (RFC-0049) ===
+            InstKind::Cast { dst, src, to } => {
+                let src_ty = ty!(*src);
+                let dst_ty = ty!(*dst);
+                self.assert_match(pc, span, "Cast", "dst", &Ty::from(*to), dst_ty, errors);
+                if NumTy::of_ty(src_ty).is_none() && !src_ty.is_error() {
+                    errors.push(ValidationError {
+                        scope: self.scope_name.clone(),
+                        inst_index: pc,
+                        span,
+                        kind: ValidationErrorKind::InvalidConstructor {
+                            inst_name: "Cast".to_string(),
+                            expected_constructor: "an integer width or f64".to_string(),
+                            actual: src_ty.clone(),
+                        },
+                    });
                 }
             }
 

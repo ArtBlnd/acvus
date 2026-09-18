@@ -151,14 +151,16 @@ changes.
   measured above: 6.4e-15 of drift in `cx`, and 34 of the 20000 pixels
   reaching a different escape count.
 - **No loop in the bench set reaches this pass today**, and the pass lands
-  anyway. Mandelbrot's loops multiply `px.to_float()`, not `px`: an extern
-  call stands between the counter and the multiplication, and the product
-  is a float besides. Attention multiplies two loaded floats
+  anyway. Mandelbrot's loops multiply `px as f64`, not `px`, and the
+  product is a float, which the first bullet above refuses. RFC-0049
+  removed the extern call that was the second reason — the cast is a chain
+  leaf now — and left the first standing, so the count is unchanged.
+  Attention multiplies two loaded floats
   (`@query[i] * key[i]`) and never an induction variable at all — its
   `@keys[t]` and `key[i]` are two one-level indexings, not a `t * d`. So
   the pass applies zero reductions across the bench set, for two reasons
-  that are both about the programs. RFC-0049's `as` cast is what would put
-  mandelbrot's product in reach, and the `for` loop is what will write
-  counters in the shape this pass matches. Until then the pass stands on
-  its listing snapshots and its value tests, and its first measured
+  that are both about the programs. Admitting a float reduction is what
+  would put mandelbrot's product in reach, and the `for` loop is what will
+  write counters in the shape this pass matches. Until then the pass stands
+  on its listing snapshots and its value tests, and its first measured
   speedup arrives with one of those two.

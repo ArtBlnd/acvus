@@ -13,7 +13,7 @@
 //! it ran once per escape step instead of once per pixel, because a loop's
 //! exit post-dominates its header and post-dominance was the whole hoist
 //! condition. That hoist would show here as an innermost head of three and
-//! a middle body of seventeen.
+//! a middle body of eleven.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::listing::{family_of, regions_named, script_listing};
@@ -30,8 +30,8 @@ let py = 0;
 while py < @h {
     let px = 0;
     while px < @w {
-        let cx = -2.0 + 3.0 * px.to_float() / @w.to_float();
-        let cy = -1.2 + 2.4 * py.to_float() / @h.to_float();
+        let cx = -2.0 + 3.0 * px as f64 / @w as f64;
+        let cy = -1.2 + 2.4 * py as f64 / @h as f64;
         let x = 0.0;
         let y = 0.0;
         let i = 0;
@@ -98,7 +98,7 @@ fn every_while_is_one_loop_operation_and_the_diamond_is_one_more() {
             },
             LoopShape {
                 head_ops: 1,
-                body_ops: 18,
+                body_ops: 12,
                 diamonds_in_head: 0,
             },
             LoopShape {

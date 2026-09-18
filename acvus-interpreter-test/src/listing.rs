@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use acvus_extern::Registry;
 use acvus_interpreter::AcvusRuntime;
+use acvus_interpreter::LeafRead;
 use acvus_interpreter::code::{Body, Code, Named, Op, Prepared, Shape, Slot, Where};
 use acvus_interpreter::{PrepareCtx, prepare_module};
 use acvus_mir::ty::Ty;
@@ -253,12 +254,14 @@ pub fn chains_of(code: &Code) -> Vec<ChainShape> {
 }
 
 /// One chain operation as a shape test reads it: where it writes, the tree
-/// it walks, and the frame offsets of its leaves. No `dst` means the root's
-/// word rides in the argument register (RFC-0052 rule 5).
+/// it walks, the frame offsets of its leaves, and the type each leaf reads
+/// its offset at (RFC-0049). No `dst` means the root's word rides in the
+/// argument register (RFC-0052 rule 5).
 pub struct ChainShape {
     pub dst: Option<Slot>,
     pub shape: Shape,
     pub leaves: Vec<u16>,
+    pub reads: Vec<LeafRead>,
 }
 
 fn collect_chains(heads: &[Box<dyn Op>], found: &mut Vec<ChainShape>) {
@@ -281,6 +284,7 @@ fn collect_chains_of(ops: &[&dyn Op], found: &mut Vec<ChainShape>) {
                 },
                 shape: probe.plan.shape,
                 leaves: probe.plan.leaves[..probe.plan.shape.leaves()].to_vec(),
+                reads: probe.plan.reads.leafwise()[..probe.plan.shape.leaves()].to_vec(),
             });
         }
         for owned in op.owns() {

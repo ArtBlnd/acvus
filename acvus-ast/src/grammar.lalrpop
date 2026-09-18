@@ -34,6 +34,7 @@ extern {
         "anyorder" => Token::Anyorder,
         "match" => Token::Match,
         "mut" => Token::Mut,
+        "as" => Token::As,
         "&" => Token::Amp,
         "+" => Token::Plus,
         "-" => Token::Minus,
@@ -303,12 +304,26 @@ AddExpr: Expr = {
 
 // Mul/Div: left-associative
 MulExpr: Expr = {
-    <l:@L> <left:MulExpr> "*" <right:UnaryExpr> <r:@R> =>
+    <l:@L> <left:MulExpr> "*" <right:CastExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:MulExpr> "/" <right:UnaryExpr> <r:@R> =>
+    <l:@L> <left:MulExpr> "/" <right:CastExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Div, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:MulExpr> "%" <right:UnaryExpr> <r:@R> =>
+    <l:@L> <left:MulExpr> "%" <right:CastExpr> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mod, right: Box::new(right), span: Span::new(l, r) },
+    CastExpr,
+};
+
+// Cast: `e as T`, left-associative, between the unary operators and `*`,
+// exactly where Rust binds it (RFC-0049).
+CastExpr: Expr = {
+    <l:@L> <e:CastExpr> "as" <tl:@L> <target:"ident"> <r:@R> =>
+        Expr::Cast {
+            id: AstId::alloc(),
+            expr: Box::new(e),
+            target,
+            target_span: Span::new(tl, r),
+            span: Span::new(l, r),
+        },
     UnaryExpr,
 };
 

@@ -13,7 +13,7 @@ use crate::ir::{
     MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
 };
 use crate::solver::CaptureRead;
-use crate::ty::{Effect, Mutability, Task, Ty, TypeArg};
+use crate::ty::{Effect, Mutability, NumTy, Task, Ty, TypeArg};
 use crate::typeck::{CapturedName, TypeResolution};
 
 pub struct Lowerer<'a> {
@@ -2585,6 +2585,23 @@ impl<'a> Lowerer<'a> {
             }
 
             Expr::Paren { inner, .. } => self.lower_expr(inner),
+
+            Expr::Cast {
+                id,
+                expr,
+                target,
+                span,
+                ..
+            } => {
+                let src = self.lower_expr(expr);
+                let dst = self.alloc_expr(*id);
+                let kind = match NumTy::of_name(self.interner.resolve(*target)) {
+                    Some(to) => InstKind::Cast { dst, src, to },
+                    None => InstKind::Poison { dst },
+                };
+                self.emit_inst(*span, kind);
+                dst
+            }
 
             Expr::Try { id, inner, span } => self.lower_try(*id, inner, *span),
 

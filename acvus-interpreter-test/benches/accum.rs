@@ -46,7 +46,7 @@ fn with_some_of() -> Vec<Registry<AcvusRuntime>> {
 
 const INT_WHILE: &str = "let acc = 0; let i = 0; while i < @n { acc = acc + i; i = i + 1; } acc";
 const FLOAT_WHILE: &str =
-    "let acc = 0.0; let i = 0; while i < @n { acc = acc + i.to_float(); i = i + 1; } acc";
+    "let acc = 0.0; let i = 0; while i < @n { acc = acc + i as f64; i = i + 1; } acc";
 const RANGE_SUM: &str = "range(0, @n) | sum";
 const MAP_ID_SUM: &str = "range(0, @n) | map(|x| -> x) | sum";
 const MAP_ADD_SUM: &str = "range(0, @n) | map(|x| -> x + 1) | sum";

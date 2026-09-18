@@ -57,7 +57,7 @@ fn assert_close(v: &Value, expected: f64) {
 const ATTENTION_AS_FUNCTION_CALLS: &str = "
 let d = len(&@query);
 let n = len(&@keys);
-let scale = 1.0 / sqrt(to_float(d));
+let scale = 1.0 / sqrt(d as f64);
 
 let scores = deque();
 let t = 0;
@@ -112,7 +112,7 @@ async fn attention_of_e1_over_the_standard_basis_is_the_softmax_weighted_sum_of_
 }
 
 const ATTENTION_AS_CHAINS: &str = "
-let scale = 1.0 / @query.len().to_float().sqrt();
+let scale = 1.0 / (@query.len() as f64).sqrt();
 
 let dot = |k| -> as_iter(k)
     .fold({ i: 0, s: 0.0, }, |acc, x| -> { i: acc.i + 1, s: acc.s + @query[acc.i] * *x, })
@@ -302,7 +302,7 @@ async fn a_closure_parameter_named_unlike_any_extern_is_the_callee() {
 #[tokio::test]
 async fn a_method_call_of_an_extern_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name() {
     let v = run(
-        "let len = |k| -> k + 7; @keys.as_iter().map(|k| -> k.len().to_float()).sum()",
+        "let len = |k| -> k + 7; @keys.as_iter().map(|k| -> k.len() as f64).sum()",
         Ty::Float,
     )
     .await;
@@ -312,7 +312,7 @@ async fn a_method_call_of_an_extern_inside_a_lambda_is_unaffected_by_a_binding_o
 #[tokio::test]
 async fn a_qualified_call_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name() {
     let v = run(
-        "let len = |k| -> k + 7; @keys.as_iter().map(|k| -> to_float(array::len(k))).sum()",
+        "let len = |k| -> k + 7; @keys.as_iter().map(|k| -> array::len(k) as f64).sum()",
         Ty::Float,
     )
     .await;

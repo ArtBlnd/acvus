@@ -62,6 +62,8 @@ pub enum Token {
     Match,
     #[token("mut", priority = 3)]
     Mut,
+    #[token("as", priority = 3)]
+    As,
 
     // -- Identifiers --
     #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(lex.slice()), priority = 2)]
@@ -182,6 +184,7 @@ impl fmt::Display for Token {
             Token::Anyorder => write!(f, "anyorder"),
             Token::Match => write!(f, "match"),
             Token::Mut => write!(f, "mut"),
+            Token::As => write!(f, "as"),
             Token::Amp => write!(f, "&"),
             Token::DoubleColon => write!(f, "::"),
             Token::Plus => write!(f, "+"),

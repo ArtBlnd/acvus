@@ -18,6 +18,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Fetch { dst, .. }
         | InstKind::BinOp { dst, .. }
         | InstKind::UnaryOp { dst, .. }
+        | InstKind::Cast { dst, .. }
         | InstKind::FieldGet { dst, .. }
         | InstKind::FieldSet { dst, .. }
         | InstKind::LoadFunction { dst, .. }
@@ -98,6 +99,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // Single use
         InstKind::Commit { value, .. } => smallvec![*value],
         InstKind::UnaryOp { operand, .. } => smallvec![*operand],
+        InstKind::Cast { src, .. } => smallvec![*src],
         InstKind::FieldGet { object, .. } => smallvec![*object],
         InstKind::FieldSet { object, value, .. } => smallvec![*object, *value],
         InstKind::Drop { src } => smallvec![*src],

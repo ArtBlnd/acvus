@@ -328,7 +328,7 @@ fn a_receiver_that_is_a_reference_to_an_open_element_drops_the_binding() {
     let i = Interner::new();
     let c = checked(
         &i,
-        "let len = |k| -> k + 7; let a = [[1, 2], [3, 4]]; as_iter(&a) | map(|k| -> to_float(k.len())) | sum",
+        "let len = |k| -> k + 7; let a = [[1, 2], [3, 4]]; as_iter(&a) | map(|k| -> k.len() as f64) | sum",
     );
     assert_eq!(c.ret, Ty::Float);
     assert!(

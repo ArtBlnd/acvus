@@ -119,6 +119,58 @@ impl IntTy {
     }
 }
 
+/// The type an `as` cast names (RFC-0049).
+///
+/// No `f32`: RFC-0037 does not have the type, and `as` does not add one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NumTy {
+    Int(IntTy),
+    F64,
+}
+
+impl NumTy {
+    pub fn of_name(name: &str) -> Option<NumTy> {
+        match name {
+            "f64" => Some(NumTy::F64),
+            _ => IntTy::ALL
+                .into_iter()
+                .find(|k| k.name() == name)
+                .map(NumTy::Int),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            NumTy::Int(k) => k.name(),
+            NumTy::F64 => "f64",
+        }
+    }
+
+    pub fn of_ty<V>(ty: &TyTerm<V>) -> Option<NumTy>
+    where
+        V: Phase,
+    {
+        match ty {
+            TyTerm::Int(k) => Some(NumTy::Int(*k)),
+            TyTerm::Float => Some(NumTy::F64),
+            _ => None,
+        }
+    }
+}
+
+impl<V> From<NumTy> for TyTerm<V>
+where
+    V: Phase,
+{
+    fn from(num: NumTy) -> TyTerm<V> {
+        match num {
+            NumTy::Int(k) => TyTerm::Int(k),
+            NumTy::F64 => TyTerm::Float,
+        }
+    }
+}
+
 /// What a declaration says about one of its type variables. The solver
 /// carries it on the variable and verifies it when the variable freezes.
 #[derive(Debug, Clone, PartialEq)]

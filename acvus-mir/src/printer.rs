@@ -375,6 +375,13 @@ fn write_body(
                 fmt_unaryop(*op),
                 vn.fmt_use(*operand, &consts, &texts)
             )?,
+            InstKind::Cast { dst, src, to } => writeln!(
+                f,
+                "{} = {} as {}",
+                vn.fmt_val(*dst),
+                vn.fmt_use(*src, &consts, &texts),
+                to.name()
+            )?,
 
             // Functions
             InstKind::LoadFunction { dst, id } => writeln!(
