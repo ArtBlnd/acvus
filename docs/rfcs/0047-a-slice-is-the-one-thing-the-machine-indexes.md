@@ -1,138 +1,136 @@
 # RFC-0047: a slice is the one thing the machine indexes
 
-Status: Draft (owner and coordinator; to be settled with RFC-0046's runtime half in the next session)
-Date: 2026-09-18
-Extends: RFC-0018 (references), RFC-0028 (container signatures), RFC-0044
+Status: Accepted — owner and coordinator, 2026-09-18 (Draft the same
+morning; the decisions below were settled at 11:50)
+Extends: RFC-0018 (references), RFC-0028 (container signatures), RFC-0039
+(one crossing), RFC-0043 (a bare name is settled by evidence), RFC-0044
 (a body is prepared once), RFC-0007 (motion)
 
 ## Problem
 
-Element access is an extern call. `@keys.get(t).get(i)` is two calls of
-`get`, each materializing a `Ref<Vec<T>>` and an `i64`, checking the
+Element access is an extern call. `*get(get(&keys, t), i)` is two calls
+of `get`, each materializing a `Ref<Vec<T>>` and an `i64`, checking the
 bound, building a `&T`, erasing it as a `Ref`, returning, and a `*`
-reading through it. After the chain, the diamond and the fused run,
-attention's inner iteration is two such runs and one arithmetic chain;
-fusion took the dispatches out and moved the clock 6 % — a removed
-dispatch there is worth 0.44 ns. What remains of `get` is `get`.
+reading through it. After the arithmetic chain, the diamond and the
+fused run (RFC-0044), attention's inner iteration is two such runs and
+one chain; fusing the dispatches out moved the clock 6 % — a removed
+dispatch there is worth 0.44 ns. What remains of `get` is `get`'s own
+work.
 
 Two facts the compiler cannot use while the check is inside the extern:
-`i < d` with `d = len(query)` proves every `query.get(i)` in bounds, and
-`@keys.get(t)` does not change across the `i` loop. Rust's LLVM elides
-the first and hoists the second; ours can do neither, because a call
-that may panic is not hoisted (RFC-0007) and a check it cannot see is not
-eliminated.
+`i < d` with `d = len(&query)` proves every `get(&query, i)` in bounds,
+and `get(&keys, t)` does not change across the `i` loop. Rust's LLVM
+elides the first and hoists the second; ours can do neither, because a
+call that may panic is not hoisted (RFC-0007) and a check it cannot see
+is not eliminated.
 
-The machine knows one indexed shape today: `Array<T, N>`, through
-`InstKind::ArrayIndex`/`ArrayGet` over the runtime's own `Array`. Every
-other container is a black box, by intent: the interpreter does not know
-`Vec`'s layout, and must not.
+The machine indexes one shape today: a matched array at a constant
+position (`InstKind::ArrayIndex`, pattern destructuring). Every
+container is otherwise a black box, by intent: the interpreter does not
+know `Vec`'s layout, and must not.
 
 ## Decision
 
 The machine indexes exactly one thing, a **slice** — Rust's `&[T]` /
-`&mut [T]`: a pointer, a length, and an element width the static type
-gives. Nothing else is indexed. A container that can be indexed says so
-by implementing **`core::as_slice`** (and `core::as_slice_mut`); the
-compiler introduces the slice with an **`AsSlice`** instruction and
-indexes it with **`Index`**, which generalizes `ArrayIndex`/`ArrayGet`.
+`&mut [T]`: a pointer and a length. A container that can be indexed says
+so by implementing **`core::as_slice`** (and `core::as_slice_mut`), a
+container signature (RFC-0028); the compiler calls it and indexes the
+result with **`Index`** / **`IndexSet`**, two instructions. There is no
+instruction that knows a container.
 
-1. **Types.** `&[T]` and `&mut [T]` are reference types (RFC-0018): they
-   borrow the container they were taken from, live as long as that
-   borrow, and are never stored beyond it. The `Array<T, N>` value is the
-   one container the machine holds itself; its `as_slice` is the
-   identity on its storage.
-2. **`core::as_slice(&C) -> &[T]`, `core::as_slice_mut(&mut C) -> &mut
-   [T]`** are signatures (RFC-0028) a container implements in its extern
-   crate — `Vec<T>` and `Array<T, N>` do, `Deque<T>` does not (two halves;
-   it may offer `as_slices` later), `Map` does not. The layout stays with
-   the implementer.
-3. **`AsSlice { dst, container }`** is an intrinsic instruction: the
-   lowering emits it where an index expression's container is not
-   already a slice, and it prepares as a call of the container's
-   `as_slice` instance — the one extern call, invariant in the
-   container. Its result is a slice `Value`.
-4. **`Index { dst, slice, index }`** replaces `ArrayIndex` (constant
-   index) and `ArrayGet` (variable index): it reads element `index` of a
-   slice. For an element type that is a word (the inline kinds), the
-   result is the element **by value** (Copy — the owner's decision
-   2026-09-18); otherwise a `&T` into the slice. `IndexSet { slice,
-   index, value }` writes through `&mut [T]`. Both check `index <
-   len` and panic with Rust's text (`index out of bounds: the len is {len}
-   but the index is {index}`); `IndexUnchecked`/`IndexSetUnchecked` are
-   the same instructions without the check, which **only the compiler
-   emits, only where it has proved the bound** (below).
-5. **Representation.** A slice `Value` is `{ head, word }`: the low byte
-   of `head` is `Kind::Slice`, the high 56 bits are the length, `word`
-   is the pointer. `Value` stays two `u64` scalars (a `ScalarPair`, 2a);
-   the kind byte's seven padding bytes become the length. `Index` reads
-   the length from `head >> 8`, the pointer from `word`, the width from
-   the element kind — three fields, no call, no layout.
-
-   The width is static because RFC-0039's `#` marker is in the type:
-   `Vec<#T>` (uniform) gives `&[#T]` = `&[Value]`, width 16, the element a
-   `Value` to define as is; `Vec<T>` specialized to an inline kind gives
-   `&[T]` with the kind's width (`f64` → 8) and the element becomes
-   `Value::inline(kind, bits)`; `Vec<T>` specialized to a Rust struct
-   gives `&[T]` with the width the `Cross` instance states as a constant,
-   and the element is a `&T`. `prepare` reads which of the three from
-   `val_types` and picks the `Index` instance; no run-time branch on
-   representation.
-6. **Bounds-check elimination.** A range analysis over the MIR's loop
-   structure (the natural loops `LoopDepth` already computes): an index
-   that is a loop's induction variable stepping by 1 from a constant `a
-   ≥ 0` under the condition `i < n`, where `n` is `len` of the same
-   slice's container and the container is not written in the loop
-   (`Loans::storage_effect`), is in bounds; the `Index` becomes
-   `IndexUnchecked`. The proof is a MIR pass with the loan condition the
-   hoist uses; a checked `Index` remains where nothing proves it.
-7. **Motion.** `AsSlice` is a shared borrow of the container; it hoists
-   under the borrow hoist's rule (`657545e3`) — out of every loop that
-   does not write the container. An `IndexUnchecked` whose slice and
-   index are loop-invariant hoists as a pure instruction; a checked
-   `Index` does not (it may panic, RFC-0007). Writes: `IndexSet` and
-   `as_slice_mut` are exclusive takes of the container, and RFC-0018's
-   exclusion holds: a live `&[T]` refuses them.
-8. **Syntax.** `a[i]` and `a[i][j]` are index expressions, lowered as
-   `AsSlice` + `Index` per level (an inner `Index` yielding `&Vec<T>`
-   feeds the next `AsSlice`). `get`/`get_mut` externs remain for a
-   transition and then go: one way to index.
+1. **One element width.** Every container the machine can slice stores
+   `Vec<Value>`: the runtime's own `Array` is `Arr<Value, ()>`, and a
+   `Vec<T>` reaches the store as `Vec<Value>` (RFC-0039). A converted
+   container (`Vec<f64>` in a Rust signature) has no storage of its own
+   and cannot be sliced. So a slice is always `&[Value]`, the width is
+   always 16, and the interpreter's one ABI fact is its own `Value`.
+2. **Types.** `&[T]` and `&mut [T]` are reference types (RFC-0018): a
+   slice borrows the container it was taken from, holds that loan, and
+   is never stored beyond it. `&mut [T]` is an exclusive take; a live
+   `&[T]` refuses `as_slice_mut` and `IndexSet` on its container.
+3. **Signatures.** `core::as_slice<T>(c: &C) -> &[T]` and
+   `core::as_slice_mut<T>(c: &mut C) -> &mut [T]` are bare names settled
+   by the container's evidence (RFC-0043). `Vec<T>` and `Array<T, N>`
+   implement them in acvus-ext; `Deque<T>` (two halves) and `Map` do not.
+   The call is an ordinary `FunctionCall` — pure, panic-free, a shared
+   borrow — and the borrow hoist (`657545e3`) lifts it out of every loop
+   that does not write the container. There is no `AsSlice`
+   instruction (owner, 11:50).
+4. **`Index { dst, slice, index, mode }`** reads element `index` of a
+   slice. The index is **`u64`** and nothing else (owner, 11:50): the
+   one check is `index < len`. `mode` is decided by the checker,
+   statically, from the element type:
+   - `Copy` — the element type is a word (`is_move_only` false): `dst` is
+     the element `Value` itself.
+   - `Ref` — otherwise: `dst` is `Value::reference(&slice[index])`, a
+     `Ref` into the slice's storage carrying the slice's loan (the
+     element is a `Value` in a `Vec<Value>`, so this is the same `Ref`
+     `get` returned).
+   `IndexSet { slice, index, value }` writes through `&mut [T]` with
+   `assign` semantics (the old element drops). Both panic with Rust's
+   text: `index out of bounds: the len is {len} but the index is {index}`.
+   `IndexUnchecked` / `IndexSetUnchecked` are the same without the
+   check; **only the compiler emits them, only where it has proved the
+   bound** (§7). The user cannot ask for them.
+5. **Syntax and place semantics.** `a[i]` is an index expression and a
+   place, as in Rust. In value position its element type must be a
+   word — otherwise the refusal is Rust's: `cannot move out of index of
+   `Vec<T>``, and the way is `clone(&a[i])` (RFC-0028: a value of the
+   element type is a clone). `&a[i]` and `&mut a[i]`, the inner level of
+   `a[i][j]`, and a method receiver auto-borrow → `Index` in `Ref` mode;
+   the outer level's `as_slice` takes that `Ref<Vec<T>>` as its `&C`.
+   `a[i] = v` is `as_slice_mut` + `IndexSet`. A statement beginning with
+   `[` is an array literal, as in Rust; a postfix `[` binds to the
+   expression before it.
+6. **Representation.** A slice `Value` is `{ head, word }` with `head =
+   { kind: Kind::Slice, len: [u8; 7] }` (`repr(C)`; the seven padding
+   bytes of today's `kind` become the length, and `Kind` keeps its niche
+   so `Option<Value>` stays 16 bytes), `word` the pointer. `Index` reads
+   the length from `head >> 8`, the pointer from `word`, the element at
+   `ptr + index * 16` — three fields, no call, no layout. Length is 56
+   bits (owner, 11:50).
+7. **Bounds-check elimination is an interval domain and nothing more**
+   (owner, 11:40: induction variables and recurrences are far future).
+   Each `Int` value carries `[lo, hi]` whose endpoints are constants or
+   one other SSA value (symbolic). Transfer: constants and `± constant`
+   are interval arithmetic; φ is join with widening; everything else is
+   ⊤. Refinement: on the true edge of `i < n`, `i.hi = n − 1`
+   (symbolic). An `Index(s, i)` becomes `IndexUnchecked` when `i.hi < n`,
+   `s = as_slice(&c)`, `n = len(&c)`, and `c` is not written between the
+   `len` and the `Index` (`Loans::storage_effect`, the hoist's own
+   condition). `u64` has no lower bound to prove. `a[i + 1]` and an index
+   derived elsewhere stay checked; that is the correct answer, not a gap.
+8. **Motion.** The `as_slice` call hoists as a borrow; a checked `Index`
+   does not (it may panic, RFC-0007); an `IndexUnchecked` whose slice and
+   index are loop-invariant hoists as a pure instruction.
 
 ## The cut, and what replaces each thing
 
-Necessity by absence: each removal breaks the build, and the compile
-errors enumerate the dependents; nothing is patched around.
+Necessity by absence: each removal breaks the build, the compile errors
+enumerate the dependents, nothing is patched around.
 
 | removed | replaced by |
 |---|---|
-| `InstKind::ArrayIndex { array, index: usize }` (constant index into `Array<T, N>`) | `AsSlice` (identity on `Array`) + `Index` with a `Const` index; the constant fold of a constant index into an `Array` of known `N` is the range pass's trivial case → `IndexUnchecked` |
-| `InstKind::ArrayGet { array, index: ValueId }` | `AsSlice` + `Index` |
-| the interpreter's array element ops and `Composite::Array`'s index paths (`prepare.rs`, `ops/composite.rs`) | the slice `Index`/`IndexSet` instances over `Array`'s storage as a slice |
-| `Vec::get`, `Vec::get_mut`, `Array::get`, `Array::get_mut` (acvus-ext) | `AsSlice`/`as_slice_mut` + `Index`/`IndexSet`; the externs are deleted once the lowering emits the instructions (a transition where both exist is a defect, not a stage) |
-| `first`, `last` on `Vec`/`Array` | stay as externs for now (they return `Option<&T>`, which is a slice's `first()`); a later RFC may make them `Index` with a bound test — recorded, not decided |
-| `len`, `is_empty` on `Vec`/`Array` | stay as externs; a slice knows its length (`head >> 8`), so `len(&v)` could become `AsSlice` + `Len` — one more instruction for one saved call; **measure before adding** (the range pass needs `len` as a value either way) |
-| the `*get(..)` read-through (`Take { Through }` after a call) in every indexing site | gone for word elements: `Index` yields the value; for others the `&T` is the same `Ref` as before |
-| `Deque::get` and any container without `as_slice` | unchanged: a call, with its check inside, never hoisted — the cost of not being a slice, by the container's own choice |
-
-Every consumer the compiler names when `ArrayIndex`/`ArrayGet` go —
-`const_dedup`, `ssa_pass`, `move_check`, `type_check`, `drop_insertion`,
-`code_motion`, the printer, `lower.rs:1437`, and `prepare` — is rewritten
-to `Index`; none keeps a dead arm.
+| `InstKind::ArrayGet` (variable index into a matched array) | deleted first (`2f3e923b`): it had nine consumers and no producer |
+| `InstKind::ArrayIndex` | **stays**: it moves an element out of an owned scrutinee at a constant position — pattern destructuring, not indexing a borrowed container. It exists without `get`, so it is not taint |
+| `Vec::get`, `Vec::get_mut`, `Array::get`, `Array::get_mut` (acvus-ext) | `as_slice`/`as_slice_mut` + `Index`/`IndexSet`; deleted when the lowering emits the instructions (a transition where both exist is a defect, not a stage) |
+| `first`, `last` on `Vec`/`Array` | stay as externs (`Option<&T>`); a later RFC may make them `Index` with a bound test — recorded, not decided |
+| `len`, `is_empty` on `Vec`/`Array` | stay as externs; a slice knows its length (`head >> 8`), so `len(&v)` could become `as_slice` + `Len` — **measure before adding** (the interval pass needs `len(&c)` as a value either way) |
+| the `*get(..)` read-through (`Take { Through }` after a call) at every indexing site | gone for word elements: `Index` in `Copy` mode yields the value; in `Ref` mode the `Ref` is the one `get` returned |
+| `Deque::get` and any container without `as_slice` | unchanged: a call with its check inside, never hoisted — the cost of not being a slice, by the container's own choice; `a[i]` on it is refused at the checker (`cannot index into a value of type `Deque<T>``) |
 
 ## What it costs
 
-- One more kind (`Slice`) and the `head` word's split into kind and
-  length: every `Kind` reader masks the low byte. Measure it on the
-  probes (`asm_probe.rs`): the mask is one `movzbl`, which most readers
-  already do.
-- Two instructions (`Index`, `IndexSet`) with checked and unchecked
-  forms, and `AsSlice`; `ArrayIndex`/`ArrayGet` are deleted, their
-  consumers become `Index` on `Array`'s identity slice.
-- A range analysis pass, and the loan condition it borrows from the
-  hoist.
-- Containers that cannot give a slice (`Deque`, `Map`) keep `get` as an
-  extern with the call cost; `Deque` may offer `as_slices` later.
-- The interpreter learns one Rust ABI fact — a slice is `(ptr, len)` and
-  element `i` is at `ptr + i * width` — and no container's layout.
+- `Kind::Slice`, and the `head` word's split into kind and length: every
+  `Kind` reader masks the low byte (`movzbl`, which most already do).
+  Measured on `asm_probe` before the compiler half lands.
+- Two instructions with checked and unchecked forms; the `Copy`/`Ref`
+  modes are instances chosen in `prepare` from `val_types`, no run-time
+  branch.
+- An interval pass, and the loan condition it borrows from the hoist.
+- `Deque` and `Map` keep `get` with the call cost.
+- The interpreter learns one Rust ABI fact — `&[Value]` is `(ptr, len)`
+  and element `i` is at `ptr + i * 16` — and no container's layout.
 
 ## Rejected
 
@@ -141,21 +139,47 @@ to `Index`; none keeps a dead arm.
   the call — the compiler can neither eliminate it nor hoist the call,
   and the fusion stage measured that the remaining cost is the call's
   own work, not the dispatch.
-- **`Index` reaching into `Vec`'s layout**: refused by the owner — the
-  interpreter does not know containers.
+- **`Index` reaching into `Vec`'s layout**: the interpreter does not know
+  containers (owner).
+- **Three element widths (uniform 16 / inline kind / `Cross` struct)**,
+  the Draft's §5: on the tree every sliceable store is `Vec<Value>` and a
+  converted container has no storage; the other two widths had no case.
+- **An `AsSlice` intrinsic instruction**: a call to a bare-name signature
+  already does what it would, and the hoist already lifts a panic-free
+  borrow. One instruction fewer.
+- **Folding `ArrayIndex` into `Index` as a `Move` mode**: `ArrayIndex`
+  acts on an owned `Array`, not a slice; two representations in one
+  instruction is a run-time branch or a second instruction under one
+  name.
+- **Index type `i64`**: a negative check for nothing; `u64` is Rust's
+  `usize` and the interval pass has one bound to prove.
+- **Induction-variable / recurrence analysis for bounds**: far future;
+  the interval domain with one symbolic endpoint covers `while i < len
+  { a[i] … i = i + 1 }`, which is the shape in every bench.
 - **A fat-pointer `Value` (24 B) or a two-register slice**: the padding
   bytes hold the length; nothing widens.
 - **Unchecked indexing as a language-level `unsafe`**: only the
-  compiler's proof emits the unchecked form; the user cannot ask for it.
+  compiler's proof emits the unchecked form.
 
 ## Consequences
 
-- attention's inner iteration: `AsSlice(query)` hoisted to the entry,
-  `AsSlice(keys[t])` hoisted above the `i` loop, two `IndexUnchecked` by
-  value and one chain per element — the Rust scalar shape. Measured
-  after it lands.
-- `for x in v` and `while let` over a slice can be a `Loop` over
+- attention's inner iteration: `as_slice(&query)` hoisted to the entry,
+  `as_slice(keys[t])` above the `i` loop, two `Index` (`Copy`, unchecked
+  after §7) and one chain per element — the Rust scalar shape. Measured
+  after each half lands, bands from dispatch counts.
+- `for x in &v` and `while let` over a slice can be a `Loop` over
   `IndexUnchecked` later (an iterator stage over a slice is `(ptr, len,
-  i)`), which is the remaining half of the iteration idiom's cost.
+  i)`, `Task::Sync`) — the remaining half of the iteration idiom's cost,
+  after RFC-0046's runtime half (`b2b04b57`).
 - kovac inherits a static, layout-free indexing instruction with a
   static bound proof.
+
+## Order of work
+
+T0 `ArrayGet` deleted (done). T1 interpreter + extern: `head` split,
+`Kind::Slice`, the slice's `Cross`, `Index`/`IndexSet` handlers with the
+probe-only unchecked forms, `as_slice`/`as_slice_mut` on `Vec`/`Array`,
+and the checked-vs-unchecked ceiling measured. T2 compiler: types,
+signatures, `a[i]` grammar and place lowering, loans, `get`/`get_mut`
+removed. T3 the interval pass — only if T1's ceiling pays. T1 and T2 take
+disjoint crates and run in parallel; T3 after both.
