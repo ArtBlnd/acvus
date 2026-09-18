@@ -15,7 +15,7 @@ use acvus_interpreter_test::listing::{code_listing, ops_of_anywhere};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::{ParsedAst, QualifiedRef};
 use acvus_mir::ir::MirBody;
-use acvus_mir::ty::Task;
+use acvus_mir::ty::{Task, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -74,14 +74,14 @@ fn registries() -> Vec<Registry<AcvusRuntime>> {
 /// Every `expect` below is a fixture that either stands or the test does
 /// not run: a failure is the test failing, which is the disposition a test
 /// wants.
-async fn run(source: &str) -> Value {
+async fn run(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
-    run_script_mode_with_externs(&i, source, Context::default(), registries())
+    run_script_mode_with_externs(&i, source, Context::default(), registries(), ret)
         .await
         .value
 }
 
-async fn run_on_tokio(source: &str) -> Value {
+async fn run_on_tokio(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
     run_parsed_on(
@@ -89,6 +89,7 @@ async fn run_on_tokio(source: &str) -> Value {
         ast,
         Context::default(),
         registries(),
+        ret,
         |_| {},
         Arc::new(TokioExecutor),
     )
@@ -97,10 +98,10 @@ async fn run_on_tokio(source: &str) -> Value {
 }
 
 /// The entry body of `source`, prepared, with the closures it makes.
-fn prepared_entry(source: &str) -> (Code, MirBody) {
+fn prepared_entry(source: &str, ret: Ty) -> (Code, MirBody) {
     let i = Interner::new();
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
-    let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries());
+    let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries(), ret);
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
     let ctx = PrepareCtx {
         interner: &i,
@@ -181,17 +182,20 @@ struct BothWays {
     consumer: &'static str,
     over_sync: &'static str,
     over_async: &'static str,
+    ret: Ty,
 }
 
 const fn both_ways(
     consumer: &'static str,
     over_sync: &'static str,
     over_async: &'static str,
+    ret: Ty,
 ) -> BothWays {
     BothWays {
         consumer,
         over_sync,
         over_async,
+        ret,
     }
 }
 
@@ -202,86 +206,103 @@ const BOTH_WAYS: [BothWays; 17] = [
         "sum",
         "range(0, 5) | sum",
         "range(0, 5) | map(|x| -> passed_through(x)) | sum",
+        Ty::I64,
     ),
     both_ways(
         "product",
         "range(1, 5) | product",
         "range(1, 5) | map(|x| -> passed_through(x)) | product",
+        Ty::I64,
     ),
     both_ways(
         "count",
         "range(0, 5) | count",
         "range(0, 5) | map(|x| -> passed_through(x)) | count",
+        Ty::I64,
     ),
     both_ways(
         "min",
         "if let Some(v) = range(0, 5) | min { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | min { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "max",
         "if let Some(v) = range(0, 5) | max { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | max { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "fold",
         "range(0, 5) | fold(0, |a, b| -> a + b)",
         "range(0, 5) | map(|x| -> passed_through(x)) | fold(0, |a, b| -> a + b)",
+        Ty::I64,
     ),
     both_ways(
         "reduce",
         "if let Some(v) = range(0, 5) | reduce(|a, b| -> a + b) { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | reduce(|a, b| -> a + b) { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "find",
         "if let Some(v) = range(0, 5) | find(|x| -> *x > 2) { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | find(|x| -> *x > 2) { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "next",
         "let a = range(0, 5); if let Some(v) = next(&mut a) { v } else { 0 - 1 }",
         "let b = range(0, 5) | map(|x| -> passed_through(x)); if let Some(v) = next(&mut b) { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "collect",
         "let c = range(0, 5) | collect; c.len()",
         "let d = range(0, 5) | map(|x| -> passed_through(x)) | collect; d.len()",
+        Ty::U64,
     ),
     both_ways(
         "any",
         "if range(0, 5) | any(|x| -> *x == 3) { 1 } else { 0 }",
         "if range(0, 5) | map(|x| -> passed_through(x)) | any(|x| -> *x == 3) { 1 } else { 0 }",
+        Ty::I64,
     ),
     both_ways(
         "all",
         "if range(0, 5) | all(|x| -> *x < 9) { 1 } else { 0 }",
         "if range(0, 5) | map(|x| -> passed_through(x)) | all(|x| -> *x < 9) { 1 } else { 0 }",
+        Ty::I64,
     ),
     both_ways(
         "position",
         "if let Some(v) = range(0, 5) | position(|x| -> *x == 4) { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | position(|x| -> *x == 4) { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "last",
         "if let Some(v) = range(0, 5) | last { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | last { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "nth",
         "if let Some(v) = range(0, 5) | nth(2) { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | nth(2) { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "min_by_key",
         "if let Some(v) = range(0, 5) | min_by_key(|x| -> 0 - *x) { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | min_by_key(|x| -> 0 - *x) { v } else { 0 - 1 }",
+        Ty::I64,
     ),
     both_ways(
         "max_by_key",
         "if let Some(v) = range(0, 5) | max_by_key(|x| -> 0 - *x) { v } else { 0 - 1 }",
         "if let Some(v) = range(0, 5) | map(|x| -> passed_through(x)) | max_by_key(|x| -> 0 - *x) { v } else { 0 - 1 }",
+        Ty::I64,
     ),
 ];
 
@@ -291,10 +312,11 @@ async fn a_consumer_answers_the_same_through_either_instance() {
         consumer,
         over_sync,
         over_async,
+        ret,
     } in BOTH_WAYS
     {
-        let from_sync = run(over_sync).await.as_int();
-        let from_async = run(over_async).await.as_int();
+        let from_sync = run(over_sync, ret.clone()).await.as_int();
+        let from_async = run(over_async, ret).await.as_int();
         assert_eq!(
             from_sync, from_async,
             "iter::{consumer}: `{over_sync}` and `{over_async}` are the same answer"
@@ -306,19 +328,24 @@ async fn a_consumer_answers_the_same_through_either_instance() {
 /// they are written out rather than folded into the table.
 #[tokio::test]
 async fn contains_and_join_answer_the_same_through_either_instance() {
-    let over_sync = run("if range(0, 5) | contains(3) { 1 } else { 0 }")
+    let over_sync = run("if range(0, 5) | contains(3) { 1 } else { 0 }", Ty::I64)
         .await
         .as_int();
-    let over_async =
-        run("if range(0, 5) | map(|x| -> passed_through(x)) | contains(3) { 1 } else { 0 }")
-            .await
-            .as_int();
+    let over_async = run(
+        "if range(0, 5) | map(|x| -> passed_through(x)) | contains(3) { 1 } else { 0 }",
+        Ty::I64,
+    )
+    .await
+    .as_int();
     assert_eq!(over_sync, 1);
     assert_eq!(over_sync, over_async);
 
-    let joined = run(r#"let j = into_iter(split_str("a,b,c", ",")) | join("-"); j.len()"#)
-        .await
-        .as_int();
+    let joined = run(
+        r#"let j = into_iter(split_str("a,b,c", ",")) | join("-"); j.len()"#,
+        Ty::U64,
+    )
+    .await
+    .as_int();
     assert_eq!(joined, 5);
 }
 
@@ -328,8 +355,10 @@ async fn contains_and_join_answer_the_same_through_either_instance() {
 /// runtime's flavor, so a current-thread test runtime shows the offload.
 #[tokio::test]
 async fn a_heavy_extern_runs_off_the_runtime_thread() {
-    let here = run_on_tokio("this_thread()").await.as_int();
-    let there = run_on_tokio("on_which_thread(100000)").await.as_int();
+    let here = run_on_tokio("this_thread()", Ty::I64).await.as_int();
+    let there = run_on_tokio("on_which_thread(100000)", Ty::I64)
+        .await
+        .as_int();
     assert_ne!(
         here, there,
         "a heavy extern runs on the blocking pool, not on the runtime thread"
@@ -342,19 +371,19 @@ async fn a_heavy_extern_runs_off_the_runtime_thread() {
 #[tokio::test]
 async fn a_heavy_extern_on_the_sequential_executor_runs_inline() {
     let here = thread_word(std::thread::current().id());
-    let there = run("on_which_thread(1000)").await.as_int();
+    let there = run("on_which_thread(1000)", Ty::I64).await.as_int();
     assert_eq!(here, there);
 }
 
 #[tokio::test]
 async fn a_pipeline_over_a_heavy_extern_is_asynchronous() {
     let source = "range(0, 4) | map(|x| -> on_which_thread(10)) | count";
-    let (_, entry) = prepared_entry(source);
+    let (_, entry) = prepared_entry(source, Ty::I64);
     assert!(
         entry.task > Task::Sync,
         "the body joins the task of the closure it makes, and that closure calls a heavy extern"
     );
-    assert_eq!(run(source).await.as_int(), 4);
+    assert_eq!(run(source, Ty::I64).await.as_int(), 4);
 }
 
 // -- The shape the type bought ------------------------------------------
@@ -374,7 +403,7 @@ fn may_suspend(code: &Code) -> bool {
 async fn a_while_let_over_a_sync_iterator_is_one_loop_operation() {
     let source = "let v = range(0, 8) | collect; let it = as_iter(&v); let acc = 0; \
                   while let Some(x) = next(&mut it) { acc = acc + *x; } acc";
-    let (main, _) = prepared_entry(source);
+    let (main, _) = prepared_entry(source, Ty::I64);
     assert!(
         !may_suspend(&main),
         "every call in the body is synchronous, so the body is"
@@ -384,14 +413,14 @@ async fn a_while_let_over_a_sync_iterator_is_one_loop_operation() {
         1,
         "the `while let` head is one Loop operation"
     );
-    assert_eq!(run(source).await.as_int(), 28);
+    assert_eq!(run(source, Ty::I64).await.as_int(), 28);
 }
 
 #[tokio::test]
 async fn a_while_let_over_an_async_iterator_stays_asynchronous() {
     let source = "let it = range(0, 8) | map(|x| -> passed_through(x)); let acc = 0; \
                   while let Some(x) = next(&mut it) { acc = acc + x; } acc";
-    let (main, _) = prepared_entry(source);
+    let (main, _) = prepared_entry(source, Ty::I64);
     assert!(
         may_suspend(&main),
         "a stage of the pipeline suspends, so the head does, so the body does"
@@ -401,5 +430,5 @@ async fn a_while_let_over_an_async_iterator_stays_asynchronous() {
         0,
         "a head that may suspend is not a Loop operation"
     );
-    assert_eq!(run(source).await.as_int(), 28);
+    assert_eq!(run(source, Ty::I64).await.as_int(), 28);
 }

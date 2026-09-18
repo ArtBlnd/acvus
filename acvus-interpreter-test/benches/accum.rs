@@ -78,6 +78,8 @@ struct Case {
     registries: fn() -> Vec<Registry<AcvusRuntime>>,
     rust: fn(i64) -> f64,
     read: fn(&Value) -> f64,
+    /// What the host declares `main` returns for this source (RFC-0054).
+    ret: Ty,
 }
 
 fn rust_int_while(n: i64) -> f64 {
@@ -253,7 +255,13 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         let ast = ParsedAst::Script(
             acvus_ast::parse_script(&interner, case.source).expect("parse error"),
         );
-        let cr = compile_source_with_externs(&interner, ast, &context_types, (case.registries)());
+        let cr = compile_source_with_externs(
+            &interner,
+            ast,
+            &context_types,
+            (case.registries)(),
+            case.ret.clone(),
+        );
         let (_shared, mut interp) = execute_compiled(
             &interner,
             cr,
@@ -300,6 +308,7 @@ fn main() {
             registries: std_only,
             rust: rust_int_while,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "float while",
@@ -307,6 +316,7 @@ fn main() {
             registries: std_only,
             rust: rust_float_while,
             read: Value::as_float,
+            ret: Ty::Float,
         },
         Case {
             name: "range | sum",
@@ -314,6 +324,7 @@ fn main() {
             registries: std_only,
             rust: rust_range_sum,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "map id | sum",
@@ -321,6 +332,7 @@ fn main() {
             registries: std_only,
             rust: rust_map_id_sum,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "map add | sum",
@@ -328,6 +340,7 @@ fn main() {
             registries: std_only,
             rust: rust_map_add_sum,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "map cap | sum",
@@ -335,6 +348,7 @@ fn main() {
             registries: std_only,
             rust: rust_map_cap_sum,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "extern while",
@@ -342,6 +356,7 @@ fn main() {
             registries: with_some_of,
             rust: rust_extern_while,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "branch while",
@@ -349,6 +364,7 @@ fn main() {
             registries: with_some_of,
             rust: rust_branch_while,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "option while",
@@ -356,6 +372,7 @@ fn main() {
             registries: with_some_of,
             rust: rust_option_while,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "while let vec",
@@ -363,6 +380,7 @@ fn main() {
             registries: std_only,
             rust: rust_while_let_vec,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "while let map",
@@ -370,6 +388,7 @@ fn main() {
             registries: std_only,
             rust: rust_while_let_map,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "call while",
@@ -377,6 +396,7 @@ fn main() {
             registries: std_only,
             rust: rust_call_while,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "collatz while",
@@ -384,6 +404,7 @@ fn main() {
             registries: std_only,
             rust: rust_collatz_while,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "grade while",
@@ -391,6 +412,7 @@ fn main() {
             registries: std_only,
             rust: rust_grade_while,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
     ];
     println!(

@@ -4,42 +4,60 @@
 //! container.
 
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-async fn int(src: &str) -> i64 {
+async fn int(src: &str, ret: Ty) -> i64 {
     let i = Interner::new();
-    run_script(&i, src, FxHashMap::default()).await.as_int()
+    run_script(&i, src, FxHashMap::default(), ret)
+        .await
+        .as_int()
 }
 
 #[tokio::test]
 async fn len_reads_every_container_through_a_reference() {
-    assert_eq!(int("let xs = [1, 2, 3]; len(&xs)").await, 3);
+    assert_eq!(int("let xs = [1, 2, 3]; len(&xs)", Ty::U64).await, 3);
     assert_eq!(
-        int("let xs = [1, 2, 3] | into_iter | collect; len(&xs)").await,
+        int(
+            "let xs = [1, 2, 3] | into_iter | collect; len(&xs)",
+            Ty::U64
+        )
+        .await,
         3
     );
     assert_eq!(
-        int("let d = deque(); push_back(&mut d, 1); push_front(&mut d, 0); len(&d)").await,
+        int(
+            "let d = deque(); push_back(&mut d, 1); push_front(&mut d, 0); len(&d)",
+            Ty::U64
+        )
+        .await,
         2
     );
 }
 
 #[tokio::test]
 async fn get_yields_a_reference_into_the_container() {
-    assert_eq!(int("let xs = [10, 20, 30]; xs[1]").await, 20);
+    assert_eq!(int("let xs = [10, 20, 30]; xs[1]", Ty::I64).await, 20);
     assert_eq!(
-        int("let xs = [10, 20, 30] | into_iter | collect; xs[2]").await,
+        int(
+            "let xs = [10, 20, 30] | into_iter | collect; xs[2]",
+            Ty::I64
+        )
+        .await,
         30
     );
-    assert_eq!(int("let d = deque(); push_back(&mut d, { x: 10, }); push_front(&mut d, { x: 5, }); get(&d, 0).x").await, 5);
+    assert_eq!(int("let d = deque(); push_back(&mut d, { x: 10, }); push_front(&mut d, { x: 5, }); get(&d, 0).x", Ty::I64).await, 5);
 }
 
 #[tokio::test]
 async fn a_write_through_an_element_lands_in_the_container() {
-    assert_eq!(int("let xs = [1, 2, 3]; xs[1] = 9; xs[1]").await, 9);
     assert_eq!(
-        int("let d = deque(); push_back(&mut d, 1); push_back(&mut d, 2); *get_mut(&mut d, 0) = 7; *get(&d, 0) + *get(&d, 1)").await,
+        int("let xs = [1, 2, 3]; xs[1] = 9; xs[1]", Ty::I64).await,
+        9
+    );
+    assert_eq!(
+        int("let d = deque(); push_back(&mut d, 1); push_back(&mut d, 2); *get_mut(&mut d, 0) = 7; *get(&d, 0) + *get(&d, 1)", Ty::I64).await,
         9
     );
 }
@@ -67,13 +85,14 @@ async fn first_and_last_are_none_on_an_empty_container_and_references_otherwise(
 async fn a_method_chain_runs_as_the_calls_it_stands_for() {
     assert_eq!(
         int(
-            "let xs = [1, 2, 3]; let ys = xs.as_iter().map(|x| -> *x * 10).collect(); ys.len() + ys[2]"
+            "let xs = [1, 2, 3]; let ys = xs.as_iter().map(|x| -> *x * 10).collect(); ys.len() + ys[2]",
+            Ty::U64
         )
         .await,
         33
     );
     assert_eq!(
-        int("let d = deque(); d.push_back({ x: 4, }); d.push_front({ x: 3, }); d.get(0).x * 10 + deque::len(&d)").await,
+        int("let d = deque(); d.push_back({ x: 4, }); d.push_front({ x: 3, }); d.get(0).x * 10 + deque::len(&d)", Ty::U64).await,
         32
     );
 }

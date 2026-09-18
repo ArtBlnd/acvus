@@ -17,6 +17,7 @@ use acvus_interpreter_test::{
     Context, compile_source_with_externs, run_script_mode_with_externs, split_context,
 };
 use acvus_mir::graph::ParsedAst;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 static RELEASES: AtomicUsize = AtomicUsize::new(0);
@@ -102,7 +103,7 @@ fn two_large_fields() -> String {
 }
 
 async fn run(i: &Interner, source: &str) -> Value {
-    run_script_mode_with_externs(i, source, Context::default(), regs())
+    run_script_mode_with_externs(i, source, Context::default(), regs(), Ty::I64)
         .await
         .value
 }
@@ -110,7 +111,7 @@ async fn run(i: &Interner, source: &str) -> Value {
 fn optimized(i: &Interner, source: &str) -> String {
     let context_types = split_context(i, Context::default()).0;
     let ast = ParsedAst::Script(acvus_ast::parse_script(i, source).expect("parse error"));
-    let compiled = compile_source_with_externs(i, ast, &context_types, regs());
+    let compiled = compile_source_with_externs(i, ast, &context_types, regs(), Ty::I64);
     compiled
         .modules
         .values()

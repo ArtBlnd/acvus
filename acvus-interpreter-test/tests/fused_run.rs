@@ -145,6 +145,7 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
         parsed(&interner, source),
         &context_types,
         registries(),
+        Ty::I64,
     );
     let ctx = PrepareCtx {
         interner: &interner,
@@ -186,6 +187,7 @@ async fn value_of(source: &str) -> Value {
         parsed(&interner, source),
         context,
         registries(),
+        Ty::I64,
         |_| {},
     )
     .await

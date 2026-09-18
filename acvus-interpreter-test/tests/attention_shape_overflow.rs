@@ -5,6 +5,7 @@
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 fn context(i: &Interner) -> Context {
@@ -28,6 +29,7 @@ async fn a_reference_captured_after_if_let_over_max_is_reported_not_overflowed()
          let weights = as_iter(&scores) | map(|s| -> exp(*s - m)) | collect; \
          weights.len()",
         context(&i),
+        Ty::U64,
     )
     .await;
 }

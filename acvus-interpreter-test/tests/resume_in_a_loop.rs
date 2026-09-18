@@ -18,6 +18,7 @@ use acvus_extern::{Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::listing::{script_listing_with_externs, terminators_depth_first};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 static CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -49,6 +50,7 @@ async fn a_while_around_an_await_is_not_a_loop() {
         AWAIT_IN_A_WHILE,
         Context::default(),
         registries(),
+        Ty::I64,
     );
     let ends = terminators_depth_first(&blocks);
     assert_eq!(
@@ -73,6 +75,7 @@ async fn the_block_after_the_call_is_where_the_resume_lands() {
         AWAIT_IN_A_WHILE,
         Context::default(),
         registries(),
+        Ty::I64,
     );
     assert_eq!(
         blocks[2].ops,
@@ -97,6 +100,7 @@ async fn the_loop_resumes_once_per_iteration_and_no_more() {
         AWAIT_IN_A_WHILE,
         Context::default(),
         registries(),
+        Ty::I64,
     )
     .await;
     assert_eq!(

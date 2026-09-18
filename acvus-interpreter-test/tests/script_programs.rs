@@ -27,7 +27,7 @@ const COLLATZ: &str = include_str!("scripts/collatz.acvus");
 async fn collatz_start_6() {
     let i = Interner::new();
     let c = ctx(&i, vec![("start", typed(Ty::I64, Value::int(6)))]);
-    let result = run_script_mode(&i, COLLATZ, c).await;
+    let result = run_script_mode(&i, COLLATZ, c, Ty::I64).await;
     eprintln!("collatz(6) max_val = {result:?}");
     // 6 -> 3 -> 10 -> 5 -> 16 -> 8 -> 4 -> 2 -> 1
     assert_eq!(result.as_int(), 16);
@@ -37,7 +37,7 @@ async fn collatz_start_6() {
 async fn collatz_start_27() {
     let i = Interner::new();
     let c = ctx(&i, vec![("start", typed(Ty::I64, Value::int(27)))]);
-    let result = run_script_mode(&i, COLLATZ, c).await;
+    let result = run_script_mode(&i, COLLATZ, c, Ty::I64).await;
     eprintln!("collatz(27) max_val = {result:?}");
     // Famous case: reaches 9232 before falling back to 1
     assert_eq!(result.as_int(), 9232);
@@ -47,7 +47,7 @@ async fn collatz_start_27() {
 async fn collatz_start_1() {
     let i = Interner::new();
     let c = ctx(&i, vec![("start", typed(Ty::I64, Value::int(1)))]);
-    let result = run_script_mode(&i, COLLATZ, c).await;
+    let result = run_script_mode(&i, COLLATZ, c, Ty::I64).await;
     eprintln!("collatz(1) max_val = {result:?}");
     // Already at 1 - while body never executes
     assert_eq!(result.as_int(), 1);
@@ -99,7 +99,7 @@ async fn grade_classifier_mixed() {
         ],
     );
     let c = ctx(&i, vec![("students", students)]);
-    let result = run_script_mode(&i, GRADE_CLASSIFIER, c).await;
+    let result = run_script_mode(&i, GRADE_CLASSIFIER, c, Ty::I64).await;
     // honor: alice, diana; pass: bob; fail: charlie, eve.
     // passing_total = 95 + 72 + 98 = 265; fail > 0 -> 265
     assert_eq!(result.as_int(), 265);
@@ -117,7 +117,7 @@ async fn grade_classifier_all_passing() {
         ],
     );
     let c = ctx(&i, vec![("students", students)]);
-    let result = run_script_mode(&i, GRADE_CLASSIFIER, c).await;
+    let result = run_script_mode(&i, GRADE_CLASSIFIER, c, Ty::I64).await;
     // passing_total = 245; fail == 0 -> 245 + best(95) = 340
     assert_eq!(result.as_int(), 340);
 }

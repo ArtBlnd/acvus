@@ -1,4 +1,5 @@
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 #[tokio::test]
@@ -9,14 +10,15 @@ async fn ok_and_err_are_built_and_matched() {
             r#"let r = if {flag} {{ Ok(3) }} else {{ Err("boom") }}; if let Ok(v) = r {{ v + 1 }} else {{ -1 }}"#
         )
     };
-    let v = run_script_mode(&i, &src(true), Context::default()).await;
+    let v = run_script_mode(&i, &src(true), Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 4);
-    let v = run_script_mode(&i, &src(false), Context::default()).await;
+    let v = run_script_mode(&i, &src(false), Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), -1);
     let v = run_script_mode(
         &i,
         r#"let r = if false { Ok(0) } else { Err("boom") }; if let Err(e) = r { e } else { "fine" }"#,
         Context::default(),
+        Ty::String,
     )
     .await;
     assert_eq!(unsafe { v.as_str() }, "boom");

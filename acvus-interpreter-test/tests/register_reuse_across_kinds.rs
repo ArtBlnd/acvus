@@ -16,6 +16,7 @@
 
 use acvus_interpreter_test::listing::{main_body, prepared_script};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// A `String` whose last read is `len(&s)`, and four word values defined
@@ -27,7 +28,12 @@ const A_STRING_DIES_THEN_INTEGERS: &str =
 #[tokio::test]
 async fn the_word_class_is_a_proper_part_of_the_frame() {
     let interner = Interner::new();
-    let prepared = prepared_script(&interner, A_STRING_DIES_THEN_INTEGERS, Context::default());
+    let prepared = prepared_script(
+        &interner,
+        A_STRING_DIES_THEN_INTEGERS,
+        Context::default(),
+        Ty::U64,
+    );
     let body = main_body(&prepared);
 
     let word_slots: Vec<usize> = body.slot_kinds.iter().map(|k| k.slot.index()).collect();
@@ -56,7 +62,13 @@ async fn the_word_class_is_a_proper_part_of_the_frame() {
 #[tokio::test]
 async fn a_string_dying_before_integers_runs_to_the_value() {
     let interner = Interner::new();
-    let value = run_script_mode(&interner, A_STRING_DIES_THEN_INTEGERS, Context::default()).await;
+    let value = run_script_mode(
+        &interner,
+        A_STRING_DIES_THEN_INTEGERS,
+        Context::default(),
+        Ty::U64,
+    )
+    .await;
     assert_eq!(
         value.as_int(),
         ("abcd".len() as i64) * 2 + 1,

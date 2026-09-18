@@ -1034,6 +1034,7 @@ mod tests {
                 task: crate::ty::Task::Sync,
             },
             closures: FxHashMap::default(),
+            ret: crate::ty::Ty::Unit,
         }
     }
 

@@ -5,6 +5,7 @@
 use acvus_extern::{Cross, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, Kind, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 #[extern_fn(effect = pure)]
@@ -106,8 +107,8 @@ fn regs() -> Vec<Registry<AcvusRuntime>> {
     regs
 }
 
-async fn run(i: &Interner, source: &str) -> Value {
-    run_script_mode_with_externs(i, source, Context::default(), regs())
+async fn run(i: &Interner, source: &str, ret: Ty) -> Value {
+    run_script_mode_with_externs(i, source, Context::default(), regs(), ret)
         .await
         .value
 }
@@ -117,9 +118,9 @@ async fn run(i: &Interner, source: &str) -> Value {
 #[tokio::test]
 async fn a_nested_option_round_trips_through_an_extern() {
     let i = Interner::new();
-    assert_eq!(run(&i, "flatten(nest(Some(1)))").await.as_int(), 1);
-    assert_eq!(run(&i, "flatten(nest(None))").await.as_int(), -1);
-    assert_eq!(run(&i, "flatten(no_nest())").await.as_int(), -2);
+    assert_eq!(run(&i, "flatten(nest(Some(1)))", Ty::I64).await.as_int(), 1);
+    assert_eq!(run(&i, "flatten(nest(None))", Ty::I64).await.as_int(), -1);
+    assert_eq!(run(&i, "flatten(no_nest())", Ty::I64).await.as_int(), -2);
 }
 
 #[tokio::test]
@@ -130,17 +131,32 @@ async fn a_nested_option_round_trips_through_a_pattern() {
             "if let Some(inner) = {call} {{ if let Some(n) = inner {{ n }} else {{ -1 }} }} else {{ -2 }}"
         )
     };
-    assert_eq!(run(&i, &src("nest(Some(9))")).await.as_int(), 9);
-    assert_eq!(run(&i, &src("nest(None)")).await.as_int(), -1);
-    assert_eq!(run(&i, &src("no_nest()")).await.as_int(), -2);
+    assert_eq!(run(&i, &src("nest(Some(9))"), Ty::I64).await.as_int(), 9);
+    assert_eq!(run(&i, &src("nest(None)"), Ty::I64).await.as_int(), -1);
+    assert_eq!(run(&i, &src("no_nest()"), Ty::I64).await.as_int(), -2);
 }
 
 #[tokio::test]
 async fn depth_three_round_trips_through_an_extern() {
     let i = Interner::new();
-    assert_eq!(run(&i, "flatten3(nest3(nest(Some(5))))").await.as_int(), 5);
-    assert_eq!(run(&i, "flatten3(nest3(nest(None)))").await.as_int(), -1);
-    assert_eq!(run(&i, "flatten3(nest3(no_nest()))").await.as_int(), -2);
+    assert_eq!(
+        run(&i, "flatten3(nest3(nest(Some(5))))", Ty::I64)
+            .await
+            .as_int(),
+        5
+    );
+    assert_eq!(
+        run(&i, "flatten3(nest3(nest(None)))", Ty::I64)
+            .await
+            .as_int(),
+        -1
+    );
+    assert_eq!(
+        run(&i, "flatten3(nest3(no_nest()))", Ty::I64)
+            .await
+            .as_int(),
+        -2
+    );
 }
 
 #[tokio::test]
@@ -153,22 +169,44 @@ async fn depth_three_round_trips_through_nested_patterns() {
              }} else {{ -3 }}"
         )
     };
-    assert_eq!(run(&i, &src("nest3(nest(Some(5)))")).await.as_int(), 5);
-    assert_eq!(run(&i, &src("nest3(nest(None))")).await.as_int(), -1);
-    assert_eq!(run(&i, &src("nest3(no_nest())")).await.as_int(), -2);
+    assert_eq!(
+        run(&i, &src("nest3(nest(Some(5)))"), Ty::I64)
+            .await
+            .as_int(),
+        5
+    );
+    assert_eq!(
+        run(&i, &src("nest3(nest(None))"), Ty::I64).await.as_int(),
+        -1
+    );
+    assert_eq!(
+        run(&i, &src("nest3(no_nest())"), Ty::I64).await.as_int(),
+        -2
+    );
 }
 
 #[tokio::test]
 async fn unwrap_opens_each_level_of_a_nested_option() {
     let i = Interner::new();
-    assert_eq!(run(&i, "unwrap(unwrap(nest(Some(4))))").await.as_int(), 4);
-    assert!(run(&i, "unwrap(nest(None))").await.is_none());
     assert_eq!(
-        run(&i, "unwrap_or(unwrap(nest(None)), 5)").await.as_int(),
+        run(&i, "unwrap(unwrap(nest(Some(4))))", Ty::I64)
+            .await
+            .as_int(),
+        4
+    );
+    assert!(
+        run(&i, "unwrap(nest(None))", Ty::Option(Box::new(Ty::I64)))
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        run(&i, "unwrap_or(unwrap(nest(None)), 5)", Ty::I64)
+            .await
+            .as_int(),
         5
     );
     assert_eq!(
-        run(&i, "unwrap_or(unwrap_or(no_nest(), None), 6)")
+        run(&i, "unwrap_or(unwrap_or(no_nest(), None), 6)", Ty::I64)
             .await
             .as_int(),
         6
@@ -181,8 +219,8 @@ async fn unwrap_opens_each_level_of_a_nested_option() {
 async fn an_option_of_a_vec_is_its_vec() {
     let i = Interner::new();
     let src = |n: i64| format!("if let Some(v) = maybe_ints({n}) {{ len(&v) }} else {{ 99 }}");
-    assert_eq!(run(&i, &src(3)).await.as_int(), 3);
-    assert_eq!(run(&i, &src(0)).await.as_int(), 99);
+    assert_eq!(run(&i, &src(3), Ty::U64).await.as_int(), 3);
+    assert_eq!(run(&i, &src(0), Ty::U64).await.as_int(), 99);
 }
 
 #[tokio::test]
@@ -190,8 +228,8 @@ async fn an_option_of_a_reference_is_its_reference() {
     let i = Interner::new();
     let src =
         |n: i64| format!("let v = ints({n}); if let Some(x) = first(&v) {{ *x }} else {{ -1 }}");
-    assert_eq!(run(&i, &src(3)).await.as_int(), 0);
-    assert_eq!(run(&i, &src(0)).await.as_int(), -1);
+    assert_eq!(run(&i, &src(3), Ty::I64).await.as_int(), 0);
+    assert_eq!(run(&i, &src(0), Ty::I64).await.as_int(), -1);
 }
 
 // -- Through a reference -----------------------------------------------
@@ -205,9 +243,9 @@ async fn a_pattern_through_a_reference_binds_an_inner_none_as_that_none() {
              if let Some(inner) = &o {{ if let Some(n) = inner {{ *n }} else {{ 7 }} }} else {{ -2 }}"
         )
     };
-    assert_eq!(run(&i, &src("nest(Some(3))")).await.as_int(), 3);
-    assert_eq!(run(&i, &src("nest(None)")).await.as_int(), 7);
-    assert_eq!(run(&i, &src("no_nest()")).await.as_int(), -2);
+    assert_eq!(run(&i, &src("nest(Some(3))"), Ty::I64).await.as_int(), 3);
+    assert_eq!(run(&i, &src("nest(None)"), Ty::I64).await.as_int(), 7);
+    assert_eq!(run(&i, &src("no_nest()"), Ty::I64).await.as_int(), -2);
 }
 
 // -- A container of options --------------------------------------------
@@ -215,17 +253,17 @@ async fn a_pattern_through_a_reference_binds_an_inner_none_as_that_none() {
 #[tokio::test]
 async fn a_vec_of_options_stores_each_element_flat() {
     let i = Interner::new();
-    assert_eq!(run(&i, "count_some(evens(5))").await.as_int(), 3);
-    assert_eq!(run(&i, "count_some(evens(0))").await.as_int(), 0);
+    assert_eq!(run(&i, "count_some(evens(5))", Ty::I64).await.as_int(), 3);
+    assert_eq!(run(&i, "count_some(evens(0))", Ty::I64).await.as_int(), 0);
 }
 
 #[tokio::test]
 async fn an_element_of_a_vec_of_options_is_read_back_through_a_pattern() {
     let i = Interner::new();
     let src = |k: i64| format!("let v = evens(4); if let Some(n) = v[{k}] {{ n }} else {{ -1 }}");
-    assert_eq!(run(&i, &src(0)).await.as_int(), 0);
-    assert_eq!(run(&i, &src(1)).await.as_int(), -1);
-    assert_eq!(run(&i, &src(2)).await.as_int(), 2);
+    assert_eq!(run(&i, &src(0), Ty::I64).await.as_int(), 0);
+    assert_eq!(run(&i, &src(1), Ty::I64).await.as_int(), -1);
+    assert_eq!(run(&i, &src(2), Ty::I64).await.as_int(), 2);
 }
 
 #[tokio::test]
@@ -240,9 +278,15 @@ async fn a_vec_of_nested_options_round_trips_whole() {
             .count() as i64;
         let sum: i64 = fixture.iter().flatten().flatten().sum();
         let ask = |f: &str| format!("{f}(nested_vec({n}))");
-        assert_eq!(run(&i, &ask("count_outer_some")).await.as_int(), outer);
-        assert_eq!(run(&i, &ask("count_inner_some")).await.as_int(), inner);
-        assert_eq!(run(&i, &ask("sum_nested")).await.as_int(), sum);
+        assert_eq!(
+            run(&i, &ask("count_outer_some"), Ty::I64).await.as_int(),
+            outer
+        );
+        assert_eq!(
+            run(&i, &ask("count_inner_some"), Ty::I64).await.as_int(),
+            inner
+        );
+        assert_eq!(run(&i, &ask("sum_nested"), Ty::I64).await.as_int(), sum);
     }
 }
 
@@ -309,6 +353,7 @@ async fn a_mapped_option_element_by_value_is_visited_at_every_step() {
         &i,
         "let it = range(0, 4) | map(|k| -> some_if_even(k)); \
          let count = 0; while let Some(x) = next(&mut it) { count = count + 1; } count",
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 4);

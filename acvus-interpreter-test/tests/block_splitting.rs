@@ -21,6 +21,7 @@ use acvus_interpreter_test::listing::{
     BlockListing, PartListing, RegionListing, ops_of_anywhere, regions_named, script_listing,
 };
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// A `while` whose body holds an `if` and nothing after it that reads an arm.
@@ -43,7 +44,7 @@ fn part_of<'r>(region: &'r RegionListing, part: &str) -> &'r PartListing {
 
 fn loop_of(source: &str) -> Vec<BlockListing> {
     let interner = Interner::new();
-    let blocks = script_listing(&interner, source, Context::default());
+    let blocks = script_listing(&interner, source, Context::default(), Ty::I64);
     assert_eq!(
         ends(&blocks),
         ["Goto", "Return<true>"],
@@ -122,7 +123,12 @@ async fn a_while_that_returns_is_not_a_region() {
                     while i < 4 { let step = if i == 3 { None } else { Some(i) };
                                   acc = acc + step?; i = i + 1; }
                     Some(acc)"#;
-    let blocks = script_listing(&interner, source, Context::default());
+    let blocks = script_listing(
+        &interner,
+        source,
+        Context::default(),
+        Ty::Option(Box::new(Ty::I64)),
+    );
     let names = ops_of_anywhere(&blocks);
     assert!(
         !names.iter().any(|name| name == "Loop"),
@@ -136,7 +142,13 @@ async fn a_while_that_returns_is_not_a_region() {
         ends(&blocks)
     );
 
-    let value = run_script_mode(&interner, source, Context::default()).await;
+    let value = run_script_mode(
+        &interner,
+        source,
+        Context::default(),
+        Ty::Option(Box::new(Ty::I64)),
+    )
+    .await;
     assert!(
         value.is_none(),
         "the `?` returns None out of the loop at i == 3: {value:?}"
@@ -146,7 +158,13 @@ async fn a_while_that_returns_is_not_a_region() {
 #[tokio::test]
 async fn the_blocks_that_splitting_states_run_to_their_values() {
     let interner = Interner::new();
-    let above = run_script_mode(&interner, TAIL_ABOVE_THE_BRANCH, Context::default()).await;
+    let above = run_script_mode(
+        &interner,
+        TAIL_ABOVE_THE_BRANCH,
+        Context::default(),
+        Ty::I64,
+    )
+    .await;
     assert_eq!(
         above.as_int(),
         0 + 2 + 4,
@@ -158,7 +176,7 @@ async fn the_blocks_that_splitting_states_run_to_their_values() {
         acc += if n % 2 == 0 { n } else { 1 };
         acc *= 2;
     }
-    let below = run_script_mode(&interner, TAIL_BELOW_THE_JOIN, Context::default()).await;
+    let below = run_script_mode(&interner, TAIL_BELOW_THE_JOIN, Context::default(), Ty::I64).await;
     assert_eq!(
         below.as_int(),
         acc,

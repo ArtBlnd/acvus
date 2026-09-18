@@ -25,6 +25,8 @@ pub struct Lowerer<'a> {
     scopes: Vec<FxHashMap<Astr, Local>>,
     /// Frozen type resolution from typeck. Contains type_map, coercion_map, direct_calls.
     resolution: Freeze<TypeResolution>,
+    /// The `ret` of the graph `Function` whose body this is (RFC-0054).
+    ret: Ty,
     /// Coercion map from type checker (expr AstId -> CastKind).
     coercion_lookup: FxHashMap<AstId, CastKind>,
     /// Closures produced during lowering.
@@ -335,7 +337,7 @@ fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node>
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(interner: &'a Interner, resolution: Freeze<TypeResolution>) -> Self {
+    pub fn new(interner: &'a Interner, resolution: Freeze<TypeResolution>, ret: Ty) -> Self {
         let coercion_lookup: FxHashMap<AstId, CastKind> =
             resolution.coercion_map.iter().cloned().collect();
         let initial_scope = FxHashMap::default();
@@ -356,6 +358,7 @@ impl<'a> Lowerer<'a> {
             interner,
             scopes: vec![initial_scope],
             resolution,
+            ret,
             coercion_lookup,
             closures: FxHashMap::default(),
             closure_label_count: 0,
@@ -1359,6 +1362,7 @@ impl<'a> Lowerer<'a> {
         MirModule {
             main: self.body,
             closures: self.closures,
+            ret: self.ret,
         }
     }
 

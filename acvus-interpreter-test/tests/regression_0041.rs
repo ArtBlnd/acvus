@@ -13,6 +13,7 @@ use acvus_extern::{
 };
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -67,11 +68,11 @@ fn registry() -> Registry<AcvusRuntime> {
     }
 }
 
-async fn run(source: &str) -> Value {
+async fn run(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
     let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
     registries.push(registry());
-    run_script_mode_with_externs(&i, source, Context::default(), registries)
+    run_script_mode_with_externs(&i, source, Context::default(), registries, ret)
         .await
         .value
 }
@@ -80,13 +81,13 @@ async fn run(source: &str) -> Value {
 
 #[tokio::test]
 async fn one_place_lent_twice_to_one_specialized_call_reads_the_same_storage_twice() {
-    let v = run("let x = vec([3.0, 4.0]); dot2(&x, &x)").await;
+    let v = run("let x = vec([3.0, 4.0]); dot2(&x, &x)", Ty::Float).await;
     assert_eq!(v.as_float(), 25.0);
 }
 
 #[tokio::test]
 async fn a_field_place_lent_to_a_specialized_parameter_is_read_through_the_cast() {
-    let v = run("let o = { v: vec([3.0, 4.0]), }; norm(&o.v)").await;
+    let v = run("let o = { v: vec([3.0, 4.0]), }; norm(&o.v)", Ty::Float).await;
     assert_eq!(v.as_float(), 5.0);
 }
 
@@ -94,6 +95,7 @@ async fn a_field_place_lent_to_a_specialized_parameter_is_read_through_the_cast(
 async fn a_lend_inside_a_loop_is_cast_back_each_iteration_and_the_sum_is_unchanged() {
     let v = run(
         "let x = vec([3.0, 4.0]); let n = 0; let acc = 0.0; while n < 3 { acc = acc + norm(&x); n = n + 1; } acc",
+        Ty::Float,
     )
     .await;
     assert_eq!(v.as_float(), 15.0);
@@ -103,7 +105,7 @@ async fn a_lend_inside_a_loop_is_cast_back_each_iteration_and_the_sum_is_unchang
 
 #[tokio::test]
 async fn a_place_lent_to_a_call_and_again_inside_a_nested_argument_computes_as_uniform() {
-    let v = run("let x = vec([3.0, 4.0]); scale(&x, norm(&x))").await;
+    let v = run("let x = vec([3.0, 4.0]); scale(&x, norm(&x))", Ty::Float).await;
     assert_eq!(v.as_float(), 35.0, "(3 + 4) * norm([3, 4]) = 7 * 5");
 }
 
@@ -111,7 +113,11 @@ async fn a_place_lent_to_a_call_and_again_inside_a_nested_argument_computes_as_u
 
 #[tokio::test]
 async fn map_then_collect_has_the_source_s_length() {
-    let v = run("let xs = into_iter([1, 2, 3]) | map(|x| -> x * 2) | collect; xs.len()").await;
+    let v = run(
+        "let xs = into_iter([1, 2, 3]) | map(|x| -> x * 2) | collect; xs.len()",
+        Ty::U64,
+    )
+    .await;
     assert_eq!(v.as_int(), 3);
 }
 
@@ -119,6 +125,7 @@ async fn map_then_collect_has_the_source_s_length() {
 async fn map_then_filter_then_collect_keeps_the_doubled_values_above_two() {
     let v = run(
         "let ys = into_iter([1, 2, 3]) | map(|x| -> x * 2) | filter(|x| -> *x > 2) | collect; ys.len() * 100 + ys[0] * 10 + ys[1]",
+        Ty::U64,
     )
     .await;
     assert_eq!(v.as_int(), 246, "two elements, 4 and 6");
@@ -129,12 +136,12 @@ async fn map_then_filter_then_collect_keeps_the_doubled_values_above_two() {
 #[tokio::test]
 async fn contains_over_a_uniform_int_vec_finds_a_member_and_misses_a_stranger() {
     assert!(
-        run("into_iter(vec([1, 2, 3])) | contains(2)")
+        run("into_iter(vec([1, 2, 3])) | contains(2)", Ty::Bool)
             .await
             .as_bool()
     );
     assert!(
-        !run("into_iter(vec([1, 2, 3])) | contains(5)")
+        !run("into_iter(vec([1, 2, 3])) | contains(5)", Ty::Bool)
             .await
             .as_bool()
     );

@@ -25,6 +25,7 @@ async fn out_of(i: &Interner, source: &str) -> f64 {
             .into_iter()
             .collect(),
         acvus_ext::std_registries(),
+        Ty::I64,
     )
     .await;
     ran.writes
@@ -54,6 +55,7 @@ async fn a_borrowed_option_is_matched_through_and_stays_usable() {
          let first = if let Some(u) = o { u[0] } else { 0.0 };
          second + first",
         Context::default(),
+        Ty::Float,
     )
     .await;
     assert_eq!(v.as_float(), 3.0);
@@ -93,6 +95,7 @@ async fn an_assignment_in_a_tag_form_body_is_the_outer_binding() {
         &i,
         "let f = |q| -> { let out = 0.0; if let Some(v) = Some(1.5) { out = v; }; out }; f(0)",
         Context::default(),
+        Ty::Float,
     )
     .await;
     assert_eq!(in_a_lambda.as_float(), 1.5);
@@ -101,6 +104,7 @@ async fn an_assignment_in_a_tag_form_body_is_the_outer_binding() {
         &i,
         "let out = 0.0; if let Some(v) = Some(1.5) { out = v; }; out",
         Context::default(),
+        Ty::Float,
     )
     .await;
     assert_eq!(at_the_top_level.as_float(), 1.5);
@@ -109,6 +113,7 @@ async fn an_assignment_in_a_tag_form_body_is_the_outer_binding() {
         &i,
         "let out = 0.0; if let Some(v) = Some(1.5) { out = v; }; out",
         Context::default(),
+        Ty::Float,
     )
     .await;
     assert_eq!(as_an_if_let.as_float(), 1.5);
@@ -123,6 +128,7 @@ async fn a_let_in_a_tag_form_body_ends_with_the_body() {
         &i,
         "let f = |q| -> { let out = 0.0; if let Some(v) = Some(1.5) { let out = v; }; out }; f(0)",
         Context::default(),
+        Ty::Float,
     )
     .await;
     assert_eq!(v.as_float(), 0.0);
@@ -139,6 +145,7 @@ async fn a_vec_moved_out_of_an_option_survives_the_match_that_moved_it() {
              len(&out)
          }; f(0)",
         Context::default(),
+        Ty::U64,
     )
     .await;
     assert_eq!(v.as_int(), 3);

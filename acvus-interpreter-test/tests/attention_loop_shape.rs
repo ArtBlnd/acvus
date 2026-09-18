@@ -13,6 +13,7 @@
 use acvus_interpreter_test::listing::{regions_named, script_listing};
 use acvus_interpreter_test::scripts::ATTENTION;
 use acvus_interpreter_test::value_from_json;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// One `while` as the machine runs it.
@@ -37,7 +38,7 @@ fn attention_loops() -> Vec<LoopShape> {
         .collect();
 
     let source = format!("{ATTENTION} *out.get(0)");
-    let blocks = script_listing(&interner, &source, contexts);
+    let blocks = script_listing(&interner, &source, contexts, Ty::Float);
     regions_named(&blocks, "Loop")
         .into_iter()
         .map(|region| {

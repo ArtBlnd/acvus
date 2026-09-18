@@ -272,6 +272,7 @@ async fn a_script_s_change_to_a_deque_context_is_committed_as_its_ops() {
             .into_iter()
             .collect(),
         acvus_ext::std_registries(),
+        Ty::U64,
     )
     .await;
     assert_eq!(ran.value.as_int(), 2);
@@ -353,6 +354,7 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
         ),
         &[(i.intern("d"), ty.clone())].into_iter().collect(),
         acvus_ext::std_registries(),
+        Ty::U64,
     );
     let mut functions = compiled.extern_executables;
     let prepare_ctx = acvus_interpreter::PrepareCtx {

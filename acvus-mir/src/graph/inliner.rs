@@ -64,6 +64,7 @@ fn inline_module(
     MirModule {
         main: body,
         closures,
+        ret: module.ret.clone(),
     }
 }
 
@@ -681,6 +682,7 @@ mod tests {
         MirModule {
             main: body,
             closures: FxHashMap::default(),
+            ret: crate::ty::Ty::Unit,
         }
     }
 

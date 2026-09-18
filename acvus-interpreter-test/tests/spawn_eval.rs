@@ -89,6 +89,7 @@ async fn spawn_eval_basic() {
                 order_param: None,
             },
             closures: FxHashMap::default(),
+            ret: Ty::I64,
         }
     };
 
@@ -136,6 +137,7 @@ async fn spawn_eval_basic() {
                 order_param: None,
             },
             closures: FxHashMap::default(),
+            ret: Ty::I64,
         }
     };
 
@@ -208,6 +210,7 @@ async fn spawn_eval_multi_args() {
                 order_param: None,
             },
             closures: FxHashMap::default(),
+            ret: Ty::I64,
         }
     };
 
@@ -260,6 +263,7 @@ async fn spawn_eval_multi_args() {
                 order_param: None,
             },
             closures: FxHashMap::default(),
+            ret: Ty::I64,
         }
     };
 

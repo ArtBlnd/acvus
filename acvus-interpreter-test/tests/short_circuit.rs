@@ -77,7 +77,7 @@ fn context_of(i: &Interner, operands: Operands) -> Context {
 async fn run_with_boom(source: &str, left: bool) -> bool {
     let i = Interner::new();
     let context = context_of(&i, Operands { left, right: false });
-    run_script_with_externs(&i, source, context, vec![boom_registry()])
+    run_script_with_externs(&i, source, context, vec![boom_registry()], Ty::Bool)
         .await
         .value
         .as_bool()
@@ -87,10 +87,16 @@ async fn run_with_counter(source: &str, operands: Operands) -> Outcome {
     let i = Interner::new();
     let calls = Arc::new(Calls::default());
     let context = context_of(&i, operands);
-    let value = run_script_with_externs(&i, source, context, vec![counted_registry(&calls)])
-        .await
-        .value
-        .as_bool();
+    let value = run_script_with_externs(
+        &i,
+        source,
+        context,
+        vec![counted_registry(&calls)],
+        Ty::Bool,
+    )
+    .await
+    .value
+    .as_bool();
     Outcome {
         value,
         calls: calls.count(),

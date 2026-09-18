@@ -62,7 +62,11 @@ pub fn lower(
             continue;
         };
 
-        let lowerer = crate::lower::Lowerer::new(interner, resolution);
+        let ret = match &infer_result.outcomes[&func.qref].meta().ty {
+            crate::ty::Ty::Fn { ret, .. } => (**ret).clone(),
+            other => other.clone(),
+        };
+        let lowerer = crate::lower::Lowerer::new(interner, resolution, ret);
         let module = match parsed {
             ParsedSource::Script(script) => lowerer.lower_script(script),
             ParsedSource::Template(template) => lowerer.lower_template(template),

@@ -285,6 +285,7 @@ mod tests {
         let module = MirModule {
             main: body.clone(),
             closures: FxHashMap::default(),
+            ret: crate::ty::Ty::Unit,
         };
         let printed = format!("{}", crate::printer::dump(&interner, &module));
         assert!(
@@ -341,6 +342,7 @@ mod tests {
         let module = MirModule {
             main: demote(cfg),
             closures: FxHashMap::default(),
+            ret: crate::ty::Ty::Unit,
         };
         let printed = format!("{}", crate::printer::dump(&interner, &module));
         assert!(printed.contains("is A"), "{printed}");

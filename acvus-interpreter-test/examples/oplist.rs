@@ -114,10 +114,24 @@ fn dump(name: &str, code: &Code) {
     }
 }
 
+/// The return type the host declares for the source's `main` (RFC-0054),
+/// named by the second command-line argument; `i64` when it is absent.
+fn declared_return(name: Option<&str>) -> Ty {
+    match name.unwrap_or("i64") {
+        "i64" => Ty::I64,
+        "f64" => Ty::Float,
+        "bool" => Ty::Bool,
+        "string" => Ty::String,
+        "unit" => Ty::Unit,
+        other => panic!("unknown return type `{other}`: i64, f64, bool, string or unit"),
+    }
+}
+
 fn main() {
     let source = std::env::args()
         .nth(1)
         .expect("a source argument on the command line");
+    let ret = declared_return(std::env::args().nth(2).as_deref());
     let interner = Interner::new();
     let names = [
         ContextName {
@@ -158,7 +172,7 @@ fn main() {
     }
     let (context_types, _snapshot) = split_context(&interner, context);
     let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, &source).expect("parse error"));
-    let cr = compile_source_with_externs(&interner, ast, &context_types, registries());
+    let cr = compile_source_with_externs(&interner, ast, &context_types, registries(), ret);
     let ctx = PrepareCtx {
         interner: &interner,
         externs: &cr.extern_executables,

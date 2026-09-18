@@ -3,6 +3,7 @@
 
 use acvus_ext_net::http_registry;
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -56,7 +57,14 @@ async fn fetch_get_returns_the_body_the_server_wrote() {
     let server = serve_once("200 OK", "hello from a socket").await;
     let i = Interner::new();
     let src = format!("fetch_get(\"http://127.0.0.1:{}/greeting\")", server.port);
-    let ran = run_script_with_externs(&i, &src, FxHashMap::default(), vec![http_registry()]).await;
+    let ran = run_script_with_externs(
+        &i,
+        &src,
+        FxHashMap::default(),
+        vec![http_registry()],
+        Ty::String,
+    )
+    .await;
     assert_eq!(unsafe { ran.value.as_str() }, "hello from a socket");
     assert_eq!(
         server.request_line.await.expect("the server task"),

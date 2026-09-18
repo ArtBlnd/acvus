@@ -4,6 +4,7 @@
 //! would catch if the register selector or drop insertion got it wrong.
 
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 #[tokio::test]
@@ -13,6 +14,7 @@ async fn a_string_rebuilt_every_iteration_keeps_one_owner() {
         &i,
         "let s = \"\"; let n = 0; while n < 3 { s = s + \"ab\"; n = n + 1; } s.len()",
         Context::default(),
+        Ty::U64,
     )
     .await;
     assert_eq!(v.as_int(), 6);
@@ -25,6 +27,7 @@ async fn a_deque_carried_around_a_loop_keeps_every_element() {
         &i,
         "let d = deque(); let n = 0; while n < 4 { push_back(&mut d, n); n = n + 1; } len(&d)",
         Context::default(),
+        Ty::U64,
     )
     .await;
     assert_eq!(v.as_int(), 4);
@@ -37,6 +40,7 @@ async fn a_string_carried_through_a_branch_keeps_one_owner() {
         &i,
         "let s = \"\"; let n = 0; while n < 4 { if n < 2 { s = s + \"a\"; } else { s = s + \"bb\"; }; n = n + 1; } s.len()",
         Context::default(),
+        Ty::U64,
     )
     .await;
     assert_eq!(v.as_int(), 6);

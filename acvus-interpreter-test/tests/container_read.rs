@@ -11,18 +11,19 @@
 
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
-async fn run(source: &str) -> Value {
+async fn run(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
     let registries = acvus_ext::std_registries::<AcvusRuntime>();
-    run_script_mode_with_externs(&i, source, Context::default(), registries)
+    run_script_mode_with_externs(&i, source, Context::default(), registries, ret)
         .await
         .value
 }
 
 async fn string(source: &str) -> String {
-    let v = run(source).await;
+    let v = run(source, Ty::String).await;
     // SAFETY: every caller's script ends in a String-typed expression.
     unsafe { v.as_str() }.to_owned()
 }
@@ -31,41 +32,64 @@ async fn string(source: &str) -> String {
 
 #[tokio::test]
 async fn is_empty_of_a_vec_is_true_only_with_no_element() {
-    assert!(run("let xs = vec([]); is_empty(&xs)").await.as_bool());
-    assert!(!run("let xs = vec([1, 2]); is_empty(&xs)").await.as_bool());
+    assert!(
+        run("let xs = vec([]); is_empty(&xs)", Ty::Bool)
+            .await
+            .as_bool()
+    );
+    assert!(
+        !run("let xs = vec([1, 2]); is_empty(&xs)", Ty::Bool)
+            .await
+            .as_bool()
+    );
 }
 
 #[tokio::test]
 async fn is_empty_of_an_array_is_false_with_an_element() {
-    assert!(!run("let xs = [1, 2]; is_empty(&xs)").await.as_bool());
+    assert!(
+        !run("let xs = [1, 2]; is_empty(&xs)", Ty::Bool)
+            .await
+            .as_bool()
+    );
 }
 
 #[tokio::test]
 async fn is_empty_of_a_deque_follows_its_pushes() {
     assert!(
-        !run("let d = deque(); push_back(&mut d, 1); is_empty(&d)")
-            .await
-            .as_bool()
+        !run(
+            "let d = deque(); push_back(&mut d, 1); is_empty(&d)",
+            Ty::Bool
+        )
+        .await
+        .as_bool()
     );
     assert!(
-        run("let d = deque(); push_back(&mut d, 1); pop_back(&mut d); is_empty(&d)")
-            .await
-            .as_bool()
+        run(
+            "let d = deque(); push_back(&mut d, 1); pop_back(&mut d); is_empty(&d)",
+            Ty::Bool
+        )
+        .await
+        .as_bool()
     );
 }
 
 #[tokio::test]
 async fn is_empty_of_a_string_is_true_only_for_the_empty_string() {
-    assert!(run("let s = \"\"; is_empty(&s)").await.as_bool());
-    assert!(!run("let s = \"a\"; is_empty(&s)").await.as_bool());
+    assert!(run("let s = \"\"; is_empty(&s)", Ty::Bool).await.as_bool());
+    assert!(!run("let s = \"a\"; is_empty(&s)", Ty::Bool).await.as_bool());
 }
 
 // -- string::len, char_at -------------------------------------------------------
 
 #[tokio::test]
 async fn len_of_a_string_counts_characters() {
-    assert_eq!(run("let s = \"héllo\"; len(&s)").await.as_int(), 5);
-    assert_eq!(run("let s = \"héllo\"; string::len(&s)").await.as_int(), 5);
+    assert_eq!(run("let s = \"héllo\"; len(&s)", Ty::U64).await.as_int(), 5);
+    assert_eq!(
+        run("let s = \"héllo\"; string::len(&s)", Ty::U64)
+            .await
+            .as_int(),
+        5
+    );
 }
 
 #[tokio::test]
@@ -77,7 +101,7 @@ async fn char_at_reads_one_character_by_character_index() {
 #[tokio::test]
 #[should_panic(expected = "char_at")]
 async fn char_at_outside_the_string_traps() {
-    run("let s = \"ab\"; char_at(&s, 5)").await;
+    run("let s = \"ab\"; char_at(&s, 5)", Ty::String).await;
 }
 
 // -- Producers ------------------------------------------------------------------
@@ -85,18 +109,23 @@ async fn char_at_outside_the_string_traps() {
 #[tokio::test]
 async fn chars_yields_one_string_per_character() {
     assert_eq!(
-        run("let cs = chars(\"ab\") | collect; len(&cs)")
+        run("let cs = chars(\"ab\") | collect; len(&cs)", Ty::U64)
             .await
             .as_int(),
         2
     );
-    assert_eq!(run("chars(\"héllo\") | count()").await.as_int(), 5);
+    assert_eq!(run("chars(\"héllo\") | count()", Ty::I64).await.as_int(), 5);
     assert_eq!(string("chars(\"héllo\") | join(\"-\")").await, "h-é-l-l-o");
 }
 
 #[tokio::test]
 async fn lines_splits_on_newlines_and_drops_the_terminator() {
-    assert_eq!(run("lines(\"a\\nb\\nc\") | count()").await.as_int(), 3);
+    assert_eq!(
+        run("lines(\"a\\nb\\nc\") | count()", Ty::I64)
+            .await
+            .as_int(),
+        3
+    );
     assert_eq!(
         string("lines(\"a\\nb\\nc\\n\") | join(\"|\")").await,
         "a|b|c"
@@ -105,14 +134,17 @@ async fn lines_splits_on_newlines_and_drops_the_terminator() {
 
 #[tokio::test]
 async fn bytes_yields_the_utf8_bytes_as_ints() {
-    assert_eq!(run("bytes(\"hé\") | count()").await.as_int(), 3);
-    assert_eq!(run("bytes(\"hé\") | sum()").await.as_int(), 104 + 195 + 169);
+    assert_eq!(run("bytes(\"hé\") | count()", Ty::I64).await.as_int(), 3);
+    assert_eq!(
+        run("bytes(\"hé\") | sum()", Ty::I64).await.as_int(),
+        104 + 195 + 169
+    );
 }
 
 #[tokio::test]
 async fn split_whitespace_drops_every_run_of_whitespace() {
     assert_eq!(
-        run("split_whitespace(\"  a  b c \") | count()")
+        run("split_whitespace(\"  a  b c \") | count()", Ty::I64)
             .await
             .as_int(),
         3
@@ -128,19 +160,25 @@ async fn split_whitespace_drops_every_run_of_whitespace() {
 #[tokio::test]
 async fn rfind_gives_the_character_index_of_the_last_match() {
     assert_eq!(
-        run("let s = \"héllo\"; rfind(&s, \"l\") | unwrap_or(-1)")
-            .await
-            .as_int(),
+        run(
+            "let s = \"héllo\"; rfind(&s, \"l\") | unwrap_or(-1)",
+            Ty::I64
+        )
+        .await
+        .as_int(),
         3
     );
     assert_eq!(
-        run("let s = \"abcabc\"; rfind(&s, \"bc\") | unwrap_or(-1)")
-            .await
-            .as_int(),
+        run(
+            "let s = \"abcabc\"; rfind(&s, \"bc\") | unwrap_or(-1)",
+            Ty::I64
+        )
+        .await
+        .as_int(),
         4
     );
     assert_eq!(
-        run("let s = \"abc\"; rfind(&s, \"z\") | unwrap_or(-1)")
+        run("let s = \"abc\"; rfind(&s, \"z\") | unwrap_or(-1)", Ty::I64)
             .await
             .as_int(),
         -1
@@ -185,13 +223,17 @@ async fn strip_prefix_and_strip_suffix_are_none_without_the_pattern() {
 async fn split_once_gives_the_text_around_the_first_pattern() {
     let v = run(
         "let p = split_once(\"a=b=c\", \"=\") | unwrap; let a = &p[0]; let b = &p[1]; concat(a, b)",
+        Ty::String,
     )
     .await;
     assert_eq!(unsafe { v.as_str() }, "ab=c");
     assert_eq!(
-        run("let p = split_once(\"a=b\", \"=\") | unwrap; len(&p)")
-            .await
-            .as_int(),
+        run(
+            "let p = split_once(\"a=b\", \"=\") | unwrap; len(&p)",
+            Ty::U64
+        )
+        .await
+        .as_int(),
         2
     );
     assert_eq!(
@@ -204,19 +246,28 @@ async fn split_once_gives_the_text_around_the_first_pattern() {
 #[tokio::test]
 async fn eq_ignore_case_compares_after_lowercasing() {
     assert!(
-        run("let a = \"HeLLo\"; let b = \"hello\"; eq_ignore_case(&a, &b)")
-            .await
-            .as_bool()
+        run(
+            "let a = \"HeLLo\"; let b = \"hello\"; eq_ignore_case(&a, &b)",
+            Ty::Bool
+        )
+        .await
+        .as_bool()
     );
     assert!(
-        run("let a = \"ÉCOLE\"; let b = \"école\"; eq_ignore_case(&a, &b)")
-            .await
-            .as_bool()
+        run(
+            "let a = \"ÉCOLE\"; let b = \"école\"; eq_ignore_case(&a, &b)",
+            Ty::Bool
+        )
+        .await
+        .as_bool()
     );
     assert!(
-        !run("let a = \"a\"; let b = \"b\"; eq_ignore_case(&a, &b)")
-            .await
-            .as_bool()
+        !run(
+            "let a = \"a\"; let b = \"b\"; eq_ignore_case(&a, &b)",
+            Ty::Bool
+        )
+        .await
+        .as_bool()
     );
 }
 

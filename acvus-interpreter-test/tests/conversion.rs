@@ -17,12 +17,14 @@ async fn text(src: &str) -> String {
 
 async fn int(src: &str) -> i64 {
     let i = Interner::new();
-    run_script(&i, src, FxHashMap::default()).await.as_int()
+    run_script(&i, src, FxHashMap::default(), Ty::I64)
+        .await
+        .as_int()
 }
 
 async fn script_mode_text(src: &str) -> String {
     let i = Interner::new();
-    let v = run_script_mode(&i, src, FxHashMap::default()).await;
+    let v = run_script_mode(&i, src, FxHashMap::default(), Ty::String).await;
     assert!(v.is_string(), "expected a String, got {v:?}");
     // SAFETY: the witness is String.
     unsafe { v.as_str() }.to_owned()
@@ -54,7 +56,7 @@ async fn to_int_reads_every_converting_scalar_through_a_reference() {
 
     let i = Interner::new();
     assert_eq!(
-        run_script(&i, "@b.to_int()", byte_context(&i, 65))
+        run_script(&i, "@b.to_int()", byte_context(&i, 65), Ty::I64)
             .await
             .as_int(),
         65

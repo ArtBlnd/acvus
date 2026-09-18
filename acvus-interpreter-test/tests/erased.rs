@@ -12,6 +12,7 @@ use acvus_extern::{
 };
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -70,11 +71,11 @@ fn registry() -> Registry<AcvusRuntime> {
     }
 }
 
-async fn run(source: &str) -> Value {
+async fn run(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
     let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
     registries.push(registry());
-    run_script_mode_with_externs(&i, source, Context::default(), registries)
+    run_script_mode_with_externs(&i, source, Context::default(), registries, ret)
         .await
         .value
 }
@@ -89,9 +90,11 @@ fn assert_str(v: &Value, expected: &str) {
 
 #[tokio::test]
 async fn an_element_edited_through_as_mut_is_what_the_program_reads() {
-    let v =
-        run(r#"let v = split_str("ab,cd", ","); upcase_first(&mut v); into_iter(v) | join("+")"#)
-            .await;
+    let v = run(
+        r#"let v = split_str("ab,cd", ","); upcase_first(&mut v); into_iter(v) | join("+")"#,
+        Ty::String,
+    )
+    .await;
     assert_str(&v, "AB+cd");
 }
 
@@ -99,9 +102,17 @@ async fn an_element_edited_through_as_mut_is_what_the_program_reads() {
 
 #[tokio::test]
 async fn contains_compares_through_as_ref() {
-    let hit = run(r#"into_iter(split_str("a,b,c", ",")) | contains_erased("b")"#).await;
+    let hit = run(
+        r#"into_iter(split_str("a,b,c", ",")) | contains_erased("b")"#,
+        Ty::Bool,
+    )
+    .await;
     assert!(hit.as_bool());
-    let miss = run(r#"into_iter(split_str("a,b,c", ",")) | contains_erased("z")"#).await;
+    let miss = run(
+        r#"into_iter(split_str("a,b,c", ",")) | contains_erased("z")"#,
+        Ty::Bool,
+    )
+    .await;
     assert!(!miss.as_bool());
 }
 
@@ -109,11 +120,23 @@ async fn contains_compares_through_as_ref() {
 
 #[tokio::test]
 async fn contains_over_inline_elements_reads_them_by_their_tag() {
-    assert!(run("into_iter([1, 2, 3]) | contains(3)").await.as_bool());
-    assert!(!run("into_iter([1, 2, 3]) | contains(4)").await.as_bool());
-    assert!(run("into_iter([1.5, 2.5]) | contains(2.5)").await.as_bool());
     assert!(
-        run("into_iter([true, false]) | contains(false)")
+        run("into_iter([1, 2, 3]) | contains(3)", Ty::Bool)
+            .await
+            .as_bool()
+    );
+    assert!(
+        !run("into_iter([1, 2, 3]) | contains(4)", Ty::Bool)
+            .await
+            .as_bool()
+    );
+    assert!(
+        run("into_iter([1.5, 2.5]) | contains(2.5)", Ty::Bool)
+            .await
+            .as_bool()
+    );
+    assert!(
+        run("into_iter([true, false]) | contains(false)", Ty::Bool)
             .await
             .as_bool()
     );

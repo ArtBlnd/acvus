@@ -474,6 +474,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
     let module = MirModule {
         main: body_of(&interner, shape),
         closures: FxHashMap::default(),
+        ret: Ty::Float,
     };
     let mut prepared = prepare_module(
         &module,

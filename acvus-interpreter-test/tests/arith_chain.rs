@@ -30,10 +30,10 @@ fn floats(i: &Interner, names: &[(&str, f64)]) -> Context {
 /// The prepared bodies of a script. A test that states where a body runs
 /// has to read them: whether a closure kept its frame is a fact about the
 /// preparation, and the value the closure returns is the same either way.
-fn prepared(i: &Interner, source: &str, context: Context) -> Prepared {
+fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
     let (context_types, _) = split_context(i, context);
     let ast = ParsedAst::Script(acvus_ast::parse_script(i, source).expect("parse error"));
-    let cr = compile_source_with_externs(i, ast, &context_types, acvus_ext::std_registries());
+    let cr = compile_source_with_externs(i, ast, &context_types, acvus_ext::std_registries(), ret);
     let ctx = PrepareCtx {
         interner: i,
         externs: &cr.extern_executables,
@@ -111,7 +111,7 @@ async fn a_chain_runs_at_each_integer_width() {
         },
     ];
     for Width { ty, n, expected } in widths {
-        let v = run_script(&i, "@n * 2 + 1 - 3", ctx(&i, "n", ty, n)).await;
+        let v = run_script(&i, "@n * 2 + 1 - 3", ctx(&i, "n", ty, n), Ty::Int(ty)).await;
         assert_eq!(ty.read(v.bits()), expected, "a chain at {ty:?}");
     }
 }
@@ -124,6 +124,7 @@ async fn a_float_chain_is_the_same_expression_rust_computes() {
         &i,
         "@x * @x - @y * @y + @c",
         floats(&i, &[("x", x), ("y", y), ("c", c)]),
+        Ty::Float,
     )
     .await;
     assert_eq!(v.as_float(), x * x - y * y + c);
@@ -137,6 +138,7 @@ async fn the_three_node_shape_reads_its_leaves_in_order() {
         &i,
         "@a * @b - @c * @d",
         floats(&i, &[("a", a), ("b", b), ("c", c), ("d", d)]),
+        Ty::Float,
     )
     .await;
     assert_eq!(v.as_float(), a * b - c * d);
@@ -151,11 +153,18 @@ async fn a_chain_of_operators_outside_the_alphabet_is_the_same_expression_rust_c
         &i,
         "@a / @b / @c / @d",
         floats(&i, &[("a", a), ("b", b), ("c", c), ("d", d)]),
+        Ty::Float,
     )
     .await;
     assert_eq!(v.as_float(), a / b / c / d);
 
-    let v = run_script(&i, "0 - (@n % 7) % 5", ctx(&i, "n", IntTy::I64, 93)).await;
+    let v = run_script(
+        &i,
+        "0 - (@n % 7) % 5",
+        ctx(&i, "n", IntTy::I64, 93),
+        Ty::I64,
+    )
+    .await;
     assert_eq!(v.as_int(), -((93i64 % 7) % 5));
 }
 
@@ -166,6 +175,7 @@ async fn a_chain_ending_in_a_compare_drives_a_while() {
         &i,
         "let s = 0; let k = 0; while k * 2 + 1 < @n { s = s + k; k = k + 1; } s",
         ctx(&i, "n", IntTy::I64, 21),
+        Ty::I64,
     )
     .await;
     let mut s = 0i64;
@@ -181,7 +191,7 @@ async fn a_chain_ending_in_a_compare_drives_a_while() {
 #[should_panic(expected = "attempt to divide by zero")]
 async fn a_division_by_zero_inside_a_chain_still_panics() {
     let i = Interner::new();
-    run_script(&i, "(@n * 2) / 0", ctx(&i, "n", IntTy::I64, 3)).await;
+    run_script(&i, "(@n * 2) / 0", ctx(&i, "n", IntTy::I64, 3), Ty::I64).await;
 }
 
 #[tokio::test]
@@ -192,6 +202,7 @@ async fn the_minimum_divided_by_minus_one_inside_a_chain_still_panics() {
         &i,
         "(@n * 1) / (0 - 1)",
         ctx(&i, "n", IntTy::I64, i64::MIN as u64),
+        Ty::I64,
     )
     .await;
 }
@@ -200,16 +211,16 @@ async fn the_minimum_divided_by_minus_one_inside_a_chain_still_panics() {
 #[should_panic(expected = "attempt to calculate the remainder with a divisor of zero")]
 async fn a_remainder_by_zero_inside_a_chain_still_panics() {
     let i = Interner::new();
-    run_script(&i, "(@n * 2) % 0", ctx(&i, "n", IntTy::I64, 3)).await;
+    run_script(&i, "(@n * 2) % 0", ctx(&i, "n", IntTy::I64, 3), Ty::I64).await;
 }
 
 #[tokio::test]
 async fn a_chain_reads_a_constant_from_a_register_the_entry_filled() {
     let i = Interner::new();
-    let v = run_script(&i, "@n * 3 + 4", ctx(&i, "n", IntTy::I64, 5)).await;
+    let v = run_script(&i, "@n * 3 + 4", ctx(&i, "n", IntTy::I64, 5), Ty::I64).await;
     assert_eq!(v.as_int(), 19);
 
-    let module = prepared(&i, "@n * 3 + 4", ctx(&i, "n", IntTy::I64, 5));
+    let module = prepared(&i, "@n * 3 + 4", ctx(&i, "n", IntTy::I64, 5), Ty::I64);
     let Code::Body(body) = &*module.main else {
         panic!("a script's entry body runs on a frame")
     };
@@ -236,7 +247,12 @@ async fn a_chain_reads_a_constant_from_a_register_the_entry_filled() {
 #[tokio::test]
 async fn a_constant_a_call_reads_is_not_hoisted() {
     let i = Interner::new();
-    let module = prepared(&i, "let s = \"abc\"; s.len()", Context::default());
+    let module = prepared(
+        &i,
+        "let s = \"abc\"; s.len()",
+        Context::default(),
+        Ty::Int(IntTy::U64),
+    );
     let Code::Body(body) = &*module.main else {
         panic!("a script's entry body runs on a frame")
     };
@@ -250,10 +266,10 @@ async fn a_constant_a_call_reads_is_not_hoisted() {
 async fn a_lambda_that_is_one_chain_runs_without_a_frame() {
     let i = Interner::new();
     let source = "let f = |x| -> x * 2 + 1; f(3)";
-    let v = run_script_mode(&i, source, Context::default()).await;
+    let v = run_script_mode(&i, source, Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 7);
 
-    let module = prepared(&i, source, Context::default());
+    let module = prepared(&i, source, Context::default(), Ty::I64);
     let Code::Expr(expr) = only_closure(&module) else {
         panic!("a lambda that is one chain is a Code::Expr")
     };
@@ -272,7 +288,7 @@ async fn a_lambda_that_is_one_chain_runs_without_a_frame() {
 #[tokio::test]
 async fn an_identity_lambda_returns_its_argument_without_a_chain() {
     let i = Interner::new();
-    let module = prepared(&i, "let f = |x| -> x; f(3)", Context::default());
+    let module = prepared(&i, "let f = |x| -> x; f(3)", Context::default(), Ty::I64);
     let Code::Expr(expr) = only_closure(&module) else {
         panic!("an identity lambda is a Code::Expr")
     };
@@ -283,10 +299,10 @@ async fn an_identity_lambda_returns_its_argument_without_a_chain() {
 async fn a_lambda_of_two_statements_keeps_its_frame() {
     let i = Interner::new();
     let source = "let f = |x| -> { let y = x * 2; y + y }; f(3)";
-    let v = run_script_mode(&i, source, Context::default()).await;
+    let v = run_script_mode(&i, source, Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 12);
 
-    let module = prepared(&i, source, Context::default());
+    let module = prepared(&i, source, Context::default(), Ty::I64);
     assert!(
         matches!(only_closure(&module), Code::Body(_)),
         "a body that is not one chain runs through Code::Body"
@@ -300,6 +316,7 @@ async fn a_lambda_that_is_one_chain_runs_without_a_frame_under_map() {
         &i,
         "range(0, @n) | map(|x| -> x * 2 + 1) | sum",
         ctx(&i, "n", IntTy::I64, 10),
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), (0..10i64).map(|x| x * 2 + 1).sum::<i64>());
@@ -309,10 +326,10 @@ async fn a_lambda_that_is_one_chain_runs_without_a_frame_under_map() {
 async fn a_run_of_more_than_three_nodes_is_several_chains_through_a_register() {
     let i = Interner::new();
     let source = "@n * 2 + @n * 3 + @n * 4 + @n * 5";
-    let v = run_script(&i, source, ctx(&i, "n", IntTy::I64, 6)).await;
+    let v = run_script(&i, source, ctx(&i, "n", IntTy::I64, 6), Ty::I64).await;
     assert_eq!(v.as_int(), 6 * 2 + 6 * 3 + 6 * 4 + 6 * 5);
 
-    let module = prepared(&i, source, ctx(&i, "n", IntTy::I64, 6));
+    let module = prepared(&i, source, ctx(&i, "n", IntTy::I64, 6), Ty::I64);
     let found = chains(&module.main);
     assert!(
         found.len() >= 2,
@@ -398,6 +415,7 @@ fn every_chain_leaf_is_inside_the_frame_it_reads_unchecked() {
         &i,
         "let s = 0; let k = 0; while k < @n { s = s + k * 2 - 1; k = k + 1; } s",
         ctx(&i, "n", IntTy::I64, 4),
+        Ty::I64,
     );
     let Code::Body(body) = &*module.main else {
         panic!("a script's entry body runs on a frame")

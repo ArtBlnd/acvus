@@ -71,17 +71,18 @@ fn compile(
 ) -> CompileResult {
     let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse error"));
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
-    compile_source_with_externs(interner, ast, context_types, std_regs)
+    compile_source_with_externs(interner, ast, context_types, std_regs, Ty::String)
 }
 
 fn compile_script(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
+    ret: Ty,
 ) -> CompileResult {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
-    compile_source_with_externs(interner, ast, context_types, std_regs)
+    compile_source_with_externs(interner, ast, context_types, std_regs, ret)
 }
 
 /// Parse a script-mode source and compile it: infer, lower, optimize.
@@ -89,10 +90,11 @@ pub fn compile_script_mode(
     interner: &Interner,
     source: &str,
     context_types: &FxHashMap<Astr, Ty>,
+    ret: Ty,
 ) -> CompileResult {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let std_regs = acvus_ext::std_registries::<AcvusRuntime>();
-    compile_source_with_externs(interner, ast, context_types, std_regs)
+    compile_source_with_externs(interner, ast, context_types, std_regs, ret)
 }
 
 pub fn compile_source_with_externs(
@@ -100,8 +102,16 @@ pub fn compile_source_with_externs(
     ast: ParsedAst,
     context_types: &FxHashMap<Astr, Ty>,
     extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
 ) -> CompileResult {
-    compile_source_with_externs_and_types(interner, ast, context_types, extern_registries, |_| {})
+    compile_source_with_externs_and_types(
+        interner,
+        ast,
+        context_types,
+        extern_registries,
+        ret,
+        |_| {},
+    )
 }
 
 /// Compile with the given registries; `declare_types` registers the caller's
@@ -111,6 +121,7 @@ pub fn compile_source_with_externs_and_types<D>(
     ast: ParsedAst,
     context_types: &FxHashMap<Astr, Ty>,
     extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
     declare_types: D,
 ) -> CompileResult
 where
@@ -125,14 +136,14 @@ where
         })
         .collect();
 
-    let entry_qref = QualifiedRef::root(interner.intern("test"));
+    let entry_qref = QualifiedRef::root(interner.intern("main"));
     let mut functions = Vec::new();
     functions.push(Function {
         qref: entry_qref,
         kind: FnKind::Local(ast),
         ty: TyTerm::Fn {
             params: vec![],
-            ret: Box::new(pb.fresh_ty_var()),
+            ret: Box::new(lift_declaration(&ret, &mut pb)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
@@ -310,17 +321,22 @@ pub async fn run_simple(source: &str) -> String {
 }
 
 /// Compile and execute a **script**, returning the result Value.
-pub async fn run_script(interner: &Interner, source: &str, context: Context) -> Value {
+pub async fn run_script(interner: &Interner, source: &str, context: Context, ret: Ty) -> Value {
     let (context_types, snapshot) = split_context(interner, context);
-    let cr = compile_script(interner, source, &context_types);
+    let cr = compile_script(interner, source, &context_types, ret);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
     interp.execute().await
 }
 
 /// Compile and execute a **script-mode** (keyword syntax: let/for/while/if), returning the result Value.
-pub async fn run_script_mode(interner: &Interner, source: &str, context: Context) -> Value {
+pub async fn run_script_mode(
+    interner: &Interner,
+    source: &str,
+    context: Context,
+    ret: Ty,
+) -> Value {
     let (context_types, snapshot) = split_context(interner, context);
-    let cr = compile_script_mode(interner, source, &context_types);
+    let cr = compile_script_mode(interner, source, &context_types, ret);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
     interp.execute().await
 }
@@ -331,8 +347,10 @@ pub async fn run_script_with_externs(
     source: &str,
     context: Context,
     extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
 ) -> Ran {
-    run_script_with_externs_and_types(interner, source, context, extern_registries, |_| {}).await
+    run_script_with_externs_and_types(interner, source, context, extern_registries, ret, |_| {})
+        .await
 }
 
 /// Run a script with the given registries; `declare_types` registers the
@@ -342,13 +360,22 @@ pub async fn run_script_with_externs_and_types<D>(
     source: &str,
     context: Context,
     extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
     declare_types: D,
 ) -> Ran
 where
     D: FnOnce(&mut acvus_mir::ty::TypeRegistry),
 {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    run_parsed_with_externs(interner, ast, context, extern_registries, declare_types).await
+    run_parsed_with_externs(
+        interner,
+        ast,
+        context,
+        extern_registries,
+        ret,
+        declare_types,
+    )
+    .await
 }
 
 /// Run a script-mode source (keyword syntax) with the given registries.
@@ -357,9 +384,10 @@ pub async fn run_script_mode_with_externs(
     source: &str,
     context: Context,
     extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
 ) -> Ran {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    run_parsed_with_externs(interner, ast, context, extern_registries, |_| {}).await
+    run_parsed_with_externs(interner, ast, context, extern_registries, ret, |_| {}).await
 }
 
 /// Run an already parsed script against `context` with the given registries.
@@ -368,6 +396,7 @@ pub async fn run_parsed_with_externs<D>(
     ast: ParsedAst,
     context: Context,
     extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
     declare_types: D,
 ) -> Ran
 where
@@ -378,6 +407,7 @@ where
         ast,
         context,
         extern_registries,
+        ret,
         declare_types,
         Arc::new(SequentialExecutor),
     )
@@ -390,6 +420,7 @@ pub async fn run_parsed_on<D>(
     ast: ParsedAst,
     context: Context,
     extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
     declare_types: D,
     executor: Arc<dyn acvus_interpreter::Executor>,
 ) -> Ran
@@ -402,6 +433,7 @@ where
         ast,
         &context_types,
         extern_registries,
+        ret,
         declare_types,
     );
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, executor);

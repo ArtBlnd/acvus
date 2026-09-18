@@ -20,9 +20,9 @@ async fn a_question_mark_takes_the_ok_and_returns_the_err() {
     let src = r#"let r = if @ok { Ok(2) } else { Err("bad") };
                  let plus_one = |r| -> Ok(r? + 1);
                  if let Ok(v) = plus_one(r) { v } else { -1 }"#;
-    let v = run_script_mode(&i, src, flags(&i, &[("ok", true)])).await;
+    let v = run_script_mode(&i, src, flags(&i, &[("ok", true)]), Ty::I64).await;
     assert_eq!(v.as_int(), 3);
-    let v = run_script_mode(&i, src, flags(&i, &[("ok", false)])).await;
+    let v = run_script_mode(&i, src, flags(&i, &[("ok", false)]), Ty::I64).await;
     assert_eq!(v.as_int(), -1);
 }
 
@@ -36,11 +36,29 @@ async fn the_error_enum_of_a_function_is_the_union_of_what_it_tried() {
                  if let Ok(v) = r { "sum" }
                  else if let Err(Fail::TooBig(n)) = r { "big" }
                  else { "odd" }"#;
-    let v = run_script_mode(&i, src, flags(&i, &[("a_ok", true), ("b_ok", true)])).await;
+    let v = run_script_mode(
+        &i,
+        src,
+        flags(&i, &[("a_ok", true), ("b_ok", true)]),
+        Ty::String,
+    )
+    .await;
     assert_eq!(text(v), "sum");
-    let v = run_script_mode(&i, src, flags(&i, &[("a_ok", false), ("b_ok", true)])).await;
+    let v = run_script_mode(
+        &i,
+        src,
+        flags(&i, &[("a_ok", false), ("b_ok", true)]),
+        Ty::String,
+    )
+    .await;
     assert_eq!(text(v), "big");
-    let v = run_script_mode(&i, src, flags(&i, &[("a_ok", true), ("b_ok", false)])).await;
+    let v = run_script_mode(
+        &i,
+        src,
+        flags(&i, &[("a_ok", true), ("b_ok", false)]),
+        Ty::String,
+    )
+    .await;
     assert_eq!(text(v), "odd");
 }
 
@@ -48,9 +66,21 @@ async fn the_error_enum_of_a_function_is_the_union_of_what_it_tried() {
 async fn a_question_mark_on_an_option_returns_none() {
     let i = Interner::new();
     let src = r#"let o = if @some { Some(4) } else { None }; let v = o?; Some(v + 1)"#;
-    let v = run_script_mode(&i, src, flags(&i, &[("some", true)])).await;
+    let v = run_script_mode(
+        &i,
+        src,
+        flags(&i, &[("some", true)]),
+        Ty::Option(Box::new(Ty::I64)),
+    )
+    .await;
     assert_eq!(v.as_int(), 5);
-    let v = run_script_mode(&i, src, flags(&i, &[("some", false)])).await;
+    let v = run_script_mode(
+        &i,
+        src,
+        flags(&i, &[("some", false)]),
+        Ty::Option(Box::new(Ty::I64)),
+    )
+    .await;
     assert!(v.is_none(), "{v:?}");
 }
 
@@ -61,6 +91,7 @@ async fn a_result_nothing_fails_into_has_the_never_error() {
         &i,
         "let r = Ok(3); if let Ok(v) = r { v } else { 0 }",
         Context::default(),
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 3);
@@ -70,12 +101,24 @@ async fn a_result_nothing_fails_into_has_the_never_error() {
 async fn a_script_returns_early_through_a_question_mark() {
     let i = Interner::new();
     let src = r#"let r = if @ok { Ok(3) } else { Err("bad") }; let v = r?; Ok(v * 10)"#;
-    let v = run_script_mode(&i, src, flags(&i, &[("ok", true)])).await;
+    let v = run_script_mode(
+        &i,
+        src,
+        flags(&i, &[("ok", true)]),
+        Ty::Result(Box::new(Ty::I64), Box::new(Ty::String)),
+    )
+    .await;
     assert_eq!(
         unsafe { v.as_result() }.as_ref().ok().map(|v| v.as_int()),
         Some(30)
     );
-    let v = run_script_mode(&i, src, flags(&i, &[("ok", false)])).await;
+    let v = run_script_mode(
+        &i,
+        src,
+        flags(&i, &[("ok", false)]),
+        Ty::Result(Box::new(Ty::I64), Box::new(Ty::String)),
+    )
+    .await;
     assert_eq!(
         unsafe { v.as_result() }.as_ref().err().map(|e| text_ref(e)),
         Some("bad".to_owned())

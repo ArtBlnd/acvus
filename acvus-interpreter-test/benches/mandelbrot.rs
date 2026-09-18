@@ -104,7 +104,7 @@ fn measure(rt: &Runtime, grid: &Grid) -> Timing {
     let mut execute = Vec::new();
     let mut script_total = 0i64;
     for rep in 0..grid.reps {
-        let cr = compile_script_mode(&interner, MANDELBROT, &context_types);
+        let cr = compile_script_mode(&interner, MANDELBROT, &context_types, Ty::I64);
         let (_shared, mut interp) = execute_compiled(
             &interner,
             cr,

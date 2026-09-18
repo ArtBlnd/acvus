@@ -13,6 +13,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use acvus_extern::{ExternType, IdentityVar, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::{Context, run_script_mode_with_externs};
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 static RELEASES: AtomicUsize = AtomicUsize::new(0);
@@ -84,7 +85,7 @@ fn regs() -> Vec<Registry<AcvusRuntime>> {
 }
 
 async fn run(i: &Interner, source: &str) -> Value {
-    run_script_mode_with_externs(i, source, Context::default(), regs())
+    run_script_mode_with_externs(i, source, Context::default(), regs(), Ty::I64)
         .await
         .value
 }

@@ -74,6 +74,10 @@ pub fn compile(
         })
         .collect();
     let entry = QualifiedRef::root(interner.intern("main"));
+    // RFC-0054, open item: this host prints whatever the file returns and so
+    // has no type to declare. The explicit "any value the host inspects by
+    // kind" the rule asks for does not exist in `Ty` yet; until the owner
+    // decides its form, `main`'s return stays inferred here.
     let mut functions = vec![Function {
         qref: entry,
         kind: FnKind::Local(parsed),

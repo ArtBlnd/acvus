@@ -4,26 +4,27 @@
 
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
-async fn run(source: &str) -> Value {
+async fn run(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
     let registries = acvus_ext::std_registries::<AcvusRuntime>();
-    run_script_mode_with_externs(&i, source, Context::default(), registries)
+    run_script_mode_with_externs(&i, source, Context::default(), registries, ret)
         .await
         .value
 }
 
 async fn int(source: &str) -> i64 {
-    run(source).await.as_int()
+    run(source, Ty::I64).await.as_int()
 }
 
 async fn float(source: &str) -> f64 {
-    run(source).await.as_float()
+    run(source, Ty::Float).await.as_float()
 }
 
 async fn boolean(source: &str) -> bool {
-    run(source).await.as_bool()
+    run(source, Ty::Bool).await.as_bool()
 }
 
 // -- abs ----------------------------------------------------------------
@@ -74,19 +75,19 @@ async fn clamp_of_a_float() {
 #[tokio::test]
 #[should_panic(expected = "lower bound 5 is above upper bound 0")]
 async fn clamp_of_an_int_with_reversed_bounds_traps() {
-    run("clamp(1, 5, 0)").await;
+    run("clamp(1, 5, 0)", Ty::I64).await;
 }
 
 #[tokio::test]
 #[should_panic(expected = "not ordered")]
 async fn clamp_of_a_float_with_reversed_bounds_traps() {
-    run("clamp(1.0, 5.0, 0.0)").await;
+    run("clamp(1.0, 5.0, 0.0)", Ty::Float).await;
 }
 
 #[tokio::test]
 #[should_panic(expected = "not ordered")]
 async fn clamp_of_a_float_with_a_nan_bound_traps() {
-    run("clamp(1.0, 0.0, 0.0 / 0.0)").await;
+    run("clamp(1.0, 0.0, 0.0 / 0.0)", Ty::Float).await;
 }
 
 // -- pow ----------------------------------------------------------------
@@ -107,7 +108,7 @@ async fn pow_of_a_float() {
 #[tokio::test]
 #[should_panic(expected = "negative exponent -1")]
 async fn pow_of_an_int_with_a_negative_exponent_traps() {
-    run("pow(2, -1)").await;
+    run("pow(2, -1)", Ty::I64).await;
 }
 
 #[tokio::test]
@@ -185,7 +186,7 @@ async fn nan_and_finiteness_predicates() {
 #[tokio::test]
 #[should_panic(expected = "type mismatch")]
 async fn hash_of_a_literal_is_a_type_error_because_a_literal_has_no_place_to_lend() {
-    run("hash(1)").await;
+    run("hash(1)", Ty::I64).await;
 }
 
 #[tokio::test]

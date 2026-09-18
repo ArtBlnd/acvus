@@ -3,7 +3,7 @@
 use acvus_mir::ir::{InstKind, MirBody, MirModule};
 use acvus_mir::ty::{Mutability, Ty, TypeArg};
 use acvus_mir::validate::validate;
-use acvus_mir_test::{compile_script_mode_raw, lowered_script_module};
+use acvus_mir_test::{compile_script_mode_raw, declared_script_module, lowered_script_module};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -81,11 +81,57 @@ fn every_lambda_of_a_script_is_checked() {
     }
 }
 
+/// RFC-0054: the host declared what `main` returns, so a `main` leaving with
+/// something else is refused at `validate` the way a lambda's body is. This
+/// is RFC-0047 T2's sabotage, made permanent.
 #[test]
-fn a_main_is_not_checked_against_a_return_type_the_module_does_not_hold() {
-    let mut module = module("let f = |x| -> [x, x, x]; f(1)");
+fn a_main_is_checked_against_what_the_host_declared() {
+    let i = Interner::new();
+    let mut module =
+        declared_script_module(&i, "let f = |x| -> [x, x, x]; f(1)", &[], array_of_3())
+            .expect("compiles");
     return_a_reference(&mut module.main);
+
+    let refusals = refusals(&module);
+    let [refusal] = refusals.as_slice() else {
+        panic!("expected one refusal, got {refusals:?}");
+    };
+    assert!(refusal.starts_with("Return takes value as"), "{refusal}");
+    assert!(refusal.contains("Array"), "{refusal}");
+    assert!(refusal.contains("Ref("), "{refusal}");
+}
+
+/// The declaration a host states is the type the module carries, not what
+/// the body happened to produce.
+#[test]
+fn the_module_carries_the_declaration_the_host_stated() {
+    let i = Interner::new();
+    let module = declared_script_module(&i, "1 + 2", &[], Ty::I64).expect("compiles");
+    assert_eq!(module.ret, Ty::I64);
+}
+
+/// A body returning other than the declaration never reaches `validate`:
+/// the checker refuses it first, naming the declared type and the one the
+/// body leaves with.
+#[test]
+fn a_body_returning_other_than_the_declaration_is_refused_by_the_checker() {
+    let i = Interner::new();
+    let refusal = declared_script_module(&i, r#""no""#, &[], Ty::I64).expect_err("refused");
+    assert!(refusal.contains("expected i64"), "{refusal}");
+    assert!(refusal.contains("got String"), "{refusal}");
+}
+
+/// RFC-0038: no value of `!` exists, so a diverging body satisfies any
+/// declaration.
+#[test]
+fn a_diverging_body_satisfies_any_declaration() {
+    let i = Interner::new();
+    let module = declared_script_module(&i, r#"panic("no")"#, &[], Ty::I64).expect("compiles");
     assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+}
+
+fn array_of_3() -> Ty {
+    Ty::Array(Box::new(Ty::I64), acvus_mir::ty::LenTerm::Known(3))
 }
 
 #[test]

@@ -843,7 +843,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         script: &acvus_ast::Script,
         expected_tail: Option<&Ty>,
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
-        let return_ty = self.solver.fresh_ty_var();
+        // A declared `ret` is the body's return type itself, so every
+        // `return` joins against it exactly as the tail does; undeclared, it
+        // is the fresh variable the tail resolves.
+        let return_ty = match expected_tail {
+            Some(declared) => lift_ty(declared),
+            None => self.solver.fresh_ty_var(),
+        };
         self.return_ty = Some(return_ty.clone());
         for stmt in &script.stmts {
             self.check_stmt(stmt);
@@ -866,20 +872,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     tail.span(),
                 );
             }
-            if let Some(expected) = expected_tail {
-                let expected_infer = lift_ty(expected);
-                self.convert_at(
-                    &ty,
-                    &expected_infer,
-                    ConversionSite {
-                        id: tail.id(),
-                        span: tail.span(),
-                        report: ConversionReport::Value,
-                    },
-                );
-            }
             ty
         } else {
+            // No tail: the body returns unit, and a declaration says whether
+            // that is what the caller reads.
+            if let Err(Mismatch { expected, got, .. }) =
+                self.solver.unify(&TyTerm::Unit, &return_ty)
+            {
+                self.error(
+                    MirErrorKind::UnificationFailure {
+                        expected: self.type_as_written(&expected),
+                        got: self.type_as_written(&got),
+                    },
+                    script.span,
+                );
+            }
             TyTerm::Unit
         };
         self.solve_body();

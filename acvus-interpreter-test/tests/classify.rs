@@ -32,7 +32,7 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
         @output = @user.name + " (" + @output + ")";
         @output
     "#;
-    let v = run_script(&i, src, c).await;
+    let v = run_script(&i, src, c, Ty::String).await;
     assert!(v.is_string());
     assert_eq!(unsafe { v.as_str() }, "alice (adult)");
 }

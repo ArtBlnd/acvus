@@ -67,7 +67,7 @@ fn mandelbrot_loops() -> Vec<LoopShape> {
     .into_iter()
     .collect();
 
-    let blocks = script_listing(&interner, MANDELBROT, context);
+    let blocks = script_listing(&interner, MANDELBROT, context, Ty::I64);
     regions_named(&blocks, "Loop")
         .into_iter()
         .map(|region| {

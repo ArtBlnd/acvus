@@ -77,6 +77,7 @@ dependencies = [
  "acvus-extern",
  "acvus-interpreter",
  "acvus-interpreter-test",
+ "acvus-mir",
  "acvus-utils",
  "reqwest",
  "rustc-hash",

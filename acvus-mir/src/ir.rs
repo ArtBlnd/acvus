@@ -564,8 +564,11 @@ impl MirBody {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MirModule {
     pub main: MirBody,
     pub closures: FxHashMap<Label, MirBody>,
+    /// The `ret` of the graph `Function` this module is the body of; for the
+    /// entry, what the host declared (RFC-0054).
+    pub ret: Ty,
 }

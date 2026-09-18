@@ -6,6 +6,7 @@ use acvus_extern::Registry;
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::code::{Block, Body, Code, Named, Op, Prepared, Shape, Slot};
 use acvus_interpreter::{PrepareCtx, prepare_module};
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 use crate::{Context, ParsedAst, compile_script_mode, compile_source_with_externs, split_context};
@@ -138,10 +139,11 @@ pub fn prepared_script_with_externs(
     source: &str,
     context: Context,
     registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
 ) -> Arc<Prepared> {
     let (context_types, _snapshot) = split_context(interner, context);
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
-    let cr = compile_source_with_externs(interner, ast, &context_types, registries);
+    let cr = compile_source_with_externs(interner, ast, &context_types, registries, ret);
     let ctx = PrepareCtx {
         interner,
         externs: &cr.extern_executables,
@@ -156,18 +158,24 @@ pub fn script_listing_with_externs(
     source: &str,
     context: Context,
     registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
 ) -> Vec<BlockListing> {
     listing(
         &main_body(&prepared_script_with_externs(
-            interner, source, context, registries,
+            interner, source, context, registries, ret,
         ))
         .blocks,
     )
 }
 
-pub fn prepared_script(interner: &Interner, source: &str, context: Context) -> Arc<Prepared> {
+pub fn prepared_script(
+    interner: &Interner,
+    source: &str,
+    context: Context,
+    ret: Ty,
+) -> Arc<Prepared> {
     let (context_types, _snapshot) = split_context(interner, context);
-    let cr = compile_script_mode(interner, source, &context_types);
+    let cr = compile_script_mode(interner, source, &context_types, ret);
     let ctx = PrepareCtx {
         interner,
         externs: &cr.extern_executables,
@@ -259,6 +267,11 @@ fn collect_part_ops(parts: &[PartListing], found: &mut Vec<String>) {
     }
 }
 
-pub fn script_listing(interner: &Interner, source: &str, context: Context) -> Vec<BlockListing> {
-    listing(&main_body(&prepared_script(interner, source, context)).blocks)
+pub fn script_listing(
+    interner: &Interner,
+    source: &str,
+    context: Context,
+    ret: Ty,
+) -> Vec<BlockListing> {
+    listing(&main_body(&prepared_script(interner, source, context, ret)).blocks)
 }

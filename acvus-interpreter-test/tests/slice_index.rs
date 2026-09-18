@@ -99,6 +99,7 @@ async fn run_with(
     interner: &Interner,
     body: MirBody,
     page: HashMap<String, Owned<AcvusRuntime>>,
+    ret: Ty,
 ) -> Value {
     let combined = Externs::combine(acvus_ext::std_registries::<AcvusRuntime>(), interner)
         .expect("the standard registries combine");
@@ -117,6 +118,7 @@ async fn run_with(
     let module = MirModule {
         main: body,
         closures: FxHashMap::default(),
+        ret,
     };
     let prepared = prepare_module(
         &module,
@@ -138,8 +140,8 @@ async fn run_with(
     interpreter.execute().await
 }
 
-async fn run(interner: &Interner, body: MirBody) -> Value {
-    run_with(interner, body, HashMap::new()).await
+async fn run(interner: &Interner, body: MirBody, ret: Ty) -> Value {
+    run_with(interner, body, HashMap::new(), ret).await
 }
 
 // -- The containers -------------------------------------------------
@@ -292,6 +294,7 @@ async fn an_array_element_is_read_by_copy() {
     let got = run(
         &interner,
         array_body(&interner, IndexMode::Copy, 1, Ty::I64),
+        Ty::I64,
     )
     .await;
     assert_eq!(got.as_int(), 20);
@@ -301,7 +304,12 @@ async fn an_array_element_is_read_by_copy() {
 async fn an_array_element_is_read_through_a_reference() {
     let interner = Interner::new();
     let dst = reference(Mutability::Shared, Ty::I64);
-    let got = run(&interner, array_body(&interner, IndexMode::Ref, 0, dst)).await;
+    let got = run(
+        &interner,
+        array_body(&interner, IndexMode::Ref, 0, dst.clone()),
+        dst,
+    )
+    .await;
     assert_eq!(got.as_int(), 10);
 }
 
@@ -312,6 +320,7 @@ async fn a_vec_element_is_read_by_copy() {
         &interner,
         vec_body(&interner, IndexMode::Copy, 2, Ty::I64),
         page_with(&[7, 8, 9]),
+        Ty::I64,
     )
     .await;
     assert_eq!(got.as_int(), 9);
@@ -323,8 +332,9 @@ async fn a_vec_element_is_read_through_a_reference() {
     let dst = reference(Mutability::Shared, Ty::I64);
     let got = run_with(
         &interner,
-        vec_body(&interner, IndexMode::Ref, 1, dst),
+        vec_body(&interner, IndexMode::Ref, 1, dst.clone()),
         page_with(&[7, 8, 9]),
+        dst,
     )
     .await;
     assert_eq!(got.as_int(), 8);
@@ -337,6 +347,7 @@ async fn an_index_at_the_length_panics_with_rusts_text() {
     run(
         &interner,
         array_body(&interner, IndexMode::Copy, 2, Ty::I64),
+        Ty::I64,
     )
     .await;
 }
@@ -442,7 +453,7 @@ async fn index_set_drops_the_element_it_replaces() {
     );
 
     ELEMENTS_DROPPED.store(0, Ordering::Relaxed);
-    let got = run_with(&interner, index_set_body(&interner), page).await;
+    let got = run_with(&interner, index_set_body(&interner), page, Ty::I64).await;
     assert_eq!(got.as_int(), 0);
     assert_eq!(
         ELEMENTS_DROPPED.load(Ordering::Relaxed),
@@ -516,10 +527,11 @@ fn indexing_body(interner: &Interner, element: Ty, mode: IndexMode, dst_ty: Ty) 
         .mir()
 }
 
-fn refusals(body: MirBody) -> Vec<ValidationErrorKind> {
+fn refusals(body: MirBody, ret: Ty) -> Vec<ValidationErrorKind> {
     let module = MirModule {
         main: body,
         closures: FxHashMap::default(),
+        ret,
     };
     validate(&module).into_iter().map(|e| e.kind).collect()
 }
@@ -544,21 +556,24 @@ fn names(kinds: &[ValidationErrorKind]) -> Vec<String> {
 async fn a_well_typed_index_passes() {
     let interner = Interner::new();
     let body = indexing_body(&interner, Ty::I64, IndexMode::Copy, Ty::I64);
-    assert_eq!(names(&refusals(body)), Vec::<String>::new());
+    assert_eq!(names(&refusals(body, Ty::I64)), Vec::<String>::new());
 }
 
 #[tokio::test]
 async fn a_copy_mode_index_whose_element_moves_is_refused() {
     let interner = Interner::new();
     let body = indexing_body(&interner, Ty::String, IndexMode::Copy, Ty::String);
-    assert_eq!(names(&refusals(body)), ["InvalidConstructor(Index)"]);
+    assert_eq!(
+        names(&refusals(body, Ty::String)),
+        ["InvalidConstructor(Index)"]
+    );
 }
 
 #[tokio::test]
 async fn a_ref_mode_index_whose_dst_is_not_a_reference_is_refused() {
     let interner = Interner::new();
     let body = indexing_body(&interner, Ty::I64, IndexMode::Ref, Ty::I64);
-    assert_eq!(names(&refusals(body)), ["TypeMismatch(Index.dst)"]);
+    assert_eq!(names(&refusals(body, Ty::I64)), ["TypeMismatch(Index.dst)"]);
 }
 
 /// A slice holds its container's loan, so taking the container exclusively
@@ -611,5 +626,5 @@ async fn a_live_slice_refuses_an_exclusive_take_of_its_container() {
             order: None,
         })
         .mir();
-    assert_eq!(names(&refusals(body)), ["BorrowConflict"]);
+    assert_eq!(names(&refusals(body, Ty::I64)), ["BorrowConflict"]);
 }

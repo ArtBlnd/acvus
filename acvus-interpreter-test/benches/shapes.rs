@@ -72,6 +72,8 @@ struct Case {
     registries: fn() -> Vec<Registry<AcvusRuntime>>,
     rust: fn(i64) -> f64,
     read: fn(&Value) -> f64,
+    /// What the host declares `main` returns for this source (RFC-0054).
+    ret: Ty,
 }
 
 fn rust_field_read(n: i64) -> f64 {
@@ -192,7 +194,13 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         let ast = ParsedAst::Script(
             acvus_ast::parse_script(&interner, case.source).expect("parse error"),
         );
-        let cr = compile_source_with_externs(&interner, ast, &context_types, (case.registries)());
+        let cr = compile_source_with_externs(
+            &interner,
+            ast,
+            &context_types,
+            (case.registries)(),
+            case.ret.clone(),
+        );
         let (_shared, mut interp) = execute_compiled(
             &interner,
             cr,
@@ -239,6 +247,7 @@ fn main() {
             registries: std_only,
             rust: rust_field_read,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "field write",
@@ -246,6 +255,7 @@ fn main() {
             registries: std_only,
             rust: rust_field_write,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "construct",
@@ -253,6 +263,7 @@ fn main() {
             registries: std_only,
             rust: rust_construct,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "enum match",
@@ -260,6 +271,7 @@ fn main() {
             registries: std_only,
             rust: rust_enum_match,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "option match",
@@ -267,6 +279,7 @@ fn main() {
             registries: with_some_of,
             rust: rust_option_match,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
         Case {
             name: "vec of objects",
@@ -274,6 +287,7 @@ fn main() {
             registries: std_only,
             rust: rust_vec_of_objects,
             read: |v| v.as_int() as f64,
+            ret: Ty::I64,
         },
     ];
     println!(

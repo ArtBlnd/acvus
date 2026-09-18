@@ -108,11 +108,7 @@ pub fn check_types(module: &MirModule) -> Vec<ValidationError> {
 
     let declared = declared_closure_returns(module);
 
-    // `main` is the body of a graph `Function`, and its declared return type
-    // is that function's `PolyTy::Fn { ret }` in the `CompilationGraph`, which
-    // `validate` does not receive: its `Return` is checked for everything but
-    // the declared type.
-    let mut ctx = CheckCtx::new("main".to_string(), None);
+    let mut ctx = CheckCtx::new("main".to_string(), Some(module.ret.clone()));
     ctx.check_body(&module.main, &mut errors);
 
     for (label, closure) in &module.closures {
@@ -1746,6 +1742,7 @@ mod tests {
                 task: crate::ty::Task::Sync,
             },
             closures: FxHashMap::default(),
+            ret: crate::ty::Ty::Unit,
         }
     }
 

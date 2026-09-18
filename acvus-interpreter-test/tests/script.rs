@@ -32,7 +32,7 @@ fn assert_str(v: &Value, expected: &str) {
 async fn let_simple_bind() {
     let i = Interner::new();
     let c = ctx(&i, vec![("x", int(10))]);
-    let result = run_script(&i, "let y = @x + 1; y", c).await;
+    let result = run_script(&i, "let y = @x + 1; y", c, Ty::I64).await;
     assert_eq!(result.as_int(), 11);
 }
 
@@ -40,7 +40,7 @@ async fn let_simple_bind() {
 async fn let_multiple_binds() {
     let i = Interner::new();
     let c = ctx(&i, vec![("x", int(5))]);
-    let result = run_script(&i, "let a = @x; let b = a + a; b", c).await;
+    let result = run_script(&i, "let a = @x; let b = a + a; b", c, Ty::I64).await;
     assert_eq!(result.as_int(), 10);
 }
 
@@ -48,7 +48,7 @@ async fn let_multiple_binds() {
 async fn let_context_store_then_read() {
     let i = Interner::new();
     let c = ctx(&i, vec![("x", int(0))]);
-    let result = run_script(&i, "@x = 42; @x", c).await;
+    let result = run_script(&i, "@x = 42; @x", c, Ty::I64).await;
     assert_eq!(result.as_int(), 42);
 }
 
@@ -60,7 +60,7 @@ async fn let_context_store_then_read() {
 async fn if_let_irrefutable() {
     let i = Interner::new();
     let c = ctx(&i, vec![("data", int(5)), ("out", int(0))]);
-    let result = run_script(&i, "if let x = @data { @out = x * 2; }; @out", c).await;
+    let result = run_script(&i, "if let x = @data { @out = x * 2; }; @out", c, Ty::I64).await;
     assert_eq!(result.as_int(), 10);
 }
 
@@ -68,7 +68,7 @@ async fn if_let_irrefutable() {
 async fn if_let_refutable_match() {
     let i = Interner::new();
     let c = ctx(&i, vec![("val", int(42)), ("out", int(0))]);
-    let result = run_script(&i, "if let 42 = @val { @out = 1; }; @out", c).await;
+    let result = run_script(&i, "if let 42 = @val { @out = 1; }; @out", c, Ty::I64).await;
     assert_eq!(result.as_int(), 1);
 }
 
@@ -76,7 +76,7 @@ async fn if_let_refutable_match() {
 async fn if_let_refutable_no_match() {
     let i = Interner::new();
     let c = ctx(&i, vec![("val", int(99)), ("out", int(0))]);
-    let result = run_script(&i, "if let 42 = @val { @out = 1; }; @out", c).await;
+    let result = run_script(&i, "if let 42 = @val { @out = 1; }; @out", c, Ty::I64).await;
     assert_eq!(result.as_int(), 0);
 }
 
@@ -109,6 +109,7 @@ async fn iter_sum() {
         &i,
         "let it = as_iter(&@items); while let Some(x) = next(&mut it) { @sum = @sum + *x; } @sum",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 6);
@@ -122,6 +123,7 @@ async fn iter_count() {
         &i,
         "let it = as_iter(&@items); while let Some(x) = next(&mut it) { @count = @count + 1; } @count",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 3);
@@ -142,6 +144,7 @@ async fn iter_nested() {
         &i,
         "let rows = as_iter(&@matrix); while let Some(row) = next(&mut rows) { let xs = as_iter(row); while let Some(x) = next(&mut xs) { @sum = @sum + *x; } } @sum",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 10);
@@ -155,6 +158,7 @@ async fn iter_empty_list() {
         &i,
         "let it = as_iter(&@items); while let Some(x) = next(&mut it) { @sum = @sum + *x; } @sum",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 99);
@@ -175,6 +179,7 @@ async fn iter_sequential_loops() {
         &i,
         "let ia = as_iter(&@a); while let Some(x) = next(&mut ia) { @sum = @sum + *x; } let ib = as_iter(&@b); while let Some(y) = next(&mut ib) { @sum = @sum + *y; } @sum",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 33);
@@ -188,6 +193,7 @@ async fn iter_loop_with_conditional() {
         &i,
         "let it = as_iter(&@items); while let Some(x) = next(&mut it) { if *x == 0 { @count = @count + 1; }; } @count",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 2);
@@ -208,6 +214,7 @@ async fn iter_accumulate_product() {
         &i,
         "let it = as_iter(&@items); while let Some(x) = next(&mut it) { @sum = @sum + *x; @product = @product * *x; } @sum + @product",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 33);
@@ -229,6 +236,7 @@ async fn iter_field_then_loop() {
         &i,
         "let it = as_iter(&@data.items); while let Some(x) = next(&mut it) { @sum = @sum + *x; } @sum",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 30);
@@ -248,6 +256,7 @@ async fn iter_with_to_string() {
         &i,
         "let it = as_iter(&@items); while let Some(x) = next(&mut it) { @out = @out + to_string(x); } @out",
         c,
+        Ty::String,
     )
     .await;
     assert_str(&result, "123");
@@ -264,6 +273,7 @@ async fn closure_reads_context_at_call() {
         &i,
         "@x = 5; let f = |v| -> *v + @x; @x = 9; as_iter(&@items) | map(f) | fold(0, |a, b| -> a + b)",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 21);
@@ -279,6 +289,7 @@ async fn a_factor_the_nested_loops_never_assign_still_reaches_the_inner_body() {
          while t < d { let i = 0; while i < d { total = total + k; i = i + 1; } t = t + 1; } \
          total",
         c,
+        Ty::I64,
     )
     .await;
     assert_eq!(result.as_int(), 54);

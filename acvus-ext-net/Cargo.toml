@@ -10,6 +10,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 [dev-dependencies]
 acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-interpreter-test = { path = "../acvus-interpreter-test" }
+acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }

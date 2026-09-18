@@ -442,20 +442,50 @@ pub fn compile_script_mode_ir_with(
 }
 
 /// Lower a script-mode source with the standard registries, before any
-/// optimization: the module as the checker decided it.
+/// optimization: the module as the checker decided it. The entry's return
+/// type is inferred from the body.
 pub fn lowered_script_module(
     interner: &Interner,
     source: &str,
     extern_fns: &[Function],
 ) -> Result<MirModule, String> {
+    let mut pb = PolyBuilder::new();
+    lower_script_returning(interner, source, extern_fns, pb.fresh_ty_var())
+}
+
+/// `lowered_script_module` for a host that declares what the entry returns
+/// (RFC-0054): the checker holds the body to `ret`, and the module carries
+/// `ret` to `validate`.
+pub fn declared_script_module(
+    interner: &Interner,
+    source: &str,
+    extern_fns: &[Function],
+    ret: Ty,
+) -> Result<MirModule, String> {
+    let mut pb = PolyBuilder::new();
+    let declared = lift_declaration(&ret, &mut pb);
+    lower_script_returning(interner, source, extern_fns, declared)
+}
+
+fn lower_script_returning(
+    interner: &Interner,
+    source: &str,
+    extern_fns: &[Function],
+    ret: acvus_mir::ty::PolyTy,
+) -> Result<MirModule, String> {
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let ast =
         acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
-    let mut functions = vec![inferred_function(
-        test_qref,
-        FnKind::Local(ParsedAst::Script(ast)),
-        vec![],
-    )];
+    let mut functions = vec![Function {
+        qref: test_qref,
+        kind: FnKind::Local(ParsedAst::Script(ast)),
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        },
+    }];
     let type_registry = extend_with_std(interner, &mut functions);
     functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {

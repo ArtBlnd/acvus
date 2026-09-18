@@ -253,6 +253,7 @@ mod tests {
         MirModule {
             main,
             closures: FxHashMap::default(),
+            ret: crate::ty::Ty::Unit,
         }
     }
 

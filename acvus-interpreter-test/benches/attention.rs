@@ -146,7 +146,7 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
     let mut compile_samples = Vec::new();
     for rep in 0..reps {
         let start = Instant::now();
-        let cr = compile_script_mode(&interner, &source, &context_types);
+        let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
         let elapsed = start.elapsed();
         drop(black_box(cr));
         if rep > 0 {
@@ -156,7 +156,7 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
 
     let mut setup_samples = Vec::new();
     for rep in 0..reps {
-        let cr = compile_script_mode(&interner, &source, &context_types);
+        let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
         let snapshot = snapshot_of(&interner, &json);
         let start = Instant::now();
         let built = execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
@@ -170,7 +170,7 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
     let mut execute_samples = Vec::new();
     let mut script_value = f64::NAN;
     for rep in 0..reps {
-        let cr = compile_script_mode(&interner, &source, &context_types);
+        let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
         let snapshot = snapshot_of(&interner, &json);
         let (_shared, mut interp) =
             execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
@@ -227,14 +227,14 @@ fn execute_only(rt: &Runtime, case: &Case) -> Duration {
     let source = format!("{ATTENTION} *out.get(0)");
     let context_types: FxHashMap<Astr, Ty> =
         split_context(&interner, context_of(&interner, &json)).0;
-    let cr = compile_script_mode(&interner, &source, &context_types);
+    let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
 
     let mut samples = Vec::new();
     for rep in 0..reps {
         let snapshot = snapshot_of(&interner, &json);
         let (_shared, mut interp) = execute_compiled(
             &interner,
-            compile_script_mode(&interner, &source, &context_types),
+            compile_script_mode(&interner, &source, &context_types, Ty::Float),
             snapshot,
             Arc::new(SequentialExecutor),
         );

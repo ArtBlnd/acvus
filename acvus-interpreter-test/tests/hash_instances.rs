@@ -6,6 +6,7 @@
 use acvus_extern::{Monomorphize, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 trait Float: Copy + Send + Sync + 'static {
@@ -51,11 +52,11 @@ fn registry() -> Registry<AcvusRuntime> {
     }
 }
 
-async fn run(source: &str) -> Value {
+async fn run(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
     let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
     registries.push(registry());
-    run_script_mode_with_externs(&i, source, Context::default(), registries)
+    run_script_mode_with_externs(&i, source, Context::default(), registries, ret)
         .await
         .value
 }
@@ -64,12 +65,16 @@ async fn run(source: &str) -> Value {
 /// `Vec<Float>`; `norm` exists only at `#f64` and takes `&Vec<#f64>`.
 #[tokio::test]
 async fn a_uniform_vec_lent_to_a_specialized_parameter_is_converted_in_place() {
-    let v = run("let x = vec([3.0, 4.0]); norm(&x)").await;
+    let v = run("let x = vec([3.0, 4.0]); norm(&x)", Ty::Float).await;
     assert_eq!(v.as_float(), 5.0);
 }
 
 #[tokio::test]
 async fn a_callee_s_writes_through_a_mutable_lend_survive_the_cast_back() {
-    let v = run("let x = vec([3.0, 4.0]); scale(&mut x, 2.0); norm(&x)").await;
+    let v = run(
+        "let x = vec([3.0, 4.0]); scale(&mut x, 2.0); norm(&x)",
+        Ty::Float,
+    )
+    .await;
     assert_eq!(v.as_float(), 10.0);
 }

@@ -10,6 +10,7 @@ use acvus_interpreter_test::listing::{
     ops_of, regions_named, script_listing_with_externs, terminators_depth_first,
 };
 use acvus_interpreter_test::*;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 #[extern_fn]
@@ -30,8 +31,13 @@ const ASYNC_CALL_WHILE: &str =
 #[tokio::test]
 async fn a_sync_call_is_an_operation_inside_the_loop() {
     let interner = Interner::new();
-    let blocks =
-        script_listing_with_externs(&interner, SYNC_CALL_WHILE, Context::default(), registries());
+    let blocks = script_listing_with_externs(
+        &interner,
+        SYNC_CALL_WHILE,
+        Context::default(),
+        registries(),
+        Ty::I64,
+    );
     let loops = regions_named(&blocks, "Loop");
     assert_eq!(loops.len(), 1, "the `while` is one `Loop` region");
     let body = loops[0].part("body").expect("a `Loop` owns its body");
@@ -57,6 +63,7 @@ async fn a_call_above_sync_is_a_terminator_and_no_loop_is_recognized() {
         ASYNC_CALL_WHILE,
         Context::default(),
         registries(),
+        Ty::I64,
     );
     assert_eq!(
         regions_named(&blocks, "Loop").len(),
@@ -86,14 +93,20 @@ async fn a_call_above_sync_is_a_terminator_and_no_loop_is_recognized() {
 #[tokio::test]
 async fn both_forms_run_to_the_same_value() {
     let interner = Interner::new();
-    let sync =
-        run_script_mode_with_externs(&interner, SYNC_CALL_WHILE, Context::default(), registries())
-            .await;
+    let sync = run_script_mode_with_externs(
+        &interner,
+        SYNC_CALL_WHILE,
+        Context::default(),
+        registries(),
+        Ty::I64,
+    )
+    .await;
     let asynchronous = run_script_mode_with_externs(
         &interner,
         ASYNC_CALL_WHILE,
         Context::default(),
         registries(),
+        Ty::I64,
     )
     .await;
     assert_eq!(sync.value.as_int(), 3);

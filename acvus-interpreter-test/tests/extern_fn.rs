@@ -65,7 +65,7 @@ async fn extern_pure_add() {
     };
 
     let c = ctx(&i, vec![]);
-    let result = run_script_with_externs(&i, "ext_add(10, 32)", c, vec![registry]).await;
+    let result = run_script_with_externs(&i, "ext_add(10, 32)", c, vec![registry], Ty::I64).await;
     assert_eq!(result.value.as_int(), 42);
 }
 
@@ -83,7 +83,7 @@ async fn extern_pure_string_transform() {
     };
 
     let c = ctx(&i, vec![("msg", string("hello"))]);
-    let result = run_script_with_externs(&i, "shout(@msg)", c, vec![registry]).await;
+    let result = run_script_with_externs(&i, "shout(@msg)", c, vec![registry], Ty::String).await;
     assert_str(&result.value, "HELLO");
 }
 
@@ -107,7 +107,8 @@ async fn extern_captures_environment() {
     };
 
     let c = ctx(&i, vec![]);
-    let result = run_script_with_externs(&i, "multiply_secret(6)", c, vec![registry]).await;
+    let result =
+        run_script_with_externs(&i, "multiply_secret(6)", c, vec![registry], Ty::I64).await;
     assert_eq!(result.value.as_int(), 42);
 }
 
@@ -126,6 +127,7 @@ async fn regex_match_via_extern() {
         r#"if let Ok(re) = regex("[0-9]+") { regex_match(re, @text) } else { false }"#,
         c,
         vec![registry],
+        Ty::Bool,
     )
     .await;
     assert!(result.value.as_bool());
@@ -142,6 +144,7 @@ async fn regex_find_via_extern() {
         r#"if let Ok(re) = regex("[0-9]+") { regex_find(re, @text) } else { None }"#,
         c,
         vec![registry],
+        Ty::Option(Box::new(Ty::String)),
     )
     .await;
     // SAFETY: `regex_find` returns `Option<String>`, whose `Some` is the
@@ -178,6 +181,7 @@ fn ir_pure_function_call_no_context_bindings() {
         ),
         &context_types,
         vec![registry],
+        Ty::I64,
     );
 
     let module = cr.modules.get(&cr.entry_qref).unwrap();
@@ -265,11 +269,11 @@ fn io_registry() -> Registry<AcvusRuntime> {
 }
 
 /// Compile a script with io_registry, return (CompileResult, entry MirModule ref).
-fn compile_io_script(source: &str) -> (Interner, CompileResult) {
+fn compile_io_script(source: &str, ret: Ty) -> (Interner, CompileResult) {
     let i = Interner::new();
     let ast =
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
-    let cr = compile_io_parsed(&i, ast, Context::default());
+    let cr = compile_io_parsed(&i, ast, Context::default(), ret);
     (i, cr)
 }
 
@@ -277,12 +281,13 @@ fn compile_io_script(source: &str) -> (Interner, CompileResult) {
 fn compile_io_script_mode(
     source: &str,
     context: Vec<(&str, TypedValue)>,
+    ret: Ty,
 ) -> (Interner, CompileResult) {
     let i = Interner::new();
     let ast =
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
     let context = ctx(&i, context);
-    let cr = compile_io_parsed(&i, ast, context);
+    let cr = compile_io_parsed(&i, ast, context, ret);
     (i, cr)
 }
 
@@ -290,6 +295,7 @@ fn compile_io_parsed(
     i: &Interner,
     ast: acvus_mir::graph::ParsedAst,
     context: Context,
+    ret: Ty,
 ) -> CompileResult {
     let context_types: FxHashMap<acvus_utils::Astr, Ty> = context
         .into_iter()
@@ -297,25 +303,26 @@ fn compile_io_parsed(
         .collect();
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
-    compile_source_with_externs(i, ast, &context_types, regs)
+    compile_source_with_externs(i, ast, &context_types, regs, ret)
 }
 
-async fn run_io_script_mode(source: &str, context: Vec<(&str, TypedValue)>) -> Value {
+async fn run_io_script_mode(source: &str, context: Vec<(&str, TypedValue)>, ret: Ty) -> Value {
     let i = Interner::new();
-    run_io_script_mode_on(&i, source, context).await
+    run_io_script_mode_on(&i, source, context, ret).await
 }
 
 async fn run_io_script_mode_on(
     i: &Interner,
     source: &str,
     context: Vec<(&str, TypedValue)>,
+    ret: Ty,
 ) -> Value {
     let i = i.clone();
     let ast =
         acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(io_registry());
-    run_parsed_with_externs(&i, ast, ctx(&i, context), regs, |_| {})
+    run_parsed_with_externs(&i, ast, ctx(&i, context), regs, ret, |_| {})
         .await
         .value
 }
@@ -374,6 +381,7 @@ async fn io_two_independent() {
         "fetch_a() + fetch_b()",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     )
     .await;
     assert_eq!(result.value.as_int(), 300);
@@ -381,7 +389,7 @@ async fn io_two_independent() {
 
 #[test]
 fn io_two_independent_mir() {
-    let (i, cr) = compile_io_script("fetch_a() + fetch_b()");
+    let (i, cr) = compile_io_script("fetch_a() + fetch_b()", Ty::I64);
     let (spawns, evals) = dump_and_positions("two_independent", &i, &cr);
     assert_eq!(spawns.len(), 2, "expected 2 spawns");
     assert_source_order(&spawns, &evals);
@@ -398,6 +406,7 @@ async fn io_four_way_parallel() {
         "fetch_a() + fetch_b() + fetch_c() + fetch_d()",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     )
     .await;
     assert_eq!(result.value.as_int(), 1000);
@@ -405,7 +414,7 @@ async fn io_four_way_parallel() {
 
 #[test]
 fn io_four_way_parallel_mir() {
-    let (i, cr) = compile_io_script("fetch_a() + fetch_b() + fetch_c() + fetch_d()");
+    let (i, cr) = compile_io_script("fetch_a() + fetch_b() + fetch_c() + fetch_d()", Ty::I64);
     let (spawns, evals) = dump_and_positions("four_way_parallel", &i, &cr);
     assert_eq!(spawns.len(), 4, "expected 4 spawns");
     assert_source_order(&spawns, &evals);
@@ -429,6 +438,7 @@ async fn io_chain_with_independent() {
         "let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); b + c",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     )
     .await;
     assert_eq!(result.value.as_int(), 1300);
@@ -436,8 +446,10 @@ async fn io_chain_with_independent() {
 
 #[test]
 fn io_chain_with_independent_mir() {
-    let (i, cr) =
-        compile_io_script("let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); b + c");
+    let (i, cr) = compile_io_script(
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); b + c",
+        Ty::I64,
+    );
     let (spawns, evals) = dump_and_positions("chain_with_independent", &i, &cr);
 
     assert_eq!(spawns.len(), 3, "expected 3 spawns");
@@ -462,6 +474,7 @@ async fn io_diamond_dependency() {
         "let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(a); b + c",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     )
     .await;
     assert_eq!(result.value.as_int(), 2000);
@@ -469,8 +482,10 @@ async fn io_diamond_dependency() {
 
 #[test]
 fn io_diamond_dependency_mir() {
-    let (i, cr) =
-        compile_io_script("let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(a); b + c");
+    let (i, cr) = compile_io_script(
+        "let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(a); b + c",
+        Ty::I64,
+    );
     let (spawns, evals) = dump_and_positions("diamond_dependency", &i, &cr);
 
     assert_eq!(spawns.len(), 3, "expected 3 spawns (fetch_a + 2x fetch_by)");
@@ -493,6 +508,7 @@ async fn io_deep_chain() {
         "let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(b); let d = fetch_by(c); d",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     )
     .await;
     assert_eq!(result.value.as_int(), 100000);
@@ -502,6 +518,7 @@ async fn io_deep_chain() {
 fn io_deep_chain_mir() {
     let (i, cr) = compile_io_script(
         "let a = fetch_a(); let b = fetch_by(a); let c = fetch_by(b); let d = fetch_by(c); d",
+        Ty::I64,
     );
     let (spawns, evals) = dump_and_positions("deep_chain", &i, &cr);
 
@@ -526,6 +543,7 @@ async fn io_two_independent_chains() {
         "let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); let d = fetch_by(c); b + d",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     )
     .await;
     assert_eq!(result.value.as_int(), 4000);
@@ -535,6 +553,7 @@ async fn io_two_independent_chains() {
 fn io_two_independent_chains_mir() {
     let (i, cr) = compile_io_script(
         "let a = fetch_a(); let b = fetch_by(a); let c = fetch_c(); let d = fetch_by(c); b + d",
+        Ty::I64,
     );
     let (spawns, evals) = dump_and_positions("two_independent_chains", &i, &cr);
 
@@ -550,13 +569,18 @@ fn io_two_independent_chains_mir() {
 
 #[tokio::test]
 async fn a_context_lent_mutably_comes_back_changed() {
-    let v = run_io_script_mode("bump(&mut @n, 5); @n", vec![("n", int(10))]).await;
+    let v = run_io_script_mode("bump(&mut @n, 5); @n", vec![("n", int(10))], Ty::I64).await;
     assert_eq!(v.as_int(), 15);
 }
 
 #[tokio::test]
 async fn a_local_lent_mutably_comes_back_changed() {
-    let v = run_io_script_mode("let x = 1; bump(&mut x, 2); bump(&mut x, 3); x", vec![]).await;
+    let v = run_io_script_mode(
+        "let x = 1; bump(&mut x, 2); bump(&mut x, 3); x",
+        vec![],
+        Ty::I64,
+    )
+    .await;
     assert_eq!(v.as_int(), 6);
 }
 
@@ -571,13 +595,18 @@ async fn a_field_of_a_context_is_a_place() {
             Owned::from_value(Value::int(1)),
         )])),
     );
-    let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", vec![("a", a)]).await;
+    let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", vec![("a", a)], Ty::I64).await;
     assert_eq!(v.as_int(), 2);
 }
 
 #[tokio::test]
 async fn the_return_value_of_a_lending_call_is_free() {
-    let v = run_io_script_mode("let x = 40; let y = bump(&mut x, 2); x + y", vec![]).await;
+    let v = run_io_script_mode(
+        "let x = 40; let y = bump(&mut x, 2); x + y",
+        vec![],
+        Ty::I64,
+    )
+    .await;
     assert_eq!(v.as_int(), 84);
 }
 
@@ -596,6 +625,7 @@ async fn commutative_draws_add_up() {
         "draw_a() + draw_b()",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     )
     .await;
     assert_eq!(result.value.as_int(), 12);
@@ -603,7 +633,7 @@ async fn commutative_draws_add_up() {
 
 #[test]
 fn commutative_run_is_issued_together_mir() {
-    let (i, cr) = compile_io_script("draw_a() + draw_b()");
+    let (i, cr) = compile_io_script("draw_a() + draw_b()", Ty::I64);
     let (spawns, evals) = dump_and_positions("commutative_run", &i, &cr);
     assert_eq!(spawns.len(), 2, "expected 2 spawns");
     assert!(
@@ -615,7 +645,7 @@ fn commutative_run_is_issued_together_mir() {
 
 #[test]
 fn a_call_that_does_not_commute_keeps_source_order_mir() {
-    let (i, cr) = compile_io_script("draw_a() + fetch_a() + draw_b()");
+    let (i, cr) = compile_io_script("draw_a() + fetch_a() + draw_b()", Ty::I64);
     let (spawns, evals) = dump_and_positions("broken_run", &i, &cr);
     assert_eq!(spawns.len(), 3, "expected 3 spawns");
     assert_source_order(&spawns, &evals);
@@ -632,6 +662,7 @@ fn a_commutative_call_after_a_branch_is_issued_with_the_one_before_mir() {
             ("c", bool_(true)),
             ("x", int(0)),
         ],
+        Ty::I64,
     );
     let (spawns, evals) = dump_and_positions("run_across_branch", &i, &cr);
     assert_eq!(spawns.len(), 2, "expected 2 spawns");
@@ -661,6 +692,7 @@ async fn anyorder_block_computes_the_same_value() {
     let v = run_io_script_mode(
         "anyorder { @a = fetch_a(); @b = fetch_b(); } @a + @b",
         vec![("a", int(0)), ("b", int(0))],
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 300);
@@ -671,6 +703,7 @@ fn anyorder_block_issues_its_calls_together_mir() {
     let (i, cr) = compile_io_script_mode(
         "anyorder { @a = fetch_a(); @b = fetch_b(); } @a + @b",
         vec![("a", int(0)), ("b", int(0))],
+        Ty::I64,
     );
     let (spawns, evals) = dump_and_positions("anyorder", &i, &cr);
     assert_eq!(spawns.len(), 2, "expected 2 spawns");
@@ -686,6 +719,7 @@ fn source_order_resumes_after_an_anyorder_block_mir() {
     let (i, cr) = compile_io_script_mode(
         "anyorder { @a = fetch_a(); @b = fetch_b(); } @c = fetch_c(); @a + @b + @c",
         vec![("a", int(0)), ("b", int(0)), ("c", int(0))],
+        Ty::I64,
     );
     let (spawns, evals) = dump_and_positions("anyorder_then", &i, &cr);
     assert_eq!(spawns.len(), 3, "expected 3 spawns");
@@ -700,6 +734,7 @@ async fn a_loop_inside_anyorder_accumulates() {
     let v = run_io_script_mode(
         "anyorder { while @n > 0 { @s = @s + fetch_a(); @n = @n - 1; } } @s",
         vec![("n", int(3)), ("s", int(0))],
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 300);
@@ -710,6 +745,7 @@ fn a_loop_inside_anyorder_merges_per_iteration_mir() {
     let (i, cr) = compile_io_script_mode(
         "anyorder { while @n > 0 { @s = @s + fetch_a(); @n = @n - 1; } } @s",
         vec![("n", int(3)), ("s", int(0))],
+        Ty::I64,
     );
     let (spawns, _) = dump_and_positions("anyorder_loop", &i, &cr);
     assert_eq!(spawns.len(), 1, "one call in the loop body");
@@ -794,6 +830,7 @@ async fn run_on_tokio(
     script_mode: bool,
     context: Vec<(&str, TypedValue)>,
     registry: Registry<AcvusRuntime>,
+    ret: Ty,
 ) -> Value {
     let i = Interner::new();
     let script = if script_mode {
@@ -807,6 +844,7 @@ async fn run_on_tokio(
         ast,
         ctx(&i, context),
         vec![registry],
+        ret,
         |_| {},
         Arc::new(TokioExecutor),
     )
@@ -822,6 +860,7 @@ async fn calls_on_the_chain_do_not_overlap() {
         true,
         vec![("a", int(0)), ("b", int(0))],
         opaque_probes(&probe),
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 200);
@@ -840,6 +879,7 @@ async fn an_anyorder_block_overlaps_its_calls() {
         true,
         vec![("a", int(0)), ("b", int(0))],
         opaque_probes(&probe),
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 200);
@@ -859,6 +899,7 @@ async fn commutative_calls_overlap_across_a_branch() {
             ("x", int(0)),
         ],
         commutative_probes(&probe),
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 200);
@@ -877,6 +918,7 @@ async fn commutative_calls_overlap_without_a_block() {
         false,
         vec![],
         commutative_probes(&probe),
+        Ty::I64,
     )
     .await;
     assert_eq!(v.as_int(), 200);
@@ -900,6 +942,7 @@ async fn io_in_iteration() {
         "as_iter(&@items) | map(|x| -> fetch_by(*x)) | fold(@sum, |a, b| -> a + b)",
         c,
         regs,
+        Ty::I64,
         |_| {},
     )
     .await;
@@ -930,6 +973,7 @@ async fn io_compiler_pipeline() {
         "let imports = fetch_a(); let types = fetch_b(); let refs = fetch_by(imports); let checked = refs + types; let extra = fetch_c(); checked + extra",
         ctx(&i, vec![]),
         vec![io_registry()],
+        Ty::I64,
     ).await;
     assert_eq!(result.value.as_int(), 1500);
 }
@@ -938,6 +982,7 @@ async fn io_compiler_pipeline() {
 fn io_compiler_pipeline_mir() {
     let (i, cr) = compile_io_script(
         "let imports = fetch_a(); let types = fetch_b(); let refs = fetch_by(imports); let checked = refs + types; let extra = fetch_c(); checked + extra",
+        Ty::I64,
     );
     let (spawns, evals) = dump_and_positions("compiler_pipeline", &i, &cr);
 
@@ -986,6 +1031,7 @@ async fn io_extern_consumes_move_only_opaque() {
         "let t = mk_tok(); consume_tok(t)",
         ctx(&i, vec![]),
         vec![registry],
+        Ty::I64,
         |_| {},
     )
     .await;
@@ -1003,6 +1049,7 @@ async fn io_inside_iterator_pipeline() {
         "as_iter(&@items) | map(|x| -> fetch_by(*x)) | collect",
         c,
         regs,
+        acvus_extern::vec_ty(&i, Ty::I64),
         |_| {},
     )
     .await;
