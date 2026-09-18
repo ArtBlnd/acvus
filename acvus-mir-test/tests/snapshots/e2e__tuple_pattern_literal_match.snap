@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 417
 expression: ir
 ---
 === literals ===
@@ -15,63 +16,87 @@ expression: ir
      4 |   r4 = tuple (r2, r3)
      5 |   assign $source = r4
      6 | L2:
-     8 |   r5 = take $source[0]
-     9 |   r6 = test r5 == 0
-    10 |   r7 = true (r8) && r6
-    11 |   r9 = take $source[1]
-    12 |   r10 = test r9 == 1
-    13 |   r11 = r7 && r10
-    14 |   jump_if r11 then L4 else L3
-    15 | L4:
-    17 |   r12 = string_concat [T0]
-    18 |   jump L0(r12)
-    19 | L3:
-    21 |   r13 = take $source[0]
-    22 |   r14 = test r13 == 1
-    23 |   r15 = true (r16) && r14
-    24 |   jump_if r15 then L5 else L1
-    25 | L5:
-    27 |   r17 = string_concat [T1]
-    28 |   jump L0(r17)
-    29 | L1:
-    31 |   r18 = string_concat [T2]
-    32 |   jump L0(r18)
-    33 | L0(r19: String):  ; merge_of L2
-    34 |   r20 = string_concat [r19]
-    35 |   commit @a = r2
-    36 |   commit @b = r3
-    37 |   return r20
+     8 |   jump_if true (r5) then L4 else L5
+     9 | L4:
+    10 |   r6 = take $source[0]
+    11 |   r7 = test r6 == 0
+    12 |   jump L6(r7)
+    13 | L5:
+    15 |   jump L6(false (r8))
+    16 | L6(r9: Bool):
+    17 |   jump_if r9 then L7 else L8
+    18 | L7:
+    19 |   r10 = take $source[1]
+    20 |   r11 = test r10 == 1
+    21 |   jump L9(r11)
+    22 | L8:
+    24 |   jump L9(false (r12))
+    25 | L9(r13: Bool):
+    26 |   jump_if r13 then L10 else L3
+    27 | L10:
+    29 |   r14 = string_concat [T0]
+    30 |   jump L0(r14)
+    31 | L3:
+    33 |   jump_if true (r15) then L11 else L12
+    34 | L11:
+    35 |   r16 = take $source[0]
+    36 |   r17 = test r16 == 1
+    37 |   jump L13(r17)
+    38 | L12:
+    40 |   jump L13(false (r18))
+    41 | L13(r19: Bool):
+    42 |   jump_if r19 then L14 else L1
+    43 | L14:
+    45 |   r20 = string_concat [T1]
+    46 |   jump L0(r20)
+    47 | L1:
+    49 |   r21 = string_concat [T2]
+    50 |   jump L0(r21)
+    51 | L0(r22: String):  ; merge_of L2
+    52 |   r23 = string_concat [r22]
+    53 |   commit @a = r2
+    54 |   commit @b = r3
+    55 |   return r23
 
-    ; r0 (v30) : i64
-    ; r1 (v31) : i64
+    ; r0 (v33) : i64
+    ; r1 (v34) : i64
     ; r2 (@a) : i64
     ; r3 (@b) : i64
     ; r4 (v7) : (i64, i64)
-    ; r5 (v10) : i64
-    ; r6 (v11) : Bool
+    ; r5 (v9) : Bool
+    ; r6 (v11) : i64
     ; r7 (v12) : Bool
-    ; r8 (v9) : Bool
-    ; r9 (v13) : i64
-    ; r10 (v14) : Bool
-    ; r11 (v15) : Bool
-    ; r12 (v17) : String
-    ; r13 (v19) : i64
-    ; r14 (v20) : Bool
-    ; r15 (v21) : Bool
-    ; r16 (v18) : Bool
-    ; r17 (v23) : String
-    ; r18 (v25) : String
-    ; r19 (v26) : String
-    ; r20 (v27) : String
-    ; r21 (@b) : i64
-    ; r22 (v22) : String
-    ; r23 (@b) : i64
-    ; r24 (v28) : i64
-    ; r25 (v33) : i64
-    ; r26 (@a) : i64
-    ; r27 (v24) : String
-    ; r28 (@a) : i64
-    ; r29 ($source) : (i64, i64)
-    ; r30 (v29) : i64
-    ; r31 (v32) : i64
-    ; r32 (v16) : String
+    ; r8 (v13) : Bool
+    ; r9 (v10) : Bool
+    ; r10 (v15) : i64
+    ; r11 (v16) : Bool
+    ; r12 (v17) : Bool
+    ; r13 (v14) : Bool
+    ; r14 (v19) : String
+    ; r15 (v20) : Bool
+    ; r16 (v22) : i64
+    ; r17 (v23) : Bool
+    ; r18 (v24) : Bool
+    ; r19 (v21) : Bool
+    ; r20 (v26) : String
+    ; r21 (v28) : String
+    ; r22 (v29) : String
+    ; r23 (v30) : String
+    ; r24 (@b) : i64
+    ; r25 (v25) : String
+    ; r26 (@b) : i64
+    ; r27 (v31) : i64
+    ; r28 (v27) : String
+    ; r29 (@a) : i64
+    ; r30 ($source) : (i64, i64)
+    ; r31 (v36) : i64
+    ; r32 (v37) : i64
+    ; r33 (v18) : String
+    ; r34 (v40) : i64
+    ; r35 (v39) : i64
+    ; r36 (v42) : i64
+    ; r37 (@a) : i64
+    ; r38 (v32) : i64
+    ; r39 (v35) : i64
+    ; r40 (v38) : i64
+    ; r41 (v41) : i64

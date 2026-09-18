@@ -279,7 +279,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `_` | wildcard (inside tuple patterns) |
 | `+` `-` `*` `/` `%` | arithmetic operators |
 | `!` | logical negation |
-| `&&` `\|\|` | logical AND / OR |
+| `&&` `\|\|` | logical AND / OR — short-circuiting: the right operand is evaluated only where the left does not decide (RFC-0020) |
 | `==` `!=` `<` `>` `<=` `>=` | comparison operators |
 | `=` | assignment (a statement), pattern match (a tag / a template) |
 | `in` | iteration |

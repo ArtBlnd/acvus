@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 281
 expression: ir
 ---
 === literals ===
@@ -11,42 +12,58 @@ expression: ir
      2 |   r2 = fetch @user
      3 |   assign @user = r2
      4 | L2:
-     7 |   r3 = true (r4) && true (r5)
-     9 |   r6 = r3 && true (r7)
-    10 |   jump_if r6 then L3 else L1
-    11 | L3:
-    12 |   r8 = take @user.name
-    13 |   r9 = take @user.age
-    14 |   r10 = string_clone r8
-    15 |   r11 = string_concat [r10]
-    16 |   jump L0(r11, r8, r9)
-    17 | L1:
-    19 |   jump L0(T0, r0, r1)
-    20 | L0(r12: String, r13: String, r14: i64):  ; merge_of L2
-    21 |   r15 = string_concat [r12]
-    22 |   r16 = take @user
-    23 |   commit @user = r16
-    24 |   return r15
+     6 |   jump_if true (r3) then L3 else L4
+     7 | L3:
+     9 |   jump L5(true (r4))
+    10 | L4:
+    12 |   jump L5(false (r5))
+    13 | L5(r6: Bool):
+    14 |   jump_if r6 then L6 else L7
+    15 | L6:
+    17 |   jump L8(true (r7))
+    18 | L7:
+    20 |   jump L8(false (r8))
+    21 | L8(r9: Bool):
+    22 |   jump_if r9 then L9 else L1
+    23 | L9:
+    24 |   r10 = take @user.name
+    25 |   r11 = take @user.age
+    26 |   r12 = string_clone r10
+    27 |   r13 = string_concat [r12]
+    28 |   jump L0(r13, r10, r11)
+    29 | L1:
+    31 |   jump L0(T0, r0, r1)
+    32 | L0(r14: String, r15: String, r16: i64):  ; merge_of L2
+    33 |   r17 = string_concat [r14]
+    34 |   r18 = take @user
+    35 |   commit @user = r18
+    36 |   return r17
 
-    ; r0 (v18) : String
-    ; r1 (v19) : i64
+    ; r0 (v20) : String
+    ; r1 (v21) : i64
     ; r2 (@user) : {age: i64, email: String, name: String}
-    ; r3 (v5) : Bool
-    ; r4 (v3) : Bool
-    ; r5 (v4) : Bool
-    ; r6 (v7) : Bool
-    ; r7 (v6) : Bool
-    ; r8 (name) : String
-    ; r9 (age) : i64
-    ; r10 (v22) : String
-    ; r11 (v13) : String
-    ; r12 (v15) : String
-    ; r13 (v20) : String
-    ; r14 (v21) : i64
-    ; r15 (v16) : String
-    ; r16 (v17) : {age: i64, email: String, name: String}
-    ; r17 (age) : i64
-    ; r18 (v14) : String
-    ; r19 (name) : String
-    ; r20 (@user) : {age: i64, email: String, name: String}
+    ; r3 (v3) : Bool
+    ; r4 (v5) : Bool
+    ; r5 (v6) : Bool
+    ; r6 (v4) : Bool
+    ; r7 (v8) : Bool
+    ; r8 (v9) : Bool
+    ; r9 (v7) : Bool
+    ; r10 (name) : String
+    ; r11 (age) : i64
+    ; r12 (v28) : String
+    ; r13 (v15) : String
+    ; r14 (v17) : String
+    ; r15 (v26) : String
+    ; r16 (v27) : i64
+    ; r17 (v18) : String
+    ; r18 (v19) : {age: i64, email: String, name: String}
+    ; r19 (v22) : String
+    ; r20 (name) : String
     ; r21 (name) : String
+    ; r22 (v25) : i64
+    ; r23 (age) : i64
+    ; r24 (@user) : {age: i64, email: String, name: String}
+    ; r25 (v23) : i64
+    ; r26 (v24) : String
+    ; r27 (v16) : String

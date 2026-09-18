@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 856
 expression: ir
 ---
 === literals ===
@@ -11,37 +12,44 @@ expression: ir
      1 |   r1 = fetch @user
      2 |   assign @user = r1
      3 | L2:
-     6 |   r2 = true (r3) && true (r4)
-     7 |   jump_if r2 then L3 else L1
-     8 | L3:
-     9 |   r5 = take @user.name
-    11 |   r6 = string_clone r5
-    12 |   r7 = string_concat [r6, T0]
-    13 |   jump L0(r7, r5)
-    14 | L1:
-    16 |   r8 = string_concat [T1]
-    17 |   jump L0(r8, r0)
-    18 | L0(r9: String, r10: String):  ; merge_of L2
-    19 |   r11 = string_concat [r9]
-    20 |   r12 = take @user
-    21 |   commit @user = r12
-    22 |   return r11
+     5 |   jump_if true (r2) then L3 else L4
+     6 | L3:
+     8 |   jump L5(true (r3))
+     9 | L4:
+    11 |   jump L5(false (r4))
+    12 | L5(r5: Bool):
+    13 |   jump_if r5 then L6 else L1
+    14 | L6:
+    15 |   r6 = take @user.name
+    17 |   r7 = string_clone r6
+    18 |   r8 = string_concat [r7, T0]
+    19 |   jump L0(r8, r6)
+    20 | L1:
+    22 |   r9 = string_concat [T1]
+    23 |   jump L0(r9, r0)
+    24 | L0(r10: String, r11: String):  ; merge_of L2
+    25 |   r12 = string_concat [r10]
+    26 |   r13 = take @user
+    27 |   commit @user = r13
+    28 |   return r12
 
-    ; r0 (v16) : String
+    ; r0 (v17) : String
     ; r1 (@user) : {age: i64, email: String, name: String}
-    ; r2 (v5) : Bool
-    ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (name) : String
-    ; r6 (v18) : String
-    ; r7 (v10) : String
-    ; r8 (v12) : String
+    ; r2 (v3) : Bool
+    ; r3 (v5) : Bool
+    ; r4 (v6) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (name) : String
+    ; r7 (v20) : String
+    ; r8 (v11) : String
     ; r9 (v13) : String
-    ; r10 (v17) : String
-    ; r11 (v14) : String
-    ; r12 (v15) : {age: i64, email: String, name: String}
-    ; r13 (v11) : String
-    ; r14 (v9) : String
+    ; r10 (v14) : String
+    ; r11 (v19) : String
+    ; r12 (v15) : String
+    ; r13 (v16) : {age: i64, email: String, name: String}
+    ; r14 (name) : String
     ; r15 (@user) : {age: i64, email: String, name: String}
-    ; r16 (name) : String
-    ; r17 (name) : String
+    ; r16 (v12) : String
+    ; r17 (v18) : String
+    ; r18 (v10) : String
+    ; r19 (name) : String

@@ -1,16 +1,23 @@
 ---
 source: acvus-mir-test/tests/inline.rs
+assertion_line: 554
 expression: ir
 ---
 === main ===
      2 |   r0 = take $v1
-     3 |   r1 = take $v2
-     4 |   r2 = r0 && r1
-     5 |   return r2
+     3 |   jump_if r0 then L0 else L1
+     4 | L0:
+     5 |   r1 = take $v2
+     6 |   jump L2(r1)
+     7 | L1:
+     9 |   jump L2(false (r2))
+    10 | L2(r3: Bool):
+    11 |   return r3
 
     ; r0 ($a) : Bool
     ; r1 ($b) : Bool
-    ; r2 (v8) : Bool
-    ; r3 (both(...)) : Bool
-    ; r4 (v1) : Bool
-    ; r5 (v2) : Bool
+    ; r2 (v9) : Bool
+    ; r3 (v7) : Bool
+    ; r4 (both(...)) : Bool
+    ; r5 (v1) : Bool
+    ; r6 (v2) : Bool

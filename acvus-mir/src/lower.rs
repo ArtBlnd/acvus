@@ -131,6 +131,48 @@ struct Local {
     slot: ValueId,
 }
 
+/// A connective whose left operand can decide the result alone (RFC-0020).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShortCircuit {
+    And,
+    Or,
+}
+
+impl ShortCircuit {
+    /// The result the left operand decides alone, which is also the value
+    /// of the left operand that decides it.
+    fn decided(self) -> bool {
+        match self {
+            ShortCircuit::And => false,
+            ShortCircuit::Or => true,
+        }
+    }
+}
+
+/// The connective an operator is, for the two operators that short-circuit.
+fn short_circuit_of(op: BinOp) -> Option<ShortCircuit> {
+    match op {
+        BinOp::And => Some(ShortCircuit::And),
+        BinOp::Or => Some(ShortCircuit::Or),
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Eq
+        | BinOp::Neq
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte
+        | BinOp::Xor
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::Shl
+        | BinOp::Shr => None,
+    }
+}
+
 /// A pattern that matches every value of its type: a binding, a context
 /// bind, a tuple of such, or an object of such. The type checker has
 /// already required every key an object pattern names to exist on the
@@ -1395,16 +1437,80 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    fn emit_and(&mut self, span: Span, left: ValueId, right: ValueId) -> ValueId {
+    /// `left && right`, with `right` lowered only on the path that reaches
+    /// it (RFC-0020).
+    fn emit_and<Right>(&mut self, span: Span, left: ValueId, right: Right) -> ValueId
+    where
+        Right: FnOnce(&mut Self) -> ValueId,
+    {
         let dst = self.alloc_val();
+        self.lower_short_circuit(span, dst, left, ShortCircuit::And, right)
+    }
+
+    /// RFC-0020: `a && b` is `if a { b } else { false }` and `a || b` is
+    /// `if a { true } else { b }`. `right` is lowered inside the block the
+    /// other path enters, so the right operand's effects happen only where
+    /// it is evaluated.
+    fn lower_short_circuit<Right>(
+        &mut self,
+        span: Span,
+        dst: ValueId,
+        left: ValueId,
+        connective: ShortCircuit,
+        right: Right,
+    ) -> ValueId
+    where
+        Right: FnOnce(&mut Self) -> ValueId,
+    {
+        let right_label = self.alloc_label();
+        let decided_label = self.alloc_label();
+        let merge_label = self.alloc_label();
+
+        let jump_if = match connective {
+            ShortCircuit::And => InstKind::JumpIf {
+                cond: left,
+                then_label: right_label,
+                then_args: vec![],
+                else_label: decided_label,
+                else_args: vec![],
+            },
+            ShortCircuit::Or => InstKind::JumpIf {
+                cond: left,
+                then_label: decided_label,
+                then_args: vec![],
+                else_label: right_label,
+                else_args: vec![],
+            },
+        };
+        self.emit_inst(span, jump_if);
+
+        self.emit_label(span, right_label);
+        let right_val = right(self);
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: merge_label,
+                args: vec![right_val],
+            },
+        );
+
+        self.emit_label(span, decided_label);
+        let decided_val = self.emit_const_bool(span, connective.decided());
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: merge_label,
+                args: vec![decided_val],
+            },
+        );
+
         self.set_val_type(dst, Ty::Bool);
         self.emit_inst(
             span,
-            InstKind::BinOp {
-                dst,
-                op: acvus_ast::BinOp::And,
-                left,
-                right,
+            InstKind::BlockLabel {
+                label: merge_label,
+                params: vec![dst],
+                merge_of: None,
             },
         );
         dst
@@ -1686,6 +1792,15 @@ impl<'a> Lowerer<'a> {
                 right,
                 span,
             } => {
+                if let Some(connective) = short_circuit_of(*op) {
+                    let l = self.lower_expr(left);
+                    let l = self.read_word_through(*span, l);
+                    let dst = self.alloc_expr(*id);
+                    return self.lower_short_circuit(*span, dst, l, connective, |s| {
+                        let r = s.lower_expr(right);
+                        s.read_word_through(*span, r)
+                    });
+                }
                 let left_ty = self.type_of_id(left.id());
                 let on_string = matches!(&left_ty, Ty::String)
                     || matches!(&left_ty, Ty::Ref(_, inner) if matches!(inner.ty, Ty::String));
@@ -2799,8 +2914,9 @@ impl<'a> Lowerer<'a> {
             Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
                 let mut all_ok = self.emit_const_bool(span, true);
                 for part in self.pattern_parts_through(pattern, reference, inner, span) {
-                    let ok = self.lower_pattern_test_value(&part.pattern, part.reference, span);
-                    all_ok = self.emit_and(span, all_ok, ok);
+                    all_ok = self.emit_and(span, all_ok, |s| {
+                        s.lower_pattern_test_value(&part.pattern, part.reference, span)
+                    });
                 }
                 all_ok
             }
@@ -3044,14 +3160,15 @@ impl<'a> Lowerer<'a> {
             Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
                 let mut all_ok = self.emit_const_bool(span, true);
                 for part in self.pattern_parts_place(pattern, path, ty) {
-                    let ok = self.lower_pattern_test_place(
-                        &part.pattern,
-                        target,
-                        &part.path,
-                        &part.ty,
-                        span,
-                    );
-                    all_ok = self.emit_and(span, all_ok, ok);
+                    all_ok = self.emit_and(span, all_ok, |s| {
+                        s.lower_pattern_test_place(
+                            &part.pattern,
+                            target,
+                            &part.path,
+                            &part.ty,
+                            span,
+                        )
+                    });
                 }
                 all_ok
             }
@@ -3203,15 +3320,17 @@ impl<'a> Lowerer<'a> {
                 let elem_ty = self.array_elem_type(src_reg);
                 let mut all_ok = self.emit_const_bool(span, true);
                 for (i, p) in head.iter().enumerate() {
-                    let elem = self.emit_array_index(span, src_reg, i, elem_ty.clone());
-                    let value_id = self.lower_pattern_test_value(p, elem, span);
-                    all_ok = self.emit_and(span, all_ok, value_id);
+                    all_ok = self.emit_and(span, all_ok, |s| {
+                        let elem = s.emit_array_index(span, src_reg, i, elem_ty.clone());
+                        s.lower_pattern_test_value(p, elem, span)
+                    });
                 }
                 for (i, p) in tail.iter().enumerate() {
-                    let elem =
-                        self.emit_array_index(span, src_reg, len - tail.len() + i, elem_ty.clone());
-                    let value_id = self.lower_pattern_test_value(p, elem, span);
-                    all_ok = self.emit_and(span, all_ok, value_id);
+                    all_ok = self.emit_and(span, all_ok, |s| {
+                        let index = len - tail.len() + i;
+                        let elem = s.emit_array_index(span, src_reg, index, elem_ty.clone());
+                        s.lower_pattern_test_value(p, elem, span)
+                    });
                 }
                 all_ok
             }
@@ -3221,30 +3340,31 @@ impl<'a> Lowerer<'a> {
                 let mut all_ok = self.emit_const_bool(span, true);
 
                 for ObjectPatternField { key, pattern, .. } in fields {
-                    let key_ok = self.alloc_val();
-                    self.set_val_type(key_ok, Ty::Bool);
-                    self.emit_inst(
-                        span,
-                        InstKind::TestObjectKey {
-                            dst: key_ok,
-                            src: src_reg,
-                            key: *key,
-                        },
-                    );
+                    all_ok = self.emit_and(span, all_ok, |s| {
+                        let key_ok = s.alloc_val();
+                        s.set_val_type(key_ok, Ty::Bool);
+                        s.emit_inst(
+                            span,
+                            InstKind::TestObjectKey {
+                                dst: key_ok,
+                                src: src_reg,
+                                key: *key,
+                            },
+                        );
 
-                    let field_val = self.alloc_val();
-                    self.set_val_type(field_val, self.object_field_type(src_reg, *key));
-                    self.emit_inst(
-                        span,
-                        InstKind::ObjectGet {
-                            dst: field_val,
-                            object: src_reg,
-                            key: *key,
-                        },
-                    );
+                        let field_val = s.alloc_val();
+                        s.set_val_type(field_val, s.object_field_type(src_reg, *key));
+                        s.emit_inst(
+                            span,
+                            InstKind::ObjectGet {
+                                dst: field_val,
+                                object: src_reg,
+                                key: *key,
+                            },
+                        );
 
-                    let sub_ok = self.lower_pattern_test_value(pattern, field_val, span);
-                    all_ok = self.emit_and(span, all_ok, sub_ok);
+                        s.lower_pattern_test_value(pattern, field_val, span)
+                    });
                 }
 
                 all_ok
@@ -3259,18 +3379,19 @@ impl<'a> Lowerer<'a> {
                     let TuplePatternElem::Pattern(pat) = elem else {
                         continue;
                     };
-                    let field_val = self.alloc_val();
-                    self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
-                    self.emit_inst(
-                        span,
-                        InstKind::TupleIndex {
-                            dst: field_val,
-                            tuple: src_reg,
-                            index: i,
-                        },
-                    );
-                    let value_id = self.lower_pattern_test_value(pat, field_val, span);
-                    all_ok = self.emit_and(span, all_ok, value_id);
+                    all_ok = self.emit_and(span, all_ok, |s| {
+                        let field_val = s.alloc_val();
+                        s.set_val_type(field_val, s.tuple_elem_type(src_reg, i));
+                        s.emit_inst(
+                            span,
+                            InstKind::TupleIndex {
+                                dst: field_val,
+                                tuple: src_reg,
+                                index: i,
+                            },
+                        );
+                        s.lower_pattern_test_value(pat, field_val, span)
+                    });
                 }
 
                 all_ok

@@ -33,6 +33,12 @@ The meaning on words:
   not an error.
 - `/`, `%` on an integer panic at zero and at `MIN / -1`, with Rust's
   texts.
+- `&&` and `||` are not instructions. `a && b` is `if a { b } else
+  { false }` and `a || b` is `if a { true } else { b }`: the left operand
+  decides alone where it can, and the right operand — its reads, its
+  calls, its effects — happens only on the path that evaluates it. The
+  checker's rule is unchanged, both operands are `Bool` at the
+  expression, and the operand bound of the two is empty as `==`'s is.
 
 The meaning on `String`: `==` is byte equality (`StringEq`), `+` is
 concatenation (`StringConcat`), and a template's output is one
@@ -120,8 +126,13 @@ operator's rule rather than a coercion keeps calls exact.
   call, a `Ref` of each operand (a temporary first assigned to a register
   the expression owns) and the instruction or call; `!=` adds
   `UnaryOp::Not`. A template body lowers to one `StringConcat`.
+- `&&` and `||` lower to the diamond `if`/`else` lowers to, the value
+  being the join block's parameter, so `BinOp::And` and `BinOp::Or` reach
+  no IR instruction and the interpreter has no arm for them. The same
+  diamond carries the conjunction a refutable pattern's parts make, so a
+  part is tested only while the parts before it have matched.
 - `core::eq` and `core::clone` are declared in `acvus_extern::core` with
   no instances; `Externs::combine` always includes that registry.
 - The interpreter's `Int` arithmetic is checked (`IntegerOverflow`), its
   `Float` comparisons are bit equality and `total_cmp`, and `BinOp` has
-  no `String` arm.
+  no `String` arm and no `And`/`Or` arm.

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 673
 expression: ir
 ---
 === literals ===
@@ -10,45 +11,59 @@ expression: ir
      1 |   r1 = fetch @items
      2 |   assign @items = r1
      3 | L2:
-     6 |   r2 = true (r3) && true (r4)
-     8 |   r5 = r2 && true (r6)
-     9 |   jump_if r5 then L3 else L1
-    10 | L3:
-    11 |   r7 = take @items[1]
-    12 |   assign a = r7
-    13 |   r8 = take @items[2]
-    14 |   assign b = r8
-    15 |   r9 = ref &a
-    16 |   r10 = call #0(r9)
-    17 |   r11 = string_concat [r10]
-    18 |   jump L0(r11, r8)
-    19 | L1:
-    21 |   r12 = string_concat [T0]
-    22 |   jump L0(r12, r0)
-    23 | L0(r13: String, r14: i64):  ; merge_of L2
-    24 |   r15 = string_concat [r13]
-    25 |   r16 = take @items
-    26 |   commit @items = r16
-    27 |   return r15
+     5 |   jump_if true (r2) then L3 else L4
+     6 | L3:
+     8 |   jump L5(true (r3))
+     9 | L4:
+    11 |   jump L5(false (r4))
+    12 | L5(r5: Bool):
+    13 |   jump_if r5 then L6 else L7
+    14 | L6:
+    16 |   jump L8(true (r6))
+    17 | L7:
+    19 |   jump L8(false (r7))
+    20 | L8(r8: Bool):
+    21 |   jump_if r8 then L9 else L1
+    22 | L9:
+    23 |   r9 = take @items[1]
+    24 |   assign a = r9
+    25 |   r10 = take @items[2]
+    26 |   assign b = r10
+    27 |   r11 = ref &a
+    28 |   r12 = call #0(r11)
+    29 |   r13 = string_concat [r12]
+    30 |   jump L0(r13, r10)
+    31 | L1:
+    33 |   r14 = string_concat [T0]
+    34 |   jump L0(r14, r0)
+    35 | L0(r15: String, r16: i64):  ; merge_of L2
+    36 |   r17 = string_concat [r15]
+    37 |   r18 = take @items
+    38 |   commit @items = r18
+    39 |   return r17
 
-    ; r0 (v20) : i64
+    ; r0 (v22) : i64
     ; r1 (@items) : Array<i64, 3>
-    ; r2 (v5) : Bool
-    ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (v7) : Bool
-    ; r6 (v6) : Bool
-    ; r7 (a) : i64
-    ; r8 (b) : i64
-    ; r9 (a.) : &i64
-    ; r10 (to_string(...)) : String
-    ; r11 (v14) : String
-    ; r12 (v16) : String
-    ; r13 (v17) : String
-    ; r14 (v21) : i64
-    ; r15 (v18) : String
-    ; r16 (v19) : Array<i64, 3>
-    ; r17 (b) : i64
-    ; r18 (a) : i64
-    ; r19 (@items) : Array<i64, 3>
-    ; r20 (v15) : String
+    ; r2 (v3) : Bool
+    ; r3 (v5) : Bool
+    ; r4 (v6) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (v8) : Bool
+    ; r7 (v9) : Bool
+    ; r8 (v7) : Bool
+    ; r9 (a) : i64
+    ; r10 (b) : i64
+    ; r11 (a.) : &i64
+    ; r12 (to_string(...)) : String
+    ; r13 (v16) : String
+    ; r14 (v18) : String
+    ; r15 (v19) : String
+    ; r16 (v25) : i64
+    ; r17 (v20) : String
+    ; r18 (v21) : Array<i64, 3>
+    ; r19 (a) : i64
+    ; r20 (v17) : String
+    ; r21 (b) : i64
+    ; r22 (@items) : Array<i64, 3>
+    ; r23 (v23) : i64
+    ; r24 (v24) : i64

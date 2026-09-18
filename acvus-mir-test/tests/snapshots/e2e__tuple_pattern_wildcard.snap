@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 404
 expression: ir
 ---
 === literals ===
@@ -10,34 +11,41 @@ expression: ir
      1 |   r1 = fetch @pair
      2 |   assign @pair = r1
      3 | L2:
-     6 |   r2 = true (r3) && true (r4)
-     7 |   jump_if r2 then L3 else L1
-     8 | L3:
-     9 |   r5 = take @pair[0]
-    10 |   r6 = string_clone r5
-    11 |   r7 = string_concat [r6]
-    12 |   jump L0(r7, r5)
-    13 | L1:
-    15 |   jump L0(T0, r0)
-    16 | L0(r8: String, r9: String):  ; merge_of L2
-    17 |   r10 = string_concat [r8]
-    18 |   r11 = take @pair
-    19 |   commit @pair = r11
-    20 |   return r10
+     5 |   jump_if true (r2) then L3 else L4
+     6 | L3:
+     8 |   jump L5(true (r3))
+     9 | L4:
+    11 |   jump L5(false (r4))
+    12 | L5(r5: Bool):
+    13 |   jump_if r5 then L6 else L1
+    14 | L6:
+    15 |   r6 = take @pair[0]
+    16 |   r7 = string_clone r6
+    17 |   r8 = string_concat [r7]
+    18 |   jump L0(r8, r6)
+    19 | L1:
+    21 |   jump L0(T0, r0)
+    22 | L0(r9: String, r10: String):  ; merge_of L2
+    23 |   r11 = string_concat [r9]
+    24 |   r12 = take @pair
+    25 |   commit @pair = r12
+    26 |   return r11
 
-    ; r0 (v14) : String
+    ; r0 (v15) : String
     ; r1 (@pair) : (String, i64)
-    ; r2 (v5) : Bool
-    ; r3 (v3) : Bool
-    ; r4 (v4) : Bool
-    ; r5 (name) : String
-    ; r6 (v16) : String
-    ; r7 (v9) : String
-    ; r8 (v11) : String
-    ; r9 (v15) : String
-    ; r10 (v12) : String
-    ; r11 (v13) : (String, i64)
-    ; r12 (@pair) : (String, i64)
-    ; r13 (name) : String
-    ; r14 (v10) : String
-    ; r15 (name) : String
+    ; r2 (v3) : Bool
+    ; r3 (v5) : Bool
+    ; r4 (v6) : Bool
+    ; r5 (v4) : Bool
+    ; r6 (name) : String
+    ; r7 (v18) : String
+    ; r8 (v10) : String
+    ; r9 (v12) : String
+    ; r10 (v17) : String
+    ; r11 (v13) : String
+    ; r12 (v14) : (String, i64)
+    ; r13 (v11) : String
+    ; r14 (name) : String
+    ; r15 (@pair) : (String, i64)
+    ; r16 (v16) : String
+    ; r17 (name) : String

@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 436
 expression: ir
 ---
 === literals ===
@@ -14,50 +15,74 @@ expression: ir
      5 | L2:
      7 |   r4 = ref &(*r3)[0]
      8 |   r5 = ref &(*r3)[1]
-    10 |   r6 = true (r7) && true (r8)
-    12 |   r9 = ref &(*r5).x
-    14 |   r10 = true (r11) && true (r12)
-    15 |   r13 = r6 && r10
-    16 |   jump_if r13 then L3 else L1
-    17 | L3:
-    18 |   r14 = ref &(*r3)[0]
-    19 |   r15 = ref &(*r3)[1]
-    20 |   r16 = ref &(*r15).x
-    21 |   r17 = string_concat [r14]
-    22 |   jump L0(r17, r14, r16)
-    23 | L1:
-    25 |   jump L0(T0, r0, r1)
-    26 | L0(r18: String, r19: &String, r20: &i64):  ; merge_of L2
-    27 |   r21 = string_concat [r18]
-    28 |   r22 = take @data
-    29 |   commit @data = r22
-    30 |   return r21
+     9 |   jump_if true (r6) then L3 else L4
+    10 | L3:
+    12 |   jump L5(true (r7))
+    13 | L4:
+    15 |   jump L5(false (r8))
+    16 | L5(r9: Bool):
+    17 |   jump_if r9 then L6 else L7
+    18 | L6:
+    20 |   r10 = ref &(*r5).x
+    21 |   jump_if true (r11) then L9 else L10
+    22 | L9:
+    24 |   jump L11(true (r12))
+    25 | L10:
+    27 |   jump L11(false (r13))
+    28 | L11(r14: Bool):
+    29 |   jump L8(r14)
+    30 | L7:
+    32 |   jump L8(false (r15))
+    33 | L8(r16: Bool):
+    34 |   jump_if r16 then L12 else L1
+    35 | L12:
+    36 |   r17 = ref &(*r3)[0]
+    37 |   r18 = ref &(*r3)[1]
+    38 |   r19 = ref &(*r18).x
+    39 |   r20 = string_concat [r17]
+    40 |   jump L0(r20, r17, r19)
+    41 | L1:
+    43 |   jump L0(T0, r0, r1)
+    44 | L0(r21: String, r22: &String, r23: &i64):  ; merge_of L2
+    45 |   r24 = string_concat [r21]
+    46 |   r25 = take @data
+    47 |   commit @data = r25
+    48 |   return r24
 
-    ; r0 (v25) : &String
-    ; r1 (v26) : &i64
+    ; r0 (v28) : &String
+    ; r1 (v29) : &i64
     ; r2 (@data) : (String, {x: i64})
     ; r3 (@data.) : &(String, {x: i64})
     ; r4 ((*r3).[0]) : &String
     ; r5 ((*r3).[1]) : &{x: i64}
-    ; r6 (v8) : Bool
-    ; r7 (v4) : Bool
-    ; r8 (v7) : Bool
-    ; r9 ((*r6).x) : &i64
-    ; r10 (v12) : Bool
-    ; r11 (v9) : Bool
-    ; r12 (v11) : Bool
-    ; r13 (v13) : Bool
-    ; r14 (label) : &String
-    ; r15 ((*r3).[1]) : &{x: i64}
-    ; r16 (x) : &i64
-    ; r17 (v20) : String
-    ; r18 (v22) : String
-    ; r19 (v27) : &String
-    ; r20 (v28) : &i64
-    ; r21 (v23) : String
-    ; r22 (v24) : (String, {x: i64})
-    ; r23 (x) : &i64
-    ; r24 (v21) : String
-    ; r25 (@data) : (String, {x: i64})
+    ; r6 (v4) : Bool
+    ; r7 (v8) : Bool
+    ; r8 (v9) : Bool
+    ; r9 (v7) : Bool
+    ; r10 ((*r6).x) : &i64
+    ; r11 (v11) : Bool
+    ; r12 (v14) : Bool
+    ; r13 (v15) : Bool
+    ; r14 (v13) : Bool
+    ; r15 (v16) : Bool
+    ; r16 (v10) : Bool
+    ; r17 (label) : &String
+    ; r18 ((*r3).[1]) : &{x: i64}
+    ; r19 (x) : &i64
+    ; r20 (v23) : String
+    ; r21 (v25) : String
+    ; r22 (v36) : &String
+    ; r23 (v37) : &i64
+    ; r24 (v26) : String
+    ; r25 (v27) : (String, {x: i64})
     ; r26 (label) : &String
-    ; r27 (label) : &String
+    ; r27 (v31) : &i64
+    ; r28 (v30) : &String
+    ; r29 (v33) : &i64
+    ; r30 (v34) : &String
+    ; r31 (x) : &i64
+    ; r32 (v24) : String
+    ; r33 (@data) : (String, {x: i64})
+    ; r34 (v32) : &String
+    ; r35 (v35) : &i64
+    ; r36 (label) : &String

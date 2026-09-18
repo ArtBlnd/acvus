@@ -323,8 +323,6 @@ macro_rules! bool_ops {
 }
 
 bool_ops! {
-    and_bool(a, b) { Value::bool_(a && b) }
-    or_bool(a, b) { Value::bool_(a || b) }
     eq_bool(a, b) { Value::bool_(a == b) }
     neq_bool(a, b) { Value::bool_(a != b) }
     xor_bool(a, b) { Value::bool_(a ^ b) }
@@ -363,7 +361,7 @@ where
         BinOp::Xor => bit_xor::<T>,
         BinOp::Shl => shl::<T>,
         BinOp::Shr => shr::<T>,
-        BinOp::And | BinOp::Or => panic!("And/Or on an integer"),
+        other => panic!("unsupported int binop {other:?}"),
     }
 }
 
@@ -393,8 +391,6 @@ pub fn float_binop(op: BinOp) -> OpFn {
 /// The operation a binary operator at `Bool` prepares to.
 pub fn bool_binop(op: BinOp) -> OpFn {
     match op {
-        BinOp::And => and_bool,
-        BinOp::Or => or_bool,
         BinOp::Eq => eq_bool,
         BinOp::Neq => neq_bool,
         BinOp::Xor => xor_bool,

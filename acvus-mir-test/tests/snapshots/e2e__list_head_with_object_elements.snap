@@ -1,6 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 557
+assertion_line: 561
 expression: ir
 ---
 === literals ===
@@ -13,38 +13,45 @@ expression: ir
      3 |   r2 = ref &@users
      4 | L2:
      6 |   r3 = ref &(*r2)[0]
-     8 |   r4 = true (r5) && true (r6)
-     9 |   jump_if r4 then L3 else L1
-    10 | L3:
-    11 |   r7 = ref &(*r2)[0]
-    12 |   r8 = take (*r7).name
-    13 |   r9 = string_concat [r8]
-    14 |   jump L0(r9, r7)
-    15 | L1:
-    17 |   r10 = string_concat [T0]
-    18 |   jump L0(r10, r0)
-    19 | L0(r11: String, r12: &{name: String}):  ; merge_of L2
-    20 |   r13 = string_concat [r11]
-    21 |   r14 = take @users
-    22 |   commit @users = r14
-    23 |   return r13
+     7 |   jump_if true (r4) then L3 else L4
+     8 | L3:
+    10 |   jump L5(true (r5))
+    11 | L4:
+    13 |   jump L5(false (r6))
+    14 | L5(r7: Bool):
+    15 |   jump_if r7 then L6 else L1
+    16 | L6:
+    17 |   r8 = ref &(*r2)[0]
+    18 |   r9 = take (*r8).name
+    19 |   r10 = string_concat [r9]
+    20 |   jump L0(r10, r8)
+    21 | L1:
+    23 |   r11 = string_concat [T0]
+    24 |   jump L0(r11, r0)
+    25 | L0(r12: String, r13: &{name: String}):  ; merge_of L2
+    26 |   r14 = string_concat [r12]
+    27 |   r15 = take @users
+    28 |   commit @users = r15
+    29 |   return r14
 
-    ; r0 (v18) : &{name: String}
+    ; r0 (v19) : &{name: String}
     ; r1 (@users) : Array<{name: String}, 3>
     ; r2 (@users.) : &Array<{name: String}, 3>
     ; r3 ((*r3).[0]) : &{name: String}
-    ; r4 (v7) : Bool
-    ; r5 (v4) : Bool
-    ; r6 (v6) : Bool
-    ; r7 (first) : &{name: String}
-    ; r8 ((*r10).name) : String
-    ; r9 (v12) : String
-    ; r10 (v14) : String
+    ; r4 (v4) : Bool
+    ; r5 (v7) : Bool
+    ; r6 (v8) : Bool
+    ; r7 (v6) : Bool
+    ; r8 (first) : &{name: String}
+    ; r9 ((*r11).name) : String
+    ; r10 (v13) : String
     ; r11 (v15) : String
-    ; r12 (v19) : &{name: String}
-    ; r13 (v16) : String
-    ; r14 (v17) : Array<{name: String}, 3>
-    ; r15 (first) : &{name: String}
-    ; r16 (@users) : Array<{name: String}, 3>
-    ; r17 (v10) : &{name: String}
-    ; r18 (v13) : String
+    ; r12 (v16) : String
+    ; r13 (v21) : &{name: String}
+    ; r14 (v17) : String
+    ; r15 (v18) : Array<{name: String}, 3>
+    ; r16 (v11) : &{name: String}
+    ; r17 (v14) : String
+    ; r18 (@users) : Array<{name: String}, 3>
+    ; r19 (v20) : &{name: String}
+    ; r20 (first) : &{name: String}

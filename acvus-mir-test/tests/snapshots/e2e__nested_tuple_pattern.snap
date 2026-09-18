@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 826
 expression: ir
 ---
 === literals ===
@@ -15,60 +16,96 @@ expression: ir
      6 | L2:
      8 |   r5 = ref &(*r4)[0]
      9 |   r6 = ref &(*r4)[1]
-    11 |   r7 = ref &(*r5)[0]
-    12 |   r8 = ref &(*r5)[1]
-    14 |   r9 = true (r10) && true (r11)
-    16 |   r12 = r9 && true (r13)
-    17 |   r14 = true (r15) && r12
-    19 |   r16 = r14 && true (r17)
-    20 |   jump_if r16 then L3 else L1
-    21 | L3:
-    22 |   r18 = ref &(*r4)[0]
-    23 |   r19 = ref &(*r4)[1]
-    24 |   r20 = ref &(*r18)[0]
-    25 |   r21 = ref &(*r18)[1]
-    26 |   r22 = string_concat [r19]
-    27 |   jump L0(r22, r20, r21, r19)
-    28 | L1:
-    30 |   jump L0(T0, r0, r1, r2)
-    31 | L0(r23: String, r24: &i64, r25: &i64, r26: &String):  ; merge_of L2
-    32 |   r27 = string_concat [r23]
-    33 |   r28 = take @data
-    34 |   commit @data = r28
-    35 |   return r27
+    10 |   jump_if true (r7) then L3 else L4
+    11 | L3:
+    13 |   r8 = ref &(*r5)[0]
+    14 |   r9 = ref &(*r5)[1]
+    15 |   jump_if true (r10) then L6 else L7
+    16 | L6:
+    18 |   jump L8(true (r11))
+    19 | L7:
+    21 |   jump L8(false (r12))
+    22 | L8(r13: Bool):
+    23 |   jump_if r13 then L9 else L10
+    24 | L9:
+    26 |   jump L11(true (r14))
+    27 | L10:
+    29 |   jump L11(false (r15))
+    30 | L11(r16: Bool):
+    31 |   jump L5(r16)
+    32 | L4:
+    34 |   jump L5(false (r17))
+    35 | L5(r18: Bool):
+    36 |   jump_if r18 then L12 else L13
+    37 | L12:
+    39 |   jump L14(true (r19))
+    40 | L13:
+    42 |   jump L14(false (r20))
+    43 | L14(r21: Bool):
+    44 |   jump_if r21 then L15 else L1
+    45 | L15:
+    46 |   r22 = ref &(*r4)[0]
+    47 |   r23 = ref &(*r4)[1]
+    48 |   r24 = ref &(*r22)[0]
+    49 |   r25 = ref &(*r22)[1]
+    50 |   r26 = string_concat [r23]
+    51 |   jump L0(r26, r24, r25, r23)
+    52 | L1:
+    54 |   jump L0(T0, r0, r1, r2)
+    55 | L0(r27: String, r28: &i64, r29: &i64, r30: &String):  ; merge_of L2
+    56 |   r31 = string_concat [r27]
+    57 |   r32 = take @data
+    58 |   commit @data = r32
+    59 |   return r31
 
-    ; r0 (v30) : &i64
-    ; r1 (v31) : &i64
-    ; r2 (v32) : &String
+    ; r0 (v34) : &i64
+    ; r1 (v35) : &i64
+    ; r2 (v36) : &String
     ; r3 (@data) : ((i64, i64), String)
     ; r4 (@data.) : &((i64, i64), String)
     ; r5 ((*r3).[0]) : &(i64, i64)
     ; r6 ((*r3).[1]) : &String
-    ; r7 ((*r5).[0]) : &i64
-    ; r8 ((*r5).[1]) : &i64
-    ; r9 (v11) : Bool
-    ; r10 (v7) : Bool
-    ; r11 (v10) : Bool
+    ; r7 (v4) : Bool
+    ; r8 ((*r5).[0]) : &i64
+    ; r9 ((*r5).[1]) : &i64
+    ; r10 (v8) : Bool
+    ; r11 (v12) : Bool
     ; r12 (v13) : Bool
-    ; r13 (v12) : Bool
-    ; r14 (v14) : Bool
-    ; r15 (v4) : Bool
-    ; r16 (v16) : Bool
-    ; r17 (v15) : Bool
-    ; r18 ((*r3).[0]) : &(i64, i64)
-    ; r19 (label) : &String
-    ; r20 (a) : &i64
-    ; r21 (b) : &i64
-    ; r22 (v25) : String
-    ; r23 (v27) : String
-    ; r24 (v33) : &i64
-    ; r25 (v34) : &i64
-    ; r26 (v35) : &String
-    ; r27 (v28) : String
-    ; r28 (v29) : ((i64, i64), String)
-    ; r29 (b) : &i64
-    ; r30 (@data) : ((i64, i64), String)
-    ; r31 (a) : &i64
-    ; r32 (label) : &String
-    ; r33 (label) : &String
-    ; r34 (v26) : String
+    ; r13 (v11) : Bool
+    ; r14 (v15) : Bool
+    ; r15 (v16) : Bool
+    ; r16 (v14) : Bool
+    ; r17 (v17) : Bool
+    ; r18 (v7) : Bool
+    ; r19 (v19) : Bool
+    ; r20 (v20) : Bool
+    ; r21 (v18) : Bool
+    ; r22 ((*r3).[0]) : &(i64, i64)
+    ; r23 (label) : &String
+    ; r24 (a) : &i64
+    ; r25 (b) : &i64
+    ; r26 (v29) : String
+    ; r27 (v31) : String
+    ; r28 (v49) : &i64
+    ; r29 (v50) : &i64
+    ; r30 (v51) : &String
+    ; r31 (v32) : String
+    ; r32 (v33) : ((i64, i64), String)
+    ; r33 (v44) : &i64
+    ; r34 (a) : &i64
+    ; r35 (v47) : &i64
+    ; r36 (label) : &String
+    ; r37 (v43) : &i64
+    ; r38 (v46) : &i64
+    ; r39 (label) : &String
+    ; r40 (v37) : &i64
+    ; r41 (v40) : &i64
+    ; r42 (v30) : String
+    ; r43 (v39) : &String
+    ; r44 (v42) : &String
+    ; r45 (@data) : ((i64, i64), String)
+    ; r46 (v45) : &String
+    ; r47 (v48) : &String
+    ; r48 (b) : &i64
+    ; r49 (v38) : &i64
+    ; r50 (v41) : &i64
