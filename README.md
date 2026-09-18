@@ -1,6 +1,6 @@
 # Acvus
 
-A small statically typed scripting language, embedded in Rust. Scripts,
+A statically typed scripting language, embedded in Rust. Scripts,
 templates and single expressions share one compiler: types are inferred
 from use, host data enters as `@context` values, and functions the host
 registers from Rust are called like any other. The compiler lowers to an
