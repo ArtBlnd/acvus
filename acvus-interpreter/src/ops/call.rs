@@ -120,6 +120,18 @@ pub fn call_extern_n(machine: &mut Machine<'_>, op: &Op) -> Flow {
     Flow::Next
 }
 
+pub fn call_extern_slice(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let call = extern_call(machine, op);
+    let ExternHandler::Sync(SyncHandler::Slice(f)) = &call.handler else {
+        panic!("prepared as a slice-returning extern call, but the handler is not one")
+    };
+    yield_order(machine, call.order);
+    let a0 = machine.use_val(op.b);
+    let value = f.boxed(machine.rt, a0);
+    machine.define(op.a, value);
+    Flow::Next
+}
+
 #[inline]
 fn fused_arg(machine: &mut Machine<'_>, held: &mut Value, slot: u32) -> Value {
     if slot == PREVIOUS {
@@ -140,6 +152,10 @@ fn fused_call(machine: &mut Machine<'_>, call: &FusedCall, held: &mut Value) -> 
             let a0 = fused_arg(machine, held, call.args[0]);
             let a1 = fused_arg(machine, held, call.args[1]);
             f(rt, a0, a1)
+        }
+        SyncHandler::Slice(f) => {
+            let a0 = fused_arg(machine, held, call.args[0]);
+            f.boxed(rt, a0)
         }
         SyncHandler::Arity3(_) | SyncHandler::ArityN(_) => {
             panic!("a fused run holds a call the fusion rule does not admit")

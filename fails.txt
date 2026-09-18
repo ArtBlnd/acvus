@@ -1,0 +1,100 @@
+test a_binding_made_after_the_call_is_not_in_the_set_at_it
+test a_binding_read_beside_a_qualified_name_of_its_own_spelling_is_captured_once
+test a_binding_that_is_not_a_function_does_not_join_the_set
+test a_borrowed_option_is_matched_through_and_stays_usable
+test a_borrow_of_a_context_the_loop_assigns_stays
+test a_call_whose_result_the_next_call_reads_is_one_operation_with_it
+test a_container_of_objects_converts_each_element
+test a_container_of_scalars_from_an_extern_fn_is_the_script_s_container
+test a_context_assigned_again_before_the_run_ends_is_accepted
+test a_context_taken_into_a_local_and_never_assigned_again_is_named_at_the_move
+test a_context_taken_into_a_local_and_not_written_back_is_refused - should panic
+test a_context_taken_into_a_local_and_written_back_is_read_in_between
+test a_deque_demotes_to_a_list_where_one_is_expected
+test a_lambda_inside_a_lambda_compiles
+test a_lambda_inside_a_lambda_runs
+test a_let_bound_lambda_is_callable_at_the_top_level
+test a_let_bound_lambda_is_callable_from_inside_another_lambda
+test a_local_captured_through_one_lambda_is_read
+test a_method_call_lends_its_receiver_as_the_callee_s_first_parameter_asks
+test a_method_call_of_an_extern_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name
+test a_method_chain_runs_as_the_calls_it_stands_for
+test a_method_receiver_one_candidate_lends_is_lent
+test an_assignment_between_two_borrows_of_a_context_keeps_them_two
+test an_element_of_a_vec_of_options_is_read_back_through_a_pattern
+test an_inner_lambda_capturing_a_lent_parameter_is_refused_once
+test an_option_of_an_option_of_a_vec_is_dropped_only_where_it_was_not_matched
+test an_option_of_a_vec_is_dropped_only_where_it_was_not_matched
+test an_option_of_a_vec_is_its_vec
+test a_qualified_call_inside_a_lambda_is_unaffected_by_a_binding_of_the_same_name
+test a_qualified_call_of_a_name_a_binding_also_has_captures_nothing
+test a_receiver_both_modes_see_as_one_type_is_not_ambiguous
+test a_receiver_that_is_already_a_reference_is_passed_as_it_is
+test a_receiver_that_is_a_reference_to_an_open_element_drops_the_binding
+test a_reference_bound_from_a_moved_storage_does_not_run - should panic
+test a_reference_bound_from_a_moved_storage_is_refused
+test a_reference_returned_by_first_keeps_the_vector_alive
+test a_reference_returned_by_get_keeps_the_vector_alive
+test a_run_inside_a_diamond_arm_is_one_operation
+test a_run_inside_a_loop_body_is_one_operation
+test a_runtime_error_is_the_operations_panic_message_with_status_2
+test a_second_reader_of_an_intermediate_leaves_the_outer_call_unfused
+test attention_written_as_chains_is_the_same_value
+test attention_written_as_function_calls_is_the_same_value
+test a_variant_against_a_borrowed_option_binds_a_reference_and_leaves_it_owned
+test a_word_captured_through_two_lambdas_is_read_by_the_inner_one
+test a_write_through_get_mut_lands_in_the_container
+test builtin_len
+test closure_capture_context
+test closure_capture_local
+test each_loop_runs_only_what_its_own_nesting_level_holds
+test every_index_of_a_run_reaches_the_call_the_source_gave_it
+test filter_object_field_equality
+test get_yields_a_reference_into_the_container
+test inline_callee_uses_builtin_len
+test lambda_capture_local_var_ref
+test lambda_filter_comparison
+test lambda_float_arithmetic
+test lambda_in_filter
+test lambda_map_arithmetic
+test lambda_multiple_field_access
+test lambda_negate_param
+test lambda_not_param
+test len_of_each_container_settles_its_namespace
+test list_literal_expression
+test map_then_filter_then_collect_keeps_the_doubled_values_above_two
+test multiple_closures_same_capture
+test pipe_filter_map
+test pipe_map_to_string_then_filter
+test pmap_builtin
+test range_step_counts_up_by_the_step_short_of_the_end
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: FAILED. 12 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 13 passed; 12 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: FAILED. 14 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 14 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 167 passed; 18 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: FAILED. 16 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 17 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 18 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 29 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: FAILED. 29 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 35 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 3 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test split_once_gives_the_text_around_the_first_pattern
+test step_by_keeps_the_first_and_every_nth_after_it
+test the_same_lambda_over_an_owned_argument_captures_the_value_and_checks
+test triple_pipe_chain

@@ -1956,6 +1956,7 @@ fn extern_call_op(handler: &ExternHandler) -> OpFn {
         ExternHandler::Sync(SyncHandler::Arity2(_)) => call::call_extern_2,
         ExternHandler::Sync(SyncHandler::Arity3(_)) => call::call_extern_3,
         ExternHandler::Sync(SyncHandler::ArityN(_)) => call::call_extern_n,
+        ExternHandler::Sync(SyncHandler::Slice(_)) => call::call_extern_slice,
     }
 }
 
