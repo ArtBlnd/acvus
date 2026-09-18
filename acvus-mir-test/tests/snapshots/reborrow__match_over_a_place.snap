@@ -26,17 +26,15 @@ expression: listing
     25 |   jump L3(r16)
     26 | L6:
     27 |   r18 = test r13 == 2
-    28 |   jump_if r18 then L7 else L8
+    28 |   jump_if r18 then L7 else L3(r10)
     29 | L7:
     31 |   r19 = r10 - 1 (r20)
     32 |   jump L3(r19)
-    33 | L8:
-    34 |   jump L3(r10)
-    35 | L3(r21: i64):  ; merge_of L4
-    36 |   jump L0(r21, r15)
-    37 | L2:
-    38 |   drop r22
-    39 |   return r10
+    33 | L3(r21: i64):  ; merge_of L4
+    34 |   jump L0(r21, r15)
+    35 | L2:
+    36 |   drop r22
+    37 |   return r10
 
     ; r0 (v4) : Array<i64, 3>
     ; r1 (v1) : i64
