@@ -14,7 +14,6 @@ use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 
-use crate::code::Code;
 use crate::interpreter::InterpreterContext;
 use crate::runtime::AcvusRuntime;
 use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
@@ -467,7 +466,7 @@ pub type ResultValue = Result<Owned<AcvusRuntime>, Owned<AcvusRuntime>>;
 pub struct FnValue {
     pub shared: Arc<InterpreterContext>,
     pub page: Arc<dyn crate::journal::RuntimeContext>,
-    pub code: Arc<Code>,
+    pub entry: Arc<dyn crate::machine::Callable>,
     pub captures: Arc<[Owned<AcvusRuntime>]>,
 }
 
@@ -476,7 +475,7 @@ impl Clone for FnValue {
         Self {
             shared: Arc::clone(&self.shared),
             page: Arc::clone(&self.page),
-            code: Arc::clone(&self.code),
+            entry: Arc::clone(&self.entry),
             captures: Arc::clone(&self.captures),
         }
     }
@@ -484,7 +483,7 @@ impl Clone for FnValue {
 
 impl fmt::Debug for FnValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<fn {:?}>", Arc::as_ptr(&self.code))
+        write!(f, "<fn {:?}>", Arc::as_ptr(&self.entry).cast::<()>())
     }
 }
 

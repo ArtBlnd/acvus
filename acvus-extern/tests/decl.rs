@@ -248,7 +248,10 @@ impl Runtime for Tiny {
     }
 
     type Value = V;
+    type Frame = ();
     type CallFuture<'a> = Ready<V>;
+
+    fn frame(&self) {}
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -311,7 +314,7 @@ impl Runtime for Tiny {
     fn call_is_sync(&self, _: &V) -> bool {
         true
     }
-    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> V {
+    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
         self.call(f, args.iter_mut().map(std::mem::take).collect())
     }
     fn call_0<'a>(&'a self, f: &'a V, _: CallToken) -> Self::CallFuture<'a> {
@@ -372,9 +375,10 @@ where
     Rt: Runtime,
 {
     let f = f.erased();
+    let mut frame = rt.frame();
     let mut out = Vec::with_capacity(v.0.len());
     for item in v.0 {
-        out.push(f.call(rt, (item,)).await);
+        out.push(f.call(rt, &mut frame, (item,)).await);
     }
     Boxed(out, PhantomData)
 }

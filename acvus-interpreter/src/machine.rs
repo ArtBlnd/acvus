@@ -13,6 +13,7 @@ use std::mem::MaybeUninit;
 use std::slice;
 use std::sync::Arc;
 
+use acvus_ast::Span;
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
@@ -146,24 +147,21 @@ impl<'c> Machine<'c> {
         F: FnOnce(&mut Machine<'_>),
     {
         if self.regs.fits_above(callee.frame_len) {
-            let window = self.regs.window();
+            let window = self.regs.window(callee);
             return run_frame(callee, named, window, self.rt, self.page, fill);
         }
         run_body(callee, named, self.rt, self.page, fill)
     }
 
     pub fn call_fn_sync(&mut self, f: &FnValue, args: &mut [Value]) -> Value {
-        match f.code.as_ref() {
-            Code::Expr(expr) => expr_value(expr, args),
-            Code::Body(body) => self.call_sync(body, &f.code.site(), |callee| {
-                enter(body, f, args, &mut callee.regs)
-            }),
-        }
+        f.entry.call_in(f, args, self)
     }
 }
 
-/// A body's registers at entry: the captures, the arguments, the order token
-/// and the entry constants, and the one mask of which of them own a `Large`.
+/// What a frame holds for as long as it is bound to one body: the kind byte
+/// of every word-typed register and the body's entry constants. A `set_word`
+/// leaves the kind byte and an entry constant's register has no writer, so a
+/// second call on the same frame reads what this wrote (RFC-0052 §5, §6).
 fn open_frame(body: &Body, regs: &mut Regs<'_>) {
     for kind in &body.slot_kinds {
         regs.open(kind.slot, Value::inline(kind.kind, 0));
@@ -171,7 +169,6 @@ fn open_frame(body: &Body, regs: &mut Regs<'_>) {
     for EntryKonst { slot, value } in &body.entry_konsts {
         regs.open(*slot, *value);
     }
-    regs.own_mask(body.param_marks);
 }
 
 fn run_body<F>(
@@ -184,8 +181,8 @@ fn run_body<F>(
 where
     F: FnOnce(&mut Machine<'_>),
 {
-    let mut store = Store::new(body.frame_len);
-    let regs = store.borrow();
+    let mut store = Store::new();
+    let (regs, _) = store.bind(body);
     run_frame(body, named, regs, rt, page, fill)
 }
 
@@ -258,8 +255,8 @@ pub async fn call_module(
     let Code::Body(body) = prepared.main.as_ref() else {
         panic!("a module's entry body is one chain, which no call into a module can be")
     };
-    let mut store = Store::new(body.frame_len);
-    let mut regs = store.borrow();
+    let mut store = Store::new();
+    let (mut regs, _) = store.bind(body);
     open_frame(body, &mut regs);
     for (slot, arg) in body.params.iter().zip(args) {
         regs.define::<false>(*slot, arg);
@@ -289,71 +286,134 @@ pub fn call_module_sync(
     })
 }
 
-/// The arguments are read into the callee's frame before the future exists, so
-/// the caller may lend registers that die at the call.
-pub fn fn_value_call<'f>(
-    f: &'f FnValue,
-    args: &mut [Value],
-) -> impl Future<Output = Value> + Send + use<'f> {
-    let entry = Entry::of(&f.code, f, args);
-    async move {
-        match entry {
-            Entry::Frame { body, mut store } => {
-                let regs = store.borrow();
-                let machine = Machine::new(body, regs, AcvusRuntime::of(&f.shared), &f.page);
-                drive(machine).await
-            }
-            Entry::Done(value) => value,
+/// What a closure calls, chosen when the closure was made: the prepared
+/// `Body` or `Expr` its `Code` holds, behind the one vtable that knows which
+/// it is. A call reads the pointer and jumps; it never asks the shape.
+pub trait Callable: Send + Sync {
+    /// Run on a frame the caller owns (RFC-0052 §6). Rule 7's window comes
+    /// from a calling `Machine`, which an extern handler never holds; what it
+    /// holds instead is this frame, made once where it was built.
+    fn call_on(&self, f: &FnValue, args: &mut [Value], frame: &mut Store) -> Value;
+
+    /// Run in the window above the calling frame (RFC-0052 rule 7).
+    fn call_in(&self, f: &FnValue, args: &mut [Value], m: &mut Machine<'_>) -> Value;
+
+    /// The arguments read into the callee's frame before the future exists,
+    /// so the caller may lend registers that die at the call.
+    fn start<'c>(&'c self, f: &FnValue, args: &mut [Value]) -> Resume<'c>;
+
+    fn may_suspend(&self) -> bool;
+    fn site(&self) -> Span;
+}
+
+impl Code {
+    /// The closure value's entry, chosen here rather than at every call.
+    pub fn callable(self: &Arc<Code>) -> Arc<dyn Callable> {
+        match self.as_ref() {
+            Code::Body(body) => Arc::clone(body) as Arc<dyn Callable>,
+            Code::Expr(expr) => Arc::clone(expr) as Arc<dyn Callable>,
         }
     }
 }
 
 /// What a closure call has to do after its arguments are read: run a body on a
-/// frame, or — for a `Code::Expr` — nothing, because the chain has already
-/// produced the value.
-enum Entry<'c> {
+/// frame, or — for an `Expr` — nothing, because the chain has already produced
+/// the value.
+pub enum Resume<'c> {
     Frame { body: &'c Body, store: Store },
     Done(Value),
 }
 
-impl<'c> Entry<'c> {
-    fn of(code: &'c Code, f: &FnValue, args: &mut [Value]) -> Entry<'c> {
-        match code {
-            Code::Expr(expr) => Entry::Done(expr_value(expr, args)),
-            Code::Body(body) => {
-                let mut store = Store::new(body.frame_len);
-                {
-                    let mut regs = store.borrow();
-                    enter(body, f, args, &mut regs);
-                }
-                Entry::Frame { body, store }
+impl Callable for Body {
+    fn call_on(&self, f: &FnValue, args: &mut [Value], frame: &mut Store) -> Value {
+        let (mut regs, bound) = frame.bind(self);
+        if !bound {
+            open_frame(self, &mut regs);
+        }
+        fill(self, f, args, &mut regs);
+        let mut machine = Machine::new(self, regs, AcvusRuntime::of(&f.shared), &f.page);
+        let stop = machine.run();
+        assert_eq!(
+            stop, RETURN,
+            "{:?} is typed pure, and its body left the machine at {stop}",
+            self.span
+        );
+        let value = machine.exit;
+        machine.regs.sweep();
+        value
+    }
+
+    fn call_in(&self, f: &FnValue, args: &mut [Value], m: &mut Machine<'_>) -> Value {
+        m.call_sync(self, &self.span, |callee| {
+            fill(self, f, args, &mut callee.regs)
+        })
+    }
+
+    fn start<'c>(&'c self, f: &FnValue, args: &mut [Value]) -> Resume<'c> {
+        let mut store = Store::new();
+        {
+            let (mut regs, _) = store.bind(self);
+            open_frame(self, &mut regs);
+            fill(self, f, args, &mut regs);
+        }
+        Resume::Frame { body: self, store }
+    }
+
+    fn may_suspend(&self) -> bool {
+        self.may_suspend
+    }
+
+    fn site(&self) -> Span {
+        self.span
+    }
+}
+
+impl Callable for Expr {
+    fn call_on(&self, _: &FnValue, args: &mut [Value], _: &mut Store) -> Value {
+        expr_value(self, args)
+    }
+
+    fn call_in(&self, _: &FnValue, args: &mut [Value], _: &mut Machine<'_>) -> Value {
+        expr_value(self, args)
+    }
+
+    fn start<'c>(&'c self, _: &FnValue, args: &mut [Value]) -> Resume<'c> {
+        Resume::Done(expr_value(self, args))
+    }
+
+    fn may_suspend(&self) -> bool {
+        false
+    }
+
+    fn site(&self) -> Span {
+        self.span
+    }
+}
+
+pub fn fn_value_call<'f>(
+    f: &'f FnValue,
+    args: &mut [Value],
+) -> impl Future<Output = Value> + Send + use<'f> {
+    let resume = f.entry.start(f, args);
+    async move {
+        match resume {
+            Resume::Frame { body, mut store } => {
+                let (regs, _) = store.bind(body);
+                let machine = Machine::new(body, regs, AcvusRuntime::of(&f.shared), &f.page);
+                drive(machine).await
             }
+            Resume::Done(value) => value,
         }
     }
 }
 
-/// Run `f` to its result with no caller frame in hand. Obligation across
-/// artifacts: rule 7's window comes from the calling `Machine`, and an extern
-/// handler's ABI is `fn(&Rt, Value) -> Value` (RFC-0052 rule 6) — it is handed
-/// the runtime, never the machine — so a closure an extern calls back roots a
-/// store of its own. Widen that ABI and this function has no callers left.
-pub fn fn_value_call_sync(f: &FnValue, args: &mut [Value]) -> Value {
-    match f.code.as_ref() {
-        Code::Expr(expr) => expr_value(expr, args),
-        Code::Body(body) => run_body(
-            body,
-            &f.code.site(),
-            AcvusRuntime::of(&f.shared),
-            &f.page,
-            |callee| enter(body, f, args, &mut callee.regs),
-        ),
-    }
+pub fn fn_value_call_sync(f: &FnValue, args: &mut [Value], frame: &mut Store) -> Value {
+    f.entry.call_on(f, args, frame)
 }
 
 /// The closure owns its captures; the body sees each through a reference
 /// (RFC-0018).
-fn enter(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
-    open_frame(body, regs);
+fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
     for (slot, capture) in body.captures.iter().zip(f.captures.iter()) {
         regs.define::<false>(*slot, Value::reference(capture));
     }

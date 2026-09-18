@@ -175,25 +175,29 @@ where
         Self::sealed(Generate(SyncWrapper::new(f)))
     }
 
-    pub fn map<U>(self, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+    pub fn map<U>(self, rt: &Rt, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
     where
         U: TyVar,
     {
+        let frame = rt.frame();
         match self.0 {
-            Stages::Sync(source) if f.is_sync() => Iter::sealed(Map { source, f }),
+            Stages::Sync(source) if f.is_sync() => Iter::sealed(Map { source, f, frame }),
             source => Iter::suspending(Map {
                 source: source.into_async(),
                 f,
+                frame,
             }),
         }
     }
 
-    pub fn filter(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+    pub fn filter(self, rt: &Rt, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+        let frame = rt.frame();
         match self.0 {
-            Stages::Sync(source) if f.is_sync() => Self::sealed(Filter { source, f }),
+            Stages::Sync(source) if f.is_sync() => Self::sealed(Filter { source, f, frame }),
             source => Self::suspending(Filter {
                 source: source.into_async(),
                 f,
+                frame,
             }),
         }
     }
@@ -241,31 +245,37 @@ where
         }
     }
 
-    pub fn take_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+    pub fn take_while(self, rt: &Rt, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+        let frame = rt.frame();
         match self.0 {
             Stages::Sync(source) if f.is_sync() => Self::sealed(TakeWhile {
                 source,
                 f,
+                frame,
                 done: false,
             }),
             source => Self::suspending(TakeWhile {
                 source: source.into_async(),
                 f,
+                frame,
                 done: false,
             }),
         }
     }
 
-    pub fn skip_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+    pub fn skip_while(self, rt: &Rt, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+        let frame = rt.frame();
         match self.0 {
             Stages::Sync(source) if f.is_sync() => Self::sealed(SkipWhile {
                 source,
                 f,
+                frame,
                 skipping: true,
             }),
             source => Self::suspending(SkipWhile {
                 source: source.into_async(),
                 f,
+                frame,
                 skipping: true,
             }),
         }
@@ -343,13 +353,13 @@ where
         }
     }
 
-    pub fn flat_map<S, U>(self, f: Fn1<T, S, E, Rt>) -> Iter<U, E, I, Rt>
+    pub fn flat_map<S, U>(self, rt: &Rt, f: Fn1<T, S, E, Rt>) -> Iter<U, E, I, Rt>
     where
         S: TyVar + FromValue<Rt> + IntoIterator<Item = U>,
         S::IntoIter: Send + Sync,
         U: Cross<Rt>,
     {
-        self.map(f).flatten()
+        self.map(rt, f).flatten()
     }
 
     pub async fn next_value(&mut self, rt: &Rt) -> Option<Rt::Value> {
@@ -416,6 +426,7 @@ where
 {
     source: S,
     f: Fn1<T, U, E, Rt>,
+    frame: Rt::Frame,
 }
 
 impl<S, T, U, E, Rt> SyncStage<Rt> for Map<S, T, U, E, Rt>
@@ -427,7 +438,8 @@ where
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
-        Some(self.f.call_value_now(rt, self.source.next(rt)?))
+        let item = self.source.next(rt)?;
+        Some(self.f.call_value_now(rt, &mut self.frame, item))
     }
 }
 
@@ -440,7 +452,11 @@ where
     Rt: Runtime,
 {
     fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(async move { Some(self.f.call_value(rt, self.source.next(rt).await?).await) })
+        Box::pin(async move {
+            let Map { source, f, frame } = self;
+            let item = source.next(rt).await?;
+            Some(f.call_value(rt, frame, item).await)
+        })
     }
 }
 
@@ -452,6 +468,7 @@ where
 {
     source: S,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    frame: Rt::Frame,
 }
 
 impl<S, T, E, Rt> SyncStage<Rt> for Filter<S, T, E, Rt>
@@ -463,7 +480,10 @@ where
 {
     fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
         while let Some(value) = self.source.next(rt) {
-            if self.f.call_now(rt, (Ref::lend(rt, &value),)) {
+            if self
+                .f
+                .call_now(rt, &mut self.frame, (Ref::lend(rt, &value),))
+            {
                 return Some(value);
             }
         }
@@ -480,8 +500,9 @@ where
 {
     fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
-            while let Some(value) = self.source.next(rt).await {
-                if self.f.call(rt, (Ref::lend(rt, &value),)).await {
+            let Filter { source, f, frame } = self;
+            while let Some(value) = source.next(rt).await {
+                if f.call(rt, frame, (Ref::lend(rt, &value),)).await {
                     return Some(value);
                 }
             }
@@ -602,6 +623,7 @@ where
 {
     source: S,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    frame: Rt::Frame,
     done: bool,
 }
 
@@ -617,7 +639,10 @@ where
             return None;
         }
         let value = self.source.next(rt)?;
-        if self.f.call_now(rt, (Ref::lend(rt, &value),)) {
+        if self
+            .f
+            .call_now(rt, &mut self.frame, (Ref::lend(rt, &value),))
+        {
             return Some(value);
         }
         self.done = true;
@@ -634,14 +659,20 @@ where
 {
     fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
-            if self.done {
+            let TakeWhile {
+                source,
+                f,
+                frame,
+                done,
+            } = self;
+            if *done {
                 return None;
             }
-            let value = self.source.next(rt).await?;
-            if self.f.call(rt, (Ref::lend(rt, &value),)).await {
+            let value = source.next(rt).await?;
+            if f.call(rt, frame, (Ref::lend(rt, &value),)).await {
                 return Some(value);
             }
-            self.done = true;
+            *done = true;
             None
         })
     }
@@ -655,6 +686,7 @@ where
 {
     source: S,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    frame: Rt::Frame,
     skipping: bool,
 }
 
@@ -668,7 +700,10 @@ where
     fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
         while self.skipping {
             let value = self.source.next(rt)?;
-            if !self.f.call_now(rt, (Ref::lend(rt, &value),)) {
+            if !self
+                .f
+                .call_now(rt, &mut self.frame, (Ref::lend(rt, &value),))
+            {
                 self.skipping = false;
                 return Some(value);
             }
@@ -686,14 +721,20 @@ where
 {
     fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
-            while self.skipping {
-                let value = self.source.next(rt).await?;
-                if !self.f.call(rt, (Ref::lend(rt, &value),)).await {
-                    self.skipping = false;
+            let SkipWhile {
+                source,
+                f,
+                frame,
+                skipping,
+            } = self;
+            while *skipping {
+                let value = source.next(rt).await?;
+                if !f.call(rt, frame, (Ref::lend(rt, &value),)).await {
+                    *skipping = false;
                     return Some(value);
                 }
             }
-            self.source.next(rt).await
+            source.next(rt).await
         })
     }
 }

@@ -353,8 +353,8 @@ impl ChainBounds {
 /// -> return` after register selection is an `Expr`, and the machine runs one
 /// with no frame, no `Machine` and no dispatch loop (RFC-0044, stage 4).
 pub enum Code {
-    Body(Body),
-    Expr(Expr),
+    Body(Arc<Body>),
+    Expr(Arc<Expr>),
 }
 
 impl Code {
@@ -362,14 +362,6 @@ impl Code {
         match self {
             Code::Body(body) => body.may_suspend,
             Code::Expr(_) => false,
-        }
-    }
-
-    /// A `Code` carries no name, so an ICE about one names it by its span.
-    pub fn site(&self) -> Span {
-        match self {
-            Code::Body(body) => body.span,
-            Code::Expr(expr) => expr.span,
         }
     }
 }

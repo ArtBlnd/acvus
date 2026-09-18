@@ -149,7 +149,7 @@ pub fn prepare_body(
     if let BodyRole::Closure = role
         && let Some(expr) = prep.expression_body()
     {
-        return Code::Expr(expr);
+        return Code::Expr(Arc::new(expr));
     }
 
     let blocks = prep.blocks(0..body.insts.len(), &regions);
@@ -173,7 +173,7 @@ pub fn prepare_body(
     let entry_konsts = prep.entry_konsts();
     let slot_kinds = prep.slot_kinds(frame_len);
 
-    Code::Body(Body {
+    Code::Body(Arc::new(Body {
         blocks,
         entry: 0,
         frame_len,
@@ -189,7 +189,7 @@ pub fn prepare_body(
             .first()
             .unwrap_or_else(|| panic!("body {role:?} holds no instruction, so it cannot return"))
             .span,
-    })
+    }))
 }
 
 fn label_map(body: &MirBody) -> FxHashMap<Label, u32> {
@@ -1632,15 +1632,15 @@ impl<'a> Prepare<'a> {
                 body,
                 captures,
             } => {
-                let code = Arc::clone(
-                    self.closures
-                        .get(body)
-                        .unwrap_or_else(|| panic!("closure body not found: {body:?}")),
-                );
+                let entry = self
+                    .closures
+                    .get(body)
+                    .unwrap_or_else(|| panic!("closure body not found: {body:?}"))
+                    .callable();
                 let Operands { slots, takes } = self.taken(captures);
                 Box::new(call::MakeClosure {
                     dst: self.off(*dst),
-                    code,
+                    entry,
                     captures: slots,
                     takes,
                 })

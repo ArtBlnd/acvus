@@ -84,7 +84,10 @@ impl acvus_extern::FromValue<Words> for Word {
 
 impl Runtime for Words {
     type Value = Word;
+    type Frame = ();
     type CallFuture<'a> = Ready<Word>;
+
+    fn frame(&self) {}
 
     fn type_of(&self, _: &Word) -> Option<TypeId> {
         Some(TypeId::of::<i64>())
@@ -182,7 +185,7 @@ impl Runtime for Words {
         false
     }
 
-    fn call_now(&self, _: &Word, _: &mut [Word], _: CallToken) -> Word {
+    fn call_now(&self, _: &Word, _: &mut [Word], _: &mut (), _: CallToken) -> Word {
         self.no_closures()
     }
 
@@ -344,7 +347,10 @@ where
 
 impl Runtime for Tags {
     type Value = TaggedWord;
+    type Frame = ();
     type CallFuture<'a> = Ready<TaggedWord>;
+
+    fn frame(&self) {}
 
     fn type_of(&self, value: &TaggedWord) -> Option<TypeId> {
         match value.kind {
@@ -469,7 +475,13 @@ impl Runtime for Tags {
         false
     }
 
-    fn call_now(&self, _: &TaggedWord, _: &mut [TaggedWord], _: CallToken) -> TaggedWord {
+    fn call_now(
+        &self,
+        _: &TaggedWord,
+        _: &mut [TaggedWord],
+        _: &mut (),
+        _: CallToken,
+    ) -> TaggedWord {
         self.no_closures()
     }
 

@@ -588,7 +588,7 @@ impl<const LARGE: bool, const THROUGH: bool> Terminator for CallIndirect<LARGE, 
                 let target = m.regs().peek(self.callee).target();
                 &*(target.as_fn() as *const FnValue)
             };
-            if closure.code.may_suspend() {
+            if closure.entry.may_suspend() {
                 let fut = Box::pin(fn_value_call(closure, &mut args));
                 m.suspend::<LARGE>(self.dst, self.next, fut);
                 return SUSPEND;
@@ -601,7 +601,7 @@ impl<const LARGE: bool, const THROUGH: bool> Terminator for CallIndirect<LARGE, 
 
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { m.regs().take::<true>(self.callee).materialize::<FnValue>() };
-        if closure.code.may_suspend() {
+        if closure.entry.may_suspend() {
             let fut = Box::pin(async move { fn_value_call(&closure, &mut args).await });
             m.suspend::<LARGE>(self.dst, self.next, fut);
             return SUSPEND;
@@ -701,7 +701,7 @@ impl Op for SpawnModule {
 
 pub struct MakeClosure {
     pub dst: Off,
-    pub code: Arc<crate::code::Code>,
+    pub entry: Arc<dyn crate::machine::Callable>,
     pub captures: Box<[Off]>,
     pub takes: u64,
 }
@@ -721,7 +721,7 @@ impl Op for MakeClosure {
         let closure = FnValue {
             shared: Arc::clone(m.shared()),
             page: Arc::clone(m.page),
-            code: Arc::clone(&self.code),
+            entry: Arc::clone(&self.entry),
             captures,
         };
         m.regs().define::<true>(self.dst, Value::closure(closure));

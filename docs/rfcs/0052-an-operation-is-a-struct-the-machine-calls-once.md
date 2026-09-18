@@ -200,11 +200,7 @@ and threw away.
    registration.
 
    The handler's ABI is `fn(&Rt, Value) -> Value`: it is handed the
-   runtime, never the machine. **A closure an extern calls back
-   therefore has no caller frame to take a window from and roots a
-   `Store` of its own** (`machine::fn_value_call_sync`). That is a
-   consequence of the ABI, not of rule 7; widen the ABI to carry the
-   machine and that function has no callers left.
+   runtime, never the machine. It is handed a frame instead — see §6.
 
    `CallExtern1::<false>::run` is now argument load, the frame's claim
    dropped with one `and`, `call *f`, result store, `ret` — **zero
@@ -216,12 +212,74 @@ and threw away.
    sweep it per call (55 % of `map cap | sum`): the callee's slots are
    the caller's frame region above `frame_len`, marked by one word, and
    released by one sweep of that word — the frame is a window, not an
-   allocation. **The window is the next cell**, so a call makes one
-   capacity compare (`callee.frame_len <= regs.above_cap`, where
-   `above_cap` is a cell's worth while a cell is left and zero
-   otherwise) and steps one cell up; a callee that does not fit, or a
-   chain deeper than the store's cells, roots a `Store` of its own.
-   One mask store to enter, one sweep of the cell's word to leave.
+   allocation. **The window is the cells above the caller's**, so a call
+   makes one capacity compare (`cells_for(callee.frame_len) <=
+   regs.above_cells`) and steps past its own cells; a callee that does
+   not fit, or a chain deeper than the store's cells, roots a `Store` of
+   its own. One mask store to enter, one sweep of that word to leave.
+
+## §6. The caller owns the frame, and a closure knows its entry
+
+`Runtime` carries `type Frame` and `fn frame(&self) -> Self::Frame`, and
+`call_now` takes `frame: &mut Self::Frame`. The borrow is the whole rule:
+a synchronous closure call cannot own, make or free the frame it runs on,
+because it is only lent one. `acvus-interpreter` answers `Store`; a
+runtime with no frame answers `()`.
+
+Every site in `acvus-ext` that calls a closure holds one. The four lazy
+stages (`Map`, `Filter`, `TakeWhile`, `SkipWhile`) take `rt` in their
+constructor and keep a `Rt::Frame` field for as long as the stage lives;
+the six eager consumers (`reduce`, `fold`, `any`, `all`, `position`,
+`extreme_by_key`, each in a synchronous and a suspending form) make one
+before the drain loop. Nothing makes one per element.
+
+### The frame is one `Vec`
+
+`Store` is `{ cells: Vec<Cell>, bound: usize }`. A `Cell` is sixteen
+registers — four cache lines, starting one — and nothing else: a frame
+wider than a cell has to be one run of `Value`s, and a mark word
+interleaved between cells would break the displacement an `Off` already
+is. A frame of `n` registers therefore takes the `cells_for(n)` cells
+that `n + 1` slots reach, and its mark word is the slot just past its
+registers. An unbound frame is an empty `Vec` — twenty-four bytes, no
+allocation — so a stage whose closure is an `Expr` pays nothing for a
+frame it never enters.
+
+`Store::bind(body)` is the only way to reach a frame. It answers whether
+the frame already carries that body's slot kinds and entry constants,
+sizes the `Vec` to the body's cells plus the window when the answer is
+no, and hands back a `Regs` whose mark word it has already written with
+the body's `param_marks`. There is no `Regs` whose mark word is
+unwritten, which is why `own_mask` no longer exists as a separate step,
+and there is no path that borrows a frame narrower than the body it
+runs. `borrow` had a `match` on `slots <= INLINE_SLOTS`; `bind` has one
+compare, on identity.
+
+Skipping `open_frame` is sound because a word register's kind byte
+survives every `set_word` (§5) and an entry constant's register is
+scratch that `prepare` gives no writer. What still runs per call is what
+differs per call: the captures, the parameters, and the sweep on the way
+out.
+
+The window keeps a constant three cells above the bound frame. The `Vec`
+cannot grow while a chain runs — every frame below the growth point
+borrows from it — so a chain deeper than that roots a `Store` of its own
+at the call, exactly as a chain past the old `INLINE_CELLS` did.
+
+### A closure's entry is chosen when the closure is made
+
+`Code`'s payloads sit behind `Arc`: `Body(Arc<Body>)`, `Expr(Arc<Expr>)`.
+`Body` and `Expr` each implement `Callable`, and a `FnValue` holds
+`entry: Arc<dyn Callable>` in place of the `Arc<Code>` it used to hold.
+`MakeClosure` carries that entry, projected once when the operation was
+prepared, and a closure value copies the `Arc`. `fn_value_call_sync` is
+`f.entry.call_on(f, args, frame)` and `Machine::call_fn_sync` is
+`f.entry.call_in(f, args, self)`: the call reads a pointer and jumps. The
+per-call `match f.code.as_ref()` is gone, and with it `Code::site` — the
+site a panic names comes from the callable that panicked.
+
+`Resume` replaces the old `Entry` on the asynchronous path, built by the
+same trait method rather than by a second `match`.
 
 ## What it costs
 
@@ -361,25 +419,97 @@ and threw away.
   `grade` +18 %, mandelbrot +8 %) are all below master now: a `Diamond`
   is one word read, a branchless arm select and one straight arm.
 
-- **`map cap | sum` is the one case above master (+38 %), and its cost
-  is not in this RFC's machine.** `perf record` on the bench binary:
-  **63.8 % of cycles in `AcvusRuntime::call_now`**, whose two hottest
-  lines are the frame it opens per element —
+- **§6 measured, three alternating pinned reps against a `17718c76`
+  binary built on the same box in the same hour** (`taskset -c 15`,
+  n = 1e6, median of three; the run-9 column above is reproduced by that
+  binary to within 5 % on every case, so it is the same scale):
+
+  | case | 17718c76 | §6 | Δ |
+  |---|---:|---:|---:|
+  | `int while` | 3.2 | **2.9** | −9.4 % |
+  | `float while` | 4.9 | **4.8** | −2.0 % |
+  | `range \| sum` | 1.7 | **1.7** | 0 % |
+  | `map id \| sum` | 3.2 | **3.4** | **+6.2 %** |
+  | `map add \| sum` | 5.5 | **5.6** | +1.8 % |
+  | `map cap \| sum` | 18.2 | **9.0** | **−50.5 %** |
+  | `extern while` | 4.7 | **4.7** | 0 % |
+  | `branch while` | 6.8 | **6.8** | 0 % |
+  | `option while` | 7.3 | **7.4** | +1.4 % |
+  | `while let vec` | 10.1 | **10.2** | +1.0 % |
+  | `while let map` | 12.2 | **12.2** | 0 % |
+  | `collatz while` | 9.0 | **9.0** | 0 % |
+  | `grade while` | 13.2 | **13.3** | +0.8 % |
+  | attention 64×64 | 102.9 µs | **101.5 µs** | −1.4 % |
+  | mandelbrot | 14.1 | **13.6** | −3.5 % |
+  | shapes `field read` | 9.2 | **9.3** | +1.1 % |
+  | shapes `field write` | 8.8 | **8.6** | −2.3 % |
+  | shapes `construct` | 36.5 | **36.9** | +1.1 % |
+  | shapes `enum match` | 27.3 | **28.0** | +2.6 % |
+  | shapes `option match` | 7.3 | **7.8** | **+6.8 %** |
+  | shapes `vec of objects` | 9.2 | **9.0** | −2.2 % |
+
+  Two cases are above the ±3 % rule. `map id | sum` is explained below
+  and is reproducible (3.2/3.2/3.2 against 3.4/3.4/3.4). `shapes option
+  match` calls no closure and this change reaches nothing it runs; its
+  reps are 7.4/7.3/7.2 against 7.8/7.4/7.9, so the medians differ by
+  more than the spread of either — **it is recorded as unexplained, not
+  as noise.**
+
+- **`map cap | sum` was the one case above master (+38 %); §6 halves
+  it, and it is still the one case that misses its band.** At run 9,
+  `perf record` put **63.8 % of cycles in `AcvusRuntime::call_now`**,
+  its two hottest lines the `open_frame` slot-kind walk and the frame
+  set-up store, with `posix_memalign`/`cfree` beside them. With the
+  frame owned by `map`'s stage: **18.1 → 9.1 ns** (−50 %). With the
+  frame a `Vec` and the entry chosen at construction: **9.4 ns**, which
+  is 9.1 within the spread of three alternating pinned reps against a
+  `17718c76` binary built and measured on the same box in the same hour.
+
+  The three lines the caller-owns-the-frame round left behind are
+  answered, and two of them are gone. `perf annotate` on
+  `Body::call_on` — the function the closure's entry now jumps to:
 
   ```
-  14.75% : 31aefb: mov %rcx,0x68(%rsp)
-  13.74% : 31afa0: movq $0x0,0x8(%rsi,%r13,1)   ; open_frame's slot_kinds walk
-  11.71% : 31b1fa: cmp %rcx,%r14
+   8.24% : 2c6010: push %rbp                    ; the call's own prologue
+   8.11% : 2c6011: push %r15
+   7.32% : 2c6070: shl  $0x4,%edi               ; the frame's byte displacement
+   7.31% : 2c6419: mov  %r11w,0x3c(%rsp)        ; Regs, two bytes at a time
   ```
 
-  — with `posix_memalign` and `cfree` at 2.2 % and 2.7 % beside them.
-  `map`'s stage is an extern, and an extern handler's ABI is
-  `fn(&Rt, Value) -> Value` (rule 6): it is handed the runtime, never
-  the calling `Machine`, so the closure it calls back cannot take rule
-  7's window and roots a `Store` of its own per element
-  (`machine::fn_value_call_sync` states the obligation). Rule 7 and rule
-  6 meet here and rule 6 wins; widening that ABI is the next intent, not
-  a fourth change in this round.
+  No allocator symbol appears on the path at all; the `Code`
+  discriminant is not in the function, because the entry decided it; the
+  `mov %rcx,0x68(%rsp)` that was 15 % is gone, because `Regs` fell from
+  48 bytes to **24** and `Machine` from 120 to **96**. What is left is
+  six `push`es and a 152-byte stack frame — the brief asked for fewer
+  than four `push`es and did not get them.
+
+  **The band was 5.5–8 ns and 9.4 misses it, and the frame is no longer
+  where the time is.** Of the case's cycles: `Body::call_on` 28.4 %
+  (bind, captures, parameters, `Machine::new`, sweep), the closure
+  body's three dispatched operations 36.4 % (`TakeThrough` 14.9 %,
+  `Return` 11.0 %, `Add<i64>` 10.5 %), the stage chain 9.6 %,
+  `expect_type::<i64>` 3.7 %. The whole prologue prices at 0.44 ns, so
+  no further shrinking of `Machine` reaches 7. What reaches it is fewer
+  operations per element, which is what a call as an operation and a
+  chain kernel are for.
+
+- **A `Vec` frame gives back what an inline one cost a frameless
+  closure.** `map id` and `map add` call `Expr` bodies, which run with
+  no registers at all (RFC-0044 stage 4). The inline four-cell `Store`
+  charged them 1 KiB inside the `Map` stage box for a frame they never
+  enter: **3.2 → 3.4** (+6.2 %). An unbound frame is now an empty `Vec`
+  and the `Expr` entry never binds one: **3.3** and **5.6**, both back
+  inside ±3 % of master.
+
+- **`shapes option match` is not unexplained; it was layout.** The
+  caller-owns-the-frame round recorded +6.8 % on a case that calls no
+  closure. It reads 7.6 against master's 7.4 here, inside the rule. The
+  same shape appeared on `shapes field read` (+13.0 %) and was measured
+  rather than argued: `perf stat` over the case alone counts
+  **1,782,583,899** instructions against **1,782,596,988** — a
+  difference of 0.0007 % — and run alone the two binaries measure 9.4
+  and 9.6. The +13 % only appears when the case runs after the other
+  five in one process. A count that does not move is not a code change.
 
 - The operation instance count on the `accum` bench binary fell from
   **2696 to 1829** (`nm -C | grep -c 'acvus_interpreter::ops::'`), the

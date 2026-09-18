@@ -142,7 +142,10 @@ impl FromValue<Counted> for V {
 
 impl Runtime for Counted {
     type Value = V;
+    type Frame = ();
     type CallFuture<'a> = Ready<V>;
+
+    fn frame(&self) {}
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         match value {
@@ -255,7 +258,7 @@ impl Runtime for Counted {
         true
     }
 
-    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> V {
+    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
         let [a] = args else {
             panic!("Counted runs only unary closures")
         };
@@ -357,7 +360,10 @@ fn a_map_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Mapping::new(&rt, mapping_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).map::<Owned<Counted>>(f));
+    let yielded = drain(
+        &rt,
+        Elements::from_items(vec![]).map::<Owned<Counted>>(&rt, f),
+    );
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }
@@ -367,7 +373,7 @@ fn a_filter_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).filter(f));
+    let yielded = drain(&rt, Elements::from_items(vec![]).filter(&rt, f));
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }
@@ -377,7 +383,7 @@ fn a_take_while_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).take_while(f));
+    let yielded = drain(&rt, Elements::from_items(vec![]).take_while(&rt, f));
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }
@@ -387,7 +393,7 @@ fn a_skip_while_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).skip_while(f));
+    let yielded = drain(&rt, Elements::from_items(vec![]).skip_while(&rt, f));
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }

@@ -148,7 +148,10 @@ impl acvus_extern::FromValue<Counting> for V {
 
 impl Runtime for Counting {
     type Value = V;
+    type Frame = ();
     type CallFuture<'a> = Ready<V>;
+
+    fn frame(&self) {}
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let (V::Boxed(cell) | V::Word(cell)) = value else {
@@ -276,7 +279,7 @@ impl Runtime for Counting {
         false
     }
 
-    fn call_now(&self, _: &V, _: &mut [V], _: CallToken) -> V {
+    fn call_now(&self, _: &V, _: &mut [V], _: &mut (), _: CallToken) -> V {
         self.no_closures()
     }
 

@@ -11,8 +11,11 @@ kovac is another, signing the same trait with its own representation.
 ```rust
 trait Runtime: Send + Sync + 'static {
     type Value: Send + Sync + 'static;
+    type Frame: Send + Sync;
     type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where Self: 'a;
+
+    fn frame(&self) -> Self::Frame;
 
     unsafe fn materialize<T: Send + Sync + 'static>(&self, v: Self::Value) -> T;
     unsafe fn erase<T: Send + Sync + 'static>(&self, t: T) -> Self::Value;
@@ -20,6 +23,8 @@ trait Runtime: Send + Sync + 'static {
     unsafe fn deref_mut<'a, T: Send + Sync + 'static>(&self, r: &'a Self::Value) -> &'a mut T;
     unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
 
+    fn call_now(&self, f: &Self::Value, args: &mut [Self::Value],
+        frame: &mut Self::Frame, _: CallToken) -> Self::Value;
     fn call_0<'a>(&'a self, f: &'a Self::Value, _: CallToken) -> Self::CallFuture<'a>;
     fn call_1<'a>(&'a self, f: &'a Self::Value, a: Self::Value, _: CallToken)
         -> Self::CallFuture<'a>;
@@ -34,8 +39,8 @@ The side an extern sees, in `acvus_extern::func`:
 trait ClosureFn<Rt: Runtime> {
     type Args;          // Fn0: ()  Fn1: (Value,)  Fn2: (Value, Value)  Fn3: …
     type Ret;
-    fn call_now(&self, rt: &Rt, args: Self::Args) -> Self::Ret;
-    fn call<'a>(&'a self, rt: &'a Rt, args: Self::Args)
+    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame, args: Self::Args) -> Self::Ret;
+    fn call<'a>(&'a self, rt: &'a Rt, frame: &'a mut Rt::Frame, args: Self::Args)
         -> impl Future<Output = Self::Ret> + Send + 'a;
 }
 ```
@@ -150,15 +155,30 @@ first `erase` and leaked for the life of the process. The host asserts
 `unsafe impl Send + Sync for Value`: every payload entered through
 `erase<T: Send + Sync>`, and vtables are shared statics.
 
-A frame is one **cell**: fifteen registers and the one word marking which
-of them own a `Large`, 256 bytes and four cache lines, starting one
-(RFC-0048 §3, RFC-0052 §5). A call's frame is the next cell of the same
-`Store`, taken after one capacity compare; a body wider than fifteen
-registers, or a chain deeper than the store's cells, gets a frame of its
-own. An operation names a register by its **byte displacement** inside the
-frame (`code::Off`, `slot * 16`, multiplied once by `prepare`), never by
-its index: `Slot` is the language-level index and it does not leave
-`prepare`.
+A frame is a run of **cells** in one `Vec`: its registers, then the one
+slot holding the word that marks which of them own a `Large`, then the
+window a call out of it takes its callee's frame from. A cell is sixteen
+registers, 256 bytes and four cache lines, starting one (RFC-0048 §3,
+RFC-0052 §5, §6). A call's frame is the cells above the caller's, taken
+after one capacity compare; a chain deeper than the store's cells gets a
+`Store` of its own. An operation names a register by its **byte
+displacement** inside the frame (`code::Off`, `slot * 16`, multiplied once
+by `prepare`), never by its index: `Slot` is the language-level index and
+it does not leave `prepare`.
+
+A synchronous call is lent its frame; it never makes one. `Runtime` carries
+`type Frame` and `fn frame(&self) -> Self::Frame`, and `call_now` takes
+`&mut Self::Frame` (RFC-0052 §6): a stage in `acvus-ext` makes one `Store`
+when it is built and lends it per element, and a consumer makes one before
+its drain loop. An unbound `Store` is an empty `Vec` and reaches no
+allocator. `Store::bind(body)` is the only way to a frame: it sizes the
+`Vec` once per binding, writes the body's `param_marks`, and answers
+whether the `slot_kinds` walk has already run for that body.
+
+A closure value holds its entry rather than its code: `FnValue.entry` is an
+`Arc<dyn Callable>` projected out of the `Code` when the closure was made,
+so a synchronous closure call reads a pointer and jumps instead of asking
+whether the code is a `Body` or an `Expr`.
 
 A register whose type is a word — an integer, a float, a `Bool`, a `Unit`
 — is opened once with its kind when the frame is made (`Body::slot_kinds`),

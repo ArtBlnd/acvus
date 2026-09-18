@@ -8,6 +8,7 @@ use std::sync::Arc;
 use acvus_extern::{CallToken, Runtime};
 
 use crate::interpreter::InterpreterContext;
+use crate::regs::Store;
 use crate::value::{Kind, Value};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
@@ -31,7 +32,12 @@ impl AcvusRuntime {
 
 impl Runtime for AcvusRuntime {
     type Value = Value;
+    type Frame = Store;
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
+
+    fn frame(&self) -> Store {
+        Store::new()
+    }
 
     fn type_of(&self, value: &Value) -> Option<TypeId> {
         match value.kind() {
@@ -135,13 +141,13 @@ impl Runtime for AcvusRuntime {
 
     fn call_is_sync(&self, f: &Value) -> bool {
         // SAFETY: the type checker admits only a closure value here.
-        !unsafe { f.as_fn() }.code.may_suspend()
+        !unsafe { f.as_fn() }.entry.may_suspend()
     }
 
-    fn call_now(&self, f: &Value, args: &mut [Value], _: CallToken) -> Value {
+    fn call_now(&self, f: &Value, args: &mut [Value], frame: &mut Store, _: CallToken) -> Value {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        crate::machine::fn_value_call_sync(closure, args)
+        crate::machine::fn_value_call_sync(closure, args, frame)
     }
 
     fn call_0<'a>(&'a self, f: &'a Value, _: CallToken) -> Self::CallFuture<'a> {

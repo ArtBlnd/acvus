@@ -144,7 +144,10 @@ impl acvus_extern::FromValue<Counting> for V {
 
 impl Runtime for Counting {
     type Value = V;
+    type Frame = ();
     type CallFuture<'a> = Ready<V>;
+
+    fn frame(&self) {}
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let V::Boxed(cell) = value else {
@@ -260,7 +263,7 @@ impl Runtime for Counting {
         true
     }
 
-    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> V {
+    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
         let [a] = args else {
             return self.only_unary();
         };
@@ -479,7 +482,9 @@ fn map_then_take_two_calls_the_closure_exactly_twice() {
             int(rt, read_int(rt, &x) * 10)
         })
     };
-    let it = items(&rt, [1, 2, 3]).map::<V>(Fn1::new(&rt, f)).take(2);
+    let it = items(&rt, [1, 2, 3])
+        .map::<V>(&rt, Fn1::new(&rt, f))
+        .take(2);
     assert_eq!(drain(&rt, it), [10, 20]);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -506,8 +511,8 @@ fn filter_then_map_interleave_per_element() {
         })
     };
     let it = items(&rt, [1, 2, 3])
-        .filter(Fn1::new(&rt, keep_odd))
-        .map::<V>(Fn1::new(&rt, times_ten));
+        .filter(&rt, Fn1::new(&rt, keep_odd))
+        .map::<V>(&rt, Fn1::new(&rt, times_ten));
     assert_eq!(drain(&rt, it), [10, 30]);
     assert_eq!(
         *log.lock().unwrap(),
@@ -528,7 +533,7 @@ fn flat_map_skips_an_empty_inner_sequence() {
         };
         inner.erase(rt)
     });
-    let it = items(&rt, [1, 2, 3]).flat_map::<Vec<V>, V>(Fn1::new(&rt, twice_unless_two));
+    let it = items(&rt, [1, 2, 3]).flat_map::<Vec<V>, V>(&rt, Fn1::new(&rt, twice_unless_two));
     assert_eq!(drain(&rt, it), [1, 1, 3, 3]);
 }
 

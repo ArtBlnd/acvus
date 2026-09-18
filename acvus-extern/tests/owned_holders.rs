@@ -146,7 +146,10 @@ impl FromValue<Counted> for V {
 
 impl Runtime for Counted {
     type Value = V;
+    type Frame = ();
     type CallFuture<'a> = Ready<V>;
+
+    fn frame(&self) {}
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         match value {
@@ -259,7 +262,7 @@ impl Runtime for Counted {
         true
     }
 
-    fn call_now(&self, f: &V, args: &mut [V], _: CallToken) -> V {
+    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
         let [a] = args else {
             panic!("Counted runs only unary closures")
         };

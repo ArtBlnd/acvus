@@ -201,7 +201,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+fn map<T, U, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -209,11 +209,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.map(f)
+    it.map(rt, f)
 }
 
 #[extern_fn(effect = pure)]
-fn pmap<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+fn pmap<T, U, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -221,18 +221,22 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.map(f)
+    it.map(rt, f)
 }
 
 #[extern_fn(effect = pure)]
-fn filter<T, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Iter<T, E, I, Rt>
+fn filter<T, E, I, Rt>(
+    rt: &Rt,
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+) -> Iter<T, E, I, Rt>
 where
     T: TyVar,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.filter(f)
+    it.filter(rt, f)
 }
 
 #[extern_fn(effect = pure)]
@@ -306,7 +310,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flat_map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, Vec<U>, E, Rt>) -> Iter<U, E, I, Rt>
+fn flat_map<T, U, E, I, Rt>(
+    rt: &Rt,
+    it: Iter<T, E, I, Rt>,
+    f: Fn1<T, Vec<U>, E, Rt>,
+) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
     U: TyVar + Cross<Rt> + FromValue<Rt>,
@@ -314,7 +322,7 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.flat_map::<Vec<U>, U>(f)
+    it.flat_map::<Vec<U>, U>(rt, f)
 }
 
 fn collect_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Vec<T>
@@ -440,7 +448,7 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.filter(f).next_now(rt)
+    it.filter(rt, f).next_now(rt)
 }
 
 #[extern_fn(effect = E, sync = find_now)]
@@ -455,7 +463,7 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.filter(f).next(rt).await
+    it.filter(rt, f).next(rt).await
 }
 
 fn reduce_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>, f: Fn2<T, T, T, E, Rt>) -> Option<T>
@@ -465,10 +473,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut acc = it.next_now(rt)?;
     drain_now!(it, rt, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call_now(rt, (acc, item));
+        acc = f.call_now(rt, &mut frame, (acc, item));
     });
     Some(acc)
 }
@@ -485,10 +494,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut acc = it.next(rt).await?;
     drain!(it, rt, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call(rt, (acc, item)).await;
+        acc = f.call(rt, &mut frame, (acc, item)).await;
     });
     Some(acc)
 }
@@ -506,10 +516,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut acc = init;
     drain_now!(it, rt, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call_now(rt, (acc, item));
+        acc = f.call_now(rt, &mut frame, (acc, item));
     });
     acc
 }
@@ -528,10 +539,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut acc = init;
     drain!(it, rt, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call(rt, (acc, item)).await;
+        acc = f.call(rt, &mut frame, (acc, item)).await;
     });
     acc
 }
@@ -543,9 +555,10 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut found = false;
     drain_now!(it, rt, |value| {
-        if f.call_now(rt, (Ref::lend(rt, &value),)) {
+        if f.call_now(rt, &mut frame, (Ref::lend(rt, &value),)) {
             found = true;
             break;
         }
@@ -565,9 +578,10 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut found = false;
     drain!(it, rt, |value| {
-        if f.call(rt, (Ref::lend(rt, &value),)).await {
+        if f.call(rt, &mut frame, (Ref::lend(rt, &value),)).await {
             found = true;
             break;
         }
@@ -582,9 +596,10 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut holds_throughout = true;
     drain_now!(it, rt, |value| {
-        if !f.call_now(rt, (Ref::lend(rt, &value),)) {
+        if !f.call_now(rt, &mut frame, (Ref::lend(rt, &value),)) {
             holds_throughout = false;
             break;
         }
@@ -604,9 +619,10 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut holds_throughout = true;
     drain!(it, rt, |value| {
-        if !f.call(rt, (Ref::lend(rt, &value),)).await {
+        if !f.call(rt, &mut frame, (Ref::lend(rt, &value),)).await {
             holds_throughout = false;
             break;
         }
@@ -673,6 +689,7 @@ where
 
 #[extern_fn(effect = pure)]
 fn take_while<T, E, I, Rt>(
+    rt: &Rt,
     it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Iter<T, E, I, Rt>
@@ -682,11 +699,12 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.take_while(f)
+    it.take_while(rt, f)
 }
 
 #[extern_fn(effect = pure)]
 fn skip_while<T, E, I, Rt>(
+    rt: &Rt,
     it: Iter<T, E, I, Rt>,
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Iter<T, E, I, Rt>
@@ -696,7 +714,7 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    it.skip_while(f)
+    it.skip_while(rt, f)
 }
 
 #[extern_fn(effect = pure)]
@@ -812,10 +830,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut index = 0;
     let mut at = None;
     drain_now!(it, rt, |value| {
-        if f.call_now(rt, (Ref::lend(rt, &value),)) {
+        if f.call_now(rt, &mut frame, (Ref::lend(rt, &value),)) {
             at = Some(index);
             break;
         }
@@ -836,10 +855,11 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut index = 0;
     let mut at = None;
     drain!(it, rt, |value| {
-        if f.call(rt, (Ref::lend(rt, &value),)).await {
+        if f.call(rt, &mut frame, (Ref::lend(rt, &value),)).await {
             at = Some(index);
             break;
         }
@@ -1016,9 +1036,10 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut best: Option<Keyed<Rt::Value>> = None;
     drain!(it, rt, |value| {
-        let key = f.call(rt, (Ref::lend(rt, &value),)).await;
+        let key = f.call(rt, &mut frame, (Ref::lend(rt, &value),)).await;
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
             None => true,
@@ -1056,9 +1077,10 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
+    let mut frame = rt.frame();
     let mut best: Option<Keyed<Rt::Value>> = None;
     drain_now!(it, rt, |value| {
-        let key = f.call_now(rt, (Ref::lend(rt, &value),));
+        let key = f.call_now(rt, &mut frame, (Ref::lend(rt, &value),));
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
             None => true,

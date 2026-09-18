@@ -410,6 +410,7 @@ fn drop_the_bound_check(code: &mut Code) {
     let Code::Body(body) = code else {
         panic!("a body with a loop prepares as a Body")
     };
+    let body = Arc::get_mut(body).expect("the prepared body is swapped before anything shares it");
     let swapped = swap_in_blocks(&mut body.blocks);
     assert_eq!(swapped, 2, "both element reads lost their bound check");
 }

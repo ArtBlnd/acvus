@@ -14,9 +14,16 @@ use crate::func::CallToken;
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
     type Value: crate::Cross<Self> + crate::FromValue<Self> + crate::Release + Copy + Default;
+    /// The frame a synchronous call runs on (RFC-0052 §6). A runtime that
+    /// needs no frame answers `()`.
+    type Frame: Send + Sync;
     type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where
         Self: 'a;
+
+    /// Obligation on the caller: one per closure-calling site, made where the
+    /// site is built, not where it calls.
+    fn frame(&self) -> Self::Frame;
 
     /// The `T` of the `erase::<T>` that made this value, when the value
     /// records it. `downcast` and `Erased::from_value` trust this answer
@@ -106,7 +113,13 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     fn call_is_sync(&self, f: &Self::Value) -> bool;
     /// Run `f` to its result now, reached only where `call_is_sync`
     /// answered true for this same value.
-    fn call_now(&self, f: &Self::Value, args: &mut [Self::Value], token: CallToken) -> Self::Value;
+    fn call_now(
+        &self,
+        f: &Self::Value,
+        args: &mut [Self::Value],
+        frame: &mut Self::Frame,
+        token: CallToken,
+    ) -> Self::Value;
 
     /// Run the closure `f`; each argument moves into the callee's
     /// parameter. Only `Fn0`/`Fn1`/… reach these: the token is theirs to
@@ -147,7 +160,10 @@ impl crate::FromValue<TypesOnly> for () {
 
 impl Runtime for TypesOnly {
     type Value = ();
+    type Frame = ();
     type CallFuture<'a> = Ready<()>;
+
+    fn frame(&self) {}
 
     fn type_of(&self, _: &()) -> Option<TypeId> {
         None
@@ -221,7 +237,7 @@ impl Runtime for TypesOnly {
     fn call_is_sync(&self, _: &()) -> bool {
         false
     }
-    fn call_now(&self, _: &(), _: &mut [()], _: CallToken) {
+    fn call_now(&self, _: &(), _: &mut [()], _: &mut (), _: CallToken) {
         no_values()
     }
     fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
