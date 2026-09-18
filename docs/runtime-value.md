@@ -140,8 +140,9 @@ RFC-0043.
 `#[repr(C)] struct Value { kind: Kind, word: u64 }`: one byte that says what
 the word is and one word that is the bits, an address, or nothing. 16 bytes,
 `Copy`, no `Drop`. `Kind` is `#[repr(u8)]` over `Undef`, `Ref`, `Large`,
-`None` and one variant per `Inline` type (`I8`..`U64`, `F64`, `Bool`,
-`Unit`), so the byte a value carries is both its discriminant and the Rust
+`None` and one variant per `Inline` type (`I8`..`U64`, `F64`, `Char`,
+`Bool`, `Unit`), so the byte a value carries is both its discriminant and
+the Rust
 type it was erased from; `Kind::of::<T>()` const-folds, and the spare values
 above the last variant are the niche that keeps `Option<Value>` at 16 bytes.
 One scalar in the first word and one in the second is a `ScalarPair` in

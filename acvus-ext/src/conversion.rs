@@ -51,6 +51,11 @@ fn to_string_float(a: &f64) -> String {
 }
 
 #[extern_fn(instance_of = sig::to_string, effect = pure)]
+fn to_string_char(a: &char) -> String {
+    a.to_string()
+}
+
+#[extern_fn(instance_of = sig::to_string, effect = pure)]
 fn to_string_bool(a: &bool) -> String {
     a.to_string()
 }
@@ -130,30 +135,24 @@ where
 
 // -- the rest -----------------------------------------------------------
 
+/// What an integer was not: a Unicode scalar value.
 #[derive(TyArg)]
 pub enum CharError {
-    NotOneChar(String),
     NotAChar(i64),
 }
 
+/// `char::from_u32`: the checked half of the `char` conversions.
+///
+/// `as` has the other half and does not cover this one. RFC-0049's `as` is
+/// total, and Rust admits only `u8 as char`, which reaches U+00FF and no
+/// further; every code point above it arrives through a check that can
+/// fail, so this returns a `Result` (RFC-0038) and stays.
 #[extern_fn(effect = pure)]
-fn char_to_int(s: String) -> Result<i64, CharError> {
-    let mut chars = s.chars();
-    match (chars.next(), chars.next()) {
-        (Some(c), None) => Ok(i64::from(u32::from(c))),
-        _ => Err(CharError::NotOneChar(s)),
-    }
-}
-
-#[extern_fn(effect = pure)]
-fn int_to_char(n: i64) -> Result<String, CharError> {
+fn int_to_char(n: i64) -> Result<char, CharError> {
     let Ok(code) = u32::try_from(n) else {
         return Err(CharError::NotAChar(n));
     };
-    match char::from_u32(code) {
-        Some(c) => Ok(c.to_string()),
-        None => Err(CharError::NotAChar(n)),
-    }
+    char::from_u32(code).ok_or(CharError::NotAChar(n))
 }
 
 pub fn conversion_registry<R: Runtime>() -> Registry<R> {
@@ -163,9 +162,9 @@ pub fn conversion_registry<R: Runtime>() -> Registry<R> {
         fns: [
             to_string_i8, to_string_i16, to_string_i32, to_string_int,
             to_string_u8, to_string_u16, to_string_u32, to_string_u64,
-            to_string_float, to_string_bool, to_string_string,
+            to_string_float, to_string_char, to_string_bool, to_string_string,
             to_int_bool,
-            char_to_int, int_to_char,
+            int_to_char,
         ],
     }
 }
@@ -182,7 +181,7 @@ mod tests {
             .expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
         let signatures = 2;
-        let plain_fns = 2;
+        let plain_fns = 1;
         assert_eq!(
             reg.functions.len() - core.functions.len(),
             signatures + plain_fns

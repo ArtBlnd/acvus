@@ -211,7 +211,11 @@ PrimaryExpr  = IDENT                       ← identifier (value binding)
              | "$" IDENT                   ← extern parameter (immutable, injected)
              | "@" IDENT                   ← context reference (mutable storage)
              | INT                         ← integer literal
+             | INT_OF                      ← suffixed integer literal (RFC-0058)
              | FLOAT                       ← float literal
+             | CHAR                        ← character literal (RFC-0058)
+             | BYTE                        ← byte literal (RFC-0058)
+             | BYTES                       ← byte-string literal (RFC-0058)
              | STRING                      ← string literal
              | FORMAT_STRING               ← format string (see below)
              | "true" | "false"            ← boolean literal
@@ -266,7 +270,8 @@ Binding      = IDENT                       ← variable capture
 
 ContextBind  = "@" IDENT                   ← context binding
 
-Literal      = INT | FLOAT | STRING | "true" | "false"
+Literal      = INT | INT_OF | FLOAT | CHAR | BYTE | BYTES | STRING
+             | "true" | "false"
 
 List         = "[" Pattern* "]"            ← exact match
              | "[" Pattern* ".." Pattern* "]"  ← rest pattern
@@ -302,7 +307,11 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `$REF` | `$name`, `$user` |
 | `@REF` | `@name`, `@user` |
 | `INT` | `0`, `42`, `-1` |
+| `INT_OF` | `10u64`, `255u8`, `1i32` — the suffix is one of RFC-0037's eight widths, and a value the width does not hold is refused |
 | `FLOAT` | `3.14`, `0.0` |
+| `CHAR` | `'x'`, `'\n'`, `'\u{1F600}'` — one Unicode scalar value, Rust's escapes |
+| `BYTE` | `b'G'`, `b'\xFF'` — a `u8` |
+| `BYTES` | `b"GET"`, `b"\xFF\x00"` — an `Array<u8, N>`, ASCII and `\xNN` |
 | `STRING` | `"hello"`, `"world"` |
 | `FORMAT_STRING` | `"hello {{ name }}!"` (lexer splits into `FmtStringStart`/`Mid`/`End`) |
 | `true` `false` | boolean literals |

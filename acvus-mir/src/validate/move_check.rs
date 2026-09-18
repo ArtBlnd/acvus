@@ -42,7 +42,9 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 /// option a box would have to move this arm with it.
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
-        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => Some(false),
+        Ty::Int(_) | Ty::Float | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => {
+            Some(false)
+        }
         Ty::Ref(..) => Some(false),
         Ty::Slice(_) => Some(true),
         Ty::Option(payload) => is_move_only(payload),

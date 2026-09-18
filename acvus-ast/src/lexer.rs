@@ -110,6 +110,8 @@ pub fn scan_template(source: &str) -> Result<Vec<Segment>, ParseError> {
                             }
                             pos += 1;
                         }
+                    } else if let Some(after) = char_literal_end(bytes, pos) {
+                        pos = after;
                     } else if let Some((tr, close_skip)) = detect_close(bytes, pos) {
                         inner_end = pos;
                         trim_right = tr;
@@ -176,6 +178,30 @@ fn detect_open(bytes: &[u8], pos: usize) -> Option<(bool, usize)> {
     } else {
         None
     }
+}
+
+/// The longest text a `'…'` literal can be: `'\u{10FFFF}'`.
+const CHAR_LITERAL_MAX: usize = 12;
+
+/// One past the closing quote of the `'…'` starting at `pos`, so the tag
+/// scanner steps over a `"` or a `}}` a character literal holds. `None`
+/// where `pos` is not a quote or no closing quote follows within the
+/// longest a literal can be, which leaves an apostrophe in a tag exactly
+/// where it was.
+fn char_literal_end(bytes: &[u8], pos: usize) -> Option<usize> {
+    if bytes[pos] != b'\'' {
+        return None;
+    }
+    let mut at = pos + 1;
+    while at < bytes.len() && at <= pos + CHAR_LITERAL_MAX {
+        match bytes[at] {
+            b'\\' => at += 2,
+            b'\n' => return None,
+            b'\'' => return Some(at + 1),
+            _ => at += 1,
+        }
+    }
+    None
 }
 
 /// Detect a closing delimiter at `pos`.
@@ -361,6 +387,10 @@ fn expand_format_string(
                         ParseErrorKind::UnclosedTag,
                         err_span,
                     ))]);
+                }
+                if let Some(after) = char_literal_end(bytes, scan) {
+                    scan = after;
+                    continue;
                 }
                 match bytes[scan] {
                     b'"' => {

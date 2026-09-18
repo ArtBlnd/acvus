@@ -94,20 +94,30 @@ async fn len_of_a_string_counts_characters() {
 
 #[tokio::test]
 async fn char_at_reads_one_character_by_character_index() {
-    assert_eq!(string("let s = \"héllo\"; char_at(&s, 1)").await, "é");
-    assert_eq!(string("let s = \"ab\"; char_at(&s, 1)").await, "b");
+    assert_eq!(
+        string("let s = \"héllo\"; let c = char_at(&s, 1); c.to_string()").await,
+        "é"
+    );
+    assert_eq!(
+        string("let s = \"ab\"; let c = char_at(&s, 1); c.to_string()").await,
+        "b"
+    );
 }
 
 #[tokio::test]
 #[should_panic(expected = "char_at")]
 async fn char_at_outside_the_string_traps() {
-    run("let s = \"ab\"; char_at(&s, 5)", Ty::String).await;
+    run(
+        "let s = \"ab\"; let c = char_at(&s, 5); c.to_string()",
+        Ty::String,
+    )
+    .await;
 }
 
 // -- Producers ------------------------------------------------------------------
 
 #[tokio::test]
-async fn chars_yields_one_string_per_character() {
+async fn chars_yields_one_char_per_character() {
     assert_eq!(
         run("let cs = chars(\"ab\") | collect; len(&cs)", Ty::U64)
             .await
@@ -115,7 +125,22 @@ async fn chars_yields_one_string_per_character() {
         2
     );
     assert_eq!(run("chars(\"héllo\") | count()", Ty::I64).await.as_int(), 5);
-    assert_eq!(string("chars(\"héllo\") | join(\"-\")").await, "h-é-l-l-o");
+    assert_eq!(
+        string("chars(\"héllo\") | map(|c| -> c.to_string()) | join(\"-\")").await,
+        "h-é-l-l-o"
+    );
+    assert_eq!(
+        run(
+            "chars(\"héllo\") | fold(0, |acc, c| -> acc + c as i64)",
+            Ty::I64
+        )
+        .await
+        .as_int(),
+        i64::from('h' as u32)
+            + i64::from('é' as u32)
+            + i64::from('l' as u32) * 2
+            + i64::from('o' as u32)
+    );
 }
 
 #[tokio::test]

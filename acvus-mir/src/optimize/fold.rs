@@ -24,7 +24,7 @@ use rustc_hash::FxHashMap;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{InstKind, ValueId};
-use crate::ty::{IntTy, NumTy, Ty};
+use crate::ty::{CastTy, IntTy, Ty, WordTy};
 
 pub fn run(cfg: &mut CfgBody) {
     while rewrite_once(cfg) {}
@@ -195,7 +195,7 @@ fn fold_cast(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     let InstKind::Cast { dst, src, to } = kind_at(cfg, site) else {
         return false;
     };
-    let Some(from) = cfg.val_types.get(&src).and_then(NumTy::of_ty) else {
+    let Some(from) = cfg.val_types.get(&src).and_then(CastTy::of_ty) else {
         return false;
     };
     let Some(value) = facts
@@ -213,23 +213,39 @@ fn fold_cast(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
 /// Every arm is the Rust `as` expression `ops::cast`'s instance for the
 /// same pair runs, so the two agree by construction;
 /// `acvus-interpreter-test/tests/fold_agreement.rs` runs both.
-fn cast_result(from: NumTy, to: NumTy, held: &Literal) -> Option<Literal> {
-    match (from, held) {
-        (NumTy::Int(k), Literal::Int(a)) => Some(int_cast(k.read(register_word(*a)), to)),
-        (NumTy::F64, Literal::Float(x)) => Some(float_cast(*x, to)),
-        _ => None,
+fn cast_result(from: CastTy, to: CastTy, held: &Literal) -> Option<Literal> {
+    let source = match (from, held) {
+        (CastTy::Int(k), Literal::Int(a)) => Source::Int(k.read(register_word(*a))),
+        (CastTy::Char, Literal::Char(c)) => Source::Int(i128::from(u32::from(*c))),
+        (CastTy::F64, Literal::Float(x)) => Source::Float(*x),
+        _ => return None,
+    };
+    match (to, source) {
+        (CastTy::Char, Source::Int(a)) => u8::try_from(a)
+            .ok()
+            .map(|byte| Literal::Char(char::from(byte))),
+        (CastTy::Char, Source::Float(_)) => None,
+        (num, Source::Int(a)) => Some(int_cast(a, num.word())),
+        (num, Source::Float(x)) => Some(float_cast(x, num.word())),
     }
 }
 
-fn int_cast(a: i128, to: NumTy) -> Literal {
+/// The word a cast reads, at the width its source type named.
+#[derive(Clone, Copy)]
+enum Source {
+    Int(i128),
+    Float(f64),
+}
+
+fn int_cast(a: i128, to: WordTy) -> Literal {
     match to {
-        NumTy::Int(j) => Literal::Int(j.read(register_word(a))),
-        NumTy::F64 => Literal::Float(a as f64),
+        WordTy::Int(j) => Literal::Int(j.read(register_word(a))),
+        WordTy::F64 => Literal::Float(a as f64),
     }
 }
 
-fn float_cast(x: f64, to: NumTy) -> Literal {
-    let NumTy::Int(j) = to else {
+fn float_cast(x: f64, to: WordTy) -> Literal {
+    let WordTy::Int(j) = to else {
         return Literal::Float(x);
     };
     Literal::Int(match j {

@@ -163,7 +163,7 @@ fn an_unwrapped_result_is_not_dropped_after_the_unwrap() {
     let i = Interner::new();
     let ir = compile_script_optimized(
         &i,
-        "let n = 0; if let Ok(c) = int_to_char(65) { n = c.len(); }; n",
+        "let n = 0; if let Ok(c) = int_to_char(65) { n = c as i64; }; n",
         &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();

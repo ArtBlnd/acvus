@@ -145,7 +145,10 @@ refused like any other unknown type name.
 `3u64` is not added here. A suffix is a lexer and literal-typing change
 whose interaction with RFC-0037's "the use decides the width" rule is its
 own decision; the fold turns `3 as u64` into the constant anyway, so
-nothing is paid for the spelling.
+nothing is paid for the spelling. **RFC-0058 made that decision**: a
+suffixed literal is a constant of its width and an unsuffixed one keeps
+RFC-0037's rule. RFC-0058 also added `char` at both ends of an `as`, so the
+`NumTy` named here is `CastTy` and `WordTy` is what the machine reads.
 
 ## Consequences
 

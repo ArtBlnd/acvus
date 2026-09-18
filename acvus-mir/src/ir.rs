@@ -4,7 +4,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::graph::QualifiedRef;
-use crate::ty::{Mutability, NumTy, Task, Ty};
+use crate::ty::{CastTy, Mutability, Task, Ty};
 
 /// A call that is an instruction of the language (RFC-0020): the
 /// compiler's own instance of a shared signature.
@@ -269,7 +269,7 @@ pub enum InstKind {
     Cast {
         dst: ValueId,
         src: ValueId,
-        to: NumTy,
+        to: CastTy,
     },
 
     // Functions

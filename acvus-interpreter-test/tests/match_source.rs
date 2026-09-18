@@ -42,7 +42,7 @@ async fn a_string_payload_moved_out_of_a_temporary_result_is_the_string() {
     let i = Interner::new();
     let out = run(
         &i,
-        "{{ Ok(c) = int_to_char(65) }}{{ c }}{{_}}bad{{/}}",
+        "{{ Ok(c) = int_to_char(65) }}{{ c.to_string() }}{{_}}bad{{/}}",
         Context::default(),
     )
     .await;

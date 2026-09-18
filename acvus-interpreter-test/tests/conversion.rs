@@ -120,19 +120,18 @@ async fn from_str_of_an_integer_the_width_does_not_hold_is_out_of_range() {
     );
 }
 
+/// `char_to_int` is gone: a `char` is a type and `c as u32` is its scalar
+/// value, which is total where the extern returned a `Result` (RFC-0058).
 #[tokio::test]
-async fn char_to_int_takes_exactly_one_char() {
-    let src = |input: &str| {
-        format!(
-            r#"let r = char_to_int("{input}");
-               if let Ok(n) = r {{ "ok " + n.to_string() }}
-               else if let Err(CharError::NotOneChar(s)) = r {{ "not one char [" + s + "]" }}
-               else {{ "unreachable" }}"#
-        )
-    };
-    assert_eq!(script_mode_text(&src("A")).await, "ok 65");
-    assert_eq!(script_mode_text(&src("")).await, "not one char []");
-    assert_eq!(script_mode_text(&src("ab")).await, "not one char [ab]");
+async fn a_char_reaches_its_scalar_value_through_as() {
+    assert_eq!(
+        script_mode_text("let n = \'A\' as u32; n.to_string()").await,
+        "65"
+    );
+    assert_eq!(
+        script_mode_text("let n = \'\\u{1F600}\' as u32; n.to_string()").await,
+        "128512"
+    );
 }
 
 #[tokio::test]
@@ -140,7 +139,7 @@ async fn int_to_char_refuses_what_is_not_a_code_point() {
     let src = |n: i64| {
         format!(
             r#"let r = int_to_char({n});
-               if let Ok(c) = r {{ "ok " + c }}
+               if let Ok(c) = r {{ "ok " + c.to_string() }}
                else if let Err(CharError::NotAChar(n)) = r {{ "not a char " + n.to_string() }}
                else {{ "unreachable" }}"#
         )

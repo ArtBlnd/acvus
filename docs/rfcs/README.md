@@ -103,3 +103,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0054](0054-the-host-declares-what-main-returns.md) | The host declares what `main` returns, and the compilation holds the body to it | Accepted |
 | [RFC-0055](0055-a-constant-expression-folds.md) | A constant expression folds | Accepted |
 | [RFC-0056](0056-a-loop-multiplies-once.md) | A loop multiplies once | Accepted |
+| [RFC-0058](0058-a-literal-says-its-type.md) | A literal says its type — `10u64`, `'c'`, `b"…"`, and `char` | Accepted |

@@ -1,6 +1,6 @@
 use acvus_ast::{
     AstId, BinOp, Expr, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField, Pattern,
-    RefKind, Span, Template, TupleElem, TuplePatternElem,
+    RefKind, Span, SuffixedInt, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -17,7 +17,7 @@ use crate::solver::{
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, NumTy, Param, ParamTerm,
+    CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, Param, ParamTerm,
     Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
 };
 use crate::variant::VariantPayload;
@@ -59,7 +59,11 @@ struct IntLiteral {
 /// a question its type answers only once the body is solved (RFC-0049).
 struct CastSite {
     from: InferTy,
+    to: CastTy,
     span: Span,
+    /// The span of the target name, where the refusal is about the pair
+    /// rather than about the source.
+    target_span: Span,
 }
 
 /// The first argument of a call that was checked before the callee's
@@ -306,7 +310,7 @@ fn operand_bound(op: BinOp) -> Option<TyVarBound> {
         | BinOp::Gt
         | BinOp::Lte
         | BinOp::Gte => Some(TyVarBound::OneOf(
-            integers().chain([TyTerm::Float]).collect(),
+            integers().chain([TyTerm::Float, TyTerm::Char]).collect(),
         )),
         BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
             Some(TyVarBound::OneOf(integers().collect()))
@@ -1700,12 +1704,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
         let casts = std::mem::take(&mut self.casts);
-        for CastSite { from, span } in casts {
+        for CastSite {
+            from,
+            to,
+            span,
+            target_span,
+        } in casts
+        {
             let Ok(from) = self.solver.freeze_ty(&from) else {
                 continue;
             };
-            if NumTy::of_ty(&from).is_none() && !from.is_error() {
-                self.error(MirErrorKind::CastOfNonNumber(from), span);
+            let Some(source) = CastTy::of_ty(&from) else {
+                if !from.is_error() {
+                    self.error(MirErrorKind::CastOfWhatDoesNotCast(from), span);
+                }
+                continue;
+            };
+            if !source.admits(to) {
+                self.error(
+                    MirErrorKind::CastNotAdmitted {
+                        from,
+                        to: Ty::from(to),
+                    },
+                    target_span,
+                );
             }
         }
         let literals = std::mem::take(&mut self.int_literals);
@@ -2062,6 +2084,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             span,
         });
         ty
+    }
+
+    /// `10u64`: the width the suffix names, and the value checked against
+    /// it here rather than after the solve, because nothing is left for a
+    /// use to decide (RFC-0058).
+    fn suffixed_int_literal(&mut self, literal: SuffixedInt, span: Span) -> InferTy {
+        let width = IntTy::from(literal.width);
+        if !width.holds(literal.value) {
+            self.error(
+                MirErrorKind::IntegerLiteralOutOfRange {
+                    value: literal.value,
+                    ty: Ty::Int(width),
+                },
+                span,
+            );
+        }
+        TyTerm::Int(width)
     }
 
     fn record(&mut self, id: AstId, ty: InferTy) {
@@ -3366,7 +3405,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Expr::Literal { id, value, span } => {
                 let ty = match value {
                     Literal::Int(n) => self.int_literal(*n, *span),
+                    Literal::IntOf(n) => self.suffixed_int_literal(*n, *span),
                     Literal::Float(_) => TyTerm::Float,
+                    Literal::Char(_) => TyTerm::Char,
+                    Literal::Bytes(bytes) => {
+                        TyTerm::Array(Box::new(TyTerm::U8), LenTerm::Known(bytes.len()))
+                    }
                     Literal::String(_) => TyTerm::String,
                     Literal::Bool(_) => TyTerm::Bool,
                     Literal::Unit => TyTerm::Unit,
@@ -3581,7 +3625,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let ok = self.unify_operands(*op, &lt, &rt, *span)
                             && matches!(
                                 self.solver.resolve_ty(&lt),
-                                TyTerm::Int(_) | TyTerm::Float | TyTerm::Var(_)
+                                TyTerm::Int(_) | TyTerm::Float | TyTerm::Char | TyTerm::Var(_)
                             );
                         if !ok {
                             self.binop_error(
@@ -3843,14 +3887,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span: _,
             } => {
                 let from = self.check_expr(expr);
-                let Some(to) = NumTy::of_name(self.interner.resolve(*target)) else {
+                let Some(to) = CastTy::of_name(self.interner.resolve(*target)) else {
                     let name = self.interner.resolve(*target).to_string();
                     self.error(MirErrorKind::CastToUnknownType(name), *target_span);
                     return self.record_ret(*id, Self::infer_error());
                 };
                 self.casts.push(CastSite {
                     from,
+                    to,
                     span: expr.span(),
+                    target_span: *target_span,
                 });
                 self.record_ret(*id, InferTy::from(to))
             }
@@ -4916,7 +4962,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn literal_ty(&mut self, lit: &Literal, span: Span) -> InferTy {
         match lit {
             Literal::Int(n) => self.int_literal(*n, span),
+            Literal::IntOf(n) => self.suffixed_int_literal(*n, span),
             Literal::Float(_) => TyTerm::Float,
+            Literal::Char(_) => TyTerm::Char,
+            Literal::Bytes(bytes) => {
+                TyTerm::Array(Box::new(TyTerm::U8), LenTerm::Known(bytes.len()))
+            }
             Literal::String(_) => TyTerm::String,
             Literal::Bool(_) => TyTerm::Bool,
             Literal::Unit => TyTerm::Unit,

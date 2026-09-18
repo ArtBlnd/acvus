@@ -2,6 +2,26 @@ use acvus_utils::{Astr, Interner};
 use logos::Logos;
 use std::fmt;
 
+use crate::literal::{IntWidth, SuffixedInt};
+
+/// The text a quoted literal encloses: the slice without its `open`-byte
+/// prefix and its one-byte closing quote.
+fn inner_text(lex: &mut logos::Lexer<'_, Token>, open: usize) -> String {
+    let slice = lex.slice();
+    slice[open..slice.len() - 1].to_owned()
+}
+
+/// `10u64`: the digits and the width the suffix names.
+fn suffixed_int(lex: &mut logos::Lexer<'_, Token>) -> Option<SuffixedInt> {
+    let slice = lex.slice();
+    let at = slice.find(|c: char| !c.is_ascii_digit())?;
+    let width = IntWidth::of_name(&slice[at..])?;
+    Some(SuffixedInt {
+        value: slice[..at].parse().ok()?,
+        width,
+    })
+}
+
 fn parse_string_literal(lex: &mut logos::Lexer<'_, Token>) -> Option<String> {
     let slice = lex.slice();
     let inner = &slice[1..slice.len() - 1];
@@ -80,10 +100,25 @@ pub enum Token {
     // -- Literals --
     #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
     FloatLit(f64),
+    #[regex(r"[0-9]+(i8|i16|i32|i64|u8|u16|u32|u64)", suffixed_int, priority = 4)]
+    IntLitOf(SuffixedInt),
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i128>().ok())]
     IntLit(i128),
     #[regex(r#""([^"\\]|\\.)*""#, parse_string_literal)]
     StringLit(String),
+    /// The text between the quotes of `'…'`, undecoded: the grammar
+    /// decodes it, so a bad escape is a parse error carrying the
+    /// literal's span rather than an unexpected character. The content
+    /// admits no bare `'` and no newline, so a literal ends at the first
+    /// quote that is not escaped and `'a' == 'b'` is three tokens.
+    #[regex(r"'([^'\\\n]|\\[^\n])*'", |lex| inner_text(lex, 1))]
+    CharLit(String),
+    /// The text between the quotes of `b'…'`, undecoded.
+    #[regex(r"b'([^'\\\n]|\\[^\n])*'", |lex| inner_text(lex, 2))]
+    ByteLit(String),
+    /// The text between the quotes of `b"…"`, undecoded.
+    #[regex(r#"b"([^"\\]|\\.)*""#, |lex| inner_text(lex, 2))]
+    ByteStrLit(String),
 
     // -- Two-char operators --
     #[token("::")]
@@ -165,6 +200,10 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::IntLit(n) => write!(f, "{n}"),
+            Token::IntLitOf(lit) => write!(f, "{}{}", lit.value, lit.width.name()),
+            Token::CharLit(s) => write!(f, "'{s}'"),
+            Token::ByteLit(s) => write!(f, "b'{s}'"),
+            Token::ByteStrLit(s) => write!(f, "b\"{s}\""),
             Token::FloatLit(n) => write!(f, "{n}"),
             Token::StringLit(s) => write!(f, "\"{s}\""),
             Token::Ident(_) => write!(f, "<ident>"),

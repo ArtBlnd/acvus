@@ -1,7 +1,11 @@
 //! String operations. All pure. A string is a value, not a container of
 //! characters (RFC-0028): there is no `get` returning a reference into it,
-//! because a `char` has no acvus type to be referenced as; a character is
-//! read out by value with `char_at`.
+//! because a `String` is UTF-8 and a scalar value is not a storage inside
+//! it; a character is read out by value with `char_at`, as the `char` it
+//! is (RFC-0058).
+//!
+//! Every index here counts scalar values, not bytes: `char_at(s, i)` is
+//! `s.chars().nth(i)`, and `find`/`rfind` report a scalar index.
 
 use acvus_extern::{
     Cross, EffectVar, Erased, IdentityVar, Registry, Runtime, extern_fn, extern_registry,
@@ -131,7 +135,7 @@ fn to_utf8_lossy(bytes: Vec<u8>) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn char_at(s: &String, i: i64) -> String {
+fn char_at(s: &String, i: i64) -> char {
     let out_of_range = || -> ! {
         panic!(
             "char_at: index {i} is out of range for length {}",
@@ -144,7 +148,7 @@ fn char_at(s: &String, i: i64) -> String {
     let Some(c) = s.chars().nth(index) else {
         out_of_range()
     };
-    c.to_string()
+    c
 }
 
 // -- Producers ----------------------------------------------------------
@@ -161,13 +165,13 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn chars<E, I, Rt>(s: String) -> Iter<String, E, I, Rt>
+fn chars<E, I, Rt>(s: String) -> Iter<char, E, I, Rt>
 where
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
 {
-    iter_of(s.chars().map(|c| c.to_string()).collect())
+    iter_of(s.chars().collect())
 }
 
 #[extern_fn(effect = pure)]

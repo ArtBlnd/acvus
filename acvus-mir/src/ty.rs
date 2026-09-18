@@ -119,54 +119,109 @@ impl IntTy {
     }
 }
 
-/// The type an `as` cast names (RFC-0049).
+/// The type an `as` cast names, at either end of it (RFC-0049, RFC-0058).
 ///
 /// No `f32`: RFC-0037 does not have the type, and `as` does not add one.
+/// Which pairs a cast may join is `Cast::admits`, not this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum NumTy {
+pub enum CastTy {
     Int(IntTy),
     F64,
+    Char,
 }
 
-impl NumTy {
-    pub fn of_name(name: &str) -> Option<NumTy> {
+impl CastTy {
+    pub const NAMES: &'static str = "i8, i16, i32, i64, u8, u16, u32, u64, f64 or char";
+
+    pub fn of_name(name: &str) -> Option<CastTy> {
         match name {
-            "f64" => Some(NumTy::F64),
+            "f64" => Some(CastTy::F64),
+            "char" => Some(CastTy::Char),
             _ => IntTy::ALL
                 .into_iter()
                 .find(|k| k.name() == name)
-                .map(NumTy::Int),
+                .map(CastTy::Int),
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            NumTy::Int(k) => k.name(),
-            NumTy::F64 => "f64",
+            CastTy::Int(k) => k.name(),
+            CastTy::F64 => "f64",
+            CastTy::Char => "char",
         }
     }
 
-    pub fn of_ty<V>(ty: &TyTerm<V>) -> Option<NumTy>
+    pub fn of_ty<V>(ty: &TyTerm<V>) -> Option<CastTy>
     where
         V: Phase,
     {
         match ty {
-            TyTerm::Int(k) => Some(NumTy::Int(*k)),
-            TyTerm::Float => Some(NumTy::F64),
+            TyTerm::Int(k) => Some(CastTy::Int(*k)),
+            TyTerm::Float => Some(CastTy::F64),
+            TyTerm::Char => Some(CastTy::Char),
             _ => None,
+        }
+    }
+
+    /// The numeric type whose word this type's word is. A `char` is a
+    /// Unicode scalar value, which is its `u32`, and every cast Rust
+    /// admits at either end of a `char` has the value of the same cast
+    /// through `u32`: `u8 as char` zero-extends, and `char as T`
+    /// truncates or extends from 32 bits.
+    pub fn word(self) -> WordTy {
+        match self {
+            CastTy::Int(k) => WordTy::Int(k),
+            CastTy::F64 => WordTy::F64,
+            CastTy::Char => WordTy::Int(IntTy::U32),
+        }
+    }
+
+    /// Whether `self as to` is a cast Rust admits: every pair of numbers,
+    /// a `char` to any integer, and `u8` to `char` and nothing else.
+    pub fn admits(self, to: CastTy) -> bool {
+        match (self, to) {
+            (_, CastTy::Char) => self == CastTy::Int(IntTy::U8),
+            (CastTy::Char, CastTy::F64) => false,
+            (CastTy::Char, _) | (CastTy::Int(_) | CastTy::F64, _) => true,
         }
     }
 }
 
-impl<V> From<NumTy> for TyTerm<V>
+/// The type a word is read and written at: RFC-0037's eight widths and
+/// `f64`, which is every type the machine converts between. A `char` is
+/// not one of them and has no word of its own — `CastTy::word`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WordTy {
+    Int(IntTy),
+    F64,
+}
+
+impl<V> From<CastTy> for TyTerm<V>
 where
     V: Phase,
 {
-    fn from(num: NumTy) -> TyTerm<V> {
+    fn from(num: CastTy) -> TyTerm<V> {
         match num {
-            NumTy::Int(k) => TyTerm::Int(k),
-            NumTy::F64 => TyTerm::Float,
+            CastTy::Int(k) => TyTerm::Int(k),
+            CastTy::F64 => TyTerm::Float,
+            CastTy::Char => TyTerm::Char,
+        }
+    }
+}
+
+impl From<acvus_ast::IntWidth> for IntTy {
+    fn from(width: acvus_ast::IntWidth) -> IntTy {
+        match width {
+            acvus_ast::IntWidth::I8 => IntTy::I8,
+            acvus_ast::IntWidth::I16 => IntTy::I16,
+            acvus_ast::IntWidth::I32 => IntTy::I32,
+            acvus_ast::IntWidth::I64 => IntTy::I64,
+            acvus_ast::IntWidth::U8 => IntTy::U8,
+            acvus_ast::IntWidth::U16 => IntTy::U16,
+            acvus_ast::IntWidth::U32 => IntTy::U32,
+            acvus_ast::IntWidth::U64 => IntTy::U64,
         }
     }
 }
@@ -500,6 +555,7 @@ where
             (TyTerm::Var(_), _) => unknowns == Unknowns::Open,
             (TyTerm::Int(a), TyTerm::Int(b)) => a == b,
             (TyTerm::Float, TyTerm::Float)
+            | (TyTerm::Char, TyTerm::Char)
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
@@ -786,6 +842,7 @@ impl PatternSubst {
             }
             (TyTerm::Int(a), TyTerm::Int(b)) => a == b,
             (TyTerm::Float, TyTerm::Float)
+            | (TyTerm::Char, TyTerm::Char)
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
@@ -1039,6 +1096,7 @@ pub struct CastRule {
 enum TyHead {
     Int(IntTy),
     Float,
+    Char,
     String,
     Bool,
     Unit,
@@ -1064,6 +1122,7 @@ fn ty_head(ty: &PolyTy) -> TyHead {
     match ty {
         TyTerm::Int(k) => TyHead::Int(*k),
         TyTerm::Float => TyHead::Float,
+        TyTerm::Char => TyHead::Char,
         TyTerm::String => TyHead::String,
         TyTerm::Bool => TyHead::Bool,
         TyTerm::Unit => TyHead::Unit,
@@ -1617,7 +1676,9 @@ impl TyTerm<Concrete> {
     /// host's declaration, not the checker's.
     pub fn is_data(&self) -> bool {
         match self {
-            Ty::Int(_) | Ty::Float | Ty::String | Ty::Bool | Ty::Unit | Ty::Never => true,
+            Ty::Int(_) | Ty::Float | Ty::Char | Ty::String | Ty::Bool | Ty::Unit | Ty::Never => {
+                true
+            }
             Ty::Array(inner, _) | Ty::Option(inner) => inner.is_data(),
             Ty::Result(ok, err) => ok.is_data() && err.is_data(),
             Ty::Tuple(elems) => elems.iter().all(Ty::is_data),
@@ -1719,6 +1780,7 @@ where
             TyTerm::Order => write!(f, "Order"),
             TyTerm::Slice(elem) => write!(f, "[{}]", elem.display(self.interner)),
             TyTerm::Float => write!(f, "Float"),
+            TyTerm::Char => write!(f, "char"),
             TyTerm::String => write!(f, "String"),
             TyTerm::Bool => write!(f, "Bool"),
             TyTerm::Unit => write!(f, "Unit"),
@@ -2177,6 +2239,9 @@ pub enum TyTerm<V: Phase> {
     // Primitives
     Int(IntTy),
     Float,
+    /// One Unicode scalar value, a word of `u32` bits (RFC-0058). Rust's
+    /// `char`, and it crosses as one.
+    Char,
     String,
     Bool,
     Unit,
@@ -2288,6 +2353,7 @@ impl<V: Phase> TyTerm<V> {
             self,
             TyTerm::Int(_)
                 | TyTerm::Float
+                | TyTerm::Char
                 | TyTerm::Bool
                 | TyTerm::Unit
                 | TyTerm::Never
@@ -2310,6 +2376,7 @@ impl<V: Phase> TyTerm<V> {
         match self {
             TyTerm::Int(k) => TyTerm::Int(*k),
             TyTerm::Float => TyTerm::Float,
+            TyTerm::Char => TyTerm::Char,
             TyTerm::String => TyTerm::String,
             TyTerm::Bool => TyTerm::Bool,
             TyTerm::Unit => TyTerm::Unit,
@@ -2422,6 +2489,7 @@ impl<V: Phase> TyTerm<V> {
         match self {
             TyTerm::Int(k) => Ok(TyTerm::Int(*k)),
             TyTerm::Float => Ok(TyTerm::Float),
+            TyTerm::Char => Ok(TyTerm::Char),
             TyTerm::String => Ok(TyTerm::String),
             TyTerm::Bool => Ok(TyTerm::Bool),
             TyTerm::Unit => Ok(TyTerm::Unit),
@@ -2590,6 +2658,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
         match ty {
             Ty::Int(k) => TyTerm::Int(*k),
             Ty::Float => TyTerm::Float,
+            Ty::Char => TyTerm::Char,
             Ty::String => TyTerm::String,
             Ty::Bool => TyTerm::Bool,
             Ty::Unit => TyTerm::Unit,

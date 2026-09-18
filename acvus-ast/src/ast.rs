@@ -1,5 +1,6 @@
 use acvus_utils::{Astr, QualifiedRef};
 
+pub use crate::literal::{IntWidth, LiteralErrorKind, SuffixedInt};
 use crate::span::Span;
 
 acvus_utils::declare_local_id!(pub AstId);
@@ -623,10 +624,36 @@ pub enum RefKind {
 pub enum Literal {
     String(String),
     Int(i128),
+    /// `10u64` (RFC-0058).
+    IntOf(SuffixedInt),
     Float(f64),
+    /// `'c'` (RFC-0058).
+    Char(char),
+    /// `b"…"` (RFC-0058).
+    Bytes(Vec<u8>),
     Bool(bool),
     List(Vec<Literal>),
     Unit,
+}
+
+impl Literal {
+    /// The same value in the literal forms that predate RFC-0058: a
+    /// suffixed integer as its value, a byte string as the list of its
+    /// bytes. A `Char` is already such a form and stays one.
+    ///
+    /// The width a suffix named and the `u8` a byte string's elements
+    /// have are the literal's *type*, which RFC-0037 keeps beside the
+    /// value rather than in it; a reader that has the type has no use for
+    /// the suffix, and the ones that do not are below the checker.
+    pub fn desugared(&self) -> Literal {
+        match self {
+            Literal::IntOf(suffixed) => Literal::Int(suffixed.value),
+            Literal::Bytes(bytes) => {
+                Literal::List(bytes.iter().map(|b| Literal::Int(i128::from(*b))).collect())
+            }
+            already => already.clone(),
+        }
+    }
 }
 
 // -- AST walk: context reference extraction --------------------------

@@ -194,6 +194,7 @@ impl_scalar_ty_arg!(u16, PolyTy::U16);
 impl_scalar_ty_arg!(u32, PolyTy::U32);
 impl_scalar_ty_arg!(u64, PolyTy::U64);
 impl_scalar_ty_arg!(f64, PolyTy::Float);
+impl_scalar_ty_arg!(char, PolyTy::Char);
 impl_scalar_ty_arg!(String, PolyTy::String);
 impl_scalar_ty_arg!(bool, PolyTy::Bool);
 impl_scalar_ty_arg!((), PolyTy::Unit);

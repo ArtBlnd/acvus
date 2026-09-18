@@ -13,7 +13,7 @@ use crate::ir::{
     MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
 };
 use crate::solver::CaptureRead;
-use crate::ty::{Effect, Mutability, NumTy, Task, Ty, TypeArg};
+use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
 use crate::typeck::{CapturedName, TypeResolution};
 
 pub struct Lowerer<'a> {
@@ -2126,7 +2126,7 @@ impl<'a> Lowerer<'a> {
                     *span,
                     InstKind::Const {
                         dst,
-                        value: value.clone(),
+                        value: value.desugared(),
                     },
                 );
                 dst
@@ -2595,7 +2595,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let src = self.lower_expr(expr);
                 let dst = self.alloc_expr(*id);
-                let kind = match NumTy::of_name(self.interner.resolve(*target)) {
+                let kind = match CastTy::of_name(self.interner.resolve(*target)) {
                     Some(to) => InstKind::Cast { dst, src, to },
                     None => InstKind::Poison { dst },
                 };
@@ -3357,7 +3357,7 @@ impl<'a> Lowerer<'a> {
                     InstKind::TestLiteral {
                         dst,
                         src: reference,
-                        value: value.clone(),
+                        value: value.desugared(),
                     },
                 );
                 dst
@@ -3612,7 +3612,7 @@ impl<'a> Lowerer<'a> {
                     InstKind::TestLiteral {
                         dst,
                         src: read,
-                        value: value.clone(),
+                        value: value.desugared(),
                     },
                 );
                 dst
@@ -3769,7 +3769,7 @@ impl<'a> Lowerer<'a> {
                     InstKind::TestLiteral {
                         dst,
                         src: src_reg,
-                        value: value.clone(),
+                        value: value.desugared(),
                     },
                 );
                 dst

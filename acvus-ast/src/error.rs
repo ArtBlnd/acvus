@@ -32,6 +32,9 @@ pub enum ParseErrorKind {
     // Tokenizer errors
     UnexpectedCharacter(char),
     InvalidNumber(String),
+    /// A `'…'`, `b'…'` or `b"…"` whose text is not what that literal
+    /// holds (RFC-0058).
+    BadLiteral(crate::literal::LiteralErrorKind),
 
     // Grammar errors
     UnexpectedToken(String),
@@ -61,6 +64,7 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::UnclosedString => write!(f, "unclosed string literal"),
             ParseErrorKind::UnexpectedCharacter(c) => write!(f, "unexpected character '{c}'"),
             ParseErrorKind::InvalidNumber(s) => write!(f, "invalid number '{s}'"),
+            ParseErrorKind::BadLiteral(kind) => write!(f, "{kind}"),
             ParseErrorKind::UnexpectedToken(s) => write!(f, "unexpected token: {s}"),
             ParseErrorKind::UnexpectedEof => write!(f, "unexpected end of input"),
             ParseErrorKind::UnmatchedCloseBlock => {

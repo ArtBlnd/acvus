@@ -16,6 +16,7 @@ pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
             }
         }
         Ty::Float => Json::from(value.as_float()),
+        Ty::Char => Json::from(char_of(value).to_string()),
         Ty::Bool => Json::from(value.as_bool()),
         Ty::Unit => Json::Null,
         // SAFETY: the type is the runtime's own witness of the value's shape.
@@ -89,6 +90,7 @@ pub fn by_kind(interner: &Interner, value: &Value) -> Json {
         Kind::U32 => int(IntTy::U32, value),
         Kind::U64 => int(IntTy::U64, value),
         Kind::F64 => Json::from(value.as_float()),
+        Kind::Char => Json::from(char_of(value).to_string()),
         Kind::Bool => Json::from(value.as_bool()),
         Kind::Unit | Kind::None => Json::Null,
         // SAFETY: a reference names a live value for as long as it lives.
@@ -96,6 +98,12 @@ pub fn by_kind(interner: &Interner, value: &Value) -> Json {
         Kind::Undef => Json::from("<undef>"),
         Kind::Large => by_composite(interner, value),
     }
+}
+
+/// The scalar value a `Char` word spells. JSON has no character, so a
+/// `char` reads out as the one-character string it is.
+fn char_of(value: &Value) -> char {
+    char::from_u32(value.as_char()).expect("as_char asserted a scalar value")
 }
 
 fn int(kind: IntTy, value: &Value) -> Json {

@@ -153,8 +153,15 @@ pub enum MirErrorKind {
     /// `e as T` where `T` is not one of the types `as` converts between
     /// (RFC-0049).
     CastToUnknownType(String),
-    /// `e as T` where `e` is not a number.
-    CastOfNonNumber(Ty),
+    /// `e as T` where `e` is neither a number nor a `char`.
+    CastOfWhatDoesNotCast(Ty),
+    /// `e as T` where both types cast but Rust does not join this pair:
+    /// only `u8 as char` reaches a `char`, and a `char` reaches an
+    /// integer and not `f64` (RFC-0058).
+    CastNotAdmitted {
+        from: Ty,
+        to: Ty,
+    },
     /// `*r` where `r` is not a reference.
     DerefOfNonReference(Ty),
     /// `*r` where the reference names a value that is not a primitive.
@@ -308,16 +315,29 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::CastToUnknownType(name) => {
                 write!(
                     f,
-                    "`as` converts to i8, i16, i32, i64, u8, u16, u32, u64 or f64, not to `{name}`"
+                    "`as` converts to {}, not to `{name}`",
+                    crate::ty::CastTy::NAMES
                 )
             }
-            MirErrorKind::CastOfNonNumber(ty) => {
+            MirErrorKind::CastOfWhatDoesNotCast(ty) => {
                 write!(
                     f,
-                    "`as` converts a number; {} is not one",
+                    "`as` converts a number or a char; {} is neither",
                     ty.display(interner)
                 )
             }
+            MirErrorKind::CastNotAdmitted { from, to } => match to {
+                Ty::Char => write!(
+                    f,
+                    "only `u8 as char` reaches a char; {} does not",
+                    from.display(interner)
+                ),
+                _ => write!(
+                    f,
+                    "`char as` reaches an integer; {} is not one",
+                    to.display(interner)
+                ),
+            },
             MirErrorKind::DerefOfNonReference(ty) => {
                 write!(f, "`*` needs a reference, got {}", ty.display(interner))
             }

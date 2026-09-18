@@ -69,6 +69,7 @@ pub fn encode(
     match ty {
         Ty::Int(k) => out.extend_from_slice(&value.bits().to_le_bytes()[..k.bytes()]),
         Ty::Float => out.extend_from_slice(&value.as_float().to_bits().to_le_bytes()),
+        Ty::Char => out.extend_from_slice(&value.as_char().to_le_bytes()),
         Ty::Bool => out.push(value.as_bool() as u8),
         Ty::Unit => {}
         // SAFETY (each composite): the type is the runtime's witness of the
@@ -177,6 +178,15 @@ pub fn decode(
             Value::from_bits(*k, k.read(u64::from_le_bytes(word)) as u64)
         }
         Ty::Float => Value::float(f64::from_bits(take_u64(input)?)),
+        Ty::Char => {
+            let mut word = [0u8; 4];
+            word.copy_from_slice(take(input, 4)?);
+            let code = u32::from_le_bytes(word);
+            let c = char::from_u32(code).ok_or_else(|| {
+                SpaceError::new(format!("{code:#x} is not a Unicode scalar value"))
+            })?;
+            Value::char_(c)
+        }
         Ty::Bool => Value::bool_(take(input, 1)?[0] != 0),
         Ty::Unit => Value::unit(),
         Ty::String => {

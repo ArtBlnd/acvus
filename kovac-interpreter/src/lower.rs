@@ -338,8 +338,21 @@ impl<'a> Lowerer<'a> {
             Literal::List(_) => {
                 // TODO: list constants go to M bank
             }
+            Literal::Char(c) => {
+                let (bank, rd) = self.reg(dst);
+                let base = match bank {
+                    Bank::A => CONST_A,
+                    Bank::B => CONST_B,
+                    _ => panic!("char const should go to scalar bank"),
+                };
+                self.pb
+                    .emit_const(encode1(base, rd), u64::from(u32::from(*c)));
+            }
             Literal::Unit => {
                 // Unit is zero-sized; no register allocation needed.
+            }
+            sugar @ (Literal::IntOf(_) | Literal::Bytes(_)) => {
+                self.lower_const(dst, &sugar.desugared())
             }
         }
     }

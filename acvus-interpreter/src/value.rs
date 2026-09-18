@@ -626,6 +626,11 @@ impl Value {
     pub fn float(f: f64) -> Self {
         Value::inline(Kind::F64, f.to_bits())
     }
+    /// A `char`'s word is its scalar value, the `u32` `char as u32` gives
+    /// (RFC-0058).
+    pub fn char_(c: char) -> Self {
+        Value::inline(Kind::Char, u64::from(u32::from(c)))
+    }
     pub fn bool_(b: bool) -> Self {
         Value::inline(Kind::Bool, b as u64)
     }
@@ -640,6 +645,19 @@ impl Value {
     }
     pub fn as_float(&self) -> f64 {
         f64::from_bits(self.bits())
+    }
+    /// The scalar value this word spells.
+    ///
+    /// # Panics
+    /// When the word is not one, which a `Char` register's is by the
+    /// checker: every way into one is `Value::char_` or a `u8 as char`.
+    pub fn as_char(&self) -> u32 {
+        let code = self.bits() as u32;
+        assert!(
+            char::from_u32(code).is_some(),
+            "a char's word is a Unicode scalar value, found {code:#x}"
+        );
+        code
     }
     pub fn as_bool(&self) -> bool {
         self.bits() != 0

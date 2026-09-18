@@ -8,6 +8,7 @@ use rustc_hash::FxHashMap;
 enum LiteralKey {
     Int(i128),
     Float(u64),
+    Char(char),
     String(String),
     Bool(bool),
     List(Vec<LiteralKey>),
@@ -19,6 +20,10 @@ impl LiteralKey {
         match lit {
             Literal::Int(v) => LiteralKey::Int(*v),
             Literal::Float(v) => LiteralKey::Float(v.to_bits()),
+            Literal::Char(v) => LiteralKey::Char(*v),
+            sugar @ (Literal::IntOf(_) | Literal::Bytes(_)) => {
+                LiteralKey::from_literal(&sugar.desugared())
+            }
             Literal::String(v) => LiteralKey::String(v.clone()),
             Literal::Bool(v) => LiteralKey::Bool(*v),
             Literal::List(elems) => {

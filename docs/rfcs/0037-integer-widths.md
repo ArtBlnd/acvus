@@ -64,7 +64,9 @@ as a `u8` with one rule.
   reaches every width in both directions with Rust's `as` values, and
   `to_int` kept only its `Bool` instance.
 - No `f32`.
-- No integer suffix on literals.
+- No integer suffix on literals. **RFC-0058 added one**: `10u64` has that
+  width, an unsuffixed literal keeps this RFC's rule, and an oversize
+  suffixed literal gets this RFC's message.
 
 ## Consequences
 

@@ -335,13 +335,14 @@ fn registries(corpus: &Arc<Corpus>) -> Vec<Registry<AcvusRuntime>> {
 
 // -- The script ---------------------------------------------------------
 
-/// `u64` has no literal and `a[i]` takes a `u64`, so the zero and the one
-/// every index arithmetic needs are derived from `len` -- the workaround
-/// `benches/programs.rs` and `benches/shapes.rs` already record.
+/// `a[i]` takes a `u64` (RFC-0047) and RFC-0058 gives one a literal, so the
+/// zero and the one every index arithmetic needs are written down. The
+/// workaround this recorded -- `one = plen / plen` -- is what
+/// `benches/programs.rs` and `benches/shapes.rs` still show.
 const PRELUDE: &str = "\
 let plen = len(&@pat); \
-let one = plen / plen; \
-let zero = plen - plen; \
+let one = 1u64; \
+let zero = 0u64; \
 let n = len(&@lines); \
 let count = 0; \
 let total = 0; \

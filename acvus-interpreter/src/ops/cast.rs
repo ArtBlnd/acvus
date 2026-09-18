@@ -12,7 +12,7 @@
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::{IntTy, NumTy};
+use acvus_mir::ty::{IntTy, WordTy};
 
 use crate::code::{Exit, Op, successor};
 use crate::machine::Machine;
@@ -52,11 +52,14 @@ impl_as_num! {
     f64 => of_f64,
 }
 
-/// The two ends of one cast, as `prepare` read them off the instruction.
+/// The two ends of one cast as words, which is what an instance of `Cast`
+/// is chosen by. A `char` has no word of its own and arrives here as the
+/// `u32` its scalar value is (`CastTy::word`, RFC-0058), so no pair with a
+/// `char` at either end adds an instance to this family.
 #[derive(Clone, Copy)]
 pub struct Conversion {
-    pub from: NumTy,
-    pub into: NumTy,
+    pub from: WordTy,
+    pub into: WordTy,
 }
 
 pub struct Cast<F, T, S, D>
@@ -107,26 +110,26 @@ where
     }
 }
 
-fn into_ty<F, S, D>(into: NumTy, at: UnaryAt<S, D>, next: Box<dyn Op>) -> Box<dyn Op>
+fn into_ty<F, S, D>(into: WordTy, at: UnaryAt<S, D>, next: Box<dyn Op>) -> Box<dyn Op>
 where
     F: AsNum,
     S: Place,
     D: Place,
 {
     match into {
-        NumTy::Int(k) => {
+        WordTy::Int(k) => {
             for_int_ty!(k, |T| Box::new(Cast::<F, T, S, D>::new(at, next))
                 as Box<dyn Op>)
         }
-        NumTy::F64 => Box::new(Cast::<F, f64, S, D>::new(at, next)),
+        WordTy::F64 => Box::new(Cast::<F, f64, S, D>::new(at, next)),
     }
 }
 
 pub fn cast_op(conversion: Conversion, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
     let Conversion { from, into } = conversion;
     at_unary!(places, |at| match from {
-        NumTy::Int(k) => for_int_ty!(k, |F| into_ty::<F, S, D>(into, at, next)),
-        NumTy::F64 => into_ty::<f64, S, D>(into, at, next),
+        WordTy::Int(k) => for_int_ty!(k, |F| into_ty::<F, S, D>(into, at, next)),
+        WordTy::F64 => into_ty::<f64, S, D>(into, at, next),
     })
 }
 

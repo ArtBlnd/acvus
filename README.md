@@ -53,6 +53,8 @@ label
   `sum`, `collect`, and the pipe form below.
 - `expr as T` converts between numbers — the eight integer widths and
   `f64` — with Rust's `as` values: `i as f64`, `n as u8`, `x as i64`.
+- A literal can say its own type: `10u64` at a width, `'c'` a `char` (one
+  Unicode scalar value), `b"GET"` an `Array<u8, 3>`, `b'G'` a `u8`.
 - References: `&x` and `&mut x` borrow; a value passed by value moves.
   Use after move is a compile error.
 

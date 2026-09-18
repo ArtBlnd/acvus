@@ -325,6 +325,7 @@ impl Terms {
             }
             TyTerm::Int(_)
             | TyTerm::Float
+            | TyTerm::Char
             | TyTerm::String
             | TyTerm::Bool
             | TyTerm::Unit
@@ -812,6 +813,7 @@ impl Terms {
 
             (TyTerm::Int(ka), TyTerm::Int(kb)) if ka == kb => Ok(()),
             (TyTerm::Float, TyTerm::Float)
+            | (TyTerm::Char, TyTerm::Char)
             | (TyTerm::String, TyTerm::String)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
@@ -3408,6 +3410,7 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
         TyTerm::Handle(inner) => TyTerm::Handle(Box::new(uniform_slots(*inner, registry))),
         leaf @ (TyTerm::Int(_)
         | TyTerm::Float
+        | TyTerm::Char
         | TyTerm::String
         | TyTerm::Bool
         | TyTerm::Unit

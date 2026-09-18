@@ -16,7 +16,7 @@ use crate::ir::{
     Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValOrigin, ValueId,
 };
 use crate::ir::{ExternInstance, IndexMode};
-use crate::ty::{Mutability, NumTy, Ty, TypeArg};
+use crate::ty::{CastTy, Mutability, Ty, TypeArg};
 use crate::validate::move_check::is_move_only;
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::{Astr, LocalIdOps};
@@ -173,6 +173,7 @@ fn types_match(expected: &Ty, actual: &Ty) -> bool {
         // Primitives
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float, Ty::Float) => true,
+        (Ty::Char, Ty::Char) => true,
         (Ty::String, Ty::String) => true,
         (Ty::Bool, Ty::Bool) => true,
         (Ty::Unit, Ty::Unit) => true,
@@ -230,7 +231,12 @@ fn literal_ty(lit: &Literal) -> Ty {
     match lit {
         Literal::String(_) => Ty::String,
         Literal::Int(_) => Ty::I64,
+        Literal::IntOf(n) => Ty::Int(n.width.into()),
         Literal::Float(_) => Ty::Float,
+        Literal::Char(_) => Ty::Char,
+        Literal::Bytes(bytes) => {
+            Ty::Array(Box::new(Ty::U8), crate::ty::LenTerm::Known(bytes.len()))
+        }
         Literal::Bool(_) => Ty::Bool,
         Literal::List(_) => Ty::error(),
         Literal::Unit => Ty::Unit,
@@ -1018,7 +1024,7 @@ impl CheckCtx {
                 let src_ty = ty!(*src);
                 let dst_ty = ty!(*dst);
                 self.assert_match(pc, span, "Cast", "dst", &Ty::from(*to), dst_ty, errors);
-                if NumTy::of_ty(src_ty).is_none() && !src_ty.is_error() {
+                if CastTy::of_ty(src_ty).is_none() && !src_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,

@@ -5,7 +5,8 @@ use crate::span::Span;
 use crate::token::Token;
 use crate::error::{ParseError, ParseErrorKind};
 use crate::tag_content::{TagContent, ListElem, build_list};
-use crate::parser::expr_to_pattern;
+use crate::parser::{decoded, expr_to_pattern};
+use crate::literal::{self, IntWidth, SuffixedInt};
 
 grammar(interner: &Interner);
 
@@ -15,6 +16,10 @@ extern {
 
     enum Token {
         "int" => Token::IntLit(<i128>),
+        "int_of" => Token::IntLitOf(<SuffixedInt>),
+        "char" => Token::CharLit(<String>),
+        "byte" => Token::ByteLit(<String>),
+        "bytes" => Token::ByteStrLit(<String>),
         "float" => Token::FloatLit(<f64>),
         "string" => Token::StringLit(<String>),
         "ident" => Token::Ident(<Astr>),
@@ -409,6 +414,17 @@ PrimaryExpr: Expr = {
         Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span: Span::new(l, r) },
     <l:@L> <n:"int"> <r:@R> =>
         Expr::Literal { id: AstId::alloc(), value: Literal::Int(n), span: Span::new(l, r) },
+    <l:@L> <n:"int_of"> <r:@R> =>
+        Expr::Literal { id: AstId::alloc(), value: Literal::IntOf(n), span: Span::new(l, r) },
+    <l:@L> <t:"char"> <r:@R> =>?
+        decoded(literal::decode_char(&t), Span::new(l, r)).map(|c|
+            Expr::Literal { id: AstId::alloc(), value: Literal::Char(c), span: Span::new(l, r) }),
+    <l:@L> <t:"byte"> <r:@R> =>?
+        decoded(literal::decode_byte(&t), Span::new(l, r)).map(|b|
+            Expr::Literal { id: AstId::alloc(), value: Literal::IntOf(SuffixedInt { value: i128::from(b), width: IntWidth::U8 }), span: Span::new(l, r) }),
+    <l:@L> <t:"bytes"> <r:@R> =>?
+        decoded(literal::decode_bytes(&t), Span::new(l, r)).map(|b|
+            Expr::Literal { id: AstId::alloc(), value: Literal::Bytes(b), span: Span::new(l, r) }),
     <l:@L> <n:"float"> <r:@R> =>
         Expr::Literal { id: AstId::alloc(), value: Literal::Float(n), span: Span::new(l, r) },
     <l:@L> <s:"string"> <r:@R> =>

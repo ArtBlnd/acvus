@@ -63,6 +63,8 @@ fn fmt_literal(lit: &Literal) -> String {
     match lit {
         Literal::Int(n) => n.to_string(),
         Literal::Float(f) => format!("{f:?}"),
+        Literal::Char(c) => format!("{c:?}"),
+        sugar @ (Literal::IntOf(_) | Literal::Bytes(_)) => fmt_literal(&sugar.desugared()),
         Literal::String(s) => format!("{s:?}"),
         Literal::Bool(b) => b.to_string(),
         Literal::Unit => "()".to_string(),

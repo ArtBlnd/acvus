@@ -179,7 +179,7 @@ macro_rules! for_each_inline {
         $m! {
             I8: i8, I16: i16, I32: i32, I64: i64,
             U8: u8, U16: u16, U32: u32, U64: u64,
-            F64: f64, Bool: bool, Unit: ()
+            F64: f64, Char: char, Bool: bool, Unit: ()
         }
     };
 }
@@ -255,6 +255,7 @@ cross_as_stored!(u16);
 cross_as_stored!(u32);
 cross_as_stored!(u64);
 cross_as_stored!(f64);
+cross_as_stored!(char);
 cross_as_stored!(bool);
 cross_as_stored!(String);
 cross_as_stored!(());

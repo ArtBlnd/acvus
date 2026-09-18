@@ -72,7 +72,7 @@ fn a_result_payload_is_taken_once_from_a_temporary() {
     let i = Interner::new();
     let ir = compile_script_ir(
         &i,
-        "if let Ok(c) = int_to_char(65) { @out = c; }; 0",
+        "if let Ok(c) = int_to_char(65) { @out = c.to_string(); }; 0",
         &ctx(&i, &[("out", Ty::String)]),
     )
     .unwrap();

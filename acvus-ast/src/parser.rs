@@ -10,6 +10,17 @@ use crate::token::Token;
 
 use crate::tag_content::TagContent;
 
+/// A decoded literal, or the grammar's error at the literal's span
+/// (`literal::LiteralErrorKind`).
+pub fn decoded<T>(
+    decoded: Result<T, LiteralErrorKind>,
+    span: Span,
+) -> Result<T, LalrpopError<usize, Token, ParseError>> {
+    decoded.map_err(|kind| LalrpopError::User {
+        error: ParseError::new(ParseErrorKind::BadLiteral(kind), span),
+    })
+}
+
 /// Parse a single expression.
 pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
@@ -1136,5 +1147,93 @@ mod tests {
         };
         let pat = expr_to_pattern(&expr).unwrap();
         assert!(validate_irrefutable(&pat).is_err());
+    }
+
+    // -- RFC-0058: a literal says its type ----------------------------
+
+    fn literal_of(source: &str) -> Literal {
+        let interner = Interner::new();
+        match parse_expr(&interner, source).expect(source) {
+            Expr::Literal { value, .. } => value,
+            other => panic!("{source} parsed as {other:?}"),
+        }
+    }
+
+    fn literal_refusal(source: &str) -> String {
+        let interner = Interner::new();
+        parse_expr(&interner, source)
+            .expect_err(source)
+            .kind
+            .to_string()
+    }
+
+    #[test]
+    fn a_suffix_gives_an_integer_literal_its_width() {
+        assert_eq!(
+            literal_of("10u64"),
+            Literal::IntOf(SuffixedInt {
+                value: 10,
+                width: IntWidth::U64,
+            })
+        );
+        assert_eq!(
+            literal_of("255u8"),
+            Literal::IntOf(SuffixedInt {
+                value: 255,
+                width: IntWidth::U8,
+            })
+        );
+        // Out of range at the lexer's level too: the value is carried and
+        // the checker refuses it, so `300u8` parses.
+        assert_eq!(
+            literal_of("300u8"),
+            Literal::IntOf(SuffixedInt {
+                value: 300,
+                width: IntWidth::U8,
+            })
+        );
+        assert_eq!(literal_of("10"), Literal::Int(10));
+    }
+
+    #[test]
+    fn a_character_literal_is_one_scalar_value() {
+        assert_eq!(literal_of("'x'"), Literal::Char('x'));
+        assert_eq!(literal_of(r"'\n'"), Literal::Char('\n'));
+        assert_eq!(literal_of(r"'\''"), Literal::Char('\''));
+        assert_eq!(literal_of(r"'\u{1F600}'"), Literal::Char('\u{1F600}'));
+        assert!(literal_refusal("'ab'").contains("exactly one scalar value"));
+    }
+
+    /// The content of a `'…'` admits no bare quote, so a comparison of two
+    /// character literals is three tokens and not one long literal.
+    #[test]
+    fn two_character_literals_are_two_literals() {
+        let interner = Interner::new();
+        let parsed = parse_expr(&interner, "'a' == 'b'").expect("'a' == 'b'");
+        assert!(matches!(parsed, Expr::BinaryOp { .. }), "{parsed:?}");
+    }
+
+    #[test]
+    fn a_byte_string_is_its_bytes_and_a_byte_literal_is_one() {
+        assert_eq!(literal_of(r#"b"GET""#), Literal::Bytes(b"GET".to_vec()));
+        assert_eq!(literal_of(r#"b"\xFF\x00""#), Literal::Bytes(vec![0xFF, 0]));
+        assert_eq!(
+            literal_of("b'G'"),
+            Literal::IntOf(SuffixedInt {
+                value: i128::from(b'G'),
+                width: IntWidth::U8,
+            })
+        );
+        assert!(literal_refusal(r#"b"é""#).contains("takes ASCII"));
+    }
+
+    /// The tag scanner steps over a character literal, so one holding a
+    /// quote or a brace does not end the tag (`char_literal_end`).
+    #[test]
+    fn a_character_literal_inside_a_tag_does_not_close_it() {
+        let interner = Interner::new();
+        for source in ["{{ '\"' }}", "{{ '}' }}"] {
+            parse_template(&interner, source).unwrap_or_else(|e| panic!("{source}: {e}"));
+        }
     }
 }

@@ -21,7 +21,7 @@ use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
     Callee, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
-use acvus_mir::ty::{IntTy, NumTy, Task, Ty};
+use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -1761,6 +1761,10 @@ impl<'a> Prepare<'a> {
                 let (op, k) = (*op, self.ty(*left).clone());
                 made(move |next| match k {
                     Ty::Int(k) => arith::int_binop(op, k, places, next),
+                    // A `char`'s word is its scalar value as a `u32` and
+                    // Rust orders a `char` by it (RFC-0058), so `==` and
+                    // `<` on chars are the `u32` operations.
+                    Ty::Char => arith::int_binop(op, IntTy::U32, places, next),
                     Ty::Float => arith::float_binop(op, places, next),
                     Ty::Bool => arith::bool_binop(op, places, next),
                     other => panic!("binop {op:?} on {other:?}"),
@@ -1785,10 +1789,16 @@ impl<'a> Prepare<'a> {
                     dst: self.place_of(rides, *dst),
                     src: self.place_of(rides, *src),
                 };
-                let from = NumTy::of_ty(self.ty(*src)).unwrap_or_else(|| {
-                    panic!("a cast reads {:?}, which is not a number", self.ty(*src))
+                let from = CastTy::of_ty(self.ty(*src)).unwrap_or_else(|| {
+                    panic!(
+                        "a cast reads {:?}, which is neither a number nor a char",
+                        self.ty(*src)
+                    )
                 });
-                let conversion = cast::Conversion { from, into: *to };
+                let conversion = cast::Conversion {
+                    from: from.word(),
+                    into: to.word(),
+                };
                 made(move |next| cast::cast_op(conversion, places, next))
             }
 
@@ -2602,6 +2612,10 @@ impl<'a> Prepare<'a> {
                 });
             }
             (Literal::List(_), other) => panic!("list literal typed as {other:?}"),
+            (Literal::Char(c), _) => u64::from(u32::from(*c)),
+            (sugar @ (Literal::IntOf(_) | Literal::Bytes(_)), _) => {
+                return self.constant(dst, &sugar.desugared());
+            }
         };
         node(move |next| constant::Const {
             dst: out,
@@ -2653,6 +2667,13 @@ impl<'a> Prepare<'a> {
                 next,
             }),
             Literal::List(_) => panic!("TestLiteral on a list literal"),
+            Literal::Char(c) => {
+                let want = i128::from(u32::from(*c));
+                node(move |next| pattern::TestInt::<u32>::new(slots, want, next))
+            }
+            sugar @ (Literal::IntOf(_) | Literal::Bytes(_)) => {
+                self.test_literal(at, &sugar.desugared())
+            }
         }
     }
 
@@ -2712,6 +2733,8 @@ fn konst_of(literal: &Literal, ty: &Ty) -> Konst {
             Konst::List(items.iter().map(|item| konst_of(item, elem)).collect())
         }
         (Literal::List(_), other) => panic!("list literal typed as {other:?}"),
+        (Literal::Char(c), _) => Konst::Word(Kind::Char, u64::from(u32::from(*c))),
+        (sugar @ (Literal::IntOf(_) | Literal::Bytes(_)), _) => konst_of(&sugar.desugared(), ty),
     }
 }
 
@@ -4802,6 +4825,7 @@ fn word_kind(ty: &Ty) -> Option<Kind> {
     match ty {
         Ty::Int(k) => Some(Kind::int(*k)),
         Ty::Float => Some(Kind::F64),
+        Ty::Char => Some(Kind::Char),
         Ty::Bool => Some(Kind::Bool),
         Ty::Unit => Some(Kind::Unit),
         _ => None,
@@ -4866,8 +4890,11 @@ fn konst_value(literal: &Literal, ty: &Ty) -> Option<Value> {
     match (literal, ty) {
         (Literal::Int(n), Ty::Int(k)) => Some(Value::inline(Kind::int(*k), *n as u64)),
         (Literal::Float(x), Ty::Float) => Some(Value::inline(Kind::F64, x.to_bits())),
+        (Literal::Char(c), Ty::Char) => Some(Value::char_(*c)),
+        (sugar @ (Literal::IntOf(_) | Literal::Bytes(_)), _) => konst_value(&sugar.desugared(), ty),
         (Literal::Int(_), _)
         | (Literal::Float(_), _)
+        | (Literal::Char(_), _)
         | (Literal::Bool(_), _)
         | (Literal::Unit, _)
         | (Literal::String(_), _)
@@ -5533,7 +5560,7 @@ fn nth(slots: &[Off], k: usize) -> Off {
 /// has to release (RFC-0048 §4).
 fn owns_large(ty: &Ty) -> bool {
     match ty {
-        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => false,
+        Ty::Int(_) | Ty::Float | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => false,
         Ty::Ref(..) => false,
         // RFC-0022: an option is its payload's own value, so it owns what
         // the payload owns and nothing else.
