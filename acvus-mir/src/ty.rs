@@ -1316,6 +1316,10 @@ impl Effect {
         self.reissue == Reissue::Pure
     }
 
+    pub fn runs_apart(&self) -> bool {
+        self.task > Task::Sync || !self.is_pure()
+    }
+
     /// No level above Pure and no context touched: the effect a type
     /// display leaves out.
     pub fn is_empty(&self) -> bool {

@@ -1,20 +1,13 @@
-//! Spawn-split pass: convert IO FunctionCalls into Spawn + Eval pairs.
+//! Spawn-split pass: a `FunctionCall` whose effect `runs_apart` becomes a
+//! `Spawn` and an `Eval`.
 //!
-//! This is a pure IR transformation with no reordering.
-//! After this pass, IO calls are expressed as:
-//!   handle = Spawn { callee, args }
-//!   result = Eval { src: handle }
-//!
-//! The work starts at Spawn, so the Spawn takes the call's entry `Order`
-//! and the Eval yields the `Order` that follows. Reordering is left to a
-//! separate pass that can move independent instructions between them.
+//! This pass does not reorder. Moving independent instructions between a
+//! `Spawn` and its `Eval` is `optimize::reorder`'s job.
 
 use crate::cfg::CfgBody;
 use crate::ir::*;
 use crate::ty::{Task, Ty};
 
-/// Split IO FunctionCalls into Spawn + Eval pairs, in-place.
-///
 /// An `Eval` awaits, so a body this pass splits anything in runs at
 /// `Task::Async` however synchronous its callees were declared: the pass
 /// is a third source of suspension beside the two RFC-0046's table names,
@@ -33,7 +26,7 @@ pub fn run(cfg: &mut CfgBody) {
                     ref callee_ty,
                     ref args,
                     order,
-                } if is_io_call(callee_ty) => {
+                } if runs_apart(callee_ty) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
 
@@ -76,8 +69,8 @@ pub fn run(cfg: &mut CfgBody) {
     }
 }
 
-fn is_io_call(callee_ty: &Ty) -> bool {
-    matches!(callee_ty.effect(), Some(e) if !e.is_pure())
+fn runs_apart(callee_ty: &Ty) -> bool {
+    matches!(callee_ty.effect(), Some(e) if e.runs_apart())
 }
 
 #[cfg(test)]
@@ -228,6 +221,66 @@ mod tests {
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 1);
         assert!(matches!(insts[0].kind, InstKind::FunctionCall { .. }));
+    }
+
+    fn burner(i: &Interner, effect: crate::ty::Effect) -> Ty {
+        Ty::Fn {
+            params: vec![Param::new(i.intern("seed"), Ty::I64)],
+            ret: Box::new(Ty::I64),
+            captures: vec![],
+            effect: effect.into(),
+        }
+    }
+
+    fn split_once(i: &Interner, effect: crate::ty::Effect) -> CfgBody {
+        let hash = QualifiedRef::root(i.intern("hash"));
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::FunctionCall {
+                    dst: v(1),
+                    callee: Callee::Direct(hash),
+                    callee_ty: burner(i, effect),
+                    args: vec![v(0)],
+                    order: None,
+                },
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
+            ],
+            2,
+        );
+        run(&mut cfg);
+        cfg
+    }
+
+    #[test]
+    fn a_pure_heavy_call_splits_into_a_pair_with_no_order() {
+        let i = Interner::new();
+        let cfg = split_once(&i, crate::ty::Effect::PURE.at_task(Task::Heavy));
+        let insts = all_insts(&cfg);
+        assert_eq!(insts.len(), 3);
+        assert!(
+            matches!(insts[1].kind, InstKind::Spawn { order: None, .. }),
+            "a pure call carries no entry Order, so its Spawn takes none"
+        );
+        assert!(
+            matches!(insts[2].kind, InstKind::Eval { order: None, .. }),
+            "and its Eval yields none"
+        );
+    }
+
+    #[test]
+    fn a_pure_sync_call_is_not_split() {
+        let i = Interner::new();
+        let cfg = split_once(&i, crate::ty::Effect::PURE);
+        let insts = all_insts(&cfg);
+        assert_eq!(insts.len(), 2);
+        assert!(matches!(insts[1].kind, InstKind::FunctionCall { .. }));
     }
 
     #[test]

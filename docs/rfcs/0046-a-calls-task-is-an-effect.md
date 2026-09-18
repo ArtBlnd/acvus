@@ -128,6 +128,21 @@ the set is the one `prepare` marks today as `may_suspend`
   propagates `Heavy`, the interpreter offloads it, and a loop over it is
   asynchronous — by type, not by discovery.
 - kovac inherits a static answer for every call site.
+- `optimize::spawn_split` splits a call when `Effect::runs_apart` — the
+  task is above `Sync`, or the effect is not pure — so a `Pure/Heavy`
+  extern is split because it is `Heavy`, on the axis this RFC added,
+  and not on the reissue chain it never joins.
+- A pure call's `Spawn` takes no `Order` and its `Eval` yields none: the
+  chain `Spawn k ← Eval k−1` is built only from the `OrderEdge` the call
+  already carried (RFC-0007), which a pure call does not, so independent
+  pure `Heavy` calls hoist without being declared `commutative`.
+- Measured on the spawn bench (`acvus-interpreter-test/benches/spawn.rs`,
+  32 cores, TokioExecutor, medians of 3 runs): `straight-8 heavy/pure`
+  337.8 µs → 44.4 µs at 33 µs of work per call, and 2889.6 µs → 353.3 µs
+  at 330 µs; the listing goes from eight `CallHeavy` to eight `Spawn`s
+  before the first `Eval`, with no `Merge` between them. `chain-8` has no
+  parallelism to find and pays the pair's fixed cost instead of
+  `CallHeavy`'s: 1.31× the sequential Rust twin → 1.20×.
 
 ## What landed in the compiler
 

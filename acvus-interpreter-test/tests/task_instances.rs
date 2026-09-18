@@ -5,8 +5,10 @@
 //! pipeline's task. These tests read the answer, which must not depend on
 //! which one ran, and the prepared shape, which must.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Registry, extern_fn, extern_registry};
 use acvus_interpreter::code::Code;
@@ -47,6 +49,16 @@ fn this_thread() -> i64 {
     thread_word(std::thread::current().id())
 }
 
+/// A `heavy` extern whose cost is wall time and nothing else: two calls of
+/// it overlap or they do not, and no amount of machine speed hides the
+/// difference.
+#[extern_fn(heavy, effect = pure)]
+fn rest(millis: i64) -> i64 {
+    let wait = u64::try_from(millis).expect("rest takes a non-negative number of milliseconds");
+    std::thread::sleep(Duration::from_millis(wait));
+    millis
+}
+
 /// `ThreadId` exposes no integer. Its `Debug` is unique per live thread,
 /// which is all an "is this the same thread" comparison needs; the fold is
 /// a hash of it and wraps on purpose.
@@ -61,7 +73,7 @@ const HASH_RADIX: i64 = 131;
 fn task_registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "task",
-        fns: [passed_through, on_which_thread, this_thread],
+        fns: [passed_through, on_which_thread, this_thread, rest],
     }
 }
 
@@ -373,6 +385,41 @@ async fn a_heavy_extern_on_the_sequential_executor_runs_inline() {
     let here = thread_word(std::thread::current().id());
     let there = run("on_which_thread(1000)", Ty::I64).await.as_int();
     assert_eq!(here, there);
+}
+
+/// Compilation is outside the measurement: what is timed is the run.
+async fn executed_in(source: &str, ret: Ty) -> (Duration, i64) {
+    let i = Interner::new();
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
+    let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries(), ret);
+    let (_shared, mut interp) = execute_compiled(&i, cr, HashMap::new(), Arc::new(TokioExecutor));
+    let start = Instant::now();
+    let value: Value = interp.execute().await;
+    (start.elapsed(), value.as_int())
+}
+
+const REST_MILLIS: i64 = 200;
+
+const TWO_CALLS_AT_MOST: f64 = 1.5;
+
+#[tokio::test]
+async fn two_independent_pure_heavy_calls_overlap() {
+    let (one, once) = executed_in(&format!("rest({REST_MILLIS})"), Ty::I64).await;
+    let (two, twice) = executed_in(
+        &format!("let a = rest({REST_MILLIS}); let b = rest({REST_MILLIS}); a + b"),
+        Ty::I64,
+    )
+    .await;
+    assert_eq!(once, REST_MILLIS);
+    assert_eq!(twice, 2 * REST_MILLIS);
+    assert!(
+        two < one.mul_f64(TWO_CALLS_AT_MOST),
+        "two independent pure Heavy calls run at once: one call took {one:?}, two took \
+         {two:?}, over the ceiling of {TWO_CALLS_AT_MOST} x one = {:?}. Serialized, two \
+         would take about {:?}",
+        one.mul_f64(TWO_CALLS_AT_MOST),
+        2 * one
+    );
 }
 
 #[tokio::test]
