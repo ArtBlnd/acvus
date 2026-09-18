@@ -24,9 +24,9 @@ use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
 
 use crate::code::{
-    ArgWindow, Arith, BasicBlock, Body, Chain, Code, Compare, ConcatPart, EntryKonst, Expr,
-    ExprBody, ExprChain, ExternArgs, ExternCall, FieldSlot, Konst, LoopBody, NO_SLOT, Op, OpFn,
-    Payload, Prepared, Root, Shape, SlotMove, Step,
+    ArgWindow, Arith, BasicBlock, Body, Chain, Code, Compare, ConcatPart, Diamond, DiamondArm,
+    EntryKonst, Expr, ExprBody, ExprChain, ExternArgs, ExternCall, FieldSlot, Konst, LoopBody,
+    NO_SLOT, Op, OpFn, Payload, Prepared, Root, Shape, SlotMove, Step,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, for_int_ty};
@@ -133,9 +133,9 @@ pub fn prepare_body(
     let mut prep = Prepare::new(body, ctx, closures, label_map(body));
 
     prep.hoist_konsts();
-    let loops = prep.loops();
-    let chains = prep.chains_in(0..body.insts.len(), &loops);
-    let units = prep.layout(0..body.insts.len(), &loops, &chains);
+    let regions = prep.regions();
+    let chains = prep.chains_in(0..body.insts.len(), &regions);
+    let units = prep.layout(0..body.insts.len(), &regions, &chains);
     prep.op_index = op_indexes(body.insts.len(), &units);
 
     if let BodyRole::Closure = role
@@ -216,16 +216,49 @@ struct LoopRegion {
     enter_jump: Option<usize>,
     head: usize,
     head_block: Range<usize>,
-    head_loops: Vec<LoopRegion>,
+    head_regions: Vec<Region>,
     jump_if: usize,
     body_block: Range<usize>,
-    body_loops: Vec<LoopRegion>,
+    body_regions: Vec<Region>,
     back: usize,
+}
+
+/// One `if/else` the recognizer matched, as indexes into `MirBody::insts`.
+struct DiamondRegion {
+    jump_if: usize,
+    on_true: ArmRegion,
+    on_false: ArmRegion,
+    join: usize,
+}
+
+/// One side of a diamond. `Direct` is the side the lowering gave no block
+/// of its own: the `JumpIf`'s own edge reaches the join.
+enum ArmRegion {
+    Block {
+        block: Range<usize>,
+        regions: Vec<Region>,
+        jump: usize,
+    },
+    Direct,
+}
+
+/// The arm the lowering did not put directly after the test, and where
+/// the join it reaches sits.
+struct FarSide {
+    arm: ArmRegion,
+    join_at: usize,
+    join_edges: Vec<usize>,
+}
+
+/// A run of instructions the recognizer replaces with one operation.
+enum Region {
+    Loop(LoopRegion),
+    Diamond(DiamondRegion),
 }
 
 struct StraightRun {
     stops_at: usize,
-    loops: Vec<LoopRegion>,
+    regions: Vec<Region>,
 }
 
 impl LoopRegion {
@@ -236,14 +269,26 @@ impl LoopRegion {
     fn end(&self) -> usize {
         self.back + 1
     }
+}
 
-    fn covers(&self, at: usize) -> bool {
-        (self.start()..self.end()).contains(&at)
+impl Region {
+    fn start(&self) -> usize {
+        match self {
+            Region::Loop(region) => region.start(),
+            Region::Diamond(region) => region.jump_if,
+        }
+    }
+
+    fn end(&self) -> usize {
+        match self {
+            Region::Loop(region) => region.end(),
+            Region::Diamond(region) => region.join + 1,
+        }
     }
 }
 
 /// One operation of a body before it is prepared: the instruction it is,
-/// or the loop or the chain it collapses.
+/// or the region or the chain it collapses.
 ///
 /// Both collapses remove instructions, so both move every operation after
 /// them. One layout decides the order once, and `op_indexes` and
@@ -251,7 +296,7 @@ impl LoopRegion {
 /// with where the operation it names was put.
 enum Unit<'r> {
     Inst(usize),
-    Loop(&'r LoopRegion),
+    Region(&'r Region),
     Chain(&'r ChainRun),
 }
 
@@ -260,26 +305,26 @@ impl Unit<'_> {
     fn head(&self) -> usize {
         match self {
             Unit::Inst(at) => *at,
-            Unit::Loop(region) => region.start(),
+            Unit::Region(region) => region.start(),
             Unit::Chain(run) => run.insts.end - 1,
         }
     }
 }
 
 impl Prepare<'_> {
-    /// The operations of `range`, in order, with each loop and each chain
-    /// one operation and each entry constant none.
+    /// The operations of `range`, in order, with each region and each
+    /// chain one operation and each entry constant none.
     fn layout<'r>(
         &self,
         range: Range<usize>,
-        loops: &'r [LoopRegion],
+        regions: &'r [Region],
         chains: &'r [ChainRun],
     ) -> Vec<Unit<'r>> {
         let mut units = Vec::with_capacity(range.len());
         let mut at = range.start;
         while at < range.end {
-            if let Some(region) = loops.iter().find(|region| region.start() == at) {
-                units.push(Unit::Loop(region));
+            if let Some(region) = regions.iter().find(|region| region.start() == at) {
+                units.push(Unit::Region(region));
                 at = region.end();
                 continue;
             }
@@ -523,14 +568,14 @@ impl<'a> Prepare<'a> {
 
     fn straight_run(&self, from: usize, limit: usize) -> StraightRun {
         let insts = self.body.insts.as_slice();
-        let mut loops = Vec::new();
+        let mut regions = Vec::new();
         let mut at = from;
         while at < limit {
-            if let Some(region) = self.recognize_loop(at)
+            if let Some(region) = self.recognize_region(at)
                 && region.end() <= limit
             {
                 at = region.end();
-                loops.push(region);
+                regions.push(region);
             } else if self.is_straight_line(&insts[at]) {
                 at += 1;
             } else {
@@ -539,7 +584,14 @@ impl<'a> Prepare<'a> {
         }
         StraightRun {
             stops_at: at,
-            loops,
+            regions,
+        }
+    }
+
+    fn recognize_region(&self, at: usize) -> Option<Region> {
+        match self.recognize_loop(at) {
+            Some(region) => Some(Region::Loop(region)),
+            None => self.recognize_diamond(at).map(Region::Diamond),
         }
     }
 
@@ -579,7 +631,7 @@ impl<'a> Prepare<'a> {
 
         let StraightRun {
             stops_at: jump_if,
-            loops: head_loops,
+            regions: head_regions,
         } = self.straight_run(head + 1, back);
         let InstKind::JumpIf {
             then_label,
@@ -599,7 +651,7 @@ impl<'a> Prepare<'a> {
 
         let StraightRun {
             stops_at: body_end,
-            loops: body_loops,
+            regions: body_regions,
         } = self.straight_run(body_label + 1, back);
         if body_end != back {
             return None;
@@ -609,29 +661,134 @@ impl<'a> Prepare<'a> {
             enter_jump,
             head,
             head_block: head + 1..jump_if,
-            head_loops,
+            head_regions,
             jump_if,
             body_block: body_label + 1..back,
-            body_loops,
+            body_regions,
             back,
         };
-        self.is_closed(&region).then_some(region)
+        self.is_closed(region.start()..region.end())
+            .then_some(region)
     }
 
-    fn is_closed(&self, region: &LoopRegion) -> bool {
+    /// The shape `acvus_mir::lower` gives an `if`. One arm has a block of
+    /// its own directly after the test — `if` and `&&` put the `then` side
+    /// there, `||` the `else` side — and the other either has one after
+    /// that or is the test's own edge into the join.
+    ///
+    /// A lowering that emits another shape does not fail here; it stops
+    /// matching, and the branch prepares as the separate operations it was
+    /// before.
+    fn recognize_diamond(&self, at: usize) -> Option<DiamondRegion> {
         let insts = self.body.insts.as_slice();
-        insts[region.start()..region.end()]
+        let InstKind::JumpIf {
+            then_label,
+            else_label,
+            ..
+        } = &insts.get(at)?.kind
+        else {
+            return None;
+        };
+
+        let near_label = block_label(insts.get(at + 1)?)?;
+        let near_is_then = near_label == *then_label;
+        if !near_is_then && near_label != *else_label {
+            return None;
+        }
+        let far_label = if near_is_then {
+            *else_label
+        } else {
+            *then_label
+        };
+        if self.references(near_label).as_slice() != [at] {
+            return None;
+        }
+
+        let StraightRun {
+            stops_at: near_jump,
+            regions: near_regions,
+        } = self.straight_run(at + 2, insts.len());
+        let InstKind::Jump { label: join, .. } = &insts.get(near_jump)?.kind else {
+            return None;
+        };
+        let near = ArmRegion::Block {
+            block: at + 2..near_jump,
+            regions: near_regions,
+            jump: near_jump,
+        };
+
+        let FarSide {
+            arm: far,
+            join_at,
+            join_edges,
+        } = if far_label == *join {
+            FarSide {
+                arm: ArmRegion::Direct,
+                join_at: near_jump + 1,
+                join_edges: vec![at, near_jump],
+            }
+        } else {
+            if block_label(insts.get(near_jump + 1)?) != Some(far_label)
+                || self.references(far_label).as_slice() != [at]
+            {
+                return None;
+            }
+            let StraightRun {
+                stops_at: far_jump,
+                regions: far_regions,
+            } = self.straight_run(near_jump + 2, insts.len());
+            let InstKind::Jump { label: other, .. } = &insts.get(far_jump)?.kind else {
+                return None;
+            };
+            if other != join {
+                return None;
+            }
+            FarSide {
+                arm: ArmRegion::Block {
+                    block: near_jump + 2..far_jump,
+                    regions: far_regions,
+                    jump: far_jump,
+                },
+                join_at: far_jump + 1,
+                join_edges: vec![near_jump, far_jump],
+            }
+        };
+
+        let (on_true, on_false) = if near_is_then {
+            (near, far)
+        } else {
+            (far, near)
+        };
+
+        if block_label(insts.get(join_at)?) != Some(*join) || self.references(*join) != join_edges {
+            return None;
+        }
+
+        let region = DiamondRegion {
+            jump_if: at,
+            on_true,
+            on_false,
+            join: join_at,
+        };
+        self.is_closed(at..join_at + 1).then_some(region)
+    }
+
+    /// No jump from outside `range` names a block inside it, so collapsing
+    /// the range into one operation leaves no target behind.
+    fn is_closed(&self, range: Range<usize>) -> bool {
+        let insts = self.body.insts.as_slice();
+        insts[range.clone()]
             .iter()
             .filter_map(block_label)
             .flat_map(|label| self.references(label))
-            .all(|at| region.covers(at))
+            .all(|at| range.contains(&at))
     }
 
-    fn loops(&self) -> Vec<LoopRegion> {
+    fn regions(&self) -> Vec<Region> {
         let mut found = Vec::new();
         let mut at = 0;
         while at < self.body.insts.len() {
-            match self.recognize_loop(at) {
+            match self.recognize_region(at) {
                 Some(region) => {
                     at = region.end();
                     found.push(region);
@@ -642,7 +799,7 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    fn block(&mut self, range: Range<usize>, nested: &[LoopRegion]) -> BasicBlock {
+    fn block(&mut self, range: Range<usize>, nested: &[Region]) -> BasicBlock {
         let chains = self.chains_in(range.clone(), nested);
         let units = self.layout(range, nested, &chains);
         BasicBlock::new(self.emit(&units).into_iter().map(|e| e.op))
@@ -681,8 +838,8 @@ impl<'a> Prepare<'a> {
         let exit = self.move_list(else_label, else_args);
         let back = self.move_list(header, back_args);
 
-        let head = self.block(region.head_block.clone(), &region.head_loops);
-        let block = self.block(region.body_block.clone(), &region.body_loops);
+        let head = self.block(region.head_block.clone(), &region.head_regions);
+        let block = self.block(region.body_block.clone(), &region.body_regions);
 
         let at = self.put(Payload::Loop(LoopBody {
             enter,
@@ -694,6 +851,49 @@ impl<'a> Prepare<'a> {
             exit,
         }));
         Op::new(control::while_loop).p(at)
+    }
+
+    fn diamond_op(&mut self, region: &DiamondRegion) -> Op {
+        let InstKind::JumpIf {
+            cond,
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+        } = &self.body.insts[region.jump_if].kind
+        else {
+            panic!("a recognized diamond's test is not a conditional jump")
+        };
+
+        let cond_slot = self.slot(*cond);
+        let on_true = self.arm(&region.on_true, then_label, then_args);
+        let on_false = self.arm(&region.on_false, else_label, else_args);
+
+        let at = self.put(Payload::Diamond(Diamond { on_true, on_false }));
+        Op::new(control::diamond).a(cond_slot).p(at)
+    }
+
+    /// `label` and `args` are the diamond's own edge into this arm, which
+    /// a `Direct` arm takes all the way to the join.
+    fn arm(&mut self, region: &ArmRegion, label: &Label, args: &[ValueId]) -> DiamondArm {
+        let ArmRegion::Block {
+            block,
+            regions,
+            jump,
+        } = region
+        else {
+            return DiamondArm {
+                block: BasicBlock::new([]),
+                join: self.move_list(label, args),
+            };
+        };
+        let InstKind::Jump { label, args } = &self.body.insts[*jump].kind else {
+            panic!("a recognized diamond's arm does not end in a jump")
+        };
+        DiamondArm {
+            join: self.move_list(label, args),
+            block: self.block(block.clone(), regions),
+        }
     }
 
     fn op(&mut self, at: usize) -> Op {
@@ -2134,9 +2334,45 @@ mod recognizer_tests {
     }
 
     #[derive(Debug, PartialEq)]
-    struct Matched {
-        covers: Range<usize>,
-        nested: usize,
+    enum Matched {
+        Loop {
+            covers: Range<usize>,
+            nested: Vec<Matched>,
+        },
+        Diamond {
+            covers: Range<usize>,
+            on_true: Vec<Matched>,
+            on_false: Vec<Matched>,
+        },
+    }
+
+    fn matched(regions: &[Region]) -> Vec<Matched> {
+        regions.iter().map(one_matched).collect()
+    }
+
+    fn one_matched(region: &Region) -> Matched {
+        let covers = region.start()..region.end();
+        match region {
+            Region::Loop(region) => Matched::Loop {
+                covers,
+                nested: matched(&region.head_regions)
+                    .into_iter()
+                    .chain(matched(&region.body_regions))
+                    .collect(),
+            },
+            Region::Diamond(region) => Matched::Diamond {
+                covers,
+                on_true: matched(arm_regions(&region.on_true)),
+                on_false: matched(arm_regions(&region.on_false)),
+            },
+        }
+    }
+
+    fn arm_regions(arm: &ArmRegion) -> &[Region] {
+        match arm {
+            ArmRegion::Block { regions, .. } => regions,
+            ArmRegion::Direct => &[],
+        }
     }
 
     struct Fixture {
@@ -2210,13 +2446,7 @@ mod recognizer_tests {
             let closures = FxHashMap::default();
             let body = body_of(insts);
             let prep = Prepare::new(&body, &ctx, &closures, label_map(&body));
-            prep.loops()
-                .iter()
-                .map(|region| Matched {
-                    covers: region.start()..region.end(),
-                    nested: region.head_loops.len() + region.body_loops.len(),
-                })
-                .collect()
+            matched(&prep.regions())
         }
     }
 
@@ -2238,9 +2468,9 @@ mod recognizer_tests {
         let fixture = Fixture::new();
         assert_eq!(
             fixture.recognize(plain_while()),
-            vec![Matched {
+            vec![Matched::Loop {
                 covers: 0..7,
-                nested: 0
+                nested: vec![]
             }]
         );
     }
@@ -2267,9 +2497,12 @@ mod recognizer_tests {
         ];
         assert_eq!(
             fixture.recognize(insts),
-            vec![Matched {
+            vec![Matched::Loop {
                 covers: 0..14,
-                nested: 1
+                nested: vec![Matched::Loop {
+                    covers: 5..12,
+                    nested: vec![]
+                }]
             }]
         );
     }
@@ -2284,7 +2517,7 @@ mod recognizer_tests {
     }
 
     #[test]
-    fn a_branch_in_the_body_leaves_the_while_alone() {
+    fn a_branch_in_the_body_is_a_diamond_inside_the_while() {
         let fixture = Fixture::new();
         let insts = vec![
             jump(0),
@@ -2300,6 +2533,95 @@ mod recognizer_tests {
             block(5),
             jump(0),
             block(2),
+        ];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched::Loop {
+                covers: 0..12,
+                nested: vec![Matched::Diamond {
+                    covers: 5..11,
+                    on_true: vec![],
+                    on_false: vec![]
+                }]
+            }]
+        );
+    }
+
+    #[test]
+    fn an_if_without_an_else_takes_the_tests_own_edge_into_the_join() {
+        let fixture = Fixture::new();
+        let insts = vec![jump_if(1, 3, 5), block(3), add(1, 2, 3), jump(5), block(5)];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched::Diamond {
+                covers: 0..5,
+                on_true: vec![],
+                on_false: vec![]
+            }]
+        );
+    }
+
+    #[test]
+    fn a_while_in_an_arm_is_one_operation_inside_the_diamond() {
+        let mut fixture = Fixture::new();
+        let stays = fixture.sync_extern("stays");
+        let insts = vec![
+            jump_if(1, 3, 4),
+            block(3),
+            jump(6),
+            block(6),
+            add(1, 2, 3),
+            jump_if(1, 7, 8),
+            block(7),
+            call(9, stays),
+            jump(6),
+            block(8),
+            jump(5),
+            block(4),
+            jump(5),
+            block(5),
+        ];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched::Diamond {
+                covers: 0..14,
+                on_true: vec![Matched::Loop {
+                    covers: 2..9,
+                    nested: vec![]
+                }],
+                on_false: vec![]
+            }]
+        );
+    }
+
+    #[test]
+    fn an_async_extern_in_an_arm_leaves_the_branch_alone() {
+        let mut fixture = Fixture::new();
+        let suspends = fixture.async_extern("suspends");
+        let insts = vec![
+            jump_if(1, 3, 4),
+            block(3),
+            call(9, suspends),
+            jump(5),
+            block(4),
+            jump(5),
+            block(5),
+        ];
+        assert_eq!(fixture.recognize(insts), vec![]);
+    }
+
+    #[test]
+    fn a_jump_into_an_arm_from_outside_leaves_the_branch_alone() {
+        let fixture = Fixture::new();
+        let insts = vec![
+            jump_if(1, 3, 4),
+            block(3),
+            add(1, 2, 3),
+            jump(5),
+            block(4),
+            jump(5),
+            block(5),
+            jump(3),
         ];
         assert_eq!(fixture.recognize(insts), vec![]);
     }
@@ -3047,9 +3369,9 @@ impl<'a> Prepare<'a> {
         Op::new(f).a(self.slot(run.dst)).b(at).p(held)
     }
 
-    /// Every chain of `range`, in the straight-line windows the loops of
+    /// Every chain of `range`, in the straight-line windows the regions of
     /// `nested` leave between them.
-    fn chains_in(&self, range: Range<usize>, nested: &[LoopRegion]) -> Vec<ChainRun> {
+    fn chains_in(&self, range: Range<usize>, nested: &[Region]) -> Vec<ChainRun> {
         let mut found = Vec::new();
         let mut at = range.start;
         while at < range.end {
@@ -3059,7 +3381,7 @@ impl<'a> Prepare<'a> {
             }
             let stop = nested
                 .iter()
-                .map(LoopRegion::start)
+                .map(Region::start)
                 .find(|start| *start > at)
                 .unwrap_or(range.end);
             found.extend(self.chain_runs(at..stop));
@@ -3068,7 +3390,7 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    /// The operations of a laid-out range: the loops and the chains one
+    /// The operations of a laid-out range: the regions and the chains one
     /// operation each, and everything else one for one.
     fn emit(&mut self, units: &[Unit<'_>]) -> Vec<Emitted> {
         let mut out: Vec<Emitted> = Vec::with_capacity(units.len());
@@ -3076,7 +3398,8 @@ impl<'a> Prepare<'a> {
             let span = self.body.insts[unit.head()].span;
             let op = match unit {
                 Unit::Inst(at) => self.op(*at),
-                Unit::Loop(region) => self.loop_op(region),
+                Unit::Region(Region::Loop(region)) => self.loop_op(region),
+                Unit::Region(Region::Diamond(region)) => self.diamond_op(region),
                 Unit::Chain(run) => self.chain_op(run),
             };
             out.push(Emitted { op, span });

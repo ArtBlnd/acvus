@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
-use acvus_interpreter::code::{Body, Chain, Code, ExprBody, Op, Payload};
+use acvus_interpreter::code::{Body, Chain, Code, DiamondArm, ExprBody, Op, Payload};
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, SlotCount, Slots, Value, prepare_module};
 use acvus_interpreter_test::{Context, compile_source_with_externs, split_context, typed};
 use acvus_mir::graph::ParsedAst;
@@ -130,6 +130,11 @@ fn dump_body(name: &str, code: &Body, base: usize, tally: &mut SlotCount) {
                 tally.concrete += count.concrete;
                 tally.total += count.total;
             }
+            Payload::Diamond(arms) => {
+                println!("  payload {index}: Diamond");
+                dump_arm("on_true", &arms.on_true, base);
+                dump_arm("on_false", &arms.on_false, base);
+            }
             Payload::Loop(body) => {
                 println!("  payload {index}: Loop (cond_slot={})", body.cond_slot);
                 println!(
@@ -150,6 +155,13 @@ fn dump_body(name: &str, code: &Body, base: usize, tally: &mut SlotCount) {
             }
             _ => {}
         }
+    }
+}
+
+fn dump_arm(side: &str, arm: &DiamondArm, base: usize) {
+    println!("     {side}: join moves={}", arm.join.len());
+    for (at, op) in arm.block.iter().enumerate() {
+        println!("       {}", line(at, op, base));
     }
 }
 

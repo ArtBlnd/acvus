@@ -57,6 +57,12 @@ const BRANCH_WHILE: &str =
     "let i = 0; let acc = 0; while i < @n { if even_of(i) { acc = acc + i; }; i = i + 1; } acc";
 const OPTION_WHILE: &str = "let i = 0; let acc = 0; while i < @n { if let Some(v) = some_of(i) { acc = acc + v; }; i = i + 1; } acc";
 
+/// A value diamond in the body: the collatz step, both arms non-empty and
+/// the join carrying one parameter.
+const COLLATZ_WHILE: &str = "let i = 0; let acc = 0; while i < @n { let d = if i % 2 == 0 { i / 2 } else { i * 3 + 1 }; acc = acc + d; i = i + 1; } acc";
+/// A three-way statement diamond: `else if` joins on two parameters, the
+/// shape `grade_classifier` runs in its `while let` body.
+const GRADE_WHILE: &str = "let i = 0; let a = 0; let b = 0; while i < @n { if i % 3 == 0 { a = a + 1; } else if i % 3 == 1 { b = b + 1; } else { a = a + 2; }; i = i + 1; } a + b";
 struct Case {
     name: &'static str,
     source: &'static str,
@@ -134,6 +140,38 @@ fn rust_option_while(n: i64) -> f64 {
         i += 1;
     }
     acc as f64
+}
+
+fn rust_collatz_while(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let d = if black_box(i) % 2 == 0 {
+            i / 2
+        } else {
+            i * 3 + 1
+        };
+        acc += d;
+        i += 1;
+    }
+    acc as f64
+}
+
+fn rust_grade_while(n: i64) -> f64 {
+    let mut a = 0i64;
+    let mut b = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        if black_box(i) % 3 == 0 {
+            a += 1;
+        } else if i % 3 == 1 {
+            b += 1;
+        } else {
+            a += 2;
+        }
+        i += 1;
+    }
+    (a + b) as f64
 }
 
 fn context(interner: &Interner, n: i64) -> Context {
@@ -277,6 +315,20 @@ fn main() {
             source: OPTION_WHILE,
             registries: with_some_of,
             rust: rust_option_while,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "collatz while",
+            source: COLLATZ_WHILE,
+            registries: std_only,
+            rust: rust_collatz_while,
+            read: |v| v.as_int() as f64,
+        },
+        Case {
+            name: "grade while",
+            source: GRADE_WHILE,
+            registries: std_only,
+            rust: rust_grade_while,
             read: |v| v.as_int() as f64,
         },
     ];

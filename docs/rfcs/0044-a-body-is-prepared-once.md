@@ -169,6 +169,26 @@ are re-indexed. `control::while_loop` runs the whole loop in one Rust
 that raises inside gives the error the span of the instruction it came
 from, not the loop's.
 
+An `if`/`else` whose arms transfer no control is one operation. The
+preparation recognizes the diamond the lowering gives a branch —
+`JumpIf { cond, then: T, else: E }`, one arm's `BlockLabel` directly
+after the test, that arm's straight run, its `Jump J`, then either the
+other arm's block and its own `Jump J` or nothing when the other edge
+already names `J`, then `BlockLabel J` — when each arm label is named
+only by the test, `J` only by the two edges the operation absorbs, and no
+jump from outside names a label between them. `if` and `&&` put the
+`then` arm directly after the test and `||` puts the `else` arm there, so
+the recognizer takes whichever is there and assigns the sides
+afterwards. Each arm becomes a `BasicBlock` and the edge that carries its
+values into `J`'s parameters becomes a parallel-move list, so a branch
+that produces nothing, one value, or the several an `else if` chain
+carries out is one shape. `control::diamond` tests the condition, runs
+that arm's operations with the loop's own `run_block`, and makes the
+moves. A recognized diamond is straight-line, so recognition runs
+inner-first and interleaves with the loop's: a `while` whose head or body
+holds a branch is one loop operation again, and a `while` inside an arm
+is one loop operation inside that arm.
+
 Operations are plain functions, one per operation, `fn(&mut Machine,
 &Op) -> Flow`, with a macro for operand access and no trait. The
 preparation is one exhaustive `match` over `InstKind` and the operand
@@ -430,9 +450,12 @@ both trees with `-C llvm-args=-align-all-functions=6` reverses the sign
   call into another body, an `Eval` — is not one operation. It prepares
   as the separate operations it was before, and stays that way until the
   synchronous call path admits a closure call.
-- An `if`/`else` inside a loop body is a control transfer, so the loop
-  around it is not recognized either. The diamond is its own
-  superinstruction, not part of this one.
+- A diamond whose arm can suspend is not one operation, for the same
+  reason a `while` is not, and a loop around it is not one either. A
+  branch the lowering emits in another order than the one above — an arm
+  whose block does not sit directly after the test, a join some third
+  jump also names — stops matching and prepares as the separate
+  operations it was before.
 
 ## An arithmetic chain is one operation, and a body that is one chain has no frame
 
@@ -567,6 +590,66 @@ numbers are code layout under fat LTO.
 instructions — three `movzwl` of the leaf offsets, `movsd`, `mulsd`,
 `mulsd`, the kind byte, the word, `Flow::Next`, `ret` — with no compare,
 no call, no frame and no unwind path, against thirty with all four before.
+
+## A diamond is one operation
+
+RFC-0020 made every `&&`, every `||` and every multi-part pattern
+conjunction a branch diamond in the MIR. The loop recognizer stops at a
+`JumpIf` that is not the loop's own exit test, so from `7ea80591`
+mandelbrot's three `while`s were no operation at all, and collatz-shaped
+and grade-shaped loops — a branch in the body — never had been. The rule
+above takes the diamond as a superinstruction, which makes the arms
+straight-line and the loops recognizable again.
+
+Measured on this machine, 2026-09-18; interleaved A/B against binaries
+built from `master` 3589d1b7 in its own tree, seven repetitions,
+medians, ns per iteration. `collatz while` and `grade while` are the
+value diamond and the `else if` chain, added to `accum` on both sides.
+
+| bench | master | this rule | ratio |
+|-------|--------|-----------|-------|
+| mandelbrot (200x100x200) | 27.0 | 16.2 | 0.600 |
+| mandelbrot (80x40x100) | 28.3 | 17.2 | 0.608 |
+| accum branch `while` | 19.3 | 10.1 | 0.523 |
+| accum option `while` | 25.1 | 14.4 | 0.575 |
+| accum collatz `while` | 23.1 | 12.6 | 0.544 |
+| accum grade `while` | 27.4 | 16.2 | 0.589 |
+| accum int `while` | 4.9 | 5.0 | 1.020 |
+| accum float `while` | 7.8 | 7.8 | 1.000 |
+| accum extern `while` | 7.7 | 7.8 | 1.020 |
+| accum `map(\|x\| -> x + k) \| sum` | 13.9 | 14.1 | 1.011 |
+| accum `range \| sum` | 1.7 | 1.7 | 1.000 |
+| attention (64, 64) execute | 189.3 µs | 189.6 µs | 1.002 |
+
+The gain is per dispatch removed, and the op listing counts them.
+mandelbrot's innermost iteration ran fifteen operations — four `nop`
+block labels, two `jump`, two `jump_if`, and seven that compute — and now
+runs eight: a `Loop` whose head is `lt` and the diamond, the diamond's
+own `chain` and `lt_f64`, and a body of four. `branch while` goes from
+twelve to five on the even iteration and nine to four on the odd,
+`option while` from sixteen to nine and twelve to seven, collatz from
+thirteen to six, grade from fifteen and a third to six and a third. Seven
+dispatches out of fifteen for mandelbrot is 0.53 against 0.60 measured;
+the difference is the parallel moves a loop makes per iteration, which no
+dispatch count reaches.
+
+attention holds exactly one diamond, the `if let` that defaults the
+maximum, and it is outside every loop; its loops were already recognized
+and their shapes do not move.
+
+**The `select` variant is not built, and the obstruction is the register
+selector, not the arithmetic.** Evaluating both arms branch-free needs
+the two arms' results in registers at once. The selector coalesces a
+jump argument with the block parameter it feeds whenever they do not
+interfere, and the two arms of a diamond never interfere — only one runs
+— so both arms' results are given the join's own slot. Every diamond in
+every bench body measures `join moves = 0` for exactly that reason:
+mandelbrot's `&&` writes `r13` from the compare chain and `r13` from the
+constant `false`, collatz's arms both write `r5`. The second arm would
+overwrite the first. Keeping the variant would mean telling the selector
+not to coalesce an arm it might speculate, which lengthens two live
+ranges and adds a move per diamond to buy one predicted branch; that
+trade was not taken here.
 
 ## Rejected
 

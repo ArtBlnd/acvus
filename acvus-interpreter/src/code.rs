@@ -194,6 +194,18 @@ pub struct LoopBody {
     pub exit: Box<[SlotMove]>,
 }
 
+pub struct DiamondArm {
+    pub block: BasicBlock,
+    pub join: Box<[SlotMove]>,
+}
+
+/// The `if/else` shape `prepare::recognize_diamond` finds in the IR and
+/// `control::diamond` runs (RFC-0044, stage 5).
+pub struct Diamond {
+    pub on_true: DiamondArm,
+    pub on_false: DiamondArm,
+}
+
 /// The operator of one node of a chain, applied by `Arith::apply` in
 /// `ops::chain`. `Neg` ignores its right operand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -385,6 +397,7 @@ pub enum Payload {
     /// A jump's moves, in the order `prepare::order_moves` put them.
     Moves(Box<[SlotMove]>),
     Loop(LoopBody),
+    Diamond(Diamond),
     /// A variant's tag, or an object's key.
     Name(Astr),
     PageKey(Box<str>),
@@ -415,6 +428,7 @@ pub fn payload_name(payload: &Payload) -> &'static str {
         Payload::Fields(_) => "Fields",
         Payload::Moves(_) => "Moves",
         Payload::Loop(_) => "Loop",
+        Payload::Diamond(_) => "Diamond",
         Payload::Name(_) => "Name",
         Payload::PageKey(_) => "PageKey",
         Payload::Text(_) => "Text",

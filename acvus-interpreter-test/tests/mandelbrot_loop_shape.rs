@@ -1,24 +1,14 @@
-//! What the register selector makes of the three nested `while`s the
-//! mandelbrot bench runs: which of them it recognizes as loops, and how
-//! many operations one iteration of each prepares.
+//! What the recognizer makes of the three nested `while`s the mandelbrot
+//! bench runs: how many operations one iteration of each prepares, and how
+//! many of them the short-circuit diamond in the innermost head holds.
 //!
-//! RFC-0020 lowers the innermost `while`'s condition `i < @max && ...` to
-//! a branch diamond, and `prepare::recognize_loop` takes a head that is a
-//! straight run ending in the one `jump_if` whose else-edge is the exit.
-//! The diamond's `jump_if` is neither, so that loop is not recognized, and
-//! an unrecognized loop inside a body stops the body from being a straight
-//! run — so neither enclosing `while` is recognized either. Restoring the
-//! recognition is the diamond op's work; until then this file measures the
-//! absence, and the bench pays for it (50.3 ns/iteration against 41.1 with
-//! the three loops recognized, 80x40 at max 100).
-//!
-//! What the counts used to guard: `total = total + i` is written after the
-//! innermost loop and must be prepared after it. `optimize::code_motion`
-//! used to hoist it into that loop's head, where it ran once per escape
-//! step instead of once per pixel, because a loop's exit post-dominates
-//! its header and post-dominance was the whole hoist condition. With no
-//! loop recognized there is no head to hoist into, so that guard comes
-//! back with the recognition.
+//! The counts are also the hoist guard. `total = total + i` is written
+//! after the innermost `while` and belongs to the middle loop's body.
+//! `optimize::code_motion` used to hoist it into the innermost head, where
+//! it ran once per escape step instead of once per pixel, because a loop's
+//! exit post-dominates its header and post-dominance was the whole hoist
+//! condition. That hoist would show here as an innermost head of three and
+//! a middle body of eighteen.
 
 use std::sync::Arc;
 
@@ -59,9 +49,11 @@ total
 ";
 
 /// One `while` as the machine runs it.
+#[derive(Debug, PartialEq)]
 struct LoopShape {
     head_ops: usize,
     body_ops: usize,
+    diamonds_in_head: usize,
 }
 
 fn mandelbrot_loops() -> Vec<LoopShape> {
@@ -93,6 +85,11 @@ fn mandelbrot_loops() -> Vec<LoopShape> {
             Payload::Loop(body) => Some(LoopShape {
                 head_ops: body.head.iter().count(),
                 body_ops: body.body.iter().count(),
+                diamonds_in_head: body
+                    .head
+                    .iter()
+                    .filter(|op| matches!(&main.payloads[op.p], Payload::Diamond(_)))
+                    .count(),
             }),
             _ => None,
         })
@@ -100,14 +97,28 @@ fn mandelbrot_loops() -> Vec<LoopShape> {
 }
 
 #[test]
-fn a_short_circuit_condition_leaves_no_while_for_the_recognizer() {
-    let shapes: Vec<String> = mandelbrot_loops()
-        .iter()
-        .map(|l| format!("head {} body {}", l.head_ops, l.body_ops))
-        .collect();
-    let none: [String; 0] = [];
+fn every_while_is_one_loop_operation_and_the_diamond_is_one_more() {
     assert_eq!(
-        shapes, none,
-        "a `while` recognized here runs as one loop op; the short-circuit diamond in the innermost head is what stops the recognizer, and its cost is the bench's"
+        mandelbrot_loops(),
+        vec![
+            LoopShape {
+                head_ops: 2,
+                body_ops: 4,
+                diamonds_in_head: 1,
+            },
+            LoopShape {
+                head_ops: 1,
+                body_ops: 19,
+                diamonds_in_head: 0,
+            },
+            LoopShape {
+                head_ops: 1,
+                body_ops: 4,
+                diamonds_in_head: 0,
+            },
+        ],
+        "the loops are listed innermost first: `i < @max` and the short-circuit \
+         diamond, then the pixel loop whose body ends in `total = total + i`, \
+         then the row loop"
     );
 }

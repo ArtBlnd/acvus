@@ -49,11 +49,32 @@ fn run_block(machine: &mut Machine<'_>, block: &BasicBlock) -> Flow {
             Flow::Next => {}
             Flow::Return => return Flow::Return,
             Flow::Jump(_) | Flow::Await(_) => panic!(
-                "an operation inside a loop transferred control: the recognizer admits \
-                 only operations that return Next or Return"
+                "an operation inside a recognized region transferred control: the recognizer \
+                 admits only operations that return Next or Return"
             ),
         }
     }
+    Flow::Next
+}
+
+pub fn diamond(machine: &mut Machine<'_>, op: &Op) -> Flow {
+    let Payload::Diamond(arms) = machine.payload(op) else {
+        panic!(
+            "a diamond operation wants a Diamond payload, found {}",
+            crate::code::payload_name(machine.payload(op))
+        )
+    };
+    let arm = if machine.reg(op.a).as_bool() {
+        &arms.on_true
+    } else {
+        &arms.on_false
+    };
+
+    match run_block(machine, &arm.block) {
+        Flow::Next => {}
+        stop => return stop,
+    }
+    move_all(machine, &arm.join);
     Flow::Next
 }
 
