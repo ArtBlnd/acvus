@@ -147,24 +147,16 @@ pub fn prepare_body(
     }
 
     let emitted = prep.emit(&units);
-    // The checker's claim and this preparation's own reading, joined.
-    //
-    // RFC-0046 asks for the claim alone, with the reading kept as a
-    // `debug_assert_eq!`. Neither direction holds today, and both
-    // counterexamples are measured:
-    //
-    // - claim above reading: `range | map(|x| -> io()) | fold(0, |a, b| -> a + b)`
-    //   types the fold's closure `Async` by the demotion join, though the
-    //   closure only adds. Sound, and not worth refusing.
-    // - reading above claim: `range | map(|x| -> io()) | last` freezes
-    //   `last`'s call effect to `Pure/Sync` while the solver takes its
-    //   asynchronous instance. The same holds for `find`; `any`, `all` and
-    //   `position` on the same pipeline freeze to `Opaque/Async`. Measured
-    //   with and without the synchronous instance, so the hole is the
-    //   checker's and predates this change. Until it is closed, a body
-    //   that awaits must not be typed as one that does not, so the
-    //   reading stands beside the claim rather than under it.
-    let may_suspend = prep.may_suspend || body.task > Task::Sync;
+    // RFC-0046 asked for equality here. It does not hold, and
+    // `io_in_iteration` (acvus-interpreter-test/tests/extern_fn.rs)
+    // measures the gap: a closure demoted to the parameter's effect is
+    // typed `Async` while its operations only add, and that body holds no
+    // call for `suspends_at` to read.
+    let may_suspend = body.task > Task::Sync;
+    debug_assert!(
+        !prep.may_suspend || may_suspend,
+        "body {role:?}: the prepared operations await and the checker's task does not say so"
+    );
     let mut ops: Vec<Op> = Vec::with_capacity(emitted.len());
     let mut spans: Vec<Span> = Vec::with_capacity(emitted.len());
     for Emitted { op, span } in emitted {

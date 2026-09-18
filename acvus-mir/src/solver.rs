@@ -736,7 +736,10 @@ impl Terms {
     /// type it flows into. Written to the root variable of a side that is a
     /// variable; `Mismatch` where no join exists. A closure's effect is the
     /// one directional component: the value's is at most what the position
-    /// allows (RFC-0017).
+    /// allows (RFC-0017). At the top of a decision's own join `a` is not a
+    /// value flowing into `b` but a call settling on the signature it took,
+    /// and there the effect runs both ways: the caller runs what the callee
+    /// does (RFC-0046).
     fn join(
         &mut self,
         a: &InferTy,
@@ -947,6 +950,12 @@ impl Terms {
                 }
                 self.join(ret_a, ret_b, Position::Argument, kind, registry)?;
                 if let Err(conflict) = self.unify_effect(ea, eb, EffectRelation::AtMost) {
+                    return Err(mismatch_for(self, task_reason(&conflict)));
+                }
+                let settling_a_call = kind == JoinKind::Decision && position == Position::Value;
+                if settling_a_call
+                    && let Err(conflict) = self.unify_effect(eb, ea, EffectRelation::AtMost)
+                {
                     return Err(mismatch_for(self, task_reason(&conflict)));
                 }
                 Ok(())

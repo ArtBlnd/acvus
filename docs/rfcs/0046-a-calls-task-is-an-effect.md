@@ -226,28 +226,46 @@ task of any body it splits. An `async fn` generic in its effect is now a
 macro error unless it names its `sync` twin, because its glue awaits for
 every effect the variable takes.
 
-**`Code::may_suspend` is the join, not the claim.** The RFC asked for
-`MirBody::task > Sync` alone with `prepare`'s own reading kept as a
-`debug_assert_eq!`. Neither direction holds, and both counterexamples are
-measured:
+**`Code::may_suspend` is the claim.** It is `MirBody::task > Task::Sync`
+alone, and `prepare`'s own reading is kept as a `debug_assert!` that the
+reading implies the claim — an operation that awaits under a body typed as
+one that does not is the direction that would be unsound. Equality, which
+this RFC first asked for, is refuted by demotion: in
+`as_iter(&@items) | map(|x| -> fetch_by(*x)) | fold(@sum, |a, b| -> a + b)`
+the fold's closure is typed `Async` because the parameter's effect is,
+while its operations only add, and that body holds no call for
+`suspends_at` to read. It is the only body that differs in the four
+crates' suites (`io_in_iteration`,
+`acvus-interpreter-test/tests/extern_fn.rs`).
 
-- The claim exceeds the reading wherever demotion applies: in
-  `range | map(|x| -> io()) | fold(0, |a, b| -> a + b)` the fold's
-  closure is typed `Async` because the parameter's effect is, though the
-  closure only adds. Sound, and the RFC's own join rule.
-- The reading exceeds the claim for `find` and `last`: over a pipeline
-  whose stage suspends, the solver takes their asynchronous instance —
-  correctly — while the call's effect freezes to `Pure/Sync`, so the body
-  holding the call is typed `Task::Sync`. `any`, `all` and `position`
-  have the same parameter shape and freeze to `Opaque/Async` on the same
-  pipeline. Measured with and without the synchronous instance, so the
-  hole predates this change; it was invisible while nothing read the
-  task.
+**The hole the runtime half measured, and where it lived.** `find` and
+`last` over a suspending pipeline took their asynchronous instance while
+their call froze to `Pure` — not `Pure/Sync`: the whole effect was lost,
+reissue and contexts with the task. The origin is not in those consumers
+and not in the task. A call settles on the signature it took through a
+decision's join, and `TermStore::join`'s function arm related the two
+effects in one direction only — the value's at most what the position
+allows, which is RFC-0017's demotion and is right for a function value
+flowing into a parameter. At a call it is the wrong way round: the caller
+runs what the callee does. A name only one declaration owns never showed
+it, because there the call type *is* the instantiated declaration and
+carries its effect term; an **overloaded** name goes through a
+`Decision::Signature` opened on a call type with a fresh effect variable,
+and nothing ever flowed the callee's effect into it. `find`, `last` and
+`contains` share their bare names with `str::find`, `vec::last` and
+`str::contains`; the other sixteen consumers do not. That, and not the
+`Fn1` parameter or the `Option<T>` return, is the whole of the split —
+`nth` and `reduce` have the same shapes as `find` and are unaffected, and
+a two-declaration extern with no iterator in it reproduces the loss on its
+own.
 
-Until that hole is closed, a body that awaits must not be typed as one
-that does not, so `Code::may_suspend` is `prepare`'s reading joined with
-the checker's claim. The shape the RFC bought does not depend on it: the
-`Loop` comes from the instance the solver chose.
+The rule: at the top of a decision's own join the effect runs both ways.
+Nested positions keep the demotion direction, so a `Sync` closure passed
+where the parameter is `Async` still joins in. With it, every consumer's
+call carries the task of the instance the solver chose, and the entry
+body's task is exactly the join over its calls and its `Spawn`/`Eval`s; a
+closure body's is that join or the demotion above it. Measured in
+`acvus-mir-test/tests/consumer_task.rs`.
 
 **`Fn1::is_sync`.** Every `call_now` asserts it, which is the type's claim
 checked against the run-time answer. It does not fire anywhere in the

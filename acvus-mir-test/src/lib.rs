@@ -441,6 +441,123 @@ pub fn compile_script_mode_ir_with(
     Ok(dump_with(interner, &module))
 }
 
+/// Lower a script-mode source with the standard registries, before any
+/// optimization: the module as the checker decided it.
+pub fn lowered_script_module(
+    interner: &Interner,
+    source: &str,
+    extern_fns: &[Function],
+) -> Result<MirModule, String> {
+    let test_qref = QualifiedRef::root(interner.intern("test"));
+    let ast =
+        acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Script(ast)),
+        vec![],
+    )];
+    let type_registry = extend_with_std(interner, &mut functions);
+    functions.extend_from_slice(extern_fns);
+    let graph = CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(vec![]),
+    };
+
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(
+        interner,
+        &graph,
+        &ext,
+        &FxHashMap::default(),
+        Freeze::new(type_registry),
+    );
+
+    let mut errors: Vec<String> = Vec::new();
+    for (qref, errs) in inf.errors() {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!("[infer:{fn_name}] {}", e.display(interner)));
+        }
+    }
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
+        errors.push(format!("[lower] {}", e.display(interner)));
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+    result
+        .module(test_qref)
+        .cloned()
+        .ok_or_else(|| "no module produced for target".to_string())
+}
+
+/// Lower a script-mode source with the standard registries and run the full
+/// optimization pipeline over it, returning the module.
+pub fn optimized_script_module(
+    interner: &Interner,
+    source: &str,
+    extern_fns: &[Function],
+) -> Result<MirModule, String> {
+    let test_qref = QualifiedRef::root(interner.intern("test"));
+    let ast =
+        acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Script(ast)),
+        vec![],
+    )];
+    let type_registry = extend_with_std(interner, &mut functions);
+    functions.extend_from_slice(extern_fns);
+    let graph = CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(vec![]),
+    };
+
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(
+        interner,
+        &graph,
+        &ext,
+        &FxHashMap::default(),
+        Freeze::new(type_registry),
+    );
+
+    let mut errors: Vec<String> = Vec::new();
+    for (qref, errs) in inf.errors() {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!("[infer:{fn_name}] {}", e.display(interner)));
+        }
+    }
+    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
+        errors.push(format!("[lower] {}", e.display(interner)));
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let opt = acvus_mir::graph::optimize::optimize(
+        result.modules,
+        &inf.context_types,
+        &FxHashSet::default(),
+    );
+    for (qref, errs) in &opt.errors {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!("[validate:{fn_name}] {}", e.display(interner)));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+    opt.modules
+        .get(&test_qref)
+        .cloned()
+        .ok_or_else(|| "no module produced for target".to_string())
+}
+
 /// Compile a **script** with the **full optimization pipeline** (SROA -> SSA -> Inline -> Pass2).
 /// Returns printed IR of the optimized module.
 pub fn compile_script_optimized(
