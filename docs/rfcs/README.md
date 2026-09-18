@@ -92,3 +92,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0044](0044-a-body-is-prepared-once.md) | A body is prepared once | Accepted |
 | [RFC-0045](0045-let-binds-and-assignment-assigns.md) | `let` binds, `x = e;` assigns | Accepted |
 | [RFC-0046](0046-a-calls-task-is-an-effect.md) | A call's task is an effect: `Task::{Sync, Async, Heavy}` | Accepted |
+| [RFC-0047](0047-a-slice-is-the-one-thing-the-machine-indexes.md) | A slice is the one thing the machine indexes: `AsSlice`, `Index`, bounds proved | Draft |
