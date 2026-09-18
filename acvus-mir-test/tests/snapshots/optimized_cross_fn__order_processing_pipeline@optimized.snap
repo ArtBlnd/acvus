@@ -32,10 +32,10 @@ expression: opt
     22 |   r21 = test r20 == true
     23 |   r22 = r19 <= r8
     24 |   r23 = test r22 == true
-    25 |   r24 = ref &$v124
+    25 |   r24 = ref &$v126
     26 |   r25 = ref &$v23
-    27 |   r26 = ref &$v132
-    28 |   r27 = ref &$v139
+    27 |   r26 = ref &$v134
+    28 |   r27 = ref &$v141
     29 |   jump_if r21 then L0 else L1(r2)
     30 | L0:
     32 |   jump L1(0 (r28))
@@ -45,78 +45,78 @@ expression: opt
     36 |   jump L3(r4)
     37 | L3(r30: i64):
     38 |   r31 = r19 + r30
-    40 |   assign v148 = T0
-    41 |   r32 = ref &v148
+    40 |   assign v150 = T0
+    41 |   r32 = ref &v150
     42 |   r33 = string_concat [r24, r32]
     43 |   drop r34
     44 |   drop r35
-    45 |   assign v151 = r33
-    46 |   r36 = ref &v151
+    45 |   assign v153 = r33
+    46 |   r36 = ref &v153
     47 |   r37 = call #0(r25)
-    48 |   assign v155 = r37
-    49 |   r38 = ref &v155
+    48 |   assign v157 = r37
+    49 |   r38 = ref &v157
     50 |   r39 = string_concat [r36, r38]
     51 |   drop r40
     52 |   drop r41
-    53 |   assign v158 = r39
-    54 |   r42 = ref &v158
-    56 |   assign v161 = T1
-    57 |   r43 = ref &v161
+    53 |   assign v160 = r39
+    54 |   r42 = ref &v160
+    56 |   assign v163 = T1
+    57 |   r43 = ref &v163
     58 |   r44 = string_concat [r42, r43]
     59 |   drop r45
     60 |   drop r46
-    61 |   assign v164 = r44
-    62 |   r47 = ref &v164
+    61 |   assign v166 = r44
+    62 |   r47 = ref &v166
     63 |   r48 = call #0(r26)
-    64 |   assign v168 = r48
-    65 |   r49 = ref &v168
+    64 |   assign v170 = r48
+    65 |   r49 = ref &v170
     66 |   r50 = string_concat [r47, r49]
     67 |   drop r51
     68 |   drop r52
-    69 |   assign v171 = r50
-    70 |   r53 = ref &v171
-    72 |   assign v174 = T2
-    73 |   r54 = ref &v174
+    69 |   assign v173 = r50
+    70 |   r53 = ref &v173
+    72 |   assign v176 = T2
+    73 |   r54 = ref &v176
     74 |   r55 = string_concat [r53, r54]
     75 |   drop r56
     76 |   drop r57
-    77 |   assign v177 = r55
-    78 |   r58 = ref &v177
+    77 |   assign v179 = r55
+    78 |   r58 = ref &v179
     79 |   r59 = call #0(r27)
-    80 |   assign v181 = r59
-    81 |   r60 = ref &v181
+    80 |   assign v183 = r59
+    81 |   r60 = ref &v183
     82 |   r61 = string_concat [r58, r60]
     83 |   drop r62
     84 |   drop r63
-    85 |   assign v184 = r61
-    86 |   r64 = ref &v184
-    88 |   assign v187 = T3
-    89 |   r65 = ref &v187
+    85 |   assign v186 = r61
+    86 |   r64 = ref &v186
+    88 |   assign v189 = T3
+    89 |   r65 = ref &v189
     90 |   r66 = string_concat [r64, r65]
     91 |   drop r67
     92 |   drop r68
-    93 |   assign v190 = r66
-    94 |   r69 = ref &v190
-    95 |   r70 = ref &$v100
+    93 |   assign v192 = r66
+    94 |   r69 = ref &v192
+    95 |   r70 = ref &$v102
     96 |   r71 = call #0(r70)
-    97 |   assign v194 = r71
-    98 |   r72 = ref &v194
+    97 |   assign v196 = r71
+    98 |   r72 = ref &v196
     99 |   r73 = string_concat [r69, r72]
    100 |   drop r74
    101 |   drop r75
-   102 |   assign v197 = r73
-   103 |   r76 = ref &v197
-   105 |   assign v200 = T4
-   106 |   r77 = ref &v200
+   102 |   assign v199 = r73
+   103 |   r76 = ref &v199
+   105 |   assign v202 = T4
+   106 |   r77 = ref &v202
    107 |   r78 = string_concat [r76, r77]
    108 |   drop r79
    109 |   drop r80
-   110 |   assign v203 = r78
-   111 |   r81 = ref &v203
-   112 |   r82 = ref &$v53
+   110 |   assign v205 = r78
+   111 |   r81 = ref &v205
+   112 |   r82 = ref &$v55
    113 |   r83 = call #0(r82)
-   114 |   assign v207 = r83
-   115 |   r84 = ref &v207
+   114 |   assign v209 = r83
+   115 |   r84 = ref &v209
    116 |   r85 = string_concat [r81, r84]
    117 |   drop r86
    118 |   drop r87
@@ -148,191 +148,193 @@ expression: opt
     ; r8 (@free_ship_min) : i64
     ; r9 (v23) : i64
     ; r10 (v22) : i64
-    ; r11 (v130) : i64
-    ; r12 (v132) : i64
-    ; r13 (v131) : i64
+    ; r11 (v132) : i64
+    ; r12 (v134) : i64
+    ; r13 (v133) : i64
     ; r14 (v31) : i64
-    ; r15 (v137) : i64
-    ; r16 (v139) : i64
-    ; r17 (v138) : i64
+    ; r15 (v139) : i64
+    ; r16 (v141) : i64
+    ; r17 (v140) : i64
     ; r18 (v37) : i64
     ; r19 (v39) : i64
     ; r20 (v43) : Bool
     ; r21 (v44) : Bool
-    ; r22 (v48) : Bool
-    ; r23 (v49) : Bool
+    ; r22 (v49) : Bool
+    ; r23 (v50) : Bool
     ; r24 ($param_1.) : &String
     ; r25 ($param_2.) : &i64
     ; r26 ($param_3.) : &i64
     ; r27 ($param_4.) : &i64
     ; r28 (v45) : i64
-    ; r29 (v101) : i64
-    ; r30 (v100) : i64
-    ; r31 (v53) : i64
+    ; r29 (v103) : i64
+    ; r30 (v102) : i64
+    ; r31 (v55) : i64
     ; r32 (@tax_rate.) : &String
-    ; r33 (v150) : String
-    ; r34 (v148) : String
-    ; r35 (v124) : String
+    ; r33 (v152) : String
+    ; r34 (v150) : String
+    ; r35 (v126) : String
     ; r36 (@default_ship.) : &String
     ; r37 (to_string(...)) : String
     ; r38 (@discount_rate.) : &String
-    ; r39 (v157) : String
-    ; r40 (v155) : String
-    ; r41 (v151) : String
+    ; r39 (v159) : String
+    ; r40 (v157) : String
+    ; r41 (v153) : String
     ; r42 (@free_ship_min.) : &String
     ; r43 (var_22.) : &String
-    ; r44 (v163) : String
-    ; r45 (v161) : String
-    ; r46 (v158) : String
+    ; r44 (v165) : String
+    ; r45 (v163) : String
+    ; r46 (v160) : String
     ; r47 (subtotal.) : &String
     ; r48 (to_string(...)) : String
     ; r49 (subtotal.) : &String
-    ; r50 (v170) : String
-    ; r51 (v168) : String
-    ; r52 (v164) : String
+    ; r50 (v172) : String
+    ; r51 (v170) : String
+    ; r52 (v166) : String
     ; r53 (@tax_rate.) : &String
     ; r54 (subtotal.) : &String
-    ; r55 (v176) : String
-    ; r56 (v174) : String
-    ; r57 (v171) : String
+    ; r55 (v178) : String
+    ; r56 (v176) : String
+    ; r57 (v173) : String
     ; r58 (tax.) : &String
     ; r59 (to_string(...)) : String
     ; r60 (@free_ship_min.) : &String
-    ; r61 (v183) : String
-    ; r62 (v181) : String
-    ; r63 (v177) : String
+    ; r61 (v185) : String
+    ; r62 (v183) : String
+    ; r63 (v179) : String
     ; r64 (var_45.) : &String
-    ; r65 (var_48.) : &String
-    ; r66 (v189) : String
-    ; r67 (v187) : String
-    ; r68 (v184) : String
-    ; r69 (total.) : &String
+    ; r65 (@free_ship_min.) : &String
+    ; r66 (v191) : String
+    ; r67 (v189) : String
+    ; r68 (v186) : String
+    ; r69 (@default_ship.) : &String
     ; r70 ($param_5.) : &i64
     ; r71 (to_string(...)) : String
-    ; r72 (@customer.) : &String
-    ; r73 (v196) : String
-    ; r74 (v194) : String
-    ; r75 (v190) : String
-    ; r76 (tax.) : &String
-    ; r77 (var_61.) : &String
-    ; r78 (v202) : String
-    ; r79 (v200) : String
-    ; r80 (v197) : String
+    ; r72 (var_55.) : &String
+    ; r73 (v198) : String
+    ; r74 (v196) : String
+    ; r75 (v192) : String
+    ; r76 (subtotal.) : &String
+    ; r77 (@shipping.) : &String
+    ; r78 (v204) : String
+    ; r79 (v202) : String
+    ; r80 (v199) : String
     ; r81 (receipt.) : &String
     ; r82 ($param_6.) : &i64
     ; r83 (to_string(...)) : String
     ; r84 (var_68.) : &String
-    ; r85 (v209) : String
-    ; r86 (v207) : String
-    ; r87 (v203) : String
-    ; r88 (v125) : String
-    ; r89 (v210) : Handle<i64>
+    ; r85 (v211) : String
+    ; r86 (v209) : String
+    ; r87 (v205) : String
+    ; r88 (v127) : String
+    ; r89 (v212) : Handle<i64>
     ; r90 (v1) : Order
     ; r91 (send_email(...)) : i64
-    ; r92 (v68) : Order
+    ; r92 (v70) : Order
     ; r93 (v88) : String
     ; r94 (subtotal) : i64
-    ; r95 (v147) : String
-    ; r96 (v84) : i64
-    ; r97 (@item_count) : i64
-    ; r98 (v80) : Order
-    ; r99 (@customer) : String
-    ; r100 (receipt) : String
-    ; r101 (total) : i64
-    ; r102 (v113) : i64
-    ; r103 (@default_ship) : i64
-    ; r104 (v75) : String
-    ; r105 (receipt) : String
-    ; r106 (v87) : i64
-    ; r107 (subtotal) : i64
-    ; r108 (v112) : i64
-    ; r109 (v74) : i64
-    ; r110 (@default_ship) : i64
-    ; r111 (v99) : i64
-    ; r112 (discount) : i64
-    ; r113 (format_receipt(...)) : String
-    ; r114 (v86) : String
-    ; r115 (v111) : Order
-    ; r116 (v199) : String
-    ; r117 ($rate) : i64
-    ; r118 (v73) : i64
-    ; r119 (v98) : i64
-    ; r120 (subtotal) : i64
-    ; r121 (v186) : String
-    ; r122 (v123) : String
-    ; r123 (final_total) : i64
-    ; r124 (v85) : i64
-    ; r125 (v173) : String
-    ; r126 (v110) : Order
-    ; r127 (@free_ship_min) : i64
-    ; r128 ($amount) : i64
-    ; r129 (v72) : i64
-    ; r130 (@tax_rate) : i64
-    ; r131 (v160) : String
-    ; r132 (v97) : i64
-    ; r133 (tax) : i64
-    ; r134 (v122) : i64
-    ; r135 (@shipping) : i64
-    ; r136 (v109) : i64
-    ; r137 (total) : i64
-    ; r138 (v71) : i64
-    ; r139 (v96) : i64
-    ; r140 (calc_tax(...)) : i64
-    ; r141 (v121) : String
-    ; r142 (tax) : i64
-    ; r143 (v83) : i64
-    ; r144 (v108) : i64
-    ; r145 (v70) : i64
-    ; r146 (@shipping) : i64
-    ; r147 (v95) : String
-    ; r148 (@tax_rate) : i64
-    ; r149 (v120) : i64
-    ; r150 (discount) : i64
-    ; r151 (v82) : i64
-    ; r152 (@free_ship_min) : i64
-    ; r153 (v107) : i64
-    ; r154 (final_total) : i64
-    ; r155 (v94) : i64
-    ; r156 (v119) : i64
-    ; r157 (subtotal) : i64
-    ; r158 (v81) : i64
-    ; r159 (v106) : i64
-    ; r160 (@total_out) : i64
-    ; r161 (v93) : i64
-    ; r162 (discount) : i64
-    ; r163 (v118) : i64
-    ; r164 (@customer) : String
-    ; r165 (v105) : i64
-    ; r166 (@free_ship_min) : i64
-    ; r167 (v67) : Order
-    ; r168 (v92) : i64
-    ; r169 (subtotal) : i64
-    ; r170 (v117) : i64
-    ; r171 (final_total) : i64
-    ; r172 (v79) : Order
-    ; r173 (v104) : i64
-    ; r174 (total) : i64
-    ; r175 ($rate) : i64
-    ; r176 (@item_count) : i64
-    ; r177 (v91) : i64
-    ; r178 (discount) : i64
-    ; r179 (v116) : i64
-    ; r180 (v78) : i64
-    ; r181 (@discount_rate) : i64
-    ; r182 (v103) : String
+    ; r95 (v84) : i64
+    ; r96 (@item_count) : i64
+    ; r97 (v80) : i64
+    ; r98 (@customer) : String
+    ; r99 (v107) : i64
+    ; r100 (@total_out) : i64
+    ; r101 (@discount_rate) : i64
+    ; r102 (v101) : i64
+    ; r103 (v113) : Order
+    ; r104 (v201) : String
+    ; r105 ($rate) : i64
+    ; r106 (v75) : i64
+    ; r107 (v100) : i64
+    ; r108 (v188) : String
+    ; r109 (v125) : String
+    ; r110 (final_total) : i64
+    ; r111 (v87) : i64
+    ; r112 (subtotal) : i64
+    ; r113 (v175) : String
+    ; r114 (v112) : Order
+    ; r115 ($amount) : i64
+    ; r116 (v74) : i64
+    ; r117 (@default_ship) : i64
+    ; r118 (v162) : String
+    ; r119 (v99) : i64
+    ; r120 (discount) : i64
+    ; r121 (v124) : i64
+    ; r122 (@shipping) : i64
+    ; r123 (v149) : String
+    ; r124 (v86) : i64
+    ; r125 (v111) : i64
+    ; r126 (@free_ship_min) : i64
+    ; r127 (v73) : i64
+    ; r128 (v98) : i64
+    ; r129 (subtotal) : i64
+    ; r130 (v123) : String
+    ; r131 (tax) : i64
+    ; r132 (v85) : i64
+    ; r133 (v110) : i64
+    ; r134 (total) : i64
+    ; r135 (v72) : i64
+    ; r136 (@tax_rate) : i64
+    ; r137 (v97) : String
+    ; r138 (tax) : i64
+    ; r139 (v122) : i64
+    ; r140 (discount) : i64
+    ; r141 (v109) : i64
+    ; r142 (v46) : Unit
+    ; r143 (final_total) : i64
+    ; r144 (v96) : i64
+    ; r145 (calc_tax(...)) : i64
+    ; r146 (v121) : i64
+    ; r147 (subtotal) : i64
+    ; r148 (v83) : i64
+    ; r149 (v108) : i64
+    ; r150 (@shipping) : i64
+    ; r151 (v95) : i64
+    ; r152 (@tax_rate) : i64
+    ; r153 (v120) : i64
+    ; r154 (@customer) : String
+    ; r155 (v82) : Order
+    ; r156 (@free_ship_min) : i64
+    ; r157 (v69) : Order
+    ; r158 (v94) : i64
+    ; r159 (v119) : i64
+    ; r160 (final_total) : i64
+    ; r161 (v81) : Order
+    ; r162 (v106) : i64
+    ; r163 ($rate) : i64
+    ; r164 (v93) : i64
+    ; r165 (discount) : i64
+    ; r166 (v118) : i64
+    ; r167 (v105) : String
+    ; r168 (@free_ship_min) : i64
+    ; r169 ($subtotal) : i64
+    ; r170 (receipt) : String
+    ; r171 (v92) : i64
+    ; r172 (subtotal) : i64
+    ; r173 (v117) : i64
+    ; r174 (@shipping) : i64
+    ; r175 (v79) : String
+    ; r176 (v104) : String
+    ; r177 (total) : i64
+    ; r178 (receipt) : String
+    ; r179 (@item_count) : i64
+    ; r180 (v91) : i64
+    ; r181 (discount) : i64
+    ; r182 (v116) : i64
     ; r183 (total) : i64
-    ; r184 ($subtotal) : i64
-    ; r185 (v90) : i64
-    ; r186 (calc_discount(...)) : i64
-    ; r187 (v115) : i64
-    ; r188 (@shipping) : i64
-    ; r189 (v77) : String
-    ; r190 (v102) : String
-    ; r191 (receipt) : String
-    ; r192 (v89) : i64
-    ; r193 (@discount_rate) : i64
-    ; r194 (v114) : i64
-    ; r195 (v76) : i64
-    ; r196 (@receipt_out) : String
-    ; r197 (tax) : i64
-    ; r198 (final_total) : i64
+    ; r184 (v78) : i64
+    ; r185 (@discount_rate) : i64
+    ; r186 (total) : i64
+    ; r187 (final_total) : i64
+    ; r188 (v90) : String
+    ; r189 (calc_discount(...)) : i64
+    ; r190 (v115) : i64
+    ; r191 (v52) : Unit
+    ; r192 (v77) : String
+    ; r193 (receipt) : String
+    ; r194 (v89) : i64
+    ; r195 (v114) : i64
+    ; r196 (@default_ship) : i64
+    ; r197 (v76) : i64
+    ; r198 (@receipt_out) : String
+    ; r199 (tax) : i64
+    ; r200 (format_receipt(...)) : String

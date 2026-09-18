@@ -616,6 +616,14 @@ fn remap_inst(
             else_label: rl(*else_label),
             else_args: rv(else_args),
         },
+        InstKind::Switch { tag, arms, default } => InstKind::Switch {
+            tag: r(*tag),
+            arms: arms
+                .iter()
+                .map(|(t, label, args)| (*t, rl(*label), rv(args)))
+                .collect(),
+            default: default.as_ref().map(|(label, args)| (rl(*label), rv(args))),
+        },
         InstKind::Return { value, order } => InstKind::Return {
             value: r(*value),
             order: order.map(r),

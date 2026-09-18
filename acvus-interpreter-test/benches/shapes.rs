@@ -48,7 +48,7 @@ const CONSTRUCT: &str = "let acc = 0; let i = 0; while i < @n { let q = { x: i, 
 /// The language has no multi-arm `match`: a refutable pattern in script
 /// position is the match-bind statement `Pattern = Expr { body };`, so the
 /// two arms are two statements and both tags are tested every iteration.
-const ENUM_MATCH: &str = "let acc = 0; let i = 0; while i < @n { let e = if i % 2 == 0 { E::A(i) } else { E::B(i + 1) }; E::A(v) = e { acc = acc + v; }; E::B(v) = e { acc = acc + v; }; i = i + 1; } acc";
+const ENUM_MATCH: &str = "let acc = 0; let i = 0; while i < @n { let e = if i % 2 == 0 { E::A(i) } else { E::B(i + 1) }; match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v; } }; i = i + 1; } acc";
 const OPTION_MATCH: &str = "let i = 0; let acc = 0; while i < @n { if let Some(v) = some_of(i) { acc = acc + v; }; i = i + 1; } acc";
 
 /// `v[i]` takes a `u64` index and integer literals are `i64`, so the index

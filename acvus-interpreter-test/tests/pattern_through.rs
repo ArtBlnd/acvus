@@ -35,7 +35,7 @@ async fn out_of(i: &Interner, source: &str) -> f64 {
         .as_float()
 }
 
-const READ_THROUGH: &str = "let f = |r| -> { Some(v) = r { @out = *v; }; 0 }; ";
+const READ_THROUGH: &str = "let f = |r| -> { if let Some(v) = r { @out = *v; }; 0 }; ";
 
 #[tokio::test]
 async fn a_variant_pattern_on_a_lent_parameter_reads_its_payload_in_place() {
@@ -61,7 +61,7 @@ async fn a_borrowed_option_is_matched_through_and_stays_usable() {
 
 // -- A body that moves the payload out of a value source ---------------
 
-const MOVE_OUT: &str = "let f = |q| -> { Some(v) = Some(1.5) { @out = v; }; 0 }; ";
+const MOVE_OUT: &str = "let f = |q| -> { if let Some(v) = Some(1.5) { @out = v; }; 0 }; ";
 
 #[tokio::test]
 async fn a_tag_form_body_moves_the_payload_out_and_the_source_is_dropped_once() {
@@ -79,7 +79,7 @@ async fn the_same_match_written_as_an_if_let_runs_the_same() {
 #[tokio::test]
 async fn a_tag_form_match_that_fails_leaves_the_context_as_it_was() {
     let i = Interner::new();
-    let source = "let f = |q| -> { Some(v) = q { @out = v; }; 0 }; f(None)";
+    let source = "let f = |q| -> { if let Some(v) = q { @out = v; }; 0 }; f(None)";
     assert_eq!(out_of(&i, source).await, 0.0);
 }
 
@@ -91,7 +91,7 @@ async fn an_assignment_in_a_tag_form_body_is_the_outer_binding() {
     let i = Interner::new();
     let in_a_lambda = run_script_mode(
         &i,
-        "let f = |q| -> { let out = 0.0; Some(v) = Some(1.5) { out = v; }; out }; f(0)",
+        "let f = |q| -> { let out = 0.0; if let Some(v) = Some(1.5) { out = v; }; out }; f(0)",
         Context::default(),
     )
     .await;
@@ -99,7 +99,7 @@ async fn an_assignment_in_a_tag_form_body_is_the_outer_binding() {
 
     let at_the_top_level = run_script_mode(
         &i,
-        "let out = 0.0; Some(v) = Some(1.5) { out = v; }; out",
+        "let out = 0.0; if let Some(v) = Some(1.5) { out = v; }; out",
         Context::default(),
     )
     .await;
@@ -121,7 +121,7 @@ async fn a_let_in_a_tag_form_body_ends_with_the_body() {
     let i = Interner::new();
     let v = run_script_mode(
         &i,
-        "let f = |q| -> { let out = 0.0; Some(v) = Some(1.5) { let out = v; }; out }; f(0)",
+        "let f = |q| -> { let out = 0.0; if let Some(v) = Some(1.5) { let out = v; }; out }; f(0)",
         Context::default(),
     )
     .await;
@@ -135,7 +135,7 @@ async fn a_vec_moved_out_of_an_option_survives_the_match_that_moved_it() {
         &i,
         "let f = |q| -> {
              let out = reverse([0]);
-             Some(v) = Some(reverse([1, 2, 3])) { out = v; };
+             if let Some(v) = Some(reverse([1, 2, 3])) { out = v; };
              len(&out)
          }; f(0)",
         Context::default(),

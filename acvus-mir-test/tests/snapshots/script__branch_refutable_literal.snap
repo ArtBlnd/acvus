@@ -12,21 +12,22 @@ expression: ir
      6 | L0:
      8 |   jump L1(1 (r5))
      9 | L1(r6: i64):
-    10 |   commit @val = r2
-    11 |   commit @out = r6
-    12 |   return r6
+    11 |   commit @val = r2
+    12 |   commit @out = r6
+    13 |   return r6
 
-    ; r0 (v11) : i64
-    ; r1 (v12) : i64
+    ; r0 (v12) : i64
+    ; r1 (v13) : i64
     ; r2 (@val) : i64
     ; r3 (@out) : i64
     ; r4 (v6) : Bool
     ; r5 (v7) : i64
-    ; r6 (v13) : i64
+    ; r6 (v14) : i64
     ; r7 (@out) : i64
-    ; r8 (v14) : i64
-    ; r9 (v10) : i64
-    ; r10 (v9) : i64
-    ; r11 (v5) : i64
-    ; r12 (@val) : i64
-    ; r13 (@out) : i64
+    ; r8 (v11) : i64
+    ; r9 (@out) : i64
+    ; r10 (@val) : i64
+    ; r11 (v15) : i64
+    ; r12 (v10) : i64
+    ; r13 (v5) : i64
+    ; r14 (v8) : Unit

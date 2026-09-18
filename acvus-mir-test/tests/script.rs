@@ -51,7 +51,7 @@ fn branch_simple_bind() {
     // Irrefutable: x = @data { body } - no branching needed
     let i = Interner::new();
     let c = ctx(&i, &[("data", Ty::I64), ("out", Ty::I64)]);
-    let ir = compile_script_ir(&i, "x = @data { @out = x + 1; }; @out", &c).unwrap();
+    let ir = compile_script_ir(&i, "if let x = @data { @out = x + 1; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -60,7 +60,7 @@ fn branch_refutable_literal() {
     // Refutable: literal match - needs test + branch
     let i = Interner::new();
     let c = ctx(&i, &[("val", Ty::I64), ("out", Ty::I64)]);
-    let ir = compile_script_ir(&i, "42 = @val { @out = 1; }; @out", &c).unwrap();
+    let ir = compile_script_ir(&i, "if let 42 = @val { @out = 1; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -72,7 +72,12 @@ fn branch_destructure_object() {
         (i.intern("age"), Ty::I64),
     ]));
     let c = ctx(&i, &[("user", obj_ty), ("out", Ty::String)]);
-    let ir = compile_script_ir(&i, "{ name, age, } = @user { @out = name; }; @out", &c).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "if let { name, age, } = @user { @out = name; }; @out",
+        &c,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -80,7 +85,12 @@ fn branch_destructure_object() {
 fn branch_nested_match() {
     let i = Interner::new();
     let c = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64), ("out", Ty::I64)]);
-    let ir = compile_script_ir(&i, "x = @a { y = @b { @out = x + y; }; }; @out", &c).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "if let x = @a { if let y = @b { @out = x + y; }; }; @out",
+        &c,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -89,7 +99,7 @@ fn branch_context_write_in_refutable() {
     // Context write inside refutable branch - needs PHI at merge
     let i = Interner::new();
     let c = ctx(&i, &[("val", Ty::I64), ("out", Ty::I64)]);
-    let ir = compile_script_ir(&i, "42 = @val { @out = 99; }; @out", &c).unwrap();
+    let ir = compile_script_ir(&i, "if let 42 = @val { @out = 99; }; @out", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -111,7 +121,7 @@ fn ssa_write_in_branch_phi() {
     // Context write in one branch - PHI at merge point
     let i = Interner::new();
     let c = ctx(&i, &[("cond", Ty::I64), ("x", Ty::I64)]);
-    let ir = compile_script_ir(&i, "42 = @cond { @x = 1; }; @x", &c).unwrap();
+    let ir = compile_script_ir(&i, "if let 42 = @cond { @x = 1; }; @x", &c).unwrap();
     insta::assert_snapshot!(ir);
 }
 

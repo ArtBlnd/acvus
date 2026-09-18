@@ -58,6 +58,8 @@ pub enum Token {
     While,
     #[token("anyorder", priority = 3)]
     Anyorder,
+    #[token("match", priority = 3)]
+    Match,
     #[token("mut", priority = 3)]
     Mut,
 
@@ -98,6 +100,8 @@ pub enum Token {
     Gte,
     #[token("->")]
     Arrow,
+    #[token("=>")]
+    FatArrow,
     #[token("..")]
     DotDot,
 
@@ -176,6 +180,7 @@ impl fmt::Display for Token {
             Token::Else => write!(f, "else"),
             Token::While => write!(f, "while"),
             Token::Anyorder => write!(f, "anyorder"),
+            Token::Match => write!(f, "match"),
             Token::Mut => write!(f, "mut"),
             Token::Amp => write!(f, "&"),
             Token::DoubleColon => write!(f, "::"),
@@ -196,6 +201,7 @@ impl fmt::Display for Token {
             Token::Gte => write!(f, ">="),
             Token::Assign => write!(f, "="),
             Token::Arrow => write!(f, "->"),
+            Token::FatArrow => write!(f, "=>"),
             Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Pipe => write!(f, "|"),

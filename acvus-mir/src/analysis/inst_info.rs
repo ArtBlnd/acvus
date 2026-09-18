@@ -63,6 +63,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::IndexSet { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
+        | InstKind::Switch { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge
         | InstKind::Nop => smallvec![],
@@ -187,6 +188,18 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             let mut v: SmallVec<[ValueId; 4]> = smallvec![*cond];
             v.extend(then_args.iter().copied());
             v.extend(else_args.iter().copied());
+            v
+        }
+        // The tag is read once; every edge carries the block arguments
+        // its target takes (RFC-0051).
+        InstKind::Switch { tag, arms, default } => {
+            let mut v: SmallVec<[ValueId; 4]> = smallvec![*tag];
+            for (_, _, args) in arms {
+                v.extend(args.iter().copied());
+            }
+            if let Some((_, args)) = default {
+                v.extend(args.iter().copied());
+            }
             v
         }
     }

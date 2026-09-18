@@ -1,8 +1,10 @@
 pub mod borrow_check;
+pub mod exhaustive;
 pub mod init_check;
 pub mod move_check;
-mod type_check;
+pub mod type_check;
 
+pub use exhaustive::{Known, known_variants};
 pub use move_check::is_move_only;
 pub use type_check::{ValidationError, ValidationErrorKind};
 
@@ -20,6 +22,7 @@ use crate::ir::{MirModule, ValOrigin};
 pub fn validate(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = type_check::check_types(module);
     errors.extend(borrow_check::check_borrows(module));
+    errors.extend(exhaustive::check_exhaustive(module));
     errors
 }
 
@@ -73,6 +76,25 @@ impl ValidationError {
             }
             ValidationErrorKind::BorrowConflict { storage, reference } => {
                 format!("{storage} is used while reference Val({reference}) to it is live")
+            }
+            ValidationErrorKind::NonExhaustiveMatch => {
+                "non-exhaustive match: the variants of this value are not known in this function"
+                    .to_string()
+            }
+            ValidationErrorKind::MatchMissesVariants { missing, .. } => {
+                format!(
+                    "non-exhaustive match: {} variants are not covered",
+                    missing.len()
+                )
+            }
+            ValidationErrorKind::MatchMissesBuiltinVariants {
+                enum_name,
+                arity,
+                covered,
+            } => {
+                format!(
+                    "non-exhaustive match: a {enum_name} has {arity} variants and the arms cover {covered}"
+                )
             }
             ValidationErrorKind::ContextMovedOut { moved_at, .. } => {
                 format!(
@@ -171,6 +193,36 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             } => write!(
                 f,
                 "{inst_name} takes {expected_constructor} and got {actual:?}"
+            ),
+            ValidationErrorKind::NonExhaustiveMatch => write!(
+                f,
+                "non-exhaustive match: the variants of this value are not known in this function; add a `_` arm"
+            ),
+            ValidationErrorKind::MatchMissesVariants { enum_name, missing } => {
+                let written = missing
+                    .iter()
+                    .map(|tag| match enum_name {
+                        Some(name) => format!(
+                            "`{}::{}`",
+                            self.interner.resolve(*name),
+                            self.interner.resolve(*tag)
+                        ),
+                        None => format!("`{}`", self.interner.resolve(*tag)),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "non-exhaustive match: {written} is not covered; add that arm or a `_` arm"
+                )
+            }
+            ValidationErrorKind::MatchMissesBuiltinVariants {
+                enum_name,
+                arity,
+                covered,
+            } => write!(
+                f,
+                "non-exhaustive match: an `{enum_name}` has {arity} variants and the arms cover {covered}; add the missing arm or a `_` arm"
             ),
             ValidationErrorKind::BorrowConflict { storage, reference } => write!(
                 f,

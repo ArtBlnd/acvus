@@ -11,25 +11,26 @@ expression: ir
      5 |   r4 = fetch @out
      6 |   r5 = take @user.name
      7 |   r6 = take @user.age
-     8 |   r7 = take @user
-     9 |   commit @user = r7
-    10 |   r8 = string_clone r5
-    11 |   commit @out = r8
-    12 |   return r5
+     9 |   r7 = take @user
+    10 |   commit @user = r7
+    11 |   r8 = string_clone r5
+    12 |   commit @out = r8
+    13 |   return r5
 
-    ; r0 (v13) : String
-    ; r1 (v14) : String
-    ; r2 (v15) : i64
+    ; r0 (v14) : String
+    ; r1 (v15) : String
+    ; r2 (v16) : i64
     ; r3 (@user) : {age: i64, name: String}
     ; r4 (@out) : String
     ; r5 (name) : String
     ; r6 (age) : i64
-    ; r7 (v11) : {age: i64, name: String}
-    ; r8 (v16) : String
+    ; r7 (v12) : {age: i64, name: String}
+    ; r8 (v17) : String
     ; r9 (@out) : String
-    ; r10 (name) : String
+    ; r10 (@out) : String
     ; r11 (name) : String
-    ; r12 (@user) : {age: i64, name: String}
-    ; r13 (v12) : String
-    ; r14 (@out) : String
-    ; r15 (age) : i64
+    ; r12 (name) : String
+    ; r13 (@user) : {age: i64, name: String}
+    ; r14 (v10) : Unit
+    ; r15 (v13) : String
+    ; r16 (age) : i64

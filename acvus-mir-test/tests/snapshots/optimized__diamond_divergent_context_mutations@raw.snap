@@ -26,29 +26,29 @@ expression: raw
     23 |   assign @output = r13
     24 |   jump L1
     25 | L1:
-    26 |   r15 = take x
-    28 |   r16 = r15 <= 100 (r17)
-    29 |   r18 = test r16 == true
-    30 |   jump_if r18 then L2 else L3
-    31 | L2:
-    32 |   r19 = take @low
-    34 |   r20 = r19 + 1 (r21)
-    35 |   assign @low = r20
-    36 |   r22 = take x
-    38 |   r23 = r22 + 10 (r24)
-    39 |   assign @output = r23
-    40 |   jump L3
-    41 | L3:
-    42 |   r25 = take @output
-    43 |   r26 = take @output
-    44 |   commit @output = r26
-    45 |   r27 = take @input
-    46 |   commit @input = r27
-    47 |   r28 = take @low
-    48 |   commit @low = r28
-    49 |   r29 = take @high
-    50 |   commit @high = r29
-    51 |   return r25
+    27 |   r15 = take x
+    29 |   r16 = r15 <= 100 (r17)
+    30 |   r18 = test r16 == true
+    31 |   jump_if r18 then L2 else L3
+    32 | L2:
+    33 |   r19 = take @low
+    35 |   r20 = r19 + 1 (r21)
+    36 |   assign @low = r20
+    37 |   r22 = take x
+    39 |   r23 = r22 + 10 (r24)
+    40 |   assign @output = r23
+    41 |   jump L3
+    42 | L3:
+    44 |   r25 = take @output
+    45 |   r26 = take @output
+    46 |   commit @output = r26
+    47 |   r27 = take @input
+    48 |   commit @input = r27
+    49 |   r28 = take @low
+    50 |   commit @low = r28
+    51 |   r29 = take @high
+    52 |   commit @high = r29
+    53 |   return r25
 
     ; r0 (@output) : i64
     ; r1 (@input) : i64
@@ -66,22 +66,24 @@ expression: raw
     ; r13 (v20) : i64
     ; r14 (v19) : i64
     ; r15 (x) : i64
-    ; r16 (v23) : Bool
-    ; r17 (v22) : i64
-    ; r18 (v24) : Bool
+    ; r16 (v24) : Bool
+    ; r17 (v23) : i64
+    ; r18 (v25) : Bool
     ; r19 (@low) : i64
-    ; r20 (v27) : i64
-    ; r21 (v26) : i64
+    ; r20 (v28) : i64
+    ; r21 (v27) : i64
     ; r22 (x) : i64
-    ; r23 (v30) : i64
-    ; r24 (v29) : i64
+    ; r23 (v31) : i64
+    ; r24 (v30) : i64
     ; r25 (@output) : i64
-    ; r26 (v32) : i64
-    ; r27 (v33) : i64
-    ; r28 (v34) : i64
-    ; r29 (v35) : i64
+    ; r26 (v34) : i64
+    ; r27 (v35) : i64
+    ; r28 (v36) : i64
+    ; r29 (v37) : i64
     ; r30 (@input) : i64
-    ; r31 (@output) : i64
+    ; r31 (v21) : Unit
     ; r32 (@low) : i64
-    ; r33 (@high) : i64
-    ; r34 (x) : i64
+    ; r33 (@output) : i64
+    ; r34 (@high) : i64
+    ; r35 (x) : i64
+    ; r36 (v32) : Unit

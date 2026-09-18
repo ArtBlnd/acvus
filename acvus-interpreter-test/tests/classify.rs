@@ -25,9 +25,9 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
     let src = r#"
         let age = @user.age;
         @output = "unknown";
-        true = age >= 65 { @output = "senior"; };
-        true = age >= 18 { @output = "adult"; };
-        true = age < 18 { @output = "minor"; };
+        if let true = age >= 65 { @output = "senior"; };
+        if let true = age >= 18 { @output = "adult"; };
+        if let true = age < 18 { @output = "minor"; };
         @output = @user.name + " (" + @output + ")";
         @output
     "#;

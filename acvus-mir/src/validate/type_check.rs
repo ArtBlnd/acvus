@@ -56,6 +56,21 @@ pub enum ValidationErrorKind {
         expected: usize,
         got: usize,
     },
+    /// A `match` whose scrutinee's variants this stage cannot name has no
+    /// catch-all (RFC-0051 §3).
+    NonExhaustiveMatch,
+    /// A `match` over a locally closed enum leaves a variant untaken.
+    MatchMissesVariants {
+        enum_name: Option<Astr>,
+        missing: Vec<Astr>,
+    },
+    /// A `match` over an `Option` or a `Result` leaves a variant untaken.
+    /// The arms are named by typeck, so the count is the whole check.
+    MatchMissesBuiltinVariants {
+        enum_name: &'static str,
+        arity: usize,
+        covered: usize,
+    },
     InvalidConstructor {
         inst_name: String,
         expected_constructor: String,
@@ -1533,6 +1548,48 @@ impl CheckCtx {
             }
 
             // === Control flow ===
+            // A `Switch` reads the tag of a variant and hands each edge the
+            // block arguments its target takes (RFC-0051). The edge arities
+            // are checked the way a `Jump`'s are.
+            InstKind::Switch { tag, arms, default } => {
+                ty!(*tag);
+                let edges = arms
+                    .iter()
+                    .map(|(_, label, args)| (label, args))
+                    .chain(default.iter().map(|(label, args)| (label, args)));
+                for (label, args) in edges {
+                    let Some(params) = self.block_params(label, insts) else {
+                        continue;
+                    };
+                    if args.len() != params.len() {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::ArityMismatch {
+                                inst_name: "Switch(arm)".to_string(),
+                                expected: params.len(),
+                                got: args.len(),
+                            },
+                        });
+                        continue;
+                    }
+                    for (i, (arg, param)) in args.iter().zip(&params).enumerate() {
+                        let param_ty = ty!(*param);
+                        let arg_ty = ty!(*arg);
+                        self.assert_match(
+                            pc,
+                            span,
+                            "Switch(arm)",
+                            &format!("arg[{i}]"),
+                            param_ty,
+                            arg_ty,
+                            errors,
+                        );
+                    }
+                }
+            }
+
             InstKind::Jump { label, args } => {
                 if let Some(params) = self.block_params(label, insts) {
                     if args.len() != params.len() {

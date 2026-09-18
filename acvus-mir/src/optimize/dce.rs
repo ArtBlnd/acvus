@@ -107,6 +107,8 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
         Terminator::JumpIf { cond, .. } => vec![*cond],
+        // The tag a `Switch` reads is live wherever the dispatch is.
+        Terminator::Switch { tag, .. } => vec![*tag],
         Terminator::Jump { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
@@ -165,26 +167,33 @@ pub fn run(cfg: &mut CfgBody) {
                 // Block param is live -> trace corresponding jump args from predecessors.
                 let block_label = cfg.blocks[bi].label;
                 for pred_block in cfg.blocks.iter() {
-                    let pred_args: Option<&[ValueId]> = match &pred_block.terminator {
-                        Terminator::Jump { label, args } if *label == block_label => Some(args),
+                    // A `Switch` can reach one block through several arms, so
+                    // an edge list, not one edge (RFC-0051).
+                    let pred_args: Vec<&[ValueId]> = match &pred_block.terminator {
+                        Terminator::Jump { label, args } if *label == block_label => {
+                            vec![args.as_slice()]
+                        }
                         Terminator::JumpIf {
                             then_label,
                             then_args,
                             else_label,
                             else_args,
                             ..
-                        } => {
-                            if *then_label == block_label {
-                                Some(then_args)
-                            } else if *else_label == block_label {
-                                Some(else_args)
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
+                        } => [(then_label, then_args), (else_label, else_args)]
+                            .into_iter()
+                            .filter(|(label, _)| **label == block_label)
+                            .map(|(_, args)| args.as_slice())
+                            .collect(),
+                        Terminator::Switch { arms, default, .. } => arms
+                            .iter()
+                            .map(|(_, label, args)| (label, args))
+                            .chain(default.iter().map(|(label, args)| (label, args)))
+                            .filter(|(label, _)| **label == block_label)
+                            .map(|(_, args)| args.as_slice())
+                            .collect(),
+                        _ => Vec::new(),
                     };
-                    if let Some(args) = pred_args {
+                    for args in pred_args {
                         if let Some(&arg) = args.get(pi) {
                             worklist.push(arg);
                         }
@@ -261,6 +270,18 @@ pub fn run(cfg: &mut CfgBody) {
                 }
                 if let Some(dead) = dead_of(*else_label) {
                     prune(else_args, dead);
+                }
+            }
+            Terminator::Switch { arms, default, .. } => {
+                for (_, label, args) in arms.iter_mut() {
+                    if let Some(dead) = dead_of(*label) {
+                        prune(args, dead);
+                    }
+                }
+                if let Some((label, args)) = default
+                    && let Some(dead) = dead_of(*label)
+                {
+                    prune(args, dead);
                 }
             }
             Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}

@@ -30,10 +30,11 @@ expression: opt
     ; r6 (v10) : Bool
     ; r7 (v12) : Bool
     ; r8 (@stats.count) : i64
-    ; r9 (v14) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r9 (v15) : {count: i64, exceeded: Bool, threshold: i64}
     ; r10 (count) : i64
     ; r11 (count) : i64
-    ; r12 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
-    ; r13 (v15) : i64
+    ; r12 (v17) : i64
+    ; r13 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
     ; r14 (count) : i64
-    ; r15 (v16) : i64
+    ; r15 (v13) : Unit
+    ; r16 (v16) : i64

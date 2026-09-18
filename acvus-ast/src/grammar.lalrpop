@@ -32,6 +32,7 @@ extern {
         "else" => Token::Else,
         "while" => Token::While,
         "anyorder" => Token::Anyorder,
+        "match" => Token::Match,
         "mut" => Token::Mut,
         "&" => Token::Amp,
         "+" => Token::Plus,
@@ -51,6 +52,7 @@ extern {
         ">=" => Token::Gte,
         "=" => Token::Assign,
         "->" => Token::Arrow,
+        "=>" => Token::FatArrow,
         ".." => Token::DotDot,
         "." => Token::Dot,
         "|" => Token::Pipe,
@@ -79,10 +81,42 @@ pub Script: Script = {
         Script { id: AstId::alloc(), stmts, tail: tail.map(Box::new), span: Span::new(l, r) }
 };
 
-// Script expression: adds if/if-let on top of base Expr.
+// Script expression: adds if/if-let/match on top of base Expr.
 ScriptExpr: Expr = {
     IfExpr,
+    MatchExpr,
     Expr,
+};
+
+// ── match ──────────────────────────────────────────────────────────────
+//
+// `match e { P => e, P => { stmts; tail }, _ => e }` is one dispatch over
+// `e` (RFC-0051): the scrutinee is evaluated once, every arm has the type
+// of the whole, and exhaustiveness is decided in `validate`.
+
+MatchExpr: Expr = {
+    <l:@L> "match" <scrutinee:Expr> "{" <arms:CommaSep<MatchArmRule>> "}" <r:@R> =>
+        Expr::Match {
+            id: AstId::alloc(),
+            scrutinee: Box::new(scrutinee),
+            arms,
+            span: Span::new(l, r),
+        },
+};
+
+MatchArmRule: MatchExprArm = {
+    // `P => { stmts; }` — an arm run for its effect; its type is Unit.
+    <l:@L> <pattern:ArmPattern> "=>" "{" <body:Stmt+> "}" <r:@R> =>
+        MatchExprArm { id: AstId::alloc(), pattern, body, tail: None, span: Span::new(l, r) },
+    // `P => e` — including `P => { stmts; tail }`, which is a block expression.
+    <l:@L> <pattern:ArmPattern> "=>" <e:Expr> <r:@R> =>
+        MatchExprArm { id: AstId::alloc(), pattern, body: vec![], tail: Some(Box::new(e)), span: Span::new(l, r) },
+};
+
+// An arm's pattern: every pattern the grammar already has, plus `_`.
+ArmPattern: Pattern = {
+    <l:@L> "_" <r:@R> => Pattern::Wildcard { id: AstId::alloc(), span: Span::new(l, r) },
+    <e:Expr> =>? Ok(expr_to_pattern(&e)?),
 };
 
 // If expression (recursive via else-if chain).
@@ -146,15 +180,8 @@ Stmt: Stmt = {
         Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
     // if expr as statement (value discarded)
     <e:IfExpr> ";" => Stmt::Expr(e),
-    // match-bind (tag form): pattern = source { body };
-    <l:@L> <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> "}" ";" <r:@R> =>?
-        Ok(Stmt::MatchBind {
-            id: AstId::alloc(),
-            pattern: expr_to_pattern(&lhs)?,
-            source: rhs,
-            body,
-            span: Span::new(l, r),
-        }),
+    // match expr as statement (value discarded)
+    <e:MatchExpr> ";" => Stmt::Expr(e),
     // assignment: `x = e;`, `@c.f = e;`, `a.b = e;`, `*r = e;`
     // A bare `x = e;` assigns the `x` in scope; it never introduces one.
     <l:@L> <lhs:Expr> "=" <rhs:ScriptExpr> ";" <r:@R> =>? {
@@ -208,7 +235,7 @@ pub TagContent: TagContent = {
 
 pub Expr: Expr = {
     // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
-    <l:@L> "|" <params:CommaSep<LambdaParamRule>> "|" "->" <body:Expr> <r:@R> =>
+    <l:@L> "|" <params:CommaSep<LambdaParamRule>> "|" "->" <body:ScriptExpr> <r:@R> =>
         Expr::Lambda {
             id: AstId::alloc(),
             params,

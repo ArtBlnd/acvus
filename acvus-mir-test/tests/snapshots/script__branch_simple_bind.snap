@@ -9,22 +9,23 @@ expression: ir
      3 |   r3 = fetch @data
      4 |   r4 = fetch @out
      6 |   r5 = r3 + 1 (r6)
-     7 |   commit @data = r3
-     8 |   commit @out = r5
-     9 |   return r5
+     8 |   commit @data = r3
+     9 |   commit @out = r5
+    10 |   return r5
 
-    ; r0 (v13) : i64
-    ; r1 (v14) : i64
-    ; r2 (v15) : i64
+    ; r0 (v14) : i64
+    ; r1 (v15) : i64
+    ; r2 (v16) : i64
     ; r3 (@data) : i64
     ; r4 (@out) : i64
     ; r5 (v9) : i64
     ; r6 (v8) : i64
     ; r7 (@out) : i64
-    ; r8 (v11) : i64
+    ; r8 (@out) : i64
     ; r9 (x) : i64
     ; r10 (@data) : i64
     ; r11 (v12) : i64
     ; r12 (x) : i64
-    ; r13 (@out) : i64
-    ; r14 (x) : i64
+    ; r13 (v10) : Unit
+    ; r14 (v13) : i64
+    ; r15 (x) : i64

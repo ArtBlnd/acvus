@@ -65,7 +65,7 @@ fn field_read_modify_write_branch() {
     );
     let src = r#"
         let count = @stats.count + 1;
-        true = count > @stats.threshold {
+        if let true = count > @stats.threshold {
             @stats.count = count;
             @stats.exceeded = true;
         };
@@ -166,11 +166,11 @@ fn diamond_divergent_context_mutations() {
     );
     let src = r#"
         let x = @input;
-        true = x > 100 {
+        if let true = x > 100 {
             @high = @high + 1;
             @output = x * 2;
         };
-        true = x <= 100 {
+        if let true = x <= 100 {
             @low = @low + 1;
             @output = x + 10;
         };
@@ -244,9 +244,9 @@ fn destructure_multi_branch_classify() {
     let src = r#"
         let age = @user.age;
         @output = "unknown";
-        true = age >= 65 { @output = "senior"; };
-        true = age >= 18 { @output = "adult"; };
-        true = age < 18 { @output = "minor"; };
+        if let true = age >= 65 { @output = "senior"; };
+        if let true = age >= 18 { @output = "adult"; };
+        if let true = age < 18 { @output = "minor"; };
         @output = @user.name + " (" + @output + ")";
         @output
     "#;

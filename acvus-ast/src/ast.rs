@@ -60,14 +60,6 @@ pub enum Stmt {
         span: Span,
     },
     Expr(Expr),
-    /// Match-bind (if-let): `pattern = source { body };`
-    MatchBind {
-        id: AstId,
-        pattern: Pattern,
-        source: Expr,
-        body: Vec<Stmt>,
-        span: Span,
-    },
 
     // -- Script mode statements --------------------------------------
     /// `let x = expr;` - new binding (Script mode).
@@ -335,6 +327,15 @@ pub enum Expr {
         else_branch: Option<Box<ElseBranch>>,
         span: Span,
     },
+    /// `match scrutinee { P => e, .. }` - one dispatch over the scrutinee
+    /// (RFC-0051). The scrutinee is evaluated once; every arm has the type
+    /// of the whole.
+    Match {
+        id: AstId,
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchExprArm>,
+        span: Span,
+    },
     /// `if let pattern = source { body; tail } else { ... }` - pattern match expression (Script mode).
     IfLet {
         id: AstId,
@@ -345,6 +346,17 @@ pub enum Expr {
         else_branch: Option<Box<ElseBranch>>,
         span: Span,
     },
+}
+
+/// One arm of a `match` expression: `P => e` or `P => { stmts; }`. An arm
+/// with no tail is typed `Unit`, as an `if` branch with no tail is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchExprArm {
+    pub id: AstId,
+    pub pattern: Pattern,
+    pub body: Vec<Stmt>,
+    pub tail: Option<Box<Expr>>,
+    pub span: Span,
 }
 
 /// An else branch in an `if` / `if let` expression.
@@ -391,6 +403,7 @@ impl Expr {
             | Expr::Variant { id, .. }
             | Expr::Block { id, .. }
             | Expr::If { id, .. }
+            | Expr::Match { id, .. }
             | Expr::IfLet { id, .. } => *id,
         }
     }
@@ -418,6 +431,7 @@ impl Expr {
             | Expr::Variant { span, .. }
             | Expr::Block { span, .. }
             | Expr::If { span, .. }
+            | Expr::Match { span, .. }
             | Expr::IfLet { span, .. } => *span,
         }
     }
@@ -486,6 +500,9 @@ pub enum Pattern {
         elements: Vec<TuplePatternElem>,
         span: Span,
     },
+    /// `_`: the position is not read and nothing binds. A `match` arm that
+    /// is a bare `_` is the catch-all (RFC-0051).
+    Wildcard { id: AstId, span: Span },
     /// A variant pattern: `Some(inner)`, `None`, or `Color::Red`.
     Variant {
         id: AstId,
@@ -500,6 +517,7 @@ impl Pattern {
     pub fn id(&self) -> AstId {
         match self {
             Pattern::Binding { id, .. }
+            | Pattern::Wildcard { id, .. }
             | Pattern::ContextBind { id, .. }
             | Pattern::Literal { id, .. }
             | Pattern::List { id, .. }
@@ -512,6 +530,7 @@ impl Pattern {
     pub fn span(&self) -> Span {
         match self {
             Pattern::Binding { span, .. }
+            | Pattern::Wildcard { span, .. }
             | Pattern::ContextBind { span, .. }
             | Pattern::Literal { span, .. }
             | Pattern::List { span, .. }
@@ -656,16 +675,6 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
                 walk_expr(expr, refs);
             }
             Stmt::Expr(expr) => walk_expr(expr, refs),
-            Stmt::MatchBind {
-                pattern,
-                source,
-                body,
-                ..
-            } => {
-                walk_pattern(pattern, refs);
-                walk_expr(source, refs);
-                walk_stmts(body, refs);
-            }
             // Script mode statements
             Stmt::LetBind { expr, .. } | Stmt::Assign { expr, .. } => walk_expr(expr, refs),
             Stmt::LetUninit { .. } => {}
@@ -730,7 +739,7 @@ fn walk_pattern(pattern: &Pattern, refs: &mut ContextRefs) {
         Pattern::ContextBind { name, .. } => {
             refs.set.insert(*name);
         }
-        Pattern::Binding { .. } | Pattern::Literal { .. } => {}
+        Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
         Pattern::List { head, tail, .. } => {
             for p in head {
                 walk_pattern(p, refs);
@@ -841,6 +850,18 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
             }
             if let Some(eb) = else_branch {
                 walk_else_branch(eb, refs);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            walk_expr(scrutinee, refs);
+            for arm in arms {
+                walk_pattern(&arm.pattern, refs);
+                walk_stmts(&arm.body, refs);
+                if let Some(tail) = &arm.tail {
+                    walk_expr(tail, refs);
+                }
             }
         }
         Expr::IfLet {

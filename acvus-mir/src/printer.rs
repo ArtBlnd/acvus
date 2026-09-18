@@ -654,6 +654,36 @@ fn write_body(
                     writeln!(f, "{}({params_str}):{merge_suffix}", fmt_label(*label))?
                 }
             }
+            // `switch r5 { A -> L1, B -> L2, _ -> L3 }` (RFC-0051).
+            InstKind::Switch { tag, arms, default } => {
+                let mut edge = |label: &Label, args: &[ValueId]| {
+                    if args.is_empty() {
+                        fmt_label(*label)
+                    } else {
+                        format!(
+                            "{}({})",
+                            fmt_label(*label),
+                            vn.fmt_uses(args, &consts, &texts)
+                        )
+                    }
+                };
+                let mut parts: Vec<String> = arms
+                    .iter()
+                    .map(|(t, label, args)| {
+                        format!("{} -> {}", ctx.interner.resolve(*t), edge(label, args))
+                    })
+                    .collect();
+                if let Some((label, args)) = default {
+                    parts.push(format!("_ -> {}", edge(label, args)));
+                }
+                drop(edge);
+                writeln!(
+                    f,
+                    "switch {} {{ {} }}",
+                    vn.fmt_use(*tag, &consts, &texts),
+                    parts.join(", ")
+                )?
+            }
             InstKind::Jump { label, args } => {
                 if args.is_empty() {
                     writeln!(f, "jump {}", fmt_label(*label))?

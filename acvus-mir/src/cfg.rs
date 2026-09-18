@@ -54,6 +54,16 @@ pub enum Terminator {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
+    /// One dispatch over a variant's tag (RFC-0051): the tag is read once
+    /// and the block leaves through the arm that tag names. `default` is
+    /// the edge a tag outside `arms` takes, and it is present exactly when
+    /// the `match` had a catch-all -- a `Switch` without one is exhaustive
+    /// over `arms`, which is what `validate`'s exhaustiveness pass decides.
+    Switch {
+        tag: ValueId,
+        arms: Vec<(Astr, Label, Vec<ValueId>)>,
+        default: Option<(Label, Vec<ValueId>)>,
+    },
     Return {
         value: ValueId,
         order: Option<ValueId>,
@@ -105,6 +115,17 @@ impl CfgBody {
                 }
                 if let Some(&bi) = self.label_to_block.get(else_label) {
                     succs.push(bi);
+                }
+            }
+            Terminator::Switch { arms, default, .. } => {
+                let edges = arms
+                    .iter()
+                    .map(|(_, label, _)| label)
+                    .chain(default.iter().map(|(label, _)| label));
+                for label in edges {
+                    if let Some(&bi) = self.label_to_block.get(label) {
+                        succs.push(bi);
+                    }
                 }
             }
             Terminator::Fallthrough => {
@@ -290,6 +311,15 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 insts.pop();
                 return term;
             }
+            InstKind::Switch { tag, arms, default } => {
+                let term = Terminator::Switch {
+                    tag: *tag,
+                    arms: arms.clone(),
+                    default: default.clone(),
+                };
+                insts.pop();
+                return term;
+            }
             InstKind::Return { value, order } => {
                 let term = Terminator::Return {
                     value: *value,
@@ -355,6 +385,12 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     },
                 });
             }
+            Terminator::Switch { tag, arms, default } => {
+                insts.push(Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind: InstKind::Switch { tag, arms, default },
+                });
+            }
             Terminator::Return { value, order } => {
                 insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
@@ -388,6 +424,12 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 else_label,
                 ..
             } => Some(then_label.0.max(else_label.0) + 1),
+            InstKind::Switch { arms, default, .. } => arms
+                .iter()
+                .map(|(_, label, _)| label.0)
+                .chain(default.iter().map(|(label, _)| label.0))
+                .max()
+                .map(|l| l + 1),
             _ => None,
         })
         .max()

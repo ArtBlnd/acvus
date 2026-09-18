@@ -199,6 +199,15 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             then_args.iter_mut().for_each(|v| s(v));
             else_args.iter_mut().for_each(|v| s(v));
         }
+        InstKind::Switch { tag, arms, default } => {
+            s(tag);
+            for (_, _, args) in arms.iter_mut() {
+                args.iter_mut().for_each(|v| s(v));
+            }
+            if let Some((_, args)) = default {
+                args.iter_mut().for_each(|v| s(v));
+            }
+        }
         InstKind::Return { value, order } => {
             s(value);
             if let Some(o) = order {
@@ -227,6 +236,15 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
             s(cond);
             then_args.iter_mut().for_each(&s);
             else_args.iter_mut().for_each(&s);
+        }
+        Terminator::Switch { tag, arms, default } => {
+            s(tag);
+            for (_, _, args) in arms.iter_mut() {
+                args.iter_mut().for_each(&s);
+            }
+            if let Some((_, args)) = default {
+                args.iter_mut().for_each(&s);
+            }
         }
         Terminator::Return { value, order } => {
             s(value);

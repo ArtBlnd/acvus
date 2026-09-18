@@ -384,6 +384,15 @@ pub enum InstKind {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
+    /// One dispatch over a variant's tag (RFC-0051). `tag` is the value
+    /// whose tag is read -- once -- and `arms` the labels its tags take;
+    /// `default` is the arm a tag outside `arms` takes, and it is present
+    /// exactly when the `match` had a catch-all.
+    Switch {
+        tag: ValueId,
+        arms: Vec<(Astr, Label, Vec<ValueId>)>,
+        default: Option<(Label, Vec<ValueId>)>,
+    },
     /// Leave the body with `value`; `order` is the `Order` the body yields
     /// last when its effect is not Pure.
     Return {

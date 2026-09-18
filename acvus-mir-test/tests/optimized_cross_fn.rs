@@ -61,8 +61,8 @@ fn order_processing_pipeline() {
                 let discount = calc_discount(subtotal, @discount_rate);
                 let tax = calc_tax(subtotal - discount, @tax_rate);
                 let total = subtotal - discount + tax;
-                true = total > @free_ship_min { @shipping = 0; };
-                true = total <= @free_ship_min { @shipping = @default_ship; };
+                if let true = total > @free_ship_min { @shipping = 0; };
+                if let true = total <= @free_ship_min { @shipping = @default_ship; };
                 let final_total = total + @shipping;
                 let receipt = format_receipt(@customer, subtotal, discount, tax, @shipping, final_total);
                 @total_out = final_total;
@@ -120,8 +120,8 @@ fn order_processing_pipeline() {
                 let discount = calc_discount(subtotal, @discount_rate);
                 let tax = calc_tax(subtotal - discount, @tax_rate);
                 let total = subtotal - discount + tax;
-                true = total > @free_ship_min { @shipping = 0; };
-                true = total <= @free_ship_min { @shipping = @default_ship; };
+                if let true = total > @free_ship_min { @shipping = 0; };
+                if let true = total <= @free_ship_min { @shipping = @default_ship; };
                 let final_total = total + @shipping;
                 let receipt = format_receipt(@customer, subtotal, discount, tax, @shipping, final_total);
                 @total_out = final_total;
@@ -207,7 +207,7 @@ fn data_enrichment_multi_io() {
                 let history = fetch_history(@user_id);
                 let score = compute_score(profile, history, @weight);
                 let label = format_label(profile, score);
-                true = score > @threshold {
+                if let true = score > @threshold {
                     notify_alert(@user_id, score);
                     @alert_count = @alert_count + 1;
                 };

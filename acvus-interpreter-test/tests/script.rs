@@ -59,7 +59,7 @@ async fn let_context_store_then_read() {
 async fn if_let_irrefutable() {
     let i = Interner::new();
     let c = ctx(&i, vec![("data", int(5)), ("out", int(0))]);
-    let result = run_script(&i, "x = @data { @out = x * 2; }; @out", c).await;
+    let result = run_script(&i, "if let x = @data { @out = x * 2; }; @out", c).await;
     assert_eq!(result.as_int(), 10);
 }
 
@@ -67,7 +67,7 @@ async fn if_let_irrefutable() {
 async fn if_let_refutable_match() {
     let i = Interner::new();
     let c = ctx(&i, vec![("val", int(42)), ("out", int(0))]);
-    let result = run_script(&i, "42 = @val { @out = 1; }; @out", c).await;
+    let result = run_script(&i, "if let 42 = @val { @out = 1; }; @out", c).await;
     assert_eq!(result.as_int(), 1);
 }
 
@@ -75,7 +75,7 @@ async fn if_let_refutable_match() {
 async fn if_let_refutable_no_match() {
     let i = Interner::new();
     let c = ctx(&i, vec![("val", int(99)), ("out", int(0))]);
-    let result = run_script(&i, "42 = @val { @out = 1; }; @out", c).await;
+    let result = run_script(&i, "if let 42 = @val { @out = 1; }; @out", c).await;
     assert_eq!(result.as_int(), 0);
 }
 

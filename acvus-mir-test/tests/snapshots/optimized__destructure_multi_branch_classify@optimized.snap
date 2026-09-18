@@ -42,19 +42,19 @@ expression: opt
     35 |   jump L5
     36 | L5:
     37 |   r13 = ref &@user.name
-    39 |   assign v25 = T4
-    40 |   r14 = ref &v25
+    39 |   assign v28 = T4
+    40 |   r14 = ref &v28
     41 |   r15 = string_concat [r13, r14]
     42 |   drop r16
-    43 |   assign v28 = r15
-    44 |   r17 = ref &v28
+    43 |   assign v31 = r15
+    44 |   r17 = ref &v31
     45 |   r18 = ref &@output
     46 |   r19 = string_concat [r17, r18]
     47 |   drop r20
-    48 |   assign v32 = r19
-    49 |   r21 = ref &v32
-    51 |   assign v35 = T5
-    52 |   r22 = ref &v35
+    48 |   assign v35 = r19
+    49 |   r21 = ref &v35
+    51 |   assign v38 = T5
+    52 |   r22 = ref &v38
     53 |   r23 = string_concat [r21, r22]
     54 |   drop r24
     55 |   drop r25
@@ -72,41 +72,44 @@ expression: opt
     ; r3 (v10) : Bool
     ; r4 (v9) : i64
     ; r5 (v11) : Bool
-    ; r6 (v15) : Bool
-    ; r7 (v14) : i64
-    ; r8 (v16) : Bool
-    ; r9 (v20) : Bool
-    ; r10 (v19) : i64
-    ; r11 (v21) : Bool
+    ; r6 (v16) : Bool
+    ; r7 (v15) : i64
+    ; r8 (v17) : Bool
+    ; r9 (v22) : Bool
+    ; r10 (v21) : i64
+    ; r11 (v23) : Bool
     ; r12 (@output) : String
     ; r13 (@user.name) : &String
-    ; r14 (var_25.) : &String
-    ; r15 (v27) : String
-    ; r16 (v25) : String
-    ; r17 (var_28.) : &String
+    ; r14 (var_28.) : &String
+    ; r15 (v30) : String
+    ; r16 (v28) : String
+    ; r17 (var_31.) : &String
     ; r18 (@output.) : &String
-    ; r19 (v31) : String
-    ; r20 (v28) : String
-    ; r21 (var_32.) : &String
-    ; r22 (var_35.) : &String
-    ; r23 (v37) : String
-    ; r24 (v35) : String
-    ; r25 (v32) : String
+    ; r19 (v34) : String
+    ; r20 (v31) : String
+    ; r21 (var_35.) : &String
+    ; r22 (var_38.) : &String
+    ; r23 (v40) : String
+    ; r24 (v38) : String
+    ; r25 (v35) : String
     ; r26 (@output) : String
-    ; r27 (v39) : String
-    ; r28 (v40) : {age: i64, name: String}
+    ; r27 (v42) : String
+    ; r28 (v43) : {age: i64, name: String}
     ; r29 (v44) : i64
-    ; r30 (v22) : String
-    ; r31 (@user) : {age: i64, name: String}
-    ; r32 (age) : i64
-    ; r33 (v24) : String
-    ; r34 (age) : i64
-    ; r35 (v12) : String
-    ; r36 (v34) : String
+    ; r30 (@user) : {age: i64, name: String}
+    ; r31 (v25) : Unit
+    ; r32 (v47) : i64
+    ; r33 (age) : i64
+    ; r34 (v46) : i64
+    ; r35 (v24) : String
+    ; r36 (v27) : String
     ; r37 (age) : i64
-    ; r38 (v43) : i64
-    ; r39 (v17) : String
-    ; r40 (v42) : i64
-    ; r41 (v7) : String
+    ; r38 (v12) : String
+    ; r39 (v37) : String
+    ; r40 (v18) : String
+    ; r41 (age) : i64
     ; r42 (age) : i64
-    ; r43 (v41) : i64
+    ; r43 (v45) : i64
+    ; r44 (v13) : Unit
+    ; r45 (v7) : String
+    ; r46 (v19) : Unit

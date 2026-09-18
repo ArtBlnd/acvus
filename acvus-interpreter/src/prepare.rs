@@ -552,6 +552,11 @@ impl<'a> Prepare<'a> {
         match &inst.kind {
             InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
+            // RFC-0051: a `Switch` is a terminator. The machine has no
+            // `switch` operation yet, and `optimize::switch_expand` has
+            // already replaced every one with its chain before `prepare`
+            // runs, so `op` below never sees one.
+            | InstKind::Switch { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
             | InstKind::Eval { .. }
@@ -935,6 +940,11 @@ impl<'a> Prepare<'a> {
         let body = self.body;
         let inst = &body.insts[at];
         match &inst.kind {
+            InstKind::Switch { .. } => todo!(
+                "the machine has no `switch` operation yet (RFC-0051, second half); \
+                 `optimize::switch_expand` replaces every Switch before prepare runs"
+            ),
+
             InstKind::Const { dst, value } => self.constant(*dst, value),
 
             InstKind::StringConcat { dst, parts } => {

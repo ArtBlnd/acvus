@@ -197,6 +197,16 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
             v.extend(*order);
             v
         }
+        Terminator::Switch { tag, arms, default } => {
+            let mut v = vec![*tag];
+            for (_, _, args) in arms {
+                v.extend(args);
+            }
+            if let Some((_, args)) = default {
+                v.extend(args);
+            }
+            v
+        }
         Terminator::Fallthrough | Terminator::Diverge => Vec::new(),
     }
 }

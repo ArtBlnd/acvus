@@ -240,6 +240,16 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             remap_vec(else_args, remap);
         }
 
+        InstKind::Switch { tag, arms, default } => {
+            remap_val(tag, remap);
+            for (_, _, args) in arms.iter_mut() {
+                remap_vec(args, remap);
+            }
+            if let Some((_, args)) = default {
+                remap_vec(args, remap);
+            }
+        }
+
         InstKind::MakeVariant { payload, .. } => {
             if let Some(p) = payload {
                 remap_val(p, remap);

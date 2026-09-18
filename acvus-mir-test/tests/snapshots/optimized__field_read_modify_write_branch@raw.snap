@@ -19,10 +19,10 @@ expression: raw
     15 |   assign @stats.exceeded = true (r9)
     16 |   jump L1
     17 | L1:
-    18 |   r10 = take @stats.count
-    19 |   r11 = take @stats
-    20 |   commit @stats = r11
-    21 |   return r10
+    19 |   r10 = take @stats.count
+    20 |   r11 = take @stats
+    21 |   commit @stats = r11
+    22 |   return r10
 
     ; r0 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
     ; r1 (@stats.count) : i64
@@ -35,6 +35,7 @@ expression: raw
     ; r8 (count) : i64
     ; r9 (v12) : Bool
     ; r10 (@stats.count) : i64
-    ; r11 (v14) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r11 (v15) : {count: i64, exceeded: Bool, threshold: i64}
     ; r12 (count) : i64
     ; r13 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r14 (v13) : Unit

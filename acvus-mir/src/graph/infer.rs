@@ -191,7 +191,7 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
                 collect_value_refs_expr(expr, refs);
             }
             Stmt::Expr(expr) => collect_value_refs_expr(expr, refs),
-            Stmt::MatchBind { source, body, .. } | Stmt::WhileLet { source, body, .. } => {
+            Stmt::WhileLet { source, body, .. } => {
                 collect_value_refs_expr(source, refs);
                 collect_value_refs_stmts(body, refs);
             }
@@ -260,6 +260,17 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
             collect_value_refs_expr(right, refs);
         }
         Expr::UnaryOp { operand, .. } => collect_value_refs_expr(operand, refs),
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_value_refs_expr(scrutinee, refs);
+            for arm in arms {
+                collect_value_refs_stmts(&arm.body, refs);
+                if let Some(tail) = &arm.tail {
+                    collect_value_refs_expr(tail, refs);
+                }
+            }
+        }
         Expr::FieldAccess { object, .. } => collect_value_refs_expr(object, refs),
         Expr::Index { object, index, .. } => {
             collect_value_refs_expr(object, refs);
@@ -2540,7 +2551,7 @@ mod tests {
             &i,
             &[(
                 "test",
-                r#""hello" = $x { let y = 1; }; 0"#,
+                r#"if let "hello" = $x { let y = 1; }; 0"#,
                 Some(vec![("x", Ty::String)]),
                 None,
             )],

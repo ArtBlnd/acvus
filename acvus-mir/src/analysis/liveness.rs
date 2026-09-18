@@ -74,6 +74,8 @@ impl DataflowAnalysis for LivenessAnalysis {
                 }
             }
             Terminator::JumpIf { cond, .. } => state.set(*cond, Liveness::Live),
+            // A `Switch` reads the tag of its scrutinee (RFC-0051).
+            Terminator::Switch { tag, .. } => state.set(*tag, Liveness::Live),
             _ => {}
         }
     }

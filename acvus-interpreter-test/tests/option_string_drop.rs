@@ -9,7 +9,7 @@ async fn an_option_of_a_string_matched_by_value_is_read_and_dropped() {
     let i = Interner::new();
     let v = run_script(
         &i,
-        "let o = Some(\"abc\"); let n = 0; Some(s) = o { n = s.len(); }; n",
+        "let o = Some(\"abc\"); let n = 0; if let Some(s) = o { n = s.len(); }; n",
         Context::default(),
     )
     .await;
@@ -21,7 +21,7 @@ async fn an_option_of_a_string_that_does_not_match_is_dropped_once() {
     let i = Interner::new();
     let v = run_script(
         &i,
-        "let o = strip_prefix(\"abc\", \"zz\"); let n = 0; Some(s) = o { n = s.len(); }; n",
+        "let o = strip_prefix(\"abc\", \"zz\"); let n = 0; if let Some(s) = o { n = s.len(); }; n",
         Context::default(),
     )
     .await;

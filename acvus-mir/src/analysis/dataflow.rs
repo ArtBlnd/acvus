@@ -310,6 +310,27 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                 }
             }
         }
+        // Every arm of a `Switch` is taken on some path: the tag decides
+        // which, and no analysis here reads a tag.
+        Terminator::Switch { arms, default, .. } => {
+            let edges = arms
+                .iter()
+                .map(|(_, label, args)| (label, args))
+                .chain(default.iter().map(|(label, args)| (label, args)));
+            for (label, args) in edges {
+                if let Some(&t) = cfg.label_to_block.get(label) {
+                    let changed = analysis.propagate_forward(
+                        exit_state,
+                        &cfg.blocks[t.0].params,
+                        args,
+                        &mut block_entry[t.0],
+                    );
+                    if changed || !visited[t.0] {
+                        worklist.push_back(t);
+                    }
+                }
+            }
+        }
         Terminator::Fallthrough => {
             let next = idx.0 + 1;
             if next < n && (block_entry[next].join_from(exit_state) || !visited[next]) {
@@ -364,6 +385,22 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                     else_args,
                     exit_state,
                 );
+            }
+        }
+        Terminator::Switch { arms, default, .. } => {
+            let edges = arms
+                .iter()
+                .map(|(_, label, args)| (label, args))
+                .chain(default.iter().map(|(label, args)| (label, args)));
+            for (label, args) in edges {
+                if let Some(&t) = cfg.label_to_block.get(label) {
+                    analysis.propagate_backward(
+                        &block_entry[t.0],
+                        &cfg.blocks[t.0].params,
+                        args,
+                        exit_state,
+                    );
+                }
             }
         }
         Terminator::Fallthrough => {

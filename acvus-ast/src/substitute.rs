@@ -301,6 +301,26 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             else_branch: else_branch.map(|eb| Box::new(sub_else_branch(*eb, subs))),
             span,
         },
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+            ..
+        } => Expr::Match {
+            id: AstId::alloc(),
+            scrutinee: Box::new(sub_expr(*scrutinee, subs)),
+            arms: arms
+                .into_iter()
+                .map(|arm| MatchExprArm {
+                    id: AstId::alloc(),
+                    pattern: arm.pattern,
+                    body: arm.body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
+                    tail: arm.tail.map(|e| Box::new(sub_expr(*e, subs))),
+                    span: arm.span,
+                })
+                .collect(),
+            span,
+        },
         Expr::IfLet {
             pattern,
             source,
@@ -441,19 +461,6 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             span,
         },
         Stmt::Expr(expr) => Stmt::Expr(sub_expr(expr, subs)),
-        Stmt::MatchBind {
-            pattern,
-            source,
-            body,
-            span,
-            ..
-        } => Stmt::MatchBind {
-            id: AstId::alloc(),
-            pattern,
-            source: sub_expr(source, subs),
-            body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
-            span,
-        },
         // Script mode statements
         Stmt::LetBind {
             name, expr, span, ..
@@ -691,6 +698,19 @@ fn validate_splice_expr(
                 validate_splice_else_branch(eb, splice_names, errors);
             }
         }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            validate_splice_expr(scrutinee, false, splice_names, errors);
+            for arm in arms {
+                for s in &arm.body {
+                    validate_splice_stmt(s, splice_names, errors);
+                }
+                if let Some(tail) = &arm.tail {
+                    validate_splice_expr(tail, false, splice_names, errors);
+                }
+            }
+        }
         Expr::IfLet {
             source,
             then_body,
@@ -745,12 +765,6 @@ fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(As
         }
         Stmt::Expr(expr) => {
             validate_splice_expr(expr, false, splice_names, errors);
-        }
-        Stmt::MatchBind { source, body, .. } => {
-            validate_splice_expr(source, false, splice_names, errors);
-            for s in body {
-                validate_splice_stmt(s, splice_names, errors);
-            }
         }
         // Script mode statements
         Stmt::LetBind { expr, .. } | Stmt::Assign { expr, .. } => {

@@ -201,6 +201,10 @@ enum EdgeSlot {
     Jump,
     Then,
     Else,
+    /// The i-th arm of a `Switch`, by position in `arms` (RFC-0051).
+    SwitchArm(usize),
+    /// A `Switch`'s `default` edge.
+    SwitchDefault,
 }
 
 /// One outgoing edge of a block's terminator. `forwarded` keeps the order of
@@ -327,6 +331,16 @@ impl<'a> EdgeRef<'a> {
                 },
                 EdgeSlot::Else,
             ) => Self { label, args },
+            (Terminator::Switch { arms, .. }, EdgeSlot::SwitchArm(i)) => {
+                let (_, label, args) = &mut arms[i];
+                Self { label, args }
+            }
+            (Terminator::Switch { default, .. }, EdgeSlot::SwitchDefault) => {
+                let (label, args) = default
+                    .as_mut()
+                    .expect("a SwitchDefault slot names a Switch that has a default");
+                Self { label, args }
+            }
             (term, _) => panic!("edge slot does not name an edge of {term:?}"),
         }
     }
@@ -389,6 +403,16 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
             uses.extend(then_args.iter().copied());
             uses.extend(else_args.iter().copied());
         }
+        // The tag a `Switch` reads, and the arguments each edge forwards.
+        Terminator::Switch { tag, arms, default } => {
+            uses.insert(*tag);
+            for (_, _, args) in arms {
+                uses.extend(args.iter().copied());
+            }
+            if let Some((_, args)) = default {
+                uses.extend(args.iter().copied());
+            }
+        }
         Terminator::Fallthrough | Terminator::Diverge => {}
     }
     uses
@@ -414,6 +438,16 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
             edge(EdgeSlot::Then, then_label, then_args),
             edge(EdgeSlot::Else, else_label, else_args),
         ],
+        Terminator::Switch { arms, default, .. } => arms
+            .iter()
+            .enumerate()
+            .map(|(i, (_, label, args))| edge(EdgeSlot::SwitchArm(i), label, args))
+            .chain(
+                default
+                    .iter()
+                    .map(|(label, args)| edge(EdgeSlot::SwitchDefault, label, args)),
+            )
+            .collect(),
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
@@ -557,6 +591,7 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         // Control flow - handled by terminator, not here.
         InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
+        | InstKind::Switch { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge => false,
     }
@@ -575,6 +610,13 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
             else_args,
             ..
         } => then_args.contains(&val) || else_args.contains(&val),
+        // A Switch's edge args are transferred; the tag is read-only.
+        Terminator::Switch { arms, default, .. } => {
+            arms.iter().any(|(_, _, args)| args.contains(&val))
+                || default
+                    .as_ref()
+                    .is_some_and(|(_, args)| args.contains(&val))
+        }
         Terminator::Fallthrough | Terminator::Diverge => false,
     }
 }

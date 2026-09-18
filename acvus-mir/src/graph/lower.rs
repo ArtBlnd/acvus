@@ -164,14 +164,14 @@ mod tests {
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
     }
 
-    // -- Script: match-bind and iterate --
+    // -- Script: `if let` and iterate --
 
     #[test]
-    fn lower_script_irrefutable_match_bind() {
+    fn lower_script_irrefutable_if_let() {
         let i = Interner::new();
         let graph = make_graph_with_ctx(
             &i,
-            "x = @data { @out = x + 1; }; @out",
+            "if let x = @data { @out = x + 1; }; @out",
             &[("data", Ty::I64), ("out", Ty::I64)],
         );
         let ext = extract::extract(&i, &graph);
@@ -180,23 +180,23 @@ mod tests {
         let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
-        // Irrefutable match-bind should NOT generate JumpIf.
+        // An irrefutable pattern has no test and no branch.
         assert!(
             !module
                 .main
                 .insts
                 .iter()
                 .any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
-            "irrefutable match-bind should not generate JumpIf"
+            "an irrefutable `if let` should not generate JumpIf"
         );
     }
 
     #[test]
-    fn lower_script_refutable_match_bind() {
+    fn lower_script_refutable_if_let() {
         let i = Interner::new();
         let graph = make_graph_with_ctx(
             &i,
-            "42 = @val { @out = 1; }; @out",
+            "if let 42 = @val { @out = 1; }; @out",
             &[("val", Ty::I64), ("out", Ty::I64)],
         );
         let ext = extract::extract(&i, &graph);
@@ -205,14 +205,14 @@ mod tests {
         let result = lower(&i, &graph, &ext, &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
-        // Refutable match-bind MUST generate JumpIf.
+        // A refutable pattern is a test and a branch.
         assert!(
             module
                 .main
                 .insts
                 .iter()
                 .any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
-            "refutable match-bind should generate JumpIf"
+            "a refutable `if let` should generate JumpIf"
         );
     }
 

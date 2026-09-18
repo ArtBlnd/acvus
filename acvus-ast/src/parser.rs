@@ -958,21 +958,46 @@ mod tests {
         assert!(matches!(&stmts[1], Stmt::Assign { name, .. } if interner.resolve(*name) == "x"));
     }
 
-    /// The tag form still parses where a bare assignment also parses: the
-    /// trailing `{ body };` is what tells them apart.
+    /// A `match` statement and a bare assignment are both statements: the
+    /// leading `match` is what tells them apart (RFC-0051).
     #[test]
-    fn the_tag_form_and_a_bare_assignment_are_both_statements() {
+    fn a_match_and_a_bare_assignment_are_both_statements() {
         let interner = Interner::new();
         let s = parse_script(
             &interner,
-            "let out = 0.0; Some(v) = Some(1.5) { out = v; };",
+            "let out = 0.0; match Some(1.5) { Some(v) => { out = v; }, None => {} };",
         )
         .unwrap();
         assert!(matches!(&s.stmts[0], Stmt::LetBind { .. }));
-        let Stmt::MatchBind { body, .. } = &s.stmts[1] else {
-            panic!("expected MatchBind");
+        let Stmt::Expr(Expr::Match { arms, .. }) = &s.stmts[1] else {
+            panic!("expected a match statement");
         };
-        assert!(matches!(&body[0], Stmt::Assign { name, .. } if interner.resolve(*name) == "out"));
+        assert_eq!(arms.len(), 2);
+        assert!(
+            matches!(&arms[0].body[0], Stmt::Assign { name, .. } if interner.resolve(*name) == "out")
+        );
+    }
+
+    /// The arm forms: a bare expression, a block with statements, a block
+    /// with a tail, and `_` as the catch-all.
+    #[test]
+    fn a_match_arm_is_an_expression_or_a_block() {
+        let interner = Interner::new();
+        let s = parse_script(
+            &interner,
+            "let acc = 0; match E::A(1) { E::A(v) => { acc = v; }, E::B(v) => { acc = 1; v }, _ => 0 }",
+        )
+        .unwrap();
+        let Some(tail) = &s.tail else {
+            panic!("expected a trailing match expression");
+        };
+        let Expr::Match { arms, .. } = tail.as_ref() else {
+            panic!("expected a match expression");
+        };
+        assert_eq!(arms.len(), 3);
+        assert!(arms[0].tail.is_none() && arms[0].body.len() == 1);
+        assert!(matches!(arms[1].tail.as_deref(), Some(Expr::Block { .. })));
+        assert!(matches!(arms[2].pattern, Pattern::Wildcard { .. }));
     }
 
     /// A `while` body is the same statement rule: `let` and assignment both.

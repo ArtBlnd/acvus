@@ -31,7 +31,7 @@ fn a_list_pattern_against_a_reference_binds_element_references() {
     let i = Interner::new();
     let ir = compile_script_ir(
         &i,
-        "[a, b, ..] = &@items { let x = *a + *b; }; 0",
+        "if let [a, b, ..] = &@items { let x = *a + *b; }; 0",
         &items(&i),
     )
     .unwrap();
@@ -43,8 +43,12 @@ fn a_list_pattern_against_a_reference_binds_element_references() {
 #[test]
 fn a_word_binding_is_read_through_the_reference_at_an_operator() {
     let i = Interner::new();
-    let ir =
-        compile_script_ir(&i, "[a, b, ..] = &@items { let x = a + 1; }; 0", &items(&i)).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "if let [a, b, ..] = &@items { let x = a + 1; }; 0",
+        &items(&i),
+    )
+    .unwrap();
     assert!(ir.contains("take (*"), "{ir}");
 }
 
@@ -69,8 +73,12 @@ fn a_literal_pattern_compares_through_the_reference() {
 #[test]
 fn a_list_pattern_against_a_value_copies_its_words_out() {
     let i = Interner::new();
-    let ir =
-        compile_script_ir(&i, "[a, b, ..] = @items { let x = a + b; }; 0", &items(&i)).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "if let [a, b, ..] = @items { let x = a + b; }; 0",
+        &items(&i),
+    )
+    .unwrap();
     assert!(ir.contains("commit @items"), "{ir}");
 }
 
@@ -82,12 +90,14 @@ fn a_list_pattern_against_a_value_of_objects_leaves_it_partly_moved() {
         i.intern("users"),
         Ty::Array(Box::new(user), LenTerm::Known(2)),
     )]);
-    let err = compile_script_ir(&i, "[a, b] = @users { let x = 1; }; 0", &users).unwrap_err();
+    let err =
+        compile_script_ir(&i, "if let [a, b] = @users { let x = 1; }; 0", &users).unwrap_err();
     assert!(
         err.contains("context @users is moved out here and not assigned again before the run ends"),
         "{err}"
     );
-    let ir = compile_script_ir(&i, "[a, b] = &@users { let x = a.age; }; 0", &users).unwrap();
+    let ir =
+        compile_script_ir(&i, "if let [a, b] = &@users { let x = a.age; }; 0", &users).unwrap();
     assert!(ir.contains("commit @users"), "{ir}");
 }
 
@@ -178,11 +188,12 @@ fn shared_ref(ty: Ty) -> Ty {
     Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty)))
 }
 
-const LITERAL_ON_A_PARAMETER: &str = "let f = |r| -> { let out = 20; 1 = r { out = 10; }; out }; ";
+const LITERAL_ON_A_PARAMETER: &str =
+    "let f = |r| -> { let out = 20; if let 1 = r { out = 10; }; out }; ";
 const VARIANT_ON_A_PARAMETER: &str =
-    "let f = |r| -> { let out = 0.0; Some(v) = r { out = *v; }; out }; ";
+    "let f = |r| -> { let out = 0.0; if let Some(v) = r { out = *v; }; out }; ";
 const VARIANT_READ_AS_A_VALUE: &str =
-    "let f = |r| -> { let out = 0.0; Some(v) = r { out = v; }; out }; ";
+    "let f = |r| -> { let out = 0.0; if let Some(v) = r { out = v; }; out }; ";
 
 #[test]
 fn a_literal_against_an_open_head_compares_through_the_reference_the_call_lends() {
@@ -263,7 +274,8 @@ fn a_binding_read_through_a_reference_before_the_mode_settles_refuses_the_value(
 #[test]
 fn a_variant_against_a_borrowed_option_binds_a_reference_and_leaves_it_owned() {
     let i = Interner::new();
-    let source = "let o = Some([1.0, 2.0]); let out = 0.0; Some(v) = &o { out = v[1]; }; out";
+    let source =
+        "let o = Some([1.0, 2.0]); let out = 0.0; if let Some(v) = &o { out = v[1]; }; out";
     let ir = compile_script_ir(&i, source, &FxHashMap::default()).unwrap();
     assert!(ir.contains("(v) : &Array<Float, 2>"), "{ir}");
     assert!(
@@ -281,27 +293,22 @@ fn instructions(ir: &str) -> String {
 }
 
 #[test]
-fn the_tag_form_and_if_let_with_no_else_are_one_lowering() {
+fn if_let_with_no_else_is_still_a_test_and_a_branch() {
+    // RFC-0051 removed the tag form, which shared this lowering. `if let`
+    // is unchanged: two arms, always exhaustive, and never a `switch`.
     let i = Interner::new();
     let out = FxHashMap::from_iter([(i.intern("out"), Ty::Float)]);
-    let tag = compile_script_optimized(&i, "let o = Some(1.5); Some(v) = o { @out = v; }; 0", &out)
-        .unwrap();
     let if_let = compile_script_mode_optimized(
         &i,
         "let o = Some(1.5); if let Some(v) = o { @out = v; }; 0",
         &out,
     )
     .unwrap();
-    assert_eq!(
-        instructions(&tag),
-        instructions(&if_let),
-        "both go through `lower_match_bind_arm`"
-    );
-    // The one difference is outside the listing: `if let` is an expression
-    // and its value is the Unit no instruction reads. The tag form is a
-    // statement and has none.
+    let listing = instructions(&if_let);
+    assert!(listing.contains("is Some"), "{listing}");
+    assert!(!listing.contains("switch"), "{listing}");
+    // `if let` is an expression: its value is the Unit no instruction reads.
     assert!(if_let.contains(": Unit"), "{if_let}");
-    assert!(!tag.contains(": Unit"), "{tag}");
 }
 
 #[test]
@@ -319,7 +326,7 @@ fn a_context_bound_by_a_pattern_whose_head_settles_on_a_reference_is_refused() {
     ]);
     let err = compile_script_ir(
         &i,
-        "let f = |r| -> { @copy = r { let x = 1; }; 0 }; f(&@user)",
+        "let f = |r| -> { if let @copy = r { let x = 1; }; 0 }; f(&@user)",
         &ctx,
     )
     .unwrap_err();

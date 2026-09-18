@@ -55,7 +55,7 @@ fn an_option_of_a_word_is_never_dropped() {
     let i = Interner::new();
     let ir = compile_script_optimized(
         &i,
-        "let o = Some(1.5); Some(v) = o { @out = v; }; 0",
+        "let o = Some(1.5); if let Some(v) = o { @out = v; }; 0",
         &ctx(&i, &[("out", Ty::Float)]),
     )
     .unwrap();
@@ -67,7 +67,7 @@ fn an_option_of_a_vec_is_dropped_only_where_it_was_not_matched() {
     let i = Interner::new();
     let ir = compile_script_optimized(
         &i,
-        "let o = Some(reverse([1, 2, 3])); Some(v) = o { @out = len(&v); }; 0",
+        "let o = Some(reverse([1, 2, 3])); if let Some(v) = o { @out = len(&v); }; 0",
         &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();
@@ -84,7 +84,7 @@ fn an_option_of_an_option_of_a_vec_is_dropped_only_where_it_was_not_matched() {
     let i = Interner::new();
     let ir = compile_script_optimized(
         &i,
-        "let o = Some(Some(reverse([1, 2, 3]))); Some(Some(v)) = o { @out = len(&v); }; 0",
+        "let o = Some(Some(reverse([1, 2, 3]))); if let Some(Some(v)) = o { @out = len(&v); }; 0",
         &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();
@@ -101,7 +101,7 @@ fn a_result_keeps_its_box_after_its_payload_is_taken() {
     let i = Interner::new();
     let ir = compile_script_optimized(
         &i,
-        "let r = decimal(\"1.5\"); Ok(v) = r { @out = 1; }; 0",
+        "let r = decimal(\"1.5\"); if let Ok(v) = r { @out = 1; }; 0",
         &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();

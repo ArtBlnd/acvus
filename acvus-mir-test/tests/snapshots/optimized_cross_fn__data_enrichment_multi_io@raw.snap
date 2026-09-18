@@ -136,25 +136,25 @@ expression: raw
     46 |   assign @alert_count = r32
     47 |   jump L1
     48 | L1:
-    49 |   r34 = take label
-    50 |   assign @result_label = r34
-    51 |   r35 = take score
-    52 |   assign @result_score = r35
-    53 |   r36 = take score
-    54 |   r37 = take @result_label
-    55 |   commit @result_label = r37
-    56 |   r38 = take @weight
-    57 |   commit @weight = r38
-    58 |   r39 = take @alert_count
-    59 |   commit @alert_count = r39
-    60 |   r40 = take @result_score
-    61 |   commit @result_score = r40
-    62 |   r41 = take @threshold
-    63 |   commit @threshold = r41
-    64 |   r42 = take @user_id
-    65 |   commit @user_id = r42
-    66 |   r43 = take $order
-    67 |   return r36 [r43]
+    50 |   r34 = take label
+    51 |   assign @result_label = r34
+    52 |   r35 = take score
+    53 |   assign @result_score = r35
+    54 |   r36 = take score
+    55 |   r37 = take @result_label
+    56 |   commit @result_label = r37
+    57 |   r38 = take @weight
+    58 |   commit @weight = r38
+    59 |   r39 = take @alert_count
+    60 |   commit @alert_count = r39
+    61 |   r40 = take @result_score
+    62 |   commit @result_score = r40
+    63 |   r41 = take @threshold
+    64 |   commit @threshold = r41
+    65 |   r42 = take @user_id
+    66 |   commit @user_id = r42
+    67 |   r43 = take $order
+    68 |   return r36 [r43]
 
     ; orders: what the body's yielded Order waits for
     ;   r43(entry)
@@ -196,20 +196,21 @@ expression: raw
     ; r34 (label) : String
     ; r35 (score) : i64
     ; r36 (score) : i64
-    ; r37 (v49) : String
-    ; r38 (v50) : i64
-    ; r39 (v51) : i64
-    ; r40 (v52) : i64
-    ; r41 (v53) : i64
-    ; r42 (v54) : i64
-    ; r43 (v55) : Order
+    ; r37 (v50) : String
+    ; r38 (v51) : i64
+    ; r39 (v52) : i64
+    ; r40 (v53) : i64
+    ; r41 (v54) : i64
+    ; r42 (v55) : i64
+    ; r43 (v56) : Order
     ; r44 (@result_label) : String
-    ; r45 (history) : i64
-    ; r46 (@weight) : i64
-    ; r47 (@result_score) : i64
-    ; r48 (@threshold) : i64
-    ; r49 (label) : String
-    ; r50 (score) : i64
-    ; r51 (@user_id) : i64
+    ; r45 (v46) : Unit
+    ; r46 (history) : i64
+    ; r47 (@weight) : i64
+    ; r48 (@result_score) : i64
+    ; r49 (@threshold) : i64
+    ; r50 (label) : String
+    ; r51 (score) : i64
     ; r52 (@alert_count) : i64
-    ; r53 (profile) : i64
+    ; r53 (@user_id) : i64
+    ; r54 (profile) : i64

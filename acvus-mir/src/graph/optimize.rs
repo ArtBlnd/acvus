@@ -38,12 +38,17 @@ fn optimize_inner(
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> OptimizeResult {
-    // -- Pass 0: moves and borrows as the source wrote them (RFC-0029) --
+    // -- Pass 0: moves, borrows and exhaustiveness as the source wrote
+    // them (RFC-0029, RFC-0051) --
 
     let mut all_errors = Vec::new();
     for (qref, module) in &modules {
         let mut errors = validate::move_check::check_moves(module);
         errors.extend(validate::borrow_check::check_borrows(module));
+        // A `match` is exhaustive (RFC-0051). Like the move check, it reads
+        // the shape the source wrote: `switch_expand` in pass 1 replaces
+        // the dispatch with the chain the machine runs today.
+        errors.extend(validate::exhaustive::check_exhaustive(module));
         if !errors.is_empty() {
             all_errors.push((*qref, errors));
         }
@@ -88,6 +93,10 @@ fn optimize_inner(
 /// Pass 1: SSA -> DSE -> DCE on a single body.
 fn run_pass1_body(body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
+    // RFC-0051, first half: the machine has no `switch` yet, so the
+    // dispatch the lowering wrote becomes the chain before any other pass
+    // runs. The second half deletes this line.
+    optimize::switch_expand::run(&mut cfg);
     optimize::ssa_pass::run(&mut cfg);
     optimize::string_copy::run(&mut cfg);
     optimize::dse::run(&mut cfg);
@@ -213,6 +222,16 @@ fn debug_validate(cfg: &CfgBody) {
                 let mut v = vec![*cond];
                 v.extend(then_args);
                 v.extend(else_args);
+                v
+            }
+            crate::cfg::Terminator::Switch { tag, arms, default } => {
+                let mut v = vec![*tag];
+                for (_, _, args) in arms {
+                    v.extend(args);
+                }
+                if let Some((_, args)) = default {
+                    v.extend(args);
+                }
                 v
             }
             crate::cfg::Terminator::Fallthrough | crate::cfg::Terminator::Diverge => vec![],

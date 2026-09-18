@@ -60,14 +60,14 @@ body, a tag-form match-bind body, an `if`/`else` block.
 
 ```
 Script       = Stmt* ScriptExpr?
-ScriptExpr   = IfExpr | Expr
+ScriptExpr   = IfExpr | MatchExpr | Expr
 ```
 
 ### Statements
 
 ```
 Stmt         = LetBind | LetUninit | Assign | ContextStore | VarFieldStore
-             | DerefStore | While | WhileLet | Anyorder | MatchBind | ExprStmt
+             | DerefStore | While | WhileLet | Anyorder | ExprStmt
 
 LetBind      = "let" IDENT "=" ScriptExpr ";"           ← let x = 0;
 LetUninit    = "let" IDENT ";"                          ← let x;
@@ -78,8 +78,34 @@ DerefStore   = "*" Expr "=" ScriptExpr ";"              ← *r = 0;
 While        = "while" Expr "{" Stmt* "}"
 WhileLet     = "while" "let" Pattern "=" Expr "{" Stmt* "}"
 Anyorder     = "anyorder" "{" Stmt* "}" ";"?
-MatchBind    = Pattern "=" Expr "{" Stmt* "}" ";"       ← if-let with body
-ExprStmt     = Expr ";" | IfExpr ";"
+ExprStmt     = Expr ";" | IfExpr ";" | MatchExpr ";"
+```
+
+### `match`
+
+```
+MatchExpr    = "match" Expr "{" (MatchArm ",")* MatchArm? "}"
+MatchArm     = ArmPattern "=>" "{" Stmt+ "}"            ← run for its effect
+             | ArmPattern "=>" Expr                     ← including { s; tail }
+ArmPattern   = "_" | Pattern
+```
+
+`match` is an expression (RFC-0051): the scrutinee is evaluated once, every
+arm has the type of the whole (`!` admitted), and an arm with no tail is
+`Unit`. An arm naming a variant the scrutinee cannot hold is refused --
+the arms contribute no variant:
+
+```
+unreachable pattern: `E::C(_)` is not a variant of `E{A(i64), B(i64)}`
+```
+
+Exhaustiveness is decided in `validate`, on the MIR, and only where the
+variant set is known: an `Option` or a `Result`, or an enum every
+definition of which is in this body. Elsewhere a `_` arm is the way
+through:
+
+```
+non-exhaustive match: the variants of this value are not known in this function; add a `_` arm
 ```
 
 **`let` binds, `=` assigns.** `let x = e;` introduces a binding and shadows
@@ -98,8 +124,9 @@ capture is by value (RFC-0018), so the store would write the lambda's copy:
 cannot assign to `x`: it is captured by the lambda, not bound in it
 ```
 
-A name assigned inside a `while`, `anyorder`, `if` or match-bind body is the
-outer binding, so its new value is live after the body; the join carries it.
+A name assigned inside a `while`, `anyorder`, `if`, `if let` or `match` arm
+body is the outer binding, so its new value is live after the body; the
+join carries it.
 
 **Assignment LHS resolution**: The LHS FieldAccess chain is flattened to
 determine the root:
@@ -108,10 +135,6 @@ determine the root:
 - Root is `@IDENT` → `ContextStore` (with or without path)
 - Root is `*Expr` with no path → `DerefStore`
 - Otherwise → parser error (`InvalidAssignTarget`)
-
-**MatchBind versus Assign**: both start with `Expr "="`. The trailing
-`"{" Stmt* "}" ";"` is what makes it the tag form; `x = { a, };` with an
-object literal on the right is an assignment.
 
 **A template binding is the template's.** `{{ x = expr }}` inside a template
 is a `MatchBlock` with a `Binding` pattern (see *Template Structure* above),

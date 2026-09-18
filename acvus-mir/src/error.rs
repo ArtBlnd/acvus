@@ -107,6 +107,17 @@ pub enum MirErrorKind {
 
     // Pattern errors
     MissingCatchAll,
+    /// A `match` whose arms are not one dispatch over a tag -- a literal,
+    /// a tuple, a nested refutable payload -- has no shape `validate` can
+    /// decide exhaustiveness on, so it must say so itself (RFC-0051 §3).
+    MatchIsNotADispatch,
+    /// A `match` arm names a variant the scrutinee cannot hold (RFC-0051
+    /// §2). The arms contribute no variant: the scrutinee's type is its
+    /// own, so an arm outside it can never be taken.
+    UnreachablePattern {
+        pattern: String,
+        scrutinee_ty: Ty,
+    },
     PatternTypeMismatch {
         pattern_ty: Ty,
         source_ty: Ty,
@@ -441,6 +452,22 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::UndefinedContext(name) => {
                 write!(f, "undefined context `@{name}`")
+            }
+            MirErrorKind::MatchIsNotADispatch => {
+                write!(
+                    f,
+                    "non-exhaustive match: these arms are not one dispatch over a tag, so the variants they cover are not known; add a `_` arm"
+                )
+            }
+            MirErrorKind::UnreachablePattern {
+                pattern,
+                scrutinee_ty,
+            } => {
+                write!(
+                    f,
+                    "unreachable pattern: `{pattern}` is not a variant of `{}`",
+                    scrutinee_ty.display(interner)
+                )
             }
             MirErrorKind::MissingCatchAll => {
                 write!(f, "match block must have a catch-all `{{{{_}}}}` arm")

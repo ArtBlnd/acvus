@@ -1,6 +1,6 @@
 use acvus_ast::{
-    AstId, BinOp, ElseBranch, Expr, IndentModifier, Literal, MatchBlock, Node, ObjectExprField,
-    ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
+    AstId, BinOp, ElseBranch, Expr, IndentModifier, Literal, MatchBlock, MatchExprArm, Node,
+    ObjectExprField, ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
     TuplePatternElem, UnaryOp,
 };
 use acvus_utils::{Astr, Freeze, Interner};
@@ -177,9 +177,69 @@ fn short_circuit_of(op: BinOp) -> Option<ShortCircuit> {
 /// bind, a tuple of such, or an object of such. The type checker has
 /// already required every key an object pattern names to exist on the
 /// source type, so the pattern cannot fail at run time.
+/// A `match` whose arms are one dispatch over a tag: every arm is a variant
+/// pattern whose payload asks nothing (RFC-0051 §5 -- a nested refutable
+/// payload is more than a tag test), with at most one catch-all, last.
+/// `tags` runs in arm order and skips the catch-all; `catch_all` is that
+/// arm's index.
+pub(crate) struct Dispatch {
+    tags: Vec<Astr>,
+    catch_all: Option<usize>,
+}
+
+impl Dispatch {
+    pub(crate) fn of(arms: &[MatchExprArm]) -> Option<Self> {
+        Self::plan(arms)
+    }
+
+    /// Whether the arms can hold one dispatch at all: an arm that is a
+    /// catch-all answers yes on its own, because `_` is always the way
+    /// through (RFC-0051 §3).
+    pub(crate) fn is_decidable(arms: &[MatchExprArm]) -> bool {
+        Self::plan(arms).is_some() || arms.iter().any(Self::is_catch_all)
+    }
+
+    fn is_catch_all(arm: &MatchExprArm) -> bool {
+        matches!(
+            arm.pattern,
+            Pattern::Wildcard { .. }
+                | Pattern::Binding {
+                    ref_kind: RefKind::Value,
+                    ..
+                }
+        )
+    }
+
+    fn plan(arms: &[MatchExprArm]) -> Option<Self> {
+        let mut tags = Vec::with_capacity(arms.len());
+        let mut catch_all = None;
+        for (index, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                Pattern::Variant { tag, payload, .. }
+                    if payload.as_deref().is_none_or(pattern_is_irrefutable) =>
+                {
+                    if catch_all.is_some() {
+                        // An arm after the catch-all can never be taken;
+                        // the chain keeps the arm order the source wrote.
+                        return None;
+                    }
+                    tags.push(*tag);
+                }
+                Pattern::Wildcard { .. }
+                | Pattern::Binding {
+                    ref_kind: RefKind::Value,
+                    ..
+                } if catch_all.is_none() => catch_all = Some(index),
+                _ => return None,
+            }
+        }
+        (!tags.is_empty()).then_some(Self { tags, catch_all })
+    }
+}
+
 fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
     match pattern {
-        Pattern::Binding { .. } | Pattern::ContextBind { .. } => true,
+        Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::ContextBind { .. } => true,
         Pattern::Tuple { elements, .. } => elements.iter().all(|e| match e {
             TuplePatternElem::Pattern(p) => pattern_is_irrefutable(p),
             TuplePatternElem::Wildcard(_) => true,
@@ -198,7 +258,10 @@ fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
 /// taken twice; a place is read through a reference instead.
 fn test_reads_a_part(pattern: &Pattern) -> bool {
     match pattern {
-        Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => false,
+        Pattern::Binding { .. }
+        | Pattern::Wildcard { .. }
+        | Pattern::ContextBind { .. }
+        | Pattern::Literal { .. } => false,
         Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => true,
         Pattern::Variant { payload, .. } => payload
             .as_deref()
@@ -687,15 +750,6 @@ impl<'a> Lowerer<'a> {
             Stmt::Expr(expr) => {
                 self.lower_expr(expr);
             }
-            Stmt::MatchBind {
-                pattern,
-                source,
-                body,
-                span,
-                ..
-            } => {
-                self.lower_stmt_match_bind(pattern, source, body, *span);
-            }
 
             // -- Script mode statements ------------------------------
             Stmt::LetBind {
@@ -747,19 +801,182 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Lower a match-bind statement: `pattern = source { body; };`
+    /// Lower `match e { P1 => e1, .., Pn => en }` (RFC-0051).
     ///
-    /// The tag form and the `if let` expression with no `else` are the same
-    /// match run for its effect, and go through `lower_match_bind_arm`.
-    fn lower_stmt_match_bind(
+    /// The scrutinee is evaluated once, into one `PatSrc` every arm reads.
+    /// The dispatch this half emits is the chain the tag form already had:
+    /// a `lower_pattern_test` (a `TestVariant` over the tag, for a variant
+    /// pattern) and a `JumpIf` per arm, with a shared merge block carrying
+    /// the result. The **last arm is the chain's else** -- it is not
+    /// tested, because `validate`'s exhaustiveness pass is what makes the
+    /// match exhaustive (a catch-all is written last, and a `Closed` set
+    /// covered by the arms leaves the last arm the only one that can hold).
+    ///
+    /// The second half replaces the whole loop below with one
+    /// `Terminator::Switch { tag, arms, default }`.
+    fn lower_match_expr(
         &mut self,
-        pattern: &Pattern,
-        source: &Expr,
-        body: &[Stmt],
+        id: AstId,
+        scrutinee: &Expr,
+        arms: &[MatchExprArm],
         span: Span,
-    ) {
-        let src = self.pattern_source(source, [pattern]);
-        self.lower_match_bind_arm(pattern, src, body, None, span);
+    ) -> ValueId {
+        let result_ty = self.type_of_id(id);
+        let Some((last, tested)) = arms.split_last() else {
+            // `match e { }`: the scrutinee still runs; the match has no
+            // value of its own.
+            self.lower_expr(scrutinee);
+            return self.emit_unit(span);
+        };
+        if let Some(dispatch) = Dispatch::of(arms) {
+            return self.lower_match_switch(&dispatch, scrutinee, arms, result_ty, span);
+        }
+        let src = self.pattern_source(scrutinee, arms.iter().map(|arm| &arm.pattern));
+        let merge_label = self.alloc_label();
+        let first_arm_label = self.alloc_label();
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: first_arm_label,
+                args: vec![],
+            },
+        );
+        self.emit_label(span, first_arm_label);
+
+        for arm in tested {
+            let matched = self.lower_pattern_test(&arm.pattern, src.clone(), arm.span);
+            let body_label = self.alloc_label();
+            let next_label = self.alloc_label();
+            self.emit_inst(
+                arm.span,
+                InstKind::JumpIf {
+                    cond: matched,
+                    then_label: body_label,
+                    then_args: vec![],
+                    else_label: next_label,
+                    else_args: vec![],
+                },
+            );
+            self.emit_label(arm.span, body_label);
+            let value = self.lower_arm_body(arm, src.clone());
+            self.emit_inst(
+                arm.span,
+                InstKind::Jump {
+                    label: merge_label,
+                    args: vec![value],
+                },
+            );
+            self.emit_label(arm.span, next_label);
+        }
+
+        let value = self.lower_arm_body(last, src);
+        self.emit_inst(
+            last.span,
+            InstKind::Jump {
+                label: merge_label,
+                args: vec![value],
+            },
+        );
+
+        let result = self.alloc_val();
+        self.set_val_type(result, result_ty);
+        self.emit_inst(
+            span,
+            InstKind::BlockLabel {
+                label: merge_label,
+                params: vec![result],
+                merge_of: Some(first_arm_label),
+            },
+        );
+        result
+    }
+
+    /// Lower a `match` whose arms are one dispatch over a tag: the
+    /// scrutinee is read once into the value whose tag the `Switch` reads,
+    /// and each arm is its own block. `Terminator::Switch` is the shape
+    /// that names a `match` and nothing else, which is what
+    /// `validate::exhaustive` reads (RFC-0051 §3-§5).
+    fn lower_match_switch(
+        &mut self,
+        dispatch: &Dispatch,
+        scrutinee: &Expr,
+        arms: &[MatchExprArm],
+        result_ty: Ty,
+        span: Span,
+    ) -> ValueId {
+        let src = self.pattern_source(scrutinee, arms.iter().map(|arm| &arm.pattern));
+        // The tag is read from one value: a register holds the scrutinee
+        // itself, a place is lent for the read, as `TestVariant` takes it.
+        let tag = match &src {
+            PatSrc::Value(reg) => *reg,
+            PatSrc::Place { target, path, ty } => self.emit_ref(
+                span,
+                target.clone(),
+                path.clone(),
+                Mutability::Shared,
+                ty.clone(),
+            ),
+        };
+        let merge_label = self.alloc_label();
+        let arm_labels: Vec<Label> = arms.iter().map(|_| self.alloc_label()).collect();
+        let switch_arms: Vec<(Astr, Label, Vec<ValueId>)> = dispatch
+            .tags
+            .iter()
+            .zip(&arm_labels)
+            .map(|(tag, label)| (*tag, *label, Vec::new()))
+            .collect();
+        let default = dispatch
+            .catch_all
+            .map(|index| (arm_labels[index], Vec::new()));
+        self.emit_inst(
+            span,
+            InstKind::Switch {
+                tag,
+                arms: switch_arms,
+                default,
+            },
+        );
+
+        for (arm, label) in arms.iter().zip(&arm_labels) {
+            self.emit_label(arm.span, *label);
+            let value = self.lower_arm_body(arm, src.clone());
+            self.emit_inst(
+                arm.span,
+                InstKind::Jump {
+                    label: merge_label,
+                    args: vec![value],
+                },
+            );
+        }
+
+        let result = self.alloc_val();
+        self.set_val_type(result, result_ty);
+        self.emit_inst(
+            span,
+            InstKind::BlockLabel {
+                label: merge_label,
+                params: vec![result],
+                merge_of: Some(arm_labels[0]),
+            },
+        );
+        result
+    }
+
+    /// One arm's bindings, statements and tail, in a scope of their own.
+    /// An arm with no tail has the value `Unit`, as an `if` branch with no
+    /// tail has.
+    fn lower_arm_body(&mut self, arm: &MatchExprArm, src: PatSrc) -> ValueId {
+        self.push_scope();
+        self.lower_pattern_bind(&arm.pattern, src, arm.span);
+        for s in &arm.body {
+            self.lower_stmt(s);
+        }
+        let value = match &arm.tail {
+            Some(tail) => self.lower_expr(tail),
+            None => self.emit_unit(arm.span),
+        };
+        self.pop_scope();
+        value
     }
 
     /// One arm matched for its effect: test the pattern, and on a match bind
@@ -2475,6 +2692,12 @@ impl<'a> Lowerer<'a> {
                 span,
             } => self.lower_if_expr(*id, cond, then_body, then_tail, else_branch, *span),
 
+            Expr::Match {
+                id,
+                scrutinee,
+                arms,
+                span,
+            } => self.lower_match_expr(*id, scrutinee, arms, *span),
             Expr::IfLet {
                 id,
                 pattern,
@@ -3088,7 +3311,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         match pattern {
-            Pattern::ContextBind { .. } | Pattern::Binding { .. } => {
+            Pattern::ContextBind { .. } | Pattern::Binding { .. } | Pattern::Wildcard { .. } => {
                 self.emit_const_bool(span, true)
             }
             Pattern::Literal { value, .. } => {
@@ -3162,6 +3385,8 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) {
         match pattern {
+            // `_` reads nothing and binds nothing.
+            Pattern::Wildcard { .. } => {}
             Pattern::Binding {
                 name,
                 ref_kind: RefKind::Value,
@@ -3276,6 +3501,7 @@ impl<'a> Lowerer<'a> {
             }
         };
         match pattern {
+            Pattern::Wildcard { .. } => Vec::new(),
             Pattern::List { head, tail, .. } => {
                 let (elem, len) = match ty {
                     Ty::Array(elem, len) => (elem.as_ref().clone(), Some(len.get())),
@@ -3339,7 +3565,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         match pattern {
-            Pattern::ContextBind { .. } | Pattern::Binding { .. } => {
+            Pattern::ContextBind { .. } | Pattern::Binding { .. } | Pattern::Wildcard { .. } => {
                 self.emit_const_bool(span, true)
             }
             Pattern::Literal { value, .. } => {
@@ -3434,6 +3660,8 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) {
         match pattern {
+            // `_` reads nothing and binds nothing.
+            Pattern::Wildcard { .. } => {}
             Pattern::Binding {
                 name,
                 ref_kind: RefKind::Value,
@@ -3484,8 +3712,10 @@ impl<'a> Lowerer<'a> {
             return self.lower_pattern_test_through(pattern, src_reg, &inner, span);
         }
         match pattern {
-            // Context bind is always irrefutable.
-            Pattern::ContextBind { .. } => self.emit_const_bool(span, true),
+            // A context bind and `_` are always irrefutable.
+            Pattern::ContextBind { .. } | Pattern::Wildcard { .. } => {
+                self.emit_const_bool(span, true)
+            }
 
             Pattern::Binding { ref_kind, .. } => {
                 if *ref_kind == RefKind::ExternParam {
@@ -3670,6 +3900,8 @@ impl<'a> Lowerer<'a> {
             return;
         }
         match pattern {
+            // `_` reads nothing and binds nothing.
+            Pattern::Wildcard { .. } => {}
             Pattern::ContextBind { name: qref, .. } => {
                 let slot = self.context_slot(*qref);
                 self.emit_assign(span, RefTarget::Var(slot), vec![], src_reg);

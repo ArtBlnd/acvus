@@ -3083,27 +3083,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             acvus_ast::Stmt::Expr(expr) => {
                 self.check_expr(expr);
             }
-            acvus_ast::Stmt::MatchBind {
-                pattern,
-                source,
-                body,
-                span,
-                ..
-            } => {
-                let source_ty = self.check_expr(source);
-                let resolved_source = self.solver.resolve_ty(&source_ty);
-                self.push_scope();
-                self.check_pattern(
-                    pattern,
-                    &resolved_source,
-                    PatternSource::Expr(source.id()),
-                    *span,
-                );
-                for s in body {
-                    self.check_stmt(s);
-                }
-                self.pop_scope();
-            }
 
             // -- Script mode statements ------------------------------
             acvus_ast::Stmt::LetBind {
@@ -3983,6 +3962,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.record_ret(*id, result_ty)
             }
 
+            Expr::Match {
+                id,
+                scrutinee,
+                arms,
+                span,
+            } => {
+                let ty = self.check_match(scrutinee, arms, *span);
+                self.record_ret(*id, ty)
+            }
+
             Expr::IfLet {
                 id,
                 pattern,
@@ -4020,6 +4009,94 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.record_ret(*id, result_ty)
             }
         }
+    }
+
+    /// A `match` is one dispatch (RFC-0051): the scrutinee's type is
+    /// settled first, every arm's pattern is checked *against* it, and the
+    /// arms' types join into one. Exhaustiveness is not decided here --
+    /// the union is still open while checking -- it is decided in
+    /// `validate`, where the body's definitions are visible.
+    fn check_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[acvus_ast::MatchExprArm],
+        span: Span,
+    ) -> InferTy {
+        let source_ty = self.check_expr(scrutinee);
+        let resolved = self.solver.resolve_ty(&source_ty);
+        let mut joined: Option<Branch> = None;
+        for arm in arms {
+            self.check_arm_is_reachable(&arm.pattern, &resolved, arm.span);
+            self.push_scope();
+            self.check_pattern(
+                &arm.pattern,
+                &resolved,
+                PatternSource::Expr(scrutinee.id()),
+                arm.span,
+            );
+            for s in &arm.body {
+                self.check_stmt(s);
+            }
+            let branch = match &arm.tail {
+                Some(tail) => Branch {
+                    ty: self.check_expr(tail),
+                    value: Some(tail.id()),
+                },
+                None => Branch {
+                    ty: TyTerm::Unit,
+                    value: None,
+                },
+            };
+            self.pop_scope();
+            joined = Some(match joined {
+                None => branch,
+                Some(acc) => Branch {
+                    ty: self.join_branches(&acc, &branch, span),
+                    value: None,
+                },
+            });
+        }
+        if !crate::lower::Dispatch::is_decidable(arms) {
+            self.error(MirErrorKind::MatchIsNotADispatch, span);
+        }
+        joined.map_or(TyTerm::Unit, |b| b.ty)
+    }
+
+    /// RFC-0051 §2: an arm contributes no variant. A pattern naming a tag
+    /// the scrutinee's enum does not carry can never be taken, and the
+    /// language has no warning axis, so it is refused. The question is
+    /// asked only where the answer is written down: a scrutinee whose head
+    /// is still open says nothing, and no arm is refused on it.
+    fn check_arm_is_reachable(&mut self, pattern: &Pattern, source_ty: &InferTy, span: Span) {
+        let Pattern::Variant { tag, payload, .. } = pattern else {
+            return;
+        };
+        let TyTerm::Enum { name, variants } = self.solver.shallow_resolve_ty(source_ty) else {
+            return;
+        };
+        if variants.contains_key(tag) {
+            return;
+        }
+        let written = match payload {
+            Some(_) => format!(
+                "{}::{}(_)",
+                self.interner.resolve(name),
+                self.interner.resolve(*tag)
+            ),
+            None => format!(
+                "{}::{}",
+                self.interner.resolve(name),
+                self.interner.resolve(*tag)
+            ),
+        };
+        let scrutinee_ty = self.type_as_written(source_ty);
+        self.error(
+            MirErrorKind::UnreachablePattern {
+                pattern: written,
+                scrutinee_ty,
+            },
+            span,
+        );
     }
 
     fn check_else_branch(&mut self, eb: &acvus_ast::ElseBranch) -> Branch {
@@ -4347,6 +4424,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     self.define_var(*name, ty);
                 }
             },
+
+            // `_` reads the position and asks nothing of it.
+            Pattern::Wildcard { .. } => {}
 
             Pattern::Literal { value, .. } => {
                 let pat_ty = self.literal_ty(value, span);

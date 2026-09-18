@@ -75,7 +75,7 @@ fn an_arithmetic_operator_over_two_variables_nothing_resolved_names_them_both() 
 #[test]
 fn an_enum_pattern_on_an_argument_names_the_enum_it_asked_for() {
     reports_as_written(
-        r#"let f = |r| -> { let out = 0; Some(v) = r { out = v; }; out }; f(1)"#,
+        r#"let f = |r| -> { let out = 0; if let Some(v) = r { out = v; }; out }; f(1)"#,
         "type mismatch: expected Option<!>, got i64",
     );
 }
@@ -83,7 +83,7 @@ fn an_enum_pattern_on_an_argument_names_the_enum_it_asked_for() {
 #[test]
 fn a_tuple_pattern_on_an_argument_names_its_arity() {
     reports_as_written(
-        r#"let f = |r| -> { let out = 0; (a, b) = r { out = 2; }; out }; f(1)"#,
+        r#"let f = |r| -> { let out = 0; if let (a, b) = r { out = 2; }; out }; f(1)"#,
         "type mismatch: expected (!, !), got i64",
     );
 }
@@ -91,7 +91,7 @@ fn a_tuple_pattern_on_an_argument_names_its_arity() {
 #[test]
 fn an_object_pattern_on_an_argument_names_the_field_it_asked_for() {
     reports_as_written(
-        r#"let f = |r| -> { let out = 0; { a, } = r { out = 2; }; out }; f(1)"#,
+        r#"let f = |r| -> { let out = 0; if let { a, } = r { out = 2; }; out }; f(1)"#,
         "type mismatch: expected {a: !}, got i64",
     );
 }
