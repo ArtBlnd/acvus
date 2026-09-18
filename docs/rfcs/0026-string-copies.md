@@ -18,22 +18,22 @@ mutation in the language the choice is unobservable.
 
 ## Rationale
 
-A string is the value a template language handles most, and a program
-that binds one and names it twice is the ordinary program, not the
-exceptional one. With the move rule alone (RFC-0018) every such program
-is a use-after-move and must write `clone(&x)` at each reuse; with an
-implicit copy the reuse is free to write, and its cost is one named
-instruction the IR shows. Making the string immutable is what lets the
-host choose a representation in which that instruction is a refcount
-rather than an allocation; nothing in the language mutates a string today,
-so the immutability costs nothing.
+With the move rule alone (RFC-0018), a program that binds a `String` and
+names it twice is a use-after-move and has to write `clone(&x)` at each
+reuse. With the inserted copy the reuse is written as the reuse, and its
+cost is one named instruction the IR shows.
+
+The immutability is what lets a host choose a representation in which
+that instruction is a refcount rather than an allocation: nothing in the
+language mutates a string, so no reader can tell the representations
+apart.
 
 ## Not built
 
 - No copy of any other heap type. `Array`, `Object`, `Tuple`, `Option`,
   and every extension type move; a reuse is `clone(&x)` where an
   instance exists.
-- No representation rule for the host. The interpreter copies today.
+- No representation rule for the host. The interpreter copies.
 - No `&mut String`, and no in-place string operation.
 
 ## Consequences

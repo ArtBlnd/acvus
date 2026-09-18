@@ -39,7 +39,7 @@ the variable.
 
 ## Rationale
 
-The three defects found on 2026-09-15 have one cause: the context was not
+Three defects found on 2026-09-15 have one cause: the context was not
 one variable. A lend of `@x` borrowed a temporary, so the borrow checker
 saw no borrow of `x` and an assign to `@x` during the lend was silently
 overwritten by the write-back. A call whose closure wrote `@x` was not a
@@ -47,13 +47,13 @@ touch of `x`, so the SSA pass forwarded a value across it and the caller
 read a stale constant. And the rule that a taken context be assigned back
 was a second rule for what is, on a variable, use-after-move.
 
-With `x` a variable, every one of those is caught by a rule that already
+With `x` a variable, each of those is caught by a rule that already
 exists for variables, and the page ops are confined to the four places
-where ownership actually changes hands. The bracket around a call is what
-makes the page the medium between bodies: a callee's `Fetch` finds the
-value because its caller committed it first. The summary that decides
-which calls are bracketed is inferred bottom-up over the call graph and
-rides in the function type (RFC-0017); no declaration is added.
+where ownership changes hands. The bracket around a call is what makes
+the page the medium between bodies: a callee's `Fetch` finds the value
+because its caller committed it first. The summary that decides which
+calls are bracketed is inferred bottom-up over the call graph and rides
+in the function type (RFC-0017); no declaration is added.
 
 ## Not built
 
@@ -68,13 +68,12 @@ rides in the function type (RFC-0017); no declaration is added.
 - No fetch of a context the body does not name. A context touched only by
   callees is committed and fetched by the callees.
 - No reference to a context in the IR. `RefTarget::Context` is gone; a
-  `Ref` targets a variable or a parameter.
+  `Ref` targets a variable, a parameter, or the storage a reference names.
 
 ## Consequences
 
 - `InstKind::Fetch { dst, context }` and `InstKind::Commit { context,
-  value }` replace `Take`/`Assign` on `RefTarget::Context`; `RefTarget` is
-  `Var | Param`.
+  value }` replace `Take`/`Assign` on `RefTarget::Context`.
 - Lowering pre-scans the body for the contexts it names (not those of
   nested lambdas, which are their own bodies), fetches them at entry into
   variable slots, commits them at every return, and brackets each call

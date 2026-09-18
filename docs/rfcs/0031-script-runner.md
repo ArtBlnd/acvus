@@ -31,10 +31,10 @@ error: no instance of the signature has the call type Fn(Deque<Int>) -> Int
 ```
 
 Parse, inference, lowering, and validation errors are all reported, all
-at once, in that shape; a runtime error is reported in the same shape at
-the instruction that failed, which is why a runtime error now carries its
-span. Exit status: 0 on success, 1 when compilation fails, 2 when the run
-fails, 64 for a usage error.
+at once, in that shape. A run-time failure is not a diagnostic: it is a
+panic, caught at the top of the process and printed as `error:
+<message>` with no span (RFC-0038). Exit status: 0 on success, 1 when
+compilation fails, 2 when the run fails, 64 for a usage error.
 
 The standard registries and `acvus-ext-net` are always registered; the
 LLM registries join with `--llm`, reading their keys from the
@@ -46,12 +46,12 @@ The pieces existed apart: the LSP turned errors into spans without lines,
 the MIR CLI took typed context declarations it had to invent a notation
 for, the test crate inferred context types from JSON and guessed where the
 data was silent, and a runtime error said what failed but not where. One
-runner with one diagnostic shape is what a script author sees first, and
+runner with one diagnostic shape is what a script author reads first, and
 the same rendering serves the LSP.
 
-Types from data keep the context file honest: what the script reads is
-what the file holds. The two places JSON cannot say what a value is are
-errors because a guessed type is a type the script did not ask for.
+The context's type is the data's type: what the script reads is what the
+file holds. The two places JSON cannot say what a value is are errors
+because a guessed type is a type the script did not ask for.
 
 ## Not built
 
@@ -66,6 +66,6 @@ errors because a guessed type is a type the script did not ask for.
 
 - `acvus-ast::report`: a line index over a source and the rendering of a
   diagnostic at a span, shared by the CLI and available to the LSP.
-- A run-time failure is a Rust panic and carries no span (RFC-0038); the
-  CLI catches it at its top and prints `error: <message>`.
+- The CLI wraps its `block_on` in `catch_unwind` and prints a run-time
+  panic as `error: <message>`.
 - `acvus-cli` is the crate; `acvus-mir-cli` is removed.

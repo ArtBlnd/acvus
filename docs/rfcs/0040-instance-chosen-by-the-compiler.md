@@ -34,12 +34,12 @@ the registries combine, so a frozen call type matches at most one.
 
 ## Rationale
 
-Until now the checker settled a choice and forgot which instance it had
+The checker settled a choice and did not keep which instance it had
 settled on; the interpreter recovered it at every call by matching the
 call's type against every instance's type, and a `Monomorphize` function
-never opened a choice at all — its members were matched only at run time.
-The fact was known at compile time and was recomputed, by a slower
-mechanism, at run time. Recording it is the whole change.
+opened no choice at all — its members were matched only at run time. The
+fact was known at compile time and was recomputed at run time, by type
+matching. Recording it is the whole change.
 
 A number, not a name. The instance is identified by its position in a
 list both sides hold; there is no mangled name because nothing links by

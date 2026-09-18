@@ -24,8 +24,9 @@ that does not name `R` anywhere has no `R` at all.
 
 ## Rationale
 
-Of the extern fns in this repository, 123 took `_: &R` and read nothing
-through it; 102 of those named `R` nowhere else and carried the
+Counted on the tree this RFC was written against (`b310358f`, 2026-09-16):
+of the extern fns in this repository, 123 took `_: &R` and read nothing
+through it, and 102 of those named `R` nowhere else and carried the
 generic and its bound for the parameter alone. A parameter a function
 must declare and may not use is the glue's convenience written into every
 signature. The glue knows whether it passed a runtime; the signature is

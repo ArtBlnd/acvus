@@ -32,15 +32,14 @@ registry at a time.
 
 ## Rationale
 
-The registry that grew with the extern system joined a declaration to
-its handler in one value, so a registry was generic over a runtime even
-where only its declarations were wanted; it registered one registry at a
-time into a type registry by side effect, so no place held all registries
-together, and the harness assembled the compiler's and the runtime's
-inputs by hand; and it accepted declarations two ways — an attribute that
-reads a Rust signature and a closure whose types a trait reads — so every
-consumer met both. Shared signatures need the one place where all
-registries meet, and one declaration form keeps that place simple.
+The previous registry joined a declaration to its handler in one value,
+so a registry was generic over a runtime even where only its declarations
+were wanted; it registered one registry at a time into a type registry by
+side effect, so no place held all registries together, and the harness
+assembled the compiler's and the runtime's inputs by hand; and it
+accepted declarations two ways — an attribute that reads a Rust signature
+and a closure whose types a trait reads — so every consumer met both.
+Shared signatures need one place where all registries meet.
 
 State is why the closure form existed. A parameter marked as state gives
 the same capability inside the one form: the body reads the state as an

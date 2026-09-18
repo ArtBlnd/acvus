@@ -34,6 +34,10 @@ reference value names; `reference` makes such a value. `call_0/1/n` run a
 closure value on owned arguments and are reachable only through
 `Fn0..Fn3::call`, whose token is theirs to mint.
 
+A type mismatch at the crossing is a compiler bug, not a runtime
+condition: the crossing panics rather than returning `Result`, and is
+declared `unsafe`.
+
 A container of a type variable — `List<T>`, `Arr<T, N>` — crosses whole
 as the Rust type it is at the call's resolved `T`: a `Monomorphize`
 instance per member type, and the runtime's value as the instance of last
@@ -47,14 +51,11 @@ nothing will run.
 RFC-0010 gave the runtime a constructor and an opener per value shape and
 a `Closure` type; RFC-0016 proposed views over the runtime's value to
 make containers cross for free. Both put knowledge of shapes on the
-boundary. Real monomorphization removed the reason for views: a
-`List<String>` is a `Vec<String>` on both sides of the crossing, so the
-crossing is a move of one Rust value and the contract needs only the pair
-that moves it. References (RFC-0018) added the only other thing a body can
-do with a value it does not own: read the storage it names.
-
-The `unsafe` on the crossing is honest: a type mismatch is a compiler bug,
-not a runtime condition, so it panics rather than returning `Result`.
+boundary. Monomorphization removes the reason for views: a `List<String>`
+is a `Vec<String>` on both sides of the crossing, so the crossing is a
+move of one Rust value and the contract needs only the pair that moves
+it. References (RFC-0018) add the only other thing a body can do with a
+value it does not own: read the storage it names.
 
 ## Not built
 

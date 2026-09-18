@@ -75,23 +75,23 @@ by value.
 
 ## Rationale
 
-The first version of this RFC declared `container::{len, get, get_mut,
-first, last}` as shared signatures with an instance per container. A
-shared signature is one generic handler per instance (`add_instance`), so
-a per-element `Monomorphize` function such as `contains` could not be an
-instance, and a signature's name was one function to the resolver, so
-`string::len` and the container `len` could not both exist. RFC-0043 made
-a bare name a set of signatures; with it, a plain function per namespace
-gives every container the same names, admits `Monomorphize` members, and
-leaves `core::` — `clone`, `eq`, `hash`, `to_string`, `to_int` — as the
-shared-signature mechanism it was built for: one operation every type
-answers, that a generic function asks for by name.
+These are plain functions per namespace rather than shared signatures
+under one `container::` name for two reasons. A shared signature is one
+generic handler per instance (`add_instance`), so a per-element
+`Monomorphize` function such as `contains` cannot be an instance; and a
+signature's name is one function to the resolver, so `string::len` and
+the container `len` cannot both exist. RFC-0043 made a bare name a set of
+signatures, which gives every container the same names, admits
+`Monomorphize` members, and leaves `core::` — `clone`, `eq`, `hash`,
+`to_string`, `to_int` — as the shared-signature mechanism it was built
+for: one operation every type answers, that a generic function asks for
+by name.
 
-`deque_get` once took the deque by value because an extern function had
-never returned a reference, and a body cannot copy an erased element; one
-element cost the whole container. The compiler ties a reference-typed
-result to the reference arguments it was built from, so returning the
-reference is the exact answer.
+An element is returned as a reference because a body cannot copy an
+erased element: taking the container by value, as `deque_get` did, costs
+the whole container for one element. The compiler ties a
+reference-typed result to the reference arguments it was built from, so
+the reference can be returned.
 
 `Ref<T>` was a phantom that named the type, and `Lent<T, Rt>` was the same
 type with the value attached; every use of the phantom stood where a

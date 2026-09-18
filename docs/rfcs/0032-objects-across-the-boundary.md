@@ -15,6 +15,11 @@ names and whose values are the fields crossed by their own types; out of
 the language an object is read the same way. A container of such structs
 — `List<T>`, `Array<T, N>`, `Option<T>` — converts each element.
 
+A scalar — `Int`, `Float`, `Bool`, `Byte`, `String`, `Unit` — converts as
+itself, so a container of scalars declared in Rust (`List<u8>`,
+`Option<String>`) crosses as the runtime's container of values, which is
+what a script's `List<Byte>` or `Option<String>` is.
+
 The language's object is the extern contract's `Obj<V>` at `V = Value`,
 as its array is `Arr<Value, ()>` (RFC-0022), so a handler that wants the
 object as the runtime holds it can take `Obj<Rt::Value>` as it is.
@@ -22,7 +27,8 @@ object as the runtime holds it can take `Obj<Rt::Value>` as it is.
 The runtime contract gains one method, `symbol(&str) -> Astr`: the name a
 field key is at run time. A crossing is chosen where the glue expands, as
 RFC-0022 chose it: a type with a `Repr` crosses as its shape, a type that
-converts crosses by conversion, any other crosses as it is.
+converts crosses by conversion, any other crosses as it is. RFC-0039
+replaced that choice with one `Cross` trait per type.
 
 ## Rationale
 
@@ -32,10 +38,10 @@ Rust value, and a script reading `.x` found no object. The LLM registry
 already returns `ChatResponse { content: List<OutputMessage>, .. }` and no
 script could read it.
 
-A conversion is honest where a `Repr` is not: the struct and the object
-are different layouts, so the crossing is O(fields), paid once per
-crossing, never on access. The three tiers keep RFC-0022's promise that a
-value with the runtime's own shape crosses for free.
+The struct and the object are different layouts, so the conversion is
+O(fields), paid once per crossing and never on access. A `Repr` states a
+shared layout, which these two do not have. The third tier is what leaves
+a value with the runtime's own shape crossing without conversion.
 
 ## Not built
 
@@ -47,11 +53,6 @@ value with the runtime's own shape crosses for free.
   no storage of its own type to read through, so such a parameter is a
   runtime error at the crossing until the boundary can lend a converted
   view.
-
-A scalar — `Int`, `Float`, `Bool`, `Byte`, `String`, `Unit` — converts as
-itself, so a container of scalars declared in Rust (`List<u8>`,
-`Option<String>`) crosses as the runtime's container of values, which is
-what a script's `List<Byte>` or `Option<String>` is.
 
 ## Consequences
 

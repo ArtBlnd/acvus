@@ -46,12 +46,11 @@ capture of a name that resolves to a reference (RFC-0018).
 
 ## Rationale
 
-The check ran after SSA promotion and missed nothing in practice only
-because promotion turned a slot that held a reference into the reference
-value; on the body as written, `r = &x; x = 2; *r` passed, since the walk
-that decides which holders are live counted value uses and not the read of
-`r`. A check that depends on an optimization to see a conflict is not a
-check of the source.
+The check ran after SSA promotion, where promotion had turned a slot
+holding a reference into the reference value. On the body as written,
+`r = &x; x = 2; *r` passed, because the walk that decides which holders
+are live counted value uses and not the read of `r`. A check that depends
+on an optimization to see a conflict is not a check of the source.
 
 A parameter of reference type had no loan, so nothing derived from it
 could conflict with anything: a lambda writing through its `&mut`
@@ -60,7 +59,7 @@ parameter while a reborrow of it was live was accepted.
 Typing `&r` as `&&T` while lowering it as a reborrow left the validator
 to reject the body the checker accepted. A reference is never data
 (RFC-0018); a reference to one would make the inner reference data, and
-nothing needs it: every use of `&r` wants what `r` names.
+every use of `&r` wants what `r` names.
 
 ## Not built
 

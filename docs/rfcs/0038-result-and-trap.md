@@ -59,16 +59,16 @@ A single error type for every failure is the generalization RFC-0036
 refused: a rate limit with a retry-after, a context overflow, a refused
 tool schema are different values with different next steps, and one
 `String` flattens them into a message the program can only print. Each
-extern fn declaring its own error enum keeps the failure space honest,
-and `?` with structural merge keeps that honesty cheap: the caller's
-error type is the union of what it called, written by the compiler.
+extern fn declares its own error enum, and `?` with structural merge
+writes the caller's error type as the union of what it called, so no
+caller declares that union.
 
 A trap is not returned as a value because it has no reader: the script
 cannot proceed from a contract the runtime broke. Every shape that
 carried it beside the value was measured and refused (RFC-0044): a
 `Result` ABI moves 72 bytes through memory per call, and a side slot
 costs a read per call and is a thread-local, which `wasm32` refuses.
-A panic costs nothing on the path that does not fail.
+A panic adds no instruction to the path that does not fail.
 
 ## Not built
 

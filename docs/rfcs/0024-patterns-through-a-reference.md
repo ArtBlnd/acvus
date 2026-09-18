@@ -26,9 +26,8 @@ source's, never the pattern's.
   with `opt` at `Some(None)` binds `v` to that `None` as a value. A
   reference to a `None` is that `None`: it owns nothing, it tests the
   same, and every op that reads a reference-typed option slot reads it
-  directly. That is `ops::storage::through`, which the tests through a
-  reference, `ref_through`, `ref_through_path`, `take_through` and
-  `take_through_path` all go through.
+  directly. In the interpreter that is `ops::variant::scrutinee`, which
+  the reference-reading ops of `ops::storage` all call.
 
 - **An open head.** The dimension is the source's, so a source whose type
   is still a variable where the pattern is written has no dimension yet.
@@ -59,8 +58,7 @@ source's dimension depend on what the pattern says.
 
 Binding `&Int` rather than copying the word is the price of one
 dimension; `*a` names the copy. Copying words through a reference and
-borrowing the rest would be a third rule keyed on the type, and the
-owner declined it.
+borrowing the rest would be a third rule keyed on the type.
 
 ## Not built
 
@@ -76,7 +74,7 @@ owner declined it.
   `let x = …;` introduces a binding that ends with the body, and `x = …;`
   assigns the binding the enclosing block introduced, which stays assigned
   after the match. `let out = 0.0; Some(v) = Some(1.5) { out = v; }; out`
-  is `1.5`, and the payload no longer has to leave through a context.
+  is `1.5`, and the payload does not have to leave through a context.
 
 - `PathSeg::{Field, Index, Payload}` replaces the field-name path of
   `Ref`/`Take`/`Assign`, so a reference can name an array element, a

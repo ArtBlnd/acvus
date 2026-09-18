@@ -40,16 +40,16 @@ large for one.
 
 ## Rationale
 
-Every wire schema counts something in `u32` or `u64` — tokens, retries,
+A wire schema counts things in `u32` or `u64` — tokens, retries,
 offsets — and a struct that carried them could not be one struct for the
 wire and the language while the language had one integer. Widening them
 to `i64` in the struct would have said the wire allows negative counts;
 it does not. Giving the language Rust's widths lets the struct say what
 the wire says, and the derive projects it without a conversion.
 
-A literal without a width of its own is what makes the widths usable
-from a script: `max_tokens: 1024` reads as a number, and the field's
-type decides what number. The alternative, a suffix on every literal
+A literal without a width of its own is what lets a script use the widths
+without naming them: `max_tokens: 1024` reads as a number, and the
+field's type decides which number. The alternative, a suffix on every literal
 that is not an `i64`, puts the type in the script where the struct
 already states it. Checking the value after the width is known, rather
 than at the literal, is what lets `300` be fine as an `i64` and an error

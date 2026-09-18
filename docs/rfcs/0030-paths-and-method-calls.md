@@ -34,9 +34,9 @@ enum name by looking, and the same expression means one thing in the
 checker and in the lowering.
 
 `len(&xs)`, `get(&d, 0).x`, `as_iter(&xs) | map(f) | collect` are the
-same calls a reader would write `xs.len()`, `d.get(0).x`,
-`xs.as_iter().map(f).collect()`; the only thing the method form adds is
-the reference the callee's own signature already asks for. Choosing the
+calls the method form writes as `xs.len()`, `d.get(0).x`,
+`xs.as_iter().map(f).collect()`; what the method form adds is the
+reference the callee's own signature already asks for. Choosing the
 receiver mode from the first parameter, as Rust does, keeps one rule for
 signatures with instances (RFC-0027), whose first parameter is `&C` or
 `C` before any argument is seen.

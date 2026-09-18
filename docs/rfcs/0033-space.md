@@ -34,25 +34,32 @@ element of an extension type, or inside an object, array, tuple, option,
 or enum that is. Its parent's bytes name it by its head; committing the
 parent walks the language shapes by type down to each nested value and
 commits it first, and a nested head that moved is a change of the parent,
-recorded as a new parent state. A log is therefore structural: `Deque<Deque<Int>>` is an
-outer chain whose nodes name inner chains, and a push into an inner deque
-is one op on the inner chain and one state on the outer.
+recorded as a new parent state. A log is therefore structural:
+`Deque<Deque<Int>>` is an outer chain whose nodes name inner chains, and a
+push into an inner deque is one op on the inner chain and one state on the
+outer.
 
 A space in `Plain` mode keeps no ops: every commit is a state node, so a
 host that wants only commit and restore has them from the same
 declaration.
 
+A run's page may sit over a space: a context is loaded from the space at
+the run's first fetch and every context the run held is committed when
+the host asks. `acvus run --space <dir>` runs over a directory store —
+`nodes/<hex>` for nodes, `heads/<id>.json` for a head and its type — and
+`acvus space <dir>` lists what the directory holds.
+
 ## Rationale
 
-The page could hand out final values but not say what they were, and a
-deque's whole value every run would make an append-only log O(n) in what
-should be O(change). Typing the layout removes the tag and the JSON; the
-op chain is what `Deque::record` already computed, given a place to land.
+The page could hand out final values but not say what they were, and
+committing a deque's whole value every run makes an append-only log O(n)
+where the change is O(1). Typing the layout removes the tag and the JSON;
+the op chain is what `Deque::record` already computed, given a place to
+land.
 
-Content addressing and compare-and-exchange are the store the owner ran
-before, and Irmin and Noms have shown that typed values under a git-like
-store carry the whole design; identity (RFC-0012) is what makes a head
-per context the natural unit, with no aliasing to reconcile inside a run.
+Content addressing and compare-and-exchange are the store the owner has
+run before. Identity (RFC-0012) is what makes a head per context the
+unit, with no aliasing to reconcile inside a run.
 
 `Deque`'s pops are tombstones on the log, not deletions of elements: a
 pop records that an item at that end is gone, never the item. The ops at
@@ -60,12 +67,6 @@ the two ends are counters, and a pop that would cross the other end's
 cursor is a conflict the replay detects rather than a value lost. A value
 pushed and popped within one run leaves no op: the final state is what
 the log reproduces, and the popped value is the caller's.
-
-A run's page may sit over a space: a context is loaded from the space at
-the run's first fetch and every context the run held is committed when
-the host asks. `acvus run --space <dir>` runs over a directory store —
-`nodes/<hex>` for nodes, `heads/<id>.json` for a head and its type — and
-`acvus space <dir>` lists what the directory holds.
 
 ## Not built
 

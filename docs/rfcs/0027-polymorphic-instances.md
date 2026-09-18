@@ -38,19 +38,20 @@ runtime runs it without looking at a type.
 ## Rationale
 
 RFC-0019 fixed an instance at one concrete type because `clone` and `eq`
-needed no more; iteration does. `List`, `Array`, and `Deque` each know how
-to yield their elements, and a script wants one name — `into_iter(xs)`,
-`as_iter(&xs)` — whatever the container, with the element type following
-from the container. Writing `iter_array`, `into_iter_array`, and a cast per
-container is the same fact written once per container per constructor.
+needed no more; iteration needs more. `List`, `Array`, and `Deque` each
+know how to yield their elements, and a script names one function —
+`into_iter(xs)`, `as_iter(&xs)` — whatever the container, with the
+element type following from the container. Writing `iter_array`,
+`into_iter_array`, and a cast per container is the same fact written once
+per container per constructor.
 
 The choice is resolved by exclusion, not by search: an instance is dropped
 only when the call's type already contradicts it, and the last one left is
-taken. This never guesses; a script that leaves the container open gets an
-unresolved-type error, as it would for any unresolved variable. Checking
-arguments left to right against the signature's type, and settling the
-choice after each, is what lets a lambda later in the argument list see the
-element type the container fixed.
+taken. A script that leaves the container open gets an unresolved-type
+error, as it would for any unresolved variable. Checking arguments left to
+right against the signature's type, and settling the choice after each, is
+what lets a lambda later in the argument list see the element type the
+container fixed.
 
 ## Not built
 

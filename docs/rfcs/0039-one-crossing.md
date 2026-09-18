@@ -28,11 +28,11 @@ macro expands; the type says how it crosses.
   converted container has no storage of its element type.
 - An `Option<T>` is its payload's value with no shape of its own:
   `Runtime::none()` is `None`, `Runtime::some(v)` is `Some(v)`, and
-  `is_none` and `unwrap_some` read them back. It costs no allocation and
+  `is_none` and `unwrap_some` read them back. It adds no allocation and
   no indirection. `Cross for Option<T>` is those four calls over `T`'s
   own crossing and nothing else — no static type, no marker, no
   `TypeId` — so a handler at `T = Rt::Value`, which has no type to
-  consult, is correct by construction. The runtime holds the two apart
+  consult, crosses by the same four calls. The runtime holds the two apart
   however it likes; the interpreter gives a `None` a word that counts the
   `Some`s around it, so `Some(Some(None))` is one word at depth two and
   `Some(v)` for any other `v` is `v`. No storage is shaped like an
@@ -52,10 +52,9 @@ the instantiation: inside `erase_field<T>` the compiler never saw
 `T: Cross`, so a derived struct nested in another crossed as an opaque
 Rust value, and `Result<Regex, E>` — whose `Cross` impl demanded
 `T: Cross` of a type that had none — fell to the as-is tier as a whole.
-Both surfaced on 2026-09-16, one from each side of the same seam. A
-single trait that every boundary type implements makes the element's
-crossing a bound the compiler checks, and puts the choice where the type
-is declared.
+Both surfaced on 2026-09-16. A single trait that every boundary type
+implements makes the element's crossing a bound the compiler checks, and
+puts the choice where the type is declared.
 
 Storing an extension type as its payload is what RFC-0022 meant by
 `Repr`, applied uniformly: the phantoms are the checker's, the payload is

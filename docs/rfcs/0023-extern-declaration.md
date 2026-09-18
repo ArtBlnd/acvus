@@ -43,11 +43,12 @@ effect, length, or identity argument is fixed.
 ## Rationale
 
 RFC-0009 named the interner as the first parameter and made `TyVar` a
-conversion pair; the runtime contract (RFC-0022) made the first parameter
-the runtime and the crossing a pair of unsafe functions on it, and
-references (RFC-0018) made `&T` a type of its own. The declaration form
-follows those rulings and adds nothing beyond them: state (RFC-0021) and
-instances (RFC-0019) are attributes on the same form, not second forms.
+conversion pair. The runtime contract (RFC-0022) makes the first
+parameter the runtime and the crossing a pair of unsafe functions on it,
+and references (RFC-0018) make `&T` a type of its own. This declaration
+form follows those rulings and adds nothing beyond them: state
+(RFC-0021) and instances (RFC-0019) are attributes on the same form, not
+second forms.
 
 ## Not built
 
