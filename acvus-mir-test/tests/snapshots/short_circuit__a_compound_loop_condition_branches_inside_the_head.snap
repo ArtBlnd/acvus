@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/short_circuit.rs
-assertion_line: 44
 expression: ir
 ---
 === main ===
@@ -9,20 +8,18 @@ expression: ir
      3 |   jump L0(0 (r2))
      4 | L0(r3: i64):
      5 |   r4 = r3 < r1
-     6 |   jump_if r4 then L3 else L4
-     7 | L3:
-     8 |   jump L5(r0)
-     9 | L4:
-    11 |   jump L5(false (r5))
-    12 | L5(r6: Bool):
-    13 |   jump_if r6 then L1 else L2
-    14 | L1:
-    16 |   r7 = r3 + 1 (r8)
-    17 |   jump L0(r7)
-    18 | L2:
-    19 |   commit @a = r0
-    20 |   commit @max = r1
-    21 |   return r3
+     6 |   jump_if r4 then L5(r0) else L4
+     7 | L4:
+     9 |   jump L5(false (r5))
+    10 | L5(r6: Bool):
+    11 |   jump_if r6 then L1 else L2
+    12 | L1:
+    14 |   r7 = r3 + 1 (r8)
+    15 |   jump L0(r7)
+    16 | L2:
+    17 |   commit @a = r0
+    18 |   commit @max = r1
+    19 |   return r3
 
     ; r0 (@a) : Bool
     ; r1 (@max) : i64

@@ -52,8 +52,6 @@ fn a_match_over_a_locally_closed_enum_needs_no_catch_all() {
         !raw.contains("_ -> "),
         "no catch-all was written, so the Switch has no default: {raw}"
     );
-    // `switch_expand` leaves the chain the machine runs today: one test per
-    // arm but the last, which is the chain's else.
     let optimized = compile_script_optimized(&i, &source, &flag(&i)).unwrap();
     assert!(!optimized.contains("switch "), "{optimized}");
     assert!(
@@ -67,8 +65,8 @@ fn a_match_over_a_locally_closed_enum_needs_no_catch_all() {
     );
     assert_eq!(
         optimized.matches("jump_if").count(),
-        2,
-        "one branch chooses the constructor and one tag test chooses the arm: {optimized}"
+        1,
+        "the branch that chooses the constructor is the one that chooses the arm: {optimized}"
     );
 }
 

@@ -127,9 +127,10 @@ acc = acc + picked; i = i + one; } acc";
     assert_eq!(answer(source, 100).await, 114);
 }
 
-/// Three arms is three edges, above the two `optimize::sroa::dispatch_for`
-/// covers, so the enum stays built and the machine's own dispatch reads its
-/// tag — inside a loop, where `bf table` reads it too.
+/// This scrutinee is a join of a join, which `optimize::sroa` does not
+/// take apart, so the enum reaches the machine and its own dispatch reads
+/// the tag. Scalar replacement learning this shape would leave the test
+/// running arithmetic and `ops::switch` unexercised in a loop.
 #[tokio::test]
 async fn a_match_inside_a_loop_reaches_every_arm_in_turn() {
     let source = "\
@@ -142,6 +143,51 @@ i = i + 1; } acc";
     // 1 + 4 + 9 over three iterations, then 1 + 4 for the two that follow.
     assert_eq!(answer(source, 3).await, 14);
     assert_eq!(answer(source, 5).await, 19);
+}
+
+/// The arms scale their payload differently so that an edge which reached
+/// the wrong one changes the sum; arms that all computed `acc + v` would
+/// answer the same whatever the dispatch did.
+#[tokio::test]
+async fn a_threaded_two_armed_match_reaches_the_arm_its_edge_names() {
+    let source = "\
+let acc = 0; let i = 0; \
+while i < @n { \
+let e = if i % 2 == 0 { E::A(i) } else { E::B(i + 1) }; \
+match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v * 2; } }; \
+i = i + 1; } acc";
+    // i even adds i, i odd adds twice i + 1: 0, 4, 2, 8, 4, 12.
+    assert_eq!(answer(source, 5).await, 18);
+    assert_eq!(answer(source, 6).await, 30);
+}
+
+#[tokio::test]
+async fn a_threaded_three_armed_match_reaches_the_arm_its_edge_names() {
+    let source = "\
+let acc = 0; let i = 0; \
+while i < @n { \
+let e = match i % 3 { 0 => E::A(i), 1 => E::B(i + 1), _ => E::C(i + 2) }; \
+match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v * 2; }, \
+E::C(v) => { acc = acc + v * 3; } }; \
+i = i + 1; } acc";
+    // i, twice i + 1, three times i + 2, by i % 3: 0, 4, 12, 3, 10, 21.
+    assert_eq!(answer(source, 3).await, 16);
+    assert_eq!(answer(source, 6).await, 50);
+}
+
+/// Two of the three edges carry a tag no arm names, and each of those is
+/// threaded to the `default` its tag selects.
+#[tokio::test]
+async fn a_threaded_edge_whose_tag_no_arm_names_reaches_the_catch_all() {
+    let source = "\
+let acc = 0; let i = 0; \
+while i < @n { \
+let e = match i % 3 { 0 => E::A(i), 1 => E::B(i + 1), _ => E::C(i + 2) }; \
+match e { E::A(v) => { acc = acc + v; }, _ => { acc = acc + 99; } }; \
+i = i + 1; } acc";
+    // i when i % 3 is zero, 99 otherwise: 0, 99, 99, 3, 99, 99.
+    assert_eq!(answer(source, 3).await, 198);
+    assert_eq!(answer(source, 6).await, 399);
 }
 
 #[tokio::test]

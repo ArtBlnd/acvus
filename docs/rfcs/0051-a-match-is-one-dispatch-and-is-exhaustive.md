@@ -190,13 +190,32 @@ for the same reason. `field read`, `field write`, `construct`, `option match`,
 `vec of objects` and every case of `benches/accum.rs` — `grade`, `branch`,
 `collatz` among them — are unchanged.
 
-`enum match` does not move, and its prepared listing is byte-identical to
-`b8b9e845`'s: RFC-0053 had already removed the enum, so no `Switch` reaches
-the machine there. What is left is the compare at the merge that RFC-0053's
-own Consequences names — the tag is a constant on each incoming edge, and
-reaching the arm directly on each edge is jump threading through the phi. No
-`dce` or `fold` rule does that today, and it is the next to-be, not this
-one.
+`enum match` does not move here, and its prepared listing is byte-identical
+to `b8b9e845`'s: RFC-0053 had already removed the enum, so no `Switch`
+reaches the machine there.
+
+Rule 4 — a dispatch whose tag is one constant is a `Goto` — has its path in
+`optimize::sroa`, which is the only place that can take it: after scalar
+replacement a tag is a numeric register, and no IR form hands a numeric tag
+phi to a later pass. `sroa::reaching_tags` settles the tag at the end of
+every block, and `sroa::thread` rewrites the graph before the SSA builder
+reads it. A dispatch whose own tag is settled becomes `Terminator::Jump`;
+otherwise each incoming edge whose tag is settled leaves for its arm
+directly, and the dispatch block, once no edge is left, is one no path
+reaches. `sroa::dispatch_for` accepts a dispatch of any width, because a
+threaded edge needs no compare; a dispatch that keeps an edge whose tag is
+not settled still needs one, and for three or more edges that chain is not
+built, so such a slot keeps its aggregate and the machine's own `Switch`
+reads its tag.
+
+Rule 4 pays only together with `optimize::forward`, which runs after
+`code_motion` in pass 2: a threaded arm, once the sink has lifted its body
+into the branch that selected it, is a block holding one `Nop` and a
+`Jump`, and `prepare::recognize_diamond` refuses a forwarder between arm
+and join. Threading alone runs `enum match` at 16.8 ns against 9.9 at
+`c2116d3f`; with the collapse it is 6.0 / 6.1, one `Diamond` and four body
+operations where base had two and six. RFC-0053's Consequences carries the
+measurement.
 
 **Not decided here**: a `match` whose arms are not one dispatch over a tag
 (a literal arm, a nested refutable payload) has no `Switch` to read, so

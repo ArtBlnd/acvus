@@ -193,6 +193,49 @@ async fn a_short_circuit_condition_leaves_the_while_recognizable() {
     );
 }
 
+/// `benches/shapes.rs`'s `enum match`. `optimize::sroa` threads each
+/// constant tag straight to its arm, `code_motion` sinks the arm's `acc + v`
+/// into the branch that selected it, and `optimize::forward` gives the
+/// branch the arm's edge -- so what reaches the recognizer is the one
+/// diamond the `if` wrote, and the tag test is not an operation at all.
+#[tokio::test]
+async fn a_threaded_matchs_arms_leave_one_diamond_in_the_loop() {
+    let source = "let acc = 0; let i = 0; while i < @n { \
+         let e = if i % 2 == 0 { E::A(i) } else { E::B(i + 1) }; \
+         match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v; } }; \
+         i = i + 1; } acc";
+    let i = Interner::new();
+    let v = run_script(&i, source, int_context(&i, "n", 6), Ty::I64).await;
+    assert_eq!(v.as_int(), 18);
+
+    let interner = Interner::new();
+    let listing = script_listing(&interner, source, int_context(&interner, "n", 6), Ty::I64);
+    assert_eq!(
+        ops_of_anywhere(&listing)
+            .iter()
+            .filter(|name| family_of(name) == "Loop")
+            .count(),
+        1
+    );
+    let diamonds = regions_named(&listing, "Diamond");
+    assert_eq!(
+        diamonds.len(),
+        1,
+        "the tag test is gone with the arm blocks"
+    );
+    for part in ["on_true", "on_false"] {
+        assert_eq!(
+            diamonds[0]
+                .part(part)
+                .expect("a diamond holds both arms")
+                .ops
+                .len(),
+            1,
+            "{part} is the one sum the arm computes"
+        );
+    }
+}
+
 #[tokio::test]
 async fn an_or_condition_is_the_same_diamond() {
     let source = "let n = 0; let acc = 0; while n < 3 || acc < 20 { acc = acc + n; n = n + 1; } n";

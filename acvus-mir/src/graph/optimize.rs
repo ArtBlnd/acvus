@@ -122,6 +122,10 @@ fn run_pass2(cfg: &mut CfgBody) {
     // header and leaves the preheader a block of its own; before the
     // reorder, which schedules within a block.
     optimize::lsr::run(cfg);
+    // A block that only jumps is its target: after `lsr`, which writes a
+    // reduction into the preheader `code_motion` may have left empty;
+    // before `reorder`, which schedules within a block.
+    optimize::forward::run(cfg);
     optimize::reorder::run(cfg);
     debug_validate(cfg);
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());

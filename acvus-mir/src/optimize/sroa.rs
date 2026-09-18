@@ -13,6 +13,10 @@
 //! branch gets its block parameter from the machinery a whole variable
 //! uses.
 //!
+//! Jump threading lives here rather than in a pass of its own because
+//! after this pass a tag is a numeric register, and no IR form hands a
+//! numeric tag phi to a later pass to thread.
+//!
 //! The pass runs before `ssa_pass` in pass 2 and so before
 //! `drop_insertion`, which is the only writer of `InstKind::Drop`. A slot
 //! this pass sees therefore has no `Drop` yet, and the drops that a
@@ -29,6 +33,7 @@ use smallvec::SmallVec;
 
 use super::ssa::{ENTRY_BLOCK, Part, SSABuilder, SsaVar};
 use super::ssa_pass::{apply_subst, apply_subst_terminator, patch_instructions};
+use crate::analysis::domtree::DomTree;
 use crate::analysis::{escape, inst_info};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, PathSeg, RefTarget, ValueId};
@@ -79,21 +84,69 @@ struct Edge {
     args: Vec<ValueId>,
 }
 
-/// A `Switch` (RFC-0051) over a slot this pass replaces. The enum is gone
-/// by the time the dispatch runs, so there is no tag in a value to read:
-/// what is left is the tag register, and the dispatch is one compare
-/// against the number `tag` stands for.
-///
-/// Only a two-edged dispatch is covered, because a chain over three or more
-/// would need blocks this pass does not make; `classify` refuses the slot
-/// for any other, which leaves the enum built and the machine's own
-/// `ops::switch` reading its tag.
+#[derive(Debug, Clone)]
+struct Arm {
+    tag: Astr,
+    edge: Edge,
+}
+
+/// A `Switch` (RFC-0051) over a slot this pass replaces, of any width.
 #[derive(Debug, Clone)]
 struct Dispatch {
+    slot: ValueId,
+    arms: Vec<Arm>,
+    default: Option<Edge>,
+}
+
+impl Dispatch {
+    /// `None` is a tag no arm names in a `Switch` without a `default`,
+    /// which is a path `validate::exhaustive` has already ruled out.
+    fn edge_for(&self, tag: Astr) -> Option<&Edge> {
+        self.arms
+            .iter()
+            .find(|arm| arm.tag == tag)
+            .map(|arm| &arm.edge)
+            .or(self.default.as_ref())
+    }
+}
+
+/// A dispatch of three or more edges has no compare form here -- the chain
+/// would need blocks this pass does not make, and building them would put a
+/// second block layout next to the one `lower` already emits. A slot whose
+/// dispatch is neither threaded nor two-edged keeps its aggregate instead,
+/// and the machine's own `ops::switch` reads its tag.
+#[derive(Debug, Clone)]
+struct Compare {
     slot: ValueId,
     tag: Astr,
     taken: Edge,
     fallen: Edge,
+}
+
+/// One argument of a threaded jump, read against the arguments that jump
+/// already carried to the dispatch block.
+#[derive(Debug, Clone, Copy)]
+enum Carry {
+    Arg(usize),
+    Value(ValueId),
+}
+
+#[derive(Debug, Clone)]
+struct Threaded {
+    pred: BlockIdx,
+    to: Label,
+    carry: Vec<Carry>,
+}
+
+#[derive(Debug, Clone)]
+enum Decision {
+    /// RFC-0051 rule 4.
+    Jump(Edge),
+    Thread {
+        edges: Vec<Threaded>,
+        unthreaded: Option<Compare>,
+    },
+    Compare(Compare),
 }
 
 /// A define that belongs at the end of a block other than the one whose
@@ -124,6 +177,7 @@ struct Plan {
     /// The `Switch` each block ends in, where this pass replaces the slot
     /// it reads.
     dispatches: Vec<Option<Dispatch>>,
+    decisions: Vec<Option<Decision>>,
 }
 
 fn plan(cfg: &CfgBody) -> Option<Plan> {
@@ -174,6 +228,7 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
         actions: vec![FxHashMap::default(); cfg.blocks.len()],
         tails: vec![Vec::new(); cfg.blocks.len()],
         dispatches: vec![None; cfg.blocks.len()],
+        decisions: vec![None; cfg.blocks.len()],
     };
     // Refusing a slot invalidates the actions already recorded for it, so
     // the walk starts over until it refuses nothing. Each round refuses at
@@ -182,7 +237,11 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
         plan.actions.iter_mut().for_each(|a| a.clear());
         plan.tails.iter_mut().for_each(|t| t.clear());
         plan.dispatches.iter_mut().for_each(|d| *d = None);
-        let refused = classify(cfg, &aliases, &mut plan);
+        plan.decisions.iter_mut().for_each(|d| *d = None);
+        let mut refused = classify(cfg, &aliases, &mut plan);
+        if refused.is_empty() {
+            refused = decide(cfg, &mut plan);
+        }
         if refused.is_empty() {
             break;
         }
@@ -239,35 +298,268 @@ fn classify(cfg: &CfgBody, aliases: &FxHashMap<ValueId, ValueId>, plan: &mut Pla
     refused
 }
 
-/// The compare a two-edged `Switch` over a replaced slot becomes, or `None`
-/// where this pass keeps the aggregate instead: a dispatch of three or more
-/// edges, or one whose tag this shape does not number.
+/// The `Switch` over a replaced slot, of any width, or `None` where an arm
+/// names a tag this shape does not number.
 fn dispatch_for(
     shape: &Shape,
     slot: ValueId,
     arms: &[(Astr, Label, Vec<ValueId>)],
     default: Option<&(Label, Vec<ValueId>)>,
 ) -> Option<Dispatch> {
-    let edge = |(label, args): (&Label, &Vec<ValueId>)| Edge {
+    let edge = |label: &Label, args: &Vec<ValueId>| Edge {
         label: *label,
         args: args.clone(),
     };
-    let (tag, taken, fallen) = match (arms, default) {
-        ([(tag, label, args)], Some(other)) => {
-            (*tag, edge((label, args)), edge((&other.0, &other.1)))
-        }
-        ([(tag, label, args), (_, other_label, other_args)], None) => {
-            (*tag, edge((label, args)), edge((other_label, other_args)))
-        }
-        _ => return None,
-    };
-    shape.tags.contains_key(&tag).then_some(())?;
+    arms.iter()
+        .all(|(tag, _, _)| shape.tags.contains_key(tag))
+        .then_some(())?;
     Some(Dispatch {
         slot,
-        tag,
-        taken,
-        fallen,
+        arms: arms
+            .iter()
+            .map(|(tag, label, args)| Arm {
+                tag: *tag,
+                edge: edge(label, args),
+            })
+            .collect(),
+        default: default.map(|(label, args)| edge(label, args)),
     })
+}
+
+// -- Step 1b: which dispatches a known tag threads ------------------
+
+/// The tags that reach a point: `None` before any predecessor has been
+/// read, `Many` where two edges disagree or the part is still the entry
+/// `Undef`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reaching {
+    None,
+    One(Astr),
+    Many,
+}
+
+impl Reaching {
+    fn meet(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::None, seen) | (seen, Self::None) => seen,
+            (Self::One(a), Self::One(b)) if a == b => Self::One(a),
+            _ => Self::Many,
+        }
+    }
+}
+
+/// The tag `slot` holds at the end of each block: the last variant this
+/// plan writes there, or what its predecessors agree on. The entry block
+/// starts at `Many` because a part begins at `Undef`, which stands for no
+/// tag at all.
+fn reaching_tags(
+    cfg: &CfgBody,
+    plan: &Plan,
+    preds: &FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
+    slot: ValueId,
+) -> Vec<Reaching> {
+    let written: Vec<Option<Astr>> = (0..cfg.blocks.len())
+        .map(|bi| written_tag(plan, bi, slot))
+        .collect();
+    let mut out = vec![Reaching::None; cfg.blocks.len()];
+    let mut moved = true;
+    while moved {
+        moved = false;
+        for bi in 0..cfg.blocks.len() {
+            let entering = match bi {
+                0 => Reaching::Many,
+                _ => preds
+                    .get(&BlockIdx(bi))
+                    .into_iter()
+                    .flatten()
+                    .fold(Reaching::None, |seen, pred| seen.meet(out[pred.0])),
+            };
+            let leaving = written[bi].map_or(entering, Reaching::One);
+            if leaving != out[bi] {
+                out[bi] = leaving;
+                moved = true;
+            }
+        }
+    }
+    out
+}
+
+/// The tag the last `DefineVariant` of this block writes into `slot`. A
+/// tail is written after every instruction of the block, so it wins.
+fn written_tag(plan: &Plan, bi: usize, slot: ValueId) -> Option<Astr> {
+    let tag_of = |action: &Action| match action {
+        Action::DefineVariant { slot: at, tag, .. } if *at == slot => Some(*tag),
+        _ => None,
+    };
+    plan.tails[bi].iter().rev().find_map(tag_of).or_else(|| {
+        plan.actions[bi]
+            .iter()
+            .filter_map(|(ii, action)| tag_of(action).map(|tag| (*ii, tag)))
+            .max_by_key(|(ii, _)| *ii)
+            .map(|(_, tag)| tag)
+    })
+}
+
+/// The graph a threading decision reads: which blocks precede a block, and
+/// whether a register reaches one.
+struct Reachability<'a> {
+    cfg: &'a CfgBody,
+    preds: FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
+    domtree: DomTree,
+    /// Where each register an instruction defines is defined. A parameter, a
+    /// capture and a block parameter are absent: each reaches every block a
+    /// walk from the entry passes.
+    defs: FxHashMap<ValueId, BlockIdx>,
+}
+
+impl<'a> Reachability<'a> {
+    fn of(cfg: &'a CfgBody) -> Self {
+        Self {
+            cfg,
+            preds: cfg.predecessors(),
+            domtree: DomTree::build(cfg),
+            defs: cfg
+                .blocks
+                .iter()
+                .enumerate()
+                .flat_map(|(bi, block)| {
+                    block
+                        .insts
+                        .iter()
+                        .flat_map(|inst| inst_info::defs(&inst.kind))
+                        .map(move |dst| (dst, BlockIdx(bi)))
+                })
+                .collect(),
+        }
+    }
+
+    fn preds_of(&self, at: BlockIdx) -> &[BlockIdx] {
+        self.preds.get(&at).map_or(&[], |preds| preds.as_slice())
+    }
+
+    fn reaches(&self, value: ValueId, at: BlockIdx) -> bool {
+        self.defs
+            .get(&value)
+            .is_none_or(|def| self.domtree.dominates(*def, at))
+    }
+}
+
+/// What each dispatch becomes, with every slot whose dispatch has no form
+/// this pass can write.
+fn decide(cfg: &CfgBody, plan: &mut Plan) -> Vec<ValueId> {
+    let graph = Reachability::of(cfg);
+    let mut cache: FxHashMap<ValueId, Vec<Reaching>> = FxHashMap::default();
+    let mut decisions: Vec<Option<Decision>> = vec![None; cfg.blocks.len()];
+    let mut refused = Vec::new();
+    for bi in 0..cfg.blocks.len() {
+        let Some(dispatch) = plan.dispatches[bi].clone() else {
+            continue;
+        };
+        let tags = cache
+            .entry(dispatch.slot)
+            .or_insert_with(|| reaching_tags(cfg, plan, &graph.preds, dispatch.slot));
+        match decide_one(&graph, plan, &dispatch, tags, BlockIdx(bi)) {
+            Some(decision) => decisions[bi] = Some(decision),
+            None => refused.push(dispatch.slot),
+        }
+    }
+    plan.decisions = decisions;
+    refused
+}
+
+fn decide_one(
+    graph: &Reachability<'_>,
+    plan: &Plan,
+    dispatch: &Dispatch,
+    tags: &[Reaching],
+    at: BlockIdx,
+) -> Option<Decision> {
+    if let Reaching::One(tag) = tags[at.0]
+        && let Some(edge) = dispatch.edge_for(tag)
+    {
+        return Some(Decision::Jump(edge.clone()));
+    }
+    let open = threadable(graph.cfg, plan, dispatch, at);
+    let mut edges = Vec::new();
+    let mut left = 0usize;
+    for pred in graph.preds_of(at) {
+        let threaded = match (open, tags[pred.0]) {
+            (true, Reaching::One(tag)) => dispatch
+                .edge_for(tag)
+                .and_then(|edge| thread_one(graph, edge, at, *pred)),
+            _ => None,
+        };
+        match threaded {
+            Some(threaded) => edges.push(threaded),
+            None => left += 1,
+        }
+    }
+    let unthreaded = match left {
+        0 => None,
+        _ => Some(compare_of(dispatch)?),
+    };
+    match (edges.is_empty(), unthreaded) {
+        (true, Some(compare)) => Some(Decision::Compare(compare)),
+        (_, unthreaded) => Some(Decision::Thread { edges, unthreaded }),
+    }
+}
+
+/// A predecessor may leave for an arm only where the dispatch block runs
+/// nothing of its own: every instruction it holds is one this pass deletes,
+/// so the path that skips the block skips nothing.
+fn threadable(cfg: &CfgBody, plan: &Plan, dispatch: &Dispatch, at: BlockIdx) -> bool {
+    let block = &cfg.blocks[at.0];
+    let deleted = plan.actions[at.0].len() == block.insts.len()
+        && plan.actions[at.0]
+            .values()
+            .all(|action| matches!(action, Action::Gone))
+        && plan.tails[at.0].is_empty();
+    let mut targets = dispatch
+        .arms
+        .iter()
+        .map(|arm| &arm.edge)
+        .chain(dispatch.default.iter());
+    deleted
+        && targets
+            .all(|edge| edge.label != block.label && cfg.label_to_block.contains_key(&edge.label))
+}
+
+/// The arguments the threaded jump carries, or `None` where one of them is
+/// a value that does not reach `pred`.
+fn thread_one(
+    graph: &Reachability<'_>,
+    edge: &Edge,
+    at: BlockIdx,
+    pred: BlockIdx,
+) -> Option<Threaded> {
+    let params = &graph.cfg.blocks[at.0].params;
+    let carry = edge
+        .args
+        .iter()
+        .map(|arg| match params.iter().position(|param| param == arg) {
+            Some(index) => Some(Carry::Arg(index)),
+            None => graph.reaches(*arg, pred).then_some(Carry::Value(*arg)),
+        })
+        .collect::<Option<Vec<Carry>>>()?;
+    Some(Threaded {
+        pred,
+        to: edge.label,
+        carry,
+    })
+}
+
+fn compare_of(dispatch: &Dispatch) -> Option<Compare> {
+    let compare = |tag: Astr, taken: &Edge, fallen: &Edge| Compare {
+        slot: dispatch.slot,
+        tag,
+        taken: taken.clone(),
+        fallen: fallen.clone(),
+    };
+    match (dispatch.arms.as_slice(), &dispatch.default) {
+        ([one], Some(other)) => Some(compare(one.tag, &one.edge, other)),
+        ([one, other], None) => Some(compare(one.tag, &one.edge, &other.edge)),
+        _ => None,
+    }
 }
 
 /// The action that replaces `kind`, or `None` when no rule covers the way
@@ -532,7 +824,120 @@ fn incoming(term: &Terminator, label: Label) -> Vec<&Vec<ValueId>> {
     }
 }
 
-// -- Step 2: run the SSA builder over the parts ---------------------
+// -- Step 2: thread the jumps a known tag settles -------------------
+
+/// The graph the SSA builder then reads. A predecessor whose tag is a
+/// constant leaves for its arm here, so the phi the builder places in that
+/// arm stands for the edges the arm actually has, and the join the dispatch
+/// used to be is one no path reaches.
+fn thread(cfg: &mut CfgBody, plan: &Plan) -> Vec<bool> {
+    for bi in 0..cfg.blocks.len() {
+        if let Some(Decision::Jump(edge)) = &plan.decisions[bi] {
+            cfg.blocks[bi].terminator = Terminator::Jump {
+                label: edge.label,
+                args: edge.args.clone(),
+            };
+        }
+    }
+    for bi in 0..cfg.blocks.len() {
+        let Some(Decision::Thread { edges, .. }) = &plan.decisions[bi] else {
+            continue;
+        };
+        let from = cfg.blocks[bi].label;
+        for threaded in edges {
+            retarget(&mut cfg.blocks[threaded.pred.0].terminator, from, threaded);
+        }
+    }
+    let alive = reachable(cfg);
+    for (block, alive) in cfg.blocks.iter_mut().zip(&alive) {
+        if !alive {
+            block.insts.clear();
+            block.terminator = Terminator::Diverge;
+        }
+    }
+    alive
+}
+
+fn retarget(term: &mut Terminator, from: Label, threaded: &Threaded) {
+    let leave = |label: &mut Label, args: &mut Vec<ValueId>| {
+        if *label != from {
+            return;
+        }
+        *args = threaded
+            .carry
+            .iter()
+            .map(|carry| match carry {
+                Carry::Arg(index) => *args
+                    .get(*index)
+                    .expect("a jump carries one argument per block parameter"),
+                Carry::Value(value) => *value,
+            })
+            .collect();
+        *label = threaded.to;
+    };
+    match term {
+        Terminator::Jump { label, args } => leave(label, args),
+        Terminator::JumpIf {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        } => {
+            leave(then_label, then_args);
+            leave(else_label, else_args);
+        }
+        Terminator::Switch { arms, default, .. } => {
+            for (_, label, args) in arms {
+                leave(label, args);
+            }
+            if let Some((label, args)) = default {
+                leave(label, args);
+            }
+        }
+        Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}
+    }
+}
+
+fn reachable(cfg: &CfgBody) -> Vec<bool> {
+    let mut seen = vec![false; cfg.blocks.len()];
+    let mut work = vec![BlockIdx(0)];
+    while let Some(at) = work.pop() {
+        if std::mem::replace(&mut seen[at.0], true) {
+            continue;
+        }
+        work.extend(cfg.successors(at));
+    }
+    seen
+}
+
+fn prune(cfg: &mut CfgBody, alive: &[bool]) {
+    if alive.iter().all(|alive| *alive) {
+        return;
+    }
+    let mut bi = 0;
+    cfg.blocks.retain(|_| {
+        let keep = alive[bi];
+        bi += 1;
+        keep
+    });
+    cfg.label_to_block = cfg
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(bi, block)| (block.label, BlockIdx(bi)))
+        .collect();
+}
+
+fn kept_compare(decision: &Option<Decision>) -> Option<&Compare> {
+    match decision {
+        Some(Decision::Compare(compare)) => Some(compare),
+        Some(Decision::Thread { unthreaded, .. }) => unthreaded.as_ref(),
+        Some(Decision::Jump(_)) | None => None,
+    }
+}
+
+// -- Step 3: run the SSA builder over the parts ---------------------
 
 /// The SSA construction in progress, with the two tables every new register
 /// is born into and the block being rewritten.
@@ -547,6 +952,7 @@ struct Rewriter<'a> {
 }
 
 fn rewrite(cfg: &mut CfgBody, plan: Plan) {
+    let alive = thread(cfg, &plan);
     let preds = cfg.predecessors();
     let successors: Vec<SmallVec<[BlockIdx; 2]>> = (0..cfg.blocks.len())
         .map(|i| cfg.successors(BlockIdx(i)))
@@ -600,6 +1006,9 @@ fn rewrite(cfg: &mut CfgBody, plan: Plan) {
         .collect();
 
     for (bi, insts) in old.into_iter().enumerate() {
+        if !alive[bi] {
+            continue;
+        }
         let label = labels[bi];
         if bi > 0 && !loop_headers.contains(&BlockIdx(bi)) {
             rw.seal(label);
@@ -624,14 +1033,14 @@ fn rewrite(cfg: &mut CfgBody, plan: Plan) {
         // The dispatch reads the tag after every define of this block, so
         // it is written where a tail action is written and for the same
         // reason.
-        if let Some(dispatch) = &plan.dispatches[bi] {
-            let cond = rw.compare(dispatch.slot, dispatch.tag, Span::ZERO, label);
+        if let Some(compare) = kept_compare(&plan.decisions[bi]) {
+            let cond = rw.compare(compare.slot, compare.tag, Span::ZERO, label);
             blocks[bi].terminator = Terminator::JumpIf {
                 cond,
-                then_label: dispatch.taken.label,
-                then_args: dispatch.taken.args.clone(),
-                else_label: dispatch.fallen.label,
-                else_args: dispatch.fallen.args.clone(),
+                then_label: compare.taken.label,
+                then_args: compare.taken.args.clone(),
+                else_label: compare.fallen.label,
+                else_args: compare.fallen.args.clone(),
             };
         }
         blocks[bi].insts = std::mem::take(&mut rw.out);
@@ -661,6 +1070,7 @@ fn rewrite(cfg: &mut CfgBody, plan: Plan) {
         }
         apply_subst_terminator(&mut block.terminator, &subst);
     }
+    prune(cfg, &alive);
 }
 
 impl Rewriter<'_> {

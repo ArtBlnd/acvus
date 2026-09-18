@@ -1,20 +1,17 @@
 ---
 source: acvus-mir-test/tests/short_circuit.rs
-assertion_line: 25
 expression: ir
 ---
 === main ===
      0 |   r0 = fetch @a
      1 |   r1 = fetch @b
-     2 |   jump_if r0 then L0 else L1
-     3 | L0:
-     4 |   jump L2(r1)
-     5 | L1:
-     7 |   jump L2(false (r2))
-     8 | L2(r3: Bool):
-     9 |   commit @a = r0
-    10 |   commit @b = r1
-    11 |   return r3
+     2 |   jump_if r0 then L2(r1) else L1
+     3 | L1:
+     5 |   jump L2(false (r2))
+     6 | L2(r3: Bool):
+     7 |   commit @a = r0
+     8 |   commit @b = r1
+     9 |   return r3
 
     ; r0 (@a) : Bool
     ; r1 (@b) : Bool

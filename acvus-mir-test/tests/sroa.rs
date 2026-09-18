@@ -85,6 +85,23 @@ fn a_variant_that_stays_in_the_body_is_a_tag_and_a_payload() {
     insta::assert_snapshot!("enum_match@optimized", listing);
 }
 
+#[test]
+fn a_three_armed_match_is_threaded_the_same_way_as_a_two_armed_one() {
+    let listing = optimized(
+        "let acc = 0; let i = 0; while i < @n { \
+         let e = match i % 3 { 0 => E::A(i), 1 => E::B(i + 1), _ => E::C(i + 2) }; \
+         match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v; }, \
+         E::C(v) => { acc = acc + v; } }; \
+         i = i + 1; } acc",
+    );
+    nothing_aggregate(&listing);
+    assert!(
+        !listing.contains("switch "),
+        "a three-armed dispatch over a replaced slot leaves no `Switch`: {listing}"
+    );
+    insta::assert_snapshot!("enum_match_three@optimized", listing);
+}
+
 /// An object that leaves the body is left alone. Scalar replacement will
 /// never reach this shape, whatever it learns: RFC-0050's layout is the
 /// lever on an object that genuinely lives past the body that built it.

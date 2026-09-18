@@ -40,102 +40,100 @@ expression: opt
     30 | L0:
     32 |   jump L1(0 (r28))
     33 | L1(r29: i64):
-    34 |   jump_if r23 then L2 else L3(r29)
-    35 | L2:
-    36 |   jump L3(r4)
-    37 | L3(r30: i64):
-    38 |   r31 = r19 + r30
-    40 |   assign v150 = T0
-    41 |   r32 = ref &v150
-    42 |   r33 = string_concat [r24, r32]
-    43 |   drop r34
-    44 |   drop r35
-    45 |   assign v153 = r33
-    46 |   r36 = ref &v153
-    47 |   r37 = call #0(r25)
-    48 |   assign v157 = r37
-    49 |   r38 = ref &v157
-    50 |   r39 = string_concat [r36, r38]
-    51 |   drop r40
-    52 |   drop r41
-    53 |   assign v160 = r39
-    54 |   r42 = ref &v160
-    56 |   assign v163 = T1
-    57 |   r43 = ref &v163
-    58 |   r44 = string_concat [r42, r43]
-    59 |   drop r45
-    60 |   drop r46
-    61 |   assign v166 = r44
-    62 |   r47 = ref &v166
-    63 |   r48 = call #0(r26)
-    64 |   assign v170 = r48
-    65 |   r49 = ref &v170
-    66 |   r50 = string_concat [r47, r49]
-    67 |   drop r51
-    68 |   drop r52
-    69 |   assign v173 = r50
-    70 |   r53 = ref &v173
-    72 |   assign v176 = T2
-    73 |   r54 = ref &v176
-    74 |   r55 = string_concat [r53, r54]
-    75 |   drop r56
-    76 |   drop r57
-    77 |   assign v179 = r55
-    78 |   r58 = ref &v179
-    79 |   r59 = call #0(r27)
-    80 |   assign v183 = r59
-    81 |   r60 = ref &v183
-    82 |   r61 = string_concat [r58, r60]
-    83 |   drop r62
-    84 |   drop r63
-    85 |   assign v186 = r61
-    86 |   r64 = ref &v186
-    88 |   assign v189 = T3
-    89 |   r65 = ref &v189
-    90 |   r66 = string_concat [r64, r65]
-    91 |   drop r67
-    92 |   drop r68
-    93 |   assign v192 = r66
-    94 |   r69 = ref &v192
-    95 |   r70 = ref &$v102
-    96 |   r71 = call #0(r70)
-    97 |   assign v196 = r71
-    98 |   r72 = ref &v196
-    99 |   r73 = string_concat [r69, r72]
-   100 |   drop r74
-   101 |   drop r75
-   102 |   assign v199 = r73
-   103 |   r76 = ref &v199
-   105 |   assign v202 = T4
-   106 |   r77 = ref &v202
-   107 |   r78 = string_concat [r76, r77]
-   108 |   drop r79
-   109 |   drop r80
-   110 |   assign v205 = r78
-   111 |   r81 = ref &v205
-   112 |   r82 = ref &$v55
-   113 |   r83 = call #0(r82)
-   114 |   assign v209 = r83
-   115 |   r84 = ref &v209
-   116 |   r85 = string_concat [r81, r84]
-   117 |   drop r86
-   118 |   drop r87
-   119 |   r88 = string_clone r85
-   120 |   r89 = spawn #1(r88) [r90 ->]
-   121 |   commit @item_count = r0
-   122 |   commit @total_out = r31
-   123 |   commit @shipping = r30
-   124 |   commit @tax_rate = r3
-   125 |   commit @default_ship = r4
-   126 |   commit @receipt_out = r85
-   127 |   commit @discount_rate = r6
-   128 |   commit @customer = r7
-   129 |   commit @free_ship_min = r8
-   130 |   r91 = eval r89 [-> r92]
-   131 |   return r31 [r92]
+    34 |   jump_if r23 then L3(r4) else L3(r29)
+    35 | L3(r30: i64):
+    36 |   r31 = r19 + r30
+    38 |   assign v150 = T0
+    39 |   r32 = ref &v150
+    40 |   r33 = string_concat [r24, r32]
+    41 |   drop r34
+    42 |   drop r35
+    43 |   assign v153 = r33
+    44 |   r36 = ref &v153
+    45 |   r37 = call #0(r25)
+    46 |   assign v157 = r37
+    47 |   r38 = ref &v157
+    48 |   r39 = string_concat [r36, r38]
+    49 |   drop r40
+    50 |   drop r41
+    51 |   assign v160 = r39
+    52 |   r42 = ref &v160
+    54 |   assign v163 = T1
+    55 |   r43 = ref &v163
+    56 |   r44 = string_concat [r42, r43]
+    57 |   drop r45
+    58 |   drop r46
+    59 |   assign v166 = r44
+    60 |   r47 = ref &v166
+    61 |   r48 = call #0(r26)
+    62 |   assign v170 = r48
+    63 |   r49 = ref &v170
+    64 |   r50 = string_concat [r47, r49]
+    65 |   drop r51
+    66 |   drop r52
+    67 |   assign v173 = r50
+    68 |   r53 = ref &v173
+    70 |   assign v176 = T2
+    71 |   r54 = ref &v176
+    72 |   r55 = string_concat [r53, r54]
+    73 |   drop r56
+    74 |   drop r57
+    75 |   assign v179 = r55
+    76 |   r58 = ref &v179
+    77 |   r59 = call #0(r27)
+    78 |   assign v183 = r59
+    79 |   r60 = ref &v183
+    80 |   r61 = string_concat [r58, r60]
+    81 |   drop r62
+    82 |   drop r63
+    83 |   assign v186 = r61
+    84 |   r64 = ref &v186
+    86 |   assign v189 = T3
+    87 |   r65 = ref &v189
+    88 |   r66 = string_concat [r64, r65]
+    89 |   drop r67
+    90 |   drop r68
+    91 |   assign v192 = r66
+    92 |   r69 = ref &v192
+    93 |   r70 = ref &$v102
+    94 |   r71 = call #0(r70)
+    95 |   assign v196 = r71
+    96 |   r72 = ref &v196
+    97 |   r73 = string_concat [r69, r72]
+    98 |   drop r74
+    99 |   drop r75
+   100 |   assign v199 = r73
+   101 |   r76 = ref &v199
+   103 |   assign v202 = T4
+   104 |   r77 = ref &v202
+   105 |   r78 = string_concat [r76, r77]
+   106 |   drop r79
+   107 |   drop r80
+   108 |   assign v205 = r78
+   109 |   r81 = ref &v205
+   110 |   r82 = ref &$v55
+   111 |   r83 = call #0(r82)
+   112 |   assign v209 = r83
+   113 |   r84 = ref &v209
+   114 |   r85 = string_concat [r81, r84]
+   115 |   drop r86
+   116 |   drop r87
+   117 |   r88 = string_clone r85
+   118 |   r89 = spawn #1(r88) [r90 ->]
+   119 |   commit @item_count = r0
+   120 |   commit @total_out = r31
+   121 |   commit @shipping = r30
+   122 |   commit @tax_rate = r3
+   123 |   commit @default_ship = r4
+   124 |   commit @receipt_out = r85
+   125 |   commit @discount_rate = r6
+   126 |   commit @customer = r7
+   127 |   commit @free_ship_min = r8
+   128 |   r91 = eval r89 [-> r92]
+   129 |   return r31 [r92]
 
     ; orders: what the body's yielded Order waits for
-    ;   eval@130 <- spawn@120 #1 <- r90(entry)
+    ;   eval@128 <- spawn@118 #1 <- r90(entry)
 
     ; r0 (@item_count) : i64
     ; r1 (@total_out) : i64

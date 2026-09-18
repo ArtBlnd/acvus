@@ -219,12 +219,68 @@ different problem.
 no constant-folding pass (`const_dedup` deduplicates literals and
 `code_motion` hoists, neither folds). Four operations, not three.
 
-`enum match` lands at the top of its band. The tag is threaded as a
-constant into each incoming edge, but the compare against it still runs
-at the merge, because the arms are reached through a `jump_if` on the
-result. Threading the constant through the branch — reaching the arm
-directly on each edge — is what would take this case to `collatz
-while`'s shape. RFC-0051's second half settled where it is not: no
-`Switch` reaches the machine here, because this pass has already removed
-the enum, so the move is jump threading through the phi and belongs to a
-pass of its own.
+`enum match` landed at the top of its band on those runs, because the
+compare against the threaded tag still ran at the merge. The section below
+is where that compare goes.
+
+## Jump threading through the tag
+
+The tag this pass writes is a constant on each incoming edge, so the
+compare at the merge asks a question each edge has already answered.
+`reaching_tags` settles the tag at the end of every block by a forward
+walk over the plan's own `DefineVariant` actions, and `thread` rewrites
+the graph before the SSA builder reads it: a dispatch whose own tag is
+settled becomes `Terminator::Jump` (RFC-0051 rule 4), and otherwise each
+incoming edge whose tag is settled leaves for its arm directly, carrying
+the arguments it had handed the dispatch block's parameters. The
+builder then places each arm's payload phi against the edges the arm
+actually has, so no tag register and no compare survive. `dispatch_for`
+accepts a dispatch of any width, because a threaded edge needs no
+compare; a dispatch that keeps an edge whose tag is not settled still
+needs one, and the chain for three or more edges is not built.
+
+Threading runs in this pass rather than one of its own because after
+scalar replacement a tag is a numeric register, and no IR form hands a
+numeric tag phi to a later pass.
+
+A two-armed `enum match` and a three-armed one both lose their
+`MakeVariant`, their tag and their dispatch. Threading alone does not
+pay, though: what it leaves is an arm block that `code_motion` then
+empties, because the sink lifts the arm's `acc + payload` into the branch
+that selected it, and the arm is left holding `jump merge(value)` over
+one `Nop` — reachable, so `prune` leaves it; a block, so `dce`, which
+sweeps instructions and block parameters, leaves it too.
+`prepare::recognize_diamond` needs both arms to jump to one join laid out
+next to them, and a forwarder between arm and merge breaks that, taking
+the enclosing `Loop` with it: measured, threading alone runs `enum match`
+at **16.8 ns** against 9.9 at `c2116d3f`, as flat block dispatch.
+
+`optimize::forward` is the other half, and the two land as one mechanism:
+a block with no parameters whose instructions are all `Nop` and whose
+terminator is an unconditional `Jump` is its target, so every predecessor
+takes that edge with the arguments the block carried and the block is
+removed, to a fixed point. `recognize_diamond` already admits an arm that
+is the test's own edge into the join, which is exactly the shape the
+collapse produces, so nothing in `prepare` is taught anything. The blocks
+a loop is made of — the header, the block entering it, the blocks it
+leaves for — are held: `lsr::Frame::of` writes a reduction into the
+entering block and `recognize_loop` matches all three against the layout.
+
+Median of three alternating runs of pinned binaries against `c2116d3f`,
+n = 1e5 / 1e6:
+
+| case | base ns | threading only | with the collapse |
+|---|---:|---:|---:|
+| enum match | 9.9 / 9.9 | 16.8 / 16.8 | **6.0 / 6.1** |
+| enum match three | 33.0 / 33.2 | 21.6 / 21.6 | **20.2 / 20.2** |
+
+`enum match` is now below its own base by 39 %: the body holds four
+operations and one `Diamond` where the base held six and two, because the
+constructor's diamond and the tag test's diamond have become the one
+diamond that decides the arm. `enum match three` keeps the flat block
+dispatch it had at base — its `match i % 3` is an `if`/`else if` whose far
+arm is itself a `JumpIf`, and `recognize_diamond` needs a `Jump` there —
+so its 39 % is the removed aggregate alone. The five other `shapes` cases
+and the four `accum` cases whose medians moved at all have prepared
+listings byte-identical to base, and in those four the pass removes no
+block; what moves is the host binary's own layout, not the program.
