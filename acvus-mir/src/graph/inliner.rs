@@ -523,15 +523,6 @@ fn remap_inst(
             array: r(*list),
             index: *index,
         },
-        InstKind::ArrayGet {
-            dst,
-            array: list,
-            index,
-        } => InstKind::ArrayGet {
-            dst: r(*dst),
-            array: r(*list),
-            index: r(*index),
-        },
         InstKind::ObjectGet { dst, object, key } => InstKind::ObjectGet {
             dst: r(*dst),
             object: r(*object),

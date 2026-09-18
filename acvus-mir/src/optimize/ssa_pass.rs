@@ -162,12 +162,6 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
         InstKind::TestLiteral { src, .. } => s(src),
         InstKind::TestObjectKey { src, .. } => s(src),
         InstKind::ArrayIndex { array: list, .. } => s(list),
-        InstKind::ArrayGet {
-            array: list, index, ..
-        } => {
-            s(list);
-            s(index);
-        }
         InstKind::ObjectGet { object, .. } => s(object),
         InstKind::MakeClosure { captures, .. } => captures.iter_mut().for_each(|v| s(v)),
         InstKind::MakeVariant { payload, .. } => {

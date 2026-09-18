@@ -534,7 +534,6 @@ pub(crate) fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::TestVariant { .. }
         | InstKind::TestObjectKey { .. }
         | InstKind::ArrayIndex { .. }
-        | InstKind::ArrayGet { .. }
         | InstKind::ObjectGet { .. }
         | InstKind::TupleIndex { .. }
         | InstKind::Merge { .. } => false,

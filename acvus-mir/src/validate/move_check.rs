@@ -848,15 +848,6 @@ fn process_inst(
                 scope, inst_idx, span, *array, *dst, val_types, debug, state, errors,
             );
         }
-        InstKind::ArrayGet {
-            dst,
-            array,
-            index: _,
-        } => {
-            extract_part(
-                scope, inst_idx, span, *array, *dst, val_types, debug, state, errors,
-            );
-        }
         // Unwrap moves the payload out of the variant: the variant is consumed.
         InstKind::UnwrapVariant { dst, src } => {
             try_consume_value(scope, inst_idx, span, *src, val_types, debug, state, errors);

@@ -533,17 +533,6 @@ fn write_body(
                 vn.fmt_val(*dst),
                 vn.fmt_use(*list, &consts, &texts)
             )?,
-            InstKind::ArrayGet {
-                dst,
-                array: list,
-                index,
-            } => writeln!(
-                f,
-                "{} = {}[{}]",
-                vn.fmt_val(*dst),
-                vn.fmt_use(*list, &consts, &texts),
-                vn.fmt_use(*index, &consts, &texts)
-            )?,
             InstKind::ObjectGet { dst, object, key } => writeln!(
                 f,
                 "{} = {}.{}",

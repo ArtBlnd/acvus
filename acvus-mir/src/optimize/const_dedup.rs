@@ -168,13 +168,6 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             remap_val(right, remap);
         }
 
-        InstKind::ArrayGet {
-            array: list, index, ..
-        } => {
-            remap_val(list, remap);
-            remap_val(index, remap);
-        }
-
         // Vec uses
         InstKind::FunctionCall {
             callee,

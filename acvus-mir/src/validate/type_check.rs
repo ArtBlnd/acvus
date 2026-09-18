@@ -1142,31 +1142,6 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::ArrayGet {
-                dst,
-                array: list,
-                index,
-            } => {
-                let list_ty = ty!(*list);
-                let index_ty = ty!(*index);
-                self.assert_match(pc, span, "ArrayGet", "index", &Ty::I64, index_ty, errors);
-                if let Some(inner) = as_array_inner(list_ty) {
-                    let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "ArrayGet", "dst", inner, dst_ty, errors);
-                } else if !list_ty.is_error() {
-                    errors.push(ValidationError {
-                        scope: self.scope_name.clone(),
-                        inst_index: pc,
-                        span,
-                        kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "ArrayGet".to_string(),
-                            expected_constructor: "Array".to_string(),
-                            actual: list_ty.clone(),
-                        },
-                    });
-                }
-            }
-
             // === Pattern tests (all produce Bool) ===
             InstKind::TestLiteral { dst, .. } => {
                 let dst_ty = ty!(*dst);

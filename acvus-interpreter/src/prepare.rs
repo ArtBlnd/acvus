@@ -592,7 +592,6 @@ impl<'a> Prepare<'a> {
             | InstKind::TestLiteral { .. }
             | InstKind::TestObjectKey { .. }
             | InstKind::ArrayIndex { .. }
-            | InstKind::ArrayGet { .. }
             | InstKind::ObjectGet { .. }
             | InstKind::MakeClosure { .. }
             | InstKind::MakeVariant { .. }
@@ -1266,17 +1265,6 @@ impl<'a> Prepare<'a> {
                     storage::read_index::<false>
                 };
                 Op::new(f).a(self.slot(*dst)).b(self.slot(*array)).p(*index)
-            }
-            InstKind::ArrayGet { dst, array, index } => {
-                let f: OpFn = if self.is_string(*dst) {
-                    pattern::array_get::<true>
-                } else {
-                    pattern::array_get::<false>
-                };
-                Op::new(f)
-                    .a(self.slot(*dst))
-                    .b(self.slot(*array))
-                    .c(self.slot(*index))
             }
             InstKind::ObjectGet { dst, object, key } => {
                 let f: OpFn = if self.is_string(*dst) {

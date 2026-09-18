@@ -31,7 +31,6 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::TestLiteral { dst, .. }
         | InstKind::TestObjectKey { dst, .. }
         | InstKind::ArrayIndex { dst, .. }
-        | InstKind::ArrayGet { dst, .. }
         | InstKind::ObjectGet { dst, .. }
         | InstKind::MakeClosure { dst, .. }
         | InstKind::MakeVariant { dst, .. }
@@ -112,10 +111,6 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // Two uses
         InstKind::BinOp { left, right, .. } => smallvec![*left, *right],
         InstKind::TestObjectKey { src, .. } => smallvec![*src],
-        InstKind::ArrayGet {
-            array: list, index, ..
-        } => smallvec![*list, *index],
-
         InstKind::ArrayIndex { array: list, .. } => smallvec![*list],
 
         // Composite constructors

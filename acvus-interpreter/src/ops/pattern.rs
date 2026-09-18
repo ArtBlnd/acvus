@@ -65,13 +65,3 @@ pub fn test_object_key<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) 
     machine.define(op.a, Value::bool_(has));
     Flow::Next
 }
-
-/// An array read at an index a register holds.
-pub fn array_get<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    let index = machine.reg(op.c).as_int() as usize;
-    let slots = ReadSlots {
-        dst: op.a,
-        src: op.b,
-    };
-    read_at::<CLONE>(machine, slots, &[Step::Index(index)])
-}

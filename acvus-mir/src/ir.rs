@@ -269,11 +269,6 @@ pub enum InstKind {
         array: ValueId,
         index: usize,
     },
-    ArrayGet {
-        dst: ValueId,
-        array: ValueId,
-        index: ValueId,
-    },
     ObjectGet {
         dst: ValueId,
         object: ValueId,
