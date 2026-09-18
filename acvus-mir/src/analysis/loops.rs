@@ -268,7 +268,6 @@ mod tests {
         InstKind::BlockLabel {
             label: Label(n),
             params: vec![],
-            merge_of: None,
         }
     }
 

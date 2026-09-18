@@ -29,7 +29,7 @@ expression: listing
     29 |   r16 = r4 + 2 (r17)
     30 |   r18 = r3 + r16
     31 |   jump L9(r18)
-    32 | L9(r19: i64):  ; merge_of L9
+    32 | L9(r19: i64):
     33 |   jump L0(r19, r9)
     34 | L2:
     35 |   commit @n = r0

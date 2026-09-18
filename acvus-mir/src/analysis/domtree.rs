@@ -460,7 +460,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Const {
                 dst: v(1),
@@ -473,7 +472,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(1),
@@ -510,7 +508,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Jump {
                 label: Label(2),
@@ -519,7 +516,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Jump {
                 label: Label(2),
@@ -528,7 +524,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Const {
                 dst: v(1),
@@ -561,7 +556,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![v(1)],
-                merge_of: None,
             },
             InstKind::Const {
                 dst: v(2),
@@ -577,7 +571,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(1),
@@ -605,7 +598,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Const {
                 dst: v(1),
@@ -618,7 +610,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(1),

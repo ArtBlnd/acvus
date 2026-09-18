@@ -596,14 +596,9 @@ fn remap_inst(
         },
 
         // Control flow
-        InstKind::BlockLabel {
-            label,
-            params,
-            merge_of,
-        } => InstKind::BlockLabel {
+        InstKind::BlockLabel { label, params } => InstKind::BlockLabel {
             label: rl(*label),
             params: rv(params),
-            merge_of: merge_of.map(&rl),
         },
         InstKind::Jump { label, args } => InstKind::Jump {
             label: rl(*label),

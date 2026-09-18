@@ -270,7 +270,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![v(2)],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(2),
@@ -279,7 +278,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![v(3)],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(3),
@@ -306,7 +304,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::BinOp {
                 dst: v(1),
@@ -341,7 +338,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![v(1)],
-                merge_of: None,
             },
             InstKind::BinOp {
                 dst: v(2),
@@ -365,7 +361,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![v(4)],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(4),

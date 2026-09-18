@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 404
 expression: ir
 ---
 === literals ===
@@ -25,7 +24,7 @@ expression: ir
     18 |   jump L0(r8, r6)
     19 | L1:
     21 |   jump L0(T0, r0)
-    22 | L0(r9: String, r10: String):  ; merge_of L2
+    22 | L0(r9: String, r10: String):
     23 |   r11 = string_concat [r9]
     24 |   r12 = take @pair
     25 |   commit @pair = r12

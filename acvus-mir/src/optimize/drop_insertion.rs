@@ -285,7 +285,6 @@ fn apply_edge_splits(cfg: &mut CfgBody, splits: Vec<EdgeSplit>) {
                 label: split.edge.target,
                 args: split.edge.forwarded,
             },
-            merge_of: None,
         });
         retarget(
             &mut cfg.blocks[split.from.0].terminator,
@@ -821,7 +820,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![v(3)],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(3),
@@ -830,7 +828,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(2),
@@ -889,7 +886,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![v(2)],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(2),
@@ -898,7 +894,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![v(3)],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(3),
@@ -1111,7 +1106,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![v(3)],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(3),
@@ -1120,7 +1114,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![v(4)],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(4),

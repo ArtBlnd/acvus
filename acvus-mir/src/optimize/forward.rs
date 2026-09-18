@@ -90,11 +90,6 @@ fn collapse(cfg: &mut CfgBody) -> bool {
             *edge.to = target.to;
             *edge.args = target.args.clone();
         }
-        if let Some(merge) = block.merge_of
-            && let Some(target) = resolved.get(&merge)
-        {
-            block.merge_of = Some(target.to);
-        }
     }
 
     cfg.blocks
@@ -270,11 +265,10 @@ mod tests {
         })
     }
 
-    fn block_label(label: u32, params: Vec<ValueId>, merge_of: Option<Label>) -> InstKind {
+    fn block_label(label: u32, params: Vec<ValueId>) -> InstKind {
         InstKind::BlockLabel {
             label: Label(label),
             params,
-            merge_of,
         }
     }
 
@@ -306,24 +300,24 @@ mod tests {
         InstKind::Return { value, order: None }
     }
 
-    fn diamond_of_two_forwarders(merge_of: Option<Label>) -> CfgBody {
+    fn diamond_of_two_forwarders() -> CfgBody {
         make_cfg(vec![
             truth(v(0)),
             branch(v(0), 0, 1),
-            block_label(0, vec![], None),
+            block_label(0, vec![]),
             InstKind::Nop,
             jump(2, vec![v(0)]),
-            block_label(1, vec![], None),
+            block_label(1, vec![]),
             InstKind::Nop,
             jump(2, vec![v(0)]),
-            block_label(2, vec![v(1)], merge_of),
+            block_label(2, vec![v(1)]),
             ret(v(1)),
         ])
     }
 
     #[test]
     fn both_arms_of_a_diamond_that_only_jump_become_the_join() {
-        let mut cfg = diamond_of_two_forwarders(None);
+        let mut cfg = diamond_of_two_forwarders();
 
         run(&mut cfg);
 
@@ -350,13 +344,13 @@ mod tests {
         let mut cfg = make_cfg(vec![
             truth(v(0)),
             jump(0, vec![]),
-            block_label(0, vec![], None),
+            block_label(0, vec![]),
             InstKind::Nop,
             jump(1, vec![]),
-            block_label(1, vec![], None),
+            block_label(1, vec![]),
             InstKind::Nop,
             jump(2, vec![v(0)]),
-            block_label(2, vec![v(1)], None),
+            block_label(2, vec![v(1)]),
             ret(v(1)),
         ]);
 
@@ -375,10 +369,10 @@ mod tests {
         let mut cfg = make_cfg(vec![
             truth(v(0)),
             jump(0, vec![v(0)]),
-            block_label(0, vec![v(1)], None),
+            block_label(0, vec![v(1)]),
             InstKind::Nop,
             jump(2, vec![v(1)]),
-            block_label(2, vec![v(2)], None),
+            block_label(2, vec![v(2)]),
             ret(v(2)),
         ]);
 
@@ -392,10 +386,10 @@ mod tests {
         let mut cfg = make_cfg(vec![
             truth(v(0)),
             jump(0, vec![]),
-            block_label(0, vec![], None),
+            block_label(0, vec![]),
             InstKind::Nop,
             jump(1, vec![]),
-            block_label(1, vec![], None),
+            block_label(1, vec![]),
             InstKind::Nop,
             jump(0, vec![]),
         ]);
@@ -435,10 +429,10 @@ mod tests {
     fn a_block_a_fallthrough_reaches_stays() {
         let mut cfg = make_cfg(vec![
             truth(v(0)),
-            block_label(0, vec![], None),
+            block_label(0, vec![]),
             InstKind::Nop,
             jump(1, vec![]),
-            block_label(1, vec![], None),
+            block_label(1, vec![]),
             ret(v(0)),
         ]);
 
@@ -456,15 +450,15 @@ mod tests {
         let mut cfg = make_cfg(vec![
             truth(v(0)),
             branch(v(0), 0, 3),
-            block_label(0, vec![], None),
+            block_label(0, vec![]),
             InstKind::Nop,
             jump(1, vec![]),
-            block_label(1, vec![], None),
+            block_label(1, vec![]),
             branch(v(0), 2, 3),
-            block_label(2, vec![], None),
+            block_label(2, vec![]),
             truth(v(1)),
             jump(1, vec![]),
-            block_label(3, vec![], None),
+            block_label(3, vec![]),
             ret(v(0)),
         ]);
 
@@ -482,15 +476,15 @@ mod tests {
         let mut cfg = make_cfg(vec![
             truth(v(0)),
             jump(0, vec![]),
-            block_label(0, vec![], None),
+            block_label(0, vec![]),
             branch(v(0), 1, 2),
-            block_label(1, vec![], None),
+            block_label(1, vec![]),
             truth(v(1)),
             jump(0, vec![]),
-            block_label(2, vec![], None),
+            block_label(2, vec![]),
             InstKind::Nop,
             jump(3, vec![]),
-            block_label(3, vec![], None),
+            block_label(3, vec![]),
             ret(v(0)),
         ]);
 
@@ -501,14 +495,5 @@ mod tests {
             5,
             "the exit is where the loop's shape ends"
         );
-    }
-
-    #[test]
-    fn a_merge_that_named_a_removed_arm_names_the_block_that_stands_there() {
-        let mut cfg = diamond_of_two_forwarders(Some(Label(0)));
-
-        run(&mut cfg);
-
-        assert_eq!(cfg.blocks[1].merge_of, Some(Label(2)));
     }
 }

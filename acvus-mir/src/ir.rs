@@ -381,11 +381,6 @@ pub enum InstKind {
     BlockLabel {
         label: Label,
         params: Vec<ValueId>,
-        /// If set, this block is the merge point of a match expression.
-        /// The label points to the first arm's test block, whose reachability
-        /// the merge point should inherit (the match structure guarantees
-        /// that exactly one arm executes and jumps here).
-        merge_of: Option<Label>,
     },
     Jump {
         label: Label,

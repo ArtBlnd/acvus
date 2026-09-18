@@ -19,7 +19,7 @@ expression: ir
     10 | L1:
     12 |   r4 = string_concat [T1]
     13 |   jump L0(r4)
-    14 | L0(r5: String):  ; merge_of L2
+    14 | L0(r5: String):
     15 |   r6 = string_concat [r5]
     16 |   r7 = take @opt
     17 |   commit @opt = r7

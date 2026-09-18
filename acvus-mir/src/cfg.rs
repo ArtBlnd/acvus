@@ -34,8 +34,6 @@ pub struct Block {
     pub insts: Vec<Inst>,
     /// Block terminator (control flow).
     pub terminator: Terminator,
-    /// If this block is a merge point, which label it merges.
-    pub merge_of: Option<Label>,
 }
 
 // -- Terminator ----------------------------------------------------
@@ -169,7 +167,6 @@ pub fn promote(body: MirBody) -> CfgBody {
     let mut current_label: Label = ENTRY_LABEL;
     let mut current_params: Vec<ValueId> = Vec::new();
     let mut current_insts: Vec<Inst> = Vec::new();
-    let mut current_merge: Option<Label> = None;
 
     let mut label_to_block: FxHashMap<Label, BlockIdx> = FxHashMap::default();
     label_to_block.insert(ENTRY_LABEL, BlockIdx(0));
@@ -180,11 +177,7 @@ pub fn promote(body: MirBody) -> CfgBody {
 
     for inst in body.insts {
         match &inst.kind {
-            InstKind::BlockLabel {
-                label,
-                params,
-                merge_of,
-            } => {
+            InstKind::BlockLabel { label, params } => {
                 // Flush previous block.
                 let terminator = extract_terminator(&mut current_insts);
                 blocks.push(Block {
@@ -192,14 +185,12 @@ pub fn promote(body: MirBody) -> CfgBody {
                     params: current_params,
                     insts: std::mem::take(&mut current_insts),
                     terminator,
-                    merge_of: current_merge,
                 });
 
                 // Start new block.
                 label_to_block.insert(*label, BlockIdx(blocks.len()));
                 current_label = *label;
                 current_params = params.clone();
-                current_merge = *merge_of;
             }
             _ => {
                 current_insts.push(inst);
@@ -214,7 +205,6 @@ pub fn promote(body: MirBody) -> CfgBody {
         params: current_params,
         insts: current_insts,
         terminator,
-        merge_of: current_merge,
     });
 
     // Invariant: every block has a unique label.
@@ -351,7 +341,6 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 kind: InstKind::BlockLabel {
                     label: block.label,
                     params: block.params,
-                    merge_of: block.merge_of,
                 },
             });
         }
@@ -526,7 +515,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Const {
                 dst: v(1),
@@ -539,7 +527,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Const {
                 dst: v(2),
@@ -552,7 +539,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![v(3)],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(3),
@@ -591,7 +577,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(0),
@@ -639,7 +624,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Jump {
                 label: Label(2),
@@ -648,7 +632,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Jump {
                 label: Label(2),
@@ -657,7 +640,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(0),
@@ -695,7 +677,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Jump {
                 label: Label(2),
@@ -704,7 +685,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Jump {
                 label: Label(2),
@@ -713,7 +693,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(0),

@@ -529,7 +529,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: l0,
                 params: vec![],
-                merge_of: None,
             },
         ];
         if early_return {
@@ -547,7 +546,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: l1,
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Jump {
                 label: l2,
@@ -556,7 +554,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: l2,
                 params: vec![],
-                merge_of: None,
             },
             second,
             InstKind::Return {

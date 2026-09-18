@@ -295,7 +295,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![v(2)],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(2),

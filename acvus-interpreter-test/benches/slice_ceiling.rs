@@ -272,7 +272,6 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
     .push(InstKind::BlockLabel {
         label: Label(0),
         params: vec![c.accumulator, c.index],
-        merge_of: None,
     })
     .push(InstKind::BinOp {
         dst: c.test,
@@ -290,7 +289,6 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
     .push(InstKind::BlockLabel {
         label: Label(1),
         params: Vec::new(),
-        merge_of: None,
     });
 
     for operand in operands() {
@@ -349,7 +347,6 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
     .push(InstKind::BlockLabel {
         label: Label(2),
         params: vec![c.result],
-        merge_of: None,
     });
 
     if shape.hoists_the_slice() {

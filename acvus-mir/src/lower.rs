@@ -889,7 +889,6 @@ impl<'a> Lowerer<'a> {
             InstKind::BlockLabel {
                 label: merge_label,
                 params: vec![result],
-                merge_of: Some(first_arm_label),
             },
         );
         result
@@ -960,7 +959,6 @@ impl<'a> Lowerer<'a> {
             InstKind::BlockLabel {
                 label: merge_label,
                 params: vec![result],
-                merge_of: Some(arm_labels[0]),
             },
         );
         result
@@ -1214,7 +1212,6 @@ impl<'a> Lowerer<'a> {
                     InstKind::BlockLabel {
                         label: merge_label,
                         params: vec![result],
-                        merge_of: None,
                     },
                 );
                 result
@@ -1326,7 +1323,6 @@ impl<'a> Lowerer<'a> {
                     InstKind::BlockLabel {
                         label: merge_label,
                         params: vec![result],
-                        merge_of: None,
                     },
                 );
                 result
@@ -1808,7 +1804,6 @@ impl<'a> Lowerer<'a> {
             InstKind::BlockLabel {
                 label,
                 params: vec![],
-                merge_of: None,
             },
         );
     }
@@ -1913,7 +1908,6 @@ impl<'a> Lowerer<'a> {
             InstKind::BlockLabel {
                 label: merge_label,
                 params: vec![dst],
-                merge_of: None,
             },
         );
         dst
@@ -1951,7 +1945,6 @@ impl<'a> Lowerer<'a> {
             InstKind::BlockLabel {
                 label: result_label,
                 params: vec![result_param],
-                merge_of: None,
             },
         );
         result_param
@@ -3267,7 +3260,6 @@ impl<'a> Lowerer<'a> {
             InstKind::BlockLabel {
                 label: end_label,
                 params: vec![merge_result],
-                merge_of: Some(arm_labels[0]),
             },
         );
         merge_result

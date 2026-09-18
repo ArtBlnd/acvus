@@ -110,9 +110,8 @@ async fn a_match_on_a_result_reaches_the_side_its_value_is() {
 
 /// A list element read through a reference is the `THROUGH` parameter every
 /// operation in `ops::switch` carries, and unit variants behind it are the
-/// shape `bf table` runs. A scrutinee whose variants are not the arms' own
-/// definitions is `Open`, so the catch-all is what RFC-0051 §3 asks for
-/// here; the three elements reach the three arms and never it.
+/// shape `bf table` runs. The catch-all here is `prepare::switch_op`'s
+/// `default` edge, which the three elements never take.
 #[tokio::test]
 async fn a_match_through_a_reference_reaches_the_arm() {
     let source = "\
@@ -202,4 +201,33 @@ async fn a_match_with_no_context_still_runs() {
     )
     .await;
     assert_eq!(ran.value.as_int(), 42);
+}
+
+/// A list of two constructions: the element type is the union of both, so the
+/// two arms cover it and no `_` is written. The two payload types differ, so
+/// the union is what carries the set -- neither construction alone does.
+const MIXED_LIST: &str = "\
+let v = [E::A(1), E::B(\"xyz\"), E::A(4)]; \
+let len = len(&v); let one = len / len; let i = len - len; let acc = @n; \
+while i < len { ";
+
+#[tokio::test]
+async fn a_match_on_a_list_element_reaches_the_arm_without_a_catch_all() {
+    let source = format!(
+        "{MIXED_LIST}let picked = match &v[i] {{ E::A(x) => *x, E::B(s) => 100 }}; \
+acc = acc + picked; i = i + one; }} acc"
+    );
+    // 1 + 100 + 4 above `@n`; an arm reached for the wrong element moves it.
+    assert_eq!(answer(&source, 0).await, 105);
+    assert_eq!(answer(&source, 1000).await, 1105);
+}
+
+#[tokio::test]
+#[should_panic(expected = "non-exhaustive match: `E::B` is not covered")]
+async fn a_match_on_a_list_element_that_misses_a_variant_is_refused() {
+    let source = format!(
+        "{MIXED_LIST}let picked = match &v[i] {{ E::A(x) => *x }}; \
+acc = acc + picked; i = i + one; }} acc"
+    );
+    answer(&source, 0).await;
 }

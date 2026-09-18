@@ -1,12 +1,14 @@
-//! A `match` is exhaustive, and it is decided where the variant set is
-//! known (RFC-0051 §3-§4).
+//! A `match` is exhaustive, and it is decided by the scrutinee's type
+//! (RFC-0051 §3-§4).
 //!
 //! The language's enums are structural and unify by union, so a value's
-//! variant set can grow anywhere the value flows, and a check at the match
-//! site does not in general see the closed set. This pass fixes the
-//! boundary of what is decided now. Everything it asks goes through
-//! [`known_variants`]; the close-phase answer and Maranget's matrix widen
-//! its `Closed` later and move neither the rule nor its place.
+//! variant set grows everywhere the value flows — and that union is what
+//! the solver leaves on the value's type. A MIR value's type is settled:
+//! `Ty` is `TyTerm<Concrete>`, whose `Var` is `Infallible`. So the variant
+//! list on the scrutinee's `Ty::Enum` is the closed set for that value,
+//! wherever the value came from, and [`known_variants`] reads it off the
+//! type. Maranget's matrix over nested positions is the widening still
+//! owed; it changes neither the rule nor its place.
 //!
 //! The pass reads `InstKind::Switch`, the one shape that names a `match`.
 //! An `if let` is two arms and always exhaustive, and never wears one.
@@ -14,10 +16,8 @@
 use std::collections::BTreeSet;
 
 use acvus_utils::Astr;
-use rustc_hash::FxHashSet;
 
-use crate::analysis::{escape, inst_info};
-use crate::ir::{Inst, InstKind, Label, MirBody, MirModule, RefTarget, ValueId};
+use crate::ir::{InstKind, MirBody, MirModule, ValueId};
 use crate::ty::Ty;
 use crate::validate::type_check::{ValidationError, ValidationErrorKind};
 
@@ -39,17 +39,19 @@ const RESULT: Builtin = Builtin {
     arity: 2,
 };
 
-/// What this stage knows about the variants a value can hold: the seam's
-/// three answers.
+/// What the scrutinee's type says about the variants it can hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Known {
-    /// (c) The set is written down in this body: these tags and no others.
+    /// The type is an enum: these tags and no others.
     Closed(BTreeSet<Astr>),
-    /// (b) The type names the set. This stage holds no interner and so
-    /// names no tag itself; the count is what it checks against.
+    /// The type is an `Option` or a `Result`. This stage holds no interner
+    /// and so names no tag itself; the count is what it checks against.
     ClosedBuiltin(Builtin),
-    /// The set is not decidable here. A `match` on such a value needs a
-    /// `_` arm, which states the intent the checker cannot yet verify.
+    /// The type names no variant set. `typeck` refuses an arm naming a
+    /// variant the scrutinee's type does not have (RFC-0051 §2), so no
+    /// script reaches this answer; what reaches it is a `Switch` a pass or a
+    /// test builds over a tag of some other type, and it is refused rather
+    /// than assumed closed.
     Open,
 }
 
@@ -106,171 +108,71 @@ fn check_body(body: &MirBody, scope: &str, errors: &mut Vec<ValidationError>) {
 /// The name the source gave the enum the value carries, for the refusal to
 /// write `E::B` rather than a bare tag.
 fn enum_name_of(body: &MirBody, value: ValueId) -> Option<Astr> {
-    let ty = match body.val_types.get(&value)? {
-        Ty::Ref(_, inner) => &inner.ty,
-        ty => ty,
-    };
-    match ty {
+    match scrutinee_ty(body, value)? {
         Ty::Enum { name, .. } => Some(*name),
         _ => None,
     }
 }
 
 /// The variants the value a `Switch` reads its tag from can hold
-/// (RFC-0051 §4). This is the whole seam: a later stage widens `Closed`
-/// here and nothing else moves.
-///
-/// - (b) an `Option` or a `Result`: [`Known::ClosedBuiltin`], the two tags
-///   the type names;
-/// - (c) a storage of this body whose every definition is a `MakeVariant`
-///   or a join of them, that comes from nowhere outside and goes nowhere
-///   outside: [`Known::Closed`] on the union of those tags;
-/// - [`Known::Open`] otherwise.
+/// (RFC-0051 §4). The value's type is the answer: a structural enum's type
+/// is the union of every construction the value can flow from, so its
+/// variant list is closed for this value wherever the value came from.
 pub fn known_variants(body: &MirBody, value: ValueId) -> Known {
-    if let Some(builtin) = builtin_of(body, value) {
-        return Known::ClosedBuiltin(builtin);
-    }
-    let Some(storage) = local_storage(body, value) else {
+    let Some(ty) = scrutinee_ty(body, value) else {
         return Known::Open;
-    };
-    // What a callee reached could write a new variant back, and this stage
-    // cannot see whether it did.
-    if escape::of_insts(body.insts.iter().map(|inst| &inst.kind)).escapes(storage) {
-        return Known::Open;
-    }
-    let mut tags = BTreeSet::new();
-    let mut defined_here = false;
-    for inst in &body.insts {
-        let InstKind::Assign {
-            target,
-            path,
-            value: written,
-        } = &inst.kind
-        else {
-            continue;
-        };
-        if *target != RefTarget::Var(storage) || !path.is_empty() {
-            continue;
-        }
-        defined_here = true;
-        let Some(written) = constructed_tags(body, *written, &mut FxHashSet::default()) else {
-            return Known::Open;
-        };
-        tags.extend(written);
-    }
-    match defined_here {
-        // A storage with no definition in this body holds what something
-        // outside put there.
-        false => Known::Open,
-        true => Known::Closed(tags),
-    }
-}
-
-/// (b) A reference is read through: a place scrutinee is lent for the tag
-/// read, and what it lends is what names the variants.
-fn builtin_of(body: &MirBody, value: ValueId) -> Option<Builtin> {
-    let ty = match body.val_types.get(&value)? {
-        Ty::Ref(_, inner) => &inner.ty,
-        ty => ty,
     };
     match ty {
-        Ty::Option(_) => Some(OPTION),
-        Ty::Result(..) => Some(RESULT),
-        _ => None,
+        Ty::Option(_) => Known::ClosedBuiltin(OPTION),
+        Ty::Result(..) => Known::ClosedBuiltin(RESULT),
+        Ty::Enum { variants, .. } => Known::Closed(variants.keys().copied().collect()),
+        _ => Known::Open,
     }
 }
 
-/// The storage of this body the value names. The register a `Switch` reads
-/// is either a lend or a read of a local slot, or the slot's own value. A
-/// parameter, a capture, or a read through one of them names no local
-/// storage, and the answer there is `Open`.
-fn local_storage(body: &MirBody, value: ValueId) -> Option<ValueId> {
-    let from_outside: FxHashSet<ValueId> = body
-        .params
-        .iter()
-        .chain(&body.captures)
-        .map(|(_, v)| *v)
-        .collect();
-    if from_outside.contains(&value) {
-        return None;
-    }
-    let defining = body.insts.iter().find(|inst| defines(inst, value));
-    match defining.map(|inst| &inst.kind) {
-        Some(InstKind::Ref { target, path, .. } | InstKind::Take { target, path, .. })
-            if path.is_empty() =>
-        {
-            match target {
-                RefTarget::Var(slot) if !from_outside.contains(slot) => Some(*slot),
-                _ => None,
-            }
-        }
-        // Not a read of a storage: the value is the storage's own register.
-        _ => Some(value),
+/// The type of the value a `Switch` reads its tag from. A place scrutinee is
+/// lent for the tag read, and what it lends is what names the variants.
+fn scrutinee_ty(body: &MirBody, value: ValueId) -> Option<&Ty> {
+    match body.val_types.get(&value)? {
+        Ty::Ref(_, inner) => Some(&inner.ty),
+        ty => Some(ty),
     }
 }
 
-fn defines(inst: &Inst, value: ValueId) -> bool {
-    match &inst.kind {
-        InstKind::Assign { target, .. } => *target == RefTarget::Var(value),
-        kind => inst_info::defs(kind).contains(&value),
-    }
-}
+#[cfg(test)]
+mod tests {
+    use acvus_ast::Span;
+    use acvus_utils::Interner;
 
-/// The tags a value is built from: one `MakeVariant`, or a join of them
-/// through a block parameter. Anything else -- a call's result, a field
-/// read, an undefined value -- is not a constructor this body wrote, and
-/// the answer is `None`, which the caller reads as `Open`.
-fn constructed_tags(
-    body: &MirBody,
-    value: ValueId,
-    seen: &mut FxHashSet<ValueId>,
-) -> Option<BTreeSet<Astr>> {
-    if !seen.insert(value) {
-        // Already on the path: a loop carrying a variant reaches its
-        // constructors on the edge that is not this one.
-        return Some(BTreeSet::new());
-    }
-    let defining = body.insts.iter().find(|inst| defines(inst, value))?;
-    match &defining.kind {
-        InstKind::MakeVariant { tag, .. } => Some(BTreeSet::from([*tag])),
-        InstKind::Assign { value: written, .. } => constructed_tags(body, *written, seen),
-        InstKind::BlockLabel { label, params, .. } => {
-            let index = params.iter().position(|p| *p == value)?;
-            let mut tags = BTreeSet::new();
-            for inst in &body.insts {
-                for args in incoming(&inst.kind, *label) {
-                    tags.extend(constructed_tags(body, *args.get(index)?, seen)?);
-                }
-            }
-            Some(tags)
-        }
-        _ => None,
-    }
-}
+    use super::*;
+    use crate::ir::{Inst, Label};
 
-/// The argument lists an instruction hands `label`, over every edge it has
-/// to it.
-fn incoming(kind: &InstKind, label: Label) -> Vec<&Vec<ValueId>> {
-    match kind {
-        InstKind::Jump { label: to, args } if *to == label => vec![args],
-        InstKind::JumpIf {
-            then_label,
-            then_args,
-            else_label,
-            else_args,
-            ..
-        } => [(then_label, then_args), (else_label, else_args)]
-            .into_iter()
-            .filter(|(to, _)| **to == label)
-            .map(|(_, args)| args)
-            .collect(),
-        InstKind::Switch { arms, default, .. } => arms
-            .iter()
-            .map(|(_, to, args)| (to, args))
-            .chain(default.iter().map(|(to, args)| (to, args)))
-            .filter(|(to, _)| **to == label)
-            .map(|(_, args)| args)
-            .collect(),
-        _ => Vec::new(),
+    /// `typeck` refuses every source that would reach [`Known::Open`], so the
+    /// body is built here.
+    #[test]
+    fn a_switch_over_a_tag_whose_type_names_no_variants_is_refused() {
+        let interner = Interner::new();
+        let mut body = MirBody::default();
+        let tag = body.val_factory.next();
+        body.val_types.insert(tag, Ty::I64);
+        body.insts.push(Inst {
+            span: Span::ZERO,
+            kind: InstKind::Switch {
+                tag,
+                arms: vec![(interner.intern("A"), Label(0), Vec::new())],
+                default: None,
+            },
+        });
+
+        let mut errors = Vec::new();
+        check_body(&body, "main", &mut errors);
+        let [error] = errors.as_slice() else {
+            panic!("one refusal, got {errors:?}");
+        };
+        assert!(
+            matches!(error.kind, ValidationErrorKind::NonExhaustiveMatch),
+            "{:?}",
+            error.kind
+        );
     }
 }

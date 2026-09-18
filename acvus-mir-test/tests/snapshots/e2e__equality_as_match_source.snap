@@ -21,7 +21,7 @@ expression: ir
     12 | L1:
     14 |   r7 = string_concat [T1]
     15 |   jump L0(r7)
-    16 | L0(r8: String):  ; merge_of L2
+    16 | L0(r8: String):
     17 |   r9 = string_concat [r8]
     18 |   commit @a = r2
     19 |   commit @b = r3

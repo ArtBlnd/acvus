@@ -3855,7 +3855,6 @@ mod recognizer_tests {
         inst(InstKind::BlockLabel {
             label: Label(label),
             params: Vec::new(),
-            merge_of: None,
         })
     }
 
@@ -4310,7 +4309,6 @@ mod assignment_tests {
         inst(InstKind::BlockLabel {
             label: Label(label),
             params: params.iter().copied().map(val).collect(),
-            merge_of: None,
         })
     }
 

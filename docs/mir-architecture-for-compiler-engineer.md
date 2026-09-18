@@ -45,7 +45,7 @@ MirBody                          CfgBody
 +-- params: Vec<(Astr,ValueId)>      +-- params: Vec<ValueId>
 +-- captures: Vec<(Astr,ValueId)>    +-- insts: Vec<Inst>   (no control flow)
 +-- order_param: Option<ValueId>     +-- terminator: Terminator
-+-- task: Task                       +-- merge_of: Option<Label>
++-- task: Task
 +-- debug: DebugInfo             +-- label_to_block: Map<Label,BlockIdx>
 +-- val_factory: LocalFactory    +-- val_types, params, captures,
 +-- label_count: u32                 order_param, task, debug (shared)
@@ -537,7 +537,7 @@ and a terminator never defines a value.
 ## Block boundaries
 
 `promote()` builds the CFG from the flat stream: a `BlockLabel` starts a
-block, carrying its `params` and `merge_of`; a `Jump`/`JumpIf`/`Switch`/
+block, carrying its `params`; a `Jump`/`JumpIf`/`Switch`/
 `Return`/`Diverge` ends one as its terminator, and a block that ends
 without one gets `Fallthrough`.
 

@@ -1235,7 +1235,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1244,7 +1243,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1253,7 +1251,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Spawn {
                     dst: v(1),
@@ -1308,7 +1305,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![v(1)],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1317,7 +1313,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![v(2)],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1326,7 +1321,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![v(3)],
-                    merge_of: None,
                 },
                 InstKind::Spawn {
                     dst: v(4),
@@ -1499,7 +1493,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(1),
@@ -1508,7 +1501,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(0),
@@ -1574,7 +1566,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1583,7 +1574,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1592,7 +1582,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Eval {
                     dst: v(1),
@@ -1658,7 +1647,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1667,7 +1655,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1676,7 +1663,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Spawn {
                     dst: v(1),
@@ -1738,7 +1724,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1747,7 +1732,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1756,7 +1740,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::JumpIf {
                     cond: v(0),
@@ -1768,7 +1751,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(3),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(5),
@@ -1777,7 +1759,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(4),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(5),
@@ -1786,7 +1767,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(5),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::UnaryOp {
                     dst: v(1),
@@ -1836,7 +1816,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1845,7 +1824,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1854,7 +1832,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::BinOp {
                     dst: v(1),
@@ -1910,7 +1887,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1919,7 +1895,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Jump {
                     label: Label(2),
@@ -1928,7 +1903,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::BinOp {
                     dst: v(1),
@@ -1993,7 +1967,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::JumpIf {
                     cond: v(0),
@@ -2005,7 +1978,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::BinOp {
                     dst: v(1),
@@ -2020,7 +1992,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(2),
                     params: vec![],
-                    merge_of: None,
                 },
                 InstKind::Return {
                     value: v(0),
@@ -2094,7 +2065,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::JumpIf {
                 cond: v(3),
@@ -2106,7 +2076,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
         ];
         insts.extend(body);
@@ -2118,7 +2087,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(0),
@@ -2217,7 +2185,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(0),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::JumpIf {
                 cond: v(3),
@@ -2229,7 +2196,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(1),
                 params: vec![],
-                merge_of: None,
             },
         ];
         insts.extend(body);
@@ -2241,7 +2207,6 @@ mod tests {
             InstKind::BlockLabel {
                 label: Label(2),
                 params: vec![],
-                merge_of: None,
             },
             InstKind::Return {
                 value: v(0),
@@ -2271,7 +2236,6 @@ mod tests {
         let label = |n| InstKind::BlockLabel {
             label: Label(n),
             params: vec![],
-            merge_of: None,
         };
         let jump = |n| InstKind::Jump {
             label: Label(n),

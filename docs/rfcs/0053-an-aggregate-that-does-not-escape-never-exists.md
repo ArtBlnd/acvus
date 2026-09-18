@@ -71,13 +71,14 @@ instruction breaks the build rather than reading as non-escaping.
 
 `validate::exhaustive` had its own version of this question that counted
 only call arguments, spawn arguments and closure captures
-(`exhaustive.rs:221-242` at `a6f1d50d`). There a missed escape only made
-the checker refuse a claim it could have allowed; here it would be a
-miscompile. The two now call one function. On the tree as it stands the
-completion changes no exhaustiveness verdict: every test in `acvus-mir`,
-`acvus-mir-test` and `acvus-interpreter-test` is green, including
-`a_match_whose_scrutinee_is_lent_to_a_call_is_open` and
-`a_match_over_a_locally_closed_enum_that_misses_a_variant_is_refused`.
+(`exhaustive.rs:221-242` at `a6f1d50d`); this RFC made the two call one
+function. Since 2026-09-20 `exhaustive` asks no escape question at all:
+a `match` is closed by the scrutinee's settled `Ty::Enum` — the union of
+every construction the value can flow from (RFC-0041) — wherever the
+value came from (`exhaustive.rs::known_variants`; tests
+`a_match_on_a_value_from_outside_is_closed_by_its_type`,
+`a_match_on_a_container_element_needs_no_catch_all`). `escape`'s one
+caller is `optimize::sroa`.
 
 ### 2. The same SSA builder, over a wider key
 
@@ -150,11 +151,9 @@ registers, each at its own last use.
 - One pass file, `acvus-mir/src/optimize/sroa.rs`, and one analysis
   module, `acvus-mir/src/analysis/escape.rs`.
 - One variant on `SsaVar` and one new enum, `Part`.
-- `exhaustive`'s escape question is now the complete one. It is
-  strictly wider, so it can only move a verdict from `Closed` to `Open`
-  — from accepting a `match` without a catch-all to refusing it. No
-  test moves today; a program that commits a locally-built enum to a
-  context, or returns it, will now need a catch-all where it did not.
+- `exhaustive` no longer asks an escape question (see §1): the
+  settled type closes every `match`, so a value from a context, a
+  container, a parameter or a return needs no catch-all.
 - One existing test changed its assertion, not its claim:
   `a_match_over_a_locally_closed_enum_needs_no_catch_all` counted
   `is A`/`is B` in the optimized listing to mean "two arms cost one tag

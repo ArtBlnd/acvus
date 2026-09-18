@@ -20,7 +20,7 @@ expression: listing
     20 |   r13 = r4 + 1 (r14)
     21 |   r15 = r3 + r13
     22 |   jump L6(r15)
-    23 | L6(r16: i64):  ; merge_of L6
+    23 | L6(r16: i64):
     24 |   jump L0(r16, r10)
     25 | L2:
     26 |   commit @n = r0

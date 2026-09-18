@@ -30,7 +30,7 @@ expression: listing
     29 | L7:
     31 |   r19 = r10 - 1 (r20)
     32 |   jump L3(r19)
-    33 | L3(r21: i64):  ; merge_of L4
+    33 | L3(r21: i64):
     34 |   jump L0(r21, r15)
     35 | L2:
     36 |   drop r22

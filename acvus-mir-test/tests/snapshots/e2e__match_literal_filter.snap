@@ -18,7 +18,7 @@ expression: ir
      9 | L1:
     11 |   r4 = string_concat [T1]
     12 |   jump L0(r4)
-    13 | L0(r5: String):  ; merge_of L2
+    13 | L0(r5: String):
     14 |   r6 = string_concat [r5]
     15 |   commit @role = r1
     16 |   return r6

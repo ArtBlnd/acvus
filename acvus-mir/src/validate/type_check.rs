@@ -1958,7 +1958,6 @@ mod tests {
                 inst(InstKind::BlockLabel {
                     label: Label(0),
                     params: vec![v1],
-                    merge_of: None,
                 }),
                 inst(InstKind::Jump {
                     label: Label(0),

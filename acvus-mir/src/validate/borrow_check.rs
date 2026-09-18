@@ -496,7 +496,6 @@ mod tests {
                 InstKind::BlockLabel {
                     label: Label(1),
                     params: vec![],
-                    merge_of: None,
                 },
                 take(7),
                 InstKind::MakeTuple {

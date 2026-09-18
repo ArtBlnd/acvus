@@ -78,8 +78,7 @@ impl ValidationError {
                 format!("{storage} is used while reference Val({reference}) to it is live")
             }
             ValidationErrorKind::NonExhaustiveMatch => {
-                "non-exhaustive match: the variants of this value are not known in this function"
-                    .to_string()
+                "non-exhaustive match: the scrutinee's type names no variants".to_string()
             }
             ValidationErrorKind::MatchMissesVariants { missing, .. } => {
                 format!(
@@ -196,7 +195,7 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             ),
             ValidationErrorKind::NonExhaustiveMatch => write!(
                 f,
-                "non-exhaustive match: the variants of this value are not known in this function; add a `_` arm"
+                "non-exhaustive match: the scrutinee's type names no variants; add a `_` arm"
             ),
             ValidationErrorKind::MatchMissesVariants { enum_name, missing } => {
                 let written = missing
