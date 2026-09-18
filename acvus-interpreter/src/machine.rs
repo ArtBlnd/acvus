@@ -19,8 +19,8 @@ use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::code::{
-    Block, BlockId, Body, Code, EntryKonst, Expr, ExprBody, ExprChain, Off, Pending, Prepared,
-    RETURN, SENTINEL, SUSPEND,
+    BlockId, Body, Code, EntryKonst, Expr, ExprBody, ExprChain, Off, Op, Pending, Prepared, RETURN,
+    SENTINEL, SUSPEND,
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
@@ -65,22 +65,22 @@ impl<'c> Machine<'c> {
         }
     }
 
-    /// One compare per block. The block index is unchecked because every
+    /// One compare per joint. The index is unchecked because every
     /// terminator's target was resolved by `prepare` against this same
-    /// `blocks` array, and the two sentinels are what the compare catches.
+    /// `heads` array, and the two sentinels are what the compare catches.
     pub fn run(&mut self) -> BlockId {
         let body = self.body;
         let mut at = self.at;
         loop {
             debug_assert!(
-                (at as usize) < body.blocks.len(),
+                (at as usize) < body.heads.len(),
                 "a terminator names block {at}, which this body does not have"
             );
             // SAFETY: `prepare::link` resolves every terminator target to an
             // index of this array or to a sentinel, and a sentinel leaves the
             // loop at the compare below before it is used as an index.
-            let block: &Block = unsafe { body.blocks.get_unchecked(at as usize) };
-            at = block.run(self);
+            let head: &Box<dyn Op> = unsafe { body.heads.get_unchecked(at as usize) };
+            at = head.run(self, 0);
             if at >= SENTINEL {
                 return at;
             }

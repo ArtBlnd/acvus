@@ -17,7 +17,7 @@ use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
-use crate::code::{BlockId, Deref, Off, Op, SUSPEND, Terminator};
+use crate::code::{BlockId, Deref, Off, Op, SUSPEND, successor};
 use crate::interpreter::lookup_module;
 use crate::machine::{Machine, call_module, call_module_sync, fn_value_call};
 use crate::runtime::{AcvusRuntime, SyncCall};
@@ -85,13 +85,17 @@ impl ArgWindow {
 pub struct CallExtern0<const LARGE: bool> {
     pub dst: Off,
     pub f: Sync0,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallExtern0<LARGE> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let value = (self.f)(m.rt);
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -100,16 +104,20 @@ pub struct CallExtern1<const LARGE: bool, const WORD: bool> {
     pub a: Off,
     pub takes: u64,
     pub f: Sync1,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool, const WORD: bool> Op for CallExtern1<LARGE, WORD> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         let value = (self.f)(m.rt, a);
         m.regs().store::<LARGE, WORD>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -119,17 +127,21 @@ pub struct CallExtern2<const LARGE: bool> {
     pub b: Off,
     pub takes: u64,
     pub f: Sync2,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallExtern2<LARGE> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         regs.take_mask(self.takes);
         let value = (self.f)(m.rt, a, b);
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -140,11 +152,14 @@ pub struct CallExtern3<const LARGE: bool> {
     pub c: Off,
     pub takes: u64,
     pub f: Sync3,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallExtern3<LARGE> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
@@ -152,6 +167,7 @@ impl<const LARGE: bool> Op for CallExtern3<LARGE> {
         regs.take_mask(self.takes);
         let value = (self.f)(m.rt, a, b, c);
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -160,13 +176,17 @@ pub struct CallWindow<const LARGE: bool> {
     pub dst: Off,
     pub window: ArgWindow,
     pub f: SyncWindow,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallWindow<LARGE> {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let rt = m.rt;
         let value = (self.f)(rt, self.window.lend(m));
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -178,17 +198,21 @@ pub struct CallSlice {
     pub a: Off,
     pub takes: u64,
     pub f: SyncSlice,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for CallSlice {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         let run = (self.f)(m.rt, a);
         let value = erase_elements(m.rt, run);
         m.regs().define::<true>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -196,13 +220,17 @@ pub struct CallState0<const LARGE: bool> {
     pub dst: Off,
     pub state: State,
     pub f: State0,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallState0<LARGE> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let value = (self.f)(&*self.state, m.rt);
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -212,16 +240,20 @@ pub struct CallState1<const LARGE: bool> {
     pub takes: u64,
     pub state: State,
     pub f: State1,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallState1<LARGE> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         let value = (self.f)(&*self.state, m.rt, a);
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -232,17 +264,21 @@ pub struct CallState2<const LARGE: bool> {
     pub takes: u64,
     pub state: State,
     pub f: State2,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallState2<LARGE> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         regs.take_mask(self.takes);
         let value = (self.f)(&*self.state, m.rt, a, b);
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -254,11 +290,14 @@ pub struct CallState3<const LARGE: bool> {
     pub takes: u64,
     pub state: State,
     pub f: State3,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallState3<LARGE> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
@@ -266,6 +305,7 @@ impl<const LARGE: bool> Op for CallState3<LARGE> {
         regs.take_mask(self.takes);
         let value = (self.f)(&*self.state, m.rt, a, b, c);
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -274,13 +314,17 @@ pub struct CallStateWindow<const LARGE: bool> {
     pub window: ArgWindow,
     pub state: State,
     pub f: StateWindow,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for CallStateWindow<LARGE> {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let rt = m.rt;
         let value = (self.f)(&*self.state, rt, self.window.lend(m));
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -290,17 +334,21 @@ pub struct CallStateSlice {
     pub takes: u64,
     pub state: State,
     pub f: StateSlice,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for CallStateSlice {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         let run = (self.f)(&*self.state, m.rt, a);
         let value = erase_elements(m.rt, run);
         m.regs().define::<true>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -357,10 +405,13 @@ pub struct Fused<const CALLS: usize, const TAIL: bool, const LARGE: bool> {
     pub calls: SmallVec<[Call; 2]>,
     pub tail: Option<Deref>,
     pub takes: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl<const CALLS: usize, const TAIL: bool, const LARGE: bool> Op for Fused<CALLS, TAIL, LARGE> {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         debug_assert_eq!(
             self.calls.len(),
             CALLS,
@@ -379,6 +430,7 @@ impl<const CALLS: usize, const TAIL: bool, const LARGE: bool> Op for Fused<CALLS
             false => held,
         };
         m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -394,10 +446,11 @@ pub fn fused(
     calls: SmallVec<[Call; 2]>,
     tail: Option<Deref>,
     takes: u64,
+    next: Box<dyn Op>,
 ) -> Box<dyn Op> {
     match large {
-        true => shape::<true>(dst, calls, tail, takes),
-        false => shape::<false>(dst, calls, tail, takes),
+        true => shape::<true>(dst, calls, tail, takes, next),
+        false => shape::<false>(dst, calls, tail, takes, next),
     }
 }
 
@@ -412,6 +465,7 @@ fn shape<const LARGE: bool>(
     calls: SmallVec<[Call; 2]>,
     tail: Option<Deref>,
     takes: u64,
+    next: Box<dyn Op>,
 ) -> Box<dyn Op> {
     let instance = Instance {
         calls: calls.len(),
@@ -426,6 +480,7 @@ fn shape<const LARGE: bool>(
             calls,
             tail,
             takes,
+            next,
         }),
         Instance {
             calls: 2,
@@ -435,6 +490,7 @@ fn shape<const LARGE: bool>(
             calls,
             tail,
             takes,
+            next,
         }),
         Instance {
             calls: 3,
@@ -444,6 +500,7 @@ fn shape<const LARGE: bool>(
             calls,
             tail,
             takes,
+            next,
         }),
         Instance {
             calls: 2,
@@ -453,6 +510,7 @@ fn shape<const LARGE: bool>(
             calls,
             tail,
             takes,
+            next,
         }),
         Instance {
             calls: 3,
@@ -462,6 +520,7 @@ fn shape<const LARGE: bool>(
             calls,
             tail,
             takes,
+            next,
         }),
         Instance {
             calls: 1,
@@ -480,8 +539,8 @@ pub struct CallExternAsync<const LARGE: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool> Terminator for CallExternAsync<LARGE> {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
         let rt = m.rt.clone();
         let fut = (self.f)(rt, self.window.lend(m));
         m.suspend::<LARGE>(self.dst, self.next, fut);
@@ -497,8 +556,8 @@ pub struct CallStateAsync<const LARGE: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool> Terminator for CallStateAsync<LARGE> {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+impl<const LARGE: bool> Op for CallStateAsync<LARGE> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
         let rt = m.rt.clone();
         let state = Arc::clone(&self.state);
         let fut = (self.f)(state, rt, self.window.lend(m));
@@ -518,8 +577,8 @@ pub struct CallHeavy<const LARGE: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool> Terminator for CallHeavy<LARGE> {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+impl<const LARGE: bool> Op for CallHeavy<LARGE> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
         let args = self.window.own(m);
         let rt = m.rt.clone();
         let f = self.f.clone();
@@ -543,15 +602,19 @@ pub struct CallDirect<const LARGE: bool, const WORD: bool> {
     pub callee: QualifiedRef,
     pub args: Box<[Off]>,
     pub takes: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool, const WORD: bool> Op for CallDirect<LARGE, WORD> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let args = staged(m, &self.args, self.takes);
         let prepared = Arc::clone(lookup_module(m.shared(), &self.callee));
         let value = call_module_sync(m, &prepared, self.callee, args);
         m.regs().store::<LARGE, WORD>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -566,8 +629,8 @@ pub struct CallDirectAsync<const LARGE: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool> Terminator for CallDirectAsync<LARGE> {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+impl<const LARGE: bool> Op for CallDirectAsync<LARGE> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
         let args = staged(m, &self.args, self.takes);
         let shared = Arc::clone(m.shared());
         let page = Arc::clone(m.page);
@@ -614,17 +677,21 @@ pub struct CallIndirect<const LARGE: bool, const WORD: bool, const THROUGH: bool
     pub callee: Off,
     pub args: Box<[Off]>,
     pub takes: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool, const WORD: bool, const THROUGH: bool> Op
     for CallIndirect<LARGE, WORD, THROUGH>
 {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let mut args = staged(m, &self.args, self.takes);
         // SAFETY: as `call_closure` states.
         let value = unsafe { call_closure::<THROUGH>(m, self.callee, &mut args) };
         m.regs().store::<LARGE, WORD>(self.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -637,8 +704,8 @@ pub struct CallIndirectAsync<const LARGE: bool, const THROUGH: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool, const THROUGH: bool> Terminator for CallIndirectAsync<LARGE, THROUGH> {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THROUGH> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
         let mut args = staged(m, &self.args, self.takes);
         let fut: BoxFuture<'static, Value> = match THROUGH {
             // SAFETY: the type checker admits only a live reference to a
@@ -670,8 +737,8 @@ pub struct Eval<const LARGE: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool> Terminator for Eval<LARGE> {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+impl<const LARGE: bool> Op for Eval<LARGE> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
         // SAFETY: the type checker admits only a handle value here.
         let handle = unsafe {
             m.regs()
@@ -695,10 +762,13 @@ pub struct SpawnExternSync {
     pub dst: Off,
     pub window: ArgWindow,
     pub f: SyncCall,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for SpawnExternSync {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let args = self.window.own(m);
         let rt = m.rt.clone();
         let f = self.f.clone();
@@ -707,6 +777,7 @@ impl Op for SpawnExternSync {
             .executor
             .spawn_blocking(Box::new(move || f.call_taking(&rt, &args)));
         m.regs().define::<true>(self.dst, Value::handle(handle));
+        self.next.run(m, r0)
     }
 }
 
@@ -714,10 +785,13 @@ pub struct SpawnExternAsync {
     pub dst: Off,
     pub window: ArgWindow,
     pub f: AsyncCall<AcvusRuntime>,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for SpawnExternAsync {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let mut args = self.window.own(m);
         let rt = m.rt.clone();
         let fut = match &self.f {
@@ -726,6 +800,7 @@ impl Op for SpawnExternAsync {
         };
         let handle = m.shared().executor.spawn_async(fut);
         m.regs().define::<true>(self.dst, Value::handle(handle));
+        self.next.run(m, r0)
     }
 }
 
@@ -734,10 +809,13 @@ pub struct SpawnModule {
     pub callee: QualifiedRef,
     pub args: Box<[Off]>,
     pub takes: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for SpawnModule {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let args = staged(m, &self.args, self.takes);
         let child = crate::interpreter::Interpreter::spawned(
             Arc::clone(m.shared()),
@@ -747,6 +825,7 @@ impl Op for SpawnModule {
         );
         let handle = m.shared().executor.spawn_interpreter(child);
         m.regs().define::<true>(self.dst, Value::handle(handle));
+        self.next.run(m, r0)
     }
 }
 
@@ -755,10 +834,13 @@ pub struct MakeClosure {
     pub entry: Arc<dyn crate::machine::Callable>,
     pub captures: Box<[Off]>,
     pub takes: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeClosure {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let captures: Arc<[Owned<AcvusRuntime>]> = {
             let regs = m.regs();
             let captures = self
@@ -776,5 +858,6 @@ impl Op for MakeClosure {
             captures,
         };
         m.regs().define::<true>(self.dst, Value::closure(closure));
+        self.next.run(m, r0)
     }
 }

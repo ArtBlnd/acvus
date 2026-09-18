@@ -65,7 +65,7 @@ async fn a_regions_head_is_one_operation_list() {
     let blocks = loop_of(TAIL_ABOVE_THE_BRANCH);
     assert_eq!(
         part_of(one_loop(&blocks), "head").ops,
-        ["Lt<i64>"],
+        ["Lt<i64, Slot, Slot, Slot>"],
         "the head is the condition alone: no terminator, because the head's \
          `JumpIf` is the `cond` the Loop reads itself"
     );
@@ -78,9 +78,9 @@ async fn a_tail_that_reads_neither_arm_sits_before_the_diamond() {
     assert_eq!(
         body.ops,
         [
-            "Chain2<i64, 0, 0>",
-            "Add<i64>",
-            "Diamond",
+            "Chain2<i64, Slot, 0, 0>",
+            "Add<i64, Slot, Slot, Slot>",
+            "Diamond<Slot>",
             "Mov<false, true>"
         ],
         "`n = n + 1` reads neither arm, so code_motion put it above the branch; \
@@ -88,7 +88,10 @@ async fn a_tail_that_reads_neither_arm_sits_before_the_diamond() {
          `Mov` after it"
     );
     let diamond = &body.regions[0];
-    assert_eq!(part_of(diamond, "on_true").ops, ["Add<i64>"]);
+    assert_eq!(
+        part_of(diamond, "on_true").ops,
+        ["Add<i64, Slot, Slot, Slot>"]
+    );
     assert_eq!(part_of(diamond, "on_false").ops, Vec::<String>::new());
 }
 
@@ -99,10 +102,10 @@ async fn a_tail_that_reads_an_arm_sits_after_the_diamond() {
     assert_eq!(
         body.ops,
         [
-            "Chain2<i64, 0, 0>",
-            "Add<i64>",
-            "Diamond",
-            "Mul<i64>",
+            "Chain2<i64, Slot, 0, 0>",
+            "Add<i64, Slot, Slot, Slot>",
+            "Diamond<Slot>",
+            "Mul<i64, Slot, Slot, Slot>",
             "Mov<false, true>"
         ],
         "`acc = acc * 2` reads what both arms wrote, so it follows the Diamond \
@@ -136,7 +139,8 @@ async fn a_while_that_returns_is_not_a_region() {
          `while` prepares as blocks: {names:?}"
     );
     assert!(
-        ends(&blocks).contains(&"JumpIf") && ends(&blocks).contains(&"Return<false>"),
+        ends(&blocks).iter().any(|end| end.starts_with("JumpIf"))
+            && ends(&blocks).contains(&"Return<false>"),
         "the loop is blocks: its test is a `JumpIf` terminator and the `?` a \
          `Return` one — {:?}",
         ends(&blocks)

@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Owned};
-use acvus_interpreter::code::{Block, Code, Op};
+use acvus_interpreter::code::{Code, Op, substitute};
 use acvus_interpreter::{
     AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,
@@ -376,33 +376,31 @@ fn drop_the_bound_check(code: &mut Code) {
         panic!("a body with a loop prepares as a Body")
     };
     let body = Arc::get_mut(body).expect("the prepared body is swapped before anything shares it");
-    let swapped = swap_in_blocks(&mut body.blocks);
+    let swapped: usize = body.heads.iter_mut().map(swap_in_chain).sum();
     assert_eq!(swapped, 2, "both element reads lost their bound check");
 }
 
-/// Every checked `Index` of these blocks and of the parts their regions
-/// hold, replaced by the unchecked form of the same read.
-fn swap_in_blocks(blocks: &mut [Block]) -> usize {
+/// Every checked `Index` of this chain and of the chains its regions hold,
+/// replaced by the unchecked form of the same read, carrying the successor
+/// the node it replaces held.
+fn swap_in_chain(head: &mut Box<dyn Op>) -> usize {
     let mut swapped = 0;
-    for block in blocks {
-        swapped += swap_in_ops(&mut block.ops);
-    }
-    swapped
-}
-
-fn swap_in_ops(ops: &mut [Box<dyn Op>]) -> usize {
-    let mut swapped = 0;
-    for op in ops.iter_mut() {
-        if let Some(read) = op.index_read() {
-            *op = acvus_interpreter::index_handlers::unchecked(IndexMode::Copy, read);
+    let mut at = head;
+    loop {
+        if let Some(read) = at.index_read() {
+            substitute(at, |next| {
+                acvus_interpreter::index_handlers::unchecked(IndexMode::Copy, read, next)
+            });
             swapped += 1;
-            continue;
         }
-        for owned in op.owns_mut() {
-            swapped += swap_in_ops(owned);
+        for owned in at.owns_mut() {
+            swapped += swap_in_chain(owned);
+        }
+        match at.successor_mut() {
+            Some(next) => at = next,
+            None => return swapped,
         }
     }
-    swapped
 }
 
 fn page(n: usize) -> HashMap<String, Owned<AcvusRuntime>> {
@@ -434,22 +432,34 @@ fn dispatches_per_iteration(code: &Code) -> usize {
     let Code::Body(body) = code else {
         panic!("a body with a loop prepares as a Body")
     };
-    body.blocks
+    body.heads
         .iter()
-        .flat_map(|block| block.ops.iter())
+        .flat_map(|head| chain_of(head.as_ref()))
         .flat_map(|op| op.owns())
-        .map(|owned| ops_in(owned.ops))
+        .map(|owned| ops_in(owned.head))
         .sum()
 }
 
+/// The operations of one chain, its terminator excluded.
+fn chain_of(head: &dyn Op) -> Vec<&dyn Op> {
+    let mut ops = Vec::new();
+    let mut at = head;
+    while let Some(next) = at.successor() {
+        ops.push(at);
+        at = next;
+    }
+    ops
+}
+
 /// The operations a region's part runs, its nested regions included.
-fn ops_in(ops: &[Box<dyn Op>]) -> usize {
-    ops.iter()
+fn ops_in(head: &dyn Op) -> usize {
+    chain_of(head)
+        .into_iter()
         .map(|op| {
             1 + op
                 .owns()
                 .into_iter()
-                .map(|owned| ops_in(owned.ops))
+                .map(|owned| ops_in(owned.head))
                 .sum::<usize>()
         })
         .sum()

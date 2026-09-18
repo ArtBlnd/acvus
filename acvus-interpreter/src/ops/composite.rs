@@ -3,7 +3,7 @@
 use acvus_extern::Owned;
 use rustc_hash::FxHashMap;
 
-use crate::code::{FieldSlot, Off, Op};
+use crate::code::{BlockId, FieldSlot, Off, Op, successor};
 use crate::machine::Machine;
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -32,24 +32,32 @@ impl Elements {
 pub struct MakeArray {
     pub dst: Off,
     pub elements: Elements,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeArray {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let items = self.elements.take(m);
         m.regs().define::<true>(self.dst, Value::array(items));
+        self.next.run(m, r0)
     }
 }
 
 pub struct MakeTuple {
     pub dst: Off,
     pub elements: Elements,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeTuple {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let items = self.elements.take(m);
         m.regs().define::<true>(self.dst, Value::tuple(items));
+        self.next.run(m, r0)
     }
 }
 
@@ -58,10 +66,13 @@ pub struct MakeObject {
     pub fields: Box<[FieldSlot]>,
     /// Bit `i` is "the slot of field `i` owns a `Large`", as `Elements`.
     pub owns_large: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeObject {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let object: FxHashMap<_, Owned<AcvusRuntime>> = self
             .fields
@@ -70,5 +81,6 @@ impl Op for MakeObject {
             .collect();
         regs.take_mask(self.owns_large);
         m.regs().define::<true>(self.dst, Value::object(object));
+        self.next.run(m, r0)
     }
 }

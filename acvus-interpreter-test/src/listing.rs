@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use acvus_extern::Registry;
 use acvus_interpreter::AcvusRuntime;
-use acvus_interpreter::code::{Block, Body, Code, Named, Op, Prepared, Shape, Slot};
+use acvus_interpreter::code::{Body, Code, Named, Op, Prepared, Shape, Slot, Where};
 use acvus_interpreter::{PrepareCtx, prepare_module};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -30,55 +30,92 @@ pub struct PartListing {
     pub leaves_with: usize,
 }
 
+/// The operation's type with every module path dropped, inside its generic
+/// arguments as well, so that `arith::Lt<i64, place::Slot, place::Slot,
+/// place::R0>` reads as `Lt<i64, Slot, Slot, R0>`.
 pub fn last_path_segment(of: &dyn Named) -> String {
     let full = of.name();
-    match full.rsplit_once("::") {
-        Some((_, last)) => last.to_string(),
-        None => full.to_string(),
+    let mut shortened = String::with_capacity(full.len());
+    let mut path = String::new();
+    for c in full.chars() {
+        match c.is_alphanumeric() || c == '_' || c == ':' {
+            true => path.push(c),
+            false => {
+                shortened.push_str(tail(&path));
+                path.clear();
+                shortened.push(c);
+            }
+        }
+    }
+    shortened.push_str(tail(&path));
+    shortened
+}
+
+fn tail(path: &str) -> &str {
+    match path.rsplit_once("::") {
+        Some((_, last)) => last,
+        None => path,
     }
 }
 
-fn names_of(ops: &[Box<dyn Op>]) -> Vec<String> {
-    ops.iter()
-        .map(|op| last_path_segment(op.as_ref()))
-        .collect()
+/// A chain read back as the operations it holds and the one node that ends
+/// it: the successor field is what is walked, so a listing and the machine
+/// read the same chain.
+fn walk(head: &dyn Op) -> (Vec<&dyn Op>, &dyn Op) {
+    let mut ops = Vec::new();
+    let mut at = head;
+    while let Some(next) = at.successor() {
+        ops.push(at);
+        at = next;
+    }
+    (ops, at)
+}
+
+fn names_of(ops: &[&dyn Op]) -> Vec<String> {
+    ops.iter().map(|op| last_path_segment(*op)).collect()
 }
 
 /// A region is the one operation that answers `owns`, so this is every
 /// region of an operation list, in order.
-fn regions_of(ops: &[Box<dyn Op>]) -> Vec<RegionListing> {
+fn regions_of(ops: &[&dyn Op]) -> Vec<RegionListing> {
     ops.iter()
         .filter(|op| !op.owns().is_empty())
         .map(|op| RegionListing {
-            name: last_path_segment(op.as_ref()),
+            name: last_path_segment(*op),
             owns: op
                 .owns()
                 .into_iter()
-                .map(|owned| PartListing {
-                    part: owned.part.to_string(),
-                    ops: names_of(owned.ops),
-                    regions: regions_of(owned.ops),
-                    leaves_with: moves_in(owned.ops),
+                .map(|owned| {
+                    let (part_ops, _end) = walk(owned.head);
+                    PartListing {
+                        part: owned.part.to_string(),
+                        ops: names_of(&part_ops),
+                        regions: regions_of(&part_ops),
+                        leaves_with: moves_in(&part_ops),
+                    }
                 })
                 .collect(),
         })
         .collect()
 }
 
-pub fn listing(blocks: &[Block]) -> Vec<BlockListing> {
-    blocks
+pub fn listing(heads: &[Box<dyn Op>]) -> Vec<BlockListing> {
+    heads
         .iter()
-        .map(|block| BlockListing {
-            ops: names_of(&block.ops),
-            end: last_path_segment(block.end.as_ref()),
-            regions: regions_of(&block.ops),
+        .map(|head| {
+            let (ops, end) = walk(head.as_ref());
+            BlockListing {
+                ops: names_of(&ops),
+                end: last_path_segment(end),
+                regions: regions_of(&ops),
+            }
         })
         .collect()
 }
 
 /// The moves a part leaves with: under RFC-0052 rule 1 they are `Mov`
 /// operations of the part itself, not a list a terminator walks.
-fn moves_in(ops: &[Box<dyn Op>]) -> usize {
+fn moves_in(ops: &[&dyn Op]) -> usize {
     names_of(ops)
         .iter()
         .filter(|name| name.starts_with("Mov<"))
@@ -115,6 +152,15 @@ pub fn regions_named<'b>(blocks: &'b [BlockListing], name: &str) -> Vec<&'b Regi
     found
 }
 
+/// The operation's family: its type name without the arguments its
+/// specialization added, which is how `asm_probe` names one too.
+pub fn family_of(name: &str) -> &str {
+    match name.split_once('<') {
+        Some((head, _)) => head,
+        None => name,
+    }
+}
+
 fn collect_regions<'b>(
     regions: &'b [RegionListing],
     name: &str,
@@ -124,7 +170,7 @@ fn collect_regions<'b>(
         for part in &region.owns {
             collect_regions(&part.regions, name, found);
         }
-        if region.name == name {
+        if family_of(&region.name) == name {
             found.push(region);
         }
     }
@@ -164,7 +210,7 @@ pub fn script_listing_with_externs(
         &main_body(&prepared_script_with_externs(
             interner, source, context, registries, ret,
         ))
-        .blocks,
+        .heads,
     )
 }
 
@@ -202,43 +248,51 @@ pub fn chains_of(code: &Code) -> Vec<ChainShape> {
         return Vec::new();
     };
     let mut found = Vec::new();
-    collect_chains(&body.blocks, &mut found);
+    collect_chains(&body.heads, &mut found);
     found
 }
 
 /// One chain operation as a shape test reads it: where it writes, the tree
-/// it walks, and the frame offsets of its leaves.
+/// it walks, and the frame offsets of its leaves. No `dst` means the root's
+/// word rides in the argument register (RFC-0052 rule 5).
 pub struct ChainShape {
-    pub dst: Slot,
+    pub dst: Option<Slot>,
     pub shape: Shape,
     pub leaves: Vec<u16>,
 }
 
-fn collect_chains(blocks: &[Block], found: &mut Vec<ChainShape>) {
-    for block in blocks {
-        collect_chains_of(&block.ops, found);
+fn collect_chains(heads: &[Box<dyn Op>], found: &mut Vec<ChainShape>) {
+    for head in heads {
+        let (ops, _end) = walk(head.as_ref());
+        collect_chains_of(&ops, found);
     }
 }
 
-fn collect_chains_of(ops: &[Box<dyn Op>], found: &mut Vec<ChainShape>) {
+fn collect_chains_of(ops: &[&dyn Op], found: &mut Vec<ChainShape>) {
     for op in ops {
         if let Some(probe) = op.chain() {
             found.push(ChainShape {
-                dst: u16::try_from(probe.dst.index())
-                    .expect("a register index fits the Slot its body was prepared with"),
+                dst: match probe.dst {
+                    Where::Frame(off) => Some(
+                        u16::try_from(off.index())
+                            .expect("a register index fits the Slot its body was prepared with"),
+                    ),
+                    Where::Register => None,
+                },
                 shape: probe.plan.shape,
                 leaves: probe.plan.leaves[..probe.plan.shape.leaves()].to_vec(),
             });
         }
         for owned in op.owns() {
-            collect_chains_of(owned.ops, found);
+            let (part_ops, _end) = walk(owned.head);
+            collect_chains_of(&part_ops, found);
         }
     }
 }
 
 pub fn code_listing(code: &Code) -> Vec<BlockListing> {
     match code {
-        Code::Body(body) => listing(&body.blocks),
+        Code::Body(body) => listing(&body.heads),
         Code::Expr(_) => Vec::new(),
     }
 }
@@ -273,5 +327,5 @@ pub fn script_listing(
     context: Context,
     ret: Ty,
 ) -> Vec<BlockListing> {
-    listing(&main_body(&prepared_script(interner, source, context, ret)).blocks)
+    listing(&main_body(&prepared_script(interner, source, context, ret)).heads)
 }

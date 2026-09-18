@@ -3,7 +3,7 @@
 
 use acvus_extern::Release;
 
-use crate::code::{ConcatPart, Off, Op};
+use crate::code::{BlockId, ConcatPart, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::{Binary, Unary};
 use crate::value::Value;
@@ -21,30 +21,38 @@ fn place<const THROUGH: bool>(value: &Value) -> &Value {
 
 pub struct CloneString<const THROUGH: bool> {
     pub slots: Unary,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool> Op for CloneString<THROUGH> {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let source = place::<THROUGH>(regs.peek(self.slots.src));
         // SAFETY: the type checker admits only a `String` here.
         let text = unsafe { source.as_str() }.to_string();
         regs.define::<true>(self.slots.dst, Value::string(text));
+        self.next.run(m, r0)
     }
 }
 
 pub struct StringEq {
     pub slots: Binary,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for StringEq {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         // SAFETY: the type checker admits only live `&String`s here.
         let equal = unsafe {
             regs.peek(self.slots.l).target().as_str() == regs.peek(self.slots.r).target().as_str()
         };
         regs.set_word(self.slots.dst, equal as u64);
+        self.next.run(m, r0)
     }
 }
 
@@ -54,10 +62,13 @@ pub struct Concat {
     /// Bit `i` is "the slot of part `i` owns a `Large`", as
     /// `composite::Elements`.
     pub owns_large: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for Concat {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
         let mut out = String::new();
         for part in &self.parts {
@@ -73,5 +84,6 @@ impl Op for Concat {
         }
         regs.take_mask(self.owns_large);
         regs.define::<true>(self.dst, Value::string(out));
+        self.next.run(m, r0)
     }
 }

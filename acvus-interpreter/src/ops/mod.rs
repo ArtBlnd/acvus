@@ -10,6 +10,7 @@ pub mod constant;
 pub mod control;
 pub mod index;
 pub mod pattern;
+pub mod place;
 pub mod storage;
 pub mod string;
 pub mod variant;

@@ -16,7 +16,7 @@
 //! a middle body of seventeen.
 
 use acvus_interpreter::Value;
-use acvus_interpreter_test::listing::{regions_named, script_listing};
+use acvus_interpreter_test::listing::{family_of, regions_named, script_listing};
 use acvus_interpreter_test::{Context, typed};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -76,7 +76,11 @@ fn mandelbrot_loops() -> Vec<LoopShape> {
             LoopShape {
                 head_ops: head.ops.len(),
                 body_ops: body.ops.len(),
-                diamonds_in_head: head.ops.iter().filter(|name| *name == "Diamond").count(),
+                diamonds_in_head: head
+                    .ops
+                    .iter()
+                    .filter(|name| family_of(name) == "Diamond")
+                    .count(),
             }
         })
         .collect()

@@ -13,8 +13,11 @@
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
-use crate::code::{BlockId, Off, Op, RETURN, Terminator};
+use std::marker::PhantomData;
+
+use crate::code::{BlockId, Off, Op, RETURN, successor};
 use crate::machine::Machine;
+use crate::ops::place::Place;
 use crate::value::Value;
 
 /// One move of a parallel move, as an operation of the block it belongs to
@@ -29,11 +32,14 @@ use crate::value::Value;
 pub struct Mov<const LARGE: bool, const WORD: bool> {
     pub dst: Off,
     pub src: Off,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         const {
             assert!(
                 !(LARGE && WORD),
@@ -51,6 +57,7 @@ impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
                 regs.define::<LARGE>(self.dst, value);
             }
         }
+        self.next.run(m, r0)
     }
 }
 
@@ -59,9 +66,9 @@ pub struct Goto {
     pub target: BlockId,
 }
 
-impl Terminator for Goto {
+impl Op for Goto {
     #[inline]
-    fn next(&self, _: &mut Machine<'_>) -> BlockId {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
         self.target
     }
 }
@@ -69,16 +76,23 @@ impl Terminator for Goto {
 /// The two edges of a conditional jump. Where an edge carries a parallel
 /// move, `prepare` gives that edge a block of its own holding the `Mov`s, so
 /// this terminator is one word load, one test and one `cmov`.
-pub struct JumpIf {
-    pub cond: Off,
+pub struct JumpIf<C>
+where
+    C: Place,
+{
+    pub cond: C::At,
     pub on_true: BlockId,
     pub on_false: BlockId,
+    pub at: PhantomData<fn() -> C>,
 }
 
-impl Terminator for JumpIf {
+impl<C> Op for JumpIf<C>
+where
+    C: Place,
+{
     #[inline]
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
-        match m.regs().word(self.cond) != 0 {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+        match C::read(m.regs(), self.cond, r0) != 0 {
             true => self.on_true,
             false => self.on_false,
         }
@@ -91,9 +105,9 @@ pub struct Return<const WORD: bool> {
     pub slot: Off,
 }
 
-impl<const WORD: bool> Terminator for Return<WORD> {
+impl<const WORD: bool> Op for Return<WORD> {
     #[inline]
-    fn next(&self, m: &mut Machine<'_>) -> BlockId {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> BlockId {
         let value = match WORD {
             true => {
                 let regs = m.regs();
@@ -107,37 +121,48 @@ impl<const WORD: bool> Terminator for Return<WORD> {
     }
 }
 
-/// The operations of one part of a region, run in order.
-#[inline(always)]
-fn run_part(ops: &[Box<dyn Op>], m: &mut Machine<'_>) {
-    for op in ops {
-        op.run(m);
+/// The last node of a region's inner chain. A part chooses no block, so the
+/// `BlockId` this returns is the one the region discards.
+pub struct PartEnd;
+
+/// What `PartEnd` returns. `Machine::run` never sees it: a region is an
+/// operation of a chain, and the chain's own end is what names a block.
+pub const PART: BlockId = 0;
+
+impl Op for PartEnd {
+    #[inline]
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
+        PART
     }
 }
 
 /// The `while` shape `prepare::recognize_loop` finds in the IR (RFC-0044,
-/// stage 3), as one operation holding its two op lists.
+/// stage 3), as one operation holding its two chains.
 ///
 /// Every move this shape used to interpret is an operation `prepare` placed:
 /// the entering move before this operation, the move into the body at the head
 /// of `body`, the back edge at the end of `body`, and the exiting move after
 /// this operation.
 pub struct Loop {
-    pub head: Box<[Box<dyn Op>]>,
+    pub head: Box<dyn Op>,
     pub cond: Off,
-    pub body: Box<[Box<dyn Op>]>,
+    pub body: Box<dyn Op>,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for Loop {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         loop {
-            run_part(&self.head, m);
+            self.head.run(m, r0);
             if m.regs().word(self.cond) == 0 {
-                return;
+                break;
             }
-            run_part(&self.body, m);
+            self.body.run(m, r0);
         }
+        self.next.run(m, r0)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -145,17 +170,17 @@ impl Op for Loop {
         vec![
             OwnedOps {
                 part: "head",
-                ops: &self.head,
+                head: self.head.as_ref(),
             },
             OwnedOps {
                 part: "body",
-                ops: &self.body,
+                head: self.body.as_ref(),
             },
         ]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut [Box<dyn Op>]> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.head, &mut self.body]
     }
 }
@@ -163,20 +188,31 @@ impl Op for Loop {
 /// The `if/else` shape `prepare::recognize_diamond` finds in the IR
 /// (RFC-0044, stage 5), as one operation holding both arms. The moves the
 /// join edge carries are the last operations of each arm.
-pub struct Diamond {
-    pub cond: Off,
-    pub on_true: Box<[Box<dyn Op>]>,
-    pub on_false: Box<[Box<dyn Op>]>,
+pub struct Diamond<C>
+where
+    C: Place,
+{
+    pub cond: C::At,
+    pub on_true: Box<dyn Op>,
+    pub on_false: Box<dyn Op>,
+    pub next: Box<dyn Op>,
+    pub at: PhantomData<fn() -> C>,
 }
 
-impl Op for Diamond {
+impl<C> Op for Diamond<C>
+where
+    C: Place,
+{
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
-        let arm = match m.regs().word(self.cond) != 0 {
-            true => &self.on_true,
-            false => &self.on_false,
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+        let arm = match C::read(m.regs(), self.cond, r0) != 0 {
+            true => self.on_true.as_ref(),
+            false => self.on_false.as_ref(),
         };
-        run_part(arm, m);
+        arm.run(m, r0);
+        self.next.run(m, r0)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -184,17 +220,17 @@ impl Op for Diamond {
         vec![
             OwnedOps {
                 part: "on_true",
-                ops: &self.on_true,
+                head: self.on_true.as_ref(),
             },
             OwnedOps {
                 part: "on_false",
-                ops: &self.on_false,
+                head: self.on_false.as_ref(),
             },
         ]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut [Box<dyn Op>]> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.on_true, &mut self.on_false]
     }
 }
@@ -204,20 +240,24 @@ impl Op for Diamond {
 /// successor no path reaches.
 pub struct Diverge;
 
-impl Terminator for Diverge {
-    fn next(&self, _: &mut Machine<'_>) -> BlockId {
+impl Op for Diverge {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
         panic!("a call typed `!` returned: its handler must panic")
     }
 }
 
 pub struct Merge {
     pub dst: Off,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for Merge {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         m.regs().define::<false>(self.dst, Value::unit());
+        self.next.run(m, r0)
     }
 }
 
@@ -226,19 +266,26 @@ impl Op for Merge {
 /// being UB to read as a concrete value.
 pub struct Undef<const WORD: bool> {
     pub dst: Off,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for Undef<true> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         m.regs().set_word(self.dst, 0);
+        self.next.run(m, r0)
     }
 }
 
 impl Op for Undef<false> {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         m.regs().define::<false>(self.dst, Value::UNDEF);
+        self.next.run(m, r0)
     }
 }
 
@@ -252,13 +299,17 @@ impl Op for Undef<false> {
 /// lowering, and `Regs::take`'s debug assert is where it surfaces.
 pub struct DropValue {
     pub slot: Off,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for DropValue {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         use acvus_extern::Release;
         m.regs().take::<true>(self.slot).release();
+        self.next.run(m, r0)
     }
 }
 
@@ -266,8 +317,8 @@ impl Op for DropValue {
 /// no path may arrive, so no block follows it.
 pub struct Poison;
 
-impl Terminator for Poison {
-    fn next(&self, _: &mut Machine<'_>) -> BlockId {
+impl Op for Poison {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> BlockId {
         panic!("reached poison instruction")
     }
 }

@@ -66,44 +66,58 @@ and threw away.
    made is a type or a field; a handler body contains no `match`, no
    `let … else`, no `kind` test on a fact its type carries.
 
-2. **A block is straight-line, and only its terminator chooses.**
+2. **An operation holds its successor; the stream holds the joints.**
 
    ```rust
-   pub struct Block { ops: Box<[Box<dyn Op>]>, end: Box<dyn Terminator> }
-   pub trait Terminator: Send + Sync { fn next(&self, m: &mut Machine) -> BlockId; }
+   pub trait Op: Send + Sync {
+       fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId;
+   }
    ```
 
-   Operations return nothing. The block runs its operations with
-   `for op in ops { op.run(m) }`. The terminator
-   — `Jump`, `JumpIf { cond: u16, then, else }`, `Return`, `Suspend`
-   (RFC-0046: stores the `Pending` in `Machine`, returns the sentinel) —
-   returns the next `BlockId`. The machine's loop is
+   A straight-line run is a **chain**: each operation holds the next as
+   a field and ends by calling it, and that call is a tail call, so the
+   whole run is a line of `jmp *`. An operation with no successor is a
+   terminator — it returns the `BlockId` instead. There is no separate
+   `Terminator` trait and no `Block`.
+
+   The stream is `Body::heads: Box<[Box<dyn Op>]>` indexed by `BlockId`:
+   one chain head per **joint**, a joint being a place where control
+   genuinely chooses — `JumpIf`'s two targets, `Return`, `Suspend`, a
+   real CFG join. The machine's loop is unchanged in shape and entered
+   only at joints:
 
    ```rust
-   loop { b = blocks[b].run(m); if b >= BlockId::SENTINEL { break } }
+   loop { at = heads[at].run(self, 0); if at >= SENTINEL { return at } }
    ```
 
-   One compare per **block**. Per operation the branches are the
-   vtable `call` and its `ret`, and nothing else. `Flow` is gone.
+   What this removes is the slice walk. Under the block form, dispatch
+   cost **seven instructions and two taken branches per operation**: the
+   data pointer, the vtable slot, the machine argument, the `call`, then
+   the `add`/`cmp`/`jne` of stepping a slice of fat pointers, then the
+   `ret`. Under the chain form it is `mov` next, `mov` vtable, `jmp *` —
+   **three instructions, one taken branch**, and the chain's last node
+   returns once per joint.
 
-3. **A region is an operation, and it runs its parts straight.** A
+3. **A region is an operation, and its parts are chains.** A
    recognized `while` or `if` chooses nothing the recognizer did not
-   already know, so it is one of its block's `ops`. The recognizers
-   stand (RFC-0044 stages 3–6: chain, diamond, loop, fused run) and
-   produce
+   already know, so it is an operation of the chain it sits in — not a
+   joint. The recognizers stand (RFC-0044 stages 3–6: chain, diamond,
+   loop, fused run) and produce
 
    ```rust
-   pub struct Loop { head: Box<[Box<dyn Op>]>, cond: Off, body: Box<[Box<dyn Op>]> }
-   pub struct Diamond { cond: Off, on_true: Box<[Box<dyn Op>]>, on_false: Box<[Box<dyn Op>]> }
+   pub struct Loop { head: Box<dyn Op>, cond: Off, body: Box<dyn Op>, next: Box<dyn Op> }
+   pub struct Diamond<C: Place> { cond: C::At, on_true: Box<dyn Op>, on_false: Box<dyn Op>, next: Box<dyn Op> }
    ```
 
-   `Loop::run` is `loop { head ops; if m.word(cond) == 0 { return }
-   body ops }` and `Diamond::run` is one word read, one arm picked, one
-   arm run. The head's `JumpIf` and the body's back `Jump` are not
+   Each part is the head of its own chain, ended by `PartEnd` — the
+   node with no successor that returns the `BlockId` the region
+   discards. `Loop::run` is `loop { head chain; if m.word(cond) == 0
+   { break } body chain }` and then its own tail call to `next`;
+   `Diamond::run` is one word read, one arm picked, one arm chain, then
+   its tail call. The head's `JumpIf` and the body's back `Jump` are not
    terminators a region dispatches — they are those two lines. A nested
-   region is one more operation of the list it sits in, and the
-   operations after it carry on where it left off, so no id is chosen
-   inside a region and no `BlockId` leaves one.
+   region is one more operation of the chain it sits in, so no id is
+   chosen inside a region and no `BlockId` leaves one.
 
    **A region's parts hold no terminator, and that is structural.**
    `prepare::straight_run` walks a candidate range and stops at the
@@ -173,10 +187,7 @@ and threw away.
    **An operation holds a byte displacement, not an index.** `Off` is
    `slot * 16`, multiplied once by `prepare`; `Slot` stays the
    language-level index and stays inside `prepare`, and the two are
-   different types. `Add::<i64>::run` is eight instructions and no
-   branch — three field loads, the frame's base, two operand loads
-   folded into the `add`, one store, `ret` — where the index form paid
-   three `shl $4` on top. A read is
+   different types, where the index form paid three `shl $4` on top. A read is
    a load; a define is a store, plus one bit when the type is a
    `Large` (the operation's type says so: `CallExtern1<const LARGE:
    bool>`); a take of a `Large` clears its bit; a batched take clears one
@@ -195,6 +206,45 @@ and threw away.
    `Value: Copy`,
    `Owned<R>` in every Rust store, `Release` — RFC-0048 §1–§9 unchanged;
    the register file is rewritten to those nine rules and to no more.
+
+   **A word with one use rides in the argument register.** `Op::run`
+   takes `r0: u64` and returns one: a word-typed SSA value with exactly
+   one use, in the immediately following operation of the **same
+   chain**, is never written to the frame. The producer leaves it in the
+   argument register the tail call already passes and the consumer reads
+   it from there. This is wasm3's `r0`, on `dyn Op`.
+
+   Where a word is, is a **type**, so no `run` tests for it:
+
+   ```rust
+   pub trait Place { type At; fn read(regs, at: Self::At, r0: u64) -> u64;
+                     fn write(regs, at: Self::At, bits: u64) -> u64; }
+   pub struct Slot;  // At = Off
+   pub struct R0;    // At = ()
+   ```
+
+   `R0::At` is `()`, so an operation whose operand rides **holds no
+   `Off` for it** — the displacement exists only where there is one, and
+   nothing can read one that does not. `prepare` decides the place
+   (`code::Where`) and the specialization follows from it: `Add<T, L, R,
+   D>`, `NotBool<S, D>`, `Chain1/2/3<T, D, …>`, `JumpIf<C>`,
+   `Diamond<C>`.
+
+   `Add::<i64, Slot, Slot, Slot>::run` is twelve instructions: three
+   `movzwl` field loads, the frame's base, two operand loads folded into
+   the `add`, one store, the successor's data and vtable, `jmp *`.
+   `Add::<i64, Slot, Slot, R0>::run` is **ten** — the `movzwl` of `dst`
+   and the store are gone. `Add::<i64, R0, Slot, R0>::run` is **eight**.
+
+   Two operands cannot both ride: a value that rides has exactly one
+   use, so it is one operand of one operation. That combination is a
+   defect in the ride analysis and panics at preparation.
+
+   **A word does not ride across a joint.** A `Loop` reads its condition
+   after its head chain has returned, so the joint is between them and
+   the condition stays in the frame; a `Diamond` is an operation of the
+   chain, so its condition rides. Both facts are measured under
+   Consequences.
 
 6. **An extern is a `fn` pointer.** `CallExtern1 { dst: u16, arg: u16,
    f: fn(&Rt, Value) -> Value, order: u16 }` calls `f` directly — no
@@ -338,8 +388,43 @@ body is the single operation `CallIndirect<false, true, true>`: **17.9 →
   dependency on the previous operation's result; the expectation is
   that it is hidden, and the brief's disassembly and cycle counts test
   that expectation, not a fallback.
+- **The tail call is a guarantee only a probe can hold.** Rust has no
+  `become` on stable, so "every `run` ends in `jmp *`" is a property of
+  the emitted code, not of the type.
+  `acvus-interpreter-test/benches/asm_probe.rs` disassembles the release
+  binary and asserts it — a bench and not a test, because a debug build
+  has no tail call in it and a `cargo test` copy would pass on an
+  artifact nobody runs.
+
+  It carries a **closed list of eight families** that may end in
+  `call` + `ret`, each with the stack address that is why: `Fused` (the
+  staged-argument `SmallVec`), `CallIndirect` and `CallDirect` (the
+  argument array), `SetStep` and `SetPath` (`&mut object`),
+  `MakeObject` (the field buffer), `SpawnModule` and
+  `SpawnExternAsync` (the argument window). LLVM's sibling-call rule
+  refuses a tail call out of any function an alloca's address escapes,
+  and no way of writing those `run`s changes it. Twenty-two instances,
+  each a boundary operation costing 50–250 instructions where one
+  `call`/`ret` pair is a fraction. The list is closed in both
+  directions: an operation outside it that ends so is red, and a listed
+  family whose every instance tail-jumps is reported as an entry no
+  longer needed. **A ninth family cannot join silently.** Removing them
+  — staging the argument run in the frame window rather than on the
+  stack — is queued, not done.
+- **The instance axis is what `r0` costs.** Specializing on `Place`
+  multiplied the two families that carry it: on the `accum` bench
+  binary, arith **135 → 716** and chain **337 → 674**, the whole machine
+  **708 → 1628** `Op::run` symbols and `.text` 5.67 → 6.69 MB (+18 %).
+  Six place combinations are reachable for a binary operation (either
+  operand may ride, never both; the result independently), and `prepare`
+  dispatches on them at run time, so all six are emitted whether a given
+  program reaches them or not. The brief's estimate was ×2–3 for binary
+  word ops; the measurement is ×5.3 for arith and ×2.3 overall.
+  Measured against it: no case regressed beyond the ±3 % rule, so the
+  bloat is paid for but not yet visibly charged.
 - The boxed structs are heap-scattered; `prepare` may lay them in one
-  arena later — measured first.
+  arena later. **Not built.** It is measured after `r0`, one variable
+  apart, and it is the next item.
 - A rewrite of `acvus-interpreter`'s `code.rs`, `machine.rs`, `prepare.rs`
   (the emitters), every `ops/*.rs` (each handler becomes a struct + one
   `impl Op`), `regs.rs`, and the tools that read operations (`oplist`,
@@ -352,6 +437,16 @@ body is the single operation `CallIndirect<false, true, true>`: **17.9 →
 
 ## Rejected
 
+- **A `call`/`ret` per operation, through a slice of fat pointers** —
+  the block form this RFC first decided. **Measured: seven instructions
+  and two taken branches per operation** (data pointer, vtable slot,
+  machine argument, `call`, then the slice's `add`/`cmp`/`jne`, then the
+  `ret`), and no shape of the loop removes the last three while the
+  stream is a slice. The chain form pays three and one.
+- **A chain kernel reached through a pointer** rather than inlined into
+  the operation: **measured at 0.89 ns per node** (run 10c), which is a
+  third of an `int while` iteration. `Chain1/2/3` keep their kernels
+  inline, and the `Shape` axis stays a field.
 - **`OpFn` + payload index** (RFC-0044 stage 1, today): measured above.
 - **`OpFn` + `Box<dyn Data>`** (one function pointer, a typed data
   box): one load fewer than the vtable, but the pairing of `f` and
@@ -386,7 +481,100 @@ body is the single operation `CallIndirect<false, true, true>`: **17.9 →
 
 ## Consequences
 
-- **The count, corrected by the machine.** `int while`, one iteration,
+- **The machine as measured, three points, one variable apart.** Base
+  is `798d574b` — the block form, dispatch seven instructions per
+  operation. Point 1 is the chain: an operation holds its successor and
+  ends in `jmp *`. Point 2 is `r0`. Every column is the same tree apart
+  from that one change, built on the `bench` profile (`opt-level = 3`,
+  fat LTO), three alternating pinned reps on core 15, median of three,
+  ns per iteration at n = 1e6.
+
+  | case | base | point 1 | point 2 | base → 2 |
+  |---|---:|---:|---:|---:|
+  | `int while` | 3.00 | 2.80 | **2.40** | −20 % |
+  | `float while` | 4.90 | 3.90 | **4.00** | −18 % |
+  | `range \| sum` | 1.70 | 1.80 | **1.70** | 0 % |
+  | `map id \| sum` | 3.40 | 3.30 | **3.30** | −3 % |
+  | `map add \| sum` | 5.60 | 5.50 | **5.50** | −2 % |
+  | `map cap \| sum` | 9.20 | 8.10 | **8.10** | −12 % |
+  | `extern while` | 4.70 | 3.90 | **4.00** | −15 % |
+  | `branch while` | 6.80 | 5.30 | **5.30** | −22 % |
+  | `option while` | 7.30 | 5.80 | **5.80** | −21 % |
+  | `while let vec` | 10.60 | 7.50 | **7.50** | −29 % |
+  | `while let map` | 12.30 | 10.30 | **10.40** | −15 % |
+  | `call while` | 10.20 | 10.10 | **10.20** | 0 % |
+  | `collatz while` | 9.10 | 6.60 | **6.60** | −28 % |
+  | `grade while` | 18.00 | 10.70 | **10.60** | −41 % |
+  | shapes `field read` | 3.10 | 2.40 | **2.40** | −23 % |
+  | shapes `field write` | 2.90 | 2.80 | **2.80** | −3 % |
+  | shapes `construct` | 2.80 | 2.80 | **2.80** | 0 % |
+  | shapes `enum match` | 13.30 | 10.50 | **10.50** | −21 % |
+  | shapes `option match` | 7.10 | 5.80 | **5.80** | −18 % |
+  | shapes `vec of objects` | 9.10 | 7.00 | **6.50** | −29 % |
+  | mandelbrot 80×40×100 | 14.30 | 10.40 | **9.40** | −34 % |
+  | mandelbrot 200×100×200 | 13.50 | 9.70 | **8.70** | −36 % |
+  | attention 256×128 (µs) | 744.7 | 603.3 | **611.8** | −18 % |
+
+  **Nothing is slower than base.** Two cases are flat across all three
+  (`construct`, `call while`); `range | sum`, which the point-1 round
+  recorded at +10.8 % and named as placement rather than dispatch,
+  returns to base here.
+
+- **The two points move different counters, and that is the whole
+  result.** Point 1's win was branches: the slice walk's `add`/`cmp`/
+  `jne` and the `call`/`ret` pair became one `jmp *` — mandelbrot
+  branches −27.1 %, instructions −4.5 %. Point 2's win is instructions
+  and leaves branches alone, because `r0` removes a store and a load,
+  not a jump. On mandelbrot (`perf stat`, whole binary, core 15), point
+  1 → point 2:
+
+  | | point 1 | point 2 | Δ |
+  |---|---:|---:|---:|
+  | instructions | 1 514 601 889 | 1 441 765 342 | **−4.8 %** |
+  | branches | 194 429 827 | 194 481 270 | +0.03 % |
+  | cycles | 422 784 166 | 397 421 598 | −6.0 % |
+
+  Per case, instructions at point 2 against point 1: mandelbrot
+  −4.8 %, `grade while` −2.8 %, and `int while`, `branch while`,
+  `call while` **flat to within 0.03 %**. Counted on the prepared
+  listings, those are exactly the two bench bodies that get a ride —
+  mandelbrot five, `grade while` one, and the other five **none**. The
+  rule is narrow and exact: **`r0` removes instructions where a chain
+  root or an arithmetic result feeds the next operation of the same
+  chain, and nowhere else.**
+
+- **Where `r0` did not reach, and why — the three expectations it
+  missed.** The brief expected `int while` at 1.9–2.2, the call cases at
+  −10 to −20 %, and `collatz`/`grade` at −5 to −15 %. Only mandelbrot's
+  band (8.0–8.8, measured 8.7) was met.
+
+  1. **`int while`'s loop condition cannot ride.** `Lt`'s result is a
+     word with one use, but that use is `Loop::run`'s own condition
+     test, which happens after the head chain has returned — a joint
+     lies between them. The value stays in the frame. This is the
+     single largest missed case and it is structural, not a gap in the
+     analysis: only a region part that *returns* its word, rather than
+     passing it forward, would reach it.
+  2. **A call's argument does not ride.** `CallDirect`, `CallIndirect`
+     and `Fused` stage their arguments in a window of consecutive
+     registers, not in one operand, so there is no single place for a
+     `Place` to name. `call while` is flat at both points.
+  3. **A diamond's condition rides only where nothing was scheduled
+     between it and its test.** `grade while` gets one ride;
+     `collatz while` gets none, because `optimize::code_motion` placed
+     `i = i + 1` between its `Chain2` and its `Diamond`. Where the ride
+     happens, one store and one load against a 150–250-instruction
+     iteration is below the wall-clock noise floor.
+
+- **A chain's leaves never ride, and that is by construction.** A
+  one-use word feeding a chain leaf was *absorbed into the chain* by the
+  recognizer instead of reaching it as an operand, so the leaves read
+  registers the chain did not produce. Only the root has a `Place`.
+
+- **The base column's count, corrected by the machine.** Everything in
+  this bullet and the four that follow it measures the **block form**,
+  which is the `base` column above; the chain form replaced it.
+  `int while`, one iteration,
   three operations (`Lt<i64>`, `Add<i64>`, `Add<i64>`) inside one
   `Loop`. The model said ~30 instructions, then ~44; the machine says
   **54**, and the disassembly says where the ten went. Measured on the
@@ -599,14 +787,17 @@ body is the single operation `CallIndirect<false, true, true>`: **17.9 →
   blocks with a terminator, regions that are operations — the SIMD-window
   decode reflection of 2026-09-18 has its target shape.
 
-## Order of work
+## What is left
 
-One to-be, one agent, a fresh worktree from master: the trait, the
-block/terminator machine, the register file to rule 5, `prepare`
-emitting structs, every operation as a struct (the recognizers'
-outputs included), extern `fn` pointers, the frame window, the tools.
-Done conditions are disassembly and the whole bench table: `Add::run`
-two loads, one store, zero branches; `CallExtern1::run` zero decisions
-before the call; the block loop one compare per block; every bench
-within its stated band or better, none slower; the four crates and the
-drop-counter suites green.
+- **The arena.** `prepare` lays a body's operations in one bump arena in
+  chain order, so a successor is adjacent and the fat pointer's data
+  load is a sequential line. Not built; measured one variable apart
+  after `r0`.
+- **The eight families that hold a stack address.** Staging a call's
+  argument run in the frame window rather than on the stack would remove
+  the `call`/`ret` pair from all of them and close the probe's exception
+  list. `CallIndirect` is the queue's next target at 247 instructions
+  per call.
+- **The three cases `r0` did not reach**, each named under Consequences:
+  a loop's condition across a joint, a call's argument window, and the
+  `Switch` operation (RFC-0051, the one `todo!` in the machine).

@@ -10,8 +10,9 @@ use std::marker::PhantomData;
 use acvus_ast::{BinOp, UnaryOp};
 use acvus_mir::ty::IntTy;
 
-use crate::code::{Off, Op};
+use crate::code::{BlockId, Off, Op, successor};
 use crate::machine::Machine;
+use crate::ops::place::{self, BinaryAt, Place, UnaryAt, at_binary, at_unary};
 use crate::value::Kind;
 
 /// Runs `$body` with `$t` the Rust integer type of an `IntTy`.
@@ -316,35 +317,56 @@ pub mod float_word {
 macro_rules! int_ops {
     ($( $op:ident = $f:ident -> $result:ident ),* $(,)?) => {
         $(
-            pub struct $op<T>
+            pub struct $op<T, L, R, D>
             where
                 T: Int,
+                L: Place,
+                R: Place,
+                D: Place,
             {
-                slots: Binary,
-                width: PhantomData<fn() -> T>,
+                l: L::At,
+                r: R::At,
+                dst: D::At,
+                next: Box<dyn Op>,
+                at: PhantomData<fn() -> (T, L, R, D)>,
             }
 
-            impl<T> $op<T>
+            impl<T, L, R, D> $op<T, L, R, D>
             where
                 T: Int,
+                L: Place,
+                R: Place,
+                D: Place,
             {
-                pub fn new(slots: Binary) -> $op<T> {
+                pub fn new(at: BinaryAt<L, R, D>, next: Box<dyn Op>) -> $op<T, L, R, D> {
                     $op {
-                        slots,
-                        width: PhantomData,
+                        l: at.l,
+                        r: at.r,
+                        dst: at.dst,
+                        next,
+                        at: PhantomData,
                     }
                 }
             }
 
-            impl<T> Op for $op<T>
+            impl<T, L, R, D> Op for $op<T, L, R, D>
             where
                 T: Int,
+                L: Place,
+                R: Place,
+                D: Place,
             {
+                successor!();
+
                 #[inline]
-                fn run(&self, m: &mut Machine<'_>) {
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
                     let regs = m.regs();
-                    let bits = word::$f::<T>(regs.word(self.slots.l), regs.word(self.slots.r));
-                    regs.set_word(self.slots.dst, $result(bits));
+                    let bits = word::$f::<T>(
+                        L::read(regs, self.l, r0),
+                        R::read(regs, self.r, r0),
+                    );
+                    let carried = D::write(regs, self.dst, $result(bits));
+                    self.next.run(m, carried)
                 }
             }
         )*
@@ -380,52 +402,100 @@ int_ops!(
     Gte = gte -> as_bool_word,
 );
 
-pub struct Neg<T>
+pub struct Neg<T, S, D>
 where
     T: Int,
+    S: Place,
+    D: Place,
 {
-    slots: Unary,
-    width: PhantomData<fn() -> T>,
+    src: S::At,
+    dst: D::At,
+    next: Box<dyn Op>,
+    at: PhantomData<fn() -> (T, S, D)>,
 }
 
-impl<T> Neg<T>
+impl<T, S, D> Neg<T, S, D>
 where
     T: Int,
+    S: Place,
+    D: Place,
 {
-    pub fn new(slots: Unary) -> Neg<T> {
+    pub fn new(at: UnaryAt<S, D>, next: Box<dyn Op>) -> Neg<T, S, D> {
         Neg {
-            slots,
-            width: PhantomData,
+            src: at.src,
+            dst: at.dst,
+            next,
+            at: PhantomData,
         }
     }
 }
 
-impl<T> Op for Neg<T>
+impl<T, S, D> Op for Neg<T, S, D>
 where
     T: Int,
+    S: Place,
+    D: Place,
 {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let regs = m.regs();
-        let bits = word::neg::<T>(regs.word(self.slots.src));
-        regs.set_word(self.slots.dst, bits);
+        let bits = word::neg::<T>(S::read(regs, self.src, r0));
+        let carried = D::write(regs, self.dst, bits);
+        self.next.run(m, carried)
     }
 }
 
 macro_rules! float_ops {
     ($( $op:ident = $f:ident -> $result:ident ),* $(,)?) => {
         $(
-            pub struct $op {
-                pub slots: Binary,
+            pub struct $op<L, R, D>
+            where
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                l: L::At,
+                r: R::At,
+                dst: D::At,
+                next: Box<dyn Op>,
+                at: PhantomData<fn() -> (L, R, D)>,
             }
 
-            impl Op for $op {
+            impl<L, R, D> $op<L, R, D>
+            where
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                pub fn new(at: BinaryAt<L, R, D>, next: Box<dyn Op>) -> $op<L, R, D> {
+                    $op {
+                        l: at.l,
+                        r: at.r,
+                        dst: at.dst,
+                        next,
+                        at: PhantomData,
+                    }
+                }
+            }
+
+            impl<L, R, D> Op for $op<L, R, D>
+            where
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                successor!();
+
                 #[inline]
-                fn run(&self, m: &mut Machine<'_>) {
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
                     let regs = m.regs();
-                    let left = f64::from_bits(regs.word(self.slots.l));
-                    let right = f64::from_bits(regs.word(self.slots.r));
-                    regs.set_word(self.slots.dst, $result(float_word::$f(left, right)));
+                    let left = f64::from_bits(L::read(regs, self.l, r0));
+                    let right = f64::from_bits(R::read(regs, self.r, r0));
+                    let bits = $result(float_word::$f(left, right));
+                    let carried = D::write(regs, self.dst, bits);
+                    self.next.run(m, carried)
                 }
             }
         )*
@@ -451,33 +521,105 @@ float_ops!(
     GteF64 = gte_f64 -> as_bool_word,
 );
 
-pub struct NegF64 {
-    pub slots: Unary,
+macro_rules! float_unary_ops {
+    ($( $op:ident = $f:ident -> $result:ident ),* $(,)?) => {
+        $(
+            pub struct $op<S, D>
+            where
+                S: Place,
+                D: Place,
+            {
+                src: S::At,
+                dst: D::At,
+                next: Box<dyn Op>,
+                at: PhantomData<fn() -> (S, D)>,
+            }
+
+            impl<S, D> $op<S, D>
+            where
+                S: Place,
+                D: Place,
+            {
+                pub fn new(at: UnaryAt<S, D>, next: Box<dyn Op>) -> $op<S, D> {
+                    $op {
+                        src: at.src,
+                        dst: at.dst,
+                        next,
+                        at: PhantomData,
+                    }
+                }
+            }
+
+            impl<S, D> Op for $op<S, D>
+            where
+                S: Place,
+                D: Place,
+            {
+                successor!();
+
+                #[inline]
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+                    let regs = m.regs();
+                    let operand = f64::from_bits(S::read(regs, self.src, r0));
+                    let bits = $result(float_word::$f(operand));
+                    let carried = D::write(regs, self.dst, bits);
+                    self.next.run(m, carried)
+                }
+            }
+        )*
+    };
 }
 
-impl Op for NegF64 {
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
-        let regs = m.regs();
-        let operand = f64::from_bits(regs.word(self.slots.src));
-        regs.set_word(self.slots.dst, float_word::neg_f64(operand).to_bits());
-    }
-}
+float_unary_ops!(NegF64 = neg_f64 -> as_float_word);
 
 macro_rules! bool_ops {
     ($( $op:ident ($a:ident, $b:ident) $body:block )*) => {
         $(
-            pub struct $op {
-                pub slots: Binary,
+            pub struct $op<L, R, D>
+            where
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                l: L::At,
+                r: R::At,
+                dst: D::At,
+                next: Box<dyn Op>,
+                at: PhantomData<fn() -> (L, R, D)>,
             }
 
-            impl Op for $op {
+            impl<L, R, D> $op<L, R, D>
+            where
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                pub fn new(at: BinaryAt<L, R, D>, next: Box<dyn Op>) -> $op<L, R, D> {
+                    $op {
+                        l: at.l,
+                        r: at.r,
+                        dst: at.dst,
+                        next,
+                        at: PhantomData,
+                    }
+                }
+            }
+
+            impl<L, R, D> Op for $op<L, R, D>
+            where
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                successor!();
+
                 #[inline]
-                fn run(&self, m: &mut Machine<'_>) {
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
                     let regs = m.regs();
-                    let $a = regs.word(self.slots.l) != 0;
-                    let $b = regs.word(self.slots.r) != 0;
-                    regs.set_word(self.slots.dst, as_bool_word($body));
+                    let $a = L::read(regs, self.l, r0) != 0;
+                    let $b = R::read(regs, self.r, r0) != 0;
+                    let carried = D::write(regs, self.dst, as_bool_word($body));
+                    self.next.run(m, carried)
                 }
             }
         )*
@@ -490,99 +632,156 @@ bool_ops! {
     XorBool(a, b) { a ^ b }
 }
 
-pub struct NotBool {
-    pub slots: Unary,
+pub struct NotBool<S, D>
+where
+    S: Place,
+    D: Place,
+{
+    src: S::At,
+    dst: D::At,
+    next: Box<dyn Op>,
+    at: PhantomData<fn() -> (S, D)>,
 }
 
-impl Op for NotBool {
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
-        let regs = m.regs();
-        let held = regs.word(self.slots.src) != 0;
-        regs.set_word(self.slots.dst, as_bool_word(!held));
+impl<S, D> NotBool<S, D>
+where
+    S: Place,
+    D: Place,
+{
+    pub fn new(at: UnaryAt<S, D>, next: Box<dyn Op>) -> NotBool<S, D> {
+        NotBool {
+            src: at.src,
+            dst: at.dst,
+            next,
+            at: PhantomData,
+        }
     }
 }
 
-fn int_op<T>(op: BinOp, slots: Binary) -> Box<dyn Op>
+impl<S, D> Op for NotBool<S, D>
+where
+    S: Place,
+    D: Place,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
+        let regs = m.regs();
+        let held = S::read(regs, self.src, r0) != 0;
+        let carried = D::write(regs, self.dst, as_bool_word(!held));
+        self.next.run(m, carried)
+    }
+}
+
+fn int_op<T, L, R, D>(op: BinOp, at: BinaryAt<L, R, D>, next: Box<dyn Op>) -> Box<dyn Op>
 where
     T: Int,
+    L: Place,
+    R: Place,
+    D: Place,
 {
     match op {
-        BinOp::Add => Box::new(Add::<T>::new(slots)),
-        BinOp::Sub => Box::new(Sub::<T>::new(slots)),
-        BinOp::Mul => Box::new(Mul::<T>::new(slots)),
-        BinOp::Div => Box::new(Div::<T>::new(slots)),
-        BinOp::Mod => Box::new(Rem::<T>::new(slots)),
-        BinOp::Eq => Box::new(Eq::<T>::new(slots)),
-        BinOp::Neq => Box::new(Neq::<T>::new(slots)),
-        BinOp::Lt => Box::new(Lt::<T>::new(slots)),
-        BinOp::Gt => Box::new(Gt::<T>::new(slots)),
-        BinOp::Lte => Box::new(Lte::<T>::new(slots)),
-        BinOp::Gte => Box::new(Gte::<T>::new(slots)),
-        BinOp::BitAnd => Box::new(BitAnd::<T>::new(slots)),
-        BinOp::BitOr => Box::new(BitOr::<T>::new(slots)),
-        BinOp::Xor => Box::new(BitXor::<T>::new(slots)),
-        BinOp::Shl => Box::new(Shl::<T>::new(slots)),
-        BinOp::Shr => Box::new(Shr::<T>::new(slots)),
+        BinOp::Add => Box::new(Add::<T, L, R, D>::new(at, next)),
+        BinOp::Sub => Box::new(Sub::<T, L, R, D>::new(at, next)),
+        BinOp::Mul => Box::new(Mul::<T, L, R, D>::new(at, next)),
+        BinOp::Div => Box::new(Div::<T, L, R, D>::new(at, next)),
+        BinOp::Mod => Box::new(Rem::<T, L, R, D>::new(at, next)),
+        BinOp::Eq => Box::new(Eq::<T, L, R, D>::new(at, next)),
+        BinOp::Neq => Box::new(Neq::<T, L, R, D>::new(at, next)),
+        BinOp::Lt => Box::new(Lt::<T, L, R, D>::new(at, next)),
+        BinOp::Gt => Box::new(Gt::<T, L, R, D>::new(at, next)),
+        BinOp::Lte => Box::new(Lte::<T, L, R, D>::new(at, next)),
+        BinOp::Gte => Box::new(Gte::<T, L, R, D>::new(at, next)),
+        BinOp::BitAnd => Box::new(BitAnd::<T, L, R, D>::new(at, next)),
+        BinOp::BitOr => Box::new(BitOr::<T, L, R, D>::new(at, next)),
+        BinOp::Xor => Box::new(BitXor::<T, L, R, D>::new(at, next)),
+        BinOp::Shl => Box::new(Shl::<T, L, R, D>::new(at, next)),
+        BinOp::Shr => Box::new(Shr::<T, L, R, D>::new(at, next)),
         other => panic!("unsupported int binop {other:?}"),
     }
 }
 
 /// The operation a binary operator at an integer width prepares to.
-pub fn int_binop(op: BinOp, k: IntTy, slots: Binary) -> Box<dyn Op> {
-    for_int_ty!(k, |T| int_op::<T>(op, slots))
+pub fn int_binop(op: BinOp, k: IntTy, places: place::Binary, next: Box<dyn Op>) -> Box<dyn Op> {
+    at_binary!(places, |at| for_int_ty!(k, |T| int_op::<T, L, R, D>(
+        op, at, next
+    )))
 }
 
-/// The operation a binary operator at `Float` prepares to.
-pub fn float_binop(op: BinOp, slots: Binary) -> Box<dyn Op> {
+fn float_op<L, R, D>(op: BinOp, at: BinaryAt<L, R, D>, next: Box<dyn Op>) -> Box<dyn Op>
+where
+    L: Place,
+    R: Place,
+    D: Place,
+{
     match op {
-        BinOp::Add => Box::new(AddF64 { slots }),
-        BinOp::Sub => Box::new(SubF64 { slots }),
-        BinOp::Mul => Box::new(MulF64 { slots }),
-        BinOp::Div => Box::new(DivF64 { slots }),
-        BinOp::Mod => Box::new(RemF64 { slots }),
-        BinOp::Eq => Box::new(EqF64 { slots }),
-        BinOp::Neq => Box::new(NeqF64 { slots }),
-        BinOp::Lt => Box::new(LtF64 { slots }),
-        BinOp::Gt => Box::new(GtF64 { slots }),
-        BinOp::Lte => Box::new(LteF64 { slots }),
-        BinOp::Gte => Box::new(GteF64 { slots }),
+        BinOp::Add => Box::new(AddF64::<L, R, D>::new(at, next)),
+        BinOp::Sub => Box::new(SubF64::<L, R, D>::new(at, next)),
+        BinOp::Mul => Box::new(MulF64::<L, R, D>::new(at, next)),
+        BinOp::Div => Box::new(DivF64::<L, R, D>::new(at, next)),
+        BinOp::Mod => Box::new(RemF64::<L, R, D>::new(at, next)),
+        BinOp::Eq => Box::new(EqF64::<L, R, D>::new(at, next)),
+        BinOp::Neq => Box::new(NeqF64::<L, R, D>::new(at, next)),
+        BinOp::Lt => Box::new(LtF64::<L, R, D>::new(at, next)),
+        BinOp::Gt => Box::new(GtF64::<L, R, D>::new(at, next)),
+        BinOp::Lte => Box::new(LteF64::<L, R, D>::new(at, next)),
+        BinOp::Gte => Box::new(GteF64::<L, R, D>::new(at, next)),
         other => panic!("unsupported float binop {other:?}"),
     }
 }
 
-/// The operation a binary operator at `Bool` prepares to.
-pub fn bool_binop(op: BinOp, slots: Binary) -> Box<dyn Op> {
+/// The operation a binary operator at `Float` prepares to.
+pub fn float_binop(op: BinOp, places: place::Binary, next: Box<dyn Op>) -> Box<dyn Op> {
+    at_binary!(places, |at| float_op::<L, R, D>(op, at, next))
+}
+
+fn bool_op<L, R, D>(op: BinOp, at: BinaryAt<L, R, D>, next: Box<dyn Op>) -> Box<dyn Op>
+where
+    L: Place,
+    R: Place,
+    D: Place,
+{
     match op {
-        BinOp::Eq => Box::new(EqBool { slots }),
-        BinOp::Neq => Box::new(NeqBool { slots }),
-        BinOp::Xor => Box::new(XorBool { slots }),
+        BinOp::Eq => Box::new(EqBool::<L, R, D>::new(at, next)),
+        BinOp::Neq => Box::new(NeqBool::<L, R, D>::new(at, next)),
+        BinOp::Xor => Box::new(XorBool::<L, R, D>::new(at, next)),
         other => panic!("unsupported bool binop {other:?}"),
     }
 }
 
+/// The operation a binary operator at `Bool` prepares to.
+pub fn bool_binop(op: BinOp, places: place::Binary, next: Box<dyn Op>) -> Box<dyn Op> {
+    at_binary!(places, |at| bool_op::<L, R, D>(op, at, next))
+}
+
 /// The operation a unary operator at an integer width prepares to.
-pub fn int_unaryop(op: UnaryOp, k: IntTy, slots: Unary) -> Box<dyn Op> {
-    match op {
-        UnaryOp::Neg => for_int_ty!(k, |T| Box::new(Neg::<T>::new(slots)) as Box<dyn Op>),
-        other => panic!("unary {other:?} on an integer"),
-    }
+pub fn int_unaryop(op: UnaryOp, k: IntTy, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
+    let UnaryOp::Neg = op else {
+        panic!("unary {op:?} on an integer")
+    };
+    at_unary!(places, |at| for_int_ty!(
+        k,
+        |T| Box::new(Neg::<T, S, D>::new(at, next)) as Box<dyn Op>
+    ))
 }
 
 /// The operation a unary operator at `Float` prepares to.
-pub fn float_unaryop(op: UnaryOp, slots: Unary) -> Box<dyn Op> {
-    match op {
-        UnaryOp::Neg => Box::new(NegF64 { slots }),
-        other => panic!("unary {other:?} on a float"),
-    }
+pub fn float_unaryop(op: UnaryOp, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
+    let UnaryOp::Neg = op else {
+        panic!("unary {op:?} on a float")
+    };
+    at_unary!(places, |at| Box::new(NegF64::<S, D>::new(at, next))
+        as Box<dyn Op>)
 }
 
 /// The operation a unary operator at `Bool` prepares to.
-pub fn bool_unaryop(op: UnaryOp, slots: Unary) -> Box<dyn Op> {
-    match op {
-        UnaryOp::Not => Box::new(NotBool { slots }),
-        other => panic!("unary {other:?} on a bool"),
-    }
+pub fn bool_unaryop(op: UnaryOp, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
+    let UnaryOp::Not = op else {
+        panic!("unary {op:?} on a bool")
+    };
+    at_unary!(places, |at| Box::new(NotBool::<S, D>::new(at, next))
+        as Box<dyn Op>)
 }
 
 #[cfg(test)]

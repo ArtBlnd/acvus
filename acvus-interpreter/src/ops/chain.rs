@@ -8,9 +8,12 @@ use std::mem::size_of;
 
 use acvus_mir::ty::IntTy;
 
-use crate::code::{Arith, ChainBounds, Compare, ExprChain, ExprFn, Off, Op, Root, Shape};
+use crate::code::{
+    Arith, BlockId, ChainBounds, Compare, ExprChain, ExprFn, Op, Root, Shape, Where, successor,
+};
 use crate::machine::Machine;
 use crate::ops::arith::{Int, for_int_ty};
+use crate::ops::place::Place;
 use crate::regs::Regs;
 use crate::value::{Kind, Value};
 
@@ -469,85 +472,103 @@ pub struct Plan {
     pub leaves: [u16; ChainBounds::MAX_LEAVES],
 }
 
-pub struct Chain1<T, const R: u8>
+pub struct Chain1<T, D, const R: u8>
 where
     T: Num,
+    D: Place,
 {
-    pub dst: Off,
+    pub dst: D::At,
     pub plan: Plan,
-    pub at: PhantomData<fn() -> T>,
+    pub next: Box<dyn Op>,
+    pub at: PhantomData<fn() -> (T, D)>,
 }
 
-pub struct Chain2<T, const O0: u8, const R: u8>
+pub struct Chain2<T, D, const O0: u8, const R: u8>
 where
     T: Num,
+    D: Place,
 {
-    pub dst: Off,
+    pub dst: D::At,
     pub plan: Plan,
-    pub at: PhantomData<fn() -> T>,
+    pub next: Box<dyn Op>,
+    pub at: PhantomData<fn() -> (T, D)>,
 }
 
-pub struct Chain3<T, const O0: u8, const O1: u8, const R: u8>
+pub struct Chain3<T, D, const O0: u8, const O1: u8, const R: u8>
 where
     T: Num,
+    D: Place,
 {
-    pub dst: Off,
+    pub dst: D::At,
     pub plan: Plan,
-    pub at: PhantomData<fn() -> T>,
+    pub next: Box<dyn Op>,
+    pub at: PhantomData<fn() -> (T, D)>,
 }
 
-impl<T, const R: u8> Op for Chain1<T, R>
+impl<T, D, const R: u8> Op for Chain1<T, D, R>
 where
     T: Num,
+    D: Place,
 {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> BlockId {
         let bits = tree1::<T, R>(&self.plan, Operands::of_frame(m.regs()));
-        m.regs().set_word(self.dst, bits);
+        let carried = D::write(m.regs(), self.dst, bits);
+        self.next.run(m, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn chain(&self) -> Option<crate::code::ChainProbe<'_>> {
         Some(crate::code::ChainProbe {
-            dst: self.dst,
+            dst: D::whence(self.dst),
             plan: &self.plan,
         })
     }
 }
 
-impl<T, const O0: u8, const R: u8> Op for Chain2<T, O0, R>
+impl<T, D, const O0: u8, const R: u8> Op for Chain2<T, D, O0, R>
 where
     T: Num,
+    D: Place,
 {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> BlockId {
         let bits = tree2::<T, O0, R>(&self.plan, Operands::of_frame(m.regs()));
-        m.regs().set_word(self.dst, bits);
+        let carried = D::write(m.regs(), self.dst, bits);
+        self.next.run(m, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn chain(&self) -> Option<crate::code::ChainProbe<'_>> {
         Some(crate::code::ChainProbe {
-            dst: self.dst,
+            dst: D::whence(self.dst),
             plan: &self.plan,
         })
     }
 }
 
-impl<T, const O0: u8, const O1: u8, const R: u8> Op for Chain3<T, O0, O1, R>
+impl<T, D, const O0: u8, const O1: u8, const R: u8> Op for Chain3<T, D, O0, O1, R>
 where
     T: Num,
+    D: Place,
 {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> BlockId {
         let bits = tree3::<T, O0, O1, R>(&self.plan, Operands::of_frame(m.regs()));
-        m.regs().set_word(self.dst, bits);
+        let carried = D::write(m.regs(), self.dst, bits);
+        self.next.run(m, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn chain(&self) -> Option<crate::code::ChainProbe<'_>> {
         Some(crate::code::ChainProbe {
-            dst: self.dst,
+            dst: D::whence(self.dst),
             plan: &self.plan,
         })
     }
@@ -589,52 +610,68 @@ where
     fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Self::Out;
 }
 
-struct BuildOp<T>
+struct BuildOp<T, D>
 where
     T: Num,
+    D: Place,
 {
-    dst: Off,
+    dst: D::At,
     plan: Option<Plan>,
-    at: PhantomData<fn() -> T>,
+    next: Option<Box<dyn Op>>,
+    at: PhantomData<fn() -> (T, D)>,
 }
 
-impl<T> BuildOp<T>
+impl<T, D> BuildOp<T, D>
 where
     T: Num,
+    D: Place,
 {
-    fn take(&mut self) -> Plan {
-        self.plan
+    fn take(&mut self) -> (Plan, Box<dyn Op>) {
+        let plan = self
+            .plan
             .take()
-            .expect("a chain instance is built once from its plan")
+            .expect("a chain instance is built once from its plan");
+        let next = self
+            .next
+            .take()
+            .expect("a chain instance is built once from its plan");
+        (plan, next)
     }
 }
 
-impl<T> Build<T> for BuildOp<T>
+impl<T, D> Build<T> for BuildOp<T, D>
 where
     T: Num,
+    D: Place,
 {
     type Out = Box<dyn Op>;
 
     fn one<const R: u8>(&mut self) -> Box<dyn Op> {
-        Box::new(Chain1::<T, R> {
+        let (plan, next) = self.take();
+        Box::new(Chain1::<T, D, R> {
             dst: self.dst,
-            plan: self.take(),
+            plan,
+            next,
             at: PhantomData,
         })
     }
 
     fn two<const O0: u8, const R: u8>(&mut self) -> Box<dyn Op> {
-        Box::new(Chain2::<T, O0, R> {
+        let (plan, next) = self.take();
+        Box::new(Chain2::<T, D, O0, R> {
             dst: self.dst,
-            plan: self.take(),
+            plan,
+            next,
             at: PhantomData,
         })
     }
 
     fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Box<dyn Op> {
-        Box::new(Chain3::<T, O0, O1, R> {
+        let (plan, next) = self.take();
+        Box::new(Chain3::<T, D, O0, O1, R> {
             dst: self.dst,
-            plan: self.take(),
+            plan,
+            next,
             at: PhantomData,
         })
     }
@@ -708,26 +745,41 @@ where
     }
 }
 
-pub fn chain_op(ty: ChainTy, dst: Off, plan: Plan) -> Box<dyn Op> {
+/// Decision not to build: a leaf has no place of its own. A chain's leaves
+/// read registers the chain did not produce — a one-use value feeding a leaf
+/// was absorbed into the chain instead of reaching it — so no leaf rides.
+fn chain_at<D>(ty: ChainTy, dst: D::At, plan: Plan, next: Box<dyn Op>) -> Box<dyn Op>
+where
+    D: Place,
+{
     let nodes = Nodes::of(&plan);
     let shape = plan.shape;
     match ty {
         ChainTy::Int(k) => for_int_ty!(k, |T| {
-            let mut make = BuildOp::<T> {
+            let mut make = BuildOp::<T, D> {
                 dst,
                 plan: Some(plan),
+                next: Some(next),
                 at: PhantomData,
             };
-            pick::<T, BuildOp<T>>(shape, &nodes, &mut make)
+            pick::<T, BuildOp<T, D>>(shape, &nodes, &mut make)
         }),
         ChainTy::Float => {
-            let mut make = BuildOp::<f64> {
+            let mut make = BuildOp::<f64, D> {
                 dst,
                 plan: Some(plan),
+                next: Some(next),
                 at: PhantomData,
             };
-            pick::<f64, BuildOp<f64>>(shape, &nodes, &mut make)
+            pick::<f64, BuildOp<f64, D>>(shape, &nodes, &mut make)
         }
+    }
+}
+
+pub fn chain_op(ty: ChainTy, dst: Where, plan: Plan, next: Box<dyn Op>) -> Box<dyn Op> {
+    match dst {
+        Where::Frame(off) => chain_at::<crate::ops::place::Slot>(ty, off, plan, next),
+        Where::Register => chain_at::<crate::ops::place::R0>(ty, (), plan, next),
     }
 }
 

@@ -2,11 +2,12 @@
 //!
 //! Every failure here is propagated as a panic: the tool either measures or
 //! does not run. Nothing about the listing is inferred — a superinstruction's
-//! blocks are printed from `Terminator::owns`, not guessed.
+//! parts are printed from `Op::owns`, not guessed.
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
-use acvus_interpreter::code::{Block, Body, Code, ExprBody, Named, Op};
+use acvus_interpreter::code::{Body, Code, ExprBody, Named, Op};
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, Value, prepare_module};
+use acvus_interpreter_test::listing::last_path_segment;
 use acvus_interpreter_test::{Context, compile_source_with_externs, split_context, typed};
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::ty::Ty;
@@ -44,30 +45,37 @@ struct ContextName {
     value: Value,
 }
 
-/// The short name of an operation or a terminator: the last path segment
-/// of its Rust type, which is the instance `prepare` chose.
-fn named(of: &dyn Named) -> &str {
-    let full = of.name();
-    match full.rsplit_once("::") {
-        Some((_, last)) => last,
-        None => full,
-    }
+/// The operation's type with the module paths dropped, its generic arguments
+/// included, which is the instance `prepare` chose.
+fn named(of: &dyn Named) -> String {
+    last_path_segment(of)
 }
 
-fn dump_blocks(indent: &str, blocks: &[Block]) {
-    for (at, block) in blocks.iter().enumerate() {
+fn dump_blocks(indent: &str, heads: &[Box<dyn Op>]) {
+    for (at, head) in heads.iter().enumerate() {
         println!("{indent}block {at}:");
-        dump_ops(indent, &block.ops);
-        println!("{indent}  -> {}", named(block.end.as_ref()));
+        dump_chain(indent, head.as_ref());
     }
 }
 
-fn dump_ops(indent: &str, ops: &[Box<dyn Op>]) {
-    for op in ops {
-        println!("{indent}  {}", named(op.as_ref()));
-        for owned in op.owns() {
-            println!("{indent}     {}:", owned.part);
-            dump_ops(&format!("{indent}       "), owned.ops);
+/// The chain from `head`, printed one operation per line: the node with no
+/// successor is what ends it.
+fn dump_chain(indent: &str, head: &dyn Op) {
+    let mut at = head;
+    loop {
+        match at.successor() {
+            Some(next) => {
+                println!("{indent}  {}", named(at));
+                for owned in at.owns() {
+                    println!("{indent}     {}:", owned.part);
+                    dump_chain(&format!("{indent}     "), owned.head);
+                }
+                at = next;
+            }
+            None => {
+                println!("{indent}  -> {}", named(at));
+                return;
+            }
         }
     }
 }
@@ -75,7 +83,7 @@ fn dump_ops(indent: &str, ops: &[Box<dyn Op>]) {
 fn dump_body(name: &str, code: &Body) {
     println!(
         "== {name}: blocks={} entry={} frame_len={} params={:?} captures={:?}",
-        code.blocks.len(),
+        code.heads.len(),
         code.entry,
         code.frame_len,
         code.params,
@@ -94,7 +102,7 @@ fn dump_body(name: &str, code: &Body) {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    dump_blocks("  ", &code.blocks);
+    dump_blocks("  ", &code.heads);
 }
 
 fn dump(name: &str, code: &Code) {

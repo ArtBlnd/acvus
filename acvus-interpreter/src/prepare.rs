@@ -23,17 +23,18 @@ use acvus_mir::ir::{
 };
 use acvus_mir::ty::{IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::code::{
-    Arith, Block, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
-    ExprBody, ExprChain, FieldSlot, Konst, Off, Op, Prepared, Root, Shape, Slot, SlotKind, Step,
-    Terminator,
+    Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
+    ExprBody, ExprChain, FieldSlot, Konst, Node, Off, Op, Prepared, Root, Shape, Slot, SlotKind,
+    Step, Where, chain, made, node,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Binary, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, Plan};
+use crate::ops::place;
 use crate::ops::{call, composite, constant, control, index, pattern, storage, string, variant};
 use crate::runtime::{ExternHandler, StateAbi, SyncAbi, SyncCall};
 use crate::value::{Kind, Value};
@@ -174,7 +175,7 @@ pub fn prepare_body(
     let slot_kinds = prep.slot_kinds(frame_len);
 
     Code::Body(Arc::new(Body {
-        blocks,
+        heads: blocks,
         entry: 0,
         frame_len,
         entry_konsts,
@@ -230,9 +231,9 @@ struct Level {
     /// The first id past the array's own blocks, which is where the edge
     /// blocks below are numbered from.
     blocks_len: BlockId,
-    /// One block per conditional edge that carries a parallel move: the
+    /// One chain per conditional edge that carries a parallel move: the
     /// `Mov`s and a `Goto`. An edge with no move names its target directly.
-    edges: Vec<Block>,
+    edges: Vec<Box<dyn Op>>,
 }
 
 #[derive(Default)]
@@ -385,6 +386,81 @@ impl Prepare<'_> {
         }
         units
     }
+
+    /// The value if it is a word with exactly one use — the two facts that do
+    /// not depend on where it is produced or read.
+    fn rides_word(&self, dst: ValueId) -> Option<ValueId> {
+        let ty = self.ty(dst);
+        let word = word_kind(ty).is_some() && !owns_large(ty);
+        (word && self.use_count(dst) == 1).then_some(dst)
+    }
+
+    /// The word this unit leaves that could ride.
+    ///
+    /// Obligation across artifacts: each producer below prepares to exactly
+    /// one node, with no move before or after it, so that "the next unit"
+    /// here and "the next operation" in the chain name the same thing.
+    fn rides_from(&self, unit: &Unit<'_>) -> Option<ValueId> {
+        match unit {
+            Unit::Inst(at) => match &self.body.insts[*at].kind {
+                InstKind::BinOp { dst, .. } | InstKind::UnaryOp { dst, .. } => {
+                    self.rides_word(*dst)
+                }
+                _ => None,
+            },
+            Unit::Chain(run) => self.rides_word(run.dst),
+            _ => None,
+        }
+    }
+
+    /// Whether the operation `at` prepares to reads `value` through a place
+    /// it is specialized on.
+    fn reads_place(&self, at: usize, value: ValueId) -> bool {
+        match &self.body.insts[at].kind {
+            InstKind::BinOp { left, right, .. } => *left == value || *right == value,
+            InstKind::UnaryOp { operand, .. } => *operand == value,
+            InstKind::JumpIf { cond, .. } => *cond == value,
+            _ => false,
+        }
+    }
+
+    /// A `Loop` reads its condition after its head chain has returned, so the
+    /// word cannot ride to it: the joint is between them. A `Diamond` is an
+    /// operation of this chain, so it can.
+    fn consumes_place(&self, unit: &Unit<'_>, value: ValueId) -> bool {
+        match unit {
+            Unit::Inst(at) => self.reads_place(*at, value),
+            Unit::Region(Region::Diamond(region)) => self.reads_place(region.jump_if, value),
+            _ => false,
+        }
+    }
+
+    /// `split` is how a block array's units are cut into blocks; a region's
+    /// part is one chain and passes `None`.
+    fn rides_in(&self, units: &[Unit<'_>], split: Option<&Split>) -> Rides {
+        let mut found = FxHashSet::default();
+        for (at, unit) in units.iter().enumerate() {
+            let Some(next) = units.get(at + 1) else {
+                continue;
+            };
+            let Some(value) = self.rides_from(unit) else {
+                continue;
+            };
+            let joined = split.is_none_or(|split| split.block_of[at] == split.block_of[at + 1]);
+            if joined && self.consumes_place(next, value) {
+                found.insert(value);
+            }
+        }
+        Rides(found)
+    }
+
+    /// Where an operation reads or writes `value`.
+    fn place_of(&self, rides: &Rides, value: ValueId) -> Where {
+        match rides.holds(value) {
+            true => Where::Register,
+            false => Where::Frame(self.off(value)),
+        }
+    }
 }
 
 fn block_heads(units: &[Unit<'_>], split: &Split) -> FxHashMap<usize, BlockId> {
@@ -393,6 +469,22 @@ fn block_heads(units: &[Unit<'_>], split: &Split) -> FxHashMap<usize, BlockId> {
         .enumerate()
         .map(|(at, unit)| (unit.head(), split.block_of[at]))
         .collect()
+}
+
+/// The values that ride in the argument register instead of a frame register
+/// (RFC-0052 rule 5). `rides_in` is what decides membership.
+///
+/// Decision not to build: no ride crosses a level. This is a value `blocks`
+/// and `straight` each build for their own unit list and pass down, not a
+/// field of `Prepare`, so there is no path by which one level's set could
+/// reach another's operations.
+#[derive(Default)]
+struct Rides(FxHashSet<ValueId>);
+
+impl Rides {
+    fn holds(&self, value: ValueId) -> bool {
+        self.0.contains(&value)
+    }
 }
 
 /// The block the unit being emitted continues into.
@@ -663,7 +755,7 @@ impl<'a> Prepare<'a> {
     ///
     /// Each move carries its own `LARGE`, so the order is the whole of the
     /// correctness argument: there is no second run for it to cross into.
-    fn move_ops(&mut self, label: &Label, args: &[ValueId]) -> Vec<Box<dyn Op>> {
+    fn move_ops(&mut self, label: &Label, args: &[ValueId]) -> Vec<Node> {
         let target = self.label(label) as usize;
         let InstKind::BlockLabel { params, .. } = &self.body.insts[target].kind else {
             panic!("a jump names {label:?}, whose instruction is not a block label")
@@ -686,7 +778,7 @@ impl<'a> Prepare<'a> {
 
     /// The block a conditional edge goes to: its own, holding the edge's
     /// `Mov`s, where it carries any; the target itself where it carries none.
-    fn edge(&mut self, moves: Vec<Box<dyn Op>>, target: BlockId) -> BlockId {
+    fn edge(&mut self, moves: Vec<Node>, target: BlockId) -> BlockId {
         if moves.is_empty() {
             return target;
         }
@@ -695,7 +787,7 @@ impl<'a> Prepare<'a> {
         let at = self.level.blocks_len + made;
         self.level
             .edges
-            .push(Block::new(moves, Box::new(control::Goto { target })));
+            .push(chain(moves, Box::new(control::Goto { target })));
         at
     }
 
@@ -995,25 +1087,26 @@ impl<'a> Prepare<'a> {
     }
 
     /// The body's blocks, with every jump inside it resolved against them.
-    fn blocks(&mut self, range: Range<usize>, nested: &[Region]) -> Box<[Block]> {
+    fn blocks(&mut self, range: Range<usize>, nested: &[Region]) -> Box<[Box<dyn Op>]> {
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
         let units = self.layout(range, nested, &runs, &chains);
         let split = self.split(&units);
+        let rides = self.rides_in(&units, Some(&split));
         self.level = Level {
             block_of_inst: block_heads(&units, &split),
             blocks_len: split.blocks,
             edges: Vec::new(),
         };
 
-        let mut blocks: Vec<Block> = Vec::with_capacity(split.blocks as usize);
-        let mut ops: Vec<Box<dyn Op>> = Vec::new();
+        let mut blocks: Vec<Box<dyn Op>> = Vec::with_capacity(split.blocks as usize);
+        let mut ops: Vec<Node> = Vec::new();
         for (at, unit) in units.iter().enumerate() {
             let next = Next(match at + 1 < units.len() {
                 true => Some(split.block_of[at + 1]),
                 false => None,
             });
-            let end = self.unit(unit, next, &mut ops);
+            let end = self.unit(unit, next, &rides, &mut ops);
             if end.is_some() {
                 assert!(
                     split.last_of_block(at),
@@ -1027,7 +1120,7 @@ impl<'a> Prepare<'a> {
                 }),
                 (None, false) => continue,
             };
-            blocks.push(Block::new(mem::take(&mut ops), end));
+            blocks.push(chain(mem::take(&mut ops), end));
         }
         assert!(
             ops.is_empty(),
@@ -1052,21 +1145,22 @@ impl<'a> Prepare<'a> {
         &mut self,
         range: Range<usize>,
         nested: &[Region],
-        leaving: Vec<Box<dyn Op>>,
-    ) -> Box<[Box<dyn Op>]> {
+        leaving: Vec<Node>,
+    ) -> Box<dyn Op> {
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
         let units = self.layout(range, nested, &runs, &chains);
-        let mut ops: Vec<Box<dyn Op>> = Vec::new();
+        let rides = self.rides_in(&units, None);
+        let mut ops: Vec<Node> = Vec::new();
         for unit in &units {
-            let end = self.unit(unit, Next(None), &mut ops);
+            let end = self.unit(unit, Next(None), &rides, &mut ops);
             assert!(
                 end.is_none(),
                 "a region's part holds a terminator, which `straight_run` does not admit"
             );
         }
         ops.extend(leaving);
-        ops.into_boxed_slice()
+        chain(ops, Box::new(control::PartEnd))
     }
 
     /// The operations this unit appends, and the terminator it is where it
@@ -1077,16 +1171,17 @@ impl<'a> Prepare<'a> {
         &mut self,
         unit: &Unit<'_>,
         next: Next,
-        ops: &mut Vec<Box<dyn Op>>,
-    ) -> Option<Box<dyn Terminator>> {
+        rides: &Rides,
+        ops: &mut Vec<Node>,
+    ) -> Option<Box<dyn Op>> {
         match unit {
-            Unit::Inst(at) => self.op(*at, next, ops),
+            Unit::Inst(at) => self.op(*at, next, rides, ops),
             Unit::Region(Region::Loop(region)) => {
                 self.loop_op(region, ops);
                 None
             }
             Unit::Region(Region::Diamond(region)) => {
-                let op = self.diamond_op(region);
+                let op = self.diamond_op(region, rides);
                 ops.push(op);
                 None
             }
@@ -1096,14 +1191,14 @@ impl<'a> Prepare<'a> {
                 None
             }
             Unit::Chain(run) => {
-                let op = self.chain_op(run);
+                let op = self.chain_op(run, rides);
                 ops.push(op);
                 None
             }
         }
     }
 
-    fn loop_op(&mut self, region: &LoopRegion, ops: &mut Vec<Box<dyn Op>>) {
+    fn loop_op(&mut self, region: &LoopRegion, ops: &mut Vec<Node>) {
         let body = self.body;
         let InstKind::JumpIf {
             cond,
@@ -1144,18 +1239,18 @@ impl<'a> Prepare<'a> {
             "the move into a loop's body is placed at the head of the body, \
              which `recognize_loop` admits only where the test above is its one entry"
         );
-        let mut held: Vec<Box<dyn Op>> = into_body;
-        held.extend(ran);
+        let body = chain(into_body, ran);
 
-        ops.push(Box::new(control::Loop {
+        ops.push(node(move |next| control::Loop {
             head,
             cond,
-            body: held.into_boxed_slice(),
+            body,
+            next,
         }));
         ops.extend(exit);
     }
 
-    fn diamond_op(&mut self, region: &DiamondRegion) -> Box<dyn Op> {
+    fn diamond_op(&mut self, region: &DiamondRegion, rides: &Rides) -> Node {
         let InstKind::JumpIf {
             cond,
             then_label,
@@ -1167,20 +1262,31 @@ impl<'a> Prepare<'a> {
             panic!("a recognized diamond's test is not a conditional jump")
         };
 
-        let cond = self.off(*cond);
+        let cond = self.place_of(rides, *cond);
         let on_true = self.arm(&region.on_true, then_label, then_args);
         let on_false = self.arm(&region.on_false, else_label, else_args);
 
-        Box::new(control::Diamond {
-            cond,
-            on_true,
-            on_false,
+        made(move |next| match cond {
+            Where::Frame(off) => Box::new(control::Diamond::<place::Slot> {
+                cond: off,
+                on_true,
+                on_false,
+                next,
+                at: PhantomData,
+            }) as Box<dyn Op>,
+            Where::Register => Box::new(control::Diamond::<place::R0> {
+                cond: (),
+                on_true,
+                on_false,
+                next,
+                at: PhantomData,
+            }),
         })
     }
 
     /// `label` and `args` are the diamond's own edge into this arm, which
     /// a `Direct` arm takes all the way to the join.
-    fn arm(&mut self, region: &ArmRegion, label: &Label, args: &[ValueId]) -> Box<[Box<dyn Op>]> {
+    fn arm(&mut self, region: &ArmRegion, label: &Label, args: &[ValueId]) -> Box<dyn Op> {
         let ArmRegion::Block {
             block,
             regions,
@@ -1188,7 +1294,7 @@ impl<'a> Prepare<'a> {
         } = region
         else {
             let join = self.move_ops(label, args);
-            return join.into_boxed_slice();
+            return chain(join, Box::new(control::PartEnd));
         };
         let InstKind::Jump { label, args } = &self.body.insts[*jump].kind else {
             panic!("a recognized diamond's arm does not end in a jump")
@@ -1202,11 +1308,12 @@ impl<'a> Prepare<'a> {
         &mut self,
         at: usize,
         next: Next,
-        ops: &mut Vec<Box<dyn Op>>,
-    ) -> Option<Box<dyn Terminator>> {
+        rides: &Rides,
+        ops: &mut Vec<Node>,
+    ) -> Option<Box<dyn Op>> {
         let body = self.body;
         let inst = &body.insts[at];
-        let op: Box<dyn Op> = match &inst.kind {
+        let op: Node = match &inst.kind {
             InstKind::Switch { .. } => todo!(
                 "the machine has no `switch` operation yet (RFC-0051, second half); \
                  `optimize::switch_expand` replaces every Switch before prepare runs"
@@ -1227,23 +1334,32 @@ impl<'a> Prepare<'a> {
                 else_label,
                 else_args,
             } => {
-                let cond = self.off(*cond);
+                let cond = self.place_of(rides, *cond);
                 let on_true = self.target(then_label);
                 let on_false = self.target(else_label);
                 let then_moves = self.move_ops(then_label, then_args);
                 let else_moves = self.move_ops(else_label, else_args);
                 let on_true = self.edge(then_moves, on_true);
                 let on_false = self.edge(else_moves, on_false);
-                return Some(Box::new(control::JumpIf {
-                    cond,
-                    on_true,
-                    on_false,
-                }));
+                return Some(match cond {
+                    Where::Frame(off) => Box::new(control::JumpIf::<place::Slot> {
+                        cond: off,
+                        on_true,
+                        on_false,
+                        at: PhantomData,
+                    }) as Box<dyn Op>,
+                    Where::Register => Box::new(control::JumpIf::<place::R0> {
+                        cond: (),
+                        on_true,
+                        on_false,
+                        at: PhantomData,
+                    }),
+                });
             }
             InstKind::Return { value, .. } => {
                 let slot = self.off(*value);
                 return Some(match word_kind(self.ty(*value)).is_some() {
-                    true => Box::new(control::Return::<true> { slot }) as Box<dyn Terminator>,
+                    true => Box::new(control::Return::<true> { slot }) as Box<dyn Op>,
                     false => Box::new(control::Return::<false> { slot }),
                 });
             }
@@ -1307,27 +1423,32 @@ impl<'a> Prepare<'a> {
                         through_reference: self.is_ref(*part),
                     })
                     .collect();
-                Box::new(string::Concat {
-                    dst: self.off(*dst),
-                    parts: held,
-                    owns_large,
-                })
+                {
+                    let dst = self.off(*dst);
+                    node(move |next| string::Concat {
+                        dst,
+                        parts: held,
+                        owns_large,
+                        next,
+                    })
+                }
             }
-            InstKind::StringEq { dst, a, b } => Box::new(string::StringEq {
-                slots: Binary {
+            InstKind::StringEq { dst, a, b } => {
+                let slots = Binary {
                     dst: self.off(*dst),
                     l: self.off(*a),
                     r: self.off(*b),
-                },
-            }),
+                };
+                node(move |next| string::StringEq { slots, next })
+            }
             InstKind::StringClone { dst, src } => {
                 let slots = Unary {
                     dst: self.off(*dst),
                     src: self.off(*src),
                 };
                 match self.is_ref(*src) {
-                    true => Box::new(string::CloneString::<true> { slots }),
-                    false => Box::new(string::CloneString::<false> { slots }),
+                    true => node(move |next| string::CloneString::<true> { slots, next }),
+                    false => node(move |next| string::CloneString::<false> { slots, next }),
                 }
             }
 
@@ -1351,12 +1472,16 @@ impl<'a> Prepare<'a> {
                     src: under.base,
                 };
                 match (under.path.is_empty(), through, clone) {
-                    (true, false, true) => Box::new(string::CloneString::<false> { slots }),
-                    (true, true, true) => Box::new(string::CloneString::<true> { slots }),
-                    (true, true, false) => Box::new(storage::TakeThrough { slots }),
+                    (true, false, true) => {
+                        node(move |next| string::CloneString::<false> { slots, next })
+                    }
+                    (true, true, true) => {
+                        node(move |next| string::CloneString::<true> { slots, next })
+                    }
+                    (true, true, false) => node(move |next| storage::TakeThrough { slots, next }),
                     (true, false, false) => match self.owns(*dst) {
-                        true => Box::new(storage::TakeVar::<true> { slots }),
-                        false => Box::new(storage::TakeVar::<false> { slots }),
+                        true => node(move |next| storage::TakeVar::<true> { slots, next }),
+                        false => node(move |next| storage::TakeVar::<false> { slots, next }),
                     },
                     (false, _, _) => read_place(slots, how, &under.path),
                 }
@@ -1379,16 +1504,24 @@ impl<'a> Prepare<'a> {
                 let key = self.ctx.page_key(context);
                 let slot = self.off(*dst);
                 match self.owns(*dst) {
-                    true => Box::new(storage::Fetch::<true> { dst: slot, key }),
-                    false => Box::new(storage::Fetch::<false> { dst: slot, key }),
+                    true => node(move |next| storage::Fetch::<true> {
+                        dst: slot,
+                        key,
+                        next,
+                    }),
+                    false => node(move |next| storage::Fetch::<false> {
+                        dst: slot,
+                        key,
+                        next,
+                    }),
                 }
             }
             InstKind::Commit { context, value } => {
                 let key = self.ctx.page_key(context);
                 let src = self.off(*value);
                 match self.owns(*value) {
-                    true => Box::new(storage::Commit::<true> { src, key }),
-                    false => Box::new(storage::Commit::<false> { src, key }),
+                    true => node(move |next| storage::Commit::<true> { src, key, next }),
+                    false => node(move |next| storage::Commit::<false> { src, key, next }),
                 }
             }
 
@@ -1443,29 +1576,31 @@ impl<'a> Prepare<'a> {
                 left,
                 right,
             } => {
-                let slots = Binary {
-                    dst: self.off(*dst),
-                    l: self.off(*left),
-                    r: self.off(*right),
+                let places = place::Binary {
+                    dst: self.place_of(rides, *dst),
+                    l: self.place_of(rides, *left),
+                    r: self.place_of(rides, *right),
                 };
-                match self.ty(*left) {
-                    Ty::Int(k) => arith::int_binop(*op, *k, slots),
-                    Ty::Float => arith::float_binop(*op, slots),
-                    Ty::Bool => arith::bool_binop(*op, slots),
+                let (op, k) = (*op, self.ty(*left).clone());
+                made(move |next| match k {
+                    Ty::Int(k) => arith::int_binop(op, k, places, next),
+                    Ty::Float => arith::float_binop(op, places, next),
+                    Ty::Bool => arith::bool_binop(op, places, next),
                     other => panic!("binop {op:?} on {other:?}"),
-                }
+                })
             }
             InstKind::UnaryOp { dst, op, operand } => {
-                let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*operand),
+                let places = place::Unary {
+                    dst: self.place_of(rides, *dst),
+                    src: self.place_of(rides, *operand),
                 };
-                match self.ty(*operand) {
-                    Ty::Int(k) => arith::int_unaryop(*op, *k, slots),
-                    Ty::Float => arith::float_unaryop(*op, slots),
-                    Ty::Bool => arith::bool_unaryop(*op, slots),
+                let (op, k) = (*op, self.ty(*operand).clone());
+                made(move |next| match k {
+                    Ty::Int(k) => arith::int_unaryop(op, k, places, next),
+                    Ty::Float => arith::float_unaryop(op, places, next),
+                    Ty::Bool => arith::bool_unaryop(op, places, next),
                     other => panic!("unary {op:?} on {other:?}"),
-                }
+                })
             }
 
             InstKind::Spawn {
@@ -1475,11 +1610,13 @@ impl<'a> Prepare<'a> {
                 match callee {
                     Callee::Direct(id) => {
                         let Operands { slots, takes } = self.taken(args);
-                        Box::new(call::SpawnModule {
+                        let callee = *id;
+                        node(move |next| call::SpawnModule {
                             dst,
-                            callee: *id,
+                            callee,
                             args: slots,
                             takes,
+                            next,
                         })
                     }
                     Callee::Extern { id, instance } => {
@@ -1487,39 +1624,56 @@ impl<'a> Prepare<'a> {
                         let window = self.window(at, args, ops);
                         match handler {
                             ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
-                                Box::new(call::SpawnExternSync { dst, window, f })
+                                node(move |next| call::SpawnExternSync {
+                                    dst,
+                                    window,
+                                    f,
+                                    next,
+                                })
                             }
-                            ExternHandler::Async(f) => {
-                                Box::new(call::SpawnExternAsync { dst, window, f })
-                            }
+                            ExternHandler::Async(f) => node(move |next| call::SpawnExternAsync {
+                                dst,
+                                window,
+                                f,
+                                next,
+                            }),
                         }
                     }
                     Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
                 }
             }
-            InstKind::Merge { dst, .. } => Box::new(control::Merge {
-                dst: self.off(*dst),
-            }),
+            InstKind::Merge { dst, .. } => {
+                let dst = self.off(*dst);
+                node(move |next| control::Merge { dst, next })
+            }
 
             InstKind::MakeArray { dst, elements } => {
                 let Operands {
                     slots,
                     takes: owns_large,
                 } = self.taken(elements);
-                Box::new(composite::MakeArray {
-                    dst: self.off(*dst),
-                    elements: composite::Elements { slots, owns_large },
-                })
+                {
+                    let dst = self.off(*dst);
+                    node(move |next| composite::MakeArray {
+                        dst,
+                        elements: composite::Elements { slots, owns_large },
+                        next,
+                    })
+                }
             }
             InstKind::MakeTuple { dst, elements } => {
                 let Operands {
                     slots,
                     takes: owns_large,
                 } = self.taken(elements);
-                Box::new(composite::MakeTuple {
-                    dst: self.off(*dst),
-                    elements: composite::Elements { slots, owns_large },
-                })
+                {
+                    let dst = self.off(*dst);
+                    node(move |next| composite::MakeTuple {
+                        dst,
+                        elements: composite::Elements { slots, owns_large },
+                        next,
+                    })
+                }
             }
             InstKind::MakeObject { dst, fields } => {
                 let values: Vec<ValueId> = fields.iter().map(|(_, value)| *value).collect();
@@ -1531,11 +1685,15 @@ impl<'a> Prepare<'a> {
                         slot: self.off(*value),
                     })
                     .collect();
-                Box::new(composite::MakeObject {
-                    dst: self.off(*dst),
-                    fields: held,
-                    owns_large,
-                })
+                {
+                    let dst = self.off(*dst);
+                    node(move |next| composite::MakeObject {
+                        dst,
+                        fields: held,
+                        owns_large,
+                        next,
+                    })
+                }
             }
             InstKind::TupleIndex { dst, tuple, index } => {
                 let how = Reading::of(self.ty(*dst), self.is_ref(*tuple));
@@ -1566,9 +1724,10 @@ impl<'a> Prepare<'a> {
                     dst: self.off(*dst),
                     src: self.off(*src),
                 };
+                let key = *key;
                 match self.is_ref(*src) {
-                    true => Box::new(pattern::TestObjectKey::<true> { slots, key: *key }),
-                    false => Box::new(pattern::TestObjectKey::<false> { slots, key: *key }),
+                    true => node(move |next| pattern::TestObjectKey::<true> { slots, key, next }),
+                    false => node(move |next| pattern::TestObjectKey::<false> { slots, key, next }),
                 }
             }
 
@@ -1603,14 +1762,15 @@ impl<'a> Prepare<'a> {
                 slice,
                 index,
                 mode,
-            } => index::checked(
-                *mode,
-                index::Read {
+            } => {
+                let mode = *mode;
+                let read = index::Read {
                     dst: self.off(*dst),
                     slice: self.off(*slice),
                     index: self.off(*index),
-                },
-            ),
+                };
+                made(move |next| index::checked(mode, read, next))
+            }
             InstKind::IndexSet {
                 slice,
                 index,
@@ -1619,15 +1779,17 @@ impl<'a> Prepare<'a> {
                 let large = self.owns(*value);
                 let (slice, index, held) = (self.off(*slice), self.off(*index), self.off(*value));
                 match large {
-                    true => Box::new(index::IndexSet::<true, true> {
+                    true => node(move |next| index::IndexSet::<true, true> {
                         slice,
                         index,
                         value: held,
+                        next,
                     }),
-                    false => Box::new(index::IndexSet::<true, false> {
+                    false => node(move |next| index::IndexSet::<true, false> {
                         slice,
                         index,
                         value: held,
+                        next,
                     }),
                 }
             }
@@ -1643,12 +1805,16 @@ impl<'a> Prepare<'a> {
                     .unwrap_or_else(|| panic!("closure body not found: {body:?}"))
                     .callable();
                 let Operands { slots, takes } = self.taken(captures);
-                Box::new(call::MakeClosure {
-                    dst: self.off(*dst),
-                    entry,
-                    captures: slots,
-                    takes,
-                })
+                {
+                    let dst = self.off(*dst);
+                    node(move |next| call::MakeClosure {
+                        dst,
+                        entry,
+                        captures: slots,
+                        takes,
+                        next,
+                    })
+                }
             }
 
             InstKind::MakeVariant { dst, tag, payload } => self.make_variant(*dst, *tag, *payload),
@@ -1659,24 +1825,25 @@ impl<'a> Prepare<'a> {
                 };
                 let through = self.is_ref(*src);
                 let form = variant_form(self.scrutinee_ty(*src));
+                let tag = *tag;
                 match (form, through) {
                     (VariantForm::Option, true) => {
-                        test_option::<true>(slots, self.tag_is(*tag, "Some"))
+                        test_option::<true>(slots, self.tag_is(tag, "Some"))
                     }
                     (VariantForm::Option, false) => {
-                        test_option::<false>(slots, self.tag_is(*tag, "Some"))
+                        test_option::<false>(slots, self.tag_is(tag, "Some"))
                     }
                     (VariantForm::Result, true) => {
-                        test_result::<true>(slots, self.tag_is(*tag, "Ok"))
+                        test_result::<true>(slots, self.tag_is(tag, "Ok"))
                     }
                     (VariantForm::Result, false) => {
-                        test_result::<false>(slots, self.tag_is(*tag, "Ok"))
+                        test_result::<false>(slots, self.tag_is(tag, "Ok"))
                     }
                     (VariantForm::Enum, true) => {
-                        Box::new(variant::TestVariant::<true> { slots, tag: *tag })
+                        node(move |next| variant::TestVariant::<true> { slots, tag, next })
                     }
                     (VariantForm::Enum, false) => {
-                        Box::new(variant::TestVariant::<false> { slots, tag: *tag })
+                        node(move |next| variant::TestVariant::<false> { slots, tag, next })
                     }
                 }
             }
@@ -1687,20 +1854,22 @@ impl<'a> Prepare<'a> {
                 };
                 match (variant_form(self.ty(*src)), self.owns(*dst)) {
                     (VariantForm::Option, true) => {
-                        Box::new(variant::UnwrapOption::<true> { slots })
+                        node(move |next| variant::UnwrapOption::<true> { slots, next })
                     }
                     (VariantForm::Option, false) => {
-                        Box::new(variant::UnwrapOption::<false> { slots })
+                        node(move |next| variant::UnwrapOption::<false> { slots, next })
                     }
                     (VariantForm::Result, true) => {
-                        Box::new(variant::UnwrapResult::<true> { slots })
+                        node(move |next| variant::UnwrapResult::<true> { slots, next })
                     }
                     (VariantForm::Result, false) => {
-                        Box::new(variant::UnwrapResult::<false> { slots })
+                        node(move |next| variant::UnwrapResult::<false> { slots, next })
                     }
-                    (VariantForm::Enum, true) => Box::new(variant::UnwrapVariant::<true> { slots }),
+                    (VariantForm::Enum, true) => {
+                        node(move |next| variant::UnwrapVariant::<true> { slots, next })
+                    }
                     (VariantForm::Enum, false) => {
-                        Box::new(variant::UnwrapVariant::<false> { slots })
+                        node(move |next| variant::UnwrapVariant::<false> { slots, next })
                     }
                 }
             }
@@ -1708,13 +1877,14 @@ impl<'a> Prepare<'a> {
             InstKind::Undef { dst } => {
                 let slot = self.off(*dst);
                 match word_kind(self.ty(*dst)).is_some() {
-                    true => Box::new(control::Undef::<true> { dst: slot }),
-                    false => Box::new(control::Undef::<false> { dst: slot }),
+                    true => node(move |next| control::Undef::<true> { dst: slot, next }),
+                    false => node(move |next| control::Undef::<false> { dst: slot, next }),
                 }
             }
-            InstKind::Drop { src } => Box::new(control::DropValue {
-                slot: self.off(*src),
-            }),
+            InstKind::Drop { src } => {
+                let slot = self.off(*src);
+                node(move |next| control::DropValue { slot, next })
+            }
         };
         ops.push(op);
         None
@@ -1723,20 +1893,20 @@ impl<'a> Prepare<'a> {
     /// The `Order` an effectful call yields, written by its own operation
     /// ahead of the call (RFC-0007). No call instance carries the register,
     /// so no call tests for one.
-    fn merge(&mut self, order: Option<ValueId>, ops: &mut Vec<Box<dyn Op>>) {
+    fn merge(&mut self, order: Option<ValueId>, ops: &mut Vec<Node>) {
         let Some(after) = order else {
             return;
         };
         let dst = self.off(after);
-        ops.push(Box::new(control::Merge { dst }));
+        ops.push(node(move |next| control::Merge { dst, next }));
     }
 
     fn call_op(
         &mut self,
         site: &CallSite<'_>,
         next: Next,
-        ops: &mut Vec<Box<dyn Op>>,
-    ) -> Option<Box<dyn Terminator>> {
+        ops: &mut Vec<Node>,
+    ) -> Option<Box<dyn Op>> {
         let CallSite {
             at,
             callee,
@@ -1872,8 +2042,8 @@ impl<'a> Prepare<'a> {
         into: Dest,
         args: &[ValueId],
         abi: SyncAbi,
-        ops: &mut Vec<Box<dyn Op>>,
-    ) -> Box<dyn Op> {
+        ops: &mut Vec<Node>,
+    ) -> Node {
         let Dest {
             slot: dst,
             large,
@@ -1883,72 +2053,101 @@ impl<'a> Prepare<'a> {
         let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
         match abi {
             SyncAbi::Arity0(f) => match large {
-                true => Box::new(call::CallExtern0::<true> { dst, f }),
-                false => Box::new(call::CallExtern0::<false> { dst, f }),
+                true => node(move |next| call::CallExtern0::<true> { dst, f, next }),
+                false => node(move |next| call::CallExtern0::<false> { dst, f, next }),
             },
             SyncAbi::Arity1(f) => {
                 let a = nth(&slots, 0);
                 match (large, word) {
-                    (true, _) => Box::new(call::CallExtern1::<true, false> { dst, a, takes, f }),
-                    (false, true) => {
-                        Box::new(call::CallExtern1::<false, true> { dst, a, takes, f })
-                    }
-                    (false, false) => {
-                        Box::new(call::CallExtern1::<false, false> { dst, a, takes, f })
-                    }
+                    (true, _) => node(move |next| call::CallExtern1::<true, false> {
+                        dst,
+                        a,
+                        takes,
+                        f,
+                        next,
+                    }),
+                    (false, true) => node(move |next| call::CallExtern1::<false, true> {
+                        dst,
+                        a,
+                        takes,
+                        f,
+                        next,
+                    }),
+                    (false, false) => node(move |next| call::CallExtern1::<false, false> {
+                        dst,
+                        a,
+                        takes,
+                        f,
+                        next,
+                    }),
                 }
             }
             SyncAbi::Arity2(f) => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
                 match large {
-                    true => Box::new(call::CallExtern2::<true> {
+                    true => node(move |next| call::CallExtern2::<true> {
                         dst,
                         a,
                         b,
                         takes,
                         f,
+                        next,
                     }),
-                    false => Box::new(call::CallExtern2::<false> {
+                    false => node(move |next| call::CallExtern2::<false> {
                         dst,
                         a,
                         b,
                         takes,
                         f,
+                        next,
                     }),
                 }
             }
             SyncAbi::Arity3(f) => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
                 match large {
-                    true => Box::new(call::CallExtern3::<true> {
+                    true => node(move |next| call::CallExtern3::<true> {
                         dst,
                         a,
                         b,
                         c,
                         takes,
                         f,
+                        next,
                     }),
-                    false => Box::new(call::CallExtern3::<false> {
+                    false => node(move |next| call::CallExtern3::<false> {
                         dst,
                         a,
                         b,
                         c,
                         takes,
                         f,
+                        next,
                     }),
                 }
             }
-            SyncAbi::Slice(f) => Box::new(call::CallSlice {
+            SyncAbi::Slice(f) => node(move |next| call::CallSlice {
                 dst,
                 a: nth(&slots, 0),
                 takes,
                 f,
+                next,
             }),
             SyncAbi::Window(f) => {
                 let window = self.window(at, args, ops);
                 match large {
-                    true => Box::new(call::CallWindow::<true> { dst, window, f }),
-                    false => Box::new(call::CallWindow::<false> { dst, window, f }),
+                    true => node(move |next| call::CallWindow::<true> {
+                        dst,
+                        window,
+                        f,
+                        next,
+                    }),
+                    false => node(move |next| call::CallWindow::<false> {
+                        dst,
+                        window,
+                        f,
+                        next,
+                    }),
                 }
             }
         }
@@ -1961,8 +2160,8 @@ impl<'a> Prepare<'a> {
         args: &[ValueId],
         state: acvus_extern::State,
         abi: StateAbi,
-        ops: &mut Vec<Box<dyn Op>>,
-    ) -> Box<dyn Op> {
+        ops: &mut Vec<Node>,
+    ) -> Node {
         let Dest {
             slot: dst,
             large,
@@ -1972,53 +2171,67 @@ impl<'a> Prepare<'a> {
         let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
         match abi {
             StateAbi::Arity0(f) => match large {
-                true => Box::new(call::CallState0::<true> { dst, state, f }),
-                false => Box::new(call::CallState0::<false> { dst, state, f }),
+                true => node(move |next| call::CallState0::<true> {
+                    dst,
+                    state,
+                    f,
+                    next,
+                }),
+                false => node(move |next| call::CallState0::<false> {
+                    dst,
+                    state,
+                    f,
+                    next,
+                }),
             },
             StateAbi::Arity1(f) => {
                 let a = nth(&slots, 0);
                 match large {
-                    true => Box::new(call::CallState1::<true> {
+                    true => node(move |next| call::CallState1::<true> {
                         dst,
                         a,
                         takes,
                         state,
                         f,
+                        next,
                     }),
-                    false => Box::new(call::CallState1::<false> {
+                    false => node(move |next| call::CallState1::<false> {
                         dst,
                         a,
                         takes,
                         state,
                         f,
+                        next,
                     }),
                 }
             }
             StateAbi::Arity2(f) => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
                 match large {
-                    true => Box::new(call::CallState2::<true> {
+                    true => node(move |next| call::CallState2::<true> {
                         dst,
                         a,
                         b,
                         takes,
                         state,
                         f,
+                        next,
                     }),
-                    false => Box::new(call::CallState2::<false> {
+                    false => node(move |next| call::CallState2::<false> {
                         dst,
                         a,
                         b,
                         takes,
                         state,
                         f,
+                        next,
                     }),
                 }
             }
             StateAbi::Arity3(f) => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
                 match large {
-                    true => Box::new(call::CallState3::<true> {
+                    true => node(move |next| call::CallState3::<true> {
                         dst,
                         a,
                         b,
@@ -2026,8 +2239,9 @@ impl<'a> Prepare<'a> {
                         takes,
                         state,
                         f,
+                        next,
                     }),
-                    false => Box::new(call::CallState3::<false> {
+                    false => node(move |next| call::CallState3::<false> {
                         dst,
                         a,
                         b,
@@ -2035,30 +2249,34 @@ impl<'a> Prepare<'a> {
                         takes,
                         state,
                         f,
+                        next,
                     }),
                 }
             }
-            StateAbi::Slice(f) => Box::new(call::CallStateSlice {
+            StateAbi::Slice(f) => node(move |next| call::CallStateSlice {
                 dst,
                 a: nth(&slots, 0),
                 takes,
                 state,
                 f,
+                next,
             }),
             StateAbi::Window(f) => {
                 let window = self.window(at, args, ops);
                 match large {
-                    true => Box::new(call::CallStateWindow::<true> {
+                    true => node(move |next| call::CallStateWindow::<true> {
                         dst,
                         window,
                         state,
                         f,
+                        next,
                     }),
-                    false => Box::new(call::CallStateWindow::<false> {
+                    false => node(move |next| call::CallStateWindow::<false> {
                         dst,
                         window,
                         state,
                         f,
+                        next,
                     }),
                 }
             }
@@ -2068,12 +2286,7 @@ impl<'a> Prepare<'a> {
     /// The argument run `assign_slots` placed for the call at `at`, and the
     /// `Mov` operations that put the arguments in it — which the caller
     /// pushes before the call's own operation (RFC-0052 rule 1).
-    fn window(
-        &mut self,
-        at: usize,
-        args: &[ValueId],
-        ops: &mut Vec<Box<dyn Op>>,
-    ) -> call::ArgWindow {
+    fn window(&mut self, at: usize, args: &[ValueId], ops: &mut Vec<Node>) -> call::ArgWindow {
         let plan = self.slots.window(at);
         let (base, arity) = (plan.base, plan.arity);
         let moved: Vec<PendingMove> = plan.moved.clone();
@@ -2157,7 +2370,7 @@ impl<'a> Prepare<'a> {
         }
     }
 
-    fn constant(&mut self, dst: ValueId, value: &Literal) -> Box<dyn Op> {
+    fn constant(&mut self, dst: ValueId, value: &Literal) -> Node {
         let out = self.off(dst);
         let word = match (value, self.ty(dst)) {
             (Literal::Int(n), Ty::Int(_)) => *n as u64,
@@ -2166,21 +2379,31 @@ impl<'a> Prepare<'a> {
             (Literal::Bool(b), _) => u64::from(*b),
             (Literal::Unit, _) => 0,
             (Literal::String(s), _) => {
-                return Box::new(constant::ConstLarge {
+                let konst = Konst::Str(s.clone());
+                return node(move |next| constant::ConstLarge {
                     dst: out,
-                    konst: Konst::Str(s.clone()),
+                    konst,
+                    next,
                 });
             }
             (Literal::List(items), Ty::Array(elem, _)) => {
                 let konst = Konst::List(items.iter().map(|item| konst_of(item, elem)).collect());
-                return Box::new(constant::ConstLarge { dst: out, konst });
+                return node(move |next| constant::ConstLarge {
+                    dst: out,
+                    konst,
+                    next,
+                });
             }
             (Literal::List(_), other) => panic!("list literal typed as {other:?}"),
         };
-        Box::new(constant::Const { dst: out, word })
+        node(move |next| constant::Const {
+            dst: out,
+            word,
+            next,
+        })
     }
 
-    fn test_literal(&mut self, at: Tested, value: &Literal) -> Box<dyn Op> {
+    fn test_literal(&mut self, at: Tested, value: &Literal) -> Node {
         let Tested { dst, src } = at;
         let through = self.is_ref(src);
         let slots = Unary {
@@ -2193,36 +2416,40 @@ impl<'a> Prepare<'a> {
                     panic!("TestLiteral: an integer literal against a non-integer")
                 };
                 let want = *n;
-                for_int_ty!(*k, |T| Box::new(pattern::TestInt::<T>::new(slots, want))
-                    as Box<dyn Op>)
+                for_int_ty!(*k, |T| node(move |next| pattern::TestInt::<T>::new(
+                    slots, want, next
+                )))
             }
             Literal::Float(x) => {
                 let want = *x;
                 match through {
-                    true => Box::new(pattern::TestFloat::<true> { slots, want }),
-                    false => Box::new(pattern::TestFloat::<false> { slots, want }),
+                    true => node(move |next| pattern::TestFloat::<true> { slots, want, next }),
+                    false => node(move |next| pattern::TestFloat::<false> { slots, want, next }),
                 }
             }
             Literal::Bool(b) => {
                 let want = *b;
                 match through {
-                    true => Box::new(pattern::TestBool::<true> { slots, want }),
-                    false => Box::new(pattern::TestBool::<false> { slots, want }),
+                    true => node(move |next| pattern::TestBool::<true> { slots, want, next }),
+                    false => node(move |next| pattern::TestBool::<false> { slots, want, next }),
                 }
             }
             Literal::String(s) => {
                 let want = s.clone();
                 match through {
-                    true => Box::new(pattern::TestString::<true> { slots, want }),
-                    false => Box::new(pattern::TestString::<false> { slots, want }),
+                    true => node(move |next| pattern::TestString::<true> { slots, want, next }),
+                    false => node(move |next| pattern::TestString::<false> { slots, want, next }),
                 }
             }
-            Literal::Unit => Box::new(pattern::TestUnit { dst: slots.dst }),
+            Literal::Unit => node(move |next| pattern::TestUnit {
+                dst: slots.dst,
+                next,
+            }),
             Literal::List(_) => panic!("TestLiteral on a list literal"),
         }
     }
 
-    fn make_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Box<dyn Op> {
+    fn make_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Node {
         let out = self.off(dst);
         let carried = payload.map(|id| Unary {
             dst: out,
@@ -2234,22 +2461,26 @@ impl<'a> Prepare<'a> {
         let large = payload.is_some_and(|id| self.owns(id));
         match (self.ty(dst), carried) {
             (Ty::Option(_), Some(slots)) => match large {
-                true => Box::new(variant::MakeSome::<true> { slots }),
-                false => Box::new(variant::MakeSome::<false> { slots }),
+                true => node(move |next| variant::MakeSome::<true> { slots, next }),
+                false => node(move |next| variant::MakeSome::<false> { slots, next }),
             },
-            (Ty::Option(_), None) => Box::new(variant::MakeNone { dst: out }),
+            (Ty::Option(_), None) => node(move |next| variant::MakeNone { dst: out, next }),
             (Ty::Result(..), Some(slots)) => match (self.tag_is(tag, "Ok"), large) {
-                (true, true) => Box::new(variant::MakeOk::<true> { slots }),
-                (true, false) => Box::new(variant::MakeOk::<false> { slots }),
-                (false, true) => Box::new(variant::MakeErr::<true> { slots }),
-                (false, false) => Box::new(variant::MakeErr::<false> { slots }),
+                (true, true) => node(move |next| variant::MakeOk::<true> { slots, next }),
+                (true, false) => node(move |next| variant::MakeOk::<false> { slots, next }),
+                (false, true) => node(move |next| variant::MakeErr::<true> { slots, next }),
+                (false, false) => node(move |next| variant::MakeErr::<false> { slots, next }),
             },
             (Ty::Result(..), None) => panic!("Ok and Err carry a payload"),
             (_, Some(slots)) => match large {
-                true => Box::new(variant::MakeVariant::<true> { slots, tag }),
-                false => Box::new(variant::MakeVariant::<false> { slots, tag }),
+                true => node(move |next| variant::MakeVariant::<true> { slots, tag, next }),
+                false => node(move |next| variant::MakeVariant::<false> { slots, tag, next }),
             },
-            (_, None) => Box::new(variant::MakeUnitVariant { dst: out, tag }),
+            (_, None) => node(move |next| variant::MakeUnitVariant {
+                dst: out,
+                tag,
+                next,
+            }),
         }
     }
 }
@@ -2320,13 +2551,13 @@ struct Carried {
 
 /// The ordered move as the operation of a block (RFC-0052 rule 1): what it
 /// carries is its type, not a field a `run` reads.
-fn mov_op(carried: &Carried) -> Box<dyn Op> {
+fn mov_op(carried: &Carried) -> Node {
     let dst = Off::of(carried.at.to);
     let src = Off::of(carried.at.from);
     match carried.moved {
-        Moved::Word => Box::new(control::Mov::<false, true> { dst, src }),
-        Moved::Large => Box::new(control::Mov::<true, false> { dst, src }),
-        Moved::Whole => Box::new(control::Mov::<false, false> { dst, src }),
+        Moved::Word => node(move |next| control::Mov::<false, true> { dst, src, next }),
+        Moved::Large => node(move |next| control::Mov::<true, false> { dst, src, next }),
+        Moved::Whole => node(move |next| control::Mov::<false, false> { dst, src, next }),
     }
 }
 
@@ -4474,7 +4705,7 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    fn fused_op(&mut self, region: &FusedRegion) -> Box<dyn Op> {
+    fn fused_op(&mut self, region: &FusedRegion) -> Node {
         let mut calls: SmallVec<[call::Call; 2]> = SmallVec::new();
         let mut read: Vec<ValueId> = Vec::new();
         let mut previous: Option<ValueId> = None;
@@ -4524,7 +4755,8 @@ impl<'a> Prepare<'a> {
         };
 
         let takes = self.take_mask(&read);
-        call::fused(self.owns(dst), self.off(dst), calls, tail, takes)
+        let (large, at) = (self.owns(dst), self.off(dst));
+        made(move |next| call::fused(large, at, calls, tail, takes, next))
     }
 
     fn def_at(&self, value: ValueId) -> Option<usize> {
@@ -4643,9 +4875,11 @@ impl<'a> Prepare<'a> {
         found
     }
 
-    fn chain_op(&mut self, run: &ChainRun) -> Box<dyn Op> {
+    fn chain_op(&mut self, run: &ChainRun, rides: &Rides) -> Node {
         self.check_chain(run);
-        chain::chain_op(run.ty, self.off(run.dst), run.plan(&|slot| slot))
+        let (ty, plan) = (run.ty, run.plan(&|slot| slot));
+        let dst = self.place_of(rides, run.dst);
+        made(move |next| chain::chain_op(ty, dst, plan, next))
     }
 
     /// Every chain of `range`, in the straight-line windows the regions of
@@ -4973,61 +5207,69 @@ macro_rules! at_step {
     }};
 }
 
-fn make_ref_step<const THROUGH: bool>(slots: Unary, one: Walked) -> Box<dyn Op> {
-    at_step!(
-        one,
-        |step| Box::new(storage::MakeRefStep::<_, THROUGH> { slots, step }) as Box<dyn Op>
-    )
+fn make_ref_step<const THROUGH: bool>(slots: Unary, one: Walked) -> Node {
+    at_step!(one, |step| node(move |next| storage::MakeRefStep::<
+        _,
+        THROUGH,
+    > {
+        slots,
+        step,
+        next
+    }))
 }
 
-fn read_step<M>(slots: Unary, one: Walked) -> Box<dyn Op>
+fn read_step<M>(slots: Unary, one: Walked) -> Node
 where
     M: storage::Reads,
 {
-    at_step!(one, |step| Box::new(storage::ReadStep::<_, M> {
+    at_step!(one, |step| node(move |next| storage::ReadStep::<_, M> {
         slots,
         step,
         mode: PhantomData,
-    }) as Box<dyn Op>)
+        next
+    }))
 }
 
-fn assign_step<const THROUGH: bool, const LARGE: bool>(
-    slots: storage::Write,
-    one: Walked,
-) -> Box<dyn Op> {
-    at_step!(
-        one,
-        |step| Box::new(storage::AssignStep::<_, THROUGH, LARGE> { slots, step }) as Box<dyn Op>
-    )
+fn assign_step<const THROUGH: bool, const LARGE: bool>(slots: storage::Write, one: Walked) -> Node {
+    at_step!(one, |step| node(move |next| storage::AssignStep::<
+        _,
+        THROUGH,
+        LARGE,
+    > {
+        slots,
+        step,
+        next
+    }))
 }
 
-fn set_step<const LARGE: bool>(slots: storage::Update, one: Walked) -> Box<dyn Op> {
-    at_step!(
-        one,
-        |step| Box::new(storage::SetStep::<_, LARGE> { slots, step }) as Box<dyn Op>
-    )
+fn set_step<const LARGE: bool>(slots: storage::Update, one: Walked) -> Node {
+    at_step!(one, |step| node(move |next| storage::SetStep::<_, LARGE> {
+        slots,
+        step,
+        next
+    }))
 }
 
 // -- The place operations ----------------------------------------------
 
-fn make_ref(slots: Unary, through: bool, path: &[Walked]) -> Box<dyn Op> {
+fn make_ref(slots: Unary, through: bool, path: &[Walked]) -> Node {
     match (through, path) {
-        (false, []) => Box::new(storage::MakeRef::<false> { slots }),
-        (true, []) => Box::new(storage::MakeRef::<true> { slots }),
+        (false, []) => node(move |next| storage::MakeRef::<false> { slots, next }),
+        (true, []) => node(move |next| storage::MakeRef::<true> { slots, next }),
         (false, [one]) => make_ref_step::<false>(slots, *one),
         (true, [one]) => make_ref_step::<true>(slots, *one),
-        (false, many) => Box::new(storage::MakeRefPath::<false> {
-            slots,
-            steps: steps_of(many),
-        }),
-        (true, many) => Box::new(storage::MakeRefPath::<true> {
-            slots,
-            steps: steps_of(many),
-        }),
+        (false, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::MakeRefPath::<false> { slots, steps, next })
+        }
+        (true, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::MakeRefPath::<true> { slots, steps, next })
+        }
     }
 }
 
-fn read_place(slots: Unary, how: Reading, path: &[Walked]) -> Box<dyn Op> {
+fn read_place(slots: Unary, how: Reading, path: &[Walked]) -> Node {
     assert!(
         !path.is_empty(),
         "a read of a place with no step is a read of the register itself"
@@ -5057,50 +5299,54 @@ fn read_place(slots: Unary, how: Reading, path: &[Walked]) -> Box<dyn Op> {
     }
 }
 
-fn read_at<M>(slots: Unary, path: &[Walked]) -> Box<dyn Op>
+fn read_at<M>(slots: Unary, path: &[Walked]) -> Node
 where
     M: storage::Reads,
 {
     match path {
         [one] => read_step::<M>(slots, *one),
-        many => Box::new(storage::ReadPath::<M> {
-            slots,
-            steps: steps_of(many),
-            mode: PhantomData,
-        }),
+        many => {
+            let steps = steps_of(many);
+            node(move |next| storage::ReadPath::<M> {
+                slots,
+                steps,
+                mode: PhantomData,
+                next,
+            })
+        }
     }
 }
 
-fn assign_place(slots: storage::Write, how: Writing, path: &[Walked]) -> Box<dyn Op> {
+fn assign_place(slots: storage::Write, how: Writing, path: &[Walked]) -> Node {
     match (how.through, how.large, path) {
-        (false, false, []) => Box::new(storage::AssignVar::<false> { slots }),
-        (false, true, []) => Box::new(storage::AssignVar::<true> { slots }),
-        (true, false, []) => Box::new(storage::AssignThrough::<false> { slots }),
-        (true, true, []) => Box::new(storage::AssignThrough::<true> { slots }),
+        (false, false, []) => node(move |next| storage::AssignVar::<false> { slots, next }),
+        (false, true, []) => node(move |next| storage::AssignVar::<true> { slots, next }),
+        (true, false, []) => node(move |next| storage::AssignThrough::<false> { slots, next }),
+        (true, true, []) => node(move |next| storage::AssignThrough::<true> { slots, next }),
         (false, false, [one]) => assign_step::<false, false>(slots, *one),
         (false, true, [one]) => assign_step::<false, true>(slots, *one),
         (true, false, [one]) => assign_step::<true, false>(slots, *one),
         (true, true, [one]) => assign_step::<true, true>(slots, *one),
-        (false, false, many) => Box::new(storage::AssignPath::<false, false> {
-            slots,
-            steps: steps_of(many),
-        }),
-        (false, true, many) => Box::new(storage::AssignPath::<false, true> {
-            slots,
-            steps: steps_of(many),
-        }),
-        (true, false, many) => Box::new(storage::AssignPath::<true, false> {
-            slots,
-            steps: steps_of(many),
-        }),
-        (true, true, many) => Box::new(storage::AssignPath::<true, true> {
-            slots,
-            steps: steps_of(many),
-        }),
+        (false, false, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::AssignPath::<false, false> { slots, steps, next })
+        }
+        (false, true, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::AssignPath::<false, true> { slots, steps, next })
+        }
+        (true, false, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::AssignPath::<true, false> { slots, steps, next })
+        }
+        (true, true, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::AssignPath::<true, true> { slots, steps, next })
+        }
     }
 }
 
-fn set_place(slots: storage::Update, large: bool, path: &[Walked]) -> Box<dyn Op> {
+fn set_place(slots: storage::Update, large: bool, path: &[Walked]) -> Node {
     assert!(
         !path.is_empty(),
         "a field set with no step names no field to write"
@@ -5108,30 +5354,30 @@ fn set_place(slots: storage::Update, large: bool, path: &[Walked]) -> Box<dyn Op
     match (large, path) {
         (false, [one]) => set_step::<false>(slots, *one),
         (true, [one]) => set_step::<true>(slots, *one),
-        (false, many) => Box::new(storage::SetPath::<false> {
-            slots,
-            steps: steps_of(many),
-        }),
-        (true, many) => Box::new(storage::SetPath::<true> {
-            slots,
-            steps: steps_of(many),
-        }),
+        (false, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::SetPath::<false> { slots, steps, next })
+        }
+        (true, many) => {
+            let steps = steps_of(many);
+            node(move |next| storage::SetPath::<true> { slots, steps, next })
+        }
     }
 }
 
 // -- The variant tests -------------------------------------------------
 
-fn test_option<const THROUGH: bool>(slots: Unary, some: bool) -> Box<dyn Op> {
+fn test_option<const THROUGH: bool>(slots: Unary, some: bool) -> Node {
     match some {
-        true => Box::new(variant::TestOption::<THROUGH, true> { slots }),
-        false => Box::new(variant::TestOption::<THROUGH, false> { slots }),
+        true => node(move |next| variant::TestOption::<THROUGH, true> { slots, next }),
+        false => node(move |next| variant::TestOption::<THROUGH, false> { slots, next }),
     }
 }
 
-fn test_result<const THROUGH: bool>(slots: Unary, ok: bool) -> Box<dyn Op> {
+fn test_result<const THROUGH: bool>(slots: Unary, ok: bool) -> Node {
     match ok {
-        true => Box::new(variant::TestResult::<THROUGH, true> { slots }),
-        false => Box::new(variant::TestResult::<THROUGH, false> { slots }),
+        true => node(move |next| variant::TestResult::<THROUGH, true> { slots, next }),
+        false => node(move |next| variant::TestResult::<THROUGH, false> { slots, next }),
     }
 }
 
@@ -5144,7 +5390,7 @@ fn call_task(callee_ty: &Ty) -> Task {
 /// The `(large, word)` pair every call's result store is picked by, the same
 /// three forms `CallExtern1` has: a `Large` the frame takes ownership of, a
 /// word whose kind the frame opened, or neither.
-fn direct_call(into: Dest, callee: QualifiedRef, operands: Operands) -> Box<dyn Op> {
+fn direct_call(into: Dest, callee: QualifiedRef, operands: Operands) -> Node {
     let Dest {
         slot: dst,
         large,
@@ -5152,28 +5398,31 @@ fn direct_call(into: Dest, callee: QualifiedRef, operands: Operands) -> Box<dyn 
     } = into;
     let Operands { slots: args, takes } = operands;
     match (large, word) {
-        (true, _) => Box::new(call::CallDirect::<true, false> {
+        (true, _) => node(move |next| call::CallDirect::<true, false> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
-        (false, true) => Box::new(call::CallDirect::<false, true> {
+        (false, true) => node(move |next| call::CallDirect::<false, true> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
-        (false, false) => Box::new(call::CallDirect::<false, false> {
+        (false, false) => node(move |next| call::CallDirect::<false, false> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
     }
 }
 
-fn indirect_call(into: Dest, through: bool, callee: Off, operands: Operands) -> Box<dyn Op> {
+fn indirect_call(into: Dest, through: bool, callee: Off, operands: Operands) -> Node {
     let Dest {
         slot: dst,
         large,
@@ -5181,41 +5430,47 @@ fn indirect_call(into: Dest, through: bool, callee: Off, operands: Operands) -> 
     } = into;
     let Operands { slots: args, takes } = operands;
     match (large, word, through) {
-        (true, _, false) => Box::new(call::CallIndirect::<true, false, false> {
+        (true, _, false) => node(move |next| call::CallIndirect::<true, false, false> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
-        (true, _, true) => Box::new(call::CallIndirect::<true, false, true> {
+        (true, _, true) => node(move |next| call::CallIndirect::<true, false, true> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
-        (false, true, false) => Box::new(call::CallIndirect::<false, true, false> {
+        (false, true, false) => node(move |next| call::CallIndirect::<false, true, false> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
-        (false, true, true) => Box::new(call::CallIndirect::<false, true, true> {
+        (false, true, true) => node(move |next| call::CallIndirect::<false, true, true> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
-        (false, false, false) => Box::new(call::CallIndirect::<false, false, false> {
+        (false, false, false) => node(move |next| call::CallIndirect::<false, false, false> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
-        (false, false, true) => Box::new(call::CallIndirect::<false, false, true> {
+        (false, false, true) => node(move |next| call::CallIndirect::<false, false, true> {
             dst,
             callee,
             args,
             takes,
+            next,
         }),
     }
 }
@@ -5226,7 +5481,7 @@ fn indirect_call_async(
     callee: Off,
     operands: Operands,
     next: BlockId,
-) -> Box<dyn Terminator> {
+) -> Box<dyn Op> {
     let Dest {
         slot: dst,
         large,

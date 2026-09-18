@@ -346,7 +346,7 @@ async fn a_run_of_more_than_three_nodes_is_several_chains_through_a_register() {
     let Code::Body(body) = &*module.main else {
         panic!("a script's entry body runs on a frame")
     };
-    let written: Vec<u16> = found.iter().map(|chain| chain.dst).collect();
+    let written: Vec<u16> = found.iter().filter_map(|chain| chain.dst).collect();
     let through_a_register = found.iter().any(|chain| {
         chain.leaves.iter().any(|off| {
             written

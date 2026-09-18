@@ -77,6 +77,18 @@ impl Off {
     }
 }
 
+/// Where `prepare` decided one word lives (RFC-0052 rule 5). It is what the
+/// place *type* in `ops::place` is chosen from, at preparation; no `run`
+/// holds one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Where {
+    /// The frame register at this byte displacement.
+    Frame(Off),
+    /// The argument register, which the operation before this one in the same
+    /// chain left the word in.
+    Register,
+}
+
 pub type BlockId = u32;
 
 /// The body returns what it left in `Machine::exit`.
@@ -110,11 +122,19 @@ where
     }
 }
 
-/// RFC-0052 §1: a `run` contains no `match`, no `let … else` and no `kind`
-/// test on a fact its own type carries.
+/// An operation holds its successor and ends by calling it; the operation
+/// with no successor returns the `BlockId` the machine's loop reads.
+///
+/// Obligation across artifacts: that the call is a tail call is asserted by
+/// `acvus-interpreter-test/benches/asm_probe.rs` on the release machine, and
+/// that a `run` holds no `match`, no `let … else` and no `kind` test on a
+/// fact its own type carries is RFC-0052 §1.
+///
+/// `r0` is the word the operation before it in the same chain produced
+/// (RFC-0052 rule 5, `Place::R0`).
 #[cfg(any(debug_assertions, feature = "probe"))]
 pub trait Op: Named + Send + Sync {
-    fn run(&self, m: &mut Machine<'_>);
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId;
 
     fn chain(&self) -> Option<ChainProbe<'_>> {
         None
@@ -130,68 +150,130 @@ pub trait Op: Named + Send + Sync {
 
     /// Answered by a region alone, for `oplist` and the loop-shape tests, so
     /// that they read the parts the recognizers produced rather than infer
-    /// them.
+    /// them. Each part is the head of one chain.
     fn owns(&self) -> Vec<OwnedOps<'_>> {
         Vec::new()
     }
 
-    /// The same lists, for `slice_ceiling`'s probe to substitute an operation
+    /// The same heads, for `slice_ceiling`'s probe to substitute an operation
     /// inside a region.
-    fn owns_mut(&mut self) -> Vec<&mut [Box<dyn Op>]> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         Vec::new()
+    }
+
+    /// The successor, for a listing that walks a chain.
+    fn successor(&self) -> Option<&dyn Op> {
+        None
+    }
+
+    /// The successor, for a probe that walks a chain to a node of it.
+    fn successor_mut(&mut self) -> Option<&mut Box<dyn Op>> {
+        None
+    }
+
+    /// The successor, taken out: `substitute` is the one caller.
+    fn take_successor(self: Box<Self>) -> Option<Box<dyn Op>> {
+        None
+    }
+}
+
+/// Put `make`'s node in `slot`'s place, carrying the successor the node
+/// there held (RFC-0047 §7's probe, now that a successor is a field).
+#[cfg(any(debug_assertions, feature = "probe"))]
+pub fn substitute<F>(slot: &mut Box<dyn Op>, make: F)
+where
+    F: FnOnce(Box<dyn Op>) -> Box<dyn Op>,
+{
+    // SAFETY: `read` copies the one owning pointer out of `slot`;
+    // `take_successor` consumes that copy, which is the old node's only
+    // drop; `write` then stores the new node without dropping the copy. On
+    // every path `slot` owns exactly one node.
+    unsafe {
+        let old = std::ptr::read(slot);
+        let successor = old
+            .take_successor()
+            .expect("the node a probe substitutes holds a successor");
+        std::ptr::write(slot, make(successor));
     }
 }
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 pub struct ChainProbe<'o> {
-    pub dst: Off,
+    pub dst: Where,
     pub plan: &'o crate::ops::chain::Plan,
 }
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 pub struct OwnedOps<'o> {
     pub part: &'static str,
-    pub ops: &'o [Box<dyn Op>],
+    pub head: &'o dyn Op,
 }
 
 #[cfg(not(any(debug_assertions, feature = "probe")))]
 pub trait Op: Send + Sync {
-    fn run(&self, m: &mut Machine<'_>);
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId;
 }
 
-#[cfg(any(debug_assertions, feature = "probe"))]
-pub trait Terminator: Named + Send + Sync {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId;
-}
-
-#[cfg(not(any(debug_assertions, feature = "probe")))]
-pub trait Terminator: Send + Sync {
-    fn next(&self, m: &mut Machine<'_>) -> BlockId;
-}
-
-pub struct Block {
-    pub ops: Box<[Box<dyn Op>]>,
-    pub end: Box<dyn Terminator>,
-}
-
-impl Block {
-    pub fn new<I>(ops: I, end: Box<dyn Terminator>) -> Block
-    where
-        I: IntoIterator<Item = Box<dyn Op>>,
-    {
-        Block {
-            ops: ops.into_iter().collect(),
-            end,
+/// The one writer of the three probe methods, over the `next` field the tail
+/// call reads.
+macro_rules! successor {
+    () => {
+        #[cfg(any(debug_assertions, feature = "probe"))]
+        fn successor(&self) -> Option<&dyn $crate::code::Op> {
+            Some(self.next.as_ref())
         }
-    }
 
+        #[cfg(any(debug_assertions, feature = "probe"))]
+        fn successor_mut(&mut self) -> Option<&mut Box<dyn $crate::code::Op>> {
+            Some(&mut self.next)
+        }
+
+        #[cfg(any(debug_assertions, feature = "probe"))]
+        fn take_successor(self: Box<Self>) -> Option<Box<dyn $crate::code::Op>> {
+            Some(self.next)
+        }
+    };
+}
+
+pub(crate) use successor;
+
+/// An operation `prepare` has decided on and not yet linked: `prepare` emits
+/// a body's operations in the order they run, and `chain` links them from the
+/// end backwards.
+pub(crate) struct Node(Box<dyn FnOnce(Box<dyn Op>) -> Box<dyn Op>>);
+
+impl Node {
     #[inline]
-    pub fn run(&self, m: &mut Machine<'_>) -> BlockId {
-        for op in self.ops.iter() {
-            op.run(m);
-        }
-        self.end.next(m)
+    pub(crate) fn link(self, next: Box<dyn Op>) -> Box<dyn Op> {
+        (self.0)(next)
     }
+}
+
+pub(crate) fn node<T, F>(make: F) -> Node
+where
+    F: FnOnce(Box<dyn Op>) -> T + 'static,
+    T: Op + 'static,
+{
+    Node(Box::new(move |next| Box::new(make(next)) as Box<dyn Op>))
+}
+
+pub(crate) fn made<F>(make: F) -> Node
+where
+    F: FnOnce(Box<dyn Op>) -> Box<dyn Op> + 'static,
+{
+    Node(Box::new(make))
+}
+
+/// The head of the chain `nodes` make, ending at `end`.
+pub(crate) fn chain<I>(nodes: I, end: Box<dyn Op>) -> Box<dyn Op>
+where
+    I: IntoIterator<Item = Node>,
+    I::IntoIter: DoubleEndedIterator,
+{
+    nodes
+        .into_iter()
+        .rev()
+        .fold(end, |next, node| node.link(next))
 }
 
 /// `owns_large` is the `Suspend` terminator's own type parameter, carried as a
@@ -406,7 +488,9 @@ pub struct SlotKind {
 }
 
 pub struct Body {
-    pub blocks: Box<[Block]>,
+    /// One chain head per joint. `Machine::run` enters here and nowhere
+    /// else: a straight run is a chain inside one of these.
+    pub heads: Box<[Box<dyn Op>]>,
     pub entry: BlockId,
     /// A call out of this body takes its callee's frame from the window above
     /// this many slots (RFC-0052 rule 7).

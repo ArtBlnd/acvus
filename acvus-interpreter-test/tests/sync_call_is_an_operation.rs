@@ -75,7 +75,7 @@ async fn a_call_above_sync_is_a_terminator_and_no_loop_is_recognized() {
         ends,
         [
             "Goto",
-            "JumpIf",
+            "JumpIf<R0>",
             "CallIndirectAsync<false, true>",
             "Goto",
             "Return<true>"

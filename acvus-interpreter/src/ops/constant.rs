@@ -1,6 +1,6 @@
 //! Constants: the literal an operation defines its destination with.
 
-use crate::code::{Konst, Off, Op};
+use crate::code::{BlockId, Konst, Off, Op, successor};
 use crate::machine::Machine;
 
 /// The word of an integer, a float, a bool or unit. The slot's kind was
@@ -9,12 +9,16 @@ use crate::machine::Machine;
 pub struct Const {
     pub dst: Off,
     pub word: u64,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for Const {
+    successor!();
+
     #[inline]
-    fn run(&self, m: &mut Machine<'_>) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         m.regs().set_word(self.dst, self.word);
+        self.next.run(m, r0)
     }
 }
 
@@ -24,11 +28,15 @@ impl Op for Const {
 pub struct ConstLarge {
     pub dst: Off,
     pub konst: Konst,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for ConstLarge {
-    fn run(&self, m: &mut Machine<'_>) {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> BlockId {
         let value = self.konst.value();
         m.regs().define::<true>(self.dst, value);
+        self.next.run(m, r0)
     }
 }

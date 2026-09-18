@@ -61,7 +61,7 @@ async fn a_while_around_an_await_is_not_a_loop() {
     );
     assert_eq!(
         ends,
-        ["Goto", "JumpIf", "Eval<false>", "Goto", "Return<true>"],
+        ["Goto", "JumpIf<R0>", "Eval<false>", "Goto", "Return<true>"],
         "entry, the head's compare, the call's block ending at the suspend, \
          the block after it, and the return"
     );
@@ -85,7 +85,7 @@ async fn the_block_after_the_call_is_where_the_resume_lands() {
     );
     assert_eq!(
         blocks[3].ops,
-        ["Add<i64>", "Add<i64>"],
+        ["Add<i64, Slot, Slot, Slot>", "Add<i64, Slot, Slot, Slot>"],
         "`s + <the call's value>` and `n + 1` run after the resume, in the \
          block the suspend named"
     );
