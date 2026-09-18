@@ -8,8 +8,9 @@ therefore never a status report.
 ## Rules
 
 - One ruling per RFC. A second ruling is a second RFC.
-- An RFC contains no file paths, line numbers, test counts, crate names as
-  implementation locations, or statements of implementation progress.
+- An RFC cites the tree where a sentence is checkable there — a file and
+  line at the commit it names — and carries no statements of
+  implementation progress.
 - Status is exactly one of `Accepted`, `Proposed`, or `Superseded by RFC-NNNN`.
   An RFC may hold an `Accepted` ruling and a `Proposed` mechanism only when the
   two are separated under their own headings inside `## Ruling`.
@@ -67,7 +68,7 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0019](0019-shared-signatures.md) | A shared signature and its instances | Accepted |
 | [RFC-0020](0020-operators-borrow.md) | Operators on language-owned types are instructions; on extension types, a shared signature | Accepted |
 | [RFC-0021](0021-registry.md) | A registry is a manifest and a handler table, combined once | Accepted |
-| [RFC-0022](0022-thin-runtime-contract.md) | The runtime contract is erase, materialize, reference, and call | Accepted |
+| [RFC-0022](0022-thin-runtime-contract.md) | The runtime contract is erase, materialize, reference, and call | Superseded by RFC-0039 |
 | [RFC-0023](0023-extern-declaration.md) | Declaring an ExternFn | Accepted |
 | [RFC-0024](0024-patterns-through-a-reference.md) | A pattern matched against a reference binds references | Accepted |
 | [RFC-0025](0025-context-is-a-variable.md) | A context is a variable of the body that touches it | Accepted |

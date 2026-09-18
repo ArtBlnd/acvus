@@ -24,9 +24,11 @@ variable found nowhere in its parameters returns a new source at every
 call, and one that carries the variable from a parameter to its return
 returns the same source it was given.
 
-A user-defined value with an identity parameter is one source and moves;
-a user-defined value without one is a plain value and copies. This is the
-only rule that decides whether a user-defined type moves.
+A user-defined value with an identity parameter is one source. Every
+user-defined value moves, with or without an identity parameter: only
+the machine's word primitives — the integer widths, `f64`, `Bool`,
+`Unit` — copy (`move_check`; owner, 2026-09-20). The identity parameter
+decides sameness, not whether the value moves.
 
 Identity lives in the compiler. The runtime sees none of it: what the
 compiler proved about sources is already spent by the time code runs. A

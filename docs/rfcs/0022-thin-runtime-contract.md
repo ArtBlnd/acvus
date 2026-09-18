@@ -1,6 +1,6 @@
 # RFC-0022: The runtime contract is erase, materialize, reference, and call
 
-Status: Accepted
+Status: Superseded by RFC-0039
 Date: 2026-09-15
 Supersedes: RFC-0010, RFC-0016
 
