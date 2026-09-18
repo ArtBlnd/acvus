@@ -1,6 +1,6 @@
 # RFC-0052: an operation is a struct, and the machine calls it once
 
-Status: Draft — owner and coordinator, 2026-09-18/19
+Status: Accepted — owner and coordinator, 2026-09-19 (phase 1 merged 17718c76; the frame a6f1d50d; a synchronous call 550de866)
 Supersedes: RFC-0044's machine representation (`Op`, `OpFn`, `Payload`,
 `Flow`); RFC-0044's stages (prepare once, recognizers, chain, diamond,
 loop, fused run, by-value ABI) stand as what the recognizers produce
