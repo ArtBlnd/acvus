@@ -135,10 +135,7 @@ where
     };
     let specialized_pattern = pattern(|arg| arg.repr);
     let uniform_pattern = pattern(|_| Repr::Uniform);
-    let family = match id.namespace {
-        Some(ns) => format!("{}::{}", i.resolve(ns), i.resolve(id.name)),
-        None => i.resolve(id.name).to_string(),
-    };
+    let family = written(i, *id);
     let fn_ty = |from: PolyTy, to: PolyTy| PolyTy::Fn {
         params: vec![ParamTerm::<Poly>::new(i.intern("value"), from)],
         ret: Box::new(to),
@@ -266,6 +263,12 @@ pub enum CombineError {
         function: QualifiedRef,
         reason: &'static str,
     },
+    /// A handler that runs above the task its declaration names (RFC-0046).
+    HandlerTask {
+        function: String,
+        declared: Task,
+        handler: Task,
+    },
 }
 
 impl fmt::Display for CombineError {
@@ -291,8 +294,63 @@ impl fmt::Display for CombineError {
                 signature,
             } => write!(f, "{function:?} requires unknown signature {signature:?}"),
             Self::CastShape { function, reason } => write!(f, "cast {function:?}: {reason}"),
+            Self::HandlerTask {
+                function,
+                declared,
+                handler,
+            } => write!(
+                f,
+                "{function} is declared at Task::{declared}, so its handler \
+                 may not run at Task::{handler}"
+            ),
         }
     }
+}
+
+/// A qualified name as a script writes it.
+fn written(i: &Interner, q: QualifiedRef) -> String {
+    match q.namespace {
+        Some(ns) => format!("{}::{}", i.resolve(ns), i.resolve(q.name)),
+        None => i.resolve(q.name).to_string(),
+    }
+}
+
+/// The task a declared type claims. A declaration generic in its effect
+/// makes no claim here — its task is whatever the caller substitutes — so
+/// the claim it could contradict does not exist.
+fn declared_task(ty: &PolyTy) -> Option<Task> {
+    match ty {
+        PolyTy::Fn {
+            effect: EffectTerm::Known(effect),
+            ..
+        } => Some(effect.task),
+        _ => None,
+    }
+}
+
+/// A declaration's task is the ceiling of its handler's: the glue that
+/// runs a handler at `Async` or `Heavy` suspends the caller, and a
+/// declaration claiming a lower task promises a caller it will not.
+fn ceiling_admits<R>(
+    i: &Interner,
+    function: QualifiedRef,
+    declared: &PolyTy,
+    handler: &ExternHandler<R>,
+) -> Result<(), CombineError>
+where
+    R: Runtime,
+{
+    let Some(declared) = declared_task(declared) else {
+        return Ok(());
+    };
+    let handler = handler.task();
+    (declared.join(handler) == declared)
+        .then_some(())
+        .ok_or_else(|| CombineError::HandlerTask {
+            function: written(i, function),
+            declared,
+            handler,
+        })
 }
 
 impl std::error::Error for CombineError {}
@@ -367,7 +425,7 @@ impl<R: Runtime> Externs<R> {
                     .remove(&decl.qref)
                     .unwrap_or_else(|| panic!("no handler for declared {:?}", decl.qref));
                 match decl.instance_of {
-                    Some(sig) => add_instance(&mut signatures, decl, instances, sig)?,
+                    Some(sig) => add_instance(interner, &mut signatures, decl, instances, sig)?,
                     None => {
                         let declared = plain
                             .iter_mut()
@@ -408,6 +466,12 @@ impl<R: Runtime> Externs<R> {
             }
             if decl.cast {
                 types.register_cast(cast_rule(&decl)?);
+            }
+            for instance in &instances.concrete {
+                ceiling_admits(interner, decl.qref, &instance.signature, &instance.handler)?;
+            }
+            if let Some(generic) = &instances.generic {
+                ceiling_admits(interner, decl.qref, &decl.ty, generic)?;
             }
             functions.push(Function {
                 qref: decl.qref,
@@ -461,6 +525,7 @@ fn meet(bound: &TyVarBound, allowed: &[PolyTy]) -> TyVarBound {
 }
 
 fn add_instance<R: Runtime>(
+    i: &Interner,
     signatures: &mut FxHashMap<QualifiedRef, Collected<R>>,
     decl: FnDecl,
     instances: Instances<R>,
@@ -497,6 +562,7 @@ fn add_instance<R: Runtime>(
     if !concrete.is_empty() {
         return Err(mismatch());
     }
+    ceiling_admits(i, decl.qref, &decl.ty, &handler)?;
     if decl.cast {
         let mut rule = cast_rule(&decl)?;
         rule.fn_ref = sig;

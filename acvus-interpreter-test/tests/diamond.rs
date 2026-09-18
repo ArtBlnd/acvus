@@ -37,10 +37,10 @@ fn shape_of(region: &RegionListing) -> DiamondShape {
     }
 }
 
-fn diamonds_innermost_first(source: &str) -> Vec<String> {
+fn diamonds_innermost_first(source: &str, page: fn(&Interner) -> Context) -> Vec<String> {
     let interner = Interner::new();
     regions_named(
-        &script_listing(&interner, source, Context::default(), Ty::I64),
+        &script_listing(&interner, source, page(&interner), Ty::I64),
         "Diamond",
     )
     .into_iter()
@@ -101,16 +101,16 @@ async fn an_if_statement_without_a_value_runs_only_the_taken_arm() {
 #[tokio::test]
 async fn an_if_nested_in_an_arm_is_a_diamond_inside_a_diamond() {
     let i = Interner::new();
-    let source = "let n = 9; let r = if n > 5 { if n > 8 { 100 } else { 10 } } else { 1 }; r";
-    let v = run_script(&i, source, Context::default(), Ty::I64).await;
+    let source = "let r = if @n > 5 { if @n > 8 { 100 } else { 10 } } else { 1 }; r";
+    let v = run_script(&i, source, int_context(&i, "n", 9), Ty::I64).await;
     assert_eq!(v.as_int(), 100);
     assert_eq!(
-        diamonds_innermost_first(source),
+        diamonds_innermost_first(source, |i| int_context(i, "n", 9)),
         vec![shape(1, 1, 0), shape(2, 1, 0)],
         "the outer arm counts the inner diamond among its own operations"
     );
     let interner = Interner::new();
-    let outer = script_listing(&interner, source, Context::default(), Ty::I64);
+    let outer = script_listing(&interner, source, int_context(&interner, "n", 9), Ty::I64);
     let outer = regions_named(&outer, "Diamond");
     let arm = outer
         .last()
@@ -119,12 +119,11 @@ async fn an_if_nested_in_an_arm_is_a_diamond_inside_a_diamond() {
         .expect("its true arm");
     assert_eq!(
         arm.ops,
-        vec!["Const", "Diamond<Slot>"],
-        "the outer arm is one operation: the inner diamond, which reads the inner \
-         test's word and runs its own arm straight. `n` is a constant, so RFC-0055 \
-         folds the inner `n > 8` to a constant; a constant is defined into its slot \
-         and the diamond reads the slot (a `Const` is not a chain producer, so the \
-         word does not ride)"
+        vec!["Gt<i64, Slot, Slot, R0>", "Diamond<R0>"],
+        "the outer arm is two operations: the inner test and the inner diamond. `@n` \
+         comes from the page, so the inner `@n > 8` is a live compare no fold reaches, \
+         and a compare is a chain producer — its word rides in R0 into the diamond \
+         rather than through a slot"
     );
 }
 
@@ -161,7 +160,10 @@ async fn a_diamond_in_a_body_leaves_the_while_recognizable() {
     let v = run_script(&i, source, Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 3 + 30 + 200);
     assert_eq!(loop_count(source), 1);
-    assert_eq!(diamonds_innermost_first(source).len(), 2);
+    assert_eq!(
+        diamonds_innermost_first(source, |_| Context::default()).len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -171,7 +173,10 @@ async fn a_while_in_an_arm_is_one_operation_inside_the_diamond() {
     let v = run_script(&i, source, Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 10);
     assert_eq!(loop_count(source), 1);
-    assert_eq!(diamonds_innermost_first(source).len(), 1);
+    assert_eq!(
+        diamonds_innermost_first(source, |_| Context::default()).len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -182,7 +187,10 @@ async fn a_short_circuit_condition_leaves_the_while_recognizable() {
     let v = run_script(&i, source, Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 15);
     assert_eq!(loop_count(source), 1);
-    assert_eq!(diamonds_innermost_first(source), vec![shape(1, 1, 0)]);
+    assert_eq!(
+        diamonds_innermost_first(source, |_| Context::default()),
+        vec![shape(1, 1, 0)]
+    );
 }
 
 #[tokio::test]
@@ -192,5 +200,8 @@ async fn an_or_condition_is_the_same_diamond() {
     let v = run_script(&i, source, Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 7);
     assert_eq!(loop_count(source), 1);
-    assert_eq!(diamonds_innermost_first(source).len(), 1);
+    assert_eq!(
+        diamonds_innermost_first(source, |_| Context::default()).len(),
+        1
+    );
 }

@@ -89,8 +89,9 @@ fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
         .expect("`xs[1]` gives `&String`, `clone` takes `&T`");
     assert_eq!(
         ir.matches("ref &").count(),
-        2,
-        "xs is lent for its slice, and the element is reborrowed as the receiver:\n{ir}"
+        1,
+        "xs is lent for its slice; the element is already a `&String`, so it is \
+         the receiver and no reborrow of it is built:\n{ir}"
     );
     assert_eq!(
         tail_ty("let xs = [\"a\", \"b\"]; xs[1].clone()"),

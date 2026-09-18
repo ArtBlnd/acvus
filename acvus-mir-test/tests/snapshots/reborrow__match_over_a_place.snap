@@ -1,0 +1,95 @@
+---
+source: acvus-mir-test/tests/reborrow.rs
+expression: listing
+---
+=== main ===
+     3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
+     4 |   assign prog = r0
+     5 |   r4 = ref &prog
+     6 |   r5 = call #0(r4)
+     7 |   r6 = r5 / r5
+     9 |   r7 = r5 - r5
+    10 |   r8 = as_slice &r4
+    11 |   jump L0(0 (r9), r7)
+    12 | L0(r10: i64, r11: u64):
+    13 |   r12 = r11 < r5
+    14 |   jump_if r12 then L1 else L2
+    15 | L1:
+    16 |   r13 = &r8[r11]
+    17 |   r14 = test r13 == 1
+    18 |   r15 = r11 + r6
+    19 |   jump L4
+    20 | L4:
+    21 |   jump_if r14 then L5 else L6
+    22 | L5:
+    24 |   r16 = r10 + 1 (r17)
+    25 |   jump L3(r16)
+    26 | L6:
+    27 |   r18 = test r13 == 2
+    28 |   jump_if r18 then L7 else L8
+    29 | L7:
+    31 |   r19 = r10 - 1 (r20)
+    32 |   jump L3(r19)
+    33 | L8:
+    34 |   jump L3(r10)
+    35 | L3(r21: i64):  ; merge_of L4
+    36 |   jump L0(r21, r15)
+    37 | L2:
+    38 |   drop r22
+    39 |   drop r8
+    40 |   return r10
+
+    ; r0 (v4) : Array<i64, 3>
+    ; r1 (v1) : i64
+    ; r2 (v2) : i64
+    ; r3 (v3) : i64
+    ; r4 (prog.) : &Array<i64, 3>
+    ; r5 (len(...)) : u64
+    ; r6 (v11) : u64
+    ; r7 (v17) : u64
+    ; r8 (v23) : &[i64]
+    ; r9 (v13) : i64
+    ; r10 (v50) : i64
+    ; r11 (v48) : u64
+    ; r12 (v21) : Bool
+    ; r13 (v25) : &i64
+    ; r14 (v27) : Bool
+    ; r15 (v42) : u64
+    ; r16 (v30) : i64
+    ; r17 (v29) : i64
+    ; r18 (v32) : Bool
+    ; r19 (v35) : i64
+    ; r20 (v34) : i64
+    ; r21 (v55) : i64
+    ; r22 (prog) : Array<i64, 3>
+    ; r23 (v44) : u64
+    ; r24 (prog.) : &Array<i64, 3>
+    ; r25 (v47) : u64
+    ; r26 (acc) : i64
+    ; r27 (pc) : u64
+    ; r28 (acc) : i64
+    ; r29 (v46) : i64
+    ; r30 (pc) : u64
+    ; r31 (plen) : u64
+    ; r32 (v31) : Unit
+    ; r33 (v53) : u64
+    ; r34 (one) : u64
+    ; r35 (plen) : u64
+    ; r36 (acc) : i64
+    ; r37 (pc) : u64
+    ; r38 (v49) : u64
+    ; r39 (plen) : u64
+    ; r40 (v52) : u64
+    ; r41 (acc) : i64
+    ; r42 (acc) : i64
+    ; r43 (v36) : Unit
+    ; r44 (plen) : u64
+    ; r45 (v39) : Unit
+    ; r46 (v45) : u64
+    ; r47 (v51) : u64
+    ; r48 (plen) : u64
+    ; r49 (v54) : u64
+    ; r50 (plen) : u64
+    ; r51 (v38) : Unit
+    ; r52 (pc) : u64
+    ; r53 (one) : u64

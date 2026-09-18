@@ -1260,3 +1260,65 @@ fn an_option_crosses_as_the_host_shaped_it() {
         Some(None)
     );
 }
+
+// -- A declaration's task is the ceiling of its handler's (RFC-0046) ---
+
+/// One declaration, built by hand rather than by `#[extern_fn]`, whose
+/// type claims `Effect::PURE` — `Task::Sync` — over a handler the runtime
+/// offloads and awaits.
+fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
+    Registry::new(|i: &Interner| {
+        let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("blocking"));
+        let heavy = ExternHandler::Heavy(SyncCall::Plain(SyncAbi::Arity0({
+            let f: acvus_extern::Sync0<Tiny> = |_| V::Taken;
+            f
+        })));
+        acvus_extern::Contribution {
+            manifest: acvus_extern::Manifest {
+                types: Vec::new(),
+                signatures: Vec::new(),
+                fns: vec![acvus_extern::FnDecl {
+                    qref,
+                    ty: PolyTy::Fn {
+                        params: Vec::new(),
+                        ret: Box::new(PolyTy::I64),
+                        captures: Vec::new(),
+                        effect: EffectTerm::Known(Effect::PURE),
+                    },
+                    bounds: Vec::new(),
+                    cast: false,
+                    instance_of: None,
+                    requires: Vec::new(),
+                }],
+            },
+            instances: acvus_extern::FxHashMap::from_iter([(
+                qref,
+                acvus_extern::Instances::generic(heavy),
+            )]),
+            space: acvus_extern::FxHashMap::default(),
+        }
+    })
+}
+
+#[test]
+fn a_pure_declaration_over_a_heavy_handler_is_refused() {
+    let i = Interner::new();
+    let err = Externs::combine(vec![a_heavy_handler_under_a_pure_declaration()], &i)
+        .err()
+        .expect("a Task::Sync declaration cannot resolve to a Heavy handler");
+    assert!(
+        matches!(
+            err,
+            acvus_extern::CombineError::HandlerTask {
+                declared: Task::Sync,
+                handler: Task::Heavy,
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert!(
+        format!("{err}").contains("blocking"),
+        "the refusal names the extern: {err}"
+    );
+}

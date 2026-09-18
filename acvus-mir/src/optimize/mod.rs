@@ -7,6 +7,7 @@ pub mod drop_insertion;
 pub mod dse;
 pub mod fold;
 pub mod lsr;
+pub mod reborrow;
 pub mod reorder;
 pub mod spawn_split;
 pub mod sroa;

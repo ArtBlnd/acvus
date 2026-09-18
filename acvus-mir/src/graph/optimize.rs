@@ -1,9 +1,6 @@
 //! Phase 5: Optimize
 //!
 //! Runs the full optimization pipeline on lowered MIR modules.
-//!
-//! Pass 1 (cross-module): SSA -> Inline
-//! Pass 2 (per-module):   SpawnSplit -> CodeMotion -> Lsr -> Reorder -> SSA -> RegColor -> Validate
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -89,7 +86,6 @@ fn optimize_inner(
     }
 }
 
-/// Pass 1: SSA -> DSE -> DCE on a single body.
 fn run_pass1_body(body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
@@ -99,14 +95,12 @@ fn run_pass1_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-/// Pass 2: Full optimization pipeline on a single body.
 fn run_pass2_body(body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
     run_pass2(&mut cfg);
     *body = cfg::demote(cfg);
 }
 
-/// Pass 2 pipeline on CfgBody.
 fn run_pass2(cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
@@ -120,6 +114,7 @@ fn run_pass2(cfg: &mut CfgBody) {
     // into one body; before `dse`/`dce`, which sweep the operands a fold
     // left with no reader.
     optimize::fold::run(cfg);
+    optimize::reborrow::run(cfg);
     optimize::dse::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);

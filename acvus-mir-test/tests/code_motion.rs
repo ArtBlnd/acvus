@@ -215,16 +215,19 @@ fn a_borrow_of_a_context_the_loop_assigns_stays() {
 }
 
 /// A borrow through a reference is a memory op: it stays in order with the
-/// other ops through that reference, wherever they are.
+/// other ops through that reference, wherever they are. The borrow is one
+/// field deep because `optimize::reborrow` folds a borrow of the *whole*
+/// of what a reference names back into that reference, leaving no op here
+/// to hold in place.
 #[test]
 fn a_borrow_through_a_reference_never_moves() {
     let i = Interner::new();
     let ir = compile_script_mode_optimized(
         &i,
-        "let v = deque(); v.push_back(1); \
+        "let v = { d: deque(), }; v.d.push_back(1); \
          let r = &v; \
          let s = 0; let i = 0; \
-         while i < @n { s = s + *r.get(0); i = i + 1; } \
+         while i < @n { s = s + *r.d.get(0); i = i + 1; } \
          s",
         &n_ctx(&i),
     )
@@ -318,15 +321,16 @@ fn two_exclusive_borrows_are_two() {
 }
 
 /// A borrow through a reference is a memory op, not a name for a storage:
-/// two of them stay two, wherever they stand.
+/// two of them stay two, wherever they stand. The borrow is one field deep
+/// for the reason `a_borrow_through_a_reference_never_moves` gives.
 #[test]
 fn two_borrows_through_a_reference_are_two() {
     let i = Interner::new();
     let ir = compile_script_mode_optimized(
         &i,
-        "let v = deque(); v.push_back(1); \
+        "let v = { d: deque(), }; v.d.push_back(1); \
          let r = &v; \
-         let a = *r.get(0); let b = *r.get(0); \
+         let a = *r.d.get(0); let b = *r.d.get(0); \
          a + b",
         &n_ctx(&i),
     )

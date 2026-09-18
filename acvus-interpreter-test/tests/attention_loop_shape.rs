@@ -73,6 +73,10 @@ fn attention_loops() -> Vec<LoopShape> {
 /// cost of the loop order, not of the instruction: an `AsSlice` hoists out
 /// of a loop that does not define its container, and here the container is
 /// defined by the loop itself.
+///
+/// `optimize::reborrow` then took both of those bodies down one: the row a
+/// pass takes is already a reference, so the borrow of the whole of what it
+/// names is that reference and no operation of its own. 11 -> 10 and 9 -> 8.
 #[test]
 fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     let shapes: Vec<String> = attention_loops()
@@ -88,8 +92,8 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
         shapes,
         [
             "head 1 body 4 back 0",
-            "head 1 body 11 back 0",
-            "head 1 body 9 back 0",
+            "head 1 body 10 back 0",
+            "head 1 body 8 back 0",
             "head 1 body 7 back 1",
         ],
         "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"
