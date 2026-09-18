@@ -111,9 +111,14 @@ and threw away.
    bool>`); a take of a `Large` clears its bit; a batched take clears one
    mask; the frame's exit releases the marked slots. Slot access is
    unchecked in release (`prepare` proved every slot below `frame_len`;
-   `debug_assert!` in debug). `Value: Copy`, `Owned<R>` in every Rust
-   store, `Release` — RFC-0048 §1–§9 unchanged; the register file is
-   rewritten to those nine rules and to no more.
+   `debug_assert!` in debug). A slot's kind is static — it is one SSA
+   value's type — so `prepare` writes the kind byte of every word-typed
+   slot once, when the frame is made, and a word-typed operation stores
+   the **word only** (`Add::run`: two loads, one store); the one kind a
+   run can change is an option's (`None` is a depth word, RFC-0039),
+   and only an option-typed slot is written whole. `Value: Copy`,
+   `Owned<R>` in every Rust store, `Release` — RFC-0048 §1–§9 unchanged;
+   the register file is rewritten to those nine rules and to no more.
 
 6. **An extern is a `fn` pointer.** `CallExtern1 { dst: u16, arg: u16,
    f: fn(&Rt, Value) -> Value, order: u16 }` calls `f` directly — no
@@ -133,11 +138,13 @@ and threw away.
 
 ## What it costs
 
-- One vtable load per operation (`(*data).vtable.run`) that a function
-  pointer in the stream would not pay — against the five loads and
-  three decisions it replaces. If it shows, the stream becomes
-  variable-length inline records with the `fn` first (Rejected below
-  records why not now).
+- One vtable-slot load per operation (`(*data).vtable.run`) that a
+  function pointer in the stream would not pay — against the five
+  loads and three decisions it replaces. The chunked block loop issues
+  the fat-pointer loads a cache line ahead, and the slot load has no
+  dependency on the previous operation's result; the expectation is
+  that it is hidden, and the brief's disassembly and cycle counts test
+  that expectation, not a fallback.
 - The boxed structs are heap-scattered; `prepare` may lay them in one
   arena later — measured first.
 - A rewrite of `acvus-interpreter`'s `code.rs`, `machine.rs`, `prepare.rs`
@@ -158,12 +165,12 @@ and threw away.
   its data is a convention the type system cannot see — a wrong pair
   is a cast; `dyn Op` makes the pairing the type.
 - **Variable-length inline records** (`f` then fields, `pc` a byte
-  offset): the fewest loads and the best locality, and no vtable — but
+  offset): one load fewer than the vtable and the best locality — but
   every jump target is a byte offset `prepare` computes, every record
-  is laid out by hand, and a mistake is memory corruption; the struct
-  form gives the same "facts moved in" with the compiler's layout. Kept
-  as the next step **if the vtable load shows** in the measurement rule
-  1 asks for.
+  is laid out by hand, a wrong offset is memory corruption, and the
+  facts an operation holds are read through casts instead of fields.
+  The owner (2026-09-19 00:10): dyn dispatch, used well, and linearity
+  over the last load. Decided, not deferred.
 - **`Flow` as a word** (the 2026-09-18 22:30 proposal): removes the
   `sret` and the jump table but keeps a compare-and-`cmov` per
   operation and a sentinel check; the block/terminator split removes the
@@ -179,12 +186,27 @@ and threw away.
 
 ## Consequences
 
-- Per operation: two branches (`call`, `ret`), loads for its own fields
-  and its register operands, no `Flow`, no payload, no discriminant.
-  Predicted, from the anatomy table, on `int while`: the 23 `Flow`
-  instructions, the payload steps of the `Loop` glue, and both register
-  bounds checks go — **128 → ~70 instructions**, 24 → ~9 branches per
-  iteration. Band stated in the brief, measured after.
+- **The expectation, counted** (the brief's done condition, no
+  compromise — this is the most performance-critical spot in the
+  system, owner 00:25). `int while`, one iteration, three operations
+  (`Lt<i64>`, `Add<i64>`, `Add<i64>`), today 128 instructions / 24
+  branches / 12 taken / 24.2 cycles:
+
+  | part | instructions | branches |
+  |---|---:|---:|
+  | dispatch per operation: fat-pointer load (hoisted by the chunk), vtable-slot load, `call`, `ret` | 4 × 3 = 12 | 6 taken |
+  | `Lt::run`: two loads, compare/set, one store | 4 | 0 |
+  | `Add::run` × 2: two loads, add, one store | 8 | 0 |
+  | `Loop::run`: condition load and branch, back edge, chunk counter | ~6 | 2 |
+  | **iteration** | **~30** | **8 (7 taken)** |
+
+  Front-end-bound, so cycles follow taken branches: **24.2 → 12–14
+  cycles, 4.44 → 2.2–2.6 ns per iteration** (Rust: 0.185). Every other
+  case is banded the same way from its operation list in the brief:
+  attention 64×64 (chain and `Index` dominate; dispatch halves) 136 →
+  **80–95 µs**; `map cap | sum` (the frame window removes the 55 %, then
+  dispatch) 13.8 → **5–6.5 ns**; mandelbrot 16.3 → **9–11 ns**. A
+  disassembly line the table does not have is a defect.
 - The chain, diamond, loop and fused run keep their measured shapes as
   structs; `AsSlice`/`Index` peepholes (RFC-0047) and the `switch`
   operation (RFC-0051) are structs added to the same trait.
