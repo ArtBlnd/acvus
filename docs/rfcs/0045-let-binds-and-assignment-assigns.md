@@ -100,3 +100,14 @@ this refusal is where it will surface.
 - Every script written against the old `ScriptStmt` rule needs `let` on the
   first store of each name. A template binding (`{{ x = expr }}`) is a
   `MatchBlock` with a `Binding` pattern, not a statement, and is untouched.
+- A scrutinee that has no storage of its own is matched as a value, in the
+  register that produced it. It is given a slot only where the pattern's own
+  test reads a part out of it — `Some(Some(v))`, a tuple, an object, a list —
+  because the interpreter's `read_slot` and `unwrap_*` move a `Large` out of
+  the slot they read, so a part read to test and read again to bind would be
+  one value taken twice. For `Some(v)` the test reads the register and the
+  bind unwraps it once: `if let Some(v) = f()` loses its `assign $source` and
+  `ref &$source`, and `take $source.payload` becomes `unwrap`. Measured at
+  n = 1e6, medians of three alternating repetitions: `option while`
+  14.8 → 11.8 ns/iteration, `while let vec` 18.0 → 14.0, `while let map`
+  18.2 → 15.5; two dispatches per iteration gone in each.

@@ -123,43 +123,41 @@ expression: raw
     32 |   r22 = take score
     33 |   r23 = take @threshold
     34 |   r24 = r22 > r23
-    35 |   assign $source = r24
-    36 |   r25 = take $source
-    37 |   r26 = test r25 == true
-    38 |   jump_if r26 then L0 else L1
-    39 | L0:
-    40 |   r27 = take @user_id
-    41 |   r28 = take score
-    42 |   r29 = take $order
-    43 |   r30 = call #4(r27, r28) [r29 -> r31]
-    44 |   assign $order = r31
-    45 |   r32 = take @alert_count
-    47 |   r33 = r32 + 1 (r34)
-    48 |   assign @alert_count = r33
-    49 |   jump L1
-    50 | L1:
-    51 |   r35 = take label
-    52 |   assign @result_label = r35
+    35 |   r25 = test r24 == true
+    36 |   jump_if r25 then L0 else L1
+    37 | L0:
+    38 |   r26 = take @user_id
+    39 |   r27 = take score
+    40 |   r28 = take $order
+    41 |   r29 = call #4(r26, r27) [r28 -> r30]
+    42 |   assign $order = r30
+    43 |   r31 = take @alert_count
+    45 |   r32 = r31 + 1 (r33)
+    46 |   assign @alert_count = r32
+    47 |   jump L1
+    48 | L1:
+    49 |   r34 = take label
+    50 |   assign @result_label = r34
+    51 |   r35 = take score
+    52 |   assign @result_score = r35
     53 |   r36 = take score
-    54 |   assign @result_score = r36
-    55 |   r37 = take score
-    56 |   r38 = take @result_label
-    57 |   commit @result_label = r38
-    58 |   r39 = take @weight
-    59 |   commit @weight = r39
-    60 |   r40 = take @alert_count
-    61 |   commit @alert_count = r40
-    62 |   r41 = take @result_score
-    63 |   commit @result_score = r41
-    64 |   r42 = take @threshold
-    65 |   commit @threshold = r42
-    66 |   r43 = take @user_id
-    67 |   commit @user_id = r43
-    68 |   r44 = take $order
-    69 |   return r37 [r44]
+    54 |   r37 = take @result_label
+    55 |   commit @result_label = r37
+    56 |   r38 = take @weight
+    57 |   commit @weight = r38
+    58 |   r39 = take @alert_count
+    59 |   commit @alert_count = r39
+    60 |   r40 = take @result_score
+    61 |   commit @result_score = r40
+    62 |   r41 = take @threshold
+    63 |   commit @threshold = r41
+    64 |   r42 = take @user_id
+    65 |   commit @user_id = r42
+    66 |   r43 = take $order
+    67 |   return r36 [r43]
 
     ; orders: what the body's yielded Order waits for
-    ;   r44(entry)
+    ;   r43(entry)
 
     ; r0 (v1) : Order
     ; r1 (@result_label) : String
@@ -186,34 +184,32 @@ expression: raw
     ; r22 (score) : i64
     ; r23 (@threshold) : i64
     ; r24 (v36) : Bool
-    ; r25 (v38) : Bool
-    ; r26 (v39) : Bool
-    ; r27 (@user_id) : i64
-    ; r28 (score) : i64
-    ; r29 (v43) : Order
-    ; r30 (notify_alert(...)) : i64
-    ; r31 (v44) : Order
-    ; r32 (@alert_count) : i64
-    ; r33 (v47) : i64
-    ; r34 (v46) : i64
-    ; r35 (label) : String
+    ; r25 (v37) : Bool
+    ; r26 (@user_id) : i64
+    ; r27 (score) : i64
+    ; r28 (v41) : Order
+    ; r29 (notify_alert(...)) : i64
+    ; r30 (v42) : Order
+    ; r31 (@alert_count) : i64
+    ; r32 (v45) : i64
+    ; r33 (v44) : i64
+    ; r34 (label) : String
+    ; r35 (score) : i64
     ; r36 (score) : i64
-    ; r37 (score) : i64
-    ; r38 (v51) : String
-    ; r39 (v52) : i64
-    ; r40 (v53) : i64
-    ; r41 (v54) : i64
-    ; r42 (v55) : i64
-    ; r43 (v56) : i64
-    ; r44 (v57) : Order
-    ; r45 (@result_label) : String
-    ; r46 (history) : i64
-    ; r47 (@weight) : i64
-    ; r48 (@result_score) : i64
-    ; r49 ($source) : Bool
-    ; r50 (@threshold) : i64
-    ; r51 (label) : String
-    ; r52 (score) : i64
-    ; r53 (@user_id) : i64
-    ; r54 (@alert_count) : i64
-    ; r55 (profile) : i64
+    ; r37 (v49) : String
+    ; r38 (v50) : i64
+    ; r39 (v51) : i64
+    ; r40 (v52) : i64
+    ; r41 (v53) : i64
+    ; r42 (v54) : i64
+    ; r43 (v55) : Order
+    ; r44 (@result_label) : String
+    ; r45 (history) : i64
+    ; r46 (@weight) : i64
+    ; r47 (@result_score) : i64
+    ; r48 (@threshold) : i64
+    ; r49 (label) : String
+    ; r50 (score) : i64
+    ; r51 (@user_id) : i64
+    ; r52 (@alert_count) : i64
+    ; r53 (profile) : i64

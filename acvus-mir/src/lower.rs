@@ -191,6 +191,21 @@ fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
     }
 }
 
+/// Whether testing this pattern reads a part out of the value it is applied
+/// to, rather than only reading the value itself. The interpreter's
+/// `read_slot` and `unwrap_*` ops move a `Large` out of the slot they read,
+/// so on a register a part read to test and read again to bind is a value
+/// taken twice; a place is read through a reference instead.
+fn test_reads_a_part(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => false,
+        Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => true,
+        Pattern::Variant { payload, .. } => payload
+            .as_deref()
+            .is_some_and(|p| !pattern_is_irrefutable(p)),
+    }
+}
+
 /// Adjust indentation of a text string according to an `IndentModifier`.
 /// All lines (including the first) are affected.
 fn adjust_text_indent(text: &str, modifier: &IndentModifier) -> String {
@@ -743,7 +758,7 @@ impl<'a> Lowerer<'a> {
         body: &[Stmt],
         span: Span,
     ) {
-        let src = self.pattern_source(source);
+        let src = self.pattern_source(source, [pattern]);
         self.lower_match_bind_arm(pattern, src, body, None, span);
     }
 
@@ -879,7 +894,7 @@ impl<'a> Lowerer<'a> {
         );
         self.emit_label(span, loop_label);
 
-        let src = self.pattern_source(source);
+        let src = self.pattern_source(source, [pattern]);
         let matched = self.lower_pattern_test(pattern, src.clone(), span);
         self.emit_inst(
             span,
@@ -1032,7 +1047,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         let result_ty = self.type_of_id(id);
-        let src = self.pattern_source(source);
+        let src = self.pattern_source(source, [pattern]);
 
         match else_branch {
             Some(eb) => {
@@ -2911,7 +2926,7 @@ impl<'a> Lowerer<'a> {
                 .map(|ca| apply_indent_to_nodes(&ca.body, modifier))
         });
 
-        let source_reg = self.pattern_source(&mb.source);
+        let source_reg = self.pattern_source(&mb.source, mb.arms.iter().map(|arm| &arm.pattern));
 
         // Match is single-value pattern matching (no iteration).
         // Try each arm against the source value; first match wins.
@@ -3181,7 +3196,10 @@ impl<'a> Lowerer<'a> {
     }
 
     /// RFC-0024.
-    fn pattern_source(&mut self, source: &Expr) -> PatSrc {
+    fn pattern_source<'p, P>(&mut self, source: &Expr, patterns: P) -> PatSrc
+    where
+        P: IntoIterator<Item = &'p Pattern>,
+    {
         let mut path: Vec<PathSeg> = Vec::new();
         let mut root = source;
         loop {
@@ -3205,13 +3223,16 @@ impl<'a> Lowerer<'a> {
                 path,
                 ty: self.type_of_id(source.id()),
             },
-            None => self.spill_pattern_source(source),
+            None if patterns.into_iter().any(test_reads_a_part) => {
+                self.spill_pattern_source(source)
+            }
+            None => PatSrc::Value(self.lower_expr(source)),
         }
     }
 
-    /// A pattern's source that is not a place is stored in a slot of its
-    /// own before matching: the test reads it and the bind takes from it,
-    /// and a temporary can be taken only once.
+    /// A source with no storage of its own is given one where the pattern's
+    /// test reads a part out of it: the test reads through a reference and
+    /// the bind takes from the slot, and a temporary can be taken only once.
     fn spill_pattern_source(&mut self, source: &Expr) -> PatSrc {
         let value = self.lower_expr(source);
         let ty = self.type_of_id(source.id());

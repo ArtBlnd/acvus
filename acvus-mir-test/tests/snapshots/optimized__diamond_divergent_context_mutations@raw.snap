@@ -15,44 +15,40 @@ expression: raw
      9 |   assign x = r4
     10 |   r5 = take x
     12 |   r6 = r5 > 100 (r7)
-    13 |   assign $source = r6
-    14 |   r8 = take $source
-    15 |   r9 = test r8 == true
-    16 |   jump_if r9 then L0 else L1
-    17 | L0:
-    18 |   r10 = take @high
-    20 |   r11 = r10 + 1 (r12)
-    21 |   assign @high = r11
-    22 |   r13 = take x
-    24 |   r14 = r13 * 2 (r15)
-    25 |   assign @output = r14
-    26 |   jump L1
-    27 | L1:
-    28 |   r16 = take x
-    30 |   r17 = r16 <= 100 (r18)
-    31 |   assign $source = r17
-    32 |   r19 = take $source
-    33 |   r20 = test r19 == true
-    34 |   jump_if r20 then L2 else L3
-    35 | L2:
-    36 |   r21 = take @low
-    38 |   r22 = r21 + 1 (r23)
-    39 |   assign @low = r22
-    40 |   r24 = take x
-    42 |   r25 = r24 + 10 (r26)
-    43 |   assign @output = r25
-    44 |   jump L3
-    45 | L3:
-    46 |   r27 = take @output
-    47 |   r28 = take @output
-    48 |   commit @output = r28
-    49 |   r29 = take @input
-    50 |   commit @input = r29
-    51 |   r30 = take @low
-    52 |   commit @low = r30
-    53 |   r31 = take @high
-    54 |   commit @high = r31
-    55 |   return r27
+    13 |   r8 = test r6 == true
+    14 |   jump_if r8 then L0 else L1
+    15 | L0:
+    16 |   r9 = take @high
+    18 |   r10 = r9 + 1 (r11)
+    19 |   assign @high = r10
+    20 |   r12 = take x
+    22 |   r13 = r12 * 2 (r14)
+    23 |   assign @output = r13
+    24 |   jump L1
+    25 | L1:
+    26 |   r15 = take x
+    28 |   r16 = r15 <= 100 (r17)
+    29 |   r18 = test r16 == true
+    30 |   jump_if r18 then L2 else L3
+    31 | L2:
+    32 |   r19 = take @low
+    34 |   r20 = r19 + 1 (r21)
+    35 |   assign @low = r20
+    36 |   r22 = take x
+    38 |   r23 = r22 + 10 (r24)
+    39 |   assign @output = r23
+    40 |   jump L3
+    41 | L3:
+    42 |   r25 = take @output
+    43 |   r26 = take @output
+    44 |   commit @output = r26
+    45 |   r27 = take @input
+    46 |   commit @input = r27
+    47 |   r28 = take @low
+    48 |   commit @low = r28
+    49 |   r29 = take @high
+    50 |   commit @high = r29
+    51 |   return r25
 
     ; r0 (@output) : i64
     ; r1 (@input) : i64
@@ -62,34 +58,30 @@ expression: raw
     ; r5 (x) : i64
     ; r6 (v13) : Bool
     ; r7 (v12) : i64
-    ; r8 (v15) : Bool
-    ; r9 (v16) : Bool
-    ; r10 (@high) : i64
-    ; r11 (v19) : i64
-    ; r12 (v18) : i64
-    ; r13 (x) : i64
-    ; r14 (v22) : i64
-    ; r15 (v21) : i64
-    ; r16 (x) : i64
-    ; r17 (v25) : Bool
-    ; r18 (v24) : i64
-    ; r19 (v27) : Bool
-    ; r20 (v28) : Bool
-    ; r21 (@low) : i64
-    ; r22 (v31) : i64
+    ; r8 (v14) : Bool
+    ; r9 (@high) : i64
+    ; r10 (v17) : i64
+    ; r11 (v16) : i64
+    ; r12 (x) : i64
+    ; r13 (v20) : i64
+    ; r14 (v19) : i64
+    ; r15 (x) : i64
+    ; r16 (v23) : Bool
+    ; r17 (v22) : i64
+    ; r18 (v24) : Bool
+    ; r19 (@low) : i64
+    ; r20 (v27) : i64
+    ; r21 (v26) : i64
+    ; r22 (x) : i64
     ; r23 (v30) : i64
-    ; r24 (x) : i64
-    ; r25 (v34) : i64
-    ; r26 (v33) : i64
-    ; r27 (@output) : i64
-    ; r28 (v36) : i64
-    ; r29 (v37) : i64
-    ; r30 (v38) : i64
-    ; r31 (v39) : i64
-    ; r32 (@input) : i64
-    ; r33 ($source) : Bool
-    ; r34 (@low) : i64
-    ; r35 (@output) : i64
-    ; r36 ($source) : Bool
-    ; r37 (@high) : i64
-    ; r38 (x) : i64
+    ; r24 (v29) : i64
+    ; r25 (@output) : i64
+    ; r26 (v32) : i64
+    ; r27 (v33) : i64
+    ; r28 (v34) : i64
+    ; r29 (v35) : i64
+    ; r30 (@input) : i64
+    ; r31 (@output) : i64
+    ; r32 (@low) : i64
+    ; r33 (@high) : i64
+    ; r34 (x) : i64

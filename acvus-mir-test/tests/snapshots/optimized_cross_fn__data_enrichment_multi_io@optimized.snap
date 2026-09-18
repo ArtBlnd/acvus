@@ -27,7 +27,7 @@ expression: opt
     18 |   r18 = call #2(r17)
     19 |   assign b = r18
     21 |   assign c = T1
-    22 |   r19 = ref &$v89
+    22 |   r19 = ref &$v85
     23 |   r20 = call #2(r19)
     24 |   assign d = r20
     26 |   assign e = T2
@@ -80,17 +80,17 @@ expression: opt
     ; r3 (@result_score) : i64
     ; r4 (@threshold) : i64
     ; r5 (@user_id) : i64
-    ; r6 (v119) : Handle<i64>
+    ; r6 (v115) : Handle<i64>
     ; r7 (v1) : Order
     ; r8 (fetch_profile(...)) : i64
     ; r9 (v18) : Order
-    ; r10 (v120) : Handle<i64>
+    ; r10 (v116) : Handle<i64>
     ; r11 (fetch_history(...)) : i64
     ; r12 (v23) : Order
-    ; r13 (v85) : i64
-    ; r14 (v87) : i64
-    ; r15 (v89) : i64
-    ; r16 (v88) : i64
+    ; r13 (v81) : i64
+    ; r14 (v83) : i64
+    ; r15 (v85) : i64
+    ; r16 (v84) : i64
     ; r17 ($param_1.) : &i64
     ; r18 (to_string(...)) : String
     ; r19 ($param_2.) : &i64
@@ -116,76 +116,72 @@ expression: opt
     ; r39 (abcd) : String
     ; r40 (e) : String
     ; r41 (v36) : Bool
-    ; r42 (v39) : Bool
-    ; r43 (v121) : Handle<i64>
-    ; r44 (v47) : i64
-    ; r45 (v46) : i64
+    ; r42 (v37) : Bool
+    ; r43 (v117) : Handle<i64>
+    ; r44 (v45) : i64
+    ; r45 (v44) : i64
     ; r46 (notify_alert(...)) : i64
-    ; r47 (v44) : Order
-    ; r48 (v76) : Order
-    ; r49 (v73) : i64
-    ; r50 (profile) : i64
-    ; r51 (v75) : i64
-    ; r52 ($source) : Bool
-    ; r53 (profile) : i64
-    ; r54 (v102) : String
-    ; r55 (score) : i64
-    ; r56 (v62) : i64
-    ; r57 (history) : i64
-    ; r58 (score) : i64
-    ; r59 (v74) : i64
-    ; r60 (@threshold) : i64
-    ; r61 (v61) : i64
-    ; r62 ($weight) : i64
-    ; r63 (label) : String
-    ; r64 (@threshold) : i64
-    ; r65 (v60) : i64
-    ; r66 (v22) : Order
-    ; r67 (v72) : i64
-    ; r68 (@result_score) : i64
-    ; r69 (v97) : String
-    ; r70 (score) : i64
-    ; r71 (v59) : String
-    ; r72 ($history) : i64
-    ; r73 (v71) : i64
-    ; r74 (label) : String
-    ; r75 (v58) : Order
-    ; r76 ($profile) : i64
-    ; r77 (@user_id) : i64
-    ; r78 (@alert_count) : i64
-    ; r79 (v70) : String
-    ; r80 (@alert_count) : i64
-    ; r81 (format_label(...)) : String
-    ; r82 (v57) : Order
-    ; r83 (v69) : Bool
-    ; r84 (score) : i64
-    ; r85 (v56) : i64
-    ; r86 (v43) : Order
-    ; r87 (v68) : String
-    ; r88 (@weight) : i64
-    ; r89 (profile) : i64
-    ; r90 (v55) : i64
-    ; r91 (v17) : Order
-    ; r92 (v67) : i64
-    ; r93 (v92) : String
-    ; r94 (score) : i64
-    ; r95 (v54) : i64
-    ; r96 (v79) : Bool
-    ; r97 (score) : i64
-    ; r98 (v66) : i64
-    ; r99 (@result_label) : String
-    ; r100 (compute_score(...)) : i64
-    ; r101 (v53) : i64
-    ; r102 (v78) : i64
-    ; r103 (@user_id) : i64
-    ; r104 (@user_id) : i64
-    ; r105 (v65) : i64
-    ; r106 (@weight) : i64
-    ; r107 (v52) : i64
-    ; r108 (v77) : i64
-    ; r109 (v64) : i64
-    ; r110 (history) : i64
-    ; r111 (v51) : String
-    ; r112 (@user_id) : i64
-    ; r113 (v38) : Bool
-    ; r114 (v63) : i64
+    ; r47 (v42) : Order
+    ; r48 (v73) : Order
+    ; r49 (v70) : i64
+    ; r50 (v88) : String
+    ; r51 (profile) : i64
+    ; r52 (v69) : i64
+    ; r53 (v66) : String
+    ; r54 (v64) : i64
+    ; r55 (@alert_count) : i64
+    ; r56 (v50) : i64
+    ; r57 (score) : i64
+    ; r58 (v75) : i64
+    ; r59 (v56) : Order
+    ; r60 (v62) : i64
+    ; r61 (@alert_count) : i64
+    ; r62 (history) : i64
+    ; r63 (v68) : i64
+    ; r64 (@weight) : i64
+    ; r65 (v49) : String
+    ; r66 (v93) : String
+    ; r67 (profile) : i64
+    ; r68 (v74) : i64
+    ; r69 (@threshold) : i64
+    ; r70 (v55) : Order
+    ; r71 ($history) : i64
+    ; r72 (v17) : Order
+    ; r73 (v61) : i64
+    ; r74 (v67) : String
+    ; r75 (score) : i64
+    ; r76 (score) : i64
+    ; r77 (v54) : i64
+    ; r78 (v98) : String
+    ; r79 (@threshold) : i64
+    ; r80 ($profile) : i64
+    ; r81 (v60) : i64
+    ; r82 (v41) : Order
+    ; r83 (v22) : Order
+    ; r84 (@result_label) : String
+    ; r85 (score) : i64
+    ; r86 (compute_score(...)) : i64
+    ; r87 (v72) : i64
+    ; r88 (@result_score) : i64
+    ; r89 (v53) : i64
+    ; r90 (score) : i64
+    ; r91 (@user_id) : i64
+    ; r92 (v59) : i64
+    ; r93 (v65) : i64
+    ; r94 (label) : String
+    ; r95 (@weight) : i64
+    ; r96 (v71) : i64
+    ; r97 (v52) : i64
+    ; r98 (label) : String
+    ; r99 (v58) : i64
+    ; r100 (score) : i64
+    ; r101 (@user_id) : i64
+    ; r102 (history) : i64
+    ; r103 (v51) : i64
+    ; r104 (format_label(...)) : String
+    ; r105 (@user_id) : i64
+    ; r106 (v57) : String
+    ; r107 (@user_id) : i64
+    ; r108 ($weight) : i64
+    ; r109 (profile) : i64
+    ; r110 (v63) : i64

@@ -11,20 +11,18 @@ expression: raw
      6 |   r4 = take count
      7 |   r5 = take @stats.threshold
      8 |   r6 = r4 > r5
-     9 |   assign $source = r6
-    10 |   r7 = take $source
-    11 |   r8 = test r7 == true
-    12 |   jump_if r8 then L0 else L1
-    13 | L0:
-    14 |   r9 = take count
-    15 |   assign @stats.count = r9
-    17 |   assign @stats.exceeded = true (r10)
-    18 |   jump L1
-    19 | L1:
-    20 |   r11 = take @stats.count
-    21 |   r12 = take @stats
-    22 |   commit @stats = r12
-    23 |   return r11
+     9 |   r7 = test r6 == true
+    10 |   jump_if r7 then L0 else L1
+    11 | L0:
+    12 |   r8 = take count
+    13 |   assign @stats.count = r8
+    15 |   assign @stats.exceeded = true (r9)
+    16 |   jump L1
+    17 | L1:
+    18 |   r10 = take @stats.count
+    19 |   r11 = take @stats
+    20 |   commit @stats = r11
+    21 |   return r10
 
     ; r0 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
     ; r1 (@stats.count) : i64
@@ -33,12 +31,10 @@ expression: raw
     ; r4 (count) : i64
     ; r5 (@stats.threshold) : i64
     ; r6 (v9) : Bool
-    ; r7 (v11) : Bool
-    ; r8 (v12) : Bool
-    ; r9 (count) : i64
-    ; r10 (v14) : Bool
-    ; r11 (@stats.count) : i64
-    ; r12 (v16) : {count: i64, exceeded: Bool, threshold: i64}
-    ; r13 (count) : i64
-    ; r14 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
-    ; r15 ($source) : Bool
+    ; r7 (v10) : Bool
+    ; r8 (count) : i64
+    ; r9 (v12) : Bool
+    ; r10 (@stats.count) : i64
+    ; r11 (v14) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r12 (count) : i64
+    ; r13 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
