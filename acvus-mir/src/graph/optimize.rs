@@ -3,7 +3,7 @@
 //! Runs the full optimization pipeline on lowered MIR modules.
 //!
 //! Pass 1 (cross-module): SSA -> Inline
-//! Pass 2 (per-module):   SpawnSplit -> CodeMotion -> Reorder -> SSA -> RegColor -> Validate
+//! Pass 2 (per-module):   SpawnSplit -> CodeMotion -> Lsr -> Reorder -> SSA -> RegColor -> Validate
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -124,6 +124,10 @@ fn run_pass2(cfg: &mut CfgBody) {
     optimize::dse::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);
+    // RFC-0056: after the hoist, which puts a loop's invariants above the
+    // header and leaves the preheader a block of its own; before the
+    // reorder, which schedules within a block.
+    optimize::lsr::run(cfg);
     optimize::reorder::run(cfg);
     debug_validate(cfg);
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());

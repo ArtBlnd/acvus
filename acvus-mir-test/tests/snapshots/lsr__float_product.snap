@@ -1,0 +1,52 @@
+---
+source: acvus-mir-test/tests/lsr.rs
+expression: listing
+---
+=== main ===
+     0 |   r0 = fetch @n
+     4 |   jump L0(0.0 (r1), 0.0 (r2), 0 (r3))
+     5 | L0(r4: Float, r5: Float, r6: i64):
+     6 |   r7 = r6 < r0
+     7 |   jump_if r7 then L1 else L2
+     8 | L1:
+    10 |   r8 = r5 * 2.0 (r9)
+    11 |   r10 = r4 + r8
+    13 |   r11 = r5 + 1.0 (r12)
+    15 |   r13 = r6 + 1 (r14)
+    16 |   jump L0(r10, r11, r13)
+    17 | L2:
+    18 |   commit @n = r0
+    19 |   return r4
+
+    ; r0 (@n) : i64
+    ; r1 (v3) : Float
+    ; r2 (v5) : Float
+    ; r3 (v7) : i64
+    ; r4 (v31) : Float
+    ; r5 (v32) : Float
+    ; r6 (v29) : i64
+    ; r7 (v11) : Bool
+    ; r8 (v15) : Float
+    ; r9 (v14) : Float
+    ; r10 (v16) : Float
+    ; r11 (v19) : Float
+    ; r12 (v18) : Float
+    ; r13 (v22) : i64
+    ; r14 (v21) : i64
+    ; r15 (v25) : i64
+    ; r16 (x) : Float
+    ; r17 (i) : i64
+    ; r18 (v28) : i64
+    ; r19 (acc) : Float
+    ; r20 (v30) : i64
+    ; r21 (x) : Float
+    ; r22 (@n) : i64
+    ; r23 (i) : i64
+    ; r24 (acc) : Float
+    ; r25 (acc) : Float
+    ; r26 (v24) : i64
+    ; r27 (v27) : Float
+    ; r28 (i) : i64
+    ; r29 (v26) : Float
+    ; r30 (@n) : i64
+    ; r31 (x) : Float

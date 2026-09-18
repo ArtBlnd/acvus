@@ -5,3 +5,4 @@ pub mod escape;
 pub mod inst_info;
 pub mod liveness;
 pub mod loans;
+pub mod loops;

@@ -15,7 +15,9 @@
 //! written after a loop move into the header and run once per iteration.
 //! Every target is therefore also held to the source's loop depth, the
 //! number of natural loops containing the block, so that no move - a shared
-//! borrow's included - lands deeper in the loop nest than it started.
+//! borrow's included - lands deeper in the loop nest than it started. What
+//! a natural loop is, and what a value defined outside one is called, lives
+//! in `analysis::loops`, which `optimize::lsr` reads from as well.
 //!
 //! Until `bb8207f` the criterion was purity instead, and purity is not
 //! infallibility: integer division and remainder panic at zero and at
@@ -77,6 +79,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::analysis::domtree::{DomTree, PostDomTree};
+use crate::analysis::loops::LoopDepth;
 use std::mem::{Discriminant, discriminant};
 
 use crate::analysis::inst_info;
@@ -279,131 +282,6 @@ where
     }
 
     best
-}
-
-// -- Loop depth -----------------------------------------------------
-
-/// How many natural loops contain each block.
-///
-/// A natural loop is named by a back edge `tail -> head` whose head dominates
-/// its tail; its body is the head together with every block that reaches the
-/// tail without passing the head.
-struct LoopDepth {
-    per_block: Vec<usize>,
-}
-
-impl LoopDepth {
-    fn of(cfg: &CfgBody, domtree: &DomTree) -> Self {
-        let n = cfg.blocks.len();
-        let preds = cfg.predecessors();
-        let mut per_block = vec![0usize; n];
-        let mut in_loop = vec![false; n];
-
-        for edge in back_edges(cfg, domtree) {
-            in_loop.fill(false);
-            in_loop[edge.head.0] = true;
-
-            let mut stack = Vec::new();
-            if !in_loop[edge.tail.0] {
-                in_loop[edge.tail.0] = true;
-                stack.push(edge.tail);
-            }
-            while let Some(b) = stack.pop() {
-                let Some(ps) = preds.get(&b) else {
-                    continue;
-                };
-                for &p in ps {
-                    if !in_loop[p.0] {
-                        in_loop[p.0] = true;
-                        stack.push(p);
-                    }
-                }
-            }
-
-            for (d, inside) in per_block.iter_mut().zip(&in_loop) {
-                *d += usize::from(*inside);
-            }
-        }
-
-        Self { per_block }
-    }
-
-    fn at(&self, block: BlockIdx) -> usize {
-        self.per_block[block.0]
-    }
-}
-
-/// An edge back to a block that is still on the walk's current path.
-struct BackEdge {
-    tail: BlockIdx,
-    head: BlockIdx,
-}
-
-/// One block of a depth-first walk, with the successor it resumes at.
-struct DfsFrame {
-    block: BlockIdx,
-    next_succ: usize,
-}
-
-/// Every back edge, found by a depth-first walk from the entry.
-///
-/// A retreating edge whose target does not dominate its source is irreducible
-/// control flow, which has no natural loop and so no depth. The lowering
-/// emits `while` and `while let` and nothing else, so this aborts rather than
-/// guess a depth for a shape the front end cannot produce.
-fn back_edges(cfg: &CfgBody, domtree: &DomTree) -> Vec<BackEdge> {
-    let n = cfg.blocks.len();
-    if n == 0 {
-        return Vec::new();
-    }
-
-    let mut edges = Vec::new();
-    let mut visited = vec![false; n];
-    let mut on_path = vec![false; n];
-    let mut stack = vec![DfsFrame {
-        block: BlockIdx(0),
-        next_succ: 0,
-    }];
-    visited[0] = true;
-    on_path[0] = true;
-
-    while let Some(frame) = stack.last_mut() {
-        let block = frame.block;
-        let succs = cfg.successors(block);
-        let Some(&succ) = succs.get(frame.next_succ) else {
-            on_path[block.0] = false;
-            stack.pop();
-            continue;
-        };
-        frame.next_succ += 1;
-
-        if on_path[succ.0] {
-            assert!(
-                domtree.dominates(succ, block),
-                "irreducible control flow: the edge from block {} back to block {} \
-                 has a head that does not dominate its tail, and the lowering emits \
-                 only structured loops",
-                block.0,
-                succ.0
-            );
-            edges.push(BackEdge {
-                tail: block,
-                head: succ,
-            });
-            continue;
-        }
-
-        if !visited[succ.0] {
-            visited[succ.0] = true;
-            on_path[succ.0] = true;
-            stack.push(DfsFrame {
-                block: succ,
-                next_succ: 0,
-            });
-        }
-    }
-
-    edges
 }
 
 // -- The blocks a borrow would newly span ---------------------------
