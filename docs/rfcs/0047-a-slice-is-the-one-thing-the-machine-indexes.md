@@ -233,6 +233,40 @@ un-hoisted `AsSlice` costs (50.505 − 9.016) / 2 = 20.7 ns, and the out pass
 runs n·d = 4096 of them at 64×64: about +85 µs against about −29 µs the
 scores pass saves, which is the sign and the order of the measured +25 µs.
 
+**A row's slice leaves the loop when the block above already named the
+row.** §8 lifts an `AsSlice` only to where its container is defined, and in
+`while li < n { let m = len(&a[li]); while i < m { … a[li][i] … } }` the
+container is `a[li]`, an `Index` that a loop-invariant hoist cannot move
+because a checked `Index` may panic. `code_motion` therefore does not move
+it: it makes the inner `Index` the outer one, which is the address a
+dominating block already named and no path that did not reach it can
+observe, and the `AsSlice` left with an operand from above the loop rises
+under §8 unchanged. The log bench's inner read (`benches/logs.rs`, inline)
+falls from `IndexRef, MakeRef, CallSlice, IndexCopy, DropValue` to
+`IndexCopy` alone and its execute from 25 390.7 to 21 016.7 µs at
+`n = 10 000` (**−17.2 %**, medians of three pinned reps, two
+`--profile bench` binaries, base `c2116d3f` by sha256); one `CallSlice` per
+line appears in the outer body in exchange. The closure case moves −0.4 %:
+its matcher reads the line through a parameter, which was hoisted already,
+so only the latency scan - run on the 332 matching lines of 10 000 -
+changes.
+
+**One slice serves a container's reads and its writes, per loop.** §2 says
+an element write leaves a slice's pointer and length where they were, and
+the loans call an `IndexSet` a write of the storage all the same. Splitting
+them at the hoist's condition is not enough: a shared slice lifted above a
+loop that takes `as_slice_mut` inside is refused by
+`validate::borrow_check` (`conflicts(Shared, Touch::Reference(Mut))`). So
+the two become one. Where every touch of a storage inside a loop goes
+through a slice of it - the `Ref` under one, the `AsSlice`, an `Index` or
+an `IndexSet` of one - and at least one of those slices is exclusive,
+`code_motion` puts a single `as_slice_mut` in the loop's preheader and
+routes the reads through it; anything else that reaches the storage, a
+`push` or a call taking the container included, leaves the slices where
+they are. `bf table`'s `tape[ptr]` is the case: its five per-step blocks
+fall from 9, 9, 6, 6 and 5 operations to 3, 3, 3, 3 and 2, and its execute
+from 23 542.0 to 18 110.6 µs at a million steps (**−23.1 %**).
+
 - attention's inner iteration is `AsSlice(query)` hoisted to the entry,
   `AsSlice(keys[t])` above the `i` loop, two `Index` and one chain per
   element — the Rust scalar shape — wherever the container is not the loop's

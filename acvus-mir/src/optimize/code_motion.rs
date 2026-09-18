@@ -79,7 +79,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::analysis::domtree::{DomTree, PostDomTree};
-use crate::analysis::loops::LoopDepth;
+use crate::analysis::loops::{LoopDepth, NaturalLoop, natural_loops_innermost_first};
 use std::mem::{Discriminant, discriminant};
 
 use crate::analysis::inst_info;
@@ -93,22 +93,27 @@ use crate::ty::Mutability;
 // -- Entry point ----------------------------------------------------
 
 pub fn run(cfg: &mut CfgBody) {
-    // Phase 1: Hoist - move Spawn and pure instructions UP.
+    // Phase 1: the hoist, the merge and the dedup to a fixed point. Each
+    // is the others' opportunity, in both directions. In the attention
+    // kernel every one of the merge's four pairs is the hoist's work -
+    // each second borrow stood inside a loop until the hoist lifted it
+    // into the block that already held the first. In the log kernel the
+    // traffic runs the other way: `a[li]` is indexed off a slice of `a`
+    // that the hoist has to lift out of both blocks and the merge to make
+    // one before the two `Index` name the same thing, and only then does
+    // the dedup leave the inner one's `AsSlice` an operand from outside
+    // the loop for the next hoist to lift.
     loop {
-        if !hoist_pass(cfg) {
+        let mut moved = hoist_pass(cfg);
+        moved |= merge_pass(cfg);
+        moved |= dedup_pass(cfg);
+        moved |= coalesce_pass(cfg);
+        if !moved {
             break;
         }
     }
 
-    // Phase 2: within a block, a shared borrow of a storage already
-    // borrowed there is that borrow. It runs after the hoist and not
-    // before it: in the attention kernel every one of the four pairs is
-    // made by the hoist - each second borrow stood inside a loop until
-    // the hoist lifted it into the block that already held the first -
-    // so a merge before the hoist finds nothing to merge.
-    merge_pass(cfg);
-
-    // Phase 3: Sink - move Eval and blocking instructions DOWN.
+    // Phase 2: Sink - move Eval and blocking instructions DOWN.
     sink_pass(cfg);
 }
 
@@ -207,6 +212,179 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
         cfg.blocks[tgt_bi].insts.extend(insts);
     }
 
+    true
+}
+
+// -- An address already named ---------------------------------------
+
+/// A checked `Index` never moves: it may panic, and RFC-0007 keeps an
+/// instruction that can raise on the path that wrote it. So an `AsSlice`
+/// of `a[i]` stays inside a loop for as long as the `Index` naming `a[i]`
+/// does, however invariant in that loop the pair is. This pass is the way
+/// out that does not move it: where a dominating block already indexes the
+/// same element, the inner `Index` becomes the outer one, which takes
+/// nothing off the path it was written on - the earlier instruction ran
+/// before it, and panicked there or not at all.
+fn names_an_address(kind: &InstKind) -> bool {
+    match kind {
+        InstKind::Index {
+            mode: IndexMode::Ref,
+            ..
+        } => true,
+        InstKind::Ref {
+            target: RefTarget::Through(_),
+            path,
+            mutability: Mutability::Shared,
+            ..
+        } => path.is_empty(),
+        _ => false,
+    }
+}
+
+fn names_the_same(a: &InstKind, b: &InstKind) -> bool {
+    match (a, b) {
+        (
+            InstKind::Index {
+                slice: sa,
+                index: ia,
+                mode: ma,
+                ..
+            },
+            InstKind::Index {
+                slice: sb,
+                index: ib,
+                mode: mb,
+                ..
+            },
+        ) => sa == sb && ia == ib && ma == mb,
+        (
+            InstKind::Ref {
+                target: ta,
+                path: pa,
+                mutability: ma,
+                ..
+            },
+            InstKind::Ref {
+                target: tb,
+                path: pb,
+                mutability: mb,
+                ..
+            },
+        ) => ta == tb && pa == pb && ma == mb,
+        _ => false,
+    }
+}
+
+fn backing_storages(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
+    let through = match kind {
+        InstKind::Index { slice, .. } => *slice,
+        InstKind::Ref {
+            target: RefTarget::Through(reference),
+            ..
+        } => *reference,
+        _ => return SmallVec::new(),
+    };
+    loans
+        .region(through)
+        .loans
+        .iter()
+        .map(|loan| loan.storage)
+        .collect()
+}
+
+/// Where one instruction stands in a body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct At {
+    block: BlockIdx,
+    inst: usize,
+}
+
+impl At {
+    fn kind<'a>(&self, cfg: &'a CfgBody) -> &'a InstKind {
+        &cfg.blocks[self.block.0].insts[self.inst].kind
+    }
+
+    /// Whether this instruction runs before `later` on every path that
+    /// reaches it.
+    fn runs_before(&self, later: At, domtree: &DomTree) -> bool {
+        match self.block == later.block {
+            true => self.inst < later.inst,
+            false => domtree.dominates(self.block, later.block),
+        }
+    }
+}
+
+/// One iteration: every address-naming instruction a dominating one already
+/// named becomes that one. Returns true if anything was replaced, so that a
+/// chain - the `Index`, then the `Ref` through it - resolves a link a pass.
+fn dedup_pass(cfg: &mut CfgBody) -> bool {
+    let domtree = DomTree::build(cfg);
+    let loans = Loans::build(cfg);
+    let writes = StorageWrites::of(cfg);
+
+    let named: Vec<At> = cfg
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, block)| {
+            block
+                .insts
+                .iter()
+                .enumerate()
+                .filter(|(_, inst)| names_an_address(&inst.kind))
+                .map(move |(inst, _)| At {
+                    block: BlockIdx(bi),
+                    inst,
+                })
+        })
+        .collect();
+
+    let mut merged: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+    let mut replaced: Vec<At> = Vec::new();
+
+    for &at in &named {
+        let kind = at.kind(cfg);
+        let reaches_here = ReachingBlocks::of(cfg, at.block);
+        let storages = backing_storages(&loans, kind);
+
+        let earlier = named
+            .iter()
+            .copied()
+            .filter(|other| {
+                *other != at && !replaced.contains(other) && other.runs_before(at, &domtree)
+            })
+            .find(|other| {
+                names_the_same(other.kind(cfg), kind)
+                    && !storages.iter().any(|&storage| {
+                        writes.written_in_closed_span(&domtree, other.block, &reaches_here, storage)
+                    })
+            });
+
+        let Some(earlier) = earlier else {
+            continue;
+        };
+        let defines = |kind: &InstKind| {
+            *inst_info::defs(kind)
+                .first()
+                .expect("an address-naming instruction defines its destination")
+        };
+        merged.insert(defines(kind), defines(earlier.kind(cfg)));
+        replaced.push(at);
+    }
+
+    if merged.is_empty() {
+        return false;
+    }
+
+    for at in &replaced {
+        cfg.blocks[at.block.0].insts[at.inst].kind = InstKind::Nop;
+    }
+    for block in cfg.blocks.iter_mut() {
+        for inst in block.insts.iter_mut() {
+            remap_uses(&mut inst.kind, &merged);
+        }
+        remap_terminator(&mut block.terminator, &merged);
+    }
     true
 }
 
@@ -358,6 +536,29 @@ impl StorageWrites {
             .filter(|&b| b != target && reaches_source.contains(b) && domtree.dominates(target, b))
             .any(|b| self.per_block[b.0].contains(&storage))
     }
+
+    /// The same question between two instructions rather than above one,
+    /// with the block each stands in counted whole.
+    ///
+    /// Neither end block is read instruction by instruction - not an
+    /// omission, a decision. A cycle inside the span runs either of them
+    /// again, so a write below the later instruction in its own block, or
+    /// above the earlier one in its own, still reaches the span; the
+    /// position would have to be paired with a second reachability walk to
+    /// be worth anything, and the callers ask about a storage a loop does
+    /// not write at all.
+    fn written_in_closed_span(
+        &self,
+        domtree: &DomTree,
+        earlier: BlockIdx,
+        reaches_later: &ReachingBlocks,
+        storage: ValueId,
+    ) -> bool {
+        (0..self.per_block.len())
+            .map(BlockIdx)
+            .filter(|&b| reaches_later.contains(b) && domtree.dominates(earlier, b))
+            .any(|b| self.per_block[b.0].contains(&storage))
+    }
 }
 
 // -- Hoistability (allowlist) ---------------------------------------
@@ -455,6 +656,254 @@ fn hoistable(loans: &Loans, kind: &InstKind) -> Hoistable {
     }
 }
 
+// -- One slice per container and per loop ----------------------------
+
+/// A slice of a storage taken inside a loop: the `Ref` that names the
+/// storage, and the `AsSlice` that projects it.
+#[derive(Clone, Copy)]
+struct SliceOfStorage {
+    reference: At,
+    slice: At,
+    mutability: Mutability,
+}
+
+/// RFC-0047 §2 is why one exclusive slice can serve the reads as well: a
+/// slice is a pointer and a length, and an element write leaves both where
+/// they were. What moves them is a write to the container's shape - a
+/// `push`, a `pop`, an `Assign` of a whole new container - and the loans
+/// call that a write of the storage while an `IndexSet` through the slice
+/// is a write of the storage too. The two are told apart here by which
+/// instruction made the write rather than by a second predicate: every
+/// touch of the storage inside the loop has to be one of the slices
+/// collected below, the `Ref` under one, or an `Index`/`IndexSet` through
+/// one, and anything else disqualifies the storage.
+///
+/// Splitting the mutabilities instead would put a live `&[T]` across an
+/// `as_slice_mut` of its own container, which `validate::borrow_check`
+/// refuses - `conflicts(Shared, Touch::Reference(Mut))` - so the read
+/// slice and the write slice become one or neither leaves.
+fn coalesce_pass(cfg: &mut CfgBody) -> bool {
+    let domtree = DomTree::build(cfg);
+    let mut loops = natural_loops_innermost_first(cfg, &domtree);
+    loops.reverse();
+    let preds = cfg.predecessors();
+
+    for loop_ in &loops {
+        let Some(preheader) = sole_entry(&preds, loop_) else {
+            continue;
+        };
+        let taken = slices_taken_in(cfg, loop_);
+        for (storage, pairs) in taken {
+            if !pairs.iter().any(|p| p.mutability == Mutability::Mut) {
+                continue;
+            }
+            if !every_touch_goes_through(cfg, loop_, storage, &pairs) {
+                continue;
+            }
+            coalesce(cfg, preheader, &pairs);
+            return true;
+        }
+    }
+    false
+}
+
+/// The one predecessor of a loop's header from outside it, which every
+/// entry to the loop therefore runs.
+fn sole_entry(
+    preds: &FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
+    loop_: &NaturalLoop,
+) -> Option<BlockIdx> {
+    let mut outside = preds
+        .get(&loop_.header)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|&p| !loop_.contains(p));
+    let first = outside.next()?;
+    outside.next().is_none().then_some(first)
+}
+
+/// Every `AsSlice` inside the loop whose container is a `Ref` to a storage
+/// taken inside the loop for that `AsSlice` alone, by the storage.
+fn slices_taken_in(cfg: &CfgBody, loop_: &NaturalLoop) -> Vec<(ValueId, Vec<SliceOfStorage>)> {
+    let readers = use_counts(cfg);
+    let mut by_storage: Vec<(ValueId, Vec<SliceOfStorage>)> = Vec::new();
+
+    for block in loop_.blocks() {
+        for (ii, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
+            let InstKind::AsSlice {
+                container,
+                mutability,
+                ..
+            } = inst.kind
+            else {
+                continue;
+            };
+            let Some(reference) = definition_in(cfg, loop_, container) else {
+                continue;
+            };
+            let InstKind::Ref {
+                target: RefTarget::Var(storage) | RefTarget::Param(storage),
+                path,
+                ..
+            } = &reference.kind(cfg)
+            else {
+                continue;
+            };
+            let readers = *readers
+                .get(&container)
+                .expect("the AsSlice at hand is itself a use of its container");
+            if !path.is_empty() || readers != 1 {
+                continue;
+            }
+            let pair = SliceOfStorage {
+                reference,
+                slice: At { block, inst: ii },
+                mutability,
+            };
+            match by_storage.iter_mut().find(|(s, _)| s == storage) {
+                Some((_, pairs)) => pairs.push(pair),
+                None => by_storage.push((*storage, vec![pair])),
+            }
+        }
+    }
+    by_storage
+}
+
+fn use_counts(cfg: &CfgBody) -> FxHashMap<ValueId, usize> {
+    let mut counts: FxHashMap<ValueId, usize> = FxHashMap::default();
+    for block in &cfg.blocks {
+        let uses = block
+            .insts
+            .iter()
+            .flat_map(|inst| inst_info::uses(&inst.kind).to_vec())
+            .chain(terminator_uses_vec(&block.terminator));
+        for u in uses {
+            *counts.entry(u).or_default() += 1;
+        }
+    }
+    counts
+}
+
+fn definition_in(cfg: &CfgBody, loop_: &NaturalLoop, value: ValueId) -> Option<At> {
+    loop_.blocks().find_map(|block| {
+        cfg.blocks[block.0]
+            .insts
+            .iter()
+            .position(|inst| inst_info::defs(&inst.kind).contains(&value))
+            .map(|inst| At { block, inst })
+    })
+}
+
+/// Whether the loop reaches the storage only through the slices collected
+/// of it: the `Ref` under one, the `AsSlice` itself, or an `Index` /
+/// `IndexSet` of one. Anything else - a call taking the container, an
+/// `Assign` of a new one, a `push` - and the slice the loop would carry
+/// may no longer name the container's elements.
+fn every_touch_goes_through(
+    cfg: &CfgBody,
+    loop_: &NaturalLoop,
+    storage: ValueId,
+    pairs: &[SliceOfStorage],
+) -> bool {
+    let loans = Loans::build(cfg);
+    let slices: Vec<ValueId> = pairs
+        .iter()
+        .map(|p| {
+            *inst_info::defs(p.slice.kind(cfg))
+                .first()
+                .expect("an AsSlice defines its destination")
+        })
+        .collect();
+
+    loop_.blocks().all(|block| {
+        cfg.blocks[block.0]
+            .insts
+            .iter()
+            .enumerate()
+            .all(|(inst, held)| {
+                let at = At { block, inst };
+                if pairs.iter().any(|p| p.reference == at || p.slice == at) {
+                    return true;
+                }
+                let through = match &held.kind {
+                    InstKind::Index { slice, .. } | InstKind::IndexSet { slice, .. } => {
+                        slices.contains(slice)
+                    }
+                    _ => false,
+                };
+                if through {
+                    return true;
+                }
+                let effect = loans.storage_effect(&held.kind);
+                !effect.reads.contains(&storage) && !effect.writes.contains(&storage)
+            })
+    })
+}
+
+/// Put one exclusive slice of the storage in the preheader and let every
+/// read and write of the loop go through it.
+fn coalesce(cfg: &mut CfgBody, preheader: BlockIdx, pairs: &[SliceOfStorage]) {
+    let template = pairs
+        .iter()
+        .find(|p| p.mutability == Mutability::Mut)
+        .expect("a coalesced storage is written through one of its slices");
+
+    let mut reference =
+        cfg.blocks[template.reference.block.0].insts[template.reference.inst].clone();
+    let mut slice = cfg.blocks[template.slice.block.0].insts[template.slice.inst].clone();
+    let old_reference = *inst_info::defs(&reference.kind)
+        .first()
+        .expect("a Ref defines its destination");
+    let old_slice = *inst_info::defs(&slice.kind)
+        .first()
+        .expect("an AsSlice defines its destination");
+    let new_reference = cfg.val_factory.next();
+    let new_slice = cfg.val_factory.next();
+    let ty_of = |v: ValueId, cfg: &CfgBody| {
+        cfg.val_types
+            .get(&v)
+            .cloned()
+            .expect("the pipeline types every defined value")
+    };
+    let reference_ty = ty_of(old_reference, cfg);
+    let slice_ty = ty_of(old_slice, cfg);
+    cfg.val_types.insert(new_reference, reference_ty);
+    cfg.val_types.insert(new_slice, slice_ty);
+
+    let renamed: FxHashMap<ValueId, ValueId> =
+        [(old_reference, new_reference), (old_slice, new_slice)]
+            .into_iter()
+            .collect();
+    remap_defs(&mut reference.kind, &renamed);
+    remap_defs(&mut slice.kind, &renamed);
+    remap_uses(&mut slice.kind, &renamed);
+    cfg.blocks[preheader.0].insts.extend([reference, slice]);
+
+    let mut merged: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+    for pair in pairs {
+        let dst = *inst_info::defs(pair.slice.kind(cfg))
+            .first()
+            .expect("an AsSlice defines its destination");
+        merged.insert(dst, new_slice);
+        cfg.blocks[pair.reference.block.0].insts[pair.reference.inst].kind = InstKind::Nop;
+        cfg.blocks[pair.slice.block.0].insts[pair.slice.inst].kind = InstKind::Nop;
+    }
+    for block in cfg.blocks.iter_mut() {
+        for inst in block.insts.iter_mut() {
+            remap_uses(&mut inst.kind, &merged);
+        }
+        remap_terminator(&mut block.terminator, &merged);
+    }
+}
+
+fn remap_defs(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
+    match kind {
+        InstKind::Ref { dst, .. } | InstKind::AsSlice { dst, .. } => remap_val(dst, remap),
+        other => panic!("a coalesced slice is a Ref or an AsSlice, not {other:?}"),
+    }
+}
+
 // -- Merge pass -----------------------------------------------------
 
 /// Within one block, a shared borrow of a storage becomes the borrow an
@@ -464,7 +913,7 @@ fn hoistable(loans: &Loans, kind: &InstKind) -> Hoistable {
 /// A block is a straight line, so the instructions between the two borrows
 /// are exactly what runs between them: the question needs no dominance and
 /// no reachability, only a walk.
-fn merge_pass(cfg: &mut CfgBody) {
+fn merge_pass(cfg: &mut CfgBody) -> bool {
     let loans = Loans::build(cfg);
     let CfgBody {
         blocks, val_types, ..
@@ -513,7 +962,7 @@ fn merge_pass(cfg: &mut CfgBody) {
     }
 
     if merged.is_empty() {
-        return;
+        return false;
     }
 
     // A merged value is read wherever the block it was defined in dominates,
@@ -525,6 +974,7 @@ fn merge_pass(cfg: &mut CfgBody) {
         }
         remap_terminator(&mut block.terminator, &merged);
     }
+    true
 }
 
 /// The storages an instruction takes exclusively: a shared borrow of one of
@@ -1799,6 +2249,204 @@ mod tests {
             },
         ]);
         insts
+    }
+
+    /// The log kernel's shape (`benches/logs.rs`): an outer loop over `li`
+    /// whose body takes `&a[li]` - the source wrote `len(&a[li])` there -
+    /// and an inner loop over `i` that reads `a[li][i]`, which is the same
+    /// `&a[li]` again, sliced and indexed.
+    fn a_loop_that_reindexes_the_row(writes_the_container: bool) -> Vec<InstKind> {
+        let index_ref = |dst, slice| InstKind::Index {
+            dst,
+            slice,
+            index: v(0),
+            mode: IndexMode::Ref,
+        };
+        let ref_through = |dst, reference| InstKind::Ref {
+            dst,
+            target: RefTarget::Through(reference),
+            path: vec![],
+            mutability: Mutability::Shared,
+        };
+        let label = |n| InstKind::BlockLabel {
+            label: Label(n),
+            params: vec![],
+            merge_of: None,
+        };
+        let jump = |n| InstKind::Jump {
+            label: Label(n),
+            args: vec![],
+        };
+        let test = |then_label, else_label| InstKind::JumpIf {
+            cond: v(3),
+            then_label: Label(then_label),
+            then_args: vec![],
+            else_label: Label(else_label),
+            else_args: vec![],
+        };
+
+        let mut inner = vec![
+            index_ref(v(14), v(11)),
+            ref_through(v(15), v(14)),
+            InstKind::AsSlice {
+                dst: v(16),
+                container: v(15),
+                mutability: Mutability::Shared,
+                instance: ExternInstance {
+                    id: QualifiedRef::root(Interner::new().intern("as_slice")),
+                    instance: 0,
+                },
+            },
+            InstKind::Index {
+                dst: v(17),
+                slice: v(16),
+                index: v(0),
+                mode: IndexMode::Copy,
+            },
+        ];
+        if writes_the_container {
+            inner.push(InstKind::Assign {
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                value: v(0),
+            });
+        }
+
+        let mut insts = vec![
+            InstKind::Const {
+                dst: v(0),
+                value: acvus_ast::Literal::Int(1),
+            },
+            InstKind::Assign {
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                value: v(0),
+            },
+            InstKind::Const {
+                dst: v(3),
+                value: acvus_ast::Literal::Bool(true),
+            },
+            InstKind::Ref {
+                dst: v(10),
+                target: RefTarget::Var(v(1)),
+                path: vec![],
+                mutability: Mutability::Shared,
+            },
+            InstKind::AsSlice {
+                dst: v(11),
+                container: v(10),
+                mutability: Mutability::Shared,
+                instance: ExternInstance {
+                    id: QualifiedRef::root(Interner::new().intern("as_slice")),
+                    instance: 0,
+                },
+            },
+            jump(0),
+            label(0),
+            test(1, 2),
+            label(1),
+            index_ref(v(12), v(11)),
+            ref_through(v(13), v(12)),
+            jump(3),
+            label(3),
+            test(4, 5),
+            label(4),
+        ];
+        insts.extend(inner);
+        insts.extend([
+            jump(3),
+            label(5),
+            jump(0),
+            label(2),
+            InstKind::Return {
+                value: v(0),
+                order: None,
+            },
+        ]);
+        insts
+    }
+
+    /// The loop depth of the block each instruction stands in after the pass.
+    struct Depths {
+        slice: usize,
+        read: usize,
+    }
+
+    fn depths_of_the_slice_and_the_read(insts: Vec<InstKind>) -> Depths {
+        let mut cfg = make_cfg(insts, 24);
+        run(&mut cfg);
+        let domtree = DomTree::build(&cfg);
+        let depth = LoopDepth::of(&cfg, &domtree);
+        let block_of = |wanted: fn(&InstKind) -> bool| {
+            cfg.blocks
+                .iter()
+                .position(|block| block.insts.iter().any(|inst| wanted(&inst.kind)))
+                .map(|bi| depth.at(BlockIdx(bi)))
+                .expect("the body still holds the instruction")
+        };
+        Depths {
+            slice: block_of(
+                |kind| matches!(kind, InstKind::AsSlice { container, .. } if *container != v(10)),
+            ),
+            read: block_of(|kind| {
+                matches!(
+                    kind,
+                    InstKind::Index {
+                        mode: IndexMode::Copy,
+                        ..
+                    }
+                )
+            }),
+        }
+    }
+
+    fn index_refs_left(insts: Vec<InstKind>) -> usize {
+        let mut cfg = make_cfg(insts, 24);
+        run(&mut cfg);
+        cfg.blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .filter(|inst| {
+                matches!(
+                    inst.kind,
+                    InstKind::Index {
+                        mode: IndexMode::Ref,
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn the_row_a_loop_reindexes_is_the_row_the_block_above_it_named() {
+        assert_eq!(
+            index_refs_left(a_loop_that_reindexes_the_row(false)),
+            1,
+            "the inner `&a[li]` is the one the outer body already named"
+        );
+        let Depths { slice, read } =
+            depths_of_the_slice_and_the_read(a_loop_that_reindexes_the_row(false));
+        assert!(
+            slice < read,
+            "the row's slice leaves the inner loop the element read stays in \
+             (slice at depth {slice}, read at depth {read})"
+        );
+    }
+
+    #[test]
+    fn a_write_to_the_container_keeps_both_the_index_and_the_slice_inside() {
+        assert_eq!(
+            index_refs_left(a_loop_that_reindexes_the_row(true)),
+            2,
+            "the body writes the container, so the row may have moved"
+        );
+        let Depths { slice, read } =
+            depths_of_the_slice_and_the_read(a_loop_that_reindexes_the_row(true));
+        assert_eq!(
+            slice, read,
+            "the slice stays beside the read it serves (slice {slice}, read {read})"
+        );
     }
 
     /// Where the `AsSlice` sits, relative to the loop's test.
