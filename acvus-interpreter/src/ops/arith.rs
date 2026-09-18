@@ -236,7 +236,7 @@ where
     let left = machine.reg(op.b).bits();
     let right = machine.reg(op.c).bits();
     let value = f(left, right);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -247,7 +247,7 @@ where
 {
     let operand = machine.reg(op.b).bits();
     let value = f(operand);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -288,7 +288,7 @@ macro_rules! float_ops {
             pub fn $name(machine: &mut Machine<'_>, op: &Op) -> Flow {
                 let left = machine.reg(op.b).as_float();
                 let right = machine.reg(op.c).as_float();
-                machine.set(op.a, float_word::$name(left, right));
+                machine.define(op.a, float_word::$name(left, right));
                 Flow::Next
             }
         )*
@@ -315,7 +315,7 @@ macro_rules! bool_ops {
             pub fn $name(machine: &mut Machine<'_>, op: &Op) -> Flow {
                 let $a = machine.reg(op.b).as_bool();
                 let $b = machine.reg(op.c).as_bool();
-                machine.set(op.a, $body);
+                machine.define(op.a, $body);
                 Flow::Next
             }
         )*
@@ -330,13 +330,13 @@ bool_ops! {
 
 pub fn neg_f64(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let value = Value::float(-machine.reg(op.b).as_float());
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
 pub fn not_bool(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let value = Value::bool_(!machine.reg(op.b).as_bool());
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 

@@ -10,6 +10,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use std::mem::MaybeUninit;
+use std::ptr;
 use std::slice;
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use crate::code::{
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
 use crate::runtime::AcvusRuntime;
-use crate::value::{FnValue, Value};
+use crate::value::{FnValue, Kind, Value};
 
 /// The registers and the interner a path walk needs, borrowed apart.
 pub struct Frame<'m> {
@@ -128,23 +129,14 @@ impl<'c> Machine<'c> {
         value
     }
 
-    #[inline]
-    pub fn set(&mut self, slot: u32, value: Value) {
-        self.regs[slot as usize] = value;
+    #[inline(always)]
+    pub fn define(&mut self, slot: u32, value: Value) {
+        define_slot(self.regs, slot, value);
     }
 
-    #[inline(always)]
-    pub fn store(&mut self, slot: u32, value: Value) {
-        debug_assert!(
-            (slot as usize) < self.regs.len(),
-            "a chain writes register {slot}, which its body's frame does not have"
-        );
-        // SAFETY: `prepare::check_assignment` states that every slot an
-        // operation names is below the body's `frame_len`, and
-        // `Machine::new` asserts the frame it runs on has that length.
-        unsafe {
-            *self.regs.get_unchecked_mut(slot as usize) = value;
-        }
+    #[inline]
+    pub fn assign(&mut self, slot: u32, value: Value) {
+        self.regs[slot as usize] = value;
     }
 
     #[inline]
@@ -227,6 +219,23 @@ impl<'c> Machine<'c> {
     }
 }
 
+#[inline(always)]
+fn define_slot(regs: &mut [Value], slot: u32, value: Value) {
+    debug_assert!(
+        (slot as usize) < regs.len(),
+        "a definition writes register {slot}, which its body's frame does not have"
+    );
+    debug_assert!(
+        regs[slot as usize].kind() != Kind::Large,
+        "a definition writes register {slot}, which holds the undropped {:?}",
+        regs[slot as usize]
+    );
+    // SAFETY: `prepare::check_assignment` states that every slot an
+    // operation names is below the body's `frame_len`, and `Machine::new`
+    // asserts the frame it runs on has that length.
+    unsafe { ptr::write(regs.as_mut_ptr().add(slot as usize), value) }
+}
+
 fn run_of(window: &ArgWindow) -> std::ops::Range<usize> {
     window.at as usize..(window.at + window.arity) as usize
 }
@@ -267,7 +276,7 @@ async fn drive(mut machine: Machine<'_>) -> Value {
             } => {
                 let value = fut.await;
 
-                machine.set(dst, value);
+                machine.define(dst, value);
                 pc = at + 1;
             }
         }
@@ -290,10 +299,10 @@ pub async fn call_module(
     fill_entry_konsts(code, &mut regs);
     let mut machine = Machine::new(code, &mut regs, &rt, &page);
     for (slot, arg) in code.params.iter().zip(args) {
-        machine.set(*slot, arg);
+        machine.define(*slot, arg);
     }
     if let Some(order) = code.order_param {
-        machine.set(order, Value::unit());
+        machine.define(order, Value::unit());
     }
     drive(machine).await
 }
@@ -310,10 +319,10 @@ pub fn call_module_sync(
     run_sync(code, &id, machine.rt, machine.page, |callee| {
         fill_entry_konsts(code, callee.regs);
         for (slot, arg) in code.params.iter().zip(args) {
-            callee.set(*slot, arg);
+            callee.define(*slot, arg);
         }
         if let Some(order) = code.order_param {
-            callee.set(order, Value::unit());
+            callee.define(order, Value::unit());
         }
     })
 }
@@ -442,19 +451,19 @@ fn word_or_unread(value: &Value) -> Value {
 /// (RFC-0018).
 fn enter(code: &Body, f: &FnValue, args: &mut [Value], regs: &mut [Value]) {
     for (slot, capture) in code.captures.iter().zip(f.captures.iter()) {
-        regs[*slot as usize] = Value::reference(capture);
+        define_slot(regs, *slot, Value::reference(capture));
     }
     for (slot, arg) in code.params.iter().zip(args) {
-        regs[*slot as usize] = arg.take();
+        define_slot(regs, *slot, arg.take());
     }
     if let Some(order) = code.order_param {
-        regs[order as usize] = Value::unit();
+        define_slot(regs, order, Value::unit());
     }
     fill_entry_konsts(code, regs);
 }
 
 fn fill_entry_konsts(code: &Body, regs: &mut [Value]) {
     for konst in &code.entry_konsts {
-        regs[konst.slot as usize] = konst.value.copy_word();
+        define_slot(regs, konst.slot, konst.value.copy_word());
     }
 }

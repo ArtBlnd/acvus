@@ -190,6 +190,25 @@ so nothing is staged; an argument that is live past the call is copied
 into its slot by a `SlotMove` the call carries. Everything else takes the
 lowest slot free over its live range.
 
+**A definition does not drop what it overwrites; an assignment does.**
+There are two kinds of register write and the preparation tells them
+apart, never the run. A definition is the destination of an SSA
+instruction — a `BinOp`, a `Const`, a `Take`, a call's `dst` and its
+order, a chain's `dst`, a block parameter a jump's parallel move fills, a
+parameter or capture `enter` writes into a fresh frame. Its slot holds no
+live value: the selector gives two values one slot only where neither is
+live where the other is written, and `acvus_mir`'s drop insertion
+(RFC-0018) has already emitted the `Drop` where a move-only value's life
+ended, so what the definition overwrites is a word, `Empty` or `Undef`.
+`Machine::define` is therefore one 16-byte store, with a `debug_assert!`
+that the old kind is not `Large` — the net under both guarantors. An
+assignment writes a storage that may hold a live value: `Assign` to a
+variable or through a reference or a path, a `FieldSet`, a `Commit`. It
+drops what it overwrites. A storage is pinned to one slot for the whole
+body, so `storage::assign_var` is the only assignment that writes a
+register by slot — `Machine::assign` — and the rest write through the
+place they name.
+
 **A synchronous handler takes its arguments by value, one Rust parameter
 each, up to three** (stage 2c). A `Value` is a scalar pair, so
 `Arity2(&R, Value, Value)` is six scalars under the `rust-call` ABI and
@@ -493,14 +512,61 @@ compare, a branch and an indirect call on the taken side, and the compare
 forces the result through `%rsp`. A build that writes the destination
 without dropping - unsound, because a register that held a `Large` would
 leak, and kept only as a probe - measured mandelbrot at 19.0 against 20.4.
-That 1.4 ns is the price of the drop, and removing it needs a
-preparation-side proof that a chain's destination never holds a `Large`.
+That 1.4 ns is the price of the drop. The section below removes it: the
+proof it needed is the register selector's, and it covers every
+definition, not only a chain's.
 
 `map(|x| -> x + 1) | sum` is the one bench slower than the tree attempt,
 4.8 to 6.3, and the cause is rule 2a rather than noise: the attempt's leaf
 read the constant straight out of `Chain::konsts`, while a constant is now
 a register, and a frameless body has no frame to hold one - so the call
 builds an operand space. Against `master` the same bench is 15.2 to 6.3.
+
+## A definition does not drop what it overwrites
+
+`Machine::set` dropped the register's old value on every write, so every
+write in the interpreter paid a load of the old kind byte, a compare, a
+branch and an indirect call on the taken side — and the possible call
+forced the result through the stack and kept `set` out of line. The rule
+above splits that one method into `define` and `assign`, and 64 of the 65
+register writes in the interpreter are definitions.
+
+Measured on this machine, 2026-09-18; interleaved A/B against binaries
+built from `master` 050b3657, three repetitions, medians, ns per
+iteration:
+
+| bench | master | this rule | ratio |
+|-------|--------|-----------|-------|
+| mandelbrot (200x100x200) | 18.8 | 14.1 | 0.750 |
+| mandelbrot (80x40x100) | 19.9 | 15.0 | 0.754 |
+| accum int `while` | 7.4 | 4.9 | 0.662 |
+| accum float `while` | 10.9 | 7.7 | 0.706 |
+| accum extern `while` | 10.8 | 7.6 | 0.704 |
+| accum branch `while` | 21.7 | 18.6 | 0.857 |
+| accum option `while` | 28.2 | 24.6 | 0.872 |
+| accum `map(\|x\| -> x + k) \| sum` | 16.5 | 14.3 | 0.867 |
+| accum `map(\|x\| -> x + 1) \| sum` | 6.3 | 6.2 | 0.984 |
+| accum `map(\|x\| -> x) \| sum` | 4.1 | 4.1 | 1.000 |
+| accum `range \| sum` | 1.7 | 1.8 | 1.059 |
+| attention (64, 64) execute | 230.3 us | 191.4 us | 0.831 |
+
+The gain is per register write, and the op listing counts the writes: the
+`int while` loop writes 3 registers per iteration and gains 2.5 ns,
+`float while` 4 and gains 3.2, mandelbrot's inner loop 9 — four in the
+head, four in the body, one back-edge move — and gains 4.7. That is 0.5
+to 0.8 ns per write on this machine, a compare and a branch plus the spill
+and the call boundary they forced.
+
+`range | sum` is the one bench that reads worse, and it executes no
+register write per element at all: its pipeline is extern stages and the
+body runs once. The bench's own Rust control, which this rule cannot
+reach, moved from 245 to 183 us between the same two binaries, so both
+numbers are code layout under fat LTO.
+
+`run2::<f64, 1, 2, 2>`, mandelbrot's chain arm, is now fourteen
+instructions — three `movzwl` of the leaf offsets, `movsd`, `mulsd`,
+`mulsd`, the kind byte, the word, `Flow::Next`, `ret` — with no compare,
+no call, no frame and no unwind path, against thirty with all four before.
 
 ## Rejected
 

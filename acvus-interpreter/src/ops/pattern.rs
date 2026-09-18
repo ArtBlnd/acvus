@@ -27,19 +27,19 @@ where
 {
     let want = *payload!(machine, op, Wide);
     let matches = T::read(machine.reg(op.b).bits()).wide() == want;
-    machine.set(op.a, Value::bool_(matches));
+    machine.define(op.a, Value::bool_(matches));
     Flow::Next
 }
 
 pub fn test_float<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let matches = place::<THROUGH>(machine, op.b).as_float() == f64::from_bits(op.p as u64);
-    machine.set(op.a, Value::bool_(matches));
+    machine.define(op.a, Value::bool_(matches));
     Flow::Next
 }
 
 pub fn test_bool<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let matches = place::<THROUGH>(machine, op.b).as_bool() == (op.p != 0);
-    machine.set(op.a, Value::bool_(matches));
+    machine.define(op.a, Value::bool_(matches));
     Flow::Next
 }
 
@@ -47,13 +47,13 @@ pub fn test_string<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> F
     let want = payload!(machine, op, Text);
     // SAFETY: the type checker matches a string literal against a string.
     let matches = unsafe { place::<THROUGH>(machine, op.b).as_str() } == want.as_str();
-    machine.set(op.a, Value::bool_(matches));
+    machine.define(op.a, Value::bool_(matches));
     Flow::Next
 }
 
 /// A unit literal matches the one value of its type.
 pub fn test_unit(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::bool_(true));
+    machine.define(op.a, Value::bool_(true));
     Flow::Next
 }
 
@@ -62,7 +62,7 @@ pub fn test_object_key<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) 
     let source = place::<THROUGH>(machine, op.b);
     // SAFETY: is_object checked the vtable id.
     let has = source.is_object() && unsafe { source.as_object() }.contains_key(key);
-    machine.set(op.a, Value::bool_(has));
+    machine.define(op.a, Value::bool_(has));
     Flow::Next
 }
 

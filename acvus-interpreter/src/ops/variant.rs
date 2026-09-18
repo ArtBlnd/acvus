@@ -43,7 +43,7 @@ pub fn make_option<const HAS_PAYLOAD: bool>(machine: &mut Machine<'_>, op: &Op) 
         Some(payload) => Value::some(payload),
         None => Value::NONE,
     };
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -51,14 +51,14 @@ pub fn make_option<const HAS_PAYLOAD: bool>(machine: &mut Machine<'_>, op: &Op) 
 pub fn make_result<const OK: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let payload = machine.use_val(op.b);
     let result = if OK { Ok(payload) } else { Err(payload) };
-    machine.set(op.a, Value::result(result));
+    machine.define(op.a, Value::result(result));
     Flow::Next
 }
 
 pub fn make_variant<const HAS_PAYLOAD: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let tag = *payload!(machine, op, Name);
     let payload = payload_value::<HAS_PAYLOAD>(machine, op);
-    machine.set(op.a, Value::variant(tag, payload));
+    machine.define(op.a, Value::variant(tag, payload));
     Flow::Next
 }
 
@@ -66,7 +66,7 @@ pub fn make_variant<const HAS_PAYLOAD: bool>(machine: &mut Machine<'_>, op: &Op)
 /// what the tag resolved to at preparation: whether it is `Some`.
 pub fn test_option<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let is_some = !scrutinee::<THROUGH>(machine, op.b).is_none();
-    machine.set(op.a, Value::bool_(is_some == (op.c != 0)));
+    machine.define(op.a, Value::bool_(is_some == (op.c != 0)));
     Flow::Next
 }
 
@@ -75,7 +75,7 @@ pub fn test_result<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> F
     let source = scrutinee::<THROUGH>(machine, op.b);
     // SAFETY: the preparation read `Result` from the source's type.
     let is_ok = unsafe { source.as_result() }.is_ok();
-    machine.set(op.a, Value::bool_(is_ok == (op.d != 0)));
+    machine.define(op.a, Value::bool_(is_ok == (op.d != 0)));
     Flow::Next
 }
 
@@ -84,13 +84,13 @@ pub fn test_variant<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> 
     let source = scrutinee::<THROUGH>(machine, op.b);
     // SAFETY: the preparation read an enum from the source's type.
     let matches = unsafe { source.as_variant() }.tag == tag;
-    machine.set(op.a, Value::bool_(matches));
+    machine.define(op.a, Value::bool_(matches));
     Flow::Next
 }
 
 pub fn unwrap_option(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let source = machine.take(op.b);
-    machine.set(op.a, Value::some_payload(source));
+    machine.define(op.a, Value::some_payload(source));
     Flow::Next
 }
 
@@ -98,7 +98,7 @@ pub fn unwrap_result(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let source = machine.take(op.b);
     // SAFETY: the preparation read `Result` from the source's type.
     let (Ok(payload) | Err(payload)) = unsafe { source.materialize::<ResultValue>() };
-    machine.set(op.a, payload);
+    machine.define(op.a, payload);
     Flow::Next
 }
 
@@ -106,6 +106,6 @@ pub fn unwrap_variant(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let source = machine.take(op.b);
     // SAFETY: the preparation read an enum from the source's type.
     let payload = unsafe { source.materialize::<VariantValue>() }.payload;
-    machine.set(op.a, payload.map_or_else(Value::unit, |p| *p));
+    machine.define(op.a, payload.map_or_else(Value::unit, |p| *p));
     Flow::Next
 }

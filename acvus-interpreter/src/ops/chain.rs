@@ -486,7 +486,7 @@ macro_rules! entry_points {
             {
                 let chain = chain_of(machine, op);
                 let value = $tree::<T, $($c),*>(chain, machine.regs());
-                machine.store(op.a, value);
+                machine.define(op.a, value);
                 Flow::Next
             }
 

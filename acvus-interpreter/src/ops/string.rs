@@ -19,7 +19,7 @@ pub fn clone_string<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) -> 
         }
     };
     let value = Value::string(text.to_string());
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -27,7 +27,7 @@ pub fn string_eq(machine: &mut Machine<'_>, op: &Op) -> Flow {
     // SAFETY: the type checker admits only live `&String`s here.
     let equal =
         unsafe { machine.reg(op.b).target().as_str() == machine.reg(op.c).target().as_str() };
-    machine.set(op.a, Value::bool_(equal));
+    machine.define(op.a, Value::bool_(equal));
     Flow::Next
 }
 
@@ -46,6 +46,6 @@ pub fn concat(machine: &mut Machine<'_>, op: &Op) -> Flow {
             out.push_str(unsafe { text.as_str() });
         }
     }
-    machine.set(op.a, Value::string(out));
+    machine.define(op.a, Value::string(out));
     Flow::Next
 }

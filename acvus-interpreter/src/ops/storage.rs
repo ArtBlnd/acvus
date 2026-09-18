@@ -186,21 +186,21 @@ fn read_through<const CLONE: bool>(at: &Value) -> Value {
 
 pub fn ref_var(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let reference = Value::reference(machine.reg(op.b));
-    machine.set(op.a, reference);
+    machine.define(op.a, reference);
     Flow::Next
 }
 
 pub fn ref_var_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let path = payload!(machine, op, Path);
     let reference = reference_to(walk_path(machine.reg(op.b), path, machine.interner()));
-    machine.set(op.a, reference);
+    machine.define(op.a, reference);
     Flow::Next
 }
 
 pub fn ref_through(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let base = through(machine.reg(op.b));
     let reference = Value::reference(base);
-    machine.set(op.a, reference);
+    machine.define(op.a, reference);
     Flow::Next
 }
 
@@ -208,13 +208,13 @@ pub fn ref_through_path(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let path = payload!(machine, op, Path);
     let base = through(machine.reg(op.b));
     let reference = reference_to(walk_path(base, path, machine.interner()));
-    machine.set(op.a, reference);
+    machine.define(op.a, reference);
     Flow::Next
 }
 
 pub fn take_var<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let value = read_slot::<CLONE>(machine.slot_mut(op.b));
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -244,7 +244,7 @@ pub fn read_at<const CLONE: bool>(
         PlaceMut::At(slot) => read_slot::<CLONE>(slot),
         PlaceMut::Depth(v) => v,
     };
-    machine.set(slots.dst, value);
+    machine.define(slots.dst, value);
     Flow::Next
 }
 
@@ -266,7 +266,7 @@ pub fn read_field<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow
 pub fn take_through<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let at = through(machine.reg(op.b));
     let value = read_through::<CLONE>(at);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -277,13 +277,13 @@ pub fn take_through_path<const CLONE: bool>(machine: &mut Machine<'_>, op: &Op) 
         Place::At(at) => read_through::<CLONE>(at),
         Place::Depth(v) => v,
     };
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
 pub fn assign_var(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let value = machine.use_val(op.b);
-    machine.set(op.a, value);
+    machine.assign(op.a, value);
     Flow::Next
 }
 
@@ -320,7 +320,7 @@ pub fn field_set(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let value = machine.use_val(op.c);
     assert!(!path.is_empty(), "FieldSet with an empty path");
     *place_mut(walk_path_mut(&mut object, path, machine.interner())) = value;
-    machine.set(op.a, object);
+    machine.define(op.a, object);
     Flow::Next
 }
 
@@ -330,7 +330,7 @@ pub fn fetch(machine: &mut Machine<'_>, op: &Op) -> Flow {
         .page
         .take(key)
         .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"));
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 

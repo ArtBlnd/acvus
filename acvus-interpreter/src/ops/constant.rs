@@ -11,27 +11,27 @@ pub fn int<T>(machine: &mut Machine<'_>, op: &Op) -> Flow
 where
     T: Int,
 {
-    machine.set(op.a, Value::inline(T::KIND, op.p as u64));
+    machine.define(op.a, Value::inline(T::KIND, op.p as u64));
     Flow::Next
 }
 
 pub fn float(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::inline(crate::value::Kind::F64, op.p as u64));
+    machine.define(op.a, Value::inline(crate::value::Kind::F64, op.p as u64));
     Flow::Next
 }
 
 pub fn boolean(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::bool_(op.p != 0));
+    machine.define(op.a, Value::bool_(op.p != 0));
     Flow::Next
 }
 
 pub fn unit(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::unit());
+    machine.define(op.a, Value::unit());
     Flow::Next
 }
 
 pub fn konst(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let value = payload!(machine, op, Konst).value();
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }

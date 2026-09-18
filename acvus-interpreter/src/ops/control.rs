@@ -13,7 +13,7 @@ use crate::value::Value;
 pub fn move_all(machine: &mut Machine<'_>, moves: &[SlotMove]) {
     for m in moves {
         let value = machine.use_val(m.from);
-        machine.set(m.to, value);
+        machine.define(m.to, value);
     }
 }
 
@@ -104,12 +104,12 @@ pub fn diverge(_: &mut Machine<'_>, _: &Op) -> Flow {
 }
 
 pub fn merge(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::unit());
+    machine.define(op.a, Value::unit());
     Flow::Next
 }
 
 pub fn undef(machine: &mut Machine<'_>, op: &Op) -> Flow {
-    machine.set(op.a, Value::UNDEF);
+    machine.define(op.a, Value::UNDEF);
     Flow::Next
 }
 

@@ -29,7 +29,7 @@ fn arg_values(machine: &mut Machine<'_>, slots: &[u32]) -> Vec<Value> {
 #[inline]
 fn yield_order(machine: &mut Machine<'_>, slot: u32) {
     if slot != NO_SLOT {
-        machine.set(slot, Value::unit());
+        machine.define(slot, Value::unit());
     }
 }
 
@@ -60,7 +60,7 @@ pub fn call_extern_0(machine: &mut Machine<'_>, op: &Op) -> Flow {
     };
     yield_order(machine, call.order);
     let value = f(&machine.rt);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -72,7 +72,7 @@ pub fn call_extern_1(machine: &mut Machine<'_>, op: &Op) -> Flow {
     yield_order(machine, call.order);
     let a0 = machine.use_val(op.b);
     let value = f(&machine.rt, a0);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -85,7 +85,7 @@ pub fn call_extern_2(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let a0 = machine.use_val(op.b);
     let a1 = machine.use_val(op.c);
     let value = f(&machine.rt, a0, a1);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -99,7 +99,7 @@ pub fn call_extern_3(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let a1 = machine.use_val(op.c);
     let a2 = machine.use_val(op.d);
     let value = f(&machine.rt, a0, a1, a2);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -113,7 +113,7 @@ pub fn call_extern_n(machine: &mut Machine<'_>, op: &Op) -> Flow {
     move_all(machine, &window.moves);
     let (rt, args) = machine.lend_window(window);
     let value = f(rt, args);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -150,7 +150,7 @@ pub fn call_direct(machine: &mut Machine<'_>, op: &Op) -> Flow {
     }
 
     let value = call_module_sync(machine, &prepared, callee, args);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -174,7 +174,7 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
         }
 
         let value = fn_value_call_sync(closure, &mut args);
-        machine.set(op.a, value);
+        machine.define(op.a, value);
         return Flow::Next;
     }
 
@@ -187,7 +187,7 @@ pub fn call_indirect<const THROUGH: bool>(machine: &mut Machine<'_>, op: &Op) ->
     }
 
     let value = fn_value_call_sync(&closure, &mut args);
-    machine.set(op.a, value);
+    machine.define(op.a, value);
     Flow::Next
 }
 
@@ -207,7 +207,7 @@ pub fn spawn_extern_sync(machine: &mut Machine<'_>, op: &Op) -> Flow {
         .shared()
         .executor
         .spawn_blocking(Box::new(move || f.call_taking(&rt, &mut args)));
-    machine.set(op.a, Value::handle(handle));
+    machine.define(op.a, Value::handle(handle));
     Flow::Next
 }
 
@@ -222,7 +222,7 @@ pub fn spawn_extern_async(machine: &mut Machine<'_>, op: &Op) -> Flow {
     let rt = machine.rt.clone();
     let f = Arc::clone(f);
     let handle = machine.shared().executor.spawn_async(f(rt, &mut args));
-    machine.set(op.a, Value::handle(handle));
+    machine.define(op.a, Value::handle(handle));
     Flow::Next
 }
 
@@ -238,7 +238,7 @@ pub fn spawn_module(machine: &mut Machine<'_>, op: &Op) -> Flow {
         args,
     );
     let handle = machine.shared().executor.spawn_interpreter(child);
-    machine.set(op.a, Value::handle(handle));
+    machine.define(op.a, Value::handle(handle));
     Flow::Next
 }
 
@@ -264,6 +264,6 @@ pub fn make_closure(machine: &mut Machine<'_>, op: &Op) -> Flow {
         code: Arc::clone(code),
         captures: captured.into(),
     };
-    machine.set(op.a, Value::closure(closure));
+    machine.define(op.a, Value::closure(closure));
     Flow::Next
 }
