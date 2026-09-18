@@ -490,7 +490,7 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         let ast = ParsedAst::Script(
             acvus_ast::parse_script(&interner, &case.source).expect("parse error"),
         );
-        let cr = compile_source_with_externs(&interner, ast, &context_types, std_only());
+        let cr = compile_source_with_externs(&interner, ast, &context_types, std_only(), Ty::I64);
         let (_shared, mut interp) = execute_compiled(
             &interner,
             cr,
@@ -562,7 +562,13 @@ fn perf_run(rt: &Runtime, case: &Case, n: i64, side: Side) {
                 let ast = ParsedAst::Script(
                     acvus_ast::parse_script(&interner, &case.source).expect("parse error"),
                 );
-                let cr = compile_source_with_externs(&interner, ast, &context_types, std_only());
+                let cr = compile_source_with_externs(
+                    &interner,
+                    ast,
+                    &context_types,
+                    std_only(),
+                    Ty::I64,
+                );
                 let (_shared, mut interp) = execute_compiled(
                     &interner,
                     cr,
@@ -655,7 +661,7 @@ fn mir(name: &str) {
     let source = source_named(name);
     let context_types = split_context(&interner, context(&interner, 1_000_000)).0;
     let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, &source).expect("parse error"));
-    let cr = compile_source_with_externs(&interner, ast, &context_types, std_only());
+    let cr = compile_source_with_externs(&interner, ast, &context_types, std_only(), Ty::I64);
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
     println!("== mir: {name}");
     println!("{}", acvus_mir::printer::dump_with(&interner, module));
@@ -668,6 +674,7 @@ fn oplist(name: &str) {
         &source_named(name),
         context(&interner, 1_000_000),
         std_only(),
+        Ty::I64,
     );
     println!("== oplist: {name}");
     print_listing(&blocks);

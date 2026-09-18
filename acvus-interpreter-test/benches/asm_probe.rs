@@ -10,6 +10,7 @@ use std::process::Command;
 
 use acvus_interpreter_test::Context;
 use acvus_interpreter_test::listing::prepared_script;
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// The operations that hold no successor — `code.rs`'s terminators, the node
@@ -228,6 +229,7 @@ fn link_the_machine() {
         &interner,
         "let acc = 0; let i = 0; while i < 10 { acc = acc + i; i = i + 1; } acc",
         Context::default(),
+        Ty::I64,
     );
     black_box(&prepared);
 }
