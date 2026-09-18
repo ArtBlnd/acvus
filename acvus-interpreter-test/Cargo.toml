@@ -38,3 +38,7 @@ harness = false
 [[bench]]
 name = "slice_ceiling"
 harness = false
+
+[[bench]]
+name = "shapes"
+harness = false
