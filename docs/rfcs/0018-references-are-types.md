@@ -36,6 +36,13 @@ other name of that storage — the place itself, a `&`, or another `&mut` —
 is read or written; while a `&` is live, the storage is not assigned or
 moved. Liveness is the last use the IR already computes.
 
+That last use is transitive. A value that holds a reference keeps the
+storage it names alive for as long as the value itself is used, and a
+reference to that value is such a use: `let it = as_iter(&v)` lends `v`
+to `it`, so `next(&mut it)` is a use of `v`, and `v` is dropped after the
+last use of `it`, never at the `&v` that built it. A storage reached only
+through a chain of such holders is alive along the whole chain.
+
 A parameter's mode is its type. A function type is `Fn(T, &U, &mut V) ->
 R`; there is no mode beside the type. A lambda writes `|a, b|`, and the
 type of each parameter, reference or value, is the type the function that

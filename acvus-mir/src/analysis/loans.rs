@@ -297,10 +297,11 @@ impl Loans {
     pub fn uses_with_storage(&self, kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         let uses = inst_info::uses(kind);
         let mut all: SmallVec<[ValueId; 4]> = uses.iter().copied().collect();
-        all.extend(
-            uses.iter()
-                .flat_map(|u| self.region(*u).loans.iter().map(|l| l.storage)),
-        );
+        let mut storage: SmallVec<[ValueId; 4]> = SmallVec::new();
+        for u in &uses {
+            self.reachable_storage(*u, &mut storage);
+        }
+        all.extend(storage);
         let effect = self.storage_effect(kind);
         all.extend(effect.reads.iter().chain(&effect.writes).copied());
         if let InstKind::Assign { target, path, .. } = kind
@@ -311,6 +312,15 @@ impl Loans {
         all.sort_unstable();
         all.dedup();
         all
+    }
+
+    fn reachable_storage(&self, value: ValueId, out: &mut SmallVec<[ValueId; 4]>) {
+        for loan in &self.region(value).loans {
+            if !out.contains(&loan.storage) {
+                out.push(loan.storage);
+                self.reachable_storage(loan.storage, out);
+            }
+        }
     }
 
     /// An access through a reference is bounded by that reference's own
