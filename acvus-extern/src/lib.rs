@@ -27,9 +27,9 @@ pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{
-    Async, AsyncCall, AsyncState, ExternHandler, Instance, Instances, State, State0, State1,
-    State2, State3, StateAbi, StateRef, StateSlice, StateWindow, Sync0, Sync1, Sync2, Sync3,
-    SyncAbi, SyncCall, SyncSlice, SyncWindow, erase_elements,
+    Async, AsyncCall, AsyncState, ExternHandler, Instance, Instances, SliceAbi, State, State0,
+    State1, State2, State3, StateAbi, StateRef, StateSlice, StateWindow, Sync0, Sync1, Sync2,
+    Sync3, SyncAbi, SyncCall, SyncSlice, SyncWindow,
 };
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
@@ -44,7 +44,7 @@ pub use registry::{
     Manifest, MemberType, Registry, SharedSignature, SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
-pub use slice::{Elements, Slice, SliceMut};
+pub use slice::{Elements, Slice, SliceMut, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use ty_arg::{Monomorphize, Never, PolyVars, SlotRepr, Spec, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;

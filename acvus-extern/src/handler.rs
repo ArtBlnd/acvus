@@ -53,8 +53,7 @@ pub type AsyncState<R> = fn(
 
 /// Which `fn` shape a declaration compiled to. A declaration of three or
 /// fewer parameters takes each in a register; four or more take the
-/// caller's argument window, and a slice return takes its run back in two
-/// registers with no boxing (RFC-0047 §6).
+/// caller's argument window.
 ///
 /// `prepare` reads this once, to pick the call operation's type; the
 /// operation then holds the bare `fn` pointer and calls it with no
@@ -68,7 +67,6 @@ where
     Arity2(Sync2<R>),
     Arity3(Sync3<R>),
     Window(SyncWindow<R>),
-    Slice(SyncSlice<R>),
 }
 
 pub enum StateAbi<R>
@@ -80,7 +78,32 @@ where
     Arity2(State2<R>),
     Arity3(State3<R>),
     Window(StateWindow<R>),
-    Slice(StateSlice<R>),
+}
+
+/// A declaration whose result is a run of one container's elements. It
+/// returns the run itself, never a value: there is no `R::Value` a slice
+/// can be.
+pub enum SliceAbi<R>
+where
+    R: Runtime,
+{
+    Plain(SyncSlice<R>),
+    Stateful { state: State, f: StateSlice<R> },
+}
+
+impl<R> Clone for SliceAbi<R>
+where
+    R: Runtime,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Plain(f) => Self::Plain(*f),
+            Self::Stateful { state, f } => Self::Stateful {
+                state: Arc::clone(state),
+                f: *f,
+            },
+        }
+    }
 }
 
 pub enum SyncCall<R>
@@ -110,7 +133,6 @@ where
             Self::Arity2(f) => Self::Arity2(f),
             Self::Arity3(f) => Self::Arity3(f),
             Self::Window(f) => Self::Window(f),
-            Self::Slice(f) => Self::Slice(f),
         }
     }
 }
@@ -126,7 +148,6 @@ where
             Self::Arity2(f) => Self::Arity2(f),
             Self::Arity3(f) => Self::Arity3(f),
             Self::Window(f) => Self::Window(f),
-            Self::Slice(f) => Self::Slice(f),
         }
     }
 }
@@ -170,7 +191,7 @@ where
     pub fn arity(&self) -> Option<usize> {
         let at = |plain: &SyncAbi<R>| match plain {
             SyncAbi::Arity0(_) => Some(0),
-            SyncAbi::Arity1(_) | SyncAbi::Slice(_) => Some(1),
+            SyncAbi::Arity1(_) => Some(1),
             SyncAbi::Arity2(_) => Some(2),
             SyncAbi::Arity3(_) => Some(3),
             SyncAbi::Window(_) => None,
@@ -179,7 +200,7 @@ where
             Self::Plain(abi) => at(abi),
             Self::Stateful { abi, .. } => match abi {
                 StateAbi::Arity0(_) => Some(0),
-                StateAbi::Arity1(_) | StateAbi::Slice(_) => Some(1),
+                StateAbi::Arity1(_) => Some(1),
                 StateAbi::Arity2(_) => Some(2),
                 StateAbi::Arity3(_) => Some(3),
                 StateAbi::Window(_) => None,
@@ -221,7 +242,6 @@ where
                     f(rt, a0, a1, a2)
                 }
                 SyncAbi::Window(f) => f(rt, args),
-                SyncAbi::Slice(f) => erase_elements(rt, f(rt, take(args, 0))),
             },
             Self::Stateful { state, abi } => {
                 let s: StateRef<'_> = state.as_ref();
@@ -240,22 +260,10 @@ where
                         f(s, rt, a0, a1, a2)
                     }
                     StateAbi::Window(f) => f(s, rt, args),
-                    StateAbi::Slice(f) => erase_elements(rt, f(s, rt, take(args, 0))),
                 }
             }
         }
     }
-}
-
-/// The run a slice-returning declaration produced, as a value: the form a
-/// caller takes when it wants a `Value` rather than the two registers.
-pub fn erase_elements<R>(rt: &R, elements: Elements<R>) -> R::Value
-where
-    R: Runtime,
-{
-    // SAFETY: `Slice::materialize` reads the box back as this same
-    // `Elements<R>`, which is the only crossing either slice type has.
-    unsafe { rt.erase::<Elements<R>>(elements) }
 }
 
 /// One handler per rung of `Task` (RFC-0046). `Sync` runs to its result
@@ -267,6 +275,11 @@ pub enum ExternHandler<R: Runtime> {
     Sync(SyncCall<R>),
     Heavy(SyncCall<R>),
     Async(AsyncCall<R>),
+    /// Obligation across artifacts: `acvus-interpreter`'s `ops::index`
+    /// stores this handler's two returned words to a register pair
+    /// (RFC-0047 amended). The rung is `Task::Sync` and no other — a lent
+    /// run cannot outlive the frame that lent it (RFC-0047 §3).
+    Slice(SliceAbi<R>),
 }
 
 impl<R: Runtime> Clone for ExternHandler<R> {
@@ -275,6 +288,7 @@ impl<R: Runtime> Clone for ExternHandler<R> {
             Self::Sync(f) => Self::Sync(f.clone()),
             Self::Heavy(f) => Self::Heavy(f.clone()),
             Self::Async(f) => Self::Async(f.clone()),
+            Self::Slice(f) => Self::Slice(f.clone()),
         }
     }
 }
@@ -284,7 +298,7 @@ impl<R: Runtime> ExternHandler<R> {
     /// A `Heavy` handler does not: it is offloaded and awaited.
     pub fn is_sync(&self) -> bool {
         match self {
-            Self::Sync(_) => true,
+            Self::Sync(_) | Self::Slice(_) => true,
             Self::Heavy(_) | Self::Async(_) => false,
         }
     }
@@ -293,7 +307,7 @@ impl<R: Runtime> ExternHandler<R> {
     /// named.
     pub fn task(&self) -> Task {
         match self {
-            Self::Sync(_) => Task::Sync,
+            Self::Sync(_) | Self::Slice(_) => Task::Sync,
             Self::Async(_) => Task::Async,
             Self::Heavy(_) => Task::Heavy,
         }

@@ -10,8 +10,8 @@ use std::sync::Arc;
 use acvus_extern::{
     Arr, AsyncCall, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, Elements,
     ExternFn, ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar,
-    Owned, PolyTy, Pure, Ref, Registry, Runtime, Slice, SyncAbi, SyncCall, Task, TyArg, TyVar,
-    TypeArg, TypeRegistry, TypesOnly, erase_elements, extern_fn, extern_registry, extern_signature,
+    Owned, PolyTy, Pure, Ref, Registry, Runtime, Slice, SliceAbi, SyncAbi, SyncCall, Task, TyArg,
+    TyVar, TypeArg, TypeRegistry, TypesOnly, Words, extern_fn, extern_registry, extern_signature,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -628,6 +628,7 @@ fn call_sync(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
         ExternHandler::Sync(f) => f.call_taking(&Tiny, &mut args),
         ExternHandler::Heavy(_) => panic!("expected a sync handler, found a heavy one"),
         ExternHandler::Async(_) => panic!("expected a sync handler, found an async one"),
+        ExternHandler::Slice(_) => panic!("expected a sync handler, found a slice one"),
     }
 }
 
@@ -657,12 +658,14 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
     );
 }
 
+/// The entry hands its run back as the two words the machine keeps a slice
+/// in, and those words name the container's own elements in place
+/// (RFC-0047 amended, rule 2).
 #[test]
-fn the_unboxed_and_the_boxed_entry_report_one_run() {
+fn a_slice_entry_hands_back_two_words_naming_the_container() {
     let (i, reg) = combined::<Tiny>();
-    let ExternHandler::Sync(SyncCall::Plain(SyncAbi::Slice(entry))) = handler(&reg, &i, "as_slice")
-    else {
-        panic!("a declaration returning a slice has the unboxed entry (RFC-0047 §6)")
+    let ExternHandler::Slice(SliceAbi::Plain(entry)) = handler(&reg, &i, "as_slice") else {
+        panic!("a declaration returning a slice has the slice entry (RFC-0047 amended)")
     };
     let storage = erased(vec![
         Owned::<Tiny>::from_value(erased(1i64)),
@@ -672,19 +675,22 @@ fn the_unboxed_and_the_boxed_entry_report_one_run() {
     // SAFETY: `storage` outlives every run taken from it here (RFC-0018).
     let container = || unsafe { Tiny.reference(&storage) };
 
-    let unboxed = entry(&Tiny, container());
-    let boxed = open::<Elements<Tiny>>(erase_elements(&Tiny, entry(&Tiny, container())));
-    assert_eq!(unboxed.len(), 3);
-    assert_eq!(boxed.len(), unboxed.len());
-    for at in 0..unboxed.len() {
-        // SAFETY: `at` is below the length both entries reported.
-        let (unboxed, boxed) = unsafe { (unboxed.at(at), boxed.at(at)) };
+    let run = entry(&Tiny, container());
+    let Words { ptr, len } = run.words();
+    assert_eq!(len, 3);
+    assert_ne!(ptr, 0);
+
+    // SAFETY: the words came from `run`, whose storage is live here.
+    let rebuilt = unsafe { Elements::<Tiny>::from_words(Words { ptr, len }) };
+    for at in 0..run.len() {
+        // SAFETY: `at` is below the length the entry reported.
+        let (lent, again) = unsafe { (run.at(at), rebuilt.at(at)) };
         assert!(
-            std::ptr::eq(unboxed, boxed),
+            std::ptr::eq(lent, again),
             "element {at} is one place in the container's own storage"
         );
         assert!(std::ptr::eq(
-            unboxed,
+            lent,
             &*open_ref::<Vec<Owned<Tiny>>>(&storage)[at]
         ));
     }
@@ -698,6 +704,7 @@ async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
         }
         ExternHandler::Sync(_) => panic!("expected an async handler, found a sync one"),
         ExternHandler::Heavy(_) => panic!("expected an async handler, found a heavy one"),
+        ExternHandler::Slice(_) => panic!("expected an async handler, found a slice one"),
     }
 }
 

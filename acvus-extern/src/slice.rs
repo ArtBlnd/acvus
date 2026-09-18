@@ -16,6 +16,13 @@ use acvus_utils::Interner;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
+/// A run as the machine holds it: one word per register of the pair.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Words {
+    pub ptr: u64,
+    pub len: u64,
+}
+
 /// A run of the runtime's values in a storage. Both fields are private and
 /// `of` takes a Rust slice, so a pointer and a length that did not come
 /// from one run cannot be named.
@@ -48,6 +55,29 @@ where
         Self {
             ptr: values.as_ptr(),
             len: values.len(),
+        }
+    }
+
+    /// Obligation across artifacts: `acvus-interpreter`'s `ops::index` keeps
+    /// a slice in the register pair these two words are (RFC-0047 amended).
+    ///
+    /// # Safety
+    /// `words.ptr` is the first of `words.len` live `Rt::Value`s of one run,
+    /// and that run outlives every `Elements` this makes — the loan the
+    /// slice holds is what keeps it so (RFC-0018).
+    #[inline(always)]
+    pub const unsafe fn from_words(words: Words) -> Self {
+        Self {
+            ptr: words.ptr as *const Rt::Value,
+            len: words.len as usize,
+        }
+    }
+
+    #[inline(always)]
+    pub fn words(&self) -> Words {
+        Words {
+            ptr: self.ptr as u64,
+            len: self.len as u64,
         }
     }
 
@@ -111,8 +141,10 @@ where
         Self(Elements::of(values), PhantomData)
     }
 
-    /// The run itself, which a fused operation keeps in two registers
-    /// instead of boxing (RFC-0047 §6).
+    pub fn from_elements(elements: Elements<Rt>) -> Self {
+        Self(elements, PhantomData)
+    }
+
     pub fn into_elements(self) -> Elements<Rt> {
         self.0
     }
@@ -126,6 +158,10 @@ where
     /// As `Slice::of`, for an exclusive take.
     pub fn of(values: &mut [Rt::Value]) -> Self {
         Self(Elements::of(values), PhantomData)
+    }
+
+    pub fn from_elements(elements: Elements<Rt>) -> Self {
+        Self(elements, PhantomData)
     }
 
     pub fn into_elements(self) -> Elements<Rt> {
@@ -155,32 +191,3 @@ macro_rules! slice_ty_arg {
 
 slice_ty_arg!(Slice, Mutability::Shared);
 slice_ty_arg!(SliceMut, Mutability::Mut);
-
-/// The crossing: one boxed `Elements` whatever `T` is (RFC-0047 §6), so
-/// the machine reads the box without naming `T` and `Value` is untouched.
-macro_rules! slice_cross {
-    ($t:ident) => {
-        impl<T, Rt> crate::Cross<Rt> for $t<T, Rt>
-        where
-            T: TyVar,
-            Rt: Runtime,
-        {
-            fn erase(self, rt: &Rt) -> Rt::Value {
-                // SAFETY: materialized back as this same `Elements<Rt>`.
-                unsafe { rt.erase::<Elements<Rt>>(self.0) }
-            }
-
-            unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-                // SAFETY: the caller's contract, and `erase` is
-                // `erase::<Elements<Rt>>`.
-                Self(
-                    unsafe { rt.materialize::<Elements<Rt>>(value) },
-                    PhantomData,
-                )
-            }
-        }
-    };
-}
-
-slice_cross!(Slice);
-slice_cross!(SliceMut);

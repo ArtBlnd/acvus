@@ -57,6 +57,14 @@ impl Off {
         self.0 as usize
     }
 
+    /// # Panics
+    /// The pair's second register is past `MAX_INDEX`, which is `Off::of`'s
+    /// bound and `assign_slots` must not place a pair across it.
+    #[inline(always)]
+    const fn next(self) -> Off {
+        Off::of(self.index() as Slot + 1)
+    }
+
     /// The register index, for the diagnostics and the listings that speak in
     /// `Slot`; no `run` calls it.
     #[inline(always)]
@@ -74,6 +82,26 @@ impl Off {
     #[inline(always)]
     pub const fn mark(self) -> u64 {
         1u64 << (self.0 / size_of::<Value>() as u16)
+    }
+}
+
+/// The two registers a slice occupies: `ptr` then `len`, adjacent
+/// (RFC-0047 amended, rule 1). Both are decided in `prepare`, so a `run`
+/// holds the second as a field and adds nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SlicePair {
+    pub ptr: Off,
+    pub len: Off,
+}
+
+impl SlicePair {
+    /// # Panics
+    /// As `Off::next`.
+    pub const fn at(ptr: Off) -> SlicePair {
+        SlicePair {
+            ptr,
+            len: ptr.next(),
+        }
     }
 }
 

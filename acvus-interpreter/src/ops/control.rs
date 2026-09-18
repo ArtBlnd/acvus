@@ -15,7 +15,7 @@
 use crate::code::OwnedOps;
 use std::marker::PhantomData;
 
-use crate::code::{BlockId, Exit, Off, Op, RETURN, successor};
+use crate::code::{BlockId, Exit, Off, Op, RETURN, SlicePair, successor};
 use crate::machine::Machine;
 use crate::ops::place::Place;
 use crate::value::Value;
@@ -57,6 +57,32 @@ impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
                 regs.define::<LARGE>(self.dst, value);
             }
         }
+        self.next.run(m, r0)
+    }
+}
+
+/// A slice's move: the two adjacent registers `prepare::assign_slots` gave
+/// it (RFC-0047 amended, rule 4).
+///
+/// Decided against the narrower two `set_word`s: `prepare::order_moves`
+/// routes a cycle through the scratch registers, whose kind bytes are
+/// unopened for the reason stated there.
+pub struct MovWide {
+    pub dst: SlicePair,
+    pub src: SlicePair,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for MovWide {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let ptr = regs.read(self.src.ptr);
+        let len = regs.read(self.src.len);
+        regs.define::<false>(self.dst.ptr, ptr);
+        regs.define::<false>(self.dst.len, len);
         self.next.run(m, r0)
     }
 }
@@ -299,6 +325,24 @@ impl Op for Undef<false> {
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().define::<false>(self.dst, Value::UNDEF);
+        self.next.run(m, r0)
+    }
+}
+
+/// The same for a slice's pair, whose two registers are word class.
+pub struct UndefWide {
+    pub dst: SlicePair,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for UndefWide {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        regs.set_word(self.dst.ptr, 0);
+        regs.set_word(self.dst.len, 0);
         self.next.run(m, r0)
     }
 }

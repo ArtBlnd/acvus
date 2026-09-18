@@ -43,7 +43,7 @@ fn slices_in_the_inner_loop_body() -> usize {
         .flat_map(|part| part.regions.iter())
         .filter(|region| region.name.starts_with("Loop"))
         .flat_map(|inner| inner.owns.iter())
-        .map(|part| part.ops.iter().filter(|name| *name == "CallSlice").count())
+        .map(|part| part.ops.iter().filter(|name| *name == "AsSlice").count())
         .sum()
 }
 

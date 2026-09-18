@@ -53,30 +53,19 @@ fn attention_loops() -> Vec<LoopShape> {
         .collect()
 }
 
-/// History. A region is an operation of the list it sits in (RFC-0052 §3),
-/// so each of the two outer bodies that hold a nested `while` counts the
-/// nested `Loop` among its own operations: 10 -> 11 and 6 -> 7 against the
-/// run that made a region a terminator. The heads and the back edges did not
-/// move.
+/// A region is an operation of the list it sits in (RFC-0052 §3), so each
+/// outer body that holds a nested `while` counts that `Loop` among its own
+/// operations.
 ///
-/// On `63b31a42`, before the borrows left the loops, the four
-/// loops were `head 2 body 11 back 0`, `head 1 body 8 back 1`,
-/// `head 1 body 12 back 0`, `head 1 body 8 back 1`. Hoisting the borrows,
-/// moving `s * scale` out of the inner head, and folding the arithmetic
-/// chain took the inner bodies to 4 and 5.
+/// The two middle bodies are the large ones because of the loop order, not
+/// the instruction: an `AsSlice` hoists out of a loop that does not define
+/// its container, and `@values[t]` is indexed by the *inner* variable, so
+/// its row is taken inside the inner loop. Each of those bodies holds one
+/// `AsSlice` and no drop — a slice is a register pair the frame never owns
+/// (RFC-0047 amended, rules 1 and 2).
 ///
-/// RFC-0047 then replaced `get` with `a[i]`. The scores pass reads
-/// `@keys[t]` once per row into a binding, so its outer body grew by the
-/// row's `Index` and `AsSlice` while its inner body kept 4. The out pass
-/// indexes `@values[t]` with `t` as the *inner* variable, so its row is
-/// taken inside the inner loop and that body grew from 5 to 9. That is the
-/// cost of the loop order, not of the instruction: an `AsSlice` hoists out
-/// of a loop that does not define its container, and here the container is
-/// defined by the loop itself.
-///
-/// `optimize::reborrow` then took both of those bodies down one: the row a
-/// pass takes is already a reference, so the borrow of the whole of what it
-/// names is that reference and no operation of its own. 11 -> 10 and 9 -> 8.
+/// The last loop's back edge carries one move: its body's `CallExtern2`
+/// writes the accumulator the head reads.
 #[test]
 fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     let shapes: Vec<String> = attention_loops()
@@ -92,8 +81,8 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
         shapes,
         [
             "head 1 body 4 back 0",
-            "head 1 body 10 back 0",
-            "head 1 body 8 back 0",
+            "head 1 body 9 back 0",
+            "head 1 body 7 back 0",
             "head 1 body 7 back 1",
         ],
         "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"

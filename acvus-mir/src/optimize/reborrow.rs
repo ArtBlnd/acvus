@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reborrow_of_a_slice_reference_stands() {
+    fn a_reborrow_of_a_slice_reference_folds() {
         let slice = || reference(Mutability::Shared, Ty::Slice(Box::new(Ty::I64)));
         let mut cfg = body(
             vec![
@@ -268,8 +268,8 @@ mod tests {
             vec![(v(1), slice()), (v(2), slice())],
         );
         run(&mut cfg);
-        assert_eq!(refs(&cfg), 1);
-        assert_eq!(returned(&cfg), v(2));
+        assert_eq!(refs(&cfg), 0);
+        assert_eq!(returned(&cfg), v(1));
     }
 
     #[test]

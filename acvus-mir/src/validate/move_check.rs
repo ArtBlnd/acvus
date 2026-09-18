@@ -43,10 +43,7 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
     match ty {
         Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => Some(false),
-        // A `&[T]` carries the boxed pointer and length its `AsSlice`
-        // allocated (RFC-0047 §6), so it owns that box and moves; every
-        // other reference is a word the runtime copies.
-        Ty::Ref(_, target) => Some(matches!(target.ty, Ty::Slice(_))),
+        Ty::Ref(..) => Some(false),
         Ty::Slice(_) => Some(true),
         Ty::Option(payload) => is_move_only(payload),
         Ty::String

@@ -12,12 +12,12 @@
 
 use std::sync::Arc;
 
-use acvus_extern::{AsyncCall, Elements, Owned, State, StateRef, erase_elements};
+use acvus_extern::{AsyncCall, Elements, Owned, State, StateRef, Words};
 use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
-use crate::code::{BlockId, Deref, Exit, Off, Op, SUSPEND, successor};
+use crate::code::{BlockId, Deref, Exit, Off, Op, SUSPEND, SlicePair, successor};
 use crate::interpreter::lookup_module;
 use crate::machine::{Machine, call_module, call_module_sync, fn_value_call};
 use crate::runtime::{AcvusRuntime, SyncCall};
@@ -190,18 +190,19 @@ impl<const LARGE: bool> Op for CallWindow<LARGE> {
     }
 }
 
-/// A slice return comes back in two registers and is boxed here (RFC-0047 §6).
-/// The boxed `Elements` is a `Large`, which is why this call carries no `LARGE`
-/// parameter.
-pub struct CallSlice {
-    pub dst: Off,
+/// `AsSlice` (RFC-0047 amended): the handler hands the run back in two
+/// words and this stores them to `dst`, the first register of the pair
+/// `prepare::assign_slots` gave the slice. A slice is no `Value`, so there
+/// is no `LARGE` here and no drop anywhere.
+pub struct AsSlice {
+    pub dst: SlicePair,
     pub a: Off,
     pub takes: u64,
     pub f: SyncSlice,
     pub next: Box<dyn Op>,
 }
 
-impl Op for CallSlice {
+impl Op for AsSlice {
     successor!();
 
     #[inline]
@@ -209,9 +210,10 @@ impl Op for CallSlice {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
-        let run = (self.f)(m.rt, a);
-        let value = erase_elements(m.rt, run);
-        m.regs().define::<true>(self.dst, value);
+        let Words { ptr, len } = (self.f)(m.rt, a).words();
+        let regs = m.regs();
+        regs.set_word(self.dst.ptr, ptr);
+        regs.set_word(self.dst.len, len);
         self.next.run(m, r0)
     }
 }
@@ -328,8 +330,10 @@ impl<const LARGE: bool> Op for CallStateWindow<LARGE> {
     }
 }
 
-pub struct CallStateSlice {
-    pub dst: Off,
+/// `AsSlice` of a stateful instance: as `AsSlice`, with the state the
+/// registry supplied held as a field.
+pub struct AsSliceStateful {
+    pub dst: SlicePair,
     pub a: Off,
     pub takes: u64,
     pub state: State,
@@ -337,7 +341,7 @@ pub struct CallStateSlice {
     pub next: Box<dyn Op>,
 }
 
-impl Op for CallStateSlice {
+impl Op for AsSliceStateful {
     successor!();
 
     #[inline]
@@ -345,9 +349,10 @@ impl Op for CallStateSlice {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
-        let run = (self.f)(&*self.state, m.rt, a);
-        let value = erase_elements(m.rt, run);
-        m.regs().define::<true>(self.dst, value);
+        let Words { ptr, len } = (self.f)(&*self.state, m.rt, a).words();
+        let regs = m.regs();
+        regs.set_word(self.dst.ptr, ptr);
+        regs.set_word(self.dst.len, len);
         self.next.run(m, r0)
     }
 }
@@ -357,12 +362,13 @@ impl Op for CallStateSlice {
 pub const PREVIOUS: Off = Off::PREVIOUS;
 
 /// One call of a fused run, at the shapes `prepare::FusableCall` admits:
-/// three or fewer arguments including the held value, and a slice return.
+/// three or fewer arguments including the held value. A slice-returning
+/// handler is not among them — its result is a register pair, and a run
+/// hands one `Value` from each call to the next.
 pub enum Call {
     Nullary { f: Sync0 },
     Unary { f: Sync1, a: Off },
     Binary { f: Sync2, a: Off, b: Off },
-    Slice { f: SyncSlice, a: Off },
 }
 
 impl Call {
@@ -379,10 +385,6 @@ impl Call {
                 let a = arg(m, held, a);
                 let b = arg(m, held, b);
                 f(rt, a, b)
-            }
-            Call::Slice { f, a } => {
-                let a = arg(m, held, a);
-                erase_elements(rt, f(rt, a))
             }
         }
     }

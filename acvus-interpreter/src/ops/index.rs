@@ -1,15 +1,17 @@
-//! Indexing a slice (RFC-0047): the one element access the machine does
-//! without knowing a container.
+//! Indexing a slice (RFC-0047 amended): the one element access the machine
+//! does without knowing a container.
 //!
-//! The slice register holds the `Large` an `AsSlice` boxed: a pointer into
-//! the container's `Vec<Value>` and a length. Reading element `i` is one
-//! dependent load and one compare — no call, no layout.
+//! A slice is a register pair — `ptr` then `len`, adjacent by
+//! `prepare::assign_slots` — so reading element `i` is two register loads,
+//! one compare and one dependent load. Nothing is boxed and nothing is
+//! freed: a slice owns nothing (RFC-0048).
 
-use acvus_extern::{Elements, Release};
+use acvus_extern::{Elements, Release, Words};
 use acvus_mir::ir::IndexMode;
 
-use crate::code::{Exit, Off, Op, successor};
+use crate::code::{Exit, Off, Op, SlicePair, successor};
 use crate::machine::Machine;
+use crate::regs::Regs;
 use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 
@@ -19,7 +21,7 @@ type Run = Elements<AcvusRuntime>;
 #[derive(Clone, Copy)]
 pub struct Read {
     pub dst: Off,
-    pub slice: Off,
+    pub slice: SlicePair,
     pub index: Off,
 }
 
@@ -28,20 +30,19 @@ fn out_of_bounds(len: usize, index: u64) -> String {
     format!("index out of bounds: the len is {len} but the index is {index}")
 }
 
-/// The run a slice value names.
+/// The run the pair at `slice` holds.
 ///
-/// The vtable check is a `debug_assert!`, as `Value::is_array`'s is: the
-/// MIR type checker gives this operand `Ref(_, Slice(T))`, and an
-/// `AsSlice`'s boxed `Elements` is the only value of that type.
-#[inline]
-fn run(slice: &Value) -> &Run {
-    debug_assert_eq!(
-        slice.vtable().type_id,
-        std::any::TypeId::of::<Run>(),
-        "index: {slice:?} is not a slice"
-    );
-    // SAFETY: the value was erased from an `Elements` by `Slice::erase`.
-    unsafe { slice.peek::<Run>() }
+/// # Safety
+/// The container the slice borrows is live and unmoved, which the loan the
+/// slice holds keeps true for as long as the pair is live (RFC-0018).
+#[inline(always)]
+unsafe fn run(regs: &Regs<'_>, slice: SlicePair) -> Run {
+    let words = Words {
+        ptr: regs.word(slice.ptr),
+        len: regs.word(slice.len),
+    };
+    // SAFETY: the caller's contract, and `AsSlice` is what wrote the pair.
+    unsafe { Run::from_words(words) }
 }
 
 /// The element position `index` names, checked against `run` where the
@@ -56,16 +57,19 @@ fn position<const CHECKED: bool>(run: &Run, index: u64) -> usize {
     index as usize
 }
 
-/// Element `index` of the run `slice` names.
+/// Element `index` of the run the pair at `slice` holds.
 ///
 /// # Safety
-/// The container the slice borrows is live and unmoved, which the loan the
-/// slice holds keeps true for as long as the slice value exists
-/// (RFC-0018).
+/// As `run`.
 #[inline]
-unsafe fn element<'a, const CHECKED: bool>(slice: &Value, index: u64) -> &'a Value {
-    let run = run(slice);
-    let at = position::<CHECKED>(run, index);
+unsafe fn element<'a, const CHECKED: bool>(
+    regs: &Regs<'_>,
+    slice: SlicePair,
+    index: u64,
+) -> &'a Value {
+    // SAFETY: the caller's contract.
+    let run = unsafe { run(regs, slice) };
+    let at = position::<CHECKED>(&run, index);
     // SAFETY: the caller's contract, and `position` put `at` within the run.
     unsafe { run.at(at) }
 }
@@ -88,7 +92,7 @@ impl<const CHECKED: bool> Op for IndexCopy<CHECKED> {
         let regs = m.regs();
         let index = regs.word(self.read.index);
         // SAFETY: the slice holds its container's loan.
-        let value = *unsafe { element::<CHECKED>(regs.peek(self.read.slice), index) };
+        let value = *unsafe { element::<CHECKED>(regs, self.read.slice, index) };
         debug_assert_ne!(
             value.kind(),
             Kind::Large,
@@ -117,7 +121,7 @@ impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
         let regs = m.regs();
         let index = regs.word(self.read.index);
         // SAFETY: as `IndexCopy`.
-        let target = unsafe { element::<CHECKED>(regs.peek(self.read.slice), index) };
+        let target = unsafe { element::<CHECKED>(regs, self.read.slice, index) };
         regs.define::<false>(self.read.dst, Value::reference(target));
         self.next.run(m, r0)
     }
@@ -126,7 +130,7 @@ impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
 /// An element assignment releases what it overwrites (RFC-0045), which is
 /// `LARGE`: what the preparation read from the element type.
 pub struct IndexSet<const CHECKED: bool, const LARGE: bool> {
-    pub slice: Off,
+    pub slice: SlicePair,
     pub index: Off,
     pub value: Off,
     pub next: Box<dyn Op>,
@@ -139,8 +143,9 @@ impl<const CHECKED: bool, const LARGE: bool> Op for IndexSet<CHECKED, LARGE> {
         let regs = m.regs();
         let index = regs.word(self.index);
         let value = regs.take::<LARGE>(self.value);
-        let slice = run(regs.peek(self.slice));
-        let at = position::<CHECKED>(slice, index);
+        // SAFETY: the slice holds its container's loan.
+        let slice = unsafe { run(regs, self.slice) };
+        let at = position::<CHECKED>(&slice, index);
         // SAFETY: the operand is a `&mut [T]`, so its run is named once
         // here, and `position` put `at` within it.
         let slot = unsafe { slice.at_mut(at) };

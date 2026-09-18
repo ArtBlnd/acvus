@@ -15,11 +15,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::AsyncCall;
+use acvus_extern::{AsyncCall, SliceAbi};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, ExternInstance, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
+    Callee, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
 use acvus_mir::ty::{IntTy, NumTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -28,8 +28,8 @@ use smallvec::SmallVec;
 
 use crate::code::{
     Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
-    ExprBody, ExprChain, FieldSlot, Konst, Node, Off, Op, Prepared, Root, Shape, Slot, SlotKind,
-    Step, Where, chain, made, node,
+    ExprBody, ExprChain, FieldSlot, Konst, Node, Off, Op, Prepared, Root, Shape, SlicePair, Slot,
+    SlotKind, Step, Where, chain, made, node,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Binary, Unary, for_int_ty};
@@ -213,7 +213,9 @@ struct Prepare<'a> {
     labels: FxHashMap<Label, u32>,
     slots: Slots,
     scratch: u32,
-    scratch_used: bool,
+    /// The registers `order_moves` broke a cycle through: none, one, or the
+    /// two of a slice's pair.
+    scratch_used: u32,
     may_suspend: bool,
     /// The block array being emitted. A region owns its blocks, so the
     /// array a jump's target names is the innermost one being built, and
@@ -557,7 +559,7 @@ impl<'a> Prepare<'a> {
             labels,
             scratch: slots.frame,
             slots,
-            scratch_used: false,
+            scratch_used: 0,
             may_suspend: false,
             level: Level::default(),
             def_inst,
@@ -581,6 +583,12 @@ impl<'a> Prepare<'a> {
         Off::of(self.slot(id))
     }
 
+    /// The two registers a slice-typed value occupies, both fixed here so no
+    /// `run` computes the second (RFC-0047 amended, rule 1).
+    fn pair(&self, id: ValueId) -> SlicePair {
+        SlicePair::at(self.off(id))
+    }
+
     /// The register `order_moves` breaks a cycle through.
     fn scratch_slot(&self) -> Slot {
         Slot::try_from(self.scratch).unwrap_or_else(|_| {
@@ -592,7 +600,7 @@ impl<'a> Prepare<'a> {
     }
 
     fn frame_len(&self) -> u16 {
-        let len = self.scratch + u32::from(self.scratch_used);
+        let len = self.scratch + self.scratch_used;
         u16::try_from(len)
             .unwrap_or_else(|_| panic!("a body of {len} registers is past a frame's reach"))
     }
@@ -687,16 +695,23 @@ impl<'a> Prepare<'a> {
             }
         };
         for (id, ty) in &self.body.val_types {
-            let Some(kind) = word_kind(ty) else {
-                continue;
-            };
+            let class = SlotClass::of(ty);
             let raw = self.slots.raw(*id);
             if raw == NO_SLOT {
                 continue;
             }
-            let slot = Slot::try_from(raw)
+            let base = Slot::try_from(raw)
                 .unwrap_or_else(|_| panic!("value {id:?} is in register {raw}, past a frame"));
-            open(slot, kind);
+            let SlotClaim::Word(kind) = class.claim() else {
+                continue;
+            };
+            for k in 0..class.width() {
+                let at = u16::try_from(k).expect("a register class is two wide at most");
+                let slot = base.checked_add(at).unwrap_or_else(|| {
+                    panic!("value {id:?} is a pair at register {base}, which leaves a frame")
+                });
+                open(slot, kind);
+            }
         }
         for (raw, value) in &self.konsts.value_at {
             let slot = Slot::try_from(*raw).unwrap_or_else(|_| {
@@ -785,7 +800,7 @@ impl<'a> Prepare<'a> {
             })
             .collect();
         let ordered = order_moves(pairs, self.scratch_slot());
-        self.scratch_used |= ordered.scratch_used;
+        self.scratch_used = self.scratch_used.max(ordered.scratch_used);
         ordered.moves.iter().map(mov_op).collect()
     }
 
@@ -1811,6 +1826,10 @@ impl<'a> Prepare<'a> {
                                 f,
                                 next,
                             }),
+                            ExternHandler::Slice(_) => panic!(
+                                "a spawn names a handler that returns a run, which would \
+                                 outlive the frame that lent it (RFC-0047 §3)"
+                            ),
                         }
                     }
                     Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
@@ -1905,29 +1924,40 @@ impl<'a> Prepare<'a> {
                 }
             }
 
-            // An `AsSlice` is the one call of the instance the checker
-            // settled on, prepared exactly as the extern call of that
-            // handler would be, so a fused run sees it as a call
-            // (RFC-0044, RFC-0047 §3).
+            // The handler hands back two words, which go to the two
+            // registers the slice's pair is (RFC-0047 amended, rule 2).
             InstKind::AsSlice {
                 dst,
                 container,
                 instance,
                 ..
             } => {
-                let handler = self.ctx.handler(&instance.id, instance.instance);
-                let into = self.dest(*dst);
+                let dst = self.pair(*dst);
                 let args = std::slice::from_ref(container);
-                match handler {
-                    ExternHandler::Sync(SyncCall::Plain(abi)) => {
-                        self.plain_call(at, into, args, abi, ops)
+                let takes = self.take_mask(args);
+                let a = self.off(*container);
+                match self.ctx.handler(&instance.id, instance.instance) {
+                    ExternHandler::Slice(SliceAbi::Plain(f)) => node(move |next| call::AsSlice {
+                        dst,
+                        a,
+                        takes,
+                        f,
+                        next,
+                    }),
+                    ExternHandler::Slice(SliceAbi::Stateful { state, f }) => {
+                        node(move |next| call::AsSliceStateful {
+                            dst,
+                            a,
+                            takes,
+                            state,
+                            f,
+                            next,
+                        })
                     }
-                    ExternHandler::Sync(SyncCall::Stateful { state, abi }) => {
-                        self.state_call(at, into, args, state, abi, ops)
-                    }
-                    ExternHandler::Heavy(_) | ExternHandler::Async(_) => panic!(
-                        "an AsSlice names a handler that is not synchronous, so lending a \
-                         container's run would outlive the borrow it stands on (RFC-0047 §3)"
+                    other => panic!(
+                        "an AsSlice names a handler of task {:?}, which returns a value and \
+                         not a run (RFC-0047 amended, rule 2)",
+                        other.task()
                     ),
                 }
             }
@@ -1940,7 +1970,7 @@ impl<'a> Prepare<'a> {
                 let mode = *mode;
                 let read = index::Read {
                     dst: self.off(*dst),
-                    slice: self.off(*slice),
+                    slice: self.pair(*slice),
                     index: self.off(*index),
                 };
                 made(move |next| index::checked(mode, read, next))
@@ -1951,7 +1981,7 @@ impl<'a> Prepare<'a> {
                 value,
             } => {
                 let large = self.owns(*value);
-                let (slice, index, held) = (self.off(*slice), self.off(*index), self.off(*value));
+                let (slice, index, held) = (self.pair(*slice), self.off(*index), self.off(*value));
                 match large {
                     true => node(move |next| index::IndexSet::<true, true> {
                         slice,
@@ -2050,9 +2080,17 @@ impl<'a> Prepare<'a> {
 
             InstKind::Undef { dst } => {
                 let slot = self.off(*dst);
-                match word_kind(self.ty(*dst)).is_some() {
-                    true => node(move |next| control::Undef::<true> { dst: slot, next }),
-                    false => node(move |next| control::Undef::<false> { dst: slot, next }),
+                match SlotClass::of(self.ty(*dst)) {
+                    SlotClass::Slice => {
+                        let dst = SlicePair::at(slot);
+                        node(move |next| control::UndefWide { dst, next })
+                    }
+                    SlotClass::Word(_) => {
+                        node(move |next| control::Undef::<true> { dst: slot, next })
+                    }
+                    SlotClass::Whole => {
+                        node(move |next| control::Undef::<false> { dst: slot, next })
+                    }
                 }
             }
             InstKind::Drop { src } => {
@@ -2149,6 +2187,10 @@ impl<'a> Prepare<'a> {
                         ops.push(op);
                         None
                     }
+                    ExternHandler::Slice(_) => panic!(
+                        "a function call names a handler that returns a run, which reaches \
+                         the machine as an AsSlice and nothing else (RFC-0047 amended, rule 2)"
+                    ),
                     ExternHandler::Heavy(f) => {
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -2300,13 +2342,6 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            SyncAbi::Slice(f) => node(move |next| call::CallSlice {
-                dst,
-                a: nth(&slots, 0),
-                takes,
-                f,
-                next,
-            }),
             SyncAbi::Window(f) => {
                 let window = self.window(at, args, ops);
                 match large {
@@ -2427,14 +2462,6 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            StateAbi::Slice(f) => node(move |next| call::CallStateSlice {
-                dst,
-                a: nth(&slots, 0),
-                takes,
-                state,
-                f,
-                next,
-            }),
             StateAbi::Window(f) => {
                 let window = self.window(at, args, ops);
                 match large {
@@ -2481,15 +2508,18 @@ impl<'a> Prepare<'a> {
                         from: self.slot(arg),
                         to: into,
                     },
-                    moved: match self.owns(arg) {
-                        true => Moved::Large,
-                        false => Moved::Whole,
+                    moved: match SlotClass::of(self.ty(arg)) {
+                        SlotClass::Slice => Moved::Pair,
+                        SlotClass::Whole | SlotClass::Word(_) => match self.owns(arg) {
+                            true => Moved::Large,
+                            false => Moved::Whole,
+                        },
                     },
                 }
             })
             .collect();
         let ordered = order_moves(pairs, self.scratch_slot());
-        self.scratch_used |= ordered.scratch_used;
+        self.scratch_used = self.scratch_used.max(ordered.scratch_used);
 
         ops.extend(ordered.moves.iter().map(mov_op));
         call::ArgWindow {
@@ -2503,19 +2533,21 @@ impl<'a> Prepare<'a> {
     /// own registers, because the moves above put every argument there.
     fn window_take_mask(&self, base: Slot, args: &[ValueId]) -> u64 {
         let mut mask = 0u64;
-        for (k, id) in args.iter().enumerate() {
-            if !self.owns(*id) {
-                continue;
+        let mut slot = base;
+        for id in args {
+            let width = u16::try_from(SlotClass::of(self.ty(*id)).width())
+                .expect("a register class is two wide at most");
+            if self.owns(*id) {
+                assert!(
+                    slot < crate::regs::MAX_FRAME_SLOTS,
+                    "an argument run reaches register {slot}, which one frame's marks do not \
+                     reach"
+                );
+                mask |= 1u64 << slot;
             }
-            let at = u16::try_from(k).expect("a call's arity fits a register index");
-            let slot = base
-                .checked_add(at)
+            slot = slot
+                .checked_add(width)
                 .unwrap_or_else(|| panic!("an argument run at register {base} leaves a frame"));
-            assert!(
-                slot < crate::regs::MAX_FRAME_SLOTS,
-                "an argument run reaches register {slot}, which one frame's marks do not reach"
-            );
-            mask |= 1u64 << slot;
         }
         mask
     }
@@ -2525,12 +2557,13 @@ impl<'a> Prepare<'a> {
     /// by, so a `Moved::Word` move writes the width every other write of
     /// those registers takes.
     fn moved(&self, arg: ValueId) -> Moved {
-        if word_kind(self.ty(arg)).is_some() {
-            return Moved::Word;
-        }
-        match self.owns(arg) {
-            true => Moved::Large,
-            false => Moved::Whole,
+        match SlotClass::of(self.ty(arg)) {
+            SlotClass::Slice => Moved::Pair,
+            SlotClass::Word(_) => Moved::Word,
+            SlotClass::Whole => match self.owns(arg) {
+                true => Moved::Large,
+                false => Moved::Whole,
+            },
         }
     }
 
@@ -2711,10 +2744,23 @@ struct Pair {
 enum Moved {
     /// Both registers were opened with a kind, so the move writes the word.
     Word,
+    /// Two adjacent word registers: a slice's `ptr` and `len` (RFC-0047
+    /// amended, rule 4).
+    Pair,
     /// The move changes the owner of a `Large`, and the mark word with it.
     Large,
     /// Neither: one whole copy, no mark.
     Whole,
+}
+
+impl Moved {
+    /// The registers this move touches at each end.
+    const fn width(self) -> u32 {
+        match self {
+            Moved::Pair => 2,
+            Moved::Word | Moved::Large | Moved::Whole => 1,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2730,15 +2776,20 @@ fn mov_op(carried: &Carried) -> Node {
     let src = Off::of(carried.at.from);
     match carried.moved {
         Moved::Word => node(move |next| control::Mov::<false, true> { dst, src, next }),
+        Moved::Pair => {
+            let (dst, src) = (SlicePair::at(dst), SlicePair::at(src));
+            node(move |next| control::MovWide { dst, src, next })
+        }
         Moved::Large => node(move |next| control::Mov::<true, false> { dst, src, next }),
         Moved::Whole => node(move |next| control::Mov::<false, false> { dst, src, next }),
     }
 }
 
-/// A jump's moves, ordered, and whether the scratch slot carried a cycle.
+/// A jump's moves, ordered, and how many scratch registers a cycle through
+/// them took.
 struct MoveOrdering {
     moves: Vec<Carried>,
-    scratch_used: bool,
+    scratch_used: u32,
 }
 
 /// Order a parallel move: every source is read before it is overwritten,
@@ -2746,7 +2797,7 @@ struct MoveOrdering {
 fn order_moves(pairs: Vec<Carried>, scratch: Slot) -> MoveOrdering {
     let mut pending: Vec<Carried> = pairs.into_iter().filter(|m| m.at.from != m.at.to).collect();
     let mut moves: Vec<Carried> = Vec::with_capacity(pending.len());
-    let mut scratch_used = false;
+    let mut scratch_used = 0u32;
     let mut scratch_holds = false;
 
     while !pending.is_empty() {
@@ -2778,6 +2829,7 @@ fn order_moves(pairs: Vec<Carried>, scratch: Slot) -> MoveOrdering {
             // through it are written and read whole.
             let through = match pending[0].moved {
                 Moved::Large => Moved::Large,
+                Moved::Pair => Moved::Pair,
                 Moved::Word | Moved::Whole => Moved::Whole,
             };
             moves.push(Carried {
@@ -2791,7 +2843,7 @@ fn order_moves(pairs: Vec<Carried>, scratch: Slot) -> MoveOrdering {
                 m.at.from = scratch;
                 m.moved = through;
             }
-            scratch_used = true;
+            scratch_used = scratch_used.max(through.width());
             scratch_holds = true;
         }
     }
@@ -3219,6 +3271,7 @@ fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]
 fn needs_window(handler: &ExternHandler) -> bool {
     match handler {
         ExternHandler::Sync(f) => f.arity().is_none(),
+        ExternHandler::Slice(_) => false,
         ExternHandler::Heavy(_) | ExternHandler::Async(_) => true,
     }
 }
@@ -3261,7 +3314,7 @@ struct WindowPlan {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Claim {
     Free,
-    Held(Option<Kind>),
+    Held(SlotClaim),
 }
 
 /// Which ranges of instructions each frame slot is already spoken for, and
@@ -3289,7 +3342,7 @@ impl Occupancy {
         self.taken.len()
     }
 
-    fn free(&self, slot: usize, range: LiveRange, want: Option<Kind>) -> bool {
+    fn free(&self, slot: usize, range: LiveRange, want: SlotClaim) -> bool {
         let clear = match self.taken.get(slot) {
             Some(taken) => !taken.iter().any(|held| held.overlaps(range)),
             None => true,
@@ -3301,7 +3354,7 @@ impl Occupancy {
         clear && fits
     }
 
-    fn take(&mut self, slot: usize, range: LiveRange, want: Option<Kind>) {
+    fn take(&mut self, slot: usize, range: LiveRange, want: SlotClaim) {
         if self.taken.len() <= slot {
             self.taken.resize_with(slot + 1, Vec::new);
             self.claimed.resize(slot + 1, Claim::Free);
@@ -3310,25 +3363,47 @@ impl Occupancy {
         self.claimed[slot] = Claim::Held(want);
     }
 
-    fn lowest_free(&self, range: LiveRange, want: Option<Kind>) -> usize {
+    /// Whether every register of a `class` placed at `base` is free over
+    /// `range` and claimed for what that register will hold.
+    fn fits(&self, base: usize, range: LiveRange, class: SlotClass) -> bool {
+        (0..class.width()).all(|k| self.free(base + k, range, class.claim()))
+    }
+
+    fn hold(&mut self, base: usize, range: LiveRange, class: SlotClass) {
+        for k in 0..class.width() {
+            self.take(base + k, range, class.claim());
+        }
+    }
+
+    fn lowest_free(&self, range: LiveRange, class: SlotClass) -> usize {
         (0..self.len())
-            .find(|slot| self.free(*slot, range, want))
+            .find(|base| self.fits(*base, range, class))
             .unwrap_or(self.len())
     }
 
-    /// The lowest base whose positions are each free over the range that
-    /// position will hold and for the kind it will carry.
-    fn lowest_free_run(&self, places: &[ArgPlace], call: usize, wants: &[Option<Kind>]) -> usize {
+    /// The lowest base whose registers each hold what the argument at that
+    /// position will hold, for as long as it holds it. A slice argument
+    /// takes two of them, so a position is not an index.
+    fn lowest_free_run(&self, window: &[WindowSlot], call: usize) -> usize {
         let fits = |base: usize| {
-            places
-                .iter()
-                .enumerate()
-                .all(|(k, place)| self.free(base + k, place.occupies(call), wants[k]))
+            let mut at = base;
+            window.iter().all(|slot| {
+                let held = self.fits(at, slot.place.occupies(call), slot.class);
+                at += slot.class.width();
+                held
+            })
         };
         (0..self.len())
             .find(|base| fits(*base))
             .unwrap_or(self.len())
     }
+}
+
+/// One argument position of a window: where the value sits until the call,
+/// and how many registers it takes there.
+struct WindowSlot {
+    place: ArgPlace,
+    class: SlotClass,
 }
 
 struct ClassRange {
@@ -3340,6 +3415,7 @@ struct ClassRange {
 /// argument window is (RFC-0044, stage 2b).
 pub struct Slots {
     of: Box<[u32]>,
+    class_of: Box<[SlotClass]>,
     frame: u32,
     windows: FxHashMap<usize, WindowPlan>,
 }
@@ -3358,6 +3434,12 @@ impl Slots {
     /// `slot_kinds` walks, where `of` is what an operation asks.
     fn raw(&self, id: ValueId) -> u32 {
         self.of[id.to_raw()]
+    }
+
+    /// The registers value `id` occupies: one, or the two of a slice pair.
+    fn run_of(&self, id: usize) -> std::ops::Range<u32> {
+        let base = self.of[id];
+        base..base + self.class_of[id].width() as u32
     }
 
     fn window(&self, call: usize) -> &WindowPlan {
@@ -3436,12 +3518,13 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         }
     }
 
-    let kinds: Vec<Option<Kind>> = (0..values)
-        .map(|value| {
-            body.val_types
-                .get(&ValueId::from_raw(value))
-                .and_then(word_kind)
-        })
+    let classes_of: Vec<SlotClass> = (0..values)
+        .map(
+            |value| match body.val_types.get(&ValueId::from_raw(value)) {
+                Some(ty) => SlotClass::of(ty),
+                None => SlotClass::Whole,
+            },
+        )
         .collect();
 
     let mut classes = Classes::new(values);
@@ -3454,7 +3537,7 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         if pinned[arg] || pinned[param] || ranges[arg].is_none() || ranges[param].is_none() {
             continue;
         }
-        if kinds[arg] != kinds[param] {
+        if classes_of[arg] != classes_of[param] {
             continue;
         }
         let (a, b) = (classes.find(arg), classes.find(param));
@@ -3475,17 +3558,16 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         });
     }
 
-    let mut class_kind: Vec<Option<Kind>> = vec![None; values];
+    let mut class_class: Vec<Option<SlotClass>> = vec![None; values];
     for value in 0..values {
         if ranges[value].is_none() {
             continue;
         }
         let root = classes.find(value);
-        match class_kind[root] {
-            None => class_kind[root] = kinds[value],
+        match class_class[root] {
+            None => class_class[root] = Some(classes_of[value]),
             Some(held) => assert_eq!(
-                Some(held),
-                kinds[value],
+                held, classes_of[value],
                 "value {value} joined a register class opened as {held:?}"
             ),
         }
@@ -3500,40 +3582,45 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
             continue;
         };
         let mut allocated: Vec<usize> = Vec::new();
-        let places: Vec<ArgPlace> = args
+        let window: Vec<WindowSlot> = args
             .iter()
             .map(|arg| {
                 let class = classes.find(arg.to_raw());
                 let dies_here = class_ranges[class].is_some_and(|range| range.hi == at);
                 let free = slot_of[class].is_none() && !allocated.contains(&class);
-                match class_ranges[class] {
+                let place = match class_ranges[class] {
                     Some(range) if dies_here && free => {
                         allocated.push(class);
                         ArgPlace::Allocated { class, range }
                     }
                     _ => ArgPlace::Moved,
+                };
+                WindowSlot {
+                    place,
+                    class: classes_of[arg.to_raw()],
                 }
             })
             .collect();
-        let wants: Vec<Option<Kind>> = args.iter().map(|arg| kinds[arg.to_raw()]).collect();
-        let base = occupancy.lowest_free_run(&places, at, &wants);
+        let base = occupancy.lowest_free_run(&window, at);
 
         let mut moved = Vec::new();
-        for (k, (place, arg)) in places.iter().zip(args).enumerate() {
-            occupancy.take(base + k, place.occupies(at), wants[k]);
-            match place {
-                ArgPlace::Allocated { class, .. } => slot_of[*class] = Some((base + k) as u32),
+        let mut slot = base;
+        for (held, arg) in window.iter().zip(args) {
+            occupancy.hold(slot, held.place.occupies(at), held.class);
+            match held.place {
+                ArgPlace::Allocated { class, .. } => slot_of[class] = Some(slot as u32),
                 ArgPlace::Moved => moved.push(PendingMove {
                     arg: *arg,
-                    to: (base + k) as u32,
+                    to: slot as u32,
                 }),
             }
+            slot += held.class.width();
         }
         plans.push((
             at,
             WindowPlan {
                 base: base as u32,
-                arity: args.len() as u32,
+                arity: (slot - base) as u32,
                 moved,
             },
         ));
@@ -3545,9 +3632,9 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         .collect();
     rest.sort_by_key(|entry| (entry.range.lo, entry.range.hi, entry.class));
     for ClassRange { class, range } in rest {
-        let want = class_kind[class];
+        let want = class_class[class].unwrap_or(SlotClass::Whole);
         let slot = occupancy.lowest_free(range, want);
-        occupancy.take(slot, range, want);
+        occupancy.hold(slot, range, want);
         slot_of[class] = Some(slot as u32);
     }
 
@@ -3560,10 +3647,9 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
             of[value] = slot;
         }
     }
-    let frame = of
-        .iter()
-        .filter(|slot| **slot != NO_SLOT)
-        .map(|slot| slot + 1)
+    let frame = (0..values)
+        .filter(|value| of[*value] != NO_SLOT)
+        .map(|value| of[value] + classes_of[value].width() as u32)
         .max()
         .unwrap_or(0);
 
@@ -3571,6 +3657,7 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
 
     let slots = Slots {
         of: of.into_boxed_slice(),
+        class_of: classes_of.into_boxed_slice(),
         frame,
         windows,
     };
@@ -3587,15 +3674,16 @@ fn check_assignment(edges: &Edges<'_>, ctx: &PrepareCtx<'_>, live: &Live, slots:
     let mut distinct = |set: &ValueSet, at: usize, which: &str| {
         seen.clear();
         for value in set.iter() {
-            let slot = slots.of[value];
-            if slot == NO_SLOT {
+            if slots.of[value] == NO_SLOT {
                 continue;
             }
-            if let Some(other) = seen.insert(slot, value) {
-                panic!(
-                    "slot {slot} holds values {value} and {other}, both live {which} \
-                     instruction {at}"
-                );
+            for slot in slots.run_of(value) {
+                if let Some(other) = seen.insert(slot, value) {
+                    panic!(
+                        "slot {slot} holds values {value} and {other}, both live {which} \
+                         instruction {at}"
+                    );
+                }
             }
         }
     };
@@ -3610,16 +3698,19 @@ fn check_assignment(edges: &Edges<'_>, ctx: &PrepareCtx<'_>, live: &Live, slots:
         };
         let run = window.base..window.base + window.arity;
         let args: Vec<usize> = args.iter().map(|arg| arg.to_raw()).collect();
+        let overlaps = |value: usize| {
+            slots.of[value] != NO_SLOT && slots.run_of(value).any(|slot| run.contains(&slot))
+        };
         for value in live.live_in[at].iter() {
             assert!(
-                !run.contains(&slots.of[value]) || args.contains(&value),
+                !overlaps(value) || args.contains(&value),
                 "value {value} is live into instruction {at} in a slot that call's \
                  argument window overwrites"
             );
         }
         for value in live.live_out[at].iter() {
             assert!(
-                !run.contains(&slots.of[value]),
+                !overlaps(value),
                 "value {value} is live out of instruction {at} in a slot that call's \
                  handler emptied"
             );
@@ -4222,7 +4313,7 @@ mod assignment_tests {
         let (a, b) = (fits(slots.of(val(2))), fits(slots.of(val(3))));
         assert_ne!(a, b, "a swap's two parameters cannot share one slot");
         let pairs = carried(&[(b, a), (a, b)]);
-        assert!(order_moves(pairs, fits(slots.frame)).scratch_used);
+        assert_eq!(order_moves(pairs, fits(slots.frame)).scratch_used, 1);
     }
 
     #[test]
@@ -4278,14 +4369,14 @@ mod move_ordering_tests {
     fn a_source_is_read_before_it_is_overwritten() {
         let ordering = order_moves(carried(&[(0, 1), (1, 2)]), 9);
         assert_eq!(emitted(&ordering), vec![(1, 2), (0, 1)]);
-        assert!(!ordering.scratch_used);
+        assert_eq!(ordering.scratch_used, 0);
     }
 
     #[test]
     fn a_cycle_goes_through_the_scratch_slot() {
         let ordering = order_moves(carried(&[(0, 1), (1, 0)]), 9);
         assert_eq!(emitted(&ordering), vec![(0, 9), (1, 0), (9, 1)]);
-        assert!(ordering.scratch_used);
+        assert_eq!(ordering.scratch_used, 1);
     }
 
     #[test]
@@ -4297,7 +4388,7 @@ mod move_ordering_tests {
     #[test]
     fn two_cycles_reuse_the_one_scratch_slot() {
         let ordering = order_moves(carried(&[(0, 1), (1, 0), (2, 3), (3, 2)]), 9);
-        assert!(ordering.scratch_used);
+        assert_eq!(ordering.scratch_used, 1);
         assert_eq!(ordering.moves.len(), 6);
     }
 }
@@ -4646,6 +4737,64 @@ impl Growing<'_> {
     }
 }
 
+/// Whether a value of this type is a slice: a borrow of a run, which the
+/// machine keeps in two adjacent word registers (RFC-0047 amended).
+fn is_slice(ty: &Ty) -> bool {
+    matches!(ty, Ty::Ref(_, target) if matches!(target.ty, Ty::Slice(_)))
+}
+
+/// How many registers a value takes, and what the frame opens them with
+/// (RFC-0052 rule 5, RFC-0047 amended rule 1). Two values share a register
+/// only where this is the same, which is what keeps a kind byte written
+/// once true.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SlotClass {
+    /// Written whole every time, so the frame opens no kind ahead of it.
+    Whole,
+    /// One word register the frame opens with this kind.
+    Word(Kind),
+    /// A slice: `ptr` then `len`, adjacent, both word class, no mark bit.
+    Slice,
+}
+
+/// What one register was claimed for, which is `slot_kinds`'s entry for it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SlotClaim {
+    Whole,
+    Word(Kind),
+}
+
+impl SlotClass {
+    fn of(ty: &Ty) -> SlotClass {
+        if is_slice(ty) {
+            return SlotClass::Slice;
+        }
+        match word_kind(ty) {
+            Some(kind) => SlotClass::Word(kind),
+            None => SlotClass::Whole,
+        }
+    }
+
+    const fn width(self) -> usize {
+        match self {
+            SlotClass::Slice => 2,
+            SlotClass::Whole | SlotClass::Word(_) => 1,
+        }
+    }
+
+    /// Decided against a `Kind::Ref` for a slice's pointer register: a frame
+    /// opens a kind through `Value::inline`, which carries no `Kind::Ref`.
+    /// That no operation reads a pair register's kind byte is pinned by
+    /// `acvus-interpreter-test/tests/slice_pair.rs`.
+    fn claim(self) -> SlotClaim {
+        match self {
+            SlotClass::Whole => SlotClaim::Whole,
+            SlotClass::Word(kind) => SlotClaim::Word(kind),
+            SlotClass::Slice => SlotClaim::Word(Kind::U64),
+        }
+    }
+}
+
 /// `None` is a type whose register is written whole every time, so the
 /// frame writes no kind ahead of it and no operation on it is a `set_word`
 /// (RFC-0052 §5).
@@ -4815,12 +4964,6 @@ impl<'a> Prepare<'a> {
                 order: None,
                 ..
             } => (*dst, id, *instance, args.as_slice()),
-            InstKind::AsSlice {
-                dst,
-                container,
-                instance: ExternInstance { id, instance },
-                ..
-            } => (*dst, id, *instance, std::slice::from_ref(container)),
             _ => return None,
         };
         // A stateful instance has no `call::Call` variant: a fused run
@@ -4831,7 +4974,7 @@ impl<'a> Prepare<'a> {
         };
         let arity = match abi {
             SyncAbi::Arity0(_) => 0,
-            SyncAbi::Arity1(_) | SyncAbi::Slice(_) => 1,
+            SyncAbi::Arity1(_) => 1,
             SyncAbi::Arity2(_) => 2,
             SyncAbi::Arity3(_) | SyncAbi::Window(_) => return None,
         };
@@ -4971,7 +5114,6 @@ impl<'a> Prepare<'a> {
                     a: args[0],
                     b: args[1],
                 },
-                SyncAbi::Slice(f) => call::Call::Slice { f, a: args[0] },
                 SyncAbi::Arity3(_) | SyncAbi::Window(_) => {
                     panic!("fusable_call admitted an arity a fused run holds no shape for")
                 }
@@ -5392,9 +5534,7 @@ fn nth(slots: &[Off], k: usize) -> Off {
 fn owns_large(ty: &Ty) -> bool {
     match ty {
         Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => false,
-        // A reference is a word. The run an `AsSlice` boxed is not: it
-        // reaches its register as the erased `Elements` (RFC-0047 §6).
-        Ty::Ref(_, target) => matches!(target.ty, Ty::Slice(_)),
+        Ty::Ref(..) => false,
         // RFC-0022: an option is its payload's own value, so it owns what
         // the payload owns and nothing else.
         Ty::Option(inner) => owns_large(inner),

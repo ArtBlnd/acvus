@@ -474,8 +474,8 @@ fn generate_extern_fn(
                 } else {
                     quote! { ::acvus_extern::SyncSlice }
                 };
-                let abi = quote! {
-                    #abi_enum::Slice({
+                let f = quote! {
+                    {
                         let __f: #alias<__R> = |#state_param __rt, #container| {
                             #state_prelude
                             #bind
@@ -483,10 +483,19 @@ fn generate_extern_fn(
                             __r.into_elements()
                         };
                         __f
-                    })
+                    }
                 };
-                let call = sync_call(abi);
-                return quote! { ::acvus_extern::ExternHandler::Sync(#call) };
+                let abi = if stateful {
+                    quote! {
+                        ::acvus_extern::SliceAbi::Stateful {
+                            state: ::std::sync::Arc::clone(&__state_arc),
+                            f: #f,
+                        }
+                    }
+                } else {
+                    quote! { ::acvus_extern::SliceAbi::Plain(#f) }
+                };
+                return quote! { ::acvus_extern::ExternHandler::Slice(#abi) };
             }
             let abi = match by_value_variant(arity) {
                 Some(variant) => {
