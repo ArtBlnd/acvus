@@ -224,5 +224,7 @@ constant into each incoming edge, but the compare against it still runs
 at the merge, because the arms are reached through a `jump_if` on the
 result. Threading the constant through the branch — reaching the arm
 directly on each edge — is what would take this case to `collatz
-while`'s shape, and it is the `Switch` operation's work (RFC-0051's
-second half), not this pass's.
+while`'s shape. RFC-0051's second half settled where it is not: no
+`Switch` reaches the machine here, because this pass has already removed
+the enum, so the move is jump threading through the phi and belongs to a
+pass of its own.

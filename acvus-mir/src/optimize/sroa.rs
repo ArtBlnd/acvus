@@ -72,6 +72,30 @@ enum Action {
     },
 }
 
+/// One edge of a dispatch: where it goes and what it carries.
+#[derive(Debug, Clone)]
+struct Edge {
+    label: Label,
+    args: Vec<ValueId>,
+}
+
+/// A `Switch` (RFC-0051) over a slot this pass replaces. The enum is gone
+/// by the time the dispatch runs, so there is no tag in a value to read:
+/// what is left is the tag register, and the dispatch is one compare
+/// against the number `tag` stands for.
+///
+/// Only a two-edged dispatch is covered, because a chain over three or more
+/// would need blocks this pass does not make; `classify` refuses the slot
+/// for any other, which leaves the enum built and the machine's own
+/// `ops::switch` reading its tag.
+#[derive(Debug, Clone)]
+struct Dispatch {
+    slot: ValueId,
+    tag: Astr,
+    taken: Edge,
+    fallen: Edge,
+}
+
 /// A define that belongs at the end of a block other than the one whose
 /// instruction asked for it.
 #[derive(Debug, Clone)]
@@ -97,6 +121,9 @@ struct Plan {
     shapes: FxHashMap<ValueId, Shape>,
     actions: Vec<FxHashMap<usize, Action>>,
     tails: Vec<Vec<Action>>,
+    /// The `Switch` each block ends in, where this pass replaces the slot
+    /// it reads.
+    dispatches: Vec<Option<Dispatch>>,
 }
 
 fn plan(cfg: &CfgBody) -> Option<Plan> {
@@ -146,6 +173,7 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
         shapes,
         actions: vec![FxHashMap::default(); cfg.blocks.len()],
         tails: vec![Vec::new(); cfg.blocks.len()],
+        dispatches: vec![None; cfg.blocks.len()],
     };
     // Refusing a slot invalidates the actions already recorded for it, so
     // the walk starts over until it refuses nothing. Each round refuses at
@@ -153,6 +181,7 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
     loop {
         plan.actions.iter_mut().for_each(|a| a.clear());
         plan.tails.iter_mut().for_each(|t| t.clear());
+        plan.dispatches.iter_mut().for_each(|d| *d = None);
         let refused = classify(cfg, &aliases, &mut plan);
         if refused.is_empty() {
             break;
@@ -173,7 +202,8 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
 /// Every slot whose replacement this walk refuses, with the plan filled in
 /// for the ones it accepts.
 ///
-/// A terminator is not examined: the only value one lets out is the one a
+/// The only terminator that names a slot is `Terminator::Switch`, whose tag
+/// is one (RFC-0051 §5); the only value any other lets out is the one a
 /// `Return` carries, and [`escaped_storages`] has already refused that.
 fn classify(cfg: &CfgBody, aliases: &FxHashMap<ValueId, ValueId>, plan: &mut Plan) -> Vec<ValueId> {
     let mut refused = Vec::new();
@@ -191,8 +221,53 @@ fn classify(cfg: &CfgBody, aliases: &FxHashMap<ValueId, ValueId>, plan: &mut Pla
                 None => refused.extend(touched),
             }
         }
+        let Terminator::Switch { tag, arms, default } = &block.terminator else {
+            continue;
+        };
+        let Some(slot) = aliases
+            .get(tag)
+            .copied()
+            .or_else(|| plan.shapes.contains_key(tag).then_some(*tag))
+        else {
+            continue;
+        };
+        match dispatch_for(&plan.shapes[&slot], slot, arms, default.as_ref()) {
+            Some(dispatch) => plan.dispatches[bi] = Some(dispatch),
+            None => refused.push(slot),
+        }
     }
     refused
+}
+
+/// The compare a two-edged `Switch` over a replaced slot becomes, or `None`
+/// where this pass keeps the aggregate instead: a dispatch of three or more
+/// edges, or one whose tag this shape does not number.
+fn dispatch_for(
+    shape: &Shape,
+    slot: ValueId,
+    arms: &[(Astr, Label, Vec<ValueId>)],
+    default: Option<&(Label, Vec<ValueId>)>,
+) -> Option<Dispatch> {
+    let edge = |(label, args): (&Label, &Vec<ValueId>)| Edge {
+        label: *label,
+        args: args.clone(),
+    };
+    let (tag, taken, fallen) = match (arms, default) {
+        ([(tag, label, args)], Some(other)) => {
+            (*tag, edge((label, args)), edge((&other.0, &other.1)))
+        }
+        ([(tag, label, args), (_, other_label, other_args)], None) => {
+            (*tag, edge((label, args)), edge((other_label, other_args)))
+        }
+        _ => return None,
+    };
+    shape.tags.contains_key(&tag).then_some(())?;
+    Some(Dispatch {
+        slot,
+        tag,
+        taken,
+        fallen,
+    })
 }
 
 /// The action that replaces `kind`, or `None` when no rule covers the way
@@ -546,6 +621,19 @@ fn rewrite(cfg: &mut CfgBody, plan: Plan) {
         for action in &plan.tails[bi] {
             rw.apply(action, Span::ZERO, label);
         }
+        // The dispatch reads the tag after every define of this block, so
+        // it is written where a tail action is written and for the same
+        // reason.
+        if let Some(dispatch) = &plan.dispatches[bi] {
+            let cond = rw.compare(dispatch.slot, dispatch.tag, Span::ZERO, label);
+            blocks[bi].terminator = Terminator::JumpIf {
+                cond,
+                then_label: dispatch.taken.label,
+                then_args: dispatch.taken.args.clone(),
+                else_label: dispatch.fallen.label,
+                else_args: dispatch.fallen.args.clone(),
+            };
+        }
         blocks[bi].insts = std::mem::take(&mut rw.out);
     }
 
@@ -659,6 +747,16 @@ impl Rewriter<'_> {
                 });
             }
         }
+    }
+
+    /// The tag register against the number `tag` stands for, in a register
+    /// of its own: what a `TestVariant` becomes when it has a destination
+    /// already, and what a `Switch` becomes when it has none.
+    fn compare(&mut self, slot: ValueId, tag: Astr, span: Span, label: Label) -> ValueId {
+        let dst = self.val_factory.next();
+        self.val_types.insert(dst, Ty::Bool);
+        self.apply(&Action::TestTag { dst, slot, tag }, span, label);
+        dst
     }
 }
 

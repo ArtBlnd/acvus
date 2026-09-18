@@ -13,4 +13,5 @@ pub mod pattern;
 pub mod place;
 pub mod storage;
 pub mod string;
+pub mod switch;
 pub mod variant;

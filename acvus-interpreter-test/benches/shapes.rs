@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use acvus_extern::{Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
+use acvus_interpreter_test::listing::{BlockListing, PartListing, script_listing_with_externs};
 use acvus_interpreter_test::{
     Context, compile_source_with_externs, execute_compiled, split_context, typed,
 };
@@ -290,6 +291,10 @@ fn main() {
             ret: Ty::I64,
         },
     ];
+    if let Ok(name) = std::env::var("SHAPES_OPLIST") {
+        oplist(&cases, &name);
+        return;
+    }
     println!(
         "{:>14} {:>10} {:>14} {:>12} {:>12} {:>14}",
         "case", "n", "execute/us", "rust/us", "ratio", "ns/iteration"
@@ -322,4 +327,54 @@ fn main() {
             );
         }
     }
+}
+
+// -- the op list --------------------------------------------------
+
+fn print_part(part: &PartListing, indent: usize) {
+    let pad = " ".repeat(indent);
+    println!("{pad}{}: {} ops", part.part, part.ops.len());
+    for op in &part.ops {
+        println!("{pad}  {op}");
+    }
+    for region in &part.regions {
+        println!("{pad}  region {}", region.name);
+        for owned in &region.owns {
+            print_part(owned, indent + 4);
+        }
+    }
+}
+
+fn print_listing(blocks: &[BlockListing]) {
+    for (i, block) in blocks.iter().enumerate() {
+        println!("block {i}: {} ops, end {}", block.ops.len(), block.end);
+        for op in &block.ops {
+            println!("  {op}");
+        }
+        for region in &block.regions {
+            println!("  region {}", region.name);
+            for owned in &region.owns {
+                print_part(owned, 4);
+            }
+        }
+    }
+}
+
+/// The prepared operations of one case, as `benches/programs.rs` prints
+/// them: what a shape costs is read here and measured above.
+fn oplist(cases: &[Case], name: &str) {
+    let case = cases
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("no case named {name:?}"));
+    let interner = Interner::new();
+    let blocks = script_listing_with_externs(
+        &interner,
+        case.source,
+        context(&interner, 1_000_000),
+        (case.registries)(),
+        case.ret.clone(),
+    );
+    println!("== oplist: {name}");
+    print_listing(&blocks);
 }

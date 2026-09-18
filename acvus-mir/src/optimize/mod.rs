@@ -13,4 +13,3 @@ pub mod sroa;
 pub mod ssa;
 pub mod ssa_pass;
 pub mod string_copy;
-pub mod switch_expand;

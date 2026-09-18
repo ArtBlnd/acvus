@@ -35,7 +35,9 @@ use crate::interpreter::Executable;
 use crate::ops::arith::{self, Binary, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, Plan};
 use crate::ops::place;
-use crate::ops::{call, composite, constant, control, index, pattern, storage, string, variant};
+use crate::ops::{
+    call, composite, constant, control, index, pattern, storage, string, switch, variant,
+};
 use crate::runtime::{ExternHandler, StateAbi, SyncAbi, SyncCall};
 use crate::value::{Kind, Value};
 
@@ -513,6 +515,10 @@ fn targets(inst: &Inst, label: Label) -> bool {
             else_label,
             ..
         } => *then_label == label || *else_label == label,
+        InstKind::Switch { arms, default, .. } => {
+            arms.iter().any(|(_, named, _)| *named == label)
+                || default.as_ref().is_some_and(|(named, _)| *named == label)
+        }
         _ => false,
     }
 }
@@ -797,6 +803,101 @@ impl<'a> Prepare<'a> {
         at
     }
 
+    /// One arm of a dispatch as the block the machine enters for it.
+    fn dispatch_edge(&mut self, label: Label, args: &[ValueId]) -> BlockId {
+        let target = self.target(&label);
+        let moves = self.move_ops(&label, args);
+        self.edge(moves, target)
+    }
+
+    /// The block a two-sided dispatch enters for the tag `name`: the arm
+    /// that names it, or the edge the dispatch falls out of.
+    fn side(&self, placed: &[Placed], default: BlockId, name: &str) -> BlockId {
+        placed
+            .iter()
+            .find(|arm| self.tag_is(arm.key, name))
+            .map_or(default, |arm| arm.block)
+    }
+
+    /// `Terminator::Switch` as the machine's one dispatch (RFC-0051 §5).
+    ///
+    /// Obligation across artifacts: the operation is handed a `default` that
+    /// is a real edge, so no `ops::switch` run decides that no arm holds. It
+    /// is the catch-all where the `match` wrote one, and otherwise the last
+    /// arm — the one tag then left untested, which is sound exactly because
+    /// `validate::exhaustive` (RFC-0051 §3) decided some arm holds.
+    ///
+    /// `arms` is the IR's own positional shape, which RFC-0051 §5 fixes as
+    /// `(tag, label, args)`; `Placed` is that arm once its block is decided.
+    fn switch_op(
+        &mut self,
+        tag: ValueId,
+        arms: &[(Astr, Label, Vec<ValueId>)],
+        default: Option<&(Label, Vec<ValueId>)>,
+    ) -> Box<dyn Op> {
+        let src = self.off(tag);
+        let through = self.is_ref(tag);
+        let form = variant_form(self.scrutinee_ty(tag));
+        let (tested, default) = match default {
+            Some((label, args)) => (arms, self.dispatch_edge(*label, args)),
+            None => {
+                let ((_, label, args), tested) = arms
+                    .split_last()
+                    .expect("a Switch names at least one successor: an arm or a default");
+                (tested, self.dispatch_edge(*label, args))
+            }
+        };
+        let placed: Vec<Placed> = tested
+            .iter()
+            .map(|(key, label, args)| Placed {
+                key: *key,
+                block: self.dispatch_edge(*label, args),
+            })
+            .collect();
+
+        match form {
+            VariantForm::Option => {
+                let on_some = self.side(&placed, default, "Some");
+                let on_none = self.side(&placed, default, "None");
+                match through {
+                    true => Box::new(switch::SwitchOption::<true> {
+                        src,
+                        on_some,
+                        on_none,
+                    }) as Box<dyn Op>,
+                    false => Box::new(switch::SwitchOption::<false> {
+                        src,
+                        on_some,
+                        on_none,
+                    }),
+                }
+            }
+            VariantForm::Result => {
+                let on_ok = self.side(&placed, default, "Ok");
+                let on_err = self.side(&placed, default, "Err");
+                match through {
+                    true => {
+                        Box::new(switch::SwitchResult::<true> { src, on_ok, on_err }) as Box<dyn Op>
+                    }
+                    false => Box::new(switch::SwitchResult::<false> { src, on_ok, on_err }),
+                }
+            }
+            VariantForm::Enum => {
+                let arms: Box<[switch::Arm]> = placed
+                    .iter()
+                    .map(|arm| switch::Arm {
+                        key: arm.key,
+                        target: arm.block,
+                    })
+                    .collect();
+                match through {
+                    true => Box::new(switch::Switch::<true> { src, arms, default }) as Box<dyn Op>,
+                    false => Box::new(switch::Switch::<false> { src, arms, default }),
+                }
+            }
+        }
+    }
+
     /// A suspending operation is excluded along with the terminators: it
     /// leaves the block for the driver, which the machine's dispatch loop
     /// alone can reach.
@@ -804,10 +905,8 @@ impl<'a> Prepare<'a> {
         match &inst.kind {
             InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
-            // RFC-0051: a `Switch` is a terminator. The machine has no
-            // `switch` operation yet, and `optimize::switch_expand` has
-            // already replaced every one with its chain before `prepare`
-            // runs, so `op` below never sees one.
+            // RFC-0051: a `Switch` is a terminator, so it ends its block
+            // and `straight_run` admits it into no region's part.
             | InstKind::Switch { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
@@ -1376,12 +1475,11 @@ impl<'a> Prepare<'a> {
         let body = self.body;
         let inst = &body.insts[at];
         let op: Node = match &inst.kind {
-            InstKind::Switch { .. } => todo!(
-                "the machine has no `switch` operation yet (RFC-0051, second half); \
-                 `optimize::switch_expand` replaces every Switch before prepare runs"
-            ),
-
             // -- The terminators ----------------------------------------
+            InstKind::Switch { tag, arms, default } => {
+                return Some(self.switch_op(*tag, arms, default.as_ref()));
+            }
+
             InstKind::Jump { label, args } => {
                 let target = self.target(label);
                 let (label, args) = (*label, args.clone());
@@ -2735,6 +2833,13 @@ enum VariantForm {
     Enum,
 }
 
+/// One arm of a dispatch once its block is decided: the tag the arm names,
+/// and the block the machine enters for it.
+struct Placed {
+    key: Astr,
+    block: BlockId,
+}
+
 fn variant_form(ty: &Ty) -> VariantForm {
     match ty {
         Ty::Option(_) => VariantForm::Option,
@@ -2891,6 +2996,14 @@ impl Edges<'_> {
             } => {
                 visit(self.target(then_label));
                 visit(self.target(else_label));
+            }
+            InstKind::Switch { arms, default, .. } => {
+                for (_, label, _) in arms {
+                    visit(self.target(label));
+                }
+                if let Some((label, _)) = default {
+                    visit(self.target(label));
+                }
             }
             InstKind::Return { .. } | InstKind::Diverge => {}
             _ => {
@@ -3053,6 +3166,14 @@ fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
             } => {
                 edge(then_label, then_args);
                 edge(else_label, else_args);
+            }
+            InstKind::Switch { arms, default, .. } => {
+                for (_, label, args) in arms {
+                    edge(label, args);
+                }
+                if let Some((label, args)) = default {
+                    edge(label, args);
+                }
             }
             _ => {}
         }

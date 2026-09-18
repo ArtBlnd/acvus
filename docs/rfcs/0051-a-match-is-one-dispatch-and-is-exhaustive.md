@@ -1,6 +1,6 @@
 # RFC-0051: a `match` is one dispatch, and it is exhaustive
 
-Status: Draft — owner and coordinator, 2026-09-18
+Status: Accepted — owner and coordinator, 2026-09-19
 Extends: RFC-0036 (variants), RFC-0039 (an option is its payload),
 RFC-0043 (types as written), RFC-0044 (a body is prepared once),
 RFC-0045 (one statement grammar)
@@ -121,35 +121,85 @@ rest goes.
 
 ## Consequences
 
-- `match` is in the grammar and `MatchBind` is gone, with every use in the
-  tree moved to `match` or `if let`. The arm rule (§2) is in `typeck`; the
-  exhaustiveness pass (§3–§4) is `validate::exhaustive`, run in pass 0 of
-  `graph::optimize`, where it reads `InstKind::Switch`.
-- **The lowering emits `Switch`, and one pass expands it.** The chain the
-  tag form used to emit does not name a `match`: it is the same shape an
-  `if let` without an `else` writes, and a pass that refused on it would
-  refuse every `if let`. So `lower_match_expr` writes the `Switch` — the one
-  shape that names a dispatch — and `optimize::switch_expand`, the first
-  step of pass 1, replaces every one with the `TestVariant` + `JumpIf` chain
-  before any other pass or the interpreter sees it.
-- **Measured** (`benches/shapes.rs`, `enum match`, n = 1e5 and 1e6): 39.4 ns
-  per iteration before, **36.5–36.8 ns** now, 99× Rust. The chain is one
-  `test_variant` per arm but the last, which is the chain's else, so the two
-  arms of `E{A, B}` cost one test where the tag form cost two, and one
-  diamond where it cost two.
-- A `match` whose arms are not one dispatch over a tag — a literal arm, a
-  nested refutable payload — has no `Switch` to read, so `typeck` refuses it
-  outright unless it has a `_` arm, which is the same sentence the `Open`
-  case writes. Nested positions are not asked separately; the `_` is asked
-  for at the `match`.
-- RFC-0050 (object and enum layout) builds on `Switch`: a variant with a tag
-  word and a payload slot is what `switch` reads.
+- RFC-0050 (object/enum layout) builds on `Switch`: a `Variant` with a
+  tag word and a payload slot is what `switch` reads.
 - The later exhaustiveness stage is one function's widening.
 
-## What is left
+### What landed
 
-The machine's `switch` operation: delete the `optimize::switch_expand::run`
-call at the top of `graph::optimize::run_pass1_body`, delete the pass, and
-add the `switch` handler in `acvus-interpreter/src/prepare.rs` — the `todo!`
-arm in `Prepare::op`, plus `is_straight_line`, which already answers
-`false`. The two artifacts move together.
+**The compiler.** `match` is in the grammar and `MatchBind` is gone, with
+every use in the tree moved to `match` or `if let`. The arm rule (§2) is in
+`typeck`; the exhaustiveness pass (§3-§4) is `validate::exhaustive`, run in
+pass 0 of `graph::optimize`, where it reads `InstKind::Switch` before any
+pass has moved it. `lower_match_expr` writes the `Switch` and no chain: the
+chain the tag form used to emit does not name a `match` — it is the shape an
+`if let` without an `else` writes, and a pass that refused on it would refuse
+every `if let`.
+
+**The machine.** `acvus-interpreter/src/ops/switch.rs` holds three
+operations, and `prepare::switch_op` chooses between them by the
+scrutinee's form. Each is a terminator: it returns the `BlockId` the machine
+enters and holds no successor (RFC-0052 §1).
+
+- A flat `Option` or `Result` carries its tag in the value's own kind
+  (RFC-0039), so `SwitchOption` and `SwitchResult` *are* that one test, with
+  each side's block — the catch-all included — resolved at preparation.
+- A boxed variant's tag is an `Astr`, and `Switch` reads it once and scans
+  the arms.
+
+`default` is always a real edge: the catch-all where the `match` wrote one,
+and otherwise the last arm, which is then the one tag left untested. That is
+sound exactly because `validate::exhaustive` decided some arm holds, and it
+is why no `run` decides that no arm holds and none reads a variant count.
+
+**Not the table §5 names.** A value's tag today is an interned name, not an
+ordinal, so nothing can be indexed by the tag itself; the nearest form is a
+hashed table whose lookup is a multiply and a dependent load. Built and
+measured at the seven arms of `bf table`, it cost **24.4 ns** a step against
+the scan's **23.3** (three pinned reps, ranges apart), and it had no other
+site in the tree — so it was cut. The table is RFC-0050's, where a tag word
+gives an ordinal to index by and the variant count gives the bound.
+
+**RFC-0053 owns the enum that never exists.** `optimize::sroa` replaces a
+locally built enum with a tag register and a payload register, and a
+`Switch` reading such a slot has no value left to read a tag from.
+`sroa::dispatch_for` covers the two-edged dispatch — the compare against the
+number the arm's tag stands for, which is what the pass already makes of a
+`TestVariant` — and refuses the slot for a dispatch of three or more edges,
+which keeps the enum built and hands the machine's `Switch` its tag.
+
+**Measured** (2026-09-19, one pinned core, three alternating reps against
+`b8b9e845`, medians):
+
+| case | n | before | after |
+| --- | --- | --- | --- |
+| `bf table` | 1e6 | 34.6 ns/step | **22.9** |
+| `bf table` | 5e6 | 35.3 | **23.4** |
+| `bf scan` | 1e6 | 55.7 | **36.5** |
+| `bf call` | 1e6 | 39.8 | **27.8** |
+| `enum match` | 1e5 | 9.8 ns/iter | 9.8 |
+| `enum match` | 1e6 | 9.9 | 9.9 |
+
+`bf table`'s seven `TestVariant` + seven `JumpIf` (blocks 4–10 of the base
+listing) are one `Switch<true>` in block 4, and the body falls from 21
+prepared blocks to 15. Per step at n=1e6: branches 90.1 → 75.9, mispredicts
+0.354 → 0.319, instructions 603 → 489, cycles 230 → 158 — the program is
+periodic, so the dispatch was predicted before and is predicted now, and
+what fell is the work rather than the misses. `bf scan` and `bf call` move
+for the same reason. `field read`, `field write`, `construct`, `option match`,
+`vec of objects` and every case of `benches/accum.rs` — `grade`, `branch`,
+`collatz` among them — are unchanged.
+
+`enum match` does not move, and its prepared listing is byte-identical to
+`b8b9e845`'s: RFC-0053 had already removed the enum, so no `Switch` reaches
+the machine there. What is left is the compare at the merge that RFC-0053's
+own Consequences names — the tag is a constant on each incoming edge, and
+reaching the arm directly on each edge is jump threading through the phi. No
+`dce` or `fold` rule does that today, and it is the next to-be, not this
+one.
+
+**Not decided here**: a `match` whose arms are not one dispatch over a tag
+(a literal arm, a nested refutable payload) has no `Switch` to read, so
+`typeck` refuses it outright unless it has a `_` arm — the same sentence the
+`Open` case writes. Nested positions are not asked separately; the `_` is
+asked for at the `match`.
