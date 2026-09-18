@@ -17,6 +17,18 @@ extern_signature! {
         T: TyVar;
 }
 
+// There is no generic `filled`, and that is a decision. `Runtime` offers
+// no clone of a value, so the copies are made in Rust by an instance that
+// knows the element type. The language's own clone reaches a `String` as a
+// compiler instruction and a `Decimal` as an extension instance, per
+// RFC-0020, and neither is a handler a generic body can call.
+extern_signature! {
+    ns: "vec",
+    fn filled<T>(n: u64, x: T) -> Vec<T>
+    where
+        T: TyVar;
+}
+
 #[extern_fn(effect = pure)]
 fn reverse<T>(mut items: Vec<T>) -> Vec<T>
 where
@@ -35,6 +47,39 @@ where
 {
     items.0
 }
+
+/// A count or a capacity wider than the address space is the overflow
+/// `Vec::with_capacity` itself reports.
+fn as_len(n: u64) -> usize {
+    let Ok(n) = usize::try_from(n) else {
+        panic!("capacity overflow")
+    };
+    n
+}
+
+#[extern_fn(effect = pure)]
+fn with_capacity<T>(n: u64) -> Vec<T>
+where
+    T: TyVar,
+{
+    Vec::with_capacity(as_len(n))
+}
+
+macro_rules! filled_of {
+    ($($name:ident: $t:ty),* $(,)?) => {$(
+        #[extern_fn(instance_of = filled, effect = pure)]
+        fn $name(n: u64, x: $t) -> Vec<$t> {
+            vec![x; as_len(n)]
+        }
+    )*};
+}
+
+filled_of!(
+    filled_int: i64,
+    filled_float: f64,
+    filled_bool: bool,
+    filled_str: String,
+);
 
 #[extern_fn(effect = pure)]
 fn len<T>(c: &Vec<T>) -> u64
@@ -91,6 +136,92 @@ where
     c.try_map(rt, |c| c.last())
 }
 
+#[extern_fn(effect = pure)]
+fn push<T>(c: &mut Vec<T>, item: T)
+where
+    T: TyVar,
+{
+    c.push(item);
+}
+
+#[extern_fn(effect = pure)]
+fn pop<T>(c: &mut Vec<T>) -> Option<T>
+where
+    T: TyVar,
+{
+    c.pop()
+}
+
+#[extern_fn(effect = pure)]
+fn insert<T>(c: &mut Vec<T>, index: u64, item: T)
+where
+    T: TyVar,
+{
+    let Ok(index) = usize::try_from(index) else {
+        panic!(
+            "insertion index (is {index}) should be <= len (is {})",
+            c.len()
+        )
+    };
+    c.insert(index, item);
+}
+
+#[extern_fn(effect = pure)]
+fn remove<T>(c: &mut Vec<T>, index: u64) -> T
+where
+    T: TyVar,
+{
+    let Ok(index) = usize::try_from(index) else {
+        panic!(
+            "removal index (is {index}) should be < len (is {})",
+            c.len()
+        )
+    };
+    c.remove(index)
+}
+
+#[extern_fn(effect = pure)]
+fn clear<T>(c: &mut Vec<T>)
+where
+    T: TyVar,
+{
+    c.clear();
+}
+
+#[extern_fn(effect = pure)]
+fn truncate<T>(c: &mut Vec<T>, len: u64)
+where
+    T: TyVar,
+{
+    c.truncate(usize::try_from(len).unwrap_or(usize::MAX));
+}
+
+#[extern_fn(effect = pure)]
+fn extend<T>(c: &mut Vec<T>, items: Vec<T>)
+where
+    T: TyVar,
+{
+    c.extend(items);
+}
+
+/// An index wider than the address space is past every length, and the
+/// message is the one `slice::swap` panics with at an index it can hold.
+fn swap_index(index: u64, len: usize) -> usize {
+    let Ok(index) = usize::try_from(index) else {
+        panic!("index out of bounds: the len is {len} but the index is {index}")
+    };
+    index
+}
+
+#[extern_fn(effect = pure)]
+fn swap<T>(c: &mut Vec<T>, i: u64, j: u64)
+where
+    T: TyVar,
+{
+    let len = c.len();
+    c.swap(swap_index(i, len), swap_index(j, len));
+}
+
 // There is no `vec::contains` (nor `array::` or `deque::contains`) beside
 // `iter::contains`: a `Monomorphize` member's glue crosses every parameter
 // naming the member through `CrossSpecialized`, and no form of a container
@@ -109,9 +240,12 @@ where
     extern_registry! {
         ns: "vec",
         types: [Vec<_>],
-        signatures: [vec],
+        signatures: [vec, filled],
         fns: [
-            reverse, vec_array, len, is_empty, as_slice, as_slice_mut, first, last,
+            reverse, vec_array, with_capacity,
+            filled_int, filled_float, filled_bool, filled_str,
+            len, is_empty, as_slice, as_slice_mut, first, last,
+            push, pop, insert, remove, clear, truncate, extend, swap,
         ],
     }
 }

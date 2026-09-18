@@ -24,6 +24,34 @@ signatures and is settled by the call's evidence (RFC-0043); the qualified
 name picks one. `string::contains` and `string::find` share their bare
 names with `iter::contains` and `iter::find`.
 
+A `Vec<T>` is also changed through a reference to it, under Rust's own
+names:
+
+```
+vec::push<T>(v: &mut Vec<T>, x: T)             vec::clear<T>(v: &mut Vec<T>)
+vec::pop<T>(v: &mut Vec<T>) -> Option<T>       vec::truncate<T>(v: &mut Vec<T>, n: u64)
+vec::insert<T>(v: &mut Vec<T>, i: u64, x: T)   vec::extend<T>(v: &mut Vec<T>, other: Vec<T>)
+vec::remove<T>(v: &mut Vec<T>, i: u64) -> T    vec::swap<T>(v: &mut Vec<T>, i: u64, j: u64)
+vec::with_capacity<T>(n: u64) -> Vec<T>        vec::filled<T>(n: u64, x: T) -> Vec<T>
+```
+
+Every index is a `u64` (RFC-0047), and each of these takes the vec first,
+so `v.push(x)` is the call written as a method on a place (RFC-0030). An
+index the vec does not hold panics with the message `Vec::insert`,
+`Vec::remove`, and `slice::swap` panic with, word for word; a `truncate`
+past the length keeps the whole vec, as `Vec::truncate` does. `push`,
+`pop`, `insert`, `remove`, `clear`, `truncate`, and `extend` write the
+vec's shape — its length, and its storage where the allocation moves;
+`swap` writes two elements and leaves shape and storage as they were.
+
+`with_capacity` names no element, and `T` is whatever the use settles
+(RFC-0043). `filled` is a shared signature with an instance per element
+type — `i64`, `f64`, `bool`, `String` — rather than one generic function:
+`Runtime` offers no clone of a value, so the copies are made in Rust by an
+instance that knows the element type, and `core::clone` reaches a `String`
+as a compiler instruction (RFC-0020) and a `Decimal` as an extension
+instance, neither of which a generic body can call.
+
 A container is read through a reference to it, and an element read out of
 a borrowed container is a reference into it: the call's result holds the
 container's loan (RFC-0018), so the container is neither moved nor
@@ -71,8 +99,10 @@ runtime was in scope, so one name carrying the value serves both.
 
 ## Not built
 
-- No `get` by value, no `pop`/`remove` here: a change to a container is
-  its own set.
+- No `get` by value: a value of the element type is `clone(get(&c, i))`.
+- No change to an `Array` or a `Deque` here. An array's length is part of
+  its type, and a deque is changed at its ends by `deque::push_front`,
+  `push_back`, `pop_front`, and `pop_back`.
 - No slicing and no negative index.
 - No `string::get`: a string is a value (RFC-0026), and a `char` has no
   acvus type to be referenced as; a character is read out by value with
@@ -102,6 +132,10 @@ runtime was in scope, so one name carrying the value serves both.
 - `acvus-extern`: `Ref<T, Rt>` and `RefMut<T, Rt>` carry `Rt::Value`;
   `Lent` is gone. The macro treats both as carriers in every position and
   unwraps `Option` of a carrier on return.
+- `acvus-ext`: the `vec` registry declares the changing functions and
+  `with_capacity` beside them, and the `filled` signature with its four
+  instances; a script accumulates into a `Vec` rather than a `Deque`, and
+  `filled(n, 0.0)` then `out[j] = acc` is writable.
 - `acvus-ext`: the registries `vec`, `array`, `deque`, `string` each
   declare their reading functions; the `container` module and its shared
   signatures are gone; `std::len`, `deque_len`, `deque_get`, `len_str`,
