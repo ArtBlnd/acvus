@@ -279,6 +279,15 @@ fn generate_extern_fn(
         }
     }
 
+    let unboxed_slice = returns_slice(&ret);
+    if unboxed_slice && (is_async || attr.heavy || params.len() != 1) {
+        return Err(syn::Error::new(
+            fn_ident.span(),
+            "a declaration returning a slice is a synchronous borrow projection \
+             of its one container parameter (RFC-0047 §3)",
+        ));
+    }
+
     let signature = |member: Option<&Type>| -> proc_macro2::TokenStream {
         let param_terms = params.iter().map(|p| {
             let name = &p.name;
@@ -411,6 +420,23 @@ fn generate_extern_fn(
                 #returned
             };
             let value_ty = quote! { <__R as ::acvus_extern::Runtime>::Value };
+            if unboxed_slice {
+                let container = &taken_idents[0];
+                return quote! {{
+                    #hold_state
+                    ::acvus_extern::ExternHandler::Sync(
+                        ::acvus_extern::SyncHandler::Slice(
+                            ::acvus_extern::SliceHandler::new(
+                                move |__rt: &__R, #container: #value_ty| {
+                                    #bind
+                                    let __r = #result;
+                                    __r.into_elements()
+                                }
+                            )
+                        )
+                    )
+                }};
+            }
             match by_value_variant(arity) {
                 Some(variant) => quote! {{
                     #hold_state
@@ -684,6 +710,20 @@ fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {
         return false;
     };
     r.mutability.is_none() && matches!(r.elem.as_ref(), Type::Path(p) if p.path.is_ident(runtime))
+}
+
+/// Whether the declaration's return type is written as one of the two
+/// slice types. The macro reads tokens, not types: a declaration that
+/// reaches `Slice` through an alias or a type parameter is not one of
+/// these, and gets today's boxing entry alone.
+fn returns_slice(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    let Some(last) = path.path.segments.last() else {
+        return false;
+    };
+    last.ident == "Slice" || last.ident == "SliceMut"
 }
 
 fn parse_return(output: &ReturnType) -> Type {

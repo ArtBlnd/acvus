@@ -7,6 +7,7 @@ use std::sync::Arc;
 use acvus_mir::ty::{PolyTy, Task};
 
 use crate::runtime::Runtime;
+use crate::slice::Elements;
 
 /// A synchronous handler takes its arguments **by value, one Rust
 /// parameter each, up to three** (RFC-0044, stage 2c). A `Value` is a
@@ -35,6 +36,7 @@ type Sync3<R> = dyn Fn(
     + Send
     + Sync;
 type SyncN<R> = dyn Fn(&R, &mut [<R as Runtime>::Value]) -> <R as Runtime>::Value + Send + Sync;
+type ElementsFn<R> = dyn Fn(&R, <R as Runtime>::Value) -> Elements<R> + Send + Sync;
 type AsyncFn<R> = dyn Fn(
         R,
         &mut [<R as Runtime>::Value],
@@ -42,9 +44,55 @@ type AsyncFn<R> = dyn Fn(
     + Send
     + Sync;
 
-/// The by-value ABI, one variant per arity the declaration has. The
-/// variant is fixed when the handler is built: the macro reads the arity
-/// off the signature, and the caller's operation is chosen to match.
+/// A declaration that returns a slice, at the one arity such a
+/// declaration has: its container reference in, the run's pointer and
+/// length out as a Rust `ScalarPair`, in two machine registers with no
+/// `Value` and no allocation (RFC-0047 §6).
+pub struct SliceHandler<R>
+where
+    R: Runtime,
+{
+    elements: Arc<ElementsFn<R>>,
+}
+
+impl<R> SliceHandler<R>
+where
+    R: Runtime,
+{
+    pub fn new<F>(elements: F) -> Self
+    where
+        F: Fn(&R, R::Value) -> Elements<R> + Send + Sync + 'static,
+    {
+        Self {
+            elements: Arc::new(elements),
+        }
+    }
+
+    pub fn elements(&self, rt: &R, container: R::Value) -> Elements<R> {
+        (self.elements)(rt, container)
+    }
+
+    pub fn boxed(&self, rt: &R, container: R::Value) -> R::Value {
+        // SAFETY: `Slice::materialize` reads the box back as this same
+        // `Elements<R>`, which is the only crossing either slice type has.
+        unsafe { rt.erase::<Elements<R>>(self.elements(rt, container)) }
+    }
+}
+
+impl<R> Clone for SliceHandler<R>
+where
+    R: Runtime,
+{
+    fn clone(&self) -> Self {
+        Self {
+            elements: Arc::clone(&self.elements),
+        }
+    }
+}
+
+/// The by-value ABI. The variant is fixed when the handler is built: the
+/// macro reads the arity and the return type off the signature, and the
+/// caller's operation is chosen to match.
 pub enum SyncHandler<R>
 where
     R: Runtime,
@@ -54,6 +102,7 @@ where
     Arity2(Arc<Sync2<R>>),
     Arity3(Arc<Sync3<R>>),
     ArityN(Arc<SyncN<R>>),
+    Slice(SliceHandler<R>),
 }
 
 impl<R> Clone for SyncHandler<R>
@@ -67,6 +116,7 @@ where
             Self::Arity2(f) => Self::Arity2(Arc::clone(f)),
             Self::Arity3(f) => Self::Arity3(Arc::clone(f)),
             Self::ArityN(f) => Self::ArityN(Arc::clone(f)),
+            Self::Slice(f) => Self::Slice(f.clone()),
         }
     }
 }
@@ -83,6 +133,7 @@ where
             Self::Arity1(_) => Some(1),
             Self::Arity2(_) => Some(2),
             Self::Arity3(_) => Some(3),
+            Self::Slice(_) => Some(1),
             Self::ArityN(_) => None,
         }
     }
@@ -120,6 +171,10 @@ where
                 let a1 = std::mem::take(&mut args[1]);
                 let a2 = std::mem::take(&mut args[2]);
                 f(rt, a0, a1, a2)
+            }
+            Self::Slice(f) => {
+                let a0 = std::mem::take(&mut args[0]);
+                f.boxed(rt, a0)
             }
             Self::ArityN(f) => f(rt, args),
         }

@@ -110,6 +110,12 @@ where
     pub fn of(values: &[Rt::Value]) -> Self {
         Self(Elements::of(values), PhantomData)
     }
+
+    /// The run itself, which a fused operation keeps in two registers
+    /// instead of boxing (RFC-0047 §6).
+    pub fn into_elements(self) -> Elements<Rt> {
+        self.0
+    }
 }
 
 impl<T, Rt> SliceMut<T, Rt>
@@ -120,6 +126,10 @@ where
     /// As `Slice::of`, for an exclusive take.
     pub fn of(values: &mut [Rt::Value]) -> Self {
         Self(Elements::of(values), PhantomData)
+    }
+
+    pub fn into_elements(self) -> Elements<Rt> {
+        self.0
     }
 }
 

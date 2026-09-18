@@ -8,10 +8,10 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Arr, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, ExternFn, ExternHandler,
-    ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure, Registry,
-    Runtime, Task, TyArg, TyVar, TypeArg, TypeRegistry, TypesOnly, extern_fn, extern_registry,
-    extern_signature,
+    Arr, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, Elements, ExternFn,
+    ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure,
+    Ref, Registry, Runtime, Slice, SyncHandler, Task, TyArg, TyVar, TypeArg, TypeRegistry,
+    TypesOnly, extern_fn, extern_registry, extern_signature,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -412,6 +412,15 @@ fn bump(n: &mut i64, by: i64) -> i64 {
     *n
 }
 
+#[extern_fn(effect = pure)]
+fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Slice<T, Rt>
+where
+    T: TyVar,
+    Rt: Runtime,
+{
+    Slice::of(c.elements(rt))
+}
+
 extern_signature! { ns: "t", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }
 
 #[extern_fn(instance_of = eq, effect = pure)]
@@ -453,8 +462,8 @@ where
         ns: "t",
         types: [Boxed<_, _, R>, Token<_>],
         signatures: [eq],
-        fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, eq_int,
-              eq_point, same, greet(Greeting("hello".to_string()))],
+        fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
+              eq_int, eq_point, same, greet(Greeting("hello".to_string()))],
     }
 }
 
@@ -630,6 +639,31 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
         42,
         "the place the reference named was written"
     );
+}
+
+#[test]
+fn the_unboxed_and_the_boxed_entry_report_one_run() {
+    let (i, reg) = combined::<Tiny>();
+    let ExternHandler::Sync(SyncHandler::Slice(entry)) = handler(&reg, &i, "as_slice") else {
+        panic!("a declaration returning a slice has the unboxed entry (RFC-0047 §6)")
+    };
+    let storage = erased(vec![erased(1i64), erased(2i64), erased(3i64)]);
+    // SAFETY: `storage` outlives every run taken from it here (RFC-0018).
+    let container = || unsafe { Tiny.reference(&storage) };
+
+    let unboxed = entry.elements(&Tiny, container());
+    let boxed = open::<Elements<Tiny>>(entry.boxed(&Tiny, container()));
+    assert_eq!(unboxed.len(), 3);
+    assert_eq!(boxed.len(), unboxed.len());
+    for at in 0..unboxed.len() {
+        // SAFETY: `at` is below the length both entries reported.
+        let (unboxed, boxed) = unsafe { (unboxed.at(at), boxed.at(at)) };
+        assert!(
+            std::ptr::eq(unboxed, boxed),
+            "element {at} is one place in the container's own storage"
+        );
+        assert!(std::ptr::eq(unboxed, &open_ref::<Vec<V>>(&storage)[at]));
+    }
 }
 
 async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
