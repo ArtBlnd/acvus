@@ -93,3 +93,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0045](0045-let-binds-and-assignment-assigns.md) | `let` binds, `x = e;` assigns | Accepted |
 | [RFC-0046](0046-a-calls-task-is-an-effect.md) | A call's task is an effect: `Task::{Sync, Async, Heavy}` | Accepted |
 | [RFC-0047](0047-a-slice-is-the-one-thing-the-machine-indexes.md) | A slice is the one thing the machine indexes: `AsSlice`, `Index`/`IndexSet`, `a[i]`, bounds proved by an interval domain | Accepted |
+| [RFC-0048](0048-ownership-is-the-machines.md) | Ownership is the machine's: `Value: Copy` with an explicit `release`, a register written once, a mark word per frame, static batched takes | Draft |
