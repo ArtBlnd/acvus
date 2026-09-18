@@ -18,6 +18,9 @@ type `Result<i64, !>`, since nothing fails into it. `!` is below every
 type, so a `Result<T, !>` goes wherever a `Result<T, E>` is expected.
 The compile-time freeze that asks whether a declared type is fully known
 keeps refusing an open variable; only the final freeze closes one to `!`.
+Read from the other side, a slot *declared* `!` states no type and so accepts
+any value: that is RFC-0054's `!` declaration, the word a host uses when it
+cannot say what `main` returns.
 
 `x?` on `x: Result<T, E1>` inside a function returning `Result<U, E2>`
 yields the `T` and unifies `Result<_, E1>` with the return type. When

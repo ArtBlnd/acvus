@@ -1,6 +1,6 @@
 # RFC-0054: the host declares what `main` returns
 
-Status: Draft — coordinator, 2026-09-19
+Status: Accepted — owner and coordinator, 2026-09-19
 Extends: RFC-0038 (`!` is below every type), RFC-0046 (a call's task is an
 effect), RFC-0047 (the slice retry, whose T2 found this)
 
@@ -113,6 +113,40 @@ the defect written down as a passing test, and it is now
 `graph::lower` produces no module. `validate` holds the *pipeline* — the
 declaration against what the optimization passes left — not the source.
 
+### 5. The `!` declaration: a host that cannot name a type says so
+
+A host that prints whatever the file returns has no type to state. It states
+*that*: `!` — the type with no value (RFC-0038) — is the declaration "I state
+no return type". `validate` accepts every `Return` under it, the checker holds
+the tail to nothing, and the host reads the value it gets back by kind, which
+the runtime carries with the value: `Value::kind()` for a word, the vtable's
+`Composite` for an allocation. It is spelled by the host, never defaulted.
+
+The rule was already in the code, unnamed. `types_match`'s `(Ty::Never, _)`
+arm fires on the *expected* side, so a declared `!` already accepted any
+actual type; its parameters are now `expected` and `actual`, and the arm says
+which side it reads. The value-side fact — a `!` *value* satisfies any slot —
+is a second site, `InstKind::Return`'s `!matches!(value_ty, Ty::Never)` guard.
+Two facts, two places; neither arm carries both.
+
+`acvus-cli` declares `Ty::Never` (`acvus-cli/src/compile.rs`; the
+`fresh_ty_var()` is gone). Under that declaration `main`'s inferred `ret` is
+`!` and no longer describes the value, so the CLI stops printing through a
+`Ty`: `Compiled::ret_ty` is gone and `json::by_kind` reads the value the way
+the declaration says the host does. Its output is unchanged — the ten
+`acvus-cli/tests/cli.rs` cases, which assert exact stdout, are untouched.
+
+Two tests carry the rule at the two contracts:
+`a_main_declared_never_holds_its_return_to_nothing`
+(`acvus-mir-test/tests/return_type.rs`) is
+`a_main_is_checked_against_what_the_host_declared` one variable apart — the
+same reference sabotage, declared `!`, drawing no refusal; and
+`a_host_declaring_never_gets_the_value_and_reads_it_by_kind`
+(`acvus-interpreter-test/tests/main_return_declaration.rs`) runs a `String`
+body under a `!` declaration and reads the result through its vtable. The ten
+`#[should_panic]` sites that declare `Ty::Never` are now correct by this rule
+rather than by accident.
+
 ## What it costs
 
 Every host names a type. In `acvus-interpreter-test` the declaration is a
@@ -139,6 +173,19 @@ convention every host must remember, it fires after the run, and it says
 nothing at the contract the script was compiled against. The declaration is
 the guarantee; the host reads the value with the witness it declared.
 
+**An explicit-any `Ty` besides `!`.** A new variant — or `Error(ErrorToken)`,
+which unifies with everything — would give the same acceptance under a second
+name. The type system already has the word for "I cannot state a type": a host
+that cannot return the type says so in `!`, and `types_match` already read it
+that way on the expected side. A second spelling would have to be kept in step
+with the first at every site that reads a declaration.
+
+**A `--returns` flag at the CLI.** It moves the declaration from the host to
+the person running the file, who has no more to say about it: the CLI prints
+whatever comes back either way. It would also make the ten `#[should_panic]`
+sites that declare `Ty::Never` wrong, and buy nothing they need — they assert
+on the panic, never on the value.
+
 **A `main`-only branch in the checker.** `check_script` already had the
 declaration; the fix was to make it the body's return type rather than an
 extra check on the tail. A branch for the entry would have left `?` unheld.
@@ -152,16 +199,9 @@ extra check on the tail. A branch for the entry would have left `?` unheld.
   before nothing was said.
 - The `acvus-interpreter-test` entry is named `main` rather than `test`, so
   the error names what the rule names.
-
-## Open item
-
-**`acvus-cli` cannot declare.** It runs a file the user wrote and prints
-whatever comes back, dispatching on the entry's type
-(`acvus-cli/src/main.rs:410-417`). Rule 3 asks such a host to declare
-explicitly with "any value the host will inspect by kind". No `Ty` means
-that: `TyTerm` has `Error(ErrorToken)`, which unifies with everything, but it
-is poison, not a type a host may name. Until the owner decides that form,
-`acvus-cli` leaves `main`'s return inferred, and the comment at
-`acvus-cli/src/compile.rs` says so. `acvus-mir-test`'s IR-inspection helpers
-are in the same position by choice: they read the IR, not a value, and
-`declared_script_module` is there for the ones that do declare.
+- `acvus-mir-test`'s IR-inspection helpers declare `!` by rule 5: they read
+  the IR, not a value. `declared_script_module` is there for the ones that do
+  declare a type.
+- `acvus-cli` reads its result by kind, so a value whose type the printer
+  could not name — a closure, an extern handle — prints as its Rust type name
+  rather than as its `Ty`.

@@ -32,7 +32,6 @@ pub struct Compiled {
     pub space: acvus_interpreter::SpaceHooksByType,
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub context_names: FxHashMap<QualifiedRef, Astr>,
-    pub ret_ty: Ty,
     mir: String,
 }
 
@@ -74,16 +73,12 @@ pub fn compile(
         })
         .collect();
     let entry = QualifiedRef::root(interner.intern("main"));
-    // RFC-0054, open item: this host prints whatever the file returns and so
-    // has no type to declare. The explicit "any value the host inspects by
-    // kind" the rule asks for does not exist in `Ty` yet; until the owner
-    // decides its form, `main`'s return stays inferred here.
     let mut functions = vec![Function {
         qref: entry,
         kind: FnKind::Local(parsed),
         ty: TyTerm::Fn {
             params: vec![],
-            ret: Box::new(pb.fresh_ty_var()),
+            ret: Box::new(lift_declaration(&Ty::Never, &mut pb)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
@@ -140,11 +135,6 @@ pub fn compile(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
-    let ret_ty = match &inf.outcomes[&entry].meta().ty {
-        Ty::Fn { ret, .. } => (**ret).clone(),
-        other => other.clone(),
-    };
-
     let optimized = optimize::optimize(lowered.modules, &inf.context_types, &FxHashSet::default());
     diagnostics.extend(
         optimized
@@ -193,7 +183,6 @@ pub fn compile(
         space,
         fn_types,
         context_names,
-        ret_ty,
         mir,
     })
 }

@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use acvus_ast::report::{Report, Severity};
 use acvus_interpreter::{
-    ContextWrite, DirStore, Executor, InMemoryContext, Interpreter, InterpreterContext,
-    Mode as SpaceMode, RuntimeContext, SequentialExecutor, Space, SpacePage, TokioExecutor, hex,
+    Composite, ContextWrite, DirStore, Executor, InMemoryContext, Interpreter, InterpreterContext,
+    Kind, Mode as SpaceMode, RuntimeContext, SequentialExecutor, Space, SpacePage, TokioExecutor,
+    Value, hex,
 };
 use acvus_utils::Interner;
 
@@ -337,7 +338,6 @@ async fn run(
         functions,
         fn_types,
         context_names,
-        ret_ty,
         space: hooks,
         ..
     } = compiled;
@@ -407,13 +407,19 @@ async fn run(
         eprintln!("error: {}: {e}", p.display());
         return ExitCode::from(EXIT_RUN);
     }
-    match &ret_ty {
-        acvus_mir::ty::Ty::String => {
-            // SAFETY: the entry's return type is String.
-            println!("{}", unsafe { value.as_str() });
-        }
-        acvus_mir::ty::Ty::Unit => {}
-        ty => println!("{}", json::of(interner, ty, &value)),
-    }
+    print_result(interner, &value);
     ExitCode::SUCCESS
+}
+
+/// RFC-0054: this host declares `!`, so it has no type for what comes back
+/// and reads the value by kind.
+fn print_result(interner: &Interner, value: &Value) {
+    match value.composite() {
+        // SAFETY, both arms: the vtable is the runtime's witness of the type
+        // behind the pointer.
+        Some(Composite::String) => println!("{}", unsafe { value.as_str() }),
+        Some(Composite::Tuple) if unsafe { value.as_tuple() }.is_empty() => {}
+        _ if value.kind() == Kind::Unit => {}
+        _ => println!("{}", json::by_kind(interner, value)),
+    }
 }

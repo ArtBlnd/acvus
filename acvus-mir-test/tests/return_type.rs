@@ -101,6 +101,20 @@ fn a_main_is_checked_against_what_the_host_declared() {
     assert!(refusal.contains("Ref("), "{refusal}");
 }
 
+/// RFC-0054, one variable from `a_main_is_checked_against_what_the_host_declared`:
+/// the same sabotage, declared `!` instead of `[i64; 3]`.
+#[test]
+fn a_main_declared_never_holds_its_return_to_nothing() {
+    let i = Interner::new();
+    let mut module = declared_script_module(&i, "let f = |x| -> [x, x, x]; f(1)", &[], Ty::Never)
+        .expect("compiles");
+    assert_eq!(module.ret, Ty::Never);
+    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+
+    return_a_reference(&mut module.main);
+    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+}
+
 /// The declaration a host states is the type the module carries, not what
 /// the body happened to produce.
 #[test]

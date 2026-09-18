@@ -157,14 +157,15 @@ fn identities_match(a: &Ty, b: &Ty) -> bool {
     }
 }
 
-/// Returns `true` if `a` and `b` are structurally equal under invariant
-/// variance.  `Ty::Error` matches anything (poison).
+/// Returns `true` if `expected` and `actual` are structurally equal under
+/// invariant variance.  `Ty::Error` matches anything (poison).
 /// `Ty::Var(Infallible)` is uninhabitable for concrete types.
-fn types_match(a: &Ty, b: &Ty) -> bool {
-    match (a, b) {
+fn types_match(expected: &Ty, actual: &Ty) -> bool {
+    match (expected, actual) {
         // Poison - accept anything.
         (Ty::Error(_), _) | (_, Ty::Error(_)) => true,
-        // No value of `!` exists, so one satisfies any slot (RFC-0038).
+        // A slot declared `!` states no type, so it accepts any value
+        // (RFC-0054).
         (Ty::Never, _) => true,
         // Uninhabitable - concrete types never have Var.
         (Ty::Var(v), _) | (_, Ty::Var(v)) => match *v {},

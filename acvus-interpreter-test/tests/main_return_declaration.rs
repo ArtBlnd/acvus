@@ -1,7 +1,7 @@
 //! The host declares what `main` returns, and the compilation holds the body
 //! to it (RFC-0054).
 
-use acvus_interpreter::Value;
+use acvus_interpreter::{Composite, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -43,6 +43,15 @@ fn i() -> Interner {
 #[should_panic(expected = "no")]
 async fn a_diverging_body_satisfies_any_declaration() {
     let _ = run_script(&i(), r#"panic("no")"#, Context::default(), Ty::I64).await;
+}
+
+/// RFC-0054: a `!` declaration is the host's "I state no return type".
+#[tokio::test]
+async fn a_host_declaring_never_gets_the_value_and_reads_it_by_kind() {
+    let v = run_script(&i(), r#""by kind""#, Context::default(), Ty::Never).await;
+    assert_eq!(v.composite(), Some(Composite::String));
+    // SAFETY: the vtable witnesses a String behind the pointer.
+    assert_eq!(unsafe { v.as_str() }, "by kind");
 }
 
 /// A `?` is a second `Return`. Under a declaration both are held to it: the
