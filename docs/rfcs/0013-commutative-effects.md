@@ -28,7 +28,10 @@ breaks one.
 Nothing else reads the axis. A commutative call still keeps its place
 against every non-commutative call, and a commutative call is not thereby
 re-issuable: whether it may be suspended and issued again is the reissue
-axis, as before.
+axis, as before. The `task` axis RFC-0046 added to `Effect` does not enter
+commutation either: it says what a call costs the scheduler, not what it
+reads or writes, so a run is the same run whether its calls are `Sync`,
+`Async` or `Heavy`.
 
 The declaration is the author's fact about the outside world, like purity.
 The compiler does not verify it, and a wrong declaration is a wrong

@@ -199,6 +199,7 @@ mod tests {
             params: vec![],
             captures: vec![],
             order_param: None,
+            task: crate::ty::Task::Sync,
             debug: DebugInfo::new(),
             label_count: 0,
             val_factory: factory,

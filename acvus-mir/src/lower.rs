@@ -12,7 +12,7 @@ use crate::ir::{
     Callee, CastKind, ExternCast, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg,
     RefTarget, ValOrigin, ValueId,
 };
-use crate::ty::{Effect, Mutability, Ty, TypeArg};
+use crate::ty::{Effect, Mutability, Task, Ty, TypeArg};
 use crate::typeck::TypeResolution;
 
 pub struct Lowerer<'a> {
@@ -271,6 +271,7 @@ impl<'a> Lowerer<'a> {
             body.val_types.insert(reg, ty.clone());
             body.params.push((*name, reg));
         }
+        body.task = resolution.effect.task;
 
         Self {
             body,
@@ -2135,6 +2136,10 @@ impl<'a> Lowerer<'a> {
                     .map(|p| p.name)
                     .zip(closure_param_regs)
                     .collect();
+                closure_body_mir.task = self
+                    .type_of_id(*id)
+                    .effect()
+                    .map_or(Task::Sync, |effect| effect.task);
                 self.closures.insert(closure_label, closure_body_mir);
 
                 // Allocate dst with Fn type. If a return-site Cast was inserted,

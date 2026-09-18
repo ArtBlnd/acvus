@@ -344,6 +344,7 @@ mod tests {
             params: Vec::new(),
             captures: Vec::new(),
             order_param: Some(v(0)),
+            task: crate::ty::Task::Sync,
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,

@@ -42,6 +42,9 @@ struct ExternFnAttr {
     /// `commutative`: two calls of this function in either order are the
     /// same program (RFC-0013).
     commutative: bool,
+    /// `heavy`: the call is offloaded to a blocking pool and awaited
+    /// (RFC-0046).
+    heavy: bool,
 }
 
 impl Parse for ExternFnAttr {
@@ -51,11 +54,19 @@ impl Parse for ExternFnAttr {
             instance_of: None,
             effect: None,
             commutative: false,
+            heavy: false,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             if key == "commutative" {
                 out.commutative = true;
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
+            if key == "heavy" {
+                out.heavy = true;
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -71,7 +82,7 @@ impl Parse for ExternFnAttr {
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name`, `instance_of`, `effect`, or `commutative`",
+                    "expected `name`, `instance_of`, `effect`, `commutative`, or `heavy`",
                 ));
             }
             if !input.is_empty() {
@@ -163,14 +174,26 @@ fn generate_extern_fn(
         None => quote! { ::core::option::Option::None },
     };
 
+    if attr.heavy && is_async {
+        return Err(syn::Error::new(
+            fn_ident.span(),
+            "`heavy` and `async fn` are two tasks; declare one",
+        ));
+    }
     let commutes = if attr.commutative {
         quote! { .commutative() }
     } else {
         quote! {}
     };
+    let task = match (attr.heavy, is_async) {
+        (true, _) => quote! { ::acvus_extern::Task::Heavy },
+        (false, true) => quote! { ::acvus_extern::Task::Async },
+        (false, false) => quote! { ::acvus_extern::Task::Sync },
+    };
+    let at_task = quote! { .at_task(#task) };
     let effect = match &attr.effect {
         None => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes #at_task) }
         }
         Some(e) if e == "pure" => {
             if attr.commutative {
@@ -179,13 +202,13 @@ fn generate_extern_fn(
                     "a pure function commutes by definition; drop `commutative`",
                 ));
             }
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE #at_task) }
         }
         Some(e) if e == "idempotent" => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::IDEMPOTENT #commutes) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::IDEMPOTENT #commutes #at_task) }
         }
         Some(e) if e == "opaque" => {
-            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes) }
+            quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::OPAQUE #commutes #at_task) }
         }
         Some(e) => match vars.lookup(e) {
             Some((VarKind::Effect, k)) => {
@@ -193,6 +216,12 @@ fn generate_extern_fn(
                     return Err(syn::Error::new(
                         e.span(),
                         "`commutative` cannot be declared on an effect variable",
+                    ));
+                }
+                if attr.heavy {
+                    return Err(syn::Error::new(
+                        e.span(),
+                        "`heavy` cannot be declared on an effect variable: the task is the variable's",
                     ));
                 }
                 quote! { __vars.effects[#k].clone() }
@@ -439,6 +468,7 @@ fn generate_extern_fn(
                     ::acvus_extern::Instance {
                         signature: #signature,
                         handler: #handler,
+                        admits: ::acvus_extern::Task::Heavy,
                     }
                 }
             });

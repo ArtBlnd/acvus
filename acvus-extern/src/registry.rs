@@ -5,8 +5,8 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, TyTerm,
-    TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, matches_pattern, unify_patterns,
+    CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Task,
+    TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -158,6 +158,7 @@ where
             concrete: vec![Instance {
                 signature: instance,
                 handler,
+                admits: Task::Heavy,
             }],
             generic: None,
         },
@@ -505,6 +506,7 @@ fn add_instance<R: Runtime>(
     collected.instances.push(Instance {
         signature: decl.ty,
         handler,
+        admits: Task::Heavy,
     });
     Ok(())
 }

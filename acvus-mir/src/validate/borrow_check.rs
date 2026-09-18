@@ -235,6 +235,7 @@ mod tests {
             val_factory: factory,
             label_count: 2,
             order_param: None,
+            task: crate::ty::Task::Sync,
         }
     }
 

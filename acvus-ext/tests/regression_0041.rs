@@ -580,7 +580,7 @@ fn a_member_under_an_option_inside_a_vec_marks_the_vec_slot_and_declares_the_vec
         panic!("sum_opt has one member")
     };
     assert_eq!(
-        at_f64.display(&interner).to_string(),
+        at_f64.ty.display(&interner).to_string(),
         "Fn(Vec<#Option<Float>>) -> Float",
         "the `#` sits on the Vec slot, which holds the composite whole"
     );
@@ -626,7 +626,7 @@ fn a_member_under_an_option_inside_a_vec_marks_the_vec_slot_and_declares_the_vec
     let displayed: Vec<String> = instances
         .concrete
         .iter()
-        .map(|t| t.display(&interner).to_string())
+        .map(|t| t.ty.display(&interner).to_string())
         .collect();
     assert_eq!(
         displayed,

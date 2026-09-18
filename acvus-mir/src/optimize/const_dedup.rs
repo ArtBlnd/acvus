@@ -284,6 +284,7 @@ mod tests {
             val_factory: LocalFactory::new(),
             label_count: 0,
             order_param: None,
+            task: crate::ty::Task::Sync,
         }
     }
 

@@ -169,7 +169,10 @@ fn externs(i: &Interner) -> Vec<Function> {
             "vec_array",
             vec_array_generic,
             Instances {
-                concrete: vec_array_concrete,
+                concrete: vec_array_concrete
+                    .into_iter()
+                    .map(acvus_mir::ty::InstanceSig::any_task)
+                    .collect(),
                 generic: true,
             },
         ),
@@ -178,7 +181,10 @@ fn externs(i: &Interner) -> Vec<Function> {
             "reverse",
             reverse_generic,
             Instances {
-                concrete: reverse_concrete,
+                concrete: reverse_concrete
+                    .into_iter()
+                    .map(acvus_mir::ty::InstanceSig::any_task)
+                    .collect(),
                 generic: true,
             },
         ),

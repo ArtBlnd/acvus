@@ -133,7 +133,10 @@ fn externs(i: &Interner) -> Vec<Function> {
                 vec_of(i, TypeArg::new(Repr::Var(tv), t)),
             ),
             Instances {
-                concrete: vec_array_concrete,
+                concrete: vec_array_concrete
+                    .into_iter()
+                    .map(acvus_mir::ty::InstanceSig::any_task)
+                    .collect(),
                 generic: true,
             },
         ),

@@ -16,8 +16,8 @@ use crate::solver::{
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Ty, TyTerm,
-    TyVarBound, TypeArg, TypeEnv, lift_ty,
+    Effect, EffectTerm, Infer, InferTy, LenTerm, Mutability, Param, ParamTerm, Solver, Task, Ty,
+    TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -1446,6 +1446,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 captures: vec![],
                 effect: Effect::PURE.into(),
             },
+            admits: Task::Heavy,
         }]
     }
 
@@ -1733,6 +1734,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     // where it is frozen.
                     continue;
                 }
+                Unsettled::TaskTooHigh {
+                    required, found, ..
+                } => MirErrorKind::TaskTooHigh { required, found },
                 Unsettled::NoConversion { from, to, .. } => {
                     if let TyTerm::Var(var) = self.solver.resolve_ty(&to)
                         && let bound @ (TyVarBound::OneOf(_) | TyVarBound::Integer { .. }) =

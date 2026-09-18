@@ -10,7 +10,7 @@ use std::sync::Arc;
 use acvus_extern::{
     Arr, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, ExternFn, ExternHandler,
     ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, PolyTy, Pure, Registry,
-    Runtime, TyArg, TyVar, TypeArg, TypeRegistry, TypesOnly, extern_fn, extern_registry,
+    Runtime, Task, TyArg, TyVar, TypeArg, TypeRegistry, TypesOnly, extern_fn, extern_registry,
     extern_signature,
 };
 
@@ -400,6 +400,11 @@ fn draw() -> i64 {
     4
 }
 
+#[extern_fn(effect = pure, heavy)]
+fn digest(s: String) -> i64 {
+    s.len() as i64
+}
+
 /// Adds `by` to the lent place and returns the new value.
 #[extern_fn(effect = pure)]
 fn bump(n: &mut i64, by: i64) -> i64 {
@@ -448,8 +453,8 @@ where
         ns: "t",
         types: [Boxed<_, _, R>, Token<_>],
         signatures: [eq],
-        fns: [add, identity, apply, boxed, fetch, take_token, draw, bump, eq_int, eq_point, same,
-              greet(Greeting("hello".to_string()))],
+        fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, eq_int,
+              eq_point, same, greet(Greeting("hello".to_string()))],
     }
 }
 
@@ -507,7 +512,11 @@ fn concrete_signature_and_declared_effect() {
 
     assert_eq!(
         fn_ty(find(&reg.functions, &i, "fetch")).effect,
-        EffectTerm::Known(Effect::OPAQUE)
+        EffectTerm::Known(Effect::OPAQUE.at_task(Task::Async))
+    );
+    assert_eq!(
+        fn_ty(find(&reg.functions, &i, "digest")).effect,
+        EffectTerm::Known(Effect::PURE.at_task(Task::Heavy))
     );
     assert_eq!(
         fn_ty(find(&reg.functions, &i, "take_token")).effect,
@@ -655,7 +664,7 @@ fn instance_for<'a>(
     let concrete = instances
         .concrete
         .iter()
-        .position(|sig| acvus_mir::ty::matches_poly(callee_ty, sig));
+        .position(|sig| acvus_mir::ty::matches_poly(callee_ty, &sig.ty));
     let index = concrete.or_else(|| instances.generic.then(|| instances.generic_index()))?;
     Some(&handlers[index])
 }

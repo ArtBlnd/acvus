@@ -4,7 +4,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::graph::QualifiedRef;
-use crate::ty::{Mutability, Ty};
+use crate::ty::{Mutability, Task, Ty};
 
 /// A call that is an instruction of the language (RFC-0020): the
 /// compiler's own instance of a shared signature.
@@ -455,6 +455,9 @@ pub struct MirBody {
     pub captures: Vec<(Astr, ValueId)>,
     /// The `Order` the body takes first when its effect is not Pure.
     pub order_param: Option<ValueId>,
+    /// The join of the tasks of everything the body does (RFC-0046). The
+    /// interpreter's `Code::may_suspend` is `task > Sync`.
+    pub task: Task,
     pub debug: DebugInfo,
     pub val_factory: LocalFactory<ValueId>,
     pub label_count: u32,
@@ -473,6 +476,7 @@ impl MirBody {
             val_types: FxHashMap::default(),
             params: Vec::new(),
             captures: Vec::new(),
+            task: Task::Sync,
             order_param: None,
             debug: DebugInfo::new(),
             val_factory: LocalFactory::new(),

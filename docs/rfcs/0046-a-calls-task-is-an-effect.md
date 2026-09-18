@@ -128,3 +128,44 @@ the set is the one `prepare` marks today as `may_suspend`
   propagates `Heavy`, the interpreter offloads it, and a loop over it is
   asynchronous — by type, not by discovery.
 - kovac inherits a static answer for every call site.
+
+## What landed in the compiler
+
+`Effect` carries `task: Task`; `at_most`, `join` and `meet` order it, the
+free effect variable's ceiling is `Effect::TOP` (`Opaque`, `Heavy`), and the
+printer leaves `Sync` out exactly as it leaves `Pure` out, so a type shows
+`with Opaque/Async` and an `Iter` shows `Pure/Heavy`. The macro reads
+`asyncness` and the new `heavy` marker and writes the task onto a declared
+level; `effect = E` adds no task, and `heavy` on an `async fn` or on an
+effect variable is a macro error. A closure's effect is its body's at the
+capture site, which was already true of the effect variable `check_lambda`
+builds - the task rides in it with no new machinery. Demotion is the join
+that `EffectRelation::AtMost` already took; a value whose task exceeds a
+fixed one is `MirErrorKind::TaskTooHigh`, carried out of the failing join as
+`MismatchReason::TaskTooHigh` and out of the conversion decision as
+`Unsettled::TaskTooHigh`. `ty::Instances` holds `InstanceSig { ty, admits }`,
+and `solve` closes an instance decision the types left tied by taking the
+tightest ceiling that admits the call's task - in the same phase as the
+other least elements, because the task a call runs with is only complete
+once the argument decisions have settled. `MirBody` carries `task` for the
+main body and for every closure body, so the interpreter reads it instead of
+recomputing it.
+
+`Spawn` and `Eval` are not instructions the checker sees: `spawn_split`
+builds them from IO `FunctionCall`s after typecheck. Their task therefore
+comes from the callee's declaration, which is where the RFC's table already
+put it.
+
+## What the second brief owes
+
+Every consumer in `acvus-ext` that is `#[extern_fn(effect = E)] async fn`
+is `Async` at run time only because its glue awaits: 19 of them (`all`,
+`any`, `collect`, `contains`, `count`, `find`, `fold`, `join`, `last`,
+`max`, `max_by_key`, `min`, `min_by_key`, `next`, `nth`, `position`,
+`product`, `reduce`, `sum`). Each needs a second instance whose signature is
+the same and whose `admits` is `Task::Sync`, with a plain `fn` body that
+takes the `Stages::Sync` arm of `Iter::stages_mut` and calls
+`SyncStage::next` without awaiting - the `drain!` macro already writes both
+arms, so the sync body is the arm that exists. The interpreter's
+`Code::may_suspend` becomes `MirBody::task > Task::Sync` with `prepare`'s own
+computation kept as a `debug_assert_eq!`.

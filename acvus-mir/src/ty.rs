@@ -229,13 +229,30 @@ impl TyVarBound {
 /// half of that contract.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Instances {
-    pub concrete: Vec<PolyTy>,
+    pub concrete: Vec<InstanceSig>,
     pub generic: bool,
 }
 
 impl Instances {
     pub fn generic_index(&self) -> usize {
         self.concrete.len()
+    }
+}
+
+/// One concrete instance of an extern: its signature and the greatest task
+/// it runs, which is a ceiling and not the instance's own task (RFC-0046).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceSig {
+    pub ty: PolyTy,
+    pub admits: Task,
+}
+
+impl InstanceSig {
+    pub fn any_task(ty: PolyTy) -> Self {
+        Self {
+            ty,
+            admits: Task::Heavy,
+        }
     }
 }
 
@@ -1148,6 +1165,48 @@ pub enum Reissue {
     Opaque,
 }
 
+/// What a call costs the scheduler (RFC-0046).
+///
+/// RFC-0046 rejected deriving synchrony from purity instead of carrying
+/// this field. A `heavy` pure extern - a regex match, a hash of a large
+/// buffer - is offloaded to a blocking pool and awaited, so `Pure` would
+/// have been an unsound claim about synchrony that nothing ever checked.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub enum Task {
+    #[default]
+    Sync,
+    Async,
+    Heavy,
+}
+
+impl Task {
+    pub fn join(self, other: Task) -> Task {
+        self.max(other)
+    }
+
+    pub fn meet(self, other: Task) -> Task {
+        self.min(other)
+    }
+}
+
+impl fmt::Display for Task {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 /// The contexts a call may touch (RFC-0017), as a set of context names.
 pub type Contexts = BTreeSet<QualifiedRef>;
 
@@ -1159,6 +1218,7 @@ pub type Contexts = BTreeSet<QualifiedRef>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {
     pub reissue: Reissue,
+    pub task: Task,
     pub commutes: bool,
     pub reads: Contexts,
     pub writes: Contexts,
@@ -1167,18 +1227,28 @@ pub struct Effect {
 impl Effect {
     pub const PURE: Effect = Effect {
         reissue: Reissue::Pure,
+        task: Task::Sync,
         commutes: true,
         reads: BTreeSet::new(),
         writes: BTreeSet::new(),
     };
     pub const IDEMPOTENT: Effect = Effect {
         reissue: Reissue::Idempotent,
+        task: Task::Sync,
         commutes: false,
         reads: BTreeSet::new(),
         writes: BTreeSet::new(),
     };
     pub const OPAQUE: Effect = Effect {
         reissue: Reissue::Opaque,
+        task: Task::Sync,
+        commutes: false,
+        reads: BTreeSet::new(),
+        writes: BTreeSet::new(),
+    };
+    pub const TOP: Effect = Effect {
+        reissue: Reissue::Opaque,
+        task: Task::Heavy,
         commutes: false,
         reads: BTreeSet::new(),
         writes: BTreeSet::new(),
@@ -1196,9 +1266,17 @@ impl Effect {
     ) -> Effect {
         Effect {
             reissue,
+            task: Task::Sync,
             commutes: (commutes || reissue == Reissue::Pure) && writes.is_empty(),
             reads,
             writes,
+        }
+    }
+
+    pub fn at_task(&self, task: Task) -> Effect {
+        Effect {
+            task,
+            ..self.clone()
         }
     }
 
@@ -1226,6 +1304,7 @@ impl Effect {
     /// The same level, declared to commute.
     pub fn commutative(&self) -> Effect {
         Effect::with_contexts(self.reissue, true, self.reads.clone(), self.writes.clone())
+            .at_task(self.task)
     }
 
     pub fn is_pure(&self) -> bool {
@@ -1235,7 +1314,7 @@ impl Effect {
     /// No level above Pure and no context touched: the effect a type
     /// display leaves out.
     pub fn is_empty(&self) -> bool {
-        self.is_pure() && self.reads.is_empty() && self.writes.is_empty()
+        self.is_pure() && self.task == Task::Sync && self.reads.is_empty() && self.writes.is_empty()
     }
 
     /// Whether the call may touch `context` at all.
@@ -1249,7 +1328,9 @@ impl Effect {
     /// this order: a bound on an effect bounds its level, and the sets
     /// only accumulate through `join`. `touches_at_most` orders the sets.
     pub fn at_most(&self, other: &Effect) -> bool {
-        self.reissue <= other.reissue && (self.commutes || !other.commutes)
+        self.reissue <= other.reissue
+            && self.task <= other.task
+            && (self.commutes || !other.commutes)
     }
 
     /// Whether `self` touches no context `other` does not.
@@ -1266,6 +1347,7 @@ impl Effect {
             self.reads.union(&other.reads).copied().collect(),
             self.writes.union(&other.writes).copied().collect(),
         )
+        .at_task(self.task.join(other.task))
     }
 
     /// The greatest effect below both.
@@ -1276,6 +1358,7 @@ impl Effect {
             self.reads.intersection(&other.reads).copied().collect(),
             self.writes.intersection(&other.writes).copied().collect(),
         )
+        .at_task(self.task.meet(other.task))
     }
 }
 
@@ -1294,6 +1377,9 @@ impl PartialOrd for Effect {
 impl fmt::Display for Effect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.reissue)?;
+        if self.task != Task::Sync {
+            write!(f, "/{}", self.task)?;
+        }
         if self.commutes && !self.is_pure() {
             write!(f, "+commutative")?;
         }
@@ -1619,7 +1705,7 @@ where
                     return Ok(());
                 }
                 write!(f, " with")?;
-                if !effect.is_pure() {
+                if !effect.is_pure() || effect.task != Task::Sync {
                     write!(f, " {effect}")?;
                 }
                 for (label, set) in [("reads", &effect.reads), ("writes", &effect.writes)] {

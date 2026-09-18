@@ -409,7 +409,7 @@ fn a_member_instance_marks_the_slots_holding_the_member() {
     let [at_f64] = instances.concrete.as_slice() else {
         panic!("dot has one member")
     };
-    let TyTerm::Fn { params, ret, .. } = at_f64 else {
+    let TyTerm::Fn { params, ret, .. } = &at_f64.ty else {
         panic!("an instance is a function type")
     };
     let expected = vec_of(&w.interner, TypeArg::specialized(PolyTy::Float));
@@ -417,7 +417,7 @@ fn a_member_instance_marks_the_slots_holding_the_member() {
     assert_eq!(params[1].ty, expected);
     assert_eq!(**ret, PolyTy::Float);
     assert_eq!(
-        at_f64.display(&w.interner).to_string(),
+        at_f64.ty.display(&w.interner).to_string(),
         "Fn(Vec<#Float>, Vec<#Float>) -> Float"
     );
 }
@@ -481,6 +481,7 @@ fn a_family_in_a_member_signature_declares_its_two_casts_once() {
     }
     assert_eq!(
         w.instances("Vec", "materialize").concrete[0]
+            .ty
             .display(&w.interner)
             .to_string(),
         "Fn(Vec<Float>) -> Vec<#Float>"

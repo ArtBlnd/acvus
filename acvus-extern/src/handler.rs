@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_mir::ty::PolyTy;
+use acvus_mir::ty::{PolyTy, Task};
 
 use crate::runtime::Runtime;
 
@@ -151,6 +151,7 @@ impl<R: Runtime> ExternHandler<R> {
 pub struct Instance<R: Runtime> {
     pub signature: PolyTy,
     pub handler: ExternHandler<R>,
+    pub admits: Task,
 }
 
 /// The number a call carries in `Callee::Extern` is an index into
@@ -186,7 +187,14 @@ impl<R: Runtime> Instances<R> {
 
     pub fn signatures(&self) -> acvus_mir::ty::Instances {
         acvus_mir::ty::Instances {
-            concrete: self.concrete.iter().map(|i| i.signature.clone()).collect(),
+            concrete: self
+                .concrete
+                .iter()
+                .map(|i| acvus_mir::ty::InstanceSig {
+                    ty: i.signature.clone(),
+                    admits: i.admits,
+                })
+                .collect(),
             generic: self.generic.is_some(),
         }
     }

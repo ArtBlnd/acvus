@@ -19,8 +19,8 @@ use crate::ir::Intrinsic;
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
     IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Mutability, ParamTerm, Phase, Poly,
-    PolyTy, Repr, ReprVarId, Scheme, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
-    could_match_pattern, matches_pattern,
+    PolyTy, Repr, ReprVarId, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId,
+    TypeRegistry, could_match_pattern, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -49,7 +49,7 @@ impl EffectBound {
     fn free() -> Self {
         EffectBound::Range {
             lower: Effect::PURE,
-            upper: Effect::OPAQUE,
+            upper: Effect::TOP,
         }
     }
 }
@@ -108,6 +108,18 @@ impl Sources {
 
 // -- Mismatch ----------------------------------------------------------
 
+/// A conflict whose one disagreement is the task names the task, so the
+/// checker can report RFC-0046's refusal instead of two printed types.
+fn task_reason(conflict: &EffectConflict) -> MismatchReason {
+    match conflict.required.task > conflict.allowed.task {
+        true => MismatchReason::TaskTooHigh {
+            required: conflict.allowed.task,
+            found: conflict.required.task,
+        },
+        false => MismatchReason::NoJoin,
+    }
+}
+
 /// Two types that did not join: what was asked and what arrived, and why.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mismatch {
@@ -126,6 +138,8 @@ pub enum MismatchReason {
     /// A slot's representation is a signature's open variable, which a
     /// flow does not bind: the decision that owns it answers later.
     ReprOpen(ReprVarId),
+    /// The value's task is above the one the position fixes (RFC-0046).
+    TaskTooHigh { required: Task, found: Task },
 }
 
 /// How two effects are related by a constraint.
@@ -932,8 +946,8 @@ impl Terms {
                     self.join(&ta.ty, &tb.ty, Position::Argument, kind, registry)?;
                 }
                 self.join(ret_a, ret_b, Position::Argument, kind, registry)?;
-                if self.unify_effect(ea, eb, EffectRelation::AtMost).is_err() {
-                    return Err(mismatch(self));
+                if let Err(conflict) = self.unify_effect(ea, eb, EffectRelation::AtMost) {
+                    return Err(mismatch_for(self, task_reason(&conflict)));
                 }
                 Ok(())
             }
@@ -1260,6 +1274,7 @@ pub enum InstanceKind {
 pub struct Candidate {
     pub instance: InstanceKind,
     pub ty: PolyTy,
+    pub admits: Task,
 }
 
 /// The generic instance of a function: the uniform one, whose signature a
@@ -1542,6 +1557,13 @@ pub enum Unsettled {
         decision: DecisionId,
         call: InferTy,
     },
+    /// A function value's task is above the one the position fixes
+    /// (RFC-0046), which no conversion can lower.
+    TaskTooHigh {
+        decision: DecisionId,
+        required: Task,
+        found: Task,
+    },
     /// The two do not join and no declared conversion takes one to the other.
     NoConversion {
         decision: DecisionId,
@@ -1614,6 +1636,7 @@ impl Unsettled {
             Unsettled::NoInstance { decision, .. }
             | Unsettled::InstanceMismatch { decision, .. }
             | Unsettled::AmbiguousInstance { decision, .. }
+            | Unsettled::TaskTooHigh { decision, .. }
             | Unsettled::NoConversion { decision, .. }
             | Unsettled::AmbiguousConversion { decision, .. }
             | Unsettled::ConversionOpen { decision, .. }
@@ -1756,11 +1779,9 @@ impl<'src> Solver<'src> {
     }
 
     /// Whether `settle_join(a, b)` would succeed, on a copy of the terms.
-    fn would_settle_join(&self, a: &InferTy, b: &InferTy) -> bool {
+    fn trial_settle_join(&self, a: &InferTy, b: &InferTy) -> Result<(), Mismatch> {
         let mut trial = self.terms.clone();
-        trial
-            .join(a, b, Position::Value, JoinKind::Decision, self.registry)
-            .is_ok()
+        trial.join(a, b, Position::Value, JoinKind::Decision, self.registry)
     }
 
     /// Whether `unify(a, b)` would succeed, on a copy of the terms.
@@ -1909,6 +1930,8 @@ impl<'src> Solver<'src> {
         self.close_matches_by_least_element(&mut failures);
         failures.extend(self.settle());
         self.close_lends_by_least_element(&mut failures);
+        failures.extend(self.settle());
+        self.close_instances_by_task();
         failures.extend(self.settle());
         for index in 0..self.decisions.len() {
             let id = DecisionId(index as u32);
@@ -2406,6 +2429,61 @@ impl<'src> Solver<'src> {
     /// present, a concrete one is taken only once the call type joins it
     /// with no variable left open in the join: an open variable may still
     /// be a demand for the generic one (hash-types.md R3).
+    /// Of the instances whose declared ceiling admits the call's task, the
+    /// one with the lowest ceiling (RFC-0046). The task read is the one the
+    /// type freezes to - the join of the lower bounds - which is the task
+    /// the program runs with. A list whose ceilings agree is left alone, so
+    /// a declaration that names no task is decided by its types as before.
+    fn tightest_admitting(&self, call: &InferTy, candidates: Vec<Candidate>) -> Vec<Candidate> {
+        let one_ceiling = candidates
+            .iter()
+            .map(|c| c.admits)
+            .min()
+            .is_some_and(|min| candidates.iter().all(|c| c.admits == min));
+        if one_ceiling {
+            return candidates;
+        }
+        let TyTerm::Fn { effect, .. } = call else {
+            return candidates;
+        };
+        let task = self.terms.freeze_effect(effect).task;
+        let admitting: Vec<Candidate> = candidates
+            .into_iter()
+            .filter(|c| task <= c.admits)
+            .collect();
+        let Some(tightest) = admitting.iter().map(|c| c.admits).min() else {
+            return admitting;
+        };
+        admitting
+            .into_iter()
+            .filter(|c| c.admits == tightest)
+            .collect()
+    }
+
+    /// Every instance decision the types left tied, narrowed to the
+    /// instances its task admits (RFC-0046). It runs where the other least
+    /// elements are taken, once `settle` has stalled, because the task a
+    /// call runs with is the join over its arguments and the last of those
+    /// arrives when the argument's own decision settles.
+    fn close_instances_by_task(&mut self) {
+        for index in 0..self.decisions.len() {
+            if !matches!(self.decisions[index].state, DecisionState::Open) {
+                continue;
+            }
+            let Decision::Instance {
+                call, candidates, ..
+            } = &self.decisions[index].decision
+            else {
+                continue;
+            };
+            let call = self.terms.resolve_ty(call);
+            let narrowed = self.tightest_admitting(&call, candidates.clone());
+            if let Decision::Instance { candidates, .. } = &mut self.decisions[index].decision {
+                *candidates = narrowed;
+            }
+        }
+    }
+
     fn step_instance(
         &mut self,
         id: DecisionId,
@@ -2477,10 +2555,22 @@ impl<'src> Solver<'src> {
         if self.awaits_signature(to) {
             return Progress::Unchanged;
         }
-        if self.identity_within_bounds(from, to) && self.would_settle_join(from, to) {
+        let joined = self.trial_settle_join(from, to);
+        if self.identity_within_bounds(from, to) && joined.is_ok() {
             self.settle_join(from, to)
-                .expect("would_settle_join checked this join on a copy of the terms");
+                .expect("the trial join checked this on a copy of the terms");
             return Progress::Settled(Answer::Conversion(Conversion::Identity));
+        }
+        if let Err(Mismatch {
+            reason: MismatchReason::TaskTooHigh { required, found },
+            ..
+        }) = joined
+        {
+            return Progress::Failed(Unsettled::TaskTooHigh {
+                decision: id,
+                required,
+                found,
+            });
         }
         let from_r = self.terms.shallow_resolve_ty(from);
         let to_r = self.terms.shallow_resolve_ty(to);
@@ -2695,9 +2785,10 @@ impl<'src> Solver<'src> {
                     .iter()
                     .cloned()
                     .enumerate()
-                    .map(|(instance, ty)| Candidate {
+                    .map(|(instance, sig)| Candidate {
                         instance: InstanceKind::Extern(instance),
-                        ty,
+                        ty: sig.ty,
+                        admits: sig.admits,
                     })
                     .chain(compiler_instances)
                     .collect(),

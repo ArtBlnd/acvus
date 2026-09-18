@@ -68,6 +68,10 @@ pub enum MirErrorKind {
         returns: Ty,
     },
     EffectExceeded(crate::ty::EffectConflict),
+    TaskTooHigh {
+        required: crate::ty::Task,
+        found: crate::ty::Task,
+    },
     ArrayLengthMismatch {
         pattern_min: usize,
         exact: bool,
@@ -220,6 +224,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::EffectExceeded(c) => {
                 write!(f, "effect {} exceeds the allowed {}", c.required, c.allowed)
+            }
+            MirErrorKind::TaskTooHigh { required, found } => {
+                write!(
+                    f,
+                    "a function whose task is {found} where {required} is required"
+                )
             }
             MirErrorKind::ArrayLengthMismatch {
                 pattern_min,

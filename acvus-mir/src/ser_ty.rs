@@ -18,8 +18,8 @@ use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
 use crate::ty::{
-    Concrete, Effect, EffectTerm, IdentityId, IdentityTerm, IntTy, LenTerm, Reissue, Repr, Ty,
-    TypeArg,
+    Concrete, Effect, EffectTerm, IdentityId, IdentityTerm, IntTy, LenTerm, Reissue, Repr, Task,
+    Ty, TypeArg,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,6 +46,8 @@ fn ser_to_qref(r: &SerQualifiedRef, interner: &Interner) -> QualifiedRef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerEffect {
     pub reissue: Reissue,
+    #[serde(default)]
+    pub task: Task,
     pub commutes: bool,
     pub reads: Vec<SerQualifiedRef>,
     pub writes: Vec<SerQualifiedRef>,
@@ -54,6 +56,7 @@ pub struct SerEffect {
 fn effect_to_ser(e: &Effect, interner: &Interner) -> SerEffect {
     SerEffect {
         reissue: e.reissue,
+        task: e.task,
         commutes: e.commutes,
         reads: e.reads.iter().map(|q| qref_to_ser(q, interner)).collect(),
         writes: e.writes.iter().map(|q| qref_to_ser(q, interner)).collect(),
@@ -67,6 +70,7 @@ fn ser_to_effect(e: &SerEffect, interner: &Interner) -> Effect {
         e.reads.iter().map(|q| ser_to_qref(q, interner)).collect(),
         e.writes.iter().map(|q| ser_to_qref(q, interner)).collect(),
     )
+    .at_task(e.task)
 }
 
 /// A parameter of a serialized function type.

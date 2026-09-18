@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::{DebugInfo, Inst, InstKind, Label, MirBody, ValueId};
-use crate::ty::Ty;
+use crate::ty::{Task, Ty};
 
 // -- BlockIdx ------------------------------------------------------
 
@@ -78,6 +78,8 @@ pub struct CfgBody {
     pub captures: Vec<(Astr, ValueId)>,
     /// The `Order` the body takes first when its effect is not Pure.
     pub order_param: Option<ValueId>,
+    /// The join of the tasks of everything the body does (RFC-0046).
+    pub task: Task,
     pub debug: DebugInfo,
     pub val_factory: LocalFactory<ValueId>,
 }
@@ -223,6 +225,7 @@ pub fn promote(body: MirBody) -> CfgBody {
         params: body.params,
         captures: body.captures,
         order_param: body.order_param,
+        task: body.task,
         debug: body.debug,
         val_factory: body.val_factory,
     })
@@ -396,6 +399,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
         params: cfg.params,
         captures: cfg.captures,
         order_param: cfg.order_param,
+        task: cfg.task,
         debug: cfg.debug,
         val_factory: cfg.val_factory,
         label_count,
@@ -430,6 +434,7 @@ mod tests {
             params: Vec::new(),
             captures: Vec::new(),
             order_param: None,
+            task: Task::Sync,
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,

@@ -42,7 +42,10 @@ fn pick_fn(i: &Interner) -> Function {
         kind: FnKind::Extern {
             bounds: vec![TyVarBound::OneOf(vec![array, option])],
             instances: acvus_mir::ty::Instances {
-                concrete: instances,
+                concrete: instances
+                    .into_iter()
+                    .map(acvus_mir::ty::InstanceSig::any_task)
+                    .collect(),
                 generic: false,
             },
         },
