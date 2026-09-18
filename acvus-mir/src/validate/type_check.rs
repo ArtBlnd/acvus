@@ -91,16 +91,45 @@ pub enum ValidationErrorKind {
 pub fn check_types(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    let mut ctx = CheckCtx::new("main".to_string());
+    let declared = declared_closure_returns(module);
+
+    // `main` is the body of a graph `Function`, and its declared return type
+    // is that function's `PolyTy::Fn { ret }` in the `CompilationGraph`, which
+    // `validate` does not receive: its `Return` is checked for everything but
+    // the declared type.
+    let mut ctx = CheckCtx::new("main".to_string(), None);
     ctx.check_body(&module.main, &mut errors);
 
     for (label, closure) in &module.closures {
         let name = format!("closure({:?})", label);
-        let mut ctx = CheckCtx::new(name);
+        let mut ctx = CheckCtx::new(name, declared.get(label).cloned());
         ctx.check_body(closure, &mut errors);
     }
 
     errors
+}
+
+/// What each closure body declares it returns: the `ret` of the `Ty::Fn` that
+/// the `MakeClosure` building it gives its value. A closure whose
+/// `MakeClosure` is gone - inlined away, or dead - declares nothing.
+fn declared_closure_returns(module: &MirModule) -> FxHashMap<Label, Ty> {
+    std::iter::once(&module.main)
+        .chain(module.closures.values())
+        .flat_map(|maker| {
+            maker.insts.iter().filter_map(|inst| {
+                let InstKind::MakeClosure {
+                    dst, body: made, ..
+                } = &inst.kind
+                else {
+                    return None;
+                };
+                let Some(Ty::Fn { ret, .. }) = maker.val_types.get(dst) else {
+                    return None;
+                };
+                Some((*made, (**ret).clone()))
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -236,13 +265,15 @@ struct CheckCtx {
     scope_name: String,
     /// label -> index in `insts` (for Jump target block param lookup)
     label_map: FxHashMap<Label, usize>,
+    declared_ret: Option<Ty>,
 }
 
 impl CheckCtx {
-    fn new(scope_name: String) -> Self {
+    fn new(scope_name: String, declared_ret: Option<Ty>) -> Self {
         Self {
             scope_name,
             label_map: FxHashMap::default(),
+            declared_ret,
         }
     }
 
@@ -1603,7 +1634,13 @@ impl CheckCtx {
             }
 
             InstKind::Return { value, order } => {
-                let _ = self.ty_of(*value, vt, span, pc, errors);
+                let value_ty = ty!(*value);
+                // `!` has no value, so it satisfies any slot (RFC-0038).
+                if let Some(declared) = &self.declared_ret
+                    && !matches!(value_ty, Ty::Never)
+                {
+                    self.assert_match(pc, span, "Return", "value", declared, value_ty, errors);
+                }
                 if let Some(o) = order {
                     self.expect_order(*o, vt, span, pc, errors);
                 }
@@ -1653,6 +1690,102 @@ mod tests {
             },
             closures: FxHashMap::default(),
         }
+    }
+
+    /// A module whose `main` builds one closure of type `|| -> declared` and
+    /// whose closure body returns a value of type `returned`.
+    fn make_closure_module(declared: Ty, returned: Ty) -> MirModule {
+        let label = Label(0);
+
+        let mut main_types = FxHashMap::default();
+        let mut main_factory = LocalFactory::<ValueId>::new();
+        let closure = main_factory.next();
+        main_types.insert(
+            closure,
+            Ty::Fn {
+                params: Vec::new(),
+                ret: Box::new(declared),
+                captures: Vec::new(),
+                effect: crate::ty::Effect::PURE.into(),
+            },
+        );
+        let mut module = make_module(
+            vec![inst(InstKind::MakeClosure {
+                dst: closure,
+                body: label,
+                captures: Vec::new(),
+            })],
+            main_types,
+        );
+        module.main.val_factory = main_factory;
+
+        let mut body_types = FxHashMap::default();
+        let mut body_factory = LocalFactory::<ValueId>::new();
+        let result = body_factory.next();
+        body_types.insert(result, returned);
+        let body = MirBody {
+            insts: vec![inst(InstKind::Return {
+                value: result,
+                order: None,
+            })],
+            val_types: body_types,
+            val_factory: body_factory,
+            ..MirBody::new()
+        };
+        module.closures.insert(label, body);
+        module
+    }
+
+    fn array_of_i64() -> Ty {
+        Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3))
+    }
+
+    #[test]
+    fn a_body_returning_what_it_declares_is_accepted() {
+        let module = make_closure_module(array_of_i64(), array_of_i64());
+        assert!(check_types(&module).is_empty());
+    }
+
+    #[test]
+    fn a_body_declaring_a_value_returning_a_reference_is_refused() {
+        let module = make_closure_module(
+            array_of_i64(),
+            Ty::Ref(
+                Mutability::Shared,
+                Box::new(TypeArg::uniform(array_of_i64())),
+            ),
+        );
+        let errors = check_types(&module);
+        let [
+            ValidationError {
+                kind:
+                    ValidationErrorKind::TypeMismatch {
+                        inst_name,
+                        expected,
+                        actual,
+                        ..
+                    },
+                ..
+            },
+        ] = errors.as_slice()
+        else {
+            panic!("expected one type mismatch, got {errors:?}");
+        };
+        assert_eq!(inst_name, "Return");
+        assert_eq!(*expected, array_of_i64());
+        assert!(matches!(actual, Ty::Ref(..)), "{actual:?}");
+    }
+
+    #[test]
+    fn a_body_returning_a_diverging_value_is_accepted() {
+        let module = make_closure_module(array_of_i64(), Ty::Never);
+        assert!(check_types(&module).is_empty());
+    }
+
+    #[test]
+    fn a_body_declaring_never_accepts_the_value_it_returns() {
+        let module = make_closure_module(Ty::Never, Ty::I64);
+        assert!(check_types(&module).is_empty());
     }
 
     #[test]
