@@ -1,6 +1,6 @@
 # RFC-0050: an aggregate is its components until it escapes
 
-Status: Draft — owner and coordinator, 2026-09-19
+Status: Accepted — owner and coordinator, 2026-09-19 ("이렇게 가자"; the owner reviews the code after it is built)
 Extends: RFC-0053 (an aggregate that does not escape never exists — the
 storage-slot form of this rule), RFC-0052 (§5 the register file, §6 the
 frame, §7 the window), RFC-0048 (`Value: Copy`, `Release`, the mark
