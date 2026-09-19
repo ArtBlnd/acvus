@@ -88,7 +88,7 @@ fn a_type_outside_the_bound_is_rejected_where_it_was_called() {
     let errs = check(&i, "add(\"a\", \"b\")").unwrap_err();
     assert!(
         errs.iter()
-            .any(|e| e.contains("outside the declared bound") && e.contains("String")),
+            .any(|e| e.contains("outside the declared bound") && e.contains("&str")),
         "{errs:?}"
     );
 }

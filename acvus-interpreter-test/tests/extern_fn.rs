@@ -120,11 +120,14 @@ async fn extern_captures_environment() {
 async fn regex_match_via_extern() {
     let i = Interner::new();
 
-    let registries = vec![acvus_ext::regex_registry()];
+    let registries = vec![
+        acvus_ext::regex_registry(),
+        acvus_ext::conversion_registry(),
+    ];
     let c = ctx(&i, vec![("text", string("hello world 42"))]);
     let result = run_script_mode_with_externs(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+") { is_match(&re, &@text) } else { false }"#,
+        r#"if let Ok(re) = regex("[0-9]+".to_string()) { is_match(&re, &@text) } else { false }"#,
         c,
         registries,
         Ty::Bool,
@@ -137,13 +140,16 @@ async fn regex_match_via_extern() {
 async fn regex_find_via_extern() {
     let i = Interner::new();
 
-    let registries = vec![acvus_ext::regex_registry()];
+    let registries = vec![
+        acvus_ext::regex_registry(),
+        acvus_ext::conversion_registry(),
+    ];
     let c = ctx(&i, vec![("text", string("price is 42 dollars"))]);
     let result = run_script_mode_with_externs(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+") {
-             if let Some(m) = find(&re, &@text) { m.text } else { "no match" }
-           } else { "?" }"#,
+        r#"if let Ok(re) = regex("[0-9]+".to_string()) {
+             if let Some(m) = find(&re, &@text) { m.text } else { "no match".to_string() }
+           } else { "?".to_string() }"#,
         c,
         registries,
         Ty::String,

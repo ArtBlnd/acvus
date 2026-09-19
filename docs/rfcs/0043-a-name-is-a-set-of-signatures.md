@@ -310,7 +310,11 @@ display order, not the order the registries were combined in.
 - A library function that exists per container type is a plain function
   in that type's namespace (`vec::len`, `string::len`, `string::contains`
   beside `iter::contains`), and the bare name is this RFC's set
-  (RFC-0028). `core::` — `clone`, `eq`,
+  (RFC-0028). With a string literal a `&str` (RFC-0062), the admission
+  order reaches `string::contains` in every form its name is written —
+  `contains(&s, "x")`, `contains("abc", "b")`, `s.contains("x")` and
+  `"abc".contains("b")` — because the argument that decides between it and
+  `iter::contains` is a view at the first parameter either way. `core::` — `clone`, `eq`,
   `hash`, `to_string`, `to_int` — remains the shared-signature mechanism:
   one signature, an instance per type, which a generic function asks for
   by name.

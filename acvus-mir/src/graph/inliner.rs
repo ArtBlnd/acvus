@@ -760,6 +760,10 @@ fn remap_inst(
             dst: r(*dst),
             value: value.clone(),
         },
+        InstKind::ConstStr { dst, text } => InstKind::ConstStr {
+            dst: r(*dst),
+            text: text.clone(),
+        },
 
         // Projection
         InstKind::Ref {

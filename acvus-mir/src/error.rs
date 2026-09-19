@@ -211,8 +211,10 @@ pub enum MirErrorKind {
     ReferenceCaptured,
     /// A reference inside a list, object, or tuple.
     ReferenceInData,
+    ViewInData,
     /// A lambda returned a reference.
     ReferenceReturned,
+    ViewReturnedFromBody(Ty),
     /// RFC-0043.
     AmbiguousFunction {
         name: String,
@@ -251,13 +253,25 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::TypeMismatchBinOp { op, left, right } => {
                 write!(
                     f,
-                    "type mismatch in `{op}`: {} vs {}",
+                    "type mismatch in `{op}`: {} vs {}{}",
                     left.display(interner),
-                    right.display(interner)
+                    right.display(interner),
+                    match (holds_text(left), holds_text(right)) {
+                        (true, true) => COPY_OF_A_VIEW,
+                        _ => "",
+                    }
                 )
             }
             MirErrorKind::EmitNotString { actual } => {
-                write!(f, "emit requires String, got {}", actual.display(interner))
+                write!(
+                    f,
+                    "emit requires String, got {}{}",
+                    actual.display(interner),
+                    match is_text_view(actual) {
+                        true => COPY_OF_A_VIEW,
+                        false => "",
+                    }
+                )
             }
             MirErrorKind::HeterogeneousList { expected, got } => {
                 write!(
@@ -277,9 +291,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::UnificationFailure { expected, got } => {
                 write!(
                     f,
-                    "type mismatch: expected {}, got {}",
+                    "type mismatch: expected {}, got {}{}",
                     expected.display(interner),
-                    got.display(interner)
+                    got.display(interner),
+                    copy_of_a_view(expected, got)
                 )
             }
             MirErrorKind::EffectExceeded(c) => {
@@ -414,6 +429,21 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "a reference cannot be stored in a list, object, or tuple"
+                )
+            }
+            MirErrorKind::ViewInData => {
+                write!(
+                    f,
+                    "a reference cannot be stored in a list, object, or tuple; \
+                     write `.to_string()` to store the text"
+                )
+            }
+            MirErrorKind::ViewReturnedFromBody(ty) => {
+                write!(
+                    f,
+                    "a body does not return a {}{}",
+                    ty.display(interner),
+                    COPY_OF_A_VIEW
                 )
             }
             MirErrorKind::ReferenceReturned => {
@@ -615,5 +645,35 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(f, "parse error: {msg}")
             }
         }
+    }
+}
+
+/// The spelling that turns a view into the owned text (RFC-0062 Decision 3).
+const COPY_OF_A_VIEW: &str = "; write `.to_string()` for the owned text";
+
+/// `str`, or a reference to it: what a string literal is.
+fn is_text_view(ty: &Ty) -> bool {
+    match ty {
+        Ty::Str => true,
+        Ty::Ref(_, inner) => is_text_view(&inner.ty),
+        _ => false,
+    }
+}
+
+/// One of the two representations of text, or a reference to one. A
+/// mismatch between two of these is the one `.to_string()` settles; a
+/// mismatch between text and a number is not.
+fn holds_text(ty: &Ty) -> bool {
+    match ty {
+        Ty::String | Ty::Str => true,
+        Ty::Ref(_, inner) => holds_text(&inner.ty),
+        _ => false,
+    }
+}
+
+fn copy_of_a_view(expected: &Ty, got: &Ty) -> &'static str {
+    match (expected, is_text_view(got)) {
+        (Ty::String, true) => COPY_OF_A_VIEW,
+        _ => "",
     }
 }

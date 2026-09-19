@@ -92,31 +92,91 @@ string has no such type.
 
 ## Consequences
 
-Measured: `let s = "abc"; s.len()` lowers to `ref &s`, one `as_slice` whose
-instance is `core::as_str`, then the call — the view is one instruction and
-`string::len`'s parameter is `&str`. `let v = [1, 2, 3]; v.len()` lowers to
-`ref &v` and the call, with no view considered. `let zs = labels([1, 2, 3]);
-zs[2].len()` resolves to `string::len` once the element type freezes, through
-the admission order of RFC-0043.
+Decisions 2 and 3 hold for the literal and for everything that reads text.
+A string literal is `Ref(Shared, Str)`, lowered to `InstKind::ConstStr`,
+which the printer writes `const_str T0` with the text in the literals table.
+Measured, `let s = "abc"; len(&s)` — six prepared operations before, three
+after:
 
-The `string` module's reading parameters that were already `&String` are
-`&str`: `len`, `is_empty`, `concat`, `char_at`, `find`, `rfind`,
-`eq_ignore_case`. `as_str` keeps `&String`, being the coercion's own
-declaration, and is declared in `core` rather than in `string`: the
-instruction it lowers to is the language's one crossing (RFC-0039), so a
-`&str` parameter is reachable wherever the checker runs. `regex`'s `text` is
-`&str` in every synchronous entry.
+```
+ConstLarge  AssignVar  MakeRef  AsSlice  CallWindow  DropValue
+Const       Const      CallWindow
+```
 
-A reading parameter taken by value stays `String`: the caller has no `&str`
-to give it until a string literal is one. `regex::replace_with` and
-`replace_all_with` keep `&String` for a second reason: `AsyncGlue` admits
-`Arg<Form = Pair>` at no arity, so a `&str` parameter of an asynchronous
-handler does not compile.
+The `String` allocation, its slot, the `core::as_str` crossing and the
+release are all gone; the two `Const`s are the pair's `ptr` and `len` words.
+A literal used directly, `len("abc")`, reaches no slot at all.
 
-`contains` keeps `&String`. Its bare name is shared with `iter::contains`,
-whose first parameter is a value, so a method receiver whose head is still a
-variable arrives by value rather than as a lend, and RFC-0043's admission
-order reaches no view through it.
+The bytes live in the module. `prepare` copies each distinct text of a module
+once into a `Literals` table, and every `Body` holds an `Arc` of it, so a run
+outlives both the MIR module the text came from and the interner it was read
+from: the compiler's `Checked::prepare` drops its modules before the machine
+runs, which every script with a literal exercises.
+
+A string pattern is unchanged in form and reads either representation:
+`match s { "a" => … }` keeps `InstKind::TestLiteral`, which holds the text as
+an immediate and compares the scrutinee's bytes, so the pattern's type check
+admits a `String` or a `&str` scrutinee against one `&str` literal pattern.
+
+`StringConcat` and `StringEq` read a part or an operand through either
+representation, so `"a" + "b"`, `s + "a"` and `s == "a"` all hold with no
+copy, and a template's `Node::Text` lowers to `ConstStr` and joins the other
+parts in one concatenation. Where an operand of `+` is still an open type
+variable the operand bound stays `String`: a value of type `str` does not
+exist, so `|k| -> k + "a"` fixes nothing and is refused.
+
+`core::to_string` takes `T = Str` as an instance, and `"x".to_string()` is
+the spelling wherever an owned string is wanted: at a `String` parameter, in
+a list, an object, a tuple or a context, at a capture, and as a body's
+result. A body does not return a `&str` — the result leaves in the one
+register a caller reads, and a host that declares `!` reads it by kind
+(RFC-0054), which a pair has none of.
+
+The `string` module's reading half takes `&str` and its producers return
+`String`: `len`, `is_empty`, `concat`, `contains`, `starts_with_str`,
+`ends_with_str`, `find`, `rfind`, `char_at`, `chars`, `bytes`, `lines`,
+`split_whitespace`, `trim`, `trim_start`, `trim_end`, `upper`, `lower`,
+`capitalize`, `substring`, `split_str`, `split_once`, `strip_prefix`,
+`strip_suffix`, `repeat_str`, `replace_str`, `eq_ignore_case`, `pad_start`,
+`pad_end`. `to_bytes` keeps `String`, which it consumes. Two units coexist
+and each function states its own: `len`, `find`, `rfind` and `substring` are
+in bytes, `char_at`, `chars` and the `pad_*` width in Unicode scalar values.
+`substring(s: &str, start: u64, end: u64)` refuses an inverted range, an
+offset past the length and an offset inside a character, rather than clamping
+as it did.
+
+`as_str` keeps `&String`, being the coercion's own declaration, and is
+declared in `core` rather than in `string`: the instruction it lowers to is
+the language's one crossing (RFC-0039), so a `&str` parameter is reachable
+wherever the checker runs. `regex`'s `text` is `&str` in every synchronous
+entry; `regex::replace_with` and `replace_all_with` keep `&String` because
+`AsyncGlue` admits `Arg<Form = Pair>` at no arity, so a `&str` parameter of
+an asynchronous handler does not compile.
+
+`contains` no longer keeps `&String`. Its bare name is shared with
+`iter::contains`, whose first parameter is a value, and with the literal a
+`&str` the admission order of RFC-0043 reaches the view in every form:
+`contains(&s, "x")`, `contains("abc", "b")`, `s.contains("x")` and
+`"abc".contains("b")` all settle on `string::contains`.
+
+The cost of the literal's type, counted over the corpus this landed with:
+274 sites in scripts, templates and examples. 217 took `.to_string()` at a
+`String` parameter or a `String`-typed binding, branch or body result; 38 in
+a list, an object, a tuple or a context, which hold no reference; 8 where an
+operand of `+` or `==` was still an open type variable; 5 at a lambda
+capture; 5 at `clone`, `hash` or `eq`, which have no instance at `&str`; and
+1 where `&x` over a `&str` became `x`. Seven calls that read two texts —
+`contains`, `find` — needed no rewrite at all: the `string` module's move to
+`&str` is what admits them. Four run-time assertions moved number with the
+unit change, all over `"héllo"`: `len` 5 to 6, `find(…, "l")` 2 to 3,
+`rfind(…, "l")` 3 to 4. One allocation count moved for a different reason —
+`split_str("a,b,c", ",")` unboxes 0 arguments where it unboxed 2, a `&str`
+parameter being a borrow rather than a value materialized out of its box.
+
+What waits is the `&str` return: an extern declared `-> &str` and a
+`substring`, `trim` or `split` that returns a view of its argument need the
+pair-wide `CallShape` Decision 4 describes, and until then every producer
+returns a `String`.
 
 ## Order of work
 

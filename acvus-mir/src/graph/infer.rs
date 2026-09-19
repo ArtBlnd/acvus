@@ -1020,9 +1020,23 @@ mod tests {
     use super::*;
     use crate::graph::extract;
     use crate::ty::{
-        ObjectTy, ParamTerm, Poly, PolyBuilder, PolyParam, lift_declaration, lift_to_poly,
+        Mutability, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyParam, TypeArg, lift_declaration,
+        lift_to_poly,
     };
     use acvus_utils::{Freeze, Interner};
+
+    /// A string literal's type (RFC-0062 Decision 2).
+    fn str_view() -> Ty {
+        Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)))
+    }
+
+    /// `core::to_string` at `T = Str`: the copy that turns a literal into
+    /// the owned text (RFC-0062 Decision 3). These graphs are built by hand
+    /// rather than from the standard registries, and a script has no other
+    /// way to write a `String`.
+    fn to_string_extern(interner: &Interner) -> Function {
+        make_extern_fn(interner, "to_string", vec![str_view()], Ty::String)
+    }
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
         let mut pb = PolyBuilder::new();
@@ -1243,6 +1257,7 @@ mod tests {
             .collect();
 
         let mut functions = extern_fns.to_vec();
+        functions.push(to_string_extern(interner));
         let mut ids = Vec::new();
 
         for (name, source, sig, output) in local_fns {
@@ -1470,7 +1485,7 @@ mod tests {
         let (result, ids) = infer_multi(
             &i,
             &[
-                ("greet", "\"hello\"", Some(vec![]), None),
+                ("greet", "\"hello\".to_string()", Some(vec![]), None),
                 ("main", "greet()", None, None),
             ],
             &[],
@@ -1555,7 +1570,7 @@ mod tests {
             &[
                 (
                     "make_str",
-                    "\"hi\"",
+                    "\"hi\".to_string()",
                     Some(vec![]),
                     Some(lift_to_poly(&Ty::String)),
                 ),
@@ -1615,7 +1630,7 @@ mod tests {
             &i,
             &[
                 ("echo", "$s", Some(vec![("s", Ty::String)]), None),
-                ("main", "echo(\"hello\")", None, None),
+                ("main", "echo(\"hello\".to_string())", None, None),
             ],
             &[],
         );
@@ -2134,7 +2149,10 @@ mod tests {
         let i = Interner::new();
         let (result, ids) = infer_multi(
             &i,
-            &[("a", "1 + 2", None, None), ("b", "\"hello\"", None, None)],
+            &[
+                ("a", "1 + 2", None, None),
+                ("b", "\"hello\".to_string()", None, None),
+            ],
             &[],
         );
         let errs = error_strings(&i, &result);
@@ -2350,7 +2368,7 @@ mod tests {
             &i,
             &[
                 ("use_add", "ext_add(1, 2)", None, None),
-                ("use_greet", "ext_greet(\"hi\")", None, None),
+                ("use_greet", "ext_greet(\"hi\".to_string())", None, None),
             ],
             &[add, greet],
             &[],
@@ -2624,7 +2642,11 @@ mod tests {
     #[test]
     fn type_constraint_inferred_always_complete() {
         let i = Interner::new();
-        let (result, ids) = infer_multi(&i, &[("test", r#""hello""#, Some(vec![]), None)], &[]);
+        let (result, ids) = infer_multi(
+            &i,
+            &[("test", r#""hello".to_string()"#, Some(vec![]), None)],
+            &[],
+        );
         let fid = ids[0].1;
         assert!(result.outcomes[&fid].is_complete());
     }

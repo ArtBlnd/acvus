@@ -130,7 +130,8 @@ fn the_module_carries_the_declaration_the_host_stated() {
 #[test]
 fn a_body_returning_other_than_the_declaration_is_refused_by_the_checker() {
     let i = Interner::new();
-    let refusal = declared_script_module(&i, r#""no""#, &[], Ty::I64).expect_err("refused");
+    let refusal =
+        declared_script_module(&i, r#""no".to_string()"#, &[], Ty::I64).expect_err("refused");
     assert!(refusal.contains("expected i64"), "{refusal}");
     assert!(refusal.contains("got String"), "{refusal}");
 }
@@ -140,7 +141,8 @@ fn a_body_returning_other_than_the_declaration_is_refused_by_the_checker() {
 #[test]
 fn a_diverging_body_satisfies_any_declaration() {
     let i = Interner::new();
-    let module = declared_script_module(&i, r#"panic("no")"#, &[], Ty::I64).expect("compiles");
+    let module =
+        declared_script_module(&i, r#"panic("no".to_string())"#, &[], Ty::I64).expect("compiles");
     assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
 }
 
@@ -150,7 +152,7 @@ fn array_of_3() -> Ty {
 
 #[test]
 fn a_lambda_whose_body_diverges_is_accepted() {
-    let module = module("let f = |x| -> panic(\"no\"); f(1)");
+    let module = module("let f = |x| -> panic(\"no\".to_string()); f(1)");
     let body = module.closures.values().next().expect("one closure");
     assert_eq!(body.val_types[&returned(body)], Ty::Never);
     assert!(validate(&module).is_empty(), "{:?}", refusals(&module));

@@ -257,6 +257,20 @@ impl Dispatch {
     }
 }
 
+/// `String` or `str`, or a reference to either: what `StringConcat` and
+/// `StringEq` read (RFC-0062 Decision 3).
+fn holds_text(ty: &Ty) -> bool {
+    match ty {
+        Ty::String | Ty::Str => true,
+        Ty::Ref(_, inner) => holds_text(&inner.ty),
+        _ => false,
+    }
+}
+
+fn str_ty() -> Ty {
+    Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)))
+}
+
 fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::ContextBind { .. } => true,
@@ -2193,13 +2207,13 @@ impl<'a> Lowerer<'a> {
         match node {
             Node::Text { value, span, .. } => {
                 let dst = self.alloc_val();
-                self.set_val_type(dst, Ty::String);
+                self.set_val_type(dst, str_ty());
                 self.set_origin(dst, ValOrigin::Expr);
                 self.emit_inst(
                     *span,
-                    InstKind::Const {
+                    InstKind::ConstStr {
                         dst,
-                        value: Literal::String(value.clone()),
+                        text: value.clone(),
                     },
                 );
                 dst
@@ -2210,6 +2224,9 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// A `String`, not the `&str` a text node is: this stands for the text a
+    /// match block produced where an arm matched nothing, so it meets the
+    /// arms' own results at the merge, and those are `String`.
     fn emit_empty_string(&mut self, span: Span) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::String);
@@ -2345,13 +2362,11 @@ impl<'a> Lowerer<'a> {
             }
             Expr::Literal { id, value, span } => {
                 let dst = self.alloc_expr(*id);
-                self.emit_inst(
-                    *span,
-                    InstKind::Const {
-                        dst,
-                        value: value.desugared(),
-                    },
-                );
+                let kind = match value.desugared() {
+                    Literal::String(text) => InstKind::ConstStr { dst, text },
+                    value => InstKind::Const { dst, value },
+                };
+                self.emit_inst(*span, kind);
                 dst
             }
 
@@ -2427,10 +2442,8 @@ impl<'a> Lowerer<'a> {
                         s.read_word_through(*span, r)
                     });
                 }
-                let left_ty = self.type_of_id(left.id());
-                let on_string = matches!(&left_ty, Ty::String)
-                    || matches!(&left_ty, Ty::Ref(_, inner) if matches!(inner.ty, Ty::String));
-                if on_string && matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Add) {
+                let on_text = holds_text(&self.type_of_id(left.id()));
+                if on_text && matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Add) {
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
                     let dst = self.alloc_expr(*id);
@@ -4291,13 +4304,11 @@ mod tests {
     fn lower_text_node() {
         let interner = Interner::new();
         let module = lower(&interner, "hello world");
-        // Template: empty_str const + text const + concat + return
-        let has_text = module.main.insts.iter().any(|i| {
-            matches!(
-                &i.kind,
-                InstKind::Const { value: Literal::String(s), .. } if s == "hello world"
-            )
-        });
+        // Template: the text as a `&str` constant, the concat, the return.
+        let has_text =
+            module.main.insts.iter().any(
+                |i| matches!(&i.kind, InstKind::ConstStr { text, .. } if text == "hello world"),
+            );
         let has_return = module
             .main
             .insts
@@ -4313,7 +4324,10 @@ mod tests {
         let module = lower(&interner, r#"{{ "hello" }}"#);
         // InlineExpr emits Const only (Yield removed, pending Iterator<String> redesign)
         assert!(module.main.insts.len() >= 1);
-        assert!(matches!(&module.main.insts[0].kind, InstKind::Const { .. }));
+        assert!(matches!(
+            &module.main.insts[0].kind,
+            InstKind::ConstStr { .. }
+        ));
     }
 
     #[test]
@@ -4398,10 +4412,7 @@ mod tests {
             .insts
             .iter()
             .filter_map(|i| match &i.kind {
-                InstKind::Const {
-                    value: Literal::String(s),
-                    ..
-                } => Some(s.as_str()),
+                InstKind::ConstStr { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect();
@@ -4419,10 +4430,7 @@ mod tests {
             .insts
             .iter()
             .filter_map(|i| match &i.kind {
-                InstKind::Const {
-                    value: Literal::String(s),
-                    ..
-                } => Some(s.as_str()),
+                InstKind::ConstStr { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect();

@@ -134,7 +134,7 @@ async fn dedup_collapses_consecutive_equal_elements_only() {
 #[tokio::test]
 async fn dedup_over_strings_reads_each_element_in_place() {
     let v = run(
-        r#"into_iter(["a", "a", "b", "b", "a"]) | dedup | count()"#,
+        r#"into_iter(["a".to_string(), "a".to_string(), "b".to_string(), "b".to_string(), "a".to_string()]) | dedup | count()"#,
         Ty::I64,
     )
     .await;

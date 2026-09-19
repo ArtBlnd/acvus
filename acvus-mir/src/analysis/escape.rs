@@ -149,6 +149,7 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         // The instruction reads its operands and hands them nowhere; a
         // block argument stays inside the body.
         InstKind::Const { .. }
+        | InstKind::ConstStr { .. }
         | InstKind::Undef { .. }
         | InstKind::Poison { .. }
         | InstKind::Nop

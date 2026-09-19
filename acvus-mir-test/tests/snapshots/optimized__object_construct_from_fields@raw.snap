@@ -17,39 +17,37 @@ expression: raw
      8 |   r4 = r3 * 2 (r5)
      9 |   assign score = r4
     10 |   r6 = ref &@user.name
-    12 |   assign v13 = T0
-    13 |   r7 = ref &v13
-    14 |   r8 = string_concat [r6, r7]
-    15 |   assign v16 = r8
-    16 |   r9 = ref &v16
-    17 |   r10 = ref &score
-    18 |   r11 = call #0(r10)
-    19 |   assign v20 = r11
-    20 |   r12 = ref &v20
-    21 |   r13 = string_concat [r9, r12]
-    22 |   assign v23 = r13
-    23 |   r14 = ref &v23
-    25 |   assign v26 = T1
-    26 |   r15 = ref &v26
-    27 |   r16 = string_concat [r14, r15]
-    28 |   assign label = r16
-    29 |   r17 = take score
-    30 |   r18 = take @min_score
-    31 |   r19 = r17 > r18
-    32 |   assign eligible = r19
-    33 |   r20 = take label
-    34 |   r21 = take score
-    35 |   r22 = take eligible
-    36 |   r23 = object {label: r20, score: r21, eligible: r22}
-    37 |   assign @output = r23
-    38 |   r24 = take @output.score
-    39 |   r25 = take @output
-    40 |   commit @output = r25
-    41 |   r26 = take @min_score
-    42 |   commit @min_score = r26
-    43 |   r27 = take @user
-    44 |   commit @user = r27
-    45 |   return r24
+    11 |   r7 = const_str T0
+    12 |   r8 = string_concat [r6, r7]
+    13 |   assign v14 = r8
+    14 |   r9 = ref &v14
+    15 |   r10 = ref &score
+    16 |   r11 = call #0(r10)
+    17 |   assign v18 = r11
+    18 |   r12 = ref &v18
+    19 |   r13 = string_concat [r9, r12]
+    20 |   assign v21 = r13
+    21 |   r14 = ref &v21
+    22 |   r15 = const_str T1
+    23 |   r16 = string_concat [r14, r15]
+    24 |   assign label = r16
+    25 |   r17 = take score
+    26 |   r18 = take @min_score
+    27 |   r19 = r17 > r18
+    28 |   assign eligible = r19
+    29 |   r20 = take label
+    30 |   r21 = take score
+    31 |   r22 = take eligible
+    32 |   r23 = object {label: r20, score: r21, eligible: r22}
+    33 |   assign @output = r23
+    34 |   r24 = take @output.score
+    35 |   r25 = take @output
+    36 |   commit @output = r25
+    37 |   r26 = take @min_score
+    38 |   commit @min_score = r26
+    39 |   r27 = take @user
+    40 |   commit @user = r27
+    41 |   return r24
 
     ; r0 (@output) : {eligible: Bool, label: String, score: i64}
     ; r1 (@min_score) : i64
@@ -58,37 +56,33 @@ expression: raw
     ; r4 (v9) : i64
     ; r5 (v8) : i64
     ; r6 (@user.name) : &String
-    ; r7 (var_13.) : &String
-    ; r8 (v15) : String
-    ; r9 (var_16.) : &String
+    ; r7 (v12) : &str
+    ; r8 (v13) : String
+    ; r9 (var_14.) : &String
     ; r10 (score.) : &i64
     ; r11 (to_string(...)) : String
-    ; r12 (var_20.) : &String
-    ; r13 (v22) : String
-    ; r14 (var_23.) : &String
-    ; r15 (var_26.) : &String
-    ; r16 (v28) : String
+    ; r12 (var_18.) : &String
+    ; r13 (v20) : String
+    ; r14 (var_21.) : &String
+    ; r15 (v23) : &str
+    ; r16 (v24) : String
     ; r17 (score) : i64
     ; r18 (@min_score) : i64
-    ; r19 (v32) : Bool
+    ; r19 (v28) : Bool
     ; r20 (label) : String
     ; r21 (score) : i64
     ; r22 (eligible) : Bool
-    ; r23 (v37) : {eligible: Bool, label: String, score: i64}
+    ; r23 (v33) : {eligible: Bool, label: String, score: i64}
     ; r24 (@output.score) : i64
-    ; r25 (v39) : {eligible: Bool, label: String, score: i64}
-    ; r26 (v40) : i64
-    ; r27 (v41) : {age: i64, name: String}
+    ; r25 (v35) : {eligible: Bool, label: String, score: i64}
+    ; r26 (v36) : i64
+    ; r27 (v37) : {age: i64, name: String}
     ; r28 (@min_score) : i64
-    ; r29 (v25) : String
-    ; r30 (v12) : String
-    ; r31 (@user) : {age: i64, name: String}
-    ; r32 (eligible) : Bool
-    ; r33 (v20) : String
+    ; r29 (label) : String
+    ; r30 (v14) : String
+    ; r31 (v18) : String
+    ; r32 (v21) : String
+    ; r33 (@user) : {age: i64, name: String}
     ; r34 (@output) : {eligible: Bool, label: String, score: i64}
-    ; r35 (v23) : String
-    ; r36 (v26) : String
-    ; r37 (score) : i64
-    ; r38 (label) : String
-    ; r39 (v13) : String
-    ; r40 (v16) : String
+    ; r35 (eligible) : Bool
+    ; r36 (score) : i64

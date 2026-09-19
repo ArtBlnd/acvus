@@ -2,4 +2,4 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
-[infer:test] [0..22] pattern type i64 incompatible with source type String
+[infer:test] [0..34] pattern type i64 incompatible with source type String

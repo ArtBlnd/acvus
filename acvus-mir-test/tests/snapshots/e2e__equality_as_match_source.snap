@@ -16,16 +16,18 @@ expression: ir
      6 |   r5 = test r4 == true
      7 |   jump_if r5 then L3 else L1
      8 | L3:
-    10 |   r6 = string_concat [T0]
-    11 |   jump L0(r6)
+     9 |   r6 = const_str T0
+    10 |   r7 = string_concat [r6]
+    11 |   jump L0(r7)
     12 | L1:
-    14 |   r7 = string_concat [T1]
-    15 |   jump L0(r7)
-    16 | L0(r8: String):
-    17 |   r9 = string_concat [r8]
+    13 |   r8 = const_str T1
+    14 |   r9 = string_concat [r8]
+    15 |   jump L0(r9)
+    16 | L0(r10: String):
+    17 |   r11 = string_concat [r10]
     18 |   commit @a = r2
     19 |   commit @b = r3
-    20 |   return r9
+    20 |   return r11
 
     ; r0 (v17) : i64
     ; r1 (v18) : i64
@@ -33,14 +35,14 @@ expression: ir
     ; r3 (@b) : i64
     ; r4 (v7) : Bool
     ; r5 (v8) : Bool
-    ; r6 (v10) : String
-    ; r7 (v12) : String
-    ; r8 (v13) : String
-    ; r9 (v14) : String
-    ; r10 (@b) : i64
-    ; r11 (v11) : String
+    ; r6 (v9) : &str
+    ; r7 (v10) : String
+    ; r8 (v11) : &str
+    ; r9 (v12) : String
+    ; r10 (v13) : String
+    ; r11 (v14) : String
     ; r12 (@b) : i64
-    ; r13 (v9) : String
+    ; r13 (@b) : i64
     ; r14 (v20) : i64
     ; r15 (@a) : i64
     ; r16 (v15) : i64

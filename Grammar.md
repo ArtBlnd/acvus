@@ -270,7 +270,7 @@ PrimaryExpr  = IDENT                       ← identifier (value binding)
              | CHAR                        ← character literal (RFC-0058)
              | BYTE                        ← byte literal (RFC-0058)
              | BYTES                       ← byte-string literal (RFC-0058)
-             | STRING                      ← string literal
+             | STRING                      ← string literal, a `&str` (RFC-0062)
              | FORMAT_STRING               ← format string (see below)
              | "true" | "false"            ← boolean literal
              | "Some" "(" Expr ")"         ← Some variant constructor

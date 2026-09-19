@@ -231,6 +231,15 @@ pub enum InstKind {
         dst: ValueId,
         value: Literal,
     },
+    /// Obligation across artifacts: the bytes `dst` names are not in this
+    /// instruction. `acvus-interpreter`'s preparation copies each distinct
+    /// text of a module once and the module's prepared code owns that copy,
+    /// so a `&str` constant is the pointer and length of a run whose owner
+    /// is the code holding this operation (RFC-0062 Decision 2).
+    ConstStr {
+        dst: ValueId,
+        text: String,
+    },
     /// A template's output: the parts joined into one `String`. A part is a
     /// `String`, moved in, or a `&String`, read through.
     StringConcat {

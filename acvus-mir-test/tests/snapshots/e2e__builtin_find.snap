@@ -28,12 +28,13 @@ expression: ir
     21 |   r13 = string_concat [r12]
     22 |   jump L0(r13)
     23 | L1:
-    25 |   r14 = string_concat [T1]
-    26 |   jump L0(r14)
-    27 | L0(r15: String):
-    28 |   r16 = string_concat [T0, T0, T0, r15]
+    24 |   r14 = const_str T1
+    25 |   r15 = string_concat [r14]
+    26 |   jump L0(r15)
+    27 | L0(r16: String):
+    28 |   r17 = string_concat [T0, T0, T0, r16]
     29 |   commit @items = r4
-    30 |   return r16
+    30 |   return r17
 
     ; r0 (v27) : Vec<i64>
     ; r1 (v28) : Vec<i64>
@@ -49,11 +50,11 @@ expression: ir
     ; r11 (v.) : &i64
     ; r12 (to_string(...)) : String
     ; r13 (v21) : String
-    ; r14 (v23) : String
-    ; r15 (v24) : String
-    ; r16 (v25) : String
-    ; r17 (@items) : Vec<i64>
-    ; r18 (v22) : String
+    ; r14 (v22) : &str
+    ; r15 (v23) : String
+    ; r16 (v24) : String
+    ; r17 (v25) : String
+    ; r18 (@items) : Vec<i64>
     ; r19 (items) : Vec<i64>
     ; r20 (v30) : Vec<i64>
     ; r21 (v14) : String

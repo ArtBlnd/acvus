@@ -80,12 +80,12 @@ fn a_method_receiver_that_must_be_lent_is_a_place() {
 fn a_method_call_of_a_signature_picks_the_instance_by_the_receiver() {
     let ir = check("let xs = [1, 2, 3]; xs.into_iter().fold(0, |a, x| -> a + x)").unwrap();
     assert!(ir.contains("call "), "{ir}");
-    assert_eq!(tail_ty("let s = \"ab\"; s.clone()"), Ty::String);
+    assert_eq!(tail_ty("let s = \"ab\".to_string(); s.clone()"), Ty::String);
 }
 
 #[test]
 fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
-    let ir = check("let xs = [\"a\", \"b\"]; xs[1].clone()")
+    let ir = check("let xs = [\"a\".to_string(), \"b\".to_string()]; xs[1].clone()")
         .expect("`xs[1]` gives `&String`, `clone` takes `&T`");
     assert_eq!(
         ir.matches("ref &").count(),
@@ -94,7 +94,7 @@ fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
          the receiver and no reborrow of it is built:\n{ir}"
     );
     assert_eq!(
-        tail_ty("let xs = [\"a\", \"b\"]; xs[1].clone()"),
+        tail_ty("let xs = [\"a\".to_string(), \"b\".to_string()]; xs[1].clone()"),
         Ty::String
     );
 }

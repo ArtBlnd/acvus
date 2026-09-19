@@ -160,6 +160,7 @@ fn externs(i: &Interner) -> Vec<Function> {
     let first_generic = fn_of(i, &[("items", vec_of(i, var_arg(&t)))], t.clone());
 
     vec![
+        concrete(i, "text", fn_of(i, &[], string())),
         concrete(i, "f", fn_of(i, &[], vec_of(i, spec(string())))),
         concrete(i, "k", fn_of(i, &[], vec_of(i, unif(string())))),
         concrete(i, "g", fn_of(i, &[("v", vec_of(i, spec(string())))], int())),
@@ -416,7 +417,7 @@ fn h2_a_declared_conversion_bridges_the_two() {
 #[test]
 fn h3_a_consumer_s_demand_picks_the_producer_s_instance() {
     let i = Interner::new();
-    let checked = check(&i, "g(vec_array([\"a\"]))").unwrap();
+    let checked = check(&i, "g(vec_array([text()]))").unwrap();
     assert_eq!(checked.ret, Ty::I64);
     assert_eq!(instance_of(&checked, "vec_array"), VEC_ARRAY_AT_SPECIALIZED);
 }
@@ -424,7 +425,7 @@ fn h3_a_consumer_s_demand_picks_the_producer_s_instance() {
 #[test]
 fn h3_no_demand_freezes_uniform() {
     let i = Interner::new();
-    let checked = check(&i, "vec_array([\"a\"])").unwrap();
+    let checked = check(&i, "vec_array([text()])").unwrap();
     assert_eq!(checked.ret, vec_of(&i, unif_ty(Ty::String)));
     assert_eq!(instance_of(&checked, "vec_array"), VEC_ARRAY_AT_UNIFORM);
 }
@@ -432,7 +433,7 @@ fn h3_no_demand_freezes_uniform() {
 #[test]
 fn h3_the_demand_passes_through_a_generic_signature() {
     let i = Interner::new();
-    let checked = check(&i, "g(reverse(vec_array([\"a\"])))").unwrap();
+    let checked = check(&i, "g(reverse(vec_array([text()])))").unwrap();
     assert_eq!(checked.ret, Ty::I64);
     assert_eq!(instance_of(&checked, "vec_array"), VEC_ARRAY_AT_SPECIALIZED);
     assert_eq!(instance_of(&checked, "reverse"), REVERSE_AT_SPECIALIZED);

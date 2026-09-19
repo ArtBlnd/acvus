@@ -93,7 +93,7 @@ async fn a_lend_of_a_moved_part_is_refused() {
 #[should_panic(expected = "`o` is used here after it was moved")]
 async fn a_reference_to_a_partly_moved_storage_is_refused() {
     run(
-        "let o = { v: vec([1, 2]), }; let x = o.v; let r = &o; r",
+        "let o = { v: vec([1, 2]), }; let x = o.v; let r = &o; 0",
         Ty::Never,
     )
     .await;

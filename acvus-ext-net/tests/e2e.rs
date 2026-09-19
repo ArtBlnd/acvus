@@ -56,12 +56,15 @@ async fn serve_once(status: &'static str, body: &'static str) -> LocalServer {
 async fn fetch_get_returns_the_body_the_server_wrote() {
     let server = serve_once("200 OK", "hello from a socket").await;
     let i = Interner::new();
-    let src = format!("fetch_get(\"http://127.0.0.1:{}/greeting\")", server.port);
+    let src = format!(
+        "fetch_get(\"http://127.0.0.1:{}/greeting\".to_string())",
+        server.port
+    );
     let ran = run_script_with_externs(
         &i,
         &src,
         FxHashMap::default(),
-        vec![http_registry()],
+        vec![http_registry(), acvus_ext::conversion_registry()],
         Ty::String,
     )
     .await;

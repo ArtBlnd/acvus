@@ -238,7 +238,10 @@ fn a_star_on_a_captured_word_names_the_word_it_is_written_on() {
 #[test]
 fn a_captured_large_is_still_read_through_its_reference() {
     let i = Interner::new();
-    let c = checked(&i, "let s = \"a\"; let f = |u| -> len(s) + u; f(1)");
+    let c = checked(
+        &i,
+        "let s = \"a\".to_string(); let f = |u| -> len(s) + u; f(1)",
+    );
     assert_eq!(c.ret, Ty::Int(acvus_mir::ty::IntTy::U64));
     assert!(
         c.captures_by_lambda

@@ -95,9 +95,9 @@ async fn a_large_value_crosses_the_one_argument_form() {
     let interner = Interner::new();
     let ran = run_script_with_externs(
         &interner,
-        "form_string(\"hello\")",
+        "form_string(\"hello\".to_string())",
         Context::default(),
-        vec![registry()],
+        vec![registry(), acvus_ext::conversion_registry()],
         Ty::String,
     )
     .await;

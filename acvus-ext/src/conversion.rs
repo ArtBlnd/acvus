@@ -65,6 +65,14 @@ fn to_string_string(a: &String) -> String {
     a.clone()
 }
 
+/// The copy RFC-0062 Decision 3 names: a `&str` reaches a `String`
+/// parameter only through this, and `"x".to_string()` is how a literal is
+/// written where an owned string is wanted.
+#[extern_fn(instance_of = sig::to_string, effect = pure)]
+fn to_string_str(a: &str) -> String {
+    a.to_owned()
+}
+
 // -- to_int -------------------------------------------------------------
 
 #[extern_fn(instance_of = sig::to_int, effect = pure)]
@@ -163,6 +171,7 @@ pub fn conversion_registry<R: Runtime>() -> Registry<R> {
             to_string_i8, to_string_i16, to_string_i32, to_string_int,
             to_string_u8, to_string_u16, to_string_u32, to_string_u64,
             to_string_float, to_string_char, to_string_bool, to_string_string,
+            to_string_str,
             to_int_bool,
             int_to_char,
         ],

@@ -8,6 +8,7 @@ acvus-extern = { path = "../acvus-extern" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dev-dependencies]
+acvus-ext = { path = "../acvus-ext" }
 acvus-interpreter = { path = "../acvus-interpreter" }
 acvus-interpreter-test = { path = "../acvus-interpreter-test" }
 acvus-mir = { path = "../acvus-mir" }

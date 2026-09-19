@@ -106,7 +106,7 @@ async fn a_captured_string_is_lent_and_so_is_not_returned_by_value() {
     let i = Interner::new();
     run_script_mode(
         &i,
-        "let s = \"a\"; let f = |y| -> s; f(1)",
+        "let s = \"a\".to_string(); let f = |y| -> s; f(1)",
         Context::default(),
         Ty::String,
     )

@@ -171,7 +171,7 @@ async fn a_literal_argument_takes_the_parameter_s_width() {
 #[tokio::test]
 async fn a_literal_matches_at_the_source_s_width() {
     let i = Interner::new();
-    let src = "if let 255 = @b { \"max\" } else { \"other\" }";
+    let src = "if let 255 = @b { \"max\".to_string() } else { \"other\".to_string() }";
     let v = run_script_mode(&i, src, ctx(&i, "b", IntTy::U8, 255), Ty::String).await;
     assert_eq!(unsafe { v.as_str() }, "max");
     let v = run_script_mode(&i, src, ctx(&i, "b", IntTy::U8, 7), Ty::String).await;

@@ -93,7 +93,7 @@ fn assert_str(v: &Value, expected: &str) {
 #[tokio::test]
 async fn an_element_edited_through_as_mut_is_what_the_program_reads() {
     let v = run(
-        r#"let v = split_str("ab,cd", ","); upcase_first(&mut v); into_iter(v) | join("+")"#,
+        r#"let v = split_str("ab,cd", ","); upcase_first(&mut v); into_iter(v) | join("+".to_string())"#,
         Ty::String,
     )
     .await;
@@ -105,13 +105,13 @@ async fn an_element_edited_through_as_mut_is_what_the_program_reads() {
 #[tokio::test]
 async fn contains_compares_through_as_ref() {
     let hit = run(
-        r#"into_iter(split_str("a,b,c", ",")) | contains_erased("b")"#,
+        r#"into_iter(split_str("a,b,c", ",")) | contains_erased("b".to_string())"#,
         Ty::Bool,
     )
     .await;
     assert!(hit.as_bool());
     let miss = run(
-        r#"into_iter(split_str("a,b,c", ",")) | contains_erased("z")"#,
+        r#"into_iter(split_str("a,b,c", ",")) | contains_erased("z".to_string())"#,
         Ty::Bool,
     )
     .await;

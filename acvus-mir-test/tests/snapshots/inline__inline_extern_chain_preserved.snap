@@ -6,19 +6,22 @@ expression: ir
   T0 = "hello"
 
 === main ===
-     1 |   r0 = ref &$v1
-     2 |   r1 = as_slice &r0
-     3 |   r2 = call #0(r1)
-     4 |   assign n = r2
-     5 |   r3 = ref &n
-     6 |   r4 = call #1(r3)
-     7 |   return r4
+     0 |   r0 = const_str T0
+     1 |   r1 = call #0(r0)
+     2 |   r2 = ref &$to_string(...)
+     3 |   r3 = as_slice &r2
+     4 |   r4 = call #1(r3)
+     5 |   assign n = r4
+     6 |   r5 = ref &n
+     7 |   r6 = call #0(r5)
+     8 |   return r6
 
-    ; r0 ($param_1.) : &String
-    ; r1 (v5) : &str
-    ; r2 (len(...)) : u64
-    ; r3 (var_5.) : &u64
-    ; r4 (to_string(...)) : String
-    ; r5 (n) : u64
-    ; r6 (process(...)) : String
-    ; r7 (v1) : String
+    ; r0 (v1) : &str
+    ; r1 (to_string(...)) : String
+    ; r2 ($param_1.) : &String
+    ; r3 (v6) : &str
+    ; r4 (len(...)) : u64
+    ; r5 (var_5.) : &u64
+    ; r6 (to_string(...)) : String
+    ; r7 (process(...)) : String
+    ; r8 (n) : u64

@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 
 /// A body with two `Return`s: the `?` leaves early with the `Err`, the tail
 /// leaves with the `Ok` payload.
-const TWO_RETURNS: &str = r#"let r = if @ok { Ok(7) } else { Err("bad") };
+const TWO_RETURNS: &str = r#"let r = if @ok { Ok(7) } else { Err("bad".to_string()) };
                              let v = r?;
                              Ok(v + 1)"#;
 
@@ -30,7 +30,7 @@ async fn a_body_returning_what_the_host_declared_runs() {
 #[tokio::test]
 #[should_panic(expected = "[main] type mismatch: expected i64, got String")]
 async fn a_body_returning_other_than_the_host_declared_does_not_compile() {
-    let _ = run_script(&i(), r#""no""#, Context::default(), Ty::I64).await;
+    let _ = run_script(&i(), r#""no".to_string()"#, Context::default(), Ty::I64).await;
 }
 
 fn i() -> Interner {
@@ -42,13 +42,25 @@ fn i() -> Interner {
 #[tokio::test]
 #[should_panic(expected = "no")]
 async fn a_diverging_body_satisfies_any_declaration() {
-    let _ = run_script(&i(), r#"panic("no")"#, Context::default(), Ty::I64).await;
+    let _ = run_script(
+        &i(),
+        r#"panic("no".to_string())"#,
+        Context::default(),
+        Ty::I64,
+    )
+    .await;
 }
 
 /// RFC-0054: a `!` declaration is the host's "I state no return type".
 #[tokio::test]
 async fn a_host_declaring_never_gets_the_value_and_reads_it_by_kind() {
-    let v = run_script(&i(), r#""by kind""#, Context::default(), Ty::Never).await;
+    let v = run_script(
+        &i(),
+        r#""by kind".to_string()"#,
+        Context::default(),
+        Ty::Never,
+    )
+    .await;
     assert_eq!(v.composite(), Some(Composite::String));
     // SAFETY: the vtable witnesses a String behind the pointer.
     assert_eq!(unsafe { v.as_str() }, "by kind");

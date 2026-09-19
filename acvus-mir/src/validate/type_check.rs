@@ -268,6 +268,13 @@ fn types_match(expected: &Ty, actual: &Ty) -> bool {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn str_ty() -> Ty {
+    Ty::Ref(
+        crate::ty::Mutability::Shared,
+        Box::new(crate::ty::TypeArg::uniform(Ty::Str)),
+    )
+}
+
 fn literal_ty(lit: &Literal) -> Ty {
     match lit {
         Literal::String(_) => Ty::String,
@@ -719,6 +726,12 @@ impl CheckCtx {
                 }
             }
 
+            // === ConstStr ===
+            InstKind::ConstStr { dst, .. } => {
+                let dst_ty = ty!(*dst);
+                self.assert_match(pc, span, "ConstStr", "dst", &str_ty(), dst_ty, errors);
+            }
+
             // === Constructors ===
             InstKind::StringClone { dst, src } => {
                 let dst_ty = ty!(*dst);
@@ -747,16 +760,16 @@ impl CheckCtx {
                 self.assert_match(pc, span, "StringEq", "dst", &Ty::Bool, dst_ty, errors);
                 for operand in [a, b] {
                     let operand_ty = ty!(*operand);
-                    let is_string_ref = matches!(operand_ty, Ty::Ref(_, inner) if matches!(inner.ty, Ty::String))
+                    let is_lent_text = matches!(operand_ty, Ty::Ref(_, inner) if matches!(inner.ty, Ty::String | Ty::Str))
                         || operand_ty.is_error();
-                    if !is_string_ref {
+                    if !is_lent_text {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
                             span,
                             kind: ValidationErrorKind::InvalidConstructor {
                                 inst_name: "StringEq".to_string(),
-                                expected_constructor: "&String".to_string(),
+                                expected_constructor: "&String or &str".to_string(),
                                 actual: operand_ty.clone(),
                             },
                         });
@@ -768,20 +781,20 @@ impl CheckCtx {
                 self.assert_match(pc, span, "StringConcat", "dst", &Ty::String, dst_ty, errors);
                 for part in parts {
                     let part_ty = ty!(*part);
-                    let is_string = match part_ty {
+                    let is_text = match part_ty {
                         Ty::String => true,
-                        Ty::Ref(_, inner) => matches!(inner.ty, Ty::String),
+                        Ty::Ref(_, inner) => matches!(inner.ty, Ty::String | Ty::Str),
                         Ty::Error(_) => true,
                         _ => false,
                     };
-                    if !is_string {
+                    if !is_text {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
                             span,
                             kind: ValidationErrorKind::InvalidConstructor {
                                 inst_name: "StringConcat".to_string(),
-                                expected_constructor: "String or &String".to_string(),
+                                expected_constructor: "String, &String or &str".to_string(),
                                 actual: part_ty.clone(),
                             },
                         });
@@ -2086,6 +2099,43 @@ mod tests {
         );
         let errors = check_types(&module);
         assert!(errors.is_empty());
+    }
+
+    /// `types_match` enumerates the primitives by hand, so a type that is
+    /// not in that list does not match itself. `&str` is the newest one and
+    /// this is what holds its arm there.
+    #[test]
+    fn a_str_constant_matches_its_own_type() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let mut vt = FxHashMap::default();
+        vt.insert(v0, str_ty());
+        let module = make_module(
+            vec![inst(InstKind::ConstStr {
+                dst: v0,
+                text: "abc".to_string(),
+            })],
+            vt,
+        );
+        let errors = check_types(&module);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn a_str_constant_at_a_string_destination_is_caught() {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let v0 = vf.next();
+        let mut vt = FxHashMap::default();
+        vt.insert(v0, Ty::String);
+        let module = make_module(
+            vec![inst(InstKind::ConstStr {
+                dst: v0,
+                text: "abc".to_string(),
+            })],
+            vt,
+        );
+        let errors = check_types(&module);
+        assert!(!errors.is_empty(), "a `&str` constant is not a `String`");
     }
 
     #[test]

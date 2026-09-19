@@ -50,7 +50,11 @@ async fn a_captured_word_on_the_right_of_the_operator_reads_through_too() {
 
 #[tokio::test]
 async fn a_captured_string_concatenates() {
-    let v = run("let s = \"a\"; let f = |t| -> s + t; f(\"b\")", Ty::String).await;
+    let v = run(
+        "let s = \"a\".to_string(); let f = |t| -> s + t; f(\"b\".to_string())",
+        Ty::String,
+    )
+    .await;
     // SAFETY: the script's type is `String`.
     assert_eq!(unsafe { v.as_str() }, "ab");
 }

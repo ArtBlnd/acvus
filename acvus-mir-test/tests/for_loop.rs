@@ -241,7 +241,7 @@ fn a_range_of_two_widths_is_refused() {
 
 #[test]
 fn a_break_out_of_an_array_of_owners_is_refused() {
-    let found = refusal("let a = [\"x\", \"y\"]; for s in a { break; } 0");
+    let found = refusal("let a = [\"x\".to_string(), \"y\".to_string()]; for s in a { break; } 0");
     assert_eq!(
         found,
         "a `for` over an array of `String` cannot `break`: the elements the loop has not taken would have no release"
@@ -255,7 +255,8 @@ fn a_try_inside_an_array_of_owners_is_refused() {
         i.intern("r"),
         Ty::Result(Box::new(Ty::I64), Box::new(Ty::String)),
     )]);
-    let source = "let a = [\"x\", \"y\"]; for s in a { let v = @r?; } Ok(0)";
+    let source =
+        "let a = [\"x\".to_string(), \"y\".to_string()]; for s in a { let v = @r?; } Ok(0)";
     let found = compile_script_optimized(&i, source, &context)
         .expect_err("a `?` out of an owning array loop is refused");
     assert!(

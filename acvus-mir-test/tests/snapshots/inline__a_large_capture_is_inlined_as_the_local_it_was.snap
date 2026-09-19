@@ -7,22 +7,28 @@ expression: ir
   T1 = "there"
 
 === main ===
-     1 |   assign s = T0
-     2 |   r0 = take s
-     3 |   r1 = closure L0 [r0]
-     4 |   assign f = r1
-     6 |   r2 = ref &f
-     7 |   r3 = call r2(T1)
-     8 |   return r3
+     0 |   r0 = const_str T0
+     1 |   r1 = call #0(r0)
+     2 |   assign s = r1
+     3 |   r2 = take s
+     4 |   r3 = closure L0 [r2]
+     5 |   assign f = r3
+     6 |   r4 = const_str T1
+     7 |   r5 = call #0(r4)
+     8 |   r6 = ref &f
+     9 |   r7 = call r6(r5)
+    10 |   return r7
 
-    ; r0 (s) : String
-    ; r1 (v4) : Fn(String) -> String
-    ; r2 (f) : &Fn(String) -> String
-    ; r3 (f(...)) : String
-    ; r4 (v6) : String
-    ; r5 (s) : String
-    ; r6 (f) : Fn(String) -> String
-    ; r7 (v1) : String
+    ; r0 (v1) : &str
+    ; r1 (to_string(...)) : String
+    ; r2 (s) : String
+    ; r3 (v5) : Fn(String) -> String
+    ; r4 (v7) : &str
+    ; r5 (to_string(...)) : String
+    ; r6 (f) : &Fn(String) -> String
+    ; r7 (f(...)) : String
+    ; r8 (s) : String
+    ; r9 (f) : Fn(String) -> String
 
 === closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
      0 |   assign s = r0
@@ -32,7 +38,7 @@ expression: ir
      4 |   r4 = as_slice &r3
      5 |   r5 = ref &x
      6 |   r6 = as_slice &r5
-     7 |   r7 = call #0(r4, r6)
+     7 |   r7 = call #1(r4, r6)
      8 |   return r7
 
     ; r0 (v1) : &String

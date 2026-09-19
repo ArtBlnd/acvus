@@ -88,6 +88,7 @@ pub(crate) fn apply_subst(kind: &mut InstKind, subst: &FxHashMap<ValueId, ValueI
 pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
     match kind {
         InstKind::Const { .. }
+        | InstKind::ConstStr { .. }
         | InstKind::Fetch { .. }
         | InstKind::Nop
         | InstKind::Diverge

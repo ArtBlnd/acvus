@@ -97,7 +97,10 @@ fn a_write_while_a_reference_is_live_is_stated_as_a_write() {
 
 #[test]
 fn a_move_out_of_an_index_carries_the_way_out_as_a_note() {
-    let (message, labels) = only("let v = [\"a\", \"b\"]; let s = v[0]; s", &nothing);
+    let (message, labels) = only(
+        "let v = [\"a\".to_string(), \"b\".to_string()]; let s = v[0]; s",
+        &nothing,
+    );
     assert_eq!(message, "cannot move out of index of `Array<String, 2>`");
     assert_eq!(
         labels,

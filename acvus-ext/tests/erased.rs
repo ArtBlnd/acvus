@@ -14,10 +14,6 @@ use acvus_extern::{
     Ref, Registry, Release, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
-/// No registry these tests combine declares a sliceable container, so the
-/// pair a slice would occupy is never built or read.
-const NO_SLICES: &str = "this runtime holds no slices";
-
 // -- A counting runtime -----------------------------------------------
 
 /// `Release: Copy` forbids a value that owns its payload inline, so an
@@ -32,6 +28,8 @@ enum V {
     Some(*mut V),
     Boxed(*mut (dyn Any + Send + Sync)),
     Reference(*const V),
+    /// One register of the pair a slice or a `&str` view sits in.
+    Word(u64),
 }
 
 // SAFETY: a cell is reached only through the value that owns it, and a
@@ -42,7 +40,7 @@ unsafe impl Sync for V {}
 impl Release for V {
     fn release(self) {
         match self {
-            V::Taken | V::None | V::Reference(_) => {}
+            V::Taken | V::None | V::Reference(_) | V::Word(_) => {}
             // SAFETY: `some` leaked this cell and nothing else releases it.
             V::Some(cell) => unsafe { *Box::from_raw(cell) }.release(),
             // SAFETY: `erase` leaked this cell and nothing else frees it.
@@ -269,12 +267,16 @@ impl Runtime for Counting {
         SYMBOLS.intern(name)
     }
 
-    fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {
-        panic!("{NO_SLICES}")
+    fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [Self::Value]) {
+        out[0] = V::Word(words.ptr);
+        out[1] = V::Word(words.len);
     }
 
-    unsafe fn slice_from_run(&self, _: &[Self::Value]) -> acvus_extern::Words {
-        panic!("{NO_SLICES}")
+    unsafe fn slice_from_run(&self, run: &[Self::Value]) -> acvus_extern::Words {
+        let (V::Word(ptr), V::Word(len)) = (run[0], run[1]) else {
+            panic!("slice_from_run: not the pair a slice was written into: {run:?}")
+        };
+        acvus_extern::Words { ptr, len }
     }
 
     fn call_is_sync(&self, _: &V) -> bool {
@@ -360,6 +362,15 @@ impl World {
         unsafe { self.rt.erase::<String>(s.to_owned()) }
     }
 
+    /// The pair a `&str` parameter is passed in (RFC-0062): the borrow is
+    /// of `s`, which the caller keeps alive across the call.
+    fn str_view(&self, s: &str) -> [V; 2] {
+        let mut pair = [V::default(); 2];
+        self.rt
+            .slice_into_run(acvus_extern::StrView::of(s).words(), &mut pair);
+        pair
+    }
+
     fn declared_return(&self, ns: &str, name: &str) -> PolyTy {
         let qref = QualifiedRef::qualified(self.interner.intern(ns), self.interner.intern(name));
         let func = self
@@ -418,14 +429,15 @@ fn split_str_is_typed_vec_of_string() {
 #[test]
 fn split_str_boxes_each_element_once_and_the_vec_once() {
     let w = World::new();
-    let args = vec![w.string("a,b,c"), w.string(",")];
+    let (text, sep) = ("a,b,c".to_owned(), ",".to_owned());
+    let args = [w.str_view(&text), w.str_view(&sep)].concat();
     let start = w.rt.counts();
     let _parts = w.call("string", "split_str", args);
     assert_eq!(
         w.rt.since(start),
         Counts {
             boxes: 4,
-            unboxes: 2
+            unboxes: 0
         }
     );
 }
@@ -433,10 +445,11 @@ fn split_str_boxes_each_element_once_and_the_vec_once() {
 #[test]
 fn reverse_on_the_vec_is_one_unbox_and_one_box() {
     let w = World::new();
+    let (text, sep) = ("a,b,c".to_owned(), ",".to_owned());
     let parts = w.call(
         "string",
         "split_str",
-        vec![w.string("a,b,c"), w.string(",")],
+        [w.str_view(&text), w.str_view(&sep)].concat(),
     );
     let start = w.rt.counts();
     let _reversed = w.call("vec", "reverse", vec![parts]);
@@ -452,10 +465,11 @@ fn reverse_on_the_vec_is_one_unbox_and_one_box() {
 #[test]
 fn join_reads_through_as_ref_with_no_unbox() {
     let w = World::new();
+    let (text, sep) = ("a,b,c".to_owned(), ",".to_owned());
     let parts = w.call(
         "string",
         "split_str",
-        vec![w.string("a,b,c"), w.string(",")],
+        [w.str_view(&text), w.str_view(&sep)].concat(),
     );
     let reversed = w.call("vec", "reverse", vec![parts]);
     // SAFETY: `reversed` is live and unmoved for the call.

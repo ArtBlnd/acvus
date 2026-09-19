@@ -37,7 +37,7 @@ fn float_and_int_are_not_spellings() {
 #[test]
 fn a_cast_of_a_value_that_is_not_a_number_is_refused() {
     assert_eq!(
-        refusal("let s = \"x\"; s as i64"),
+        refusal("let s = \"x\".to_string(); s as i64"),
         "`as` converts a number or a char; String is neither"
     );
     assert_eq!(

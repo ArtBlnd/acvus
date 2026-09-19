@@ -6,8 +6,9 @@ expression: ir
   T0 = "hello"
 
 === main ===
-     1 |   r0 = string_concat [T0]
-     2 |   return r0
+     0 |   r0 = const_str T0
+     1 |   r1 = string_concat [r0]
+     2 |   return r1
 
-    ; r0 (v2) : String
-    ; r1 (v1) : String
+    ; r0 (v1) : &str
+    ; r1 (v2) : String

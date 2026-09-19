@@ -4,18 +4,18 @@
 //! it; a character is read out by value with `char_at`, as the `char` it
 //! is (RFC-0058).
 //!
-//! Every index here counts scalar values, not bytes: `char_at(s, i)` is
-//! `s.chars().nth(i)`, and `find`/`rfind` report a scalar index.
+//! Every function that reads takes a `&str` and every function that
+//! produces returns a `String` (RFC-0062 Decisions 2 and 3): a `&str`
+//! return waits for the crossing to carry a pair out. Two units coexist
+//! here and each function states its own: `len`, `find`, `rfind` and
+//! `substring` are in bytes, `char_at`, `chars` and the `pad_*` width in
+//! Unicode scalar values.
 
 use acvus_extern::{
     EffectVar, Erased, IdentityVar, OneValue, Registry, Runtime, extern_fn, extern_registry,
 };
 
 use crate::iter::Iter;
-
-fn char_index(s: &str, byte: usize) -> i64 {
-    s[..byte].chars().count() as i64
-}
 
 fn padding(fill: &str, count: usize) -> String {
     fill.chars().cycle().take(count).collect()
@@ -28,10 +28,10 @@ fn shortfall(s: &str, width: i64) -> usize {
     width.saturating_sub(s.chars().count())
 }
 
-/// The length in characters.
+/// The length in bytes.
 #[extern_fn(effect = pure)]
 fn len(s: &str) -> u64 {
-    s.chars().count() as u64
+    s.len() as u64
 }
 
 #[extern_fn(effect = pure)]
@@ -48,74 +48,91 @@ fn concat(a: &str, b: &str) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn trim(s: String) -> String {
+fn trim(s: &str) -> String {
     s.trim().to_owned()
 }
 
 #[extern_fn(effect = pure)]
-fn trim_start(s: String) -> String {
+fn trim_start(s: &str) -> String {
     s.trim_start().to_owned()
 }
 
 #[extern_fn(effect = pure)]
-fn trim_end(s: String) -> String {
+fn trim_end(s: &str) -> String {
     s.trim_end().to_owned()
 }
 
 #[extern_fn(effect = pure)]
-fn upper(s: String) -> String {
+fn upper(s: &str) -> String {
     s.to_uppercase()
 }
 
 #[extern_fn(effect = pure)]
-fn lower(s: String) -> String {
+fn lower(s: &str) -> String {
     s.to_lowercase()
 }
 
 #[extern_fn(effect = pure)]
-fn contains(s: &String, pat: String) -> bool {
-    s.contains(&*pat)
+fn contains(s: &str, pat: &str) -> bool {
+    s.contains(pat)
 }
 
 #[extern_fn(effect = pure)]
-fn starts_with_str(s: String, pat: String) -> bool {
-    s.starts_with(&*pat)
+fn starts_with_str(s: &str, pat: &str) -> bool {
+    s.starts_with(pat)
 }
 
 #[extern_fn(effect = pure)]
-fn ends_with_str(s: String, pat: String) -> bool {
-    s.ends_with(&*pat)
+fn ends_with_str(s: &str, pat: &str) -> bool {
+    s.ends_with(pat)
 }
 
 #[extern_fn(effect = pure)]
-fn replace_str(s: String, from: String, to: String) -> String {
-    s.replace(&*from, &to)
+fn replace_str(s: &str, from: &str, to: &str) -> String {
+    s.replace(from, to)
 }
 
 #[extern_fn(effect = pure)]
-fn split_str<Rt>(rt: &Rt, s: String, sep: String) -> Vec<Erased<Rt, String>>
+fn split_str<Rt>(rt: &Rt, s: &str, sep: &str) -> Vec<Erased<Rt, String>>
 where
     Rt: Runtime,
 {
-    s.split(&*sep)
+    s.split(sep)
         .map(|part| Erased::new(rt, part.to_owned()))
         .collect()
 }
 
 #[extern_fn(effect = pure)]
-fn repeat_str(s: String, n: u64) -> String {
+fn repeat_str(s: &str, n: u64) -> String {
     let Ok(n) = usize::try_from(n) else {
         panic!("repeat_str: count {n} exceeds the address space")
     };
     s.repeat(n)
 }
 
-/// Byte range `[start, end)` clamped to the string; an inverted range is empty.
+/// The bytes `[start, end)`. Both offsets are byte offsets and both must be
+/// on a character boundary; `start` past `end`, an offset past the length,
+/// or an offset inside a character is refused (RFC-0062 Decision 2).
 #[extern_fn(effect = pure)]
-fn substring(s: String, start: i64, end: i64) -> String {
-    let start = start.max(0) as usize;
-    let end = (end.max(0) as usize).min(s.len());
-    let start = start.min(end);
+fn substring(s: &str, start: u64, end: u64) -> String {
+    let refuse = |what: &str| -> ! {
+        panic!(
+            "substring: {what} for the range {start}..{end} over {} bytes of {s:?}",
+            s.len()
+        )
+    };
+    let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
+        refuse("an offset exceeds the address space")
+    };
+    if start > end {
+        refuse("the range is inverted")
+    }
+    if !s.is_char_boundary(start) {
+        refuse("start is not on a character boundary")
+    }
+    if !s.is_char_boundary(end) {
+        refuse("end is not on a character boundary")
+    }
     s[start..end].to_owned()
 }
 
@@ -134,6 +151,7 @@ fn to_utf8_lossy(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// `i` counts Unicode scalar values.
 #[extern_fn(effect = pure)]
 fn char_at(s: &str, i: i64) -> char {
     let out_of_range = || -> ! {
@@ -164,8 +182,9 @@ where
     Iter::generate(move |_| items.next())
 }
 
+/// One Unicode scalar value per step.
 #[extern_fn(effect = pure)]
-fn chars<E, I, Rt>(s: String) -> Iter<char, E, I, Rt>
+fn chars<E, I, Rt>(s: &str) -> Iter<char, E, I, Rt>
 where
     E: EffectVar,
     I: IdentityVar,
@@ -175,7 +194,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn lines<E, I, Rt>(s: String) -> Iter<String, E, I, Rt>
+fn lines<E, I, Rt>(s: &str) -> Iter<String, E, I, Rt>
 where
     E: EffectVar,
     I: IdentityVar,
@@ -184,8 +203,9 @@ where
     iter_of(s.lines().map(str::to_owned).collect())
 }
 
+/// One byte per step.
 #[extern_fn(effect = pure)]
-fn bytes<E, I, Rt>(s: String) -> Iter<i64, E, I, Rt>
+fn bytes<E, I, Rt>(s: &str) -> Iter<i64, E, I, Rt>
 where
     E: EffectVar,
     I: IdentityVar,
@@ -195,7 +215,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn split_whitespace<E, I, Rt>(s: String) -> Iter<String, E, I, Rt>
+fn split_whitespace<E, I, Rt>(s: &str) -> Iter<String, E, I, Rt>
 where
     E: EffectVar,
     I: IdentityVar,
@@ -206,54 +226,55 @@ where
 
 // -- Searching and shaping ---------------------------------------------
 
-/// The character index of the first `pat` in `s`.
+/// The byte offset of the first `pat` in `s`.
 #[extern_fn(effect = pure)]
-fn find(s: &str, pat: String) -> Option<i64> {
-    s.find(&*pat).map(|byte| char_index(s, byte))
+fn find(s: &str, pat: &str) -> Option<i64> {
+    s.find(pat).map(|byte| byte as i64)
 }
 
-/// The character index of the last `pat` in `s`.
+/// The byte offset of the last `pat` in `s`.
 #[extern_fn(effect = pure)]
-fn rfind(s: &str, pat: String) -> Option<i64> {
-    s.rfind(&*pat).map(|byte| char_index(s, byte))
+fn rfind(s: &str, pat: &str) -> Option<i64> {
+    s.rfind(pat).map(|byte| byte as i64)
 }
 
 /// JS `padStart`: `fill` repeated and cut to the shortfall on the left; an
 /// empty `fill` or a `width` at or below the length leaves `s` as it is.
+/// `width` counts Unicode scalar values.
 #[extern_fn(effect = pure)]
-fn pad_start(s: String, width: i64, fill: String) -> String {
-    let mut padded = padding(&fill, shortfall(&s, width));
-    padded.push_str(&s);
+fn pad_start(s: &str, width: i64, fill: &str) -> String {
+    let mut padded = padding(fill, shortfall(s, width));
+    padded.push_str(s);
     padded
 }
 
 /// JS `padEnd`: as `pad_start`, on the right.
 #[extern_fn(effect = pure)]
-fn pad_end(s: String, width: i64, fill: String) -> String {
-    let mut padded = s;
-    padded.push_str(&padding(&fill, shortfall(&padded, width)));
+fn pad_end(s: &str, width: i64, fill: &str) -> String {
+    let mut padded = s.to_owned();
+    padded.push_str(&padding(fill, shortfall(s, width)));
     padded
 }
 
 #[extern_fn(effect = pure)]
-fn strip_prefix(s: String, pat: String) -> Option<String> {
-    s.strip_prefix(&*pat).map(str::to_owned)
+fn strip_prefix(s: &str, pat: &str) -> Option<String> {
+    s.strip_prefix(pat).map(str::to_owned)
 }
 
 #[extern_fn(effect = pure)]
-fn strip_suffix(s: String, pat: String) -> Option<String> {
-    s.strip_suffix(&*pat).map(str::to_owned)
+fn strip_suffix(s: &str, pat: &str) -> Option<String> {
+    s.strip_suffix(pat).map(str::to_owned)
 }
 
 /// The text before and after the first `pat`, as a two-element Vec: an
 /// extern function returns no tuple (`acvus-extern` has no `Cross` for
 /// one) and no array of a constant length (`Len<K>` is a length variable).
 #[extern_fn(effect = pure)]
-fn split_once<Rt>(rt: &Rt, s: String, pat: String) -> Option<Vec<Erased<Rt, String>>>
+fn split_once<Rt>(rt: &Rt, s: &str, pat: &str) -> Option<Vec<Erased<Rt, String>>>
 where
     Rt: Runtime,
 {
-    s.split_once(&*pat).map(|(head, tail)| {
+    s.split_once(pat).map(|(head, tail)| {
         vec![
             Erased::new(rt, head.to_owned()),
             Erased::new(rt, tail.to_owned()),
@@ -267,10 +288,10 @@ fn eq_ignore_case(a: &str, b: &str) -> bool {
 }
 
 #[extern_fn(effect = pure)]
-fn capitalize(s: String) -> String {
+fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
-        return s;
+        return String::new();
     };
     let mut out: String = first.to_uppercase().collect();
     out.push_str(chars.as_str());

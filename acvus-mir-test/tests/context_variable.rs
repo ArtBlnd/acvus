@@ -55,7 +55,7 @@ fn an_assign_to_a_context_while_it_is_lent_is_rejected() {
     );
     let err = compile_script_ir_with(
         &i,
-        r#"f(&@items, { @items = "x"; 1 })"#,
+        r#"f(&@items, { @items = "x".to_string(); 1 })"#,
         &string_context(&i, "items"),
         &[f],
     )
@@ -77,7 +77,7 @@ fn a_closure_writing_a_lent_context_is_rejected_at_the_call() {
     );
     let err = compile_script_ir_with(
         &i,
-        r#"f(&@items, |x| -> { @items = "x"; x })"#,
+        r#"f(&@items, |x| -> { @items = "x".to_string(); x })"#,
         &string_context(&i, "items"),
         &[f],
     )
@@ -157,7 +157,7 @@ fn a_string_context_used_once_after_reassignment_is_not_copied() {
     let i = Interner::new();
     let ir = compile_script_ir(
         &i,
-        r#"let x = @items; @items = "new"; x"#,
+        r#"let x = @items; @items = "new".to_string(); x"#,
         &string_context(&i, "items"),
     )
     .unwrap();

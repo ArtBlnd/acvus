@@ -1,7 +1,7 @@
 //! Reading a container through the per-type fns under one bare name
 //! (RFC-0028, RFC-0043) and the String producers and fns of batch 1c,
 //! each at the script contract: `is_empty` over Vec, Array, Deque and
-//! String; `len` of a String in characters; `char_at`; the
+//! String; `len` of a String in bytes; `char_at`; the
 //! producers `chars`, `lines`, `bytes`, `split_whitespace`; `rfind`,
 //! `pad_start`, `pad_end`, `strip_prefix`, `strip_suffix`, `split_once`,
 //! `eq_ignore_case`, `capitalize`. A trap surfaces here as a panic of the
@@ -82,13 +82,13 @@ async fn is_empty_of_a_string_is_true_only_for_the_empty_string() {
 // -- string::len, char_at -------------------------------------------------------
 
 #[tokio::test]
-async fn len_of_a_string_counts_characters() {
-    assert_eq!(run("let s = \"héllo\"; len(&s)", Ty::U64).await.as_int(), 5);
+async fn len_of_a_string_counts_bytes() {
+    assert_eq!(run("let s = \"héllo\"; len(&s)", Ty::U64).await.as_int(), 6);
     assert_eq!(
         run("let s = \"héllo\"; string::len(&s)", Ty::U64)
             .await
             .as_int(),
-        5
+        6
     );
 }
 
@@ -126,7 +126,7 @@ async fn chars_yields_one_char_per_character() {
     );
     assert_eq!(run("chars(\"héllo\") | count()", Ty::I64).await.as_int(), 5);
     assert_eq!(
-        string("chars(\"héllo\") | map(|c| -> c.to_string()) | join(\"-\")").await,
+        string("chars(\"héllo\") | map(|c| -> c.to_string()) | join(\"-\".to_string())").await,
         "h-é-l-l-o"
     );
     assert_eq!(
@@ -152,7 +152,7 @@ async fn lines_splits_on_newlines_and_drops_the_terminator() {
         3
     );
     assert_eq!(
-        string("lines(\"a\\nb\\nc\\n\") | join(\"|\")").await,
+        string("lines(\"a\\nb\\nc\\n\") | join(\"|\".to_string())").await,
         "a|b|c"
     );
 }
@@ -175,7 +175,7 @@ async fn split_whitespace_drops_every_run_of_whitespace() {
         3
     );
     assert_eq!(
-        string("split_whitespace(\"  a  b c \") | join(\",\")").await,
+        string("split_whitespace(\"  a  b c \") | join(\",\".to_string())").await,
         "a,b,c"
     );
 }
@@ -183,7 +183,7 @@ async fn split_whitespace_drops_every_run_of_whitespace() {
 // -- Searching and shaping ------------------------------------------------------
 
 #[tokio::test]
-async fn rfind_gives_the_character_index_of_the_last_match() {
+async fn rfind_gives_the_byte_offset_of_the_last_match() {
     assert_eq!(
         run(
             "let s = \"héllo\"; rfind(&s, \"l\") | unwrap_or(-1)",
@@ -191,7 +191,7 @@ async fn rfind_gives_the_character_index_of_the_last_match() {
         )
         .await
         .as_int(),
-        3
+        4
     );
     assert_eq!(
         run(
@@ -231,7 +231,7 @@ async fn strip_prefix_and_strip_suffix_are_none_without_the_pattern() {
         "bar"
     );
     assert_eq!(
-        string("strip_prefix(\"foobar\", \"bar\") | unwrap_or(\"none\")").await,
+        string("strip_prefix(\"foobar\", \"bar\") | unwrap_or(\"none\".to_string())").await,
         "none"
     );
     assert_eq!(
@@ -239,7 +239,7 @@ async fn strip_prefix_and_strip_suffix_are_none_without_the_pattern() {
         "foo"
     );
     assert_eq!(
-        string("strip_suffix(\"foobar\", \"foo\") | unwrap_or(\"none\")").await,
+        string("strip_suffix(\"foobar\", \"foo\") | unwrap_or(\"none\".to_string())").await,
         "none"
     );
 }
@@ -262,7 +262,7 @@ async fn split_once_gives_the_text_around_the_first_pattern() {
         2
     );
     assert_eq!(
-        string("let p = split_once(\"ab\", \"=\") | unwrap_or(vec([\"x\", \"y\"])); let a = &p[0]; let b = &p[1]; concat(a, b)")
+        string("let p = split_once(\"ab\", \"=\") | unwrap_or(vec([\"x\".to_string(), \"y\".to_string()])); let a = &p[0]; let b = &p[1]; concat(a, b)")
             .await,
         "xy"
     );

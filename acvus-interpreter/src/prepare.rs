@@ -28,11 +28,11 @@ use smallvec::SmallVec;
 
 use crate::code::{
     Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
-    ExprBody, ExprChain, FieldSlot, Konst, Marked, Node, Off, Op, Prepared, Root, Shape, SlicePair,
-    Slot, SlotKind, Step, Where, chain, made, node,
+    ExprBody, ExprChain, FieldSlot, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared,
+    Root, Shape, SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
 };
 use crate::interpreter::Executable;
-use crate::ops::arith::{self, Binary, Unary, for_int_ty};
+use crate::ops::arith::{self, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
 use crate::ops::place;
 use crate::ops::{
@@ -96,6 +96,8 @@ impl PrepareCtx<'_> {
 /// Every body of a module, prepared: the closures first, so a `MakeClosure`
 /// resolves its body to an `Arc<Code>` at preparation.
 pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
+    let bodies = || std::iter::once(&module.main).chain(module.closures.values());
+    let literals = Arc::new(Literals::of(bodies().flat_map(|body| literal_texts(body))));
     let mut closures: FxHashMap<Label, Arc<Code>> = FxHashMap::default();
     let mut remaining: Vec<(&Label, &MirBody)> = module.closures.iter().collect();
     remaining.sort_by_key(|(label, _)| **label);
@@ -118,14 +120,27 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
                 .collect::<Vec<_>>()
         );
         for (label, body) in ready {
-            let code = prepare_body(body, ctx, &closures, BodyRole::Closure);
+            let code = prepare_body(body, ctx, &closures, &literals, BodyRole::Closure);
             closures.insert(*label, Arc::new(code));
         }
         remaining.retain(|(label, _)| !closures.contains_key(label));
     }
 
-    let main = Arc::new(prepare_body(&module.main, ctx, &closures, BodyRole::Entry));
+    let main = Arc::new(prepare_body(
+        &module.main,
+        ctx,
+        &closures,
+        &literals,
+        BodyRole::Entry,
+    ));
     Prepared { main, closures }
+}
+
+pub fn literal_texts(body: &MirBody) -> impl Iterator<Item = &str> {
+    body.insts.iter().filter_map(|inst| match &inst.kind {
+        InstKind::ConstStr { text, .. } => Some(text.as_str()),
+        _ => None,
+    })
 }
 
 fn made_closures(body: &MirBody) -> impl Iterator<Item = Label> + '_ {
@@ -151,9 +166,10 @@ pub fn prepare_body(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
     closures: &FxHashMap<Label, Arc<Code>>,
+    literals: &Arc<Literals>,
     role: BodyRole,
 ) -> Code {
-    let mut prep = Prepare::new(body, ctx, closures, label_map(body));
+    let mut prep = Prepare::new(body, ctx, closures, literals, label_map(body));
 
     prep.hoist_konsts();
     let regions = prep.regions();
@@ -193,6 +209,7 @@ pub fn prepare_body(
             .expect("the cells of the widest frame fit a u16"),
         mark_words: crate::regs::mark_words(frame_len),
         entry_konsts,
+        literals: Arc::clone(literals),
         slot_kinds,
         may_suspend,
         params,
@@ -222,6 +239,7 @@ struct Prepare<'a> {
     body: &'a MirBody,
     ctx: &'a PrepareCtx<'a>,
     closures: &'a FxHashMap<Label, Arc<Code>>,
+    literals: &'a Literals,
     labels: FxHashMap<Label, u32>,
     slots: Slots,
     /// Where each addressed aggregate of this body lives (RFC-0050 rule 2).
@@ -627,6 +645,7 @@ impl<'a> Prepare<'a> {
         body: &'a MirBody,
         ctx: &'a PrepareCtx<'a>,
         closures: &'a FxHashMap<Label, Arc<Code>>,
+        literals: &'a Literals,
         labels: FxHashMap<Label, u32>,
     ) -> Self {
         let slots = assign_slots(body, ctx, &labels);
@@ -651,6 +670,7 @@ impl<'a> Prepare<'a> {
             body,
             ctx,
             closures,
+            literals,
             labels,
             scratch: slots.frame,
             slots,
@@ -1134,6 +1154,7 @@ impl<'a> Prepare<'a> {
             },
 
             InstKind::Const { .. }
+            | InstKind::ConstStr { .. }
             | InstKind::StringConcat { .. }
             | InstKind::StringEq { .. }
             | InstKind::StringClone { .. }
@@ -1929,13 +1950,32 @@ impl<'a> Prepare<'a> {
 
             InstKind::Const { dst, value } => self.constant(*dst, value),
 
+            InstKind::ConstStr { dst, text } => {
+                let pair = self.pair(*dst);
+                let run = self.literals.run(text);
+                made(move |next| {
+                    Box::new(constant::Const {
+                        dst: pair.ptr,
+                        word: run.ptr,
+                        next: Box::new(constant::Const {
+                            dst: pair.len,
+                            word: run.len,
+                            next,
+                        }),
+                    })
+                })
+            }
+
             InstKind::StringConcat { dst, parts } => {
                 let owns_large = self.take_mask(parts);
                 let held: Box<[ConcatPart]> = parts
                     .iter()
-                    .map(|part| ConcatPart {
-                        slot: self.off(*part),
-                        through_reference: self.is_ref(*part),
+                    .map(|part| match SlotClass::of(self.ty(*part)) {
+                        SlotClass::Slice => ConcatPart::Lent(LentText::Pair(self.pair(*part))),
+                        _ if self.is_ref(*part) => {
+                            ConcatPart::Lent(LentText::Through(self.off(*part)))
+                        }
+                        _ => ConcatPart::Owned(self.off(*part)),
                     })
                     .collect();
                 {
@@ -1949,12 +1989,9 @@ impl<'a> Prepare<'a> {
                 }
             }
             InstKind::StringEq { dst, a, b } => {
-                let slots = Binary {
-                    dst: self.marked(*dst),
-                    l: self.marked(*a),
-                    r: self.marked(*b),
-                };
-                node(move |next| string::StringEq { slots, next })
+                let dst = self.off(*dst);
+                let (l, r) = (self.lent_text(*a), self.lent_text(*b));
+                node(move |next| string::StringEq { dst, l, r, next })
             }
             InstKind::StringClone { dst, src } => {
                 let slots = Unary {
@@ -2727,6 +2764,14 @@ impl<'a> Prepare<'a> {
         }
     }
 
+    /// An operand of `StringEq`, which the checker keeps lent (RFC-0020).
+    fn lent_text(&self, id: ValueId) -> LentText {
+        match SlotClass::of(self.ty(id)) {
+            SlotClass::Slice => LentText::Pair(self.pair(id)),
+            SlotClass::Word(_) | SlotClass::Whole => LentText::Through(self.off(id)),
+        }
+    }
+
     fn constant(&mut self, dst: ValueId, value: &Literal) -> Node {
         let out = self.marked(dst);
         let word = match (value, self.ty(dst)) {
@@ -2797,9 +2842,22 @@ impl<'a> Prepare<'a> {
             }
             Literal::String(s) => {
                 let want = s.clone();
-                match through {
-                    true => node(move |next| pattern::TestString::<true> { slots, want, next }),
-                    false => node(move |next| pattern::TestString::<false> { slots, want, next }),
+                match SlotClass::of(self.ty(src)) {
+                    SlotClass::Slice => {
+                        let (dst, src) = (slots.dst.at, self.lent_text(src));
+                        node(move |next| string::TestLentText {
+                            dst,
+                            src,
+                            want,
+                            next,
+                        })
+                    }
+                    _ => match through {
+                        true => node(move |next| pattern::TestString::<true> { slots, want, next }),
+                        false => {
+                            node(move |next| pattern::TestString::<false> { slots, want, next })
+                        }
+                    },
                 }
             }
             Literal::Unit => node(move |next| pattern::TestUnit {
@@ -4231,7 +4289,14 @@ mod recognizer_tests {
             for id in mentioned {
                 body.val_types.insert(id, Ty::Int(IntTy::I64));
             }
-            prepare_body(&body, &ctx, &FxHashMap::default(), BodyRole::Entry)
+            let literals = Arc::new(Literals::of(literal_texts(&body)));
+            prepare_body(
+                &body,
+                &ctx,
+                &FxHashMap::default(),
+                &literals,
+                BodyRole::Entry,
+            )
         }
 
         fn recognize(&self, insts: Vec<Inst>) -> Vec<Matched> {
@@ -4243,7 +4308,8 @@ mod recognizer_tests {
             };
             let closures = FxHashMap::default();
             let body = body_of(insts);
-            let prep = Prepare::new(&body, &ctx, &closures, label_map(&body));
+            let literals = Literals::of(literal_texts(&body));
+            let prep = Prepare::new(&body, &ctx, &closures, &literals, label_map(&body));
             matched(&prep.regions())
         }
     }

@@ -16,7 +16,8 @@ async fn ok_and_err_are_built_and_matched() {
     assert_eq!(v.as_int(), -1);
     let v = run_script_mode(
         &i,
-        r#"let r = if false { Ok(0) } else { Err("boom") }; if let Err(e) = r { e } else { "fine" }"#,
+        r#"let r = if false { Ok(0) } else { Err("boom".to_string()) };
+           if let Err(e) = r { e } else { "fine".to_string() }"#,
         Context::default(),
         Ty::String,
     )

@@ -790,7 +790,10 @@ fn process_inst(
         InstKind::Merge { dst, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::Const { dst, .. } | InstKind::Poison { dst } | InstKind::Undef { dst } => {
+        InstKind::Const { dst, .. }
+        | InstKind::ConstStr { dst, .. }
+        | InstKind::Poison { dst }
+        | InstKind::Undef { dst } => {
             state.set_value(*dst, Liveness::Alive);
         }
         // A reference names the place, so it reads it.

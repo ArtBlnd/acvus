@@ -98,6 +98,7 @@ fn externs(i: &Interner) -> Vec<Function> {
         vec_of(i, TypeArg::uniform(string())),
     );
     vec![
+        extern_fn(i, "text", fn_of(i, &[], string()), Instances::default()),
         extern_fn(
             i,
             "k",
@@ -255,7 +256,7 @@ fn s1_a_conversion_between_two_ground_types_is_recorded_at_the_argument() {
 #[test]
 fn s2_two_objects_join_to_the_union_of_their_fields() {
     let i = Interner::new();
-    let checked = ok(&i, "[{ a: 1, }, { b: \"s\", }]");
+    let checked = ok(&i, "[{ a: 1, }, { b: text(), }]");
     let fields: FxHashMap<_, _> = [(i.intern("a"), Ty::I64), (i.intern("b"), Ty::String)]
         .into_iter()
         .collect();
@@ -271,7 +272,7 @@ fn s2_two_objects_join_to_the_union_of_their_fields() {
 #[test]
 fn s2_a_field_read_is_a_join_with_a_partial_object() {
     let i = Interner::new();
-    let checked = ok(&i, "let f = |o| -> o.name; f({ name: \"n\", age: 1, })");
+    let checked = ok(&i, "let f = |o| -> o.name; f({ name: text(), age: 1, })");
     assert_eq!(checked.ret, Ty::String);
 }
 
@@ -346,11 +347,14 @@ fn s4_a_conversion_that_does_not_exist_names_both_types_at_the_argument() {
 #[test]
 fn s5_a_lambda_after_the_argument_sees_the_element_type_the_instance_fixed() {
     let i = Interner::new();
-    let checked = ok(&i, "vec_array([\"a\"]) ; let f = |x| -> x + 1; f(1)");
+    let checked = ok(&i, "vec_array([text()]) ; let f = |x| -> x + 1; f(1)");
     assert_eq!(checked.ret, Ty::I64);
     assert_eq!(
         checked.calls,
-        vec![("vec_array".to_string(), VEC_ARRAY_AT_UNIFORM)]
+        vec![
+            ("text".to_string(), 0),
+            ("vec_array".to_string(), VEC_ARRAY_AT_UNIFORM)
+        ]
     );
 }
 

@@ -466,8 +466,11 @@ fn a_piped_vec_reaches_the_fixture_iterator_probe_through_into_iter() {
 #[test]
 fn a_candidate_that_takes_the_argument_directly_drops_one_that_would_view_it() {
     let i = Interner::new();
-    let c = checked(&i, "let s = \"ab\"; peek(&s)");
-    assert_eq!(c.callees, vec!["fx_a::peek".to_string()]);
+    let c = checked(&i, "let s = \"ab\".to_string(); peek(&s)");
+    assert_eq!(
+        c.callees,
+        vec!["core::to_string".to_string(), "fx_a::peek".to_string()]
+    );
 }
 
 /// Rule 5: no candidate takes the `&String` directly, `fx_b::glance` takes a
@@ -505,10 +508,18 @@ fn a_string_receiver_reaches_len_by_the_view() {
 #[test]
 fn an_element_still_a_variable_defers_its_admission_until_the_head_resolves() {
     let i = Interner::new();
-    let c = checked(&i, "let f = |zs| -> zs[0].len(); f([\"a\", \"b\"])");
+    let c = checked(
+        &i,
+        "let f = |zs| -> zs[0].len(); f([\"a\".to_string(), \"b\".to_string()])",
+    );
     assert_eq!(
         c.callees,
-        vec!["array::as_slice".to_string(), "string::len".to_string()]
+        vec![
+            "array::as_slice".to_string(),
+            "core::to_string".to_string(),
+            "core::to_string".to_string(),
+            "string::len".to_string()
+        ]
     );
 }
 
@@ -528,7 +539,7 @@ fn an_argument_no_candidate_takes_empties_the_set_at_that_argument() {
 #[test]
 fn a_bare_variable_receiver_at_a_value_parameter_reaches_no_view() {
     let i = Interner::new();
-    let errors = errors_of(&i, "let f = |k| -> len(k); f(\"ab\")");
+    let errors = errors_of(&i, "let f = |k| -> len(k); f(\"ab\".to_string())");
     assert_eq!(
         errors,
         vec!["no `len` takes a call of type Fn(String) -> u64"]

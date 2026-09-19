@@ -44,136 +44,121 @@ expression: raw
 
 === main ===
      0 |   r0 = ref &$v1
-     2 |   assign v9 = T0
-     3 |   r1 = ref &v9
-     4 |   r2 = string_concat [r0, r1]
-     5 |   assign v12 = r2
-     6 |   r3 = ref &v12
-     7 |   r4 = ref &$v2
-     8 |   r5 = call #0(r4)
-     9 |   assign v16 = r5
-    10 |   r6 = ref &v16
-    11 |   r7 = string_concat [r3, r6]
-    12 |   assign v19 = r7
-    13 |   r8 = ref &v19
-    15 |   assign v22 = T1
-    16 |   r9 = ref &v22
-    17 |   r10 = string_concat [r8, r9]
-    18 |   assign v25 = r10
-    19 |   r11 = ref &v25
-    20 |   r12 = ref &$v3
-    21 |   r13 = call #0(r12)
-    22 |   assign v29 = r13
-    23 |   r14 = ref &v29
-    24 |   r15 = string_concat [r11, r14]
-    25 |   assign v32 = r15
-    26 |   r16 = ref &v32
-    28 |   assign v35 = T2
-    29 |   r17 = ref &v35
-    30 |   r18 = string_concat [r16, r17]
-    31 |   assign v38 = r18
-    32 |   r19 = ref &v38
-    33 |   r20 = ref &$v4
-    34 |   r21 = call #0(r20)
-    35 |   assign v42 = r21
-    36 |   r22 = ref &v42
-    37 |   r23 = string_concat [r19, r22]
-    38 |   assign v45 = r23
-    39 |   r24 = ref &v45
-    41 |   assign v48 = T3
-    42 |   r25 = ref &v48
-    43 |   r26 = string_concat [r24, r25]
-    44 |   assign v51 = r26
-    45 |   r27 = ref &v51
-    46 |   r28 = ref &$v5
-    47 |   r29 = call #0(r28)
-    48 |   assign v55 = r29
-    49 |   r30 = ref &v55
-    50 |   r31 = string_concat [r27, r30]
-    51 |   assign v58 = r31
-    52 |   r32 = ref &v58
-    54 |   assign v61 = T4
-    55 |   r33 = ref &v61
-    56 |   r34 = string_concat [r32, r33]
-    57 |   assign v64 = r34
-    58 |   r35 = ref &v64
-    59 |   r36 = ref &$v6
-    60 |   r37 = call #0(r36)
-    61 |   assign v68 = r37
-    62 |   r38 = ref &v68
-    63 |   r39 = string_concat [r35, r38]
-    64 |   return r39
+     1 |   r1 = const_str T0
+     2 |   r2 = string_concat [r0, r1]
+     3 |   assign v10 = r2
+     4 |   r3 = ref &v10
+     5 |   r4 = ref &$v2
+     6 |   r5 = call #0(r4)
+     7 |   assign v14 = r5
+     8 |   r6 = ref &v14
+     9 |   r7 = string_concat [r3, r6]
+    10 |   assign v17 = r7
+    11 |   r8 = ref &v17
+    12 |   r9 = const_str T1
+    13 |   r10 = string_concat [r8, r9]
+    14 |   assign v21 = r10
+    15 |   r11 = ref &v21
+    16 |   r12 = ref &$v3
+    17 |   r13 = call #0(r12)
+    18 |   assign v25 = r13
+    19 |   r14 = ref &v25
+    20 |   r15 = string_concat [r11, r14]
+    21 |   assign v28 = r15
+    22 |   r16 = ref &v28
+    23 |   r17 = const_str T2
+    24 |   r18 = string_concat [r16, r17]
+    25 |   assign v32 = r18
+    26 |   r19 = ref &v32
+    27 |   r20 = ref &$v4
+    28 |   r21 = call #0(r20)
+    29 |   assign v36 = r21
+    30 |   r22 = ref &v36
+    31 |   r23 = string_concat [r19, r22]
+    32 |   assign v39 = r23
+    33 |   r24 = ref &v39
+    34 |   r25 = const_str T3
+    35 |   r26 = string_concat [r24, r25]
+    36 |   assign v43 = r26
+    37 |   r27 = ref &v43
+    38 |   r28 = ref &$v5
+    39 |   r29 = call #0(r28)
+    40 |   assign v47 = r29
+    41 |   r30 = ref &v47
+    42 |   r31 = string_concat [r27, r30]
+    43 |   assign v50 = r31
+    44 |   r32 = ref &v50
+    45 |   r33 = const_str T4
+    46 |   r34 = string_concat [r32, r33]
+    47 |   assign v54 = r34
+    48 |   r35 = ref &v54
+    49 |   r36 = ref &$v6
+    50 |   r37 = call #0(r36)
+    51 |   assign v58 = r37
+    52 |   r38 = ref &v58
+    53 |   r39 = string_concat [r35, r38]
+    54 |   return r39
 
     ; r0 ($param_1.) : &String
-    ; r1 (var_9.) : &String
-    ; r2 (v11) : String
-    ; r3 (var_12.) : &String
+    ; r1 (v8) : &str
+    ; r2 (v9) : String
+    ; r3 (var_10.) : &String
     ; r4 ($param_2.) : &i64
     ; r5 (to_string(...)) : String
-    ; r6 (var_16.) : &String
-    ; r7 (v18) : String
-    ; r8 (var_19.) : &String
-    ; r9 (var_22.) : &String
-    ; r10 (v24) : String
-    ; r11 (var_25.) : &String
+    ; r6 (var_14.) : &String
+    ; r7 (v16) : String
+    ; r8 (var_17.) : &String
+    ; r9 (v19) : &str
+    ; r10 (v20) : String
+    ; r11 (var_21.) : &String
     ; r12 ($param_3.) : &i64
     ; r13 (to_string(...)) : String
-    ; r14 (var_29.) : &String
-    ; r15 (v31) : String
-    ; r16 (var_32.) : &String
-    ; r17 (var_35.) : &String
-    ; r18 (v37) : String
-    ; r19 (var_38.) : &String
+    ; r14 (var_25.) : &String
+    ; r15 (v27) : String
+    ; r16 (var_28.) : &String
+    ; r17 (v30) : &str
+    ; r18 (v31) : String
+    ; r19 (var_32.) : &String
     ; r20 ($param_4.) : &i64
     ; r21 (to_string(...)) : String
-    ; r22 (var_42.) : &String
-    ; r23 (v44) : String
-    ; r24 (var_45.) : &String
-    ; r25 (var_48.) : &String
-    ; r26 (v50) : String
-    ; r27 (var_51.) : &String
+    ; r22 (var_36.) : &String
+    ; r23 (v38) : String
+    ; r24 (var_39.) : &String
+    ; r25 (v41) : &str
+    ; r26 (v42) : String
+    ; r27 (var_43.) : &String
     ; r28 ($param_5.) : &i64
     ; r29 (to_string(...)) : String
-    ; r30 (var_55.) : &String
-    ; r31 (v57) : String
-    ; r32 (var_58.) : &String
-    ; r33 (var_61.) : &String
-    ; r34 (v63) : String
-    ; r35 (var_64.) : &String
+    ; r30 (var_47.) : &String
+    ; r31 (v49) : String
+    ; r32 (var_50.) : &String
+    ; r33 (v52) : &str
+    ; r34 (v53) : String
+    ; r35 (var_54.) : &String
     ; r36 ($param_6.) : &i64
     ; r37 (to_string(...)) : String
-    ; r38 (var_68.) : &String
-    ; r39 (v70) : String
+    ; r38 (var_58.) : &String
+    ; r39 (v60) : String
     ; r40 (v25) : String
-    ; r41 (v3) : i64
-    ; r42 (v47) : String
-    ; r43 (v60) : String
-    ; r44 (v9) : String
-    ; r45 (v51) : String
-    ; r46 (v6) : i64
-    ; r47 (v12) : String
-    ; r48 (v68) : String
-    ; r49 (v5) : i64
-    ; r50 (v55) : String
-    ; r51 (v61) : String
-    ; r52 (v42) : String
-    ; r53 (v4) : i64
-    ; r54 (v48) : String
-    ; r55 (v29) : String
-    ; r56 (v35) : String
-    ; r57 (v16) : String
-    ; r58 (v22) : String
-    ; r59 (v34) : String
-    ; r60 (v21) : String
-    ; r61 (v2) : i64
-    ; r62 (v8) : String
-    ; r63 (v58) : String
-    ; r64 (v64) : String
-    ; r65 (v1) : String
-    ; r66 (v45) : String
-    ; r67 (v32) : String
-    ; r68 (v38) : String
-    ; r69 (v19) : String
+    ; r41 (v6) : i64
+    ; r42 (v50) : String
+    ; r43 (v17) : String
+    ; r44 (v36) : String
+    ; r45 (v4) : i64
+    ; r46 (v10) : String
+    ; r47 (v43) : String
+    ; r48 (v5) : i64
+    ; r49 (v54) : String
+    ; r50 (v3) : i64
+    ; r51 (v47) : String
+    ; r52 (v28) : String
+    ; r53 (v21) : String
+    ; r54 (v58) : String
+    ; r55 (v14) : String
+    ; r56 (v39) : String
+    ; r57 (v1) : String
+    ; r58 (v2) : i64
+    ; r59 (v32) : String
 
 -- main --
 === main ===

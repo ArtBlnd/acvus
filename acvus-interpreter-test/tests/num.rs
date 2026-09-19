@@ -196,12 +196,16 @@ async fn hash_of_equal_ints_is_equal() {
 
 #[tokio::test]
 async fn hash_of_equal_strings_is_equal() {
-    assert!(boolean(r#"let a = "a"; let b = "a"; hash(&a) == hash(&b)"#).await);
+    assert!(
+        boolean(r#"let a = "a".to_string(); let b = "a".to_string(); hash(&a) == hash(&b)"#).await
+    );
 }
 
 #[tokio::test]
 async fn hash_of_different_strings_differs() {
-    assert!(boolean(r#"let a = "a"; let b = "b"; hash(&a) != hash(&b)"#).await);
+    assert!(
+        boolean(r#"let a = "a".to_string(); let b = "b".to_string(); hash(&a) != hash(&b)"#).await
+    );
 }
 
 #[tokio::test]

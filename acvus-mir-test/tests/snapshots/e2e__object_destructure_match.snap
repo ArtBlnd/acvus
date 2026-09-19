@@ -33,13 +33,14 @@ expression: ir
     29 |   r14 = string_concat [r13, r12]
     30 |   jump L0(r14, r9)
     31 | L1:
-    33 |   r15 = string_concat [T0]
-    34 |   jump L0(r15, r0)
-    35 | L0(r16: String, r17: String):
-    36 |   r18 = string_concat [r16]
-    37 |   r19 = take @user
-    38 |   commit @user = r19
-    39 |   return r18
+    32 |   r15 = const_str T0
+    33 |   r16 = string_concat [r15]
+    34 |   jump L0(r16, r0)
+    35 | L0(r17: String, r18: String):
+    36 |   r19 = string_concat [r17]
+    37 |   r20 = take @user
+    38 |   commit @user = r20
+    39 |   return r19
 
     ; r0 (v23) : String
     ; r1 (@user) : {age: i64, email: String, name: String}
@@ -56,15 +57,15 @@ expression: ir
     ; r12 (to_string(...)) : String
     ; r13 (v27) : String
     ; r14 (v17) : String
-    ; r15 (v19) : String
-    ; r16 (v20) : String
-    ; r17 (v26) : String
-    ; r18 (v21) : String
-    ; r19 (v22) : {age: i64, email: String, name: String}
-    ; r20 (name) : String
+    ; r15 (v18) : &str
+    ; r16 (v19) : String
+    ; r17 (v20) : String
+    ; r18 (v26) : String
+    ; r19 (v21) : String
+    ; r20 (v22) : {age: i64, email: String, name: String}
     ; r21 (name) : String
-    ; r22 (v25) : String
-    ; r23 (v18) : String
+    ; r22 (name) : String
+    ; r23 (v25) : String
     ; r24 (age) : i64
     ; r25 (@user) : {age: i64, email: String, name: String}
     ; r26 (v24) : String

@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 2649
 expression: ir
 ---
 === literals ===
@@ -18,13 +17,15 @@ expression: ir
      9 |   r7 = call #2(r5, r6)
     10 |   r8 = call #3(r7)
     11 |   r9 = call #1(r8)
-    13 |   r10 = call #4(r9, T1)
-    14 |   r11 = string_concat [T0, T0, r10]
-    15 |   commit @users = r4
-    16 |   return r11
+    12 |   r10 = const_str T1
+    13 |   r11 = call #4(r10)
+    14 |   r12 = call #5(r9, r11)
+    15 |   r13 = string_concat [T0, T0, r12]
+    16 |   commit @users = r4
+    17 |   return r13
 
-    ; r0 (v19) : Vec<{name: String}>
-    ; r1 (v20) : Vec<{name: String}>
+    ; r0 (v20) : Vec<{name: String}>
+    ; r1 (v21) : Vec<{name: String}>
     ; r2 (@users) : Vec<{name: String}>
     ; r3 (v6) : Array<{name: String}, 0>
     ; r4 (vec(...)) : Vec<{name: String}>
@@ -33,16 +34,17 @@ expression: ir
     ; r7 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
     ; r8 (collect(...)) : Vec<String>
     ; r9 (v14) : Iterator<String, Pure, #IdentityId(2)>
-    ; r10 (join(...)) : String
-    ; r11 (v17) : String
-    ; r12 (@users) : Vec<{name: String}>
-    ; r13 (users) : Vec<{name: String}>
+    ; r10 (v15) : &str
+    ; r11 (to_string(...)) : String
+    ; r12 (join(...)) : String
+    ; r13 (v18) : String
     ; r14 (@users) : Vec<{name: String}>
     ; r15 (users) : Vec<{name: String}>
-    ; r16 (v15) : String
-    ; r17 (v18) : Vec<{name: String}>
-    ; r18 (v5) : String
+    ; r16 (@users) : Vec<{name: String}>
+    ; r17 (v5) : String
+    ; r18 (users) : Vec<{name: String}>
     ; r19 (v8) : String
+    ; r20 (v19) : Vec<{name: String}>
 
 === closure L0 (ValueId(0)) ===
      0 |   assign u = r0

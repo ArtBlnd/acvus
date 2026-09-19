@@ -12,54 +12,69 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @names
-     8 |   r4 = list [T0, T0, T0]
-    10 |   r5 = call #0(r3)
-    11 |   r6 = closure L0 []
-    12 |   r7 = call #1(r5, r6)
-    15 |   r8 = call #2(r7, T1)
-    16 |   r9 = string_concat [T0, T0, T0, r8]
-    17 |   commit @names = r4
-    18 |   return r9
+     5 |   r4 = const_str T0
+     6 |   r5 = call #0(r4)
+     7 |   r6 = const_str T0
+     8 |   r7 = call #0(r6)
+     9 |   r8 = const_str T0
+    10 |   r9 = call #0(r8)
+    11 |   r10 = list [r5, r7, r9]
+    13 |   r11 = call #1(r3)
+    14 |   r12 = closure L0 []
+    15 |   r13 = call #2(r11, r12)
+    17 |   r14 = const_str T1
+    18 |   r15 = call #0(r14)
+    19 |   r16 = call #3(r13, r15)
+    20 |   r17 = string_concat [T0, T0, T0, r16]
+    21 |   commit @names = r10
+    22 |   return r17
 
-    ; r0 (v22) : Array<String, 3>
-    ; r1 (v23) : Array<String, 3>
-    ; r2 (v24) : Iterator<String, Pure, #IdentityId(0)>
+    ; r0 (v26) : Array<String, 3>
+    ; r1 (v27) : Array<String, 3>
+    ; r2 (v28) : Iterator<String, Pure, #IdentityId(0)>
     ; r3 (@names) : Array<String, 3>
-    ; r4 (v9) : Array<String, 3>
-    ; r5 (into_iter(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r6 (v13) : Fn(&String) -> Bool
-    ; r7 (filter(...)) : Iterator<String, Pure, #IdentityId(0)>
-    ; r8 (join(...)) : String
-    ; r9 (v20) : String
-    ; r10 (names) : Array<String, 3>
-    ; r11 (@names) : Array<String, 3>
-    ; r12 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r13 (v6) : String
-    ; r14 (v7) : String
-    ; r15 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r16 (v10) : String
-    ; r17 (v18) : String
-    ; r18 (v21) : Array<String, 3>
-    ; r19 (@names) : Array<String, 3>
-    ; r20 (names) : Array<String, 3>
-    ; r21 (v5) : String
-    ; r22 (v16) : String
-    ; r23 (v8) : String
+    ; r4 (v6) : &str
+    ; r5 (to_string(...)) : String
+    ; r6 (v8) : &str
+    ; r7 (to_string(...)) : String
+    ; r8 (v10) : &str
+    ; r9 (to_string(...)) : String
+    ; r10 (v12) : Array<String, 3>
+    ; r11 (into_iter(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r12 (v16) : Fn(&String) -> Bool
+    ; r13 (filter(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r14 (v21) : &str
+    ; r15 (to_string(...)) : String
+    ; r16 (join(...)) : String
+    ; r17 (v24) : String
+    ; r18 (@names) : Array<String, 3>
+    ; r19 (names) : Array<String, 3>
+    ; r20 (v25) : Array<String, 3>
+    ; r21 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r22 (v13) : String
+    ; r23 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r24 (@names) : Array<String, 3>
+    ; r25 (names) : Array<String, 3>
+    ; r26 (v5) : String
+    ; r27 (v19) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef
-     2 |   assign v5 = T2
-     3 |   r1 = ref &v5
-     4 |   r2 = string_eq r3 r1
-     5 |   r4 = !r2
-     6 |   return r4
+     1 |   r1 = const_str T2
+     2 |   r2 = call #0(r1)
+     3 |   assign v6 = r2
+     4 |   r3 = ref &v6
+     5 |   r4 = string_eq r5 r3
+     6 |   r6 = !r4
+     7 |   return r6
 
-    ; r0 (v9) : &String
-    ; r1 (var_5.) : &String
-    ; r2 (v8) : Bool
-    ; r3 (v1) : &String
-    ; r4 (v7) : Bool
-    ; r5 (n) : &String
-    ; r6 (n) : &String
-    ; r7 (v5) : String
-    ; r8 (v4) : String
+    ; r0 (v10) : &String
+    ; r1 (v4) : &str
+    ; r2 (to_string(...)) : String
+    ; r3 (var_6.) : &String
+    ; r4 (v9) : Bool
+    ; r5 (v1) : &String
+    ; r6 (v8) : Bool
+    ; r7 (n) : &String
+    ; r8 (v6) : String
+    ; r9 (n) : &String

@@ -53,6 +53,18 @@ fn pick_fn(i: &Interner) -> Function {
     }
 }
 
+/// `text() -> String`: the one owned text this graph can name.
+fn text_fn(i: &Interner) -> Function {
+    Function {
+        qref: QualifiedRef::root(i.intern("text")),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: acvus_mir::ty::Instances::default(),
+        },
+        ty: fn_of(i, &[], TyTerm::String),
+    }
+}
+
 fn script_fn(i: &Interner, source: &str) -> Function {
     let mut pb = PolyBuilder::new();
     Function {
@@ -74,7 +86,7 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
     let f = script_fn(i, source);
     let qref = f.qref;
     let graph = CompilationGraph {
-        functions: Freeze::new(vec![pick_fn(i), f]),
+        functions: Freeze::new(vec![pick_fn(i), text_fn(i), f]),
         contexts: Freeze::new(vec![]),
     };
     let ext = extract::extract(i, &graph);
@@ -103,7 +115,7 @@ fn the_argument_s_shape_picks_the_instance_and_fixes_the_element_type() {
     let i = Interner::new();
     assert_eq!(check(&i, "pick([1, 2], |x| -> x)").unwrap(), Ty::I64);
     assert_eq!(
-        check(&i, "pick(Some(\"a\"), |x| -> x)").unwrap(),
+        check(&i, "pick(Some(text()), |x| -> x)").unwrap(),
         Ty::String
     );
 }

@@ -1021,7 +1021,7 @@ fn string_equality_in_filter() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = ["", "", ""] }}{{ x = names | into_iter | filter(|n| -> n != "admin") }}{{ x | join(",") }}"#,
+        r#"{{ names = @names }}{{ @names = ["".to_string(), "".to_string(), "".to_string()] }}{{ x = names | into_iter | filter(|n| -> n != "admin".to_string()) }}{{ x | join(",".to_string()) }}"#,
         &context,
     )
     .unwrap();
@@ -1041,7 +1041,7 @@ fn lambda_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.name) }}{{ x | join(",".to_string()) }}"#,
         &context,
     )
     .unwrap();
@@ -1114,7 +1114,7 @@ fn lambda_chained_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.address.city) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.address.city) }}{{ x | join(",".to_string()) }}"#,
         &context,
     )
     .unwrap();
@@ -1130,7 +1130,7 @@ fn lambda_string_concat() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = vec([]) }}{{ x = names | into_iter | map(|n| -> n + "!") }}{{ x | join(",") }}"#,
+        r#"{{ names = @names }}{{ @names = vec([]) }}{{ x = names | into_iter | map(|n| -> n + "!".to_string()) }}{{ x | join(",".to_string()) }}"#,
         &context,
     )
     .unwrap();
@@ -1149,7 +1149,7 @@ fn pipe_filter_then_map_field() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",".to_string()) }}"#,
         &context,
     )
     .unwrap();
@@ -1174,7 +1174,7 @@ fn error_variable_write_type_mismatch() {
     let i = Interner::new();
     // Attempting to write to a context key (read-only).
     let context = ctx(&i, &[("count", Ty::I64)]);
-    let result = compile_to_ir(&i, r#"{{ @count = "hello" }}"#, &context);
+    let result = compile_to_ir(&i, r#"{{ @count = "hello".to_string() }}"#, &context);
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1265,7 +1265,7 @@ fn builtin_join() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = vec([]) }}{{ names | join(", ") }}"#,
+        r#"{{ names = @names }}{{ @names = vec([]) }}{{ names | join(", ".to_string()) }}"#,
         &context,
     )
     .unwrap();
@@ -2426,7 +2426,7 @@ fn projection_context_field_read() {
 fn projection_context_whole_write() {
     let i = Interner::new();
     let context = ctx(&i, &[("out", Ty::String)]);
-    let ir = compile_to_ir(&i, r#"{{ @out = "hello" }}"#, &context).unwrap();
+    let ir = compile_to_ir(&i, r#"{{ @out = "hello".to_string() }}"#, &context).unwrap();
     // Context store should produce Store instruction (may remain after SSA for write-back).
     assert!(
         ir.contains("commit @out"),
@@ -2650,7 +2650,7 @@ fn sroa_field_read_in_lambda() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | join(",") }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | join(",".to_string()) }}"#,
         &context,
     )
     .unwrap();

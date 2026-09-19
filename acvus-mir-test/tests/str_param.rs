@@ -61,7 +61,7 @@ fn main_body(ir: &str) -> &str {
 
 #[test]
 fn a_borrowed_string_at_a_str_parameter_is_one_view_before_the_call() {
-    let ir = ir("let s = \"abc\"; byte_length(&s)");
+    let ir = ir("let s = \"abc\".to_string(); byte_length(&s)");
     let body = main_body(&ir);
     assert_eq!(body.matches("as_slice").count(), 1, "{body}");
     let viewed = body

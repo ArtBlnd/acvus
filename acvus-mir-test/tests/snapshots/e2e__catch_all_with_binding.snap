@@ -15,33 +15,33 @@ expression: ir
      4 |   r3 = test r2 == "admin"
      5 |   jump_if r3 then L3 else L1
      6 | L3:
-     8 |   r4 = string_concat [T0]
-     9 |   jump L0(r4, r1)
+     7 |   r4 = const_str T0
+     8 |   r5 = string_concat [r4]
+     9 |   jump L0(r5, r1)
     10 | L1:
-    13 |   r5 = string_clone T1
-    14 |   r6 = string_concat [T2, r5]
-    15 |   jump L0(r6, T1)
-    16 | L0(r7: String, r8: String):
-    17 |   r9 = string_concat [r7]
-    18 |   commit @role = r2
-    19 |   return r9
+    11 |   r6 = const_str T1
+    13 |   r7 = string_concat [T2, r6]
+    14 |   jump L0(r7, r6)
+    15 | L0(r8: String, r9: &str):
+    16 |   r10 = string_concat [r8]
+    17 |   commit @role = r2
+    18 |   return r10
 
     ; r0 (v15) : String
-    ; r1 (v16) : String
+    ; r1 (v16) : &str
     ; r2 (@role) : String
     ; r3 (v4) : Bool
-    ; r4 (v6) : String
-    ; r5 (v19) : String
-    ; r6 (v11) : String
-    ; r7 (v12) : String
-    ; r8 (v18) : String
-    ; r9 (v13) : String
-    ; r10 (v3) : String
-    ; r11 (v14) : String
-    ; r12 (v17) : String
-    ; r13 (v9) : String
-    ; r14 (@role) : String
-    ; r15 (v7) : String
-    ; r16 (fallback) : String
-    ; r17 (v5) : String
-    ; r18 (fallback) : String
+    ; r4 (v5) : &str
+    ; r5 (v6) : String
+    ; r6 (v7) : &str
+    ; r7 (v11) : String
+    ; r8 (v12) : String
+    ; r9 (v18) : &str
+    ; r10 (v13) : String
+    ; r11 (v3) : String
+    ; r12 (v14) : String
+    ; r13 (v17) : String
+    ; r14 (v9) : String
+    ; r15 (@role) : String
+    ; r16 (fallback) : &str
+    ; r17 (fallback) : &str

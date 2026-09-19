@@ -1025,6 +1025,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             TyTerm::Unit
         };
         self.solve_body();
+        // A body does not hand a `&str` to its caller. The result leaves in
+        // the one register a caller reads, and a view is two (RFC-0062
+        // Decision 4); a host that declares `!` reads it by kind
+        // (RFC-0054) and a pair has no kind. Every other reference is left
+        // as it was: whether a body may return one at all is a question
+        // this decision does not answer.
+        if let Some(tail) = &script.tail {
+            let resolved = self.solver.resolve_ty(&tail_ty);
+            if matches!(&resolved, TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str)) {
+                let ty = self.type_as_written(&resolved);
+                self.error(MirErrorKind::ViewReturnedFromBody(ty), tail.span());
+            }
+        }
         self.check_moves_out_of_captures();
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
@@ -1754,9 +1767,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A reference is never data (RFC-0018).
     fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span) {
-        if matches!(self.solver.resolve_ty(ty), TyTerm::Ref(..)) {
-            self.error(MirErrorKind::ReferenceInData, span);
-        }
+        let kind = match self.solver.resolve_ty(ty) {
+            TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str) => MirErrorKind::ViewInData,
+            TyTerm::Ref(..) => MirErrorKind::ReferenceInData,
+            _ => return,
+        };
+        self.error(kind, span);
     }
 
     /// Walk a field path on a type, resolving each step.
@@ -3473,10 +3489,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Node::InlineExpr { expr, span, .. } => {
                 let ty = self.check_expr(expr);
                 let resolved = self.solver.resolve_ty(&ty);
+                // A `&str` emits as it is: the node joins the template's
+                // other parts in one `StringConcat`, which reads a part's
+                // bytes through either representation (RFC-0062 Decision 3).
                 match &resolved {
                     TyTerm::String | TyTerm::Error(_) => {}
                     TyTerm::Ref(_, inner)
-                        if matches!(self.solver.resolve_ty(&inner.ty), TyTerm::String) => {}
+                        if matches!(
+                            self.solver.resolve_ty(&inner.ty),
+                            TyTerm::String | TyTerm::Str
+                        ) => {}
                     TyTerm::Var(_) => self.convert_at(
                         &ty,
                         &TyTerm::String,
@@ -4053,7 +4075,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Literal::Bytes(bytes) => {
                         TyTerm::Array(Box::new(TyTerm::U8), LenTerm::Known(bytes.len()))
                     }
-                    Literal::String(_) => TyTerm::String,
+                    Literal::String(_) => str_literal_ty(),
                     Literal::Bool(_) => TyTerm::Bool,
                     Literal::Unit => TyTerm::Unit,
                     Literal::List(elems) => {
@@ -4193,7 +4215,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     return self.record_ret(*id, ty);
                 }
 
+                // `+` on text is the concatenation, and `==` on text is the
+                // byte comparison: both read their operands and neither needs
+                // the two sides to be the same representation of text
+                // (RFC-0062 Decision 3).
+                let both_text =
+                    is_text(&self.solver.resolve_ty(&lt)) && is_text(&self.solver.resolve_ty(&rt));
                 let ty = match op {
+                    BinOp::Add if both_text => TyTerm::String,
+                    BinOp::Eq | BinOp::Neq if both_text => TyTerm::Bool,
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                         if !self.unify_operands(*op, &lt, &rt, *span) {
                             self.binop_error(
@@ -5242,6 +5272,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             // `_` reads the position and asks nothing of it.
             Pattern::Wildcard { .. } => {}
 
+            // Obligation across artifacts: what makes this admission sound
+            // is that a string literal pattern never becomes a value.
+            // `lower.rs` emits `InstKind::TestLiteral`, which holds the text
+            // as an immediate and compares the scrutinee's bytes, so the two
+            // representations of one text are one comparison (RFC-0062
+            // Decision 2).
+            Pattern::Literal {
+                value: Literal::String(_),
+                ..
+            } if holds_text(&source_resolved) => {}
+
             Pattern::Literal { value, .. } => {
                 let pat_ty = self.literal_ty(value, span);
                 if self.solver.unify_pattern(source_ty, &pat_ty).is_err() {
@@ -5613,7 +5654,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Literal::Bytes(bytes) => {
                 TyTerm::Array(Box::new(TyTerm::U8), LenTerm::Known(bytes.len()))
             }
-            Literal::String(_) => TyTerm::String,
+            Literal::String(_) => str_literal_ty(),
             Literal::Bool(_) => TyTerm::Bool,
             Literal::Unit => TyTerm::Unit,
             Literal::List(elems) => match elems.first() {
@@ -5625,6 +5666,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             },
         }
     }
+}
+
+/// Whether this type is one of the two representations of text: a `String`
+/// or the `str` a `&str` names. An operand of `+` or `==` has already been
+/// read through its reference, so a reference is not one of them.
+fn is_text(ty: &InferTy) -> bool {
+    matches!(ty, TyTerm::String | TyTerm::Str)
+}
+
+/// Whether this type is one of the two representations of text, or a
+/// reference to one: `String`, `&String`, `str`, `&str`.
+fn holds_text(ty: &InferTy) -> bool {
+    match ty {
+        TyTerm::String | TyTerm::Str => true,
+        TyTerm::Ref(_, inner) => holds_text(&inner.ty),
+        _ => false,
+    }
+}
+
+fn str_literal_ty() -> InferTy {
+    TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(TyTerm::Str)))
 }
 
 fn op_str(op: BinOp) -> &'static str {
@@ -5876,11 +5938,16 @@ mod tests {
 
     // -- Named extern functions --
 
+    /// A string literal's type (RFC-0062 Decision 2).
+    fn str_view() -> Ty {
+        Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)))
+    }
+
     fn my_fn(interner: &Interner) -> FxHashMap<Astr, Ty> {
         FxHashMap::from_iter([(
             interner.intern("my_fn"),
             Ty::Fn {
-                params: vec![p(interner, Ty::String)],
+                params: vec![p(interner, str_view())],
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
@@ -5943,7 +6010,7 @@ mod tests {
         let fns = FxHashMap::from_iter([(
             i.intern("my_fn"),
             Ty::Fn {
-                params: vec![p(&i, Ty::String), p(&i, Ty::I64)],
+                params: vec![p(&i, str_view()), p(&i, Ty::I64)],
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),

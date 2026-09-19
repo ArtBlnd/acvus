@@ -125,7 +125,7 @@ fn a_result_keeps_its_box_after_its_payload_is_taken() {
     let i = Interner::new();
     let ir = compile_script_optimized(
         &i,
-        "let r = decimal(\"1.5\"); if let Ok(v) = r { @out = 1; }; 0",
+        "let r = decimal(\"1.5\".to_string()); if let Ok(v) = r { @out = 1; }; 0",
         &ctx(&i, &[("out", Ty::Int(acvus_mir::ty::IntTy::U64))]),
     )
     .unwrap();

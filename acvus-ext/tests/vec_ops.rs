@@ -256,7 +256,7 @@ async fn filled_of_zero_is_empty() {
 #[tokio::test]
 async fn filled_clones_a_string_per_element() {
     assert_eq!(
-        strings_of(r#"let s = "ab"; filled(3, s)"#).await,
+        strings_of(r#"let s = "ab".to_string(); filled(3, s)"#).await,
         ["ab", "ab", "ab"]
     );
 }

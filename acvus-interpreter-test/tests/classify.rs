@@ -28,10 +28,10 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
     ]);
     let src = r#"
         let age = @user.age;
-        @output = "unknown";
-        if let true = age >= 65 { @output = "senior"; };
-        if let true = age >= 18 { @output = "adult"; };
-        if let true = age < 18 { @output = "minor"; };
+        @output = "unknown".to_string();
+        if let true = age >= 65 { @output = "senior".to_string(); };
+        if let true = age >= 18 { @output = "adult".to_string(); };
+        if let true = age < 18 { @output = "minor".to_string(); };
         @output = @user.name + " (" + @output + ")";
         @output
     "#;

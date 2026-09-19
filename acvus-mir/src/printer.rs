@@ -59,13 +59,17 @@ fn fmt_label(l: Label) -> String {
     format!("L{}", l.0)
 }
 
+fn fmt_str(text: &str) -> String {
+    format!("{text:?}")
+}
+
 fn fmt_literal(lit: &Literal) -> String {
     match lit {
         Literal::Int(n) => n.to_string(),
         Literal::Float(f) => format!("{f:?}"),
         Literal::Char(c) => format!("{c:?}"),
         sugar @ (Literal::IntOf(_) | Literal::Bytes(_)) => fmt_literal(&sugar.desugared()),
-        Literal::String(s) => format!("{s:?}"),
+        Literal::String(s) => fmt_str(s),
         Literal::Bool(b) => b.to_string(),
         Literal::Unit => "()".to_string(),
         Literal::List(elems) => {
@@ -161,15 +165,19 @@ fn collect_texts_from_body(
     text_entries: &mut Vec<String>,
 ) {
     for inst in &body.insts {
-        if let InstKind::Const { value, .. } = &inst.kind
-            && matches!(value, Literal::String(_) | Literal::List(_))
-        {
-            let key = fmt_literal(value);
-            if !lit_to_tidx.contains_key(&key) {
-                let idx = text_entries.len();
-                lit_to_tidx.insert(key.clone(), idx);
-                text_entries.push(key);
+        let key = match &inst.kind {
+            InstKind::Const { value, .. }
+                if matches!(value, Literal::String(_) | Literal::List(_)) =>
+            {
+                fmt_literal(value)
             }
+            InstKind::ConstStr { text, .. } => fmt_str(text),
+            _ => continue,
+        };
+        if !lit_to_tidx.contains_key(&key) {
+            let idx = text_entries.len();
+            lit_to_tidx.insert(key.clone(), idx);
+            text_entries.push(key);
         }
     }
 }
@@ -271,6 +279,14 @@ fn write_body(
                     _ => fmt_literal(value),
                 };
                 writeln!(f, "{} = const {}", vn.fmt_val(*dst), shown)?
+            }
+            InstKind::ConstStr { dst, text } => {
+                let key = fmt_str(text);
+                let shown = match ctx.lit_to_tidx.get(&key) {
+                    Some(tidx) => format!("T{tidx}"),
+                    None => key,
+                };
+                writeln!(f, "{} = const_str {}", vn.fmt_val(*dst), shown)?
             }
             // Projection
             InstKind::Ref {

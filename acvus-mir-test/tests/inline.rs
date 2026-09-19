@@ -177,7 +177,7 @@ fn inline_extern_chain_preserved() {
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
-        ("main", r#"process("hello")"#),
+        ("main", r#"process("hello".to_string())"#),
         &[(
             "process",
             "let n = len(&$s); n.to_string()",
@@ -556,7 +556,7 @@ fn a_large_capture_is_inlined_as_the_local_it_was() {
         &i,
         (
             "main",
-            r#"let s = "hi"; let f = |x| -> concat(&s, &x); f("there")"#,
+            r#"let s = "hi".to_string(); let f = |x| -> concat(&s, &x); f("there".to_string())"#,
         ),
         &[],
         &[],
@@ -609,10 +609,10 @@ fn inline_string_operations() {
     let i = Interner::new();
     let ir = compile_inline_ir(
         &i,
-        ("main", r#"greet("world")"#),
+        ("main", r#"greet("world".to_string())"#),
         &[(
             "greet",
-            r#"let h = "Hello "; concat(&h, &$name)"#,
+            r#"let h = "Hello "; concat(h, &$name)"#,
             sig(&i, &[("name", Ty::String)]),
         )],
         &[],

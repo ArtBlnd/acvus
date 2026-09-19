@@ -13,6 +13,7 @@ use crate::ir::{Callee, InstKind, RefTarget, ValueId};
 pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
     match kind {
         InstKind::Const { dst, .. }
+        | InstKind::ConstStr { dst, .. }
         | InstKind::Ref { dst, .. }
         | InstKind::Take { dst, .. }
         | InstKind::Fetch { dst, .. }
@@ -77,6 +78,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
     match kind {
         // No uses
         InstKind::Const { .. }
+        | InstKind::ConstStr { .. }
         | InstKind::Diverge
         | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }

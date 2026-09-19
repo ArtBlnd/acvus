@@ -13,44 +13,47 @@ expression: ir
      2 |   r2 = undef
      3 |   r3 = undef
      4 |   r4 = fetch @role
+     5 |   r5 = const_str T0
      7 | L2:
-     8 |   r5 = test r4 == "admin"
-     9 |   jump_if r5 then L3 else L1
+     8 |   r6 = test r4 == "admin"
+     9 |   jump_if r6 then L3 else L1
     10 | L3:
-    13 |   r6 = string_concat [T0]
-    14 |   jump L0(r6, T1, r3)
+    11 |   r7 = const_str T1
+    13 |   r8 = string_concat [T0]
+    14 |   jump L0(r8, r7, r3)
     15 | L1:
-    18 |   r7 = string_concat [T0]
-    19 |   jump L0(r7, r2, T2)
-    20 | L0(r8: String, r9: String, r10: String):
-    21 |   r11 = string_concat [T0, r8, T0]
+    16 |   r9 = const_str T2
+    18 |   r10 = string_concat [T0]
+    19 |   jump L0(r10, r2, r9)
+    20 | L0(r11: String, r12: &str, r13: &str):
+    21 |   r14 = string_concat [T0, r11, r5]
     22 |   commit @role = r4
-    23 |   return r11
+    23 |   return r14
 
     ; r0 (v20) : String
-    ; r1 (v21) : String
-    ; r2 (v22) : String
-    ; r3 (v23) : String
+    ; r1 (v21) : &str
+    ; r2 (v22) : &str
+    ; r3 (v23) : &str
     ; r4 (@role) : String
-    ; r5 (v7) : Bool
-    ; r6 (v11) : String
-    ; r7 (v15) : String
-    ; r8 (v16) : String
-    ; r9 (v26) : String
-    ; r10 (v27) : String
-    ; r11 (v18) : String
-    ; r12 (v3) : String
-    ; r13 (v14) : String
-    ; r14 (v6) : String
-    ; r15 (v25) : String
-    ; r16 (selected) : String
-    ; r17 (selected) : String
-    ; r18 (v10) : String
-    ; r19 (selected) : String
-    ; r20 (@role) : String
-    ; r21 (v12) : String
-    ; r22 (selected) : String
-    ; r23 (v24) : String
-    ; r24 (v5) : String
-    ; r25 (v8) : String
+    ; r5 (v3) : &str
+    ; r6 (v7) : Bool
+    ; r7 (v8) : &str
+    ; r8 (v11) : String
+    ; r9 (v12) : &str
+    ; r10 (v15) : String
+    ; r11 (v16) : String
+    ; r12 (v26) : &str
+    ; r13 (v27) : &str
+    ; r14 (v18) : String
+    ; r15 (v14) : String
+    ; r16 (v6) : String
+    ; r17 (v25) : String
+    ; r18 (selected) : &str
+    ; r19 (selected) : &str
+    ; r20 (v10) : String
+    ; r21 (selected) : &str
+    ; r22 (@role) : String
+    ; r23 (selected) : &str
+    ; r24 (v24) : &str
+    ; r25 (v5) : String
     ; r26 (v19) : String

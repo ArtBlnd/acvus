@@ -189,7 +189,7 @@ async fn regex_match_true() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { let t = "abc123"; is_match(&re, &t) } else { false }"#,
+        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "abc123"; is_match(&re, &t) } else { false }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -202,7 +202,7 @@ async fn regex_match_false() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { let t = "abc"; is_match(&re, &t) } else { true }"#,
+        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "abc"; is_match(&re, &t) } else { true }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -215,7 +215,7 @@ async fn regex_find_all_collect() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { let t = "a1b22c333"; find_all(&re, &t) | map(|m| -> m.text) | collect } else { vec([]) }"#,
+        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "a1b22c333"; find_all(&re, &t) | map(|m| -> m.text) | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -228,7 +228,7 @@ async fn regex_replace() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\s+") { let t = "hello   world"; replace_all(&re, &t, " ") } else { "?" }"#,
+        r#"if let Ok(re) = regex("\\s+".to_string()) { let t = "hello   world"; replace_all(&re, &t, " ".to_string()) } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -241,7 +241,7 @@ async fn regex_split_collect() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("[,;]\\s*") { let t = "a, b;c"; split(&re, &t) | collect } else { vec([]) }"#,
+        r#"if let Ok(re) = regex("[,;]\\s*".to_string()) { let t = "a, b;c"; split(&re, &t) | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -258,7 +258,7 @@ async fn base64_roundtrip() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(s) = base64_decode(base64_encode("hello world")) { s } else { "not decoded" }"#,
+        r#"if let Ok(s) = base64_decode(base64_encode("hello world".to_string())) { s } else { "not decoded".to_string() }"#,
         TypedContext::default(),
         vec![encoding_registry::<AcvusRuntime>()],
     )
@@ -271,7 +271,7 @@ async fn base64_that_does_not_decode_names_which_decoding_failed() {
     let i = Interner::new();
     let src = |input: &str| {
         [
-            &format!(r#"{{{{ r = base64_decode("{input}") }}}}"#),
+            &format!(r#"{{{{ r = base64_decode("{input}".to_string()) }}}}"#),
             "{{ Ok(s) = r }}{{ s }}",
             "{{ Err(Base64Error::InvalidBase64(e)) = }}not base64: {{ e.input }}",
             "{{ Err(Base64Error::InvalidUtf8(e)) = }}not utf8: {{ e.input }}{{/}}",
@@ -291,7 +291,7 @@ async fn url_roundtrip() {
     let i = Interner::new();
     let result = run_ext(
         &i,
-        r#"url_decode(url_encode("hello world&foo=bar"))"#,
+        r#"url_decode(url_encode("hello world&foo=bar".to_string()))"#,
         TypedContext::default(),
         vec![encoding_registry::<AcvusRuntime>()],
     )
@@ -309,7 +309,7 @@ async fn datetime_format_from_timestamp() {
     // 2024-01-01 00:00:00 UTC = epoch 1704067200
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(dt) = from_timestamp(1704067200) { format_date(dt, "%Y-%m-%d") } else { "?" }"#,
+        r#"if let Ok(dt) = from_timestamp(1704067200) { format_date(dt, "%Y-%m-%d".to_string()) } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     )
@@ -335,7 +335,7 @@ async fn datetime_add_days() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(dt) = from_timestamp(1704067200) { let dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d") } else { "?" }"#,
+        r#"if let Ok(dt) = from_timestamp(1704067200) { let dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d".to_string()) } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     )
@@ -348,7 +348,7 @@ async fn datetime_parse_and_format() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(dt) = parse_date("2024-06-15 12:30:00", "%Y-%m-%d %H:%M:%S") { format_date(dt, "%m/%d/%Y") } else { "?" }"#,
+        r#"if let Ok(dt) = parse_date("2024-06-15 12:30:00".to_string(), "%Y-%m-%d %H:%M:%S".to_string()) { format_date(dt, "%m/%d/%Y".to_string()) } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     ).await;
@@ -364,7 +364,7 @@ async fn mixed_regex_and_encoding() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { let t = "abc123"; let m = is_match(&re, &t); base64_encode("hello") + " " + m.to_string() } else { "?" }"#,
+        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "abc123"; let m = is_match(&re, &t); base64_encode("hello".to_string()) + " " + m.to_string() } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![
             regex_registry::<AcvusRuntime>(),
@@ -488,7 +488,7 @@ async fn an_object_returned_by_an_extern_fn_is_the_script_s_object() {
     assert_eq!(v.as_int(), 1);
     let v = run_ext(
         &i,
-        "shift({ x: 41, label: \"a\", }).x",
+        "shift({ x: 41, label: \"a\".to_string(), }).x",
         TypedContext::default(),
         regs(),
     )
@@ -661,7 +661,7 @@ async fn a_decimal_is_exact_text_in_and_out() {
     let i = Interner::new();
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(d) = decimal("1.50") }}{{ d.to_string() }}{{/}}"#,
+        r#"{{ Ok(d) = decimal("1.50".to_string()) }}{{ d.to_string() }}{{/}}"#,
         TypedContext::default(),
         vec![],
     )
@@ -669,7 +669,7 @@ async fn a_decimal_is_exact_text_in_and_out() {
     assert_str(&v, "1.50");
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(a) = decimal("1.5") }}{{ Ok(b) = decimal("1.50") }}{{ same = a == b }}{{ same.to_string() }}{{/}}{{/}}"#,
+        r#"{{ Ok(a) = decimal("1.5".to_string()) }}{{ Ok(b) = decimal("1.50".to_string()) }}{{ same = a == b }}{{ same.to_string() }}{{/}}{{/}}"#,
         TypedContext::default(),
         vec![],
     )
@@ -677,7 +677,7 @@ async fn a_decimal_is_exact_text_in_and_out() {
     assert_str(&v, "true");
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(d) = decimal("0.5") }}{{ f = decimal_to_float(&d) }}{{ f.to_string() }}{{/}}"#,
+        r#"{{ Ok(d) = decimal("0.5".to_string()) }}{{ f = decimal_to_float(&d) }}{{ f.to_string() }}{{/}}"#,
         TypedContext::default(),
         vec![],
     )
@@ -699,7 +699,7 @@ async fn an_extension_type_is_a_field_of_a_derived_object() {
     assert_str(&v, "9.99 USD");
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(d) = decimal("0.05") }}{{ p = double_price({ amount: d, currency: "KRW", }) }}{{ p.amount.to_string() }}{{/}}"#,
+        r#"{{ Ok(d) = decimal("0.05".to_string()) }}{{ p = double_price({ amount: d, currency: "KRW".to_string(), }) }}{{ p.amount.to_string() }}{{/}}"#,
         TypedContext::default(),
         regs(),
     )
@@ -741,7 +741,7 @@ async fn a_result_built_by_the_script_crosses_into_the_extern_fn() {
     assert_str(&v, "41");
     let v = run_ext_template(
         &i,
-        r#"{{ describe(Err("nope")) }}"#,
+        r#"{{ describe(Err("nope".to_string())) }}"#,
         TypedContext::default(),
         regs(),
     )
@@ -782,7 +782,7 @@ async fn an_extern_fn_s_result_is_the_script_s_result() {
     let regs = || vec![fallible_registry()];
     let src = |text: &str| {
         [
-            &format!(r#"{{{{ r = parse_int("{text}") }}}}"#),
+            &format!(r#"{{{{ r = parse_int("{text}".to_string()) }}}}"#),
             "{{ Ok(n) = r }}{{ n.to_string() }}",
             "{{ Err(ParseFail::NotANumber(t)) = }}not a number: {{ t }}",
             "{{ Err(ParseFail::Empty) = }}empty{{_}}?{{/}}",
@@ -875,7 +875,7 @@ async fn a_refused_input_names_why_in_its_own_enum() {
     let i = Interner::new();
     let v = run_ext_template(
         &i,
-        r#"{{ r = regex("(") }}{{ Err(RegexError::Invalid(e)) = r }}{{ e.pattern }}{{_}}?{{/}}"#,
+        r#"{{ r = regex("(".to_string()) }}{{ Err(RegexError::Invalid(e)) = r }}{{ e.pattern }}{{_}}?{{/}}"#,
         TypedContext::default(),
         vec![regex_registry()],
     )
@@ -883,7 +883,7 @@ async fn a_refused_input_names_why_in_its_own_enum() {
     assert_str(&v, "(");
     let v = run_ext_template(
         &i,
-        r#"{{ r = parse_date("yesterday", "%Y") }}{{ Err(DateError::Unparsable(e)) = r }}{{ e.input }} {{ e.format }}{{_}}?{{/}}"#,
+        r#"{{ r = parse_date("yesterday".to_string(), "%Y".to_string()) }}{{ Err(DateError::Unparsable(e)) = r }}{{ e.input }} {{ e.format }}{{_}}?{{/}}"#,
         TypedContext::default(),
         vec![datetime_registry()],
     )
@@ -899,7 +899,7 @@ async fn a_refused_input_names_why_in_its_own_enum() {
     assert_str(&v, "9223372036854775807");
     let v = run_ext_template(
         &i,
-        r#"{{ r = decimal("1.2.3") }}{{ Err(DecimalError::Unparsable(t)) = r }}{{ t }}{{_}}?{{/}}"#,
+        r#"{{ r = decimal("1.2.3".to_string()) }}{{ Err(DecimalError::Unparsable(t)) = r }}{{ t }}{{_}}?{{/}}"#,
         TypedContext::default(),
         vec![],
     )
@@ -913,7 +913,7 @@ async fn panic_stops_the_run_with_the_script_s_message() {
     let i = Interner::new();
     run_ext_script_mode(
         &i,
-        r#"if @never { 1 } else { panic("the sky fell") }"#,
+        r#"if @never { 1 } else { panic("the sky fell".to_string()) }"#,
         [(i.intern("never"), (Ty::Bool, Value::bool_(false)))]
             .into_iter()
             .collect(),
@@ -927,7 +927,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     let i = Interner::new();
     let v = run_ext(
         &i,
-        "let s = \"ab\"; let b = to_bytes(s); b[0] as i64",
+        "let s = \"ab\".to_string(); let b = to_bytes(s); b[0] as i64",
         TypedContext::default(),
         vec![],
     )
@@ -935,7 +935,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     assert_eq!(v.as_int(), 97, "b\"ab\" is 97, 98");
     let v = run_ext(
         &i,
-        "let s = \"ab\"; let b = to_bytes(s); b.len()",
+        "let s = \"ab\".to_string(); let b = to_bytes(s); b.len()",
         TypedContext::default(),
         vec![],
     )
@@ -944,7 +944,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
 
     let v = run_ext(
         &i,
-        "let s = \"héllo\"; to_utf8_lossy(to_bytes(s))",
+        "let s = \"héllo\".to_string(); to_utf8_lossy(to_bytes(s))",
         TypedContext::default(),
         vec![],
     )
@@ -952,7 +952,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     assert_str(&v, "héllo");
     let v = run_ext_script_mode(
         &i,
-        "if let Ok(re) = regex(\"[0-9]+\") { let t = \"ab42cd\"; if let Some(m) = find(&re, &t) { m.text } else { \"none\" } } else { \"?\" }",
+        "if let Ok(re) = regex(\"[0-9]+\".to_string()) { let t = \"ab42cd\"; if let Some(m) = find(&re, &t) { m.text } else { \"none\".to_string() } } else { \"?\".to_string() }",
         TypedContext::default(),
         vec![regex_registry()],
     )
@@ -1198,7 +1198,20 @@ async fn a_string_lent_to_a_str_parameter_is_the_pair_the_handler_reads() {
     let i = Interner::new();
     let v = run_ext(
         &i,
-        "let s = \"héllo\"; byte_length(&s)",
+        "let s = \"héllo\".to_string(); byte_length(&s)",
+        TypedContext::default(),
+        vec![str_registry()],
+    )
+    .await;
+    assert_eq!(v.as_int(), 6, "six bytes, five scalar values");
+}
+
+#[tokio::test]
+async fn a_literal_at_a_str_parameter_reaches_the_handler_with_no_string_made() {
+    let i = Interner::new();
+    let v = run_ext(
+        &i,
+        "byte_length(\"héllo\")",
         TypedContext::default(),
         vec![str_registry()],
     )
@@ -1211,7 +1224,7 @@ async fn a_str_parameter_reads_the_borrowed_string_s_own_bytes() {
     let i = Interner::new();
     let v = run_ext(
         &i,
-        "let s = \"abc\"; first_byte(&s)",
+        "let s = \"abc\".to_string(); first_byte(&s)",
         TypedContext::default(),
         vec![str_registry()],
     )

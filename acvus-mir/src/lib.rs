@@ -214,7 +214,7 @@ mod tests {
         let i = Interner::new();
         compile_script(
             &i,
-            r#"let x = @data; @data = "new"; x"#,
+            r#"let x = @data; @data = "new".to_string(); x"#,
             &[("data", Ty::String)],
         )
         .unwrap();
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn context_data_string() {
         let i = Interner::new();
-        assert!(compile_script(&i, r#"@x = "hello"; 1"#, &[("x", Ty::String)]).is_ok());
+        assert!(compile_script(&i, r#"@x = "hello".to_string(); 1"#, &[("x", Ty::String)]).is_ok());
     }
 
     #[test]

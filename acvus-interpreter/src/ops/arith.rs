@@ -57,16 +57,6 @@ macro_rules! for_int_ty {
 
 pub(crate) use for_int_ty;
 
-/// The registers a two-operand operation names, each with the frame's claim on
-/// it: these carry the families that define and take whole `Value`s, where
-/// `ops::place` carries the ones that write a word and mark nothing.
-#[derive(Clone, Copy)]
-pub struct Binary {
-    pub dst: Marked,
-    pub l: Marked,
-    pub r: Marked,
-}
-
 /// The registers a one-operand operation names.
 #[derive(Clone, Copy)]
 pub struct Unary {

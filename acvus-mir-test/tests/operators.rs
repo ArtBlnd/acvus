@@ -180,7 +180,7 @@ fn an_array_against_an_integer_literal_operand_is_refused_as_a_mismatch() {
 #[test]
 fn a_string_against_an_integer_literal_operand_is_refused_as_a_mismatch() {
     let i = Interner::new();
-    let err = script(&i, "let f = |k| -> k < 7; f(\"a\")").unwrap_err();
+    let err = script(&i, "let f = |k| -> k < 7; f(\"a\".to_string())").unwrap_err();
     assert!(
         err.contains("type mismatch: expected i64, got String"),
         "{err}"
@@ -228,7 +228,11 @@ fn a_captured_word_compared_is_the_word_itself() {
 #[test]
 fn a_captured_string_is_still_concatenated_through_the_reference() {
     let i = Interner::new();
-    let ir = script(&i, "let s = \"a\"; let f = |t| -> s + t; f(\"b\")").unwrap();
+    let ir = script(
+        &i,
+        "let s = \"a\".to_string(); let f = |t| -> s + t; f(\"b\".to_string())",
+    )
+    .unwrap();
     assert!(ir.contains("string_concat"), "{ir}");
     assert!(!ir.contains("take (*"), "{ir}");
 }
@@ -260,7 +264,7 @@ fn a_value_mode_receiver_of_an_owned_place_is_moved_as_before() {
 #[test]
 fn a_string_literal_operand_fixes_the_parameter_against_an_integer_call() {
     let i = Interner::new();
-    let err = script(&i, "let f = |k| -> k + \"a\"; f(1)").unwrap_err();
+    let err = script(&i, "let f = |k| -> k + \"a\".to_string(); f(1)").unwrap_err();
     assert!(
         err.contains("type mismatch: expected String, got i64"),
         "{err}"
@@ -274,7 +278,11 @@ fn a_string_literal_operand_fixes_the_parameter_against_an_integer_call() {
 #[test]
 fn a_string_literal_operand_leaves_the_parameter_taking_a_string() {
     let i = Interner::new();
-    let ir = script(&i, "let f = |k| -> k + \"a\"; f(\"b\")").unwrap();
+    let ir = script(
+        &i,
+        "let f = |k| -> k + \"a\".to_string(); f(\"b\".to_string())",
+    )
+    .unwrap();
     assert!(ir.contains("Fn(String) -> String"), "{ir}");
     assert!(ir.contains("string_concat"), "{ir}");
 }

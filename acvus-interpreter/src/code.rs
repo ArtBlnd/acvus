@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use acvus_ast::Span;
-use acvus_extern::Owned;
+use acvus_extern::{Owned, Words};
 use acvus_mir::ir::Label;
 use acvus_utils::Astr;
 use futures::future::BoxFuture;
@@ -407,9 +407,61 @@ impl Konst {
     }
 }
 
-pub struct ConcatPart {
-    pub slot: Off,
-    pub through_reference: bool,
+/// Every distinct string literal of one module, copied once when it was
+/// prepared: a `&str` constant is the pointer and length of one of these
+/// runs (RFC-0062 Decision 2), and the `Body` holding that constant holds an
+/// `Arc` of this table, so the bytes outlive every operation naming them
+/// whatever the module they were prepared from does.
+pub struct Literals {
+    runs: FxHashMap<Box<str>, Words>,
+}
+
+impl Literals {
+    pub fn of<'a>(texts: impl Iterator<Item = &'a str>) -> Literals {
+        let mut runs: FxHashMap<Box<str>, Words> = FxHashMap::default();
+        for text in texts {
+            if runs.contains_key(text) {
+                continue;
+            }
+            let owned: Box<str> = Box::from(text);
+            let words = Words {
+                ptr: owned.as_ptr() as u64,
+                len: owned.len() as u64,
+            };
+            runs.insert(owned, words);
+        }
+        Literals { runs }
+    }
+
+    /// # Panics
+    /// `text` is not one of the texts this table was built from, which
+    /// `prepare_module` builds from the same bodies it then prepares.
+    pub fn run(&self, text: &str) -> Words {
+        *self
+            .runs
+            .get(text)
+            .unwrap_or_else(|| panic!("literals: no run for {text:?}"))
+    }
+}
+
+/// One part of a template's output, as the preparation read it from the
+/// part's type (RFC-0062 Decision 3).
+#[derive(Clone, Copy)]
+pub enum ConcatPart {
+    /// A `String` in this register, moved into the output.
+    Owned(Off),
+    /// Text the operation only reads.
+    Lent(LentText),
+}
+
+/// Text an operation reads without taking it: the two representations
+/// RFC-0062 Decision 3 admits, as the preparation read the operand's type.
+#[derive(Clone, Copy)]
+pub enum LentText {
+    /// A `&String`, read through the reference.
+    Through(Off),
+    /// A `&str`: the pair holding `(ptr, len)` of the bytes.
+    Pair(SlicePair),
 }
 
 pub struct FieldSlot {
@@ -604,6 +656,9 @@ pub struct Body {
     pub frame_cells: u16,
     pub mark_words: u16,
     pub entry_konsts: Box<[EntryKonst]>,
+    /// The module's literals, held here because an operation of this body
+    /// names their bytes by address.
+    pub literals: Arc<Literals>,
     pub slot_kinds: Box<[SlotKind]>,
     pub may_suspend: bool,
     pub params: Box<[Off]>,
@@ -666,5 +721,36 @@ mod tests {
                 "{name} is {size} bytes, past the {LINE} one cache line holds"
             );
         }
+    }
+
+    /// # Safety
+    /// `run` names live UTF-8, which is what this test is checking.
+    unsafe fn text_of(run: acvus_extern::Words) -> &'static str {
+        // SAFETY: the caller's contract.
+        unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                run.ptr as *const u8,
+                run.len as usize,
+            ))
+        }
+    }
+
+    #[test]
+    fn a_run_outlives_the_text_the_table_was_built_from() {
+        let literals = {
+            let module_text = String::from("héllo");
+            Literals::of(std::iter::once(module_text.as_str()))
+        };
+        let run = literals.run("héllo");
+        assert_eq!(run.len, 6);
+        // SAFETY: the table owns the copy and is alive here, which is the
+        // claim under test.
+        assert_eq!(unsafe { text_of(run) }, "héllo");
+    }
+
+    #[test]
+    fn one_text_twice_is_one_run() {
+        let literals = Literals::of(["abc", "abc"].into_iter());
+        assert_eq!(literals.run("abc"), literals.run("abc"));
     }
 }

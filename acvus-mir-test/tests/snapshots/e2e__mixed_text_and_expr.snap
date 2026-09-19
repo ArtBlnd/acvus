@@ -9,16 +9,18 @@ expression: ir
 === main ===
      0 |   r0 = fetch @name
      1 |   assign @name = r0
-     3 |   r1 = ref &@name
-     5 |   r2 = string_concat [T0, r1, T1]
-     6 |   r3 = take @name
-     7 |   commit @name = r3
-     8 |   return r2
+     2 |   r1 = const_str T0
+     3 |   r2 = ref &@name
+     4 |   r3 = const_str T1
+     5 |   r4 = string_concat [r1, r2, r3]
+     6 |   r5 = take @name
+     7 |   commit @name = r5
+     8 |   return r4
 
     ; r0 (@name) : String
-    ; r1 (@name.) : &String
-    ; r2 (v6) : String
-    ; r3 (v7) : String
-    ; r4 (v3) : String
-    ; r5 (@name) : String
-    ; r6 (v5) : String
+    ; r1 (v3) : &str
+    ; r2 (@name.) : &String
+    ; r3 (v5) : &str
+    ; r4 (v6) : String
+    ; r5 (v7) : String
+    ; r6 (@name) : String

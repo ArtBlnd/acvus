@@ -33,29 +33,32 @@ expression: ir
     25 | L9(r13: Bool):
     26 |   jump_if r13 then L10 else L3
     27 | L10:
-    29 |   r14 = string_concat [T0]
-    30 |   jump L0(r14)
+    28 |   r14 = const_str T0
+    29 |   r15 = string_concat [r14]
+    30 |   jump L0(r15)
     31 | L3:
-    33 |   jump_if true (r15) then L11 else L12
+    33 |   jump_if true (r16) then L11 else L12
     34 | L11:
-    35 |   r16 = take $source[0]
-    36 |   r17 = test r16 == 1
-    37 |   jump L13(r17)
+    35 |   r17 = take $source[0]
+    36 |   r18 = test r17 == 1
+    37 |   jump L13(r18)
     38 | L12:
-    40 |   jump L13(false (r18))
-    41 | L13(r19: Bool):
-    42 |   jump_if r19 then L14 else L1
+    40 |   jump L13(false (r19))
+    41 | L13(r20: Bool):
+    42 |   jump_if r20 then L14 else L1
     43 | L14:
-    45 |   r20 = string_concat [T1]
-    46 |   jump L0(r20)
+    44 |   r21 = const_str T1
+    45 |   r22 = string_concat [r21]
+    46 |   jump L0(r22)
     47 | L1:
-    49 |   r21 = string_concat [T2]
-    50 |   jump L0(r21)
-    51 | L0(r22: String):
-    52 |   r23 = string_concat [r22]
+    48 |   r23 = const_str T2
+    49 |   r24 = string_concat [r23]
+    50 |   jump L0(r24)
+    51 | L0(r25: String):
+    52 |   r26 = string_concat [r25]
     53 |   commit @a = r2
     54 |   commit @b = r3
-    55 |   return r23
+    55 |   return r26
 
     ; r0 (v33) : i64
     ; r1 (v34) : i64
@@ -71,26 +74,26 @@ expression: ir
     ; r11 (v16) : Bool
     ; r12 (v17) : Bool
     ; r13 (v14) : Bool
-    ; r14 (v19) : String
-    ; r15 (v20) : Bool
-    ; r16 (v22) : i64
-    ; r17 (v23) : Bool
-    ; r18 (v24) : Bool
-    ; r19 (v21) : Bool
-    ; r20 (v26) : String
-    ; r21 (v28) : String
-    ; r22 (v29) : String
-    ; r23 (v30) : String
-    ; r24 (@b) : i64
-    ; r25 (v25) : String
-    ; r26 (@b) : i64
-    ; r27 (v31) : i64
-    ; r28 (v27) : String
-    ; r29 (@a) : i64
-    ; r30 ($source) : (i64, i64)
-    ; r31 (v36) : i64
-    ; r32 (v37) : i64
-    ; r33 (v18) : String
+    ; r14 (v18) : &str
+    ; r15 (v19) : String
+    ; r16 (v20) : Bool
+    ; r17 (v22) : i64
+    ; r18 (v23) : Bool
+    ; r19 (v24) : Bool
+    ; r20 (v21) : Bool
+    ; r21 (v25) : &str
+    ; r22 (v26) : String
+    ; r23 (v27) : &str
+    ; r24 (v28) : String
+    ; r25 (v29) : String
+    ; r26 (v30) : String
+    ; r27 (@b) : i64
+    ; r28 (@b) : i64
+    ; r29 (v31) : i64
+    ; r30 (@a) : i64
+    ; r31 ($source) : (i64, i64)
+    ; r32 (v36) : i64
+    ; r33 (v37) : i64
     ; r34 (v40) : i64
     ; r35 (v39) : i64
     ; r36 (v42) : i64

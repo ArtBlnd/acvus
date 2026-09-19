@@ -1,3 +1,3 @@
-[translate] {{ @translate | map(|m| -> m.content) | join("") }}
-[sentiment] {{ @sentiment | map(|m| -> m.content) | join("") }}
-[chat] {{ @chat | map(|m| -> m.content) | join("") }}
+[translate] {{ @translate | map(|m| -> m.content) | join("".to_string()) }}
+[sentiment] {{ @sentiment | map(|m| -> m.content) | join("".to_string()) }}
+[chat] {{ @chat | map(|m| -> m.content) | join("".to_string()) }}

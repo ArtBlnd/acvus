@@ -33,9 +33,9 @@ async fn the_error_enum_of_a_function_is_the_union_of_what_it_tried() {
                  let b = if @b_ok { Ok(2) } else { Err(Fail::Odd) };
                  let both = |a, b| -> Ok(a? + b?);
                  let r = both(a, b);
-                 if let Ok(v) = r { "sum" }
-                 else if let Err(Fail::TooBig(n)) = r { "big" }
-                 else { "odd" }"#;
+                 if let Ok(v) = r { "sum".to_string() }
+                 else if let Err(Fail::TooBig(n)) = r { "big".to_string() }
+                 else { "odd".to_string() }"#;
     let v = run_script_mode(
         &i,
         src,
@@ -100,7 +100,7 @@ async fn a_result_nothing_fails_into_has_the_never_error() {
 #[tokio::test]
 async fn a_script_returns_early_through_a_question_mark() {
     let i = Interner::new();
-    let src = r#"let r = if @ok { Ok(3) } else { Err("bad") }; let v = r?; Ok(v * 10)"#;
+    let src = r#"let r = if @ok { Ok(3) } else { Err("bad".to_string()) }; let v = r?; Ok(v * 10)"#;
     let v = run_script_mode(
         &i,
         src,

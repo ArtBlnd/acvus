@@ -599,6 +599,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         // These don't consume a value; a Ref only reads the reference a
         // place goes through.
         InstKind::Const { .. }
+        | InstKind::ConstStr { .. }
         | InstKind::Ref { .. }
         | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }

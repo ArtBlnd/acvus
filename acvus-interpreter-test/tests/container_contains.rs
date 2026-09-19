@@ -35,7 +35,7 @@ async fn contains_of_a_lent_string_finds_a_substring() {
 }
 
 #[tokio::test]
-async fn find_of_a_string_is_the_first_character_index() {
+async fn find_of_a_string_is_the_first_byte_offset() {
     assert_eq!(
         run(
             "let s = \"héllo\"; find(&s, \"l\") | unwrap_or(-1)",
@@ -43,7 +43,7 @@ async fn find_of_a_string_is_the_first_character_index() {
         )
         .await
         .as_int(),
-        2
+        3
     );
     assert_eq!(
         run("let s = \"abc\"; find(&s, \"z\") | unwrap_or(-1)", Ty::I64)

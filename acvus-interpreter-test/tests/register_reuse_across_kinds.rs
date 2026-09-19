@@ -23,7 +23,7 @@ use acvus_utils::Interner;
 /// after it — enough that a selector willing to reuse across kinds would
 /// have taken the string's register for one of them.
 const A_STRING_DIES_THEN_INTEGERS: &str =
-    "let s = \"abcd\"; let k = len(&s); let t = k * 2; let u = t + 1; u";
+    "let s = \"abcd\".to_string(); let k = len(&s); let t = k * 2; let u = t + 1; u";
 
 #[tokio::test]
 async fn the_word_class_is_a_proper_part_of_the_frame() {

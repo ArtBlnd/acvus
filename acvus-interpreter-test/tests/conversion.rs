@@ -70,11 +70,11 @@ async fn as_reads_every_number_at_the_named_type() {
 
 fn from_str_src(ty: &str, input: &str) -> String {
     format!(
-        r#"let r = {ty}::from_str("{input}");
+        r#"let r = {ty}::from_str("{input}".to_string());
            if let Ok(n) = r {{ "ok " + n.to_string() }}
            else if let Err(ParseIntError::Invalid(t)) = r {{ "invalid " + t }}
            else if let Err(ParseIntError::OutOfRange(t)) = r {{ "out of range " + t }}
-           else {{ "unreachable" }}"#
+           else {{ "unreachable".to_string() }}"#
     )
 }
 
@@ -141,7 +141,7 @@ async fn int_to_char_refuses_what_is_not_a_code_point() {
             r#"let r = int_to_char({n});
                if let Ok(c) = r {{ "ok " + c.to_string() }}
                else if let Err(CharError::NotAChar(n)) = r {{ "not a char " + n.to_string() }}
-               else {{ "unreachable" }}"#
+               else {{ "unreachable".to_string() }}"#
         )
     };
     assert_eq!(script_mode_text(&src(65)).await, "ok A");

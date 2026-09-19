@@ -29,7 +29,7 @@ async fn a_branch_that_panics_leaves_the_other_branch_s_type() {
     let i = Interner::new();
     let v = run_script_mode_with_externs(
         &i,
-        r#"if @c { boom("no") } else { 41 }"#,
+        r#"if @c { boom("no".to_string()) } else { 41 }"#,
         flag(&i, false),
         registries(),
         Ty::I64,
@@ -45,7 +45,7 @@ async fn a_panic_stops_the_run_with_its_message() {
     let i = Interner::new();
     run_script_mode_with_externs(
         &i,
-        r#"if @c { boom("no") } else { 41 }"#,
+        r#"if @c { boom("no".to_string()) } else { 41 }"#,
         flag(&i, true),
         registries(),
         Ty::I64,
@@ -58,7 +58,7 @@ async fn a_move_on_the_panicking_path_does_not_reach_the_code_after() {
     let i = Interner::new();
     let v = run_script_mode_with_externs(
         &i,
-        r#"let s = "kept"; if @c { let t = s; boom(t) } else { 0 }; len(&s)"#,
+        r#"let s = "kept".to_string(); if @c { let t = s; boom(t) } else { 0 }; len(&s)"#,
         flag(&i, false),
         registries(),
         Ty::U64,

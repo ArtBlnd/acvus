@@ -42,7 +42,7 @@ fn a_script_prints_its_value_as_json_and_reports_its_writes() {
     write(
         dir.path(),
         "sum.acvus",
-        "let it = as_iter(&@items);\nlet total = 0;\nwhile let Some(x) = next(&mut it) { total = total + *x; }\n@count = @count + 1;\n{ total: total, tag: \"ok\", }\n",
+        "let it = as_iter(&@items);\nlet total = 0;\nwhile let Some(x) = next(&mut it) { total = total + *x; }\n@count = @count + 1;\n{ total: total, tag: \"ok\".to_string(), }\n",
     );
     write(
         dir.path(),
@@ -154,7 +154,11 @@ fn a_context_value_without_a_type_is_refused_before_anything_runs() {
 #[test]
 fn a_call_against_a_parameter_a_literal_operand_fixed_is_a_compile_error() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "cat.acvus", "let f = |k| -> k + \"a\";\nf(1)\n");
+    write(
+        dir.path(),
+        "cat.acvus",
+        "let f = |k| -> k + \"a\".to_string();\nf(1)\n",
+    );
     let out = acvus(dir.path(), &["check", "cat.acvus"]);
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
@@ -168,7 +172,7 @@ fn a_call_against_a_parameter_a_literal_operand_fixed_is_a_compile_error() {
     write(
         dir.path(),
         "cat_ok.acvus",
-        "let f = |k| -> k + \"a\";\nf(\"b\")\n",
+        "let f = |k| -> k + \"a\".to_string();\nf(\"b\".to_string())\n",
     );
     let out = acvus(dir.path(), &["run", "cat_ok.acvus"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
@@ -353,7 +357,7 @@ fn json_puts_the_diagnostics_on_stdout_and_nothing_else() {
     let array: Vec<serde_json::Value> = serde_json::from_str(&text(&out.stdout)).unwrap();
     assert_eq!(array.len(), 1);
     assert_eq!(array[0]["severity"], "error");
-    assert_eq!(array[0]["message"], "type mismatch in `+`: i64 vs String");
+    assert_eq!(array[0]["message"], "type mismatch in `+`: i64 vs str");
     assert_eq!(array[0]["path"], "bad.acvus");
     assert_eq!(array[0]["line"], 2);
     assert_eq!(array[0]["col"], 9);
@@ -378,7 +382,7 @@ fn a_template_is_checked_as_a_script_is() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         text(&out.stderr),
-        "error: type mismatch in `+`: i64 vs String\n  --> bad.acvt:1:10\n  |\n1 | Hello {{ 1 + \"a\" }}!\n  |          ^^^^^^^\n"
+        "error: type mismatch in `+`: i64 vs str\n  --> bad.acvt:1:10\n  |\n1 | Hello {{ 1 + \"a\" }}!\n  |          ^^^^^^^\n"
     );
 
     write(dir.path(), "ok.acvt", "Hello {{ @name }}!\n");

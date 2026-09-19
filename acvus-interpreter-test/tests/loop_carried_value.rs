@@ -12,7 +12,7 @@ async fn a_string_rebuilt_every_iteration_keeps_one_owner() {
     let i = Interner::new();
     let v = run_script(
         &i,
-        "let s = \"\"; let n = 0; while n < 3 { s = s + \"ab\"; n = n + 1; } s.len()",
+        "let s = \"\".to_string(); let n = 0; while n < 3 { s = s + \"ab\"; n = n + 1; } s.len()",
         Context::default(),
         Ty::U64,
     )
@@ -38,7 +38,7 @@ async fn a_string_carried_through_a_branch_keeps_one_owner() {
     let i = Interner::new();
     let v = run_script(
         &i,
-        "let s = \"\"; let n = 0; while n < 4 { if n < 2 { s = s + \"a\"; } else { s = s + \"bb\"; }; n = n + 1; } s.len()",
+        "let s = \"\".to_string(); let n = 0; while n < 4 { if n < 2 { s = s + \"a\"; } else { s = s + \"bb\"; }; n = n + 1; } s.len()",
         Context::default(),
         Ty::U64,
     )

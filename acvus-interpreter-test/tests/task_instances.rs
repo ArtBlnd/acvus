@@ -353,7 +353,7 @@ async fn contains_and_join_answer_the_same_through_either_instance() {
     assert_eq!(over_sync, over_async);
 
     let joined = run(
-        r#"let j = into_iter(split_str("a,b,c", ",")) | join("-"); j.len()"#,
+        r#"let j = into_iter(split_str("a,b,c", ",")) | join("-".to_string()); j.len()"#,
         Ty::U64,
     )
     .await

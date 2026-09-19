@@ -35,19 +35,49 @@ pub(crate) fn make_graph(
     };
 
     let graph = CompilationGraph {
-        functions: Freeze::new(vec![Function {
-            qref: test_qref,
-            kind: FnKind::Local(parsed),
-            ty: TyTerm::Fn {
-                params: vec![],
-                ret: Box::new(pb.fresh_ty_var()),
-                captures: vec![],
-                effect: crate::ty::Effect::OPAQUE.into(),
+        functions: Freeze::new(vec![
+            Function {
+                qref: test_qref,
+                kind: FnKind::Local(parsed),
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(pb.fresh_ty_var()),
+                    captures: vec![],
+                    effect: crate::ty::Effect::OPAQUE.into(),
+                },
             },
-        }]),
+            to_string(interner),
+        ]),
         contexts: Freeze::new(contexts),
     };
     (graph, test_qref)
+}
+
+/// `core::to_string` at `T = Str`: the copy that turns a string literal into
+/// the owned text (RFC-0062 Decision 3). These helpers build their graph by
+/// hand rather than from the standard registries, so a script compiled
+/// through them reaches no declaration it did not name; this one it names,
+/// because a `String` is otherwise unwritable in a script.
+fn to_string(interner: &Interner) -> Function {
+    use crate::ty::{Mutability, ParamTerm, Poly, TypeArg, lift_to_poly};
+
+    let str_view = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)));
+    Function {
+        qref: QualifiedRef::root(interner.intern("to_string")),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            instances: crate::ty::Instances::default(),
+        },
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::<Poly>::new(
+                interner.intern("a"),
+                lift_to_poly(&str_view),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::String)),
+            captures: vec![],
+            effect: crate::ty::Effect::PURE.into(),
+        },
+    }
 }
 
 fn run_pipeline(

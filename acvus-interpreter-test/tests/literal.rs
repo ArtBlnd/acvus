@@ -66,10 +66,10 @@ async fn a_signed_literal_is_its_widths_minimum() {
 /// string that arrives holds the bytes the escapes name.
 #[tokio::test]
 async fn a_string_literal_arrives_decoded() {
-    assert_eq!(text("\"\\x41\"").await, "A");
-    assert_eq!(text("\"a\\tb\"").await, "a\tb");
-    assert_eq!(text("\"\\u{1F600}\"").await, "\u{1F600}");
-    assert_eq!(text("\"back\\\\slash\"").await, "back\\slash");
+    assert_eq!(text("\"\\x41\".to_string()").await, "A");
+    assert_eq!(text("\"a\\tb\".to_string()").await, "a\tb");
+    assert_eq!(text("\"\\u{1F600}\".to_string()").await, "\u{1F600}");
+    assert_eq!(text("\"back\\\\slash\".to_string()").await, "back\\slash");
 }
 
 /// `a[i]` takes a `u64` (RFC-0047), and `1u64` is how one is written.
@@ -92,19 +92,20 @@ async fn a_char_literal_is_one_scalar_value() {
 #[tokio::test]
 async fn a_char_compares_by_its_scalar_value() {
     assert_eq!(
-        text("let c = 'x'; if c == 'x' { \"y\" } else { \"n\" }").await,
+        text("let c = 'x'; if c == 'x' { \"y\".to_string() } else { \"n\".to_string() }").await,
         "y"
     );
     assert_eq!(
-        text("let c = 'x'; if c == 'y' { \"y\" } else { \"n\" }").await,
+        text("let c = 'x'; if c == 'y' { \"y\".to_string() } else { \"n\".to_string() }").await,
         "n"
     );
     assert_eq!(
-        text("let c = 'a'; if c < 'b' { \"y\" } else { \"n\" }").await,
+        text("let c = 'a'; if c < 'b' { \"y\".to_string() } else { \"n\".to_string() }").await,
         "y"
     );
     assert_eq!(
-        text("let c = '\\u{1F600}'; if c < 'b' { \"y\" } else { \"n\" }").await,
+        text("let c = '\\u{1F600}'; if c < 'b' { \"y\".to_string() } else { \"n\".to_string() }")
+            .await,
         "n"
     );
 }
@@ -183,7 +184,10 @@ async fn a_byte_literal_is_a_u8() {
     assert_eq!(int_at("b'G'", IntTy::U8).await, i128::from(b'G'));
     assert_eq!(int_at("b'\\xFF'", IntTy::U8).await, i128::from(0xFFu8));
     assert_eq!(
-        text("let s = b\"GET\"; if s[0u64] == b'G' { \"y\" } else { \"n\" }").await,
+        text(
+            "let s = b\"GET\"; if s[0u64] == b'G' { \"y\".to_string() } else { \"n\".to_string() }"
+        )
+        .await,
         "y"
     );
 }

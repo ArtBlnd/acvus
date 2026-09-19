@@ -162,7 +162,7 @@ const PIPELINES: [Pipeline; 19] = [
     ),
     synchronous(
         "join",
-        r#"let j = into_iter(split_str("a,b,c", ",")) | map(|s| -> s) | join("-"); j.len()"#,
+        r#"let j = into_iter(split_str("a,b,c", ",")) | map(|s| -> s) | join("-".to_string()); j.len()"#,
     ),
 ];
 
