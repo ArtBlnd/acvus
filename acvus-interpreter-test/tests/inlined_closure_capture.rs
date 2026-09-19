@@ -1,5 +1,10 @@
-//! A `Large` laid in a callee's first register is released exactly once
-//! (RFC-0052 rule 7).
+//! A small pure closure called where it was made is its body (RFC-0060), and
+//! a `Large` it captured is released exactly once either way.
+//!
+//! The two sources below differ in one thing: the second's `if` puts its body
+//! in two blocks, which is what keeps the inliner off it. Everything else —
+//! the capture, the two calls, the value — is the same, so the release count
+//! is read one variable apart.
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -80,49 +85,45 @@ fn regs() -> Vec<Registry<AcvusRuntime>> {
     regs
 }
 
-const CALLS: usize = 1000;
+const ONE_BLOCK: &str = "let t = tracked(1); \
+     let f = |x| -> rank(&t) + x; \
+     let a = f(1); let b = f(2); a + b";
 
-/// The body holds two statements, which is what keeps it a `Body` rather than
-/// the one chain a frameless `Code::Expr` is: a frameless call binds no frame,
-/// so it has no mark word to claim a `Large` parameter with.
-///
-/// The `if` puts the body in two blocks, so the inliner leaves the closure
-/// alone and there is a call here to read at all (RFC-0060). Flatten it and
-/// this file still compiles while both tests lose their subject.
-fn source() -> String {
-    format!(
-        "let take = |t| -> {{ let n = rank(&t); let m = if n > 0 {{ n }} else {{ 0 }}; m }}; \
-         let acc = 0; let i = 0; \
-         while i < {CALLS} {{ acc = acc + take(tracked(1)); i = i + 1; }} acc"
-    )
-}
+const TWO_BLOCKS: &str = "let t = tracked(1); \
+     let f = |x| -> { let n = rank(&t); let m = if n > 0 { n } else { 0 }; m + x }; \
+     let a = f(1); let b = f(2); a + b";
 
-async fn run(i: &Interner, source: &str) -> Value {
-    run_script_mode_with_externs(i, source, Context::default(), regs(), Ty::I64)
+async fn value(source: &str) -> Value {
+    let i = Interner::new();
+    run_script_mode_with_externs(&i, source, Context::default(), regs(), Ty::I64)
         .await
         .value
 }
 
-#[tokio::test]
-async fn a_large_argument_is_released_once_per_call() {
-    let measured = Measured::start();
+fn has_indirect_call(source: &str) -> bool {
     let i = Interner::new();
-    let v = run(&i, &source()).await;
-    assert_eq!(v.as_int(), CALLS as i64);
-    assert_eq!(measured.count(), CALLS);
+    let blocks = script_listing_with_externs(&i, source, Context::default(), regs(), Ty::I64);
+    ops_of_anywhere(&blocks)
+        .iter()
+        .any(|op| op.starts_with("CallIndirect"))
 }
 
 #[tokio::test]
-async fn the_large_reaches_the_callee_through_the_laid_run() {
-    let i = Interner::new();
-    let blocks = script_listing_with_externs(&i, &source(), Context::default(), regs(), Ty::I64);
-    let ops = ops_of_anywhere(&blocks);
-    assert!(
-        ops.iter().any(|op| op == "LayArg"),
-        "the call lays its argument in the callee's first register: {ops:?}"
-    );
-    assert!(
-        ops.iter().any(|op| op.starts_with("CallIndirect<")),
-        "the closure call is an operation and not a terminator: {ops:?}"
-    );
+async fn the_one_block_body_is_spliced_and_the_two_block_body_is_called() {
+    assert!(!has_indirect_call(ONE_BLOCK));
+    assert!(has_indirect_call(TWO_BLOCKS));
+}
+
+#[tokio::test]
+async fn an_inlined_large_capture_is_released_once_for_two_calls() {
+    let measured = Measured::start();
+    assert_eq!(value(ONE_BLOCK).await.as_int(), 5);
+    assert_eq!(measured.count(), 1);
+}
+
+#[tokio::test]
+async fn the_called_form_releases_the_same_capture_the_same_number_of_times() {
+    let measured = Measured::start();
+    assert_eq!(value(TWO_BLOCKS).await.as_int(), 5);
+    assert_eq!(measured.count(), 1);
 }

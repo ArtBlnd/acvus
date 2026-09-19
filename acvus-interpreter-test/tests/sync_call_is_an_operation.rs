@@ -1,8 +1,10 @@
 //! RFC-0052: a call whose callee's task is `Sync` is an operation, and only a
 //! call above `Sync` is a terminator.
 //!
-//! The two sources below differ in one thing, the task of the function `step`
-//! names; the listing is where the difference is read.
+//! Each `step` below is a closure the inliner leaves alone, which is what
+//! there has to be for a call to read at all (RFC-0060): the sync one is two
+//! blocks, and the async one takes an `Order`. What the listing then reads is
+//! the task.
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
@@ -24,7 +26,8 @@ fn registries() -> Vec<Registry<AcvusRuntime>> {
     regs
 }
 
-const SYNC_CALL_WHILE: &str = "let step = |x| -> x + 1; let i = 0; while i < 3 { i = step(i); } i";
+const SYNC_CALL_WHILE: &str =
+    "let step = |x| -> if x < 100 { x + 1 } else { x }; let i = 0; while i < 3 { i = step(i); } i";
 const ASYNC_CALL_WHILE: &str =
     "let step = |x| -> bump_later(x); let i = 0; while i < 3 { i = step(i); } i";
 

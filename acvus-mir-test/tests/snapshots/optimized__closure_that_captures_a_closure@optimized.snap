@@ -1,0 +1,55 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+expression: opt
+---
+=== main ===
+     1 |   return 2.0 (r0)
+
+    ; r0 (v25) : Float
+    ; r1 (x) : Float
+    ; r2 (v11) : &Fn(Float) -> Float
+    ; r3 (f) : Fn(Float) -> Float
+    ; r4 (f) : &Fn(Float) -> Float
+    ; r5 (v6) : i64
+    ; r6 (v9) : Fn(Float) -> Float
+    ; r7 (f(...)) : Float
+    ; r8 (t) : i64
+    ; r9 (v4) : Fn(i64) -> Float
+    ; r10 (g(...)) : Float
+    ; r11 (v26) : Float
+    ; r12 (f) : Fn(Float) -> Float
+    ; r13 (f) : &Fn(Float) -> Float
+    ; r14 (v24) : Float
+    ; r15 (f) : Fn(Float) -> Float
+    ; r16 (v20) : i64
+    ; r17 (v1) : Fn(Float) -> Float
+    ; r18 (x) : Float
+    ; r19 (g) : Fn(i64) -> Float
+    ; r20 (v16) : Float
+    ; r21 (g) : &Fn(i64) -> Float
+    ; r22 (v19) : &Fn(Float) -> Float
+
+=== closure L0 (ValueId(0)) ===
+     1 |   r0 = r1 + 1.0 (r2)
+     2 |   return r0
+
+    ; r0 (v5) : Float
+    ; r1 (v1) : Float
+    ; r2 (v4) : Float
+    ; r3 (x) : Float
+    ; r4 (v6) : Float
+    ; r5 (x) : Float
+
+=== closure L1 (ValueId(1)) [captures: [ValueId(0)]] ===
+     1 |   r1 = call r0(1.0 (r2))
+     2 |   return r1
+
+    ; r0 (v1) : &Fn(Float) -> Float
+    ; r1 (f(...)) : Float
+    ; r2 (v5) : Float
+    ; r3 (f) : &Fn(Float) -> Float
+    ; r4 (f) : &Fn(Float) -> Float
+    ; r5 (v2) : i64
+    ; r6 (v9) : i64
+    ; r7 (v8) : &Fn(Float) -> Float
+    ; r8 (t) : i64

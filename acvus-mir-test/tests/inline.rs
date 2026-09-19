@@ -484,15 +484,100 @@ fn inline_context_write_propagation() {
 }
 
 // =======================================================================
-//  6. Soundness rejection - things that must NOT be inlined
+//  6. A closure the caller holds instead of calling
 // =======================================================================
 
 #[test]
-fn inline_devirt_known_closure() {
-    // Indirect call to a known closure (single MakeClosure def) gets devirtualized and inlined.
-    // main = { f = |x| -> x + 1; f(5) }
+fn a_small_pure_closure_called_where_it_was_made_is_its_body() {
     let i = Interner::new();
     let ir = compile_inline_ir(&i, ("main", "let f = |x| -> x + 1; f(5)"), &[], &[]).unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+#[test]
+fn a_closure_over_the_instruction_bound_stays_a_call() {
+    let i = Interner::new();
+    let ir = compile_inline_ir(
+        &i,
+        ("main", "let f = |x| -> x+x+x+x+x+x+x+x+x; f(5)"),
+        &[],
+        &[],
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+#[test]
+fn a_closure_of_two_blocks_stays_a_call() {
+    let i = Interner::new();
+    let ir = compile_inline_ir(
+        &i,
+        (
+            "main",
+            "let f = |x| -> if x > 0 { x + 1 } else { x - 1 }; f(5)",
+        ),
+        &[],
+        &[],
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+#[test]
+fn a_closure_an_array_also_holds_stays_a_call() {
+    let i = Interner::new();
+    let ir = compile_inline_ir(
+        &i,
+        ("main", "let f = |x| -> x + 1; let a = f(5); let v = [f]; a"),
+        &[],
+        &[],
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+#[test]
+fn a_word_capture_is_inlined_as_the_copy_it_is() {
+    let i = Interner::new();
+    let ir = compile_inline_ir(
+        &i,
+        ("main", "let k = 1; let f = |x| -> x + k; f(5)"),
+        &[],
+        &[],
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+#[test]
+fn a_large_capture_is_inlined_as_the_local_it_was() {
+    let i = Interner::new();
+    let ir = compile_inline_ir(
+        &i,
+        (
+            "main",
+            r#"let s = "hi"; let f = |x| -> concat(&s, &x); f("there")"#,
+        ),
+        &[],
+        &[],
+    )
+    .unwrap();
+    insta::assert_snapshot!(ir);
+}
+
+#[test]
+fn a_closure_a_second_closure_captures_stays_a_call() {
+    let i = Interner::new();
+    let ir = compile_inline_ir(
+        &i,
+        (
+            "main",
+            "let f = |x| -> x + 1.0; let g = |t| -> f(1.0); g(0)",
+        ),
+        &[],
+        &[],
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 

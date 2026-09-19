@@ -1,0 +1,28 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+expression: opt
+---
+=== main ===
+     1 |   return 6 (r0)
+
+    ; r0 (v10) : i64
+    ; r1 (x) : i64
+    ; r2 (v11) : i64
+    ; r3 (v3) : i64
+    ; r4 (f) : Fn(i64) -> i64
+    ; r5 (v9) : i64
+    ; r6 (f) : &Fn(i64) -> i64
+    ; r7 (v1) : Fn(i64) -> i64
+    ; r8 (x) : i64
+    ; r9 (f(...)) : i64
+
+=== closure L0 (ValueId(0)) ===
+     1 |   r0 = r1 + 1 (r2)
+     2 |   return r0
+
+    ; r0 (v5) : i64
+    ; r1 (v1) : i64
+    ; r2 (v4) : i64
+    ; r3 (x) : i64
+    ; r4 (v6) : i64
+    ; r5 (x) : i64

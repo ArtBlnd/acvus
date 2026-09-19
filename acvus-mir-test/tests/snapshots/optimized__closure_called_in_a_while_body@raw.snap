@@ -1,0 +1,54 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+expression: raw
+---
+=== main ===
+     0 |   r0 = fetch @n
+     1 |   assign @n = r0
+     2 |   r1 = closure L0 []
+     3 |   assign step = r1
+     5 |   assign i = 0 (r2)
+     6 |   jump L0
+     7 | L0:
+     8 |   r3 = take i
+     9 |   r4 = take @n
+    10 |   r5 = r3 < r4
+    11 |   jump_if r5 then L1 else L2
+    12 | L1:
+    13 |   r6 = take i
+    14 |   r7 = ref &step
+    15 |   r8 = call r7(r6)
+    16 |   assign i = r8
+    17 |   jump L0
+    18 | L2:
+    19 |   r9 = take i
+    20 |   r10 = take @n
+    21 |   commit @n = r10
+    22 |   return r9
+
+    ; r0 (@n) : i64
+    ; r1 (v3) : Fn(i64) -> i64
+    ; r2 (v5) : i64
+    ; r3 (i) : i64
+    ; r4 (@n) : i64
+    ; r5 (v9) : Bool
+    ; r6 (i) : i64
+    ; r7 (step) : &Fn(i64) -> i64
+    ; r8 (step(...)) : i64
+    ; r9 (i) : i64
+    ; r10 (v14) : i64
+    ; r11 (i) : i64
+    ; r12 (@n) : i64
+    ; r13 (step) : Fn(i64) -> i64
+
+=== closure L0 (ValueId(0)) ===
+     0 |   assign x = r0
+     1 |   r1 = take x
+     3 |   r2 = r1 + 1 (r3)
+     4 |   return r2
+
+    ; r0 (v1) : i64
+    ; r1 (x) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (x) : i64

@@ -1,0 +1,49 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+expression: raw
+---
+=== main ===
+     0 |   r0 = closure L0 []
+     1 |   assign f = r0
+     2 |   r1 = take f
+     3 |   r2 = closure L1 [r1]
+     4 |   assign g = r2
+     6 |   r3 = ref &g
+     7 |   r4 = call r3(0 (r5))
+     8 |   return r4
+
+    ; r0 (v1) : Fn(Float) -> Float
+    ; r1 (f) : Fn(Float) -> Float
+    ; r2 (v4) : Fn(i64) -> Float
+    ; r3 (g) : &Fn(i64) -> Float
+    ; r4 (g(...)) : Float
+    ; r5 (v6) : i64
+    ; r6 (f) : Fn(Float) -> Float
+    ; r7 (g) : Fn(i64) -> Float
+
+=== closure L0 (ValueId(0)) ===
+     0 |   assign x = r0
+     1 |   r1 = take x
+     3 |   r2 = r1 + 1.0 (r3)
+     4 |   return r2
+
+    ; r0 (v1) : Float
+    ; r1 (x) : Float
+    ; r2 (v5) : Float
+    ; r3 (v4) : Float
+    ; r4 (x) : Float
+
+=== closure L1 (ValueId(1)) [captures: [ValueId(0)]] ===
+     0 |   assign f = r0
+     1 |   assign t = r1
+     3 |   r2 = take f
+     4 |   r3 = call r2(1.0 (r4))
+     5 |   return r3
+
+    ; r0 (v1) : &Fn(Float) -> Float
+    ; r1 (v2) : i64
+    ; r2 (f) : &Fn(Float) -> Float
+    ; r3 (f(...)) : Float
+    ; r4 (v5) : Float
+    ; r5 (f) : &Fn(Float) -> Float
+    ; r6 (t) : i64

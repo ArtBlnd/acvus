@@ -1,0 +1,45 @@
+---
+source: acvus-mir-test/tests/inline.rs
+expression: ir
+---
+=== main ===
+     1 |   assign k = 1 (r0)
+     2 |   r1 = take k
+     4 |   assign k = r1
+     5 |   assign x = 5 (r2)
+     6 |   r3 = take x
+     7 |   r4 = take k
+     8 |   r5 = r3 + r4
+     9 |   return r5
+
+    ; r0 (v1) : i64
+    ; r1 (k) : i64
+    ; r2 (v6) : i64
+    ; r3 (x) : i64
+    ; r4 (k) : i64
+    ; r5 (v16) : i64
+    ; r6 (f(...)) : i64
+    ; r7 (k) : i64
+    ; r8 (k) : i64
+    ; r9 (x) : i64
+    ; r10 (f) : Fn(i64) -> i64
+    ; r11 (f) : &Fn(i64) -> i64
+    ; r12 (v4) : Fn(i64) -> i64
+
+=== closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
+     0 |   r0 = take (*r1)
+     1 |   assign k = r0
+     2 |   assign x = r2
+     3 |   r3 = take x
+     4 |   r4 = take k
+     5 |   r5 = r3 + r4
+     6 |   return r5
+
+    ; r0 (v3) : i64
+    ; r1 (v1) : &i64
+    ; r2 (v2) : i64
+    ; r3 (x) : i64
+    ; r4 (k) : i64
+    ; r5 (v8) : i64
+    ; r6 (x) : i64
+    ; r7 (k) : i64

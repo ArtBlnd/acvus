@@ -1,0 +1,51 @@
+---
+source: acvus-mir-test/tests/optimized.rs
+expression: opt
+---
+=== main ===
+     0 |   r0 = fetch @n
+     2 |   jump L0(0 (r1))
+     3 | L0(r2: i64):
+     4 |   r3 = r2 < r0
+     5 |   jump_if r3 then L1 else L2
+     6 | L1:
+     8 |   r4 = r2 + 1 (r5)
+     9 |   jump L0(r4)
+    10 | L2:
+    11 |   commit @n = r0
+    12 |   return r2
+
+    ; r0 (@n) : i64
+    ; r1 (v5) : i64
+    ; r2 (v17) : i64
+    ; r3 (v9) : Bool
+    ; r4 (v23) : i64
+    ; r5 (v22) : i64
+    ; r6 (step(...)) : i64
+    ; r7 (v3) : Fn(i64) -> i64
+    ; r8 (v14) : i64
+    ; r9 (i) : i64
+    ; r10 (x) : i64
+    ; r11 (v15) : i64
+    ; r12 (step) : Fn(i64) -> i64
+    ; r13 (v18) : i64
+    ; r14 (i) : i64
+    ; r15 (x) : i64
+    ; r16 (i) : i64
+    ; r17 (i) : i64
+    ; r18 (@n) : i64
+    ; r19 (step) : &Fn(i64) -> i64
+    ; r20 (v24) : i64
+    ; r21 (v16) : i64
+    ; r22 (@n) : i64
+
+=== closure L0 (ValueId(0)) ===
+     1 |   r0 = r1 + 1 (r2)
+     2 |   return r0
+
+    ; r0 (v5) : i64
+    ; r1 (v1) : i64
+    ; r2 (v4) : i64
+    ; r3 (x) : i64
+    ; r4 (v6) : i64
+    ; r5 (x) : i64

@@ -1,21 +1,21 @@
 //! Phase 4: Inliner
 //!
-//! Inlines all local function calls into a single flat MIR body.
+//! Inlines local function calls into a single flat MIR body. Which call is
+//! one: [`direct_target`] for `Callee::Direct`, [`ClosurePlan`] for
+//! `Callee::Indirect`.
+//!
 //! After inlining, re-run SSABuilder to deduplicate context loads and
 //! insert PHIs at merge points.
-//!
-//! What gets inlined:
-//! - `FunctionCall` with `Callee::Direct(id)` where id is a local function
-//!
-//! What stays as a call:
-//! - `Callee::Indirect` (closures, function-valued variables)
-//! - `Callee::Direct` to extern/builtin functions (no body to inline)
-//! - Recursive calls (detected via SCC - self-referencing or mutual recursion)
 
 use acvus_utils::LocalIdOps;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use acvus_ast::Span;
+use acvus_utils::Astr;
+
+use crate::analysis::{escape, inst_info};
 use crate::ir::*;
+use crate::ty::{Mutability, Ty, TypeArg};
 
 use super::types::QualifiedRef;
 
@@ -71,10 +71,6 @@ fn inline_module(
 /// Inline all eligible FunctionCall instructions within a MirBody.
 /// Iterates until no more inlining opportunities remain (handles nested calls
 /// where an inlined body itself contains calls to other local functions).
-///
-/// Handles both:
-/// - **Direct calls** to local functions (from `all_modules`)
-/// - **Indirect calls** where the callee is a known MakeClosure (devirtualization)
 fn inline_body(
     body: &MirBody,
     all_modules: &FxHashMap<QualifiedRef, MirModule>,
@@ -88,60 +84,35 @@ fn inline_body(
         let mut new_insts = Vec::new();
         let mut val_remap: FxHashMap<ValueId, ValueId> = FxHashMap::default();
 
-        // Build def_map for devirtualization: ValueId -> instruction index.
-        let def_map: FxHashMap<ValueId, usize> = current
-            .insts
-            .iter()
-            .enumerate()
-            .flat_map(|(idx, inst)| {
-                crate::analysis::inst_info::defs(&inst.kind)
-                    .into_iter()
-                    .map(move |d| (d, idx))
-            })
-            .collect();
+        let insts = std::mem::take(&mut current.insts);
+        let plans = ClosurePlans::of_body(&insts, &current.val_types, closures);
+        let mut bound: FxHashMap<PlanId, Vec<CaptureBound>> = FxHashMap::default();
 
-        for inst in &current.insts {
-            // Try to resolve callee body for inlining.
-            let inline_target = match &inst.kind {
-                // Direct call to a local function.
-                InstKind::FunctionCall {
-                    dst,
-                    callee: Callee::Direct(callee_id),
-                    args,
-                    order,
-                    ..
-                } if !recursive_fns.contains(callee_id) && all_modules.contains_key(callee_id) => {
-                    let callee_body = &all_modules[callee_id].main;
-                    Some(InlineTarget {
-                        dst: *dst,
-                        callee_body,
-                        args: args.clone(),
-                        captures: Vec::new(),
-                        order: *order,
-                    })
-                }
+        for (idx, inst) in insts.iter().enumerate() {
+            if let Some(plan) = plans.made_at(idx) {
+                let mut emit = Emit {
+                    body: &mut current,
+                    insts: &mut new_insts,
+                };
+                let captures = plan.bind_captures(&mut emit, &val_remap, inst.span);
+                bound.insert(plan.id, captures);
+                changed = true;
+                continue;
+            }
+            if plans.is_residue(idx) {
+                changed = true;
+                continue;
+            }
 
-                // Indirect call - try devirtualization.
-                InstKind::FunctionCall {
-                    dst,
-                    callee: Callee::Indirect(callee_val),
-                    args,
-                    order,
-                    ..
-                } => {
-                    let callee_val = remap_one(*callee_val, &val_remap);
-                    try_devirt(&current.insts, &def_map, callee_val, closures).map(
-                        |(callee_body, captures)| InlineTarget {
-                            dst: *dst,
-                            callee_body,
-                            args: args.clone(),
-                            captures,
-                            order: *order,
-                        },
-                    )
-                }
-
-                _ => None,
+            let inline_target = match plans.called_at(idx) {
+                Some(plan) => Some(plan.target(
+                    &inst.kind,
+                    bound.get(&plan.id).expect(
+                        "a closure's captures are bound at its MakeClosure, \
+                         which every call of it follows",
+                    ),
+                )),
+                None => direct_target(&inst.kind, all_modules, recursive_fns),
             };
 
             if let Some(InlineTarget {
@@ -149,16 +120,13 @@ fn inline_body(
                 callee_body,
                 args,
                 captures,
+                skip,
                 order,
             }) = inline_target
             {
                 // Apply val_remap to args: earlier inlinings may have replaced
                 // the original dst with a new value.
-                let args: Vec<ValueId> = captures
-                    .iter()
-                    .chain(args.iter())
-                    .map(|a| remap_one(*a, &val_remap))
-                    .collect();
+                let args: Vec<ValueId> = args.iter().map(|a| remap_one(*a, &val_remap)).collect();
 
                 // Build ValueId remap: callee's ids -> fresh ids in caller.
                 let mut callee_remap: FxHashMap<ValueId, ValueId> = FxHashMap::default();
@@ -174,15 +142,11 @@ fn inline_body(
 
                 // Map callee capture_regs and param_regs directly to caller args.
                 // LLVM-style: direct SSA value substitution.
-                let n_captures = callee_body.captures.len();
                 let mut substituted_regs: FxHashSet<ValueId> = FxHashSet::default();
-                for ((_, cap_reg), arg) in callee_body.captures.iter().zip(args.iter()) {
-                    callee_remap.insert(*cap_reg, *arg);
-                    substituted_regs.insert(*cap_reg);
+                for bound in &captures {
+                    bound.substitute(&mut callee_remap, &mut substituted_regs);
                 }
-                for ((_, param_reg), arg) in
-                    callee_body.params.iter().zip(args[n_captures..].iter())
-                {
+                for ((_, param_reg), arg) in callee_body.params.iter().zip(args.iter()) {
                     callee_remap.insert(*param_reg, *arg);
                     substituted_regs.insert(*param_reg);
                 }
@@ -221,7 +185,10 @@ fn inline_body(
                 }
 
                 // Emit callee instructions with remapped ids.
-                for callee_inst in &callee_body.insts {
+                for (at, callee_inst) in callee_body.insts.iter().enumerate() {
+                    if skip.contains(&at) {
+                        continue;
+                    }
                     match &callee_inst.kind {
                         InstKind::Return {
                             value,
@@ -272,27 +239,484 @@ struct InlineTarget<'a> {
     dst: ValueId,
     callee_body: &'a MirBody,
     args: Vec<ValueId>,
-    captures: Vec<ValueId>,
+    captures: Vec<CaptureBound>,
+    /// Callee instructions a [`CaptureBound`] has already answered.
+    skip: FxHashSet<usize>,
     order: Option<OrderEdge>,
 }
 
-/// Try to devirtualize an indirect call: if the callee ValueId is defined by
-/// a single MakeClosure (not from a phi), return the closure's body and captures.
-fn try_devirt<'a>(
-    insts: &[Inst],
-    def_map: &FxHashMap<ValueId, usize>,
-    callee_val: ValueId,
-    closures: &'a FxHashMap<Label, MirBody>,
-) -> Option<(&'a MirBody, Vec<ValueId>)> {
-    let &def_idx = def_map.get(&callee_val)?;
-    let inst = &insts[def_idx];
-    match &inst.kind {
-        InstKind::MakeClosure { body, captures, .. } => {
-            let closure_body = closures.get(body)?;
-            Some((closure_body, captures.clone()))
+/// The local function a `Callee::Direct` names, where this phase has its
+/// body and the call is not part of a recursion.
+fn direct_target<'a>(
+    kind: &InstKind,
+    all_modules: &'a FxHashMap<QualifiedRef, MirModule>,
+    recursive_fns: &FxHashSet<QualifiedRef>,
+) -> Option<InlineTarget<'a>> {
+    let InstKind::FunctionCall {
+        dst,
+        callee: Callee::Direct(callee_id),
+        args,
+        order,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    if recursive_fns.contains(callee_id) {
+        return None;
+    }
+    Some(InlineTarget {
+        dst: *dst,
+        callee_body: &all_modules.get(callee_id)?.main,
+        args: args.clone(),
+        captures: Vec::new(),
+        skip: FxHashSet::default(),
+        order: *order,
+    })
+}
+
+// -- A closure the caller holds instead of calling -------------------
+
+/// Inline a closure only when it is really small and pure. The bound is the
+/// owner's, and it is a count rather than a measurement: what the inlined
+/// call costs is a `Callable::call_in` through a vtable and `chain_value`'s
+/// operand space (RFC-0052 §7 Consequences, RFC-0060).
+const INLINE_MAX_INSTS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PlanId(usize);
+
+/// One read of a capture register. `at` indexes the callee's instructions,
+/// not the caller's.
+#[derive(Debug, Clone, Copy)]
+struct WordRead {
+    at: usize,
+    dst: ValueId,
+}
+
+/// How an inlined copy reads one capture of the closure body.
+#[derive(Debug, Clone)]
+enum CaptureBinding {
+    /// The argument is already the reference the body reads: the captured
+    /// name was itself a capture, and no `&&T` exists (RFC-0029).
+    Reference,
+    /// The body reads the capture only as the word copy RFC-0018 gives it.
+    Copy(Vec<WordRead>),
+    /// The body reads the capture through a reference into storage the
+    /// closure owns, so the caller gives it the local it was.
+    Local,
+}
+
+/// What an inlined copy puts in place of one capture register.
+#[derive(Debug, Clone)]
+enum CaptureBound {
+    Register {
+        reg: ValueId,
+        value: ValueId,
+    },
+    Copy {
+        reg: ValueId,
+        reads: Vec<WordRead>,
+        of: ValueId,
+    },
+}
+
+impl CaptureBound {
+    fn substitute(
+        &self,
+        remap: &mut FxHashMap<ValueId, ValueId>,
+        substituted: &mut FxHashSet<ValueId>,
+    ) {
+        match self {
+            Self::Register { reg, value } => {
+                remap.insert(*reg, *value);
+                substituted.insert(*reg);
+            }
+            Self::Copy { reg, reads, of } => {
+                substituted.insert(*reg);
+                for read in reads {
+                    remap.insert(read.dst, *of);
+                    substituted.insert(read.dst);
+                }
+            }
         }
+    }
+
+    fn skipped(&self) -> &[WordRead] {
+        match self {
+            Self::Register { .. } => &[],
+            Self::Copy { reads, .. } => reads,
+        }
+    }
+}
+
+/// One capture of the closure: the name it binds, the register the body
+/// reads it in, the value `MakeClosure` takes, and how the two meet.
+struct PlannedCapture {
+    name: Astr,
+    reg: ValueId,
+    arg: ValueId,
+    binding: CaptureBinding,
+}
+
+/// A closure of one body, with every call of it and everything that exists
+/// only to make it.
+struct ClosurePlan<'a> {
+    id: PlanId,
+    body: &'a MirBody,
+    captures: Vec<PlannedCapture>,
+}
+
+impl<'a> ClosurePlan<'a> {
+    /// The caller's side of each capture, made where `MakeClosure` was and
+    /// not at each call: a `Local` binding moves the captured value into a
+    /// local, and a value moves once however many calls read it.
+    fn bind_captures(
+        &self,
+        emit: &mut Emit<'_>,
+        val_remap: &FxHashMap<ValueId, ValueId>,
+        span: Span,
+    ) -> Vec<CaptureBound> {
+        self.captures
+            .iter()
+            .map(|capture| {
+                let arg = remap_one(capture.arg, val_remap);
+                let reg = capture.reg;
+                match &capture.binding {
+                    CaptureBinding::Reference => CaptureBound::Register { reg, value: arg },
+                    CaptureBinding::Copy(reads) => CaptureBound::Copy {
+                        reg,
+                        reads: reads.clone(),
+                        of: arg,
+                    },
+                    CaptureBinding::Local => CaptureBound::Register {
+                        reg,
+                        value: emit.lend_local(span, capture.name, arg),
+                    },
+                }
+            })
+            .collect()
+    }
+
+    fn target(&self, kind: &InstKind, bound: &[CaptureBound]) -> InlineTarget<'a> {
+        let InstKind::FunctionCall {
+            dst, args, order, ..
+        } = kind
+        else {
+            panic!("a closure plan's call site is a FunctionCall, not {kind:?}")
+        };
+        InlineTarget {
+            dst: *dst,
+            callee_body: self.body,
+            args: args.clone(),
+            captures: bound.to_vec(),
+            skip: bound
+                .iter()
+                .flat_map(|b| b.skipped().iter().map(|read| read.at))
+                .collect(),
+            order: *order,
+        }
+    }
+}
+
+struct Emit<'b> {
+    body: &'b mut MirBody,
+    insts: &'b mut Vec<Inst>,
+}
+
+impl Emit<'_> {
+    fn value(&mut self, ty: Ty) -> ValueId {
+        let dst = self.body.val_factory.next();
+        self.body.val_types.insert(dst, ty);
+        dst
+    }
+
+    fn inst(&mut self, span: Span, kind: InstKind) {
+        self.insts.push(Inst { span, kind });
+    }
+
+    /// The reference an inlined capture register reads, not the local it
+    /// reads it out of.
+    fn lend_local(&mut self, span: Span, name: Astr, value: ValueId) -> ValueId {
+        let ty = self
+            .body
+            .val_types
+            .get(&value)
+            .expect("a MakeClosure capture is typed where the caller takes it")
+            .clone();
+
+        let slot = self.value(ty.clone());
+        self.body
+            .debug
+            .val_origins
+            .insert(slot, ValOrigin::Named(name));
+        self.inst(
+            span,
+            InstKind::Assign {
+                target: RefTarget::Var(slot),
+                path: Vec::new(),
+                value,
+            },
+        );
+
+        let lent = self.value(Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty))));
+        self.inst(
+            span,
+            InstKind::Ref {
+                dst: lent,
+                target: RefTarget::Var(slot),
+                path: Vec::new(),
+                mutability: Mutability::Shared,
+            },
+        );
+        lent
+    }
+}
+
+/// Every closure of a body the inliner replaces with its own instructions,
+/// indexed by the instructions it answers for.
+struct ClosurePlans<'a> {
+    plans: Vec<ClosurePlan<'a>>,
+    made: FxHashMap<usize, PlanId>,
+    called: FxHashMap<usize, PlanId>,
+    residue: FxHashSet<usize>,
+}
+
+impl<'a> ClosurePlans<'a> {
+    fn of_body(
+        insts: &[Inst],
+        val_types: &FxHashMap<ValueId, Ty>,
+        closures: &'a FxHashMap<Label, MirBody>,
+    ) -> Self {
+        let mut this = Self {
+            plans: Vec::new(),
+            made: FxHashMap::default(),
+            called: FxHashMap::default(),
+            residue: FxHashSet::default(),
+        };
+
+        for (idx, inst) in insts.iter().enumerate() {
+            let InstKind::MakeClosure {
+                dst,
+                body: label,
+                captures,
+            } = &inst.kind
+            else {
+                continue;
+            };
+            let Some(closure) = closures.get(label) else {
+                continue;
+            };
+            if !small_pure_chain(closure) || closure.captures.len() != captures.len() {
+                continue;
+            }
+            let Some(uses) = ClosureUses::of(insts, idx, *dst) else {
+                continue;
+            };
+            let Some(planned) = plan_captures(closure, captures, val_types) else {
+                continue;
+            };
+            if uses.overlaps(&this) {
+                continue;
+            }
+
+            let id = PlanId(this.plans.len());
+            this.made.insert(idx, id);
+            this.residue
+                .extend(uses.residue.iter().filter(|at| **at != idx));
+            this.called.extend(uses.calls.iter().map(|at| (*at, id)));
+            this.plans.push(ClosurePlan {
+                id,
+                body: closure,
+                captures: planned,
+            });
+        }
+
+        this
+    }
+
+    fn made_at(&self, idx: usize) -> Option<&ClosurePlan<'a>> {
+        Some(&self.plans[self.made.get(&idx)?.0])
+    }
+
+    fn called_at(&self, idx: usize) -> Option<&ClosurePlan<'a>> {
+        Some(&self.plans[self.called.get(&idx)?.0])
+    }
+
+    fn is_residue(&self, idx: usize) -> bool {
+        self.residue.contains(&idx)
+    }
+}
+
+/// Every instruction that exists only because a body made one closure, and
+/// every call that names it.
+struct ClosureUses {
+    calls: FxHashSet<usize>,
+    residue: FxHashSet<usize>,
+}
+
+impl ClosureUses {
+    /// The uses of the closure made at `mk_idx`, or `None` where one of them
+    /// is not a call of it: a closure that also escapes — stored, returned,
+    /// passed — is one body, and an inlined copy beside it would be two.
+    fn of(insts: &[Inst], mk_idx: usize, mk_dst: ValueId) -> Option<Self> {
+        let mut names: FxHashSet<ValueId> = [mk_dst].into_iter().collect();
+        let mut slots: FxHashSet<ValueId> = FxHashSet::default();
+        let mut this = Self {
+            calls: FxHashSet::default(),
+            residue: [mk_idx].into_iter().collect(),
+        };
+
+        let mut growing = true;
+        while growing {
+            growing = false;
+            for (idx, inst) in insts.iter().enumerate() {
+                if this.residue.contains(&idx) || this.calls.contains(&idx) {
+                    continue;
+                }
+                match &inst.kind {
+                    InstKind::Assign {
+                        target: RefTarget::Var(slot),
+                        path,
+                        value,
+                    } if path.is_empty() && names.contains(value) => {
+                        growing |= slots.insert(*slot);
+                        this.residue.insert(idx);
+                    }
+                    InstKind::Ref {
+                        dst,
+                        target: RefTarget::Var(slot),
+                        path,
+                        mutability: Mutability::Shared,
+                    } if path.is_empty() && slots.contains(slot) => {
+                        growing |= names.insert(*dst);
+                        this.residue.insert(idx);
+                    }
+                    InstKind::Drop { src } if names.contains(src) || slots.contains(src) => {
+                        this.residue.insert(idx);
+                    }
+                    InstKind::FunctionCall {
+                        callee: Callee::Indirect(f),
+                        args,
+                        ..
+                    } if idx > mk_idx
+                        && names.contains(f)
+                        && !args.iter().any(|a| names.contains(a)) =>
+                    {
+                        this.calls.insert(idx);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let clean = insts.iter().enumerate().all(|(idx, inst)| {
+            this.residue.contains(&idx)
+                || this.calls.contains(&idx)
+                || (!inst_info::uses(&inst.kind)
+                    .iter()
+                    .any(|u| names.contains(u))
+                    && !storage_of(&inst.kind).is_some_and(|s| slots.contains(&s)))
+        });
+        clean.then_some(this)
+    }
+
+    fn overlaps(&self, plans: &ClosurePlans<'_>) -> bool {
+        self.residue
+            .iter()
+            .chain(self.calls.iter())
+            .any(|at| plans.residue.contains(at) || plans.called.contains_key(at))
+    }
+}
+
+/// The storage this instruction names directly, which `inst_info::uses` does
+/// not count as a value read.
+fn storage_of(kind: &InstKind) -> Option<ValueId> {
+    match kind {
+        InstKind::Ref { target, .. }
+        | InstKind::Take { target, .. }
+        | InstKind::Assign { target, .. } => Some(escape::named_storage(target)),
         _ => None,
     }
+}
+
+fn small_pure_chain(body: &MirBody) -> bool {
+    let Some((last, rest)) = body.insts.split_last() else {
+        return false;
+    };
+    body.order_param.is_none()
+        && body.insts.len() <= INLINE_MAX_INSTS
+        && matches!(last.kind, InstKind::Return { .. })
+        && !rest.iter().any(|inst| starts_or_ends_a_block(&inst.kind))
+}
+
+fn starts_or_ends_a_block(kind: &InstKind) -> bool {
+    matches!(
+        kind,
+        InstKind::BlockLabel { .. }
+            | InstKind::Jump { .. }
+            | InstKind::JumpIf { .. }
+            | InstKind::Switch { .. }
+            | InstKind::Return { .. }
+            | InstKind::Diverge
+    )
+}
+
+/// Each capture of `closure` against the value `MakeClosure` takes for it, or
+/// `None` where one of them is a shape the splice cannot answer.
+fn plan_captures(
+    closure: &MirBody,
+    args: &[ValueId],
+    caller_types: &FxHashMap<ValueId, Ty>,
+) -> Option<Vec<PlannedCapture>> {
+    closure
+        .captures
+        .iter()
+        .zip(args)
+        .map(|((name, reg), arg)| {
+            Some(PlannedCapture {
+                name: *name,
+                reg: *reg,
+                arg: *arg,
+                binding: capture_binding(closure, *reg, caller_types.get(arg)?)?,
+            })
+        })
+        .collect()
+}
+
+fn capture_binding(closure: &MirBody, reg: ValueId, arg_ty: &Ty) -> Option<CaptureBinding> {
+    let cap_ty = closure.val_types.get(&reg)?;
+    if cap_ty == arg_ty {
+        return Some(CaptureBinding::Reference);
+    }
+    let Ty::Ref(Mutability::Shared, inner) = cap_ty else {
+        return None;
+    };
+    if inner.ty != *arg_ty {
+        return None;
+    }
+    Some(match word_reads(closure, reg) {
+        Some(reads) => CaptureBinding::Copy(reads),
+        None => CaptureBinding::Local,
+    })
+}
+
+/// The reads of a capture register, where the body reads it as nothing but
+/// the word copy RFC-0018 gives it.
+fn word_reads(closure: &MirBody, reg: ValueId) -> Option<Vec<WordRead>> {
+    let mut reads = Vec::new();
+    for (at, inst) in closure.insts.iter().enumerate() {
+        match &inst.kind {
+            InstKind::Take {
+                dst,
+                target: RefTarget::Through(through),
+                path,
+            } if *through == reg && path.is_empty() => reads.push(WordRead { at, dst: *dst }),
+            other if inst_info::uses(other).contains(&reg) => return None,
+            _ => {}
+        }
+    }
+    Some(reads)
 }
 
 /// Remap a single ValueId through a remap table. Returns original if not mapped.
@@ -947,9 +1371,91 @@ mod tests {
         assert!(has_const, "g's Const(42) should be present");
     }
 
+    /// A caller holding a closure of `len` instructions and one call of it.
+    /// The caller's four instructions are the shape `lower.rs` writes for a
+    /// `let`-bound lambda: `MakeClosure`, an `Assign` into the variable's
+    /// slot, a `Ref` of that slot, and the call through the reference.
+    fn closure_of(i: &acvus_utils::Interner, len: usize) -> MirModule {
+        let adds = len - 1;
+        let mut closure = make_body(
+            (0..adds)
+                .map(|n| InstKind::BinOp {
+                    dst: ValueId::from_raw(n + 1),
+                    op: acvus_ast::BinOp::Add,
+                    left: v(n),
+                    right: v(0),
+                })
+                .chain([InstKind::Return {
+                    value: ValueId::from_raw(adds),
+                    order: None,
+                }])
+                .collect(),
+            len,
+        );
+        closure.params = vec![(i.intern("x"), v(0))];
+
+        let main = make_body(
+            vec![
+                InstKind::MakeClosure {
+                    dst: v(0),
+                    body: Label(0),
+                    captures: Vec::new(),
+                },
+                InstKind::Assign {
+                    target: RefTarget::Var(v(3)),
+                    path: Vec::new(),
+                    value: v(0),
+                },
+                InstKind::Ref {
+                    dst: v(1),
+                    target: RefTarget::Var(v(3)),
+                    path: Vec::new(),
+                    mutability: Mutability::Shared,
+                },
+                InstKind::FunctionCall {
+                    dst: v(2),
+                    callee: Callee::Indirect(v(1)),
+                    callee_ty: Ty::error(),
+                    args: vec![v(4)],
+                    order: None,
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+            ],
+            5,
+        );
+
+        MirModule {
+            main,
+            closures: [(Label(0), closure)].into_iter().collect(),
+            ret: crate::ty::Ty::Unit,
+        }
+    }
+
+    fn inlines_body_of(len: usize) -> bool {
+        let i = acvus_utils::Interner::new();
+        let caller_id = QualifiedRef::root(i.intern("caller"));
+        let mut modules = FxHashMap::default();
+        modules.insert(caller_id, closure_of(&i, len));
+
+        let result = inline(&modules, &FxHashSet::default());
+        !result.modules[&caller_id]
+            .main
+            .insts
+            .iter()
+            .any(|inst| matches!(inst.kind, InstKind::FunctionCall { .. }))
+    }
+
     #[test]
-    fn inline_indirect_call_preserved() {
-        // Indirect call (closure) should never be inlined.
+    fn a_closure_body_of_inline_max_insts_is_inlined_and_one_more_is_not() {
+        assert!(inlines_body_of(INLINE_MAX_INSTS));
+        assert!(!inlines_body_of(INLINE_MAX_INSTS + 1));
+    }
+
+    #[test]
+    fn an_indirect_call_to_no_make_closure_is_preserved() {
         let caller_body = make_body(
             vec![
                 InstKind::FunctionCall {

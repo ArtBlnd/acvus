@@ -268,3 +268,39 @@ fn destructure_multi_branch_classify() {
 //     - CodeMotion: `factor` computation is loop-invariant -> hoist
 //     - SSA: @result loop phi
 // =======================================================================
+
+// =======================================================================
+// 11. A small pure closure called where it was made (RFC-0060)
+//     - Inline: the call becomes the add
+//     - Fold: the add becomes the constant, and nothing is left of the closure
+// =======================================================================
+
+#[test]
+fn closure_called_where_it_was_made() {
+    let i = Interner::new();
+    let c = ctx(&i, &[]);
+    let src = "let f = |x| -> x + 1; f(5)";
+    let (raw, opt) = snap_both(&i, src, &c);
+    insta::assert_snapshot!("closure_called_where_it_was_made@raw", raw);
+    insta::assert_snapshot!("closure_called_where_it_was_made@optimized", opt);
+}
+
+#[test]
+fn closure_called_in_a_while_body() {
+    let i = Interner::new();
+    let c = ctx(&i, &[("n", Ty::I64)]);
+    let src = "let step = |x| -> x + 1; let i = 0; while i < @n { i = step(i); } i";
+    let (raw, opt) = snap_both(&i, src, &c);
+    insta::assert_snapshot!("closure_called_in_a_while_body@raw", raw);
+    insta::assert_snapshot!("closure_called_in_a_while_body@optimized", opt);
+}
+
+#[test]
+fn closure_that_captures_a_closure() {
+    let i = Interner::new();
+    let c = ctx(&i, &[]);
+    let src = "let f = |x| -> x + 1.0; let g = |t| -> f(1.0); g(0)";
+    let (raw, opt) = snap_both(&i, src, &c);
+    insta::assert_snapshot!("closure_that_captures_a_closure@raw", raw);
+    insta::assert_snapshot!("closure_that_captures_a_closure@optimized", opt);
+}
