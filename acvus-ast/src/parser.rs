@@ -390,18 +390,6 @@ fn validate_irrefutable(pattern: &Pattern) -> Result<(), ParseError> {
     }
 }
 
-fn is_place(expr: &Expr) -> bool {
-    match expr {
-        Expr::Ident {
-            ref_kind: RefKind::Value | RefKind::ExternParam,
-            ..
-        }
-        | Expr::ContextRef { .. } => true,
-        Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => is_place(object),
-        _ => false,
-    }
-}
-
 /// `place = value;`. A bare name stays a statement of its own because
 /// `acvus-mir`'s checker refuses assigning a name that is not bound, or one
 /// the enclosing lambda captured, against the bindings in scope.
@@ -431,15 +419,17 @@ pub fn build_assign(
             expr: rhs,
             span,
         }),
-        place if is_place(&place) => Ok(Stmt::Store {
-            id: AstId::alloc(),
-            place: Box::new(place),
-            expr: rhs,
-            span,
-        }),
-        _ => Err(LalrpopError::User {
-            error: ParseError::new(ParseErrorKind::InvalidAssignTarget, span),
-        }),
+        lhs => match Place::of(lhs) {
+            Some(place) => Ok(Stmt::Store {
+                id: AstId::alloc(),
+                place,
+                expr: rhs,
+                span,
+            }),
+            None => Err(LalrpopError::User {
+                error: ParseError::new(ParseErrorKind::InvalidAssignTarget, span),
+            }),
+        },
     }
 }
 
@@ -1296,7 +1286,29 @@ mod tests {
     /// `$parameter` or an `@context` is a `Store` of that place.
     #[test]
     fn an_assignment_target_is_a_place() {
-        fn shape(expr: &Expr, interner: &Interner) -> String {
+        fn shape(place: &Place, interner: &Interner) -> String {
+            match place {
+                Place::Field { object, field, .. } => {
+                    format!("{}.{}", shape(object, interner), interner.resolve(*field))
+                }
+                Place::Base(PlaceBase::Root {
+                    root: Root::Local(name),
+                    ..
+                }) => interner.resolve(*name).to_string(),
+                Place::Base(PlaceBase::Root {
+                    root: Root::ExternParam(name),
+                    ..
+                }) => format!("${}", interner.resolve(*name)),
+                Place::Base(PlaceBase::Root {
+                    root: Root::Context(name),
+                    ..
+                }) => format!("@{}", interner.resolve(*name)),
+                Place::Base(PlaceBase::Element { container, .. }) => {
+                    format!("{}[]", container_shape(container.expr(), interner))
+                }
+            }
+        }
+        fn container_shape(expr: &Expr, interner: &Interner) -> String {
             match expr {
                 Expr::Ident {
                     name,
@@ -1306,10 +1318,14 @@ mod tests {
                 Expr::Ident { name, .. } => interner.resolve(name.name).to_string(),
                 Expr::ContextRef { name, .. } => format!("@{}", interner.resolve(name.name)),
                 Expr::FieldAccess { object, field, .. } => {
-                    format!("{}.{}", shape(object, interner), interner.resolve(*field))
+                    format!(
+                        "{}.{}",
+                        container_shape(object, interner),
+                        interner.resolve(*field)
+                    )
                 }
-                Expr::Index { object, .. } => format!("{}[]", shape(object, interner)),
-                other => panic!("not a place: {other:?}"),
+                Expr::Index { object, .. } => format!("{}[]", container_shape(object, interner)),
+                other => format!("{other:?}"),
             }
         }
         let interner = Interner::new();
@@ -1332,7 +1348,13 @@ mod tests {
         assert!(matches!(&s.stmts[0], Stmt::Assign { name, .. } if interner.resolve(*name) == "x"));
         assert!(matches!(&s.stmts[1], Stmt::DerefStore { .. }));
 
-        for src in ["f(x) = 1;", "1 = 2;", "(o).f = 1;", "E::A = 1;"] {
+        for src in [
+            "f(x) = 1;",
+            "1 = 2;",
+            "(o).f = 1;",
+            "E::A = 1;",
+            "f(x)[0] = 1;",
+        ] {
             assert_eq!(
                 parse_script(&interner, src).unwrap_err().kind,
                 ParseErrorKind::InvalidAssignTarget,

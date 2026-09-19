@@ -1567,6 +1567,69 @@ impl<'a> Lowerer<'a> {
         Place { target, path, ty }
     }
 
+    fn store_target(&mut self, place: &acvus_ast::Place) -> Place {
+        let ty = self.type_of_id(place.id());
+        let mut path: Vec<PathSeg> = Vec::new();
+        let mut node = place;
+        let base = loop {
+            match node {
+                acvus_ast::Place::Field { object, field, .. } => {
+                    path.push(PathSeg::Field(*field));
+                    node = object;
+                }
+                acvus_ast::Place::Base(base) => break base,
+            }
+        };
+        path.reverse();
+        let target = self.store_base(base);
+        // A place that is a reference names what the reference names
+        // (RFC-0029).
+        let ty = match ty {
+            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => {
+                inner.ty
+            }
+            ty => ty,
+        };
+        Place { target, path, ty }
+    }
+
+    fn store_base(&mut self, base: &acvus_ast::PlaceBase) -> RefTarget {
+        let (id, span) = (base.id(), base.span());
+        let storage = match base {
+            acvus_ast::PlaceBase::Root { root, .. } => match root {
+                acvus_ast::Root::Context(name) => {
+                    RefTarget::Var(self.context_slot(QualifiedRef::root(*name)))
+                }
+                acvus_ast::Root::ExternParam(name) => match self.try_param_slot(*name) {
+                    Some(param_reg) => RefTarget::Param(param_reg),
+                    None => RefTarget::Var(self.var_slot(*name)),
+                },
+                acvus_ast::Root::Local(name) => RefTarget::Var(self.var_slot(*name)),
+            },
+            acvus_ast::PlaceBase::Element {
+                callee_id,
+                container,
+                index,
+                ..
+            } => {
+                let access = IndexAccess {
+                    mode: IndexMode::Ref,
+                    ..self.index_access(id)
+                };
+                let reference =
+                    self.lower_index_as(access, id, *callee_id, container.expr(), index, span);
+                return RefTarget::Through(reference);
+            }
+        };
+        match self.type_of_id(id) {
+            ty @ Ty::Ref(..) => {
+                let reference = self.emit_take(span, storage, vec![], ty);
+                RefTarget::Through(reference)
+            }
+            _ => storage,
+        }
+    }
+
     /// An operator operand borrowed for the expression (RFC-0020).
     fn lend_operand(&mut self, operand: &Expr) -> ValueId {
         let ty = self.type_of_id(operand.id());
@@ -3017,18 +3080,18 @@ impl<'a> Lowerer<'a> {
     /// index is a value, so the element is written through the container's
     /// mutable slice (RFC-0047). Every other place is the storage its root
     /// names under a path of `PathSeg::Field` steps.
-    fn lower_store(&mut self, place: &Expr, value_expr: &Expr, span: Span) {
+    fn lower_store(&mut self, place: &acvus_ast::Place, value_expr: &Expr, span: Span) {
         let value = self.lower_expr(value_expr);
-        if let Expr::Index {
+        if let acvus_ast::Place::Base(acvus_ast::PlaceBase::Element {
             id,
             callee_id,
-            object,
+            container,
             index,
             span: index_span,
-        } = place
+        }) = place
         {
             let taken = self.take_slice(
-                object,
+                container.expr(),
                 *callee_id,
                 *id,
                 self.index_access(*id).mutability,
@@ -3045,7 +3108,7 @@ impl<'a> Lowerer<'a> {
             );
             return;
         }
-        let place = self.place(place);
+        let place = self.store_target(place);
         self.emit_assign(span, place.target, place.path, value);
     }
 

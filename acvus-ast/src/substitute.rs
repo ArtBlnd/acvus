@@ -51,6 +51,59 @@ pub fn substitute_template(template: Template, subs: &FxHashMap<Astr, SubstValue
 /// If the expression is a splice placeholder, returns the splice `Vec<Expr>`.
 /// If it's a single placeholder, returns the replacement wrapped in a vec.
 /// Otherwise, recursively substitutes and returns a single-element vec.
+fn sub_place(place: Place, subs: &FxHashMap<Astr, SubstValue>) -> Place {
+    match place {
+        Place::Field {
+            id,
+            object,
+            field,
+            span,
+        } => Place::Field {
+            id,
+            object: Box::new(sub_place(*object, subs)),
+            field,
+            span,
+        },
+        Place::Base(PlaceBase::Root {
+            root: Root::Local(name),
+            ..
+        }) => match subs.get(&name) {
+            Some(SubstValue::Single(replacement)) => substituted_place(replacement.clone()),
+            Some(SubstValue::Splice(_)) => panic!(
+                "splice placeholder on the left of `=` \
+                 (compile-time validation should have caught this)"
+            ),
+            None => place,
+        },
+        Place::Base(PlaceBase::Root { .. }) => place,
+        Place::Base(PlaceBase::Element {
+            id,
+            callee_id,
+            container,
+            index,
+            span,
+        }) => Place::Base(PlaceBase::Element {
+            id,
+            callee_id,
+            container: substituted_container(sub_expr(container.expr().clone(), subs)),
+            index: Box::new(sub_expr(*index, subs)),
+            span,
+        }),
+    }
+}
+
+fn substituted_place(expr: Expr) -> Place {
+    Place::of(expr).unwrap_or_else(|| {
+        panic!("the left of `=` is a place, and a placeholder replaced there named none")
+    })
+}
+
+fn substituted_container(expr: Expr) -> PlaceExpr {
+    PlaceExpr::of(expr).unwrap_or_else(|| {
+        panic!("an indexed container on the left of `=` is a place, and a placeholder replaced there named none")
+    })
+}
+
 fn sub_expr_seq(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Vec<Expr> {
     match &expr {
         Expr::Ident {
@@ -435,7 +488,7 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             place, expr, span, ..
         } => Stmt::Store {
             id: AstId::alloc(),
-            place: Box::new(sub_expr(*place, subs)),
+            place: sub_place(place, subs),
             expr: sub_expr(expr, subs),
             span,
         },
@@ -596,6 +649,28 @@ pub fn validate_splice_positions_template(
 
 /// Validate an expression. `in_seq` indicates whether this expression is in a
 /// sequence context where splice is allowed.
+fn validate_splice_place(place: &Place, splice_names: &[Astr], errors: &mut Vec<(Astr, Span)>) {
+    match place {
+        Place::Field { object, .. } => validate_splice_place(object, splice_names, errors),
+        Place::Base(PlaceBase::Root {
+            root: Root::Local(name),
+            span,
+            ..
+        }) => {
+            if splice_names.contains(name) {
+                errors.push((*name, *span));
+            }
+        }
+        Place::Base(PlaceBase::Root { .. }) => {}
+        Place::Base(PlaceBase::Element {
+            container, index, ..
+        }) => {
+            validate_splice_expr(container.expr(), false, splice_names, errors);
+            validate_splice_expr(index, false, splice_names, errors);
+        }
+    }
+}
+
 fn validate_splice_expr(
     expr: &Expr,
     in_seq: bool,
@@ -775,7 +850,7 @@ fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(As
             validate_splice_expr(expr, false, splice_names, errors);
         }
         Stmt::Store { place, expr, .. } => {
-            validate_splice_expr(place, false, splice_names, errors);
+            validate_splice_place(place, splice_names, errors);
             validate_splice_expr(expr, false, splice_names, errors);
         }
         Stmt::Expr(expr) => {

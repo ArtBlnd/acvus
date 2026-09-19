@@ -28,13 +28,10 @@ pub struct Script {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// Store into a place: `@a = 0;`, `a.x.y = 0;`, `a[i] = 0;`,
-    /// `a.x[i].y = 0;`. `place` is the left-hand expression itself -- a
-    /// local, a `$param` or an `@context` under a path of field and index
-    /// steps -- so each `a[i]` of it settles its `as_slice_mut` instance
-    /// where every other index expression settles one (RFC-0047).
+    /// `a.x[i].y = 0;`.
     Store {
         id: AstId,
-        place: Box<Expr>,
+        place: Place,
         expr: Expr,
         span: Span,
     },
@@ -111,6 +108,157 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Place {
+    Base(PlaceBase),
+    Field {
+        id: AstId,
+        object: Box<Place>,
+        field: Astr,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlaceBase {
+    Root {
+        id: AstId,
+        root: Root,
+        span: Span,
+    },
+    /// `place[i]`. The container is not a `Place`, and that is a decision:
+    /// an index step settles its `as_slice_mut` instance and lends its
+    /// container through the machinery every `a[i]` goes through, a read's
+    /// included, and that machinery reads an `Expr` (RFC-0047).
+    Element {
+        id: AstId,
+        callee_id: AstId,
+        container: PlaceExpr,
+        index: Box<Expr>,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Root {
+    Local(Astr),
+    ExternParam(Astr),
+    Context(Astr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaceExpr(Expr);
+
+impl PlaceExpr {
+    pub fn of(expr: Expr) -> Option<Self> {
+        match Self::names_a_place(&expr) {
+            true => Some(Self(expr)),
+            false => None,
+        }
+    }
+
+    pub fn expr(&self) -> &Expr {
+        &self.0
+    }
+
+    fn names_a_place(expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident {
+                ref_kind: RefKind::Value | RefKind::ExternParam,
+                ..
+            }
+            | Expr::ContextRef { .. } => true,
+            Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => {
+                Self::names_a_place(object)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Place {
+    pub fn of(expr: Expr) -> Option<Self> {
+        match expr {
+            Expr::FieldAccess {
+                id,
+                object,
+                field,
+                span,
+            } => Some(Self::Field {
+                id,
+                object: Box::new(Self::of(*object)?),
+                field,
+                span,
+            }),
+            base => PlaceBase::of(base).map(Self::Base),
+        }
+    }
+
+    pub fn id(&self) -> AstId {
+        match self {
+            Self::Base(base) => base.id(),
+            Self::Field { id, .. } => *id,
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Base(base) => base.span(),
+            Self::Field { span, .. } => *span,
+        }
+    }
+}
+
+impl PlaceBase {
+    fn of(expr: Expr) -> Option<Self> {
+        match expr {
+            Expr::Ident {
+                id,
+                name,
+                ref_kind,
+                span,
+            } => {
+                let root = match ref_kind {
+                    RefKind::Value => Root::Local(name.name),
+                    RefKind::ExternParam => Root::ExternParam(name.name),
+                };
+                Some(Self::Root { id, root, span })
+            }
+            Expr::ContextRef { id, name, span } => Some(Self::Root {
+                id,
+                root: Root::Context(name.name),
+                span,
+            }),
+            Expr::Index {
+                id,
+                callee_id,
+                object,
+                index,
+                span,
+            } => Some(Self::Element {
+                id,
+                callee_id,
+                container: PlaceExpr::of(*object)?,
+                index,
+                span,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn id(&self) -> AstId {
+        match self {
+            Self::Root { id, .. } | Self::Element { id, .. } => *id,
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Root { span, .. } | Self::Element { span, .. } => *span,
+        }
+    }
 }
 
 /// What a `for` traverses, as the parser reads it. Which of the four heads
@@ -715,7 +863,7 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
     for stmt in stmts {
         match stmt {
             Stmt::Store { place, expr, .. } => {
-                walk_expr(place, refs);
+                walk_place(place, refs);
                 walk_expr(expr, refs);
             }
             Stmt::DerefStore { target, expr, .. } => {
@@ -824,6 +972,25 @@ fn walk_pattern(pattern: &Pattern, refs: &mut ContextRefs) {
             if let Some(p) = payload {
                 walk_pattern(p, refs);
             }
+        }
+    }
+}
+
+fn walk_place(place: &Place, refs: &mut ContextRefs) {
+    match place {
+        Place::Field { object, .. } => walk_place(object, refs),
+        Place::Base(PlaceBase::Root {
+            root: Root::Context(name),
+            ..
+        }) => {
+            refs.set.insert(QualifiedRef::root(*name));
+        }
+        Place::Base(PlaceBase::Root { .. }) => {}
+        Place::Base(PlaceBase::Element {
+            container, index, ..
+        }) => {
+            walk_expr(container.expr(), refs);
+            walk_expr(index, refs);
         }
     }
 }

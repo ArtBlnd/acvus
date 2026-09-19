@@ -184,7 +184,7 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
                 collect_value_refs_expr(expr, refs);
             }
             Stmt::Store { place, expr, .. } => {
-                collect_value_refs_expr(place, refs);
+                collect_value_refs_place(place, refs);
                 collect_value_refs_expr(expr, refs);
             }
             Stmt::Expr(expr) => collect_value_refs_expr(expr, refs),
@@ -250,6 +250,24 @@ fn collect_value_refs_node(node: &acvus_ast::Node, refs: &mut Vec<Astr>) {
                     collect_value_refs_node(n, refs);
                 }
             }
+        }
+    }
+}
+
+fn collect_value_refs_place(place: &acvus_ast::Place, refs: &mut Vec<Astr>) {
+    use acvus_ast::*;
+    match place {
+        Place::Field { object, .. } => collect_value_refs_place(object, refs),
+        Place::Base(PlaceBase::Root {
+            root: Root::Local(name),
+            ..
+        }) => refs.push(*name),
+        Place::Base(PlaceBase::Root { .. }) => {}
+        Place::Base(PlaceBase::Element {
+            container, index, ..
+        }) => {
+            collect_value_refs_expr(container.expr(), refs);
+            collect_value_refs_expr(index, refs);
         }
     }
 }

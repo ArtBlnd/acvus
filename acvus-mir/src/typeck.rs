@@ -252,6 +252,15 @@ impl PlaceDemand {
             Self::Borrow(Mutability::Mut) => Mutability::Mut,
         }
     }
+
+    /// A mutable projection demands its object mutably (RFC-0018); every
+    /// other read borrows the object of `a.f` shared (RFC-0047 §3).
+    fn through_a_field(self) -> Self {
+        match self {
+            Self::Borrow(Mutability::Mut) => Self::Borrow(Mutability::Mut),
+            Self::Value | Self::Borrow(Mutability::Shared) => Self::Borrow(Mutability::Shared),
+        }
+    }
 }
 
 /// RFC-0030.
@@ -1861,57 +1870,63 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// the container's `as_slice_mut`, which is what makes the element write
     /// exclusive -- the loan the slice holds is the write's, so a container
     /// already held shared is refused there and a root holding `&T` here.
-    fn store_place(&mut self, place: &Expr, span: Span) -> InferTy {
+    fn store_place(&mut self, place: &acvus_ast::Place, span: Span) -> InferTy {
         match place {
-            Expr::FieldAccess {
+            acvus_ast::Place::Field {
                 id, object, field, ..
             } => {
                 let base = self.store_place(object, span);
                 let ty = self.field_path_for_store(&base, &[*field], span);
                 self.record_ret(*id, ty)
             }
-            Expr::Index {
+            acvus_ast::Place::Base(acvus_ast::PlaceBase::Element {
                 id,
                 callee_id,
-                object,
+                container,
                 index,
                 span: index_span,
-            } => self.check_index(IndexSite {
+            }) => self.check_index(IndexSite {
                 id: *id,
                 callee_id: *callee_id,
-                object,
+                object: container.expr(),
                 index,
                 span: *index_span,
                 demand: PlaceDemand::Borrow(Mutability::Mut),
             }),
-            Expr::ContextRef { id, name, .. } => {
-                self.note_context_use(*name, span);
-                self.note_access(Effect::write(*name), span);
+            acvus_ast::Place::Base(acvus_ast::PlaceBase::Root {
+                id,
+                root: acvus_ast::Root::Context(name),
+                ..
+            }) => {
+                let qref = QualifiedRef::root(*name);
+                self.note_context_use(qref, span);
+                self.note_access(Effect::write(qref), span);
                 let ty = self
                     .env
                     .contexts
-                    .get(name)
+                    .get(&qref)
                     .cloned()
                     .unwrap_or_else(|| self.solver.fresh_ty_var());
                 self.record_ret(*id, ty)
             }
-            Expr::Ident {
-                name,
-                ref_kind: RefKind::ExternParam,
+            acvus_ast::Place::Base(acvus_ast::PlaceBase::Root {
+                root: acvus_ast::Root::ExternParam(name),
                 ..
-            } => {
+            }) => {
                 self.error(
-                    MirErrorKind::ExternParamAssign(self.interner.resolve(name.name).to_string()),
+                    MirErrorKind::ExternParamAssign(self.interner.resolve(*name).to_string()),
                     span,
                 );
                 Self::infer_error()
             }
-            Expr::Ident { id, name, .. } => {
-                let var_ty = self.lookup_var(name.name).unwrap_or_else(|| {
+            acvus_ast::Place::Base(acvus_ast::PlaceBase::Root {
+                id,
+                root: acvus_ast::Root::Local(name),
+                ..
+            }) => {
+                let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
                     self.error(
-                        MirErrorKind::UndefinedVariable(
-                            self.interner.resolve(name.name).to_string(),
-                        ),
+                        MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
                         span,
                     );
                     Self::infer_error()
@@ -1927,9 +1942,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     _ => var_ty,
                 }
             }
-            other => unreachable!(
-                "acvus_ast::parser::build_assign admits only a place as a store target: {other:?}"
-            ),
         }
     }
 
@@ -2841,6 +2853,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
 
         let container = self.solver.resolve_ty(&first.ty);
+        if Self::is_error(referent_of(&container)) {
+            return self.record_ret(id, Self::infer_error());
+        }
         if !takes_container(
             &candidates,
             &self.solver.resolve_ty(referent_of(&container)),
@@ -4554,13 +4569,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 field,
                 span,
             } => {
-                // `a.f` reads a place: the object is borrowed, not moved,
-                // so an `a[i]` below it takes a reference (RFC-0047 §3).
-                let outer =
-                    std::mem::replace(&mut self.demand, PlaceDemand::Borrow(Mutability::Shared));
+                let through = self.demand.through_a_field();
+                let outer = std::mem::replace(&mut self.demand, through);
                 let ot_raw = self.check_expr(object);
                 self.demand = outer;
                 let ot = self.solver.shallow_resolve_ty(&ot_raw);
+                if outer == PlaceDemand::Borrow(Mutability::Mut)
+                    && let TyTerm::Ref(Mutability::Shared, _) = &ot
+                {
+                    let shown = self.type_as_written(&ot_raw);
+                    self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
+                    return self.record_ret(*id, Self::infer_error());
+                }
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
                 if let TyTerm::Ref(_, inner) = &ot {

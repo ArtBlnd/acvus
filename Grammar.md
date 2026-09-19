@@ -188,8 +188,15 @@ steps: `x`, `@a.x.y`, `v[i]`, `v[0].f`, `o.g[0]`, `o.f[i].g`. The left of
   bindings in scope: a name that is not bound, or one the enclosing lambda
   captured, is refused there
 - `*Expr` → `DerefStore`, a store through a reference **value**
-- any other place → `Store`, holding the place expression itself
+- any other place → `Store`, holding a `Place`: a `Root` -- a name, a
+  `$parameter` or an `@context` -- under a path of `.field` steps over a
+  base, where the base is that root or a `[index]` step whose container is
+  the place expression the index machinery reads
 - anything else → parser error (`InvalidAssignTarget`)
+
+The parser is the one site that decides: `Place::of` is the conversion and
+`InvalidAssignTarget` its refusal, so `f(x)[0] = 1` is refused there and
+nothing below re-derives that a store's target is a place.
 
 A `$parameter` is a place, and a store into one is refused by the checker:
 `extern param `$p` is immutable and cannot be assigned`. A store into a
@@ -197,6 +204,15 @@ place through a shared reference is refused the same way a read of it as a
 `&mut` would be: ``cannot store through &{f: i64}: not a `&mut```, and a
 `v[i]` step of a place takes the container's `as_slice_mut`, so the loan the
 write holds is exclusive.
+
+**A mutable projection demands its object mutably** (RFC-0018). A `.field`
+under a write or a `&mut` hands its object the same mutable demand, so every
+`[index]` below the field takes `as_slice_mut` too: `v[i].h[j] = e` writes
+into `v`, where a shared slice would have written into a copy of the element
+and lost it. The same rule makes a mutable reach through a shared reference
+a refusal rather than a silent copy: `r.g[i] = e` and `&mut r.g[i]` with
+`r: &{g: [i64]}` are both ``cannot store through &{g: [i64]}: not a
+`&mut```. A read borrows the object shared, as before.
 
 The IR has one shape per write: `Assign { target, path }` with
 `PathSeg::Field` steps for every place whose steps are fields, and

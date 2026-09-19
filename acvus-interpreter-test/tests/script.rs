@@ -328,6 +328,56 @@ async fn a_store_lands_at_the_place_the_left_of_the_assignment_names() {
 }
 
 #[tokio::test]
+async fn a_store_through_a_field_writes_into_the_container_the_place_names() {
+    assert_eq!(
+        run_int("let v = [{ h: [1, 2, ], }, ]; v[0u64].h[1u64] = 4; v[0u64].h[1u64]").await,
+        4
+    );
+    assert_eq!(
+        run_int("let o = { g: [{ h: [1, 2, ], }, ], }; o.g[0u64].h[1u64] = 4; o.g[0u64].h[1u64]")
+            .await,
+        4
+    );
+    assert_eq!(
+        run_int(
+            "let v = [{ h: [1, 2, ], }, ]; let r = &mut v; r[0u64].h[1u64] = 4; v[0u64].h[1u64]"
+        )
+        .await,
+        4
+    );
+    assert_eq!(
+        run_int("let o = { g: [1, 2, ], }; let r = &mut o; r.g[0u64] = 5; o.g[0u64]").await,
+        5
+    );
+    assert_eq!(
+        run_int("let v = [{ h: [1, 2, ], }, ]; let a = &mut v[0u64].h[0u64]; *a + 1").await,
+        2
+    );
+}
+
+#[tokio::test]
+async fn a_store_into_a_context_place_writes_the_context() {
+    async fn run_on_c(src: &str) -> i64 {
+        let i = Interner::new();
+        let (f, g) = (i.intern("f"), i.intern("g"));
+        let c = typed(
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([
+                (f, Ty::I64),
+                (g, ints_ty(2)),
+            ]))),
+            Value::object(FxHashMap::from_iter([
+                (f, Owned::from_value(Value::int(1))),
+                (g, Owned::from_value(ints_value(&[1, 2]))),
+            ])),
+        );
+        let context = ctx(&i, vec![("c", c)]);
+        run_script(&i, src, context, Ty::I64).await.as_int()
+    }
+    assert_eq!(run_on_c("@c.f = 5; @c.f").await, 5);
+    assert_eq!(run_on_c("@c.g[0u64] = 7; @c.g[0u64]").await, 7);
+}
+
+#[tokio::test]
 async fn a_match_or_an_if_runs_where_an_operand_runs() {
     assert_eq!(run_int("10 + match 1 { 1 => 2, _ => 3, }").await, 12);
     assert_eq!(run_int("(match 1 { 1 => 2, _ => 3, }) + 10").await, 12);

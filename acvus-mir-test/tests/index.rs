@@ -97,6 +97,32 @@ fn a_store_into_an_element_takes_the_container_exclusively() {
     assert!(body.contains("] = "), "{body}");
 }
 
+/// A mutable projection demands its object mutably (RFC-0018).
+#[test]
+fn a_store_through_a_field_takes_every_container_below_it_mutably() {
+    let ir = ir("let v = [{ h: [1, 2, ], }, ]; v[0u64].h[1u64] = 4; v[0u64].h[1u64]");
+    let body = main_body(&ir);
+    assert_eq!(
+        count(body, "as_slice &mut"),
+        2,
+        "the element's container and the field's:\n{body}"
+    );
+    assert!(body.contains("] = 4"), "{body}");
+}
+
+#[test]
+fn a_mutable_reach_through_a_field_of_a_shared_reference_is_refused() {
+    let through_a_shared_reference = "cannot store through &{g: Array<i64, 2>}: not a `&mut`";
+    assert_eq!(
+        refusal("let o = { g: [1, 2, ], }; let r = &o; r.g[0u64] = 5; o.g[0u64]"),
+        through_a_shared_reference
+    );
+    assert_eq!(
+        refusal("let o = { g: [1, 2, ], }; let r = &o; let x = &mut r.g[0u64]; 0"),
+        through_a_shared_reference
+    );
+}
+
 #[test]
 fn a_nested_index_takes_a_slice_of_the_row_it_indexed() {
     let ir = ir("let m = [[1, 2], [3, 4]]; m[1][0]");
