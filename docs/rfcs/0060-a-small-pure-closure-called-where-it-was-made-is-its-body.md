@@ -72,9 +72,10 @@ nor a shared reference to it — refuses the closure.
 **Nothing is left of an inlined closure.** The `MakeClosure`, the variable
 it was bound to, the references taken of that variable and its drop are
 the closure's existence; with every call spliced they go with it, in the
-inliner. `optimize::dce` will not do it: `dce::is_root` makes every
-`Assign` unconditionally live, so a `MakeClosure` whose only reader is
-`assign f = r0` outlives every call to it.
+inliner. It is the inliner's and not `optimize::dce`'s because the
+`MakeClosure` is gone by the time `dce` runs, and the residue that named
+its result would be a use with no definition through every pass between
+(RFC-0061).
 
 ## What it costs
 
@@ -145,11 +146,10 @@ deleting it is a reachability pass nobody has needed.
 - A closure that captures a closure collapses at both levels, because the
   inner call's callee reaches the outer capture's local through the
   reference the third capture shape made.
+- A store into a slot no reader names is dead, for storage of every kind and
+  not only a closure's (RFC-0061).
 
 ## Open questions
 
-- `dce::is_root` treats every `Assign` as observable, so dead storage of
-  any kind survives it, not only a closure's. Whether a store to a slot no
-  reader names is dead is dce's question and is unanswered.
 - `INLINE_MAX_INSTS` has no measurement behind it. What would settle it is
   a bench whose closure sits near the bound.

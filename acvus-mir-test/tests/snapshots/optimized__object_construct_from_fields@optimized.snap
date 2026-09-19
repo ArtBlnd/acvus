@@ -8,7 +8,7 @@ expression: opt
 
 === main ===
      0 |   r0 = fetch @output
-     1 |   assign @output = r0
+     1 |   drop r0
      2 |   r1 = fetch @min_score
      3 |   r2 = fetch @user
      4 |   assign @user = r2

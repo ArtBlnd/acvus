@@ -108,7 +108,7 @@ fn a_byte_string_is_an_array_of_u8() {
 /// the literal's type is the literal's, with nothing for a use to settle.
 #[test]
 fn an_empty_byte_string_is_still_an_array_of_u8() {
-    let ir = listing("let s = b\"\"; 0");
+    let ir = listing("let s = b\"\"; s");
     assert!(ir.contains("T0 = []"), "{ir}");
     assert!(ir.contains(": Array<u8, 0>"), "{ir}");
 }

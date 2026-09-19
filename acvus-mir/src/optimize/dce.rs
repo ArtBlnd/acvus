@@ -9,26 +9,49 @@
 //!    definitions as live -> trace their operands -> fixpoint.
 //! 3. **Sweep**: remove non-live instructions.
 //!
-//! Runs post-SSA, post-DSE. Catches: dead inline residue, unused Ref/Load,
-//! dead computation chains, unused Spawn handles.
+//! A store into a local slot is live only where a live instruction reads
+//! that slot before the next store into it (`Stores`).
+//!
+//! Runs post-SSA, post-DSE. Removing a store leaves the value it stored
+//! with no reader, and the release of that value comes from
+//! `drop_insertion`, which `graph::optimize::run_pass2` runs after this
+//! pass.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::cfg::{CfgBody, Terminator};
-use crate::ir::{InstKind, Label, ValueId};
+use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
+use crate::validate::move_check::is_move_only;
+
+/// An instruction of a body, or a block's terminator at the index one past
+/// that block's last instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Point {
+    block: usize,
+    inst: usize,
+}
+
+impl Point {
+    fn next(self) -> Self {
+        Self {
+            block: self.block,
+            inst: self.inst + 1,
+        }
+    }
+}
 
 // -- Def location ----------------------------------------------------
 
 /// Where a ValueId is defined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum DefLoc {
-    /// Defined by an instruction at (block, inst_index).
-    Inst(usize, usize),
-    /// Defined as a block parameter at (block, param_index).
-    BlockParam(usize, usize),
+    /// Defined by an instruction.
+    Inst(Point),
+    /// Defined as a block parameter.
+    BlockParam { block: usize, param: usize },
     /// Function parameter or capture - always live.
     EntryParam,
 }
@@ -45,18 +68,210 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
     for (bi, block) in cfg.blocks.iter().enumerate() {
         // Block params.
         for (pi, &param) in block.params.iter().enumerate() {
-            map.insert(param, DefLoc::BlockParam(bi, pi));
+            map.insert(
+                param,
+                DefLoc::BlockParam {
+                    block: bi,
+                    param: pi,
+                },
+            );
         }
 
         // Instructions.
         for (ii, inst) in block.insts.iter().enumerate() {
             for d in inst_info::defs(&inst.kind) {
-                map.insert(d, DefLoc::Inst(bi, ii));
+                map.insert(
+                    d,
+                    DefLoc::Inst(Point {
+                        block: bi,
+                        inst: ii,
+                    }),
+                );
             }
         }
     }
 
     map
+}
+
+// -- Stores into a slot ----------------------------------------------
+
+/// The slot an `Assign` fills whole, which is the store whose liveness a
+/// reader decides. A store through a reference or into a path writes
+/// storage this body does not own alone, and stays a root.
+fn filled_slot(kind: &InstKind) -> Option<ValueId> {
+    let InstKind::Assign { target, path, .. } = kind else {
+        return None;
+    };
+    path.is_empty()
+        .then(|| inst_info::storage(target))
+        .flatten()
+}
+
+/// Whether a slot's type has a release: a word owns nothing, so a store
+/// into it releases nothing whatever the slot held (RFC-0048 §4). A type
+/// the classification cannot read is taken to have one.
+fn releases(slot: ValueId, cfg: &CfgBody) -> bool {
+    cfg.val_types.get(&slot).and_then(is_move_only) != Some(false)
+}
+
+/// Which slots may hold a value at a point: a store lands on an occupant
+/// there, and removing the store would move that occupant's release to the
+/// next store or to the body's end (RFC-0045).
+struct Occupancy {
+    entry: Vec<FxHashSet<ValueId>>,
+}
+
+impl Occupancy {
+    fn of(cfg: &CfgBody) -> Self {
+        let mut entry = vec![FxHashSet::default(); cfg.blocks.len()];
+        // A parameter's and a capture's slot arrives full.
+        entry[0] = cfg.entry_defs().collect();
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for bi in 0..cfg.blocks.len() {
+                let exit = Self::through(cfg, &entry[bi], &cfg.blocks[bi].insts);
+                for succ in cfg.successors(BlockIdx(bi)) {
+                    for slot in &exit {
+                        changed |= entry[succ.0].insert(*slot);
+                    }
+                }
+            }
+        }
+
+        Self { entry }
+    }
+
+    fn may_hold(&self, cfg: &CfgBody, at: Point, slot: ValueId) -> bool {
+        let before = &cfg.blocks[at.block].insts[..at.inst];
+        Self::through(cfg, &self.entry[at.block], before).contains(&slot)
+    }
+
+    fn through(cfg: &CfgBody, entry: &FxHashSet<ValueId>, insts: &[Inst]) -> FxHashSet<ValueId> {
+        let mut held = entry.clone();
+        for inst in insts {
+            if let Some(slot) = filled_slot(&inst.kind) {
+                held.insert(slot);
+                continue;
+            }
+            // A take moves the value out of a slot that owns one; a word
+            // is copied and its slot keeps it.
+            if let InstKind::Take { target, path, .. } = &inst.kind
+                && path.is_empty()
+                && let Some(slot) = inst_info::storage(target)
+                && releases(slot, cfg)
+            {
+                held.remove(&slot);
+            }
+        }
+        held
+    }
+}
+
+/// The stores whose liveness is a reader's, and the readers that decide it.
+struct Stores {
+    /// Every store rule 2 admits removing, so `is_root` does not hold it.
+    conditional: FxHashSet<Point>,
+    /// For each point, the conditional stores whose slot that point reads:
+    /// live wherever that point is live.
+    read_at: FxHashMap<Point, Vec<Point>>,
+    /// Conditional stores a terminator reads, which is live unconditionally.
+    read_at_terminator: Vec<Point>,
+}
+
+impl Stores {
+    fn of(cfg: &CfgBody, loans: &Loans) -> Self {
+        let occupancy = Occupancy::of(cfg);
+        let mut this = Self {
+            conditional: FxHashSet::default(),
+            read_at: FxHashMap::default(),
+            read_at_terminator: Vec::new(),
+        };
+
+        for (bi, block) in cfg.blocks.iter().enumerate() {
+            for (ii, inst) in block.insts.iter().enumerate() {
+                let at = Point {
+                    block: bi,
+                    inst: ii,
+                };
+                let Some(slot) = filled_slot(&inst.kind) else {
+                    continue;
+                };
+                if releases(slot, cfg) && occupancy.may_hold(cfg, at, slot) {
+                    continue;
+                }
+                this.conditional.insert(at);
+                for reader in readers_from(cfg, loans, at, slot) {
+                    if reader.inst == cfg.blocks[reader.block].insts.len() {
+                        this.read_at_terminator.push(at);
+                    } else {
+                        this.read_at.entry(reader).or_default().push(at);
+                    }
+                }
+            }
+        }
+
+        this
+    }
+
+    fn read_at(&self, point: Point) -> &[Point] {
+        self.read_at.get(&point).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// Every point that may read `slot` on a path out of the store at `from`,
+/// up to the next store into `slot` or the body's end.
+fn readers_from(cfg: &CfgBody, loans: &Loans, from: Point, slot: ValueId) -> Vec<Point> {
+    let mut seen: FxHashSet<Point> = FxHashSet::default();
+    let mut work = vec![from.next()];
+    let mut readers = Vec::new();
+
+    while let Some(at) = work.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let block = &cfg.blocks[at.block];
+        if at.inst == block.insts.len() {
+            if storage_reached(loans, terminator_values(&block.terminator)).contains(&slot) {
+                readers.push(at);
+            }
+            work.extend(
+                cfg.successors(BlockIdx(at.block))
+                    .into_iter()
+                    .map(|s| Point {
+                        block: s.0,
+                        inst: 0,
+                    }),
+            );
+            continue;
+        }
+        let kind = &block.insts[at.inst].kind;
+        if loans.uses_with_storage(kind).contains(&slot) {
+            readers.push(at);
+        }
+        if filled_slot(kind) == Some(slot) {
+            continue;
+        }
+        work.push(at.next());
+    }
+
+    readers
+}
+
+/// The storage a set of values reaches through the loans they hold: the
+/// slots a use of one of them touches.
+fn storage_reached(loans: &Loans, values: impl IntoIterator<Item = ValueId>) -> FxHashSet<ValueId> {
+    let mut reached = FxHashSet::default();
+    let mut work: Vec<ValueId> = values.into_iter().collect();
+    while let Some(v) = work.pop() {
+        if !reached.insert(v) {
+            continue;
+        }
+        work.extend(loans.region(v).loans.iter().map(|l| l.storage));
+    }
+    reached
 }
 
 // -- Root identification ---------------------------------------------
@@ -65,6 +280,9 @@ fn build_def_map(cfg: &CfgBody) -> FxHashMap<ValueId, DefLoc> {
 ///
 /// An instruction with ANY effect (read, write, IO) must not
 /// be removed. Only provably pure instructions can be dead.
+///
+/// A store `Stores::conditional` holds is asked of its readers instead, and
+/// this answer does not apply to it.
 fn is_root(kind: &InstKind, loans: &Loans) -> bool {
     if !loans.storage_effect(kind).writes.is_empty() {
         return true;
@@ -113,6 +331,30 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
     }
 }
 
+/// Every value a terminator names, block arguments included: what it may
+/// carry a slot's loan out through.
+fn terminator_values(term: &Terminator) -> Vec<ValueId> {
+    let mut values = terminator_roots(term);
+    match term {
+        Terminator::Jump { args, .. } => values.extend(args),
+        Terminator::JumpIf {
+            then_args,
+            else_args,
+            ..
+        } => values.extend(then_args.iter().chain(else_args)),
+        Terminator::Switch { arms, default, .. } => {
+            for (_, _, args) in arms {
+                values.extend(args);
+            }
+            if let Some((_, args)) = default {
+                values.extend(args);
+            }
+        }
+        Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}
+    }
+    values
+}
+
 // -- Public API ------------------------------------------------------
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
@@ -120,9 +362,10 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
 pub fn run(cfg: &mut CfgBody) {
     let def_map = build_def_map(cfg);
     let loans = Loans::build(cfg);
+    let stores = Stores::of(cfg, &loans);
 
-    // Live instruction set: (block_idx, inst_idx).
-    let mut live_insts: FxHashSet<(usize, usize)> = FxHashSet::default();
+    // Live instruction set.
+    let mut live_insts: FxHashSet<Point> = FxHashSet::default();
     // Live terminators (always live, but track for block param tracing).
     let mut live_terminators: FxHashSet<usize> = FxHashSet::default();
     // Worklist of ValueIds to trace.
@@ -131,8 +374,12 @@ pub fn run(cfg: &mut CfgBody) {
     // Phase 1: seed roots.
     for (bi, block) in cfg.blocks.iter().enumerate() {
         for (ii, inst) in block.insts.iter().enumerate() {
-            if is_root(&inst.kind, &loans) {
-                live_insts.insert((bi, ii));
+            let at = Point {
+                block: bi,
+                inst: ii,
+            };
+            if !stores.conditional.contains(&at) && is_root(&inst.kind, &loans) {
+                live_insts.insert(at);
                 worklist.extend(inst_info::uses(&inst.kind));
             }
         }
@@ -144,65 +391,86 @@ pub fn run(cfg: &mut CfgBody) {
         worklist.extend(terminator_roots(&block.terminator));
     }
 
-    // Phase 2: backward walk.
+    // Phase 2: backward walk, alternating with the stores the live
+    // instructions read.
     let mut live_values: FxHashSet<ValueId> = FxHashSet::default();
+    let mut pending: Vec<Point> = stores.read_at_terminator.clone();
 
-    while let Some(val) = worklist.pop() {
-        if !live_values.insert(val) {
-            continue; // Already processed.
+    loop {
+        while let Some(at) = pending.pop() {
+            if live_insts.insert(at) {
+                worklist.extend(inst_info::uses(&cfg.blocks[at.block].insts[at.inst].kind));
+            }
         }
 
-        let Some(&def_loc) = def_map.get(&val) else {
-            continue; // External value (not defined in this body).
-        };
-
-        match def_loc {
-            DefLoc::Inst(bi, ii) => {
-                if live_insts.insert((bi, ii)) {
-                    // Newly live - trace its operands.
-                    worklist.extend(inst_info::uses(&cfg.blocks[bi].insts[ii].kind));
-                }
+        while let Some(val) = worklist.pop() {
+            if !live_values.insert(val) {
+                continue; // Already processed.
             }
-            DefLoc::BlockParam(bi, pi) => {
-                // Block param is live -> trace corresponding jump args from predecessors.
-                let block_label = cfg.blocks[bi].label;
-                for pred_block in cfg.blocks.iter() {
-                    // A `Switch` can reach one block through several arms, so
-                    // an edge list, not one edge (RFC-0051).
-                    let pred_args: Vec<&[ValueId]> = match &pred_block.terminator {
-                        Terminator::Jump { label, args } if *label == block_label => {
-                            vec![args.as_slice()]
-                        }
-                        Terminator::JumpIf {
-                            then_label,
-                            then_args,
-                            else_label,
-                            else_args,
-                            ..
-                        } => [(then_label, then_args), (else_label, else_args)]
-                            .into_iter()
-                            .filter(|(label, _)| **label == block_label)
-                            .map(|(_, args)| args.as_slice())
-                            .collect(),
-                        Terminator::Switch { arms, default, .. } => arms
-                            .iter()
-                            .map(|(_, label, args)| (label, args))
-                            .chain(default.iter().map(|(label, args)| (label, args)))
-                            .filter(|(label, _)| **label == block_label)
-                            .map(|(_, args)| args.as_slice())
-                            .collect(),
-                        _ => Vec::new(),
-                    };
-                    for args in pred_args {
-                        if let Some(&arg) = args.get(pi) {
-                            worklist.push(arg);
+
+            let Some(&def_loc) = def_map.get(&val) else {
+                continue; // External value (not defined in this body).
+            };
+
+            match def_loc {
+                DefLoc::Inst(at) => {
+                    if live_insts.insert(at) {
+                        // Newly live - trace its operands.
+                        worklist.extend(inst_info::uses(&cfg.blocks[at.block].insts[at.inst].kind));
+                    }
+                }
+                DefLoc::BlockParam { block, param } => {
+                    // Block param is live -> trace corresponding jump args from predecessors.
+                    let block_label = cfg.blocks[block].label;
+                    for pred_block in cfg.blocks.iter() {
+                        // A `Switch` can reach one block through several arms, so
+                        // an edge list, not one edge (RFC-0051).
+                        let pred_args: Vec<&[ValueId]> = match &pred_block.terminator {
+                            Terminator::Jump { label, args } if *label == block_label => {
+                                vec![args.as_slice()]
+                            }
+                            Terminator::JumpIf {
+                                then_label,
+                                then_args,
+                                else_label,
+                                else_args,
+                                ..
+                            } => [(then_label, then_args), (else_label, else_args)]
+                                .into_iter()
+                                .filter(|(label, _)| **label == block_label)
+                                .map(|(_, args)| args.as_slice())
+                                .collect(),
+                            Terminator::Switch { arms, default, .. } => arms
+                                .iter()
+                                .map(|(_, label, args)| (label, args))
+                                .chain(default.iter().map(|(label, args)| (label, args)))
+                                .filter(|(label, _)| **label == block_label)
+                                .map(|(_, args)| args.as_slice())
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        for args in pred_args {
+                            if let Some(&arg) = args.get(param) {
+                                worklist.push(arg);
+                            }
                         }
                     }
                 }
+                DefLoc::EntryParam => {
+                    // Function param/capture - always live, nothing to trace.
+                }
             }
-            DefLoc::EntryParam => {
-                // Function param/capture - always live, nothing to trace.
-            }
+        }
+
+        pending.extend(
+            live_insts
+                .iter()
+                .flat_map(|at| stores.read_at(*at))
+                .filter(|store| !live_insts.contains(store))
+                .copied(),
+        );
+        if pending.is_empty() {
+            break;
         }
     }
 
@@ -210,7 +478,10 @@ pub fn run(cfg: &mut CfgBody) {
     for (bi, block) in cfg.blocks.iter_mut().enumerate() {
         let mut ii = 0;
         block.insts.retain(|_| {
-            let keep = live_insts.contains(&(bi, ii));
+            let keep = live_insts.contains(&Point {
+                block: bi,
+                inst: ii,
+            });
             ii += 1;
             keep
         });
@@ -297,7 +568,7 @@ mod tests {
     use super::*;
     use crate::cfg;
     use crate::graph::QualifiedRef;
-    use crate::ir::{Callee, DebugInfo, Inst, MirBody};
+    use crate::ir::{Callee, DebugInfo, Inst, MirBody, RefTarget};
     use crate::ty::Effect;
     use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
@@ -309,12 +580,17 @@ mod tests {
 
     /// `dst = name()` with the given effect; its result is never used.
     fn unused_call(i: &Interner, name: &str, effect: Effect, dst: usize) -> InstKind {
+        returning_call(i, name, effect, dst, Ty::I64)
+    }
+
+    /// `dst = name() -> ret` with the given effect.
+    fn returning_call(i: &Interner, name: &str, effect: Effect, dst: usize, ret: Ty) -> InstKind {
         InstKind::FunctionCall {
             dst: v(dst),
             callee: Callee::Direct(QualifiedRef::root(i.intern(name))),
             callee_ty: Ty::Fn {
                 params: vec![],
-                ret: Box::new(Ty::I64),
+                ret: Box::new(ret),
                 captures: vec![],
                 effect: effect.into(),
             },
@@ -323,11 +599,24 @@ mod tests {
         }
     }
 
+    /// `assign slot = value`, the whole slot.
+    fn assign(slot: usize, value: usize) -> InstKind {
+        InstKind::Assign {
+            target: RefTarget::Var(v(slot)),
+            path: Vec::new(),
+            value: v(value),
+        }
+    }
+
     fn body(insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+        typed_body(insts, &vec![Ty::I64; val_count])
+    }
+
+    fn typed_body(insts: Vec<InstKind>, types: &[Ty]) -> CfgBody {
         let mut factory = LocalFactory::<ValueId>::new();
         let mut val_types = FxHashMap::default();
-        for _ in 0..val_count {
-            val_types.insert(factory.next(), Ty::I64);
+        for ty in types {
+            val_types.insert(factory.next(), ty.clone());
         }
         cfg::promote(MirBody {
             insts: insts
@@ -354,6 +643,148 @@ mod tests {
             .flat_map(|b| b.insts.iter())
             .filter(|i| matches!(i.kind, InstKind::FunctionCall { .. }))
             .count()
+    }
+
+    /// The value each surviving `Assign` stores, in program order.
+    fn stored(cfg: &CfgBody) -> Vec<ValueId> {
+        cfg.blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter_map(|i| match i.kind {
+                InstKind::Assign { value, .. } => Some(value),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn refs(cfg: &CfgBody) -> usize {
+        cfg.blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| matches!(i.kind, InstKind::Ref { .. }))
+            .count()
+    }
+
+    /// `v0 = opaque() -> String` into a slot `v1` of the same type, and a
+    /// word returned: the store has no reader.
+    fn opaque_store_never_read(i: &Interner, tail: Vec<InstKind>) -> CfgBody {
+        let mut insts = vec![
+            returning_call(i, "make", Effect::OPAQUE, 0, Ty::String),
+            assign(1, 0),
+        ];
+        insts.extend(tail);
+        insts.push(InstKind::Const {
+            dst: v(3),
+            value: acvus_ast::Literal::Int(1),
+        });
+        insts.push(InstKind::Return {
+            value: v(3),
+            order: None,
+        });
+        typed_body(
+            insts,
+            &[
+                Ty::String,
+                Ty::String,
+                Ty::Ref(
+                    crate::ty::Mutability::Shared,
+                    Box::new(crate::ty::TypeArg::uniform(Ty::String)),
+                ),
+                Ty::I64,
+            ],
+        )
+    }
+
+    #[test]
+    fn a_store_no_one_reads_is_dead_and_its_producer_stays() {
+        let i = Interner::new();
+        let mut cfg = opaque_store_never_read(&i, Vec::new());
+        run(&mut cfg);
+        assert_eq!(stored(&cfg), Vec::new(), "a store with no reader is dead");
+        assert_eq!(
+            calls(&cfg),
+            1,
+            "the effectful call that produced the stored value stays"
+        );
+    }
+
+    #[test]
+    fn a_dead_ref_of_the_slot_does_not_keep_the_store() {
+        let i = Interner::new();
+        let mut cfg = opaque_store_never_read(
+            &i,
+            vec![InstKind::Ref {
+                dst: v(2),
+                target: RefTarget::Var(v(1)),
+                path: Vec::new(),
+                mutability: crate::ty::Mutability::Shared,
+            }],
+        );
+        run(&mut cfg);
+        assert_eq!(refs(&cfg), 0, "a reference no one reads is dead");
+        assert_eq!(
+            stored(&cfg),
+            Vec::new(),
+            "a read from a dead instruction does not keep the store alive"
+        );
+    }
+
+    #[test]
+    fn a_store_onto_an_occupant_stays() {
+        let i = Interner::new();
+        let mut cfg = typed_body(
+            vec![
+                returning_call(&i, "make", Effect::OPAQUE, 0, Ty::String),
+                assign(2, 0),
+                returning_call(&i, "make", Effect::OPAQUE, 1, Ty::String),
+                assign(2, 1),
+                InstKind::Const {
+                    dst: v(3),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
+            ],
+            &[Ty::String, Ty::String, Ty::String, Ty::I64],
+        );
+        run(&mut cfg);
+        assert_eq!(
+            stored(&cfg),
+            vec![v(1)],
+            "the store that lands on an occupant releases it and stays; \
+             the store into the empty slot goes"
+        );
+    }
+
+    #[test]
+    fn a_store_into_a_word_slot_is_dead_whatever_the_slot_holds() {
+        let mut cfg = body(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                assign(2, 0),
+                InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::Int(2),
+                },
+                assign(2, 1),
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
+            ],
+            4,
+        );
+        run(&mut cfg);
+        assert_eq!(
+            stored(&cfg),
+            Vec::new(),
+            "a word slot has no release, so neither store has to stand"
+        );
     }
 
     #[test]

@@ -105,3 +105,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0056](0056-a-loop-multiplies-once.md) | A loop multiplies once | Accepted |
 | [RFC-0058](0058-a-literal-says-its-type.md) | A literal says its type — `10u64`, `'c'`, `b"…"`, and `char` | Accepted |
 | [RFC-0060](0060-a-small-pure-closure-called-where-it-was-made-is-its-body.md) | A small pure closure called where it was made is its body | Accepted |
+| [RFC-0061](0061-a-store-nothing-reads-is-dead.md) | A store nothing reads is dead | Accepted |
