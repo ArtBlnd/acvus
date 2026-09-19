@@ -178,10 +178,37 @@ unit change, all over `"héllo"`: `len` 5 to 6, `find(…, "l")` 2 to 3,
 `split_str("a,b,c", ",")` unboxes 0 arguments where it unboxed 2, a `&str`
 parameter being a borrow rather than a value materialized out of its box.
 
-What waits is the `&str` return: an extern declared `-> &str` and a
+A `&str` **parameter** now costs two registers rather than a window. The
+argument run's form is counted in the runtime's values, so
+`len(s: &str)` takes `CallExtern2`, `contains(s: &str, pat: &str)` takes
+`CallExtern4`, and only a run past four values is lent its window.
+`REGISTER_FORM` moved from three to four for that reason: of the 248
+declarations instantiated in the `asm_probe` bench binary, 30 are past the
+register forms once a pair costs two values, and four values brings 27 of the
+30 back — five brings 29 and six all 30, each at the price of one more
+`Runtime::op_*_arguments` method. The operations do not grow: at a zero-sized
+handler `CallExtern1` through `CallExtern4` all measure 48 bytes, the `Off`s
+fitting inside the padding `Marked` and the take mask leave, and `ops/call.rs`
+asserts that the widest one stays inside a cache line.
+
+What waits is the `&str` **return**: an extern declared `-> &str` and a
 `substring`, `trim` or `split` that returns a view of its argument need the
 pair-wide `CallShape` Decision 4 describes, and until then every producer
-returns a `String`.
+returns a `String`. The macro is the wall — `acvus-extern-macro` refuses a
+`-> &str` declaration by name — and behind it `prepare`'s `extern_call`
+asserts that a handler's result is one value wide.
+
+`Option<&str>` is admitted by the checker and cannot be held by the machine.
+`reject_reference_in_data` refuses a view in an array, an object or a tuple
+literal and is not asked at `Some`'s construction, while `MakeSome` and
+`TakeVar` each move one of the runtime's values; a two-word payload therefore
+loses its length word, which is read back from whatever register follows.
+Measured on one program, `let o = Some("abcdefgh"); let p = "ij"; let q =
+len(&p); ... s.len() * 100 + q`: 802 is right, `8e937131` answers 202 and the
+tree that moved the cut answers 2 — the same defect reading a different
+neighbour. Closing it is one call to `reject_reference_in_data` at `Some`,
+which is where the type is admitted; the machine's one-value option is not
+what is wrong.
 
 ## Order of work
 

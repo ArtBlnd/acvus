@@ -64,6 +64,16 @@ pub enum CallShape {
         large: bool,
         next: Box<dyn Op>,
     },
+    Registers4 {
+        dst: Marked,
+        a: Off,
+        b: Off,
+        c: Off,
+        d: Off,
+        takes: u64,
+        large: bool,
+        next: Box<dyn Op>,
+    },
     Window {
         dst: Marked,
         window: ArgWindow,
@@ -293,6 +303,46 @@ where
                 a,
                 b,
                 c,
+                takes,
+                f,
+                next,
+            }),
+        },
+        shape => off_the_register_forms(f, shape),
+    }
+}
+
+pub fn op_four_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Registers4 {
+            dst,
+            a,
+            b,
+            c,
+            d,
+            takes,
+            large,
+            next,
+        } => match large {
+            true => Box::new(CallExtern4::<H, true> {
+                dst,
+                a,
+                b,
+                c,
+                d,
+                takes,
+                f,
+                next,
+            }),
+            false => Box::new(CallExtern4::<H, false> {
+                dst,
+                a,
+                b,
+                c,
+                d,
                 takes,
                 f,
                 next,
@@ -620,6 +670,57 @@ where
         self.next.run(m, r0)
     }
 }
+
+pub struct CallExtern4<H, const LARGE: bool> {
+    pub dst: Marked,
+    pub a: Off,
+    pub b: Off,
+    pub c: Off,
+    pub d: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H, const LARGE: bool> Op for CallExtern4<H, LARGE>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        let c = regs.read(self.c);
+        let d = regs.read(self.d);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallExtern0`'s, at four arguments.
+        let value = unsafe { self.f.call4(rt, m.window(), a, b, c, d) };
+        m.regs().define::<LARGE>(self.dst, value);
+        self.next.run(m, r0)
+    }
+}
+
+/// A register form is read once per call off the operation itself, so the
+/// widest one stays inside a cache line. At a zero-sized handler — which is
+/// every declaration in the workspace — `CallExtern1` through `CallExtern4`
+/// all measure 48 bytes, the `Off`s fitting in the padding `Marked` and the
+/// `u64` mask leave, so this bound is not what fixed the cut at four;
+/// `acvus_extern::REGISTER_FORM`'s own note says what did. It is asserted
+/// because a host whose handler carries state, or a wider `Off`, would make it
+/// binding.
+const CACHE_LINE: usize = 64;
+const _: () = assert!(
+    size_of::<CallExtern4<(), false>>() <= CACHE_LINE,
+    "the widest register form is past a cache line: lower acvus_extern::REGISTER_FORM"
+);
+const _: () = assert!(
+    acvus_extern::REGISTER_FORM == 4,
+    "REGISTER_FORM names the widest CallExtern this module defines"
+);
 
 /// A declaration whose arguments are wider than the register forms is called
 /// through its window.

@@ -260,10 +260,19 @@ pub struct Width {
     pub ret: usize,
 }
 
-/// The widest argument run a register form covers: a call of this many
-/// values or fewer takes each in a register, and a wider one is lent its
-/// window. RFC-0044 stage 2c fixed the cut at three.
-pub const REGISTER_FORM: usize = 3;
+/// The widest argument run a register form covers: a call of this many of the
+/// runtime's values or fewer takes each in a register, and a wider one is lent
+/// its window. RFC-0044 stage 2c fixed the cut at three parameters, which with
+/// a `&str` or a slice parameter counting two values is four values.
+///
+/// Four is where the handlers run out, not where the operations do. Of the 248
+/// declarations instantiated in the `asm_probe` bench binary, 30 are past the
+/// register forms when a pair costs two values; raising the cut to four brings
+/// 27 of the 30 in, to five brings 29, to six all 30, and every step above
+/// four costs one more `Runtime::op_*_arguments` method that every host
+/// implements. `ops/call.rs` asserts the cache-line bound that the operations
+/// themselves owe.
+pub const REGISTER_FORM: usize = 4;
 
 impl Width {
     /// Whether the call takes its arguments in registers.
@@ -340,6 +349,22 @@ where
         unsafe { self.call_run(rt, frame, &[a, b, c]) }
     }
 
+    /// # Safety
+    /// As `call0`, at four values.
+    #[inline]
+    unsafe fn call4(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+        c: Rt::Value,
+        d: Rt::Value,
+    ) -> Rt::Value {
+        // SAFETY: the caller's contract, which is `call_run`'s at four.
+        unsafe { self.call_run(rt, frame, &[a, b, c, d]) }
+    }
+
     /// The window form: the arguments are lent as the run they already sit
     /// in, and the result is one value.
     ///
@@ -384,11 +409,13 @@ pub struct InWindow;
 /// picks between the two, so the fold over a declaration's parameters needs
 /// no bound the parameter types do not already carry.
 ///
-/// A register form passes one register per parameter, and the other half of
-/// that contract lives in the interpreter: `prepare::CallForm::of` builds a
-/// register shape only where `Width::args` equals the number of parameters.
-/// A parameter wider than one value therefore leaves the register forms here,
-/// so that both halves say the same thing.
+/// The fold counts **the runtime's values, not parameters**: a `&str` or a
+/// slice parameter is two of them and takes the run two wider, so a
+/// declaration whose parameters total `REGISTER_FORM` values or fewer takes a
+/// register form naming one register per value. A run wider than that is lent
+/// its window. The other half of that contract lives in the interpreter:
+/// `prepare::CallForm::of` reads the same `Width::args`, which is the same
+/// count of values, so both halves say one thing.
 pub trait ArgRun {
     type WithOne: ArgRun;
     type WithPair: ArgRun;
@@ -396,17 +423,21 @@ pub trait ArgRun {
 
 impl ArgRun for InRegisters<0> {
     type WithOne = InRegisters<1>;
-    type WithPair = InWindow;
+    type WithPair = InRegisters<2>;
 }
 impl ArgRun for InRegisters<1> {
     type WithOne = InRegisters<2>;
-    type WithPair = InWindow;
+    type WithPair = InRegisters<3>;
 }
 impl ArgRun for InRegisters<2> {
     type WithOne = InRegisters<3>;
-    type WithPair = InWindow;
+    type WithPair = InRegisters<4>;
 }
 impl ArgRun for InRegisters<3> {
+    type WithOne = InRegisters<4>;
+    type WithPair = InWindow;
+}
+impl ArgRun for InRegisters<4> {
     type WithOne = InWindow;
     type WithPair = InWindow;
 }
@@ -419,8 +450,8 @@ impl ArgRun for InWindow {
 /// `REGISTER_FORM` is that number written once more for `prepare` to read.
 /// The assertion is what keeps the two one number.
 const _: () = assert!(
-    REGISTER_FORM == 3,
-    "the ArgRun chain covers REGISTER_FORM parameters and no other number"
+    REGISTER_FORM == 4,
+    "the ArgRun chain covers REGISTER_FORM of the runtime's values and no other number"
 );
 
 /// The run a declaration's parameters make, as the form its call takes.
@@ -496,6 +527,11 @@ taken_form!(
 taken_form!(
     InRegisters<3>,
     op = Rt::op_three_arguments,
+    fused = no_fused_run
+);
+taken_form!(
+    InRegisters<4>,
+    op = Rt::op_four_arguments,
     fused = no_fused_run
 );
 taken_form!(InWindow, op = Rt::op_wide, fused = no_fused_run);
@@ -1051,7 +1087,7 @@ where
     }
 }
 
-/// The ten entries of a host that runs a call where it stands: every form
+/// The entries of a host that runs a call where it stands: every form
 /// builds the same `DirectOp`, because such a host lays no arguments in
 /// registers and so takes every form the same way.
 #[macro_export]
@@ -1061,6 +1097,7 @@ macro_rules! direct_call_forms {
         $crate::direct_call_forms!(@op op_one_argument);
         $crate::direct_call_forms!(@op op_two_arguments);
         $crate::direct_call_forms!(@op op_three_arguments);
+        $crate::direct_call_forms!(@op op_four_arguments);
         $crate::direct_call_forms!(@op op_wide);
         $crate::direct_call_forms!(@op op_slice);
         $crate::direct_call_forms!(@fused fused_no_argument);

@@ -261,6 +261,16 @@ or an associated type of the crossing.
   implement `Arg`, and a declaration that takes one is refused with
   `OneValue`'s message. A slice *parameter* needs a `Form = Pair` `Arg` impl
   and a coercion in the checker — the next run, not settled here.
+- Rule 7's reading of `Width` counts the runtime's values and not the
+  parameters, on both halves. `ArgRun`'s fold takes the run two wider at a
+  `Form = Pair` parameter, `prepare::CallForm::of` reads `Width::args` alone,
+  and `extern_call` asserts that the registers a call site's arguments occupy
+  equal that number. So a `&str` or slice parameter takes a register form:
+  `len(s: &str)` is `CallExtern2` and `contains(s: &str, pat: &str)` is
+  `CallExtern4`. `REGISTER_FORM` is four values, fixed by where the handlers
+  run out rather than by where the operations do — the count is in RFC-0062's
+  Consequences, and `CallExtern1` through `CallExtern4` all measure 48 bytes
+  at a zero-sized handler, with `ops/call.rs` asserting the cache line.
 - RFC-0050's flat layout changes `acvus-extern/src/object.rs` and
   `variant.rs` only. RFC-0050's wide argument will add a `Form` beside `One`
   and `Pair`, and the window form (`Handler::call` on `&mut [Value]`) is

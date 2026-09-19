@@ -7,6 +7,8 @@
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
+use acvus_interpreter::listing::ops_of_anywhere;
+use acvus_interpreter_test::listing::script_listing_with_externs;
 use acvus_interpreter_test::{Context, run_script_with_externs};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -32,8 +34,36 @@ fn form3(a: i64, b: i64, c: i64) -> i64 {
 }
 
 #[extern_fn(effect = pure)]
-fn form_window(a: i64, b: i64, c: i64, d: i64) -> i64 {
+fn form4(a: i64, b: i64, c: i64, d: i64) -> i64 {
     ((a * 10 + b) * 10 + c) * 10 + d
+}
+
+#[extern_fn(effect = pure)]
+fn form_window(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+    (((a * 10 + b) * 10 + c) * 10 + d) * 10 + e
+}
+
+/// A `&str` parameter is two of the runtime's values, so these four name the
+/// register forms by word count and not by parameter count: two, three, four
+/// values, and then past them.
+#[extern_fn(effect = pure)]
+fn pair2(s: &str) -> i64 {
+    s.len() as i64
+}
+
+#[extern_fn(effect = pure)]
+fn pair3(s: &str, a: i64) -> i64 {
+    s.len() as i64 * 10 + a
+}
+
+#[extern_fn(effect = pure)]
+fn pair4(s: &str, t: &str) -> i64 {
+    s.len() as i64 * 10 + t.len() as i64
+}
+
+#[extern_fn(effect = pure)]
+fn pair6(s: &str, t: &str, u: &str) -> i64 {
+    (s.len() as i64 * 10 + t.len() as i64) * 10 + u.len() as i64
 }
 
 #[extern_fn(effect = pure)]
@@ -44,7 +74,19 @@ fn form_string(s: String) -> String {
 fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "t",
-        fns: [form0, form1, form2, form3, form_window, form_string],
+        fns: [
+            form0,
+            form1,
+            form2,
+            form3,
+            form4,
+            form_window,
+            form_string,
+            pair2,
+            pair3,
+            pair4,
+            pair6,
+        ],
     }
 }
 
@@ -68,11 +110,59 @@ async fn every_register_form_returns_what_its_body_returned() {
     assert_eq!(answer("form1(4)").await, 40);
     assert_eq!(answer("form2(4, 2)").await, 42);
     assert_eq!(answer("form3(4, 2, 1)").await, 421);
+    assert_eq!(answer("form4(4, 2, 1, 3)").await, 4213);
 }
 
 #[tokio::test]
 async fn the_window_form_returns_what_its_body_returned() {
-    assert_eq!(answer("form_window(4, 2, 1, 3)").await, 4213);
+    assert_eq!(answer("form_window(4, 2, 1, 3, 5)").await, 42135);
+}
+
+#[tokio::test]
+async fn a_pair_parameter_returns_what_its_body_returned() {
+    assert_eq!(answer("pair2(\"abcd\")").await, 4);
+    assert_eq!(answer("pair3(\"abcd\", 7)").await, 47);
+    assert_eq!(answer("pair4(\"abcd\", \"xy\")").await, 42);
+    assert_eq!(answer("pair6(\"abcd\", \"xy\", \"z\")").await, 421);
+}
+
+/// The value alone does not say which form ran — the window form answers the
+/// same thing. This is the form itself, read off the prepared operations.
+#[test]
+fn a_pair_parameter_costs_two_registers_and_not_a_window() {
+    let cases = [
+        ("pair2(\"abcd\")", "CallExtern2"),
+        ("pair3(\"abcd\", 7)", "CallExtern3"),
+        ("pair4(\"abcd\", \"xy\")", "CallExtern4"),
+        ("pair6(\"abcd\", \"xy\", \"z\")", "CallWindow"),
+        ("form4(4, 2, 1, 3)", "CallExtern4"),
+        ("form_window(4, 2, 1, 3, 5)", "CallWindow"),
+    ];
+    for (source, form) in cases {
+        let interner = Interner::new();
+        let blocks = script_listing_with_externs(
+            &interner,
+            source,
+            Context::default(),
+            vec![registry(), acvus_ext::conversion_registry()],
+            Ty::I64,
+        );
+        let ops = ops_of_anywhere(&blocks);
+        let called: Vec<&String> = ops
+            .iter()
+            .filter(|op| op.contains("__extern_fn_"))
+            .collect();
+        assert_eq!(
+            called.len(),
+            1,
+            "{source} prepares one extern call, and these are {called:?}"
+        );
+        assert!(
+            called[0].starts_with(form),
+            "{source} takes {form}, and the operation prepared for it is {}",
+            called[0]
+        );
+    }
 }
 
 #[tokio::test]
@@ -136,7 +226,8 @@ async fn an_awaited_declaration_resumes_with_its_value() {
 #[tokio::test]
 async fn the_forms_compose_in_one_body() {
     assert_eq!(
-        answer("form_window(form0() - 6, form1(0), form2(0, 1), form3(0, 0, 2))").await,
-        1012
+        answer("form_window(form0() - 6, form1(0), form2(0, 1), form3(0, 0, 2), pair2(\"abcd\"))")
+            .await,
+        10124
     );
 }

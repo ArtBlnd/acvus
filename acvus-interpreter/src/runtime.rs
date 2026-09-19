@@ -75,6 +75,13 @@ impl Runtime for AcvusRuntime {
         call::op_three_arguments(handler, shape)
     }
 
+    fn op_four_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_four_arguments(handler, shape)
+    }
+
     fn op_wide<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
     where
         H: acvus_extern::Handler<AcvusRuntime>,

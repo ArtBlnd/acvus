@@ -3033,8 +3033,16 @@ impl<'a> Prepare<'a> {
              (RFC-0047 amended, rule 2)"
         );
         let takes = self.take_mask(args);
-        let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
-        match CallForm::of(&width, args.len()) {
+        let slots = self.argument_words(args);
+        assert_eq!(
+            slots.len(),
+            width.args,
+            "a call site's arguments occupy {} of the runtime's values and the handler \
+             declares {} (RFC-0059 rule 7)",
+            slots.len(),
+            width.args
+        );
+        match CallForm::of(&width) {
             CallForm::Registers(0) => {
                 made(move |next| f.into_op(call::CallShape::Registers0 { dst, large, next }))
             }
@@ -3078,6 +3086,26 @@ impl<'a> Prepare<'a> {
                     })
                 })
             }
+            CallForm::Registers(4) => {
+                let (a, b, c, d) = (
+                    nth(&slots, 0),
+                    nth(&slots, 1),
+                    nth(&slots, 2),
+                    nth(&slots, 3),
+                );
+                made(move |next| {
+                    f.into_op(call::CallShape::Registers4 {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        d,
+                        takes,
+                        large,
+                        next,
+                    })
+                })
+            }
             CallForm::Registers(_) | CallForm::Window => {
                 let window = self.window(at, args, ops);
                 made(move |next| {
@@ -3090,6 +3118,21 @@ impl<'a> Prepare<'a> {
                 })
             }
         }
+    }
+
+    fn argument_words(&self, args: &[ValueId]) -> Vec<Off> {
+        let mut words = Vec::with_capacity(args.len());
+        for id in args {
+            match SlotClass::of(self.ty(*id)) {
+                SlotClass::Slice => {
+                    let pair = self.pair(*id);
+                    words.push(pair.ptr);
+                    words.push(pair.len);
+                }
+                SlotClass::Whole | SlotClass::Word(_) => words.push(self.off(*id)),
+            }
+        }
+        words
     }
 
     /// The argument run `assign_slots` placed for the call at `at`, and the
@@ -4071,7 +4114,7 @@ fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]
             callee: Callee::Extern { id, instance },
             args,
             ..
-        } => needs_window(&ctx.handler(id, *instance), args.len()).then_some(args.as_slice()),
+        } => needs_window(&ctx.handler(id, *instance)).then_some(args.as_slice()),
         InstKind::Spawn {
             callee: Callee::Extern { .. },
             args,
@@ -4081,11 +4124,9 @@ fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]
     }
 }
 
-/// A handler that takes a slice is lent the caller's registers, so they
-/// must be contiguous.
-fn needs_window(handler: &ExternHandler, args: usize) -> bool {
+fn needs_window(handler: &ExternHandler) -> bool {
     match handler {
-        ExternHandler::Sync(f) => matches!(CallForm::of(&f.width(), args), CallForm::Window),
+        ExternHandler::Sync(f) => matches!(CallForm::of(&f.width()), CallForm::Window),
         ExternHandler::Heavy(_) | ExternHandler::Async(_) => true,
     }
 }
@@ -4093,16 +4134,17 @@ fn needs_window(handler: &ExternHandler, args: usize) -> bool {
 /// How a synchronous extern call hands over its arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CallForm {
-    /// One register operand per argument: the run fits the register forms
-    /// and every argument is one value.
+    /// The count is `Width::args` — the runtime's values, not the
+    /// parameters — and it is the same number `acvus_extern::ArgRun` folds a
+    /// declaration's parameters to in the other crate.
     Registers(usize),
     /// The argument run laid in the caller's window.
     Window,
 }
 
 impl CallForm {
-    fn of(width: &Width, args: usize) -> CallForm {
-        if width.in_registers() && width.args == args {
+    fn of(width: &Width) -> CallForm {
+        if width.in_registers() {
             CallForm::Registers(width.args)
         } else {
             CallForm::Window
@@ -4120,17 +4162,29 @@ fn refuses_to_run(
     _: Value,
     _: Value,
     _: Value,
+    _: Value,
 ) -> Value {
     let _ = a;
     panic!("the preparation must not run a handler")
 }
 
-/// An extern lent its window: four arguments is past the register forms.
 #[cfg(test)]
-fn window_handler() -> ExternHandler {
-    ExternHandler::sync(acvus_extern::glue4::<
+fn nullary_handler() -> ExternHandler {
+    ExternHandler::sync(acvus_extern::glue0::<
         crate::runtime::AcvusRuntime,
         _,
+        acvus_extern::Val<Value>,
+    >(|_, _| Value::default()))
+}
+
+/// An extern lent its window: five of the runtime's values is past the
+/// register forms, which `REGISTER_FORM` cuts at four.
+#[cfg(test)]
+fn window_handler() -> ExternHandler {
+    ExternHandler::sync(acvus_extern::glue5::<
+        crate::runtime::AcvusRuntime,
+        _,
+        acvus_extern::ByValue<Value>,
         acvus_extern::ByValue<Value>,
         acvus_extern::ByValue<Value>,
         acvus_extern::ByValue<Value>,
@@ -4165,25 +4219,20 @@ fn refuses_a_str(
 mod call_form_tests {
     use super::*;
 
-    /// The form is the handler's width and never its count of parameters: a
-    /// parameter written `&str` is a pair, so one of them is already past the
-    /// register forms and the call is lent its window.
     #[test]
-    fn one_str_parameter_is_lent_its_window() {
+    fn one_str_parameter_takes_two_registers() {
         let ExternHandler::Sync(factory) = str_handler() else {
             panic!("an extern declared with a plain `fn` is a Sync handler")
         };
         let width = factory.width();
         assert_eq!(width, Width { args: 2, ret: 1 });
-        assert_eq!(CallForm::of(&width, 1), CallForm::Window);
+        assert_eq!(CallForm::of(&width), CallForm::Registers(2));
 
-        let op = factory.into_op(call::CallShape::Window {
+        let op = factory.into_op(call::CallShape::Registers2 {
             dst: Marked::of(Off::of(2)),
-            window: call::ArgWindow {
-                at: Off::of(0),
-                arity: 2,
-                takes: 0,
-            },
+            a: Off::of(0),
+            b: Off::of(1),
+            takes: 0,
             large: false,
             next: Box::new(crate::ops::control::Return::<false> {
                 slot: Marked::of(Off::of(2)),
@@ -4191,9 +4240,8 @@ mod call_form_tests {
         });
         let built = crate::listing::last_path_segment(&*op);
         assert!(
-            built.starts_with("CallWindow"),
-            "a `&str` parameter is lent its window, and the operation built for it is \
-             {built}"
+            built.starts_with("CallExtern2"),
+            "a `&str` parameter is two registers, and the operation built for it is {built}"
         );
     }
 }
@@ -4871,7 +4919,7 @@ mod recognizer_tests {
                 namespace: None,
                 name: self.interner.intern(name),
             };
-            let handler = window_handler();
+            let handler = nullary_handler();
             self.externs.insert(id, Executable::Extern(vec![handler]));
             id
         }
@@ -5341,16 +5389,33 @@ mod assignment_tests {
 
     #[test]
     fn an_argument_that_dies_at_the_call_is_allocated_into_the_window() {
-        let slots = assign(vec![konst(0), call(1, WINDOW, &[0]), ret(1)]);
-        let window = slots.window(1);
+        let slots = assign(vec![
+            konst(0),
+            konst(1),
+            konst(2),
+            konst(3),
+            konst(4),
+            call(5, WINDOW, &[0, 1, 2, 3, 4]),
+            ret(5),
+        ]);
+        let window = slots.window(5);
         assert!(window.moved.is_empty());
         assert_eq!(slots.of(val(0)), window.base);
     }
 
     #[test]
     fn an_argument_used_after_the_call_is_moved_into_the_window() {
-        let slots = assign(vec![konst(0), call(1, WINDOW, &[0]), add(2, 0, 1), ret(2)]);
-        let window = slots.window(1);
+        let slots = assign(vec![
+            konst(0),
+            konst(1),
+            konst(2),
+            konst(3),
+            konst(4),
+            call(5, WINDOW, &[0, 1, 2, 3, 4]),
+            add(6, 0, 5),
+            ret(6),
+        ]);
+        let window = slots.window(5);
         let arg = slots.of(val(0));
         assert_ne!(arg, window.base);
         let moved: Vec<(u32, u32)> = window
