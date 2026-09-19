@@ -98,25 +98,27 @@ where
     rt: &'a Rt,
 }
 
-/// The position `name` holds in `obj`.
-///
 /// # Panics
-/// The object has no such field, and the checker does not rule that out for
-/// every argument. Measured in
-/// `acvus-mir-test/tests/projection_parameter.rs`: a value of a declared
-/// struct that lacks the field is refused, and an object **literal** that
-/// lacks it is admitted with its type unchanged, because `ObjectTy::meet`
-/// joins a `Written` field set with an `AtLeast` one by their union. So this
-/// panic has a reachable caller, and closing it is a change to that join.
+/// The object has no such field, which no admitted program reaches:
+/// `typeck.rs::refused_projection_parameter` refuses an argument whose field
+/// set is closed -- a declared value, or an object literal -- and lacks a
+/// field the projection borrows, and the seven cases that fix it are
+/// `acvus-mir-test/tests/projection_parameter.rs`.
+///
+/// Answering `Option` instead would not move the refusal anywhere better.
+/// The callers are the derive's projection builders, which owe their handler
+/// a `&'a T` per field and have no error channel to write a `None` into, so
+/// the arm would be this panic one frame further from the shape that lacks
+/// the name.
 fn position_of<Rt>(rt: &Rt, obj: &Obj<Owned<Rt>>, name: &str) -> FieldAt
 where
     Rt: Runtime,
 {
     let Some(at) = obj.shape.at(rt.symbol(name)) else {
         panic!(
-            "an object crossing into a projection lacks the field `{name}`: an object literal \
-             that lacks a field the projection names is admitted by the checker, and the \
-             projection cannot borrow what is not there (RFC-0050 rule 6)"
+            "an object crossing into a projection lacks the field `{name}`: a projection \
+             parameter is matched at least, so the checker refuses an argument that lacks a \
+             field the projection borrows (RFC-0050 rule 6)"
         )
     };
     at

@@ -2363,6 +2363,23 @@ where
         }
     }
 
+    /// This is deliberately not a case of `meet`. `meet` joins a `Written`
+    /// set with an `AtLeast` one by their union, which is RFC-0042's rule
+    /// that a field store adds to a literal's set, and that rule stays.
+    /// A projection parameter (RFC-0050 rule 6) is matched at least
+    /// instead: it writes no field into its argument, so a literal that
+    /// lacks a field it borrows is refused rather than widened.
+    ///
+    /// `Declared` is absent from the match because `meet` already refuses
+    /// it by name, answering `Undeclared` for a declaration that does not
+    /// name a field the projection does.
+    pub fn borrowed_field_missing_from(&self, argument: &Self) -> Option<Astr> {
+        match (self.set, argument.set) {
+            (FieldSet::AtLeast, FieldSet::Written) => self.only_in(argument),
+            _ => None,
+        }
+    }
+
     /// The field on which `other` disagrees with the declaration `of`
     /// carries. A value of the declared type has every field the struct
     /// names, so an object that is one and lacks a field is refused; what

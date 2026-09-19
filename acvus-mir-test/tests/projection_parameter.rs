@@ -9,7 +9,7 @@
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{Effect, Instances, Mutability, ObjectTy, ParamTerm, Poly, TyTerm, TypeArg};
-use acvus_mir_test::compile_script_mode_ir_with;
+use acvus_mir_test::{Marked, Refusal, compile_script_mode_ir_with, refuse_script_mode_ir_with};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -51,8 +51,8 @@ fn extern_fn(i: &Interner, name: &str, param: Option<TyTerm<Poly>>, ret: TyTerm<
     }
 }
 
-fn compile(i: &Interner, source: &str) -> Result<String, String> {
-    let externs = [
+fn externs(i: &Interner) -> [Function; 5] {
+    [
         extern_fn(i, "take_point", Some(point_ty(i)), TyTerm::I64),
         extern_fn(
             i,
@@ -63,12 +63,28 @@ fn compile(i: &Interner, source: &str) -> Result<String, String> {
         extern_fn(i, "read_y", Some(at_least_ref(i, &["y"])), TyTerm::I64),
         extern_fn(i, "read_z", Some(at_least_ref(i, &["z"])), TyTerm::I64),
         extern_fn(i, "point", None, point_ty(i)),
-    ];
-    compile_script_mode_ir_with(i, source, &FxHashMap::default(), &externs)
+    ]
+}
+
+fn compile(i: &Interner, source: &str) -> Result<String, String> {
+    compile_script_mode_ir_with(i, source, &FxHashMap::default(), &externs(i))
 }
 
 fn refusal(i: &Interner, source: &str) -> String {
     compile(i, source).expect_err("the projection fixes what the object must have")
+}
+
+/// The refusals of `source`, each with the labels it points at.
+fn refusals(i: &Interner, source: &str) -> Vec<Refusal> {
+    let externs = externs(i);
+    match refuse_script_mode_ir_with(i, source, &FxHashMap::default(), &externs) {
+        Ok(ir) => panic!("expected a refusal, compiled:\n{ir}"),
+        Err(refusals) => refusals,
+    }
+}
+
+fn words(refusals: &[Refusal]) -> Vec<String> {
+    refusals.iter().map(Refusal::to_string).collect()
 }
 
 #[test]
@@ -107,21 +123,28 @@ fn a_projection_naming_a_field_a_declared_type_lacks_is_refused_by_that_name() {
     );
 }
 
-/// The gap RFC-0050 rule 6 has at a projection parameter, stated as the
-/// checker's actual answer. Rule 6 says a projection naming a field the
-/// object lacks is refused. That holds where the argument's type is
-/// `Declared`, which the test above pins, and **not** where it is an object
-/// literal: the literal is admitted and its type does not even grow the
-/// field, so `p` stays `{x: i64}`. The glue then asks the object's shape for
-/// `y` at call time and panics, which `projection::position_of` is the site
-/// of. Closing it is a change to how `ObjectTy::meet` joins `Written` with
-/// `AtLeast`, and that join is RFC-0042's own rule that a field store adds
-/// to a literal's field set, so it is not this test's to decide.
+/// A literal's field set is exactly what it wrote, so a projection naming a
+/// field it lacks is refused as a `Declared` value lacking one already is.
+/// The union `ObjectTy::meet` gives a `Written` set stays where RFC-0042
+/// means it -- a field store widens a literal -- and a parameter stores
+/// nothing.
 #[test]
-fn an_object_literal_lacking_a_projections_field_is_admitted_unchanged() {
+fn a_projection_naming_a_field_an_object_literal_lacks_is_refused() {
     let i = Interner::new();
-    let ir = compile(&i, "let p = { x: 1, }; read_y(&p)").expect("the literal is admitted");
-    assert!(ir.contains("r2 (p.) : &{x: i64}"), "{ir}");
+    let source = "let p = { x: 1, }; read_y(&p)";
+    let refusals = refusals(&i, source);
+    assert_eq!(refusals.len(), 1, "{:#?}", words(&refusals));
+    assert_eq!(
+        refusals[0].message,
+        "`p` lacks field `y`, which the projection parameter borrows"
+    );
+    assert_eq!(
+        refusals[0].marked(source),
+        [Marked {
+            source: None,
+            text: "the parameter borrows at least `{y: i64}`, and `p` has `{x: i64}`".to_string(),
+        }]
+    );
 }
 
 /// The by-value parameter is the exact meet, and the object the projection

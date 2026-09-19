@@ -367,6 +367,22 @@ pub fn compile_script_mode_ir_with(
     context: &FxHashMap<Astr, Ty>,
     extern_fns: &[Function],
 ) -> Result<String, String> {
+    refuse_script_mode_ir_with(interner, source, context, extern_fns).map_err(|refusals| {
+        refusals
+            .iter()
+            .map(Refusal::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
+/// `compile_script_mode_ir_with`, keeping each refusal's labels.
+pub fn refuse_script_mode_ir_with(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+    extern_fns: &[Function],
+) -> Result<String, Vec<Refusal>> {
     let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
@@ -378,7 +394,13 @@ pub fn compile_script_mode_ir_with(
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let ast = match acvus_ast::parse_script(interner, source) {
         Ok(ast) => ast,
-        Err(e) => return Err(format!("parse error: {e:?}")),
+        Err(e) => {
+            return Err(vec![Refusal {
+                stage: "parse".to_string(),
+                message: format!("parse error: {e:?}"),
+                labels: Vec::new(),
+            }]);
+        }
     };
     let mut functions = vec![inferred_function(
         test_qref,
@@ -401,34 +423,46 @@ pub fn compile_script_mode_ir_with(
         Freeze::new(type_registry),
     );
 
-    let mut errors: Vec<String> = Vec::new();
+    let mut refusals: Vec<Refusal> = Vec::new();
     for (qref, errs) in inf.errors() {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
-            errors.push(format!("[infer:{}] {}", fn_name, e.display(interner)));
+            refusals.push(Refusal {
+                stage: format!("infer:{fn_name}"),
+                message: e.display(interner).to_string(),
+                labels: e.labels.clone(),
+            });
         }
     }
 
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        refusals.push(Refusal {
+            stage: "lower".to_string(),
+            message: e.display(interner).to_string(),
+            labels: e.labels.clone(),
+        });
     }
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
+    if !refusals.is_empty() {
+        return Err(refusals);
     }
 
-    let mut module = result
-        .module(test_qref)
-        .cloned()
-        .ok_or_else(|| "no module produced for target".to_string())?;
+    let mut module = result.module(test_qref).cloned().ok_or_else(|| {
+        vec![Refusal {
+            stage: "lower".to_string(),
+            message: "no module produced for target".to_string(),
+            labels: Vec::new(),
+        }]
+    })?;
     let cfg_main = cfg::promote(std::mem::take(&mut module.main));
     let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main);
     module.main = cfg::demote(cfg_main);
     if !init_errors.is_empty() {
-        let msgs: Vec<String> = init_errors
+        return Err(init_errors
             .iter()
-            .map(|e| {
-                format!(
+            .map(|e| Refusal {
+                stage: "init".to_string(),
+                message: format!(
                     "UninitError: {:?} fields {:?} at [{},{}]",
                     e.subject,
                     e.uninit_fields
@@ -437,10 +471,10 @@ pub fn compile_script_mode_ir_with(
                         .collect::<Vec<_>>(),
                     e.span.start,
                     e.span.end,
-                )
+                ),
+                labels: Vec::new(),
             })
-            .collect();
-        return Err(msgs.join("\n"));
+            .collect());
     }
     Ok(dump_with(interner, &module))
 }

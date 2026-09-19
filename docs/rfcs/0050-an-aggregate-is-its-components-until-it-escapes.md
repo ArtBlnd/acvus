@@ -441,24 +441,27 @@ name a borrow that mentions no runtime, and the language stores a `Vec<T>` as
 own values and only `SRef<'a, Rt>` could name it. Making the projection carry
 the runtime is what would make it universal.
 
-Two of rule 6's own sentences are not met, and both are measured rather than
+One of rule 6's own sentences is not met, and it is measured rather than
 argued. **A projection resolves each field's name against the object's shape at
 call time**, where rule 6 says there is no name lookup: the offsets are to reach
 the glue as a table in the operation, and no extern call form carries one —
 `prepare.rs::extern_call` builds its operation out of registers and a window.
 The field table's index cannot stand in for the position, because rule 6 admits
 a projection naming a subset of the object's fields and the two orders then
-differ. **And a projection parameter's at-least meet does not refuse every
-object that lacks a field it names.**
-`acvus-mir-test/tests/projection_parameter.rs` measures both halves: extra
-fields are admitted, a partial projection over a wider object is admitted, a
-by-value parameter keeps RFC-0042 R1's exact meet, and a value of a declared
-struct lacking the field is refused by that field's name — but an object
-**literal** lacking it is admitted with its type unchanged, because
-`ObjectTy::meet` joins a `Written` field set with an `AtLeast` one by their
-union, which is RFC-0042's own rule that a field store adds to a literal's
-field set. The glue then panics at `projection::position_of`. Closing it is a
-change to that join and is not a change the projection may make on its own.
+differ.
+
+The at-least meet is the direction of the meet at a parameter, not RFC-0042's
+join. `typeck.rs::refused_projection_parameter` raises the refusal at the
+argument, ahead of every other join of the two, because a later one would have
+widened the argument's field set by `ObjectTy::meet`'s union. An argument whose
+field set is closed — a declared value, or an object literal — and lacks a field
+the projection borrows is refused; an `AtLeast` argument, an object whose fields
+are not all known, is admitted and gains them, which is the one case where the
+union is the meaning. The union itself stays where RFC-0042 puts it: a store
+into a `Written` object adds a field to its type, and a parameter stores
+nothing. `acvus-mir-test/tests/projection_parameter.rs` measures the seven
+cases, and `projection::position_of`'s panic is unreachable from an admitted
+program.
 
 The partial projection's loan is of the whole storage. A script writes `f(&o)`
 and the projection is a fact of the Rust signature, which the checker does not

@@ -141,6 +141,12 @@ pub enum MirErrorKind {
         declared: String,
         field: String,
     },
+    /// An object at a projection parameter lacks a field the projection
+    /// borrows (RFC-0050 rule 6).
+    ProjectionLacksField {
+        object: String,
+        field: String,
+    },
     UndefinedContext(String),
 
     // Pattern errors
@@ -607,6 +613,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "object has field `{field}` that `{declared}` does not declare"
+                )
+            }
+            MirErrorKind::ProjectionLacksField { object, field } => {
+                write!(
+                    f,
+                    "`{object}` lacks field `{field}`, which the projection parameter borrows"
                 )
             }
             MirErrorKind::UndefinedContext(name) => {

@@ -1224,6 +1224,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if self.meet_slice_parameter(arg_ty, param_ty, site) {
             return;
         }
+        if self.refused_projection_parameter(param_ty, arg_ty, site) {
+            return;
+        }
         let Some(lent) = &site.place else {
             if self.refused_field_set(param_ty, arg_ty, site.span) {
                 return;
@@ -1265,6 +1268,62 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             path: path.clone(),
             to,
         });
+    }
+
+    /// RFC-0050 rule 6. This must stay ahead of every other join of the
+    /// argument with the parameter: `ObjectTy::meet` in `ty.rs` widens a
+    /// `Written` set by union, so a call placed after one still compiles
+    /// and finds nothing left to refuse.
+    ///
+    /// The label carries no span, which is a decision. The registry holds
+    /// no declaration span for an extern parameter -- `Function` and
+    /// `ParamTerm` are a name and a type -- and the call encloses the
+    /// argument this refusal already points at, so the two field sets are
+    /// what the reader does not have.
+    fn refused_projection_parameter(
+        &mut self,
+        param_ty: &InferTy,
+        arg_ty: &InferTy,
+        site: &ArgSite,
+    ) -> bool {
+        let TyTerm::Ref(_, borrowed) = self.solver.shallow_resolve_ty(param_ty) else {
+            return false;
+        };
+        let TyTerm::Object(projection) = self.solver.shallow_resolve_ty(&borrowed.ty) else {
+            return false;
+        };
+        let TyTerm::Ref(_, referent) = self.solver.shallow_resolve_ty(arg_ty) else {
+            return false;
+        };
+        let TyTerm::Object(argument) = self.solver.shallow_resolve_ty(&referent.ty) else {
+            return false;
+        };
+        let Some(field) = projection.borrowed_field_missing_from(&argument) else {
+            return false;
+        };
+        let borrows = self.object_as_written(&projection);
+        let has = self.object_as_written(&argument);
+        let object = match &site.place {
+            Some(lent) => lent.place.display(self.interner),
+            None => has.clone(),
+        };
+        let note =
+            format!("the parameter borrows at least `{borrows}`, and `{object}` has `{has}`");
+        self.labeled_error(
+            MirErrorKind::ProjectionLacksField {
+                object,
+                field: self.interner.resolve(field).to_string(),
+            },
+            site.span,
+            vec![Label::note(note)],
+        );
+        true
+    }
+
+    fn object_as_written(&self, object: &ObjectTy<Infer>) -> String {
+        self.type_as_written(&TyTerm::Object(object.clone()))
+            .display(self.interner)
+            .to_string()
     }
 
     /// Whether the argument met a declared struct's field set and disagreed
