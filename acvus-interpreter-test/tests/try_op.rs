@@ -17,7 +17,7 @@ fn text(v: Value) -> String {
 #[tokio::test]
 async fn a_question_mark_takes_the_ok_and_returns_the_err() {
     let i = Interner::new();
-    let src = r#"let r = if @ok { Ok(2) } else { Err("bad") };
+    let src = r#"let r = if @ok { Ok(2) } else { Err("bad".to_string()) };
                  let plus_one = |r| -> Ok(r? + 1);
                  if let Ok(v) = plus_one(r) { v } else { -1 }"#;
     let v = run_script_mode(&i, src, flags(&i, &[("ok", true)]), Ty::I64).await;

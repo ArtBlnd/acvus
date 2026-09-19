@@ -7,7 +7,7 @@ async fn ok_and_err_are_built_and_matched() {
     let i = Interner::new();
     let src = |flag: bool| {
         format!(
-            r#"let r = if {flag} {{ Ok(3) }} else {{ Err("boom") }}; if let Ok(v) = r {{ v + 1 }} else {{ -1 }}"#
+            r#"let r = if {flag} {{ Ok(3) }} else {{ Err("boom".to_string()) }}; if let Ok(v) = r {{ v + 1 }} else {{ -1 }}"#
         )
     };
     let v = run_script_mode(&i, &src(true), Context::default(), Ty::I64).await;

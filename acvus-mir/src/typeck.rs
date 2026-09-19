@@ -6,7 +6,7 @@ use acvus_ast::{
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::error::{MirError, MirErrorKind, ShownValue};
+use crate::error::{DataShape, MirError, MirErrorKind, ShownValue};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::solver::{
@@ -1919,10 +1919,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A reference is never data (RFC-0018).
-    fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span) {
+    fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span, shape: DataShape) {
         let kind = match self.solver.resolve_ty(ty) {
-            TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str) => MirErrorKind::ViewInData,
-            TyTerm::Ref(..) => MirErrorKind::ReferenceInData,
+            TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str) => {
+                MirErrorKind::ViewInData(shape)
+            }
+            TyTerm::Ref(..) => MirErrorKind::ReferenceInData(shape),
             _ => return,
         };
         self.error(kind, span);
@@ -4896,7 +4898,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
                 let element = self.solver.fresh_ty_var();
                 let first_ty = self.check_expr(all_elems[0]);
-                self.reject_reference_in_data(&first_ty, all_elems[0].span());
+                self.reject_reference_in_data(&first_ty, all_elems[0].span(), DataShape::Aggregate);
                 self.solver
                     .unify(&first_ty, &element)
                     .expect("a fresh variable takes any type");
@@ -4926,7 +4928,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let mut field_types = FxHashMap::default();
                 for ObjectExprField { key, value, .. } in fields {
                     let ft = self.check_expr(value);
-                    self.reject_reference_in_data(&ft, value.span());
+                    self.reject_reference_in_data(&ft, value.span(), DataShape::Aggregate);
                     field_types.insert(*key, ft);
                 }
                 let ty = TyTerm::Object(ObjectTy::written(field_types));
@@ -4943,7 +4945,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .map(|elem| match elem {
                         TupleElem::Expr(e) => {
                             let et = self.check_expr(e);
-                            self.reject_reference_in_data(&et, e.span());
+                            self.reject_reference_in_data(&et, e.span(), DataShape::Aggregate);
                             et
                         }
                         TupleElem::Wildcard(_) => self.solver.fresh_ty_var(),
@@ -4994,6 +4996,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 return Self::infer_error();
                             };
                             let inner_ty = self.check_expr(inner_expr);
+                            self.reject_reference_in_data(
+                                &inner_ty,
+                                inner_expr.span(),
+                                DataShape::Payload,
+                            );
                             if self.solver.unify(&type_params[*idx], &inner_ty).is_err() {
                                 let resolved_tp = self.solver.resolve_ty(&type_params[*idx]);
                                 let resolved_inner = self.solver.resolve_ty(&inner_ty);
@@ -5489,7 +5496,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let binds = std::mem::take(&mut self.context_binds_under_open_head);
         for DeferredContextBind { decision, span } in binds {
             if let Some(Answer::Match(MatchMode::Through)) = self.solver.answer(decision) {
-                self.error(MirErrorKind::ReferenceInData, span);
+                self.error(MirErrorKind::ReferenceInData(DataShape::Aggregate), span);
             }
         }
     }
@@ -5506,7 +5513,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Pattern::ContextBind { name: qref, .. } => {
                 match self.pattern_mode {
                     PatternMode::Through => {
-                        self.error(MirErrorKind::ReferenceInData, span);
+                        self.error(MirErrorKind::ReferenceInData(DataShape::Aggregate), span);
                         return;
                     }
                     PatternMode::Deferred => self.deferred_context_binds.push(span),

@@ -284,11 +284,41 @@ mod reference_returned_from_body {
         let (message, _) = only("let xs = [1]; nope::len(&xs)", &nothing);
         assert_eq!(message, WORDS);
     }
+}
+
+/// A reference is not an `Option`'s or a `Result`'s payload. `MakeSome`
+/// moves one value where a view is two, so `Some("ab")` read a neighbouring
+/// register for the length until this refusal existed.
+mod reference_in_a_payload {
+    use super::*;
+
+    const WORDS: &str = "a reference cannot be stored in an Option or a Result";
 
     #[test]
-    fn a_reference_inside_an_option_payload_is_refused() {
-        let (message, _) = only("let a = 1; Some(&a)", &nothing);
+    fn a_view_in_a_some_carries_the_way_to_own_the_text() {
+        let (message, labels) = only(
+            "let o = Some(\"ab\"); let n = 0; if let Some(s) = o { n = s.len(); }; n",
+            &nothing,
+        );
+        assert_eq!(
+            message,
+            format!("{WORDS}; write `.to_string()` to store the text")
+        );
+        assert_eq!(labels, []);
+    }
+
+    #[test]
+    fn a_reference_in_an_ok_is_refused() {
+        let (message, labels) = only("let s = \"ab\".to_string(); let r = Ok(&s); 0", &nothing);
         assert_eq!(message, WORDS);
+        assert_eq!(labels, []);
+    }
+
+    #[test]
+    fn a_reference_in_an_err_is_refused() {
+        let (message, labels) = only("let s = \"ab\".to_string(); let r = Err(&s); 0", &nothing);
+        assert_eq!(message, WORDS);
+        assert_eq!(labels, []);
     }
 }
 

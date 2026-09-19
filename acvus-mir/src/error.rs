@@ -22,6 +22,21 @@ impl fmt::Display for ShownValue {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataShape {
+    Aggregate,
+    Payload,
+}
+
+impl fmt::Display for DataShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            DataShape::Aggregate => "a list, object, or tuple",
+            DataShape::Payload => "an Option or a Result",
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MirError {
     pub kind: MirErrorKind,
@@ -245,9 +260,8 @@ pub enum MirErrorKind {
     },
     /// A lambda captured a reference.
     ReferenceCaptured,
-    /// A reference inside a list, object, or tuple.
-    ReferenceInData,
-    ViewInData,
+    ReferenceInData(DataShape),
+    ViewInData(DataShape),
     /// A lambda returned a reference.
     ReferenceReturned,
     /// A script body returned a reference.
@@ -469,16 +483,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::ReferenceCaptured => {
                 write!(f, "a lambda cannot capture a reference")
             }
-            MirErrorKind::ReferenceInData => {
-                write!(
-                    f,
-                    "a reference cannot be stored in a list, object, or tuple"
-                )
+            MirErrorKind::ReferenceInData(shape) => {
+                write!(f, "a reference cannot be stored in {shape}")
             }
-            MirErrorKind::ViewInData => {
+            MirErrorKind::ViewInData(shape) => {
                 write!(
                     f,
-                    "a reference cannot be stored in a list, object, or tuple; \
+                    "a reference cannot be stored in {shape}; \
                      write `.to_string()` to store the text"
                 )
             }

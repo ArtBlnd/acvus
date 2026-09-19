@@ -1,15 +1,6 @@
 //! Pins the pair `4216d0fc` relies on for `Option<String>`: RFC-0026's
 //! clone-on-take and the drop the inserter still emits for the option.
 //!
-//! The payload is written `.to_string()` because a string literal is a `&str`
-//! since RFC-0062, and an `Option<&str>` is a type the checker admits and the
-//! machine cannot hold: `MakeSome` and `TakeVar` move one of the runtime's
-//! values and a view is two, so the length word comes from whatever register
-//! follows. That is a hole in `Some`'s admission, not in this file's subject,
-//! and it reads the wrong length at `8e937131` too — `let o =
-//! Some("abcdefgh"); let p = "ij"; let q = len(&p); ... s.len() * 100 + q`
-//! answers 202 there and 2 here where 802 is right. Closing it is one call to
-//! `reject_reference_in_data` at `Some`'s construction in `acvus-mir`.
 
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -39,4 +30,18 @@ async fn an_option_of_a_string_that_does_not_match_is_dropped_once() {
     )
     .await;
     assert_eq!(v.as_int(), 0);
+}
+
+#[tokio::test]
+#[should_panic(expected = "a reference cannot be stored in an Option or a Result")]
+async fn a_view_as_an_option_payload_is_refused_where_it_answered_202_for_802() {
+    let i = Interner::new();
+    run_script(
+        &i,
+        "let o = Some(\"abcdefgh\"); let p = \"ij\"; let q = len(&p); let n = 0; \
+         if let Some(s) = o { n = s.len() * 100 + q; }; n",
+        Context::default(),
+        Ty::U64,
+    )
+    .await;
 }
