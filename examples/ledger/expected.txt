@@ -1,0 +1,9 @@
+opening float 250.00 -> 250.00
+coffee beans -18.75 -> 231.25
+invoice 2041 1200.00 -> 1431.25
+server rent -149.90 -> 1281.35
+keyboard -212.45 -> 1068.90
+invoice 2042 480.50 -> 1549.40
+coffee beans -18.75 -> 1530.65
+closing 1530.65
+largest debit -212.45 (keyboard)

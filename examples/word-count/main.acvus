@@ -1,0 +1,89 @@
+"Word counts over the context text: `split_whitespace` cuts it, `lower` folds the case, and a trailing period or comma is stripped with `strip_suffix`.";
+"The top three words come out by count descending and, where counts tie, by the word's bytes ascending -- there is no ordering on `String`, so the tiebreak compares `to_bytes` element by element.";
+
+let bare = |w| -> {
+    let no_stop = unwrap_or(strip_suffix(&w, "."), w);
+    let no_comma = unwrap_or(strip_suffix(&no_stop, ","), no_stop);
+    no_comma
+};
+
+let bytes_lt = |a, b| -> {
+    let shorter = if len(&a) < len(&b) { len(&a) } else { len(&b) };
+    let i = 0u64;
+    let verdict = 0;
+    while i < shorter && verdict == 0 {
+        if a[i] < b[i] {
+            verdict = 0 - 1;
+        } else if b[i] < a[i] {
+            verdict = 1;
+        };
+        i = i + 1u64;
+    }
+    let tied = verdict == 0;
+    let answer = if tied { len(&a) < len(&b) } else { verdict < 0 };
+    answer
+};
+
+let words = vec([]);
+let tally = vec([]);
+let total = 0;
+
+let raw = &@text | split_whitespace;
+while let Some(token) = next(&mut raw) {
+    let word = bare(lower(&token));
+    total = total + 1;
+    let seen = false;
+    let i = 0u64;
+    while i < len(&words) {
+        if words[i] == word {
+            tally[i] = tally[i] + 1;
+            seen = true;
+        };
+        i = i + 1u64;
+    }
+    if !seen {
+        push(&mut words, word);
+        push(&mut tally, 1);
+    };
+}
+
+let i = 0u64;
+while i < len(&words) {
+    let best = i;
+    let j = i + 1u64;
+    while j < len(&words) {
+        let ahead = if tally[j] > tally[best] {
+            true
+        } else {
+            let tied = tally[j] == tally[best];
+            let by_name = if tied {
+                bytes_lt(to_bytes(words[j].to_string()), to_bytes(words[best].to_string()))
+            } else {
+                false
+            };
+            by_name
+        };
+        if ahead {
+            best = j;
+        };
+        j = j + 1u64;
+    }
+    swap(&mut words, i, best);
+    swap(&mut tally, i, best);
+    i = i + 1u64;
+}
+
+let distinct = len(&words);
+let wanted = 3u64;
+let shown = if distinct < wanted { distinct } else { wanted };
+
+let out = "{{ &total | to_string }} words, {{ &distinct | to_string }} distinct, top {{ &shown | to_string }}:";
+let k = 0u64;
+while k < shown {
+    let word = words[k].to_string();
+    let count = tally[k];
+    out = out + "
+{{ &word }} {{ &count | to_string }}";
+    k = k + 1u64;
+}
+out

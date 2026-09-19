@@ -1,0 +1,8 @@
+7 rounds, deepest 4, 7 served
+fetch-index
+parse-index
+fetch-page-1
+fetch-page-2
+parse-page-1
+parse-page-2
+write-report

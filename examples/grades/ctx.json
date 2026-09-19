@@ -1,0 +1,11 @@
+{
+  "students": [
+    { "name": "Ada",     "score": 97 },
+    { "name": "Brahms",  "score": 61 },
+    { "name": "Curie",   "score": 88 },
+    { "name": "Dirac",   "score": 42 },
+    { "name": "Emmy",    "score": 93 },
+    { "name": "Fermi",   "score": 59 },
+    { "name": "Gauss",   "score": 74 }
+  ]
+}

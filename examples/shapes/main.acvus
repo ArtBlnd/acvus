@@ -1,0 +1,59 @@
+"A structural enum of three shapes: `Shape::Circle`, `Shape::Square` and `Shape::Rect` are introduced by being written, and the `match` that measures one is exhaustive over them.";
+"An entry whose kind is none of the three becomes an `Err`, `measure` carries that `Err` outward with `?`, and the largest area is an `Option` because an empty list has none.";
+
+let pi = 3.141592653589793;
+
+let measure = |parsed| -> {
+    let shape = parsed?;
+    let m = match shape {
+        Shape::Circle(r) => { area: pi * r * r, perimeter: 2.0 * pi * r, },
+        Shape::Square(s) => { area: s * s, perimeter: 4.0 * s, },
+        Shape::Rect((w, h)) => { area: w * h, perimeter: 2.0 * (w + h), },
+    };
+    Ok(m)
+};
+
+let areas = vec([]);
+let total_area = 0.0;
+let total_perimeter = 0.0;
+let refused = vec([]);
+
+let entries = as_iter(&@entries);
+while let Some(e) = next(&mut entries) {
+    let kind = e.kind.to_string();
+    let parsed = if kind == "circle".to_string() {
+        Ok(Shape::Circle(e.a))
+    } else if kind == "square".to_string() {
+        Ok(Shape::Square(e.a))
+    } else if kind == "rect".to_string() {
+        Ok(Shape::Rect((e.a, e.b)))
+    } else {
+        Err(kind)
+    };
+
+    let measured = measure(parsed);
+    match measured {
+        Ok(m) => {
+            total_area = total_area + m.area;
+            total_perimeter = total_perimeter + m.perimeter;
+            push(&mut areas, m.area);
+        },
+        Err(bad) => {
+            push(&mut refused, bad);
+        },
+    };
+}
+
+let largest = unwrap_or(into_iter(areas) | max, 0.0);
+
+let out = "measured {{ &total_area | to_string }} area, {{ &total_perimeter | to_string }} perimeter
+largest {{ &largest | to_string }}";
+
+let i = 0u64;
+while i < len(&refused) {
+    let kind = refused[i].to_string();
+    out = out + "
+refused {{ &kind }}";
+    i = i + 1u64;
+}
+out

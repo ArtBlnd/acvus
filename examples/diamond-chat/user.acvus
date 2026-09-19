@@ -1,2 +1,0 @@
-[sentiment: {{ @sentiment | map(|m| -> m.content) | join("".to_string()) }}]
-{{ @translate | map(|m| -> m.content) | join("".to_string()) }}

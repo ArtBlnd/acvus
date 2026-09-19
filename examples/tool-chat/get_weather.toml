@@ -1,5 +1,0 @@
-name = "get_weather"
-kind = "plain"
-template = "get_weather.acvus"
-
-[self]

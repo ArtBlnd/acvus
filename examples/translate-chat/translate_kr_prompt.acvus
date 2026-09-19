@@ -1,3 +1,0 @@
-Translate the following text to Korean. Output ONLY the translation, nothing else.
-
-{{ @chat | map(|m| -> m.content) | join("".to_string()) }}

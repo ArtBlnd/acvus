@@ -1,0 +1,9 @@
+{
+  "entries": [
+    { "kind": "circle", "a": 2.0, "b": 0.0 },
+    { "kind": "square", "a": 3.0, "b": 0.0 },
+    { "kind": "rect",   "a": 2.0, "b": 5.0 },
+    { "kind": "hexagon","a": 1.0, "b": 0.0 },
+    { "kind": "square", "a": 1.5, "b": 0.0 }
+  ]
+}

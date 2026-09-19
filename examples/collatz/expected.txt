@@ -1,0 +1,1 @@
+collatz(27): 111 steps, peak 9232

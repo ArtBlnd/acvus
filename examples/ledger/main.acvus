@@ -1,0 +1,49 @@
+"Money as whole cents: each amount arrives as text with two decimal places, is split on the point and turned into an integer, so no float appears anywhere in the run.";
+"An amount whose digits do not parse becomes an `Err` that `?` carries out of the run; the report carries the running balance after every transaction, the closing balance, and the largest single debit.";
+
+let to_cents = |text| -> {
+    let negative = starts_with_str(&text, "-");
+    let body = unwrap_or(strip_prefix(&text, "-"), text);
+    let parts = unwrap(split_once(&body, "."));
+    let read_whole = i64::from_str(parts[0u64].to_string());
+    let read_frac = i64::from_str(parts[1u64].to_string());
+    let cents = read_whole? * 100 + read_frac?;
+    let signed = if negative { 0 - cents } else { cents };
+    Ok(signed)
+};
+
+let money = |cents| -> {
+    let negative = cents < 0;
+    let size = if negative { 0 - cents } else { cents };
+    let sign = if negative { "-".to_string() } else { "".to_string() };
+    let whole = size / 100;
+    let frac = size % 100;
+    let frac_text = frac.to_string();
+    let padded = pad_start(&frac_text, 2, "0");
+    "{{ &sign }}{{ &whole | to_string }}.{{ &padded }}"
+};
+
+let balance = 0;
+let largest_debit = 0;
+let largest_note = "none".to_string();
+let out = "".to_string();
+
+let rows = as_iter(&@transactions);
+while let Some(row) = next(&mut rows) {
+    let amount = to_cents(row.amount.to_string())?;
+    balance = balance + amount;
+    if amount < largest_debit {
+        largest_debit = amount;
+        largest_note = row.note.to_string();
+    };
+    let note = row.note.to_string();
+    let amount_text = money(amount);
+    let balance_text = money(balance);
+    out = out + "{{ &note }} {{ &amount_text }} -> {{ &balance_text }}
+";
+}
+
+let closing = money(balance);
+let debit = money(largest_debit);
+out + "closing {{ &closing }}
+largest debit {{ &debit }} ({{ &largest_note }})"

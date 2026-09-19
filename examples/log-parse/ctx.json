@@ -1,0 +1,3 @@
+{
+  "log": "2026-09-19T09:58:03 INFO server started on port 8080\n2026-09-19T09:58:04 INFO context store opened\n2026-09-19T10:01:17 WARN retry 1 of 3 for upstream fetch\n2026-09-19T10:01:22 ERROR upstream fetch failed after 3 retries\n2026-09-19T10:01:22 INFO falling back to the cached page\n2026-09-19T10:14:59 WARN cache entry is 900 seconds old\n2026-09-19T10:15:00 INFO cache refreshed\n2026-09-19T11:02:41 ERROR context commit rejected: a head moved\n2026-09-19T11:02:41 INFO retrying the commit\n2026-09-19T11:02:42 INFO server stopped"
+}

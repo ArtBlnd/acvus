@@ -1,1 +1,0 @@
-{{ @translate_eng | map(|m| -> m.content) | join("".to_string()) }}

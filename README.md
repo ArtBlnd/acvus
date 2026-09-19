@@ -181,10 +181,31 @@ acvus-cli           `acvus run | check | mir | ops | space`
 `acvus-mir` knows nothing about the interpreter; `acvus-interpreter`
 depends on it, never the reverse.
 
+## Examples
+
+Each directory under [`examples/`](examples/) holds `main.acvus`, the
+`ctx.json` it reads and the `expected.txt` it prints:
+
+```sh
+cargo run -p acvus-cli -- run examples/collatz/main.acvus --context examples/collatz/ctx.json
+```
+
+```
+collatz     the Collatz walk of a context number: `while`, and `if` as a value
+grades      objects in a context array: `as_iter`/`while let`, and `map | filter | fold`
+word-count  `split_whitespace`, `lower`, counts in parallel vectors, the top three by count then bytes
+log-parse   log lines cut by `lines` and `split_once`: a tally per level, the first and last timestamp
+shapes      a structural enum, an exhaustive `match`, a `Result` per entry carried out by `?`
+ledger      money as whole cents: a running balance and the largest debit, no float
+queue       a `deque` as a work queue: `push_back`, `pop_front`, and the order out
+```
+
+`acvus-cli/tests/examples.rs` runs each of them and compares stdout to
+`expected.txt` byte for byte.
+
 ## Documents
 
 Design decisions are RFCs under [`docs/rfcs/`](docs/rfcs/README.md).
-Runnable projects are under [`examples/`](examples/).
 
 ## License
 

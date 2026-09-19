@@ -1,0 +1,52 @@
+"Each log line is `timestamp level message`, cut by `lines` and two `split_once` calls; the levels are tallied against a fixed list so the report's order is the list's.";
+"The longest message is measured in bytes, which is what `len` on a string counts.";
+
+let levels = vec(["ERROR".to_string(), "WARN".to_string(), "INFO".to_string()]);
+let counts = vec([0, 0, 0]);
+
+let first = "".to_string();
+let last = "".to_string();
+let seen = 0;
+let longest = 0u64;
+
+let records = &@log | lines;
+while let Some(line) = next(&mut records) {
+    let head = unwrap(split_once(&line, " "));
+    let stamp = head[0u64].to_string();
+    let rest = head[1u64].to_string();
+
+    let body = unwrap(split_once(&rest, " "));
+    let level = body[0u64].to_string();
+    let message = body[1u64].to_string();
+
+    let i = 0u64;
+    while i < len(&levels) {
+        if levels[i] == level {
+            counts[i] = counts[i] + 1;
+        };
+        i = i + 1u64;
+    }
+
+    if seen == 0 {
+        first = stamp.to_string();
+    };
+    last = stamp;
+    seen = seen + 1;
+
+    let width = len(&message);
+    if width > longest {
+        longest = width;
+    };
+}
+
+let out = "{{ &seen | to_string }} lines, {{ &first }} .. {{ &last }}";
+let i = 0u64;
+while i < len(&levels) {
+    let level = levels[i].to_string();
+    let count = counts[i];
+    out = out + "
+{{ &level }} {{ &count | to_string }}";
+    i = i + 1u64;
+}
+out + "
+longest message {{ &longest | to_string }} bytes"

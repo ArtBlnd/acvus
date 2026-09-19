@@ -1,0 +1,4 @@
+21 words, 12 distinct, top 3:
+the 4
+dog 3
+fox 3

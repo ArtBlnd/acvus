@@ -1,0 +1,5 @@
+10 lines, 2026-09-19T09:58:03 .. 2026-09-19T11:02:42
+ERROR 2
+WARN 2
+INFO 6
+longest message 37 bytes

@@ -1,0 +1,17 @@
+"The Collatz walk of @start, a number the context carries: `while` drives the walk and `if` stands as a value on the right of the assignment.";
+"The report names the steps the walk took and the largest value it reached.";
+
+let n = @start;
+let steps = 0;
+let peak = n;
+
+while n > 1 {
+    n = if n % 2 == 0 { n / 2 } else { n * 3 + 1 };
+    steps = steps + 1;
+    if n > peak {
+        peak = n;
+    };
+}
+
+let start = @start;
+"collatz({{ &start | to_string }}): {{ &steps | to_string }} steps, peak {{ &peak | to_string }}"

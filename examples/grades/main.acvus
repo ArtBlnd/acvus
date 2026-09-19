@@ -1,0 +1,31 @@
+"Students arrive as objects in a context array: `as_iter` and `while let` walk them once and count the three bands.";
+"A `map | filter | fold` pipeline over the same array totals the scores of 60 and above.";
+
+let honor = 0;
+let pass = 0;
+let fail = 0;
+let best = 0;
+
+let students = as_iter(&@students);
+while let Some(s) = next(&mut students) {
+    let score = s.score;
+    if score >= 90 {
+        honor = honor + 1;
+        if score > best {
+            best = score;
+        };
+    } else if score >= 60 {
+        pass = pass + 1;
+    } else {
+        fail = fail + 1;
+    };
+}
+
+let passing_total = as_iter(&@students)
+    | map(|s| -> s.score)
+    | filter(|s| -> *s >= 60)
+    | fold(0, |acc, s| -> acc + s);
+
+"honor {{ &honor | to_string }}, pass {{ &pass | to_string }}, fail {{ &fail | to_string }}
+best {{ &best | to_string }}
+passing total {{ &passing_total | to_string }}"
