@@ -209,11 +209,16 @@ object lives.
    the same either way. In registers (rule 1) the same flattening is
    what SROA does today one level down (`sroa.rs`: `[PathSeg::Field]`),
    widened to a path of any depth. **A structural object's field order
-   is its field names in interned-symbol order** (amended 2026-09-20): a
-   `Declared` struct's order is its declaration's; a `Written` or
-   `AtLeast` object's is the sorted names of its settled type, so every
-   object type has one layout without a declaration, and a union that
-   adds a field re-lays the settled type once. A field the settled union
+   is its field names in string order** (amended 2026-09-20; corrected
+   the same day — an interned symbol's order is the order of first
+   interning, which differs between programs and across a source change,
+   so it cannot order a layout that a committed object, a run and the
+   glue must all agree on): a `Declared` struct's order is its
+   declaration's; a `Written` or `AtLeast` object's is its settled
+   type's field names sorted as strings, so every object type has one
+   layout without a declaration and independent of the program that
+   names it, and a union that adds a field re-lays the settled type
+   once. A field the settled union
    type has and a construction lacks is `Undef` at its offset. For a
    declared struct's type no such field exists: the checker refuses an
    object that lacks a field the struct declares (RFC-0042 R1). For an
