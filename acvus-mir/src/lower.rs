@@ -2050,11 +2050,48 @@ impl<'a> Lowerer<'a> {
                 },
                 val,
             ),
+            Some(CastKind::Slice {
+                mutability,
+                as_slice,
+            }) => self.emit_as_slice(span, val, mutability, &as_slice),
             Some(CastKind::ThroughRef { .. }) => {
                 unreachable!("a cast through a reference is lowered where the argument is lent")
             }
             None => val,
         }
+    }
+
+    /// The container's own `as_slice` of a `&C` the caller already holds,
+    /// where the parameter is a `&[T]` (RFC-0047 rule 6). The slice's type is
+    /// the instance's return type, as every other coercion's result is.
+    fn emit_as_slice(
+        &mut self,
+        span: Span,
+        container: ValueId,
+        mutability: Mutability,
+        as_slice: &ExternCast,
+    ) -> ValueId {
+        let Ty::Fn { ret, .. } = &as_slice.callee_ty else {
+            panic!(
+                "an as_slice coercion's callee_ty is not Fn: {:?}",
+                as_slice.callee_ty
+            )
+        };
+        let dst = self.alloc_val();
+        self.set_val_type(dst, (**ret).clone());
+        self.emit_inst(
+            span,
+            InstKind::AsSlice {
+                dst,
+                container,
+                mutability,
+                instance: ExternInstance {
+                    id: as_slice.fn_ref,
+                    instance: as_slice.instance,
+                },
+            },
+        );
+        dst
     }
 
     /// A call of a cast function on `val`: pure, one argument, no context.
@@ -2889,6 +2926,13 @@ impl<'a> Lowerer<'a> {
                     },
                     reference,
                 )
+            }
+            Some(CastKind::Slice {
+                mutability: sliced,
+                as_slice,
+            }) => {
+                let reference = self.emit_ref(span, place.target, place.path, mutability, place.ty);
+                self.emit_as_slice(span, reference, sliced, &as_slice)
             }
             None => self.emit_ref(span, place.target, place.path, mutability, place.ty),
         }

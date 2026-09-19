@@ -42,6 +42,13 @@ pub enum CastKind {
         cast: ExternCast,
         back: ExternCast,
     },
+    /// At a call argument of `&C` whose parameter is `&[T]`: the container's
+    /// own `as_slice` of the reference, which the lowering emits as an
+    /// `AsSlice` and not a call (RFC-0047 rule 6).
+    Slice {
+        mutability: Mutability,
+        as_slice: ExternCast,
+    },
 }
 
 /// A cast function at the type of one call of it.

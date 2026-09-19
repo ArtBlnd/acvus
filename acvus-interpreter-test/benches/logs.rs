@@ -16,8 +16,9 @@
 //!   the `CallIndirect` boundary.
 //! - `heavy ext`: the matcher as a `Heavy` Rust extern, one call per line.
 //!   This is what `optimize::spawn_split` can reach today without a `for`.
-//! - `sync ext`: the same Rust body declared `#[extern_fn(effect = pure)]`.
-//!   One variable apart from `heavy ext`, so the difference is the spawn.
+//! - `sync ext`: the same matcher in the caller's frame, taking the pattern
+//!   and the line as `&[i64]` -- the script holds the corpus and the call
+//!   crosses two register pairs (RFC-0047 rule 6).
 //!
 //! The Rust twins are the same matcher over the same `Vec<Vec<i64>>`, once
 //! sequentially and once over `std::thread::scope` chunks -- the parallel
@@ -28,7 +29,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::{Owned, Registry, extern_fn, extern_registry, vec_ty};
+use acvus_extern::{Elements, Owned, Registry, Slice, extern_fn, extern_registry, vec_ty};
 use acvus_interpreter::{
     AcvusRuntime, Executor, Interpreter, InterpreterContext, SequentialExecutor, TokioExecutor,
     Value,
@@ -170,32 +171,45 @@ const QMARK: i64 = b'?' as i64;
 const ZERO_DIGIT: i64 = b'0' as i64;
 const NINE_DIGIT: i64 = b'9' as i64;
 
+fn glob(pat: &[i64], line: &[i64]) -> bool {
+    glob_over(pat.len(), |at| pat[at], line.len(), |at| line[at])
+}
+
 /// The same algorithm the script runs, statement for statement: one forward
 /// index into each of pattern and line, the last `*` with the position it was
 /// matched at, and a backtrack that advances that position by one.
-fn glob(pat: &[i64], line: &[i64]) -> bool {
+///
+/// It reads its two sequences through an accessor because the extern reads
+/// them through a `Slice`'s view of the script's own container, where a Rust
+/// `&[i64]` would be a copy per call.
+#[inline(always)]
+fn glob_over<P, L>(plen: usize, pat: P, llen: usize, line: L) -> bool
+where
+    P: Fn(usize) -> i64,
+    L: Fn(usize) -> i64,
+{
     let mut i = 0usize;
     let mut j = 0usize;
     let mut has_star = false;
     let mut star = 0usize;
     let mut mark = 0usize;
     loop {
-        if i >= line.len() {
-            while j < pat.len() && pat[j] == STAR {
+        if i >= llen {
+            while j < plen && pat(j) == STAR {
                 j += 1;
             }
-            return j == pat.len();
+            return j == plen;
         }
         let mut advanced = false;
-        if j < pat.len() {
-            let pj = pat[j];
+        if j < plen {
+            let pj = pat(j);
             if pj == STAR {
                 has_star = true;
                 star = j;
                 mark = i;
                 j += 1;
                 advanced = true;
-            } else if pj == QMARK || pj == line[i] {
+            } else if pj == QMARK || pj == line(i) {
                 i += 1;
                 j += 1;
                 advanced = true;
@@ -267,9 +281,9 @@ fn rust_chunked(lines: &[Vec<i64>], pat: &[i64], chunks: usize) -> Counted {
 
 // -- The matcher, as an extern ------------------------------------------
 
-/// The corpus the extern matches against. A container cannot be handed to an
-/// extern -- `&Vec<i64>` panics at the boundary and `Slice<i64, Rt>` has no
-/// call syntax (see the report's W1) -- so the script names a line by its
+/// The corpus the `heavy` cases match against. A slice borrows the frame the
+/// call laid its arguments on, and a `heavy` call is awaited, so a parameter
+/// of one is refused there (RFC-0047 rule 6): those cases name a line by its
 /// index and the bytes live on the Rust side, built from the same `SEED`.
 struct Corpus {
     lines: Vec<Vec<i64>>,
@@ -310,24 +324,38 @@ fn match_heavy_opaque(#[state] corpus: &Arc<Corpus>, index: u64) -> bool {
     corpus.matches(index)
 }
 
-/// The same body in the caller's frame: the sequential floor the `heavy` rows
-/// are read against, one declaration variable apart.
+/// The same matcher in the caller's frame, over the pattern and the line the
+/// script lends it: the sequential floor the `heavy` rows are read against.
 #[extern_fn(effect = pure)]
-fn match_sync(#[state] corpus: &Arc<Corpus>, index: u64) -> bool {
-    corpus.matches(index)
+fn glob_match<Rt>(rt: &Rt, pat: Slice<i64, Rt>, line: Slice<i64, Rt>) -> bool
+where
+    Rt: acvus_extern::Runtime,
+{
+    let (pat, line) = (pat.into_elements(), line.into_elements());
+    let byte = |view: &Elements<Rt>, at: usize| {
+        // SAFETY: `at` is below the length the view reports, the container the
+        // script lent is live for the call (RFC-0018), and every element of a
+        // language `Vec<i64>` was erased from `i64` (RFC-0047 rule 1).
+        unsafe { *rt.value_as_ref::<i64>(view.at(at)) }
+    };
+    glob_over(
+        pat.len(),
+        |at| byte(&pat, at),
+        line.len(),
+        |at| byte(&line, at),
+    )
 }
 
 fn registries(corpus: &Arc<Corpus>) -> Vec<Registry<AcvusRuntime>> {
     let for_heavy = Arc::clone(corpus);
     let for_opaque = Arc::clone(corpus);
-    let for_sync = Arc::clone(corpus);
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(extern_registry! {
         ns: "bench",
         fns: [
             match_heavy(for_heavy),
             match_heavy_opaque(for_opaque),
-            match_sync(for_sync),
+            glob_match,
         ],
     });
     regs
@@ -479,7 +507,26 @@ li = li + one; \
     )
 }
 
-/// Cases 3 and 4: the matcher as a Rust extern, `heavy` or `sync`.
+/// Case 3: the matcher as a `sync` Rust extern over the corpus the script
+/// holds, the pattern and the line crossing as `&[i64]`.
+fn slice_source() -> String {
+    format!(
+        "{PRELUDE}\
+while li < n {{ \
+if glob_match(&@pat, &@lines[li]) {{ \
+let slen = len(&@lines[li]); \
+{latency} count = count + 1; total = total + lat; \
+}}; \
+li = li + one; \
+}} \
+{tail}",
+        latency = latency(&KERNEL_PLACES),
+        tail = tail(),
+    )
+}
+
+/// Cases 4 and 5: the matcher as a `heavy` Rust extern over the corpus Rust
+/// holds, the script naming a line by its index.
 fn extern_source(call: &str) -> String {
     format!(
         "{PRELUDE}\
@@ -588,7 +635,7 @@ fn cases() -> Vec<Case> {
         },
         Case {
             name: CASE_NAMES[2],
-            source: extern_source("match_sync"),
+            source: slice_source(),
             exec: Exec::Sequential,
         },
         Case {

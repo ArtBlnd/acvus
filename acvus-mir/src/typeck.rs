@@ -82,6 +82,18 @@ struct IndexUse {
     demand: PlaceDemand,
 }
 
+/// One argument whose parameter is a `&[T]` and whose container was still a
+/// variable where the argument met it (RFC-0047 rule 6). What an `a[i]`
+/// argument names is settled by the index's own signature decision, so the
+/// coercion waits for the solve as `IndexUse` does.
+struct SliceArg {
+    at: AstId,
+    span: Span,
+    arg: InferTy,
+    param: InferTy,
+    mutability: Mutability,
+}
+
 /// One `a[i]` as the checker reads it (RFC-0047).
 struct IndexSite<'a> {
     id: AstId,
@@ -370,6 +382,10 @@ enum PendingCast {
         cast: PendingExternCast,
         back: PendingExternCast,
     },
+    Slice {
+        mutability: Mutability,
+        as_slice: PendingExternCast,
+    },
 }
 
 /// A cast function at the type of one call of it, its instance still the
@@ -655,6 +671,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Every `a[i]`, kept for the refusals that can only name their type
     /// once the body is solved (RFC-0047 §2, §5).
     index_uses: Vec<IndexUse>,
+    /// RFC-0047 rule 6, drained by `settle_slice_args`.
+    slice_args: Vec<SliceArg>,
     /// The places the calls being checked have consumed, innermost last.
     holds: Vec<Hold>,
     /// Decisions instantiated so far, each at the span that will report a
@@ -698,6 +716,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             structural_variant_calls: FxHashSet::default(),
             conversions: Vec::new(),
             index_uses: Vec::new(),
+            slice_args: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
             errors: Vec::new(),
@@ -1025,6 +1044,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// of it inside the call is a conversion decision from the held
     /// reference, resolved as a `HeldLend`.
     fn meet_argument(&mut self, arg_ty: &InferTy, param_ty: &InferTy, site: &ArgSite) {
+        if self.meet_slice_parameter(arg_ty, param_ty, site) {
+            return;
+        }
         let Some(lent) = &site.place else {
             let _ = self.solver.unify(param_ty, arg_ty);
             self.convert_argument_at(arg_ty, param_ty, site);
@@ -1062,6 +1084,120 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             path: path.clone(),
             to,
         });
+    }
+
+    /// `&v` at a `&[T]` parameter is the container's own `as_slice` of it,
+    /// recorded at the argument (RFC-0047 rule 6). The two mutabilities must
+    /// agree, so `&v` at a `&mut [T]` parameter is refused where every other
+    /// argument mismatch is; so is a container that declares no `as_slice`,
+    /// and an argument already of slice type unifies as it is.
+    fn meet_slice_parameter(
+        &mut self,
+        arg_ty: &InferTy,
+        param_ty: &InferTy,
+        site: &ArgSite,
+    ) -> bool {
+        let TyTerm::Ref(mutability, wanted) = self.solver.shallow_resolve_ty(param_ty) else {
+            return false;
+        };
+        let TyTerm::Slice(_) = self.solver.shallow_resolve_ty(&wanted.ty) else {
+            return false;
+        };
+        let TyTerm::Ref(lent, container) = self.solver.shallow_resolve_ty(arg_ty) else {
+            return false;
+        };
+        if lent != mutability {
+            return false;
+        }
+        let referent = self.solver.resolve_ty(&container.ty);
+        if matches!(referent, TyTerm::Var(_)) {
+            self.slice_args.push(SliceArg {
+                at: site.id,
+                span: site.span,
+                arg: arg_ty.clone(),
+                param: param_ty.clone(),
+                mutability,
+            });
+            return true;
+        }
+        self.slice_coercion(&referent, mutability, arg_ty, param_ty, site.id, site.span)
+    }
+
+    /// The `as_slice` the container's evidence settles on, recorded as the
+    /// coercion at `at`. `false` is a container that declares none, which the
+    /// caller reports as the argument mismatch it is.
+    fn slice_coercion(
+        &mut self,
+        referent: &InferTy,
+        mutability: Mutability,
+        arg_ty: &InferTy,
+        param_ty: &InferTy,
+        at: AstId,
+        span: Span,
+    ) -> bool {
+        let Some(head) = sliceable_head(referent) else {
+            return false;
+        };
+        let name = self.interner.intern(match mutability {
+            Mutability::Shared => "as_slice",
+            Mutability::Mut => "as_slice_mut",
+        });
+        let taker: Option<(QualifiedRef, crate::ty::Scheme)> = self
+            .env
+            .machine_set(name)
+            .into_iter()
+            .find(
+                |(_, scheme)| match scheme.params().first().map(|param| &param.ty) {
+                    Some(TyTerm::Ref(_, takes)) => sliceable_head(&takes.ty) == Some(head),
+                    _ => false,
+                },
+            )
+            .map(|(qref, scheme)| (qref, scheme.clone()));
+        let Some((qref, scheme)) = taker else {
+            return false;
+        };
+        let as_slice = self.applied_at(qref, &scheme, arg_ty, param_ty, span);
+        self.coercions.push(PendingCoercion {
+            at,
+            cast: PendingCast::Slice {
+                mutability,
+                as_slice,
+            },
+        });
+        true
+    }
+
+    /// Every argument whose container the solve has now named. A container
+    /// that never named one, or that declares no `as_slice`, is the argument
+    /// mismatch the eager path reports at the site.
+    fn settle_slice_args(&mut self) {
+        let deferred = std::mem::take(&mut self.slice_args);
+        for SliceArg {
+            at,
+            span,
+            arg,
+            param,
+            mutability,
+        } in deferred
+        {
+            let referent = match self.solver.shallow_resolve_ty(&arg) {
+                TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty),
+                other => other,
+            };
+            if self.slice_coercion(&referent, mutability, &arg, &param, at, span) {
+                continue;
+            }
+            // The two referents and not the two references, so that one
+            // argument mismatch reads the same whether its container's head
+            // was named where the argument met its parameter or here.
+            let (wanted, given) = (
+                self.solver.shallow_resolve_ty(&param),
+                self.solver.shallow_resolve_ty(&arg),
+            );
+            let expected = self.type_as_written(referent_of(&wanted));
+            let got = self.type_as_written(referent_of(&given));
+            self.error(MirErrorKind::UnificationFailure { expected, got }, span);
+        }
     }
 
     fn held_root(&self, root: &PlaceRoot) -> Option<HeldRoot> {
@@ -1663,6 +1799,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         cast: self.frozen_cast(cast)?,
                         back: self.frozen_cast(back)?,
                     },
+                    PendingCast::Slice {
+                        mutability,
+                        as_slice,
+                    } => CastKind::Slice {
+                        mutability: *mutability,
+                        as_slice: self.frozen_cast(as_slice)?,
+                    },
                 };
                 Some((coercion.at, kind))
             })
@@ -1692,6 +1835,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.report_unsettled(unsettled);
         self.record_decided_call_types();
         self.resolve_conversions();
+        self.settle_slice_args();
         self.settle_index_uses();
         let settled = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
@@ -1892,7 +2036,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             unreachable!("a cast rule names a declared function (RFC-0023)")
         };
         let scheme = scheme.clone();
-        let (inst, instance) = self.instantiate_at(fn_ref, &scheme, span);
+        self.applied_at(fn_ref, &scheme, from, to, span)
+    }
+
+    /// One declared function at the types of one call of it: the instance the
+    /// solver settles for those types, and the closed call type it settles
+    /// at. `from` meets the first parameter and `to` the return.
+    fn applied_at(
+        &mut self,
+        fn_ref: QualifiedRef,
+        scheme: &crate::ty::Scheme,
+        from: &InferTy,
+        to: &InferTy,
+        span: Span,
+    ) -> PendingExternCast {
+        let (inst, instance) = self.instantiate_at(fn_ref, scheme, span);
         if let TyTerm::Fn {
             params,
             ret,

@@ -2321,12 +2321,12 @@ impl<'a> Prepare<'a> {
         );
         let takes = self.take_mask(args);
         let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
-        match width.args {
-            0 => match large {
+        match CallForm::of(&width, args.len()) {
+            CallForm::Registers(0) => match large {
                 true => node(move |next| call::CallExtern0::<true> { dst, f, next }),
                 false => node(move |next| call::CallExtern0::<false> { dst, f, next }),
             },
-            1 => {
+            CallForm::Registers(1) => {
                 let a = nth(&slots, 0);
                 match (large, word) {
                     (true, _) => node(move |next| call::CallExtern1::<true, false> {
@@ -2352,7 +2352,7 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            2 => {
+            CallForm::Registers(2) => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
                 match large {
                     true => node(move |next| call::CallExtern2::<true> {
@@ -2373,7 +2373,7 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            3 => {
+            CallForm::Registers(3) => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
                 match large {
                     true => node(move |next| call::CallExtern3::<true> {
@@ -2396,7 +2396,7 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            _ => {
+            CallForm::Registers(_) | CallForm::Window => {
                 let window = self.window(at, args, ops);
                 match large {
                     true => node(move |next| call::CallWindow::<true> {
@@ -3201,7 +3201,7 @@ fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]
             callee: Callee::Extern { id, instance },
             args,
             ..
-        } => needs_window(&ctx.handler(id, *instance)).then_some(args.as_slice()),
+        } => needs_window(&ctx.handler(id, *instance), args.len()).then_some(args.as_slice()),
         InstKind::Spawn {
             callee: Callee::Extern { .. },
             args,
@@ -3213,10 +3213,30 @@ fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]
 
 /// A handler that takes a slice is lent the caller's registers, so they
 /// must be contiguous.
-fn needs_window(handler: &ExternHandler) -> bool {
+fn needs_window(handler: &ExternHandler, args: usize) -> bool {
     match handler {
-        ExternHandler::Sync(f) => !f.width().in_registers(),
+        ExternHandler::Sync(f) => matches!(CallForm::of(&f.width(), args), CallForm::Window),
         ExternHandler::Heavy(_) | ExternHandler::Async(_) => true,
+    }
+}
+
+/// How a synchronous extern call hands over its arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallForm {
+    /// One register operand per argument: the run fits the register forms
+    /// and every argument is one value.
+    Registers(usize),
+    /// The argument run laid in the caller's window.
+    Window,
+}
+
+impl CallForm {
+    fn of(width: &Width, args: usize) -> CallForm {
+        if width.in_registers() && width.args == args {
+            CallForm::Registers(width.args)
+        } else {
+            CallForm::Window
+        }
     }
 }
 

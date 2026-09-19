@@ -92,6 +92,29 @@ knows a container: `AsSlice` runs the container's own `as_slice` instance.
    that outlives its body). A slice reference copies like every other
    reference (`move_check`: `&[T]` owns nothing). Both pair registers
    open as `Kind::U64` — `Value::inline` carries no `Kind::Ref`.
+
+   The pair crosses an ExternFn boundary in both directions (amended
+   2026-09-20). A declaration returns one through `Handler::call_slice`,
+   whose `Elements` comes back in `rax`/`rdx`. A declaration takes one as a
+   Rust parameter of type `Slice<T, Rt>` or `SliceMut<T, Rt>` by value, two
+   of the argument run: `Arg` carries `type Form` as `Ret` does, and the
+   two-register form is `Form = Pair`. The runtime's `slice_from_run` reads
+   the pair back, so no new `Runtime` method was needed for the parameter
+   direction. `&v` reaches such a parameter by a coercion at the argument:
+   where the parameter is `Ref(m, Slice(E))` and the argument `Ref(m, C)`
+   with `C` a container that declares `as_slice` at that mutability, the
+   checker records `CastKind::Slice` and the lowering emits the `AsSlice`
+   there, so the argument is the slice and no copy of the container is made.
+   The container's head is not always known where the argument meets its
+   parameter — an `a[i]` argument's element type is settled by the index's
+   own signature decision — so a coercion whose container is still a
+   variable waits for the body's solve, as an `a[i]`'s own refusal does.
+
+   A `heavy` or an `async` declaration refuses a slice parameter. Such a
+   call is awaited, and the elements the pair names belong to the frame the
+   caller laid the arguments on, which is gone when the call resumes. The
+   bound is the one the return direction already used: every `Arg` of a
+   `ValuesOnly` handler and of an `AsyncHandler` is `Form = One`.
 7. **Bounds-check elimination is an interval domain and nothing more.**
    Each `Int` value carries `[lo, hi]` whose endpoints are constants or one
    other SSA value. Transfer: constants and `± constant`
@@ -149,7 +172,7 @@ enumerate the dependents, nothing is patched around.
   `as_slice_mut` declarations and which `resolve_fn` does not read.
   `as_slice(&v)` is `undefined function` because the name is in no table the
   lookup searches, so the only `&[T]` in a body is an `AsSlice`'s `dst`,
-  read by an `Index` beside it.
+  read by an `Index` beside it or passed to a declaration that takes one.
 
 ## Rejected
 
@@ -183,10 +206,9 @@ enumerate the dependents, nothing is patched around.
   two registers — "a slice then cannot cross an extern boundary in either
   direction" — was disproven for the return direction by disassembly:
   `Elements` returns in `rax`/`rdx` and `AsSlice` stores them to the pair
-  (attention −21 %, `as_slice in loop` −42.5 %). The parameter direction
-  (a `Slice<T>` parameter reading two registers, `f(&v)`) is not built;
-  `acvus-extern` has no accessor for a register word, so it needs a
-  `Runtime` method — its own brief.
+  (attention −21 %, `as_slice in loop` −42.5 %). The parameter direction is
+  built as well (§6), and it needed no `Runtime` method: `slice_from_run`
+  is the accessor both directions read the pair through.
 - **The length inside `Value`'s head word.** Three forms, all measured. A
   `{ kind: u8, len: [u8; 7] }` head falls to memory class and returns
   through `sret` from every handler (attention +122 %); a
@@ -279,6 +301,22 @@ routes the reads through it; anything else that reaches the storage, a
 they are. `bf table`'s `tape[ptr]` is the case: its five per-step blocks
 fall from 9, 9, 6, 6 and 5 operations to 3, 3, 3, 3 and 2, and its execute
 from 23 542.0 to 18 110.6 µs at a million steps (**−23.1 %**).
+
+**A slice parameter costs the log bench's sync case +28.6 %, and the element
+width is why.** `benches/logs.rs`'s `sync ext` case was a `#[state]` corpus
+addressed by line index; it is now `glob_match(&@pat, &@lines[li])` over two
+`Slice<i64, Rt>` parameters. Execute at `n = 10 000`: 561.4 → 722.1 µs, medians
+of six alternating pinned reps on two `--profile bench` binaries, base
+`ef619b66` by sha256; the `inline` control moves +0.4 %. The op listing names
+the per-line difference — the call's four ops (`CallExtern1`, `Add`, `Diamond`,
+`Mov`) become seven (`IndexRef`, `AsSlice`, two `MovWide`, `CallWindow`, `Add`,
+`Diamond`), the `@pat` slice hoisting to the entry block — but five machine ops
+do not account for +16 ns per line. The rest is §1: every container the machine
+can slice stores `Vec<Value>`, so a Rust body reading a line through the view
+walks 16 bytes per element and extracts a word from each, where the `#[state]`
+corpus held a native `Vec<i64>` at 8 bytes and read it directly. A slice
+parameter buys the script its container back; it does not buy a Rust body a
+Rust slice.
 
 - attention's inner iteration is `AsSlice(query)` hoisted to the entry,
   `AsSlice(keys[t])` above the `i` loop, two `Index` and one chain per

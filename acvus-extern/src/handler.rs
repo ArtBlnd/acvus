@@ -33,8 +33,14 @@ where
 {
     /// What the closure's parameter is.
     type Out;
+    /// The run this parameter takes out of the call's argument run. A bound
+    /// that admits only a parameter which survives the caller suspending
+    /// says `Form = One`: the `Pair` a slice is borrows the caller's frame
+    /// (RFC-0047 §3).
+    type Form: Form;
+
     /// How many of the run's values this parameter consumes.
-    const WIDTH: usize;
+    const WIDTH: usize = <Self::Form as Form>::WIDTH;
 
     /// # Safety
     /// `run` is this parameter's own `WIDTH` values of a call's argument
@@ -53,11 +59,11 @@ pub struct ByRefMut<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
 impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Uniform>
 where
-    T: OneValue<Rt>,
+    T: Cross<Rt>,
     Rt: Runtime,
 {
     type Out = T;
-    const WIDTH: usize = <T as Cross<Rt>>::WIDTH;
+    type Form = <T as Cross<Rt>>::Form;
 
     unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> T {
         // SAFETY: the caller's contract, which is `Cross::from_run`'s.
@@ -71,7 +77,7 @@ where
     Rt: Runtime,
 {
     type Out = T;
-    const WIDTH: usize = 1;
+    type Form = One;
 
     unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> T {
         // SAFETY: as the uniform impl's.
@@ -85,7 +91,7 @@ where
     Rt: Runtime,
 {
     type Out = &'a T;
-    const WIDTH: usize = 1;
+    type Form = One;
 
     unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a T {
         // SAFETY: the caller's contract: a live storage of `T` (RFC-0018).
@@ -99,7 +105,7 @@ where
     Rt: Runtime,
 {
     type Out = &'a mut T;
-    const WIDTH: usize = 1;
+    type Form = One;
 
     unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a mut T {
         // SAFETY: the caller's contract: a live storage of `T`, exclusively
@@ -114,7 +120,7 @@ where
     Rt: Runtime,
 {
     type Out = &'a T;
-    const WIDTH: usize = 1;
+    type Form = One;
 
     unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a T {
         // SAFETY: as the uniform impl's, at the specialized representation.
@@ -128,7 +134,7 @@ where
     Rt: Runtime,
 {
     type Out = &'a mut T;
-    const WIDTH: usize = 1;
+    type Form = One;
 
     unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a mut T {
         // SAFETY: as the uniform impl's, at the specialized representation.
@@ -315,10 +321,12 @@ where
     }
 }
 
-/// A handler whose result is one of the runtime's values, so the result
-/// outlives the call: what a task above `Sync` returns, a slice being a
-/// borrow of a container the caller holds the loan of (RFC-0047 §3).
-pub trait ReturnsValue<Rt>: Handler<Rt>
+/// A handler whose every crossing is one of the runtime's values: no
+/// parameter and no result is a slice. This is what a task above `Sync`
+/// runs. Such a call is awaited, and a slice is a borrow of the frame the
+/// call laid its arguments on, whose loan is gone by the time the caller
+/// resumes (RFC-0047 §3, rule 6).
+pub trait ValuesOnly<Rt>: Handler<Rt>
 where
     Rt: Runtime,
 {
@@ -438,12 +446,12 @@ macro_rules! arity {
             }
         }
 
-        impl<Rt, F, $($arg,)* R> ReturnsValue<Rt> for Glue<Rt, F, ($($arg,)*), R>
+        impl<Rt, F, $($arg,)* R> ValuesOnly<Rt> for Glue<Rt, F, ($($arg,)*), R>
         where
             Rt: Runtime,
             F: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> R::Of,
-            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+            $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
             R: Ret<Rt, Form = One> + 'static,
         {
         }
@@ -462,7 +470,7 @@ macro_rules! arity {
             Rt: Runtime,
             F: Send + Sync + 'static,
             F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> BoxFuture<'a, Rt::Value>,
-            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+            $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
         {
             fn clone_box(&self) -> Box<dyn AsyncHandler<Rt>> {
                 Box::new(AsyncGlue::<Rt, F, ($($arg,)*)> {
@@ -569,9 +577,10 @@ impl<R: Runtime> ExternHandler<R> {
         Self::Sync(Box::new(handler))
     }
 
-    /// The result of a call the caller waits for outlives the frame it ran
-    /// on, which is why this takes `ReturnsValue` and `sync` does not.
-    pub fn heavy(handler: impl ReturnsValue<R> + 'static) -> Self {
+    /// A call the caller waits for is resumed after the frame it ran on is
+    /// gone, so neither its arguments nor its result may borrow that frame.
+    /// That is why this takes `ValuesOnly` and `sync` does not.
+    pub fn heavy(handler: impl ValuesOnly<R> + 'static) -> Self {
         Self::Heavy(Box::new(handler))
     }
 

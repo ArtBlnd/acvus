@@ -79,9 +79,9 @@ where
 /// field, a container's element — says this and not `Cross`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not cross the boundary as one of the runtime's values",
-    note = "a slice crosses as the two registers it occupies and is no value of the language: it is a result, never a parameter, a field, or a container's element (RFC-0047 amended)."
+    note = "a slice crosses as the two registers it occupies and is no value of the language: it is an argument and a result, never a field, a container's element, or a parameter taken by reference (RFC-0047 rule 6)."
 )]
-pub trait OneValue<Rt>: Cross<Rt>
+pub trait OneValue<Rt>: Cross<Rt, Form = One>
 where
     Rt: Runtime,
 {

@@ -47,11 +47,16 @@ or an associated type of the crossing.
 2. **Two crossings, not one, and no blanket.** `Cross<Rt>` is the run.
    `OneValue<Rt>: Cross<Rt>` is the crossing that is *one of the runtime's
    values*: `erase`, `materialize`, `deref`, `deref_mut`, `STORED_AS_VALUE`.
-   Every bound that needs a value says `OneValue` — a parameter by value or
-   by borrow, an object's field, a container's element, a closure carrier's
-   argument and result — and `Slice`/`SliceMut` implement `Cross` alone, so a
-   slice in any of those positions is a compile error with the sentence
-   `OneValue`'s `#[diagnostic::on_unimplemented]` carries. There is no
+   Every bound that needs a value says `OneValue` — a parameter by borrow,
+   an object's field, a container's element, a closure carrier's argument
+   and result — and `Slice`/`SliceMut` implement `Cross` alone, so a slice
+   in any of those positions is a compile error with the sentence
+   `OneValue`'s `#[diagnostic::on_unimplemented]` carries. A parameter **by
+   value** is built by its crossing at that crossing's width (`Cross`,
+   `from_run`), which is what admits `Slice<T, Rt>` as a parameter
+   (RFC-0047 rule 6); a separate `Arg` impl for `ByValue<Slice>` beside the
+   `OneValue` one is refused by coherence (a downstream crate may implement
+   `OneValue` for `Slice`), so the one bound is `Cross`. There is no
    blanket `impl<T: OneValue> Cross for T`: coherence cannot admit one beside
    `impl Cross for Slice`, so each one-value type states both impls, the
    `Cross` half through one macro (`cross_one_value!`) or, inside the proc
@@ -65,8 +70,8 @@ or an associated type of the crossing.
    `const WIDTH` and `unsafe fn take(rt, run) -> Out`, implemented for three
    marker types the macro names from the Rust parameter's mode: `ByValue<T,
    C>` (the crossing), `ByRef<T, C>` (`deref`), `ByRefMut<T, C>`
-   (`deref_mut`), where `C` is `Uniform` or `Specialized`. The uniform modes
-   require `OneValue<Rt>`, the borrow modes `Borrowable<Rt>`, which carries
+   (`deref_mut`), where `C` is `Uniform` or `Specialized`. The by-value mode
+   requires `Cross<Rt>` (rule 2), the borrow modes `Borrowable<Rt>`, which carries
    `#[diagnostic::on_unimplemented]`: the refusal of `&Option<T>` and of a
    Rust `&[T]` is a trait error, not a name check.
 

@@ -455,6 +455,25 @@ where
     Slice::of(c.elements(rt))
 }
 
+/// The parameter direction of RFC-0047 rule 6: the declaration reads the
+/// elements through the view the caller lent, and the pair it was handed is
+/// the only thing it was handed.
+#[extern_fn(effect = pure)]
+fn sum_slice<Rt>(rt: &Rt, s: Slice<i64, Rt>) -> i64
+where
+    Rt: Runtime,
+{
+    let elements = s.into_elements();
+    (0..elements.len())
+        .map(|at| {
+            // SAFETY: `at` is below the length the view reports, the
+            // container the caller lent is live for the call (RFC-0018), and
+            // every element of a language `Vec<i64>` was erased from `i64`.
+            unsafe { *rt.value_as_ref::<i64>(elements.at(at)) }
+        })
+        .sum()
+}
+
 extern_signature! { ns: "t", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }
 
 #[extern_fn(instance_of = eq, effect = pure)]
@@ -494,7 +513,8 @@ where
         types: [Boxed<_, _, R>, Token<_>],
         signatures: [eq],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              eq_int, eq_point, same, greet(Greeting("hello".to_string()))],
+              sum_slice, eq_int, eq_point, same,
+              greet(Greeting("hello".to_string()))],
     }
 }
 
@@ -717,6 +737,32 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
             &*open_ref::<Vec<Owned<Tiny>>>(&storage)[at]
         ));
     }
+}
+
+#[test]
+fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
+    let (i, reg) = combined::<Tiny>();
+    let ExternHandler::Sync(entry) = handler(&reg, &i, "sum_slice") else {
+        panic!("a declaration taking a slice runs in the caller's frame (RFC-0047 rule 6)")
+    };
+    assert_eq!(
+        entry.width(),
+        acvus_extern::Width { args: 2, ret: 1 },
+        "a slice parameter is two of the argument run and the result is one value"
+    );
+    let storage = vec![erased(4i64), erased(5i64), erased(6i64)];
+
+    let mut run = [V::default(); 2];
+    Tiny.slice_into_run(
+        Slice::<i64, Tiny>::of(&storage).into_elements().words(),
+        &mut run,
+    );
+    let mut out = [V::default(); 1];
+    // SAFETY: `run` is the pair `slice_into_run` just wrote, `storage` is
+    // live and unmoved, and `out` has room for the one value the width names.
+    unsafe { entry.call(&Tiny, &run, &mut out) };
+
+    assert_eq!(peek::<i64>(&out[0]), 15);
 }
 
 async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {

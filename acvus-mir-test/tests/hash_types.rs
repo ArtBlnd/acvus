@@ -307,6 +307,9 @@ fn check_functions(
                 i.resolve(cast.fn_ref.name),
                 i.resolve(back.fn_ref.name)
             ),
+            CastKind::Slice { as_slice, .. } => {
+                format!("[{}]", i.resolve(as_slice.fn_ref.name))
+            }
         })
         .collect();
     casts.sort();
