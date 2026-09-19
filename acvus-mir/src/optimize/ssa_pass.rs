@@ -196,6 +196,12 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             then_args,
             else_args,
             ..
+        }
+        | InstKind::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => {
             s(cond);
             then_args.iter_mut().for_each(|v| s(v));
@@ -240,6 +246,12 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
     match term {
         Terminator::Jump { args, .. } => args.iter_mut().for_each(&s),
         Terminator::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             cond,
             then_args,
             else_args,
@@ -663,6 +675,13 @@ pub(super) fn patch_instructions(cfg: &mut CfgBody, phi_insertions: &[super::ssa
                 }
             }
             Terminator::JumpIf {
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                ..
+            }
+            | Terminator::Diamond {
                 then_label,
                 then_args,
                 else_label,

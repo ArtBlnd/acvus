@@ -12,7 +12,7 @@ expression: ir
      3 |   r2 = ref &@users
      4 | L2:
      6 |   r3 = ref &(*r2)[0]
-     7 |   jump_if true (r4) then L3 else L4
+     7 |   if true (r4) -> L3 else L4 join L5
      8 | L3:
     10 |   jump L5(true (r5))
     11 | L4:

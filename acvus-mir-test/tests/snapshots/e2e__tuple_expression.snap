@@ -12,13 +12,13 @@ expression: ir
      6 |   r6 = tuple (r3, r5)
      7 |   assign $source = r6
      8 | L2:
-    10 |   jump_if true (r7) then L3 else L4
+    10 |   if true (r7) -> L3 else L4 join L5
     11 | L3:
     13 |   jump L5(true (r8))
     14 | L4:
     16 |   jump L5(false (r9))
     17 | L5(r10: Bool):
-    18 |   jump_if r10 then L6 else L7
+    18 |   if r10 -> L6 else L7 join L8
     19 | L6:
     21 |   jump L8(true (r11))
     22 | L7:

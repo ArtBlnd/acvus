@@ -5,7 +5,7 @@ expression: ir
 === main ===
      1 |   r0 = variant Some(42 (r1))
      2 |   r2 = test r0 is Some
-     3 |   jump_if r2 then L0 else L2
+     3 |   if r2 -> L0 else L2 join L1
      4 | L0:
      5 |   r3 = unwrap r0
      6 |   assign v = r3

@@ -36,11 +36,11 @@ expression: opt
     26 |   r25 = ref &$v23
     27 |   r26 = ref &$v134
     28 |   r27 = ref &$v141
-    29 |   jump_if r21 then L0 else L1(r2)
+    29 |   if r21 -> L0 else L1(r2) join L1
     30 | L0:
     32 |   jump L1(0 (r28))
     33 | L1(r29: i64):
-    34 |   jump_if r23 then L3(r4) else L3(r29)
+    34 |   if r23 -> L3(r4) else L3(r29) join L3
     35 | L3(r30: i64):
     36 |   r31 = r19 + r30
     37 |   r32 = const_str T0

@@ -13,7 +13,7 @@ expression: listing
     12 |   r8 = r6 == 0 (r9)
     13 |   r10 = test r8 == true
     15 |   r11 = r3 + 1 (r12)
-    16 |   jump_if r10 then L3 else L4(r4)
+    16 |   if r10 -> L3 else L4(r4) join L4
     17 | L3:
     18 |   r13 = r4 + r3
     19 |   jump L4(r13)

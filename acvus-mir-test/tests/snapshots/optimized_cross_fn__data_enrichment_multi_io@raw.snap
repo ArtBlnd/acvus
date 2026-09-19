@@ -143,7 +143,7 @@ expression: raw
     33 |   r23 = take @threshold
     34 |   r24 = r22 > r23
     35 |   r25 = test r24 == true
-    36 |   jump_if r25 then L0 else L1
+    36 |   if r25 -> L0 else L1 join L1
     37 | L0:
     38 |   r26 = take @user_id
     39 |   r27 = take score

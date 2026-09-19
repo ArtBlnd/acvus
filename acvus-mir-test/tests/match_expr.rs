@@ -63,9 +63,9 @@ fn a_match_over_an_enum_built_in_this_body_needs_no_catch_all() {
         0,
         "no instruction reads a tag out of a value that does not exist: {optimized}"
     );
+    let branches = optimized.matches(" if ").count() + optimized.matches("jump_if ").count();
     assert_eq!(
-        optimized.matches("jump_if").count(),
-        1,
+        branches, 1,
         "the branch that chooses the constructor is the one that chooses the arm: {optimized}"
     );
 }

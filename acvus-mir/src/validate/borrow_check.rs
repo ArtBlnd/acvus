@@ -271,6 +271,12 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
             then_args,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => {
             let mut v = vec![*cond];
             v.extend(then_args);

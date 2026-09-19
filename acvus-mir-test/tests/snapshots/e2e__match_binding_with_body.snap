@@ -11,7 +11,7 @@ expression: ir
      1 |   r1 = fetch @user
      2 |   assign @user = r1
      3 | L2:
-     5 |   jump_if true (r2) then L3 else L4
+     5 |   if true (r2) -> L3 else L4 join L5
      6 | L3:
      8 |   jump L5(true (r3))
      9 | L4:

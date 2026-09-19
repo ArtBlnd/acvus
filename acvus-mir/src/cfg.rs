@@ -52,6 +52,16 @@ pub enum Terminator {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
+    /// See [`crate::ir::InstKind::Diamond`] for what `join` obliges of a
+    /// pass that rewrites labels.
+    Diamond {
+        cond: ValueId,
+        then_label: Label,
+        then_args: Vec<ValueId>,
+        else_label: Label,
+        else_args: Vec<ValueId>,
+        join: Label,
+    },
     /// One dispatch over a variant's tag (RFC-0051): the tag is read once
     /// and the block leaves through the arm that tag names. `default` is
     /// the edge a tag outside `arms` takes, and it is present exactly when
@@ -119,6 +129,11 @@ impl CfgBody {
                 then_label,
                 else_label,
                 ..
+            }
+            | Terminator::Diamond {
+                then_label,
+                else_label,
+                ..
             } => {
                 if let Some(&bi) = self.label_to_block.get(then_label) {
                     succs.push(bi);
@@ -180,6 +195,30 @@ impl CfgBody {
 }
 
 // -- Promote: MirBody -> CfgBody -----------------------------------
+
+/// RFC-0063 Decision 1 admits a `Diamond` only where the arms rejoin, so a
+/// pass that dissolves the join calls this: what is left is a `JumpIf`.
+pub fn demote_diamond(term: &mut Terminator) {
+    let Terminator::Diamond {
+        cond,
+        then_label,
+        then_args,
+        else_label,
+        else_args,
+        ..
+    } = term
+    else {
+        return;
+    };
+    let demoted = Terminator::JumpIf {
+        cond: *cond,
+        then_label: *then_label,
+        then_args: std::mem::take(then_args),
+        else_label: *else_label,
+        else_args: std::mem::take(else_args),
+    };
+    *term = demoted;
+}
 
 pub fn promote(body: MirBody) -> CfgBody {
     let mut blocks: Vec<Block> = Vec::new();
@@ -320,6 +359,25 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 insts.pop();
                 return term;
             }
+            InstKind::Diamond {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                join,
+            } => {
+                let term = Terminator::Diamond {
+                    cond: *cond,
+                    then_label: *then_label,
+                    then_args: then_args.clone(),
+                    else_label: *else_label,
+                    else_args: else_args.clone(),
+                    join: *join,
+                };
+                insts.pop();
+                return term;
+            }
             InstKind::Switch { tag, arms, default } => {
                 let term = Terminator::Switch {
                     tag: *tag,
@@ -410,6 +468,26 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     },
                 });
             }
+            Terminator::Diamond {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                join,
+            } => {
+                insts.push(Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind: InstKind::Diamond {
+                        cond,
+                        then_label,
+                        then_args,
+                        else_label,
+                        else_args,
+                        join,
+                    },
+                });
+            }
             Terminator::Switch { tag, arms, default } => {
                 insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
@@ -467,6 +545,12 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 else_label,
                 ..
             } => Some(then_label.0.max(else_label.0) + 1),
+            InstKind::Diamond {
+                then_label,
+                else_label,
+                join,
+                ..
+            } => Some(then_label.0.max(else_label.0).max(join.0) + 1),
             InstKind::Switch { arms, default, .. } => arms
                 .iter()
                 .map(|(_, label, _)| label.0)

@@ -73,7 +73,9 @@ impl DataflowAnalysis for LivenessAnalysis {
                     state.set(*o, Liveness::Live);
                 }
             }
-            Terminator::JumpIf { cond, .. } => state.set(*cond, Liveness::Live),
+            Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => {
+                state.set(*cond, Liveness::Live)
+            }
             // A `Switch` reads the tag of its scrutinee (RFC-0051).
             Terminator::Switch { tag, .. } => state.set(*tag, Liveness::Live),
             // A `For` reads the source it traverses on every iteration

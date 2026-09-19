@@ -22,6 +22,8 @@ fn main_body(ir: &str) -> &str {
         .unwrap()
 }
 
+const IF_TERMINATOR: &str = " if ";
+
 fn at(body: &str, needle: &str) -> usize {
     body.find(needle)
         .unwrap_or_else(|| panic!("no `{needle}` in:\n{body}"))
@@ -54,7 +56,7 @@ fn an_addition_used_only_in_a_then_block_stays_in_it() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "jump_if") < at(body, " + "), "{ir}");
+    assert!(at(body, IF_TERMINATOR) < at(body, " + "), "{ir}");
 }
 
 /// The merge post-dominates the branch, so the two execute under the same
@@ -69,7 +71,7 @@ fn an_addition_after_a_merge_rises_above_the_branch() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, " + ") < at(body, "jump_if"), "{ir}");
+    assert!(at(body, " + ") < at(body, IF_TERMINATOR), "{ir}");
 }
 
 // -- Loop depth -----------------------------------------------------

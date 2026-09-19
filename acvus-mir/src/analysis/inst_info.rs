@@ -65,6 +65,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::IndexSet { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
+        | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. }
         | InstKind::Return { .. }
@@ -189,6 +190,12 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             then_args,
             else_args,
             ..
+        }
+        | InstKind::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => {
             let mut v: SmallVec<[ValueId; 4]> = smallvec![*cond];
             v.extend(then_args.iter().copied());
@@ -246,6 +253,7 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
         InstKind::BlockLabel { .. }
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
+            | InstKind::Diamond { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
     )

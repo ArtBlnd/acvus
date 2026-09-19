@@ -55,7 +55,7 @@ expression: opt
     45 |   drop r42
     46 |   r43 = r15 > r4
     47 |   r44 = test r43 == true
-    48 |   jump_if r44 then L0 else L1(r12, r2)
+    48 |   if r44 -> L0 else L1(r12, r2) join L1
     49 | L0:
     50 |   r45 = spawn #4(r5, r15) [r12 ->]
     52 |   r46 = r2 + 1 (r47)

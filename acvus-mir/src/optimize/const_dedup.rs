@@ -241,6 +241,12 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             then_args,
             else_args,
             ..
+        }
+        | InstKind::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => {
             remap_val(cond, remap);
             remap_vec(then_args, remap);

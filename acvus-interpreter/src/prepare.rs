@@ -19,7 +19,8 @@ use acvus_extern::Width;
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
+    Callee, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, TwoWay,
+    ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -658,7 +659,7 @@ impl Prepare<'_> {
             InstKind::BinOp { left, right, .. } => *left == value || *right == value,
             InstKind::UnaryOp { operand, .. } => *operand == value,
             InstKind::Cast { src, .. } => *src == value,
-            InstKind::JumpIf { cond, .. } => *cond == value,
+            InstKind::JumpIf { cond, .. } | InstKind::Diamond { cond, .. } => *cond == value,
             _ => false,
         }
     }
@@ -747,7 +748,14 @@ impl Next {
 fn targets(inst: &Inst, label: Label) -> bool {
     match &inst.kind {
         InstKind::Jump { label: named, .. } => *named == label,
+        // A `Diamond`'s `join` is not an edge: no control leaves the block for
+        // it, so it is not a reference to the label either (RFC-0063).
         InstKind::JumpIf {
+            then_label,
+            else_label,
+            ..
+        }
+        | InstKind::Diamond {
             then_label,
             else_label,
             ..
@@ -1363,6 +1371,7 @@ impl<'a> Prepare<'a> {
         match &inst.kind {
             InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
+            | InstKind::Diamond { .. }
             // RFC-0051: a `Switch` is a terminator, so it ends its block
             // and `straight_run` admits it into no region's part. A `For`
             // is one too (RFC-0057).
@@ -1607,25 +1616,18 @@ impl<'a> Prepare<'a> {
     /// before.
     fn recognize_diamond(&self, at: usize) -> Option<DiamondRegion> {
         let insts = self.body.insts.as_slice();
-        let InstKind::JumpIf {
+        let TwoWay {
             then_label,
             else_label,
             ..
-        } = &insts.get(at)?.kind
-        else {
-            return None;
-        };
+        } = two_way(&insts.get(at)?.kind)?;
 
         let near_label = block_label(insts.get(at + 1)?)?;
-        let near_is_then = near_label == *then_label;
-        if !near_is_then && near_label != *else_label {
+        let near_is_then = near_label == then_label;
+        if !near_is_then && near_label != else_label {
             return None;
         }
-        let far_label = if near_is_then {
-            *else_label
-        } else {
-            *then_label
-        };
+        let far_label = if near_is_then { else_label } else { then_label };
         if self.references(near_label).as_slice() != [at] {
             return None;
         }
@@ -2090,15 +2092,12 @@ impl<'a> Prepare<'a> {
     /// that register to a value live outside the arm.
     fn select_shape(&self, region: &DiamondRegion) -> Option<SelectShape> {
         let insts = self.body.insts.as_slice();
-        let InstKind::JumpIf {
+        let TwoWay {
             cond,
             then_args,
             else_args,
             ..
-        } = &insts[region.jump_if].kind
-        else {
-            return None;
-        };
+        } = two_way(&insts[region.jump_if].kind)?;
         let Sides {
             arm_block,
             arm_regions,
@@ -2165,7 +2164,7 @@ impl<'a> Prepare<'a> {
         }
 
         Some(SelectShape {
-            cond: *cond,
+            cond,
             dst: *dst,
             ty,
             root,
@@ -2203,20 +2202,20 @@ impl<'a> Prepare<'a> {
     }
 
     fn diamond_op(&mut self, region: &DiamondRegion, rides: &Rides) -> Node {
-        let InstKind::JumpIf {
+        let Some(TwoWay {
             cond,
             then_label,
             then_args,
             else_label,
             else_args,
-        } = &self.body.insts[region.jump_if].kind
+        }) = two_way(&self.body.insts[region.jump_if].kind)
         else {
-            panic!("a recognized diamond's test is not a conditional jump")
+            panic!("a recognized diamond's test is not a two-way branch")
         };
 
-        let cond = self.place_of(rides, *cond);
-        let on_true = self.arm(&region.on_true, then_label, then_args);
-        let on_false = self.arm(&region.on_false, else_label, else_args);
+        let cond = self.place_of(rides, cond);
+        let on_true = self.arm(&region.on_true, &then_label, then_args);
+        let on_false = self.arm(&region.on_false, &else_label, else_args);
 
         made(move |next| match cond {
             Where::Frame(off) => Box::new(control::Diamond::<place::Slot> {
@@ -2289,6 +2288,14 @@ impl<'a> Prepare<'a> {
                 then_args,
                 else_label,
                 else_args,
+            }
+            | InstKind::Diamond {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                ..
             } => {
                 let cond = self.place_of(rides, *cond);
                 let on_true = self.target(then_label);
@@ -3794,6 +3801,11 @@ impl Edges<'_> {
                 then_label,
                 else_label,
                 ..
+            }
+            | InstKind::Diamond {
+                then_label,
+                else_label,
+                ..
             } => {
                 visit(self.target(then_label));
                 visit(self.target(else_label));
@@ -3973,6 +3985,13 @@ fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
         match &inst.kind {
             InstKind::Jump { label, args } => edge(label, args),
             InstKind::JumpIf {
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                ..
+            }
+            | InstKind::Diamond {
                 then_label,
                 then_args,
                 else_label,

@@ -90,6 +90,11 @@ fn collapse(cfg: &mut CfgBody) -> bool {
             *edge.to = target.to;
             *edge.args = target.args.clone();
         }
+        if let Terminator::Diamond { join, .. } = &mut block.terminator
+            && let Some(target) = resolved.get(join)
+        {
+            *join = target.to;
+        }
     }
 
     cfg.blocks
@@ -202,6 +207,13 @@ fn edges_mut(term: &mut Terminator) -> Vec<EdgeMut<'_>> {
     match term {
         Terminator::Jump { label, args } => vec![EdgeMut { to: label, args }],
         Terminator::JumpIf {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             then_label,
             then_args,
             else_label,

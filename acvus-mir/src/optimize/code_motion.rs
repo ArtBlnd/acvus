@@ -1040,6 +1040,12 @@ fn remap_terminator(term: &mut Terminator, remap: &FxHashMap<ValueId, ValueId>) 
             then_args,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => {
             remap_val(cond, remap);
             remap_vec(then_args, remap);
@@ -1086,6 +1092,12 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
         Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Jump { args, .. } => args.clone(),
         Terminator::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             cond,
             then_args,
             else_args,

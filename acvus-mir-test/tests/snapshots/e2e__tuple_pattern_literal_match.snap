@@ -15,7 +15,7 @@ expression: ir
      4 |   r4 = tuple (r2, r3)
      5 |   assign $source = r4
      6 | L2:
-     8 |   jump_if true (r5) then L4 else L5
+     8 |   if true (r5) -> L4 else L5 join L6
      9 | L4:
     10 |   r6 = take $source[0]
     11 |   r7 = test r6 == 0
@@ -23,7 +23,7 @@ expression: ir
     13 | L5:
     15 |   jump L6(false (r8))
     16 | L6(r9: Bool):
-    17 |   jump_if r9 then L7 else L8
+    17 |   if r9 -> L7 else L8 join L9
     18 | L7:
     19 |   r10 = take $source[1]
     20 |   r11 = test r10 == 1
@@ -37,7 +37,7 @@ expression: ir
     29 |   r15 = string_concat [r14]
     30 |   jump L0(r15)
     31 | L3:
-    33 |   jump_if true (r16) then L11 else L12
+    33 |   if true (r16) -> L11 else L12 join L13
     34 | L11:
     35 |   r17 = take $source[0]
     36 |   r18 = test r17 == 1

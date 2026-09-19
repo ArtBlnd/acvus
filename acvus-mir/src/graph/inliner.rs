@@ -656,6 +656,7 @@ fn starts_or_ends_a_block(kind: &InstKind) -> bool {
         InstKind::BlockLabel { .. }
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
+            | InstKind::Diamond { .. }
             | InstKind::Switch { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
@@ -1044,6 +1045,21 @@ fn remap_inst(
             then_args: rv(then_args),
             else_label: rl(*else_label),
             else_args: rv(else_args),
+        },
+        InstKind::Diamond {
+            cond,
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            join,
+        } => InstKind::Diamond {
+            cond: r(*cond),
+            then_label: rl(*then_label),
+            then_args: rv(then_args),
+            else_label: rl(*else_label),
+            else_args: rv(else_args),
+            join: rl(*join),
         },
         InstKind::For {
             source,

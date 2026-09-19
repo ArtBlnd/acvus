@@ -77,6 +77,11 @@ pub enum ValidationErrorKind {
         at: Ty,
         hi: Ty,
     },
+    /// RFC-0063 Decision 1.
+    DiamondArmMissesJoin {
+        side: &'static str,
+        join: Label,
+    },
     /// A `match` over a locally closed enum leaves a variant untaken.
     MatchMissesVariants {
         enum_name: Option<Astr>,
@@ -181,6 +186,12 @@ fn declared_closure_returns(module: &MirModule) -> FxHashMap<Label, Ty> {
             })
         })
         .collect()
+}
+
+struct BranchEdge<'a> {
+    side: &'static str,
+    label: Label,
+    args: &'a [ValueId],
 }
 
 // ---------------------------------------------------------------------------
@@ -1856,65 +1867,75 @@ impl CheckCtx {
                 then_args,
                 else_label,
                 else_args,
+            }
+            | InstKind::Diamond {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                ..
             } => {
+                let name = match kind {
+                    InstKind::Diamond { .. } => "Diamond",
+                    _ => "JumpIf",
+                };
                 let cond_ty = ty!(*cond);
-                self.assert_match(pc, span, "JumpIf", "cond", &Ty::Bool, cond_ty, errors);
+                self.assert_match(pc, span, name, "cond", &Ty::Bool, cond_ty, errors);
 
-                if let Some(then_params) = self.block_params(then_label, insts) {
-                    if then_args.len() != then_params.len() {
+                let edges = [
+                    BranchEdge {
+                        side: "then",
+                        label: *then_label,
+                        args: then_args,
+                    },
+                    BranchEdge {
+                        side: "else",
+                        label: *else_label,
+                        args: else_args,
+                    },
+                ];
+                for BranchEdge { side, label, args } in edges {
+                    if let InstKind::Diamond { join, .. } = kind
+                        && !crate::ir::reaches(insts, label, *join)
+                    {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
                             span,
-                            kind: ValidationErrorKind::ArityMismatch {
-                                inst_name: "JumpIf(then)".to_string(),
-                                expected: then_params.len(),
-                                got: then_args.len(),
-                            },
+                            kind: ValidationErrorKind::DiamondArmMissesJoin { side, join: *join },
                         });
-                    } else {
-                        for (i, (arg, param)) in then_args.iter().zip(&then_params).enumerate() {
-                            let param_ty = ty!(*param);
-                            let arg_ty = ty!(*arg);
-                            self.assert_match(
-                                pc,
-                                span,
-                                "JumpIf(then)",
-                                &format!("arg[{i}]"),
-                                param_ty,
-                                arg_ty,
-                                errors,
-                            );
-                        }
                     }
-                }
 
-                if let Some(else_params) = self.block_params(else_label, insts) {
-                    if else_args.len() != else_params.len() {
+                    let Some(params) = self.block_params(&label, insts) else {
+                        continue;
+                    };
+                    let edge = format!("{name}({side})");
+                    if args.len() != params.len() {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
                             span,
                             kind: ValidationErrorKind::ArityMismatch {
-                                inst_name: "JumpIf(else)".to_string(),
-                                expected: else_params.len(),
-                                got: else_args.len(),
+                                inst_name: edge,
+                                expected: params.len(),
+                                got: args.len(),
                             },
                         });
-                    } else {
-                        for (i, (arg, param)) in else_args.iter().zip(&else_params).enumerate() {
-                            let param_ty = ty!(*param);
-                            let arg_ty = ty!(*arg);
-                            self.assert_match(
-                                pc,
-                                span,
-                                "JumpIf(else)",
-                                &format!("arg[{i}]"),
-                                param_ty,
-                                arg_ty,
-                                errors,
-                            );
-                        }
+                        continue;
+                    }
+                    for (i, (arg, param)) in args.iter().zip(&params).enumerate() {
+                        let param_ty = ty!(*param);
+                        let arg_ty = ty!(*arg);
+                        self.assert_match(
+                            pc,
+                            span,
+                            &edge,
+                            &format!("arg[{i}]"),
+                            param_ty,
+                            arg_ty,
+                            errors,
+                        );
                     }
                 }
             }
@@ -2224,5 +2245,80 @@ mod tests {
             errors.is_empty(),
             "matching jump arg types should pass: {errors:?}"
         );
+    }
+
+    fn diamond_module(else_rejoins: bool) -> MirModule {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let cond = vf.next();
+        let joined = vf.next();
+        let mut vt = FxHashMap::default();
+        vt.insert(cond, Ty::Bool);
+        vt.insert(joined, Ty::Unit);
+        let leave_else = match else_rejoins {
+            true => inst(InstKind::Jump {
+                label: Label(2),
+                args: vec![],
+            }),
+            false => inst(InstKind::Return {
+                value: joined,
+                order: None,
+            }),
+        };
+        make_module(
+            vec![
+                inst(InstKind::Diamond {
+                    cond,
+                    then_label: Label(0),
+                    then_args: vec![],
+                    else_label: Label(1),
+                    else_args: vec![],
+                    join: Label(2),
+                }),
+                inst(InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![],
+                }),
+                inst(InstKind::Jump {
+                    label: Label(2),
+                    args: vec![],
+                }),
+                inst(InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![],
+                }),
+                leave_else,
+                inst(InstKind::BlockLabel {
+                    label: Label(2),
+                    params: vec![],
+                }),
+                inst(InstKind::Return {
+                    value: joined,
+                    order: None,
+                }),
+            ],
+            vt,
+        )
+    }
+
+    #[test]
+    fn a_diamond_whose_arms_both_reach_the_join_is_accepted() {
+        let errors = check_types(&diamond_module(true));
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn a_diamond_whose_arm_does_not_reach_the_join_is_refused() {
+        let errors = check_types(&diamond_module(false));
+        let refusals: Vec<&ValidationErrorKind> = errors
+            .iter()
+            .map(|error| &error.kind)
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    ValidationErrorKind::DiamondArmMissesJoin { side: "else", .. }
+                )
+            })
+            .collect();
+        assert_eq!(refusals.len(), 1, "{errors:?}");
     }
 }

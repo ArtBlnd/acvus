@@ -287,6 +287,14 @@ fn propagate_to_successors<A: DataflowAnalysis>(
             then_args,
             else_label,
             else_args,
+        }
+        | Terminator::Diamond {
+            cond,
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
         } => {
             let definite = analysis.eval_branch_cond(exit_state, cond);
             let edges = [
@@ -408,6 +416,13 @@ fn propagate_from_successors<A: DataflowAnalysis>(
             }
         }
         Terminator::JumpIf {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             then_label,
             then_args,
             else_label,

@@ -151,6 +151,12 @@ fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
             then_args,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => std::iter::once(*cond)
             .chain(then_args.iter().copied())
             .chain(else_args.iter().copied())

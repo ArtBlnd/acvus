@@ -15,17 +15,17 @@ expression: ir
      6 | L2:
      8 |   r5 = ref &(*r4)[0]
      9 |   r6 = ref &(*r4)[1]
-    10 |   jump_if true (r7) then L3 else L4
+    10 |   if true (r7) -> L3 else L4 join L5
     11 | L3:
     13 |   r8 = ref &(*r5)[0]
     14 |   r9 = ref &(*r5)[1]
-    15 |   jump_if true (r10) then L6 else L7
+    15 |   if true (r10) -> L6 else L7 join L8
     16 | L6:
     18 |   jump L8(true (r11))
     19 | L7:
     21 |   jump L8(false (r12))
     22 | L8(r13: Bool):
-    23 |   jump_if r13 then L9 else L10
+    23 |   if r13 -> L9 else L10 join L11
     24 | L9:
     26 |   jump L11(true (r14))
     27 | L10:
@@ -35,7 +35,7 @@ expression: ir
     32 | L4:
     34 |   jump L5(false (r17))
     35 | L5(r18: Bool):
-    36 |   jump_if r18 then L12 else L13
+    36 |   if r18 -> L12 else L13 join L14
     37 | L12:
     39 |   jump L14(true (r19))
     40 | L13:

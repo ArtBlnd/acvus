@@ -8,7 +8,7 @@ expression: ir
      2 |   r2 = fetch @val
      3 |   r3 = fetch @out
      4 |   r4 = test r2 == 42
-     5 |   jump_if r4 then L0 else L1(r3)
+     5 |   if r4 -> L0 else L1(r3) join L1
      6 | L0:
      8 |   jump L1(1 (r5))
      9 | L1(r6: i64):

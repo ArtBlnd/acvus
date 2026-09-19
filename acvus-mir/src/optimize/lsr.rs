@@ -148,6 +148,13 @@ fn sole_edge_args(term: &Terminator, label: Label) -> Option<&Vec<ValueId>> {
             else_label,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
         } => {
             if *then_label == label {
                 edges.push(then_args);
@@ -196,6 +203,13 @@ fn sole_edge_args_mut(term: &mut Terminator, label: Label) -> &mut Vec<ValueId> 
             }
         }
         Terminator::JumpIf {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             then_label,
             then_args,
             else_label,
@@ -348,6 +362,12 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Jump { args, .. } => args.clone(),
         Terminator::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             cond,
             then_args,
             else_args,
@@ -663,6 +683,12 @@ fn subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) 
     match term {
         Terminator::Jump { args, .. } => args.iter_mut().for_each(&mut one),
         Terminator::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             cond,
             then_args,
             else_args,

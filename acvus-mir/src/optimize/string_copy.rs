@@ -153,6 +153,11 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
             then_args,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            then_args,
+            else_args,
+            ..
         } => then_args.iter().chain(else_args).copied().collect(),
         Terminator::For {
             body_args,
@@ -173,6 +178,11 @@ fn terminator_args_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
     match t {
         Terminator::Jump { args, .. } => args.iter_mut().collect(),
         Terminator::JumpIf {
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             then_args,
             else_args,
             ..

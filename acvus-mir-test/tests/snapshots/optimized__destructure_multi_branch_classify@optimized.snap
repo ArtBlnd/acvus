@@ -25,7 +25,7 @@ expression: opt
     13 |   r10 = test r8 == true
     15 |   r11 = r2 < 18 (r12)
     16 |   r13 = test r11 == true
-    17 |   jump_if r7 then L0 else L1
+    17 |   if r7 -> L0 else L1 join L1
     18 | L0:
     19 |   drop r14
     20 |   r15 = const_str T1
@@ -33,7 +33,7 @@ expression: opt
     22 |   assign @output = r16
     23 |   jump L1
     24 | L1:
-    25 |   jump_if r10 then L2 else L3
+    25 |   if r10 -> L2 else L3 join L3
     26 | L2:
     27 |   drop r14
     28 |   r17 = const_str T2
@@ -41,7 +41,7 @@ expression: opt
     30 |   assign @output = r18
     31 |   jump L3
     32 | L3:
-    33 |   jump_if r13 then L4 else L5
+    33 |   if r13 -> L4 else L5 join L5
     34 | L4:
     35 |   drop r14
     36 |   r19 = const_str T3

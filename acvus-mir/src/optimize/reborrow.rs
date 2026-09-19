@@ -86,6 +86,12 @@ fn terminator_uses_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
             then_args,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => std::iter::once(cond)
             .chain(then_args.iter_mut())
             .chain(else_args.iter_mut())

@@ -11,6 +11,7 @@ use crate::graph::QualifiedRef;
 use crate::ir::{
     Callee, CastKind, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess, IndexMode, Inst,
     InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
+    reaches,
 };
 use crate::solver::CaptureRead;
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
@@ -55,6 +56,18 @@ pub struct Lowerer<'a> {
 struct Loop {
     header: Label,
     exit: Label,
+}
+
+#[derive(Clone, Copy)]
+struct DiamondLabels {
+    then_label: Label,
+    else_label: Label,
+    join: Label,
+}
+
+struct PendingDiamond {
+    at: usize,
+    labels: DiamondLabels,
 }
 
 /// Which of the two jumps out of a loop body this is.
@@ -1000,14 +1013,13 @@ impl<'a> Lowerer<'a> {
         let matched = self.lower_pattern_test(pattern, src.clone(), span);
         let body_label = self.alloc_label();
         let end_label = self.alloc_label();
-        self.emit_inst(
+        let pending = self.open_diamond(
             span,
-            InstKind::JumpIf {
-                cond: matched,
+            matched,
+            DiamondLabels {
                 then_label: body_label,
-                then_args: vec![],
                 else_label: end_label,
-                else_args: vec![],
+                join: end_label,
             },
         );
 
@@ -1020,6 +1032,7 @@ impl<'a> Lowerer<'a> {
                 args: vec![],
             },
         );
+        self.close_diamond(pending);
 
         self.emit_label(span, end_label);
     }
@@ -1323,14 +1336,13 @@ impl<'a> Lowerer<'a> {
         match else_branch {
             Some(eb) => {
                 let else_label = self.alloc_label();
-                self.emit_inst(
+                let pending = self.open_diamond(
                     span,
-                    InstKind::JumpIf {
-                        cond: cond_val,
+                    cond_val,
+                    DiamondLabels {
                         then_label,
-                        then_args: vec![],
                         else_label,
-                        else_args: vec![],
+                        join: merge_label,
                     },
                 );
 
@@ -1363,6 +1375,7 @@ impl<'a> Lowerer<'a> {
                         args: vec![else_val],
                     },
                 );
+                self.close_diamond(pending);
 
                 // Merge.
                 let result = self.alloc_val();
@@ -1379,14 +1392,13 @@ impl<'a> Lowerer<'a> {
             None => {
                 // No else: then branch stores to a var slot, else path skips.
                 // The result is Unit (no value merge needed).
-                self.emit_inst(
+                let pending = self.open_diamond(
                     span,
-                    InstKind::JumpIf {
-                        cond: cond_val,
+                    cond_val,
+                    DiamondLabels {
                         then_label,
-                        then_args: vec![],
                         else_label: merge_label,
-                        else_args: vec![],
+                        join: merge_label,
                     },
                 );
 
@@ -1406,6 +1418,7 @@ impl<'a> Lowerer<'a> {
                         args: vec![],
                     },
                 );
+                self.close_diamond(pending);
 
                 self.emit_label(span, merge_label);
                 self.emit_unit(span)
@@ -1433,14 +1446,13 @@ impl<'a> Lowerer<'a> {
                 let then_label = self.alloc_label();
                 let merge_label = self.alloc_label();
                 let else_label = self.alloc_label();
-                self.emit_inst(
+                let pending = self.open_diamond(
                     span,
-                    InstKind::JumpIf {
-                        cond: matched,
+                    matched,
+                    DiamondLabels {
                         then_label,
-                        then_args: vec![],
                         else_label,
-                        else_args: vec![],
+                        join: merge_label,
                     },
                 );
 
@@ -1474,6 +1486,7 @@ impl<'a> Lowerer<'a> {
                         args: vec![else_val],
                     },
                 );
+                self.close_diamond(pending);
 
                 // Merge.
                 let result = self.alloc_val();
@@ -2024,23 +2037,19 @@ impl<'a> Lowerer<'a> {
         let decided_label = self.alloc_label();
         let merge_label = self.alloc_label();
 
-        let jump_if = match connective {
-            ShortCircuit::And => InstKind::JumpIf {
-                cond: left,
+        let labels = match connective {
+            ShortCircuit::And => DiamondLabels {
                 then_label: right_label,
-                then_args: vec![],
                 else_label: decided_label,
-                else_args: vec![],
+                join: merge_label,
             },
-            ShortCircuit::Or => InstKind::JumpIf {
-                cond: left,
+            ShortCircuit::Or => DiamondLabels {
                 then_label: decided_label,
-                then_args: vec![],
                 else_label: right_label,
-                else_args: vec![],
+                join: merge_label,
             },
         };
-        self.emit_inst(span, jump_if);
+        let pending = self.open_diamond(span, left, labels);
 
         self.emit_label(span, right_label);
         let right_val = right(self);
@@ -2062,6 +2071,8 @@ impl<'a> Lowerer<'a> {
             },
         );
 
+        self.close_diamond(pending);
+
         self.set_val_type(dst, Ty::Bool);
         self.emit_inst(
             span,
@@ -2073,10 +2084,66 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
+    #[must_use]
+    fn open_diamond(&mut self, span: Span, cond: ValueId, labels: DiamondLabels) -> PendingDiamond {
+        let DiamondLabels {
+            then_label,
+            else_label,
+            join,
+        } = labels;
+        let at = self.body.insts.len();
+        self.emit_inst(
+            span,
+            InstKind::Diamond {
+                cond,
+                then_label,
+                then_args: vec![],
+                else_label,
+                else_args: vec![],
+                join,
+            },
+        );
+        PendingDiamond { at, labels }
+    }
+
+    /// RFC-0063 Decision 1 admits a `Diamond` only where both arms rejoin. An
+    /// arm that `break`s, `continue`s or ends in a call typed `!` leaves
+    /// through an edge of its own, and the branch is a `JumpIf`. The arms are
+    /// the instructions between the branch and here and nothing else, so that
+    /// is the range the question is asked of.
+    fn close_diamond(&mut self, pending: PendingDiamond) {
+        let PendingDiamond { at, labels } = pending;
+        let arms = &self.body.insts[at..];
+        if reaches(arms, labels.then_label, labels.join)
+            && reaches(arms, labels.else_label, labels.join)
+        {
+            return;
+        }
+        let InstKind::Diamond {
+            cond,
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        } = &mut self.body.insts[at].kind
+        else {
+            panic!("`open_diamond` wrote a `Diamond` at this index")
+        };
+        let demoted = InstKind::JumpIf {
+            cond: *cond,
+            then_label: *then_label,
+            then_args: std::mem::take(then_args),
+            else_label: *else_label,
+            else_args: std::mem::take(else_args),
+        };
+        self.body.insts[at].kind = demoted;
+    }
+
     /// Emit short-circuit merge: `ok_val` flows into the success path,
     /// `false` into the fail path, and a block param merges them.
-    fn emit_fail_merge(&mut self, span: Span, ok_val: ValueId, fail_label: Label) -> ValueId {
-        let result_label = self.alloc_label();
+    fn emit_fail_merge(&mut self, span: Span, ok_val: ValueId, labels: DiamondLabels) -> ValueId {
+        let (fail_label, result_label) = (labels.else_label, labels.join);
         let result_param = self.alloc_val();
         self.set_val_type(result_param, Ty::Bool);
 
@@ -3594,26 +3661,22 @@ impl<'a> Lowerer<'a> {
                 if pattern_is_irrefutable(inner_pat) {
                     return tag_ok;
                 }
-                let check_inner_label = self.alloc_label();
-                let fail_label = self.alloc_label();
-                self.emit_inst(
-                    span,
-                    InstKind::JumpIf {
-                        cond: tag_ok,
-                        then_label: check_inner_label,
-                        then_args: vec![],
-                        else_label: fail_label,
-                        else_args: vec![],
-                    },
-                );
-                self.emit_label(span, check_inner_label);
+                let labels = DiamondLabels {
+                    then_label: self.alloc_label(),
+                    else_label: self.alloc_label(),
+                    join: self.alloc_label(),
+                };
+                let pending = self.open_diamond(span, tag_ok, labels);
+                self.emit_label(span, labels.then_label);
                 let part = self
                     .pattern_parts_through(pattern, reference, inner, span)
                     .into_iter()
                     .next()
                     .expect("a payload pattern names one part");
                 let inner_ok = self.lower_pattern_test_value(&part.pattern, part.reference, span);
-                self.emit_fail_merge(span, inner_ok, fail_label)
+                let result = self.emit_fail_merge(span, inner_ok, labels);
+                self.close_diamond(pending);
+                result
             }
         }
     }
@@ -3862,19 +3925,13 @@ impl<'a> Lowerer<'a> {
                 if pattern_is_irrefutable(inner_pat) {
                     return tag_ok;
                 }
-                let check_inner_label = self.alloc_label();
-                let fail_label = self.alloc_label();
-                self.emit_inst(
-                    span,
-                    InstKind::JumpIf {
-                        cond: tag_ok,
-                        then_label: check_inner_label,
-                        then_args: vec![],
-                        else_label: fail_label,
-                        else_args: vec![],
-                    },
-                );
-                self.emit_label(span, check_inner_label);
+                let labels = DiamondLabels {
+                    then_label: self.alloc_label(),
+                    else_label: self.alloc_label(),
+                    join: self.alloc_label(),
+                };
+                let pending = self.open_diamond(span, tag_ok, labels);
+                self.emit_label(span, labels.then_label);
                 let part = self
                     .pattern_parts_place(pattern, path, ty)
                     .into_iter()
@@ -3887,7 +3944,9 @@ impl<'a> Lowerer<'a> {
                     &part.ty,
                     span,
                 );
-                self.emit_fail_merge(span, inner_ok, fail_label)
+                let result = self.emit_fail_merge(span, inner_ok, labels);
+                self.close_diamond(pending);
+                result
             }
         }
     }
@@ -4091,22 +4150,15 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // Has payload - short-circuit: if tag fails, skip inner test.
-                let check_inner_label = self.alloc_label();
-                let fail_label = self.alloc_label();
-
-                self.emit_inst(
-                    span,
-                    InstKind::JumpIf {
-                        cond: tag_ok,
-                        then_label: check_inner_label,
-                        then_args: vec![],
-                        else_label: fail_label,
-                        else_args: vec![],
-                    },
-                );
+                let labels = DiamondLabels {
+                    then_label: self.alloc_label(),
+                    else_label: self.alloc_label(),
+                    join: self.alloc_label(),
+                };
+                let pending = self.open_diamond(span, tag_ok, labels);
 
                 // Success path: unwrap and test inner pattern.
-                self.emit_label(span, check_inner_label);
+                self.emit_label(span, labels.then_label);
                 let inner_val = self.alloc_val();
                 self.set_val_type(inner_val, self.variant_inner_type(src_reg, *tag));
                 self.emit_inst(
@@ -4118,7 +4170,9 @@ impl<'a> Lowerer<'a> {
                 );
                 let inner_ok = self.lower_pattern_test_value(inner_pat, inner_val, span);
 
-                self.emit_fail_merge(span, inner_ok, fail_label)
+                let result = self.emit_fail_merge(span, inner_ok, labels);
+                self.close_diamond(pending);
+                result
             }
         }
     }

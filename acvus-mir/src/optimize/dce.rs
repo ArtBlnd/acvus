@@ -324,7 +324,7 @@ fn is_root(kind: &InstKind, loans: &Loans) -> bool {
 fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
-        Terminator::JumpIf { cond, .. } => vec![*cond],
+        Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
         // The tag a `Switch` reads is live wherever the dispatch is.
         Terminator::Switch { tag, .. } => vec![*tag],
         // A `For` reads its source on every iteration, so the source is a
@@ -341,6 +341,11 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Jump { args, .. } => values.extend(args),
         Terminator::JumpIf {
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             then_args,
             else_args,
             ..
@@ -441,6 +446,13 @@ pub fn run(cfg: &mut CfgBody) {
                                 vec![(0, args.as_slice())]
                             }
                             Terminator::JumpIf {
+                                then_label,
+                                then_args,
+                                else_label,
+                                else_args,
+                                ..
+                            }
+                            | Terminator::Diamond {
                                 then_label,
                                 then_args,
                                 else_label,
@@ -569,6 +581,13 @@ pub fn run(cfg: &mut CfgBody) {
                 }
             }
             Terminator::JumpIf {
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                ..
+            }
+            | Terminator::Diamond {
                 then_label,
                 then_args,
                 else_label,

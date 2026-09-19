@@ -204,7 +204,7 @@ expression: raw
     40 |   r27 = take @free_ship_min
     41 |   r28 = r26 > r27
     42 |   r29 = test r28 == true
-    43 |   jump_if r29 then L0 else L1
+    43 |   if r29 -> L0 else L1 join L1
     44 | L0:
     46 |   assign @shipping = 0 (r30)
     47 |   jump L1
@@ -213,7 +213,7 @@ expression: raw
     51 |   r32 = take @free_ship_min
     52 |   r33 = r31 <= r32
     53 |   r34 = test r33 == true
-    54 |   jump_if r34 then L2 else L3
+    54 |   if r34 -> L2 else L3 join L3
     55 | L2:
     56 |   r35 = take @default_ship
     57 |   assign @shipping = r35

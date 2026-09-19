@@ -27,7 +27,7 @@ expression: listing
     28 |   r22 = r20 + 1 (r23)
     29 |   r24 = r22 > r20
     31 |   r25 = r20 + 1 (r26)
-    32 |   jump_if r24 then L6 else L7(r19)
+    32 |   if r24 -> L6 else L7(r19) join L7
     33 | L6:
     34 |   r27 = r20 * r1
     35 |   r28 = r27 + r0

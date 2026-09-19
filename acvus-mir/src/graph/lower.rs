@@ -194,8 +194,8 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
-            "an irrefutable `if let` should not generate JumpIf"
+                .any(|i| crate::ir::two_way(&i.kind).is_some()),
+            "an irrefutable `if let` should not generate a two-way branch"
         );
     }
 
@@ -219,8 +219,8 @@ mod tests {
                 .main
                 .insts
                 .iter()
-                .any(|i| matches!(i.kind, InstKind::JumpIf { .. })),
-            "a refutable `if let` should generate JumpIf"
+                .any(|i| crate::ir::two_way(&i.kind).is_some()),
+            "a refutable `if let` should generate a two-way branch"
         );
     }
 

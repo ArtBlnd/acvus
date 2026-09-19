@@ -93,9 +93,46 @@ keeps the control shape the source wrote.** `if` is its third instance.
 
 ## Consequences
 
-Waiting: the compiler half (`Terminator::Diamond`, the four lowering
-sites, the 81 arms, `validate`), then the machine half (`prepare` builds
-`Diamond<C>`/`Select` from the terminator; `recognize_diamond` deleted).
+The compiler half has landed: `InstKind::Diamond` and
+`cfg::Terminator::Diamond`, nine lowering sites, the consumer arms,
+`validate`, and the printer's `if cond -> L1 else L2 join L3`. `prepare`
+reads a `Diamond` exactly as it read a `JumpIf` — the four terminator
+enumerations, the block emitter and `recognize_diamond` accept it — so the
+machine's shapes are the ones it recognized before.
+
+Three corrections Decision 1 needs, and one obligation it puts on every pass,
+found in building it.
+
+**`?` is not a diamond.** Its failure arm rebuilds the operand's failure at
+the function's return type and *returns* (RFC-0038), so the two paths never
+meet. `?` keeps `JumpIf`. Decision 1's list of four is a list of three:
+`if`, `&&`, `||`.
+
+**A payload pattern's test is a diamond.** `Some(1) = e` tests the tag, and
+on a match tests the payload; on a failure it takes `false` to a join of one
+`Bool` parameter. That is `&&` written by hand, it rejoins by construction,
+and it is a `Diamond`. Decision 1 did not name it.
+
+**An arm that does not rejoin is not only one that leaves a loop.** An arm
+whose tail is typed `!` ends in `Diverge` and reaches no join either
+(RFC-0038). The criterion is therefore reachability of `join` from each arm
+over the instructions the branch's arms occupy — `ir::reaches`, which the
+lowering asks of the arms it has just written and `validate` asks of a whole
+body. It is exact where "an arm holds a `break`" would not be: a `break` of
+a loop written *inside* an arm leaves that loop, and the branch still
+rejoins.
+
+**A pass that dissolves the join maintains it.** `optimize::sroa`'s
+threading leaves the block a dispatch used to be reachable by no path; where
+every path through it ended at one block, that block is where the arms now
+meet, and where they scatter the branch is demoted (`cfg::demote_diamond`).
+`optimize::forward::collapse` maps `join` through the forwarders it removes.
+`graph::inliner` and `cfg::promote`/`demote` carry it. This is the
+prerequisite the machine half needs: a stale `join` is unreadable, and
+`validate` refuses one (`DiamondArmMissesJoin`).
+
+Waiting: the machine half — `prepare` builds `Diamond<C>`/`Select` from the
+terminator and `recognize_diamond` and its straight-run scan go.
 `spawn_split` over a body with an `if` reads `join`.
 
 ## Order of work

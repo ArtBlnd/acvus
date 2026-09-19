@@ -3,7 +3,7 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === main ===
-     1 |   jump_if true (r0) then L0 else L2
+     1 |   if true (r0) -> L0 else L2 join L1
      2 | L0:
      4 |   jump L1(1 (r1))
      5 | L2:

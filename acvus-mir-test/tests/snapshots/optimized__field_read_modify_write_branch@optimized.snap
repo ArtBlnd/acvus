@@ -10,7 +10,7 @@ expression: opt
      5 |   r4 = take @stats.threshold
      6 |   r5 = r2 > r4
      7 |   r6 = test r5 == true
-     8 |   jump_if r6 then L0 else L1
+     8 |   if r6 -> L0 else L1 join L1
      9 | L0:
     10 |   assign @stats.count = r2
     12 |   assign @stats.exceeded = true (r7)

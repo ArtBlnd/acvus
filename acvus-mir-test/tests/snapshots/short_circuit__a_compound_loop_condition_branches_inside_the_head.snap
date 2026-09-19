@@ -8,7 +8,7 @@ expression: ir
      3 |   jump L0(0 (r2))
      4 | L0(r3: i64):
      5 |   r4 = r3 < r1
-     6 |   jump_if r4 then L5(r0) else L4
+     6 |   if r4 -> L5(r0) else L4 join L5
      7 | L4:
      9 |   jump L5(false (r5))
     10 | L5(r6: Bool):

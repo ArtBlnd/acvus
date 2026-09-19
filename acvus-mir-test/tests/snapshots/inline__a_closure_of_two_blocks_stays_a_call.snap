@@ -19,7 +19,7 @@ expression: ir
      0 |   assign x = r0
      1 |   r1 = take x
      3 |   r2 = r1 > 0 (r3)
-     4 |   jump_if r2 then L0 else L2
+     4 |   if r2 -> L0 else L2 join L1
      5 | L0:
      6 |   r4 = take x
      8 |   r5 = r4 + 1 (r6)

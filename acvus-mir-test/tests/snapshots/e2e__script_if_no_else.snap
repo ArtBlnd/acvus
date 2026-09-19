@@ -4,7 +4,7 @@ expression: ir
 ---
 === main ===
      1 |   assign x = 0 (r0)
-     3 |   jump_if true (r1) then L0 else L1
+     3 |   if true (r1) -> L0 else L1 join L1
      4 | L0:
      6 |   assign x = 1 (r2)
      7 |   jump L1

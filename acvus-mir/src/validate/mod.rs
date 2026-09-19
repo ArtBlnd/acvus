@@ -107,6 +107,11 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 f,
                 "non-exhaustive match: the scrutinee's type names no variants; add a `_` arm"
             ),
+            ValidationErrorKind::DiamondArmMissesJoin { side, join } => write!(
+                f,
+                "an `if`'s {side} arm does not reach the join L{} it is written to rejoin at",
+                join.0
+            ),
             ValidationErrorKind::ForRangeWidths { at, hi } => write!(
                 f,
                 "a `for` over `{}..{}` needs one integer width at both bounds",

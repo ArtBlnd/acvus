@@ -325,11 +325,21 @@ impl<'a> EdgeRef<'a> {
                     then_label: label,
                     then_args: args,
                     ..
+                }
+                | Terminator::Diamond {
+                    then_label: label,
+                    then_args: args,
+                    ..
                 },
                 EdgeSlot::Then,
             )
             | (
                 Terminator::JumpIf {
+                    else_label: label,
+                    else_args: args,
+                    ..
+                }
+                | Terminator::Diamond {
                     else_label: label,
                     else_args: args,
                     ..
@@ -421,6 +431,12 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
             then_args,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
         } => {
             uses.insert(*cond);
             uses.extend(then_args.iter().copied());
@@ -464,6 +480,13 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
     match term {
         Terminator::Jump { label, args } => vec![edge(EdgeSlot::Jump, label, args)],
         Terminator::JumpIf {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             then_label,
             then_args,
             else_label,
@@ -611,6 +634,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         // Control flow - handled by terminator, not here.
         InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
+        | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. }
         | InstKind::Return { .. }
@@ -625,8 +649,13 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
         Terminator::Return { value, order } => *value == val || *order == Some(val),
         // Jump args are transferred to the target block.
         Terminator::Jump { args, .. } => args.contains(&val),
-        // JumpIf: args are transferred, cond is read-only.
+        // A two-way branch transfers its edge args; the cond is read-only.
         Terminator::JumpIf {
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
             then_args,
             else_args,
             ..

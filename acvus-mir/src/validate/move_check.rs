@@ -419,11 +419,18 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                 }
             }
             Terminator::JumpIf {
-                cond: _,
                 then_label,
                 then_args,
                 else_label,
                 else_args,
+                ..
+            }
+            | Terminator::Diamond {
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                ..
             } => {
                 for (label, args) in [(then_label, then_args), (else_label, else_args)] {
                     if let Some(&target_idx) = cfg.label_to_block.get(label) {
@@ -1081,6 +1088,7 @@ fn process_inst(
         // Control flow - handled at block level
         InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
+        | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. } => {}
     }

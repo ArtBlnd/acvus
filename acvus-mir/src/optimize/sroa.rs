@@ -805,6 +805,13 @@ fn incoming(term: &Terminator, label: Label) -> Vec<&Vec<ValueId>> {
             else_label,
             else_args,
             ..
+        }
+        | Terminator::Diamond {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
         } => [(then_label, then_args), (else_label, else_args)]
             .into_iter()
             .filter(|(to, _)| **to == label)
@@ -847,13 +854,18 @@ fn thread(cfg: &mut CfgBody, plan: &Plan) -> Vec<bool> {
         }
     }
     for bi in 0..cfg.blocks.len() {
-        let Some(Decision::Thread { edges, .. }) = &plan.decisions[bi] else {
+        let Some(Decision::Thread { edges, unthreaded }) = &plan.decisions[bi] else {
             continue;
         };
         let from = cfg.blocks[bi].label;
+        let arrives = match unthreaded {
+            Some(_) => Arrives::StillHere,
+            None => Arrives::At(sole_target(edges)),
+        };
         for threaded in edges {
             retarget(&mut cfg.blocks[threaded.pred.0].terminator, from, threaded);
         }
+        settle_joins(cfg, from, arrives);
     }
     let alive = reachable(cfg);
     for (block, alive) in cfg.blocks.iter_mut().zip(&alive) {
@@ -863,6 +875,43 @@ fn thread(cfg: &mut CfgBody, plan: &Plan) -> Vec<bool> {
         }
     }
     alive
+}
+
+/// Where the paths through a threaded dispatch end up.
+enum Arrives {
+    /// The dispatch keeps a predecessor, so the block is still a block.
+    StillHere,
+    At(Option<Label>),
+}
+
+fn sole_target(edges: &[Threaded]) -> Option<Label> {
+    let (first, rest) = edges.split_first()?;
+    rest.iter()
+        .all(|edge| edge.to == first.to)
+        .then_some(first.to)
+}
+
+/// Threading leaves the dispatch a block no path reaches (see `thread`), and
+/// a `Diamond` that named it as its join now names a block that is gone. The
+/// pass knows what became of the paths through it: where they all end at one
+/// block, that block is where the arms now meet; where they scatter, the arms
+/// no longer rejoin and the branch is not a diamond.
+fn settle_joins(cfg: &mut CfgBody, from: Label, arrives: Arrives) {
+    let Arrives::At(to) = arrives else {
+        return;
+    };
+    for block in &mut cfg.blocks {
+        let Terminator::Diamond { join, .. } = &mut block.terminator else {
+            continue;
+        };
+        if *join != from {
+            continue;
+        }
+        match to {
+            Some(to) => *join = to,
+            None => crate::cfg::demote_diamond(&mut block.terminator),
+        }
+    }
 }
 
 fn retarget(term: &mut Terminator, from: Label, threaded: &Threaded) {
@@ -893,6 +942,20 @@ fn retarget(term: &mut Terminator, from: Label, threaded: &Threaded) {
         } => {
             leave(then_label, then_args);
             leave(else_label, else_args);
+        }
+        Terminator::Diamond {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            join,
+            ..
+        } => {
+            leave(then_label, then_args);
+            leave(else_label, else_args);
+            if *join == from {
+                *join = threaded.to;
+            }
         }
         Terminator::Switch { arms, default, .. } => {
             for (_, label, args) in arms {

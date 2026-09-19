@@ -12,7 +12,7 @@ expression: raw
      7 |   r5 = take @stats.threshold
      8 |   r6 = r4 > r5
      9 |   r7 = test r6 == true
-    10 |   jump_if r7 then L0 else L1
+    10 |   if r7 -> L0 else L1 join L1
     11 | L0:
     12 |   r8 = take count
     13 |   assign @stats.count = r8

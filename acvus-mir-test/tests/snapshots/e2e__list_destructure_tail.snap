@@ -10,13 +10,13 @@ expression: ir
      1 |   r1 = fetch @items
      2 |   assign @items = r1
      3 | L2:
-     5 |   jump_if true (r2) then L3 else L4
+     5 |   if true (r2) -> L3 else L4 join L5
      6 | L3:
      8 |   jump L5(true (r3))
      9 | L4:
     11 |   jump L5(false (r4))
     12 | L5(r5: Bool):
-    13 |   jump_if r5 then L6 else L7
+    13 |   if r5 -> L6 else L7 join L8
     14 | L6:
     16 |   jump L8(true (r6))
     17 | L7:

@@ -23,7 +23,7 @@ expression: raw
      9 |   r5 = take age
     11 |   r6 = r5 >= 65 (r7)
     12 |   r8 = test r6 == true
-    13 |   jump_if r8 then L0 else L1
+    13 |   if r8 -> L0 else L1 join L1
     14 | L0:
     15 |   r9 = const_str T1
     16 |   r10 = call #0(r9)
@@ -33,7 +33,7 @@ expression: raw
     21 |   r11 = take age
     23 |   r12 = r11 >= 18 (r13)
     24 |   r14 = test r12 == true
-    25 |   jump_if r14 then L2 else L3
+    25 |   if r14 -> L2 else L3 join L3
     26 | L2:
     27 |   r15 = const_str T2
     28 |   r16 = call #0(r15)
@@ -43,7 +43,7 @@ expression: raw
     33 |   r17 = take age
     35 |   r18 = r17 < 18 (r19)
     36 |   r20 = test r18 == true
-    37 |   jump_if r20 then L4 else L5
+    37 |   if r20 -> L4 else L5 join L5
     38 | L4:
     39 |   r21 = const_str T3
     40 |   r22 = call #0(r21)

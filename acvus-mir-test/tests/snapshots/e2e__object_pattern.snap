@@ -11,13 +11,13 @@ expression: ir
      2 |   r2 = fetch @user
      3 |   assign @user = r2
      4 | L2:
-     6 |   jump_if true (r3) then L3 else L4
+     6 |   if true (r3) -> L3 else L4 join L5
      7 | L3:
      9 |   jump L5(true (r4))
     10 | L4:
     12 |   jump L5(false (r5))
     13 | L5(r6: Bool):
-    14 |   jump_if r6 then L6 else L7
+    14 |   if r6 -> L6 else L7 join L8
     15 | L6:
     17 |   jump L8(true (r7))
     18 | L7:

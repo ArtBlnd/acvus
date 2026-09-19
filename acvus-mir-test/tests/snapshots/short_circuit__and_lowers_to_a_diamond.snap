@@ -5,7 +5,7 @@ expression: ir
 === main ===
      0 |   r0 = fetch @a
      1 |   r1 = fetch @b
-     2 |   jump_if r0 then L2(r1) else L1
+     2 |   if r0 -> L2(r1) else L1 join L2
      3 | L1:
      5 |   jump L2(false (r2))
      6 | L2(r3: Bool):

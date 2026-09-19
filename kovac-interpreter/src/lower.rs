@@ -268,6 +268,14 @@ impl<'a> Lowerer<'a> {
                     then_args,
                     else_label,
                     else_args,
+                }
+                | InstKind::Diamond {
+                    cond,
+                    then_label,
+                    then_args,
+                    else_label,
+                    else_args,
+                    ..
                 } => {
                     self.lower_jump_if(*cond, *then_label, then_args, *else_label, else_args);
                 }

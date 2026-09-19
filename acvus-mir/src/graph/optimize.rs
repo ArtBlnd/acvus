@@ -224,6 +224,12 @@ fn debug_validate(cfg: &CfgBody) {
                 then_args,
                 else_args,
                 ..
+            }
+            | crate::cfg::Terminator::Diamond {
+                cond,
+                then_args,
+                else_args,
+                ..
             } => {
                 let mut v = vec![*cond];
                 v.extend(then_args);

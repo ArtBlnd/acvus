@@ -1,7 +1,7 @@
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
 use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::QualifiedRef;
 use crate::ty::{CastTy, Mutability, Task, Ty};
@@ -489,6 +489,19 @@ pub enum InstKind {
         else_label: Label,
         else_args: Vec<ValueId>,
     },
+    /// `join` is the one label here that no edge carries, so a pass that
+    /// rewrites the labels it reaches through edges misses it. Every such
+    /// pass rewrites this one alongside — `graph::inliner::remap`,
+    /// `cfg::promote` and `demote`, `optimize::forward::collapse`,
+    /// `optimize::sroa::settle_joins` (RFC-0063 Decision 4).
+    Diamond {
+        cond: ValueId,
+        then_label: Label,
+        then_args: Vec<ValueId>,
+        else_label: Label,
+        else_args: Vec<ValueId>,
+        join: Label,
+    },
     /// One dispatch over a variant's tag (RFC-0051). `tag` is the value
     /// whose tag is read -- once -- and `arms` the labels its tags take;
     /// `default` is the arm a tag outside `arms` takes, and it is present
@@ -540,6 +553,111 @@ pub enum InstKind {
     Poison {
         dst: ValueId,
     },
+}
+
+pub struct TwoWay<'a> {
+    pub cond: ValueId,
+    pub then_label: Label,
+    pub then_args: &'a [ValueId],
+    pub else_label: Label,
+    pub else_args: &'a [ValueId],
+}
+
+/// RFC-0063 "What it costs" asks for one helper where a pass treats
+/// [`InstKind::JumpIf`] and [`InstKind::Diamond`] alike. Most such passes do
+/// not call it: the two variants' field names agree, so one or-pattern over
+/// both is the whole arm, and that cannot drift from the enum the way a
+/// helper's body can. What is left for this are the readers that destructure
+/// the same instruction more than once, where the or-pattern would be
+/// repeated.
+pub fn two_way(kind: &InstKind) -> Option<TwoWay<'_>> {
+    let (InstKind::JumpIf {
+        cond,
+        then_label,
+        then_args,
+        else_label,
+        else_args,
+    }
+    | InstKind::Diamond {
+        cond,
+        then_label,
+        then_args,
+        else_label,
+        else_args,
+        ..
+    }) = kind
+    else {
+        return None;
+    };
+    Some(TwoWay {
+        cond: *cond,
+        then_label: *then_label,
+        then_args,
+        else_label: *else_label,
+        else_args,
+    })
+}
+
+/// A block may end without a terminator and fall through to the block below
+/// it — `cfg::Terminator::Fallthrough` is that block, and
+/// `acvus_interpreter::prepare`'s `Edges::successors` reads the same IR the
+/// same way.
+fn successor_labels(insts: &[Inst], at: usize) -> Vec<Label> {
+    for (offset, inst) in insts[at..].iter().enumerate() {
+        match &inst.kind {
+            InstKind::BlockLabel { label, .. } if offset > 0 => return vec![*label],
+            InstKind::Jump { label, .. } => return vec![*label],
+            InstKind::JumpIf {
+                then_label,
+                else_label,
+                ..
+            }
+            | InstKind::Diamond {
+                then_label,
+                else_label,
+                ..
+            } => return vec![*then_label, *else_label],
+            InstKind::Switch { arms, default, .. } => {
+                return arms
+                    .iter()
+                    .map(|(_, label, _)| *label)
+                    .chain(default.iter().map(|(label, _)| *label))
+                    .collect();
+            }
+            InstKind::For { body, exit, .. } => return vec![*body, *exit],
+            InstKind::Return { .. } | InstKind::Diverge => return Vec::new(),
+            _ => {}
+        }
+    }
+    Vec::new()
+}
+
+/// Whether control entering `from` reaches `join`, over the blocks `insts`
+/// holds. `join` answers `true` without being one of them, which is what lets
+/// `lower` ask this of an arm it has written before the join block exists.
+pub fn reaches(insts: &[Inst], from: Label, join: Label) -> bool {
+    let index: FxHashMap<Label, usize> = insts
+        .iter()
+        .enumerate()
+        .filter_map(|(at, inst)| match &inst.kind {
+            InstKind::BlockLabel { label, .. } => Some((*label, at)),
+            _ => None,
+        })
+        .collect();
+    let mut seen: FxHashSet<Label> = FxHashSet::default();
+    let mut work = vec![from];
+    while let Some(label) = work.pop() {
+        if label == join {
+            return true;
+        }
+        if !seen.insert(label) {
+            continue;
+        }
+        if let Some(&at) = index.get(&label) {
+            work.extend(successor_labels(insts, at));
+        }
+    }
+    false
 }
 
 /// Debug info for a single Val: where it came from in source.

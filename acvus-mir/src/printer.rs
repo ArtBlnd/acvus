@@ -788,6 +788,42 @@ fn write_body(
                     else_str
                 )?
             }
+            InstKind::Diamond {
+                cond,
+                then_label,
+                then_args,
+                else_label,
+                else_args,
+                join,
+            } => {
+                let cond_str = vn.fmt_use(*cond, &consts, &texts);
+                let then_str = if then_args.is_empty() {
+                    fmt_label(*then_label)
+                } else {
+                    format!(
+                        "{}({})",
+                        fmt_label(*then_label),
+                        vn.fmt_uses(then_args, &consts, &texts)
+                    )
+                };
+                let else_str = if else_args.is_empty() {
+                    fmt_label(*else_label)
+                } else {
+                    format!(
+                        "{}({})",
+                        fmt_label(*else_label),
+                        vn.fmt_uses(else_args, &consts, &texts)
+                    )
+                };
+                writeln!(
+                    f,
+                    "if {} -> {} else {} join {}",
+                    cond_str,
+                    then_str,
+                    else_str,
+                    fmt_label(*join)
+                )?
+            }
             InstKind::Return { value, order } => {
                 write!(f, "return {}", vn.fmt_use(*value, &consts, &texts))?;
                 if let Some(o) = order {

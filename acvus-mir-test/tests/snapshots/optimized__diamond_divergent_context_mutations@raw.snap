@@ -16,7 +16,7 @@ expression: raw
     10 |   r5 = take x
     12 |   r6 = r5 > 100 (r7)
     13 |   r8 = test r6 == true
-    14 |   jump_if r8 then L0 else L1
+    14 |   if r8 -> L0 else L1 join L1
     15 | L0:
     16 |   r9 = take @high
     18 |   r10 = r9 + 1 (r11)
@@ -29,7 +29,7 @@ expression: raw
     27 |   r15 = take x
     29 |   r16 = r15 <= 100 (r17)
     30 |   r18 = test r16 == true
-    31 |   jump_if r18 then L2 else L3
+    31 |   if r18 -> L2 else L3 join L3
     32 | L2:
     33 |   r19 = take @low
     35 |   r20 = r19 + 1 (r21)
