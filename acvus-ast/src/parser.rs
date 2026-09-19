@@ -390,6 +390,85 @@ fn validate_irrefutable(pattern: &Pattern) -> Result<(), ParseError> {
     }
 }
 
+fn is_place(expr: &Expr) -> bool {
+    match expr {
+        Expr::Ident {
+            ref_kind: RefKind::Value | RefKind::ExternParam,
+            ..
+        }
+        | Expr::ContextRef { .. } => true,
+        Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => is_place(object),
+        _ => false,
+    }
+}
+
+/// `place = value;`. A bare name stays a statement of its own because
+/// `acvus-mir`'s checker refuses assigning a name that is not bound, or one
+/// the enclosing lambda captured, against the bindings in scope.
+pub fn build_assign(
+    lhs: Expr,
+    rhs: Expr,
+    span: Span,
+) -> Result<Stmt, LalrpopError<usize, Token, ParseError>> {
+    match lhs {
+        Expr::Ident {
+            name,
+            ref_kind: RefKind::Value,
+            ..
+        } => Ok(Stmt::Assign {
+            id: AstId::alloc(),
+            name: name.name,
+            expr: rhs,
+            span,
+        }),
+        Expr::UnaryOp {
+            op: UnaryOp::Deref,
+            operand,
+            ..
+        } => Ok(Stmt::DerefStore {
+            id: AstId::alloc(),
+            target: operand,
+            expr: rhs,
+            span,
+        }),
+        place if is_place(&place) => Ok(Stmt::Store {
+            id: AstId::alloc(),
+            place: Box::new(place),
+            expr: rhs,
+            span,
+        }),
+        _ => Err(LalrpopError::User {
+            error: ParseError::new(ParseErrorKind::InvalidAssignTarget, span),
+        }),
+    }
+}
+
+/// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
+/// a call of a qualified name: which of the two a `QualifiedRef` names is
+/// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
+pub fn build_call(func: Expr, args: Vec<Expr>, span: Span) -> Expr {
+    let func = match func {
+        Expr::Variant {
+            enum_name: Some(namespace),
+            tag,
+            payload: None,
+            ..
+        } => Expr::Ident {
+            id: AstId::alloc(),
+            name: QualifiedRef::qualified(namespace, tag),
+            ref_kind: RefKind::Value,
+            span,
+        },
+        other => other,
+    };
+    Expr::FuncCall {
+        id: AstId::alloc(),
+        func: Box::new(func),
+        args,
+        span,
+    }
+}
+
 /// Convert an expression (parsed from the LHS of `=`) to a pattern.
 pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
     match expr {
@@ -1047,6 +1126,118 @@ mod tests {
         );
     }
 
+    /// An object literal's trailing comma is required -- a decision, not a
+    /// hole: the comma is what tells `{ g, }`, the object, from `{ g }`, the
+    /// block whose tail is `g`.
+    #[test]
+    fn an_object_literal_requires_its_trailing_comma() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "let o = { g: 1, };").unwrap();
+        let Stmt::LetBind { expr, .. } = &s.stmts[0] else {
+            panic!("expected a let");
+        };
+        assert!(matches!(expr, Expr::Object { .. }));
+        assert!(parse_script(&interner, "let o = { g: 1 };").is_err());
+        // A list, a tuple and a call each admit one and require none.
+        for src in [
+            "let v = [1, 2];",
+            "let v = [1, 2, ];",
+            "let t = (1, 2);",
+            "let t = (1, 2, );",
+            "let x = f(1, 2);",
+            "let x = f(1, 2, );",
+        ] {
+            parse_script(&interner, src).unwrap();
+        }
+    }
+
+    /// A `match` and an `if` stand wherever an expression stands: an
+    /// operator's side, a call argument, a parenthesized expression, a list
+    /// element, an object field value, a method receiver, a scrutinee.
+    #[test]
+    fn a_match_and_an_if_are_operands() {
+        let interner = Interner::new();
+        let one = |src: &str| -> Expr {
+            let s = parse_script(&interner, src).unwrap();
+            let Stmt::LetBind { expr, .. } = &s.stmts[0] else {
+                panic!("expected a let for {src}");
+            };
+            expr.clone()
+        };
+        let m = "match 1 { 1 => 2, _ => 3, }";
+        let i = "if c { 1 } else { 2 }";
+        for head in [m, i] {
+            assert!(matches!(
+                one(&format!("let x = 10 + {head};")),
+                Expr::BinaryOp { right, .. } if matches!(*right, Expr::Match { .. } | Expr::If { .. })
+            ));
+            assert!(matches!(
+                one(&format!("let x = f({head});")),
+                Expr::FuncCall { args, .. } if matches!(args[0], Expr::Match { .. } | Expr::If { .. })
+            ));
+            assert!(matches!(
+                one(&format!("let x = ({head}) + 10;")),
+                Expr::BinaryOp { left, .. } if matches!(*left, Expr::Paren { .. })
+            ));
+            assert!(matches!(
+                one(&format!("let x = [{head}, 1];")),
+                Expr::List { head: elems, .. } if matches!(elems[0], Expr::Match { .. } | Expr::If { .. })
+            ));
+            assert!(matches!(
+                one(&format!("let x = {{ f: {head}, }};")),
+                Expr::Object { fields, .. } if matches!(fields[0].value, Expr::Match { .. } | Expr::If { .. })
+            ));
+            assert!(matches!(
+                one(&format!("let x = {head}.to_string();")),
+                Expr::MethodCall { .. }
+            ));
+            assert!(matches!(
+                one(&format!("let x = 1 | {head};")),
+                Expr::Pipe { .. }
+            ));
+            assert!(matches!(
+                one(&format!("let x = match {head} {{ _ => 0, }};")),
+                Expr::Match { .. }
+            ));
+        }
+        // The statement forms are unchanged: each ends in `;`.
+        let s = parse_script(&interner, "if c { f(); }; match 1 { _ => { f(); }, };").unwrap();
+        assert!(matches!(&s.stmts[0], Stmt::Expr(Expr::If { .. })));
+        assert!(matches!(&s.stmts[1], Stmt::Expr(Expr::Match { .. })));
+    }
+
+    /// Every postfix follows a qualified call, `?` included: the qualified
+    /// name is a primary, not a level above the postfixes (RFC-0038).
+    #[test]
+    fn a_postfix_follows_a_qualified_call() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "let n = i64::from_str(s)?; n").unwrap();
+        let Stmt::LetBind { expr, .. } = &s.stmts[0] else {
+            panic!("expected a let");
+        };
+        let Expr::Try { inner, .. } = expr else {
+            panic!("expected `?` over the call, got {expr:?}");
+        };
+        let Expr::FuncCall { func, .. } = inner.as_ref() else {
+            panic!("expected a call under `?`");
+        };
+        let Expr::Ident { name, .. } = func.as_ref() else {
+            panic!("expected a qualified name as the callee");
+        };
+        assert_eq!(name.namespace.map(|ns| interner.resolve(ns)), Some("i64"));
+        assert_eq!(interner.resolve(name.name), "from_str");
+
+        for src in [
+            "let n = (i64::from_str(s))?; n",
+            "let n = E::f(s).g; n",
+            "let n = E::f(s)[0]; n",
+            "let n = E::f(s).g(1); n",
+            "let n = E::Tag; n",
+        ] {
+            parse_script(&interner, src).unwrap();
+        }
+    }
+
     /// The arm forms: a bare expression, a block with statements, a block
     /// with a tail, and `_` as the catch-all.
     #[test]
@@ -1098,42 +1289,56 @@ mod tests {
         assert!(matches!(expr, Expr::Object { .. }));
     }
 
-    // -- ContextStore ----------------------------------------------
+    // -- Store -------------------------------------------------------
 
+    /// The left of `=` is a place: a bare name is an `Assign`, a `*r` a
+    /// `DerefStore`, and every path of field and index steps from a name, a
+    /// `$parameter` or an `@context` is a `Store` of that place.
     #[test]
-    fn script_context_store() {
+    fn an_assignment_target_is_a_place() {
+        fn shape(expr: &Expr, interner: &Interner) -> String {
+            match expr {
+                Expr::Ident {
+                    name,
+                    ref_kind: RefKind::ExternParam,
+                    ..
+                } => format!("${}", interner.resolve(name.name)),
+                Expr::Ident { name, .. } => interner.resolve(name.name).to_string(),
+                Expr::ContextRef { name, .. } => format!("@{}", interner.resolve(name.name)),
+                Expr::FieldAccess { object, field, .. } => {
+                    format!("{}.{}", shape(object, interner), interner.resolve(*field))
+                }
+                Expr::Index { object, .. } => format!("{}[]", shape(object, interner)),
+                other => panic!("not a place: {other:?}"),
+            }
+        }
         let interner = Interner::new();
-        let s = parse_script(&interner, "@count = @count + 1; @count").unwrap();
-        assert_eq!(s.stmts.len(), 1);
-        assert!(
-            matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "count")
-        );
-        assert!(s.tail.is_some());
-    }
+        let store = |src: &str| -> String {
+            let s = parse_script(&interner, src).unwrap();
+            let Stmt::Store { place, .. } = &s.stmts[0] else {
+                panic!("expected a Store for {src}");
+            };
+            shape(place, &interner)
+        };
+        assert_eq!(store("@count = @count + 1; @count"), "@count");
+        assert_eq!(store("@a.x.y = 0;"), "@a.x.y");
+        assert_eq!(store("v[0] = 5;"), "v[]");
+        assert_eq!(store("v[0].f = 5;"), "v[].f");
+        assert_eq!(store("o.g[0] = 7;"), "o.g[]");
+        assert_eq!(store("o.f[i].g = 9;"), "o.f[].g");
+        assert_eq!(store("$p.f = 1;"), "$p.f");
 
-    #[test]
-    fn script_context_store_no_tail() {
-        let interner = Interner::new();
-        let s = parse_script(&interner, "@x = 42;").unwrap();
-        assert_eq!(s.stmts.len(), 1);
-        assert!(
-            matches!(&s.stmts[0], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x")
-        );
-        assert!(s.tail.is_none());
-    }
+        let s = parse_script(&interner, "x = 1; *r = 2;").unwrap();
+        assert!(matches!(&s.stmts[0], Stmt::Assign { name, .. } if interner.resolve(*name) == "x"));
+        assert!(matches!(&s.stmts[1], Stmt::DerefStore { .. }));
 
-    #[test]
-    fn script_mixed_bind_and_context_store() {
-        let interner = Interner::new();
-        let s = parse_script(&interner, "let tmp = @x + 1; @x = tmp; @x").unwrap();
-        assert_eq!(s.stmts.len(), 2);
-        assert!(
-            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "tmp")
-        );
-        assert!(
-            matches!(&s.stmts[1], Stmt::ContextStore { name, .. } if interner.resolve(name.name) == "x")
-        );
-        assert!(s.tail.is_some());
+        for src in ["f(x) = 1;", "1 = 2;", "(o).f = 1;", "E::A = 1;"] {
+            assert_eq!(
+                parse_script(&interner, src).unwrap_err().kind,
+                ParseErrorKind::InvalidAssignTarget,
+                "{src}"
+            );
+        }
     }
 
     // -- Variant (Option) --------------------------------------------

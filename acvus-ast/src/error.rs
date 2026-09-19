@@ -96,7 +96,9 @@ impl fmt::Display for ParseErrorKind {
             ),
             ParseErrorKind::InvalidAssignTarget => write!(
                 f,
-                "invalid assignment target: expected identifier or @context"
+                "not an assignment target: the left of `=` is a place -- a name, \
+                 an `@context` or a `$parameter` under any path of `.field` and \
+                 `[index]` steps -- or `*reference`"
             ),
         }
     }
@@ -201,18 +203,18 @@ impl Coverage {
             if covers(STATEMENT_KEYWORDS) {
                 return Some(Self {
                     nonterminal: Nonterminal::Statement,
-                    opening: [OPERAND_START, STATEMENT_KEYWORDS, EXPRESSION_HEADS].concat(),
+                    opening: [OPERAND_START, STATEMENT_KEYWORDS, LAMBDA_START].concat(),
                 });
             }
             if set.contains(&Terminal::Underscore) {
                 return Some(Self {
                     nonterminal: Nonterminal::Pattern,
-                    opening: [OPERAND_START, &[Terminal::Underscore, Terminal::Pipe]].concat(),
+                    opening: [OPERAND_START, &[Terminal::Underscore], LAMBDA_START].concat(),
                 });
             }
             return Some(Self {
                 nonterminal: Nonterminal::Expression,
-                opening: [OPERAND_START, EXPRESSION_HEADS].concat(),
+                opening: [OPERAND_START, LAMBDA_START].concat(),
             });
         }
         match set == LITERALS {
@@ -356,6 +358,8 @@ const OPERAND_START: &[Terminal] = &[
     Terminal::None,
     Terminal::Ok,
     Terminal::Err,
+    Terminal::If,
+    Terminal::Match,
     Terminal::Amp,
     Terminal::Minus,
     Terminal::Star,
@@ -366,7 +370,7 @@ const OPERAND_START: &[Terminal] = &[
     Terminal::FmtStart,
 ];
 
-const EXPRESSION_HEADS: &[Terminal] = &[Terminal::If, Terminal::Match, Terminal::Pipe];
+const LAMBDA_START: &[Terminal] = &[Terminal::Pipe];
 
 const STATEMENT_KEYWORDS: &[Terminal] = &[
     Terminal::Let,
@@ -739,25 +743,21 @@ mod tests {
         }
     }
 
-    /// Each set is one lalrpop reported on master `e6b37d0f`, for the
-    /// source in the name.
+    /// Each set is one lalrpop reported for the source in the name.
     #[test]
     fn a_set_stands_for_the_nonterminal_it_covers() {
         let spoken = |set: &str| -> String {
             Expected::of_grammar_names(set.split(' ').filter(|n| !n.is_empty())).to_string()
         };
-        let operand = r#""int" "int_of" "char" "byte" "bytes" "float" "string" "ident" "$ref" "@ref" "true" "false" "Some" "None" "Ok" "Err" "&" "-" "*" "!" "(" "[" "{" "fmt_start""#;
+        let operand = r#""int" "int_of" "char" "byte" "bytes" "float" "string" "ident" "$ref" "@ref" "true" "false" "Some" "None" "Ok" "Err" "if" "match" "&" "-" "*" "!" "(" "[" "{" "fmt_start""#;
         // `let x = 1 +;`
         assert_eq!(spoken(operand), "an expression");
         // `let x = ;`
-        assert_eq!(
-            spoken(&format!(r#"{operand} "if" "match" "|""#)),
-            "an expression"
-        );
+        assert_eq!(spoken(&format!(r#"{operand} "|""#)), "an expression");
         // `let x = 1; }`
         assert_eq!(
             spoken(&format!(
-                r#"{operand} "if" "match" "|" "let" "while" "for" "break" "continue" "anyorder""#
+                r#"{operand} "|" "let" "while" "for" "break" "continue" "anyorder""#
             )),
             "a statement"
         );

@@ -6,13 +6,13 @@
 // the tiebreak compares `to_bytes` element by element.
 
 let bare = |w| -> {
-    let no_stop = unwrap_or(strip_suffix(&w, "."), w);
-    let no_comma = unwrap_or(strip_suffix(&no_stop, ","), no_stop);
+    let no_stop = w.strip_suffix(".").unwrap_or(w);
+    let no_comma = no_stop.strip_suffix(",").unwrap_or(no_stop);
     no_comma
 };
 
 let bytes_lt = |a, b| -> {
-    let shorter = if len(&a) < len(&b) { len(&a) } else { len(&b) };
+    let shorter = if a.len() < b.len() { a.len() } else { b.len() };
     let i = 0u64;
     let verdict = 0;
     while i < shorter && verdict == 0 {
@@ -24,7 +24,7 @@ let bytes_lt = |a, b| -> {
         i = i + 1u64;
     }
     let tied = verdict == 0;
-    let answer = if tied { len(&a) < len(&b) } else { verdict < 0 };
+    let answer = if tied { a.len() < b.len() } else { verdict < 0 };
     answer
 };
 
@@ -33,12 +33,12 @@ let tally = vec([]);
 let total = 0;
 
 let raw = &@text | split_whitespace;
-while let Some(token) = next(&mut raw) {
-    let word = bare(lower(&token));
+while let Some(token) = raw.next() {
+    let word = bare(token.lower());
     total = total + 1;
     let seen = false;
     let i = 0u64;
-    while i < len(&words) {
+    while i < words.len() {
         if words[i] == word {
             tally[i] = tally[i] + 1;
             seen = true;
@@ -46,22 +46,22 @@ while let Some(token) = next(&mut raw) {
         i = i + 1u64;
     }
     if !seen {
-        push(&mut words, word);
-        push(&mut tally, 1);
+        words.push(word);
+        tally.push(1);
     };
 }
 
 let i = 0u64;
-while i < len(&words) {
+while i < words.len() {
     let best = i;
     let j = i + 1u64;
-    while j < len(&words) {
+    while j < words.len() {
         let ahead = if tally[j] > tally[best] {
             true
         } else {
             let tied = tally[j] == tally[best];
             let by_name = if tied {
-                bytes_lt(to_bytes(words[j].to_string()), to_bytes(words[best].to_string()))
+                bytes_lt(words[j].to_string().to_bytes(), words[best].to_string().to_bytes())
             } else {
                 false
             };
@@ -72,12 +72,12 @@ while i < len(&words) {
         };
         j = j + 1u64;
     }
-    swap(&mut words, i, best);
-    swap(&mut tally, i, best);
+    words.swap(i, best);
+    tally.swap(i, best);
     i = i + 1u64;
 }
 
-let distinct = len(&words);
+let distinct = words.len();
 let wanted = 3u64;
 let shown = if distinct < wanted { distinct } else { wanted };
 

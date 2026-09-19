@@ -729,59 +729,15 @@ impl<'a> Lowerer<'a> {
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::ContextStore {
-                name,
-                path,
-                expr,
-                span,
-                ..
+            Stmt::Store {
+                place, expr, span, ..
             } => {
-                self.lower_context_store(*name, path, expr, *span);
-            }
-            Stmt::VarFieldStore {
-                name,
-                path,
-                expr,
-                span,
-                ..
-            } => {
-                self.lower_var_field_store(*name, path, expr, *span);
+                self.lower_store(place, expr, *span);
             }
             Stmt::DerefStore {
                 target, expr, span, ..
             } => {
                 self.lower_deref_store(target, expr, *span);
-            }
-            Stmt::IndexStore {
-                place, expr, span, ..
-            } => {
-                let Expr::Index {
-                    id,
-                    callee_id,
-                    object,
-                    index,
-                    span: index_span,
-                } = place.as_ref()
-                else {
-                    unreachable!("the parser builds an IndexStore from an index expression")
-                };
-                let value = self.lower_expr(expr);
-                let taken = self.take_slice(
-                    object,
-                    *callee_id,
-                    *id,
-                    self.index_access(*id).mutability,
-                    *index_span,
-                );
-                let index = self.lower_expr(index);
-                self.emit_inst(
-                    *span,
-                    InstKind::IndexSet {
-                        slice: taken,
-                        index,
-                        value,
-                    },
-                );
             }
             Stmt::Expr(expr) => {
                 self.lower_expr(expr);
@@ -2989,37 +2945,41 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_context_store(
-        &mut self,
-        qref: QualifiedRef,
-        path: &[Astr],
-        value_expr: &Expr,
-        span: Span,
-    ) -> ValueId {
-        let val = self.lower_expr(value_expr);
-        let slot = self.context_slot(qref);
-        self.emit_assign(span, RefTarget::Var(slot), fields(path), val);
-        val
-    }
-
-    fn lower_var_field_store(
-        &mut self,
-        name: Astr,
-        path: &[Astr],
-        value_expr: &Expr,
-        span: Span,
-    ) -> ValueId {
-        let val = self.lower_expr(value_expr);
-        let slot = self.var_slot(name);
-        let var_ty = self.var_type(name);
-        let target = if matches!(var_ty, Ty::Ref(..)) {
-            let reference = self.emit_take(span, RefTarget::Var(slot), vec![], var_ty);
-            RefTarget::Through(reference)
-        } else {
-            RefTarget::Var(slot)
-        };
-        self.emit_assign(span, target, fields(path), val);
-        val
+    /// A store into a place. An element write is the one place the IR has no
+    /// `Assign` for: `PathSeg::Index` carries a constant step, and `a[i]`'s
+    /// index is a value, so the element is written through the container's
+    /// mutable slice (RFC-0047). Every other place is the storage its root
+    /// names under a path of `PathSeg::Field` steps.
+    fn lower_store(&mut self, place: &Expr, value_expr: &Expr, span: Span) {
+        let value = self.lower_expr(value_expr);
+        if let Expr::Index {
+            id,
+            callee_id,
+            object,
+            index,
+            span: index_span,
+        } = place
+        {
+            let taken = self.take_slice(
+                object,
+                *callee_id,
+                *id,
+                self.index_access(*id).mutability,
+                *index_span,
+            );
+            let index = self.lower_expr(index);
+            self.emit_inst(
+                span,
+                InstKind::IndexSet {
+                    slice: taken,
+                    index,
+                    value,
+                },
+            );
+            return;
+        }
+        let place = self.place(place);
+        self.emit_assign(span, place.target, place.path, value);
     }
 
     fn lower_deref_store(&mut self, target: &Expr, value_expr: &Expr, span: Span) {

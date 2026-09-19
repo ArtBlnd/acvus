@@ -59,23 +59,23 @@ block: a script's top level, a lambda's block body, a `while`/`for`/
 `anyorder` body, a tag-form match-bind body, an `if`/`else` block.
 
 ```
-Script       = Stmt* ScriptExpr?
-ScriptExpr   = IfExpr | MatchExpr | Expr
+Script       = Stmt* Expr?
 ```
 
 ### Statements
 
 ```
-Stmt         = LetBind | LetUninit | Assign | ContextStore | VarFieldStore
-             | DerefStore | While | WhileLet | For | Break | Continue
+Stmt         = LetBind | LetUninit | Assign | Store | DerefStore
+             | While | WhileLet | For | Break | Continue
              | Anyorder | ExprStmt
 
-LetBind      = "let" IDENT "=" ScriptExpr ";"           ← let x = 0;
+LetBind      = "let" IDENT "=" Expr ";"                 ← let x = 0;
 LetUninit    = "let" IDENT ";"                          ← let x;
-Assign       = IDENT "=" ScriptExpr ";"                 ← x = 0;
-ContextStore = "@" IDENT ("." IDENT)* "=" ScriptExpr ";" ← @a = 0; / @a.x.y = 0;
-VarFieldStore= IDENT ("." IDENT)+ "=" ScriptExpr ";"    ← a.x = 0;
-DerefStore   = "*" Expr "=" ScriptExpr ";"              ← *r = 0;
+Assign       = IDENT "=" Expr ";"                       ← x = 0;
+Store        = Place "=" Expr ";"                       ← a.x = 0; / v[i].f = 0;
+DerefStore   = "*" Expr "=" Expr ";"                    ← *r = 0;
+Place        = PlaceRoot (("." IDENT) | ("[" Expr "]"))*
+PlaceRoot    = IDENT | "$" IDENT | "@" IDENT
 While        = "while" Expr "{" Stmt* "}"
 WhileLet     = "while" "let" Pattern "=" Expr "{" Stmt* "}"
 For          = "for" IDENT "in" ForHead "{" Stmt* "}"
@@ -83,8 +83,15 @@ ForHead      = Expr | Expr ".." Expr
 Break        = "break" ";"
 Continue     = "continue" ";"
 Anyorder     = "anyorder" "{" Stmt* "}" ";"?
-ExprStmt     = Expr ";" | IfExpr ";" | MatchExpr ";"
+ExprStmt     = Expr ";"
 ```
+
+Every statement of the language ends in `;`, an `if` and a `match` statement
+included, so a statement that begins with one is the expression statement
+rule and the grammar has no decision to make -- there is no
+"a block-like expression at statement start is a statement" rule, as Rust
+has. `if c { … };` and `match e { … };` are `Expr ";"`, and the same
+expression without the `;` is the block's tail.
 
 ### `for`
 
@@ -173,19 +180,35 @@ A name assigned inside a `while`, `anyorder`, `if`, `if let` or `match` arm
 body is the outer binding, so its new value is live after the body; the
 join carries it.
 
-**Assignment LHS resolution**: The LHS FieldAccess chain is flattened to
-determine the root:
-- Root is `IDENT` with no path → `Assign`
-- Root is `IDENT` with path → `VarFieldStore`
-- Root is `@IDENT` → `ContextStore` (with or without path)
-- Root is `*Expr` with no path → `DerefStore`
-- Otherwise → parser error (`InvalidAssignTarget`)
+**An assignment target is a place.** A place is a root -- a name, a
+`$parameter` or an `@context` -- under any path of `.field` and `[index]`
+steps: `x`, `@a.x.y`, `v[i]`, `v[0].f`, `o.g[0]`, `o.f[i].g`. The left of
+`=` is read as one:
+- a bare name → `Assign`, which is the form the checker reads against the
+  bindings in scope: a name that is not bound, or one the enclosing lambda
+  captured, is refused there
+- `*Expr` → `DerefStore`, a store through a reference **value**
+- any other place → `Store`, holding the place expression itself
+- anything else → parser error (`InvalidAssignTarget`)
+
+A `$parameter` is a place, and a store into one is refused by the checker:
+`extern param `$p` is immutable and cannot be assigned`. A store into a
+place through a shared reference is refused the same way a read of it as a
+`&mut` would be: ``cannot store through &{f: i64}: not a `&mut```, and a
+`v[i]` step of a place takes the container's `as_slice_mut`, so the loan the
+write holds is exclusive.
+
+The IR has one shape per write: `Assign { target, path }` with
+`PathSeg::Field` steps for every place whose steps are fields, and
+`IndexSet { slice, index, value }` where the last step is an index, because
+`PathSeg::Index` carries a constant and `v[i]`'s index is a value.
 
 **A template binding is the template's.** `{{ x = expr }}` inside a template
 is a `MatchBlock` with a `Binding` pattern (see *Template Structure* above),
 not a statement: this rule does not reach it.
 
-**ContextStore path**: In `@a.x.y = 0;`, path = `[x, y]`. Empty path means identity store (`@a = 0;`).
+`@a = 0;` is the place `@a` with no steps: the store writes the context
+itself.
 
 
 ## Expression Grammar
@@ -212,35 +235,37 @@ OrExpr       = OrExpr "||" AndExpr        ← left-associative
 AndExpr      = AndExpr "&&" CompExpr      ← left-associative
              | CompExpr
 
-CompExpr     = CompExpr CompOp RangeExpr   ← left-associative
-             | RangeExpr
+CompExpr     = CompExpr CompOp AddExpr     ← left-associative
+             | AddExpr
 
 CompOp       = "==" | "!=" | "<" | ">" | "<=" | ">="
-
-RangeExpr    = AddExpr ".." AddExpr        ← exclusive [start, end)
-             | AddExpr "..=" AddExpr       ← inclusive end [start, end]
-             | AddExpr "=.." AddExpr       ← exclusive start (start, end]
-             | AddExpr
 
 AddExpr      = AddExpr ("+" | "-") MulExpr ← left-associative
              | MulExpr
 
-MulExpr      = MulExpr ("*" | "/" | "%") UnaryExpr ← left-associative
+MulExpr      = MulExpr ("*" | "/" | "%") CastExpr ← left-associative
+             | CastExpr
+
+CastExpr     = CastExpr "as" IDENT         ← left-associative (RFC-0049)
              | UnaryExpr
 
 UnaryExpr    = "-" UnaryExpr
              | "!" UnaryExpr
-             | QualifiedExpr
-
-QualifiedExpr = IDENT "::" IDENT "(" Expr ")"  ← qualified variant with payload
-              | IDENT "::" IDENT                ← qualified variant without payload
-              | PostfixExpr
+             | "*" UnaryExpr               ← read through a reference
+             | "&" "mut"? UnaryExpr        ← borrow a place (RFC-0018)
+             | PostfixExpr
 
 PostfixExpr  = PostfixExpr "." IDENT       ← field access
              | PostfixExpr "[" Expr "]"    ← index (RFC-0047)
-             | PostfixExpr "(" CommaSep<Expr> ")"  ← function call
+             | PostfixExpr "?"             ← the payload, or an early return (RFC-0038)
+             | PostfixExpr "." IDENT "(" CommaSep<Expr> ")"  ← method call
+             | PostfixExpr "(" CommaSep<Expr> ")"            ← function call
              | PrimaryExpr
 ```
+
+A qualified name is a primary (below), not a level of its own, so every
+postfix follows a qualified call: `i64::from_str(s)?`, `E::f(x).g`,
+`E::f(x)[0]`.
 
 `a[i]` is a place, as `a.f` is: `&a[i]`, `a[i][j]`, `a[i].f`, `a[i]` as a
 method receiver, and `a[i] = v` on the left of an assignment. The index is
@@ -262,6 +287,9 @@ grammar production for `"-" INT` beside `"-" UnaryExpr` is ambiguous: after
 
 ```
 PrimaryExpr  = IDENT                       ← identifier (value binding)
+             | IDENT "::" IDENT            ← qualified name: `Enum::Tag`, or a
+                                             call's callee — which of the two
+                                             it is, the checker settles
              | "$" IDENT                   ← extern parameter (immutable, injected)
              | "@" IDENT                   ← context reference (mutable storage)
              | INT                         ← integer literal
@@ -279,7 +307,9 @@ PrimaryExpr  = IDENT                       ← identifier (value binding)
              | "[" CommaSep<ListElem> "]"  ← list
              | "{" ScriptStmt+ Expr "}"    ← block expression
              | "{" Expr "}"               ← block expression (single expr)
-             | "{" (ObjectField ",")+ "}"  ← object literal
+             | "{" (ObjectField ",")* "}"  ← object literal
+             | MatchExpr                   ← an operand, braces as delimiter
+             | IfExpr                      ← an operand, braces as delimiter
 
 TupleElem    = Expr | "_"
 ListElem     = Expr | ".."
@@ -295,6 +325,21 @@ ObjectField  = IDENT ":" Expr             ← explicit key
 - Grammar-level desugaring — converted to a `BinOp::Add` chain. No new AST variant.
 - **String type only** — no auto `to_string`. Non-String expressions require `| to_string` pipe.
 - Empty text segments (`""`) are excluded from the chain.
+
+**`match` and `if` are operands.** Wherever an expression stands -- an
+operator's side, a call argument, a parenthesized expression, a list
+element, an object field value, a pipe stage's input, a method receiver, a
+scrutinee -- a `match` or an `if` stands, with its braces as its delimiter
+and no `;` inside the expression: `10 + match n { … }`, `f(if c { 1 } else
+{ 2 })`, `(match n { … }) + 10`.
+
+**An object literal's trailing comma is required** -- a decision, not a hole.
+`{ g: 1, }` is the form and `{ g: 1 }` is refused with ``expected `,`,
+found `}```. One field and one comma read the same as ten, and the comma is
+what separates the literal from a block expression whose tail is a name
+(`{ g }` is the object `{ g: g, }`, and `{ g, }` says so). Nothing about
+lists, tuples or calls follows it: each of those admits a trailing comma
+and does not require one.
 
 **Tuple vs Paren**:
 - 1 element (non-wildcard): `(expr)` → parenthesized group (Paren)
@@ -401,8 +446,8 @@ opening stands for that nonterminal:
 
 | Set | Message |
 |-----|---------|
-| every operand opening, with `if`, `match`, `\|` and the statement keywords | `a statement` |
-| every operand opening | `an expression` |
+| every operand opening, with `\|` and the statement keywords | `a statement` |
+| every operand opening, with or without the lambda's `\|` | `an expression` |
 | every operand opening and `_` | `a pattern` |
 | the seven literal forms | `a literal` |
 | anything else | the terminals themselves: ``expected `)` or `,``` |
@@ -425,9 +470,8 @@ holds them equal to the table's.
 | 3 | `\|\|` (logical or) | left |
 | 4 | `&&` (logical and) | left |
 | 5 | `==` `!=` `<` `>` `<=` `>=` | left |
-| 6 | `..` `..=` `=..` (range) | non-assoc |
-| 7 | `+` `-` | left |
-| 8 | `*` `/` `%` | left |
-| 9 | `-` `!` (unary) | prefix |
-| 10 | `::` (qualified) | — |
-| 11 | `.` `()` (postfix) | left |
+| 6 | `+` `-` | left |
+| 7 | `*` `/` `%` | left |
+| 8 | `as` (cast) | left |
+| 9 | `-` `!` `*` `&` (unary) | prefix |
+| 10 | `.` `[]` `?` `()` (postfix) | left |

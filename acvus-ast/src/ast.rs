@@ -27,27 +27,12 @@ pub struct Script {
 /// A statement in a script.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    ContextStore {
-        id: AstId,
-        name: QualifiedRef,
-        /// Field path for projection store: `@a.x.y = 0;` -> path = [x, y].
-        /// Empty = identity store: `@a = 0;`.
-        path: Vec<Astr>,
-        expr: Expr,
-        span: Span,
-    },
-    /// Field store on a local variable: `a.x.y = 0;`.
-    VarFieldStore {
-        id: AstId,
-        name: Astr,
-        path: Vec<Astr>,
-        expr: Expr,
-        span: Span,
-    },
-    /// Store into an element: `a[i] = 0;` (RFC-0047). `place` is the
-    /// `Expr::Index` itself, so the `as_slice_mut` instance it settles is
-    /// recorded where every other index expression records one.
-    IndexStore {
+    /// Store into a place: `@a = 0;`, `a.x.y = 0;`, `a[i] = 0;`,
+    /// `a.x[i].y = 0;`. `place` is the left-hand expression itself -- a
+    /// local, a `$param` or an `@context` under a path of field and index
+    /// steps -- so each `a[i]` of it settles its `as_slice_mut` instance
+    /// where every other index expression settles one (RFC-0047).
+    Store {
         id: AstId,
         place: Box<Expr>,
         expr: Expr,
@@ -729,17 +714,12 @@ impl ContextRefs {
 fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
     for stmt in stmts {
         match stmt {
-            Stmt::ContextStore { name, expr, .. } => {
-                refs.set.insert(*name);
+            Stmt::Store { place, expr, .. } => {
+                walk_expr(place, refs);
                 walk_expr(expr, refs);
             }
-            Stmt::VarFieldStore { expr, .. } => walk_expr(expr, refs),
             Stmt::DerefStore { target, expr, .. } => {
                 walk_expr(target, refs);
-                walk_expr(expr, refs);
-            }
-            Stmt::IndexStore { place, expr, .. } => {
-                walk_expr(place, refs);
                 walk_expr(expr, refs);
             }
             Stmt::Expr(expr) => walk_expr(expr, refs),

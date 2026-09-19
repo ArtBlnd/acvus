@@ -6,9 +6,9 @@
 // transaction, the closing balance, and the largest single debit.
 
 let to_cents = |text| -> {
-    let negative = starts_with_str(&text, "-");
-    let body = unwrap_or(strip_prefix(&text, "-"), text);
-    let parts = unwrap(split_once(&body, "."));
+    let negative = text.starts_with_str("-");
+    let body = text.strip_prefix("-").unwrap_or(text);
+    let parts = body.split_once(".").unwrap();
     let read_whole = i64::from_str(parts[0u64].to_string());
     let read_frac = i64::from_str(parts[1u64].to_string());
     let cents = read_whole? * 100 + read_frac?;
@@ -23,7 +23,7 @@ let money = |cents| -> {
     let whole = size / 100;
     let frac = size % 100;
     let frac_text = frac.to_string();
-    let padded = pad_start(&frac_text, 2, "0");
+    let padded = frac_text.pad_start(2, "0");
     "{{ &sign }}{{ &whole | to_string }}.{{ &padded }}"
 };
 
@@ -32,8 +32,8 @@ let largest_debit = 0;
 let largest_note = "none".to_string();
 let out = "".to_string();
 
-let rows = as_iter(&@transactions);
-while let Some(row) = next(&mut rows) {
+let rows = @transactions.as_iter();
+while let Some(row) = rows.next() {
     let amount = to_cents(row.amount.to_string())?;
     balance = balance + amount;
     if amount < largest_debit {

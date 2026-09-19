@@ -297,3 +297,47 @@ async fn a_factor_the_nested_loops_never_assign_still_reaches_the_inner_body() {
     .await;
     assert_eq!(result.as_int(), 54);
 }
+
+// =======================================================================
+//  A store into a place, and a `match` or an `if` as an operand
+// =======================================================================
+
+async fn run_int(src: &str) -> i64 {
+    let i = Interner::new();
+    run_script(&i, src, FxHashMap::default(), Ty::I64)
+        .await
+        .as_int()
+}
+
+#[tokio::test]
+async fn a_store_lands_at_the_place_the_left_of_the_assignment_names() {
+    assert_eq!(run_int("let o = { f: 1, }; o.f = 3; o.f").await, 3);
+    assert_eq!(run_int("let v = [1, 2, ]; v[1u64] = 8; v[1u64]").await, 8);
+    assert_eq!(
+        run_int("let v = [{ f: 1, }, ]; v[0u64].f = 5; v[0u64].f").await,
+        5
+    );
+    assert_eq!(
+        run_int("let o = { g: [1, 2, ], }; o.g[0u64] = 7; o.g[0u64]").await,
+        7
+    );
+    assert_eq!(
+        run_int("let o = { g: [{ h: 1, }, ], }; o.g[0u64].h = 9; o.g[0u64].h").await,
+        9
+    );
+}
+
+#[tokio::test]
+async fn a_match_or_an_if_runs_where_an_operand_runs() {
+    assert_eq!(run_int("10 + match 1 { 1 => 2, _ => 3, }").await, 12);
+    assert_eq!(run_int("(match 1 { 1 => 2, _ => 3, }) + 10").await, 12);
+    assert_eq!(run_int("10 + if 1 < 2 { 1 } else { 2 }").await, 11);
+    assert_eq!(
+        run_int("let f = |x| -> x + 1; f(match 1 { 1 => 2, _ => 3, })").await,
+        3
+    );
+    assert_eq!(
+        run_int("let v = [if 1 < 2 { 7 } else { 8 }, 1, ]; v[0u64]").await,
+        7
+    );
+}

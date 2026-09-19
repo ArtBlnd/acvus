@@ -10,29 +10,29 @@ let served = vec([]);
 let high_water = 0u64;
 let round = 0;
 
-let tasks = as_iter(&@tasks);
-while let Some(task) = next(&mut tasks) {
-    push_back(&mut pending, task.name.to_string());
-    let depth = len(&pending);
+let tasks = @tasks.as_iter();
+while let Some(task) = tasks.next() {
+    pending.push_back(task.name.to_string());
+    let depth = pending.len();
     if depth > high_water {
         high_water = depth;
     };
     round = round + 1;
     if round % 2 == 0 {
-        if let Some(name) = pop_front(&mut pending) {
-            push(&mut served, name);
+        if let Some(name) = pending.pop_front() {
+            served.push(name);
         };
     };
 }
 
-while let Some(name) = pop_front(&mut pending) {
-    push(&mut served, name);
+while let Some(name) = pending.pop_front() {
+    served.push(name);
 }
 
-let count = len(&served);
+let count = served.len();
 let out = "{{ &round | to_string }} rounds, deepest {{ &high_water | to_string }}, {{ &count | to_string }} served";
 let i = 0u64;
-while i < len(&served) {
+while i < served.len() {
     let name = served[i].to_string();
     out = out + "
 {{ &name }}";

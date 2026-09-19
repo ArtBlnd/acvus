@@ -179,14 +179,11 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
     use acvus_ast::*;
     for stmt in stmts {
         match stmt {
-            Stmt::ContextStore { expr, .. } | Stmt::VarFieldStore { expr, .. } => {
-                collect_value_refs_expr(expr, refs);
-            }
             Stmt::DerefStore { target, expr, .. } => {
                 collect_value_refs_expr(target, refs);
                 collect_value_refs_expr(expr, refs);
             }
-            Stmt::IndexStore { place, expr, .. } => {
+            Stmt::Store { place, expr, .. } => {
                 collect_value_refs_expr(place, refs);
                 collect_value_refs_expr(expr, refs);
             }

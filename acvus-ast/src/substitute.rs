@@ -431,29 +431,11 @@ fn fold_binop(parts: Vec<Expr>, op: BinOp, span: Span) -> Expr {
 
 fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
     match stmt {
-        Stmt::ContextStore {
-            name,
-            path,
-            expr,
-            span,
-            ..
-        } => Stmt::ContextStore {
+        Stmt::Store {
+            place, expr, span, ..
+        } => Stmt::Store {
             id: AstId::alloc(),
-            name,
-            path,
-            expr: sub_expr(expr, subs),
-            span,
-        },
-        Stmt::VarFieldStore {
-            name,
-            path,
-            expr,
-            span,
-            ..
-        } => Stmt::VarFieldStore {
-            id: AstId::alloc(),
-            name,
-            path,
+            place: Box::new(sub_expr(*place, subs)),
             expr: sub_expr(expr, subs),
             span,
         },
@@ -462,14 +444,6 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
         } => Stmt::DerefStore {
             id: AstId::alloc(),
             target: Box::new(sub_expr(*target, subs)),
-            expr: sub_expr(expr, subs),
-            span,
-        },
-        Stmt::IndexStore {
-            place, expr, span, ..
-        } => Stmt::IndexStore {
-            id: AstId::alloc(),
-            place: Box::new(sub_expr(*place, subs)),
             expr: sub_expr(expr, subs),
             span,
         },
@@ -796,14 +770,11 @@ fn validate_splice_else_branch(
 
 fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(Astr, Span)>) {
     match stmt {
-        Stmt::ContextStore { expr, .. } | Stmt::VarFieldStore { expr, .. } => {
-            validate_splice_expr(expr, false, splice_names, errors);
-        }
         Stmt::DerefStore { target, expr, .. } => {
             validate_splice_expr(target, false, splice_names, errors);
             validate_splice_expr(expr, false, splice_names, errors);
         }
-        Stmt::IndexStore { place, expr, .. } => {
+        Stmt::Store { place, expr, .. } => {
             validate_splice_expr(place, false, splice_names, errors);
             validate_splice_expr(expr, false, splice_names, errors);
         }

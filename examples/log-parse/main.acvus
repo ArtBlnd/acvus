@@ -17,14 +17,14 @@ let seen = 0;
 let longest = 0u64;
 
 let records = &@log | lines;
-while let Some(line) = next(&mut records) {
-    let fields = unwrap(captures(&line_re, &line));
-    let stamp = unwrap(named(&fields, "stamp".to_string())).text;
-    let level = unwrap(named(&fields, "level".to_string())).text;
-    let message = unwrap(named(&fields, "message".to_string())).text;
+while let Some(line) = records.next() {
+    let fields = line_re.captures(&line).unwrap();
+    let stamp = fields.named("stamp".to_string()).unwrap().text;
+    let level = fields.named("level".to_string()).unwrap().text;
+    let message = fields.named("message".to_string()).unwrap().text;
 
     let i = 0u64;
-    while i < len(&levels) {
+    while i < levels.len() {
         if levels[i] == level {
             counts[i] = counts[i] + 1;
         };
@@ -37,19 +37,19 @@ while let Some(line) = next(&mut records) {
     last = stamp;
     seen = seen + 1;
 
-    let width = len(&message);
+    let width = message.len();
     if width > longest {
         longest = width;
     };
 }
 
-let opened = parse_date(first.to_string(), stamp_format.to_string())?;
-let closed = parse_date(last.to_string(), stamp_format.to_string())?;
-let span = timestamp(closed) - timestamp(opened);
+let opened = first.to_string().parse_date(stamp_format.to_string())?;
+let closed = last.to_string().parse_date(stamp_format.to_string())?;
+let span = closed.timestamp() - opened.timestamp();
 
 let out = "{{ &seen | to_string }} lines over {{ &span | to_string }} seconds, {{ &first }} .. {{ &last }}";
 let i = 0u64;
-while i < len(&levels) {
+while i < levels.len() {
     let level = levels[i].to_string();
     let count = counts[i];
     out = out + "

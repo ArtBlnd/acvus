@@ -1856,6 +1856,83 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         current
     }
 
+    /// The type of the place a store writes: one step per `.field` and
+    /// `[index]` of the path, from the root's storage. An index step demands
+    /// the container's `as_slice_mut`, which is what makes the element write
+    /// exclusive -- the loan the slice holds is the write's, so a container
+    /// already held shared is refused there and a root holding `&T` here.
+    fn store_place(&mut self, place: &Expr, span: Span) -> InferTy {
+        match place {
+            Expr::FieldAccess {
+                id, object, field, ..
+            } => {
+                let base = self.store_place(object, span);
+                let ty = self.field_path_for_store(&base, &[*field], span);
+                self.record_ret(*id, ty)
+            }
+            Expr::Index {
+                id,
+                callee_id,
+                object,
+                index,
+                span: index_span,
+            } => self.check_index(IndexSite {
+                id: *id,
+                callee_id: *callee_id,
+                object,
+                index,
+                span: *index_span,
+                demand: PlaceDemand::Borrow(Mutability::Mut),
+            }),
+            Expr::ContextRef { id, name, .. } => {
+                self.note_context_use(*name, span);
+                self.note_access(Effect::write(*name), span);
+                let ty = self
+                    .env
+                    .contexts
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| self.solver.fresh_ty_var());
+                self.record_ret(*id, ty)
+            }
+            Expr::Ident {
+                name,
+                ref_kind: RefKind::ExternParam,
+                ..
+            } => {
+                self.error(
+                    MirErrorKind::ExternParamAssign(self.interner.resolve(name.name).to_string()),
+                    span,
+                );
+                Self::infer_error()
+            }
+            Expr::Ident { id, name, .. } => {
+                let var_ty = self.lookup_var(name.name).unwrap_or_else(|| {
+                    self.error(
+                        MirErrorKind::UndefinedVariable(
+                            self.interner.resolve(name.name).to_string(),
+                        ),
+                        span,
+                    );
+                    Self::infer_error()
+                });
+                self.record(*id, var_ty.clone());
+                match self.solver.shallow_resolve_ty(&var_ty) {
+                    TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
+                    TyTerm::Ref(Mutability::Shared, _) => {
+                        let shown = self.type_as_written(&var_ty);
+                        self.error(MirErrorKind::StoreThroughSharedReference(shown), span);
+                        Self::infer_error()
+                    }
+                    _ => var_ty,
+                }
+            }
+            other => unreachable!(
+                "acvus_ast::parser::build_assign admits only a place as a store target: {other:?}"
+            ),
+        }
+    }
+
     /// Every refusal the checker raises without labels of its own passes
     /// here, so a mismatch that is really one type from two sources is
     /// restated wherever it is raised and not only where this run looked.
@@ -3671,64 +3748,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Type-check a single script statement.
     fn check_stmt(&mut self, stmt: &acvus_ast::Stmt) {
         match stmt {
-            acvus_ast::Stmt::ContextStore {
+            acvus_ast::Stmt::Store {
                 id,
-                name,
-                path,
+                place,
                 expr,
                 span,
             } => {
                 let ty = self.check_expr(expr);
-                self.note_context_use(*name, *span);
-                self.note_access(Effect::write(*name), *span);
-                let ctx_ty = self
-                    .env
-                    .contexts
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| self.solver.fresh_ty_var());
-                let target_ty = self.field_path_for_store(&ctx_ty, path, *span);
-                let site = ConversionSite {
-                    id: expr.id(),
-                    span: *span,
-                    report: ConversionReport::Store,
-                };
-                if self.flow(&ty, &target_ty, site).is_err() {
-                    self.error(
-                        MirErrorKind::UnificationFailure {
-                            expected: self.type_as_written(&target_ty),
-                            got: self.type_as_written(&ty),
-                        },
-                        *span,
-                    );
-                }
-                self.record(*id, ty);
-            }
-            acvus_ast::Stmt::VarFieldStore {
-                id,
-                name,
-                path,
-                expr,
-                span,
-            } => {
-                let ty = self.check_expr(expr);
-                let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
-                    self.error(
-                        MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
-                        *span,
-                    );
-                    Self::infer_error()
-                });
-                let base = match self.solver.shallow_resolve_ty(&var_ty) {
-                    TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
-                    TyTerm::Ref(Mutability::Shared, _) => {
-                        let shown = self.type_as_written(&var_ty);
-                        self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
-                        Self::infer_error()
-                    }
-                    _ => var_ty,
-                };
-                let target_ty = self.field_path_for_store(&base, path, *span);
+                let target_ty = self.store_place(place, *span);
                 let site = ConversionSite {
                     id: expr.id(),
                     span: *span,
@@ -3771,47 +3798,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     self.error(
                         MirErrorKind::UnificationFailure {
                             expected: self.type_as_written(&inner),
-                            got: self.type_as_written(&ty),
-                        },
-                        *span,
-                    );
-                }
-                self.record(*id, ty);
-            }
-            acvus_ast::Stmt::IndexStore {
-                id,
-                place,
-                expr,
-                span,
-            } => {
-                let Expr::Index {
-                    id: index_id,
-                    callee_id,
-                    object,
-                    index,
-                    span: index_span,
-                } = place.as_ref()
-                else {
-                    unreachable!("the parser builds an IndexStore from an index expression")
-                };
-                let ty = self.check_expr(expr);
-                let element = self.check_index(IndexSite {
-                    id: *index_id,
-                    callee_id: *callee_id,
-                    object,
-                    index,
-                    span: *index_span,
-                    demand: PlaceDemand::Borrow(Mutability::Mut),
-                });
-                let site = ConversionSite {
-                    id: expr.id(),
-                    span: *span,
-                    report: ConversionReport::Store,
-                };
-                if self.flow(&ty, &element, site).is_err() {
-                    self.error(
-                        MirErrorKind::UnificationFailure {
-                            expected: self.type_as_written(&element),
                             got: self.type_as_written(&ty),
                         },
                         *span,
