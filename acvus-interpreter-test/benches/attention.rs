@@ -1,19 +1,71 @@
+//! One program in three forms, one table row per size: `in-language` and
+//! `dot` are execute times of the script whose inner loop is acvus and of
+//! the script whose inner loop is one extern call, `rust` is the same
+//! arithmetic in Rust, and the two ratio columns divide each script form by
+//! `rust`.
+//!
+//! `dot` is declared here rather than in `acvus-ext` because a math library
+//! is a design of its own and is not started by a bench. The signature this
+//! file measures is the one such a library would export.
+
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::Owned;
+use acvus_extern::{Elements, Owned, Registry, Slice, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
-use acvus_interpreter_test::listing::{regions_named, script_listing};
+use acvus_interpreter_test::listing::{regions_named, script_listing_with_externs};
 use acvus_interpreter_test::scripts::{ATTENTION, ATTENTION_VEC};
 use acvus_interpreter_test::{
-    Context, compile_script_mode, execute_compiled, split_context, value_from_json,
+    CompileResult, Context, compile_source_with_externs, execute_compiled, split_context,
+    value_from_json,
 };
+use acvus_mir::graph::ParsedAst;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 use tokio::runtime::Runtime;
+
+fn element_of<Rt>(rt: &Rt, view: &Elements<Rt>, at: usize) -> f64
+where
+    Rt: acvus_extern::Runtime,
+{
+    // SAFETY: `at` is below the length the view reports, the container the
+    // caller lent is live for the call (RFC-0018), and every element of a
+    // language `Array<f64, N>` was erased from `f64` (RFC-0047 rule 1).
+    unsafe { *rt.value_as_ref::<f64>(view.at(at)) }
+}
+
+#[extern_fn(effect = pure)]
+fn dot<Rt>(rt: &Rt, a: Slice<f64, Rt>, b: Slice<f64, Rt>) -> f64
+where
+    Rt: acvus_extern::Runtime,
+{
+    let (a, b) = (a.into_elements(), b.into_elements());
+    assert_eq!(a.len(), b.len(), "dot takes two views of one length");
+    (0..a.len())
+        .map(|at| element_of(rt, &a, at) * element_of(rt, &b, at))
+        .sum()
+}
+
+fn registries() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(extern_registry! {
+        ns: "bench",
+        fns: [dot],
+    });
+    regs
+}
+
+fn compile_form(
+    interner: &Interner,
+    source: &str,
+    context_types: &FxHashMap<Astr, Ty>,
+) -> CompileResult {
+    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
+    compile_source_with_externs(interner, ast, context_types, registries(), Ty::Float)
+}
 
 struct Inputs {
     query: Vec<f64>,
@@ -108,11 +160,17 @@ fn rust_attention(inputs: &Inputs) -> f64 {
         z = z + w;
     }
 
-    let mut acc = 0.0;
-    for t in 0..n {
-        acc = acc + weights[t] / z * inputs.values[t][0];
+    // The script computes every output column and returns the first; the
+    // twin does the same work so the ratio divides like by like.
+    let mut out = Vec::with_capacity(d);
+    for j in 0..d {
+        let mut acc = 0.0;
+        for t in 0..n {
+            acc = acc + weights[t] / z * inputs.values[t][j];
+        }
+        out.push(acc);
     }
-    acc
+    out[0]
 }
 
 fn median(mut samples: Vec<Duration>) -> Duration {
@@ -142,16 +200,56 @@ impl Container {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kernel {
+    InLanguage,
+    Dot,
+}
+
+impl Kernel {
+    fn name(self) -> &'static str {
+        match self {
+            Kernel::InLanguage => "in-language",
+            Kernel::Dot => "dot",
+        }
+    }
+}
+
+/// Obligation across artifacts: this text is the `i` loop of both
+/// `scripts::ATTENTION` and `scripts::ATTENTION_VEC`, character for
+/// character. Editing either script's inner loop drops the count the
+/// assertion in `source_of` takes.
+const IN_LANGUAGE_INNER: &str = "    let key = &@keys[t];
+    let s = 0.0;
+    let i = 0;
+    while i < d {
+        s = s + @query[i] * key[i];
+        i = i + 1;
+    }
+";
+
+const DOT_INNER: &str = "    let s = dot(&@query, &@keys[t]);\n";
+
 /// `*out.get(0)`, the read `ATTENTION`'s own tests use, is not available to
 /// both variants: the `vec` registry exports no `get`, and the `deque`
 /// registry exports no `as_slice`, so `out[0]` has no instance to lower
 /// through either. `first` is the one read both registries do export, so the
 /// bench uses it and the two variants differ in the container alone.
-fn source_of(container: Container) -> String {
-    format!(
-        "{} if let Some(x) = out.first() {{ *x }} else {{ 0.0 }}",
-        container.script()
-    )
+fn source_of(container: Container, kernel: Kernel) -> String {
+    let script = container.script();
+    let script = match kernel {
+        Kernel::InLanguage => script.to_string(),
+        Kernel::Dot => {
+            assert_eq!(
+                script.matches(IN_LANGUAGE_INNER).count(),
+                1,
+                "the {} script holds the in-language inner loop once",
+                container.name()
+            );
+            script.replace(IN_LANGUAGE_INNER, DOT_INNER)
+        }
+    };
+    format!("{script} if let Some(x) = out.first() {{ *x }} else {{ 0.0 }}")
 }
 
 struct Case {
@@ -161,16 +259,62 @@ struct Case {
     reps: usize,
 }
 
+struct Timing {
+    compile: Duration,
+    setup: Duration,
+    execute: Duration,
+}
+
 struct Row {
     container: Container,
     n: usize,
     d: usize,
-    compile: Duration,
-    setup: Duration,
-    execute: Duration,
+    in_language: Timing,
+    dot: Timing,
     rust: Duration,
 }
 
+struct Samples {
+    kernel: Kernel,
+    source: String,
+    compile: Vec<Duration>,
+    setup: Vec<Duration>,
+    execute: Vec<Duration>,
+    value: f64,
+}
+
+impl Samples {
+    fn of(container: Container, kernel: Kernel) -> Self {
+        Self {
+            kernel,
+            source: source_of(container, kernel),
+            compile: Vec::new(),
+            setup: Vec::new(),
+            execute: Vec::new(),
+            value: f64::NAN,
+        }
+    }
+
+    fn timing(self) -> Timing {
+        Timing {
+            compile: median(self.compile),
+            setup: median(self.setup),
+            execute: median(self.execute),
+        }
+    }
+}
+
+fn timed<T, F>(body: F) -> (T, Duration)
+where
+    F: FnOnce() -> T,
+{
+    let start = Instant::now();
+    let value = body();
+    (value, start.elapsed())
+}
+
+/// The forms alternate inside one rep so that a drift of the box between the
+/// first phase and the last lands on both of them.
 fn measure(rt: &Runtime, case: &Case) -> Row {
     let Case {
         container,
@@ -181,77 +325,67 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
     let inputs = inputs(n, d);
     let json = context_json(&inputs);
     let interner = Interner::new();
-    let source = source_of(container);
     let context_types: FxHashMap<Astr, Ty> =
         split_context(&interner, context_of(&interner, &json)).0;
 
-    let mut compile_samples = Vec::new();
-    for rep in 0..reps {
-        let start = Instant::now();
-        let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
-        let elapsed = start.elapsed();
-        drop(black_box(cr));
-        if rep > 0 {
-            compile_samples.push(elapsed);
-        }
-    }
-
-    let mut setup_samples = Vec::new();
-    for rep in 0..reps {
-        let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
-        let snapshot = snapshot_of(&interner, &json);
-        let start = Instant::now();
-        let built = execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
-        let elapsed = start.elapsed();
-        drop(black_box(built));
-        if rep > 0 {
-            setup_samples.push(elapsed);
-        }
-    }
-
-    let mut execute_samples = Vec::new();
-    let mut script_value = f64::NAN;
-    for rep in 0..reps {
-        let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
-        let snapshot = snapshot_of(&interner, &json);
-        let (_shared, mut interp) =
-            execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
-        let start = Instant::now();
-        let value = rt.block_on(interp.execute());
-        let elapsed = start.elapsed();
-        script_value = value.as_float();
-        if rep > 0 {
-            execute_samples.push(elapsed);
-        }
-    }
-
+    let mut forms = [
+        Samples::of(container, Kernel::InLanguage),
+        Samples::of(container, Kernel::Dot),
+    ];
     let mut rust_samples = Vec::new();
     let mut rust_value = f64::NAN;
+
     for rep in 0..reps {
-        let start = Instant::now();
-        let value = rust_attention(black_box(&inputs));
-        let elapsed = start.elapsed();
+        for form in &mut forms {
+            let (cr, compile) = timed(|| compile_form(&interner, &form.source, &context_types));
+            drop(black_box(cr));
+
+            let cr = compile_form(&interner, &form.source, &context_types);
+            let snapshot = snapshot_of(&interner, &json);
+            let (built, setup) =
+                timed(|| execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor)));
+            drop(black_box(built));
+
+            let cr = compile_form(&interner, &form.source, &context_types);
+            let snapshot = snapshot_of(&interner, &json);
+            let (_shared, mut interp) =
+                execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
+            let (value, execute) = timed(|| rt.block_on(interp.execute()));
+            form.value = value.as_float();
+
+            if rep > 0 {
+                form.compile.push(compile);
+                form.setup.push(setup);
+                form.execute.push(execute);
+            }
+        }
+
+        let (value, elapsed) = timed(|| rust_attention(black_box(&inputs)));
         rust_value = black_box(value);
         if rep > 0 {
             rust_samples.push(elapsed);
         }
     }
 
-    let difference = (script_value - rust_value).abs();
-    assert!(
-        difference < 1e-9,
-        "{} n={n} d={d}: script produced {script_value:.17e}, \
-         Rust reference produced {rust_value:.17e}, abs diff {difference:.17e}",
-        container.name()
-    );
+    for form in &forms {
+        let difference = (form.value - rust_value).abs();
+        assert!(
+            difference < 1e-9,
+            "{} {} n={n} d={d}: script produced {:.17e}, \
+             Rust reference produced {rust_value:.17e}, abs diff {difference:.17e}",
+            container.name(),
+            form.kernel.name(),
+            form.value
+        );
+    }
 
+    let [in_language, dot] = forms;
     Row {
         container,
         n,
         d,
-        compile: median(compile_samples),
-        setup: median(setup_samples),
-        execute: median(execute_samples),
+        in_language: in_language.timing(),
+        dot: dot.timing(),
         rust: median(rust_samples),
     }
 }
@@ -263,7 +397,7 @@ fn micros(d: Duration) -> f64 {
 /// This mode exists so a profiler sees one phase. Pointed at the default
 /// bench, `perf record` attributes most of the process to the compiler, and
 /// the interpreter symbols the stage is about sit under the noise.
-fn execute_only(rt: &Runtime, case: &Case) -> Duration {
+fn execute_only(rt: &Runtime, case: &Case, kernel: Kernel) -> Duration {
     let Case {
         container,
         n,
@@ -273,17 +407,17 @@ fn execute_only(rt: &Runtime, case: &Case) -> Duration {
     let inputs = inputs(n, d);
     let json = context_json(&inputs);
     let interner = Interner::new();
-    let source = source_of(container);
+    let source = source_of(container, kernel);
     let context_types: FxHashMap<Astr, Ty> =
         split_context(&interner, context_of(&interner, &json)).0;
-    let cr = compile_script_mode(&interner, &source, &context_types, Ty::Float);
+    let cr = compile_form(&interner, &source, &context_types);
 
     let mut samples = Vec::new();
     for rep in 0..reps {
         let snapshot = snapshot_of(&interner, &json);
         let (_shared, mut interp) = execute_compiled(
             &interner,
-            compile_script_mode(&interner, &source, &context_types, Ty::Float),
+            compile_form(&interner, &source, &context_types),
             snapshot,
             Arc::new(SequentialExecutor),
         );
@@ -303,23 +437,27 @@ fn execute_only(rt: &Runtime, case: &Case) -> Duration {
 /// first, so a difference between the two containers can be read off the
 /// inner loops instead of inferred from a duration.
 fn print_loop_listing(container: Container) {
-    let interner = Interner::new();
-    let json = context_json(&inputs(2, 2));
-    let blocks = script_listing(
-        &interner,
-        &source_of(container),
-        context_of(&interner, &json),
-        Ty::Float,
-    );
-    for (index, region) in regions_named(&blocks, "Loop").into_iter().enumerate() {
-        let head = region.part("head").expect("a Loop holds a head");
-        let body = region.part("body").expect("a Loop holds a body");
-        println!(
-            "{} loop {index}: head [{}] body [{}]",
-            container.name(),
-            head.ops.join(", "),
-            body.ops.join(", ")
+    for kernel in [Kernel::InLanguage, Kernel::Dot] {
+        let interner = Interner::new();
+        let json = context_json(&inputs(2, 2));
+        let blocks = script_listing_with_externs(
+            &interner,
+            &source_of(container, kernel),
+            context_of(&interner, &json),
+            registries(),
+            Ty::Float,
         );
+        for (index, region) in regions_named(&blocks, "Loop").into_iter().enumerate() {
+            let head = region.part("head").expect("a Loop holds a head");
+            let body = region.part("body").expect("a Loop holds a body");
+            println!(
+                "{} {} loop {index}: head [{}] body [{}]",
+                container.name(),
+                kernel.name(),
+                head.ops.join(", "),
+                body.ops.join(", ")
+            );
+        }
     }
 }
 
@@ -331,6 +469,17 @@ fn container_from_env() -> Container {
         "deque" => Container::Deque,
         "vec" => Container::Vec,
         other => panic!("ATTENTION_CONTAINER is deque or vec, got {other:?}"),
+    }
+}
+
+fn kernel_from_env() -> Kernel {
+    match std::env::var("ATTENTION_KERNEL")
+        .unwrap_or_else(|_| "in-language".to_string())
+        .as_str()
+    {
+        "in-language" => Kernel::InLanguage,
+        "dot" => Kernel::Dot,
+        other => panic!("ATTENTION_KERNEL is in-language or dot, got {other:?}"),
     }
 }
 
@@ -361,7 +510,10 @@ fn main() {
 
     match std::env::var("ATTENTION_PHASE").as_deref() {
         Ok("execute") => {
-            println!("{:.1}", micros(execute_only(&rt, &case_from_env())));
+            println!(
+                "{:.1}",
+                micros(execute_only(&rt, &case_from_env(), kernel_from_env()))
+            );
             return;
         }
         Ok("listing") => {
@@ -386,19 +538,34 @@ fn main() {
     let rows: Vec<Row> = cases.iter().map(|case| measure(&rt, case)).collect();
 
     println!(
-        "{:>8}  {:>10}  {:>12}  {:>12}  {:>12}  {:>12}  {:>12}",
-        "container", "size", "compile/us", "setup/us", "execute/us", "rust/us", "execute/rust"
+        "{:>8}  {:>10}  {:>22}  {:>16}  {:>22}  {:>16}  {:>22}  {:>16}  {:>10}  {:>18}  {:>10}",
+        "container",
+        "size",
+        "in-language.compile/us",
+        "dot.compile/us",
+        "in-language.setup/us",
+        "dot.setup/us",
+        "in-language.execute/us",
+        "dot.execute/us",
+        "rust/us",
+        "in-language/rust",
+        "dot/rust",
     );
     for row in &rows {
         println!(
-            "{:>8}  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.1}",
+            "{:>8}  {:>10}  {:>22.1}  {:>16.1}  {:>22.1}  {:>16.1}  \
+             {:>22.1}  {:>16.1}  {:>10.1}  {:>18.1}  {:>10.1}",
             row.container.name(),
             format!("{}x{}", row.n, row.d),
-            micros(row.compile),
-            micros(row.setup),
-            micros(row.execute),
+            micros(row.in_language.compile),
+            micros(row.dot.compile),
+            micros(row.in_language.setup),
+            micros(row.dot.setup),
+            micros(row.in_language.execute),
+            micros(row.dot.execute),
             micros(row.rust),
-            micros(row.execute) / micros(row.rust)
+            micros(row.in_language.execute) / micros(row.rust),
+            micros(row.dot.execute) / micros(row.rust),
         );
     }
     println!(
