@@ -7,9 +7,17 @@
 //! coupling — not slot scarcity — is what each of them foundered on. A body uses
 //! far fewer than the registers it may colour, so a run needs nothing of the
 //! scalar allocator but the number it stops at.
+//!
+//! Decision not to ask `analysis::escape` here. That predicate answers whether
+//! a value outlives the instruction that hands it on, and rule 3's joins are
+//! exactly the instructions it answers yes for: an `Assign` of a block
+//! parameter into the storage a web shares with it puts that parameter in the
+//! escaped set, so asking it of a web heaps every web this pass exists to
+//! place. `Sites` answers the question this pass has to ask instead: is every
+//! mention of a member one the emitter has a register form for.
 
-use acvus_mir::analysis::escape;
-use acvus_mir::ir::{InstKind, Label, MirBody, ValueId};
+use acvus_mir::analysis::inst_info;
+use acvus_mir::ir::{InstKind, Label, MirBody, PathSeg, RefTarget, ValueId};
 use acvus_mir::ty::{FieldSet, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -33,6 +41,55 @@ pub struct Word {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Layout {
     words: Box<[Word]>,
+    tags: Tags,
+}
+
+/// Obligation across artifacts: a run's register at offset zero holds the
+/// index this numbering gives a variant, written by the construction arm in
+/// `prepare` and read by `ops::run::SwitchRun`. Both reach it through
+/// `Layout::tag_word` and `Layout::tag_index`, so neither carries a numbering
+/// of its own.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Tags {
+    names: Box<[Astr]>,
+}
+
+impl Tags {
+    /// Decision not to number by declaration order: `Ty::Enum` carries its
+    /// variants as an `FxHashMap` and no declaration reaches this, so string
+    /// order is the one order the settled type fixes. It is the comparison
+    /// rule 8 orders a structural object's fields by, for the same reason —
+    /// an interned symbol's order is the order of first interning, which
+    /// differs between programs and across a source change.
+    fn of<'v, I>(variants: I, interner: &Interner) -> Tags
+    where
+        I: Iterator<Item = &'v Astr>,
+    {
+        let mut names: Vec<Astr> = variants.copied().collect();
+        names.sort_by(|a, b| interner.resolve(*a).cmp(interner.resolve(*b)));
+        Tags {
+            names: names.into_boxed_slice(),
+        }
+    }
+
+    pub fn index(&self, name: Astr) -> Option<u32> {
+        self.names
+            .iter()
+            .position(|held| *held == name)
+            .map(|at| u32::try_from(at).expect("an enum has fewer variants than a u32 counts"))
+    }
+
+    pub fn names(&self) -> &[Astr] {
+        &self.names
+    }
+
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
 }
 
 /// Whether the type being laid is the run's own or one of its fields'. Only the
@@ -55,9 +112,70 @@ impl Layout {
     pub fn of(ty: &Ty, interner: &Interner) -> Option<Layout> {
         let mut words = Vec::new();
         lay(ty, interner, Level::Outer, &mut words)?;
+        let tags = match ty {
+            Ty::Enum { variants, .. } => Tags::of(variants.keys(), interner),
+            _ => Tags::default(),
+        };
         Some(Layout {
             words: words.into_boxed_slice(),
+            tags,
         })
+    }
+
+    pub fn tags(&self) -> &Tags {
+        &self.tags
+    }
+
+    /// The register at offset zero of a run holding `tag`.
+    pub fn tag_word(&self, tag: Astr) -> Option<crate::value::Value> {
+        self.tag_index(tag)
+            .map(|at| crate::value::Value::inline(crate::value::Kind::U32, u64::from(at)))
+    }
+
+    pub fn tag_index(&self, tag: Astr) -> Option<u32> {
+        self.tags.index(tag)
+    }
+
+    /// # Panics
+    /// The layout is a structural object's, which has no payload.
+    pub fn payload(&self) -> u16 {
+        assert!(!self.tags.is_empty(), "only an enum's run has a payload");
+        1
+    }
+
+    /// Whether one construction can write this whole layout. Every value a
+    /// `MakeObject` or a `MakeVariant` names is one register, so a layout with
+    /// a register no such value reaches is one this pass cannot fill.
+    /// The fields of the run's own type, with the register each begins.
+    pub fn fields(&self) -> impl Iterator<Item = (u16, Astr)> + '_ {
+        self.words.iter().enumerate().filter_map(|(at, word)| {
+            word.field
+                .map(|name| (u16::try_from(at).expect("a layout is bounded"), name))
+        })
+    }
+
+    /// Whether this layout is a home for a value of `narrow`'s type too: the
+    /// members of one web carry the union type's variants and fields in
+    /// different widths, because a `MakeVariant` result is typed by the one
+    /// variant it wrote and the join it reaches carries the union (RFC-0041).
+    pub fn subsumes(&self, narrow: &Layout) -> bool {
+        if narrow.words.len() > self.words.len() {
+            return false;
+        }
+        let tags = narrow
+            .tags
+            .names()
+            .iter()
+            .all(|name| self.tags.index(*name).is_some());
+        let fields = narrow.fields().all(|(_, name)| self.field(name).is_some());
+        tags && fields && narrow.tags.is_empty() == self.tags.is_empty()
+    }
+
+    pub fn lowerable(&self) -> bool {
+        match self.tags.is_empty() {
+            true => self.words.iter().all(|word| word.field.is_some()),
+            false => self.words.len() == 2,
+        }
     }
 
     pub fn len(&self) -> u16 {
@@ -173,6 +291,8 @@ pub struct Run {
     pub var: ValueId,
     pub base: Slot,
     pub layout: Layout,
+    pub members: Vec<ValueId>,
+    pub projections: Vec<ValueId>,
 }
 
 /// Where every addressed aggregate of one body lives.
@@ -187,7 +307,17 @@ pub struct RunPlan {
 
 impl RunPlan {
     pub fn of(&self, var: ValueId) -> Option<&Run> {
-        self.runs.iter().find(|run| run.var == var)
+        self.runs.iter().find(|run| run.members.contains(&var))
+    }
+
+    pub fn projected(&self, var: ValueId) -> Option<&Run> {
+        self.runs.iter().find(|run| run.projections.contains(&var))
+    }
+
+    pub fn registers(&self) -> impl Iterator<Item = Slot> + '_ {
+        self.runs
+            .iter()
+            .flat_map(|run| (0..run.layout.len()).map(|at| run.base + at))
     }
 }
 
@@ -196,6 +326,8 @@ struct Candidate {
     layout: Layout,
     range: LiveRange,
     depth: u32,
+    members: Vec<ValueId>,
+    projections: Vec<ValueId>,
 }
 
 /// The registers one placed run holds over its live range.
@@ -233,7 +365,7 @@ pub(crate) fn plan(
                 heaped,
             };
         }
-        heaped.push(candidates.remove(spill_first(&candidates)).var);
+        heaped.extend(candidates.remove(spill_first(&candidates)).members);
     }
 }
 
@@ -256,51 +388,346 @@ fn spill_first(candidates: &[Candidate]) -> usize {
         .expect("an empty candidate set takes no registers, so it always places")
 }
 
+/// Two values rule 3 gives one home. Union is symmetric, so neither side is
+/// the target of the other.
+#[derive(Clone, Copy)]
+struct Join {
+    one: ValueId,
+    other: ValueId,
+}
+
+struct Edges<'a> {
+    body: &'a MirBody,
+    labels: &'a FxHashMap<Label, u32>,
+}
+
+impl Edges<'_> {
+    fn params(&self, label: &Label) -> &[ValueId] {
+        let at = *self
+            .labels
+            .get(label)
+            .unwrap_or_else(|| panic!("unknown label {label:?}")) as usize;
+        let InstKind::BlockLabel { params, .. } = &self.body.insts[at].kind else {
+            panic!("a jump names {label:?}, whose instruction is not a block label")
+        };
+        params
+    }
+
+    fn carried(&self, params: &[ValueId], args: &[ValueId], out: &mut Vec<Join>) {
+        out.extend(params.iter().zip(args).map(|(param, arg)| Join {
+            one: *param,
+            other: *arg,
+        }));
+    }
+
+    fn edge(&self, label: &Label, args: &[ValueId], out: &mut Vec<Join>) {
+        self.carried(self.params(label), args, out);
+    }
+
+    fn joins(&self) -> Vec<Join> {
+        let mut out = Vec::new();
+        for inst in &self.body.insts {
+            match &inst.kind {
+                InstKind::Assign {
+                    target,
+                    path,
+                    value,
+                } if path.is_empty() => {
+                    if let Some(storage) = inst_info::storage(target) {
+                        out.push(Join {
+                            one: storage,
+                            other: *value,
+                        });
+                    }
+                }
+                InstKind::Jump { label, args } => self.edge(label, args, &mut out),
+                InstKind::JumpIf {
+                    then_label,
+                    then_args,
+                    else_label,
+                    else_args,
+                    ..
+                } => {
+                    self.edge(then_label, then_args, &mut out);
+                    self.edge(else_label, else_args, &mut out);
+                }
+                InstKind::Switch { arms, default, .. } => {
+                    for (_, label, args) in arms {
+                        self.edge(label, args, &mut out);
+                    }
+                    if let Some((label, args)) = default {
+                        self.edge(label, args, &mut out);
+                    }
+                }
+                InstKind::For {
+                    source,
+                    body,
+                    body_args,
+                    exit,
+                    exit_args,
+                } => {
+                    self.edge(exit, exit_args, &mut out);
+                    let carried = source.carried_params(self.params(body));
+                    self.carried(carried, body_args, &mut out);
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// Where a web member is mentioned, and whether this pass lowers that mention.
+///
+/// The default arm refuses, so an instruction kind added to the IR takes its
+/// web to the heap rather than reaching a lowering that was never written for
+/// it. That direction is the whole of the soundness argument here: a member
+/// whose mention is refused has no run, and a member with a run is mentioned
+/// only where the emitter has an arm.
+struct Sites<'a> {
+    class_of: &'a [usize],
+    web: &'a FxHashSet<usize>,
+    projected: &'a FxHashMap<ValueId, usize>,
+    refused: FxHashSet<usize>,
+}
+
+impl Sites<'_> {
+    fn web_of(&self, value: ValueId) -> Option<usize> {
+        let root = self.class_of[value.to_raw()];
+        self.web.contains(&root).then_some(root)
+    }
+
+    /// A mention this pass has no register form for.
+    fn refuse(&mut self, value: ValueId) {
+        if let Some(root) = self.web_of(value) {
+            self.refused.insert(root);
+        }
+        if let Some(root) = self.projected.get(&value) {
+            self.refused.insert(*root);
+        }
+    }
+
+    fn refuse_target(&mut self, target: &RefTarget) {
+        if let Some(storage) = inst_info::storage(target) {
+            self.refuse(storage);
+        }
+        if let RefTarget::Through(through) = target {
+            self.refuse(*through);
+        }
+    }
+
+    /// The web a place reaches: the storage it names, or the one the
+    /// reference it walks through projects onto.
+    fn reached(&self, target: &RefTarget) -> Option<usize> {
+        match target {
+            RefTarget::Var(storage) | RefTarget::Param(storage) => self.web_of(*storage),
+            RefTarget::Through(through) => self.projected.get(through).copied(),
+        }
+    }
+
+    fn observe(&mut self, kind: &InstKind) {
+        match kind {
+            InstKind::MakeObject { dst, fields } => {
+                if self.web_of(*dst).is_none() {
+                    self.refuse(*dst);
+                }
+                for (_, value) in fields {
+                    self.refuse(*value);
+                }
+            }
+            InstKind::MakeVariant { dst, payload, .. } => {
+                if self.web_of(*dst).is_none() {
+                    self.refuse(*dst);
+                }
+                if let Some(value) = payload {
+                    self.refuse(*value);
+                }
+            }
+            InstKind::Assign {
+                target,
+                path,
+                value,
+            } => {
+                let joined = path.is_empty()
+                    && self.reached(target).is_some()
+                    && self.reached(target) == self.web_of(*value);
+                if !joined {
+                    self.refuse_target(target);
+                    self.refuse(*value);
+                }
+            }
+            InstKind::Ref { target, path, .. } => {
+                if !path.is_empty() || self.reached(target).is_none() {
+                    self.refuse_target(target);
+                }
+            }
+            InstKind::Take { target, path, .. } => {
+                let read = matches!(path.as_slice(), [PathSeg::Field(_) | PathSeg::Payload])
+                    && self.reached(target).is_some();
+                if !read {
+                    self.refuse_target(target);
+                }
+            }
+            InstKind::Drop { .. }
+            | InstKind::Switch { .. }
+            | InstKind::Jump { .. }
+            | InstKind::JumpIf { .. }
+            | InstKind::BlockLabel { .. } => {}
+            InstKind::TestVariant { src, .. } | InstKind::UnwrapVariant { src, .. } => {
+                self.refuse(*src);
+            }
+            other => {
+                for value in inst_info::uses(other) {
+                    self.refuse(value);
+                }
+                for def in inst_info::defs(other) {
+                    self.refuse(def);
+                }
+            }
+        }
+    }
+}
+
 fn candidates(
     body: &MirBody,
     labels: &FxHashMap<Label, u32>,
     ranges: &[Option<LiveRange>],
     interner: &Interner,
 ) -> Vec<Candidate> {
-    let escaped = escape::of_insts(body.insts.iter().map(|inst| &inst.kind));
     let depths = loop_depths(body, labels);
+    let values = body.val_factory.len();
 
-    let mut addressed: FxHashSet<ValueId> = FxHashSet::default();
-    for inst in &body.insts {
-        if let InstKind::Ref { target, .. } = &inst.kind {
-            addressed.insert(escape::named_storage(target));
+    let entry: FxHashSet<ValueId> = body
+        .params
+        .iter()
+        .chain(&body.captures)
+        .map(|(_, id)| *id)
+        .chain(body.order_param)
+        .collect();
+
+    let mut classes = super::Classes::new(values);
+    for Join { one, other } in (Edges { body, labels }).joins() {
+        let (one, other) = (classes.find(one.to_raw()), classes.find(other.to_raw()));
+        if one != other {
+            classes.unite(one, other);
         }
     }
+    let class_of: Vec<usize> = (0..values).map(|value| classes.find(value)).collect();
 
-    let mut out: Vec<Candidate> = Vec::new();
-    for var in addressed {
-        if escaped.escapes(var) {
+    let mut members: FxHashMap<usize, Vec<ValueId>> = FxHashMap::default();
+    for value in 0..values {
+        if ranges[value].is_none() {
             continue;
         }
-        // An addressed storage the colouring gave no range is one no operation
-        // reads: it is neither defined nor live, which is the same answer
-        // `Slots::of` refuses to be asked for.
-        let Some(range) = ranges[var.to_raw()] else {
-            continue;
-        };
+        let id = ValueId::from_raw(value);
         let ty = body
             .val_types
-            .get(&var)
-            .unwrap_or_else(|| panic!("no type for value {var:?}"));
-        let Some(layout) = Layout::of(ty, interner) else {
-            continue;
-        };
-        if layout.is_empty() {
+            .get(&id)
+            .unwrap_or_else(|| panic!("no type for value {id:?}"));
+        if !laid_whole(ty) {
             continue;
         }
+        if entry.contains(&id) {
+            continue;
+        }
+        members.entry(class_of[value]).or_default().push(id);
+    }
+
+    let mut layouts: FxHashMap<usize, Layout> = FxHashMap::default();
+    members.retain(|root, held| {
+        let laid: Option<Vec<Layout>> = held
+            .iter()
+            .map(|id| Layout::of(&body.val_types[id], interner))
+            .collect();
+        let Some(laid) = laid else { return false };
+        let widest = laid
+            .iter()
+            .max_by_key(|layout| (layout.len(), layout.tags.len()))
+            .expect("a web is the members that made it");
+        if widest.is_empty()
+            || !widest.lowerable()
+            || laid.iter().any(|held| !widest.subsumes(held))
+        {
+            return false;
+        }
+        layouts.insert(*root, widest.clone());
+        true
+    });
+
+    let web: FxHashSet<usize> = members.keys().copied().collect();
+    let mut projected: FxHashMap<ValueId, usize> = FxHashMap::default();
+    for inst in &body.insts {
+        if let InstKind::Ref {
+            dst, target, path, ..
+        } = &inst.kind
+            && path.is_empty()
+            && let Some(storage) = inst_info::storage(target)
+            && let Some(root) = web.get(&class_of[storage.to_raw()])
+        {
+            projected.insert(*dst, *root);
+        }
+    }
+
+    let mut sites = Sites {
+        class_of: &class_of,
+        web: &web,
+        projected: &projected,
+        refused: FxHashSet::default(),
+    };
+    for inst in &body.insts {
+        sites.observe(&inst.kind);
+    }
+    for id in &entry {
+        sites.refuse(*id);
+    }
+    let refused = sites.refused;
+
+    let mut out: Vec<Candidate> = Vec::new();
+    for (root, mut held) in members {
+        if refused.contains(&root) {
+            continue;
+        }
+        let projections: Vec<ValueId> = projected
+            .iter()
+            .filter(|(_, at)| **at == root)
+            .map(|(dst, _)| *dst)
+            .collect();
+        if projections.is_empty() {
+            continue;
+        }
+        held.sort_by_key(|id| id.to_raw());
+        let range = held
+            .iter()
+            .chain(&projections)
+            .map(|id| {
+                ranges[id.to_raw()]
+                    .unwrap_or_else(|| panic!("value {id:?} is in a web and has no live range"))
+            })
+            .reduce(|held, one| held.joined(one))
+            .expect("a web is the members that made it");
         out.push(Candidate {
-            var,
-            layout,
+            var: held[0],
+            layout: layouts.remove(&root).expect("every web was laid"),
             range,
             depth: depths[range.lo],
+            members: held,
+            projections,
         });
     }
+    out.sort_by_key(|candidate| candidate.var.to_raw());
     out
+}
+
+/// Whether rule 8 lays this type as a run of its own. A nested aggregate is
+/// laid inline inside one, and a `Tuple`, an `Option` and a `Result` are laid
+/// as fields; only an enum and a structural object are a run's own type, because
+/// only those two have the construction and the dispatch this pass lowers.
+fn laid_whole(ty: &Ty) -> bool {
+    match ty {
+        Ty::Enum { .. } => true,
+        Ty::Object(obj) => matches!(obj.field_set(), FieldSet::Written | FieldSet::AtLeast),
+        _ => false,
+    }
 }
 
 /// RFC-0050 rule 2's placement order: deepest loop first, then live-range start.
@@ -355,6 +782,8 @@ fn place(candidates: &[Candidate], base: Slot) -> Option<Vec<Run>> {
             var: candidate.var,
             base: base + at,
             layout: candidate.layout.clone(),
+            members: candidate.members.clone(),
+            projections: candidate.projections.clone(),
         });
     }
     Some(runs)
@@ -543,11 +972,14 @@ mod tests {
     fn candidate(var: usize, lo: usize, hi: usize, len: u16, depth: u32) -> Candidate {
         let i = Interner::new();
         let ty = Ty::Tuple(vec![Ty::I64; usize::from(len)]);
+        let id = ValueId::from_raw(var);
         Candidate {
-            var: ValueId::from_raw(var),
+            var: id,
             layout: Layout::of(&ty, &i).expect("a tuple of words has a layout"),
             range: LiveRange { lo, hi },
             depth,
+            members: vec![id],
+            projections: Vec::new(),
         }
     }
 

@@ -35,9 +35,10 @@ use crate::interpreter::Executable;
 use crate::ops::arith::{self, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
 use crate::ops::place;
+use crate::ops::run::{LaidKonst, LaidMove};
 use crate::ops::{
-    call, cast, composite, constant, control, index, pattern, select, storage, string, switch,
-    variant,
+    call, cast, composite, constant, control, index, pattern, run as run_ops, select, storage,
+    string, switch, variant,
 };
 use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
@@ -199,7 +200,7 @@ pub fn prepare_body(
         "body {role:?}: the prepared operations await and the checker's task does not say so"
     );
 
-    let frame_len = prep.scalar_len();
+    let frame_len = prep.frame_len();
     let param_ids: Vec<ValueId> = body.params.iter().map(|(_, v)| *v).collect();
     let param_marks = prep.take_mask(&param_ids);
     let params = param_ids.iter().map(|id| prep.off(*id)).collect();
@@ -229,6 +230,35 @@ pub fn prepare_body(
             .unwrap_or_else(|| panic!("body {role:?} holds no instruction, so it cannot return"))
             .span,
     }))
+}
+
+/// The instructions a placed run leaves nothing to emit for: an `Assign`
+/// between two members of one web, which share a home, and a `Drop` of a
+/// projection, which owns nothing.
+fn noops(body: &MirBody, plan: &runs::RunPlan) -> FxHashSet<usize> {
+    let mut out = FxHashSet::default();
+    for (at, inst) in body.insts.iter().enumerate() {
+        let skip = match &inst.kind {
+            InstKind::Assign {
+                target,
+                path,
+                value,
+            } => {
+                let home = inst_info::storage(target).and_then(|storage| plan.of(storage));
+                path.is_empty()
+                    && match (home, plan.of(*value)) {
+                        (Some(target), Some(value)) => target.base == value.base,
+                        _ => false,
+                    }
+            }
+            InstKind::Drop { src } => plan.projected(*src).is_some(),
+            _ => false,
+        };
+        if skip {
+            out.insert(at);
+        }
+    }
+    out
 }
 
 fn label_map(body: &MirBody) -> FxHashMap<Label, u32> {
@@ -264,6 +294,7 @@ struct Prepare<'a> {
     /// The registers `order_moves` broke a cycle through: none, one, or the
     /// two of a slice's pair.
     scratch_used: u32,
+    run_noops: FxHashSet<usize>,
     may_suspend: bool,
     /// The block array being emitted. A region owns its blocks, so the
     /// array a jump's target names is the innermost one being built, and
@@ -507,7 +538,7 @@ impl Prepare<'_> {
                 at = run.insts.end;
                 continue;
             }
-            if !self.konsts.holds_inst(at) {
+            if !self.konsts.holds_inst(at) && !self.run_noops.contains(&at) {
                 units.push(Unit::Inst(at));
             }
             at += 1;
@@ -695,6 +726,7 @@ impl<'a> Prepare<'a> {
             plan: runs::RunPlan::default(),
             run_base: 0,
             scratch_used: 0,
+            run_noops: FxHashSet::default(),
             may_suspend: false,
             level: Level::default(),
             def_inst,
@@ -722,16 +754,45 @@ impl<'a> Prepare<'a> {
             &self.slots.ranges,
             self.ctx.interner,
         );
-        let frame = self.run_base + self.plan.total;
+        let frame = self.run_frame_len();
         assert!(
             frame <= crate::regs::MAX_FRAME_SLOTS,
             "a body's {scalars} scalar registers and {} run registers reach {frame}, past the {}",
             self.plan.total,
             crate::regs::MAX_FRAME_SLOTS
         );
+        for slot in self.plan.registers() {
+            assert!(
+                slot < frame,
+                "a run holds register {slot}, which a frame of {frame} does not have"
+            );
+            assert_eq!(
+                Marked::of(Off::of(slot)).word_byte(),
+                0,
+                "a run holds register {slot}, whose mark bit is outside mark word 0"
+            );
+        }
+        self.run_noops = noops(self.body, &self.plan);
+    }
+
+    fn run_frame_len(&self) -> u16 {
+        self.run_base + self.plan.total
+    }
+
+    /// A body with no placed run keeps the frame it has today: the run base
+    /// sits above the scratch `order_moves` may take, and charging a body for
+    /// registers it never reads is what the sixth build measured out.
+    fn frame_len(&self) -> u16 {
+        match self.plan.runs.is_empty() {
+            true => self.scalar_len(),
+            false => self.run_frame_len().max(self.scalar_len()),
+        }
     }
 
     fn slot(&self, id: ValueId) -> Slot {
+        if let Some(run) = self.plan.of(id) {
+            return run.base;
+        }
         let raw = match self.konsts.slot_of.get(&id) {
             Some(slot) => *slot,
             None => self.slots.of(id),
@@ -750,6 +811,32 @@ impl<'a> Prepare<'a> {
     /// define, take or assign a whole `Value` (RFC-0050 rule 2).
     fn marked(&self, id: ValueId) -> Marked {
         Marked::of(self.off(id))
+    }
+
+    /// The run a place reaches: the one the storage it names is a member of,
+    /// or the one the reference it walks through projects onto.
+    fn reached_run(&self, target: &RefTarget) -> Option<&runs::Run> {
+        match target {
+            RefTarget::Var(storage) | RefTarget::Param(storage) => self.plan.of(*storage),
+            RefTarget::Through(through) => self.plan.projected(*through),
+        }
+    }
+
+    /// The register a one-segment path lands on inside the run it reaches.
+    fn run_field(&self, target: &RefTarget, path: &[PathSeg]) -> Option<Marked> {
+        let run = self.reached_run(target)?;
+        let at = match path {
+            [PathSeg::Payload] => run.layout.payload(),
+            [PathSeg::Field(name)] => run.layout.field(*name)?,
+            _ => return None,
+        };
+        Some(Marked::of(Off::of(run.base + at)))
+    }
+
+    /// The register a dispatch reads its tag from, where the value it names
+    /// lives in a run (RFC-0050 rule 3).
+    fn run_tag(&self, tag: ValueId) -> Option<&runs::Run> {
+        self.plan.of(tag).or_else(|| self.plan.projected(tag))
     }
 
     /// The two registers a slice-typed value occupies, both fixed here so no
@@ -1117,6 +1204,9 @@ impl<'a> Prepare<'a> {
         arms: &[(Astr, Label, Vec<ValueId>)],
         default: Option<&(Label, Vec<ValueId>)>,
     ) -> Box<dyn Op> {
+        let placed_run = self
+            .run_tag(tag)
+            .map(|run| (Off::of(run.base), run.layout.tags().clone()));
         let src = self.off(tag);
         let through = self.is_ref(tag);
         let form = variant_form(self.scrutinee_ty(tag));
@@ -1136,6 +1226,19 @@ impl<'a> Prepare<'a> {
                 block: self.dispatch_edge(*label, args),
             })
             .collect();
+
+        if let Some((src, tags)) = placed_run {
+            let arms: Box<[run_ops::RunArm]> = placed
+                .iter()
+                .map(|arm| run_ops::RunArm {
+                    tag: u64::from(tags.index(arm.key).unwrap_or_else(|| {
+                        panic!("the settled type numbers no variant {:?}", arm.key)
+                    })),
+                    target: arm.block,
+                })
+                .collect();
+            return Box::new(run_ops::SwitchRun { src, arms, default });
+        }
 
         match form {
             VariantForm::Option => {
@@ -2255,6 +2358,17 @@ impl<'a> Prepare<'a> {
 
             InstKind::Ref {
                 dst, target, path, ..
+            } if path.is_empty() && self.reached_run(target).is_some() => {
+                let at = Off::of(
+                    self.reached_run(target)
+                        .expect("the guard read the same run")
+                        .base,
+                );
+                let dst = self.off(*dst);
+                node(move |next| run_ops::Project { dst, at, next })
+            }
+            InstKind::Ref {
+                dst, target, path, ..
             } => {
                 let under = self.walked_under(target, path);
                 let slots = Unary {
@@ -2262,6 +2376,17 @@ impl<'a> Prepare<'a> {
                     src: under.base,
                 };
                 make_ref(slots, through_target(target), &under.path)
+            }
+            InstKind::Take { dst, target, path } if self.run_field(target, path).is_some() => {
+                let src = self
+                    .run_field(target, path)
+                    .expect("the guard read the same register");
+                let owns = self.owns(*dst);
+                let dst = self.marked(*dst);
+                match owns {
+                    true => node(move |next| control::Mov::<true, false> { dst, src, next }),
+                    false => node(move |next| control::Mov::<false, false> { dst, src, next }),
+                }
             }
             InstKind::Take { dst, target, path } => {
                 let clone = self.is_string(*dst);
@@ -2496,6 +2621,9 @@ impl<'a> Prepare<'a> {
                     })
                 }
             }
+            InstKind::MakeObject { dst, fields } if self.plan.of(*dst).is_some() => {
+                self.lay_object(*dst, fields)
+            }
             InstKind::MakeObject { dst, fields } => {
                 let values: Vec<ValueId> = fields.iter().map(|(_, value)| *value).collect();
                 let owns_large = self.take_mask(&values);
@@ -2650,6 +2778,9 @@ impl<'a> Prepare<'a> {
                 }
             }
 
+            InstKind::MakeVariant { dst, tag, payload } if self.plan.of(*dst).is_some() => {
+                self.lay_variant(*dst, *tag, *payload)
+            }
             InstKind::MakeVariant { dst, tag, payload } => self.make_variant(*dst, *tag, *payload),
             InstKind::TestVariant { dst, src, tag } => {
                 let slots = Unary {
@@ -2721,6 +2852,15 @@ impl<'a> Prepare<'a> {
                         node(move |next| control::Undef::<false> { dst: slot, next })
                     }
                 }
+            }
+            InstKind::Drop { src } if self.plan.of(*src).is_some() => {
+                let run = self.plan.of(*src).expect("the guard read the same run");
+                let registers: Box<[Marked]> = run
+                    .layout
+                    .releases()
+                    .map(|at| Marked::of(Off::of(run.base + at)))
+                    .collect();
+                node(move |next| run_ops::DropRun { registers, next })
             }
             InstKind::Drop { src } => {
                 let slot = self.marked(*src);
@@ -3122,6 +3262,63 @@ impl<'a> Prepare<'a> {
                 self.test_literal(at, &sugar.desugared())
             }
         }
+    }
+
+    /// RFC-0050 rule 2: an aggregate's construction writes its run's
+    /// registers, and no `Make` operation exists for it.
+    fn lay_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Node {
+        let run = self.plan.of(dst).expect("the arm read the same run");
+        let (base, at) = (run.base, run.layout.payload());
+        let word = run
+            .layout
+            .tag_word(tag)
+            .unwrap_or_else(|| panic!("the settled type of {dst:?} numbers no variant {tag:?}"));
+        let konsts = Box::new([LaidKonst {
+            at: Marked::of(Off::of(base)),
+            value: word,
+        }]);
+        let register = Marked::of(Off::of(base + at));
+        let moved: Box<[LaidMove]> = match payload {
+            Some(src) => Box::new([LaidMove {
+                at: register,
+                src: self.marked(src),
+                large: self.owns(src),
+            }]),
+            None => Box::new([]),
+        };
+        node(move |next| run_ops::LayRun {
+            konsts,
+            moved,
+            next,
+        })
+    }
+
+    fn lay_object(&mut self, dst: ValueId, fields: &[(Astr, ValueId)]) -> Node {
+        let run = self.plan.of(dst).expect("the arm read the same run");
+        let base = run.base;
+        let written: FxHashMap<Astr, ValueId> = fields.iter().copied().collect();
+        let mut moved: Vec<LaidMove> = Vec::new();
+        let mut konsts: Vec<LaidKonst> = Vec::new();
+        for (offset, name) in run.layout.fields().collect::<Vec<(u16, Astr)>>() {
+            let at = Marked::of(Off::of(base + offset));
+            match written.get(&name) {
+                Some(src) => moved.push(LaidMove {
+                    at,
+                    src: self.marked(*src),
+                    large: self.owns(*src),
+                }),
+                None => konsts.push(LaidKonst {
+                    at,
+                    value: Value::UNDEF,
+                }),
+            }
+        }
+        let (konsts, moved) = (konsts.into_boxed_slice(), moved.into_boxed_slice());
+        node(move |next| run_ops::LayRun {
+            konsts,
+            moved,
+            next,
+        })
     }
 
     fn make_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Node {

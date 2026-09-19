@@ -31,6 +31,10 @@ macro_rules! kind {
             Undef,
             Ref,
             Large,
+            /// A run of registers and a heap realization hold one aggregate's
+            /// flat layout alike (RFC-0050 rule 4), so a projection into either
+            /// is this one kind and a reader of it does not know which it has.
+            LargeRef,
             /// An option whose payload is a `None`: the word is how many
             /// `Some`s wrap it, and zero is `None` itself (RFC-0022).
             None,
@@ -52,21 +56,21 @@ macro_rules! kind {
             pub fn type_id(self) -> Option<TypeId> {
                 match self {
                     $(Kind::$name => Some(TypeId::of::<$t>()),)*
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => None,
                 }
             }
 
             pub fn name(self) -> Option<&'static str> {
                 match self {
                     $(Kind::$name => Some(stringify!($t)),)*
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::None => None,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => None,
                 }
             }
 
             pub fn is_inline(self) -> bool {
                 match self {
                     $(Kind::$name)|* => true,
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::None => false,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => false,
                 }
             }
         }
@@ -356,6 +360,21 @@ impl Value {
         unsafe { &*(self.word as *const Value) }
     }
 
+    /// A projection onto the aggregate whose flat layout begins at `base`.
+    ///
+    /// Nothing reads through one yet: `prepare` knows every projected web's
+    /// base, so it folds each use of a projection onto the register it names.
+    /// The read and write through a projection are RFC-0050 rule 3's one
+    /// family over a run and a heap `Large` alike, and they arrive with the
+    /// flat heap object.
+    #[inline]
+    pub fn large_ref(base: *mut Value) -> Value {
+        Value {
+            kind: Kind::LargeRef,
+            word: base as u64,
+        }
+    }
+
     /// # Safety
     /// As `target`, and no other name of the storage is used meanwhile.
     #[allow(clippy::mut_from_ref)]
@@ -386,6 +405,7 @@ impl fmt::Debug for Value {
                 Ok(())
             }
             Kind::Ref => write!(f, "Ref({:p})", self.word as *const Value),
+            Kind::LargeRef => write!(f, "LargeRef({:p})", self.word as *const Value),
             Kind::Large => {
                 let vtable = self.header().vtable;
                 match vtable.debug {
@@ -909,7 +929,13 @@ mod tests {
 
     #[test]
     fn the_kinds_that_no_rust_type_was_erased_into_name_none() {
-        for kind in [Kind::Undef, Kind::Ref, Kind::Large, Kind::None] {
+        for kind in [
+            Kind::Undef,
+            Kind::Ref,
+            Kind::Large,
+            Kind::LargeRef,
+            Kind::None,
+        ] {
             assert_eq!(kind.type_id(), None, "{kind:?}");
             assert_eq!(kind.name(), None, "{kind:?}");
             assert!(!kind.is_inline(), "{kind:?}");

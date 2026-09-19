@@ -529,6 +529,11 @@ impl<'f> Regs<'f> {
         unsafe { &mut *self.at_mut(off) }
     }
 
+    #[inline(always)]
+    pub fn projection(&mut self, off: Off) -> Value {
+        Value::large_ref(self.at_mut(off))
+    }
+
     /// One 8-byte load: the kind byte was written when the frame was made and
     /// no run of a word-typed register changes it (RFC-0052 §5).
     #[inline(always)]

@@ -52,6 +52,16 @@ const CONSTRUCT: &str = "let acc = 0; let i = 0; while i < @n { let q = { x: i, 
 const ENUM_MATCH: &str = "let acc = 0; let i = 0; while i < @n { let e = if i % 2 == 0 { E::A(i) } else { E::B(i + 1) }; match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v; } }; i = i + 1; } acc";
 /// Three arms, and a scrutinee whose three edges each carry a constant tag.
 const ENUM_MATCH_THREE: &str = "let acc = 0; let i = 0; while i < @n { let e = match i % 3 { 0 => E::A(i), 1 => E::B(i + 1), _ => E::C(i + 2) }; match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v; }, E::C(v) => { acc = acc + v; } }; i = i + 1; } acc";
+/// The three arms of `ENUM_MATCH_THREE` with the scrutinee held across an
+/// inner loop, so its address is taken and `optimize::sroa` leaves the
+/// aggregate to the machine. Every row above it holds no aggregate at all by
+/// the time `prepare` sees it, which is why they do not move when the machine's
+/// aggregate representation does.
+const ENUM_MATCH_HELD: &str = "let acc = 0; let i = 0; while i < @n { \
+let e = if i % 3 == 0 { E::A(i) } else { if i % 3 == 1 { E::B(i + 1) } else { E::C(i + 2) } }; \
+let j = 0; while j < 1 { match e { E::A(v) => { acc = acc + v; }, \
+E::B(v) => { acc = acc + v; }, E::C(v) => { acc = acc + v; } }; j = j + 1; } \
+i = i + 1; } acc";
 const OPTION_MATCH: &str = "let i = 0; let acc = 0; while i < @n { if let Some(v) = some_of(i) { acc = acc + v; }; i = i + 1; } acc";
 
 /// `v[i]` takes a `u64` index and integer literals are `i64`, so the index
@@ -149,6 +159,29 @@ fn rust_enum_match_three(n: i64) -> f64 {
             E3::A(v) => acc += v,
             E3::B(v) => acc += v,
             E3::C(v) => acc += v,
+        }
+        i += 1;
+    }
+    acc as f64
+}
+
+fn rust_enum_match_held(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let e = match black_box(i) % 3 {
+            0 => E3::A(i),
+            1 => E3::B(i + 1),
+            _ => E3::C(i + 2),
+        };
+        let mut j = 0i64;
+        while j < 1 {
+            match &e {
+                E3::A(v) => acc += *v,
+                E3::B(v) => acc += *v,
+                E3::C(v) => acc += *v,
+            }
+            j += 1;
         }
         i += 1;
     }
@@ -306,6 +339,14 @@ fn main() {
             source: ENUM_MATCH_THREE,
             registries: std_only,
             rust: rust_enum_match_three,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "enum match held",
+            source: ENUM_MATCH_HELD,
+            registries: std_only,
+            rust: rust_enum_match_held,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

@@ -338,20 +338,59 @@ Rule 8's field order is landed in both artifacts that have to agree on it:
 fields by the resolved name, and the run placement's `prepare/runs.rs::lay`
 calls that same function, so a committed object's canonical bytes and a run's
 registers cannot disagree. A test lays and encodes a field set interned in the
-reverse of its string order and pins the two orders equal. Rules 2, 3, 4 and 9
-remain unbuilt in the machine: no operation writes or reads a run, so no
-aggregate is kept off the heap yet.
+reverse of its string order and pins the two orders equal.
 
-The rest here is not built yet; the first three are expectations, each with the
+Rules 2 and 3 are landed for an addressed enum whose web the emitter lowers
+whole, and the unit rule 3 places is the **SSA web**, not the value: the
+values joined by an `Assign`, by a block argument reaching its parameter, and
+by the construction that writes them take one run and one base. Reading rule 3
+per value does not reach the customers at all — for every one of them the run's
+writer is a join of several `MakeVariant` results, so lowering one variable's
+own sites leaves every allocation standing. A web is placed only where every
+mention of every member is one the emitter has a register form for; the default
+arm of that enumeration refuses, so an instruction kind added to the IR takes
+its web to the heap rather than reaching a lowering never written for it.
+`analysis::escape` is not what asks: that predicate reports an `Assign`'s
+source as escaping, and an `Assign` between two members is exactly rule 3's
+join, so asking it of a web heaps every web.
+
+Measured, `benches/shapes.rs` `enum match held` at three arms, four
+alternating pinned reps, min of each, one variable apart in one binary:
+**42.6 ns an iteration on the heap, 38.2 in a run — 10.3 % faster, ranges
+disjoint** — and **2.0 heap allocations an iteration become 0**, which is
+rule 4's first judgment. A run's registers also **execute 11.3 % fewer
+instructions** than the heap form.
+
+Rule 8's tag numbering is string order over the settled type's variants, for
+the reason rule 8 orders fields that way. The numbering makes a table of blocks
+indexed by the tag possible and that table is **refused**: measured at 46.2 ns
+an iteration, it was slower than the heap form it replaces, at equal cache
+misses and 1.36 G fewer instructions — a second data-dependent indirect branch
+beside the machine's own dispatch costs more than three compares save. The
+dispatch is a scan of ordinals.
+
+Rules 4, 5, 6, 7 and 9 remain unbuilt in the machine. Rule 5's realization has
+no emission site under rule 3's own predicate: a web with a member that
+escapes is placed on the heap whole, so nothing takes a whole aggregate out of
+a run. Rule 4's heap-side projection is still today's `Obj` map lookup.
+
+The rest here is not built yet; the first two are expectations, each with the
 count it rests on, and the measured table replaces them when the
 implementation lands.
 
-- **Expected** `enum match` at 6–9 ns, from 13.6: `MakeVariant` gone, a
-  `Switch` on a tag register, the payload a phi. **Expected** `vec of
-  objects` at 4–6 ns, from 9.6: field reads by projection into the element,
-  no hash. `option match` holds no aggregate and is expected flat. The
-  Brainfuck bench's `program[pc]` read becomes two loads through a
-  projection, and its dispatch row becomes a `Switch`.
+- **Withdrawn as written**: `enum match` at 6–9 ns from 13.6 and `vec of
+  objects` at 4–6 ns from 9.6. Measured at the base, **neither row holds an
+  aggregate by the time `prepare` sees it** — `optimize::sroa` scalarizes both
+  in the MIR, and their listings hold no `MakeObject`, no `MakeVariant` and no
+  `Switch`. So no representation the machine gives an aggregate can move them,
+  and the rows earlier builds recorded moving on this bench did not move for
+  that reason. `benches/shapes.rs` gained `enum match held`, which holds the
+  scrutinee across an inner loop so that its address is taken and the
+  aggregate survives to the machine; that row is the one the numbers above
+  are from. **Expected** still, for `vec of objects`: field reads by
+  projection into the element, no hash — a container element is rule 7's and
+  no web reaches it. The Brainfuck bench's `program[pc]` read becomes two
+  loads through a projection, and its dispatch row becomes a `Switch`.
 - Rule 6's window half is built, and the handle to it is one word. Against
   master `f3160466`, min of three alternating pinned reps: `extern while`
   3.7 → 3.5 ns, `option while` 5.4 → 5.3, `branch while` 5.0 → 4.9,

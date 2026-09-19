@@ -96,6 +96,7 @@ pub fn by_kind(interner: &Interner, value: &Value) -> Json {
         // SAFETY: a reference names a live value for as long as it lives.
         Kind::Ref => by_kind(interner, unsafe { value.target() }),
         Kind::Undef => Json::from("<undef>"),
+        Kind::LargeRef => Json::from("<projection>"),
         Kind::Large => by_composite(interner, value),
     }
 }
