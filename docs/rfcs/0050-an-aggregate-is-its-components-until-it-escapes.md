@@ -68,10 +68,13 @@ object lives.
    a body's runs exceed the bound, aggregates are spilled to the heap
    (rule 4) **in ascending loop depth**, the shallowest first, ties
    broken by the longest live range first: what a loop touches stays in
-   the frame. The region is owned by the frame like every register: a
-   frame has ⌈(64 + wide) / 64⌉ mark words, laid after its registers
-   where today's one is, and the sweep releases a run's `Large` fields
-   by its marks. The projection into a run is `Regs::run_of` — nothing
+   the frame. The region is owned by the frame like every register. Its marks
+   are **one bit per run** in a second mark word that lives in the frame's
+   memory and is read or written only by an operation that builds,
+   moves or releases an aggregate run — never by a scalar chain, whose
+   marks are the by-value operand of RFC-0052 §5 as amended (2026-09-20).
+   The sweep releases a run's `Large` fields by walking the run's layout
+   for each set run bit. The projection into a run is `Regs::run_of` — nothing
    new in the machine reads it.
 
 3. **A reference to an aggregate is a projection, and an addressed

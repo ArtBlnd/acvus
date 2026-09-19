@@ -163,6 +163,24 @@ threw away.
    the type is a `Large` (the operation's type says so: `CallExtern1<const
    LARGE: bool, const WORD: bool>`); a take of a `Large` clears its bit; a
    batched take clears one mask; the frame's exit releases the marked slots.
+
+   **The mark word is an operand while the frame runs** (amended
+   2026-09-20; owner: "1번으로 가자"). `Op::run(&self, m, r0, marks) ->
+   Exit` carries the frame's marks by value beside `r0`, and `Exit` is
+   the pair `(at, marks)` — 16 bytes, two registers — so a chain's
+   `take_mask` is `marks & !takes` and a `Large` define is `marks | bit`:
+   register arithmetic, no load, no store. The word touches memory at
+   three places only: the frame's entry (`param_marks` in), a suspension
+   (the `SUSPEND` exit writes `marks` to the frame's slot and the resumed
+   `run` reads it back), and the frame's exit (`RETURN` hands `marks` to
+   `sweep`). A frameless chain (`Code::Expr`) has no marks and passes
+   zero. Why: the memory RMW on the hot path was a load the CPU ordered
+   against every in-flight store to the frame; on Zen it blocked on
+   partial-address matches at ≈8.7 cycles each — `while let vec` paid 0.9
+   of them per iteration at `d88f27be` and 1.8 after RFC-0059 moved every
+   address (RFC-0059 Consequences). With the operand there is no load to
+   block.
+
    Slot access is unchecked in release, on `prepare`'s proof that every slot
    is below `frame_len`. A slot's kind is static — it is one SSA value's
    type — so `prepare` writes the kind byte of every word-typed slot once,
