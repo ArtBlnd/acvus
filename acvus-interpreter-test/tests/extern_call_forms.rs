@@ -71,6 +71,41 @@ fn form_string(s: String) -> String {
     s.to_uppercase()
 }
 
+/// A result two values wide, at one value of arguments and then at two,
+/// three, four and past them. Each body hands back a run of bytes its own
+/// argument lent, which is the only thing a view may be (RFC-0047 §3).
+#[extern_fn(effect = pure)]
+fn view1(s: &String) -> &str {
+    &s[..]
+}
+
+#[extern_fn(effect = pure)]
+fn view2(s: &str) -> &str {
+    s.trim()
+}
+
+#[extern_fn(effect = pure)]
+fn view3(s: &str, n: i64) -> &str {
+    &s[..n as usize]
+}
+
+#[extern_fn(effect = pure)]
+fn view4<'a>(s: &'a str, t: &'a str) -> &'a str {
+    match s.len() >= t.len() {
+        true => s,
+        false => t,
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn view_window<'a>(s: &'a str, t: &'a str, u: &'a str) -> &'a str {
+    match (s.len() >= t.len(), s.len() >= u.len()) {
+        (true, true) => s,
+        (false, _) => t,
+        (_, false) => u,
+    }
+}
+
 fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "t",
@@ -86,6 +121,12 @@ fn registry() -> Registry<AcvusRuntime> {
             pair3,
             pair4,
             pair6,
+            view1,
+            view2,
+            view3,
+            view4,
+            view_window,
+            addr_of,
         ],
     }
 }
@@ -163,6 +204,109 @@ fn a_pair_parameter_costs_two_registers_and_not_a_window() {
             called[0]
         );
     }
+}
+
+/// A view's own length, read back through `len`, is what the caller sees of
+/// the pair the call wrote.
+async fn view_length(source: &str) -> i64 {
+    let interner = Interner::new();
+    run_script_with_externs(
+        &interner,
+        source,
+        Context::default(),
+        vec![
+            registry(),
+            acvus_ext::conversion_registry(),
+            acvus_ext::string_registry(),
+        ],
+        Ty::U64,
+    )
+    .await
+    .value
+    .as_int()
+}
+
+#[tokio::test]
+async fn a_view_result_returns_what_its_body_returned() {
+    for (source, bytes, _) in view_cases() {
+        assert_eq!(view_length(&source).await, bytes as i64, "{source}");
+    }
+}
+
+/// The length alone does not say which form ran. This is the form itself,
+/// read off the prepared operations.
+/// One script per pair form, with the byte length of the view each one
+/// takes and the operation `prepare` builds for it.
+fn view_cases() -> [(String, usize, &'static str); 5] {
+    let owned = "let s = \"  ab \".to_string();";
+    [
+        ("view1(&s)", 5, "CallPair1"),
+        ("view2(&s)", 2, "CallPair2"),
+        ("view3(&s, 3)", 3, "CallPair3"),
+        ("view4(&s, \"xyzxyz\")", 6, "CallPair4"),
+        ("view_window(&s, \"xyzxyz\", \"pq\")", 6, "CallPairWindow"),
+    ]
+    .map(|(call, bytes, form)| (format!("{owned} let v = {call}; len(&v)"), bytes, form))
+}
+
+#[test]
+fn a_view_result_takes_the_pair_form_of_its_argument_width() {
+    for (source, _, form) in view_cases() {
+        let interner = Interner::new();
+        let blocks = script_listing_with_externs(
+            &interner,
+            &source,
+            Context::default(),
+            vec![
+                registry(),
+                acvus_ext::conversion_registry(),
+                acvus_ext::string_registry(),
+            ],
+            Ty::U64,
+        );
+        let ops = ops_of_anywhere(&blocks);
+        let called: Vec<&String> = ops
+            .iter()
+            .filter(|op| op.contains("__extern_fn_view"))
+            .collect();
+        assert_eq!(
+            called.len(),
+            1,
+            "{source} prepares one view-returning call, and these are {called:?}"
+        );
+        assert!(
+            called[0].starts_with(form),
+            "{source} takes {form}, and the operation prepared for it is {}",
+            called[0]
+        );
+    }
+}
+
+/// The first byte of the view, as an address the script can subtract.
+#[extern_fn(effect = pure)]
+fn addr_of(s: &str) -> i64 {
+    s.as_ptr() as i64
+}
+
+/// The counting allocator in `view_allocates_nothing.rs` bounds what the
+/// run costs; this is the copy itself, or its absence: the bytes `trim`
+/// hands back are two bytes into the argument's own buffer.
+#[tokio::test]
+async fn a_view_names_the_bytes_of_its_argument() {
+    let interner = Interner::new();
+    let ran = run_script_with_externs(
+        &interner,
+        "let s = \"  ab \".to_string(); let v = trim(&s); addr_of(&v) - addr_of(&s)",
+        Context::default(),
+        vec![
+            registry(),
+            acvus_ext::conversion_registry(),
+            acvus_ext::string_registry(),
+        ],
+        Ty::I64,
+    )
+    .await;
+    assert_eq!(ran.value.as_int(), 2);
 }
 
 #[tokio::test]

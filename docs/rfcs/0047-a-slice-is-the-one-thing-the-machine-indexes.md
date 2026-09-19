@@ -338,3 +338,17 @@ Rust slice.
   at `Task::Sync`. Not built.
 - kovac inherits a static, layout-free indexing instruction with a static
   bound proof.
+
+- **§3's pair result is no longer tied to one parameter.** A handler whose
+  `Ret::Form` is `Pair` takes a register form at any argument width:
+  `TakenForm<Pair>` is implemented for `InRegisters<1>` through
+  `InRegisters<4>` and for `InWindow`, and `prepare::extern_call` places the
+  two adjacent registers `assign_slots` gives every value of
+  `SlotClass::Slice`. `CallShape::Slice`, `Runtime::op_slice` and the
+  `AsSlice` operation are replaced by `CallPair1`..`CallPair4` and
+  `CallPairWindow`; the `AsSlice` **instruction** is unchanged and now builds
+  `CallPair1`. `InRegisters<0>` has no `TakenForm<Pair>` impl, because a
+  declaration with no parameter lends no storage the run could name — which
+  is what §3's "borrow projection of its container" says, stated as the one
+  bound that survives. The refusal a reader meets first is the macro's, which
+  names the missing parameter.

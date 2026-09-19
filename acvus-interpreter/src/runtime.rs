@@ -89,11 +89,39 @@ impl Runtime for AcvusRuntime {
         call::off_the_register_forms(handler, shape)
     }
 
-    fn op_slice<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    fn op_pair_one_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
     where
         H: acvus_extern::Handler<AcvusRuntime>,
     {
-        call::op_slice(handler, shape)
+        call::op_pair_one_argument(handler, shape)
+    }
+
+    fn op_pair_two_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_pair_two_arguments(handler, shape)
+    }
+
+    fn op_pair_three_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_pair_three_arguments(handler, shape)
+    }
+
+    fn op_pair_four_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_pair_four_arguments(handler, shape)
+    }
+
+    fn op_pair_wide<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_pair_wide(handler, shape)
     }
 
     fn fused_no_argument<H>(handler: H, shape: call::FusedShape) -> call::Call

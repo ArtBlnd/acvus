@@ -3088,11 +3088,11 @@ impl<'a> Prepare<'a> {
                     f.width(),
                     Width { args: 1, ret: 2 },
                     "an AsSlice names a handler of another shape than the one container in \
-                     and the two words of a run out, which is `Handler::call_slice`'s \
+                     and the two words of a run out, which is `Handler::call_pair1`'s \
                      contract (RFC-0047 amended, rule 2)"
                 );
                 made(move |next| {
-                    f.into_op(call::CallShape::Slice {
+                    f.into_op(call::CallShape::Pair1 {
                         dst,
                         a,
                         takes,
@@ -3331,7 +3331,7 @@ impl<'a> Prepare<'a> {
                 }
                 match handler {
                     ExternHandler::Sync(f) => {
-                        let op = self.extern_call(at, into, args, f, ops);
+                        let op = self.extern_call(at, site.dst, args, f, ops);
                         ops.push(op);
                         None
                     }
@@ -3367,23 +3367,12 @@ impl<'a> Prepare<'a> {
     fn extern_call(
         &mut self,
         at: usize,
-        into: Dest,
+        result: ValueId,
         args: &[ValueId],
         f: call::Handler,
         ops: &mut Vec<Node>,
     ) -> Node {
-        let Dest {
-            slot: dst,
-            large,
-            word,
-        } = into;
         let width = f.width();
-        assert_eq!(
-            width.ret, 1,
-            "a function call names a handler whose result is wider than one value; a run of \
-             a container's elements reaches the machine as an AsSlice and nothing else \
-             (RFC-0047 amended, rule 2)"
-        );
         let takes = self.take_mask(args);
         let slots = self.argument_words(args);
         assert_eq!(
@@ -3394,7 +3383,36 @@ impl<'a> Prepare<'a> {
             slots.len(),
             width.args
         );
-        match CallForm::of(&width) {
+        let form = CallForm::of(&width);
+        match width.ret {
+            ONE_VALUE => self.call_into_register(at, result, args, f, form, slots, takes, ops),
+            PAIR => self.call_into_pair(at, result, args, f, form, slots, takes, ops),
+            other => panic!(
+                "a handler's result is {other} of the runtime's values; a call writes the one \
+                 register a value is or the two a view is (RFC-0047 amended rule 2, RFC-0062 \
+                 Decision 4)"
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_into_register(
+        &mut self,
+        at: usize,
+        result: ValueId,
+        args: &[ValueId],
+        f: call::Handler,
+        form: CallForm,
+        slots: Vec<Off>,
+        takes: u64,
+        ops: &mut Vec<Node>,
+    ) -> Node {
+        let Dest {
+            slot: dst,
+            large,
+            word,
+        } = self.dest(result);
+        match form {
             CallForm::Registers(0) => {
                 made(move |next| f.into_op(call::CallShape::Registers0 { dst, large, next }))
             }
@@ -3468,6 +3486,91 @@ impl<'a> Prepare<'a> {
                         next,
                     })
                 })
+            }
+        }
+    }
+
+    /// The destination is the two adjacent registers `assign_slots` placed
+    /// for a value of `SlotClass::Slice`, which is every `&[T]` and every
+    /// `&str` (RFC-0047 amended rule 1, RFC-0062 Decision 4). Neither
+    /// register carries a mark bit, so no `Dest` flag reaches here.
+    #[allow(clippy::too_many_arguments)]
+    fn call_into_pair(
+        &mut self,
+        at: usize,
+        result: ValueId,
+        args: &[ValueId],
+        f: call::Handler,
+        form: CallForm,
+        slots: Vec<Off>,
+        takes: u64,
+        ops: &mut Vec<Node>,
+    ) -> Node {
+        let dst = self.pair(result);
+        match form {
+            CallForm::Registers(0) => panic!(
+                "a declaration of no parameter returns a view of nothing; \
+                 `TakenForm<Pair>` has no impl for `InRegisters<0>` and the macro refuses \
+                 the declaration ahead of it (RFC-0047 §3)"
+            ),
+            CallForm::Registers(1) => {
+                let a = nth(&slots, 0);
+                made(move |next| {
+                    f.into_op(call::CallShape::Pair1 {
+                        dst,
+                        a,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(2) => {
+                let (a, b) = (nth(&slots, 0), nth(&slots, 1));
+                made(move |next| {
+                    f.into_op(call::CallShape::Pair2 {
+                        dst,
+                        a,
+                        b,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(3) => {
+                let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
+                made(move |next| {
+                    f.into_op(call::CallShape::Pair3 {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(4) => {
+                let (a, b, c, d) = (
+                    nth(&slots, 0),
+                    nth(&slots, 1),
+                    nth(&slots, 2),
+                    nth(&slots, 3),
+                );
+                made(move |next| {
+                    f.into_op(call::CallShape::Pair4 {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        d,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(_) | CallForm::Window => {
+                let window = self.window(at, args, ops);
+                made(move |next| f.into_op(call::CallShape::PairWindow { dst, window, next }))
             }
         }
     }
@@ -4518,6 +4621,11 @@ enum CallForm {
     /// The argument run laid in the caller's window.
     Window,
 }
+
+/// The two result widths a call writes, read off the forms `acvus-extern`
+/// counts a handler's result by, so the two crates cannot say two numbers.
+const ONE_VALUE: usize = <acvus_extern::One as acvus_extern::Form>::WIDTH;
+const PAIR: usize = <acvus_extern::Pair as acvus_extern::Form>::WIDTH;
 
 impl CallForm {
     fn of(width: &Width) -> CallForm {

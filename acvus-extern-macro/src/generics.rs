@@ -128,10 +128,17 @@ impl Vars {
         let mut vars = Vec::new();
         let mut counts = [0usize; 5];
         for param in &generics.params {
+            // A lifetime parameter is admitted and dropped, which is a
+            // decision: a declaration whose result may borrow either of two
+            // parameters has to name one lifetime for Rust, and that
+            // lifetime is the call's own rather than an acvus type variable.
+            if matches!(param, GenericParam::Lifetime(_)) {
+                continue;
+            }
             let GenericParam::Type(tp) = param else {
                 return Err(syn::Error::new(
                     span_of(param),
-                    "only type parameters bounded by TyVar, EffectVar, LenVar, IdentityVar, Monomorphize, or Runtime are allowed",
+                    "only lifetimes and type parameters bounded by TyVar, EffectVar, LenVar, IdentityVar, Monomorphize, or Runtime are allowed",
                 ));
             };
             let kinds: Vec<VarKind> = bounds_of(generics, tp)

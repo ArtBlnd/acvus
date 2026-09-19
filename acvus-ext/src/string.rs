@@ -4,9 +4,10 @@
 //! it; a character is read out by value with `char_at`, as the `char` it
 //! is (RFC-0058).
 //!
-//! Every function that reads takes a `&str` and every function that
-//! produces returns a `String` (RFC-0062 Decisions 2 and 3): a `&str`
-//! return waits for the crossing to carry a pair out. Two units coexist
+//! Every function that reads takes a `&str`. A function whose result is a
+//! run of its argument's own bytes returns `&str` and the caller holds the
+//! argument's loan for as long as the result; a function that builds new
+//! bytes returns `String` (RFC-0062 Decisions 2 and 3). Two units coexist
 //! here and each function states its own: `len`, `find`, `rfind` and
 //! `substring` are in bytes, `char_at`, `chars` and the `pad_*` width in
 //! Unicode scalar values.
@@ -47,19 +48,25 @@ fn concat(a: &str, b: &str) -> String {
     s
 }
 
+/// A view of `s` with the outer whitespace cut away. The bytes are `s`'s
+/// own, so the caller holds `s`'s loan for as long as the result.
 #[extern_fn(effect = pure)]
-fn trim(s: &str) -> String {
-    s.trim().to_owned()
+fn trim(s: &str) -> &str {
+    s.trim()
 }
 
+/// A view of `s` with the outer whitespace cut away. The bytes are `s`'s
+/// own, so the caller holds `s`'s loan for as long as the result.
 #[extern_fn(effect = pure)]
-fn trim_start(s: &str) -> String {
-    s.trim_start().to_owned()
+fn trim_start(s: &str) -> &str {
+    s.trim_start()
 }
 
+/// A view of `s` with the outer whitespace cut away. The bytes are `s`'s
+/// own, so the caller holds `s`'s loan for as long as the result.
 #[extern_fn(effect = pure)]
-fn trim_end(s: &str) -> String {
-    s.trim_end().to_owned()
+fn trim_end(s: &str) -> &str {
+    s.trim_end()
 }
 
 #[extern_fn(effect = pure)]
@@ -110,11 +117,13 @@ fn repeat_str(s: &str, n: u64) -> String {
     s.repeat(n)
 }
 
-/// The bytes `[start, end)`. Both offsets are byte offsets and both must be
-/// on a character boundary; `start` past `end`, an offset past the length,
-/// or an offset inside a character is refused (RFC-0062 Decision 2).
+/// A view of the bytes `[start, end)` of `s`, which are `s`'s own, so the
+/// caller holds `s`'s loan for as long as the result. Both offsets are byte
+/// offsets and both must be on a character boundary; `start` past `end`, an
+/// offset past the length, or an offset inside a character is refused
+/// (RFC-0062 Decision 2).
 #[extern_fn(effect = pure)]
-fn substring(s: &str, start: u64, end: u64) -> String {
+fn substring(s: &str, start: u64, end: u64) -> &str {
     let refuse = |what: &str| -> ! {
         panic!(
             "substring: {what} for the range {start}..{end} over {} bytes of {s:?}",
@@ -133,7 +142,7 @@ fn substring(s: &str, start: u64, end: u64) -> String {
     if !s.is_char_boundary(end) {
         refuse("end is not on a character boundary")
     }
-    s[start..end].to_owned()
+    &s[start..end]
 }
 
 #[extern_fn(effect = pure)]

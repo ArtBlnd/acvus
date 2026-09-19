@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use acvus_extern::{Owned, Words};
+use acvus_extern::{Owned, Runtime, Words};
 use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
@@ -80,10 +80,39 @@ pub enum CallShape {
         large: bool,
         next: Box<dyn Op>,
     },
-    Slice {
+    Pair1 {
         dst: SlicePair,
         a: Off,
         takes: u64,
+        next: Box<dyn Op>,
+    },
+    Pair2 {
+        dst: SlicePair,
+        a: Off,
+        b: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    Pair3 {
+        dst: SlicePair,
+        a: Off,
+        b: Off,
+        c: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    Pair4 {
+        dst: SlicePair,
+        a: Off,
+        b: Off,
+        c: Off,
+        d: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    PairWindow {
+        dst: SlicePair,
+        window: ArgWindow,
         next: Box<dyn Op>,
     },
     Heavy {
@@ -352,26 +381,127 @@ where
     }
 }
 
-pub fn op_slice<H>(f: H, shape: CallShape) -> Box<dyn Op>
+/// This family has no `Heavy` and no `Spawn` arm, which is a decision and not
+/// an omission: a result two values wide is a borrow of the frame the call
+/// laid its arguments on, and both of those tasks resume after that frame is
+/// gone. `ExternHandler::heavy` takes `impl ValuesOnly<R>` and
+/// `AsyncCall::WIDTH` fixes `ret: 1`, so no such handler can reach here.
+fn off_the_pair_register_forms<H>(f: H, shape: CallShape) -> Box<dyn Op>
 where
     H: acvus_extern::Handler<AcvusRuntime>,
 {
-    let CallShape::Slice {
-        dst,
-        a,
-        takes,
-        next,
-    } = shape
-    else {
-        not_this_form("a result that is a run of elements")
+    let CallShape::PairWindow { dst, window, next } = shape else {
+        not_this_form("a result two values wide at this arity")
     };
-    Box::new(AsSlice::<H> {
+    Box::new(CallPairWindow::<H> {
         dst,
-        a,
-        takes,
+        window,
         f,
         next,
     })
+}
+
+pub fn op_pair_one_argument<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Pair1 {
+            dst,
+            a,
+            takes,
+            next,
+        } => Box::new(CallPair1::<H> {
+            dst,
+            a,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_pair_register_forms(f, shape),
+    }
+}
+
+pub fn op_pair_two_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Pair2 {
+            dst,
+            a,
+            b,
+            takes,
+            next,
+        } => Box::new(CallPair2::<H> {
+            dst,
+            a,
+            b,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_pair_register_forms(f, shape),
+    }
+}
+
+pub fn op_pair_three_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Pair3 {
+            dst,
+            a,
+            b,
+            c,
+            takes,
+            next,
+        } => Box::new(CallPair3::<H> {
+            dst,
+            a,
+            b,
+            c,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_pair_register_forms(f, shape),
+    }
+}
+
+pub fn op_pair_four_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Pair4 {
+            dst,
+            a,
+            b,
+            c,
+            d,
+            takes,
+            next,
+        } => Box::new(CallPair4::<H> {
+            dst,
+            a,
+            b,
+            c,
+            d,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_pair_register_forms(f, shape),
+    }
+}
+
+pub fn op_pair_wide<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    off_the_pair_register_forms(f, shape)
 }
 
 pub fn fused_no_argument<H>(f: H, shape: FusedShape) -> Call
@@ -747,11 +877,22 @@ where
     }
 }
 
-/// `AsSlice` (RFC-0047 amended): the handler's result is two values wide and
-/// this stores their words to `dst`, the first register of the pair
-/// `prepare::assign_slots` gave the slice. A slice is no `Value`, so there is
-/// no `LARGE` here and no drop anywhere.
-pub struct AsSlice<H> {
+/// The pair forms (RFC-0047 amended rule 2, RFC-0062 Decision 4): the
+/// handler's result is two of the runtime's values and this stores their
+/// words to the two adjacent registers `prepare::assign_slots` gave the
+/// call's result. Neither register holds a `Value`, so there is no `LARGE`
+/// here and no drop anywhere.
+#[inline]
+fn land_pair(m: &mut Machine<'_>, dst: SlicePair, out: [Value; 2]) {
+    // SAFETY: `out` is what the handler's `Ret::into_run` wrote at
+    // `Form = Pair`, which is `slice_into_run`'s own output.
+    let Words { ptr, len } = unsafe { m.rt.slice_from_run(&out) };
+    let regs = m.regs();
+    regs.set_word(dst.ptr, ptr);
+    regs.set_word(dst.len, len);
+}
+
+pub struct CallPair1<H> {
     pub dst: SlicePair,
     pub a: Off,
     pub takes: u64,
@@ -759,7 +900,7 @@ pub struct AsSlice<H> {
     pub next: Box<dyn Op>,
 }
 
-impl<H> Op for AsSlice<H>
+impl<H> Op for CallPair1<H>
 where
     H: acvus_extern::Handler<AcvusRuntime>,
 {
@@ -771,12 +912,126 @@ where
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
-        // SAFETY: as `CallExtern0`'s; `prepare` admits only a handler whose
-        // result is the two values a slice is.
-        let Words { ptr, len } = unsafe { self.f.call_slice(rt, m.window(), a) }.words();
+        // SAFETY: `prepare` read this handler's width and built this
+        // operation for the form it named.
+        let out = unsafe { self.f.call_pair1(rt, m.window(), a) };
+        land_pair(m, self.dst, out);
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallPair2<H> {
+    pub dst: SlicePair,
+    pub a: Off,
+    pub b: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallPair2<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
         let regs = m.regs();
-        regs.set_word(self.dst.ptr, ptr);
-        regs.set_word(self.dst.len, len);
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallPair1`'s, at two arguments.
+        let out = unsafe { self.f.call_pair2(rt, m.window(), a, b) };
+        land_pair(m, self.dst, out);
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallPair3<H> {
+    pub dst: SlicePair,
+    pub a: Off,
+    pub b: Off,
+    pub c: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallPair3<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        let c = regs.read(self.c);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallPair1`'s, at three arguments.
+        let out = unsafe { self.f.call_pair3(rt, m.window(), a, b, c) };
+        land_pair(m, self.dst, out);
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallPair4<H> {
+    pub dst: SlicePair,
+    pub a: Off,
+    pub b: Off,
+    pub c: Off,
+    pub d: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallPair4<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        let c = regs.read(self.c);
+        let d = regs.read(self.d);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallPair1`'s, at four arguments.
+        let out = unsafe { self.f.call_pair4(rt, m.window(), a, b, c, d) };
+        land_pair(m, self.dst, out);
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallPairWindow<H> {
+    pub dst: SlicePair,
+    pub window: ArgWindow,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallPairWindow<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
+        let Lent { run, window } = self.window.lend(m);
+        // SAFETY: as `CallPair1`'s; the run is the window `prepare` laid.
+        let out = unsafe { self.f.call_pair_run(rt, window, run) };
+        land_pair(m, self.dst, out);
         self.next.run(m, r0)
     }
 }

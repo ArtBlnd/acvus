@@ -1,11 +1,5 @@
 error: there is no `&mut str`: a write through one could leave the bytes invalid UTF-8. Take `&str` to read, or `String` to own (RFC-0062).
- --> tests/compile_fail/mut_str_param.rs:6:13
+ --> tests/compile_fail/mut_str_param.rs:5:13
   |
-6 | fn blank(s: &mut str) {
+5 | fn blank(s: &mut str) {
   |             ^^^^^^^^
-
-error: a declaration returning the language's `&str` is not built yet: the machine takes a result two values wide only through `AsSlice` (RFC-0047 §3, RFC-0062 Order of work). Return `String`, or `StrView` once the machine reads a pair-wide result at a call.
-  --> tests/compile_fail/mut_str_param.rs:11:21
-   |
-11 | fn head(s: &str) -> &str {
-   |                     ^^^^

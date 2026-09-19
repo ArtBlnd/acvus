@@ -128,22 +128,21 @@ exist, so `|k| -> k + "a"` fixes nothing and is refused.
 `core::to_string` takes `T = Str` as an instance, and `"x".to_string()` is
 the spelling wherever an owned string is wanted: at a `String` parameter, in
 a list, an object, a tuple or a context, at a capture, and as a body's
-result. A body does not return a `&str` — the result leaves in the one
-register a caller reads, and a host that declares `!` reads it by kind
-(RFC-0054), which a pair has none of. The wider rule, decided with this
-one and not yet enforced for the other references: a body's result is not
-a reference of any kind until a reference's extent can be stated in a
-signature (a later RFC on loans as lifetimes); today a `&String` or `&T`
-result prints nothing at the host, and the checker will refuse it as it
-refuses the `&str`.
+result. A body does not return a reference of any kind: the result leaves in
+the one register a caller reads, a host that declares `!` reads it by kind
+(RFC-0054), which a pair has none of, and what a reference names is a place
+the run is about to leave. `MirErrorKind::ReferenceReturnedFromBody` is that
+refusal, and it is what makes an extern call the only site where a call's
+destination can be the two registers a view occupies.
 
-The `string` module's reading half takes `&str` and its producers return
-`String`: `len`, `is_empty`, `concat`, `contains`, `starts_with_str`,
-`ends_with_str`, `find`, `rfind`, `char_at`, `chars`, `bytes`, `lines`,
-`split_whitespace`, `trim`, `trim_start`, `trim_end`, `upper`, `lower`,
-`capitalize`, `substring`, `split_str`, `split_once`, `strip_prefix`,
-`strip_suffix`, `repeat_str`, `replace_str`, `eq_ignore_case`, `pad_start`,
-`pad_end`. `to_bytes` keeps `String`, which it consumes. Two units coexist
+The `string` module's reading half takes `&str`. A producer whose result is
+a run of its argument's own bytes returns `&str` — `trim`, `trim_start`,
+`trim_end`, `substring` — and every producer that builds new bytes returns
+`String`: `concat`, `upper`, `lower`, `capitalize`, `split_str`,
+`split_once`, `strip_prefix`, `strip_suffix`, `repeat_str`, `replace_str`,
+`pad_start`, `pad_end`. `to_bytes` keeps `String`, which it consumes. The
+split family stays owned because its elements are owned (RFC-0047 §3 lends
+one run, not a list of them). Two units coexist
 and each function states its own: `len`, `find`, `rfind` and `substring` are
 in bytes, `char_at`, `chars` and the `pad_*` width in Unicode scalar values.
 `substring(s: &str, start: u64, end: u64)` refuses an inverted range, an
@@ -191,12 +190,35 @@ handler `CallExtern1` through `CallExtern4` all measure 48 bytes, the `Off`s
 fitting inside the padding `Marked` and the take mask leave, and `ops/call.rs`
 asserts that the widest one stays inside a cache line.
 
-What waits is the `&str` **return**: an extern declared `-> &str` and a
-`substring`, `trim` or `split` that returns a view of its argument need the
-pair-wide `CallShape` Decision 4 describes, and until then every producer
-returns a `String`. The macro is the wall — `acvus-extern-macro` refuses a
-`-> &str` declaration by name — and behind it `prepare`'s `extern_call`
-asserts that a handler's result is one value wide.
+The `&str` **return** is landed. A declaration written `-> &str` crosses as
+`RetStr`, whose `Ret::Of<'a>` is `&'a str`: `Ret::Of` is a generic
+associated type over the lifetime the call's arguments were taken at,
+because a view of a parameter has no other lifetime to name. A call whose
+handler declares a result two values wide is placed into the two adjacent
+registers `assign_slots` already gives every value of `SlotClass::Slice`,
+which is every `&[T]` and every `&str`; `prepare::extern_call` reads
+`Width::ret` and builds `CallPair1` through `CallPair4` or `CallPairWindow`,
+and `CallShape::Slice`, `Runtime::op_slice` and the `AsSlice` operation are
+gone — `InstKind::AsSlice` now builds `CallPair1`, which is the same
+operation `as_str` took under its old name.
+
+RFC-0047 §3's restriction of a pair result to a declaration of one parameter
+is withdrawn. `TakenForm<Pair>` is implemented for `InRegisters<1>` through
+`InRegisters<4>` and for `InWindow`, so a view crosses at any argument width;
+the one run it has no impl for is `InRegisters<0>`, because a declaration
+with no parameter has no storage the view could be a projection of. The macro
+refuses that declaration ahead of the missing impl, and refuses a `-> &str`
+on a `heavy` or `async fn` declaration, whose frame is gone when the call
+resumes. The macro also admits a lifetime parameter and drops it: a
+declaration whose result may borrow either of two parameters has to name one
+lifetime for Rust.
+
+Measured, `let s = "  ab ".to_string(); let v = trim(&s); addr_of(&v) -
+addr_of(&s)` answers **2** — the view is the argument's own buffer, two bytes
+in, and nothing is copied. Counting every allocation of the run alone, with
+compilation and preparation outside the count and the least of three runs
+taken, `let v = trim(&@text); len(&v)` allocates **15** against `upper`'s
+**17** over the same nine bytes.
 
 `Option<&str>` is admitted by the checker and cannot be held by the machine.
 `reject_reference_in_data` refuses a view in an array, an object or a tuple
@@ -216,4 +238,6 @@ what is wrong.
 RFC-0043 → the literal as a pair constant → the rest of the `string` module
 on `&str` → the machine (`SlicePair` for `&str`, `is_char_boundary` at
 `substring`) → the extern crossing (`Arg`/`Ret` at `Form = Pair` for `&str`)
-→ regex on `&str`.
+→ regex on `&str`. All of it is landed. What is not: `Option<&str>` above,
+and a result wider than two values, which is what an aggregate returned by
+an extern would need.

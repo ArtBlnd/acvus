@@ -271,6 +271,15 @@ or an associated type of the crossing.
   run out rather than by where the operations do — the count is in RFC-0062's
   Consequences, and `CallExtern1` through `CallExtern4` all measure 48 bytes
   at a zero-sized handler, with `ops/call.rs` asserting the cache line.
+- Rule 7's reading of `Width` covers the result as well. `Ret::Of` is a
+  generic associated type over the call's lifetime, so a result may borrow
+  what the arguments lent; `Ret::Form` names the run it is written into, and
+  `TakenForm<Pair>` picks `Runtime::op_pair_*` at every argument width but
+  zero. `Handler` carries `call_pair1` through `call_pair4` and
+  `call_pair_run`, each handing back the `[Value; 2]` the result occupies,
+  and `call_slice` is gone. Every arity's glue binds `Ret<Rt>` rather than
+  `Ret<Rt, Form = One>`; `ValuesOnly` still binds `Form = One`, which is what
+  keeps a view off a `heavy` or awaited call.
 - RFC-0050's flat layout changes `acvus-extern/src/object.rs` and
   `variant.rs` only. RFC-0050's wide argument will add a `Form` beside `One`
   and `Pair`, and the window form (`Handler::call` on `&mut [Value]`) is

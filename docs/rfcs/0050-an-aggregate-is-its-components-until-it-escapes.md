@@ -542,3 +542,13 @@ path of any depth (rule 8), and `prepare` emitting realization only at
 the escape sites with rule 3's one home → multi-value return at the
 window's run → the extern glue (`Window`, `Out`, `&[Value]` + shape,
 `#[acvus::enum]`, `&mut` write-back) → the benches.
+
+Rule 5's `Out` is not built, and rule 6's "no name lookup at call time" is
+not true. Both waited on a call destination wider than one register, and that
+half is now landed: a call whose handler declares a result two values wide
+writes the two adjacent registers `assign_slots` placed (RFC-0062
+Consequences). What `Out` still needs is a destination run of `S::WIDTH`
+registers rather than of two, which is a third `Form` beside `One` and
+`Pair`, and a `Ret` impl that hands the handler `&mut [Value]` over it. The
+offset table rule 6 asks for is independent of that: `position_of` is still
+reached per field per call, because no extern call form carries a table.

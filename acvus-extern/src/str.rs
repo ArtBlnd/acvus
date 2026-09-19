@@ -4,7 +4,7 @@
 use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
-use crate::handler::Arg;
+use crate::handler::{Arg, Ret};
 use crate::obj::{Cross, Pair};
 use crate::runtime::Runtime;
 use crate::slice::Words;
@@ -88,6 +88,22 @@ where
 
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
         rt.slice_into_run(self.words(), out)
+    }
+}
+
+/// The macro emits this where `Val` would stand for an owned result, for a
+/// result written `&str` in Rust.
+pub struct RetStr;
+
+impl<Rt> Ret<Rt> for RetStr
+where
+    Rt: Runtime,
+{
+    type Of<'a> = &'a str;
+    type Form = Pair;
+
+    fn into_run(value: &str, rt: &Rt, out: &mut [Rt::Value]) {
+        rt.slice_into_run(StrView::of(value).words(), out)
     }
 }
 

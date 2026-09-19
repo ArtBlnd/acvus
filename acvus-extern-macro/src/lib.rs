@@ -121,6 +121,13 @@ enum Mode {
 }
 
 impl Mode {
+    fn lends_its_storage(self) -> bool {
+        match self {
+            Mode::Borrow | Mode::BorrowMut | Mode::Str | Mode::Projection => true,
+            Mode::Value => false,
+        }
+    }
+
     /// The acvus type of a parameter whose Rust type is `ty` under this
     /// mode, with `rt` as the runtime a reference carrier names.
     fn acvus_ty(self, ty: &Type, rt: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
@@ -139,6 +146,40 @@ impl Mode {
 
 fn is_str(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident("str"))
+}
+
+/// How the Rust result crosses back, which is the `Mode` of the return
+/// position.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Returning {
+    Value,
+    Str,
+}
+
+impl Returning {
+    fn of(ty: &Type) -> Self {
+        match ty {
+            Type::Reference(r) if is_str(&r.elem) => Returning::Str,
+            _ => Returning::Value,
+        }
+    }
+
+    /// The acvus type of a result whose Rust type crosses as `owned`.
+    fn acvus_ty(self, owned: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        match self {
+            Returning::Value => quote! { #owned },
+            Returning::Str => quote! { ::acvus_extern::StrView },
+        }
+    }
+
+    /// The `Ret` marker the glue is built with, where `owned` is the `Val`
+    /// a result that crosses as itself takes.
+    fn marker(self, owned: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        match self {
+            Returning::Value => quote! { #owned },
+            Returning::Str => quote! { ::acvus_extern::RetStr },
+        }
+    }
 }
 
 /// The test is the lifetime and not the type's name because reading a
@@ -215,16 +256,26 @@ fn generate_extern_fn(
         })
         .collect();
     let ret = parse_return(&func.sig.output);
-    if let Type::Reference(r) = &ret
-        && is_str(&r.elem)
-    {
-        return Err(syn::Error::new_spanned(
-            &ret,
-            "a declaration returning the language's `&str` is not built yet: the machine \
-             takes a result two values wide only through `AsSlice` (RFC-0047 §3, RFC-0062 \
-             Order of work). Return `String`, or `StrView` once the machine reads a \
-             pair-wide result at a call.",
-        ));
+    let returning = Returning::of(&ret);
+    if returning == Returning::Str {
+        if !params.iter().any(|p| p.mode.lends_its_storage()) {
+            return Err(syn::Error::new_spanned(
+                &ret,
+                "a declaration returning the language's `&str` has no parameter the view \
+                 can be a projection of: every parameter is taken by value, so the bytes \
+                 the result names belong to no storage the caller kept (RFC-0047 §3). \
+                 Take one parameter by reference, or return `String`.",
+            ));
+        }
+        if is_async || attr.heavy {
+            return Err(syn::Error::new(
+                func.sig.ident.span(),
+                "a declaration returning the language's `&str` runs at `Task::Sync`: the \
+                 view borrows the frame the call laid its arguments on, and that frame is \
+                 gone by the time an awaited or offloaded call resumes (RFC-0047 §3). \
+                 Return `String`, or declare this at `Sync`.",
+            ));
+        }
     }
 
     let fn_ident = &func.sig.ident;
@@ -356,6 +407,7 @@ fn generate_extern_fn(
             }
         });
         let comp_ret = vars.to_compile_time_instance(&ret, member);
+        let comp_ret = returning.acvus_ty(&quote! { #comp_ret });
         quote! {
             ::acvus_extern::PolyTy::Fn {
                 params: vec![#(#param_terms),*],
@@ -389,7 +441,7 @@ fn generate_extern_fn(
         let rt_ret = vars.to_runtime_instance(&ret, member);
         let ret_marker = {
             let c = crossing(&ret, member);
-            quote! { ::acvus_extern::Val<#rt_ret, #c> }
+            returning.marker(&quote! { ::acvus_extern::Val<#rt_ret, #c> })
         };
         let arg_markers: Vec<proc_macro2::TokenStream> = params
             .iter()

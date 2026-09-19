@@ -61,7 +61,19 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     fn op_wide<H>(handler: H, shape: Self::CallShape) -> Self::Op
     where
         H: crate::handler::Handler<Self>;
-    fn op_slice<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    fn op_pair_one_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_pair_two_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_pair_three_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_pair_four_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_pair_wide<H>(handler: H, shape: Self::CallShape) -> Self::Op
     where
         H: crate::handler::Handler<Self>;
 

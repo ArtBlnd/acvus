@@ -32,6 +32,31 @@ fn even_of(i: i64) -> bool {
     i % 2 == 0
 }
 
+/// One variable apart: the same body, the same argument, the same work,
+/// and the result crossing back as the two registers a view occupies or as
+/// the one a `String` does (RFC-0062 Decision 4). The owned side pays the
+/// copy and the `as_str` a later `&str` parameter then needs; that pair is
+/// what a script paid for `string::trim` before the view return landed.
+#[extern_fn(effect = pure)]
+fn view_trim(s: &str) -> &str {
+    s.trim()
+}
+
+#[extern_fn(effect = pure)]
+fn owned_trim(s: &str) -> String {
+    s.trim().to_owned()
+}
+
+#[extern_fn(effect = pure)]
+fn view_cut(s: &str, from: u64, to: u64) -> &str {
+    &s[from as usize..to as usize]
+}
+
+#[extern_fn(effect = pure)]
+fn owned_cut(s: &str, from: u64, to: u64) -> String {
+    s[from as usize..to as usize].to_owned()
+}
+
 fn std_only() -> Vec<Registry<AcvusRuntime>> {
     acvus_ext::std_registries::<AcvusRuntime>()
 }
@@ -43,6 +68,42 @@ fn with_some_of() -> Vec<Registry<AcvusRuntime>> {
         fns: [some_of, id_of, even_of],
     });
     regs
+}
+
+fn with_views() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = std_only();
+    regs.push(extern_registry! {
+        ns: "bench",
+        fns: [view_trim, owned_trim, view_cut, owned_cut],
+    });
+    regs
+}
+
+const TEXT: &str = "  hello world  ";
+
+const TRIM_VIEW: &str = "let acc = 0; let i = 0; while i < @n { let v = view_trim(\"  hello world  \"); acc = acc + len(&v) as i64; i = i + 1; } acc";
+const TRIM_OWNED: &str = "let acc = 0; let i = 0; while i < @n { let v = owned_trim(\"  hello world  \"); acc = acc + len(&v) as i64; i = i + 1; } acc";
+const CUT_VIEW: &str = "let acc = 0; let i = 0; while i < @n { let v = view_cut(\"  hello world  \", 2, 7); acc = acc + len(&v) as i64; i = i + 1; } acc";
+const CUT_OWNED: &str = "let acc = 0; let i = 0; while i < @n { let v = owned_cut(\"  hello world  \", 2, 7); acc = acc + len(&v) as i64; i = i + 1; } acc";
+
+fn rust_trim(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        acc += black_box(TEXT).trim().len() as i64;
+        i += 1;
+    }
+    acc as f64
+}
+
+fn rust_cut(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        acc += black_box(TEXT)[2..7].len() as i64;
+        i += 1;
+    }
+    acc as f64
 }
 
 const INT_WHILE: &str = "let acc = 0; let i = 0; while i < @n { acc = acc + i; i = i + 1; } acc";
@@ -430,6 +491,38 @@ fn main() {
         .build()
         .expect("a current-thread tokio runtime");
     let cases = [
+        Case {
+            name: "trim view",
+            source: TRIM_VIEW,
+            registries: with_views,
+            rust: rust_trim,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "trim owned",
+            source: TRIM_OWNED,
+            registries: with_views,
+            rust: rust_trim,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "cut view",
+            source: CUT_VIEW,
+            registries: with_views,
+            rust: rust_cut,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "cut owned",
+            source: CUT_OWNED,
+            registries: with_views,
+            rust: rust_cut,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
         Case {
             name: "int while",
             source: INT_WHILE,

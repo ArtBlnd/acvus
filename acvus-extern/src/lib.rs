@@ -59,7 +59,7 @@ pub use registry::{
 pub use runtime::{Runtime, TypesOnly};
 pub use slice::{Elements, Slice, SliceMut, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
-pub use str::{ByStr, StrView};
+pub use str::{ByStr, RetStr, StrView};
 pub use transparent::Transparent;
 pub use ty_arg::{Monomorphize, Never, PolyVars, SlotRepr, Spec, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;

@@ -1,0 +1,5 @@
+error: a declaration returning the language's `&str` has no parameter the view can be a projection of: every parameter is taken by value, so the bytes the result names belong to no storage the caller kept (RFC-0047 §3). Take one parameter by reference, or return `String`.
+ --> tests/compile_fail/view_returned_without_a_loan.rs:7:20
+  |
+7 | fn sign(n: i64) -> &'static str {
+  |                    ^^^^^^^^^^^^

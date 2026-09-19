@@ -48,7 +48,7 @@ fn slices_in_the_loop_body(body: &str) -> usize {
             let part = region.part("body").expect("a Loop holds a body");
             part.ops
                 .iter()
-                .filter(|name| name.starts_with("AsSlice"))
+                .filter(|name| name.contains("__extern_fn_as_slice"))
                 .count()
         })
         .sum()

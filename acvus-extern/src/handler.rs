@@ -14,7 +14,6 @@ use futures::future::BoxFuture;
 
 use crate::obj::{Cross, CrossSpecialized, Form, One, OneValue, Pair};
 use crate::runtime::Runtime;
-use crate::slice::Elements;
 
 /// Which crossing a parameter or a result takes (RFC-0040).
 pub struct Uniform;
@@ -156,23 +155,20 @@ where
 {
 }
 
-/// How a handler's result reaches the machine: the Rust value the closure
-/// returns, and the run of the runtime's values it is written into.
 pub trait Ret<Rt>: Sized
 where
     Rt: Runtime,
 {
-    /// What the closure returns.
-    type Of;
+    type Of<'a>;
     /// The run the result is written into. A bound that admits only a result
-    /// the caller can take away says `Form = One`: the `Pair` a slice is
-    /// borrows the caller's frame (RFC-0047 §3).
+    /// the caller can take away says `Form = One`: the `Pair` a view or a
+    /// slice is borrows the caller's frame (RFC-0047 §3).
     type Form: Form;
 
     /// How many of the runtime's values the result occupies.
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
 
-    fn into_run(value: Self::Of, rt: &Rt, out: &mut [Rt::Value]);
+    fn into_run(value: Self::Of<'_>, rt: &Rt, out: &mut [Rt::Value]);
 }
 
 /// The arguments of a closure call, written into the callee's parameter
@@ -229,7 +225,7 @@ where
     T: Cross<Rt>,
     Rt: Runtime,
 {
-    type Of = T;
+    type Of<'a> = T;
     type Form = <T as Cross<Rt>>::Form;
 
     fn into_run(value: T, rt: &Rt, out: &mut [Rt::Value]) {
@@ -242,7 +238,7 @@ where
     T: CrossSpecialized<Rt>,
     Rt: Runtime,
 {
-    type Of = T;
+    type Of<'a> = T;
     type Form = One;
 
     fn into_run(value: T, rt: &Rt, out: &mut [Rt::Value]) {
@@ -378,22 +374,77 @@ where
         out[0]
     }
 
-    /// The slice form: the result is the run of a container's elements, and
-    /// the caller takes the pair away in registers instead of lending a
-    /// place to write it into.
+    /// The pair forms: the caller takes the result away in the two adjacent
+    /// registers `acvus-interpreter`'s `assign_slots` placed for it, rather
+    /// than lending a place to write it into.
     ///
     /// # Safety
-    /// `WIDTH` is `Width { args: 1, ret: 2 }`, and `a` is this call's own
-    /// argument.
+    /// `WIDTH` is `Width { args: k, ret: 2 }` for the `k` this form names,
+    /// and the arguments are this call's own, in declaration order.
     #[inline]
-    unsafe fn call_slice(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> Elements<Rt> {
+    unsafe fn call_pair1(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> [Rt::Value; 2] {
+        // SAFETY: the caller's contract, which is `call_pair_run`'s at one.
+        unsafe { self.call_pair_run(rt, frame, &[a]) }
+    }
+
+    /// # Safety
+    /// As `call_pair1`, at two values.
+    #[inline]
+    unsafe fn call_pair2(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+    ) -> [Rt::Value; 2] {
+        // SAFETY: the caller's contract, which is `call_pair_run`'s at two.
+        unsafe { self.call_pair_run(rt, frame, &[a, b]) }
+    }
+
+    /// # Safety
+    /// As `call_pair1`, at three values.
+    #[inline]
+    unsafe fn call_pair3(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+        c: Rt::Value,
+    ) -> [Rt::Value; 2] {
+        // SAFETY: the caller's contract, which is `call_pair_run`'s at three.
+        unsafe { self.call_pair_run(rt, frame, &[a, b, c]) }
+    }
+
+    /// # Safety
+    /// As `call_pair1`, at four values.
+    #[inline]
+    unsafe fn call_pair4(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+        c: Rt::Value,
+        d: Rt::Value,
+    ) -> [Rt::Value; 2] {
+        // SAFETY: the caller's contract, which is `call_pair_run`'s at four.
+        unsafe { self.call_pair_run(rt, frame, &[a, b, c, d]) }
+    }
+
+    /// # Safety
+    /// As `call`, with `WIDTH.ret == 2`.
+    #[inline]
+    unsafe fn call_pair_run(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        run: &[Rt::Value],
+    ) -> [Rt::Value; 2] {
         let mut out = [Rt::Value::default(); 2];
-        // SAFETY: the caller's contract, which is `call`'s at one argument
-        // and a result two values wide.
-        unsafe { self.call(rt, frame, &[a], &mut out) };
-        // SAFETY: `out` is the pair the slice's `into_run` just wrote, and
-        // the elements it names are the caller's loan (RFC-0018).
-        unsafe { Elements::from_words(rt.slice_from_run(&out)) }
+        // SAFETY: the caller's contract.
+        unsafe { self.call(rt, frame, run, &mut out) };
+        out
     }
 }
 
@@ -488,8 +539,8 @@ where
 }
 
 macro_rules! taken_form {
-    ($run:ty, op = $op:path, fused = $fused:path) => {
-        impl TakenForm<One> for $run {
+    ($run:ty, result = $form:ty, op = $op:path, fused = $fused:path) => {
+        impl TakenForm<$form> for $run {
             fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
             where
                 Rt: Runtime,
@@ -511,51 +562,71 @@ macro_rules! taken_form {
 
 taken_form!(
     InRegisters<0>,
+    result = One,
     op = Rt::op_no_argument,
     fused = Rt::fused_no_argument
 );
 taken_form!(
     InRegisters<1>,
+    result = One,
     op = Rt::op_one_argument,
     fused = Rt::fused_one_argument
 );
 taken_form!(
     InRegisters<2>,
+    result = One,
     op = Rt::op_two_arguments,
     fused = Rt::fused_two_arguments
 );
 taken_form!(
     InRegisters<3>,
+    result = One,
     op = Rt::op_three_arguments,
     fused = no_fused_run
 );
 taken_form!(
     InRegisters<4>,
+    result = One,
     op = Rt::op_four_arguments,
     fused = no_fused_run
 );
-taken_form!(InWindow, op = Rt::op_wide, fused = no_fused_run);
+taken_form!(
+    InWindow,
+    result = One,
+    op = Rt::op_wide,
+    fused = no_fused_run
+);
 
-/// A result wider than one value is the run of a container's elements, which
-/// RFC-0047 §3 admits from a declaration of one parameter of one value and
-/// from nowhere else. The missing impls of every other run are that refusal.
-impl TakenForm<Pair> for InRegisters<1> {
-    fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
-    where
-        Rt: Runtime,
-        H: Handler<Rt>,
-    {
-        Rt::op_slice::<H>(handler, shape)
-    }
-
-    fn fused<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
-    where
-        Rt: Runtime,
-        H: Handler<Rt>,
-    {
-        panic!("a fused run holds no call whose result is a run of elements")
-    }
-}
+taken_form!(
+    InRegisters<1>,
+    result = Pair,
+    op = Rt::op_pair_one_argument,
+    fused = no_fused_pair
+);
+taken_form!(
+    InRegisters<2>,
+    result = Pair,
+    op = Rt::op_pair_two_arguments,
+    fused = no_fused_pair
+);
+taken_form!(
+    InRegisters<3>,
+    result = Pair,
+    op = Rt::op_pair_three_arguments,
+    fused = no_fused_pair
+);
+taken_form!(
+    InRegisters<4>,
+    result = Pair,
+    op = Rt::op_pair_four_arguments,
+    fused = no_fused_pair
+);
+taken_form!(
+    InWindow,
+    result = Pair,
+    op = Rt::op_pair_wide,
+    fused = no_fused_pair
+);
 
 /// What the module table holds for one declared instance: the handler with
 /// its type erased, which `prepare` turns back into a typed operation by
@@ -659,6 +730,16 @@ where
     panic!("a fused run holds no call of this many arguments")
 }
 
+fn no_fused_pair<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
+where
+    Rt: Runtime,
+    H: Handler<Rt>,
+{
+    panic!(
+        "a fused run hands one value from each call to the next and holds no call whose result is a pair"
+    )
+}
+
 /// A Rust closure with the crossing on both sides of it: `A` is the tuple of
 /// the declaration's parameter modes, in the order the machine lays a call's
 /// arguments (RFC-0052 §7), and `R` its result.
@@ -729,7 +810,7 @@ macro_rules! arity {
         where
             Rt: Runtime,
             F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
-                -> R::Of,
+                -> R::Of<'a>,
             $($arg: for<'a> Arg<'a, Rt>,)*
             R: $($result)*,
         {
@@ -741,7 +822,7 @@ macro_rules! arity {
             Rt: Runtime,
             F: Clone + Send + Sync + 'static,
             F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
-                -> R::Of,
+                -> R::Of<'a>,
             $($arg: for<'a> Arg<'a, Rt> + 'static,)*
             R: Ret<Rt> + 'static,
         {
@@ -784,7 +865,7 @@ macro_rules! arity {
             Rt: Runtime,
             F: Clone + Send + Sync + 'static,
             F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
-                -> R::Of,
+                -> R::Of<'a>,
             $($arg: for<'a> Arg<'a, Rt> + 'static,)*
             R: Ret<Rt> + 'static,
             <($($arg,)*) as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
@@ -815,7 +896,7 @@ macro_rules! arity {
             Rt: Runtime,
             F: Clone + Send + Sync + 'static,
             F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
-                -> R::Of,
+                -> R::Of<'a>,
             $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
             R: Ret<Rt, Form = One> + 'static,
         {
@@ -866,33 +947,28 @@ macro_rules! arity {
     };
 }
 
-// A slice is the one result wider than a value, and RFC-0047 §3 admits it
-// from a declaration of one parameter of one value and from no other: every
-// arity but one binds `Form = One` below, and `TakenForm<Pair>` is
-// implemented for `InRegisters<1>` alone, so a slice returned anywhere else
-// is a compile error.
-arity!(glue0, async_glue0, [Ret<Rt, Form = One>]);
+arity!(glue0, async_glue0, [Ret<Rt>]);
 arity!(glue1, async_glue1, [Ret<Rt>], A0: a0);
-arity!(glue2, async_glue2, [Ret<Rt, Form = One>], A0: a0, A1: a1);
-arity!(glue3, async_glue3, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2);
+arity!(glue2, async_glue2, [Ret<Rt>], A0: a0, A1: a1);
+arity!(glue3, async_glue3, [Ret<Rt>], A0: a0, A1: a1, A2: a2);
 arity!(
-    glue4, async_glue4, [Ret<Rt, Form = One>],
+    glue4, async_glue4, [Ret<Rt>],
     A0: a0, A1: a1, A2: a2, A3: a3
 );
 arity!(
-    glue5, async_glue5, [Ret<Rt, Form = One>],
+    glue5, async_glue5, [Ret<Rt>],
     A0: a0, A1: a1, A2: a2, A3: a3, A4: a4
 );
 arity!(
-    glue6, async_glue6, [Ret<Rt, Form = One>],
+    glue6, async_glue6, [Ret<Rt>],
     A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5
 );
 arity!(
-    glue7, async_glue7, [Ret<Rt, Form = One>],
+    glue7, async_glue7, [Ret<Rt>],
     A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5, A6: a6
 );
 arity!(
-    glue8, async_glue8, [Ret<Rt, Form = One>],
+    glue8, async_glue8, [Ret<Rt>],
     A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5, A6: a6, A7: a7
 );
 
@@ -1099,7 +1175,11 @@ macro_rules! direct_call_forms {
         $crate::direct_call_forms!(@op op_three_arguments);
         $crate::direct_call_forms!(@op op_four_arguments);
         $crate::direct_call_forms!(@op op_wide);
-        $crate::direct_call_forms!(@op op_slice);
+        $crate::direct_call_forms!(@op op_pair_one_argument);
+        $crate::direct_call_forms!(@op op_pair_two_arguments);
+        $crate::direct_call_forms!(@op op_pair_three_arguments);
+        $crate::direct_call_forms!(@op op_pair_four_arguments);
+        $crate::direct_call_forms!(@op op_pair_wide);
         $crate::direct_call_forms!(@fused fused_no_argument);
         $crate::direct_call_forms!(@fused fused_one_argument);
         $crate::direct_call_forms!(@fused fused_two_arguments);

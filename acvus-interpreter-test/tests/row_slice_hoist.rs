@@ -46,7 +46,7 @@ fn slices_in_the_inner_loop_body() -> usize {
         .map(|part| {
             part.ops
                 .iter()
-                .filter(|name| name.starts_with("AsSlice"))
+                .filter(|name| name.contains("__extern_fn_as_slice"))
                 .count()
         })
         .sum()

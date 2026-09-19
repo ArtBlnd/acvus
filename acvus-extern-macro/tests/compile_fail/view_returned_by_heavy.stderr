@@ -1,0 +1,5 @@
+error: a declaration returning the language's `&str` runs at `Task::Sync`: the view borrows the frame the call laid its arguments on, and that frame is gone by the time an awaited or offloaded call resumes (RFC-0047 §3). Return `String`, or declare this at `Sync`.
+ --> tests/compile_fail/view_returned_by_heavy.rs:6:4
+  |
+6 | fn head(s: &str) -> &str {
+  |    ^^^^

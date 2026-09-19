@@ -28,6 +28,10 @@ fn the_slice_entry_is_the_slice_returning_declarations_and_nothing_else() {
             "array::as_slice",
             "array::as_slice_mut",
             "core::as_str",
+            "string::substring",
+            "string::trim",
+            "string::trim_end",
+            "string::trim_start",
             "vec::as_slice",
             "vec::as_slice_mut",
         ]
