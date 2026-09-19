@@ -230,12 +230,14 @@ object lives.
    the same day — an interned symbol's order is the order of first
    interning, which differs between programs and across a source change,
    so it cannot order a layout that a committed object, a run and the
-   glue must all agree on): a `Declared` struct's order is its
-   declaration's; a `Written` or `AtLeast` object's is its settled
-   type's field names sorted as strings, so every object type has one
-   layout without a declaration and independent of the program that
-   names it, and a union that adds a field re-lays the settled type
-   once. A field the settled union
+   glue must all agree on): **every** object type's order is its
+   settled type's field names sorted as strings — a `Declared` struct's
+   too (corrected 2026-09-20 by the flat-heap build: `FieldSet::Declared`
+   carries the struct's name, not an order, so the declaration's order is
+   not in the type; `derive(TyArg)` emits its field table in string order
+   to match) — so every object type has one layout without a declaration
+   and independent of the program that names it, and a union that adds a
+   field re-lays the settled type once. A field the settled union
    type has and a construction lacks is `Undef` at its offset. For a
    declared struct's type no such field exists: the checker refuses an
    object that lacks a field the struct declares (RFC-0042 R1). For an
