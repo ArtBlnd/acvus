@@ -420,6 +420,99 @@ where
     }
 }
 
+pub struct ForStart<S>
+where
+    S: Source,
+{
+    pub src: S,
+    pub counter: Off,
+    pub next: Box<dyn Op>,
+}
+
+impl<S> Op for ForStart<S>
+where
+    S: Source,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let first = self.src.first(regs);
+        regs.set_word(self.counter, first);
+        self.next.run(m, r0)
+    }
+}
+
+/// A `for` whose body does not rejoin keeps the counter and the bound in the
+/// frame rather than in locals of one `run`, as `For<S>` does, and that is a
+/// decision this operation's shape forces. The body's blocks hold a
+/// terminator, so no region can own them; the header therefore has to be a
+/// terminator too, and a terminator returns. What it costs is a load of the
+/// counter and a read of the bound per iteration where the region pays
+/// neither, and what it buys is a `break` and a `continue`, which are
+/// ordinary edges out of and back into these blocks.
+///
+/// Cross-artifact obligation: an operation holding no successor ends its
+/// chain in a `ret`, and `benches/asm_probe.rs` holds the list of the
+/// families that may — `control::ForAt` is in `NO_SUCCESSOR` there.
+pub struct ForAt<S>
+where
+    S: Source,
+{
+    pub src: S,
+    pub counter: Off,
+    pub body: BlockId,
+    pub exit: BlockId,
+}
+
+impl<S> Op for ForAt<S>
+where
+    S: Source,
+{
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+        let regs = m.regs();
+        let at = regs.word(self.counter);
+        let bound = self.src.bound(regs);
+        match S::holds(at, bound) {
+            true => {
+                self.src.lay(regs, at);
+                self.body.into()
+            }
+            false => self.exit.into(),
+        }
+    }
+}
+
+/// Cross-artifact obligation: which edges carry this is decided in
+/// `prepare`'s `Jump` arm — every edge into a `for` header except the entry,
+/// which carries `ForStart` instead. An edge that carries neither leaves the
+/// counter where the last iteration left it and the loop does not terminate.
+pub struct ForStep<S>
+where
+    S: Source,
+{
+    pub counter: Off,
+    pub next: Box<dyn Op>,
+    pub of: PhantomData<fn() -> S>,
+}
+
+impl<S> Op for ForStep<S>
+where
+    S: Source,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let at = regs.word(self.counter);
+        regs.set_word(self.counter, S::step(at));
+        self.next.run(m, r0)
+    }
+}
+
 /// The `if/else` shape `prepare::recognize_diamond` finds in the IR
 /// (RFC-0044, stage 5), as one operation holding both arms. The moves the
 /// join edge carries are the last operations of each arm.

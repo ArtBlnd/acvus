@@ -188,13 +188,36 @@ releases the elements a `break` never reached. The machine therefore does
 not release the array, and must not.
 
 A loop a `break` leaves, or one a `continue` returns to the head of, is the
-joints path Decision 4 names, and it does not run yet: `recognize_for`
-refuses both shapes -- a `break` puts the exit's drop block between the
-terminator and the body, and a `continue` is a third jump to the header --
-and `prepare` then refuses the script.
-`acvus-interpreter-test/tests/for_loop.rs` holds that refusal as two tests
-that must be deleted when the path lands. The parallel split section is
-still unwritten: `spawn_split` over a `for` waits on it, not on the machine.
+joints path Decision 4 names, and it runs as three operations rather than
+one. `recognize_for` refuses both shapes -- a `break` puts the exit's drop
+block between the terminator and the body, and a `continue` is a third jump
+to the header -- so the body's blocks stay blocks, and a region may hold no
+block. The header is then the terminator it is in the IR: `ForAt<S>` reads
+the counter, compares it to the bound, and either lays the body block's
+leading parameters and continues to the body or continues to the exit, with
+the two edges' parallel moves in blocks of their own as a `JumpIf`'s are.
+The counter lives in a frame register because that operation returns:
+`ForStart<S>` on the loop's one entering edge lays its first value and
+`ForStep<S>` advances it on every other edge into the header, which is the
+latch and every `continue`. What it costs against the region is a load of
+the counter and a read of the bound per iteration, and one `ret` and one
+dispatch per iteration; what it buys is `break` and `continue`.
+
+The counter's register is the body block's counter parameter, and liveness
+has to be told about it: the terminator writes that parameter and the
+terminator is its only reader, so `inst_info` reports no use and
+`prepare::assign_slots` would hand its register to a value live across the
+loop. `Edges::for_counter` is where the use is put back.
+
+An `Array` head over this path releases nothing the region does not. The
+lowering emits the array's `Drop` on the loop's exit block *and* on every
+`break` edge -- `acvus mir` over `for x in a { if x == 2 { break; } … }`
+prints `drop r0` in both -- so the machine leaves the array's register and
+the frame's claim on it standing, exactly as Decision 3 requires. An array
+of owners cannot `break` at all: the checker refuses it.
+
+The parallel split section is still unwritten: `spawn_split` over a `for`
+waits on it, not on the machine.
 
 What is measured already, at the machine's listing, is what `break` changes
 about region recognition: a loop whose exit is a flag is a `Loop<Slot>`

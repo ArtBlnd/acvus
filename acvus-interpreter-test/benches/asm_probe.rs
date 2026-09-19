@@ -19,6 +19,7 @@ use acvus_utils::Interner;
 const NO_SUCCESSOR: &[&str] = &[
     "control::Goto",
     "control::JumpIf",
+    "control::ForAt",
     "switch::Switch",
     "switch::SwitchOption",
     "switch::SwitchResult",

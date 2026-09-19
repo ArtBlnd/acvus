@@ -54,6 +54,11 @@ const MAP_CAP_SUM: &str = "let k = 1; range(0, @n) | map(|x| -> x + k) | sum";
 /// The three traversals RFC-0057 replaces a pipeline with: one `For` region
 /// per loop, and no `Iter` extern per element.
 const FOR_RANGE: &str = "let acc = 0; for i in 0..@n { acc = acc + i; } acc";
+/// The joints path of RFC-0057 Decision 4 beside the region: the `break` is
+/// never taken, so the two rows run the same traversal and the difference is
+/// what a terminator-shaped header costs over a region.
+const FOR_RANGE_BREAK: &str =
+    "let acc = 0; for i in 0..@n { if i == @n { break; }; acc = acc + i; } acc";
 const FOR_SLICE: &str =
     "let v = range(0, @n) | collect; let acc = 0; for x in &v { acc = acc + *x; } acc";
 const FOR_SLICE_ADD: &str =
@@ -130,6 +135,17 @@ fn rust_map_cap_sum(n: i64) -> f64 {
 fn rust_for_range(n: i64) -> f64 {
     let mut acc = 0i64;
     for i in 0..n {
+        acc += black_box(i);
+    }
+    acc as f64
+}
+
+fn rust_for_range_break(n: i64) -> f64 {
+    let mut acc = 0i64;
+    for i in 0..n {
+        if i == n {
+            break;
+        }
         acc += black_box(i);
     }
     acc as f64
@@ -365,6 +381,14 @@ fn main() {
             source: FOR_RANGE,
             registries: std_only,
             rust: rust_for_range,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "for range break",
+            source: FOR_RANGE_BREAK,
+            registries: std_only,
+            rust: rust_for_range_break,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

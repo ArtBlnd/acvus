@@ -1,8 +1,14 @@
-//! A `for` is a region (RFC-0057 Decision 3): the value each head produces,
-//! and what the machine runs it as.
+//! A `for` whose body rejoins is a region and a `for` a `break` leaves or a
+//! `continue` returns to the head of is joints (RFC-0057 Decisions 3 and 4):
+//! the value each head produces, and what the machine runs each as.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+use acvus_extern::{ExternType, Registry, extern_fn, extern_registry};
+use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::listing::{BlockListing, RegionListing, ops_of_anywhere, regions_named};
-use acvus_interpreter_test::listing::script_listing;
+use acvus_interpreter_test::listing::{script_listing, script_listing_with_externs};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
@@ -216,26 +222,297 @@ fn a_for_owns_its_body_alone_where_a_while_owns_a_head_too() {
     assert_eq!(parts, ["head", "body"], "{:?}", ops_of_anywhere(&found));
 }
 
-// -- Where this run stopped --------------------------------------------
+// -- break and continue: the joints path -------------------------------
 
-/// The two tests below are the executable statement of an unfinished piece of
-/// this run, not of a decision. `break` and `continue` reach the joints path
-/// RFC-0057 Decision 4 names, and that path is not built, so `recognize_for`
-/// refuses both shapes and the block emitter then meets a `For` it has no
-/// operation for. Each fails, and must be deleted, when the joints path lands.
 const BREAK: &str = "let v = vec([1, 2, 3]); let acc = 0; \
                      for x in &v { if *x == 2 { break; }; acc = acc + *x; } acc";
 const CONTINUE: &str = "let v = vec([1, 2, 3]); let acc = 0; \
                         for x in &v { if *x == 2 { continue; }; acc = acc + *x; } acc";
+const RANGE_BREAK: &str = "let s = 0; for i in 0..10 { if i == 5 { break; }; s = s + i; } s";
+
+#[tokio::test]
+async fn a_break_stops_the_traversal_where_it_stands() {
+    assert_eq!(int(BREAK).await, 1);
+}
+
+#[tokio::test]
+async fn a_continue_skips_the_rest_of_the_body_and_advances() {
+    assert_eq!(int(CONTINUE).await, 4);
+}
+
+#[tokio::test]
+async fn a_break_on_the_first_iteration_leaves_the_carried_value_alone() {
+    assert_eq!(
+        int("let acc = 7; for i in 0..5 { if i == 0 { break; }; acc = acc + 1; } acc").await,
+        7
+    );
+}
+
+#[tokio::test]
+async fn a_continue_over_a_range_skips_the_odd_counters() {
+    assert_eq!(
+        int("let acc = 0; for i in 0..6 { if i % 2 == 1 { continue; }; acc = acc + i; } acc").await,
+        6
+    );
+}
+
+#[tokio::test]
+async fn a_range_head_takes_a_break() {
+    assert_eq!(int(RANGE_BREAK).await, 10);
+}
+
+#[tokio::test]
+async fn an_array_of_words_takes_a_break() {
+    assert_eq!(
+        int("let a = [1, 2, 3]; let acc = 0; \
+             for x in a { if x == 2 { break; }; acc = acc + x; } acc")
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_mutable_head_takes_a_continue() {
+    assert_eq!(
+        int(
+            "let v = vec([1, 2, 3]); for x in &mut v { if *x == 2 { continue; }; *x = 9; } \
+             v[0] + v[1] + v[2]"
+        )
+        .await,
+        20
+    );
+}
+
+#[tokio::test]
+async fn a_break_inside_a_nested_for_leaves_the_inner_loop_alone() {
+    assert_eq!(
+        uint(
+            "let acc = 0u64; for i in 0u64..3u64 { \
+             for j in 0u64..3u64 { if j == 1u64 { break; }; acc = acc + 1u64; } } acc"
+        )
+        .await,
+        3
+    );
+}
+
+#[tokio::test]
+async fn a_break_in_a_for_inside_a_while_runs_once_per_turn_of_the_while() {
+    assert_eq!(
+        uint(
+            "let k = 0u64; let acc = 0u64; while k < 3u64 { \
+             for j in 0u64..5u64 { if j == 2u64 { break; }; acc = acc + 1u64; } k = k + 1u64; } acc"
+        )
+        .await,
+        6
+    );
+}
+
+/// The latch carries the counter as a jump argument, so the move that reads
+/// it stands ahead of the step that advances it. With the two the other way
+/// round every assignment writes the next counter and this answers 3.
+#[tokio::test]
+async fn a_latch_that_carries_the_counter_reads_it_before_the_step() {
+    assert_eq!(
+        int("let last = 0; for i in 0..5 { if i == 3 { break; }; last = i; } last").await,
+        2
+    );
+}
+
+/// The counter's register is the loop's for the whole loop. `ForAt` writes it
+/// on every iteration, so a value live across the loop that shared it would
+/// come out holding a counter, and `acc` here answers 4 instead of 100.
+#[tokio::test]
+async fn a_value_live_across_the_loop_does_not_share_the_counter_register() {
+    assert_eq!(
+        int("let v = vec([1, 2, 3]); let acc = 100; for x in &v { if *x == 2 { break; }; } acc")
+            .await,
+        100
+    );
+}
+
+// -- What the machine runs the joints path as --------------------------
 
 #[test]
-#[should_panic(expected = "the joints path RFC-0057 Decision 4 names does not run yet")]
-fn a_for_a_break_leaves_is_refused() {
-    i64_blocks(BREAK);
+fn the_preheader_lays_the_counter_the_header_tests_and_the_latch_steps() {
+    let blocks = i64_blocks(RANGE_BREAK);
+    let preheader = blocks.first().expect("an entry block");
+    assert_eq!(
+        preheader.ops.last().map(String::as_str),
+        Some("ForStart<Range<i64>>"),
+        "{:?}",
+        preheader.ops
+    );
+
+    let header = blocks
+        .iter()
+        .find(|block| block.end.starts_with("ForAt<"))
+        .unwrap_or_else(|| panic!("a header: {:?}", ops_of_anywhere(&blocks)));
+    assert_eq!(header.ops, Vec::<String>::new(), "{:?}", header.ops);
+
+    let latch = blocks
+        .iter()
+        .find(|block| block.ops.iter().any(|op| op.starts_with("ForStep<")))
+        .unwrap_or_else(|| panic!("a latch: {:?}", ops_of_anywhere(&blocks)));
+    assert_eq!(
+        latch.ops.last().map(String::as_str),
+        Some("ForStep<Range<i64>>"),
+        "the step is the last operation of the latch: {:?}",
+        latch.ops
+    );
 }
 
 #[test]
-#[should_panic(expected = "the joints path RFC-0057 Decision 4 names does not run yet")]
-fn a_for_a_continue_returns_to_the_head_of_is_refused() {
-    i64_blocks(CONTINUE);
+fn a_loop_a_break_leaves_is_no_region_and_carries_no_move_or_comparison() {
+    for source in [BREAK, CONTINUE, RANGE_BREAK] {
+        let blocks = i64_blocks(source);
+        assert_eq!(
+            blocks
+                .iter()
+                .flat_map(|block| block.regions.iter())
+                .map(|region| region.name.clone())
+                .collect::<Vec<String>>(),
+            Vec::<String>::new(),
+            "{source} runs as joints"
+        );
+        let ops = ops_of_anywhere(&blocks);
+        assert!(
+            !ops.iter()
+                .any(|op| op.starts_with("Mov") || op.starts_with("Lt<") || op == "Yield"),
+            "{source}: {ops:?}"
+        );
+    }
+}
+
+#[test]
+fn every_edge_into_a_header_carries_a_start_or_a_step() {
+    let blocks =
+        i64_blocks("let acc = 0; for i in 0..4 { if i == 2 { continue; }; acc = acc + i; } acc");
+    let ops = ops_of_anywhere(&blocks);
+    assert_eq!(
+        ops.iter().filter(|op| op.starts_with("ForStart<")).count(),
+        1,
+        "one preheader: {ops:?}"
+    );
+    assert_eq!(
+        ops.iter().filter(|op| op.starts_with("ForStep<")).count(),
+        2,
+        "the continue and the latch each step: {ops:?}"
+    );
+}
+
+// -- What a `break` releases -------------------------------------------
+
+static RELEASES: AtomicUsize = AtomicUsize::new(0);
+
+/// One counter, and the harness runs these tests on parallel threads.
+static TRACKED_SCRIPTS: Mutex<()> = Mutex::new(());
+
+struct Measured {
+    at_start: usize,
+    _scripts: MutexGuard<'static, ()>,
+}
+
+impl Measured {
+    fn start() -> Self {
+        let scripts = TRACKED_SCRIPTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Self {
+            at_start: RELEASES.load(Ordering::SeqCst),
+            _scripts: scripts,
+        }
+    }
+
+    fn count(&self) -> usize {
+        RELEASES.load(Ordering::SeqCst) - self.at_start
+    }
+}
+
+struct Counted;
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        RELEASES.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// An extension type over a `Vec`, so the value crosses as a `Large` and its
+/// release is what the counter sees. It carries no identity variable, so two
+/// calls to `tracked` are values of one source and an array of them
+/// typechecks.
+#[derive(ExternType)]
+#[repr(transparent)]
+struct Tracked(Vec<Counted>);
+
+#[extern_fn(effect = pure)]
+fn tracked(n: i64) -> Tracked {
+    Tracked((0..n).map(|_| Counted).collect())
+}
+
+#[extern_fn(effect = pure)]
+fn rank(t: &Tracked) -> i64 {
+    t.0.len() as i64
+}
+
+fn regs() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(extern_registry! {
+        ns: "t",
+        types: [Tracked],
+        fns: [tracked, rank],
+    });
+    regs
+}
+
+async fn tracked_int(source: &str) -> i64 {
+    let i = Interner::new();
+    run_script_mode_with_externs(&i, source, Context::default(), regs(), Ty::I64)
+        .await
+        .value
+        .as_int()
+}
+
+const OWNERS_IN_A_VEC: &str = "let v = vec([tracked(1), tracked(1), tracked(1)]); let seen = 0; \
+                               for t in &v { if seen == 1 { break; }; seen = seen + rank(t); } seen";
+
+const OWNERS_IN_AN_ARRAY: &str = "let a = [tracked(1), tracked(1), tracked(1)]; let seen = 0; \
+     for t in a { if seen == 1 { continue; }; seen = seen + rank(&t); } seen";
+
+/// Three elements released for two the loop reached: a traversal of borrowed
+/// owners never takes an element, so the release is the container's, and the
+/// lowering puts it on the `break` edge as it puts it on the terminator's.
+#[tokio::test]
+async fn a_break_out_of_a_vec_of_owners_releases_every_element_once() {
+    let measured = Measured::start();
+    assert_eq!(tracked_int(OWNERS_IN_A_VEC).await, 1);
+    assert_eq!(measured.count(), 3);
+}
+
+/// An array by value hands each element out as the loop reaches it and the
+/// exit releases the rest, a `continue` included.
+#[tokio::test]
+async fn a_continue_in_an_array_of_owners_releases_every_element_once() {
+    let measured = Measured::start();
+    assert_eq!(tracked_int(OWNERS_IN_AN_ARRAY).await, 1);
+    assert_eq!(measured.count(), 3);
+}
+
+/// The machine emits no release of its own for a container a `break` leaves:
+/// the two `DropValue`s are the lowering's, one on the terminator's exit edge
+/// and one on the `break` edge.
+#[test]
+fn a_traversal_of_owners_a_break_leaves_runs_as_joints_and_releases_nothing_itself() {
+    let i = Interner::new();
+    let blocks =
+        script_listing_with_externs(&i, OWNERS_IN_A_VEC, Context::default(), regs(), Ty::I64);
+    let ops = ops_of_anywhere(&blocks);
+    assert!(
+        blocks.iter().any(|block| block.end.starts_with("ForAt<")),
+        "{ops:?}"
+    );
+    assert_eq!(
+        ops.iter().filter(|op| *op == "DropValue").count(),
+        2,
+        "{ops:?}"
+    );
 }

@@ -45,6 +45,79 @@ use crate::value::{Kind, Value};
 
 pub mod runs;
 
+/// `For`, `ForStart`, `ForAt` and `ForStep` each carry the head as a type
+/// parameter, and they read this one dispatch rather than a copy of it each.
+macro_rules! for_head {
+    ($prep:expr, $at:expr, |$src:ident, $head:ident, $counter:ident| $make:expr) => {{
+        let prep: &Prepare<'_> = $prep;
+        let terminator: usize = $at;
+        let InstKind::For { source, body, .. } = &prep.body.insts[terminator].kind else {
+            panic!("instruction {terminator} is not a `For`")
+        };
+        let params: &[ValueId] = prep.block_params(body);
+        let $counter: Off = prep.off(params[source.counter_param()]);
+        match source {
+            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
+                type $head = control::Slice;
+                let $src = control::Slice {
+                    slice: prep.pair(*slice),
+                    elem: prep.off(params[0]),
+                    index: $counter,
+                };
+                $make
+            }
+            ForSource::Array(array) => {
+                let element = params[0];
+                let array = prep.off(*array);
+                let elem = prep.marked(element);
+                let index = $counter;
+                match (owns_large(prep.ty(element)), word_kind(prep.ty(element))) {
+                    (true, None) => {
+                        type $head = control::Array<true, false>;
+                        let $src = $head { array, elem, index };
+                        $make
+                    }
+                    (false, Some(_)) => {
+                        type $head = control::Array<false, true>;
+                        let $src = $head { array, elem, index };
+                        $make
+                    }
+                    (false, None) => {
+                        type $head = control::Array<false, false>;
+                        let $src = $head { array, elem, index };
+                        $make
+                    }
+                    (true, Some(kind)) => panic!(
+                        "an array element of kind {kind:?} both owns a `Large` and is a word, \
+                         which is the one pair `Regs::store` refuses"
+                    ),
+                }
+            }
+            ForSource::Range { at, hi } => {
+                let Ty::Int(width) = prep.ty(*at) else {
+                    panic!(
+                        "a `for` over a range names the bound type {:?}; RFC-0057 Decision 1 \
+                         admits one integer width and no other",
+                        prep.ty(*at)
+                    )
+                };
+                let from = prep.off(*at);
+                let hi = prep.off(*hi);
+                for_int_ty!(*width, |T| {
+                    type $head = control::Range<T>;
+                    let $src = $head {
+                        hi,
+                        elem: $counter,
+                        from,
+                        width: PhantomData,
+                    };
+                    $make
+                })
+            }
+        }
+    }};
+}
+
 /// The registers `order_moves` may break a cycle through, which a run's base is
 /// placed above. It is two rather than one because a cycle carrying a slice moves
 /// the pair through the scratch (`Moved::Pair`), and `scratch_used` grows while
@@ -1913,97 +1986,95 @@ impl<'a> Prepare<'a> {
         let leaving = self.move_ops(exit, exit_args);
         let back = self.move_ops(header, back_args);
 
-        let params: Vec<ValueId> = self.block_params(body_label).to_vec();
         let ran = self.straight(region.body_block.clone(), &region.body_regions, back);
         let ran = chain(into_body, ran);
 
-        ops.push(self.for_node(source, &params, ran));
+        ops.push(self.for_node(region.terminator, ran));
         ops.extend(leaving);
     }
 
-    /// The `For` operation one head prepares to, with `ran` as its body chain.
-    ///
-    /// `params` is the body block's parameter list, whose leading entries the
-    /// terminator fills: `ForSource::counter_param` decides which of them is
-    /// the counter, and a container's element is the other one.
-    fn for_node(&self, source: &ForSource, params: &[ValueId], ran: Box<dyn Op>) -> Node {
-        let counter = self.off(params[source.counter_param()]);
-        match source {
-            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
-                let src = control::Slice {
-                    slice: self.pair(*slice),
-                    elem: self.off(params[0]),
-                    index: counter,
-                };
-                made(move |next| {
-                    Box::new(control::For {
-                        src,
-                        body: ran,
-                        next,
-                    }) as Box<dyn Op>
-                })
-            }
-            ForSource::Array(array) => {
-                let element = params[0];
-                let array = self.off(*array);
-                let elem = self.marked(element);
-                let index = counter;
-                match (owns_large(self.ty(element)), word_kind(self.ty(element))) {
-                    (true, None) => made(move |next| {
-                        let src = control::Array::<true, false> { array, elem, index };
-                        Box::new(control::For {
-                            src,
-                            body: ran,
-                            next,
-                        }) as Box<dyn Op>
-                    }),
-                    (false, Some(_)) => made(move |next| {
-                        let src = control::Array::<false, true> { array, elem, index };
-                        Box::new(control::For {
-                            src,
-                            body: ran,
-                            next,
-                        }) as Box<dyn Op>
-                    }),
-                    (false, None) => made(move |next| {
-                        let src = control::Array::<false, false> { array, elem, index };
-                        Box::new(control::For {
-                            src,
-                            body: ran,
-                            next,
-                        }) as Box<dyn Op>
-                    }),
-                    (true, Some(kind)) => panic!(
-                        "an array element of kind {kind:?} both owns a `Large` and is a word, \
-                         which is the one pair `Regs::store` refuses"
-                    ),
-                }
-            }
-            ForSource::Range { at, hi } => {
-                let Ty::Int(width) = self.ty(*at) else {
-                    panic!(
-                        "a `for` over a range names the bound type {:?}; RFC-0057 Decision 1 \
-                         admits one integer width and no other",
-                        self.ty(*at)
-                    )
-                };
-                let from = self.off(*at);
-                let hi = self.off(*hi);
-                for_int_ty!(*width, |T| made(move |next| {
-                    let src = control::Range::<T> {
-                        hi,
-                        elem: counter,
-                        from,
-                        width: PhantomData,
-                    };
-                    Box::new(control::For {
-                        src,
-                        body: ran,
-                        next,
-                    }) as Box<dyn Op>
-                }))
-            }
+    fn for_node(&self, terminator: usize, ran: Box<dyn Op>) -> Node {
+        for_head!(self, terminator, |src, _Head, _counter| made(move |next| {
+            Box::new(control::For {
+                src,
+                body: ran,
+                next,
+            }) as Box<dyn Op>
+        }))
+    }
+
+    fn for_at(&mut self, at: usize) -> Box<dyn Op> {
+        let insts = self.body.insts.as_slice();
+        let InstKind::For {
+            source,
+            body,
+            body_args,
+            exit,
+            exit_args,
+        } = &insts[at].kind
+        else {
+            panic!("`for_at` was handed instruction {at}, which is not a `For`")
+        };
+        self.header_edges_carry_the_counter(at);
+
+        let into_body = self.moves_past(body, body_args, source.supplied_params());
+        let into_exit = self.move_ops(exit, exit_args);
+        let body_target = self.target(body);
+        let exit_target = self.target(exit);
+        let on_body = self.edge(into_body, body_target);
+        let on_exit = self.edge(into_exit, exit_target);
+
+        for_head!(self, at, |src, _Head, counter| Box::new(control::ForAt {
+            src,
+            counter,
+            body: on_body,
+            exit: on_exit,
+        }) as Box<dyn Op>)
+    }
+
+    fn counter_op(&self, header: usize, from: usize) -> Node {
+        match from < header {
+            true => for_head!(self, header + 1, |src, _Head, counter| made(
+                move |next| Box::new(control::ForStart { src, counter, next }) as Box<dyn Op>
+            )),
+            false => for_head!(self, header + 1, |_src, Head, counter| made(
+                move |next| Box::new(control::ForStep::<Head> {
+                    counter,
+                    next,
+                    of: PhantomData,
+                }) as Box<dyn Op>
+            )),
         }
+    }
+
+    fn for_header(&self, label: &Label) -> Option<usize> {
+        let at = self.label(label) as usize;
+        matches!(self.body.insts.get(at + 1)?.kind, InstKind::For { .. }).then_some(at)
+    }
+
+    /// `counter_op` is reached from the `Jump` arm alone, and it reads the
+    /// preheader off the one edge standing above the header.
+    fn header_edges_carry_the_counter(&self, terminator: usize) {
+        let header = terminator
+            .checked_sub(1)
+            .unwrap_or_else(|| panic!("a `for` at instruction 0 has no header block above it"));
+        let Some(label) = block_label(&self.body.insts[header]) else {
+            panic!("the instruction above the `for` at {terminator} is not its header's label")
+        };
+        let reaching = self.references(label);
+        for at in &reaching {
+            assert!(
+                matches!(self.body.insts[*at].kind, InstKind::Jump { .. }),
+                "instruction {at} reaches the header {label:?} of a `for` and is not a `Jump`, \
+                 so no operation on that edge lays or advances the counter"
+            );
+        }
+        let above = reaching.iter().filter(|at| **at < header).count();
+        assert_eq!(
+            above, 1,
+            "{label:?} is the header of a `for` and {above} edges into it stand above it, \
+             where the preheader is the one that does"
+        );
     }
 
     /// The diamond `region` is, where it is a select: one arm a single
@@ -2200,19 +2271,16 @@ impl<'a> Prepare<'a> {
                 return Some(self.switch_op(*tag, arms, default.as_ref()));
             }
 
-            InstKind::For { source, .. } => {
-                panic!(
-                    "a `for` over {source:?} reached the block emitter, so \
-                     `recognize_for` refused its shape: a `break` or a `continue` leaves this \
-                     loop, which the joints path RFC-0057 Decision 4 names does not run yet"
-                )
-            }
+            InstKind::For { .. } => return Some(self.for_at(at)),
 
             InstKind::Jump { label, args } => {
                 let target = self.target(label);
                 let (label, args) = (*label, args.clone());
                 let moves = self.move_ops(&label, &args);
                 ops.extend(moves);
+                if let Some(header) = self.for_header(&label) {
+                    ops.push(self.counter_op(header, at));
+                }
                 return Some(Box::new(control::Goto { target }));
             }
             InstKind::JumpIf {
@@ -3758,6 +3826,18 @@ impl Edges<'_> {
         };
         params
     }
+
+    /// Cross-artifact obligation: `acvus_mir::analysis::inst_info` reports
+    /// the counter as a definition of the body block and as a use of nothing,
+    /// because the terminator writes it and the terminator is its only
+    /// reader. It is a real use, and liveness that does not carry it gives
+    /// the counter's register to a value live across the loop.
+    fn for_counter(&self, at: usize) -> Option<ValueId> {
+        let InstKind::For { source, body, .. } = &self.insts[at].kind else {
+            return None;
+        };
+        Some(self.block_params(body)[source.counter_param()])
+    }
 }
 
 /// Which values are live where: a backward dataflow to a fixed point.
@@ -3785,6 +3865,9 @@ impl Live {
                 }
                 for used in inst_info::uses(&insts[at].kind) {
                     into.insert(used.to_raw());
+                }
+                if let Some(counter) = edges.for_counter(at) {
+                    into.insert(counter.to_raw());
                 }
                 if live_out[at] != out {
                     live_out[at] = out;
