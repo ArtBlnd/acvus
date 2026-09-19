@@ -1,6 +1,6 @@
 # RFC-0057: a `for` loop is a terminator
 
-Status: Draft — 2026-09-20
+Status: Accepted — 2026-09-20
 Extends: RFC-0047 (a slice is the one thing the machine indexes; a slice is
 two registers), RFC-0052 (regions: `Loop<C>`, `Diamond`, `Select`),
 RFC-0018 (references and loans), RFC-0045 (an assign releases what the

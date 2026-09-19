@@ -1,6 +1,6 @@
 # RFC-0062: a string slice is a register pair
 
-Status: Draft — 2026-09-20
+Status: Accepted — 2026-09-20
 Extends: RFC-0047 (a slice is the one thing the machine indexes; two
 registers; the `&v` coercion and the `Slice<T, Rt>` parameter), RFC-0018
 (references and loans), RFC-0012 (every user-defined value moves; a copy is
