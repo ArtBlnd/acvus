@@ -718,6 +718,7 @@ mod tests {
         }
         let val_types: FxHashMap<ValueId, Ty> = types.into_iter().collect();
         let cfg = promote(MirBody {
+            demoted_diamonds: Default::default(),
             insts: insts
                 .into_iter()
                 .map(|kind| Inst {

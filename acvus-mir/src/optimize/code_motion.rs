@@ -1232,6 +1232,7 @@ mod tests {
             factory.next();
         }
         cfg::promote(MirBody {
+            demoted_diamonds: Default::default(),
             insts: insts
                 .into_iter()
                 .map(|kind| Inst {

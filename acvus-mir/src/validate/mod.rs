@@ -112,6 +112,13 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 "an `if`'s {side} arm does not reach the join L{} it is written to rejoin at",
                 join.0
             ),
+            ValidationErrorKind::DemotedDiamondMeetsAgain { join } => write!(
+                f,
+                "a branch demoted from an `if` has arms that meet again at L{}: \
+                 a pass running after `optimize::rejoin` re-formed them and left \
+                 the terminator a `jump_if`",
+                join.0
+            ),
             ValidationErrorKind::ForRangeWidths { at, hi } => write!(
                 f,
                 "a `for` over `{}..{}` needs one integer width at both bounds",

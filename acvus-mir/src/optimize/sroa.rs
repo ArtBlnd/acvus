@@ -900,8 +900,8 @@ fn settle_joins(cfg: &mut CfgBody, from: Label, arrives: Arrives) {
     let Arrives::At(to) = arrives else {
         return;
     };
-    for block in &mut cfg.blocks {
-        let Terminator::Diamond { join, .. } = &mut block.terminator else {
+    for bi in 0..cfg.blocks.len() {
+        let Terminator::Diamond { join, .. } = &mut cfg.blocks[bi].terminator else {
             continue;
         };
         if *join != from {
@@ -909,7 +909,7 @@ fn settle_joins(cfg: &mut CfgBody, from: Label, arrives: Arrives) {
         }
         match to {
             Some(to) => *join = to,
-            None => crate::cfg::demote_diamond(&mut block.terminator),
+            None => crate::cfg::demote_diamond(cfg, BlockIdx(bi)),
         }
     }
 }

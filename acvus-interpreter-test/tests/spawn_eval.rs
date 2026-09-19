@@ -74,6 +74,7 @@ async fn spawn_eval_basic() {
         ];
         MirModule {
             main: MirBody {
+                demoted_diamonds: Default::default(),
                 task: Task::Sync,
                 insts,
                 val_types: types(vec![
@@ -121,6 +122,7 @@ async fn spawn_eval_basic() {
         ];
         MirModule {
             main: MirBody {
+                demoted_diamonds: Default::default(),
                 // An `Eval` awaits (RFC-0046).
                 task: Task::Async,
                 insts,
@@ -192,6 +194,7 @@ async fn spawn_eval_multi_args() {
         ];
         MirModule {
             main: MirBody {
+                demoted_diamonds: Default::default(),
                 task: Task::Sync,
                 insts,
                 val_types: types(vec![
@@ -246,6 +249,7 @@ async fn spawn_eval_multi_args() {
         ];
         MirModule {
             main: MirBody {
+                demoted_diamonds: Default::default(),
                 // An `Eval` awaits (RFC-0046).
                 task: Task::Async,
                 insts,

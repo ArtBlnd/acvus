@@ -318,6 +318,7 @@ mod tests {
 
     fn make_body(insts: Vec<Inst>) -> MirBody {
         MirBody {
+            demoted_diamonds: Default::default(),
             insts,
             val_types: FxHashMap::default(),
             params: Vec::new(),

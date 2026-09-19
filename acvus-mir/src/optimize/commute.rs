@@ -333,6 +333,7 @@ mod tests {
             val_types.insert(vid, ty);
         }
         cfg::promote(MirBody {
+            demoted_diamonds: Default::default(),
             insts: insts
                 .into_iter()
                 .map(|kind| Inst {

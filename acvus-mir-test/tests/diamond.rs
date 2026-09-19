@@ -1,7 +1,7 @@
 //! RFC-0063: an `if` is a terminator.
 
 use acvus_mir::ty::Ty;
-use acvus_mir_test::compile_script_mode_raw;
+use acvus_mir_test::{compile_script_mode_raw, compile_script_optimized};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -103,4 +103,27 @@ fn an_if_whose_arm_continues_the_enclosing_loop_stays_a_jump_if() {
 fn an_if_whose_arm_breaks_a_loop_of_its_own_is_still_a_diamond() {
     let ir = raw("let i = 0; if @c { while i < @n { break; } }; i");
     assert_eq!(diamond_lines(&ir).len(), 1, "{ir}");
+}
+
+fn optimized(source: &str) -> String {
+    let i = Interner::new();
+    compile_script_optimized(&i, source, &ctx(&i, &[("n", Ty::I64)])).unwrap()
+}
+
+/// The same program as `acvus-mir-test/tests/sroa.rs`'s `enum_match`, whose
+/// snapshot pins the whole body; change one and the other must move with it.
+#[test]
+fn an_if_whose_arms_a_pass_scattered_and_another_rejoined_is_a_diamond_again() {
+    let ir = optimized(
+        "let acc = 0; let i = 0; while i < @n { \
+         let e = if i % 2 == 0 { E::A(i) } else { E::B(i + 1) }; \
+         match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v; } }; \
+         i = i + 1; } acc",
+    );
+    assert_eq!(diamond_lines(&ir), ["if r8 -> L3 else L5 join L6"], "{ir}");
+    assert_eq!(
+        ir.matches(JUMP_IF).count(),
+        1,
+        "the `while` test, only: {ir}"
+    );
 }

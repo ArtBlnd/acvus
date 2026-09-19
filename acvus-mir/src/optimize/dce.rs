@@ -693,6 +693,7 @@ mod tests {
             val_types.insert(factory.next(), ty.clone());
         }
         cfg::promote(MirBody {
+            demoted_diamonds: Default::default(),
             insts: insts
                 .into_iter()
                 .map(|kind| Inst {

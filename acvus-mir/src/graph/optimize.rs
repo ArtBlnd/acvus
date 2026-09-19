@@ -99,6 +99,7 @@ fn run_pass2_body(body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
     run_pass2(&mut cfg);
     *body = cfg::demote(cfg);
+    optimize::rejoin::run(body);
 }
 
 fn run_pass2(cfg: &mut CfgBody) {

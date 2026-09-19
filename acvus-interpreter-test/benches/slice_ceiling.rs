@@ -125,6 +125,7 @@ impl Build {
             factory.next();
         }
         MirBody {
+            demoted_diamonds: Default::default(),
             insts: self.insts,
             val_types: self.val_types,
             params: Vec::new(),

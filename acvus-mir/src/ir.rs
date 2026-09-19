@@ -660,6 +660,55 @@ pub fn reaches(insts: &[Inst], from: Label, join: Label) -> bool {
     false
 }
 
+/// A two-way branch, and the block whose terminator it is.
+pub struct Branch {
+    pub at: usize,
+    pub block: Label,
+}
+
+/// The branches of `insts` that `demoted` marks: the ones a pass wrote as a
+/// `JumpIf` over a `Diamond` the lowering had written
+/// (`cfg::demote_diamond`).
+pub fn demoted_branches<'a>(
+    insts: &'a [Inst],
+    demoted: &'a FxHashSet<Label>,
+) -> impl Iterator<Item = Branch> + 'a {
+    let mut block = crate::cfg::ENTRY_LABEL;
+    insts.iter().enumerate().filter_map(move |(at, inst)| {
+        match &inst.kind {
+            InstKind::BlockLabel { label, .. } => block = *label,
+            InstKind::JumpIf { .. } if demoted.contains(&block) => {
+                return Some(Branch { at, block });
+            }
+            _ => {}
+        }
+        None
+    })
+}
+
+/// The first block after the branch at `at` that both its arms reach.
+///
+/// `lower`'s `close_diamond` decides whether to write a `Diamond` by asking
+/// [`reaches`] of the arms it has just emitted, over the instructions between
+/// the branch and the join. This asks that same question of a branch a pass
+/// demoted; the two must stay one question, or a pass restores a terminator
+/// the lowering would not have written.
+pub fn meets_again(insts: &[Inst], at: usize) -> Option<Label> {
+    let branch = two_way(&insts[at].kind)?;
+    let (then_label, else_label) = (branch.then_label, branch.else_label);
+    insts[at + 1..]
+        .iter()
+        .enumerate()
+        .find_map(|(offset, inst)| {
+            let InstKind::BlockLabel { label, .. } = &inst.kind else {
+                return None;
+            };
+            let (label, arms) = (*label, &insts[at..=at + offset]);
+            let meets = reaches(arms, then_label, label) && reaches(arms, else_label, label);
+            meets.then_some(label)
+        })
+}
+
 /// Debug info for a single Val: where it came from in source.
 #[derive(Debug, Clone)]
 pub enum ValOrigin {
@@ -760,6 +809,11 @@ pub struct MirBody {
     pub debug: DebugInfo,
     pub val_factory: LocalFactory<ValueId>,
     pub label_count: u32,
+    /// The blocks whose `Diamond` a pass demoted to a `JumpIf`
+    /// (`cfg::demote_diamond`). `optimize::rejoin` restores the ones whose
+    /// arms a later pass brought back together, and `validate` refuses one it
+    /// left behind.
+    pub demoted_diamonds: FxHashSet<Label>,
 }
 
 impl Default for MirBody {
@@ -780,6 +834,7 @@ impl MirBody {
             debug: DebugInfo::new(),
             val_factory: LocalFactory::new(),
             label_count: 0,
+            demoted_diamonds: FxHashSet::default(),
         }
     }
 

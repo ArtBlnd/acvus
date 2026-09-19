@@ -112,6 +112,9 @@ pub struct CfgBody {
     pub task: Task,
     pub debug: DebugInfo,
     pub val_factory: LocalFactory<ValueId>,
+    /// See [`crate::ir::MirBody::demoted_diamonds`], which this is carried to
+    /// and from.
+    pub demoted_diamonds: FxHashSet<Label>,
 }
 
 impl CfgBody {
@@ -198,7 +201,8 @@ impl CfgBody {
 
 /// RFC-0063 Decision 1 admits a `Diamond` only where the arms rejoin, so a
 /// pass that dissolves the join calls this: what is left is a `JumpIf`.
-pub fn demote_diamond(term: &mut Terminator) {
+pub fn demote_diamond(cfg: &mut CfgBody, at: BlockIdx) {
+    let block = &mut cfg.blocks[at.0];
     let Terminator::Diamond {
         cond,
         then_label,
@@ -206,7 +210,7 @@ pub fn demote_diamond(term: &mut Terminator) {
         else_label,
         else_args,
         ..
-    } = term
+    } = &mut block.terminator
     else {
         return;
     };
@@ -217,7 +221,9 @@ pub fn demote_diamond(term: &mut Terminator) {
         else_label: *else_label,
         else_args: std::mem::take(else_args),
     };
-    *term = demoted;
+    block.terminator = demoted;
+    let demoted_at = block.label;
+    cfg.demoted_diamonds.insert(demoted_at);
 }
 
 pub fn promote(body: MirBody) -> CfgBody {
@@ -297,6 +303,7 @@ pub fn promote(body: MirBody) -> CfgBody {
         task: body.task,
         debug: body.debug,
         val_factory: body.val_factory,
+        demoted_diamonds: body.demoted_diamonds,
     })
 }
 
@@ -425,6 +432,13 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
 // -- Demote: CfgBody -> MirBody ------------------------------------
 
 pub fn demote(cfg: CfgBody) -> MirBody {
+    let emitted: FxHashSet<Label> = cfg.blocks.iter().map(|block| block.label).collect();
+    let demoted_diamonds = cfg
+        .demoted_diamonds
+        .intersection(&emitted)
+        .copied()
+        .collect();
+
     let mut insts: Vec<Inst> = Vec::new();
 
     for block in cfg.blocks {
@@ -573,6 +587,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
         debug: cfg.debug,
         val_factory: cfg.val_factory,
         label_count,
+        demoted_diamonds,
     }
 }
 
@@ -593,6 +608,7 @@ mod tests {
             factory.next();
         }
         MirBody {
+            demoted_diamonds: Default::default(),
             insts: insts
                 .into_iter()
                 .map(|kind| Inst {

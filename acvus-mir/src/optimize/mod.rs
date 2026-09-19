@@ -9,6 +9,7 @@ pub mod fold;
 pub mod forward;
 pub mod lsr;
 pub mod reborrow;
+pub mod rejoin;
 pub mod reorder;
 pub mod spawn_split;
 pub mod sroa;

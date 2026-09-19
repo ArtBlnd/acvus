@@ -131,6 +131,20 @@ meet, and where they scatter the branch is demoted (`cfg::demote_diamond`).
 prerequisite the machine half needs: a stale `join` is unreadable, and
 `validate` refuses one (`DiamondArmMissesJoin`).
 
+**The demotion is not final.** `sroa` demotes from what it knows at its own
+moment, and `forward` and `dce` then bring the scattered arms back to one
+block; nothing in either of them is the place to decide a branch's shape.
+`optimize::rejoin` is: it runs once, on the `MirBody` `cfg::demote` produces,
+after every other pass and before `validate`. A branch it restores is one
+`cfg::demote_diamond` recorded — the lowering's fact, kept in
+`MirBody::demoted_diamonds`, since Decision 1's rejected `JumpIf` field would
+be a shape a pass decides. The criterion is the lowering's own, `ir::reaches`
+over the instructions between the branch and the candidate join, and
+`ir::meets_again` is the one function both `rejoin` and `validate` ask. What
+`rejoin` leaves demoted and `validate` then finds meeting again is a pass
+that ran after it and did not restore the terminator
+(`DemotedDiamondMeetsAgain`).
+
 Waiting: the machine half — `prepare` builds `Diamond<C>`/`Select` from the
 terminator and `recognize_diamond` and its straight-run scan go.
 `spawn_split` over a body with an `if` reads `join`.

@@ -82,6 +82,11 @@ pub enum ValidationErrorKind {
         side: &'static str,
         join: Label,
     },
+    /// RFC-0063 Decision 1: the arms of a branch `cfg::demote_diamond`
+    /// demoted meet again, and the terminator was not restored.
+    DemotedDiamondMeetsAgain {
+        join: Label,
+    },
     /// A `match` over a locally closed enum leaves a variant untaken.
     MatchMissesVariants {
         enum_name: Option<Astr>,
@@ -372,6 +377,18 @@ impl CheckCtx {
                 &body.insts,
                 errors,
             );
+        }
+
+        for branch in crate::ir::demoted_branches(&body.insts, &body.demoted_diamonds) {
+            let Some(join) = crate::ir::meets_again(&body.insts, branch.at) else {
+                continue;
+            };
+            errors.push(ValidationError {
+                scope: self.scope_name.clone(),
+                inst_index: branch.at,
+                span: body.insts[branch.at].span,
+                kind: ValidationErrorKind::DemotedDiamondMeetsAgain { join },
+            });
         }
     }
 
@@ -1994,6 +2011,7 @@ mod tests {
     fn make_module(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>) -> MirModule {
         MirModule {
             main: MirBody {
+                demoted_diamonds: Default::default(),
                 insts,
                 val_types,
                 params: Vec::new(),
@@ -2298,6 +2316,83 @@ mod tests {
             ],
             vt,
         )
+    }
+
+    fn demoted_module(marked: bool) -> MirModule {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let cond = vf.next();
+        let joined = vf.next();
+        let mut vt = FxHashMap::default();
+        vt.insert(cond, Ty::Bool);
+        vt.insert(joined, Ty::Unit);
+        let mut module = make_module(
+            vec![
+                inst(InstKind::JumpIf {
+                    cond,
+                    then_label: Label(0),
+                    then_args: vec![],
+                    else_label: Label(1),
+                    else_args: vec![],
+                }),
+                inst(InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![],
+                }),
+                inst(InstKind::Jump {
+                    label: Label(2),
+                    args: vec![],
+                }),
+                inst(InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![],
+                }),
+                inst(InstKind::Jump {
+                    label: Label(2),
+                    args: vec![],
+                }),
+                inst(InstKind::BlockLabel {
+                    label: Label(2),
+                    params: vec![],
+                }),
+                inst(InstKind::Return {
+                    value: joined,
+                    order: None,
+                }),
+            ],
+            vt,
+        );
+        if marked {
+            module.main.demoted_diamonds.insert(crate::cfg::ENTRY_LABEL);
+        }
+        module
+    }
+
+    fn meets_again_refusals(module: &MirModule) -> usize {
+        check_types(module)
+            .iter()
+            .filter(|error| {
+                matches!(
+                    error.kind,
+                    ValidationErrorKind::DemotedDiamondMeetsAgain { join: Label(2) }
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_demoted_branch_whose_arms_meet_again_is_refused() {
+        assert_eq!(meets_again_refusals(&demoted_module(true)), 1);
+    }
+
+    #[test]
+    fn the_same_branch_with_no_demotion_behind_it_is_accepted() {
+        let module = demoted_module(false);
+        assert_eq!(meets_again_refusals(&module), 0);
+        assert!(
+            check_types(&module).is_empty(),
+            "{:?}",
+            check_types(&module)
+        );
     }
 
     #[test]

@@ -219,6 +219,7 @@ mod tests {
             factory.next();
         }
         MirBody {
+            demoted_diamonds: Default::default(),
             insts: insts.into_iter().map(inst).collect(),
             val_types,
             params: vec![],

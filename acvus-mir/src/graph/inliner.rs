@@ -1127,6 +1127,7 @@ mod tests {
             val_types.insert(v, Ty::I64);
         }
         MirBody {
+            demoted_diamonds: Default::default(),
             insts: insts.into_iter().map(make_inst).collect(),
             val_types,
             params: Vec::new(),
