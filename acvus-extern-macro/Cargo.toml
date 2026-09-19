@@ -10,3 +10,7 @@ proc-macro = true
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+acvus-extern = { path = "../acvus-extern" }
+trybuild = "1.0.121"

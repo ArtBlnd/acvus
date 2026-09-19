@@ -14,9 +14,13 @@ use std::sync::{Arc, Mutex};
 
 use acvus_ext::{Deque, Iter, vec_registry};
 use acvus_extern::{
-    Arr, CallToken, Cross, Erased, Externs, Fn1, FnKind, FromValue, Interner, Monomorphize,
+    Arr, CallToken, Erased, Externs, Fn1, FnKind, FromValue, Interner, Monomorphize, OneValue,
     QualifiedRef, Ref, RefMut, Registry, Release, Runtime, extern_fn, extern_registry,
 };
+
+/// No registry these tests combine declares a sliceable container, so the
+/// pair a slice would occupy is never built or read.
+const NO_SLICES: &str = "this runtime holds no slices";
 
 // -- A counting runtime -----------------------------------------------
 
@@ -110,7 +114,9 @@ where
 
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
-impl acvus_extern::Cross<Counting> for V {
+acvus_extern::cross_one_value!(V, at Counting);
+
+impl acvus_extern::OneValue<Counting> for V {
     fn erase(self, _: &Counting) -> V {
         self
     }
@@ -224,7 +230,7 @@ impl Runtime for Counting {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        open_ref(unsafe { <V as acvus_extern::Cross<Counting>>::deref(self, reference) })
+        open_ref(unsafe { <V as acvus_extern::OneValue<Counting>>::deref(self, reference) })
     }
 
     unsafe fn deref_mut<'a, T>(&self, reference: &'a V) -> &'a mut T
@@ -232,7 +238,7 @@ impl Runtime for Counting {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        open_mut(unsafe { <V as acvus_extern::Cross<Counting>>::deref_mut(self, reference) })
+        open_mut(unsafe { <V as acvus_extern::OneValue<Counting>>::deref_mut(self, reference) })
     }
 
     unsafe fn reference(&self, target: &V) -> V {
@@ -257,6 +263,14 @@ impl Runtime for Counting {
 
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {
+        panic!("{NO_SLICES}")
+    }
+
+    unsafe fn slice_from_run(&self, _: &[Self::Value]) -> acvus_extern::Words {
+        panic!("{NO_SLICES}")
     }
 
     fn call_is_sync(&self, _: &V) -> bool {

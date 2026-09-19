@@ -2,7 +2,7 @@
 //! around it, and `Some(v)` for any other `v` is `v` itself (RFC-0022).
 //! Every case here crosses the extern boundary, a pattern, or both.
 
-use acvus_extern::{Cross, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{OneValue, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, Kind, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -308,16 +308,16 @@ fn none_is_a_kind_and_option_of_a_value_keeps_its_niche() {
     assert_eq!(size_of::<Option<Value>>(), 16);
     let i = Interner::new();
     let rt = runtime(&i);
-    let flat = <Option<i64> as Cross<AcvusRuntime>>::erase(Some(7), &rt);
+    let flat = <Option<i64> as OneValue<AcvusRuntime>>::erase(Some(7), &rt);
     assert_eq!(flat.kind(), Kind::I64);
     assert_eq!(
-        unsafe { <Option<i64> as Cross<AcvusRuntime>>::materialize(&rt, flat) },
+        unsafe { <Option<i64> as OneValue<AcvusRuntime>>::materialize(&rt, flat) },
         Some(7)
     );
-    let none = <Option<i64> as Cross<AcvusRuntime>>::erase(None, &rt);
+    let none = <Option<i64> as OneValue<AcvusRuntime>>::erase(None, &rt);
     assert_eq!(none.kind(), Kind::None);
     assert_eq!(
-        unsafe { <Option<i64> as Cross<AcvusRuntime>>::materialize(&rt, none) },
+        unsafe { <Option<i64> as OneValue<AcvusRuntime>>::materialize(&rt, none) },
         None
     );
 }

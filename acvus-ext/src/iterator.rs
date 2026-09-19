@@ -26,9 +26,8 @@
 //! which `Fn1` does not implement.
 
 use acvus_extern::{
-    Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar,
-    Monomorphize, Ref, Registry, Runtime, Stored, TransparentOver, TyVar, extern_fn,
-    extern_registry,
+    Arr, ClosureFn, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar, Monomorphize,
+    OneValue, Ref, Registry, Runtime, Stored, TransparentOver, TyVar, extern_fn, extern_registry,
 };
 
 use crate::iter::{Iter, drain, drain_now};
@@ -143,7 +142,7 @@ where
 #[extern_cast]
 fn into_iter_vec<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -155,7 +154,7 @@ where
 #[extern_cast]
 fn into_iter_array<T, N, E, I, Rt>(items: Arr<T, N>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,
@@ -190,7 +189,7 @@ where
 #[extern_fn(effect = pure)]
 fn rev_iter<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -289,7 +288,7 @@ where
 #[extern_fn(effect = pure)]
 fn flatten<T, E, I, Rt>(it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -300,7 +299,7 @@ where
 #[extern_fn(effect = pure)]
 fn flatten_arrays<T, N, E, I, Rt>(it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     N: LenVar,
     E: EffectVar,
     I: IdentityVar,
@@ -317,7 +316,7 @@ fn flat_map<T, U, E, I, Rt>(
 ) -> Iter<U, E, I, Rt>
 where
     T: TyVar,
-    U: TyVar + Cross<Rt> + FromValue<Rt>,
+    U: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -327,7 +326,7 @@ where
 
 fn collect_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Vec<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -342,7 +341,7 @@ where
 #[extern_fn(effect = E, sync = collect_now)]
 async fn collect<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Vec<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -418,7 +417,7 @@ where
 
 fn next_now<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -429,7 +428,7 @@ where
 #[extern_fn(effect = E, sync = next_now)]
 async fn next<T, E, I, Rt>(rt: &Rt, it: &mut Iter<T, E, I, Rt>) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -443,7 +442,7 @@ fn find_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -458,7 +457,7 @@ async fn find<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -468,7 +467,7 @@ where
 
 fn reduce_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>, f: Fn2<T, T, T, E, Rt>) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -489,7 +488,7 @@ async fn reduce<T, E, I, Rt>(
     f: Fn2<T, T, T, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -510,8 +509,8 @@ fn fold_now<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> U
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
-    U: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
+    U: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -533,8 +532,8 @@ async fn fold<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> U
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
-    U: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
+    U: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -550,7 +549,7 @@ where
 
 fn any_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> bool
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -573,7 +572,7 @@ async fn any<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> bool
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -591,7 +590,7 @@ where
 
 fn all_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> bool
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -614,7 +613,7 @@ async fn all<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> bool
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -720,7 +719,7 @@ where
 #[extern_fn(effect = pure)]
 fn chunks<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<Vec<T>, E, I, Rt>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -771,7 +770,7 @@ where
 
 fn last_now<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -786,7 +785,7 @@ where
 #[extern_fn(effect = E, sync = last_now)]
 async fn last<T, E, I, Rt>(rt: &Rt, mut it: Iter<T, E, I, Rt>) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -800,7 +799,7 @@ where
 
 fn nth_now<T, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -811,7 +810,7 @@ where
 #[extern_fn(effect = E, sync = nth_now)]
 async fn nth<T, E, I, Rt>(rt: &Rt, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -1057,7 +1056,7 @@ fn min_by_key_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -1099,7 +1098,7 @@ async fn min_by_key<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -1113,7 +1112,7 @@ fn max_by_key_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -1128,7 +1127,7 @@ async fn max_by_key<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + Cross<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,

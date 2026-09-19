@@ -1,0 +1,13 @@
+error[E0271]: type mismatch resolving `<Val<Slice<Owned<__R>, __R>> as Ret<__R>>::Form == One`
+ --> tests/compile_fail/slice_returned_by_heavy.rs:5:1
+  |
+5 | #[extern_fn(effect = pure, heavy)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `One`, found `Pair`
+  |
+  = note: required for `Glue<__R, {closure@$DIR/tests/compile_fail/slice_returned_by_heavy.rs:5:1: 5:35}, (ByValue<acvus_extern::Ref<Vec<acvus_extern::Owned<__R>>, __R>>,), Val<acvus_extern::Slice<acvus_extern::Owned<__R>, __R>>>` to implement `ReturnsValue<__R>`
+note: required by a bound in `ExternHandler::<R>::heavy`
+ --> $WORKSPACE/acvus-extern/src/handler.rs
+  |
+  |     pub fn heavy(handler: impl ReturnsValue<R> + 'static) -> Self {
+  |                                ^^^^^^^^^^^^^^^ required by this bound in `ExternHandler::<R>::heavy`
+  = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,12 @@
+error[E0271]: type mismatch resolving `<Val<Slice<Owned<__R>, __R>> as Ret<__R>>::Form == One`
+ --> tests/compile_fail/slice_returned_at_arity_two.rs:6:1
+  |
+6 | #[extern_fn(effect = pure)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `One`, found `Pair`
+  |
+note: required by a bound in `glue2`
+ --> $WORKSPACE/acvus-extern/src/handler.rs
+  |
+  | arity!(glue2, async_glue2, [Ret<Rt, Form = One>], A0: a0, A1: a1);
+  |                                     ^^^^^^^^^^ required by this bound in `glue2`
+  = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

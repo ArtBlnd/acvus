@@ -1,304 +1,589 @@
-//! Type-erased handlers, ready for a runtime to call.
+//! Typed handlers, ready for a runtime to call (RFC-0059).
+//!
+//! A declaration's Rust body is reached through a closure the proc macro
+//! writes, wrapped in a `Glue` whose type parameters say how each parameter
+//! comes out of the call's argument run and how the result is written back.
+//! Every fact the ABI needs is a constant of those types, summed once in the
+//! `Handler` impl and read back through `Handler::width`.
 
-use std::any::Any;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use acvus_mir::ty::{PolyTy, Task};
+use futures::future::BoxFuture;
 
+use crate::obj::{Cross, CrossSpecialized, Form, One, OneValue};
 use crate::runtime::Runtime;
 use crate::slice::Elements;
 
-/// A `#[state]` parameter, supplied when the registry is built and read
-/// by the handler as its first argument. The call operation holds the
-/// `Arc` as a field, so the operation's type says a state exists and the
-/// handler runs without testing for one (RFC-0052 §6).
-pub type State = Arc<dyn Any + Send + Sync>;
-pub type StateRef<'a> = &'a (dyn Any + Send + Sync);
+/// Which crossing a parameter or a result takes (RFC-0040).
+pub struct Uniform;
+/// The crossing of a `Monomorphize` member instance.
+pub struct Specialized;
 
-pub type Sync0<R> = fn(&R) -> <R as Runtime>::Value;
-pub type Sync1<R> = fn(&R, <R as Runtime>::Value) -> <R as Runtime>::Value;
-pub type Sync2<R> = fn(&R, <R as Runtime>::Value, <R as Runtime>::Value) -> <R as Runtime>::Value;
-pub type Sync3<R> = fn(
-    &R,
-    <R as Runtime>::Value,
-    <R as Runtime>::Value,
-    <R as Runtime>::Value,
-) -> <R as Runtime>::Value;
-pub type SyncWindow<R> = fn(&R, &[<R as Runtime>::Value]) -> <R as Runtime>::Value;
-pub type SyncSlice<R> = fn(&R, <R as Runtime>::Value) -> Elements<R>;
-
-pub type State0<R> = fn(StateRef<'_>, &R) -> <R as Runtime>::Value;
-pub type State1<R> = fn(StateRef<'_>, &R, <R as Runtime>::Value) -> <R as Runtime>::Value;
-pub type State2<R> =
-    fn(StateRef<'_>, &R, <R as Runtime>::Value, <R as Runtime>::Value) -> <R as Runtime>::Value;
-pub type State3<R> = fn(
-    StateRef<'_>,
-    &R,
-    <R as Runtime>::Value,
-    <R as Runtime>::Value,
-    <R as Runtime>::Value,
-) -> <R as Runtime>::Value;
-pub type StateWindow<R> = fn(StateRef<'_>, &R, &[<R as Runtime>::Value]) -> <R as Runtime>::Value;
-pub type StateSlice<R> = fn(StateRef<'_>, &R, <R as Runtime>::Value) -> Elements<R>;
-
-pub type Async<R> =
-    fn(R, &[<R as Runtime>::Value]) -> Pin<Box<dyn Future<Output = <R as Runtime>::Value> + Send>>;
-pub type AsyncState<R> = fn(
-    State,
-    R,
-    &[<R as Runtime>::Value],
-) -> Pin<Box<dyn Future<Output = <R as Runtime>::Value> + Send>>;
-
-/// Which `fn` shape a declaration compiled to. A declaration of three or
-/// fewer parameters takes each in a register; four or more take the
-/// caller's argument window.
-///
-/// `prepare` reads this once, to pick the call operation's type; the
-/// operation then holds the bare `fn` pointer and calls it with no
-/// decision in between.
-pub enum SyncAbi<R>
+/// How one Rust parameter takes its argument out of a call's argument run.
+/// The mode — by value, by shared reference, by exclusive reference — is
+/// written in Rust and read by the macro (RFC-0015); the width is the
+/// type's.
+pub trait Arg<'a, Rt>: Sized
 where
-    R: Runtime,
+    Rt: Runtime,
 {
-    Arity0(Sync0<R>),
-    Arity1(Sync1<R>),
-    Arity2(Sync2<R>),
-    Arity3(Sync3<R>),
-    Window(SyncWindow<R>),
+    /// What the closure's parameter is.
+    type Out;
+    /// How many of the run's values this parameter consumes.
+    const WIDTH: usize;
+
+    /// # Safety
+    /// `run` is this parameter's own `WIDTH` values of a call's argument
+    /// run, and any storage a reference it yields names is live and unmoved
+    /// for `'a` — exclusively so for an exclusive reference (RFC-0018).
+    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> Self::Out;
 }
 
-pub enum StateAbi<R>
-where
-    R: Runtime,
-{
-    Arity0(State0<R>),
-    Arity1(State1<R>),
-    Arity2(State2<R>),
-    Arity3(State3<R>),
-    Window(StateWindow<R>),
-}
+/// A parameter taken by value: the crossing builds the Rust value.
+pub struct ByValue<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
+/// A parameter taken by shared reference: the body reads the storage the
+/// caller lent (RFC-0018).
+pub struct ByRef<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
+/// As `ByRef`, exclusively.
+pub struct ByRefMut<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
-/// A declaration whose result is a run of one container's elements. It
-/// returns the run itself, never a value: there is no `R::Value` a slice
-/// can be.
-pub enum SliceAbi<R>
+impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Uniform>
 where
-    R: Runtime,
+    T: OneValue<Rt>,
+    Rt: Runtime,
 {
-    Plain(SyncSlice<R>),
-    Stateful { state: State, f: StateSlice<R> },
-}
+    type Out = T;
+    const WIDTH: usize = <T as Cross<Rt>>::WIDTH;
 
-impl<R> Clone for SliceAbi<R>
-where
-    R: Runtime,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Self::Plain(f) => Self::Plain(*f),
-            Self::Stateful { state, f } => Self::Stateful {
-                state: Arc::clone(state),
-                f: *f,
-            },
-        }
+    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> T {
+        // SAFETY: the caller's contract, which is `Cross::from_run`'s.
+        unsafe { <T as Cross<Rt>>::from_run(rt, run) }
     }
 }
 
-pub enum SyncCall<R>
+impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Specialized>
 where
-    R: Runtime,
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
 {
-    Plain(SyncAbi<R>),
-    Stateful { state: State, abi: StateAbi<R> },
-}
+    type Out = T;
+    const WIDTH: usize = 1;
 
-pub enum AsyncCall<R>
-where
-    R: Runtime,
-{
-    Plain(Async<R>),
-    Stateful { state: State, f: AsyncState<R> },
-}
-
-impl<R> Clone for SyncAbi<R>
-where
-    R: Runtime,
-{
-    fn clone(&self) -> Self {
-        match *self {
-            Self::Arity0(f) => Self::Arity0(f),
-            Self::Arity1(f) => Self::Arity1(f),
-            Self::Arity2(f) => Self::Arity2(f),
-            Self::Arity3(f) => Self::Arity3(f),
-            Self::Window(f) => Self::Window(f),
-        }
+    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> T {
+        // SAFETY: as the uniform impl's.
+        unsafe { <T as CrossSpecialized<Rt>>::from_run(rt, run) }
     }
 }
 
-impl<R> Clone for StateAbi<R>
+impl<'a, T, Rt> Arg<'a, Rt> for ByRef<T, Uniform>
 where
-    R: Runtime,
+    T: Borrowable<Rt>,
+    Rt: Runtime,
 {
-    fn clone(&self) -> Self {
-        match *self {
-            Self::Arity0(f) => Self::Arity0(f),
-            Self::Arity1(f) => Self::Arity1(f),
-            Self::Arity2(f) => Self::Arity2(f),
-            Self::Arity3(f) => Self::Arity3(f),
-            Self::Window(f) => Self::Window(f),
-        }
+    type Out = &'a T;
+    const WIDTH: usize = 1;
+
+    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a T {
+        // SAFETY: the caller's contract: a live storage of `T` (RFC-0018).
+        unsafe { <T as OneValue<Rt>>::deref(rt, &run[0]) }
     }
 }
 
-impl<R> Clone for SyncCall<R>
+impl<'a, T, Rt> Arg<'a, Rt> for ByRefMut<T, Uniform>
 where
-    R: Runtime,
+    T: Borrowable<Rt>,
+    Rt: Runtime,
 {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Plain(abi) => Self::Plain(abi.clone()),
-            Self::Stateful { state, abi } => Self::Stateful {
-                state: Arc::clone(state),
-                abi: abi.clone(),
-            },
-        }
+    type Out = &'a mut T;
+    const WIDTH: usize = 1;
+
+    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a mut T {
+        // SAFETY: the caller's contract: a live storage of `T`, exclusively
+        // named (RFC-0018).
+        unsafe { <T as OneValue<Rt>>::deref_mut(rt, &run[0]) }
     }
 }
 
-impl<R> Clone for AsyncCall<R>
+impl<'a, T, Rt> Arg<'a, Rt> for ByRef<T, Specialized>
 where
-    R: Runtime,
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
 {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Plain(f) => Self::Plain(*f),
-            Self::Stateful { state, f } => Self::Stateful {
-                state: Arc::clone(state),
-                f: *f,
-            },
-        }
+    type Out = &'a T;
+    const WIDTH: usize = 1;
+
+    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a T {
+        // SAFETY: as the uniform impl's, at the specialized representation.
+        unsafe { <T as CrossSpecialized<Rt>>::deref(rt, &run[0]) }
     }
 }
 
-impl<R> SyncCall<R>
+impl<'a, T, Rt> Arg<'a, Rt> for ByRefMut<T, Specialized>
 where
-    R: Runtime,
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
 {
-    /// The arity the ABI names, and `None` for the window form, whose
-    /// arity is whatever the caller's slice holds.
-    pub fn arity(&self) -> Option<usize> {
-        let at = |plain: &SyncAbi<R>| match plain {
-            SyncAbi::Arity0(_) => Some(0),
-            SyncAbi::Arity1(_) => Some(1),
-            SyncAbi::Arity2(_) => Some(2),
-            SyncAbi::Arity3(_) => Some(3),
-            SyncAbi::Window(_) => None,
-        };
-        match self {
-            Self::Plain(abi) => at(abi),
-            Self::Stateful { abi, .. } => match abi {
-                StateAbi::Arity0(_) => Some(0),
-                StateAbi::Arity1(_) => Some(1),
-                StateAbi::Arity2(_) => Some(2),
-                StateAbi::Arity3(_) => Some(3),
-                StateAbi::Window(_) => None,
-            },
-        }
-    }
+    type Out = &'a mut T;
+    const WIDTH: usize = 1;
 
-    /// Calls the handler with its arguments in a slice, taking each out of
-    /// its place: for a caller that does not know the arity where it
-    /// stands — a spawn that must own the arguments, a test. The
-    /// interpreter's call path does not come here; it reads each argument
-    /// from the register the operation names and passes it by value.
+    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a mut T {
+        // SAFETY: as the uniform impl's, at the specialized representation.
+        unsafe { <T as CrossSpecialized<Rt>>::deref_mut(rt, &run[0]) }
+    }
+}
+
+/// A type a parameter may take by reference: one whose values are places the
+/// language names. An `Option` is not — `None` is one value and `Some(v)` is
+/// `v`'s own value (RFC-0039) — and the missing impl is the refusal.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no storage of its own type, so a parameter cannot borrow one",
+    label = "this parameter is taken by reference",
+    note = "an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.",
+    note = "a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047)."
+)]
+pub trait Borrowable<Rt>: OneValue<Rt>
+where
+    Rt: Runtime,
+{
+}
+
+/// How a handler's result reaches the machine: the Rust value the closure
+/// returns, and the run of the runtime's values it is written into.
+pub trait Ret<Rt>: Sized
+where
+    Rt: Runtime,
+{
+    /// What the closure returns.
+    type Of;
+    /// The run the result is written into. A bound that admits only a result
+    /// the caller can take away says `Form = One`: the `Pair` a slice is
+    /// borrows the caller's frame (RFC-0047 §3).
+    type Form: Form;
+
+    /// How many of the runtime's values the result occupies.
+    const WIDTH: usize = <Self::Form as Form>::WIDTH;
+
+    fn into_run(value: Self::Of, rt: &Rt, out: &mut [Rt::Value]);
+}
+
+/// A result crossing as itself, at whichever width its type declares.
+pub struct Val<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
+
+impl<T, Rt> Ret<Rt> for Val<T, Uniform>
+where
+    T: Cross<Rt>,
+    Rt: Runtime,
+{
+    type Of = T;
+    type Form = <T as Cross<Rt>>::Form;
+
+    fn into_run(value: T, rt: &Rt, out: &mut [Rt::Value]) {
+        <T as Cross<Rt>>::into_run(value, rt, out)
+    }
+}
+
+impl<T, Rt> Ret<Rt> for Val<T, Specialized>
+where
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
+{
+    type Of = T;
+    type Form = One;
+
+    fn into_run(value: T, rt: &Rt, out: &mut [Rt::Value]) {
+        <T as CrossSpecialized<Rt>>::into_run(value, rt, out)
+    }
+}
+
+/// How many of the runtime's values a call's arguments occupy and how many
+/// its result writes back. Both numbers are sums of the `WIDTH` constants of
+/// the declaration's types; `Glue`'s `Handler` impl is where they are added,
+/// and `prepare` reads the answer rather than counting anything itself.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Width {
+    pub args: usize,
+    pub ret: usize,
+}
+
+/// The widest argument run a register form covers: a call of this many
+/// values or fewer takes each in a register, and a wider one is lent its
+/// window. RFC-0044 stage 2c fixed the cut at three.
+pub const REGISTER_FORM: usize = 3;
+
+impl Width {
+    /// Whether the call takes its arguments in registers.
+    pub fn in_registers(&self) -> bool {
+        self.args <= REGISTER_FORM
+    }
+}
+
+/// A declaration compiled to a Rust body, with the crossing on both sides of
+/// it. One trait object per declared instance; the call operation holds it
+/// and calls through it once.
+pub trait Handler<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    /// One call site's own handle on this handler. A box's data pointer is
+    /// the handler, so the call loads it and jumps; an `Arc`'s payload sits
+    /// behind a header of no static offset, which costs the call a read of
+    /// the vtable's alignment and the arithmetic over it.
+    fn clone_box(&self) -> Box<dyn Handler<Rt>>;
+
+    fn width(&self) -> Width;
+
+    /// # Safety
+    /// `run` holds `width().args` of the runtime's values in declaration
+    /// order, `out` has room for `width().ret`, and every reference the
+    /// handler takes out of `run` names storage live for the call
+    /// (RFC-0018).
+    unsafe fn call(&self, rt: &Rt, run: &[Rt::Value], out: &mut [Rt::Value]);
+
+    /// The register forms. A declaration whose arguments are `k` values wide
+    /// and whose result is one value takes them in registers, and `prepare`
+    /// calls the one form `width()` names.
     ///
-    /// # Panics
-    /// `args` is not as long as the arity the handler names.
-    pub fn call_taking(&self, rt: &R, args: &[R::Value]) -> R::Value {
-        if let Some(arity) = self.arity() {
-            assert_eq!(
-                args.len(),
-                arity,
-                "a handler of arity {arity} was called with {} arguments",
-                args.len()
-            );
+    /// # Safety
+    /// `width()` is `Width { args: k, ret: 1 }` for the `k` this form names,
+    /// and the arguments are this call's own, in declaration order.
+    unsafe fn call0(&self, rt: &Rt) -> Rt::Value {
+        // SAFETY: the caller's contract, which is `call_run`'s at no values.
+        unsafe { self.call_run(rt, &[]) }
+    }
+
+    /// # Safety
+    /// As `call0`, at one value.
+    unsafe fn call1(&self, rt: &Rt, a: Rt::Value) -> Rt::Value {
+        // SAFETY: the caller's contract, which is `call_run`'s at one value.
+        unsafe { self.call_run(rt, &[a]) }
+    }
+
+    /// # Safety
+    /// As `call0`, at two values.
+    unsafe fn call2(&self, rt: &Rt, a: Rt::Value, b: Rt::Value) -> Rt::Value {
+        // SAFETY: the caller's contract, which is `call_run`'s at two.
+        unsafe { self.call_run(rt, &[a, b]) }
+    }
+
+    /// # Safety
+    /// As `call0`, at three values.
+    unsafe fn call3(&self, rt: &Rt, a: Rt::Value, b: Rt::Value, c: Rt::Value) -> Rt::Value {
+        // SAFETY: the caller's contract, which is `call_run`'s at three.
+        unsafe { self.call_run(rt, &[a, b, c]) }
+    }
+
+    /// The window form: the arguments are lent as the run they already sit
+    /// in, and the result is one value.
+    ///
+    /// # Safety
+    /// As `call`, with `width().ret == 1`.
+    unsafe fn call_run(&self, rt: &Rt, run: &[Rt::Value]) -> Rt::Value {
+        let mut out = [Rt::Value::default()];
+        // SAFETY: the caller's contract.
+        unsafe { self.call(rt, run, &mut out) };
+        out[0]
+    }
+
+    /// The slice form: the result is the run of a container's elements, and
+    /// the caller takes the pair away in registers instead of lending a
+    /// place to write it into.
+    ///
+    /// # Safety
+    /// `width()` is `Width { args: 1, ret: 2 }`, and `a` is this call's own
+    /// argument.
+    unsafe fn call_slice(&self, rt: &Rt, a: Rt::Value) -> Elements<Rt> {
+        let mut out = [Rt::Value::default(); 2];
+        // SAFETY: the caller's contract, which is `call`'s at one argument
+        // and a result two values wide.
+        unsafe { self.call(rt, &[a], &mut out) };
+        // SAFETY: `out` is the pair the slice's `into_run` just wrote, and
+        // the elements it names are the caller's loan (RFC-0018).
+        unsafe { Elements::from_words(rt.slice_from_run(&out)) }
+    }
+}
+
+impl<Rt> Clone for Box<dyn Handler<Rt>>
+where
+    Rt: Runtime,
+{
+    fn clone(&self) -> Self {
+        (**self).clone_box()
+    }
+}
+
+/// A handler whose result is one of the runtime's values, so the result
+/// outlives the call: what a task above `Sync` returns, a slice being a
+/// borrow of a container the caller holds the loan of (RFC-0047 §3).
+pub trait ReturnsValue<Rt>: Handler<Rt>
+where
+    Rt: Runtime,
+{
+}
+
+/// A declaration whose Rust body is an `async fn`: the call hands the
+/// runtime a future, and the arguments the future owns (RFC-0046). One
+/// `Pin<Box<dyn Future>>` per call; the future in the wide run is
+/// RFC-0050's.
+pub trait AsyncHandler<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    /// As `Handler::clone_box`.
+    fn clone_box(&self) -> Box<dyn AsyncHandler<Rt>>;
+
+    fn width(&self) -> Width;
+
+    /// # Safety
+    /// `run` holds `width().args` of the runtime's values in declaration
+    /// order, and any storage a reference the body takes out of them names
+    /// is live for as long as the future — which, a spawn's arguments being
+    /// owned, it is (RFC-0046).
+    unsafe fn call(
+        &self,
+        rt: Rt,
+        run: &[Rt::Value],
+    ) -> Pin<Box<dyn Future<Output = Rt::Value> + Send>>;
+}
+
+impl<Rt> Clone for Box<dyn AsyncHandler<Rt>>
+where
+    Rt: Runtime,
+{
+    fn clone(&self) -> Self {
+        (**self).clone_box()
+    }
+}
+
+/// A Rust closure with the crossing on both sides of it: `A` is the tuple of
+/// the declaration's parameter modes, in the order the machine lays a call's
+/// arguments (RFC-0052 §7), and `R` its result.
+pub struct Glue<Rt, F, A, R> {
+    f: F,
+    shape: PhantomData<fn() -> (Rt, A, R)>,
+}
+
+// SAFETY: a `Glue` holds the closure and nothing else; the `PhantomData` is
+// over `fn() -> _` and carries no value.
+unsafe impl<Rt, F, A, R> Send for Glue<Rt, F, A, R> where F: Send {}
+// SAFETY: as `Send`.
+unsafe impl<Rt, F, A, R> Sync for Glue<Rt, F, A, R> where F: Sync {}
+
+/// As `Glue`, for a body that awaits. The closure is shared because the
+/// future it returns outlives the call that made it, so the call clones the
+/// closure into the future rather than borrowing it.
+pub struct AsyncGlue<Rt, F, A> {
+    f: Arc<F>,
+    shape: PhantomData<fn() -> (Rt, A)>,
+}
+
+// SAFETY: as `Glue`'s, the closure being behind a shared pointer.
+unsafe impl<Rt, F, A> Send for AsyncGlue<Rt, F, A> where F: Send + Sync {}
+// SAFETY: as `Send`.
+unsafe impl<Rt, F, A> Sync for AsyncGlue<Rt, F, A> where F: Send + Sync {}
+
+/// One arity: the two `Handler` impls and the two constructors that carry
+/// their bounds. A closure is inferred higher-ranked only where the bound is
+/// in scope at its own site, which is why the constructors exist and neither
+/// `Glue` nor `AsyncGlue` has a `new`.
+macro_rules! arity {
+    ($glue:ident, $async_glue:ident, [$($result:tt)*] $(, $arg:ident: $out:ident)*) => {
+        pub fn $glue<Rt, F, $($arg,)* R>(f: F) -> Glue<Rt, F, ($($arg,)*), R>
+        where
+            Rt: Runtime,
+            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> R::Of,
+            $($arg: for<'a> Arg<'a, Rt>,)*
+            R: $($result)*,
+        {
+            Glue { f, shape: PhantomData }
         }
-        let take = |args: &[R::Value], at: usize| args[at];
-        match self {
-            Self::Plain(abi) => match abi {
-                SyncAbi::Arity0(f) => f(rt),
-                SyncAbi::Arity1(f) => f(rt, take(args, 0)),
-                SyncAbi::Arity2(f) => {
-                    let a0 = take(args, 0);
-                    let a1 = take(args, 1);
-                    f(rt, a0, a1)
-                }
-                SyncAbi::Arity3(f) => {
-                    let a0 = take(args, 0);
-                    let a1 = take(args, 1);
-                    let a2 = take(args, 2);
-                    f(rt, a0, a1, a2)
-                }
-                SyncAbi::Window(f) => f(rt, args),
-            },
-            Self::Stateful { state, abi } => {
-                let s: StateRef<'_> = state.as_ref();
-                match abi {
-                    StateAbi::Arity0(f) => f(s, rt),
-                    StateAbi::Arity1(f) => f(s, rt, take(args, 0)),
-                    StateAbi::Arity2(f) => {
-                        let a0 = take(args, 0);
-                        let a1 = take(args, 1);
-                        f(s, rt, a0, a1)
-                    }
-                    StateAbi::Arity3(f) => {
-                        let a0 = take(args, 0);
-                        let a1 = take(args, 1);
-                        let a2 = take(args, 2);
-                        f(s, rt, a0, a1, a2)
-                    }
-                    StateAbi::Window(f) => f(s, rt, args),
+
+        impl<Rt, F, $($arg,)* R> Handler<Rt> for Glue<Rt, F, ($($arg,)*), R>
+        where
+            Rt: Runtime,
+            F: Clone + Send + Sync + 'static,
+            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> R::Of,
+            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+            R: Ret<Rt> + 'static,
+        {
+            fn clone_box(&self) -> Box<dyn Handler<Rt>> {
+                Box::new(Glue::<Rt, F, ($($arg,)*), R> {
+                    f: self.f.clone(),
+                    shape: PhantomData,
+                })
+            }
+
+            fn width(&self) -> Width {
+                Width {
+                    args: 0 $(+ <$arg as Arg<'_, Rt>>::WIDTH)*,
+                    ret: <R as Ret<Rt>>::WIDTH,
                 }
             }
+
+            #[allow(unused_variables, unused_mut, unused_assignments)]
+            unsafe fn call(&self, rt: &Rt, run: &[Rt::Value], out: &mut [Rt::Value]) {
+                let mut _at = 0usize;
+                $(
+                    let _width = <$arg as Arg<'_, Rt>>::WIDTH;
+                    // SAFETY: the caller's contract: `run` is this
+                    // declaration's whole argument run, so each parameter's
+                    // own values are the next `WIDTH` of it.
+                    let $out = unsafe { $arg::take(rt, &run[_at.._at + _width]) };
+                    _at += _width;
+                )*
+                <R as Ret<Rt>>::into_run((self.f)(rt $(, $out)*), rt, out)
+            }
         }
-    }
+
+        impl<Rt, F, $($arg,)* R> ReturnsValue<Rt> for Glue<Rt, F, ($($arg,)*), R>
+        where
+            Rt: Runtime,
+            F: Clone + Send + Sync + 'static,
+            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> R::Of,
+            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+            R: Ret<Rt, Form = One> + 'static,
+        {
+        }
+
+        pub fn $async_glue<Rt, F, $($arg,)*>(f: F) -> AsyncGlue<Rt, F, ($($arg,)*)>
+        where
+            Rt: Runtime,
+            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> BoxFuture<'a, Rt::Value>,
+            $($arg: for<'a> Arg<'a, Rt>,)*
+        {
+            AsyncGlue { f: Arc::new(f), shape: PhantomData }
+        }
+
+        impl<Rt, F, $($arg,)*> AsyncHandler<Rt> for AsyncGlue<Rt, F, ($($arg,)*)>
+        where
+            Rt: Runtime,
+            F: Send + Sync + 'static,
+            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> BoxFuture<'a, Rt::Value>,
+            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+        {
+            fn clone_box(&self) -> Box<dyn AsyncHandler<Rt>> {
+                Box::new(AsyncGlue::<Rt, F, ($($arg,)*)> {
+                    f: Arc::clone(&self.f),
+                    shape: PhantomData,
+                })
+            }
+
+            fn width(&self) -> Width {
+                Width {
+                    args: 0 $(+ <$arg as Arg<'_, Rt>>::WIDTH)*,
+                    ret: 1,
+                }
+            }
+
+            #[allow(unused_variables, unused_mut, unused_assignments)]
+            unsafe fn call(
+                &self,
+                rt: Rt,
+                run: &[Rt::Value],
+            ) -> Pin<Box<dyn Future<Output = Rt::Value> + Send>> {
+                let held: Vec<Rt::Value> = run.to_vec();
+                let f = Arc::clone(&self.f);
+                Box::pin(async move {
+                    let mut _at = 0usize;
+                    $(
+                        let _width = <$arg as Arg<'_, Rt>>::WIDTH;
+                        // SAFETY: as the synchronous impl's, over the run
+                        // the future owns.
+                        let $out = unsafe { $arg::take(&rt, &held[_at.._at + _width]) };
+                        _at += _width;
+                    )*
+                    f(&rt $(, $out)*).await
+                })
+            }
+        }
+    };
 }
 
-/// One handler per rung of `Task` (RFC-0046). `Sync` runs to its result
-/// in the caller's frame; `Heavy` is a Rust `fn` all the same, but one the
+// A slice is the one result wider than a value, and RFC-0047 §3 admits it
+// from a declaration of one parameter and no other: every arity but one takes
+// `Form = One`, so a slice returned anywhere else is a compile error.
+arity!(glue0, async_glue0, [Ret<Rt, Form = One>]);
+arity!(glue1, async_glue1, [Ret<Rt>], A0: a0);
+arity!(glue2, async_glue2, [Ret<Rt, Form = One>], A0: a0, A1: a1);
+arity!(glue3, async_glue3, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2);
+arity!(glue4, async_glue4, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2, A3: a3);
+arity!(glue5, async_glue5, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2, A3: a3, A4: a4);
+arity!(
+    glue6,
+    async_glue6,
+    [Ret<Rt, Form = One>],
+    A0: a0,
+    A1: a1,
+    A2: a2,
+    A3: a3,
+    A4: a4,
+    A5: a5
+);
+arity!(
+    glue7,
+    async_glue7,
+    [Ret<Rt, Form = One>],
+    A0: a0,
+    A1: a1,
+    A2: a2,
+    A3: a3,
+    A4: a4,
+    A5: a5,
+    A6: a6
+);
+arity!(
+    glue8,
+    async_glue8,
+    [Ret<Rt, Form = One>],
+    A0: a0,
+    A1: a1,
+    A2: a2,
+    A3: a3,
+    A4: a4,
+    A5: a5,
+    A6: a6,
+    A7: a7
+);
+
+/// One handler per rung of `Task` (RFC-0046). `Sync` runs to its result in
+/// the caller's frame; `Heavy` is a Rust body all the same, but one the
 /// runtime hands to `Executor::spawn_blocking` and awaits; `Async` runs on
 /// the async runtime and owns its interner because it lives across await
 /// points.
+///
+/// The handler is shared, not owned: one declared instance is reached from
+/// every call site the checker settled on it, and each site's operation
+/// holds the object the registry built.
+#[derive(Clone)]
 pub enum ExternHandler<R: Runtime> {
-    Sync(SyncCall<R>),
-    Heavy(SyncCall<R>),
-    Async(AsyncCall<R>),
-    /// Obligation across artifacts: `acvus-interpreter`'s `ops::index`
-    /// stores this handler's two returned words to a register pair
-    /// (RFC-0047 amended). The rung is `Task::Sync` and no other — a lent
-    /// run cannot outlive the frame that lent it (RFC-0047 §3).
-    Slice(SliceAbi<R>),
-}
-
-impl<R: Runtime> Clone for ExternHandler<R> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Sync(f) => Self::Sync(f.clone()),
-            Self::Heavy(f) => Self::Heavy(f.clone()),
-            Self::Async(f) => Self::Async(f.clone()),
-            Self::Slice(f) => Self::Slice(f.clone()),
-        }
-    }
+    Sync(Box<dyn Handler<R>>),
+    Heavy(Box<dyn Handler<R>>),
+    Async(Box<dyn AsyncHandler<R>>),
 }
 
 impl<R: Runtime> ExternHandler<R> {
+    pub fn sync(handler: impl Handler<R> + 'static) -> Self {
+        Self::Sync(Box::new(handler))
+    }
+
+    /// The result of a call the caller waits for outlives the frame it ran
+    /// on, which is why this takes `ReturnsValue` and `sync` does not.
+    pub fn heavy(handler: impl ReturnsValue<R> + 'static) -> Self {
+        Self::Heavy(Box::new(handler))
+    }
+
+    pub fn awaited(handler: impl AsyncHandler<R> + 'static) -> Self {
+        Self::Async(Box::new(handler))
+    }
+
     /// Whether the call reaches its result without the caller suspending.
     /// A `Heavy` handler does not: it is offloaded and awaited.
     pub fn is_sync(&self) -> bool {
         match self {
-            Self::Sync(_) | Self::Slice(_) => true,
+            Self::Sync(_) => true,
             Self::Heavy(_) | Self::Async(_) => false,
         }
     }
@@ -307,9 +592,16 @@ impl<R: Runtime> ExternHandler<R> {
     /// named.
     pub fn task(&self) -> Task {
         match self {
-            Self::Sync(_) | Self::Slice(_) => Task::Sync,
+            Self::Sync(_) => Task::Sync,
             Self::Async(_) => Task::Async,
             Self::Heavy(_) => Task::Heavy,
+        }
+    }
+
+    pub fn width(&self) -> Width {
+        match self {
+            Self::Sync(f) | Self::Heavy(f) => f.width(),
+            Self::Async(f) => f.width(),
         }
     }
 }

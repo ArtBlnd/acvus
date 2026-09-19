@@ -111,7 +111,9 @@ unsafe impl<R> Send for Owned<R> where R: Runtime {}
 // SAFETY: as `Send`.
 unsafe impl<R> Sync for Owned<R> where R: Runtime {}
 
-impl<R> crate::Cross<R> for Owned<R>
+crate::cross_one_value!(Owned<__Rt>);
+
+impl<R> crate::OneValue<R> for Owned<R>
 where
     R: Runtime,
 {
@@ -151,6 +153,8 @@ where
 }
 
 impl<R> crate::Stored<R> for Owned<R> where R: Runtime {}
+
+impl<R> crate::Borrowable<R> for Owned<R> where R: Runtime {}
 
 // SAFETY: `Owned<R>` is `#[repr(transparent)]` with `ManuallyDrop<R::Value>`
 // — itself `repr(transparent)` over `R::Value` — as its one field.

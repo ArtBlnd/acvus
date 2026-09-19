@@ -12,9 +12,6 @@ use crate::regs::Store;
 use crate::value::{Kind, Value};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
-pub type SyncAbi = acvus_extern::SyncAbi<AcvusRuntime>;
-pub type StateAbi = acvus_extern::StateAbi<AcvusRuntime>;
-pub type SyncCall = acvus_extern::SyncCall<AcvusRuntime>;
 
 #[derive(Clone)]
 #[repr(transparent)]
@@ -139,6 +136,18 @@ impl Runtime for AcvusRuntime {
         self.0.interner.intern(name)
     }
 
+    fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [Value]) {
+        out[0] = word(words.ptr);
+        out[1] = word(words.len);
+    }
+
+    unsafe fn slice_from_run(&self, run: &[Value]) -> acvus_extern::Words {
+        acvus_extern::Words {
+            ptr: run[0].bits(),
+            len: run[1].bits(),
+        }
+    }
+
     fn call_is_sync(&self, f: &Value) -> bool {
         // SAFETY: the type checker admits only a closure value here.
         !unsafe { f.as_fn() }.entry.may_suspend()
@@ -166,6 +175,14 @@ impl Runtime for AcvusRuntime {
     ) -> Self::CallFuture<'a> {
         self.run(f, args)
     }
+}
+
+/// One of the machine's registers holding a bare word rather than a value of
+/// the language: half of the pair a slice occupies (RFC-0047 amended), which
+/// the machine reads with `Value::bits`.
+pub fn word(bits: u64) -> Value {
+    // SAFETY: `u64` is `Inline`, so the word is the value.
+    unsafe { Value::erase(bits) }
 }
 
 /// # Safety
@@ -226,9 +243,11 @@ impl acvus_extern::FromValue<AcvusRuntime> for Value {
     }
 }
 
+acvus_extern::cross_one_value!(Value, at AcvusRuntime);
+
 /// The runtime's own value crosses as itself: nothing to convert, and a
 /// reference to one is read through the word that names it (RFC-0039).
-impl acvus_extern::Cross<AcvusRuntime> for Value {
+impl acvus_extern::OneValue<AcvusRuntime> for Value {
     fn erase(self, _: &AcvusRuntime) -> Value {
         self
     }
@@ -247,3 +266,5 @@ impl acvus_extern::Cross<AcvusRuntime> for Value {
         unsafe { reference.target_mut() }
     }
 }
+
+impl acvus_extern::Borrowable<AcvusRuntime> for Value {}

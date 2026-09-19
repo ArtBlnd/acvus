@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::{AsyncCall, SliceAbi};
+use acvus_extern::Width;
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
@@ -38,7 +38,7 @@ use crate::ops::place;
 use crate::ops::{
     call, cast, composite, constant, control, index, pattern, storage, string, switch, variant,
 };
-use crate::runtime::{ExternHandler, StateAbi, SyncAbi, SyncCall};
+use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
 
 /// The slot table's empty entry: a value that is neither defined nor live.
@@ -1881,6 +1881,12 @@ impl<'a> Prepare<'a> {
                     Callee::Extern { id, instance } => {
                         let handler = self.ctx.handler(id, *instance);
                         let window = self.window(at, args, ops);
+                        assert_eq!(
+                            handler.width().ret,
+                            1,
+                            "a spawn names a handler that returns a run, which would \
+                             outlive the frame that lent it (RFC-0047 §3)"
+                        );
                         match handler {
                             ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
                                 node(move |next| call::SpawnExternSync {
@@ -1896,10 +1902,6 @@ impl<'a> Prepare<'a> {
                                 f,
                                 next,
                             }),
-                            ExternHandler::Slice(_) => panic!(
-                                "a spawn names a handler that returns a run, which would \
-                                 outlive the frame that lent it (RFC-0047 §3)"
-                            ),
                         }
                     }
                     Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
@@ -2006,30 +2008,29 @@ impl<'a> Prepare<'a> {
                 let args = std::slice::from_ref(container);
                 let takes = self.take_mask(args);
                 let a = self.off(*container);
-                match self.ctx.handler(&instance.id, instance.instance) {
-                    ExternHandler::Slice(SliceAbi::Plain(f)) => node(move |next| call::AsSlice {
-                        dst,
-                        a,
-                        takes,
-                        f,
-                        next,
-                    }),
-                    ExternHandler::Slice(SliceAbi::Stateful { state, f }) => {
-                        node(move |next| call::AsSliceStateful {
-                            dst,
-                            a,
-                            takes,
-                            state,
-                            f,
-                            next,
-                        })
-                    }
-                    other => panic!(
-                        "an AsSlice names a handler of task {:?}, which returns a value and \
-                         not a run (RFC-0047 amended, rule 2)",
-                        other.task()
-                    ),
-                }
+                let handler = self.ctx.handler(&instance.id, instance.instance);
+                let ExternHandler::Sync(f) = handler else {
+                    panic!(
+                        "an AsSlice names a handler of task {:?}; a run of a container's \
+                         elements is lent for the caller's frame and no other task can hold \
+                         it (RFC-0047 §3)",
+                        handler.task()
+                    )
+                };
+                assert_eq!(
+                    f.width(),
+                    Width { args: 1, ret: 2 },
+                    "an AsSlice names a handler of another shape than the one container in \
+                     and the two words of a run out, which is `Handler::call_slice`'s \
+                     contract (RFC-0047 amended, rule 2)"
+                );
+                node(move |next| call::AsSlice {
+                    dst,
+                    a,
+                    takes,
+                    f,
+                    next,
+                })
             }
             InstKind::Index {
                 dst,
@@ -2248,20 +2249,11 @@ impl<'a> Prepare<'a> {
                     self.may_suspend = true;
                 }
                 match handler {
-                    ExternHandler::Sync(SyncCall::Plain(abi)) => {
-                        let op = self.plain_call(at, into, args, abi, ops);
+                    ExternHandler::Sync(f) => {
+                        let op = self.extern_call(at, into, args, f, ops);
                         ops.push(op);
                         None
                     }
-                    ExternHandler::Sync(SyncCall::Stateful { state, abi }) => {
-                        let op = self.state_call(at, into, args, state, abi, ops);
-                        ops.push(op);
-                        None
-                    }
-                    ExternHandler::Slice(_) => panic!(
-                        "a function call names a handler that returns a run, which reaches \
-                         the machine as an AsSlice and nothing else (RFC-0047 amended, rule 2)"
-                    ),
                     ExternHandler::Heavy(f) => {
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -2280,7 +2272,7 @@ impl<'a> Prepare<'a> {
                             }),
                         })
                     }
-                    ExternHandler::Async(AsyncCall::Plain(f)) => {
+                    ExternHandler::Async(f) => {
                         let window = self.window(at, args, ops);
                         let resume = next.block();
                         Some(match large {
@@ -2298,37 +2290,21 @@ impl<'a> Prepare<'a> {
                             }),
                         })
                     }
-                    ExternHandler::Async(AsyncCall::Stateful { state, f }) => {
-                        let window = self.window(at, args, ops);
-                        let resume = next.block();
-                        Some(match large {
-                            true => Box::new(call::CallStateAsync::<true> {
-                                dst: slot,
-                                window,
-                                state,
-                                f,
-                                next: resume,
-                            }),
-                            false => Box::new(call::CallStateAsync::<false> {
-                                dst: slot,
-                                window,
-                                state,
-                                f,
-                                next: resume,
-                            }),
-                        })
-                    }
                 }
             }
         }
     }
 
-    fn plain_call(
+    /// The operation one synchronous extern call runs as. The handler's
+    /// `Width` names the form — how many of the runtime's values the
+    /// arguments are, and how many the result is — and nothing here counts
+    /// anything of its own (RFC-0059 rule 7).
+    fn extern_call(
         &mut self,
         at: usize,
         into: Dest,
         args: &[ValueId],
-        abi: SyncAbi,
+        f: call::Handler,
         ops: &mut Vec<Node>,
     ) -> Node {
         let Dest {
@@ -2336,14 +2312,21 @@ impl<'a> Prepare<'a> {
             large,
             word,
         } = into;
+        let width = f.width();
+        assert_eq!(
+            width.ret, 1,
+            "a function call names a handler whose result is wider than one value; a run of \
+             a container's elements reaches the machine as an AsSlice and nothing else \
+             (RFC-0047 amended, rule 2)"
+        );
         let takes = self.take_mask(args);
         let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
-        match abi {
-            SyncAbi::Arity0(f) => match large {
+        match width.args {
+            0 => match large {
                 true => node(move |next| call::CallExtern0::<true> { dst, f, next }),
                 false => node(move |next| call::CallExtern0::<false> { dst, f, next }),
             },
-            SyncAbi::Arity1(f) => {
+            1 => {
                 let a = nth(&slots, 0);
                 match (large, word) {
                     (true, _) => node(move |next| call::CallExtern1::<true, false> {
@@ -2369,7 +2352,7 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            SyncAbi::Arity2(f) => {
+            2 => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
                 match large {
                     true => node(move |next| call::CallExtern2::<true> {
@@ -2390,7 +2373,7 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            SyncAbi::Arity3(f) => {
+            3 => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
                 match large {
                     true => node(move |next| call::CallExtern3::<true> {
@@ -2413,7 +2396,7 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            SyncAbi::Window(f) => {
+            _ => {
                 let window = self.window(at, args, ops);
                 match large {
                     true => node(move |next| call::CallWindow::<true> {
@@ -2425,128 +2408,6 @@ impl<'a> Prepare<'a> {
                     false => node(move |next| call::CallWindow::<false> {
                         dst,
                         window,
-                        f,
-                        next,
-                    }),
-                }
-            }
-        }
-    }
-
-    fn state_call(
-        &mut self,
-        at: usize,
-        into: Dest,
-        args: &[ValueId],
-        state: acvus_extern::State,
-        abi: StateAbi,
-        ops: &mut Vec<Node>,
-    ) -> Node {
-        let Dest {
-            slot: dst,
-            large,
-            word: _,
-        } = into;
-        let takes = self.take_mask(args);
-        let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
-        match abi {
-            StateAbi::Arity0(f) => match large {
-                true => node(move |next| call::CallState0::<true> {
-                    dst,
-                    state,
-                    f,
-                    next,
-                }),
-                false => node(move |next| call::CallState0::<false> {
-                    dst,
-                    state,
-                    f,
-                    next,
-                }),
-            },
-            StateAbi::Arity1(f) => {
-                let a = nth(&slots, 0);
-                match large {
-                    true => node(move |next| call::CallState1::<true> {
-                        dst,
-                        a,
-                        takes,
-                        state,
-                        f,
-                        next,
-                    }),
-                    false => node(move |next| call::CallState1::<false> {
-                        dst,
-                        a,
-                        takes,
-                        state,
-                        f,
-                        next,
-                    }),
-                }
-            }
-            StateAbi::Arity2(f) => {
-                let (a, b) = (nth(&slots, 0), nth(&slots, 1));
-                match large {
-                    true => node(move |next| call::CallState2::<true> {
-                        dst,
-                        a,
-                        b,
-                        takes,
-                        state,
-                        f,
-                        next,
-                    }),
-                    false => node(move |next| call::CallState2::<false> {
-                        dst,
-                        a,
-                        b,
-                        takes,
-                        state,
-                        f,
-                        next,
-                    }),
-                }
-            }
-            StateAbi::Arity3(f) => {
-                let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
-                match large {
-                    true => node(move |next| call::CallState3::<true> {
-                        dst,
-                        a,
-                        b,
-                        c,
-                        takes,
-                        state,
-                        f,
-                        next,
-                    }),
-                    false => node(move |next| call::CallState3::<false> {
-                        dst,
-                        a,
-                        b,
-                        c,
-                        takes,
-                        state,
-                        f,
-                        next,
-                    }),
-                }
-            }
-            StateAbi::Window(f) => {
-                let window = self.window(at, args, ops);
-                match large {
-                    true => node(move |next| call::CallStateWindow::<true> {
-                        dst,
-                        window,
-                        state,
-                        f,
-                        next,
-                    }),
-                    false => node(move |next| call::CallStateWindow::<false> {
-                        dst,
-                        window,
-                        state,
                         f,
                         next,
                     }),
@@ -3354,10 +3215,42 @@ fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]
 /// must be contiguous.
 fn needs_window(handler: &ExternHandler) -> bool {
     match handler {
-        ExternHandler::Sync(f) => f.arity().is_none(),
-        ExternHandler::Slice(_) => false,
+        ExternHandler::Sync(f) => !f.width().in_registers(),
         ExternHandler::Heavy(_) | ExternHandler::Async(_) => true,
     }
+}
+
+/// A handler the preparation picks and no test runs: the fixtures below read
+/// the operation's shape, never its result.
+#[cfg(test)]
+fn refuses_to_run(
+    _: &crate::runtime::AcvusRuntime,
+    a: Value,
+    _: Value,
+    _: Value,
+    _: Value,
+) -> Value {
+    let _ = a;
+    panic!("the preparation must not run a handler")
+}
+
+/// An extern lent its window: four arguments is past the register forms.
+#[cfg(test)]
+fn window_handler() -> ExternHandler {
+    ExternHandler::sync(acvus_extern::glue4::<
+        crate::runtime::AcvusRuntime,
+        _,
+        acvus_extern::ByValue<Value>,
+        acvus_extern::ByValue<Value>,
+        acvus_extern::ByValue<Value>,
+        acvus_extern::ByValue<Value>,
+        acvus_extern::Val<Value>,
+    >(refuses_to_run))
+}
+
+#[cfg(test)]
+fn never_runs_awaited(_: &crate::runtime::AcvusRuntime) -> acvus_extern::BoxFuture<'_, Value> {
+    Box::pin(async { panic!("the recognizer must not run a handler") })
 }
 
 /// What one argument position of a window holds until the call.
@@ -3988,9 +3881,10 @@ mod recognizer_tests {
                 namespace: None,
                 name: self.interner.intern(name),
             };
-            let handler = ExternHandler::Async(AsyncCall::Plain(|_, _| {
-                Box::pin(async { panic!("the recognizer must not run a handler") })
-            }));
+            let handler = ExternHandler::awaited(acvus_extern::async_glue0::<
+                crate::runtime::AcvusRuntime,
+                _,
+            >(never_runs_awaited));
             self.externs.insert(id, Executable::Extern(vec![handler]));
             id
         }
@@ -4000,9 +3894,7 @@ mod recognizer_tests {
                 namespace: None,
                 name: self.interner.intern(name),
             };
-            let handler = ExternHandler::Sync(SyncCall::Plain(SyncAbi::Window(|_, _| {
-                panic!("the preparation must not run a handler")
-            })));
+            let handler = window_handler();
             self.externs.insert(id, Executable::Extern(vec![handler]));
             id
         }
@@ -4370,8 +4262,13 @@ mod assignment_tests {
     /// One extern of each ABI: `by_value` takes its one argument in a
     /// register, `window` is lent a slice.
     fn externs() -> FxHashMap<QualifiedRef, Executable> {
-        let by_value = ExternHandler::Sync(SyncCall::Plain(SyncAbi::Arity1(|_, v| v)));
-        let window = ExternHandler::Sync(SyncCall::Plain(SyncAbi::Window(|_, args| args[0])));
+        let by_value = ExternHandler::sync(acvus_extern::glue1::<
+            crate::runtime::AcvusRuntime,
+            _,
+            acvus_extern::ByValue<Value>,
+            acvus_extern::Val<Value>,
+        >(|_, v| v));
+        let window = window_handler();
         [
             (extern_ref(BY_VALUE), Executable::Extern(vec![by_value])),
             (extern_ref(WINDOW), Executable::Extern(vec![window])),
@@ -5052,7 +4949,7 @@ impl Prepare<'_> {
 struct FusableCall<'a> {
     dst: ValueId,
     args: &'a [ValueId],
-    abi: SyncAbi,
+    handler: call::Handler,
 }
 
 /// A run of extern calls the recognizer matched, as indexes into
@@ -5084,22 +4981,14 @@ impl<'a> Prepare<'a> {
             } => (*dst, id, *instance, args.as_slice()),
             _ => return None,
         };
-        // A stateful instance has no `call::Call` variant: a fused run
-        // holds bare `fn` pointers, and the state would be a field the run
-        // has nowhere to put (RFC-0044, stage 6).
-        let ExternHandler::Sync(SyncCall::Plain(abi)) = self.ctx.handler(id, instance) else {
+        let ExternHandler::Sync(handler) = self.ctx.handler(id, instance) else {
             return None;
         };
-        let arity = match abi {
-            SyncAbi::Arity0(_) => 0,
-            SyncAbi::Arity1(_) => 1,
-            SyncAbi::Arity2(_) => 2,
-            SyncAbi::Arity3(_) | SyncAbi::Window(_) => return None,
-        };
-        if arity != args.len() {
+        let width = handler.width();
+        if width.ret != 1 || width.args > 2 || width.args != args.len() {
             return None;
         }
-        Some(FusableCall { dst, args, abi })
+        Some(FusableCall { dst, args, handler })
     }
 
     /// The `*r` closing a run whose last call left `last`: the read of a
@@ -5224,17 +5113,19 @@ impl<'a> Prepare<'a> {
                 };
             }
             previous = Some(found.dst);
-            calls.push(match found.abi {
-                SyncAbi::Arity0(f) => call::Call::Nullary { f },
-                SyncAbi::Arity1(f) => call::Call::Unary { f, a: args[0] },
-                SyncAbi::Arity2(f) => call::Call::Binary {
+            let f = found.handler;
+            calls.push(match f.width().args {
+                0 => call::Call::Nullary { f },
+                1 => call::Call::Unary { f, a: args[0] },
+                2 => call::Call::Binary {
                     f,
                     a: args[0],
                     b: args[1],
                 },
-                SyncAbi::Arity3(_) | SyncAbi::Window(_) => {
-                    panic!("fusable_call admitted an arity a fused run holds no shape for")
-                }
+                other => panic!(
+                    "fusable_call admitted {other} arguments, which a fused run holds no \
+                     shape for"
+                ),
             });
         }
         let last = previous.expect("a recognized run holds at least one call");

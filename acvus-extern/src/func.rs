@@ -14,7 +14,7 @@ use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
 use crate::effect::{EffectArg, EffectVar};
-use crate::obj::Cross;
+use crate::obj::OneValue;
 use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
@@ -84,7 +84,12 @@ macro_rules! define_fn_arg {
             }
         }
 
-        impl<$($A,)* R, E, Rt> crate::Cross<Rt> for $name<$($A,)* R, E, Rt>
+        crate::cross_one_value!(
+            $name<$($A,)* R, E, __Rt>,
+            $($A: TyVar,)* R: TyVar, E: EffectVar
+        );
+
+        impl<$($A,)* R, E, Rt> crate::OneValue<Rt> for $name<$($A,)* R, E, Rt>
         where
             $($A: TyVar,)*
             R: TyVar,
@@ -133,7 +138,7 @@ define_fn_arg!(Fn3; A: "_0", B: "_1", C: "_2");
 /// The value a call produced, read at the closure's declared return type.
 fn returned<R, Rt>(rt: &Rt, out: Rt::Value) -> R
 where
-    R: Cross<Rt>,
+    R: OneValue<Rt>,
     Rt: Runtime,
 {
     // SAFETY: the closure's declared return type is `R`.
@@ -142,7 +147,7 @@ where
 
 impl<R, E, Rt> ClosureFn<Rt> for Fn0<R, E, Rt>
 where
-    R: Cross<Rt>,
+    R: OneValue<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {
@@ -208,8 +213,8 @@ where
 
 impl<A, R, E, Rt> ClosureFn<Rt> for Fn1<A, R, E, Rt>
 where
-    A: Cross<Rt>,
-    R: Cross<Rt>,
+    A: OneValue<Rt>,
+    R: OneValue<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {
@@ -245,9 +250,9 @@ where
 
 impl<A, B, R, E, Rt> ClosureFn<Rt> for Fn2<A, B, R, E, Rt>
 where
-    A: Cross<Rt>,
-    B: Cross<Rt>,
-    R: Cross<Rt>,
+    A: OneValue<Rt>,
+    B: OneValue<Rt>,
+    R: OneValue<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {
@@ -286,10 +291,10 @@ where
 
 impl<A, B, C, R, E, Rt> ClosureFn<Rt> for Fn3<A, B, C, R, E, Rt>
 where
-    A: Cross<Rt>,
-    B: Cross<Rt>,
-    C: Cross<Rt>,
-    R: Cross<Rt>,
+    A: OneValue<Rt>,
+    B: OneValue<Rt>,
+    C: OneValue<Rt>,
+    R: OneValue<Rt>,
     E: EffectVar,
     Rt: Runtime,
 {

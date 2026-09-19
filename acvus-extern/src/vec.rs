@@ -8,7 +8,7 @@ use std::mem::ManuallyDrop;
 
 use acvus_mir::ty::{Ty, TypeArg};
 
-use crate::obj::{Cross, storage_as, storage_as_mut, stored_as_container_of};
+use crate::obj::{OneValue, storage_as, storage_as_mut, stored_as_container_of};
 use crate::owned::Owned;
 use crate::registry::ExternTypeDecl;
 use crate::runtime::Runtime;
@@ -19,7 +19,7 @@ use crate::{Interner, PolyTy, QualifiedRef, TyVarBound, UserDefinedDecl};
 /// `stored_as_container_of::<T, Rt>()`.
 unsafe fn into_values<T, Rt>(items: Vec<T>) -> Vec<Owned<Rt>>
 where
-    T: Cross<Rt>,
+    T: OneValue<Rt>,
     Rt: Runtime,
 {
     let mut items = ManuallyDrop::new(items);
@@ -33,7 +33,7 @@ where
 /// As `into_values`.
 unsafe fn from_values<T, Rt>(items: Vec<Owned<Rt>>) -> Vec<T>
 where
-    T: Cross<Rt>,
+    T: OneValue<Rt>,
     Rt: Runtime,
 {
     let mut items = ManuallyDrop::new(items);
@@ -41,9 +41,11 @@ where
     unsafe { Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity()) }
 }
 
-impl<T, Rt> Cross<Rt> for Vec<T>
+crate::cross_one_value!(Vec<T>, T: crate::OneValue<__Rt>);
+
+impl<T, Rt> OneValue<Rt> for Vec<T>
 where
-    T: Cross<Rt>,
+    T: OneValue<Rt>,
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
@@ -94,6 +96,15 @@ where
         };
         same
     }
+}
+
+/// A container's storage is the `Vec<Owned<Rt>>` the runtime keeps, which a
+/// `Vec<T>` reference reads in place when `T` is the runtime's own value.
+impl<T, Rt> crate::Borrowable<Rt> for Vec<T>
+where
+    T: OneValue<Rt>,
+    Rt: Runtime,
+{
 }
 
 /// The message a `Vec<T>` gives when read through a reference and `T` is not

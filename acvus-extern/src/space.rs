@@ -131,7 +131,7 @@ where
 {
     pub fn of<J>() -> Self
     where
-        J: Journaled<Rt> + crate::Cross<Rt>,
+        J: Journaled<Rt> + crate::OneValue<Rt>,
     {
         // SAFETY (each hook): the value was erased from `J` — the hooks are
         // looked up by the value's declared type — and the space alone

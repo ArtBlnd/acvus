@@ -393,7 +393,7 @@ where
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
 fn into_iter_deque<T, E, I, Rt>(d: Deque<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + acvus_extern::Cross<Rt>,
+    T: TyVar + acvus_extern::OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,

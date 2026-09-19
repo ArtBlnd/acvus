@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::obj::Cross;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
 
@@ -191,3 +192,33 @@ macro_rules! slice_ty_arg {
 
 slice_ty_arg!(Slice, Mutability::Shared);
 slice_ty_arg!(SliceMut, Mutability::Mut);
+
+/// A slice crosses as the register pair the machine keeps it in, and as
+/// nothing else: it implements `Cross` and not `OneValue`, so a parameter, a
+/// field or an element that names one is a compile error. The two words
+/// themselves are the runtime's to build and to read, because only the
+/// runtime knows what one of its values is made of.
+macro_rules! slice_cross {
+    ($t:ident) => {
+        impl<T, Rt> Cross<Rt> for $t<T, Rt>
+        where
+            T: TyVar,
+            Rt: Runtime,
+        {
+            type Form = crate::obj::Pair;
+
+            unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+                // SAFETY: the caller's contract: `run` is the pair a slice
+                // was written into, and the elements it names are live.
+                Self::from_elements(unsafe { Elements::from_words(rt.slice_from_run(run)) })
+            }
+
+            fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+                rt.slice_into_run(self.into_elements().words(), out)
+            }
+        }
+    };
+}
+
+slice_cross!(Slice);
+slice_cross!(SliceMut);

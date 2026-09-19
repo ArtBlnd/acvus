@@ -6,13 +6,13 @@
 //! another body, an `Eval` — is a terminator: it hands a `'static` future to
 //! the driver and leaves the block at `SUSPEND`.
 //!
-//! `prepare` reads a handler's `SyncAbi`/`StateAbi` once, picks the operation
-//! by the arity it names, and moves the bare `fn` in as a field; a `run` here
-//! calls it with no decision in between (RFC-0052 §6).
+//! `prepare` reads a handler's `Width` once, picks the operation by the form
+//! it names, and moves the handler in as a field; a `run` here calls through
+//! it with no decision in between (RFC-0052 §6, RFC-0059 rule 7).
 
 use std::sync::Arc;
 
-use acvus_extern::{AsyncCall, Elements, Owned, State, StateRef, Words};
+use acvus_extern::{Owned, Words};
 use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
@@ -20,30 +20,15 @@ use smallvec::SmallVec;
 use crate::code::{BlockId, Deref, Exit, Off, Op, SUSPEND, SlicePair, successor};
 use crate::interpreter::lookup_module;
 use crate::machine::{Machine, call_module, call_module_sync, fn_value_call};
-use crate::runtime::{AcvusRuntime, SyncCall};
+use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, HandleValue, Value};
 
-pub type Sync0 = acvus_extern::Sync0<AcvusRuntime>;
-pub type Sync1 = acvus_extern::Sync1<AcvusRuntime>;
-pub type Sync2 = acvus_extern::Sync2<AcvusRuntime>;
-pub type Sync3 = acvus_extern::Sync3<AcvusRuntime>;
-pub type SyncWindow = acvus_extern::SyncWindow<AcvusRuntime>;
-pub type SyncSlice = acvus_extern::SyncSlice<AcvusRuntime>;
-
-/// `acvus_extern::handler` declares these six as `State0<R>..StateSlice<R>`
-/// but exports neither them nor its module, so they are spelled here at
-/// `R = AcvusRuntime`. A `StateAbi` destructured in `prepare` is assigned
-/// straight into these fields, which is where a divergence from the
-/// declarations would surface.
-pub type State0 = fn(StateRef<'_>, &AcvusRuntime) -> Value;
-pub type State1 = fn(StateRef<'_>, &AcvusRuntime, Value) -> Value;
-pub type State2 = fn(StateRef<'_>, &AcvusRuntime, Value, Value) -> Value;
-pub type State3 = fn(StateRef<'_>, &AcvusRuntime, Value, Value, Value) -> Value;
-pub type StateWindow = fn(StateRef<'_>, &AcvusRuntime, &[Value]) -> Value;
-pub type StateSlice = fn(StateRef<'_>, &AcvusRuntime, Value) -> Elements<AcvusRuntime>;
-
-pub type Async = acvus_extern::Async<AcvusRuntime>;
-pub type AsyncState = acvus_extern::AsyncState<AcvusRuntime>;
+/// The declared instance a call reaches, cloned out of the module table for
+/// this site alone: a box's data pointer is the handler, so `run` loads it
+/// and jumps. The operation asked `Handler::width` once, at preparation, and
+/// calls the one form that answer names.
+pub type Handler = Box<dyn acvus_extern::Handler<AcvusRuntime>>;
+pub type AsyncHandler = Box<dyn acvus_extern::AsyncHandler<AcvusRuntime>>;
 
 /// A call the driver runs hands its arguments to a future that outlives this
 /// frame, so it owns them rather than lending registers.
@@ -123,7 +108,7 @@ impl ArgWindow {
 
 pub struct CallExtern0<const LARGE: bool> {
     pub dst: Off,
-    pub f: Sync0,
+    pub f: Handler,
     pub next: Box<dyn Op>,
 }
 
@@ -132,7 +117,9 @@ impl<const LARGE: bool> Op for CallExtern0<LARGE> {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let value = (self.f)(m.rt);
+        // SAFETY: `prepare` read this handler's width and built this
+        // operation for the form it named.
+        let value = unsafe { self.f.call0(m.rt) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -142,7 +129,7 @@ pub struct CallExtern1<const LARGE: bool, const WORD: bool> {
     pub dst: Off,
     pub a: Off,
     pub takes: u64,
-    pub f: Sync1,
+    pub f: Handler,
     pub next: Box<dyn Op>,
 }
 
@@ -154,7 +141,8 @@ impl<const LARGE: bool, const WORD: bool> Op for CallExtern1<LARGE, WORD> {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
-        let value = (self.f)(m.rt, a);
+        // SAFETY: as `CallExtern0`'s, at one argument.
+        let value = unsafe { self.f.call1(m.rt, a) };
         m.regs().store::<LARGE, WORD>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -165,7 +153,7 @@ pub struct CallExtern2<const LARGE: bool> {
     pub a: Off,
     pub b: Off,
     pub takes: u64,
-    pub f: Sync2,
+    pub f: Handler,
     pub next: Box<dyn Op>,
 }
 
@@ -178,7 +166,8 @@ impl<const LARGE: bool> Op for CallExtern2<LARGE> {
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         regs.take_mask(self.takes);
-        let value = (self.f)(m.rt, a, b);
+        // SAFETY: as `CallExtern0`'s, at two arguments.
+        let value = unsafe { self.f.call2(m.rt, a, b) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -190,7 +179,7 @@ pub struct CallExtern3<const LARGE: bool> {
     pub b: Off,
     pub c: Off,
     pub takes: u64,
-    pub f: Sync3,
+    pub f: Handler,
     pub next: Box<dyn Op>,
 }
 
@@ -204,17 +193,19 @@ impl<const LARGE: bool> Op for CallExtern3<LARGE> {
         let b = regs.read(self.b);
         let c = regs.read(self.c);
         regs.take_mask(self.takes);
-        let value = (self.f)(m.rt, a, b, c);
+        // SAFETY: as `CallExtern0`'s, at three arguments.
+        let value = unsafe { self.f.call3(m.rt, a, b, c) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
 }
 
-/// A declaration of four or more parameters is called through its window.
+/// A declaration whose arguments are wider than the register forms is called
+/// through its window.
 pub struct CallWindow<const LARGE: bool> {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: SyncWindow,
+    pub f: Handler,
     pub next: Box<dyn Op>,
 }
 
@@ -223,21 +214,22 @@ impl<const LARGE: bool> Op for CallWindow<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let rt = m.rt;
-        let value = (self.f)(rt, self.window.lend(m));
+        // SAFETY: as `CallExtern0`'s; the run is the window `prepare` laid.
+        let value = unsafe { self.f.call_run(rt, self.window.lend(m)) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
 }
 
-/// `AsSlice` (RFC-0047 amended): the handler hands the run back in two
-/// words and this stores them to `dst`, the first register of the pair
-/// `prepare::assign_slots` gave the slice. A slice is no `Value`, so there
-/// is no `LARGE` here and no drop anywhere.
+/// `AsSlice` (RFC-0047 amended): the handler's result is two values wide and
+/// this stores their words to `dst`, the first register of the pair
+/// `prepare::assign_slots` gave the slice. A slice is no `Value`, so there is
+/// no `LARGE` here and no drop anywhere.
 pub struct AsSlice {
     pub dst: SlicePair,
     pub a: Off,
     pub takes: u64,
-    pub f: SyncSlice,
+    pub f: Handler,
     pub next: Box<dyn Op>,
 }
 
@@ -249,146 +241,9 @@ impl Op for AsSlice {
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
-        let Words { ptr, len } = (self.f)(m.rt, a).words();
-        let regs = m.regs();
-        regs.set_word(self.dst.ptr, ptr);
-        regs.set_word(self.dst.len, len);
-        self.next.run(m, r0)
-    }
-}
-
-pub struct CallState0<const LARGE: bool> {
-    pub dst: Off,
-    pub state: State,
-    pub f: State0,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for CallState0<LARGE> {
-    successor!();
-
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let value = (self.f)(&*self.state, m.rt);
-        m.regs().define::<LARGE>(self.dst, value);
-        self.next.run(m, r0)
-    }
-}
-
-pub struct CallState1<const LARGE: bool> {
-    pub dst: Off,
-    pub a: Off,
-    pub takes: u64,
-    pub state: State,
-    pub f: State1,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for CallState1<LARGE> {
-    successor!();
-
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let a = regs.read(self.a);
-        regs.take_mask(self.takes);
-        let value = (self.f)(&*self.state, m.rt, a);
-        m.regs().define::<LARGE>(self.dst, value);
-        self.next.run(m, r0)
-    }
-}
-
-pub struct CallState2<const LARGE: bool> {
-    pub dst: Off,
-    pub a: Off,
-    pub b: Off,
-    pub takes: u64,
-    pub state: State,
-    pub f: State2,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for CallState2<LARGE> {
-    successor!();
-
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let a = regs.read(self.a);
-        let b = regs.read(self.b);
-        regs.take_mask(self.takes);
-        let value = (self.f)(&*self.state, m.rt, a, b);
-        m.regs().define::<LARGE>(self.dst, value);
-        self.next.run(m, r0)
-    }
-}
-
-pub struct CallState3<const LARGE: bool> {
-    pub dst: Off,
-    pub a: Off,
-    pub b: Off,
-    pub c: Off,
-    pub takes: u64,
-    pub state: State,
-    pub f: State3,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for CallState3<LARGE> {
-    successor!();
-
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let a = regs.read(self.a);
-        let b = regs.read(self.b);
-        let c = regs.read(self.c);
-        regs.take_mask(self.takes);
-        let value = (self.f)(&*self.state, m.rt, a, b, c);
-        m.regs().define::<LARGE>(self.dst, value);
-        self.next.run(m, r0)
-    }
-}
-
-pub struct CallStateWindow<const LARGE: bool> {
-    pub dst: Off,
-    pub window: ArgWindow,
-    pub state: State,
-    pub f: StateWindow,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for CallStateWindow<LARGE> {
-    successor!();
-
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
-        let value = (self.f)(&*self.state, rt, self.window.lend(m));
-        m.regs().define::<LARGE>(self.dst, value);
-        self.next.run(m, r0)
-    }
-}
-
-/// `AsSlice` of a stateful instance: as `AsSlice`, with the state the
-/// registry supplied held as a field.
-pub struct AsSliceStateful {
-    pub dst: SlicePair,
-    pub a: Off,
-    pub takes: u64,
-    pub state: State,
-    pub f: StateSlice,
-    pub next: Box<dyn Op>,
-}
-
-impl Op for AsSliceStateful {
-    successor!();
-
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let a = regs.read(self.a);
-        regs.take_mask(self.takes);
-        let Words { ptr, len } = (self.f)(&*self.state, m.rt, a).words();
+        // SAFETY: as `CallExtern0`'s; `prepare` admits only a handler whose
+        // result is the two values a slice is.
+        let Words { ptr, len } = unsafe { self.f.call_slice(m.rt, a) }.words();
         let regs = m.regs();
         regs.set_word(self.dst.ptr, ptr);
         regs.set_word(self.dst.len, len);
@@ -405,25 +260,27 @@ pub const PREVIOUS: Off = Off::PREVIOUS;
 /// handler is not among them — its result is a register pair, and a run
 /// hands one `Value` from each call to the next.
 pub enum Call {
-    Nullary { f: Sync0 },
-    Unary { f: Sync1, a: Off },
-    Binary { f: Sync2, a: Off, b: Off },
+    Nullary { f: Handler },
+    Unary { f: Handler, a: Off },
+    Binary { f: Handler, a: Off, b: Off },
 }
 
 impl Call {
     #[inline]
     fn invoke(&self, m: &mut Machine<'_>, held: &mut Value) -> Value {
         let rt = m.rt;
-        match *self {
-            Call::Nullary { f } => f(rt),
+        // SAFETY: `prepare::fusable_call` admits a call into this run only at
+        // the form each arm names.
+        match self {
+            Call::Nullary { f } => unsafe { f.call0(rt) },
             Call::Unary { f, a } => {
-                let a = arg(m, held, a);
-                f(rt, a)
+                let a = arg(m, held, *a);
+                unsafe { f.call1(rt, a) }
             }
             Call::Binary { f, a, b } => {
-                let a = arg(m, held, a);
-                let b = arg(m, held, b);
-                f(rt, a, b)
+                let a = arg(m, held, *a);
+                let b = arg(m, held, *b);
+                unsafe { f.call2(rt, a, b) }
             }
         }
     }
@@ -576,32 +433,16 @@ fn shape<const LARGE: bool>(
 pub struct CallExternAsync<const LARGE: bool> {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: Async,
+    pub f: AsyncHandler,
     pub next: BlockId,
 }
 
 impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let rt = m.rt.clone();
-        let fut = (self.f)(rt, self.window.lend(m));
-        m.suspend::<LARGE>(self.dst, self.next, fut);
-        SUSPEND
-    }
-}
-
-pub struct CallStateAsync<const LARGE: bool> {
-    pub dst: Off,
-    pub window: ArgWindow,
-    pub state: State,
-    pub f: AsyncState,
-    pub next: BlockId,
-}
-
-impl<const LARGE: bool> Op for CallStateAsync<LARGE> {
-    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
-        let rt = m.rt.clone();
-        let state = Arc::clone(&self.state);
-        let fut = (self.f)(state, rt, self.window.lend(m));
+        // SAFETY: `prepare` built this operation from this handler's width,
+        // and the future owns the arguments it is given.
+        let fut = unsafe { self.f.call(rt, self.window.lend(m)) };
         m.suspend::<LARGE>(self.dst, self.next, fut);
         SUSPEND
     }
@@ -614,7 +455,7 @@ impl<const LARGE: bool> Op for CallStateAsync<LARGE> {
 pub struct CallHeavy<const LARGE: bool> {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: SyncCall,
+    pub f: Handler,
     pub next: BlockId,
 }
 
@@ -624,7 +465,9 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
         let rt = m.rt.clone();
         let f = self.f.clone();
         let executor = Arc::clone(&m.shared().executor);
-        let handle = executor.spawn_blocking(Box::new(move || f.call_taking(&rt, &args)));
+        // SAFETY: the window is this call's whole argument run, owned by the
+        // closure the pool runs.
+        let handle = executor.spawn_blocking(Box::new(move || unsafe { f.call_run(&rt, &args) }));
         m.suspend::<LARGE>(
             self.dst,
             self.next,
@@ -798,7 +641,7 @@ impl<const LARGE: bool> Op for Eval<LARGE> {
 pub struct SpawnExternSync {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: SyncCall,
+    pub f: Handler,
     pub next: Box<dyn Op>,
 }
 
@@ -809,10 +652,11 @@ impl Op for SpawnExternSync {
         let args = self.window.own(m);
         let rt = m.rt.clone();
         let f = self.f.clone();
+        // SAFETY: as `CallHeavy`'s.
         let handle = m
             .shared()
             .executor
-            .spawn_blocking(Box::new(move || f.call_taking(&rt, &args)));
+            .spawn_blocking(Box::new(move || unsafe { f.call_run(&rt, &args) }));
         m.regs().define::<true>(self.dst, Value::handle(handle));
         self.next.run(m, r0)
     }
@@ -821,7 +665,7 @@ impl Op for SpawnExternSync {
 pub struct SpawnExternAsync {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: AsyncCall<AcvusRuntime>,
+    pub f: AsyncHandler,
     pub next: Box<dyn Op>,
 }
 
@@ -829,12 +673,10 @@ impl Op for SpawnExternAsync {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let mut args = self.window.own(m);
+        let args = self.window.own(m);
         let rt = m.rt.clone();
-        let fut = match &self.f {
-            AsyncCall::Plain(f) => f(rt, &mut args),
-            AsyncCall::Stateful { state, f } => f(Arc::clone(state), rt, &mut args),
-        };
+        // SAFETY: as `CallExternAsync`'s; the spawned future owns `args`.
+        let fut = unsafe { self.f.call(rt, &args) };
         let handle = m.shared().executor.spawn_async(fut);
         m.regs().define::<true>(self.dst, Value::handle(handle));
         self.next.run(m, r0)

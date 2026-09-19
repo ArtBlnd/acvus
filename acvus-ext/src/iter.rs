@@ -20,8 +20,8 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    BoxFuture, ClosureFn, Cross, EffectVar, Erased, ExternType, Fn1, FromValue, IdentityVar, Ref,
-    Runtime, Stored, TyVar,
+    BoxFuture, ClosureFn, EffectVar, Erased, ExternType, Fn1, FromValue, IdentityVar, OneValue,
+    Ref, Runtime, Stored, TyVar,
 };
 use sync_wrapper::SyncWrapper;
 
@@ -161,7 +161,7 @@ where
 
     pub fn from_items(items: Vec<T>) -> Self
     where
-        T: Cross<Rt>,
+        T: OneValue<Rt>,
     {
         let mut items = items.into_iter();
         Self::generate(move |_| items.next())
@@ -170,7 +170,7 @@ where
     pub fn generate<F>(f: F) -> Self
     where
         F: FnMut(&Rt) -> Option<T> + Send + 'static,
-        T: Cross<Rt>,
+        T: OneValue<Rt>,
     {
         Self::sealed(Generate(SyncWrapper::new(f)))
     }
@@ -286,7 +286,7 @@ where
     /// zero before this is reached. One chunk is the only buffer.
     pub fn chunks(self, size: u64) -> Iter<Vec<T>, E, I, Rt>
     where
-        T: Cross<Rt> + FromValue<Rt>,
+        T: OneValue<Rt> + FromValue<Rt>,
     {
         match self.0 {
             Stages::Sync(source) => Iter::sealed(Chunks::<_, T> {
@@ -339,7 +339,7 @@ where
     where
         T: FromValue<Rt> + IntoIterator<Item = U>,
         T::IntoIter: Send + Sync,
-        U: Cross<Rt>,
+        U: OneValue<Rt>,
     {
         match self.0 {
             Stages::Sync(source) => Iter::sealed(Flatten::<_, T> {
@@ -357,7 +357,7 @@ where
     where
         S: TyVar + FromValue<Rt> + IntoIterator<Item = U>,
         S::IntoIter: Send + Sync,
-        U: Cross<Rt>,
+        U: OneValue<Rt>,
     {
         self.map(rt, f).flatten()
     }
@@ -409,7 +409,7 @@ struct Generate<F>(SyncWrapper<F>);
 impl<F, T, Rt> SyncStage<Rt> for Generate<F>
 where
     F: FnMut(&Rt) -> Option<T> + Send,
-    T: Cross<Rt>,
+    T: OneValue<Rt>,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
@@ -748,7 +748,7 @@ struct Chunks<S, T> {
 impl<S, T, Rt> SyncStage<Rt> for Chunks<S, T>
 where
     S: SyncStage<Rt>,
-    T: Cross<Rt> + FromValue<Rt> + Send + Sync,
+    T: OneValue<Rt> + FromValue<Rt> + Send + Sync,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
@@ -766,7 +766,7 @@ where
 impl<S, T, Rt> AsyncStage<Rt> for Chunks<S, T>
 where
     S: AsyncStage<Rt>,
-    T: Cross<Rt> + FromValue<Rt> + Send + Sync,
+    T: OneValue<Rt> + FromValue<Rt> + Send + Sync,
     Rt: Runtime,
 {
     fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {
@@ -881,7 +881,7 @@ where
     S: SyncStage<Rt>,
     T: FromValue<Rt> + IntoIterator<Item = U> + Send + Sync,
     T::IntoIter: Send + Sync,
-    U: Cross<Rt>,
+    U: OneValue<Rt>,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt) -> Option<Rt::Value> {
@@ -900,7 +900,7 @@ where
     S: AsyncStage<Rt>,
     T: FromValue<Rt> + IntoIterator<Item = U> + Send + Sync,
     T::IntoIter: Send + Sync,
-    U: Cross<Rt>,
+    U: OneValue<Rt>,
     Rt: Runtime,
 {
     fn next<'a>(&'a mut self, rt: &'a Rt) -> BoxFuture<'a, Option<Rt::Value>> {

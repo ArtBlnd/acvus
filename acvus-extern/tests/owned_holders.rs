@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{
-    Arr, Astr, CallToken, Cross, Erased, Fn1, FromValue, FxHashMap, Interner, Opaque, Owned, Ref,
-    Release, Runtime, cross_as_stored, materialize_field, materialize_payload,
+    Arr, Astr, CallToken, Erased, Fn1, FromValue, FxHashMap, Interner, OneValue, Opaque, Owned,
+    Ref, Release, Runtime, cross_as_stored, materialize_field, materialize_payload,
 };
 
 // -- A payload that counts its own drops --------------------------------
@@ -77,6 +77,10 @@ impl Release for V {
 #[derive(Clone, Default)]
 struct Counted;
 
+/// This runtime's registry declares no sliceable container, so the pair a
+/// slice would occupy is never built or read.
+const NO_SLICES: &str = "this runtime holds no slices";
+
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
 /// The shape `Fn1` and the `Iter` stages carry as a closure value.
@@ -112,7 +116,9 @@ where
         .unwrap_or_else(|| panic!("value is not a {}", type_name::<T>()))
 }
 
-impl Cross<Counted> for V {
+acvus_extern::cross_one_value!(V, at Counted);
+
+impl acvus_extern::OneValue<Counted> for V {
     fn erase(self, _: &Counted) -> V {
         self
     }
@@ -217,7 +223,7 @@ impl Runtime for Counted {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        let target = unsafe { <V as Cross<Counted>>::deref(self, reference) };
+        let target = unsafe { <V as OneValue<Counted>>::deref(self, reference) };
         open_ref::<T>(target)
     }
 
@@ -226,7 +232,7 @@ impl Runtime for Counted {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract, exclusively.
-        let target = unsafe { <V as Cross<Counted>>::deref_mut(self, reference) };
+        let target = unsafe { <V as OneValue<Counted>>::deref_mut(self, reference) };
         open_mut::<T>(target)
     }
 
@@ -252,6 +258,14 @@ impl Runtime for Counted {
 
     fn symbol(&self, name: &str) -> Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [V]) {
+        panic!("{NO_SLICES}")
+    }
+
+    unsafe fn slice_from_run(&self, _: &[V]) -> acvus_extern::Words {
+        panic!("{NO_SLICES}")
     }
 
     unsafe fn reference(&self, target: &V) -> V {
@@ -398,7 +412,7 @@ fn a_vec_materialized_back_is_released_by_its_receiver() {
     let drops = Drops::default();
     let stored = vec![drops.payload(), drops.payload()].erase(&rt);
     // SAFETY: `stored` was erased from this same `Vec<Tracked>`.
-    let items = unsafe { <Vec<Tracked> as Cross<Counted>>::materialize(&rt, stored) };
+    let items = unsafe { <Vec<Tracked> as OneValue<Counted>>::materialize(&rt, stored) };
     assert_eq!(drops.count(), 0, "the elements are out of the store");
     drop(items);
     assert_eq!(drops.count(), 2, "the receiver dropped each element once");
@@ -422,7 +436,7 @@ fn an_array_materialized_back_is_released_by_its_receiver() {
     let drops = Drops::default();
     let stored = Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]).erase(&rt);
     // SAFETY: `stored` was erased from this same `Arr<Tracked, ()>`.
-    let items = unsafe { <Arr<Tracked, ()> as Cross<Counted>>::materialize(&rt, stored) };
+    let items = unsafe { <Arr<Tracked, ()> as OneValue<Counted>>::materialize(&rt, stored) };
     assert_eq!(drops.count(), 0, "the elements are out of the store");
     drop(items);
     assert_eq!(drops.count(), 2, "the receiver dropped each element once");
@@ -499,8 +513,8 @@ fn an_object_field_taken_out_is_released_by_its_receiver() {
 
 // -- `Variant<Owned<Rt>>`: a variant's payload ---------------------------
 
-fn one_payload(rt: &Counted, drops: &Drops) -> Option<Box<Owned<Counted>>> {
-    Some(Box::new(Owned::from_value(tracked_value(rt, drops))))
+fn one_payload(rt: &Counted, drops: &Drops) -> Option<Owned<Counted>> {
+    Some(Owned::from_value(tracked_value(rt, drops)))
 }
 
 #[test]

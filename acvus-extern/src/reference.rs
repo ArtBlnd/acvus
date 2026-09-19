@@ -264,7 +264,9 @@ where
     }
 }
 
-impl<T, Rt> crate::Cross<Rt> for Ref<T, Rt>
+crate::cross_one_value!(Ref<T, __Rt>, T: TyVar);
+
+impl<T, Rt> crate::OneValue<Rt> for Ref<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,
@@ -278,7 +280,9 @@ where
     }
 }
 
-impl<T, Rt> crate::Cross<Rt> for RefMut<T, Rt>
+crate::cross_one_value!(RefMut<T, __Rt>, T: TyVar);
+
+impl<T, Rt> crate::OneValue<Rt> for RefMut<T, Rt>
 where
     T: TyVar,
     Rt: Runtime,

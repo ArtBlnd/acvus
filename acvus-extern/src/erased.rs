@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::PolyTy;
 use acvus_utils::Interner;
 
-use crate::obj::{Cross, FromValue, Inline, Stored, TransparentOver, expect_type};
+use crate::obj::{FromValue, Inline, OneValue, Stored, TransparentOver, expect_type};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg};
@@ -112,7 +112,9 @@ where
     }
 }
 
-impl<R, T> Cross<R> for Erased<R, T>
+crate::cross_one_value!(Erased<__Rt, T>, T: Stored<__Rt>);
+
+impl<R, T> OneValue<R> for Erased<R, T>
 where
     R: Runtime,
     T: Stored<R>,
@@ -131,16 +133,24 @@ where
         // SAFETY: the caller's contract, and `repr(transparent)` over
         // `R::Value`.
         unsafe {
-            &*(<R::Value as Cross<R>>::deref(rt, reference) as *const R::Value as *const Self)
+            &*(<R::Value as OneValue<R>>::deref(rt, reference) as *const R::Value as *const Self)
         }
     }
 
     unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
         // SAFETY: as in `deref`, exclusively.
         unsafe {
-            &mut *(<R::Value as Cross<R>>::deref_mut(rt, reference) as *mut R::Value as *mut Self)
+            &mut *(<R::Value as OneValue<R>>::deref_mut(rt, reference) as *mut R::Value
+                as *mut Self)
         }
     }
+}
+
+impl<R, T> crate::Borrowable<R> for Erased<R, T>
+where
+    R: Runtime,
+    T: Stored<R>,
+{
 }
 
 // SAFETY: `#[repr(transparent)]` above, over `Owned<R>`, itself

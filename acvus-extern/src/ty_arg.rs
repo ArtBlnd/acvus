@@ -125,9 +125,11 @@ where
     }
 }
 
+crate::cross_one_value!(Typeck<N>, const N: usize);
+
 /// The stand-ins appear inside types that ask their element to be
 /// `Stored`, such as `Erased<Rt, T>`; being uninhabited, they never cross.
-impl<const N: usize, Rt> crate::Cross<Rt> for Typeck<N>
+impl<const N: usize, Rt> crate::OneValue<Rt> for Typeck<N>
 where
     Rt: crate::Runtime,
 {
@@ -142,11 +144,15 @@ where
 
 impl<const N: usize, Rt> crate::Stored<Rt> for Typeck<N> where Rt: crate::Runtime {}
 
+impl<const N: usize, Rt> crate::Borrowable<Rt> for Typeck<N> where Rt: crate::Runtime {}
+
 // SAFETY: `Typeck<N>` is uninhabited, so no `&Typeck<N>` exists and the
 // layout claim is never read.
 unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Typeck<N> where Rt: crate::Runtime {}
 
-impl<T, Rt> crate::Cross<Rt> for Spec<T>
+crate::cross_one_value!(Spec<T>, T: Send + Sync + 'static);
+
+impl<T, Rt> crate::OneValue<Rt> for Spec<T>
 where
     T: Send + Sync + 'static,
     Rt: crate::Runtime,
@@ -161,6 +167,13 @@ where
 }
 
 impl<T, Rt> crate::Stored<Rt> for Spec<T>
+where
+    T: Send + Sync + 'static,
+    Rt: crate::Runtime,
+{
+}
+
+impl<T, Rt> crate::Borrowable<Rt> for Spec<T>
 where
     T: Send + Sync + 'static,
     Rt: crate::Runtime,

@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 use acvus_ext::Iter;
 use acvus_extern::{CallToken, Erased, Interner, Runtime};
 
+/// No registry these tests combine declares a sliceable container, so the
+/// pair a slice would occupy is never built or read.
+const NO_SLICES: &str = "this runtime holds no slices";
+
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
 /// `Word` stays eight bytes, so absence has to live in a niche rather than
@@ -66,7 +70,9 @@ where
     unsafe { (&raw const word).cast::<T>().read() }
 }
 
-impl acvus_extern::Cross<Words> for Word {
+acvus_extern::cross_one_value!(Word, at Words);
+
+impl acvus_extern::OneValue<Words> for Word {
     fn erase(self, _: &Words) -> Word {
         self
     }
@@ -167,6 +173,14 @@ impl Runtime for Words {
 
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {
+        panic!("{NO_SLICES}")
+    }
+
+    unsafe fn slice_from_run(&self, _: &[Self::Value]) -> acvus_extern::Words {
+        panic!("{NO_SLICES}")
     }
 
     fn none(&self) -> Word {
@@ -295,7 +309,9 @@ impl acvus_extern::Release for TaggedWord {
 #[derive(Clone, Copy)]
 struct Tags;
 
-impl acvus_extern::Cross<Tags> for TaggedWord {
+acvus_extern::cross_one_value!(TaggedWord, at Tags);
+
+impl acvus_extern::OneValue<Tags> for TaggedWord {
     fn erase(self, _: &Tags) -> TaggedWord {
         self
     }
@@ -457,6 +473,14 @@ impl Runtime for Tags {
 
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {
+        panic!("{NO_SLICES}")
+    }
+
+    unsafe fn slice_from_run(&self, _: &[Self::Value]) -> acvus_extern::Words {
+        panic!("{NO_SLICES}")
     }
 
     fn none(&self) -> TaggedWord {

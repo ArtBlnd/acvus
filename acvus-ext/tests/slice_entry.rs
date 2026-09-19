@@ -1,7 +1,7 @@
 //! Which of the standard declarations hand a run back in two registers
 //! (RFC-0047 amended, rule 2).
 
-use acvus_extern::{ExternHandler, Externs, Interner, QualifiedRef, TypesOnly};
+use acvus_extern::{Externs, Interner, QualifiedRef, TypesOnly};
 
 fn name(i: &Interner, qref: &QualifiedRef) -> String {
     match qref.namespace {
@@ -18,11 +18,7 @@ fn the_slice_entry_is_the_slice_returning_declarations_and_nothing_else() {
     let mut in_registers: Vec<String> = externs
         .handlers
         .iter()
-        .filter(|(_, handlers)| {
-            handlers
-                .iter()
-                .any(|h| matches!(h, ExternHandler::Slice(_)))
-        })
+        .filter(|(_, handlers)| handlers.iter().any(|h| h.width().ret == 2))
         .map(|(qref, _)| name(&i, qref))
         .collect();
     in_registers.sort();

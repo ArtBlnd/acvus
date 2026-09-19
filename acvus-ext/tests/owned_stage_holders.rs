@@ -12,8 +12,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{Deque, Iter};
 use acvus_extern::{
-    Astr, CallToken, Cross, Fn1, FromValue, Interner, Owned, Ref, Release, Runtime, cross_as_stored,
+    Astr, CallToken, Fn1, FromValue, Interner, OneValue, Owned, Ref, Release, Runtime,
+    cross_as_stored,
 };
+
+/// No registry these tests combine declares a sliceable container, so the
+/// pair a slice would occupy is never built or read.
+const NO_SLICES: &str = "this runtime holds no slices";
 
 // -- A payload that counts its own drops --------------------------------
 
@@ -108,7 +113,9 @@ where
         .unwrap_or_else(|| panic!("value is not a {}", type_name::<T>()))
 }
 
-impl Cross<Counted> for V {
+acvus_extern::cross_one_value!(V, at Counted);
+
+impl acvus_extern::OneValue<Counted> for V {
     fn erase(self, _: &Counted) -> V {
         self
     }
@@ -213,7 +220,7 @@ impl Runtime for Counted {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        let target = unsafe { <V as Cross<Counted>>::deref(self, reference) };
+        let target = unsafe { <V as OneValue<Counted>>::deref(self, reference) };
         open_ref::<T>(target)
     }
 
@@ -222,7 +229,7 @@ impl Runtime for Counted {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract, exclusively.
-        let target = unsafe { <V as Cross<Counted>>::deref_mut(self, reference) };
+        let target = unsafe { <V as OneValue<Counted>>::deref_mut(self, reference) };
         open_mut::<T>(target)
     }
 
@@ -248,6 +255,14 @@ impl Runtime for Counted {
 
     fn symbol(&self, name: &str) -> Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {
+        panic!("{NO_SLICES}")
+    }
+
+    unsafe fn slice_from_run(&self, _: &[Self::Value]) -> acvus_extern::Words {
+        panic!("{NO_SLICES}")
     }
 
     unsafe fn reference(&self, target: &V) -> V {

@@ -209,6 +209,21 @@ pub struct Contribution<R: Runtime> {
 }
 
 impl<R: Runtime> Contribution<R> {
+    /// A contribution with the declarations and nothing running yet: what
+    /// `extern_registry!` opens with, so the map types stay here.
+    pub fn of(manifest: Manifest) -> Self {
+        Self {
+            manifest,
+            instances: FxHashMap::default(),
+            space: FxHashMap::default(),
+        }
+    }
+
+    /// The space hooks of one declared type (RFC-0033).
+    pub fn register_space(&mut self, qref: QualifiedRef, hooks: SpaceHooks<R>) {
+        self.space.insert(qref, hooks);
+    }
+
     /// Adds a declared function; a second declaration of one family cast
     /// adds its instances to the first.
     pub fn declare(&mut self, f: ExternFn<R>) {

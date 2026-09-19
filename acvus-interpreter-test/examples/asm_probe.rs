@@ -1,7 +1,7 @@
 //! Disassembly probe: the erase/materialize path of a word and of a reference.
 use std::hint::black_box;
 
-use acvus_extern::{Cross, Runtime};
+use acvus_extern::{OneValue, Runtime};
 use acvus_interpreter::{AcvusRuntime, Value};
 
 #[inline(never)]
@@ -44,19 +44,19 @@ pub fn probe_some_i64(rt: &AcvusRuntime, v: i64) -> Option<Value> {
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub fn probe_erase_some_i64(rt: &AcvusRuntime, v: Option<i64>) -> Value {
-    <Option<i64> as Cross<AcvusRuntime>>::erase(v, rt)
+    <Option<i64> as OneValue<AcvusRuntime>>::erase(v, rt)
 }
 
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub fn probe_materialize_some_i64(rt: &AcvusRuntime, v: Value) -> Option<i64> {
-    unsafe { <Option<i64> as Cross<AcvusRuntime>>::materialize(rt, v) }
+    unsafe { <Option<i64> as OneValue<AcvusRuntime>>::materialize(rt, v) }
 }
 
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub fn probe_erase_some_some_i64(rt: &AcvusRuntime, v: Option<Option<i64>>) -> Value {
-    <Option<Option<i64>> as Cross<AcvusRuntime>>::erase(v, rt)
+    <Option<Option<i64>> as OneValue<AcvusRuntime>>::erase(v, rt)
 }
 
 fn main() {

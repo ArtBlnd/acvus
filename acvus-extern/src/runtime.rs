@@ -13,7 +13,7 @@ use crate::func::CallToken;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
-    type Value: crate::Cross<Self> + crate::FromValue<Self> + crate::Release + Copy + Default;
+    type Value: crate::OneValue<Self> + crate::FromValue<Self> + crate::Release + Copy + Default;
     /// The frame a synchronous call runs on (RFC-0052 §6). A runtime that
     /// needs no frame answers `()`.
     type Frame: Send + Sync;
@@ -98,6 +98,20 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 
     /// The name a field key is at run time (RFC-0032).
     fn symbol(&self, name: &str) -> acvus_utils::Astr;
+
+    /// A slice written into the run its result is: two of the runtime's
+    /// values, one per register of the pair the machine keeps a slice in
+    /// (RFC-0047 amended). A runtime whose value cannot carry a bare word
+    /// holds no slice and says so here.
+    fn slice_into_run(&self, words: crate::slice::Words, out: &mut [Self::Value]);
+
+    /// The same slice read back out of that run.
+    ///
+    /// # Safety
+    /// `run` is what `slice_into_run` wrote, and the elements it names are
+    /// live and unmoved — the loan the slice holds is what keeps them so
+    /// (RFC-0018).
+    unsafe fn slice_from_run(&self, run: &[Self::Value]) -> crate::slice::Words;
 
     /// A reference value naming `target`'s storage (RFC-0018): what a
     /// handler passes to a closure whose parameter is `&T` / `&mut T`.
@@ -233,6 +247,12 @@ impl Runtime for TypesOnly {
     }
     fn symbol(&self, _: &str) -> acvus_utils::Astr {
         panic!("TypesOnly runtime holds no values")
+    }
+    fn slice_into_run(&self, _: crate::slice::Words, _: &mut [()]) {
+        no_values()
+    }
+    unsafe fn slice_from_run(&self, _: &[()]) -> crate::slice::Words {
+        no_values()
     }
     fn call_is_sync(&self, _: &()) -> bool {
         false

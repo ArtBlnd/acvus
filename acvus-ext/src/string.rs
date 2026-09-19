@@ -8,7 +8,7 @@
 //! `s.chars().nth(i)`, and `find`/`rfind` report a scalar index.
 
 use acvus_extern::{
-    Cross, EffectVar, Erased, IdentityVar, Registry, Runtime, extern_fn, extern_registry,
+    EffectVar, Erased, IdentityVar, OneValue, Registry, Runtime, extern_fn, extern_registry,
 };
 
 use crate::iter::Iter;
@@ -155,7 +155,7 @@ fn char_at(s: &String, i: i64) -> char {
 
 fn iter_of<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: Cross<Rt>,
+    T: OneValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,

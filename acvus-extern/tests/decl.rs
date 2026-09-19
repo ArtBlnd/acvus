@@ -5,13 +5,12 @@
 use std::any::Any;
 use std::future::Ready;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use acvus_extern::{
-    Arr, AsyncCall, CallToken, ClosureFn, Cross, Eff, Effect, EffectTerm, EffectVar, Elements,
-    ExternFn, ExternHandler, ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar,
-    Owned, PolyTy, Pure, Ref, Registry, Runtime, Slice, SliceAbi, SyncAbi, SyncCall, Task, TyArg,
-    TyVar, TypeArg, TypeRegistry, TypesOnly, Words, extern_fn, extern_registry, extern_signature,
+    Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, Elements, ExternHandler,
+    ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, OneValue, Owned, PolyTy,
+    Pure, Ref, Registry, Runtime, Slice, Task, TyArg, TyVar, TypeArg, TypesOnly, Words, extern_fn,
+    extern_registry, extern_signature,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -192,7 +191,9 @@ where
 
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
-impl acvus_extern::Cross<Tiny> for V {
+acvus_extern::cross_one_value!(V, at Tiny);
+
+impl acvus_extern::OneValue<Tiny> for V {
     fn erase(self, _: &Tiny) -> V {
         self
     }
@@ -245,6 +246,20 @@ impl Runtime for Tiny {
 
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [V]) {
+        // A slice is two of the machine's registers (RFC-0047 amended); this
+        // runtime has no registers, so each word is its own value.
+        out[0] = erased(words.ptr);
+        out[1] = erased(words.len);
+    }
+
+    unsafe fn slice_from_run(&self, run: &[V]) -> acvus_extern::Words {
+        acvus_extern::Words {
+            ptr: *open_ref::<u64>(&run[0]),
+            len: *open_ref::<u64>(&run[1]),
+        }
     }
 
     type Value = V;
@@ -387,7 +402,7 @@ where
 #[extern_cast]
 fn boxed<T, N, Rt>(rt: &Rt, items: Arr<T, N>) -> Boxed<T, Pure, Rt>
 where
-    T: TyVar + Cross<Rt>,
+    T: TyVar + OneValue<Rt>,
     N: LenVar,
     Rt: Runtime,
 {
@@ -456,7 +471,7 @@ fn eq_point(a: &Point, b: &Point) -> bool {
 #[extern_fn(effect = pure)]
 fn same<T, R>(rt: &R, a: T, b: T) -> Boxed<T, Pure, R>
 where
-    T: TyVar + Cross<R> + HasInstance<eq>,
+    T: TyVar + OneValue<R> + HasInstance<eq>,
     R: Runtime,
 {
     Boxed(vec![a.erase(rt), b.erase(rt)], PhantomData)
@@ -623,12 +638,12 @@ fn types_and_casts_reach_the_type_registry() {
     );
 }
 
-fn call_sync(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
+fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
-        ExternHandler::Sync(f) => f.call_taking(&Tiny, &mut args),
+        // SAFETY: the caller passes the declaration's own arguments.
+        ExternHandler::Sync(f) => unsafe { f.call_run(&Tiny, &args) },
         ExternHandler::Heavy(_) => panic!("expected a sync handler, found a heavy one"),
         ExternHandler::Async(_) => panic!("expected a sync handler, found an async one"),
-        ExternHandler::Slice(_) => panic!("expected a sync handler, found a slice one"),
     }
 }
 
@@ -664,9 +679,14 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
 #[test]
 fn a_slice_entry_hands_back_two_words_naming_the_container() {
     let (i, reg) = combined::<Tiny>();
-    let ExternHandler::Slice(SliceAbi::Plain(entry)) = handler(&reg, &i, "as_slice") else {
-        panic!("a declaration returning a slice has the slice entry (RFC-0047 amended)")
+    let ExternHandler::Sync(entry) = handler(&reg, &i, "as_slice") else {
+        panic!("a declaration returning a slice has a synchronous handler (RFC-0047 §3)")
     };
+    assert_eq!(
+        entry.width(),
+        acvus_extern::Width { args: 1, ret: 2 },
+        "a slice-returning declaration takes one container and hands back two words"
+    );
     let storage = erased(vec![
         Owned::<Tiny>::from_value(erased(1i64)),
         Owned::<Tiny>::from_value(erased(2i64)),
@@ -675,15 +695,18 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     // SAFETY: `storage` outlives every run taken from it here (RFC-0018).
     let container = || unsafe { Tiny.reference(&storage) };
 
-    let run = entry(&Tiny, container());
-    let Words { ptr, len } = run.words();
+    // SAFETY: the handler's width says one argument in and the two words a
+    // slice is out.
+    let Words { ptr, len } = unsafe { entry.call_slice(&Tiny, container()) }.words();
     assert_eq!(len, 3);
     assert_ne!(ptr, 0);
 
-    // SAFETY: the words came from `run`, whose storage is live here.
+    // SAFETY: the words came from the handler, whose storage is live here.
+    let run = unsafe { Elements::<Tiny>::from_words(Words { ptr, len }) };
+    // SAFETY: as above, over the same two words.
     let rebuilt = unsafe { Elements::<Tiny>::from_words(Words { ptr, len }) };
     for at in 0..run.len() {
-        // SAFETY: `at` is below the length the entry reported.
+        // SAFETY: `at` is below the length the handler reported.
         let (lent, again) = unsafe { (run.at(at), rebuilt.at(at)) };
         assert!(
             std::ptr::eq(lent, again),
@@ -696,15 +719,12 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     }
 }
 
-async fn call_async(handler: &ExternHandler<Tiny>, mut args: Vec<V>) -> V {
+async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
-        ExternHandler::Async(AsyncCall::Plain(f)) => f(Tiny, &mut args).await,
-        ExternHandler::Async(AsyncCall::Stateful { state, f }) => {
-            f(std::sync::Arc::clone(state), Tiny, &mut args).await
-        }
+        // SAFETY: as `call_sync`'s; the future owns `args`.
+        ExternHandler::Async(f) => unsafe { f.call(Tiny, &args) }.await,
         ExternHandler::Sync(_) => panic!("expected an async handler, found a sync one"),
         ExternHandler::Heavy(_) => panic!("expected an async handler, found a heavy one"),
-        ExternHandler::Slice(_) => panic!("expected an async handler, found a slice one"),
     }
 }
 
@@ -1255,15 +1275,15 @@ fn a_host_some_is_never_none_and_opens_back_to_its_payload() {
 #[test]
 fn an_option_crosses_as_the_host_shaped_it() {
     let rt = Tiny;
-    let erased_option = <Option<i64> as acvus_extern::Cross<Tiny>>::erase(Some(4), &rt);
+    let erased_option = <Option<i64> as acvus_extern::OneValue<Tiny>>::erase(Some(4), &rt);
     assert!(matches!(erased_option, V::Some(_)));
     assert_eq!(
-        unsafe { <Option<i64> as acvus_extern::Cross<Tiny>>::materialize(&rt, erased_option) },
+        unsafe { <Option<i64> as acvus_extern::OneValue<Tiny>>::materialize(&rt, erased_option) },
         Some(4)
     );
-    let nested = <Option<Option<i64>> as acvus_extern::Cross<Tiny>>::erase(Some(None), &rt);
+    let nested = <Option<Option<i64>> as acvus_extern::OneValue<Tiny>>::erase(Some(None), &rt);
     assert_eq!(
-        unsafe { <Option<Option<i64>> as acvus_extern::Cross<Tiny>>::materialize(&rt, nested) },
+        unsafe { <Option<Option<i64>> as acvus_extern::OneValue<Tiny>>::materialize(&rt, nested) },
         Some(None)
     );
 }
@@ -1276,10 +1296,10 @@ fn an_option_crosses_as_the_host_shaped_it() {
 fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
     Registry::new(|i: &Interner| {
         let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("blocking"));
-        let heavy = ExternHandler::Heavy(SyncCall::Plain(SyncAbi::Arity0({
-            let f: acvus_extern::Sync0<Tiny> = |_| V::Taken;
-            f
-        })));
+        let heavy =
+            ExternHandler::heavy(acvus_extern::glue0::<Tiny, _, acvus_extern::Val<V>>(|_| {
+                V::Taken
+            }));
         acvus_extern::Contribution {
             manifest: acvus_extern::Manifest {
                 types: Vec::new(),
@@ -1328,4 +1348,125 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
         format!("{err}").contains("blocking"),
         "the refusal names the extern: {err}"
     );
+}
+
+// -- `Width` is the library's sum, not the macro's count (RFC-0059) -----
+
+/// Every arity the glue builds reports the width its parameter and result
+/// types declare, and the register form at that width reaches the same
+/// closure the run form does. Each argument is made fresh: a value crossing
+/// by materialization is taken, and one taken twice is freed twice.
+#[test]
+fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
+    use acvus_extern::{ByRef, ByValue, Handler, Val, Width};
+
+    fn answered(handler: &dyn Handler<Tiny>, expected: Width, args: Vec<V>) -> i64 {
+        assert_eq!(handler.width(), expected);
+        // SAFETY: the arguments are the declaration's own, at its width.
+        open::<i64>(unsafe { handler.call_run(&Tiny, &args) })
+    }
+
+    assert_eq!(
+        answered(
+            &acvus_extern::glue0::<Tiny, _, Val<i64>>(|_| 0),
+            Width { args: 0, ret: 1 },
+            vec![],
+        ),
+        0
+    );
+    assert_eq!(
+        answered(
+            &acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, a| a),
+            Width { args: 1, ret: 1 },
+            vec![erased(1i64)],
+        ),
+        1
+    );
+    assert_eq!(
+        answered(
+            &acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(|_, a, b| a + b),
+            Width { args: 2, ret: 1 },
+            vec![erased(1i64), erased(2i64)],
+        ),
+        3
+    );
+
+    let place = erased(10i64);
+    // SAFETY: `place` outlives the reference taken to it here (RFC-0018).
+    let lent = unsafe { Tiny.reference(&place) };
+    assert_eq!(
+        answered(
+            &acvus_extern::glue3::<Tiny, _, ByValue<i64>, ByRef<i64>, ByValue<i64>, Val<i64>>(
+                |_, a, b, c| a + *b + c
+            ),
+            Width { args: 3, ret: 1 },
+            vec![erased(1i64), lent, erased(3i64)],
+        ),
+        14,
+        "a borrowed parameter reads the place the reference names"
+    );
+
+    assert_eq!(
+        answered(
+            &acvus_extern::glue4::<
+                Tiny,
+                _,
+                ByValue<i64>,
+                ByValue<i64>,
+                ByValue<i64>,
+                ByValue<i64>,
+                Val<i64>,
+            >(|_, a, b, c, d| a + b + c + d),
+            Width { args: 4, ret: 1 },
+            vec![erased(1i64), erased(2i64), erased(3i64), erased(4i64)],
+        ),
+        10
+    );
+
+    let two_wide =
+        acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(|_, a, b| a * 10 + b);
+    // SAFETY: the width says two arguments in and one value out.
+    let by_register = unsafe { two_wide.call2(&Tiny, erased(1i64), erased(2i64)) };
+    assert_eq!(
+        open::<i64>(by_register),
+        12,
+        "the register form reaches the closure the run form does"
+    );
+}
+
+/// Every call site holds its own box, cloned out of the one the registry
+/// built, and the clone is the same handler: the width it reports and the
+/// answer it gives are the original's.
+#[test]
+fn a_glue_clones_into_a_box_that_is_the_same_handler() {
+    use acvus_extern::{ByValue, Handler, Val, Width};
+
+    let glue = acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, a| a * 3);
+    let boxed: Box<dyn Handler<Tiny>> = glue.clone_box();
+    let again = boxed.clone();
+
+    assert_eq!(boxed.width(), glue.width());
+    assert_eq!(again.width(), Width { args: 1, ret: 1 });
+    // SAFETY: the width says one argument in and one value out, at each of
+    // the three names of this one handler.
+    let answers = unsafe {
+        [
+            glue.call1(&Tiny, erased(7i64)),
+            boxed.call1(&Tiny, erased(7i64)),
+            again.call1(&Tiny, erased(7i64)),
+        ]
+    };
+    assert_eq!(answers.map(open::<i64>), [21, 21, 21]);
+}
+
+/// A `#[state]` parameter is the closure's own capture, typed: it is no
+/// argument of the call, so nothing stands between the call and the value
+/// the registry supplied.
+#[test]
+fn a_state_capture_is_no_argument_of_the_call() {
+    let (i, reg) = combined::<Tiny>();
+    let ExternHandler::Sync(f) = handler(&reg, &i, "greet") else {
+        panic!("greet is a synchronous declaration")
+    };
+    assert_eq!(f.width(), acvus_extern::Width { args: 1, ret: 1 });
 }
