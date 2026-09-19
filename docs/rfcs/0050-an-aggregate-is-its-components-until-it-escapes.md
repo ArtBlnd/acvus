@@ -57,19 +57,25 @@ object lives.
    run of them** (amended 2026-09-20; re-amended the same day after the
    first build showed the earlier wording made a second register class).
    There is one kind of register. A body's frame is `frame_len` slots
-   (`Cell`s of sixteen `Value`s, `Off` addressing), bounded at **320**
-   (the 64 a scalar body may use plus 256 for runs); `prepare` colors
-   scalar values one register at a time and an aggregate that needs an
-   address (rule 3) as a **run** of adjacent registers holding its
-   flattened field layout (rule 8), by live range as it colors everything
-   else. A body with no run has the frame it has today. The scratch
-   register `order_moves` may take is reserved before emission, so
-   `frame_len` is final when the first `Off` is written and a run begins
-   where the scalar registers end — not at a constant. When the runs
-   would take the frame past 320, aggregates are spilled to the heap
-   (rule 4) **in ascending loop depth**, the shallowest first, ties broken
-   by the longest live range first: what a loop touches stays in the
-   frame. **Marks are per register, as today**: the mark word covers
+   (`Cell`s of sixteen `Value`s, `Off` addressing), bounded at **320**,
+   fixed: the scalar registers (at most 64), the scratch `order_moves`
+   may take (at most 2 — a `Pair` move), and the runs in what remains
+   (at most 254). `prepare` colors scalar values one register at a time;
+   an aggregate that needs an address (rule 3) takes a **run** of adjacent
+   registers holding its flattened field layout (rule 8), placed by a pass
+   of its own after the scalars. A body with no run has the frame it has
+   today. The scratch is reserved before emission, so `frame_len` is final
+   when the first `Off` is written and a run begins where the scalar
+   registers end — not at a constant. **Runs are placed deepest loop
+   first**: candidates are ordered by loop depth descending, then by
+   live-range start, and each takes the lowest registers free over its
+   range, so the runs a loop touches are placed first and reuse registers
+   among themselves; a run placed for an outer scope never starves an
+   inner loop's. When the runs would take the frame past 320, aggregates
+   are spilled to the heap (rule 4) **shallowest first**, ties broken by
+   the longest live range first. The mark word and bit an operation marks
+   in are decided at `prepare` and carried by the operation, never derived
+   from its `Off` at run time. **Marks are per register, as today**: the mark word covers
    registers 0–63, and a frame past 64 registers has ⌈`frame_len` / 64⌉
    mark words in its mark slots; an operation's `take_mask`/define mask
    names the word its registers fall in, decided at `prepare`. A run's
