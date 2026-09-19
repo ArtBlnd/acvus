@@ -4,7 +4,7 @@
 //! Organized by category with soundness and completeness coverage.
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{ParamTerm, Poly, PolyParam, Ty, lift_to_poly};
+use acvus_mir::ty::{ObjectTy, ParamTerm, Poly, PolyParam, Ty, lift_to_poly};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
 
@@ -16,12 +16,12 @@ fn sig(i: &Interner, params: &[(&str, Ty)]) -> Vec<PolyParam> {
 }
 
 fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
-    Ty::Object(
+    Ty::Object(ObjectTy::written(
         fields
             .iter()
             .map(|(k, v)| (i.intern(k), v.clone()))
             .collect(),
-    )
+    ))
 }
 
 // =======================================================================

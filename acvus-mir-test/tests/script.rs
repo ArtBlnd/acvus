@@ -3,7 +3,7 @@
 //! Each test compiles a script source -> MIR and snapshots the printed IR.
 //! Tests are grouped by category with both soundness and completeness direction.
 
-use acvus_mir::ty::{Param, Ty};
+use acvus_mir::ty::{ObjectTy, Param, Ty};
 use acvus_mir_test::{compile_script_ir, compile_script_mode_raw, compile_script_optimized};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -67,10 +67,10 @@ fn branch_refutable_literal() {
 #[test]
 fn branch_destructure_object() {
     let i = Interner::new();
-    let obj_ty = Ty::Object(FxHashMap::from_iter([
+    let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
         (i.intern("name"), Ty::String),
         (i.intern("age"), Ty::I64),
-    ]));
+    ])));
     let c = ctx(&i, &[("user", obj_ty), ("out", Ty::String)]);
     let ir = compile_script_ir(
         &i,

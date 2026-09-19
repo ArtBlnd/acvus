@@ -96,11 +96,11 @@ returns the replacement itself.
 `ignore_whitespace`, `unicode`, `swap_greed`. They are `RegexBuilder`'s
 switches of the same names.
 
-A derived object crosses field by field, and a field the literal left out
-panics the crossing rather than failing to compile: two object types unify
-by union, so the checker admits the short literal. Write all six, or start
-from `regex_flags()`, which is Unicode on and every other switch off — the
-set `regex` itself compiles with.
+`RegexFlags` declares those six fields and a value of it has exactly
+them, so a literal that leaves one out is refused at the call by the
+field's name (RFC-0042 R1). Write all six, or start from `regex_flags()`,
+which is Unicode on and every other switch off — the set `regex` itself
+compiles with.
 
 ```
 let flags = { case_insensitive: true, multi_line: false,

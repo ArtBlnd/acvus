@@ -18,9 +18,9 @@ use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
-    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Mutability, ParamTerm, Phase, Poly,
-    PolyTy, Repr, ReprVarId, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId,
-    TypeRegistry, could_match_pattern, matches_pattern,
+    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy,
+    ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
+    TypeBoundId, TypeRegistry, could_match_pattern, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -140,6 +140,11 @@ pub enum MismatchReason {
     ReprOpen(ReprVarId),
     /// The value's task is above the one the position fixes (RFC-0046).
     TaskTooHigh { required: Task, found: Task },
+    /// A field the struct `declared` names and the object lacks. A declared
+    /// struct's field set is exact (RFC-0042).
+    ObjectLacksDeclaredField { declared: Astr, field: Astr },
+    /// A field the object has and the struct `declared` does not name.
+    ObjectFieldNotDeclared { declared: Astr, field: Astr },
 }
 
 /// How two effects are related by a constraint.
@@ -819,35 +824,41 @@ impl Terms {
             | (TyTerm::Unit, TyTerm::Unit)
             | (TyTerm::Order, TyTerm::Order) => Ok(()),
 
-            (TyTerm::Object(fa), TyTerm::Object(fb)) => {
-                for (key, ty_a) in fa {
-                    if let Some(ty_b) = fb.get(key) {
+            (TyTerm::Object(oa), TyTerm::Object(ob)) => {
+                for (key, ty_a) in oa {
+                    if let Some(ty_b) = ob.get(key) {
                         self.join(ty_a, ty_b, Position::Argument, kind, registry)?;
                     }
                 }
-                let a_only = fa.keys().any(|k| !fb.contains_key(k));
-                let b_only = fb.keys().any(|k| !fa.contains_key(k));
-                if !a_only && !b_only {
-                    return Ok(());
+                match ObjectTy::meet(oa, ob) {
+                    ObjectMeet::Joined {
+                        ty,
+                        a_takes,
+                        b_takes,
+                    } => self.write_union(
+                        UnionSide {
+                            root: a_root,
+                            grows: a_takes,
+                        },
+                        UnionSide {
+                            root: b_root,
+                            grows: b_takes,
+                        },
+                        TyTerm::Object(ty),
+                        Structure::Product,
+                        kind,
+                        mismatch,
+                    ),
+                    ObjectMeet::Lacks { declared, field } => Err(mismatch_for(
+                        self,
+                        MismatchReason::ObjectLacksDeclaredField { declared, field },
+                    )),
+                    ObjectMeet::Undeclared { declared, field } => Err(mismatch_for(
+                        self,
+                        MismatchReason::ObjectFieldNotDeclared { declared, field },
+                    )),
+                    ObjectMeet::TwoDeclarations { .. } => Err(mismatch(self)),
                 }
-                let mut merged: FxHashMap<Astr, InferTy> = fa.clone();
-                for (k, v) in fb {
-                    merged.entry(*k).or_insert_with(|| v.clone());
-                }
-                self.write_union(
-                    UnionSide {
-                        root: a_root,
-                        grows: b_only,
-                    },
-                    UnionSide {
-                        root: b_root,
-                        grows: a_only,
-                    },
-                    TyTerm::Object(merged),
-                    Structure::Product,
-                    kind,
-                    mismatch,
-                )
             }
             (
                 TyTerm::Enum {
@@ -3374,11 +3385,13 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
                 .map(|e| uniform_slots(e, registry))
                 .collect(),
         ),
-        TyTerm::Object(fields) => TyTerm::Object(
-            fields
-                .into_iter()
-                .map(|(k, v)| (k, uniform_slots(v, registry)))
-                .collect(),
+        TyTerm::Object(object) => TyTerm::Object(
+            object.with_fields(
+                object
+                    .iter()
+                    .map(|(k, v)| (*k, uniform_slots(v.clone(), registry)))
+                    .collect(),
+            ),
         ),
         TyTerm::Fn {
             params,

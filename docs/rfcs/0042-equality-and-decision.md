@@ -13,7 +13,14 @@ union of their fields and two `Enum`s to the union of their variants; a
 side that must grow and has no variable (an extern's declared type)
 cannot grow — for an `Object` that is the definite-assignment check's
 report, for an `Enum` the checker's mismatch; a pattern may name fewer
-members than its source. **R2** A decision is a position with more than
+members than its source. An object type carries which field set it has:
+the fields a struct declares, under the struct's name; the fields an
+object literal wrote; or at least the fields a read or a pattern named.
+Two undeclared field sets join to their union as above. A declared field
+set is the field set of every value of that type, so an object that is
+one and lacks a field the struct declares, or carries a field it does
+not declare, is refused by that field's name, and what only asks an
+object for fields joins to the declared type. **R2** A decision is a position with more than
 one admissible answer; it holds its answer set and only shrinks:
 integer width (on the variable, as `TyVarBound::Integer`), effect
 interval, instance, representation `ρ`, conversion. **R3** A decision
@@ -57,3 +64,8 @@ built".
   RFC-0040's instance choice is `Decision::Instance`, read by `answer(id)`.
 - `acvus-mir/src/typeck.rs`: `flow`, `convert_at`, `solve_body`,
   `report_unsettled`, `resolve_conversions`; `Intrinsic` in `ir.rs`.
+- `acvus-mir/src/ty.rs` holds `FieldSet`, `ObjectTy` and
+  `ObjectTy::meet`, which the join calls for two objects. `#[derive(TyArg)]`
+  emits `ObjectTy::declared` for a struct, so every extern parameter of a
+  declared struct's type carries its field set; a struct variant's payload
+  is an object a literal writes and carries `Written`.

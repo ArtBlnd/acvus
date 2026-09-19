@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::{
     graph::infer,
-    ty::{Param, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, TypeArg, lift_to_poly},
+    ty::{ObjectTy, Param, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, TypeArg, lift_to_poly},
 };
 use acvus_mir_test::*;
 use acvus_utils::{Astr, Freeze, Interner};
@@ -130,12 +130,12 @@ fn ctx(i: &Interner, pairs: &[(&str, Ty)]) -> FxHashMap<Astr, Ty> {
 
 /// Helper: build an Object type from string-keyed fields.
 fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
-    Ty::Object(
+    Ty::Object(ObjectTy::written(
         fields
             .iter()
             .map(|(k, v)| (i.intern(k), v.clone()))
             .collect(),
-    )
+    ))
 }
 
 /// Helper: a context holding a `Vec<elem>`. A pipeline takes the vec whole

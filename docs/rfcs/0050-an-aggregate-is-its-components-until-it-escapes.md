@@ -195,7 +195,10 @@ object lives.
    widened to a path of any depth. A field the settled union type has
    and a construction lacks is `Undef` at its offset — whether the
    checker admits a read of it is the type system's question, listed
-   under Order of work, not answered here.
+   under Order of work. For a declared struct's type it is answered: the
+   checker refuses an object that lacks a field the struct declares
+   (RFC-0042 R1), so no value of a declared type has an `Undef` field.
+   For an object literal's type the question stays here.
 
 9. **`Option<Aggregate>` is flat over the run**: the run's first
    `Value` is `Kind::None` for `None` and the payload's first component

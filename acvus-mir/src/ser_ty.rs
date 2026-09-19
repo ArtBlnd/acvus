@@ -18,8 +18,8 @@ use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
 use crate::ty::{
-    Concrete, Effect, EffectTerm, IdentityId, IdentityTerm, IntTy, LenTerm, Reissue, Repr, Task,
-    Ty, TypeArg,
+    Concrete, Effect, EffectTerm, FieldSet, IdentityId, IdentityTerm, IntTy, LenTerm, ObjectTy,
+    Reissue, Repr, Task, Ty, TypeArg,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -115,6 +115,18 @@ fn ser_to_arg(arg: &SerTypeArg, interner: &Interner) -> TypeArg<Concrete> {
     }
 }
 
+/// An object type's field set (RFC-0042) as it is written down.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SerFieldSet {
+    #[default]
+    Written,
+    AtLeast,
+    Declared {
+        name: std::string::String,
+    },
+}
+
 /// Serializable mirror of [`Ty`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -135,6 +147,10 @@ pub enum SerTy {
         elem: Box<SerTy>,
     },
     Object {
+        /// A serialized object type without it is an object literal's, so a
+        /// freeze written before a field set said which it is still reads.
+        #[serde(default)]
+        field_set: SerFieldSet,
         fields: BTreeMap<std::string::String, SerTy>,
     },
     Tuple {
@@ -181,8 +197,15 @@ impl Ty {
                 len: len.get(),
                 elem: Box::new(elem.to_ser(interner)),
             },
-            Ty::Object(fields) => SerTy::Object {
-                fields: fields
+            Ty::Object(object) => SerTy::Object {
+                field_set: match object.field_set() {
+                    FieldSet::Declared(name) => SerFieldSet::Declared {
+                        name: interner.resolve(name).to_string(),
+                    },
+                    FieldSet::Written => SerFieldSet::Written,
+                    FieldSet::AtLeast => SerFieldSet::AtLeast,
+                },
+                fields: object
                     .iter()
                     .map(|(k, v)| (interner.resolve(*k).to_string(), v.to_ser(interner)))
                     .collect(),
@@ -264,12 +287,19 @@ impl SerTy {
             SerTy::Array { len, elem } => {
                 Ty::Array(Box::new(elem.to_ty(interner)), LenTerm::Known(*len))
             }
-            SerTy::Object { fields } => Ty::Object(
-                fields
+            SerTy::Object { field_set, fields } => {
+                let fields = fields
                     .iter()
                     .map(|(k, v)| (interner.intern(k), v.to_ty(interner)))
-                    .collect(),
-            ),
+                    .collect();
+                Ty::Object(match field_set {
+                    SerFieldSet::Declared { name } => {
+                        ObjectTy::declared(interner.intern(name), fields)
+                    }
+                    SerFieldSet::Written => ObjectTy::written(fields),
+                    SerFieldSet::AtLeast => ObjectTy::at_least(fields),
+                })
+            }
             SerTy::Tuple { elems } => Ty::Tuple(elems.iter().map(|e| e.to_ty(interner)).collect()),
             SerTy::Fn {
                 params,

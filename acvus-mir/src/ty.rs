@@ -583,7 +583,8 @@ where
                 es.len() == ps.len() && es.iter().zip(ps).all(|(e, p)| go(e, p, seen, unknowns))
             }
             (TyTerm::Object(fs), TyTerm::Object(pfs)) => {
-                fs.len() == pfs.len()
+                fs.declaration() == pfs.declaration()
+                    && fs.len() == pfs.len()
                     && fs
                         .iter()
                         .all(|(k, v)| pfs.get(k).is_some_and(|pv| go(v, pv, seen, unknowns)))
@@ -863,7 +864,8 @@ impl PatternSubst {
                 ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| self.unify(x, y))
             }
             (TyTerm::Object(fa), TyTerm::Object(fb)) => {
-                fa.len() == fb.len()
+                fa.declaration() == fb.declaration()
+                    && fa.len() == fb.len()
                     && fa
                         .iter()
                         .all(|(k, v)| fb.get(k).is_some_and(|w| self.unify(v, w)))
@@ -1785,9 +1787,12 @@ where
             TyTerm::Bool => write!(f, "Bool"),
             TyTerm::Unit => write!(f, "Unit"),
             TyTerm::Never => write!(f, "!"),
-            TyTerm::Object(fields) => {
-                let mut sorted: Vec<_> = fields.iter().collect();
+            TyTerm::Object(object) => {
+                let mut sorted: Vec<_> = object.iter().collect();
                 sorted.sort_by_key(|(k, _)| self.interner.resolve(**k).to_string());
+                if let Some(name) = object.declaration() {
+                    write!(f, "{}", self.interner.resolve(name))?;
+                }
                 write!(f, "{{")?;
                 for (i, (k, v)) in sorted.iter().enumerate() {
                     if i > 0 {
@@ -2230,6 +2235,197 @@ impl<V: Phase> TypeArg<V> {
     }
 }
 
+/// How an object type's field set relates to the values it admits
+/// (RFC-0042).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldSet {
+    /// The fields the struct `Astr` names declares. A value of the type has
+    /// exactly these.
+    Declared(Astr),
+    /// The fields an object literal wrote. A field store adds to them.
+    Written,
+    /// At least the fields a read or a pattern named, which is what asking
+    /// an object for a field says about it.
+    AtLeast,
+}
+
+/// An object type: the type of each field, and what the field set is
+/// (RFC-0042).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectTy<V>
+where
+    V: Phase,
+{
+    set: FieldSet,
+    fields: FxHashMap<Astr, TyTerm<V>>,
+}
+
+/// The join of two object types (RFC-0042).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectMeet<V>
+where
+    V: Phase,
+{
+    /// The join, and which side has to take it: a side that lacks a field
+    /// of the union grows into it, and a side that meets a declaration
+    /// takes the declared type.
+    Joined {
+        ty: ObjectTy<V>,
+        a_takes: bool,
+        b_takes: bool,
+    },
+    /// A field `declared` names and an object of its type lacks.
+    Lacks { declared: Astr, field: Astr },
+    /// A field an object has and `declared` does not name.
+    Undeclared { declared: Astr, field: Astr },
+    /// Two declarations: a value has the fields of one declared struct and
+    /// of no other.
+    TwoDeclarations { a: Astr, b: Astr },
+}
+
+impl<V> ObjectTy<V>
+where
+    V: Phase,
+{
+    /// The type of a struct `name` declares.
+    pub fn declared(name: Astr, fields: FxHashMap<Astr, TyTerm<V>>) -> Self {
+        Self {
+            set: FieldSet::Declared(name),
+            fields,
+        }
+    }
+
+    /// The type of an object a literal wrote.
+    pub fn written(fields: FxHashMap<Astr, TyTerm<V>>) -> Self {
+        Self {
+            set: FieldSet::Written,
+            fields,
+        }
+    }
+
+    /// What reading these fields asks of the object read.
+    pub fn at_least(fields: FxHashMap<Astr, TyTerm<V>>) -> Self {
+        Self {
+            set: FieldSet::AtLeast,
+            fields,
+        }
+    }
+
+    pub fn field_set(&self) -> FieldSet {
+        self.set
+    }
+
+    pub fn declaration(&self) -> Option<Astr> {
+        match self.set {
+            FieldSet::Declared(name) => Some(name),
+            FieldSet::Written | FieldSet::AtLeast => None,
+        }
+    }
+
+    /// This object's field set over `fields`: what a walk over an object
+    /// type rebuilds.
+    pub fn with_fields<W>(&self, fields: FxHashMap<Astr, TyTerm<W>>) -> ObjectTy<W>
+    where
+        W: Phase,
+    {
+        ObjectTy {
+            set: self.set,
+            fields,
+        }
+    }
+
+    /// A field of this object the other lacks. The one that is interned
+    /// first, so that two runs of one program refuse it in the same words.
+    fn only_in(&self, other: &Self) -> Option<Astr> {
+        self.fields
+            .keys()
+            .filter(|k| !other.fields.contains_key(k))
+            .min()
+            .copied()
+    }
+
+    /// The union of the two field sets, which the side that lacks a field
+    /// of it grows into.
+    fn union(a: &Self, b: &Self, set: FieldSet) -> ObjectMeet<V> {
+        let mut fields = a.fields.clone();
+        for (name, ty) in &b.fields {
+            fields.entry(*name).or_insert_with(|| ty.clone());
+        }
+        ObjectMeet::Joined {
+            a_takes: b.only_in(a).is_some(),
+            b_takes: a.only_in(b).is_some(),
+            ty: ObjectTy { set, fields },
+        }
+    }
+
+    /// The field on which `other` disagrees with the declaration `of`
+    /// carries. A value of the declared type has every field the struct
+    /// names, so an object that is one and lacks a field is refused; what
+    /// only asks an object for fields is not.
+    fn disagreement(declared: Astr, of: &Self, other: &Self) -> Option<ObjectMeet<V>> {
+        if let Some(field) = other.only_in(of) {
+            return Some(ObjectMeet::Undeclared { declared, field });
+        }
+        match other.set {
+            FieldSet::AtLeast => None,
+            FieldSet::Declared(_) | FieldSet::Written => of
+                .only_in(other)
+                .map(|field| ObjectMeet::Lacks { declared, field }),
+        }
+    }
+
+    /// What the two join to (RFC-0042): two undeclared field sets join to
+    /// their union, and a declared field set is the value's own, so an
+    /// object that is one lacking a field, or carrying a field the struct
+    /// does not name, is refused by the field's name.
+    pub fn meet(a: &Self, b: &Self) -> ObjectMeet<V> {
+        let joined = |ty: &Self, a_takes: bool, b_takes: bool| ObjectMeet::Joined {
+            ty: ty.clone(),
+            a_takes,
+            b_takes,
+        };
+        match (a.set, b.set) {
+            (FieldSet::Declared(x), FieldSet::Declared(y)) if x != y => {
+                ObjectMeet::TwoDeclarations { a: x, b: y }
+            }
+            (FieldSet::Declared(x), FieldSet::Declared(_)) => {
+                Self::disagreement(x, a, b).unwrap_or_else(|| joined(a, false, false))
+            }
+            (FieldSet::Declared(x), _) => {
+                Self::disagreement(x, a, b).unwrap_or_else(|| joined(a, false, true))
+            }
+            (_, FieldSet::Declared(y)) => {
+                Self::disagreement(y, b, a).unwrap_or_else(|| joined(b, true, false))
+            }
+            (FieldSet::Written, _) | (_, FieldSet::Written) => Self::union(a, b, FieldSet::Written),
+            (FieldSet::AtLeast, FieldSet::AtLeast) => Self::union(a, b, FieldSet::AtLeast),
+        }
+    }
+}
+
+impl<V> std::ops::Deref for ObjectTy<V>
+where
+    V: Phase,
+{
+    type Target = FxHashMap<Astr, TyTerm<V>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.fields
+    }
+}
+
+impl<'a, V> IntoIterator for &'a ObjectTy<V>
+where
+    V: Phase,
+{
+    type Item = (&'a Astr, &'a TyTerm<V>);
+    type IntoIter = std::collections::hash_map::Iter<'a, Astr, TyTerm<V>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.iter()
+    }
+}
+
 /// A type term parameterized over inference phase.
 ///
 /// When `V = Concrete`: `Var(Infallible)` is uninhabitable - type is always concrete.
@@ -2254,7 +2450,7 @@ pub enum TyTerm<V: Phase> {
     Order,
     // Containers
     Array(Box<TyTerm<V>>, LenTerm<V>),
-    Object(FxHashMap<Astr, TyTerm<V>>),
+    Object(ObjectTy<V>),
     Tuple(Vec<TyTerm<V>>),
     Option(Box<TyTerm<V>>),
     Result(Box<TyTerm<V>>, Box<TyTerm<V>>),
@@ -2393,11 +2589,13 @@ impl<V: Phase> TyTerm<V> {
                 on_len,
                 on_repr,
             ))),
-            TyTerm::Object(fields) => TyTerm::Object(
-                fields
-                    .iter()
-                    .map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect, on_len, on_repr)))
-                    .collect(),
+            TyTerm::Object(object) => TyTerm::Object(
+                object.with_fields(
+                    object
+                        .iter()
+                        .map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect, on_len, on_repr)))
+                        .collect(),
+                ),
             ),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
                 elems
@@ -2506,15 +2704,15 @@ impl<V: Phase> TyTerm<V> {
                 on_len,
                 on_repr,
             )?))),
-            TyTerm::Object(fields) => {
-                let mapped: Result<FxHashMap<_, _>, E> = fields
+            TyTerm::Object(object) => {
+                let mapped: Result<FxHashMap<_, _>, E> = object
                     .iter()
                     .map(|(k, v)| {
                         v.try_map(on_var, on_identity, on_effect, on_len, on_repr)
                             .map(|mv| (*k, mv))
                     })
                     .collect();
-                Ok(TyTerm::Object(mapped?))
+                Ok(TyTerm::Object(object.with_fields(mapped?)))
             }
             TyTerm::Tuple(elems) => Ok(TyTerm::Tuple(
                 elems
@@ -2666,9 +2864,9 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
             Ty::Order => TyTerm::Order,
             Ty::Array(inner, len) => TyTerm::Array(Box::new(go(inner, builder)), lift_ty_len(len)),
             Ty::Slice(elem) => TyTerm::Slice(Box::new(go(elem, builder))),
-            Ty::Object(fields) => {
-                TyTerm::Object(fields.iter().map(|(k, v)| (*k, go(v, builder))).collect())
-            }
+            Ty::Object(object) => TyTerm::Object(
+                object.with_fields(object.iter().map(|(k, v)| (*k, go(v, builder))).collect()),
+            ),
             Ty::Tuple(elems) => TyTerm::Tuple(elems.iter().map(|e| go(e, builder)).collect()),
             Ty::Option(inner) => TyTerm::Option(Box::new(go(inner, builder))),
             Ty::Result(ok, err) => {
@@ -2899,14 +3097,14 @@ mod tests {
         let mut s = Solver::new(&mut sources, &registry);
         let interner = Interner::new();
         let t = s.fresh_ty_var();
-        let obj1 = TyTerm::Object(FxHashMap::from_iter([
+        let obj1 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([
             (interner.intern("name"), TyTerm::String),
             (interner.intern("age"), t.clone()),
-        ]));
-        let obj2 = TyTerm::Object(FxHashMap::from_iter([
+        ])));
+        let obj2 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([
             (interner.intern("name"), TyTerm::String),
             (interner.intern("age"), TyTerm::I64),
-        ]));
+        ])));
         assert!(s.unify(&obj1, &obj2).is_ok());
         assert_eq!(s.resolve_ty(&t), TyTerm::I64);
     }
@@ -2917,23 +3115,23 @@ mod tests {
         let registry = TypeRegistry::new();
         let mut s = Solver::new(&mut sources, &registry);
         let interner = Interner::new();
-        let obj1 = TyTerm::Object(FxHashMap::from_iter([(
+        let obj1 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
             interner.intern("name"),
             TyTerm::String,
-        )]));
-        let obj2 = TyTerm::Object(FxHashMap::from_iter([(
+        )])));
+        let obj2 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
             interner.intern("age"),
             TyTerm::I64,
-        )]));
+        )])));
         let home = s.fresh_ty_var();
         assert!(s.unify(&obj1, &home).is_ok());
         assert!(s.unify(&obj2, &home).is_ok());
         assert_eq!(
             s.resolve_ty(&home),
-            TyTerm::Object(FxHashMap::from_iter([
+            TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([
                 (interner.intern("name"), TyTerm::String),
                 (interner.intern("age"), TyTerm::I64),
-            ]))
+            ])))
         );
     }
 
@@ -2951,6 +3149,131 @@ mod tests {
 
     // -- Object merge tests --
 
+    /// The join of an object type with a declared struct's (RFC-0042).
+    fn meet_of(
+        i: &Interner,
+        a: ObjectTy<Concrete>,
+        b: ObjectTy<Concrete>,
+    ) -> Result<Vec<String>, String> {
+        let named = |name: Astr, field: Astr| format!("{} {}", i.resolve(name), i.resolve(field));
+        match ObjectTy::meet(&a, &b) {
+            ObjectMeet::Joined { ty, .. } => {
+                let mut fields: Vec<String> =
+                    ty.keys().map(|k| i.resolve(*k).to_string()).collect();
+                fields.sort();
+                Ok(fields)
+            }
+            ObjectMeet::Lacks { declared, field } => {
+                Err(format!("lacks {}", named(declared, field)))
+            }
+            ObjectMeet::Undeclared { declared, field } => {
+                Err(format!("undeclared {}", named(declared, field)))
+            }
+            ObjectMeet::TwoDeclarations { a, b } => {
+                Err(format!("two {} {}", i.resolve(a), i.resolve(b)))
+            }
+        }
+    }
+
+    fn fields_of(i: &Interner, names: &[&str]) -> FxHashMap<Astr, Ty> {
+        names.iter().map(|n| (i.intern(n), Ty::I64)).collect()
+    }
+
+    #[test]
+    fn two_written_objects_join_to_the_union_of_their_fields() {
+        let i = Interner::new();
+        assert_eq!(
+            meet_of(
+                &i,
+                ObjectTy::written(fields_of(&i, &["a"])),
+                ObjectTy::written(fields_of(&i, &["b"])),
+            ),
+            Ok(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_written_object_lacking_a_declared_field_is_refused_by_its_name() {
+        let i = Interner::new();
+        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        assert_eq!(
+            meet_of(&i, flags, ObjectTy::written(fields_of(&i, &["a"]))),
+            Err("lacks Flags b".to_string())
+        );
+    }
+
+    #[test]
+    fn an_object_carrying_a_field_no_declaration_names_is_refused_by_its_name() {
+        let i = Interner::new();
+        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        assert_eq!(
+            meet_of(
+                &i,
+                flags,
+                ObjectTy::written(fields_of(&i, &["a", "b", "c"]))
+            ),
+            Err("undeclared Flags c".to_string())
+        );
+    }
+
+    #[test]
+    fn the_join_of_a_declaration_and_a_written_object_of_its_fields_is_the_declared_type() {
+        let i = Interner::new();
+        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        let written = ObjectTy::written(fields_of(&i, &["a", "b"]));
+        let ObjectMeet::Joined {
+            ty,
+            a_takes,
+            b_takes,
+        } = ObjectTy::meet(&flags, &written)
+        else {
+            panic!("the field sets agree")
+        };
+        assert_eq!(ty.declaration(), Some(i.intern("Flags")));
+        assert_eq!((a_takes, b_takes), (false, true));
+    }
+
+    /// Reading a field asks the object for it; the object a declaration
+    /// fixed answers with its own type.
+    #[test]
+    fn asking_a_declared_object_for_one_of_its_fields_joins_to_the_declared_type() {
+        let i = Interner::new();
+        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        let ObjectMeet::Joined {
+            ty,
+            a_takes,
+            b_takes,
+        } = ObjectTy::meet(&flags, &ObjectTy::at_least(fields_of(&i, &["a"])))
+        else {
+            panic!("a read of `a` is within the declaration")
+        };
+        assert_eq!(ty.declaration(), Some(i.intern("Flags")));
+        assert_eq!((a_takes, b_takes), (false, true));
+    }
+
+    #[test]
+    fn asking_a_declared_object_for_a_field_it_does_not_have_is_refused() {
+        let i = Interner::new();
+        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        assert_eq!(
+            meet_of(&i, flags, ObjectTy::at_least(fields_of(&i, &["c"]))),
+            Err("undeclared Flags c".to_string())
+        );
+    }
+
+    #[test]
+    fn a_value_has_the_fields_of_one_declared_struct_and_of_no_other() {
+        let i = Interner::new();
+        assert_eq!(
+            meet_of(
+                &i,
+                ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a"])),
+                ObjectTy::declared(i.intern("Other"), fields_of(&i, &["a"])),
+            ),
+            Err("two Flags Other".to_string())
+        );
+    }
+
     #[test]
     fn unify_object_disjoint_via_var() {
         // Var -> {a} then Var -> {b} should merge to {a, b}
@@ -2959,8 +3282,14 @@ mod tests {
         let mut s = Solver::new(&mut sources, &registry);
         let i = Interner::new();
         let v = s.fresh_ty_var();
-        let obj_a = TyTerm::Object(FxHashMap::from_iter([(i.intern("a"), TyTerm::I64)]));
-        let obj_b = TyTerm::Object(FxHashMap::from_iter([(i.intern("b"), TyTerm::String)]));
+        let obj_a = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("a"),
+            TyTerm::I64,
+        )])));
+        let obj_b = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("b"),
+            TyTerm::String,
+        )])));
         assert!(s.unify(&v, &obj_a).is_ok());
         assert!(s.unify(&v, &obj_b).is_ok());
         let resolved = s.resolve_ty(&v);
@@ -2982,14 +3311,14 @@ mod tests {
         let mut s = Solver::new(&mut sources, &registry);
         let i = Interner::new();
         let v = s.fresh_ty_var();
-        let obj_ab = TyTerm::Object(FxHashMap::from_iter([
+        let obj_ab = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("a"), TyTerm::I64),
             (i.intern("b"), TyTerm::String),
-        ]));
-        let obj_bc = TyTerm::Object(FxHashMap::from_iter([
+        ])));
+        let obj_bc = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("b"), TyTerm::String),
             (i.intern("c"), TyTerm::Bool),
-        ]));
+        ])));
         assert!(s.unify(&v, &obj_ab).is_ok());
         assert!(s.unify(&v, &obj_bc).is_ok());
         let resolved = s.resolve_ty(&v);
@@ -3012,8 +3341,14 @@ mod tests {
         let mut s = Solver::new(&mut sources, &registry);
         let i = Interner::new();
         let v = s.fresh_ty_var();
-        let obj1 = TyTerm::Object(FxHashMap::from_iter([(i.intern("b"), TyTerm::I64)]));
-        let obj2 = TyTerm::Object(FxHashMap::from_iter([(i.intern("b"), TyTerm::String)]));
+        let obj1 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("b"),
+            TyTerm::I64,
+        )])));
+        let obj2 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("b"),
+            TyTerm::String,
+        )])));
         assert!(s.unify(&v, &obj1).is_ok());
         assert!(s.unify(&v, &obj2).is_err());
     }
@@ -3749,7 +4084,10 @@ mod tests {
         assert!(!Ty::Option(Box::new(fn_ty.clone())).is_data());
         assert!(!Ty::Tuple(vec![Ty::I64, fn_ty.clone()]).is_data());
         let interner = Interner::new();
-        let obj = Ty::Object(FxHashMap::from_iter([(interner.intern("cb"), fn_ty)]));
+        let obj = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            interner.intern("cb"),
+            fn_ty,
+        )])));
         assert!(!obj.is_data());
     }
 }

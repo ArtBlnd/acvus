@@ -1,7 +1,9 @@
 //! Intent tests for RefTarget::Through (RFC-0018).
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Mutability, Param, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly};
+use acvus_mir::ty::{
+    Mutability, ObjectTy, Param, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly,
+};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -27,10 +29,10 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
 }
 
 fn user(i: &Interner) -> Ty {
-    Ty::Object(FxHashMap::from_iter([
+    Ty::Object(ObjectTy::written(FxHashMap::from_iter([
         (i.intern("name"), Ty::String),
         (i.intern("age"), Ty::I64),
-    ]))
+    ])))
 }
 
 fn closure_taking(i: &Interner, param: Ty, ret: Ty) -> Ty {
@@ -66,15 +68,21 @@ fn a_string_field_is_copied_through_a_reference() {
 #[test]
 fn an_object_field_cannot_be_moved_out_through_a_reference() {
     let i = Interner::new();
-    let nested = Ty::Object(FxHashMap::from_iter([(
+    let nested = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
         i.intern("inner"),
-        Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
-    )]));
+        Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("age"),
+            Ty::I64,
+        )]))),
+    )])));
     let shared = Ty::Ref(
         Mutability::Shared,
         Box::new(TypeArg::uniform(nested.clone())),
     );
-    let inner = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
+    let inner = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+        i.intern("age"),
+        Ty::I64,
+    )])));
     let err = with_closure(&i, shared, inner, "u.inner").unwrap_err();
     assert!(!err.is_empty(), "{err}");
 }

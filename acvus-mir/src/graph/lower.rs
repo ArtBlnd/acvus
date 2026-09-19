@@ -84,6 +84,7 @@ pub fn lower(
 mod tests {
     use super::*;
     use crate::ir::InstKind;
+    use crate::ty::ObjectTy;
     use crate::{
         graph::extract,
         ty::{PolyBuilder, Ty, TyTerm},
@@ -158,7 +159,10 @@ mod tests {
     #[test]
     fn lower_context_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("name"),
+            Ty::String,
+        )])));
         let graph = make_graph_with_ctx(&i, "@user.name", &[("user", obj_ty)]);
         let ext = extract::extract(&i, &graph);
         let inf =

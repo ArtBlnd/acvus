@@ -5,7 +5,7 @@ use std::path::Path;
 
 use acvus_extern::Owned;
 use acvus_interpreter::{AcvusRuntime, ContextWrite, Value};
-use acvus_mir::ty::{IntTy, LenTerm, Ty};
+use acvus_mir::ty::{IntTy, LenTerm, ObjectTy, Ty};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -85,7 +85,7 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
                 values.insert(key, Owned::from_value(t.value));
             }
             Typed {
-                ty: Ty::Object(tys),
+                ty: Ty::Object(ObjectTy::written(tys)),
                 value: Value::object(values),
             }
         }

@@ -893,14 +893,15 @@ fn wrong_argument_type_panics_trusting_typeck() {
 #[test]
 fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     let (i, reg) = combined::<TypesOnly>();
-    let point = acvus_extern::Ty::Object(
+    let point = acvus_extern::Ty::Object(acvus_extern::ObjectTy::declared(
+        i.intern("Point"),
         [
             (i.intern("x"), acvus_extern::Ty::I64),
             (i.intern("label"), acvus_extern::Ty::String),
         ]
         .into_iter()
         .collect(),
-    );
+    ));
     let eq_fn = reg
         .functions
         .iter()
@@ -984,11 +985,11 @@ enum Shape {
 fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
     let i = Interner::new();
     let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts::default());
-    let rect = PolyTy::Object(
+    let rect = PolyTy::Object(acvus_extern::ObjectTy::written(
         [(i.intern("w"), PolyTy::I64), (i.intern("h"), PolyTy::I64)]
             .into_iter()
             .collect(),
-    );
+    ));
     assert_eq!(
         <Shape as TyArg>::poly_ty(&i, &vars),
         PolyTy::Enum {

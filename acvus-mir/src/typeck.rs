@@ -17,8 +17,8 @@ use crate::solver::{
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, Param, ParamTerm,
-    Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
+    CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy, Param,
+    ParamTerm, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -1038,6 +1038,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         });
     }
 
+    /// How a declared struct's field set refused an object (RFC-0042), for
+    /// the join that refused it and no other.
+    fn declared_field_refusal(&self, mismatch: &Mismatch) -> Option<MirErrorKind> {
+        let shown = |name: Astr| self.interner.resolve(name).to_string();
+        match mismatch.reason {
+            MismatchReason::ObjectLacksDeclaredField { declared, field } => {
+                Some(MirErrorKind::ObjectLacksDeclaredField {
+                    declared: shown(declared),
+                    field: shown(field),
+                })
+            }
+            MismatchReason::ObjectFieldNotDeclared { declared, field } => {
+                Some(MirErrorKind::ObjectFieldNotDeclared {
+                    declared: shown(declared),
+                    field: shown(field),
+                })
+            }
+            MismatchReason::NoJoin
+            | MismatchReason::UnionWithoutHome
+            | MismatchReason::ReprOpen(_)
+            | MismatchReason::TaskTooHigh { .. } => None,
+        }
+    }
+
     /// An argument meets its parameter (solver.md R1, R4). A `&place`
     /// argument's conversion consumes the place (RFC-0041): the place holds
     /// the parameter's referent type until the call ends, and a later lend
@@ -1048,7 +1072,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return;
         }
         let Some(lent) = &site.place else {
-            let _ = self.solver.unify(param_ty, arg_ty);
+            if self.refused_field_set(param_ty, arg_ty, site.span) {
+                return;
+            }
             self.convert_argument_at(arg_ty, param_ty, site);
             return;
         };
@@ -1073,7 +1099,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.convert_at(&held_lend_ty, param_ty, site);
             return;
         }
-        let _ = self.solver.unify(param_ty, arg_ty);
+        if self.refused_field_set(param_ty, arg_ty, site.span) {
+            return;
+        }
         self.convert_argument_at(arg_ty, param_ty, site);
         let to = match self.solver.shallow_resolve_ty(param_ty) {
             TyTerm::Ref(_, param_referent) => param_referent.ty,
@@ -1084,6 +1112,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             path: path.clone(),
             to,
         });
+    }
+
+    /// Whether the argument met a declared struct's field set and disagreed
+    /// with it, reported at `span`. No conversion answers such a join: the
+    /// field set is the type (RFC-0042).
+    fn refused_field_set(&mut self, param_ty: &InferTy, arg_ty: &InferTy, span: Span) -> bool {
+        let Err(mismatch) = self.solver.unify(param_ty, arg_ty) else {
+            return false;
+        };
+        let Some(kind) = self.declared_field_refusal(&mismatch) else {
+            return false;
+        };
+        self.error(kind, span);
+        true
     }
 
     /// `&v` at a `&[T]` parameter is the container's own `as_slice` of it,
@@ -1596,15 +1638,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let mut current = base.clone();
         for field in path {
             let field_ty = self.solver.fresh_ty_var();
-            let partial = TyTerm::Object(FxHashMap::from_iter([(*field, field_ty.clone())]));
-            if let Err(Mismatch { expected, got, .. }) = self.solver.unify(&current, &partial) {
-                self.error(
+            let partial = TyTerm::Object(ObjectTy::at_least(FxHashMap::from_iter([(
+                *field,
+                field_ty.clone(),
+            )])));
+            if let Err(mismatch) = self.solver.unify(&current, &partial) {
+                let kind = self.declared_field_refusal(&mismatch).unwrap_or_else(|| {
                     MirErrorKind::UnificationFailure {
-                        expected: self.type_as_written(&got),
-                        got: self.type_as_written(&expected),
-                    },
-                    span,
-                );
+                        expected: self.type_as_written(&mismatch.got),
+                        got: self.type_as_written(&mismatch.expected),
+                    }
+                });
+                self.error(kind, span);
                 return Self::infer_error();
             }
             current = field_ty;
@@ -3913,8 +3958,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Error(_) => Self::infer_error(),
                         TyTerm::Object(_) | TyTerm::Var(_) => {
                             let fresh = self.solver.fresh_ty_var();
-                            let partial =
-                                TyTerm::Object(FxHashMap::from_iter([(field_key, fresh.clone())]));
+                            let partial = TyTerm::Object(ObjectTy::at_least(FxHashMap::from_iter(
+                                [(field_key, fresh.clone())],
+                            )));
                             if self.solver.unify(&inner.ty, &partial).is_err() {
                                 self.error(
                                     MirErrorKind::UndefinedField {
@@ -3952,8 +3998,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     }
                     TyTerm::Object(_) | TyTerm::Var(_) => {
                         let fresh = self.solver.fresh_ty_var();
-                        let partial_obj =
-                            TyTerm::Object(FxHashMap::from_iter([(field_key, fresh.clone())]));
+                        let partial_obj = TyTerm::Object(ObjectTy::at_least(FxHashMap::from_iter(
+                            [(field_key, fresh.clone())],
+                        )));
                         if self.solver.unify(&ot_raw, &partial_obj).is_err() {
                             self.error(
                                 MirErrorKind::UndefinedField {
@@ -4119,7 +4166,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     self.reject_reference_in_data(&ft, value.span());
                     field_types.insert(*key, ft);
                 }
-                let ty = TyTerm::Object(field_types);
+                let ty = TyTerm::Object(ObjectTy::written(field_types));
                 self.record_ret(*id, ty)
             }
 
@@ -4821,14 +4868,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Pattern::Object { fields, .. } => {
                 // If source is already a concrete Object, match fields directly (open/subset).
                 // Otherwise, build an Object from pattern fields and unify to infer the type.
-                let obj_fields = if let TyTerm::Object(obj_fields) = &source_resolved {
-                    obj_fields.clone()
+                let obj_fields = if let TyTerm::Object(object) = &source_resolved {
+                    object.iter().map(|(k, v)| (*k, v.clone())).collect()
                 } else {
                     let field_vars: FxHashMap<Astr, InferTy> = fields
                         .iter()
                         .map(|f| (f.key, self.solver.fresh_ty_var()))
                         .collect();
-                    let obj_ty = TyTerm::Object(field_vars.clone());
+                    let obj_ty = TyTerm::Object(ObjectTy::at_least(field_vars.clone()));
                     if self.solver.unify_pattern(source_ty, &obj_ty).is_err() {
                         self.error(
                             MirErrorKind::PatternTypeMismatch {
@@ -5313,10 +5360,10 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(
             i.intern("user"),
-            Ty::Object(FxHashMap::from_iter([
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([
                 (i.intern("name"), Ty::String),
                 (i.intern("age"), Ty::I64),
-            ])),
+            ]))),
         )]);
         let src = "{{ @user.name }}";
         check_with_interner(src, &context, &i).unwrap();
@@ -5330,7 +5377,10 @@ mod tests {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(
             i.intern("user"),
-            Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)])),
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+                i.intern("name"),
+                Ty::String,
+            )]))),
         )]);
         let src = "{{ @user.unknown }}";
         let result = check_with_interner(src, &context, &i);
@@ -5513,7 +5563,10 @@ mod tests {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(
             i.intern("obj"),
-            Ty::Object(FxHashMap::from_iter([(i.intern("x"), Ty::I64)])),
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+                i.intern("x"),
+                Ty::I64,
+            )]))),
         )]);
         let src = "{{ x = @obj }}{{_}}{{/}}";
         check_with_interner(src, &ctx, &i).unwrap();

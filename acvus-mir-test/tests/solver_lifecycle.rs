@@ -9,8 +9,8 @@ use acvus_mir::graph::{
 use acvus_mir::ir::{Callee, CastKind};
 use acvus_mir::solver::{Answer, Conversion, Decision, InstanceChoice, InstanceKind};
 use acvus_mir::ty::{
-    CastRule, Effect, Instances, LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Scheme,
-    Solver, Sources, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
+    CastRule, Effect, Instances, LenTerm, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Repr,
+    Scheme, Solver, Sources, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
 };
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -260,7 +260,10 @@ fn s2_two_objects_join_to_the_union_of_their_fields() {
         .collect();
     assert_eq!(
         checked.ret,
-        Ty::Array(Box::new(Ty::Object(fields)), LenTerm::Known(2))
+        Ty::Array(
+            Box::new(Ty::Object(ObjectTy::written(fields))),
+            LenTerm::Known(2)
+        )
     );
 }
 
@@ -358,11 +361,11 @@ fn s5_a_lambda_after_the_argument_sees_the_element_type_the_instance_fixed() {
 #[test]
 fn s6_a_field_store_grows_the_object_for_every_use() {
     let i = Interner::new();
-    let ab = TyTerm::Object(
+    let ab = TyTerm::Object(ObjectTy::written(
         [(i.intern("a"), TyTerm::I64), (i.intern("b"), TyTerm::I64)]
             .into_iter()
             .collect(),
-    );
+    ));
     let fab = extern_fn(
         &i,
         "fab",

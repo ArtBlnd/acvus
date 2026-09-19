@@ -1,7 +1,9 @@
 //! Intent tests for RFC-0025.
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Mutability, Param, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly};
+use acvus_mir::ty::{
+    Mutability, ObjectTy, Param, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly,
+};
 use acvus_mir_test::*;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -103,7 +105,10 @@ fn a_context_read_after_a_call_whose_closure_writes_it_is_fetched_again() {
 }
 
 fn object_context(i: &Interner, name: &str) -> FxHashMap<acvus_utils::Astr, Ty> {
-    let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
+    let user = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+        i.intern("age"),
+        Ty::I64,
+    )])));
     FxHashMap::from_iter([(i.intern(name), user)])
 }
 

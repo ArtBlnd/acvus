@@ -38,7 +38,7 @@ pub fn build_context_ids(
 mod tests {
     use crate::ir::{InstKind, MirModule, RefTarget};
     use crate::test::{compile_script, compile_template};
-    use crate::ty::{Param, Ty};
+    use crate::ty::{ObjectTy, Param, Ty};
     use acvus_utils::Interner;
     use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -70,7 +70,10 @@ mod tests {
     #[test]
     fn a_template_that_moves_a_context_out_is_rejected() {
         let i = Interner::new();
-        let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
+        let user = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("age"),
+            Ty::I64,
+        )])));
         let err = compile_template(&i, r#"{{ y = @user }}{{ z = y.age }}"#, &[("user", user)])
             .unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
@@ -85,20 +88,20 @@ mod tests {
     #[test]
     fn integration_object_field_access() {
         let i = Interner::new();
-        let user_ty = Ty::Object(FxHashMap::from_iter([
+        let user_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::I64),
-        ]));
+        ])));
         compile_template(&i, "{{ x = @user.age }}", &[("user", user_ty)]).unwrap();
     }
 
     #[test]
     fn a_string_field_read_out_of_a_context_is_a_copy() {
         let i = Interner::new();
-        let user_ty = Ty::Object(FxHashMap::from_iter([
+        let user_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::I64),
-        ]));
+        ])));
         compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).unwrap();
     }
 
@@ -106,10 +109,10 @@ mod tests {
     fn integration_nested_match() {
         let i = Interner::new();
         let users_ty = Ty::Array(
-            Box::new(Ty::Object(FxHashMap::from_iter([
+            Box::new(Ty::Object(ObjectTy::written(FxHashMap::from_iter([
                 (i.intern("name"), Ty::String),
                 (i.intern("age"), Ty::I64),
-            ]))),
+            ])))),
             crate::ty::LenTerm::Known(3),
         );
         compile_template(
@@ -136,10 +139,10 @@ mod tests {
     #[test]
     fn integration_object_pattern() {
         let i = Interner::new();
-        let data_ty = Ty::Object(FxHashMap::from_iter([
+        let data_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("value"), Ty::I64),
-        ]));
+        ])));
         compile_template(
             &i,
             r#"{{ { name, } = @data }}{{ name }}{{/}}"#,
@@ -196,7 +199,10 @@ mod tests {
     #[test]
     fn a_context_moved_out_and_not_assigned_back_is_rejected() {
         let i = Interner::new();
-        let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
+        let user = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("age"),
+            Ty::I64,
+        )])));
         let err = compile_script(&i, "@data", &[("data", user.clone())]).unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
         let err = compile_script(&i, "let x = @data; x", &[("data", user)]).unwrap_err();
@@ -305,7 +311,10 @@ mod tests {
     #[test]
     fn projection_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("age"),
+            Ty::I64,
+        )])));
         let module = compile_script(&i, "@obj.age", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         assert!(
@@ -317,7 +326,10 @@ mod tests {
     #[test]
     fn projection_loaded_before_binop() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("val"), Ty::I64)]));
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("val"),
+            Ty::I64,
+        )])));
         let module = compile_script(&i, "@obj.val + 1", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         let take = kinds
@@ -396,7 +408,10 @@ mod tests {
     #[test]
     fn projection_no_leak_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("age"),
+            Ty::I64,
+        )])));
         let module = compile_script(&i, "@obj.age", &[("obj", obj_ty)]).unwrap();
         let mut ref_dsts = FxHashSet::default();
         let mut consumed = FxHashSet::default();
@@ -443,10 +458,10 @@ mod tests {
     #[test]
     fn context_data_object() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::I64),
-        ]));
+        ])));
         assert!(compile_script(&i, "@user = @user; 1", &[("user", obj_ty)]).is_ok());
     }
 
@@ -494,10 +509,10 @@ mod tests {
 
             effect: crate::ty::Effect::OPAQUE.into(),
         };
-        let obj_ty = Ty::Object(FxHashMap::from_iter([
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("callback"), fn_ty),
-        ]));
+        ])));
         assert!(compile_script(&i, "@obj = @obj; @obj", &[("obj", obj_ty)]).is_err());
     }
 }

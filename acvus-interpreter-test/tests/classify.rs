@@ -3,7 +3,7 @@
 use acvus_extern::Owned;
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{ObjectTy, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -13,7 +13,10 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
     let name = i.intern("name");
     let age = i.intern("age");
     let user = typed(
-        Ty::Object(FxHashMap::from_iter([(name, Ty::String), (age, Ty::I64)])),
+        Ty::Object(ObjectTy::written(FxHashMap::from_iter([
+            (name, Ty::String),
+            (age, Ty::I64),
+        ]))),
         Value::object(FxHashMap::from_iter([
             (name, Owned::from_value(Value::string("alice"))),
             (age, Owned::from_value(Value::int(30))),

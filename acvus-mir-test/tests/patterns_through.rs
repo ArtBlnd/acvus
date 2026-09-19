@@ -4,7 +4,7 @@ use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
-use acvus_mir::ty::{LenTerm, Mutability, PolyBuilder, Ty, TyTerm, TypeArg};
+use acvus_mir::ty::{LenTerm, Mutability, ObjectTy, PolyBuilder, Ty, TyTerm, TypeArg};
 use acvus_mir_test::*;
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -19,10 +19,10 @@ fn items(i: &Interner) -> FxHashMap<acvus_utils::Astr, Ty> {
 fn user(i: &Interner) -> FxHashMap<acvus_utils::Astr, Ty> {
     FxHashMap::from_iter([(
         i.intern("user"),
-        Ty::Object(FxHashMap::from_iter([
+        Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::I64),
-        ])),
+        ]))),
     )])
 }
 
@@ -85,7 +85,10 @@ fn a_list_pattern_against_a_value_copies_its_words_out() {
 #[test]
 fn a_list_pattern_against_a_value_of_objects_leaves_it_partly_moved() {
     let i = Interner::new();
-    let user = Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)]));
+    let user = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+        i.intern("age"),
+        Ty::I64,
+    )])));
     let users = FxHashMap::from_iter([(
         i.intern("users"),
         Ty::Array(Box::new(user), LenTerm::Known(2)),
@@ -107,11 +110,17 @@ fn a_context_bind_through_a_reference_is_rejected() {
     let ctx = FxHashMap::from_iter([
         (
             i.intern("user"),
-            Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+                i.intern("age"),
+                Ty::I64,
+            )]))),
         ),
         (
             i.intern("copy"),
-            Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+                i.intern("age"),
+                Ty::I64,
+            )]))),
         ),
     ]);
     let err = compile_script_ir(&i, "@copy = &@user; 0", &ctx).unwrap_err();
@@ -317,11 +326,17 @@ fn a_context_bound_by_a_pattern_whose_head_settles_on_a_reference_is_refused() {
     let ctx = FxHashMap::from_iter([
         (
             i.intern("user"),
-            Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+                i.intern("age"),
+                Ty::I64,
+            )]))),
         ),
         (
             i.intern("copy"),
-            Ty::Object(FxHashMap::from_iter([(i.intern("age"), Ty::I64)])),
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+                i.intern("age"),
+                Ty::I64,
+            )]))),
         ),
     ]);
     let err = compile_script_ir(

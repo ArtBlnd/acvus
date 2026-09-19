@@ -103,6 +103,18 @@ pub enum MirErrorKind {
         object_ty: Ty,
         field: String,
     },
+    /// An object at a parameter of a declared struct's type lacks a field
+    /// the struct declares (RFC-0042).
+    ObjectLacksDeclaredField {
+        declared: String,
+        field: String,
+    },
+    /// An object at a parameter of a declared struct's type has a field the
+    /// struct does not declare (RFC-0042).
+    ObjectFieldNotDeclared {
+        declared: String,
+        field: String,
+    },
     UndefinedContext(String),
 
     // Pattern errors
@@ -486,6 +498,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "no field `{field}` on type {}",
                     object_ty.display(interner)
+                )
+            }
+            MirErrorKind::ObjectLacksDeclaredField { declared, field } => {
+                write!(f, "object lacks field `{field}` that `{declared}` declares")
+            }
+            MirErrorKind::ObjectFieldNotDeclared { declared, field } => {
+                write!(
+                    f,
+                    "object has field `{field}` that `{declared}` does not declare"
                 )
             }
             MirErrorKind::UndefinedContext(name) => {

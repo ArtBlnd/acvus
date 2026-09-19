@@ -5,7 +5,7 @@
 //! than its source.
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ty::{Effect, Instances, ParamTerm, Poly, TyTerm};
+use acvus_mir::ty::{Effect, Instances, ObjectTy, ParamTerm, Poly, TyTerm};
 use acvus_mir_test::compile_script_mode_ir_with;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -27,11 +27,11 @@ fn extern_taking(i: &Interner, name: &str, param: TyTerm<Poly>) -> Function {
 }
 
 fn object_ab(i: &Interner) -> TyTerm<Poly> {
-    TyTerm::Object(
+    TyTerm::Object(ObjectTy::written(
         [(i.intern("a"), TyTerm::I64), (i.intern("b"), TyTerm::I64)]
             .into_iter()
             .collect(),
-    )
+    ))
 }
 
 fn shape(i: &Interner, variants: &[&str]) -> TyTerm<Poly> {

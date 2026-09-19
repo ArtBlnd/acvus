@@ -1028,7 +1028,7 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::{Param, Ty};
+    use crate::ty::{ObjectTy, Param, Ty};
     use acvus_utils::Interner;
 
     fn compile_and_dump_ctx(
@@ -1075,10 +1075,10 @@ mod tests {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(
             interner.intern("user"),
-            Ty::Object(FxHashMap::from_iter([
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([
                 (interner.intern("n"), Ty::I64),
                 (interner.intern("age"), Ty::I64),
-            ])),
+            ]))),
         )]);
         let out = compile_and_dump_ctx("{{ x = @user.age }}", &context, &interner);
         assert!(out.contains(".age"), "{out}");

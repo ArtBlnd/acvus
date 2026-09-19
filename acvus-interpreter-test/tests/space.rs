@@ -10,7 +10,7 @@ use acvus_extern::{Externs, Owned, Runtime};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, Mode, SequentialExecutor, Space, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{LenTerm, Ty, TypeArg};
+use acvus_mir::ty::{LenTerm, ObjectTy, Ty, TypeArg};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -61,7 +61,7 @@ fn a_value_of_a_language_shape_comes_back_equal() {
     let i = Interner::new();
     let rt = runtime(&i);
     let space = Space::new(Mode::Plain);
-    let ty = Ty::Object(
+    let ty = Ty::Object(ObjectTy::written(
         [
             (i.intern("name"), Ty::String),
             (
@@ -72,7 +72,7 @@ fn a_value_of_a_language_shape_comes_back_equal() {
         ]
         .into_iter()
         .collect(),
-    );
+    ));
     let mut value = Value::object(
         [
             (i.intern("name"), Owned::from_value(Value::string("acvus"))),
@@ -408,14 +408,14 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
         checkpoint_every: 100,
     });
     let inner_ty = deque_ty(&i, Ty::I64);
-    let obj_ty = Ty::Object(
+    let obj_ty = Ty::Object(ObjectTy::written(
         [
             (i.intern("name"), Ty::String),
             (i.intern("log"), inner_ty.clone()),
         ]
         .into_iter()
         .collect(),
-    );
+    ));
     let ty = deque_ty(&i, obj_ty);
     let obj = Value::object(
         [

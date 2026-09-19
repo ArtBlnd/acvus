@@ -6,7 +6,7 @@
 use acvus_extern::Owned;
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
-use acvus_mir::ty::{LenTerm, Ty};
+use acvus_mir::ty::{LenTerm, ObjectTy, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -71,10 +71,10 @@ fn student(i: &Interner, name: &str, score: i64) -> Value {
 }
 
 fn student_ty(i: &Interner) -> Ty {
-    Ty::Object(FxHashMap::from_iter([
+    Ty::Object(ObjectTy::written(FxHashMap::from_iter([
         (i.intern("name"), Ty::String),
         (i.intern("score"), Ty::I64),
-    ]))
+    ])))
 }
 
 fn students(i: &Interner, items: Vec<Value>) -> TypedValue {

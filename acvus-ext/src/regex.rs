@@ -40,9 +40,8 @@ pub struct Group {
 #[repr(transparent)]
 pub struct Captures(Vec<Group>);
 
-/// The `RegexBuilder` switches, all six of them: a derived object crosses
-/// field by field and a field the literal left out panics the crossing, so
-/// a script writes every one or starts from `regex_flags()`.
+/// The `RegexBuilder` switches, all six of them. A script writes every one
+/// or starts from `regex_flags()`.
 #[derive(TyArg)]
 pub struct RegexFlags {
     case_insensitive: bool,

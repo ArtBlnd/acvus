@@ -3,7 +3,7 @@
 use acvus_extern::Owned;
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
-use acvus_mir::ty::{LenTerm, Ty};
+use acvus_mir::ty::{LenTerm, ObjectTy, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -225,7 +225,10 @@ async fn iter_field_then_loop() {
     let i = Interner::new();
     let items = i.intern("items");
     let data = typed(
-        Ty::Object(FxHashMap::from_iter([(items, ints_ty(2))])),
+        Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            items,
+            ints_ty(2),
+        )]))),
         Value::object(FxHashMap::from_iter([(
             items,
             Owned::from_value(ints_value(&[10, 20])),

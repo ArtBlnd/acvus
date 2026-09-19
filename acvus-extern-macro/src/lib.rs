@@ -975,7 +975,7 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 ));
             };
             let shape = ObjectShape::of(fields);
-            let ty = shape.poly_ty();
+            let ty = shape.declared_poly_ty(&ident.to_string());
             let erase = shape.erase(quote! { self });
             let materialize = shape.materialize(quote! { __value }, quote! { Self });
             Ok(cross_impl(ident, ty, erase, materialize))
@@ -1075,17 +1075,35 @@ impl<'a> ObjectShape<'a> {
         Self { idents, names, tys }
     }
 
-    fn poly_ty(&self) -> proc_macro2::TokenStream {
+    fn fields(&self) -> proc_macro2::TokenStream {
         let (names, tys) = (&self.names, &self.tys);
         quote! {
+            [#((
+                __i.intern(#names),
+                <#tys as ::acvus_extern::TyArg>::poly_ty(__i, __vars),
+            )),*]
+            .into_iter()
+            .collect()
+        }
+    }
+
+    /// The type of the struct `name` declares: these fields and no others,
+    /// so an object reaching it has all of them (RFC-0042).
+    fn declared_poly_ty(&self, name: &str) -> proc_macro2::TokenStream {
+        let fields = self.fields();
+        quote! {
             ::acvus_extern::PolyTy::Object(
-                [#((
-                    __i.intern(#names),
-                    <#tys as ::acvus_extern::TyArg>::poly_ty(__i, __vars),
-                )),*]
-                .into_iter()
-                .collect(),
+                ::acvus_extern::ObjectTy::declared(__i.intern(#name), #fields),
             )
+        }
+    }
+
+    /// The type of a struct variant's payload, which an enum declares as
+    /// the object its fields spell.
+    fn written_poly_ty(&self) -> proc_macro2::TokenStream {
+        let fields = self.fields();
+        quote! {
+            ::acvus_extern::PolyTy::Object(::acvus_extern::ObjectTy::written(#fields))
         }
     }
 
@@ -1205,7 +1223,7 @@ fn generate_enum_ty_arg(
             syn::Fields::Named(fields) => {
                 let shape = ObjectShape::of(fields);
                 let idents = &shape.idents;
-                let ty = shape.poly_ty();
+                let ty = shape.written_poly_ty();
                 let erase = shape.erase_bound();
                 let materialize = shape.materialize(
                     quote! { ::acvus_extern::take_payload(__payload, #tag).into_value() },

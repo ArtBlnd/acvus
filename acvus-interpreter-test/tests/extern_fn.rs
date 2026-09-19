@@ -7,7 +7,7 @@ use acvus_extern::{ExternType, Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Executable, TokioExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
-use acvus_mir::ty::{LenTerm, Ty};
+use acvus_mir::ty::{LenTerm, ObjectTy, Ty};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -589,7 +589,7 @@ async fn a_field_of_a_context_is_a_place() {
     let i = Interner::new();
     let n = i.intern("n");
     let a = typed(
-        Ty::Object(FxHashMap::from_iter([(n, Ty::I64)])),
+        Ty::Object(ObjectTy::written(FxHashMap::from_iter([(n, Ty::I64)]))),
         Value::object(FxHashMap::from_iter([(
             n,
             Owned::from_value(Value::int(1)),

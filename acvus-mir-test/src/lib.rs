@@ -4,7 +4,7 @@ use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
 use acvus_mir::printer::dump_with;
-use acvus_mir::ty::{PolyBuilder, PolyParam, Ty, TyTerm, TypeRegistry, lift_declaration};
+use acvus_mir::ty::{ObjectTy, PolyBuilder, PolyParam, Ty, TyTerm, TypeRegistry, lift_declaration};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -212,11 +212,11 @@ pub fn compile_simple(interner: &Interner, source: &str) -> Result<String, Strin
 pub fn user_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
     FxHashMap::from_iter([(
         interner.intern("user"),
-        Ty::Object(FxHashMap::from_iter([
+        Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (interner.intern("name"), Ty::String),
             (interner.intern("age"), Ty::I64),
             (interner.intern("email"), Ty::String),
-        ])),
+        ]))),
     )])
 }
 
@@ -224,10 +224,10 @@ pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
     FxHashMap::from_iter([(
         interner.intern("users"),
         Ty::Array(
-            Box::new(Ty::Object(FxHashMap::from_iter([
+            Box::new(Ty::Object(ObjectTy::written(FxHashMap::from_iter([
                 (interner.intern("name"), Ty::String),
                 (interner.intern("age"), Ty::I64),
-            ]))),
+            ])))),
             acvus_mir::ty::LenTerm::Known(3),
         ),
     )])

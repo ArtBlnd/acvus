@@ -1008,7 +1008,9 @@ pub fn infer(
 mod tests {
     use super::*;
     use crate::graph::extract;
-    use crate::ty::{ParamTerm, Poly, PolyBuilder, PolyParam, lift_declaration, lift_to_poly};
+    use crate::ty::{
+        ObjectTy, ParamTerm, Poly, PolyBuilder, PolyParam, lift_declaration, lift_to_poly,
+    };
     use acvus_utils::{Freeze, Interner};
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {
@@ -1388,7 +1390,10 @@ mod tests {
     #[test]
     fn resolve_context_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([(i.intern("name"), Ty::String)]));
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("name"),
+            Ty::String,
+        )])));
         let graph = make_graph_with_ctx_and_builtins(&i, "@user.name", &[("user", obj_ty)]);
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
@@ -2131,10 +2136,10 @@ mod tests {
     #[test]
     fn inter_fn_object_return_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(FxHashMap::from_iter([
+        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::I64),
-        ]));
+        ])));
         let (result, ids) = infer_multi(
             &i,
             &[
@@ -2148,10 +2153,10 @@ mod tests {
             ],
             &[(
                 "user",
-                Ty::Object(FxHashMap::from_iter([
+                Ty::Object(ObjectTy::written(FxHashMap::from_iter([
                     (i.intern("name"), Ty::String),
                     (i.intern("age"), Ty::I64),
-                ])),
+                ]))),
             )],
         );
         let errs = error_strings(&i, &result);

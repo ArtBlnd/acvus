@@ -19,7 +19,9 @@ pub struct Ran {
 }
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower, optimize as graph_optimize};
-use acvus_mir::ty::{LenTerm, PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
+use acvus_mir::ty::{
+    LenTerm, ObjectTy, PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly,
+};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -481,7 +483,7 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
                 tys.insert(key, ty);
                 values.insert(key, Owned::from_value(value));
             }
-            typed(Ty::Object(tys), Value::object(values))
+            typed(Ty::Object(ObjectTy::written(tys)), Value::object(values))
         }
     }
 }
@@ -506,11 +508,11 @@ pub fn user_context(interner: &Interner) -> Context {
     FxHashMap::from_iter([(
         interner.intern("user"),
         typed(
-            Ty::Object(FxHashMap::from_iter([
+            Ty::Object(ObjectTy::written(FxHashMap::from_iter([
                 (name, Ty::String),
                 (age, Ty::I64),
                 (email, Ty::String),
-            ])),
+            ]))),
             Value::object(FxHashMap::from_iter([
                 (name, Owned::from_value(Value::string("alice"))),
                 (age, Owned::from_value(Value::int(30))),

@@ -316,13 +316,12 @@ async fn case_insensitive_changes_a_result() {
     assert_eq!(s, "true false");
 }
 
-/// A derived object crosses field by field, and the checker does not refuse
-/// an object literal that is missing one: two object types unify by union,
-/// so the shortfall surfaces in the crossing instead. That is why
-/// `regex_flags()` exists.
+/// `RegexFlags` declares six fields, so an object of five is not one
+/// (RFC-0042). The refusal names the field, and `regex_flags()` is the
+/// value a script starts from instead.
 #[tokio::test]
-#[should_panic(expected = "object field `multi_line` is missing")]
-async fn a_flags_literal_missing_a_field_does_not_reach_the_builder() {
+#[should_panic(expected = "object lacks field `multi_line` that `RegexFlags` declares")]
+async fn a_flags_literal_missing_a_field_is_refused_at_the_call() {
     let i = Interner::new();
     text_of(
         &i,

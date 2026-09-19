@@ -7,7 +7,7 @@
 //! - `{name}@raw` - unoptimized, raw lowered MIR
 //! - `{name}@optimized` - after full optimization pipeline
 
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{ObjectTy, Ty};
 use acvus_mir_test::{compile_script_optimized, compile_script_raw};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -20,12 +20,12 @@ fn ctx(i: &Interner, entries: &[(&str, Ty)]) -> FxHashMap<acvus_utils::Astr, Ty>
 }
 
 fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
-    Ty::Object(
+    Ty::Object(ObjectTy::written(
         fields
             .iter()
             .map(|(name, ty)| (i.intern(name), ty.clone()))
             .collect(),
-    )
+    ))
 }
 
 fn snap_both(i: &Interner, source: &str, c: &FxHashMap<acvus_utils::Astr, Ty>) -> (String, String) {
