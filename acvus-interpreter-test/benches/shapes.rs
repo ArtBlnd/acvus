@@ -63,6 +63,11 @@ let e = if i % 3 == 0 { E::A(i) } else { if i % 3 == 1 { E::B(i + 1) } else { E:
 let j = 0; while j < 1 { match e { E::A(v) => { acc = acc + v; }, \
 E::B(v) => { acc = acc + v; }, E::C(v) => { acc = acc + v; } }; j = j + 1; } \
 i = i + 1; } acc";
+const ENUM_MATCH_HEAPED: &str = "let acc = 0; let i = 0; while i < @n { \
+let e = if i % 3 == 0 { E::A(i) } else { if i % 3 == 1 { E::B(i + 1) } else { E::C(i + 2) } }; \
+let v = [e]; let m = len(&v); let z = m - m; \
+match &v[z] { E::A(w) => { acc = acc + *w; }, E::B(w) => { acc = acc + *w; }, \
+E::C(w) => { acc = acc + *w; } }; i = i + 1; } acc";
 const OPTION_MATCH: &str = "let i = 0; let acc = 0; while i < @n { if let Some(v) = some_of(i) { acc = acc + v; }; i = i + 1; } acc";
 
 /// `v[i]` takes a `u64` index and integer literals are `i64`, so the index
@@ -183,6 +188,29 @@ fn rust_enum_match_held(n: i64) -> f64 {
                 E3::C(v) => acc += *v,
             }
             j += 1;
+        }
+        i += 1;
+    }
+    acc as f64
+}
+
+/// The array is what `prepare::runs::Sites` refuses, so this row's variant is
+/// realized on the heap where `enum match held`'s takes a run. The Rust
+/// reference carries the same `Vec` so the ratio compares like with like.
+fn rust_enum_match_heaped(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let e = match black_box(i) % 3 {
+            0 => E3::A(i),
+            1 => E3::B(i + 1),
+            _ => E3::C(i + 2),
+        };
+        let v = vec![e];
+        match &v[0] {
+            E3::A(w) => acc += *w,
+            E3::B(w) => acc += *w,
+            E3::C(w) => acc += *w,
         }
         i += 1;
     }
@@ -376,6 +404,14 @@ fn main() {
             source: ENUM_MATCH_HELD,
             registries: std_only,
             rust: rust_enum_match_held,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "enum match heaped",
+            source: ENUM_MATCH_HEAPED,
+            registries: std_only,
+            rust: rust_enum_match_heaped,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

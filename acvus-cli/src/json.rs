@@ -58,14 +58,16 @@ pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
         }
         Ty::Enum { variants, .. } => {
             let variant = unsafe { value.as_variant() };
-            let tag = interner.resolve(variant.tag).to_string();
-            match (&variant.payload, variants.get(&variant.tag)) {
-                (Some(payload), Some(Some(t))) => {
+            // SAFETY: the same witness — a variant's first register is its tag.
+            let tag = unsafe { variant.tag().as_tag() };
+            let name = interner.resolve(tag).to_string();
+            match variants.get(&tag) {
+                Some(Some(t)) => {
                     let mut out = Map::new();
-                    out.insert(tag, of(interner, t, payload));
+                    out.insert(name, of(interner, t, variant.payload()));
                     Json::Object(out)
                 }
-                _ => Json::from(tag),
+                _ => Json::from(name),
             }
         }
         other => Json::from(format!("<{}>", other.display(interner))),
@@ -148,10 +150,16 @@ fn by_composite(interner: &Interner, value: &Value) -> Json {
         }
         Some(Composite::Variant) => {
             let variant = unsafe { value.as_variant() };
-            let tag = interner.resolve(variant.tag).to_string();
-            match &variant.payload {
-                Some(payload) => Json::Object(Map::from_iter([(tag, by_kind(interner, payload))])),
-                None => Json::from(tag),
+            // SAFETY: the same witness — a variant's first register is its tag.
+            let tag = interner
+                .resolve(unsafe { variant.tag().as_tag() })
+                .to_string();
+            match variant.payload().kind() {
+                Kind::Undef => Json::from(tag),
+                _ => Json::Object(Map::from_iter([(
+                    tag,
+                    by_kind(interner, variant.payload()),
+                )])),
             }
         }
         Some(Composite::Fn | Composite::Handle) | None => {

@@ -85,27 +85,29 @@ impl Op for DropRun {
     }
 }
 
-/// One tested arm: the index `prepare::runs::Tags` gives its tag, and the block
-/// the machine enters for it.
+/// One tested arm: the tag word `prepare::runs::Tags::word` gives its name, and
+/// the block the machine enters for it.
 pub struct RunArm {
     pub tag: u64,
     pub target: BlockId,
 }
 
-/// Obligation across artifacts: `arms` carry the numbering
-/// `prepare::runs::Tags` gives the settled type, which is the numbering the
-/// construction writes into the tag register. `default` is the edge RFC-0051's
-/// `switch_op` guarantees.
+/// Obligation across artifacts: `arms` carry the words `Tags::word` gives their
+/// names, which is what `value::Value::tag` writes into a heap variant's tag
+/// register and what `prepare::lay_variant` writes into a run's. `default` is
+/// the edge RFC-0051's `switch_op` guarantees.
 ///
-/// Decision not to index a table of blocks by the tag, which the ordinal makes
-/// possible. Measured on `benches/shapes.rs`'s `enum match held` at three arms,
+/// Decision not to index a table of blocks by the tag, which a dense ordinal
+/// would have made possible. Measured on `benches/shapes.rs`'s `enum match held` at three arms,
 /// four alternating pinned reps, min of each: the table ran 46.2 ns an
 /// iteration, this scan 38.2, and the heap form it replaces 42.6 — so the table
 /// was slower than the heap form it was meant to beat. It executed 1.36 G fewer
 /// instructions than the heap form and spent more cycles doing it, at equal
 /// cache misses: a second data-dependent indirect branch beside the machine's
 /// own dispatch costs more than three compares save. `ops::switch` records the
-/// same effect at seven arms.
+/// same effect at seven arms. The ordinal that table needed is withdrawn for a
+/// second reason in RFC-0050's Consequences: a heap construction does not hold
+/// the type it would be a position in.
 pub struct SwitchRun {
     pub src: Off,
     pub arms: Box<[RunArm]>,

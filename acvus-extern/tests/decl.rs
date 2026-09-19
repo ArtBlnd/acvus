@@ -25,6 +25,9 @@ enum V {
     Taken,
     /// The language's `Option` (RFC-0022), held as a host pleases.
     None,
+    /// RFC-0050 rule 8's two variant registers, held as a host pleases.
+    Undef,
+    Tag(acvus_extern::Astr),
     Some(*mut V),
     Erased(*mut (dyn Any + Send + Sync)),
     Closure(Closure),
@@ -43,7 +46,7 @@ impl acvus_extern::Release for V {
             V::Some(payload) => (*unsafe { Box::from_raw(payload) }).release(),
             V::Erased(any) => drop(unsafe { Box::from_raw(any) }),
             V::Closure(c) => drop(unsafe { Box::from_raw(c.0) }),
-            V::Taken | V::None | V::Reference(_) => {}
+            V::Taken | V::None | V::Undef | V::Tag(_) | V::Reference(_) => {}
         }
     }
 }
@@ -107,6 +110,10 @@ where
             "peek: value is an option, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Undef | V::Tag(_) => panic!(
+            "peek: value is a variant register, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::Taken => panic!("peek: the value was already taken out of its slot"),
     }
 }
@@ -137,6 +144,10 @@ where
             "materialize: value is an option, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Undef | V::Tag(_) => panic!(
+            "materialize: value is a variant register, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::Taken => panic!("materialize: the value was already taken out of its slot"),
     }
 }
@@ -148,7 +159,13 @@ impl Tiny {
     fn call(&self, f: &V, args: Vec<V>) -> V {
         match f {
             V::Closure(c) => (unsafe { &*c.0 })(args),
-            V::None | V::Some(_) | V::Taken | V::Erased(_) | V::Reference(_) => {
+            V::None
+            | V::Undef
+            | V::Tag(_)
+            | V::Some(_)
+            | V::Taken
+            | V::Erased(_)
+            | V::Reference(_) => {
                 panic!("call on a value that is not a closure")
             }
         }
@@ -254,6 +271,25 @@ impl Runtime for Tiny {
 
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn variant_tag(&self, name: &str) -> V {
+        V::Tag(SYMBOLS.intern(name))
+    }
+
+    unsafe fn tag_symbol(&self, tag: &V) -> acvus_extern::Astr {
+        let V::Tag(name) = tag else {
+            panic!("not a tag register: {tag:?}")
+        };
+        *name
+    }
+
+    fn undef(&self) -> V {
+        V::Undef
+    }
+
+    fn is_undef(&self, value: &V) -> bool {
+        matches!(value, V::Undef)
     }
 
     fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [V]) {

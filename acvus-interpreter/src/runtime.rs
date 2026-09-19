@@ -260,6 +260,23 @@ impl Runtime for AcvusRuntime {
         self.0.interner.intern(name)
     }
 
+    fn variant_tag(&self, name: &str) -> Value {
+        Value::tag(self.0.interner.intern(name))
+    }
+
+    unsafe fn tag_symbol(&self, tag: &Value) -> acvus_utils::Astr {
+        // SAFETY: the caller's contract.
+        unsafe { tag.as_tag() }
+    }
+
+    fn undef(&self) -> Value {
+        Value::UNDEF
+    }
+
+    fn is_undef(&self, value: &Value) -> bool {
+        value.kind() == Kind::Undef
+    }
+
     fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [Value]) {
         out[0] = word(words.ptr);
         out[1] = word(words.len);

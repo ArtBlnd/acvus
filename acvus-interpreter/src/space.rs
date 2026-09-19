@@ -545,10 +545,11 @@ impl Space {
             },
             Ty::Enum { variants, .. } => {
                 let variant = unsafe { value.as_variant_mut() };
-                if let (Some(payload), Some(Some(t))) =
-                    (&mut variant.payload, variants.get(&variant.tag))
-                {
-                    self.commit_nested(rt, t, payload, moved)?;
+                // SAFETY: the same witness — a variant's first register is its tag.
+                let tag = unsafe { variant.tag().as_tag() };
+                if let Some(Some(t)) = variants.get(&tag) {
+                    let t = t.as_ref().clone();
+                    self.commit_nested(rt, &t, variant.payload_mut(), moved)?;
                 }
                 Ok(())
             }

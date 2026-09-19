@@ -104,6 +104,10 @@ where
         .unwrap_or_else(|| panic!("open_mut: value is not a {}", type_name::<T>()))
 }
 
+/// This runtime's registry declares no enum, so no value of it is ever a
+/// variant and no tag register is ever written or read.
+const NO_VARIANTS: &str = "this runtime holds no variants";
+
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
 acvus_extern::cross_one_value!(V, at Counting);
@@ -282,6 +286,22 @@ impl Runtime for Counting {
 
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn variant_tag(&self, _: &str) -> Self::Value {
+        panic!("{NO_VARIANTS}")
+    }
+
+    unsafe fn tag_symbol(&self, _: &Self::Value) -> acvus_extern::Astr {
+        panic!("{NO_VARIANTS}")
+    }
+
+    fn undef(&self) -> Self::Value {
+        panic!("{NO_VARIANTS}")
+    }
+
+    fn is_undef(&self, _: &Self::Value) -> bool {
+        panic!("{NO_VARIANTS}")
     }
 
     fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [Self::Value]) {

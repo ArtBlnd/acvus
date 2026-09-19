@@ -9,16 +9,13 @@
 //! untested. So no `run` here has to decide that no arm holds;
 //! `validate::exhaustive` (RFC-0051 §3) decided that already.
 //!
-//! Decision not to build: the table RFC-0051 §5 names. A value's tag today
-//! is an `Astr`, an interned name and not an ordinal, so no table can be
-//! indexed by the tag itself; the nearest form is a hashed table whose
-//! lookup is a multiply and a dependent load, and at the seven arms of
-//! `benches/programs.rs`'s `bf table` that measured 24.4 ns a step against
-//! the scan's 23.3 (2026-09-19, three pinned reps, ranges apart). RFC-0050
-//! gives the value a tag word; the table is that RFC's, with an ordinal to
-//! index by and a variant count to bound it.
-
-use acvus_utils::Astr;
+//! Decision not to build: the table RFC-0051 §5 names. A tag word is the
+//! program's number for an interned name, which is sparse, so no table can be
+//! indexed by it; the nearest form is a hashed table whose lookup is a multiply
+//! and a dependent load, and at the seven arms of `benches/programs.rs`'s
+//! `bf table` that measured 24.4 ns a step against the scan's 23.3 (2026-09-19,
+//! three pinned reps, ranges apart). `ops::run::SwitchRun` records the same
+//! effect for a table a dense ordinal would have allowed.
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
@@ -26,13 +23,14 @@ use crate::code::{BlockId, Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::variant::scrutinee;
 
-/// One tested arm: the tag it names and the block the machine enters for it.
+/// One tested arm: the tag word it names and the block the machine enters for
+/// it.
 pub struct Arm {
-    pub key: Astr,
+    pub key: u64,
     pub target: BlockId,
 }
 
-/// A boxed variant's dispatch: one tag read and a scan of the arms, which
+/// A heap variant's dispatch: one tag read and a scan of the arms, which
 /// `prepare` ordered as the `match` wrote them.
 pub struct Switch<const THROUGH: bool> {
     pub src: Off,
@@ -45,7 +43,7 @@ impl<const THROUGH: bool> Op for Switch<THROUGH> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let source = scrutinee::<THROUGH>(m.regs().peek(self.src));
         // SAFETY: the preparation read an enum from the source's type.
-        let tag = unsafe { source.as_variant() }.tag;
+        let tag = unsafe { source.as_variant() }.tag().bits();
         self.arms
             .iter()
             .find(|arm| arm.key == tag)
@@ -96,7 +94,7 @@ impl<const THROUGH: bool> Op for SwitchResult<THROUGH> {
 /// the chain the machine runs for it, ended by `Yield` as every region part
 /// is (RFC-0052 §3).
 pub struct RegionArm {
-    pub key: Astr,
+    pub key: u64,
     pub head: Box<dyn Op>,
 }
 
@@ -117,7 +115,7 @@ impl<const THROUGH: bool> Op for SwitchRegion<THROUGH> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let source = scrutinee::<THROUGH>(m.regs().peek(self.src));
         // SAFETY: the preparation read an enum from the source's type.
-        let tag = unsafe { source.as_variant() }.tag;
+        let tag = unsafe { source.as_variant() }.tag().bits();
         let arm = self
             .arms
             .iter()

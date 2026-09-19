@@ -52,6 +52,8 @@ cross_as_stored!(Tracked);
 enum V {
     #[default]
     None,
+    Undef,
+    Tag(Astr),
     Some(*mut V),
     Boxed(*mut (dyn Any + Send + Sync)),
     Reference(*const V),
@@ -65,7 +67,7 @@ unsafe impl Sync for V {}
 impl Release for V {
     fn release(self) {
         match self {
-            V::None | V::Reference(_) => {}
+            V::None | V::Undef | V::Tag(_) | V::Reference(_) => {}
             // SAFETY: `some` leaked this cell and nothing else releases it.
             V::Some(cell) => unsafe { *Box::from_raw(cell) }.release(),
             // SAFETY: `erase` leaked this cell and nothing else frees it.
@@ -170,7 +172,7 @@ impl Runtime for Counted {
     fn type_of(&self, value: &V) -> Option<TypeId> {
         match value {
             V::Boxed(_) => Some(cell_ref(value).type_id()),
-            V::None | V::Some(_) | V::Reference(_) => None,
+            V::None | V::Undef | V::Tag(_) | V::Some(_) | V::Reference(_) => None,
         }
     }
 
@@ -285,6 +287,25 @@ impl Runtime for Counted {
 
     fn symbol(&self, name: &str) -> Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn variant_tag(&self, name: &str) -> V {
+        V::Tag(SYMBOLS.intern(name))
+    }
+
+    unsafe fn tag_symbol(&self, tag: &V) -> Astr {
+        let V::Tag(name) = tag else {
+            panic!("not a tag register: {tag:?}")
+        };
+        *name
+    }
+
+    fn undef(&self) -> V {
+        V::Undef
+    }
+
+    fn is_undef(&self, value: &V) -> bool {
+        matches!(value, V::Undef)
     }
 
     fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [V]) {
@@ -540,6 +561,56 @@ fn an_object_field_taken_out_is_released_by_its_receiver() {
     assert_eq!(drops.count(), 0, "the field is out of the object");
     drop(taken);
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
+}
+
+// -- `Variant<Owned<Rt>>`: a variant's two registers ---------------------
+
+fn carrying(rt: &Counted, drops: &Drops) -> acvus_extern::Variant<Owned<Counted>> {
+    acvus_extern::Variant::of(
+        Owned::from_value(rt.variant_tag("Held")),
+        Owned::from_value(tracked_value(rt, drops)),
+    )
+}
+
+/// RFC-0050 rule 4: a flat variant releases its payload through the kind byte,
+/// as an object releases its fields, and no descriptor says which register owns
+/// one. The tag register is dropped by the same code and owns nothing.
+#[test]
+fn a_variants_payload_is_released_once_and_its_tag_releases_nothing() {
+    let rt = Counted;
+    let drops = Drops::default();
+    {
+        let _held = carrying(&rt, &drops);
+        assert_eq!(drops.count(), 0, "the holder has not been let go of yet");
+    }
+    assert_eq!(drops.count(), 1, "the payload was released once");
+}
+
+#[test]
+fn a_variants_payload_taken_out_is_released_by_its_receiver() {
+    let rt = Counted;
+    let drops = Drops::default();
+    let payload = carrying(&rt, &drops).into_payload();
+    assert_eq!(drops.count(), 0, "the payload is out of the variant");
+    // SAFETY: the payload was erased from a `Tracked`.
+    let taken = unsafe { materialize_field::<Tracked, Counted>(&rt, payload) };
+    assert_eq!(drops.count(), 0, "the payload is in its receiver");
+    drop(taken);
+    assert_eq!(drops.count(), 1, "its receiver dropped it once");
+}
+
+/// A unit variant's payload register is `rt.undef()`, which owns nothing, so a
+/// variant that carries no payload releases nothing at all.
+#[test]
+fn a_unit_variants_registers_release_nothing() {
+    let rt = Counted;
+    let drops = Drops::default();
+    let unit = acvus_extern::Variant::of(
+        Owned::<Counted>::from_value(rt.variant_tag("Bare")),
+        Owned::from_value(rt.undef()),
+    );
+    drop(unit);
+    assert_eq!(drops.count(), 0, "a unit variant holds nothing to release");
 }
 
 /// RFC-0050 rule 8's order has two implementations of one comparison — `ObjectShape::

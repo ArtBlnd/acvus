@@ -529,6 +529,36 @@ implementation lands.
   What the one word still costs is one register the handler never reads
   where it calls no closure; choosing the operation by whether the handler
   calls a closure at all, which `Glue` already knows, is what removes that.
+Rule 4's heap realization is flat for an enum too. A heap variant is one header
+holding `[tag, payload]` — the same two registers `prepare/runs.rs::Layout`
+gives a run of that enum, at the same offsets — so the boxed payload is gone and
+a variant with a payload is one allocation where it was two. Measured on
+`benches/shapes.rs` `enum match heaped`, a three-armed construction whose member
+crosses into an array so `Sites` refuses its web: **39.1 to 36.1 ns an
+iteration, -7.6 %, ranges disjoint at both sizes**, and the allocation count for
+the same script **4.000 to 3.000 per iteration**, the two it keeps being the
+array and its slice. `switch::Switch<true>::run` falls from 52 instructions to
+38 and `variant::TestVariant<true>::run` from 41 to 30, both of them losing a
+call into `core::panicking::panic_fmt` that `Astr`'s equality carried.
+
+**The dense ordinal is refused for the heap form, and the tag word is the
+interned name's own number instead.** Rule 8 gives the tag word a position in
+the settled type's variant list, which a run can write because the web fixes one
+type for every member. A heap variant has no web, and measured over
+`acvus-interpreter-test` — 31 preparation sites — **every heap `MakeVariant`
+destination names exactly the one variant it wrote and every `Switch` scrutinee
+names the union**, so a position would be a different number at the writer and
+at the reader, and a variant that crossed a body or a container would have no
+shared type at all. `Astr::bits` is the one numbering a program already has at
+both ends: `value::Value::tag` writes it for the heap and `Layout::tag_word` for
+the run, so the two forms still spell one tag alike, which
+`prepare::runs::tests::a_heap_variant_and_a_run_of_one_enum_are_the_same_words`
+pins. What the ordinal was for is unaffected — it existed to make a `u64`
+compare possible where the heap compared interned names through a pointer, and
+the table it would have indexed is already refused above on measurement. Rule
+8's own sentence about the numbering is left for the owner to amend; this
+records what was built and why.
+
 - `&Obj` handlers become expressible; a Rust handler receives a real
   Rust enum.
 - A frame overflow of either class is a `prepare` refusal naming the

@@ -134,14 +134,16 @@ pub fn encode(
         },
         Ty::Enum { variants, .. } => {
             let variant = unsafe { value.as_variant() };
+            // SAFETY: the same witness — a variant's first register is its tag.
+            let tag = unsafe { variant.tag().as_tag() };
             let sorted = sorted_variants(&rt.0.interner, variants);
             let index = sorted
                 .iter()
-                .position(|(k, _)| **k == variant.tag)
+                .position(|(k, _)| **k == tag)
                 .ok_or_else(|| SpaceError::new("variant not in its enum type"))?;
             out.extend_from_slice(&(index as u64).to_le_bytes());
-            if let (Some(payload), Some(t)) = (&variant.payload, sorted[index].1) {
-                encode(rt, nested, t, payload, out)?;
+            if let Some(t) = sorted[index].1 {
+                encode(rt, nested, t, variant.payload(), out)?;
             }
         }
         Ty::UserDefined { .. } => {

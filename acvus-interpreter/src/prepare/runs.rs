@@ -44,23 +44,22 @@ pub struct Layout {
     tags: Tags,
 }
 
-/// Obligation across artifacts: a run's register at offset zero holds the
-/// index this numbering gives a variant, written by the construction arm in
-/// `prepare` and read by `ops::run::SwitchRun`. Both reach it through
-/// `Layout::tag_word` and `Layout::tag_index`, so neither carries a numbering
-/// of its own.
+/// The variants a run's type names, which is what decides whether a web's
+/// widest layout is a home for a narrower member's tags (`Layout::subsumes`).
+///
+/// The tag word itself is not numbered here. A run and a heap variant spell one
+/// tag the same way — `value::Value::tag` writes both — because a construction
+/// holds only the one variant's own type: measured over
+/// `acvus-interpreter-test`, every heap `MakeVariant` destination names exactly
+/// the variant it wrote and every `Switch` scrutinee names the union, so a
+/// position in this list would be a different number at the writer and at the
+/// reader.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Tags {
     names: Box<[Astr]>,
 }
 
 impl Tags {
-    /// Decision not to number by declaration order: `Ty::Enum` carries its
-    /// variants as an `FxHashMap` and no declaration reaches this, so string
-    /// order is the one order the settled type fixes. It is the comparison
-    /// rule 8 orders a structural object's fields by, for the same reason —
-    /// an interned symbol's order is the order of first interning, which
-    /// differs between programs and across a source change.
     fn of<'v, I>(variants: I, interner: &Interner) -> Tags
     where
         I: Iterator<Item = &'v Astr>,
@@ -72,11 +71,16 @@ impl Tags {
         }
     }
 
-    pub fn index(&self, name: Astr) -> Option<u32> {
-        self.names
-            .iter()
-            .position(|held| *held == name)
-            .map(|at| u32::try_from(at).expect("an enum has fewer variants than a u32 counts"))
+    pub fn holds(&self, name: Astr) -> bool {
+        self.names.contains(&name)
+    }
+
+    /// The word a run's tag register holds for `name`, which is the word
+    /// `value::Value::variant` writes into a heap variant's, and `None` where
+    /// this type names no such variant.
+    pub fn word(&self, name: Astr) -> Option<u64> {
+        self.holds(name)
+            .then(|| crate::value::Value::tag(name).bits())
     }
 
     pub fn names(&self) -> &[Astr] {
@@ -128,12 +132,7 @@ impl Layout {
 
     /// The register at offset zero of a run holding `tag`.
     pub fn tag_word(&self, tag: Astr) -> Option<crate::value::Value> {
-        self.tag_index(tag)
-            .map(|at| crate::value::Value::inline(crate::value::Kind::U32, u64::from(at)))
-    }
-
-    pub fn tag_index(&self, tag: Astr) -> Option<u32> {
-        self.tags.index(tag)
+        self.tags.holds(tag).then(|| crate::value::Value::tag(tag))
     }
 
     /// # Panics
@@ -166,7 +165,7 @@ impl Layout {
             .tags
             .names()
             .iter()
-            .all(|name| self.tags.index(*name).is_some());
+            .all(|name| self.tags.holds(*name));
         let fields = narrow.fields().all(|(_, name)| self.field(name).is_some());
         tags && fields && narrow.tags.is_empty() == self.tags.is_empty()
     }
@@ -1075,6 +1074,54 @@ mod tests {
     fn at_one_depth_the_longest_live_range_gives_its_run_up_first() {
         let held = [candidate(0, 0, 2, 2, 1), candidate(1, 0, 9, 2, 1)];
         assert_eq!(held[spill_first(&held)].var, ValueId::from_raw(1));
+    }
+
+    /// RFC-0050 rule 8 says the run and the heap realization are one layout, and
+    /// this is the contract both reach it through: a run of `E::B(i64)` and a
+    /// heap `Value::variant` of the same tag are compared register for
+    /// register.
+    ///
+    /// The two writers are `prepare::lay_variant`, which writes
+    /// `Layout::tag_word` at the run's base, and `value::Value::variant`, which
+    /// writes `Value::tag` at the header's first register. Give them different
+    /// numberings and only this assertion fails.
+    #[test]
+    fn a_heap_variant_and_a_run_of_one_enum_are_the_same_words() {
+        let i = Interner::new();
+        let ty = enum_of(
+            &i,
+            &[
+                ("Zed", Some(Ty::I64)),
+                ("Alpha", Some(Ty::I64)),
+                ("Mu", Some(Ty::I64)),
+            ],
+        );
+        let laid = layout(&ty, &i);
+        assert_eq!(
+            usize::from(laid.len()),
+            acvus_extern::VARIANT_WIDTH,
+            "a run of an enum is the registers a heap variant holds"
+        );
+        assert_eq!(
+            usize::from(laid.payload()),
+            1,
+            "the payload follows the tag in both"
+        );
+
+        for name in ["Zed", "Alpha", "Mu"] {
+            let tag = i.intern(name);
+            let run = laid.tag_word(tag).expect("the type names this variant");
+            let heap = crate::value::Value::variant(tag, None);
+            // SAFETY: `Value::variant` erased a variant.
+            let held = unsafe { heap.as_variant() };
+            assert_eq!(run.kind(), held.tag().kind(), "the tag register's kind");
+            assert_eq!(run.bits(), held.tag().bits(), "the tag register's word");
+            assert_eq!(
+                held.payload().kind(),
+                crate::value::Kind::Undef,
+                "a tag that carries nothing leaves rule 8's Undef"
+            );
+        }
     }
 
     /// The whole pass at its contract: two aggregates too wide to share a frame

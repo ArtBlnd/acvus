@@ -62,6 +62,24 @@ impl Hash for Astr {
 }
 
 impl Astr {
+    /// The one number a run of the program gives this name. Two `Astr`s are
+    /// equal exactly when their bits are, and unlike `id` alone these carry
+    /// the interner, so comparing them needs none of `eq`'s assertion.
+    pub fn bits(self) -> u64 {
+        (u64::from(self.interner_id.get()) << 32) | u64::from(self.id)
+    }
+
+    /// # Panics
+    /// `bits` is not what `bits` wrote: its high half is zero, which no
+    /// interner id is.
+    pub fn of_bits(bits: u64) -> Astr {
+        Astr {
+            interner_id: NonZero::new((bits >> 32) as u32)
+                .expect("an Astr's bits carry a non-zero interner id"),
+            id: bits as u32,
+        }
+    }
+
     /// Explicit display wrapper - requires an interner reference.
     pub fn display<'a>(&self, interner: &'a Interner) -> AstrDisplay<'a> {
         AstrDisplay {

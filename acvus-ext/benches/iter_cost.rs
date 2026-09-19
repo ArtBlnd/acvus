@@ -40,6 +40,12 @@ fn no_options() -> ! {
     panic!("the iter_cost runtimes hold no language Option")
 }
 
+/// Not built: these runtimes carry no language enum, so no value of theirs is a
+/// variant and no tag register is written or read.
+fn no_variants() -> ! {
+    panic!("the iter_cost runtimes hold no variants")
+}
+
 impl Default for Word {
     fn default() -> Self {
         Word(u64::MAX)
@@ -183,6 +189,22 @@ impl Runtime for Words {
 
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn variant_tag(&self, _: &str) -> Self::Value {
+        no_variants()
+    }
+
+    unsafe fn tag_symbol(&self, _: &Self::Value) -> acvus_utils::Astr {
+        no_variants()
+    }
+
+    fn undef(&self) -> Self::Value {
+        no_variants()
+    }
+
+    fn is_undef(&self, _: &Self::Value) -> bool {
+        no_variants()
     }
 
     fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {
@@ -502,6 +524,22 @@ impl Runtime for Tags {
 
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn variant_tag(&self, _: &str) -> Self::Value {
+        no_variants()
+    }
+
+    unsafe fn tag_symbol(&self, _: &Self::Value) -> acvus_utils::Astr {
+        no_variants()
+    }
+
+    fn undef(&self) -> Self::Value {
+        no_variants()
+    }
+
+    fn is_undef(&self, _: &Self::Value) -> bool {
+        no_variants()
     }
 
     fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {

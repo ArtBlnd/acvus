@@ -78,6 +78,10 @@ impl Release for V {
 #[derive(Clone, Default)]
 struct Counted;
 
+/// This runtime's registry declares no enum, so no value of it is ever a
+/// variant and no tag register is ever written or read.
+const NO_VARIANTS: &str = "this runtime holds no variants";
+
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
 /// The shape `Fn1` and the `Iter` stages carry as a closure value.
@@ -282,6 +286,22 @@ impl Runtime for Counted {
 
     fn symbol(&self, name: &str) -> Astr {
         SYMBOLS.intern(name)
+    }
+
+    fn variant_tag(&self, _: &str) -> Self::Value {
+        panic!("{NO_VARIANTS}")
+    }
+
+    unsafe fn tag_symbol(&self, _: &Self::Value) -> Astr {
+        panic!("{NO_VARIANTS}")
+    }
+
+    fn undef(&self) -> Self::Value {
+        panic!("{NO_VARIANTS}")
+    }
+
+    fn is_undef(&self, _: &Self::Value) -> bool {
+        panic!("{NO_VARIANTS}")
     }
 
     fn slice_into_run(&self, _: acvus_extern::Words, _: &mut [Self::Value]) {

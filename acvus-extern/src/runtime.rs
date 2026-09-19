@@ -178,6 +178,22 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// The name a field key is at run time (RFC-0032).
     fn symbol(&self, name: &str) -> acvus_utils::Astr;
 
+    /// How a tag lies in a register is the runtime's contract (RFC-0050 rule
+    /// 6), so `acvus-extern-macro`'s derived enum crossing calls these two and
+    /// never reads the word itself.
+    fn variant_tag(&self, name: &str) -> Self::Value;
+
+    /// # Safety
+    /// `tag` is the tag register of a variant this runtime wrote.
+    unsafe fn tag_symbol(&self, tag: &Self::Value) -> acvus_utils::Astr;
+
+    /// The word rule 8 leaves at a register whose component this value does
+    /// not have; `interpreter::ops::pattern::TestObjectKey` is what reads one
+    /// back.
+    fn undef(&self) -> Self::Value;
+
+    fn is_undef(&self, value: &Self::Value) -> bool;
+
     /// A slice written into the run its result is: two of the runtime's
     /// values, one per register of the pair the machine keeps a slice in
     /// (RFC-0047 amended). A runtime whose value cannot carry a bare word
@@ -344,6 +360,18 @@ impl Runtime for TypesOnly {
     }
     fn symbol(&self, _: &str) -> acvus_utils::Astr {
         panic!("TypesOnly runtime holds no values")
+    }
+    fn variant_tag(&self, _: &str) {
+        no_values()
+    }
+    unsafe fn tag_symbol(&self, _: &()) -> acvus_utils::Astr {
+        panic!("TypesOnly runtime holds no values")
+    }
+    fn undef(&self) {
+        no_values()
+    }
+    fn is_undef(&self, _: &()) -> bool {
+        no_values()
     }
     fn slice_into_run(&self, _: crate::slice::Words, _: &mut [()]) {
         no_values()

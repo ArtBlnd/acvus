@@ -583,9 +583,12 @@ typed_debug_fn! { Tuple;
 }
 typed_debug_fn! { Object; dbg_object = |d, f| f.debug_map().entries(d.fields()).finish(); }
 typed_debug_fn! { VariantValue;
-    dbg_variant = |d, f| match &d.payload {
-        Some(p) => write!(f, "{:?}({:?})", d.tag, p),
-        None => write!(f, "{:?}", d.tag),
+    dbg_variant = |d, f| {
+        let tag = Astr::of_bits(d.tag().bits());
+        match d.payload().kind() {
+            Kind::Undef => write!(f, "{tag:?}"),
+            _ => write!(f, "{tag:?}({:?})", d.payload()),
+        }
     };
 }
 typed_debug_fn! { ResultValue;
@@ -723,14 +726,22 @@ impl Value {
         let shape = ObjectShape::in_order(fields.iter().map(|(name, _)| *name).collect());
         Value::object(shape, fields.into_iter().map(|(_, v)| v).collect())
     }
+    /// RFC-0050 rules 4 and 8's flat variant: the tag register and one payload,
+    /// `Undef` where the tag carries none.
     pub fn variant(tag: Astr, payload: Option<Owned<AcvusRuntime>>) -> Self {
-        large(
-            &VARIANT,
-            VariantValue {
-                tag,
-                payload: payload.map(Box::new),
-            },
-        )
+        let payload = payload.unwrap_or_else(|| Owned::from_value(Value::UNDEF));
+        Value::variant_of(Value::tag(tag), payload)
+    }
+
+    pub fn variant_of(tag: Value, payload: Owned<AcvusRuntime>) -> Self {
+        large(&VARIANT, VariantValue::of(Owned::from_value(tag), payload))
+    }
+
+    /// The word a tag register holds: the one number a run of the program gives
+    /// the name, so two tags compare as words and neither side needs the enum's
+    /// type to write or read one.
+    pub fn tag(tag: Astr) -> Value {
+        Value::inline(Kind::U64, tag.bits())
     }
     /// `Some(payload)`, in the one shape every option takes: the payload's
     /// own value, unless the payload is itself a `None`, whose depth word
@@ -895,6 +906,11 @@ impl Value {
     /// The value is a variant.
     pub unsafe fn as_variant_mut(&mut self) -> &mut VariantValue {
         unsafe { self.peek_mut::<VariantValue>() }
+    }
+    /// # Safety
+    /// The value is a variant's tag register.
+    pub unsafe fn as_tag(&self) -> Astr {
+        Astr::of_bits(self.bits())
     }
     /// # Safety
     /// The value is an `Fn`.

@@ -153,10 +153,49 @@ impl<V> Obj<V> {
     }
 }
 
-/// A variant as the runtime holds it: the tag and its payload, if any.
+/// The registers rule 8 gives every enum: the tag and one payload.
+pub const VARIANT_WIDTH: usize = 2;
+
+/// A variant as the runtime holds it (RFC-0050 rules 4 and 8).
+///
+/// These two registers are the same two that `interpreter::prepare::runs::
+/// Layout` gives a run of the same enum, in the same order and with the same
+/// word spelling the tag. The two crates lay one enum, and
+/// `interpreter::prepare::runs`'s
+/// `a_heap_variant_and_a_run_of_one_enum_are_the_same_words` is where the two
+/// are compared register for register.
+///
+/// Unlike its sibling `Obj`, a variant carries no shared shape. A field's
+/// position means nothing without the field names, so an object has to hold an
+/// `ObjectShape`; a tag word carries the interned name it stands for, so a
+/// reader — a printer with no `Ty`, a crossing, a `Switch` — resolves it alone.
 pub struct Variant<V> {
-    pub tag: Astr,
-    pub payload: Option<Box<V>>,
+    pub values: [V; VARIANT_WIDTH],
+}
+
+impl<V> Variant<V> {
+    pub fn of(tag: V, payload: V) -> Variant<V> {
+        Variant {
+            values: [tag, payload],
+        }
+    }
+
+    pub fn tag(&self) -> &V {
+        &self.values[0]
+    }
+
+    pub fn payload(&self) -> &V {
+        &self.values[1]
+    }
+
+    pub fn payload_mut(&mut self) -> &mut V {
+        &mut self.values[1]
+    }
+
+    pub fn into_payload(self) -> V {
+        let [_, payload] = self.values;
+        payload
+    }
 }
 
 /// The run of the runtime's values a crossing occupies, as a type, so that a

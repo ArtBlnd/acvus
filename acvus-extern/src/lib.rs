@@ -43,8 +43,8 @@ pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
     Cross, CrossSpecialized, FieldAt, Form, FromValue, Inline, Obj, ObjectShape, One, OneValue,
-    Pair, Stored, TransparentOver, Variant, downcast, erase_field, expect_type, materialize_field,
-    materialize_payload, one_from_run, one_into_run, take_payload,
+    Pair, Stored, TransparentOver, VARIANT_WIDTH, Variant, downcast, erase_field, expect_type,
+    materialize_field, materialize_payload, one_from_run, one_into_run, take_payload,
 };
 pub use owned::{Owned, Release};
 pub use projection::{

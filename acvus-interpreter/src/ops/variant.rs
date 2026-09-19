@@ -5,7 +5,6 @@
 //! the destination's and the source's types as the preparation read them.
 
 use acvus_extern::Owned;
-use acvus_utils::Astr;
 
 use crate::code::{Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
@@ -91,9 +90,11 @@ impl<const LARGE: bool> Op for MakeErr<LARGE> {
     }
 }
 
+/// `tag` is the register word the preparation resolved, not the name: what the
+/// operation writes at run time it carries (RFC-0050 rule 8).
 pub struct MakeVariant<const LARGE: bool> {
     pub slots: Unary,
-    pub tag: Astr,
+    pub tag: Value,
     pub next: Box<dyn Op>,
 }
 
@@ -103,7 +104,7 @@ impl<const LARGE: bool> Op for MakeVariant<LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
-        let value = Value::variant(self.tag, Some(payload));
+        let value = Value::variant_of(self.tag, payload);
         regs.define::<true>(self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -111,7 +112,7 @@ impl<const LARGE: bool> Op for MakeVariant<LARGE> {
 
 pub struct MakeUnitVariant {
     pub dst: Marked,
-    pub tag: Astr,
+    pub tag: Value,
     pub next: Box<dyn Op>,
 }
 
@@ -119,7 +120,7 @@ impl Op for MakeUnitVariant {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let value = Value::variant(self.tag, None);
+        let value = Value::variant_of(self.tag, Owned::from_value(Value::UNDEF));
         m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -163,7 +164,7 @@ impl<const THROUGH: bool, const OK: bool> Op for TestResult<THROUGH, OK> {
 
 pub struct TestVariant<const THROUGH: bool> {
     pub slots: Unary,
-    pub tag: Astr,
+    pub tag: u64,
     pub next: Box<dyn Op>,
 }
 
@@ -174,7 +175,7 @@ impl<const THROUGH: bool> Op for TestVariant<THROUGH> {
         let regs = m.regs();
         let source = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         // SAFETY: the preparation read an enum from the source's type.
-        let matches = unsafe { source.as_variant() }.tag == self.tag;
+        let matches = unsafe { source.as_variant() }.tag().bits() == self.tag;
         regs.set_word(self.slots.dst.at, matches as u64);
         self.next.run(m, r0)
     }
@@ -222,7 +223,7 @@ impl<const LARGE: bool> Op for UnwrapResult<LARGE> {
 /// here, and that is a limit of the instruction rather than a choice: the
 /// MIR's `UnwrapVariant` names a destination and a source and no tag, so
 /// the preparation has no tag to resolve the arm against. Give the
-/// instruction its tag and the `map_or_else` below becomes a second const.
+/// instruction its tag and the kind test below becomes a second const.
 pub struct UnwrapVariant<const LARGE: bool> {
     pub slots: Unary,
     pub next: Box<dyn Op>,
@@ -235,8 +236,13 @@ impl<const LARGE: bool> Op for UnwrapVariant<LARGE> {
         let regs = m.regs();
         let variant = regs.take::<true>(self.slots.src);
         // SAFETY: the preparation read an enum from the source's type.
-        let payload = unsafe { variant.materialize::<VariantValue>() }.payload;
-        let value = payload.map_or_else(Value::unit, |held| (*held).into_value());
+        let payload = unsafe { variant.materialize::<VariantValue>() }
+            .into_payload()
+            .into_value();
+        let value = match payload.kind() {
+            Kind::Undef => Value::unit(),
+            _ => payload,
+        };
         regs.define::<LARGE>(self.slots.dst, value);
         self.next.run(m, r0)
     }

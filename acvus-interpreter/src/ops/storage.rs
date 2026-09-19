@@ -114,20 +114,22 @@ impl Segment for VariantPayload {
     #[inline]
     fn at<'v>(&self, value: &'v Value) -> Place<'v> {
         // SAFETY: the preparation read an enum from the type.
-        let held = unsafe { value.as_variant() }
-            .payload
-            .as_deref()
-            .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE);
+        let held: &Value = unsafe { value.as_variant() }.payload();
+        assert!(
+            held.kind() != Kind::Undef,
+            "{PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE}"
+        );
         Place::At(held)
     }
 
     #[inline]
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY: the preparation read an enum from the type.
-        let held = unsafe { value.as_variant_mut() }
-            .payload
-            .as_deref_mut()
-            .expect(PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE);
+        let held: &mut Value = unsafe { value.as_variant_mut() }.payload_mut();
+        assert!(
+            held.kind() != Kind::Undef,
+            "{PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE}"
+        );
         PlaceMut::At(held)
     }
 }

@@ -1350,9 +1350,9 @@ impl<'a> Prepare<'a> {
             let arms: Box<[run_ops::RunArm]> = placed
                 .iter()
                 .map(|arm| run_ops::RunArm {
-                    tag: u64::from(tags.index(arm.key).unwrap_or_else(|| {
-                        panic!("the settled type numbers no variant {:?}", arm.key)
-                    })),
+                    tag: tags
+                        .word(arm.key)
+                        .unwrap_or_else(|| panic!("the run's type names no variant {:?}", arm.key)),
                     target: arm.block,
                 })
                 .collect();
@@ -1390,7 +1390,7 @@ impl<'a> Prepare<'a> {
                 let arms: Box<[switch::Arm]> = placed
                     .iter()
                     .map(|arm| switch::Arm {
-                        key: arm.key,
+                        key: Value::tag(arm.key).bits(),
                         target: arm.block,
                     })
                     .collect();
@@ -1481,7 +1481,7 @@ impl<'a> Prepare<'a> {
             };
         }
 
-        let mut chains: Vec<switch::RegionArm> = Vec::with_capacity(tested.len());
+        let mut chains: Vec<(Astr, Box<dyn Op>)> = Vec::with_capacity(tested.len());
         for (key, label, args) in tested {
             let head = self.arm_chain(
                 region,
@@ -1491,18 +1491,18 @@ impl<'a> Prepare<'a> {
                 },
                 rides,
             );
-            chains.push(switch::RegionArm { key: *key, head });
+            chains.push((*key, head));
         }
         let otherwise = self.arm_chain(region, fallback, rides);
 
         if let Some((src, tags)) = placed_run {
             let arms: Box<[run_ops::RunRegionArm]> = chains
                 .into_iter()
-                .map(|arm| run_ops::RunRegionArm {
-                    tag: u64::from(tags.index(arm.key).unwrap_or_else(|| {
-                        panic!("the settled type numbers no variant {:?}", arm.key)
-                    })),
-                    head: arm.head,
+                .map(|(key, head)| run_ops::RunRegionArm {
+                    tag: tags
+                        .word(key)
+                        .unwrap_or_else(|| panic!("the run's type names no variant {key:?}")),
+                    head,
                 })
                 .collect();
             return made(move |next| {
@@ -1515,7 +1515,13 @@ impl<'a> Prepare<'a> {
             });
         }
 
-        let arms: Box<[switch::RegionArm]> = chains.into_boxed_slice();
+        let arms: Box<[switch::RegionArm]> = chains
+            .into_iter()
+            .map(|(key, head)| switch::RegionArm {
+                key: Value::tag(key).bits(),
+                head,
+            })
+            .collect();
         match through {
             true => made(move |next| {
                 Box::new(switch::SwitchRegion::<true> {
@@ -3187,9 +3193,11 @@ impl<'a> Prepare<'a> {
                         test_result::<false>(slots, self.tag_is(tag, "Ok"))
                     }
                     (VariantForm::Enum, true) => {
+                        let tag = Value::tag(tag).bits();
                         node(move |next| variant::TestVariant::<true> { slots, tag, next })
                     }
                     (VariantForm::Enum, false) => {
+                        let tag = Value::tag(tag).bits();
                         node(move |next| variant::TestVariant::<false> { slots, tag, next })
                     }
                 }
@@ -3907,15 +3915,21 @@ impl<'a> Prepare<'a> {
                 (false, false) => node(move |next| variant::MakeErr::<false> { slots, next }),
             },
             (Ty::Result(..), None) => panic!("Ok and Err carry a payload"),
-            (_, Some(slots)) => match large {
-                true => node(move |next| variant::MakeVariant::<true> { slots, tag, next }),
-                false => node(move |next| variant::MakeVariant::<false> { slots, tag, next }),
-            },
-            (_, None) => node(move |next| variant::MakeUnitVariant {
-                dst: out,
-                tag,
-                next,
-            }),
+            (_, Some(slots)) => {
+                let tag = Value::tag(tag);
+                match large {
+                    true => node(move |next| variant::MakeVariant::<true> { slots, tag, next }),
+                    false => node(move |next| variant::MakeVariant::<false> { slots, tag, next }),
+                }
+            }
+            (_, None) => {
+                let tag = Value::tag(tag);
+                node(move |next| variant::MakeUnitVariant {
+                    dst: out,
+                    tag,
+                    next,
+                })
+            }
         }
     }
 }

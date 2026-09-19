@@ -1,8 +1,17 @@
 # RFC-0036: A Rust enum crosses the boundary as the language's enum
 
-Status: Accepted
+Status: Accepted; the representation superseded by RFC-0050 rules 4 and 8
 Date: 2026-09-16
 Extends: RFC-0032
+
+A variant is no longer a tag symbol beside a boxed payload. It is one header
+holding two of the runtime's values — the tag word and the payload, `Undef`
+where the variant carries none — which is the layout a run of the same enum
+takes. The crossing below stands unchanged: `variant::erase` and
+`variant::opened` write and read those two registers through `Runtime::
+variant_tag` and `Runtime::tag_symbol`, and the derive still names its variants
+in declaration order, because a tag word carries the name it stands for and
+needs no agreed position.
 
 ## Ruling
 
