@@ -19,7 +19,7 @@ use acvus_extern::Width;
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
+    Callee, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -303,6 +303,16 @@ struct LoopRegion {
     back: usize,
 }
 
+/// One `for` the recognizer matched, as indexes into `MirBody::insts`.
+struct ForRegion {
+    enter_jump: usize,
+    head: usize,
+    terminator: usize,
+    body_block: Range<usize>,
+    body_regions: Vec<Region>,
+    back: usize,
+}
+
 /// One `if/else` the recognizer matched, as indexes into `MirBody::insts`.
 struct DiamondRegion {
     jump_if: usize,
@@ -396,6 +406,7 @@ struct FarSide {
 /// A run of instructions the recognizer replaces with one operation.
 enum Region {
     Loop(LoopRegion),
+    For(ForRegion),
     Diamond(DiamondRegion),
 }
 
@@ -418,6 +429,7 @@ impl Region {
     fn start(&self) -> usize {
         match self {
             Region::Loop(region) => region.start(),
+            Region::For(region) => region.enter_jump,
             Region::Diamond(region) => region.jump_if,
         }
     }
@@ -425,6 +437,7 @@ impl Region {
     fn end(&self) -> usize {
         match self {
             Region::Loop(region) => region.end(),
+            Region::For(region) => region.back + 1,
             Region::Diamond(region) => region.join + 1,
         }
     }
@@ -629,6 +642,7 @@ fn targets(inst: &Inst, label: Label) -> bool {
             arms.iter().any(|(_, named, _)| *named == label)
                 || default.as_ref().is_some_and(|(named, _)| *named == label)
         }
+        InstKind::For { body, exit, .. } => *body == label || *exit == label,
         _ => false,
     }
 }
@@ -998,11 +1012,26 @@ impl<'a> Prepare<'a> {
     /// Each move carries its own `LARGE`, so the order is the whole of the
     /// correctness argument: there is no second run for it to cross into.
     fn move_ops(&mut self, label: &Label, args: &[ValueId]) -> Vec<Node> {
+        self.moves_past(label, args, 0)
+    }
+
+    fn block_params(&self, label: &Label) -> &'_ [ValueId] {
         let target = self.label(label) as usize;
         let InstKind::BlockLabel { params, .. } = &self.body.insts[target].kind else {
             panic!("a jump names {label:?}, whose instruction is not a block label")
         };
-        let pairs: Vec<Carried> = params
+        params
+    }
+
+    fn moves_past(&mut self, label: &Label, args: &[ValueId], supplied_params: usize) -> Vec<Node> {
+        let params = self.block_params(label);
+        assert!(
+            params.len() >= supplied_params,
+            "a block takes {} parameters, fewer than the {supplied_params} the edge into it \
+             does not carry because its terminator fills them",
+            params.len()
+        );
+        let pairs: Vec<Carried> = params[supplied_params..]
             .iter()
             .zip(args)
             .map(|(param, arg)| Carried {
@@ -1215,6 +1244,9 @@ impl<'a> Prepare<'a> {
     }
 
     fn recognize_region(&self, at: usize) -> Option<Region> {
+        if let Some(region) = self.recognize_for(at) {
+            return Some(Region::For(region));
+        }
         match self.recognize_loop(at) {
             Some(region) => Some(Region::Loop(region)),
             None => self.recognize_diamond(at).map(Region::Diamond),
@@ -1294,6 +1326,75 @@ impl<'a> Prepare<'a> {
             back,
         };
         self.is_closed(region.start()..region.end())
+            .then_some(region)
+    }
+
+    /// The shape `acvus_mir::lower` gives a `for` whose body rejoins: the
+    /// entry jump, a header holding nothing but its `For`, the body block the
+    /// terminator's one edge reaches, and the latch back to the header.
+    ///
+    /// A `break` and a `continue` are each refused here, and they are refused
+    /// by the two conditions RFC-0057 Decision 4 names rather than by a test
+    /// of their own. A `break` puts the exit's block between the terminator
+    /// and the body, so the body label is not the instruction after the
+    /// terminator; a `continue` is a third jump to the header, so the header
+    /// has more references than the entry and the latch. Either way this
+    /// answers `None` and the loop prepares as the blocks it was, which is
+    /// what "that loop runs its branches as joints" means in the machine.
+    fn recognize_for(&self, at: usize) -> Option<ForRegion> {
+        let insts = self.body.insts.as_slice();
+        let InstKind::Jump { label: entered, .. } = &insts.get(at)?.kind else {
+            return None;
+        };
+        let head = at + 1;
+        let header = block_label(insts.get(head)?)?;
+        if header != *entered {
+            return None;
+        }
+
+        let terminator = head + 1;
+        let InstKind::For { body, exit, .. } = &insts.get(terminator)?.kind else {
+            return None;
+        };
+        let reaching = self.references(header);
+        let [entry, back] = reaching.as_slice() else {
+            return None;
+        };
+        if *entry != at || *back <= head {
+            return None;
+        }
+        let back = *back;
+        if !matches!(insts[back].kind, InstKind::Jump { .. }) {
+            return None;
+        }
+        if block_label(insts.get(back + 1)?)? != *exit {
+            return None;
+        }
+
+        let body_label = terminator + 1;
+        if block_label(insts.get(body_label)?)? != *body
+            || self.references(*body).as_slice() != [terminator]
+        {
+            return None;
+        }
+
+        let StraightRun {
+            stops_at: body_end,
+            regions: body_regions,
+        } = self.straight_run(body_label + 1, back);
+        if body_end != back {
+            return None;
+        }
+
+        let region = ForRegion {
+            enter_jump: at,
+            head,
+            terminator,
+            body_block: body_label + 1..back,
+            body_regions,
+            back,
+        };
+        self.is_closed(region.enter_jump..region.back + 1)
             .then_some(region)
     }
 
@@ -1561,6 +1662,10 @@ impl<'a> Prepare<'a> {
                 self.loop_op(region, ops);
                 None
             }
+            Unit::Region(Region::For(region)) => {
+                self.for_op(region, ops);
+                None
+            }
             Unit::Region(Region::Diamond(region)) => {
                 let op = match self.select_op(region, rides) {
                     Some(op) => op,
@@ -1646,6 +1751,133 @@ impl<'a> Prepare<'a> {
             }),
         }));
         ops.extend(exit);
+    }
+
+    fn for_op(&mut self, region: &ForRegion, ops: &mut Vec<Node>) {
+        let body = self.body;
+        let InstKind::For {
+            source,
+            body: body_label,
+            body_args,
+            exit,
+            exit_args,
+        } = &body.insts[region.terminator].kind
+        else {
+            panic!("a recognized `for`'s terminator is not a `For`")
+        };
+        let InstKind::Jump {
+            label: header,
+            args: back_args,
+        } = &body.insts[region.back].kind
+        else {
+            panic!("a recognized `for`'s latch is not a jump")
+        };
+        let InstKind::Jump {
+            label: entered,
+            args: entering,
+        } = &body.insts[region.enter_jump].kind
+        else {
+            panic!("a recognized `for`'s entry is not a jump")
+        };
+
+        let entering = self.move_ops(entered, entering);
+        ops.extend(entering);
+
+        let into_body = self.moves_past(body_label, body_args, source.supplied_params());
+        let leaving = self.move_ops(exit, exit_args);
+        let back = self.move_ops(header, back_args);
+
+        let params: Vec<ValueId> = self.block_params(body_label).to_vec();
+        let ran = self.straight(region.body_block.clone(), &region.body_regions, back);
+        let ran = chain(into_body, ran);
+
+        ops.push(self.for_node(source, &params, ran));
+        ops.extend(leaving);
+    }
+
+    /// The `For` operation one head prepares to, with `ran` as its body chain.
+    ///
+    /// `params` is the body block's parameter list, whose leading entries the
+    /// terminator fills: `ForSource::counter_param` decides which of them is
+    /// the counter, and a container's element is the other one.
+    fn for_node(&self, source: &ForSource, params: &[ValueId], ran: Box<dyn Op>) -> Node {
+        let counter = self.off(params[source.counter_param()]);
+        match source {
+            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
+                let src = control::Slice {
+                    slice: self.pair(*slice),
+                    elem: self.off(params[0]),
+                    index: counter,
+                };
+                made(move |next| {
+                    Box::new(control::For {
+                        src,
+                        body: ran,
+                        next,
+                    }) as Box<dyn Op>
+                })
+            }
+            ForSource::Array(array) => {
+                let element = params[0];
+                let array = self.off(*array);
+                let elem = self.marked(element);
+                let index = counter;
+                match (owns_large(self.ty(element)), word_kind(self.ty(element))) {
+                    (true, None) => made(move |next| {
+                        let src = control::Array::<true, false> { array, elem, index };
+                        Box::new(control::For {
+                            src,
+                            body: ran,
+                            next,
+                        }) as Box<dyn Op>
+                    }),
+                    (false, Some(_)) => made(move |next| {
+                        let src = control::Array::<false, true> { array, elem, index };
+                        Box::new(control::For {
+                            src,
+                            body: ran,
+                            next,
+                        }) as Box<dyn Op>
+                    }),
+                    (false, None) => made(move |next| {
+                        let src = control::Array::<false, false> { array, elem, index };
+                        Box::new(control::For {
+                            src,
+                            body: ran,
+                            next,
+                        }) as Box<dyn Op>
+                    }),
+                    (true, Some(kind)) => panic!(
+                        "an array element of kind {kind:?} both owns a `Large` and is a word, \
+                         which is the one pair `Regs::store` refuses"
+                    ),
+                }
+            }
+            ForSource::Range { at, hi } => {
+                let Ty::Int(width) = self.ty(*at) else {
+                    panic!(
+                        "a `for` over a range names the bound type {:?}; RFC-0057 Decision 1 \
+                         admits one integer width and no other",
+                        self.ty(*at)
+                    )
+                };
+                let from = self.off(*at);
+                let hi = self.off(*hi);
+                for_int_ty!(*width, |T| made(move |next| {
+                    let src = control::Range::<T> {
+                        hi,
+                        elem: counter,
+                        from,
+                        width: PhantomData,
+                    };
+                    Box::new(control::For {
+                        src,
+                        body: ran,
+                        next,
+                    }) as Box<dyn Op>
+                }))
+            }
+        }
     }
 
     /// The diamond `region` is, where it is a select: one arm a single
@@ -1842,17 +2074,11 @@ impl<'a> Prepare<'a> {
                 return Some(self.switch_op(*tag, arms, default.as_ref()));
             }
 
-            // RFC-0057: the machine has no `For` operation yet. Expanding one
-            // here into the comparison, the element read and the advance
-            // needs a counter register initialized above the header, and the
-            // header block is the only block this arm writes: the preheader's
-            // `Mov`s and `move_ops`' parameter positions are outside it. The
-            // machine run gives `For` the region op that owns the index
-            // register (RFC-0057 Decision 3).
             InstKind::For { source, .. } => {
                 panic!(
-                    "a `for` over {source:?} cannot be prepared: the machine has no `For` \
-                     operation yet (RFC-0057 Decision 3); the script is refused before it runs"
+                    "a `for` over {source:?} reached the block emitter, so \
+                     `recognize_for` refused its shape: a `break` or a `continue` leaves this \
+                     loop, which the joints path RFC-0057 Decision 4 names does not run yet"
                 )
             }
 
@@ -3292,6 +3518,10 @@ impl Edges<'_> {
                     visit(self.target(label));
                 }
             }
+            InstKind::For { body, exit, .. } => {
+                visit(self.target(body));
+                visit(self.target(exit));
+            }
             InstKind::Return { .. } | InstKind::Diverge => {}
             _ => {
                 if at + 1 < self.insts.len() {
@@ -3433,15 +3663,10 @@ struct EdgeMove {
 
 fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
     let mut moves = Vec::new();
-    let mut edge = |label: &Label, args: &[ValueId]| {
-        for (arg, param) in args.iter().zip(edges.block_params(label)) {
-            moves.push(EdgeMove {
-                arg: *arg,
-                param: *param,
-            });
-        }
-    };
     for inst in edges.insts {
+        let mut edge = |label: &Label, args: &[ValueId]| {
+            carried_moves(&mut moves, edges.block_params(label), args)
+        };
         match &inst.kind {
             InstKind::Jump { label, args } => edge(label, args),
             InstKind::JumpIf {
@@ -3462,10 +3687,31 @@ fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
                     edge(label, args);
                 }
             }
+            InstKind::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_args,
+            } => {
+                edge(exit, exit_args);
+                carried_moves(
+                    &mut moves,
+                    source.carried_params(edges.block_params(body)),
+                    body_args,
+                );
+            }
             _ => {}
         }
     }
     moves
+}
+
+fn carried_moves(into: &mut Vec<EdgeMove>, params: &[ValueId], args: &[ValueId]) {
+    into.extend(args.iter().zip(params).map(|(arg, param)| EdgeMove {
+        arg: *arg,
+        param: *param,
+    }));
 }
 
 /// The arguments of the extern call or spawn at this instruction.
@@ -4191,6 +4437,10 @@ mod recognizer_tests {
             covers: Range<usize>,
             nested: Vec<Matched>,
         },
+        For {
+            covers: Range<usize>,
+            nested: Vec<Matched>,
+        },
         Diamond {
             covers: Range<usize>,
             on_true: Vec<Matched>,
@@ -4211,6 +4461,10 @@ mod recognizer_tests {
                     .into_iter()
                     .chain(matched(&region.body_regions))
                     .collect(),
+            },
+            Region::For(region) => Matched::For {
+                covers,
+                nested: matched(&region.body_regions),
             },
             Region::Diamond(region) => Matched::Diamond {
                 covers,

@@ -168,13 +168,33 @@ a parameter of the body and not a value the body computes, so no pass has to
 find it, and a `Range`'s element is its counter, so a range loop carries one
 register where a container's loop carries two.
 
-The timing numbers wait for the machine. `prepare` has no `For` arm that
-runs: expanding the terminator into the comparison, the element read and the
-advance needs a counter initialized above the header, and the header block
-is the only block such an arm writes -- so the interpreter refuses a `For`
-until the region op that owns the index register exists. Until then the
-measurements of `int while`, of attention's inner loop and of the log
-bench's `inline break` case are not available.
+The machine half is built for a loop whose body rejoins. `prepare::
+recognize_for` matches the shape the lowering emits -- the entry jump, a
+header holding nothing but its terminator, the body block the terminator's
+one edge reaches, the latch back to the header -- and `prepare::for_op`
+collapses it into one region operation, `ops::control::For<S>`, where `S` is
+the head: `Slice` for both `&v` and `&mut v`, `Array<LARGE, WORD>` for an
+array by value, `Range<T>` at the width the two bounds share. The counter is
+a local of `For::run`, not a register any operation advances, and the bound
+is read once above the loop, so the region runs one chain per iteration
+where `Loop<C>` runs two -- its head chain is the comparison the terminator
+replaced. The element read is `IndexUnchecked`: the terminator is the bound.
+
+What the `Array` head leaves behind is the loop's one cross-crate
+obligation. Each iteration moves element `index` out of the array and leaves
+`Undef` in its slot; the array itself is released by the `Drop`
+`optimize::drop_insertion` puts on the exit block, which is also what
+releases the elements a `break` never reached. The machine therefore does
+not release the array, and must not.
+
+A loop a `break` leaves, or one a `continue` returns to the head of, is the
+joints path Decision 4 names, and it does not run yet: `recognize_for`
+refuses both shapes -- a `break` puts the exit's drop block between the
+terminator and the body, and a `continue` is a third jump to the header --
+and `prepare` then refuses the script.
+`acvus-interpreter-test/tests/for_loop.rs` holds that refusal as two tests
+that must be deleted when the path lands. The parallel split section is
+still unwritten: `spawn_split` over a `for` waits on it, not on the machine.
 
 What is measured already, at the machine's listing, is what `break` changes
 about region recognition: a loop whose exit is a flag is a `Loop<Slot>`

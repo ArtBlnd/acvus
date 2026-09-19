@@ -15,9 +15,15 @@
 use crate::code::OwnedOps;
 use std::marker::PhantomData;
 
+use acvus_extern::Owned;
+
+use crate::runtime::AcvusRuntime;
+
 use crate::code::{BlockId, Exit, Marked, Off, Op, RETURN, SlicePair, successor};
 use crate::machine::Machine;
+use crate::ops::arith::Int;
 use crate::ops::place::Place;
+use crate::regs::Regs;
 use crate::value::Value;
 
 /// One move of a parallel move, as an operation of the block it belongs to
@@ -222,6 +228,195 @@ where
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.head, &mut self.body]
+    }
+}
+
+pub trait Source: Send + Sync + 'static {
+    type Bound: Copy;
+
+    fn bound(&self, regs: &Regs<'_>) -> Self::Bound;
+    fn first(&self, regs: &Regs<'_>) -> u64;
+    fn holds(at: u64, bound: Self::Bound) -> bool;
+    fn step(at: u64) -> u64;
+
+    /// Cross-artifact obligation: which of the body block's leading
+    /// parameters this fills, and in which order, is decided in
+    /// `acvus_mir::ir::ForSource::supplied_params` and `counter_param`. The
+    /// body reads those registers by position, so an implementation that
+    /// lays them in another order compiles here and reads the wrong register
+    /// there.
+    fn lay(&self, regs: &mut Regs<'_>, at: u64);
+}
+
+/// One operation for both `for x in &v` and `for x in &mut v`: the two heads
+/// differ in the loan the terminator carries and not in what the machine does.
+pub struct Slice {
+    pub slice: SlicePair,
+    pub elem: Off,
+    pub index: Off,
+}
+
+impl Source for Slice {
+    type Bound = u64;
+
+    #[inline(always)]
+    fn bound(&self, regs: &Regs<'_>) -> u64 {
+        regs.word(self.slice.len)
+    }
+
+    #[inline(always)]
+    fn first(&self, _regs: &Regs<'_>) -> u64 {
+        0
+    }
+
+    #[inline(always)]
+    fn holds(at: u64, bound: u64) -> bool {
+        at < bound
+    }
+
+    #[inline(always)]
+    fn step(at: u64) -> u64 {
+        at + 1
+    }
+
+    #[inline(always)]
+    fn lay(&self, regs: &mut Regs<'_>, at: u64) {
+        // SAFETY: the slice holds its container's loan, and `at` is below the
+        // length `bound` read — the terminator is the bound, so the read is
+        // the unchecked one (RFC-0057 Decision 3).
+        let target = unsafe { crate::ops::index::element::<false>(regs, self.slice, at) };
+        regs.put(self.elem, Value::reference(target));
+        regs.set_word(self.index, at);
+    }
+}
+
+/// Cross-artifact obligation: this operation does not release the array, and
+/// it must not. `acvus_mir::optimize::drop_insertion` emits a `Drop` of the
+/// array on the loop's exit block, which is what releases the storage and the
+/// slots the counter never reached; `acvus mir` over `for x in a { … }` prints
+/// it as the `drop` above the exit's `return`. So the array's register keeps
+/// its value and the frame keeps its claim on it for that `Drop` to take.
+pub struct Array<const LARGE: bool, const WORD: bool> {
+    pub array: Off,
+    pub elem: Marked,
+    pub index: Off,
+}
+
+impl<const LARGE: bool, const WORD: bool> Source for Array<LARGE, WORD> {
+    type Bound = u64;
+
+    #[inline(always)]
+    fn bound(&self, regs: &Regs<'_>) -> u64 {
+        // SAFETY: the preparation read `Array` off the source's type.
+        unsafe { regs.peek(self.array).as_array() }.len() as u64
+    }
+
+    #[inline(always)]
+    fn first(&self, _regs: &Regs<'_>) -> u64 {
+        0
+    }
+
+    #[inline(always)]
+    fn holds(at: u64, bound: u64) -> bool {
+        at < bound
+    }
+
+    #[inline(always)]
+    fn step(at: u64) -> u64 {
+        at + 1
+    }
+
+    #[inline(always)]
+    fn lay(&self, regs: &mut Regs<'_>, at: u64) {
+        // SAFETY: as `bound`; `at` is below the length that read.
+        let slot = unsafe { &mut regs.peek_mut(self.array).as_array_mut().0[at as usize] };
+        let taken: Owned<AcvusRuntime> = std::mem::replace(slot, Owned::from_value(Value::UNDEF));
+        regs.store::<LARGE, WORD>(self.elem, taken.into_value());
+        regs.set_word(self.index, at);
+    }
+}
+
+pub struct Range<T>
+where
+    T: Int,
+{
+    pub hi: Off,
+    pub elem: Off,
+    pub from: Off,
+    pub width: PhantomData<fn() -> T>,
+}
+
+impl<T> Source for Range<T>
+where
+    T: Int,
+{
+    type Bound = T;
+
+    #[inline(always)]
+    fn bound(&self, regs: &Regs<'_>) -> T {
+        T::read(regs.word(self.hi))
+    }
+
+    #[inline(always)]
+    fn first(&self, regs: &Regs<'_>) -> u64 {
+        regs.word(self.from)
+    }
+
+    #[inline(always)]
+    fn holds(at: u64, bound: T) -> bool {
+        T::read(at) < bound
+    }
+
+    #[inline(always)]
+    fn step(at: u64) -> u64 {
+        T::read(at).wrapping_add(T::read(1)).word()
+    }
+
+    #[inline(always)]
+    fn lay(&self, regs: &mut Regs<'_>, at: u64) {
+        regs.set_word(self.elem, at);
+    }
+}
+
+/// The shape `prepare::recognize_for` finds in the IR (RFC-0057 Decision 3).
+pub struct For<S>
+where
+    S: Source,
+{
+    pub src: S,
+    pub body: Box<dyn Op>,
+    pub next: Box<dyn Op>,
+}
+
+impl<S> Op for For<S>
+where
+    S: Source,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let bound = self.src.bound(m.regs());
+        let mut at = self.src.first(m.regs());
+        while S::holds(at, bound) {
+            self.src.lay(m.regs(), at);
+            self.body.run(m, r0);
+            at = S::step(at);
+        }
+        self.next.run(m, r0)
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        vec![OwnedOps {
+            part: "body",
+            head: self.body.as_ref(),
+        }]
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+        vec![&mut self.body]
     }
 }
 

@@ -51,6 +51,14 @@ const RANGE_SUM: &str = "range(0, @n) | sum";
 const MAP_ID_SUM: &str = "range(0, @n) | map(|x| -> x) | sum";
 const MAP_ADD_SUM: &str = "range(0, @n) | map(|x| -> x + 1) | sum";
 const MAP_CAP_SUM: &str = "let k = 1; range(0, @n) | map(|x| -> x + k) | sum";
+/// The three traversals RFC-0057 replaces a pipeline with: one `For` region
+/// per loop, and no `Iter` extern per element.
+const FOR_RANGE: &str = "let acc = 0; for i in 0..@n { acc = acc + i; } acc";
+const FOR_SLICE: &str =
+    "let v = range(0, @n) | collect; let acc = 0; for x in &v { acc = acc + *x; } acc";
+const FOR_SLICE_ADD: &str =
+    "let v = range(0, @n) | collect; let acc = 0; for x in &v { acc = acc + *x + 1; } acc";
+
 const EXTERN_WHILE: &str =
     "let i = 0; let acc = 0; while i < @n { acc = acc + id_of(i); i = i + 1; } acc";
 const BRANCH_WHILE: &str =
@@ -117,6 +125,32 @@ fn rust_map_add_sum(n: i64) -> f64 {
 fn rust_map_cap_sum(n: i64) -> f64 {
     let k = 1i64;
     (0..n).map(black_box).map(|x| x + k).sum::<i64>() as f64
+}
+
+fn rust_for_range(n: i64) -> f64 {
+    let mut acc = 0i64;
+    for i in 0..n {
+        acc += black_box(i);
+    }
+    acc as f64
+}
+
+fn rust_for_slice(n: i64) -> f64 {
+    let v: Vec<i64> = (0..n).collect();
+    let mut acc = 0i64;
+    for x in &v {
+        acc += black_box(*x);
+    }
+    acc as f64
+}
+
+fn rust_for_slice_add(n: i64) -> f64 {
+    let v: Vec<i64> = (0..n).collect();
+    let mut acc = 0i64;
+    for x in &v {
+        acc += black_box(*x) + 1;
+    }
+    acc as f64
 }
 
 fn rust_extern_while(n: i64) -> f64 {
@@ -327,6 +361,14 @@ fn main() {
             ret: Ty::I64,
         },
         Case {
+            name: "for range",
+            source: FOR_RANGE,
+            registries: std_only,
+            rust: rust_for_range,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
             name: "map id | sum",
             source: MAP_ID_SUM,
             registries: std_only,
@@ -335,10 +377,26 @@ fn main() {
             ret: Ty::I64,
         },
         Case {
+            name: "for slice",
+            source: FOR_SLICE,
+            registries: std_only,
+            rust: rust_for_slice,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
             name: "map add | sum",
             source: MAP_ADD_SUM,
             registries: std_only,
             rust: rust_map_add_sum,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "for slice add",
+            source: FOR_SLICE_ADD,
+            registries: std_only,
+            rust: rust_for_slice_add,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

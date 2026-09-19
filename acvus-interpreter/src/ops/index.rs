@@ -62,7 +62,7 @@ fn position<const CHECKED: bool>(run: &Run, index: u64) -> usize {
 /// # Safety
 /// As `run`.
 #[inline]
-unsafe fn element<'a, const CHECKED: bool>(
+pub(crate) unsafe fn element<'a, const CHECKED: bool>(
     regs: &Regs<'_>,
     slice: SlicePair,
     index: u64,
