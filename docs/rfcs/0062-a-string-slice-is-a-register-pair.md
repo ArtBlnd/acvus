@@ -130,7 +130,12 @@ the spelling wherever an owned string is wanted: at a `String` parameter, in
 a list, an object, a tuple or a context, at a capture, and as a body's
 result. A body does not return a `&str` — the result leaves in the one
 register a caller reads, and a host that declares `!` reads it by kind
-(RFC-0054), which a pair has none of.
+(RFC-0054), which a pair has none of. The wider rule, decided with this
+one and not yet enforced for the other references: a body's result is not
+a reference of any kind until a reference's extent can be stated in a
+signature (a later RFC on loans as lifetimes); today a `&String` or `&T`
+result prints nothing at the host, and the checker will refuse it as it
+refuses the `&str`.
 
 The `string` module's reading half takes `&str` and its producers return
 `String`: `len`, `is_empty`, `concat`, `contains`, `starts_with_str`,
