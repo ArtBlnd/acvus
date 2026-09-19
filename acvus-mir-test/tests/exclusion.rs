@@ -14,7 +14,7 @@ fn check(src: &str) -> Result<String, String> {
 #[test]
 fn a_reference_kept_in_a_variable_holds_its_loan() {
     let err = check("let x = 1; let r = &x; x = 2; *r").expect_err("x is written while r names it");
-    assert!(err.contains("is touched while the reference"), "{err}");
+    assert!(err.contains("while a reference to it is live"), "{err}");
     check("let x = 1; let r = &x; let y = *r; x = 2; y").expect("r is dead before the write");
 }
 
@@ -25,7 +25,7 @@ fn a_borrow_of_a_reference_is_a_reborrow() {
     assert!(!ir.contains("&&"), "{ir}");
     let err = check("let x = 1; let r = &x; let rr = &r; x = 2; *rr")
         .expect_err("x is written while the reborrow names it");
-    assert!(err.contains("is touched while the reference"), "{err}");
+    assert!(err.contains("while a reference to it is live"), "{err}");
 }
 
 #[test]

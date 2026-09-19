@@ -1,6 +1,7 @@
 use std::fmt;
 
 use acvus_ast::Span;
+use acvus_ast::report::Label;
 use acvus_utils::Interner;
 
 use crate::graph::QualifiedRef;
@@ -10,6 +11,7 @@ use crate::ty::Ty;
 pub struct MirError {
     pub kind: MirErrorKind,
     pub span: Span,
+    pub labels: Vec<Label>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,13 +225,6 @@ pub enum MirErrorKind {
     },
     /// One call names the same place twice.
     PlaceNamedTwice(String),
-
-    // Validation errors (from MIR pass type checking)
-    ValidationCheck {
-        scope: String,
-        inst_index: usize,
-        message: String,
-    },
 
     // Graph engine errors
     ParseError(String),
@@ -615,13 +610,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "function `{func}` expects {expected} arguments, got {got}"
                 )
-            }
-            MirErrorKind::ValidationCheck {
-                scope,
-                inst_index,
-                message,
-            } => {
-                write!(f, "[{scope}] inst #{inst_index}: {message}")
             }
             MirErrorKind::ParseError(msg) => {
                 write!(f, "parse error: {msg}")

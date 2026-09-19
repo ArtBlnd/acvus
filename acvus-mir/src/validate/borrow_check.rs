@@ -7,16 +7,17 @@
 //! reference was assigned into — is live from its definition to its last
 //! use, counted as liveness counts them (RFC-0029).
 
-use acvus_utils::LocalIdOps;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::loans::{Loan, Loans};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{InstKind, MirBody, MirModule, RefTarget, ValueId};
-use crate::ty::{Mutability, Ty, TypeArg};
+use crate::ty::{Mutability, Ty};
 use crate::validate::move_check::is_move_only;
-use crate::validate::type_check::{ValidationError, ValidationErrorKind};
+use crate::validate::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
+use acvus_ast::Span;
+use acvus_ast::report::Label;
 
 pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
@@ -59,6 +60,19 @@ enum Touch {
         moves: bool,
     },
     Assign,
+}
+
+impl Touch {
+    /// A `&mut` may write through the reference it takes, so it is stated as
+    /// a write; a `&` and a copying `Take` only read.
+    fn stated(&self) -> ConflictTouch {
+        match self {
+            Touch::Reference(Mutability::Shared) => ConflictTouch::Read,
+            Touch::Reference(Mutability::Mut) | Touch::Assign => ConflictTouch::Written,
+            Touch::Take { moves: true } => ConflictTouch::Moved,
+            Touch::Take { moves: false } => ConflictTouch::Read,
+        }
+    }
 }
 
 fn touch(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Option<(RefTarget, Touch)> {
@@ -109,8 +123,77 @@ fn reached(target: &RefTarget, loans: &Loans) -> Reached {
     }
 }
 
+struct HolderUse {
+    holder: ValueId,
+    span: Span,
+}
+
+/// A `Loan` carries no span, and it cannot gain one here: `Region`'s join
+/// dedupes loans by equality, so a span in a `Loan` would change what the
+/// region analysis converges to. The places a conflict points at are read off
+/// the instructions instead.
+struct HolderSites {
+    borrowed: FxHashMap<ValueId, Span>,
+    named: Vec<HolderUse>,
+}
+
+impl HolderSites {
+    fn of(cfg: &CfgBody, loans: &Loans) -> Self {
+        let mut borrowed = FxHashMap::default();
+        let mut named = Vec::new();
+        for block in &cfg.blocks {
+            for inst in &block.insts {
+                match &inst.kind {
+                    InstKind::Ref { dst, .. } => {
+                        borrowed.insert(*dst, inst.span);
+                    }
+                    // RFC-0029: a storage a reference was assigned into holds
+                    // the loan too, and it was borrowed where the reference
+                    // it was given was. A slot given a reference twice keeps
+                    // the first, since the walk visits blocks in listing
+                    // order and cannot say which loan is the live one.
+                    InstKind::Assign { target, value, .. } => {
+                        if let Some(slot) = inst_info::storage(target)
+                            && let Some(span) = borrowed.get(value).copied()
+                        {
+                            borrowed.entry(slot).or_insert(span);
+                        }
+                    }
+                    _ => {}
+                }
+                named.extend(
+                    loans
+                        .uses_with_storage(&inst.kind)
+                        .into_iter()
+                        .map(|u| HolderUse {
+                            holder: u,
+                            span: inst.span,
+                        }),
+                );
+            }
+        }
+        Self { borrowed, named }
+    }
+
+    fn labels(&self, holder: ValueId, conflict: Span) -> Vec<Label> {
+        let borrow = self
+            .borrowed
+            .get(&holder)
+            .filter(|span| **span != Span::ZERO)
+            .map(|span| Label::at(*span, "borrowed here"));
+        let later = self
+            .named
+            .iter()
+            .filter(|u| u.holder == holder && u.span.start > conflict.start)
+            .min_by_key(|u| u.span.start)
+            .map(|u| Label::at(u.span, "the reference is used here"));
+        borrow.into_iter().chain(later).collect()
+    }
+}
+
 fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>) {
     let loans = Loans::build(cfg);
+    let sites = HolderSites::of(cfg, &loans);
     let holders: FxHashSet<ValueId> = cfg
         .val_types
         .keys()
@@ -168,8 +251,10 @@ fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>
                         inst_index: ii,
                         span: inst.span,
                         kind: ValidationErrorKind::BorrowConflict {
-                            storage: format!("{target:?}"),
-                            reference: holder.to_raw() as u32,
+                            storage: inst_info::storage(&target)
+                                .and_then(|slot| cfg.debug.get(slot).cloned()),
+                            touch: touch.stated(),
+                            labels: sites.labels(*holder, inst.span),
                         },
                     });
                 }
@@ -228,8 +313,9 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
 mod tests {
     use super::*;
     use crate::ir::{DebugInfo, Inst, Label};
+    use crate::ty::TypeArg;
     use acvus_ast::Span;
-    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
+    use acvus_utils::{LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)

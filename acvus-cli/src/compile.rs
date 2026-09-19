@@ -4,6 +4,7 @@
 //! produces.
 
 use acvus_ast::Span;
+use acvus_ast::report::Label;
 use acvus_extern::{Externs, Registry};
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ pub enum Mode {
 pub struct Diagnostic {
     pub message: String,
     pub span: Option<Span>,
+    pub labels: Vec<Label>,
 }
 
 /// A source every stage that can refuse it has accepted. Running it takes
@@ -119,6 +121,7 @@ pub fn check(
         vec![Diagnostic {
             message: e.kind.to_string(),
             span: span_of(e.span),
+            labels: Vec::new(),
         }]
     })?;
 
@@ -150,6 +153,7 @@ pub fn check(
         vec![Diagnostic {
             message: format!("the registries do not combine: {e}"),
             span: None,
+            labels: Vec::new(),
         }]
     })?;
     let fn_types: FxHashMap<QualifiedRef, Ty> = extern_fns
@@ -177,6 +181,7 @@ pub fn check(
         .map(|e| Diagnostic {
             message: e.display(interner).to_string(),
             span: span_of(e.span),
+            labels: e.labels.clone(),
         })
         .collect();
     let lowered = lower::lower(interner, &graph, &ext, &inf);
@@ -188,6 +193,7 @@ pub fn check(
             .map(|e| Diagnostic {
                 message: e.display(interner).to_string(),
                 span: span_of(e.span),
+                labels: e.labels.clone(),
             }),
     );
     if !diagnostics.is_empty() {
@@ -199,10 +205,10 @@ pub fn check(
             .errors
             .into_iter()
             .flat_map(|(_, errs)| errs)
-            .map(|e| e.into_mir_error())
             .map(|e| Diagnostic {
                 message: e.display(interner).to_string(),
                 span: span_of(e.span),
+                labels: e.labels().to_vec(),
             }),
     );
     if !diagnostics.is_empty() {

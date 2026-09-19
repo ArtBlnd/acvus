@@ -1,3 +1,6 @@
+use std::fmt;
+
+use acvus_ast::report::Label;
 use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::cfg;
 use acvus_mir::graph::*;
@@ -667,12 +670,49 @@ pub fn compile_script_optimized(
     Ok(dump_with(interner, module))
 }
 
-/// Compile a script-mode source through the full pipeline; the printed IR, or every error.
-pub fn compile_script_mode_optimized(
+/// One stage's refusal of a source: the stage that raised it, the words, and
+/// the other places it points at.
+pub struct Refusal {
+    pub stage: String,
+    pub message: String,
+    pub labels: Vec<Label>,
+}
+
+impl Refusal {
+    /// Each label as the source it covers and the words it carries, which is
+    /// what a test asserting a second place can read.
+    pub fn marked(&self, source: &str) -> Vec<Marked> {
+        self.labels
+            .iter()
+            .map(|l| Marked {
+                source: l.span.map(|s| source[s.start..s.end].to_string()),
+                text: l.text.clone(),
+            })
+            .collect()
+    }
+}
+
+/// A label as a test reads it: the source its span covers, absent for a
+/// spanless note, and its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marked {
+    pub source: Option<String>,
+    pub text: String,
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] {}", self.stage, self.message)
+    }
+}
+
+/// Compile a script-mode source through the full pipeline; the printed IR, or
+/// every refusal with its labels.
+pub fn refuse_script_mode_optimized(
     interner: &Interner,
     source: &str,
     context: &FxHashMap<Astr, Ty>,
-) -> Result<String, String> {
+) -> Result<String, Vec<Refusal>> {
     let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
@@ -684,7 +724,13 @@ pub fn compile_script_mode_optimized(
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let ast = match acvus_ast::parse_script(interner, source) {
         Ok(ast) => ast,
-        Err(e) => return Err(format!("parse error: {e:?}")),
+        Err(e) => {
+            return Err(vec![Refusal {
+                stage: "parse".to_string(),
+                message: format!("{e:?}"),
+                labels: Vec::new(),
+            }]);
+        }
     };
     let mut functions = vec![inferred_function(
         test_qref,
@@ -706,20 +752,28 @@ pub fn compile_script_mode_optimized(
         Freeze::new(type_registry),
     );
 
-    let mut errors: Vec<String> = Vec::new();
+    let mut refusals: Vec<Refusal> = Vec::new();
     for (qref, errs) in inf.errors() {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
-            errors.push(format!("[infer:{}] {}", fn_name, e.display(interner)));
+            refusals.push(Refusal {
+                stage: format!("infer:{fn_name}"),
+                message: e.display(interner).to_string(),
+                labels: e.labels.clone(),
+            });
         }
     }
 
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        refusals.push(Refusal {
+            stage: "lower".to_string(),
+            message: e.display(interner).to_string(),
+            labels: e.labels.clone(),
+        });
     }
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
+    if !refusals.is_empty() {
+        return Err(refusals);
     }
 
     let opt_result = acvus_mir::graph::optimize::optimize(
@@ -731,18 +785,41 @@ pub fn compile_script_mode_optimized(
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
-            errors.push(format!("[validate:{}] {}", fn_name, e.display(interner)));
+            refusals.push(Refusal {
+                stage: format!("validate:{fn_name}"),
+                message: e.display(interner).to_string(),
+                labels: e.labels().to_vec(),
+            });
         }
     }
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
+    if !refusals.is_empty() {
+        return Err(refusals);
     }
 
-    let module = opt_result
-        .modules
-        .get(&test_qref)
-        .ok_or_else(|| "no module produced for target".to_string())?;
+    let module = opt_result.modules.get(&test_qref).ok_or_else(|| {
+        vec![Refusal {
+            stage: "optimize".to_string(),
+            message: "no module produced for target".to_string(),
+            labels: Vec::new(),
+        }]
+    })?;
     Ok(dump_with(interner, module))
+}
+
+/// Compile a script-mode source through the full pipeline; the printed IR, or
+/// every error, one line each.
+pub fn compile_script_mode_optimized(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+) -> Result<String, String> {
+    refuse_script_mode_optimized(interner, source, context).map_err(|refusals| {
+        refusals
+            .iter()
+            .map(Refusal::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
 }
 
 // -- Inline pipeline -------------------------------------------------

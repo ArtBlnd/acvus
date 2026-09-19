@@ -80,7 +80,7 @@ async fn a_word_part_beside_a_moved_part_is_read() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "use of `o` after it was moved")]
+#[should_panic(expected = "`o` is used here after it was moved")]
 async fn a_lend_of_a_moved_part_is_refused() {
     run(
         "let o = { v: vec([1, 2]), }; let x = o.v; o.v.len()",
@@ -90,7 +90,7 @@ async fn a_lend_of_a_moved_part_is_refused() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "use of `o` after it was moved")]
+#[should_panic(expected = "`o` is used here after it was moved")]
 async fn a_reference_to_a_partly_moved_storage_is_refused() {
     run(
         "let o = { v: vec([1, 2]), }; let x = o.v; let r = &o; r",

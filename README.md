@@ -30,8 +30,12 @@ body, block by block, and `run` executes them. What only `prepare` refuses —
 an `@name` no context declares — therefore reaches `ops` and `run` alone.
 
 A diagnostic is one `error: <message>` line, then the file, line and column,
-the source line and a caret under the span. `--json` puts them on stdout
-instead, as an array of `{severity, message, path, line, col, span}` — the
+the source line and a caret under the span. A refusal whose story needs a
+second place carries a label there: that line too, with `---` under the
+span and the label's words after it, in source order, the lines between
+elided with `...`. A label with no place of its own is a `= help:` line.
+`--json` puts them on stdout instead, as an array of `{severity, message,
+path, line, col, span, labels}`, each label `{line, col, span, text}` — the
 span is `[start, end]` in bytes, and `line`, `col` and `span` are `null`
 where the failing stage has no span to give. Under `--json` every byte on
 stdout is JSON: `check` and `mir` print the array alone, `ops` prints its

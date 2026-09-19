@@ -22,7 +22,7 @@ fn use_after_move_of_a(source: &str) {
     let errs = errors(source);
     assert_eq!(errs.len(), 1, "{source}: {errs:#?}");
     assert!(
-        errs[0].contains("use of `a` after it was moved"),
+        errs[0].contains("`a` is used here after it was moved"),
         "{source}: {errs:#?}"
     );
 }

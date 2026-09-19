@@ -16,6 +16,7 @@
 use std::collections::VecDeque;
 
 use acvus_ast::Span;
+use acvus_ast::report::Label;
 use acvus_utils::{Astr, LocalIdOps};
 use rustc_hash::FxHashMap;
 
@@ -78,14 +79,8 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Liveness {
     Alive,
-    /// A part moved out at instruction index `at`.
-    PartlyMoved {
-        at: usize,
-    },
-    /// Moved at instruction index `at`.
-    Moved {
-        at: usize,
-    },
+    PartlyMoved { site: MoveSite },
+    Moved { site: MoveSite },
 }
 
 impl Liveness {
@@ -93,21 +88,48 @@ impl Liveness {
     fn join(self, other: Liveness) -> Liveness {
         match (self, other) {
             (Liveness::Alive, Liveness::Alive) => Liveness::Alive,
-            (Liveness::Moved { at }, _) | (_, Liveness::Moved { at }) => Liveness::Moved { at },
-            (Liveness::PartlyMoved { at }, _) | (_, Liveness::PartlyMoved { at }) => {
-                Liveness::PartlyMoved { at }
+            (Liveness::Moved { site }, _) | (_, Liveness::Moved { site }) => {
+                Liveness::Moved { site }
+            }
+            (Liveness::PartlyMoved { site }, _) | (_, Liveness::PartlyMoved { site }) => {
+                Liveness::PartlyMoved { site }
             }
         }
     }
 }
 
-/// Where a place left its storage: the instruction's index in its block, and
-/// the span the source wrote there. A diagnosis stated at the move needs the
-/// span, which the index alone does not give across blocks.
+/// How a value left, in the words the label at the move uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MovedBy {
+    TheProgram,
+    ACall,
+}
+
+impl MovedBy {
+    fn words(self) -> &'static str {
+        match self {
+            MovedBy::TheProgram => "moved here",
+            MovedBy::ACall => "moved into this call",
+        }
+    }
+}
+
+/// Where a place left its storage, and what took it. The span is the second
+/// place the refusal points at; a synthesized instruction has `Span::ZERO`
+/// and the refusal then names one place only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MoveSite {
-    at: usize,
     span: Span,
+    by: MovedBy,
+}
+
+impl MoveSite {
+    fn label(self) -> Vec<Label> {
+        match self.span == Span::ZERO {
+            true => Vec::new(),
+            false => vec![Label::at(self.span, self.by.words())],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,7 +529,10 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                 try_consume_value(
                     scope,
                     block.insts.len(),
-                    span,
+                    MoveSite {
+                        span,
+                        by: MovedBy::TheProgram,
+                    },
                     *value,
                     &cfg.val_types,
                     debug,
@@ -564,7 +589,7 @@ fn propagate_args(
 fn try_consume_value(
     scope: &str,
     inst_idx: usize,
-    span: Span,
+    site: MoveSite,
     id: ValueId,
     val_types: &FxHashMap<ValueId, Ty>,
     debug: &DebugInfo,
@@ -580,23 +605,25 @@ fn try_consume_value(
     };
 
     // Check if already moved
-    if let Some(Liveness::Moved { at } | Liveness::PartlyMoved { at }) = state.get_value(id) {
+    if let Some(Liveness::Moved { site: moved } | Liveness::PartlyMoved { site: moved }) =
+        state.get_value(id)
+    {
         errors.push(ValidationError {
             scope: scope.to_string(),
             inst_index: inst_idx,
-            span,
+            span: site.span,
             kind: ValidationErrorKind::UseAfterMove {
                 value_id: id.to_raw() as u32,
-                moved_at: at,
                 ty: ty.clone(),
                 origin: debug.get(id).cloned(),
+                labels: moved.label(),
             },
         });
         return true;
     }
 
     // Mark as moved
-    state.set_value(id, Liveness::Moved { at: inst_idx });
+    state.set_value(id, Liveness::Moved { site });
     true
 }
 
@@ -648,7 +675,7 @@ fn under_options<'a>(ty: &'a Ty, path: &[PathSeg]) -> Option<&'a Ty> {
 fn extract_part(
     scope: &str,
     inst_idx: usize,
-    span: Span,
+    site: MoveSite,
     container: ValueId,
     dst: ValueId,
     val_types: &FxHashMap<ValueId, Ty>,
@@ -660,18 +687,18 @@ fn extract_part(
         && moves_out(ty)
     {
         match state.get_value(container) {
-            Some(Liveness::Moved { at }) => errors.push(ValidationError {
+            Some(Liveness::Moved { site: moved }) => errors.push(ValidationError {
                 scope: scope.to_string(),
                 inst_index: inst_idx,
-                span,
+                span: site.span,
                 kind: ValidationErrorKind::UseAfterMove {
                     value_id: container.to_raw() as u32,
-                    moved_at: at,
                     ty: ty.clone(),
                     origin: debug.get(container).cloned(),
+                    labels: moved.label(),
                 },
             }),
-            _ => state.set_value(container, Liveness::PartlyMoved { at: inst_idx }),
+            _ => state.set_value(container, Liveness::PartlyMoved { site }),
         }
     }
     state.set_value(dst, Liveness::Alive);
@@ -709,10 +736,7 @@ fn touch_storage(
             scope: scope.to_string(),
             inst_index: inst_idx,
             span: site.span,
-            kind: ValidationErrorKind::ContextMovedOut {
-                context,
-                moved_at: site.span,
-            },
+            kind: ValidationErrorKind::ContextMovedOut { context },
         });
         return;
     }
@@ -733,9 +757,9 @@ fn touch_storage(
         span,
         kind: ValidationErrorKind::UseAfterMove {
             value_id: slot.to_raw() as u32,
-            moved_at: site.at,
             ty: ty.clone(),
             origin: debug.get(*slot).cloned(),
+            labels: site.label(),
         },
     });
 }
@@ -752,6 +776,14 @@ fn process_inst(
     errors: &mut Vec<ValidationError>,
 ) {
     let span = inst.span;
+    let plain = MoveSite {
+        span,
+        by: MovedBy::TheProgram,
+    };
+    let into_call = MoveSite {
+        span,
+        by: MovedBy::ACall,
+    };
 
     match &inst.kind {
         // === No operands / define only ===
@@ -800,7 +832,10 @@ fn process_inst(
                 && let Some(ty) = val_types.get(dst)
                 && moves_out(ty)
             {
-                let site = MoveSite { at: inst_idx, span };
+                let site = MoveSite {
+                    span,
+                    by: MovedBy::TheProgram,
+                };
                 let whole: &[PathSeg] = &[];
                 let moved = match emptied_by(&inst.kind, val_types) == Some(*slot) {
                     true => whole,
@@ -819,7 +854,7 @@ fn process_inst(
             value,
         } => {
             try_consume_value(
-                scope, inst_idx, span, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, debug, state, errors,
             );
             let place = Place { target, path };
             touch_storage(
@@ -846,7 +881,7 @@ fn process_inst(
         }
         InstKind::Commit { value, .. } => {
             try_consume_value(
-                scope, inst_idx, span, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, debug, state, errors,
             );
         }
         InstKind::BlockLabel { params, .. } => {
@@ -859,12 +894,14 @@ fn process_inst(
         // === Consuming operations (move operands) ===
         InstKind::Return { value, .. } => {
             try_consume_value(
-                scope, inst_idx, span, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, debug, state, errors,
             );
         }
         InstKind::Diverge => {}
         InstKind::Drop { src } => {
-            try_consume_value(scope, inst_idx, span, *src, val_types, debug, state, errors);
+            try_consume_value(
+                scope, inst_idx, plain, *src, val_types, debug, state, errors,
+            );
         }
 
         // Functions
@@ -877,11 +914,13 @@ fn process_inst(
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(
-                    scope, inst_idx, span, *closure, val_types, debug, state, errors,
+                    scope, inst_idx, into_call, *closure, val_types, debug, state, errors,
                 );
             }
             for arg in args {
-                try_consume_value(scope, inst_idx, span, *arg, val_types, debug, state, errors);
+                try_consume_value(
+                    scope, inst_idx, into_call, *arg, val_types, debug, state, errors,
+                );
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -892,37 +931,39 @@ fn process_inst(
         }
         InstKind::StringConcat { dst, parts } => {
             for p in parts {
-                try_consume_value(scope, inst_idx, span, *p, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *p, val_types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeArray { dst, elements } => {
             for e in elements {
-                try_consume_value(scope, inst_idx, span, *e, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *e, val_types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeObject { dst, fields } => {
             for (_, v) in fields {
-                try_consume_value(scope, inst_idx, span, *v, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *v, val_types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeTuple { dst, elements } => {
             for e in elements {
-                try_consume_value(scope, inst_idx, span, *e, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *e, val_types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeClosure { dst, captures, .. } => {
             for cap in captures {
-                try_consume_value(scope, inst_idx, span, *cap, val_types, debug, state, errors);
+                try_consume_value(
+                    scope, inst_idx, plain, *cap, val_types, debug, state, errors,
+                );
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeVariant { dst, payload, .. } => {
             if let Some(p) = payload {
-                try_consume_value(scope, inst_idx, span, *p, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *p, val_types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -931,7 +972,7 @@ fn process_inst(
         // These read the value but don't take ownership.
         InstKind::FieldGet { dst, object, .. } => {
             extract_part(
-                scope, inst_idx, span, *object, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *object, *dst, val_types, debug, state, errors,
             );
         }
         InstKind::FieldSet {
@@ -941,23 +982,23 @@ fn process_inst(
             ..
         } => {
             try_consume_value(
-                scope, inst_idx, span, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, debug, state, errors,
             );
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::ObjectGet { dst, object, .. } => {
             extract_part(
-                scope, inst_idx, span, *object, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *object, *dst, val_types, debug, state, errors,
             );
         }
         InstKind::TupleIndex { dst, tuple, .. } => {
             extract_part(
-                scope, inst_idx, span, *tuple, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *tuple, *dst, val_types, debug, state, errors,
             );
         }
         InstKind::ArrayIndex { dst, array, .. } => {
             extract_part(
-                scope, inst_idx, span, *array, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *array, *dst, val_types, debug, state, errors,
             );
         }
 
@@ -969,12 +1010,14 @@ fn process_inst(
         }
         InstKind::IndexSet { value, .. } => {
             try_consume_value(
-                scope, inst_idx, span, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, debug, state, errors,
             );
         }
         InstKind::UnwrapVariant { dst, src } => {
             if emptied_by(&inst.kind, val_types) == Some(*src) {
-                try_consume_value(scope, inst_idx, span, *src, val_types, debug, state, errors);
+                try_consume_value(
+                    scope, inst_idx, plain, *src, val_types, debug, state, errors,
+                );
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -1014,17 +1057,21 @@ fn process_inst(
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(
-                    scope, inst_idx, span, *closure, val_types, debug, state, errors,
+                    scope, inst_idx, into_call, *closure, val_types, debug, state, errors,
                 );
             }
             for arg in args {
-                try_consume_value(scope, inst_idx, span, *arg, val_types, debug, state, errors);
+                try_consume_value(
+                    scope, inst_idx, into_call, *arg, val_types, debug, state, errors,
+                );
             }
             state.set_value(*dst, Liveness::Alive);
         }
         // Eval - consumes Handle (move-only), defines dst
         InstKind::Eval { dst, src, .. } => {
-            try_consume_value(scope, inst_idx, span, *src, val_types, debug, state, errors);
+            try_consume_value(
+                scope, inst_idx, plain, *src, val_types, debug, state, errors,
+            );
             state.set_value(*dst, Liveness::Alive);
         }
 
@@ -1190,23 +1237,19 @@ mod tests {
             Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
         );
 
+        let call = |dst, span| Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst,
+                callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                callee_ty: Ty::error(),
+                args: vec![v0],
+                order: None,
+            },
+        };
+        let first = Span { start: 0, end: 7 };
         let module = make_module(
-            vec![
-                inst(InstKind::FunctionCall {
-                    dst: v1,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    callee_ty: Ty::error(),
-                    args: vec![v0],
-                    order: None,
-                }),
-                inst(InstKind::FunctionCall {
-                    dst: v2,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    callee_ty: Ty::error(),
-                    args: vec![v0],
-                    order: None,
-                }),
-            ],
+            vec![call(v1, first), call(v2, Span { start: 9, end: 16 })],
             val_types,
         );
 
@@ -1216,6 +1259,10 @@ mod tests {
             errors[0].kind,
             ValidationErrorKind::UseAfterMove { .. }
         ));
+        assert_eq!(
+            errors[0].labels(),
+            [Label::at(first, "moved into this call")]
+        );
     }
 
     #[test]
@@ -1455,8 +1502,8 @@ mod tests {
         assert!(
             matches!(
                 errors[0].kind,
-                ValidationErrorKind::ContextMovedOut { context, moved_at: at }
-                    if context == query.name && at == moved_at
+                ValidationErrorKind::ContextMovedOut { context }
+                    if context == query.name
             ),
             "{:?}",
             errors[0].kind
@@ -1493,24 +1540,38 @@ mod tests {
             }
         }
 
+        /// The span of the instruction at index `at`, which is the place a
+        /// label at that instruction names.
+        fn span_at(at: usize) -> Span {
+            Span {
+                start: at * 10,
+                end: at * 10 + 1,
+            }
+        }
+
+        fn push(&mut self, kind: InstKind) {
+            let span = Self::span_at(self.insts.len());
+            self.insts.push(Inst { span, kind });
+        }
+
         fn take(&mut self, path: &[PathSeg]) {
             let dst = self.vf.next();
             self.val_types.insert(dst, test_user_defined());
-            self.insts.push(inst(InstKind::Take {
+            self.push(InstKind::Take {
                 dst,
                 target: RefTarget::Var(self.slot),
                 path: path.to_vec(),
-            }));
+            });
         }
 
         fn assign(&mut self, path: &[PathSeg]) {
             let value = self.vf.next();
             self.val_types.insert(value, test_user_defined());
-            self.insts.push(inst(InstKind::Assign {
+            self.push(InstKind::Assign {
                 target: RefTarget::Var(self.slot),
                 path: path.to_vec(),
                 value,
-            }));
+            });
         }
 
         fn lend(&mut self, path: &[PathSeg]) {
@@ -1522,12 +1583,12 @@ mod tests {
                     Box::new(TypeArg::uniform(test_user_defined())),
                 ),
             );
-            self.insts.push(inst(InstKind::Ref {
+            self.push(InstKind::Ref {
                 dst,
                 target: RefTarget::Var(self.slot),
                 path: path.to_vec(),
                 mutability: crate::ty::Mutability::Shared,
-            }));
+            });
         }
 
         fn errors(self) -> Vec<ValidationError> {
@@ -1554,10 +1615,10 @@ mod tests {
         o.take(&[v]);
         let errors = o.errors();
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(matches!(
-            errors[0].kind,
-            ValidationErrorKind::UseAfterMove { moved_at: 1, .. }
-        ));
+        assert_eq!(
+            errors[0].labels(),
+            [Label::at(Storage::span_at(1), "moved here")]
+        );
     }
 
     #[test]
@@ -1581,10 +1642,10 @@ mod tests {
         o.lend(&[]);
         let errors = o.errors();
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(matches!(
-            errors[0].kind,
-            ValidationErrorKind::UseAfterMove { moved_at: 1, .. }
-        ));
+        assert_eq!(
+            errors[0].labels(),
+            [Label::at(Storage::span_at(1), "moved here")]
+        );
     }
 
     #[test]
@@ -1596,10 +1657,10 @@ mod tests {
         o.assign(&[v]);
         let errors = o.errors();
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(matches!(
-            errors[0].kind,
-            ValidationErrorKind::UseAfterMove { moved_at: 1, .. }
-        ));
+        assert_eq!(
+            errors[0].labels(),
+            [Label::at(Storage::span_at(1), "moved here")]
+        );
     }
 
     #[test]

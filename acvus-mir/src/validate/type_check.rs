@@ -34,6 +34,18 @@ pub struct ValidationError {
     pub kind: ValidationErrorKind,
 }
 
+impl ValidationError {
+    /// The other places this refusal names, in the words of the site that
+    /// raised it.
+    pub fn labels(&self) -> &[acvus_ast::report::Label] {
+        match &self.kind {
+            ValidationErrorKind::UseAfterMove { labels, .. }
+            | ValidationErrorKind::BorrowConflict { labels, .. } => labels,
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ValidationErrorKind {
     TypeMismatch {
@@ -82,26 +94,48 @@ pub enum ValidationErrorKind {
         expected_constructor: String,
         actual: Ty,
     },
-    /// Use of a move-only value after it has been consumed.
+    /// Use of a move-only value after it has been consumed. `labels` names
+    /// where it was moved; it is empty where the move is a synthesized
+    /// instruction, which carries no span.
     UseAfterMove {
         value_id: u32,
-        moved_at: usize,
         ty: Ty,
         /// The subject's `DebugInfo` origin, which names it as the source
         /// wrote it.
         origin: Option<ValOrigin>,
+        labels: Vec<acvus_ast::report::Label>,
     },
     /// A storage touched while a reference to it excludes that (RFC-0018).
+    /// `labels` names the borrow and the use that keeps it live.
     BorrowConflict {
-        storage: String,
-        reference: u32,
+        storage: Option<ValOrigin>,
+        touch: ConflictTouch,
+        labels: Vec<acvus_ast::report::Label>,
     },
     /// A context moved out of and never assigned again, so the `Commit` that
     /// ends the run finds its place empty (RFC-0025). Stated at the move.
     ContextMovedOut {
         context: Astr,
-        moved_at: Span,
     },
+}
+
+/// What the conflicting instruction does to the storage, in the word the
+/// refusal uses for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictTouch {
+    Read,
+    Written,
+    Moved,
+}
+
+impl ConflictTouch {
+    pub fn word(self) -> &'static str {
+        match self {
+            ConflictTouch::Read => "read",
+            ConflictTouch::Written => "written",
+            ConflictTouch::Moved => "moved",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

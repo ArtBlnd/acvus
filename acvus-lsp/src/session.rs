@@ -7,6 +7,7 @@
 //! - MirError -> LspError conversion
 //! - Completion logic (context, pipe, keyword)
 
+use acvus_ast::report::Label;
 use acvus_mir::error::MirError;
 use acvus_mir::graph::incremental::{ContextInfo, IncrementalGraph};
 use acvus_mir::graph::types::*;
@@ -34,6 +35,9 @@ pub struct LspError {
     pub category: LspErrorCategory,
     pub message: String,
     pub span: Option<(usize, usize)>,
+    /// The other places the refusal points at, which a protocol layer sends
+    /// as `relatedInformation`.
+    pub related: Vec<Label>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,5 +357,6 @@ fn mir_error_to_lsp(error: &MirError, interner: &Interner) -> LspError {
                 None
             }
         },
+        related: error.labels.clone(),
     }
 }

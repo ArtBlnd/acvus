@@ -133,7 +133,7 @@ fn a_reference_returned_by_a_call_keeps_the_place_it_was_lent() {
         &externs,
     )
     .expect_err("x is lent again while r still names it");
-    assert!(err.contains("is touched while the reference"), "{err}");
+    assert!(err.contains("while a reference to it is live"), "{err}");
     compile_multi_fn_optimized(
         &i,
         (

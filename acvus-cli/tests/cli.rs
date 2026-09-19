@@ -426,3 +426,46 @@ fn a_space_directory_keeps_contexts_between_runs() {
     assert!(listing.starts_with("@n: i64 = "), "{listing}");
     assert!(listing.contains("2 nodes"), "{listing}");
 }
+
+/// A refusal whose story needs a second place shows both, in source order,
+/// with the lines between them elided — and `--json` carries the same labels.
+#[test]
+fn a_use_after_move_shows_the_move_and_the_use_with_the_lines_between_elided() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "let a = [1, 2];\nlet b = a;\nlet c = 1;\nlet d = 2;\nlet e = 3;\na\n";
+    write(dir.path(), "mv.acvus", source);
+
+    let out = acvus(dir.path(), &["check", "mv.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        [
+            "error: `a` is used here after it was moved",
+            "  --> mv.acvus:6:1",
+            "  |",
+            "2 | let b = a;",
+            "  |         - moved here",
+            "...",
+            "6 | a",
+            "  | ^ `a` is used here after it was moved",
+            "",
+        ]
+        .join("\n")
+    );
+
+    let out = acvus(dir.path(), &["check", "--json", "mv.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let array: Vec<serde_json::Value> = serde_json::from_str(&text(&out.stdout)).unwrap();
+    assert_eq!(array.len(), 1);
+    assert_eq!(array[0]["line"], 6);
+    assert_eq!(array[0]["col"], 1);
+    assert_eq!(
+        array[0]["labels"],
+        serde_json::json!([{
+            "line": 2,
+            "col": 9,
+            "span": [24, 25],
+            "text": "moved here",
+        }])
+    );
+}

@@ -60,7 +60,7 @@ fn an_assign_to_a_context_while_it_is_lent_is_rejected() {
         &[f],
     )
     .unwrap_err();
-    assert!(err.contains("is touched while the reference"), "{err}");
+    assert!(err.contains("while a reference to it is live"), "{err}");
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn a_closure_writing_a_lent_context_is_rejected_at_the_call() {
         &[f],
     )
     .unwrap_err();
-    assert!(err.contains("is touched while the reference"), "{err}");
+    assert!(err.contains("while a reference to it is live"), "{err}");
 }
 
 #[test]

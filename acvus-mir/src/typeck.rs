@@ -1,3 +1,4 @@
+use acvus_ast::report::Label;
 use acvus_ast::{
     AstId, BinOp, Expr, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField, Pattern,
     RefKind, Span, SuffixedInt, Template, TupleElem, TuplePatternElem,
@@ -592,6 +593,10 @@ struct CaptureMove {
     name: Astr,
     owned: InferTy,
     span: Span,
+    /// The enclosing lambda whose capture the name leaves. A lambda directly
+    /// inside the body carries no enclosing lambda, and the refusal then
+    /// names one place.
+    captured_at: Option<Span>,
 }
 
 /// Where a value meets a type it may need converting to, and how a
@@ -1455,6 +1460,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let seen = self.captured_by(name, &ty, &capturing);
             let taken_from_an_enclosing_capture = capturing_lambdas >= 2;
             if taken_from_an_enclosing_capture {
+                let captured_at = capturing
+                    .iter()
+                    .rev()
+                    .nth(1)
+                    .map(|enclosing| self.lambda_stack[*enclosing].body_span);
                 let inner = self
                     .lambda_stack
                     .last_mut()
@@ -1465,6 +1475,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         name,
                         owned: ty.clone(),
                         span,
+                        captured_at,
                     });
                 }
             }
@@ -1778,7 +1789,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     fn error(&mut self, kind: MirErrorKind, span: Span) {
-        self.errors.push(MirError { kind, span });
+        self.errors.push(MirError {
+            kind,
+            span,
+            labels: Vec::new(),
+        });
+    }
+
+    fn labeled_error(&mut self, kind: MirErrorKind, span: Span, labels: Vec<Label>) {
+        self.errors.push(MirError { kind, span, labels });
     }
 
     /// Instantiate a scheme for a use at `span`; its bounded variables are
@@ -2503,12 +2522,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             if owned.is_primitive() {
                 continue;
             }
-            self.error(
+            let at_the_enclosing_lambda = m
+                .captured_at
+                .map(|span| Label::at(span, "captured here"))
+                .into_iter()
+                .collect();
+            self.labeled_error(
                 MirErrorKind::MoveOutOfCapture {
                     name: self.interner.resolve(m.name).to_string(),
                     ty: self.type_as_written(&owned),
                 },
                 m.span,
+                at_the_enclosing_lambda,
             );
         }
     }
@@ -2666,7 +2691,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             if moves && demand == PlaceDemand::Value {
                 let ty = self.type_the_checker_left_open(&referent);
-                self.error(MirErrorKind::MoveOutOfIndex { ty }, span);
+                let note = Label::note(format!(
+                    "the element is {}, which moves; take a reference with `&a[i]`",
+                    element.display(self.interner)
+                ));
+                self.labeled_error(MirErrorKind::MoveOutOfIndex { ty }, span, vec![note]);
             }
         }
     }
@@ -3650,9 +3679,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let var_ty = match self.assign_target(*name) {
                     AssignTarget::Bound(var_ty) => var_ty,
                     AssignTarget::Captured => {
-                        self.error(
+                        let at_the_lambda = self
+                            .lambda_stack
+                            .last()
+                            .map(|ls| Label::at(ls.body_span, "captured here"))
+                            .into_iter()
+                            .collect();
+                        self.labeled_error(
                             MirErrorKind::AssignToCapture(self.interner.resolve(*name).to_string()),
                             *span,
+                            at_the_lambda,
                         );
                         Self::infer_error()
                     }

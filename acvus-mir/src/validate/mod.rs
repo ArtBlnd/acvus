@@ -12,7 +12,6 @@ use std::fmt;
 
 use acvus_utils::Interner;
 
-use crate::error::{MirError, MirErrorKind};
 use crate::ir::{MirModule, ValOrigin};
 
 /// The checks that hold of a MIR module at any point in the pipeline. The
@@ -26,93 +25,16 @@ pub fn validate(module: &MirModule) -> Vec<ValidationError> {
     errors
 }
 
-impl ValidationError {
-    /// Convert this validation error into a [`MirError`] for unified error reporting.
-    pub fn into_mir_error(self) -> MirError {
-        let message = match &self.kind {
-            ValidationErrorKind::TypeMismatch {
-                inst_name,
-                desc,
-                expected,
-                actual,
-            } => {
-                format!(
-                    "type mismatch at {inst_name}, {desc}: expected {expected:?}, actual {actual:?}"
-                )
-            }
-            ValidationErrorKind::MissingType { value_id } => {
-                format!("Val({value_id}) has no type entry")
-            }
-            ValidationErrorKind::OrderEdge { inst_name, pure } => {
-                if *pure {
-                    format!("{inst_name}: a Pure call carries an Order")
-                } else {
-                    format!("{inst_name}: an effectful call carries no Order")
-                }
-            }
-            ValidationErrorKind::ArityMismatch {
-                inst_name,
-                expected,
-                got,
-            } => {
-                format!("arity mismatch at {inst_name}: expected {expected}, got {got}")
-            }
-            ValidationErrorKind::InvalidConstructor {
-                inst_name,
-                expected_constructor,
-                actual,
-            } => {
-                format!("{inst_name}: expected {expected_constructor}, got {actual:?}")
-            }
-            ValidationErrorKind::UseAfterMove {
-                value_id,
-                moved_at,
-                ty,
-                origin: _,
-            } => {
-                format!(
-                    "use of move-only value Val({value_id}) after move (moved at inst #{moved_at}), type: {ty:?}"
-                )
-            }
-            ValidationErrorKind::BorrowConflict { storage, reference } => {
-                format!("{storage} is used while reference Val({reference}) to it is live")
-            }
-            ValidationErrorKind::NonExhaustiveMatch => {
-                "non-exhaustive match: the scrutinee's type names no variants".to_string()
-            }
-            ValidationErrorKind::ForRangeWidths { at, hi } => {
-                format!("a range of {at:?} and {hi:?} is not one integer width")
-            }
-            ValidationErrorKind::MatchMissesVariants { missing, .. } => {
-                format!(
-                    "non-exhaustive match: {} variants are not covered",
-                    missing.len()
-                )
-            }
-            ValidationErrorKind::MatchMissesBuiltinVariants {
-                enum_name,
-                arity,
-                covered,
-            } => {
-                format!(
-                    "non-exhaustive match: a {enum_name} has {arity} variants and the arms cover {covered}"
-                )
-            }
-            ValidationErrorKind::ContextMovedOut { moved_at, .. } => {
-                format!(
-                    "a context is moved out at [{}..{}] and not assigned again before the run ends",
-                    moved_at.start, moved_at.end
-                )
-            }
-        };
-
-        MirError {
-            kind: MirErrorKind::ValidationCheck {
-                scope: self.scope,
-                inst_index: self.inst_index,
-                message,
-            },
-            span: self.span,
+/// The subject as the source wrote it, where its origin is a name the source
+/// wrote. A field, a call's result and a bare expression have no name of their
+/// own, and each caller says what it puts there instead.
+fn written_as(interner: &Interner, origin: Option<&ValOrigin>) -> Option<String> {
+    match origin? {
+        ValOrigin::Named(name) => Some(format!("`{}`", interner.resolve(*name))),
+        ValOrigin::Context(name) => Some(format!("`@{}`", interner.resolve(*name))),
+        ValOrigin::ExternParam(name) => Some(format!("`${}`", interner.resolve(*name))),
+        ValOrigin::Field(..) | ValOrigin::RefField(..) | ValOrigin::Call(_) | ValOrigin::Expr => {
+            None
         }
     }
 }
@@ -138,27 +60,12 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
         match &self.error.kind {
             ValidationErrorKind::UseAfterMove {
                 value_id, origin, ..
-            } => {
-                let subject = match origin {
-                    Some(ValOrigin::Named(name)) => {
-                        format!("`{}`", self.interner.resolve(*name))
-                    }
-                    Some(ValOrigin::Context(name)) => {
-                        format!("`@{}`", self.interner.resolve(*name))
-                    }
-                    Some(ValOrigin::ExternParam(name)) => {
-                        format!("`${}`", self.interner.resolve(*name))
-                    }
-                    Some(
-                        ValOrigin::Field(..)
-                        | ValOrigin::RefField(..)
-                        | ValOrigin::Call(_)
-                        | ValOrigin::Expr,
-                    )
-                    | None => format!("Val({value_id})"),
-                };
-                write!(f, "use of {subject} after it was moved")
-            }
+            } => write!(
+                f,
+                "{} is used here after it was moved",
+                written_as(self.interner, origin.as_ref())
+                    .unwrap_or_else(|| format!("Val({value_id})"))
+            ),
             ValidationErrorKind::ContextMovedOut { context, .. } => write!(
                 f,
                 "context @{} is moved out here and not assigned again before the run ends",
@@ -232,10 +139,15 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 f,
                 "non-exhaustive match: an `{enum_name}` has {arity} variants and the arms cover {covered}; add the missing arm or a `_` arm"
             ),
-            ValidationErrorKind::BorrowConflict { storage, reference } => write!(
-                f,
-                "{storage} is touched while the reference Val({reference}) to it is live"
-            ),
+            ValidationErrorKind::BorrowConflict { storage, touch, .. } => {
+                let named = written_as(self.interner, storage.as_ref())
+                    .unwrap_or_else(|| "the storage".to_string());
+                write!(
+                    f,
+                    "{named} is {} here while a reference to it is live",
+                    touch.word()
+                )
+            }
         }
     }
 }

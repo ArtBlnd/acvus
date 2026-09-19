@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use acvus_ast::Span;
 use acvus_ast::report::{LineIndex, Report, Severity};
 use acvus_interpreter::{
     Composite, ContextWrite, DirStore, Executor, InMemoryContext, Interpreter, InterpreterContext,
@@ -222,6 +223,7 @@ impl Rendering {
                             path,
                             source,
                             span: d.span,
+                            labels: d.labels.clone(),
                         }
                     );
                 }
@@ -231,14 +233,27 @@ impl Rendering {
                 let array: Vec<serde_json::Value> = diagnostics
                     .iter()
                     .map(|d| {
-                        let at = d.span.map(|s| index.line_col(s.start.min(source.len())));
+                        let at = |span: Span| index.line_col(span.start.min(source.len()));
+                        let labels: Vec<serde_json::Value> = d
+                            .labels
+                            .iter()
+                            .map(|l| {
+                                serde_json::json!({
+                                    "line": l.span.map(|s| at(s).line),
+                                    "col": l.span.map(|s| at(s).col),
+                                    "span": l.span.map(|s| [s.start, s.end]),
+                                    "text": l.text,
+                                })
+                            })
+                            .collect();
                         serde_json::json!({
                             "severity": Severity::Error.to_string(),
                             "message": d.message,
                             "path": path,
-                            "line": at.map(|a| a.line),
-                            "col": at.map(|a| a.col),
+                            "line": d.span.map(|s| at(s).line),
+                            "col": d.span.map(|s| at(s).col),
                             "span": d.span.map(|s| [s.start, s.end]),
+                            "labels": labels,
                         })
                     })
                     .collect();
