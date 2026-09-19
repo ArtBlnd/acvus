@@ -42,6 +42,14 @@ use crate::ops::{
 use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
 
+pub mod runs;
+
+/// The registers `order_moves` may break a cycle through, which a run's base is
+/// placed above. It is two rather than one because a cycle carrying a slice moves
+/// the pair through the scratch (`Moved::Pair`), and `scratch_used` grows while
+/// the body is being emitted — after every run's `Off` is already written.
+const MAX_SCRATCH_SLOTS: u16 = 2;
+
 /// The slot table's empty entry: a value that is neither defined nor live.
 const NO_SLOT: u32 = u32::MAX;
 
@@ -168,7 +176,7 @@ pub fn prepare_body(
         "body {role:?}: the prepared operations await and the checker's task does not say so"
     );
 
-    let frame_len = prep.frame_len();
+    let frame_len = prep.scalar_len();
     let param_ids: Vec<ValueId> = body.params.iter().map(|(_, v)| *v).collect();
     let param_marks = prep.take_mask(&param_ids);
     let params = param_ids.iter().map(|id| prep.off(*id)).collect();
@@ -181,6 +189,9 @@ pub fn prepare_body(
         heads: blocks,
         entry: 0,
         frame_len,
+        frame_cells: u16::try_from(crate::regs::cells_for(frame_len))
+            .expect("the cells of the widest frame fit a u16"),
+        mark_words: crate::regs::mark_words(frame_len),
         entry_konsts,
         slot_kinds,
         may_suspend,
@@ -213,6 +224,14 @@ struct Prepare<'a> {
     closures: &'a FxHashMap<Label, Arc<Code>>,
     labels: FxHashMap<Label, u32>,
     slots: Slots,
+    /// Where each addressed aggregate of this body lives (RFC-0050 rule 2).
+    ///
+    /// No operation reads a run yet, so `scalar_len` does not add `plan.total` to
+    /// the frame. That is a decision: a frame handed registers no operation reads
+    /// pays for them twice, once in the cells every bind touches and once at
+    /// every call into the body, because a frame past the window a caller keeps
+    /// roots a `Store` of its own.
+    plan: runs::RunPlan,
     scratch: u32,
     /// The registers `order_moves` broke a cycle through: none, one, or the
     /// two of a slice's pair.
@@ -611,6 +630,12 @@ impl<'a> Prepare<'a> {
         labels: FxHashMap<Label, u32>,
     ) -> Self {
         let slots = assign_slots(body, ctx, &labels);
+        // A run begins above the registers `order_moves` may take while the body
+        // is being emitted, because a run's `Off` is written before it takes
+        // them (RFC-0050 rule 2).
+        let run_base = Slot::try_from(slots.frame + u32::from(MAX_SCRATCH_SLOTS))
+            .unwrap_or_else(|_| panic!("a body of {} registers has no run base", slots.frame));
+        let plan = runs::plan(body, &labels, run_base, &slots.ranges);
         let values = body.val_factory.len();
         let mut def_inst: Vec<Option<usize>> = vec![None; values];
         let mut use_counts: Vec<u32> = vec![0; values];
@@ -629,6 +654,7 @@ impl<'a> Prepare<'a> {
             labels,
             scratch: slots.frame,
             slots,
+            plan,
             scratch_used: 0,
             may_suspend: false,
             level: Level::default(),
@@ -669,10 +695,35 @@ impl<'a> Prepare<'a> {
         })
     }
 
-    fn frame_len(&self) -> u16 {
+    /// The scalar registers and the one `order_moves` may break a cycle
+    /// through. A run begins above this, so it is final before the first `Off`
+    /// of a run is written (RFC-0050 rule 2).
+    fn scalar_len(&self) -> u16 {
         let len = self.scratch + self.scratch_used;
-        u16::try_from(len)
-            .unwrap_or_else(|_| panic!("a body of {len} registers is past a frame's reach"))
+        let len = u16::try_from(len)
+            .unwrap_or_else(|_| panic!("a body of {len} registers is past a frame's reach"));
+        assert!(
+            len <= crate::regs::MAX_SCALAR_SLOTS,
+            "a body was coloured into {len} scalar registers, past the {}",
+            crate::regs::MAX_SCALAR_SLOTS
+        );
+        assert!(
+            self.scratch_used <= u32::from(MAX_SCRATCH_SLOTS),
+            "a jump's cycle went through {} scratch registers, past the {MAX_SCRATCH_SLOTS} a \
+             run's base is placed above",
+            self.scratch_used
+        );
+        // Rule 3's frame equation, checked where both halves are final. The
+        // frame does not yet carry the runs, so this asserts what it will be
+        // rather than what it is.
+        let frame = len + MAX_SCRATCH_SLOTS + self.plan.total;
+        assert!(
+            frame <= crate::regs::MAX_FRAME_SLOTS,
+            "a body's {len} scalar registers and {} run registers reach {frame}, past the {}",
+            self.plan.total,
+            crate::regs::MAX_FRAME_SLOTS
+        );
+        len
     }
 
     /// # Panics
@@ -871,16 +922,23 @@ impl<'a> Prepare<'a> {
         }
     }
 
-    /// The bit of every operand whose type owns a `Large`, in the frame's
-    /// mark word. `Off::of` is where the width one mark word reaches is
-    /// asserted, so `Off::mark` is total here.
+    /// `Regs::take_mask` reads mark word 0 alone, and the assertion here is what
+    /// makes that read total: no structure in `regs.rs` can check that the
+    /// registers of a mask fall in one word.
     fn take_mask(&self, ids: &[ValueId]) -> u64 {
         let mut mask = 0u64;
         for id in ids {
             if !self.owns(*id) {
                 continue;
             }
-            mask |= self.off(*id).mark();
+            let off = self.off(*id);
+            assert_eq!(
+                off.mark_word(),
+                0,
+                "value {id:?} is in register {}, whose mark bit is outside mark word 0",
+                off.index()
+            );
+            mask |= off.mark_bit();
         }
         mask
     }
@@ -2625,9 +2683,8 @@ impl<'a> Prepare<'a> {
                 .expect("a register class is two wide at most");
             if self.owns(*id) {
                 assert!(
-                    slot < crate::regs::MAX_FRAME_SLOTS,
-                    "an argument run reaches register {slot}, which one frame's marks do not \
-                     reach"
+                    slot < crate::regs::MARK_WORD_SLOTS,
+                    "an argument run reaches register {slot}, which is outside mark word 0"
                 );
                 mask |= 1u64 << slot;
             }
@@ -3101,9 +3158,9 @@ fn touch(ranges: &mut [Option<LiveRange>], value: usize, at: usize) {
 
 /// A closed range of instruction indexes.
 #[derive(Clone, Copy)]
-struct LiveRange {
-    lo: usize,
-    hi: usize,
+pub(crate) struct LiveRange {
+    pub(crate) lo: usize,
+    pub(crate) hi: usize,
 }
 
 impl LiveRange {
@@ -3121,7 +3178,7 @@ impl LiveRange {
         }
     }
 
-    fn overlaps(self, other: Self) -> bool {
+    pub(crate) fn overlaps(self, other: Self) -> bool {
         self.lo <= other.hi && other.lo <= self.hi
     }
 }
@@ -3630,6 +3687,10 @@ pub struct Slots {
     class_of: Box<[SlotClass]>,
     frame: u32,
     windows: FxHashMap<usize, WindowPlan>,
+    /// Each value's live range, indexed by `ValueId::to_raw`. `runs::plan` reads
+    /// it so that the run placement scans the same intervals the scalar
+    /// colouring did rather than recomputing them from the instruction list.
+    ranges: Box<[Option<LiveRange>]>,
 }
 
 impl Slots {
@@ -3806,9 +3867,9 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
             .expect("a register class is two registers at most");
         let over = run + width;
         assert!(
-            over <= u32::from(crate::regs::MAX_FRAME_SLOTS),
-            "the parameters of one body reach register {over}, past the frame's {}",
-            crate::regs::MAX_FRAME_SLOTS
+            over <= u32::from(crate::regs::MAX_SCALAR_SLOTS),
+            "the parameters of one body reach register {over}, past the {} a scalar body colours",
+            crate::regs::MAX_SCALAR_SLOTS
         );
         occupancy.hold(
             usize::try_from(run).expect("a frame's registers fit a usize"),
@@ -3904,6 +3965,7 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         class_of: classes_of.into_boxed_slice(),
         frame,
         windows,
+        ranges: ranges.into_boxed_slice(),
     };
     #[cfg(debug_assertions)]
     check_assignment(&edges, ctx, &live, &slots);

@@ -19,12 +19,40 @@ use crate::value::Value;
 /// The registers one cell holds: four cache lines of `Value`s.
 pub const CELL_SLOTS: u16 = 16;
 
-/// One mark word covers a frame, so this is where `prepare` stops.
-pub const MAX_FRAME_SLOTS: u16 = 64;
+pub const MAX_FRAME_SLOTS: u16 = MAX_SCALAR_SLOTS + MAX_RUN_SLOTS;
 
-/// The frame's mark word sits one `Value`-wide slot past its registers, so a
-/// frame of `n` registers occupies the cells `n + 1` slots reach.
-const MARK_SLOTS: u16 = 1;
+/// `prepare::assign_slots` is what keeps this bound: it colours a scalar value
+/// into the registers below it and nothing here can check that it did.
+pub const MAX_SCALAR_SLOTS: u16 = 64;
+
+pub const MAX_RUN_SLOTS: u16 = 256;
+
+pub(crate) const MARK_WORD_SLOTS: u16 = 64;
+
+const MARK_WORDS_PER_SLOT: u16 = 2;
+
+/// `Regs::of` writes `Body::param_marks` into mark word 0 whatever a frame's
+/// length is, so even a frame of no registers carries that one word.
+const MARK_WORDS_AT_LEAST: u16 = 1;
+
+const _: () = assert!(
+    MARK_WORD_SLOTS as u32 == u64::BITS,
+    "a mark word carries one bit per register"
+);
+const _: () = assert!(
+    size_of::<Value>() == MARK_WORDS_PER_SLOT as usize * size_of::<u64>(),
+    "a register slot holds a whole number of mark words"
+);
+
+#[inline(always)]
+pub(crate) const fn mark_words(slots: u16) -> u16 {
+    MARK_WORDS_AT_LEAST + slots.saturating_sub(1) / MARK_WORD_SLOTS
+}
+
+#[inline(always)]
+const fn mark_slots(slots: u16) -> u16 {
+    mark_words(slots).div_ceil(MARK_WORDS_PER_SLOT)
+}
 
 /// The cells a bound frame keeps above itself, so that a call out of it runs
 /// in this same `Vec`. Decision not to build: the `Vec` cannot grow while a
@@ -68,10 +96,10 @@ const _: () = assert!(
     "a bound frame's window holds the cell its calls lay their arguments in"
 );
 
-/// The cells a frame of `slots` registers occupies, its mark word included.
+/// The cells a frame of `slots` registers occupies, its mark words included.
 #[inline(always)]
-const fn cells_for(slots: u16) -> usize {
-    (slots as usize + MARK_SLOTS as usize).div_ceil(CELL_SLOTS as usize)
+pub(crate) const fn cells_for(slots: u16) -> usize {
+    (slots as usize + mark_slots(slots) as usize).div_ceil(CELL_SLOTS as usize)
 }
 
 /// The cells a frame of `MAX_FRAME_SLOTS` registers occupies: the most any
@@ -145,8 +173,7 @@ impl Store {
     fn widen(&mut self, slots: u16) {
         assert!(
             slots <= MAX_FRAME_SLOTS,
-            "a body of {slots} registers was prepared past the {MAX_FRAME_SLOTS} one frame's \
-             mark word reaches"
+            "a body of {slots} registers was prepared past the {MAX_FRAME_SLOTS} one frame holds"
         );
         let need = cells_for(slots) + WINDOW_CELLS;
         if self.cells.len() < need {
@@ -222,8 +249,8 @@ impl FrameState {
     }
 
     #[inline(always)]
-    pub fn fits(&self, callee_len: u16) -> bool {
-        cells_for(callee_len) + ARG_CELLS <= self.cells.len()
+    pub fn fits(&self, callee: &Body) -> bool {
+        usize::from(callee.frame_cells) + ARG_CELLS <= self.cells.len()
     }
 
     /// The frame `body` runs in, and whether the window already carries
@@ -363,7 +390,12 @@ impl<'f> Regs<'f> {
     #[inline]
     fn of(cells: &'f mut [Cell], body: &Body) -> Regs<'f> {
         let len = body.frame_len;
-        let own = cells_for(len);
+        let own = usize::from(body.frame_cells);
+        debug_assert_eq!(
+            own,
+            cells_for(len),
+            "a body of {len} registers was prepared with {own} cells"
+        );
         assert!(
             own + ARG_CELLS <= cells.len(),
             "a frame of {len} registers was borrowed from {} cells",
@@ -375,7 +407,7 @@ impl<'f> Regs<'f> {
             above_cells: (cells.len() - own).min(MAX_FRAME_CELLS) as u16,
             cells,
         };
-        regs.mark(body.param_marks);
+        regs.mark(0, body.param_marks);
         regs
     }
 
@@ -433,13 +465,17 @@ impl<'f> Regs<'f> {
         }
     }
 
-    /// The frame's mark word: the slot `cells_for` reserved just past its
-    /// registers, written when the frame was made and never read before.
+    /// `word` is `Off::mark_word` of the register being marked, which `prepare`
+    /// moved into the operation's own `Off`.
     #[inline(always)]
-    fn mark_ptr(&self) -> *mut u64 {
-        let byte = usize::from(self.len) * size_of::<Value>();
-        // SAFETY: `cells_for(len)` reserved the slot at register index `len`,
-        // and `Regs::of` wrote it before handing the frame out.
+    fn mark_ptr(&self, word: usize) -> *mut u64 {
+        debug_assert!(
+            word < usize::from(mark_words(self.len)),
+            "an operation marks mark word {word}, which its body's frame does not have"
+        );
+        let byte = usize::from(self.len) * size_of::<Value>() + word * size_of::<u64>();
+        // SAFETY: `cells_for(len)` reserved `mark_slots(len)` slots at register
+        // index `len`, and the assertion above holds `word` inside them.
         unsafe {
             self.cells
                 .as_ptr()
@@ -451,15 +487,27 @@ impl<'f> Regs<'f> {
     }
 
     #[inline(always)]
-    fn marked(&self) -> u64 {
+    fn marked(&self, word: usize) -> u64 {
         // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr() }
+        unsafe { *self.mark_ptr(word) }
     }
 
     #[inline(always)]
-    fn mark(&mut self, bits: u64) {
+    fn mark(&mut self, word: usize, bits: u64) {
         // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr() = bits }
+        unsafe { *self.mark_ptr(word) = bits }
+    }
+
+    /// The mark words above word 0, cleared. `Regs::of` does not clear them: it
+    /// runs on every bind, and a frame of one mark word — every frame in the
+    /// bench set — would pay for words it does not have on the one path a
+    /// closure-heavy body takes per element. This runs from
+    /// `machine::open_frame` instead, once per window and body, which is also
+    /// where the kind bytes are written.
+    pub fn open_marks(&mut self, mark_words: u16) {
+        for word in 1..usize::from(mark_words) {
+            self.mark(word, 0);
+        }
     }
 
     #[inline(always)]
@@ -499,7 +547,7 @@ impl<'f> Regs<'f> {
     #[inline(always)]
     pub fn take_word(&mut self, off: Off) -> u64 {
         debug_assert!(
-            self.marked() & off.mark() == 0,
+            self.marked(off.mark_word()) & off.mark_bit() == 0,
             "a word-typed register carries the frame's claim on a Large"
         );
         self.word(off)
@@ -514,7 +562,8 @@ impl<'f> Regs<'f> {
         // (RFC-0041, RFC-0048 §6), so no value is lost here.
         unsafe { self.at_mut(off).write(value) };
         if LARGE {
-            self.mark(self.marked() | off.mark());
+            let word = off.mark_word();
+            self.mark(word, self.marked(word) | off.mark_bit());
         }
     }
 
@@ -549,27 +598,33 @@ impl<'f> Regs<'f> {
     pub fn take<const LARGE: bool>(&mut self, off: Off) -> Value {
         let value = self.read(off);
         if LARGE {
-            self.mark(self.marked() & !off.mark());
+            let word = off.mark_word();
+            self.mark(word, self.marked(word) & !off.mark_bit());
         }
         value
     }
 
     /// The batched form: one `and` of the constant mask of the registers this
     /// operation consumes (RFC-0048 §5).
+    ///
+    /// `prepare::take_mask` and `prepare::window_take_mask` are what keep every
+    /// register of a mask inside mark word 0; each asserts it where it builds
+    /// one, and no structure here shows that they did.
     #[inline(always)]
     pub fn take_mask(&mut self, mask: u64) {
-        let marked = self.marked();
+        let marked = self.marked(0);
         debug_assert!(
             marked & mask == mask,
             "an operation takes a register its frame does not own: a double take"
         );
-        self.mark(marked & !mask);
+        self.mark(0, marked & !mask);
     }
 
     /// RFC-0045: the old value is released before the new one lands.
     pub fn assign<const LARGE: bool>(&mut self, off: Off, value: Value) {
-        let one = off.mark();
-        let marked = self.marked();
+        let one = off.mark_bit();
+        let word = off.mark_word();
+        let marked = self.marked(word);
         if marked & one != 0 {
             self.read(off).release();
         }
@@ -577,26 +632,33 @@ impl<'f> Regs<'f> {
         // owner released just above.
         unsafe { self.at_mut(off).write(value) };
         match LARGE {
-            true => self.mark(marked | one),
-            false => self.mark(marked & !one),
+            true => self.mark(word, marked | one),
+            false => self.mark(word, marked & !one),
         }
     }
 
-    /// Leaving: the set bits of the frame's mark word, released, and the word
+    /// Leaving: the set bits of the frame's mark words, released, and the words
     /// cleared. It iterates the set bits, never the registers — the 16-slot
     /// kind scan at every return is what RFC-0048 §6 removed.
-    pub fn sweep(&mut self) {
-        let mut live = self.marked();
-        while live != 0 {
-            let bit = live.trailing_zeros();
-            debug_assert!(
-                bit < u32::from(MAX_FRAME_SLOTS),
-                "a set mark bit is a register index, which the mark word bounds"
-            );
-            self.read(Off::of(bit as u16)).release();
-            live &= live - 1;
+    pub fn sweep(&mut self, mark_words: u16) {
+        let mut word = 0usize;
+        loop {
+            let mut live = self.marked(word);
+            while live != 0 {
+                let bit = live.trailing_zeros() as u16 + word as u16 * MARK_WORD_SLOTS;
+                debug_assert!(
+                    bit < self.len,
+                    "a set mark bit is a register index, which its frame holds"
+                );
+                self.read(Off::of(bit)).release();
+                live &= live - 1;
+            }
+            self.mark(word, 0);
+            word += 1;
+            if word >= usize::from(mark_words) {
+                return;
+            }
         }
-        self.mark(0);
     }
 
     /// The registers an extern call's arguments sit in, lent to the handler
@@ -622,5 +684,47 @@ impl<'f> Regs<'f> {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_carries_one_mark_word_per_sixty_four_registers() {
+        assert_eq!(mark_words(0), 1);
+        assert_eq!(mark_words(1), 1);
+        assert_eq!(mark_words(64), 1);
+        assert_eq!(mark_words(65), 2);
+        assert_eq!(mark_words(MAX_FRAME_SLOTS), 5);
+    }
+
+    /// A frame's own cells are the ones `take_window` withholds from the window,
+    /// so a callee cannot reach a mark word of the frame below it.
+    #[test]
+    fn the_mark_words_lie_inside_the_cells_a_frame_keeps() {
+        for len in 0..=MAX_FRAME_SLOTS {
+            let last = usize::from(len) * size_of::<Value>()
+                + usize::from(mark_words(len)) * size_of::<u64>();
+            assert!(
+                last <= cells_for(len) * size_of::<Cell>(),
+                "a frame of {len} registers keeps {} cells, which its last mark word leaves",
+                cells_for(len)
+            );
+        }
+    }
+
+    /// A frame of at most 64 registers occupies the cells it occupied before the
+    /// runs: one mark slot, and `cells_for` the expression it was.
+    #[test]
+    fn a_scalar_frame_occupies_the_cells_it_did() {
+        for len in 0..=MAX_SCALAR_SLOTS {
+            assert_eq!(
+                cells_for(len),
+                (usize::from(len) + 1).div_ceil(CELL_SLOTS as usize),
+                "a frame of {len} registers"
+            );
+        }
     }
 }

@@ -173,7 +173,7 @@ impl<'c> Machine<'c> {
         let rt = self.rt;
         let page = self.page;
         let window = &mut self.above;
-        if window.fits(callee.frame_len) {
+        if window.fits(callee) {
             let (regs, opened) = window.bind(callee);
             return run_frame(callee, named, regs, rt, page, opened, fill);
         }
@@ -215,6 +215,7 @@ where
 /// leaves the kind byte and an entry constant's register has no writer, so a
 /// second call on the same frame reads what this wrote (RFC-0052 §5, §6).
 fn open_frame(body: &Body, regs: &mut Regs<'_>) {
+    regs.open_marks(body.mark_words);
     for kind in &body.slot_kinds {
         regs.open(kind.slot, Value::inline(kind.kind, 0));
     }
@@ -254,7 +255,7 @@ where
         "{named:?} is typed pure, and its body left the machine at {stop}"
     );
     let value = machine.exit;
-    machine.regs.sweep();
+    machine.regs.sweep(body.mark_words);
     value
 }
 
@@ -263,7 +264,7 @@ async fn drive(mut machine: Machine<'_>) -> Value {
         let stop = machine.run();
         if stop == RETURN {
             let value = machine.exit;
-            machine.regs.sweep();
+            machine.regs.sweep(machine.body.mark_words);
             return value;
         }
         debug_assert_eq!(stop, SUSPEND, "a body left the machine at {stop}");
@@ -365,7 +366,7 @@ pub enum Resume<'c> {
 
 impl Callable for Body {
     fn call_in_window(&self, f: &FnValue, window: &mut FrameState, arity: u16) -> Value {
-        if !window.fits(self.frame_len) {
+        if !window.fits(self) {
             return run_rooted(
                 window,
                 self,
@@ -389,7 +390,7 @@ impl Callable for Body {
             self.span
         );
         let value = machine.exit;
-        machine.regs.sweep();
+        machine.regs.sweep(self.mark_words);
         value
     }
 

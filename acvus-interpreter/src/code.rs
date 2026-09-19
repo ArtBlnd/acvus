@@ -36,17 +36,17 @@ pub type Slot = u16;
 pub struct Off(u16);
 
 impl Off {
-    /// The widest register index an `Off` can stand for: the frame's mark word
-    /// is 64 bits, so `mark` shifts by less than 64 and `of` cannot overflow.
-    pub const MAX_INDEX: u16 = 63;
+    /// The widest register index an `Off` can stand for. `regs.rs` asserts this
+    /// against `MAX_FRAME_SLOTS`, so the two bounds cannot disagree.
+    pub const MAX_INDEX: u16 = 319;
 
     /// # Panics
     /// `slot` is past `MAX_INDEX`, which `prepare`'s frame sizing must not
-    /// emit — the same bound `regs::Store::new` asserts.
+    /// emit — the same bound `regs::Store::widen` asserts.
     pub const fn of(slot: Slot) -> Off {
         assert!(
             slot <= Off::MAX_INDEX,
-            "an operation names a register past the 64 one frame's mark word reaches"
+            "an operation names a register past the ones one frame holds"
         );
         Off(slot * size_of::<Value>() as u16)
     }
@@ -78,10 +78,21 @@ impl Off {
     /// `of` cannot produce it.
     pub const PREVIOUS: Off = Off(u16::MAX);
 
-    /// This register's bit of the frame's mark word. `of` bounds the shift.
     #[inline(always)]
-    pub const fn mark(self) -> u64 {
-        1u64 << (self.0 / size_of::<Value>() as u16)
+    pub const fn mark_word(self) -> usize {
+        self.index() / u64::BITS as usize
+    }
+
+    #[inline(always)]
+    pub const fn mark_bit(self) -> u64 {
+        1u64 << (self.index() % u64::BITS as usize)
+    }
+
+    /// # Panics
+    /// As `Off::of`.
+    #[inline(always)]
+    pub const fn field(self, at: u16) -> Off {
+        Off::of(self.index() as Slot + at)
     }
 }
 
@@ -532,6 +543,14 @@ pub struct Body {
     /// A call out of this body takes its callee's frame from the window above
     /// this many slots (RFC-0052 rule 7).
     pub frame_len: u16,
+    /// These two are fields rather than expressions over `frame_len` because
+    /// three earlier attempts at RFC-0050 rule 2 computed them where they are
+    /// read, and every one of them regressed the closure-binding benchmarks —
+    /// `map cap | sum` by 7.6 % in the last of the three, which binds a frame
+    /// per element. A bind, a window's `fits` and a sweep are the readers, and
+    /// all three run per call.
+    pub frame_cells: u16,
+    pub mark_words: u16,
     pub entry_konsts: Box<[EntryKonst]>,
     pub slot_kinds: Box<[SlotKind]>,
     pub may_suspend: bool,
