@@ -137,6 +137,82 @@ pub struct IndexAccess {
     pub mode: IndexMode,
 }
 
+/// What a `for` traverses (RFC-0057 Decision 1). Every source is settled
+/// before the header runs: a slice pair, an array value, or two bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForSource {
+    /// A `&[T]`: the element is a `&T`.
+    Slice(ValueId),
+    /// A `&mut [T]`: the element is a `&mut T`, and the container is held
+    /// exclusively for the loop (RFC-0057 Decision 5).
+    SliceMut(ValueId),
+    /// An `Array<T, N>` moved into the loop: the element is a `T` taken out
+    /// of it, and the array is empty when the loop ends.
+    Array(ValueId),
+    /// `at..hi` of one integer width: the element is that width's value.
+    Range { at: ValueId, hi: ValueId },
+}
+
+impl ForSource {
+    pub fn uses(&self) -> smallvec::SmallVec<[ValueId; 2]> {
+        match self {
+            Self::Slice(v) | Self::SliceMut(v) | Self::Array(v) => smallvec::smallvec![*v],
+            Self::Range { at, hi } => smallvec::smallvec![*at, *hi],
+        }
+    }
+
+    pub fn uses_mut(&mut self) -> Vec<&mut ValueId> {
+        match self {
+            Self::Slice(v) | Self::SliceMut(v) | Self::Array(v) => vec![v],
+            Self::Range { at, hi } => vec![at, hi],
+        }
+    }
+
+    pub fn for_each_use(&mut self, mut f: impl FnMut(&mut ValueId)) {
+        match self {
+            Self::Slice(v) | Self::SliceMut(v) | Self::Array(v) => f(v),
+            Self::Range { at, hi } => {
+                f(at);
+                f(hi);
+            }
+        }
+    }
+
+    /// How many of the body block's leading parameters the terminator fills
+    /// itself; the carried values follow them.
+    pub fn supplied_params(&self) -> usize {
+        match self {
+            Self::Range { .. } => 1,
+            Self::Slice(_) | Self::SliceMut(_) | Self::Array(_) => 2,
+        }
+    }
+
+    /// The body block's parameters that `body_args` supplies, which are the
+    /// ones left after `supplied_params`.
+    pub fn carried_params<'a>(&self, body_params: &'a [ValueId]) -> &'a [ValueId] {
+        body_params.get(self.supplied_params()..).unwrap_or(&[])
+    }
+
+    /// Which body parameter is the loop's counter, the induction variable
+    /// the machine's `For` advances.
+    pub fn counter_param(&self) -> usize {
+        match self {
+            Self::Range { .. } => 0,
+            Self::Slice(_) | Self::SliceMut(_) | Self::Array(_) => 1,
+        }
+    }
+}
+
+/// Which of the four heads a `for` was written with (RFC-0057 Decision 1).
+/// The checker settles it from the head's type; the lowering reads it and
+/// decides nothing, as it reads an [`IndexAccess`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForKind {
+    Slice(Mutability),
+    Array,
+    Range,
+}
+
 /// The `Order` a call waits for and the `Order` it yields (RFC-0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderEdge {
@@ -408,6 +484,13 @@ pub enum InstKind {
         tag: ValueId,
         arms: Vec<(Astr, Label, Vec<ValueId>)>,
         default: Option<(Label, Vec<ValueId>)>,
+    },
+    For {
+        source: ForSource,
+        body: Label,
+        body_args: Vec<ValueId>,
+        exit: Label,
+        exit_args: Vec<ValueId>,
     },
     /// Leave the body with `value`; `order` is the `Order` the body yields
     /// last when its effect is not Pure.

@@ -327,6 +327,9 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
         Terminator::JumpIf { cond, .. } => vec![*cond],
         // The tag a `Switch` reads is live wherever the dispatch is.
         Terminator::Switch { tag, .. } => vec![*tag],
+        // A `For` reads its source on every iteration, so the source is a
+        // root of the traversal (RFC-0057).
+        Terminator::For { source, .. } => source.uses().to_vec(),
         Terminator::Jump { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
@@ -342,6 +345,11 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => values.extend(then_args.iter().chain(else_args)),
+        Terminator::For {
+            body_args,
+            exit_args,
+            ..
+        } => values.extend(body_args.iter().chain(exit_args)),
         Terminator::Switch { arms, default, .. } => {
             for (_, _, args) in arms {
                 values.extend(args);
@@ -424,10 +432,13 @@ pub fn run(cfg: &mut CfgBody) {
                     let block_label = cfg.blocks[block].label;
                     for pred_block in cfg.blocks.iter() {
                         // A `Switch` can reach one block through several arms, so
-                        // an edge list, not one edge (RFC-0051).
-                        let pred_args: Vec<&[ValueId]> = match &pred_block.terminator {
+                        // an edge list, not one edge (RFC-0051). The `usize` is
+                        // the first parameter the edge carries an argument for:
+                        // a `For`'s body edge starts after the parameters the
+                        // terminator fills itself (RFC-0057).
+                        let pred_args: Vec<(usize, &[ValueId])> = match &pred_block.terminator {
                             Terminator::Jump { label, args } if *label == block_label => {
-                                vec![args.as_slice()]
+                                vec![(0, args.as_slice())]
                             }
                             Terminator::JumpIf {
                                 then_label,
@@ -438,19 +449,33 @@ pub fn run(cfg: &mut CfgBody) {
                             } => [(then_label, then_args), (else_label, else_args)]
                                 .into_iter()
                                 .filter(|(label, _)| **label == block_label)
-                                .map(|(_, args)| args.as_slice())
+                                .map(|(_, args)| (0, args.as_slice()))
                                 .collect(),
                             Terminator::Switch { arms, default, .. } => arms
                                 .iter()
                                 .map(|(_, label, args)| (label, args))
                                 .chain(default.iter().map(|(label, args)| (label, args)))
                                 .filter(|(label, _)| **label == block_label)
-                                .map(|(_, args)| args.as_slice())
+                                .map(|(_, args)| (0, args.as_slice()))
                                 .collect(),
+                            Terminator::For {
+                                source,
+                                body,
+                                body_args,
+                                exit,
+                                exit_args,
+                            } => [
+                                (body, source.supplied_params(), body_args),
+                                (exit, 0, exit_args),
+                            ]
+                            .into_iter()
+                            .filter(|(label, _, _)| **label == block_label)
+                            .map(|(_, first, args)| (first, args.as_slice()))
+                            .collect(),
                             _ => Vec::new(),
                         };
-                        for args in pred_args {
-                            if let Some(&arg) = args.get(param) {
+                        for (first, args) in pred_args {
+                            if let Some(&arg) = param.checked_sub(first).and_then(|i| args.get(i)) {
                                 worklist.push(arg);
                             }
                         }
@@ -490,14 +515,28 @@ pub fn run(cfg: &mut CfgBody) {
     // Phase 4: sweep - remove dead block params and the jump args that
     // fed them. A dead param is a phi nothing reads; left in place it
     // would carry a second copy of a move-only value.
+    //
+    // A `For`'s body takes its element and its counter by position from the
+    // terminator, so those parameters stay whether anything reads them: the
+    // machine's `For` writes them there (RFC-0057).
+    let supplied: FxHashMap<Label, usize> = cfg
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.terminator {
+            Terminator::For { source, body, .. } => Some((*body, source.supplied_params())),
+            _ => None,
+        })
+        .collect();
     let dead_params: Vec<(Label, Vec<usize>)> = cfg
         .blocks
         .iter()
         .map(|block| {
+            let pinned = supplied.get(&block.label).copied().unwrap_or(0);
             let dead = block
                 .params
                 .iter()
                 .enumerate()
+                .skip(pinned)
                 .filter(|(_, p)| !live_values.contains(p))
                 .map(|(pi, _)| pi)
                 .collect();
@@ -541,6 +580,22 @@ pub fn run(cfg: &mut CfgBody) {
                 }
                 if let Some(dead) = dead_of(*else_label) {
                     prune(else_args, dead);
+                }
+            }
+            Terminator::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_args,
+            } => {
+                let first = source.supplied_params();
+                if let Some(dead) = dead_of(*body) {
+                    let shifted: Vec<usize> = dead.iter().map(|pi| pi - first).collect();
+                    prune(body_args, &shifted);
+                }
+                if let Some(dead) = dead_of(*exit) {
+                    prune(exit_args, dead);
                 }
             }
             Terminator::Switch { arms, default, .. } => {

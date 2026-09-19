@@ -425,6 +425,46 @@ alive = false; \
     )
 }
 
+/// The same matcher with `break` in place of the `alive` flag (RFC-0057
+/// Decision 4). The flag was the exit the language had; the two exits are
+/// `break` now, and the `Mov` per iteration that carried the flag through
+/// the loop's back edge goes with it --
+/// `acvus-interpreter-test/tests/loop_exit_moves.rs` counts them.
+fn matcher_break(places: &Places) -> String {
+    let Places {
+        pat,
+        line,
+        len: slen,
+    } = places;
+    format!(
+        "\
+let i = zero; \
+let j = zero; \
+let hs = false; \
+let star = zero; \
+let mark = zero; \
+let ok = false; \
+while true {{ \
+if i < {slen} {{ \
+let adv = false; \
+if j < plen {{ \
+let pj = {pat}[j]; \
+if pj == {STAR} {{ hs = true; star = j; mark = i; j = j + one; adv = true; }} \
+else {{ if pj == {QMARK} || pj == {line}[i] {{ i = i + one; j = j + one; adv = true; }}; }}; \
+}}; \
+if !adv {{ \
+if hs {{ j = star + one; mark = mark + one; i = mark; }} else {{ break; }}; \
+}}; \
+}} else {{ \
+while j < plen && {pat}[j] == {STAR} {{ j = j + one; }} \
+ok = j == plen; \
+break; \
+}}; \
+}} \
+"
+    )
+}
+
 /// The trailing integer field, read backwards. Runs on a matching line only.
 fn latency(places: &Places) -> String {
     let Places {
@@ -477,7 +517,25 @@ li = li + one; \
     )
 }
 
-/// Case 2: the same matcher as a named closure, one `CallIndirect` per line.
+/// Case 2: case 1 with the matcher's two exits written as `break`
+/// (RFC-0057). The old case stays: the two are the measurement's pair.
+pub fn inline_break_source() -> String {
+    format!(
+        "{PRELUDE}\
+while li < n {{ \
+let slen = len(&@lines[li]); \
+{matcher} \
+if ok {{ {latency} count = count + 1; total = total + lat; }}; \
+li = li + one; \
+}} \
+{tail}",
+        matcher = matcher_break(&KERNEL_PLACES),
+        latency = latency(&KERNEL_PLACES),
+        tail = tail(),
+    )
+}
+
+/// Case 3: the same matcher as a named closure, one `CallIndirect` per line.
 /// The pattern and the line are its two arguments, and the `u64` `plen`,
 /// `one` and `zero` the index arithmetic needs are captures of the outer
 /// body (RFC-0018: a captured word is a copy).
@@ -507,7 +565,7 @@ li = li + one; \
     )
 }
 
-/// Case 3: the matcher as a `sync` Rust extern over the corpus the script
+/// Case 4: the matcher as a `sync` Rust extern over the corpus the script
 /// holds, the pattern and the line crossing as `&[i64]`.
 fn slice_source() -> String {
     format!(
@@ -525,7 +583,7 @@ li = li + one; \
     )
 }
 
-/// Cases 4 and 5: the matcher as a `heavy` Rust extern over the corpus Rust
+/// Cases 5 and 6: the matcher as a `heavy` Rust extern over the corpus Rust
 /// holds, the script naming a line by its index.
 fn extern_source(call: &str) -> String {
     format!(
@@ -619,7 +677,14 @@ struct Case {
     exec: Exec,
 }
 
-const CASE_NAMES: [&str; 5] = ["inline", "closure", "sync ext", "heavy pure", "heavy opq"];
+const CASE_NAMES: [&str; 6] = [
+    "inline",
+    "inline break",
+    "closure",
+    "sync ext",
+    "heavy pure",
+    "heavy opq",
+];
 
 fn cases() -> Vec<Case> {
     vec![
@@ -630,21 +695,26 @@ fn cases() -> Vec<Case> {
         },
         Case {
             name: CASE_NAMES[1],
-            source: closure_source(),
+            source: inline_break_source(),
             exec: Exec::Sequential,
         },
         Case {
             name: CASE_NAMES[2],
-            source: slice_source(),
+            source: closure_source(),
             exec: Exec::Sequential,
         },
         Case {
             name: CASE_NAMES[3],
+            source: slice_source(),
+            exec: Exec::Sequential,
+        },
+        Case {
+            name: CASE_NAMES[4],
             source: extern_source("match_heavy"),
             exec: Exec::Tokio,
         },
         Case {
-            name: CASE_NAMES[4],
+            name: CASE_NAMES[5],
             source: extern_source("match_heavy_opaque"),
             exec: Exec::Tokio,
         },

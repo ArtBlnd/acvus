@@ -817,7 +817,14 @@ fn incoming(term: &Terminator, label: Label) -> Vec<&Vec<ValueId>> {
             .filter(|(to, _)| **to == label)
             .map(|(_, args)| args)
             .collect(),
-        Terminator::Jump { .. }
+        // A `For`'s exit edge carries its target's whole parameter list; the
+        // body edge carries only what follows the parameters the terminator
+        // fills, so its arguments line up with no parameter here (RFC-0057).
+        Terminator::For {
+            exit, exit_args, ..
+        } if *exit == label => vec![exit_args],
+        Terminator::For { .. }
+        | Terminator::Jump { .. }
         | Terminator::Return { .. }
         | Terminator::Fallthrough
         | Terminator::Diverge => Vec::new(),
@@ -895,6 +902,13 @@ fn retarget(term: &mut Terminator, from: Label, threaded: &Threaded) {
                 leave(label, args);
             }
         }
+        // Only a `For`'s exit edge is threaded: its body edge names the
+        // block whose leading parameters the terminator fills by position,
+        // and an arm the dispatch was threaded to has no such parameters
+        // (RFC-0057).
+        Terminator::For {
+            exit, exit_args, ..
+        } => leave(exit, exit_args),
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}
     }
 }

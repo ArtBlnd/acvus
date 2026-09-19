@@ -1052,8 +1052,10 @@ impl<'a> Prepare<'a> {
             InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
             // RFC-0051: a `Switch` is a terminator, so it ends its block
-            // and `straight_run` admits it into no region's part.
+            // and `straight_run` admits it into no region's part. A `For`
+            // is one too (RFC-0057).
             | InstKind::Switch { .. }
+            | InstKind::For { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
             | InstKind::Eval { .. }
@@ -1753,6 +1755,20 @@ impl<'a> Prepare<'a> {
             // -- The terminators ----------------------------------------
             InstKind::Switch { tag, arms, default } => {
                 return Some(self.switch_op(*tag, arms, default.as_ref()));
+            }
+
+            // RFC-0057: the machine has no `For` operation yet. Expanding one
+            // here into the comparison, the element read and the advance
+            // needs a counter register initialized above the header, and the
+            // header block is the only block this arm writes: the preheader's
+            // `Mov`s and `move_ops`' parameter positions are outside it. The
+            // machine run gives `For` the region op that owns the index
+            // register (RFC-0057 Decision 3).
+            InstKind::For { source, .. } => {
+                panic!(
+                    "a `for` over {source:?} cannot be prepared: the machine has no `For` \
+                     operation yet (RFC-0057 Decision 3); the script is refused before it runs"
+                )
             }
 
             InstKind::Jump { label, args } => {

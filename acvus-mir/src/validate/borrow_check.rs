@@ -197,6 +197,17 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
             v.extend(*order);
             v
         }
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            let mut v = source.uses().to_vec();
+            v.extend(body_args);
+            v.extend(exit_args);
+            v
+        }
         Terminator::Switch { tag, arms, default } => {
             let mut v = vec![*tag];
             for (_, _, args) in arms {

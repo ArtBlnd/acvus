@@ -176,5 +176,9 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Switch { .. } => {}
+
+        // The source outlives the terminator: every iteration reads an
+        // element through it (RFC-0057).
+        InstKind::For { source, .. } => source.uses().into_iter().for_each(out),
     }
 }

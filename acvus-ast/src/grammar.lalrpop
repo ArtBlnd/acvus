@@ -36,6 +36,10 @@ extern {
         "if" => Token::If,
         "else" => Token::Else,
         "while" => Token::While,
+        "for" => Token::For,
+        "in" => Token::In,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
         "anyorder" => Token::Anyorder,
         "match" => Token::Match,
         "mut" => Token::Mut,
@@ -181,6 +185,14 @@ Stmt: Stmt = {
             body,
             span: Span::new(l, r),
         }),
+    // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
+    <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:Stmt*> "}" <r:@R> =>
+        Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binding, head, body, span: Span::new(l, r) },
+    // break; | continue;  -- the innermost loop, no labels (RFC-0057 Decision 4)
+    <l:@L> "break" ";" <r:@R> =>
+        Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
+    <l:@L> "continue" ";" <r:@R> =>
+        Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) },
     // anyorder { body }
     <l:@L> "anyorder" "{" <body:Stmt*> "}" ";"? <r:@R> =>
         Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
@@ -224,6 +236,13 @@ Stmt: Stmt = {
     },
     // expression statement
     <e:Expr> ";" => Stmt::Expr(e),
+};
+
+// `lo..hi` is a `for` head and not a value: there is no `Range` type, so
+// `..` appears in no expression rule (RFC-0057 Decision 1).
+ForHead: ForHead = {
+    <lo:Expr> ".." <hi:Expr> => ForHead::Range { lo, hi },
+    <e:Expr> => ForHead::Value(e),
 };
 
 // ── Top-level rule ─────────────────────────────────────────────────────

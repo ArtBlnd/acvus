@@ -246,6 +246,17 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             remap_vec(else_args, remap);
         }
 
+        InstKind::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            source.for_each_use(|v| remap_val(v, remap));
+            remap_vec(body_args, remap);
+            remap_vec(exit_args, remap);
+        }
+
         InstKind::Switch { tag, arms, default } => {
             remap_val(tag, remap);
             for (_, _, args) in arms.iter_mut() {

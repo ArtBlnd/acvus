@@ -154,6 +154,11 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => then_args.iter().chain(else_args).copied().collect(),
+        Terminator::For {
+            body_args,
+            exit_args,
+            ..
+        } => body_args.iter().chain(exit_args).copied().collect(),
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .flat_map(|(_, _, args)| args.iter())
@@ -172,6 +177,11 @@ fn terminator_args_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
             else_args,
             ..
         } => then_args.iter_mut().chain(else_args.iter_mut()).collect(),
+        Terminator::For {
+            body_args,
+            exit_args,
+            ..
+        } => body_args.iter_mut().chain(exit_args.iter_mut()).collect(),
         Terminator::Switch { arms, default, .. } => arms
             .iter_mut()
             .flat_map(|(_, _, args)| args.iter_mut())

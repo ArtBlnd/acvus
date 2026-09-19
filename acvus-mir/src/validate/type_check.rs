@@ -15,7 +15,7 @@
 use crate::ir::{
     Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValOrigin, ValueId,
 };
-use crate::ir::{ExternInstance, IndexMode};
+use crate::ir::{ExternInstance, ForSource, IndexMode};
 use crate::ty::{CastTy, Mutability, Ty, TypeArg};
 use crate::validate::move_check::is_move_only;
 use acvus_ast::{BinOp, Literal, Span, UnaryOp};
@@ -59,6 +59,12 @@ pub enum ValidationErrorKind {
     /// A `match` whose scrutinee's variants this stage cannot name has no
     /// catch-all (RFC-0051 §3).
     NonExhaustiveMatch,
+    /// The two bounds of a `for i in lo..hi` are not one integer width
+    /// (RFC-0057 Decision 1).
+    ForRangeWidths {
+        at: Ty,
+        hi: Ty,
+    },
     /// A `match` over a locally closed enum leaves a variant untaken.
     MatchMissesVariants {
         enum_name: Option<Astr>,
@@ -497,6 +503,50 @@ impl CheckCtx {
     }
 
     /// Get block params for a label.
+    /// One edge's arguments against the parameters they fill: as many, and
+    /// each of the parameter's type.
+    fn check_edge_args(
+        &self,
+        pc: usize,
+        span: Span,
+        inst_name: &str,
+        params: &[ValueId],
+        args: &[ValueId],
+        vt: &FxHashMap<ValueId, Ty>,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        if args.len() != params.len() {
+            errors.push(ValidationError {
+                scope: self.scope_name.clone(),
+                inst_index: pc,
+                span,
+                kind: ValidationErrorKind::ArityMismatch {
+                    inst_name: inst_name.to_string(),
+                    expected: params.len(),
+                    got: args.len(),
+                },
+            });
+            return;
+        }
+        for (i, (arg, param)) in args.iter().zip(params).enumerate() {
+            let (Some(param_ty), Some(arg_ty)) = (
+                self.ty_of(*param, vt, span, pc, errors),
+                self.ty_of(*arg, vt, span, pc, errors),
+            ) else {
+                continue;
+            };
+            self.assert_match(
+                pc,
+                span,
+                inst_name,
+                &format!("arg[{i}]"),
+                param_ty,
+                arg_ty,
+                errors,
+            );
+        }
+    }
+
     fn block_params(&self, label: &Label, insts: &[crate::ir::Inst]) -> Option<Vec<ValueId>> {
         let idx = self.label_map.get(label)?;
         match &insts[*idx].kind {
@@ -1570,6 +1620,115 @@ impl CheckCtx {
             }
 
             // === Control flow ===
+            // A `For` is the loop's condition (RFC-0057): the source decides
+            // the element and the counter it hands the body, and the edges'
+            // remaining arguments are checked the way a `Jump`'s are.
+            InstKind::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_args,
+            } => {
+                let element = match source {
+                    ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
+                        let slice_ty = ty!(*slice);
+                        let wanted = match source {
+                            ForSource::SliceMut(_) => Mutability::Mut,
+                            _ => Mutability::Shared,
+                        };
+                        let Some((held, element)) = slice_of(slice_ty) else {
+                            self.invalid(pc, span, "For", "Ref(_, Slice)", slice_ty, errors);
+                            return;
+                        };
+                        if held != wanted {
+                            self.invalid(
+                                pc,
+                                span,
+                                "For",
+                                &format!("Ref({wanted:?}, Slice)"),
+                                slice_ty,
+                                errors,
+                            );
+                        }
+                        Ty::Ref(
+                            wanted,
+                            Box::new(crate::ty::TypeArg::uniform(element.clone())),
+                        )
+                    }
+                    ForSource::Array(array) => {
+                        let array_ty = ty!(*array);
+                        let Ty::Array(element, _) = array_ty else {
+                            self.invalid(pc, span, "For", "Array", array_ty, errors);
+                            return;
+                        };
+                        (**element).clone()
+                    }
+                    ForSource::Range { at, hi } => {
+                        let at_ty = ty!(*at).clone();
+                        let hi_ty = ty!(*hi);
+                        if !matches!(at_ty, Ty::Int(_)) {
+                            self.invalid(pc, span, "For", "Int", &at_ty, errors);
+                            return;
+                        }
+                        if !types_match(&at_ty, hi_ty) {
+                            errors.push(ValidationError {
+                                scope: self.scope_name.clone(),
+                                inst_index: pc,
+                                span,
+                                kind: ValidationErrorKind::ForRangeWidths {
+                                    at: at_ty.clone(),
+                                    hi: hi_ty.clone(),
+                                },
+                            });
+                        }
+                        at_ty
+                    }
+                };
+                if let Some(params) = self.block_params(body, insts) {
+                    let supplied = source.supplied_params();
+                    if params.len() < supplied {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::ArityMismatch {
+                                inst_name: "For(body)".to_string(),
+                                expected: supplied,
+                                got: params.len(),
+                            },
+                        });
+                        return;
+                    }
+                    let elem_ty = ty!(params[0]);
+                    self.assert_match(pc, span, "For(body)", "elem", &element, elem_ty, errors);
+                    if supplied == 2 {
+                        let index_ty = ty!(params[1]);
+                        self.assert_match(
+                            pc,
+                            span,
+                            "For(body)",
+                            "index",
+                            &Ty::U64,
+                            index_ty,
+                            errors,
+                        );
+                    }
+                    self.check_edge_args(
+                        pc,
+                        span,
+                        "For(body)",
+                        &params[supplied..],
+                        body_args,
+                        vt,
+                        errors,
+                    );
+                }
+                if let Some(params) = self.block_params(exit, insts) {
+                    self.check_edge_args(pc, span, "For(exit)", &params, exit_args, vt, errors);
+                }
+            }
+
             // A `Switch` reads the tag of a variant and hands each edge the
             // block arguments its target takes (RFC-0051). The edge arities
             // are checked the way a `Jump`'s are.

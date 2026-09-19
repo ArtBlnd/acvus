@@ -4,7 +4,7 @@ use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::ir::{Callee, IndexMode, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::ir::{Callee, ForSource, IndexMode, InstKind, Label, MirBody, MirModule, ValueId};
 
 /// Normalizes ValueIds to sequential order of first appearance.
 struct ValNormalizer {
@@ -654,6 +654,48 @@ fn write_body(
                         .join(", ");
                     writeln!(f, "{}({params_str}):", fmt_label(*label))?
                 }
+            }
+            // `for slice(r3) -> L1 else L2` (RFC-0057). The element and the
+            // counter are the body block's leading parameters, printed where
+            // that block's label is.
+            InstKind::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_args,
+            } => {
+                let over = match source {
+                    ForSource::Slice(slice) => {
+                        format!("slice({})", vn.fmt_use(*slice, &consts, &texts))
+                    }
+                    ForSource::SliceMut(slice) => {
+                        format!("slice_mut({})", vn.fmt_use(*slice, &consts, &texts))
+                    }
+                    ForSource::Array(array) => {
+                        format!("array({})", vn.fmt_use(*array, &consts, &texts))
+                    }
+                    ForSource::Range { at, hi } => format!(
+                        "range({}..{})",
+                        vn.fmt_use(*at, &consts, &texts),
+                        vn.fmt_use(*hi, &consts, &texts)
+                    ),
+                };
+                let mut edge = |label: &Label, args: &[ValueId]| {
+                    if args.is_empty() {
+                        fmt_label(*label)
+                    } else {
+                        format!(
+                            "{}({})",
+                            fmt_label(*label),
+                            vn.fmt_uses(args, &consts, &texts)
+                        )
+                    }
+                };
+                let taken = edge(body, body_args);
+                let left = edge(exit, exit_args);
+                drop(edge);
+                writeln!(f, "for {over} -> {taken} else {left}")?
             }
             // `switch r5 { A -> L1, B -> L2, _ -> L3 }` (RFC-0051).
             InstKind::Switch { tag, arms, default } => {

@@ -424,6 +424,43 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     }
                 }
             }
+            // A `For` leaves through two edges. The body's leading
+            // parameters are the terminator's own, so only what follows them
+            // takes an argument from that edge; the exit takes the loop's
+            // carried values (RFC-0057).
+            Terminator::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_args,
+            } => {
+                for (label, args) in [(body, body_args), (exit, exit_args)] {
+                    if let Some(&target_idx) = cfg.label_to_block.get(label) {
+                        let params = &cfg.blocks[target_idx.0].params;
+                        let taking: &[ValueId] = match label == body {
+                            true => source.carried_params(params),
+                            false => params,
+                        };
+                        propagate_args(
+                            scope,
+                            &block_exit[idx.0],
+                            args,
+                            taking,
+                            &cfg.val_types,
+                            errors,
+                            &mut block_entry[target_idx.0],
+                        );
+                        if propagate_state(
+                            &block_exit[idx.0],
+                            params,
+                            &mut block_entry[target_idx.0],
+                        ) {
+                            worklist.push_back(target_idx);
+                        }
+                    }
+                }
+            }
             // Every arm of a `Switch` is an edge that forwards its own
             // arguments, exactly as a `JumpIf`'s two are.
             Terminator::Switch { arms, default, .. } => {
@@ -992,7 +1029,10 @@ fn process_inst(
         }
 
         // Control flow - handled at block level
-        InstKind::Jump { .. } | InstKind::JumpIf { .. } | InstKind::Switch { .. } => {}
+        InstKind::Jump { .. }
+        | InstKind::JumpIf { .. }
+        | InstKind::Switch { .. }
+        | InstKind::For { .. } => {}
     }
 }
 

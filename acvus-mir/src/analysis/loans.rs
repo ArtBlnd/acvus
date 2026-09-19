@@ -17,8 +17,8 @@ use smallvec::SmallVec;
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
-use crate::cfg::CfgBody;
-use crate::ir::{Inst, InstKind, RefTarget, ValueId};
+use crate::cfg::{CfgBody, Terminator};
+use crate::ir::{ForSource, Inst, InstKind, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +88,7 @@ impl StorageEffect {
 
 struct RegionAnalysis<'a> {
     val_types: &'a FxHashMap<ValueId, Ty>,
+    cfg: &'a CfgBody,
 }
 
 /// A value with no type entry is taken to carry a reference: the stricter
@@ -183,15 +184,38 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
         }
     }
 
+    /// A `For` over a slice hands the body a reference into it, so the
+    /// element holds the source's loan for as long as the loop runs, which
+    /// is the terminator's own extent (RFC-0057 Decision 3). An array's
+    /// element is moved out and a range's is a number: neither is a loan.
+    fn terminator_uses(&self, term: &Terminator, state: &mut DataflowState<ValueId, Region>) {
+        let Terminator::For { source, body, .. } = term else {
+            return;
+        };
+        let (ForSource::Slice(slice) | ForSource::SliceMut(slice)) = source else {
+            return;
+        };
+        let Some(&target) = self.cfg.label_to_block.get(body) else {
+            return;
+        };
+        let Some(&element) = self.cfg.blocks[target.0].params.first() else {
+            return;
+        };
+        let mut region = state.get(*slice);
+        region.via.push(*slice);
+        state.set(element, region);
+    }
+
     fn propagate_forward(
         &self,
         source_exit: &DataflowState<ValueId, Region>,
         params: &[ValueId],
+        first: usize,
         args: &[ValueId],
         target_entry: &mut DataflowState<ValueId, Region>,
     ) -> bool {
         let mut changed = target_entry.join_from(source_exit);
-        for (param, arg) in params.iter().zip(args) {
+        for (param, arg) in params.iter().skip(first).zip(args) {
             if !self.carries_ref(*param) {
                 continue;
             }
@@ -208,6 +232,7 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
         &self,
         _: &DataflowState<ValueId, Region>,
         _: &[ValueId],
+        _: usize,
         _: &[ValueId],
         _: &mut DataflowState<ValueId, Region>,
     ) {
@@ -230,6 +255,7 @@ impl Loans {
     pub fn build(cfg: &CfgBody) -> Self {
         let analysis = RegionAnalysis {
             val_types: &cfg.val_types,
+            cfg,
         };
         let mut entry = DataflowState::new();
         for storage in cfg.entry_defs() {

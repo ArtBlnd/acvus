@@ -200,6 +200,16 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             then_args.iter_mut().for_each(|v| s(v));
             else_args.iter_mut().for_each(|v| s(v));
         }
+        InstKind::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            source.for_each_use(&mut *s);
+            body_args.iter_mut().for_each(|v| s(v));
+            exit_args.iter_mut().for_each(|v| s(v));
+        }
         InstKind::Switch { tag, arms, default } => {
             s(tag);
             for (_, _, args) in arms.iter_mut() {
@@ -237,6 +247,16 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
             s(cond);
             then_args.iter_mut().for_each(&s);
             else_args.iter_mut().for_each(&s);
+        }
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            source.for_each_use(|v| s(v));
+            body_args.iter_mut().for_each(&s);
+            exit_args.iter_mut().for_each(&s);
         }
         Terminator::Switch { tag, arms, default } => {
             s(tag);
@@ -653,6 +673,23 @@ pub(super) fn patch_instructions(cfg: &mut CfgBody, phi_insertions: &[super::ssa
                 }
                 if let Some(extra) = jump_extra_args.get(&(pred_label, *else_label)) {
                     else_args.extend_from_slice(extra);
+                }
+            }
+            // A `For` fills the leading parameters of its body itself, so a
+            // phi at that block is one of the parameters after them
+            // (RFC-0057); the exit's are all phis.
+            Terminator::For {
+                body,
+                body_args,
+                exit,
+                exit_args,
+                ..
+            } => {
+                if let Some(extra) = jump_extra_args.get(&(pred_label, *body)) {
+                    body_args.extend_from_slice(extra);
+                }
+                if let Some(extra) = jump_extra_args.get(&(pred_label, *exit)) {
+                    exit_args.extend_from_slice(extra);
                 }
             }
             _ => {}

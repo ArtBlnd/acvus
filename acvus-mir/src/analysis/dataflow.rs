@@ -90,22 +90,26 @@ pub trait DataflowAnalysis {
         None
     }
 
-    /// Propagate state across a forward edge.
-    /// `params`/`args`: target block params and jump args for param->arg mapping.
+    /// Propagate state across a forward edge. `params` is the target
+    /// block's whole parameter list and `args` fills it from `first`: a
+    /// `For`'s body edge starts after the parameters the terminator fills
+    /// itself (RFC-0057), and every other edge starts at zero.
     fn propagate_forward(
         &self,
         source_exit: &DataflowState<Self::Key, Self::Domain>,
         params: &[ValueId],
+        first: usize,
         args: &[ValueId],
         target_entry: &mut DataflowState<Self::Key, Self::Domain>,
     ) -> bool;
 
-    /// Propagate state across a backward edge.
-    /// `succ_params`/`term_args`: successor params and this terminator's args.
+    /// Propagate state across a backward edge, with `succ_params` and
+    /// `first` as they are on the forward one.
     fn propagate_backward(
         &self,
         succ_entry: &DataflowState<Self::Key, Self::Domain>,
         succ_params: &[ValueId],
+        first: usize,
         term_args: &[ValueId],
         exit_state: &mut DataflowState<Self::Key, Self::Domain>,
     );
@@ -268,6 +272,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                 let changed = analysis.propagate_forward(
                     exit_state,
                     &cfg.blocks[t.0].params,
+                    0,
                     args,
                     &mut block_entry[t.0],
                 );
@@ -301,12 +306,49 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                     let changed = analysis.propagate_forward(
                         exit_state,
                         &cfg.blocks[t.0].params,
+                        0,
                         args,
                         &mut block_entry[t.0],
                     );
                     if changed || !visited[t.0] {
                         worklist.push_back(t);
                     }
+                }
+            }
+        }
+        // Both edges of a `For` are taken on some path: the source decides
+        // which, and no analysis here reads a source. The body's leading
+        // parameters are the terminator's own, so only the carried ones
+        // take arguments from this edge (RFC-0057).
+        Terminator::For {
+            source,
+            body,
+            body_args,
+            exit,
+            exit_args,
+        } => {
+            if let Some(&t) = cfg.label_to_block.get(body) {
+                let changed = analysis.propagate_forward(
+                    exit_state,
+                    &cfg.blocks[t.0].params,
+                    source.supplied_params(),
+                    body_args,
+                    &mut block_entry[t.0],
+                );
+                if changed || !visited[t.0] {
+                    worklist.push_back(t);
+                }
+            }
+            if let Some(&t) = cfg.label_to_block.get(exit) {
+                let changed = analysis.propagate_forward(
+                    exit_state,
+                    &cfg.blocks[t.0].params,
+                    0,
+                    exit_args,
+                    &mut block_entry[t.0],
+                );
+                if changed || !visited[t.0] {
+                    worklist.push_back(t);
                 }
             }
         }
@@ -322,6 +364,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                     let changed = analysis.propagate_forward(
                         exit_state,
                         &cfg.blocks[t.0].params,
+                        0,
                         args,
                         &mut block_entry[t.0],
                     );
@@ -358,6 +401,7 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                 analysis.propagate_backward(
                     &block_entry[t.0],
                     &cfg.blocks[t.0].params,
+                    0,
                     args,
                     exit_state,
                 );
@@ -374,6 +418,7 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                 analysis.propagate_backward(
                     &block_entry[t.0],
                     &cfg.blocks[t.0].params,
+                    0,
                     then_args,
                     exit_state,
                 );
@@ -382,6 +427,7 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                 analysis.propagate_backward(
                     &block_entry[t.0],
                     &cfg.blocks[t.0].params,
+                    0,
                     else_args,
                     exit_state,
                 );
@@ -397,10 +443,37 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                     analysis.propagate_backward(
                         &block_entry[t.0],
                         &cfg.blocks[t.0].params,
+                        0,
                         args,
                         exit_state,
                     );
                 }
+            }
+        }
+        Terminator::For {
+            source,
+            body,
+            body_args,
+            exit,
+            exit_args,
+        } => {
+            if let Some(&t) = cfg.label_to_block.get(body) {
+                analysis.propagate_backward(
+                    &block_entry[t.0],
+                    &cfg.blocks[t.0].params,
+                    source.supplied_params(),
+                    body_args,
+                    exit_state,
+                );
+            }
+            if let Some(&t) = cfg.label_to_block.get(exit) {
+                analysis.propagate_backward(
+                    &block_entry[t.0],
+                    &cfg.blocks[t.0].params,
+                    0,
+                    exit_args,
+                    exit_state,
+                );
             }
         }
         Terminator::Fallthrough => {
@@ -420,12 +493,13 @@ fn propagate_from_successors<A: DataflowAnalysis>(
 pub fn value_propagate_forward<D: SemiLattice>(
     source_exit: &DataflowState<ValueId, D>,
     params: &[ValueId],
+    first: usize,
     args: &[ValueId],
     target_entry: &mut DataflowState<ValueId, D>,
 ) -> bool {
     let mut changed = false;
 
-    for (param, arg) in params.iter().zip(args.iter()) {
+    for (param, arg) in params.iter().skip(first).zip(args.iter()) {
         let arg_val = source_exit.get(*arg);
         let entry = target_entry.values.entry(*param).or_insert_with(D::bottom);
         if entry.join_mut(&arg_val) {
@@ -445,10 +519,11 @@ pub fn value_propagate_forward<D: SemiLattice>(
 pub fn value_propagate_backward<D: SemiLattice>(
     succ_entry: &DataflowState<ValueId, D>,
     succ_params: &[ValueId],
+    first: usize,
     term_args: &[ValueId],
     exit_state: &mut DataflowState<ValueId, D>,
 ) {
-    for (param, arg) in succ_params.iter().zip(term_args.iter()) {
+    for (param, arg) in succ_params.iter().skip(first).zip(term_args.iter()) {
         let param_val = succ_entry.get(*param);
         if param_val != D::bottom() {
             let entry = exit_state.values.entry(*arg).or_insert_with(D::bottom);

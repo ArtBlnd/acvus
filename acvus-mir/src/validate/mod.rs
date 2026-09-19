@@ -80,6 +80,9 @@ impl ValidationError {
             ValidationErrorKind::NonExhaustiveMatch => {
                 "non-exhaustive match: the scrutinee's type names no variants".to_string()
             }
+            ValidationErrorKind::ForRangeWidths { at, hi } => {
+                format!("a range of {at:?} and {hi:?} is not one integer width")
+            }
             ValidationErrorKind::MatchMissesVariants { missing, .. } => {
                 format!(
                     "non-exhaustive match: {} variants are not covered",
@@ -196,6 +199,12 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             ValidationErrorKind::NonExhaustiveMatch => write!(
                 f,
                 "non-exhaustive match: the scrutinee's type names no variants; add a `_` arm"
+            ),
+            ValidationErrorKind::ForRangeWidths { at, hi } => write!(
+                f,
+                "a `for` over `{}..{}` needs one integer width at both bounds",
+                at.display(self.interner),
+                hi.display(self.interner)
             ),
             ValidationErrorKind::MatchMissesVariants { enum_name, missing } => {
                 let written = missing

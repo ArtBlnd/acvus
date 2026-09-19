@@ -1051,6 +1051,16 @@ fn remap_terminator(term: &mut Terminator, remap: &FxHashMap<ValueId, ValueId>) 
                 remap_val(order, remap);
             }
         }
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            source.for_each_use(|v| remap_val(v, remap));
+            remap_vec(body_args, remap);
+            remap_vec(exit_args, remap);
+        }
         Terminator::Switch { tag, arms, default } => {
             remap_val(tag, remap);
             for (_, _, args) in arms.iter_mut() {
@@ -1084,6 +1094,17 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
             let mut v = vec![*cond];
             v.extend_from_slice(then_args);
             v.extend_from_slice(else_args);
+            v
+        }
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            let mut v = source.uses().to_vec();
+            v.extend_from_slice(body_args);
+            v.extend_from_slice(exit_args);
             v
         }
         Terminator::Switch { tag, arms, default } => {

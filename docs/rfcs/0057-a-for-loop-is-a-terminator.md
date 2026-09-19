@@ -140,10 +140,49 @@ questions asked of one terminator — a separate RFC, after this one.
 
 ## Consequences
 
-Expected, to be replaced by measurement: `int while` written as `for i in
-0..n` loses the `Lt` chain, the `Yield` and the `Mov` per iteration;
-attention's inner loop written as `for x in &keys[t]` loses its bounds
-check and its increment; the log bench's flag `Mov`s go with `break`.
+The language and MIR half is built: the four heads, `Terminator::For`, the
+passes' arms, `break` and `continue`. What a traversal's MIR holds, over
+`for x in &v { acc = acc + *x }`, is one `AsSlice` above the header, a
+header holding nothing but its terminator, and a body of the addition
+alone:
+
+```
+r8 = as_slice &r7
+jump L0(0, r1)
+L0(r10: i64):
+  for slice(r8) -> L1 else L2(r10)
+L1(r12: &i64, r13: u64):
+  r14 = take (*r12)
+  r15 = r10 + r14
+  jump L0(r15)
+L2(r19: i64):
+```
+
+No `Lt`, no `i + 1`, no `Index`: the element and the counter are the body
+block's leading parameters, which the terminator fills. The carried values
+are the header's parameters, the latch is `jump L0(carried…)`, `continue` is
+that jump and `break` is `jump L2(carried…)`.
+
+The parameter layout is the one the machine's `For` op reads: the counter is
+a parameter of the body and not a value the body computes, so no pass has to
+find it, and a `Range`'s element is its counter, so a range loop carries one
+register where a container's loop carries two.
+
+The timing numbers wait for the machine. `prepare` has no `For` arm that
+runs: expanding the terminator into the comparison, the element read and the
+advance needs a counter initialized above the header, and the header block
+is the only block such an arm writes -- so the interpreter refuses a `For`
+until the region op that owns the index register exists. Until then the
+measurements of `int while`, of attention's inner loop and of the log
+bench's `inline break` case are not available.
+
+What is measured already, at the machine's listing, is what `break` changes
+about region recognition: a loop whose exit is a flag is a `Loop<Slot>`
+region, and the same loop with `break` is joints, because an arm that leaves
+the loop does not rejoin. A scan whose flag lives in a slot rather than in a
+block argument carries no `Mov` either way, so the flag `Mov`s of the log
+bench are not this scan's: `acvus-interpreter-test/tests/loop_exit_moves.rs`
+holds both counts.
 
 ## Order of work
 

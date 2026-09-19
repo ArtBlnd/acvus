@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::{MirError, MirErrorKind};
 use crate::graph::QualifiedRef;
-use crate::ir::{Callee, CastKind, ExternCast, IndexAccess, IndexMode};
+use crate::ir::{Callee, CastKind, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, Conversion,
     ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice, InstanceKind,
@@ -408,6 +408,9 @@ pub struct TypeResolution {
     /// it from the container's evidence and the element type; the lowering
     /// reads it and decides nothing.
     pub index_access: FxHashMap<AstId, IndexAccess>,
+    /// Which of the four heads each `for` was written with (RFC-0057),
+    /// keyed by the statement's own id.
+    pub for_kinds: FxHashMap<AstId, ForKind>,
     /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
     pub structural_variant_calls: FxHashSet<AstId>,
     /// The return type of the function each `?` leaves early from (RFC-0038).
@@ -434,6 +437,7 @@ impl TypeResolution {
         operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
         intrinsic_calls: FxHashMap<AstId, Intrinsic>,
         index_access: FxHashMap<AstId, IndexAccess>,
+        for_kinds: FxHashMap<AstId, ForKind>,
         structural_variant_calls: FxHashSet<AstId>,
         try_returns: FxHashMap<AstId, Ty>,
         tail_ty: Ty,
@@ -449,6 +453,7 @@ impl TypeResolution {
             operator_calls,
             intrinsic_calls,
             index_access,
+            for_kinds,
             structural_variant_calls,
             try_returns,
             tail_ty,
@@ -633,6 +638,14 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// How each `a[i]` reaches its element (RFC-0047), keyed by the index
     /// expression's own id.
     index_access: FxHashMap<AstId, IndexAccess>,
+    /// Which head each `for` under check was written with (RFC-0057).
+    for_kinds: FxHashMap<AstId, ForKind>,
+    /// The loops enclosing the statement under check, innermost last:
+    /// `break` and `continue` name the last one and are refused where there
+    /// is none (RFC-0057 Decision 4). A `Some` carries the element type of a
+    /// `for x in a` whose array owns what it holds, and leaving such a loop
+    /// early would leave the elements it has not taken without a release.
+    loops: Vec<Option<Ty>>,
     /// How the pattern being checked reads its scrutinee (RFC-0024).
     pattern_mode: PatternMode,
     /// The bindings of the pattern being checked under `Deferred`, each
@@ -703,6 +716,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             direct_calls: FxHashMap::default(),
             operator_calls: FxHashMap::default(),
             index_access: FxHashMap::default(),
+            for_kinds: FxHashMap::default(),
+            loops: Vec::new(),
             pattern_mode: PatternMode::Value,
             deferred_bindings: Vec::new(),
             deferred_context_binds: Vec::new(),
@@ -876,6 +891,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             operator_calls,
             self.frozen_intrinsic_calls(),
             self.index_access.clone(),
+            self.for_kinds.clone(),
             self.structural_variant_calls,
             FxHashMap::default(),
             Ty::String,
@@ -970,6 +986,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             operator_calls,
             self.frozen_intrinsic_calls(),
             self.index_access.clone(),
+            self.for_kinds.clone(),
             self.structural_variant_calls,
             try_returns,
             frozen_tail,
@@ -1499,7 +1516,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.body_effect = self.solver.fresh_effect_var();
         let outer_return = self.return_ty.replace(self.solver.fresh_ty_var());
         let outer_holds = std::mem::take(&mut self.holds);
+        let outer_loops = std::mem::take(&mut self.loops);
         let body_ty = self.check_expr(body);
+        self.loops = outer_loops;
         self.holds = outer_holds;
         let ret = self
             .return_ty
@@ -3500,9 +3519,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                 }
                 self.push_scope();
+                self.loops.push(None);
                 for s in body {
                     self.check_stmt(s);
                 }
+                self.loops.pop();
                 self.pop_scope();
             }
             acvus_ast::Stmt::Anyorder { body, .. } => {
@@ -3522,13 +3543,220 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let source_ty = self.check_expr(source);
                 let resolved = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
+                self.loops.push(None);
                 self.check_pattern(pattern, &resolved, PatternSource::Expr(source.id()), *span);
                 for s in body {
                     self.check_stmt(s);
                 }
+                self.loops.pop();
                 self.pop_scope();
             }
+            acvus_ast::Stmt::For {
+                id,
+                callee_id,
+                binding,
+                head,
+                body,
+                span,
+            } => self.check_for(*id, *callee_id, *binding, head, body, *span),
+            acvus_ast::Stmt::Break { span, .. } => self.check_loop_jump("break", *span),
+            acvus_ast::Stmt::Continue { span, .. } => self.check_loop_jump("continue", *span),
         }
+    }
+
+    /// One traversal (RFC-0057 Decision 1). The head decides the source and
+    /// the element: `&v` and `&mut v` through the container's own `as_slice`,
+    /// which the index expressions settle the same way, an array by value,
+    /// and a range of one integer width.
+    fn check_for(
+        &mut self,
+        id: AstId,
+        callee_id: AstId,
+        binding: Astr,
+        head: &acvus_ast::ForHead,
+        body: &[acvus_ast::Stmt],
+        span: Span,
+    ) {
+        let (kind, element) = match head {
+            acvus_ast::ForHead::Range { lo, hi } => {
+                (ForKind::Range, self.check_range(lo, hi, span))
+            }
+            acvus_ast::ForHead::Value(Expr::Borrow { mutable, place, .. }) => {
+                let mutability = match mutable {
+                    true => Mutability::Mut,
+                    false => Mutability::Shared,
+                };
+                (
+                    ForKind::Slice(mutability),
+                    self.check_for_slice(callee_id, place, mutability, span),
+                )
+            }
+            acvus_ast::ForHead::Value(array) => (ForKind::Array, self.check_for_array(array)),
+        };
+        self.for_kinds.insert(id, kind);
+        // The statement's own id carries the element the source yields, which
+        // is what the lowering builds the slice's type from, exactly as an
+        // index expression's id carries its element (RFC-0047).
+        self.record(id, element.clone());
+        let binding_ty = match kind {
+            ForKind::Slice(mutability) => {
+                TyTerm::Ref(mutability, Box::new(TypeArg::uniform(element.clone())))
+            }
+            ForKind::Array | ForKind::Range => element.clone(),
+        };
+        let consumed = self
+            .solver
+            .freeze_ty(&element)
+            .ok()
+            .filter(|_| kind == ForKind::Array)
+            .filter(|element| crate::validate::is_move_only(element) == Some(true));
+        self.push_scope();
+        self.loops.push(consumed);
+        self.define_var(binding, binding_ty);
+        for s in body {
+            self.check_stmt(s);
+        }
+        self.loops.pop();
+        self.pop_scope();
+    }
+
+    /// `lo..hi`: one integer width at both bounds, which is the element's
+    /// type (RFC-0057 Decision 1).
+    fn check_range(&mut self, lo: &Expr, hi: &Expr, span: Span) -> InferTy {
+        let lo_ty = self.check_expr(lo);
+        let hi_ty = self.check_expr(hi);
+        if self.solver.unify(&lo_ty, &hi_ty).is_err() {
+            self.error(
+                MirErrorKind::UnificationFailure {
+                    expected: self.type_as_written(&lo_ty),
+                    got: self.type_as_written(&hi_ty),
+                },
+                span,
+            );
+            return Self::infer_error();
+        }
+        let resolved = self.solver.resolve_ty(&lo_ty);
+        if !matches!(resolved, TyTerm::Int(_) | TyTerm::Var(_) | TyTerm::Error(_)) {
+            self.error(
+                MirErrorKind::ForSourceNotAdmitted {
+                    ty: self.type_as_written(&lo_ty),
+                },
+                span,
+            );
+            return Self::infer_error();
+        }
+        lo_ty
+    }
+
+    /// `&v` or `&mut v`: the container's own `as_slice`, settled on the
+    /// statement's `callee_id` where an index expression settles its own
+    /// (RFC-0047 rule 6). The slice's element is what comes back; the
+    /// binding is a reference to it.
+    fn check_for_slice(
+        &mut self,
+        callee_id: AstId,
+        place: &Expr,
+        mutability: Mutability,
+        span: Span,
+    ) -> InferTy {
+        let name = self.interner.intern(match mutability {
+            Mutability::Shared => "as_slice",
+            Mutability::Mut => "as_slice_mut",
+        });
+        let candidates: Vec<SignatureCandidate> = self
+            .env
+            .machine_set(name)
+            .into_iter()
+            .map(|(qref, scheme)| SignatureCandidate::Named {
+                qref,
+                scheme: scheme.clone(),
+            })
+            .collect();
+        let first = self.receiver_arg(place, ReceiverMode::Lent(mutability));
+        let container = self.solver.resolve_ty(&first.ty);
+        if !takes_container(
+            &candidates,
+            &self.solver.resolve_ty(referent_of(&container)),
+        ) {
+            self.error(
+                MirErrorKind::ForSourceNotAdmitted {
+                    ty: self.type_as_written(&container),
+                },
+                span,
+            );
+            return Self::infer_error();
+        }
+        let slice = self.check_overloaded_call(candidates, callee_id, name, Some(first), &[], span);
+        match self.solver.shallow_resolve_ty(&slice) {
+            TyTerm::Ref(_, inner) => match self.solver.shallow_resolve_ty(&inner.ty) {
+                TyTerm::Slice(element) => *element,
+                _ => Self::infer_error(),
+            },
+            _ => Self::infer_error(),
+        }
+    }
+
+    /// An array by value: the loop takes its elements out, and the element
+    /// is the array's own (RFC-0057 Decision 1). Every other value held by
+    /// value is refused here, a container by value with the message that
+    /// names the borrow it wanted.
+    fn check_for_array(&mut self, array: &Expr) -> InferTy {
+        let array_ty = self.check_expr(array);
+        let resolved = self.solver.resolve_ty(&array_ty);
+        match &resolved {
+            TyTerm::Array(element, _) => (**element).clone(),
+            TyTerm::UserDefined { .. } => {
+                self.error(MirErrorKind::ForConsumesContainer, array.span());
+                Self::infer_error()
+            }
+            _ => {
+                self.error(
+                    MirErrorKind::ForSourceNotAdmitted {
+                        ty: self.type_the_checker_left_open(&resolved),
+                    },
+                    array.span(),
+                );
+                Self::infer_error()
+            }
+        }
+    }
+
+    /// `break` and `continue` name the innermost loop, so outside every loop
+    /// they name none (RFC-0057 Decision 4). A `break` out of a `for x in a`
+    /// whose element owns something is refused: the elements the loop has
+    /// not taken would have no release.
+    fn check_loop_jump(&mut self, keyword: &'static str, span: Span) {
+        let Some(innermost) = self.loops.last() else {
+            self.error(MirErrorKind::OutsideLoop { keyword }, span);
+            return;
+        };
+        if let Some(element) = innermost
+            && keyword == "break"
+        {
+            self.error(
+                MirErrorKind::ArrayLoopLeftEarly {
+                    keyword,
+                    element: element.clone(),
+                },
+                span,
+            );
+        }
+    }
+
+    /// `?` returns from the body, so it leaves every enclosing loop at once:
+    /// a `for x in a` among them whose element owns something is refused for
+    /// the reason `break` is.
+    fn check_try_leaves_loops(&mut self, span: Span) {
+        let Some(element) = self.loops.iter().rev().find_map(|loop_| loop_.clone()) else {
+            return;
+        };
+        self.error(
+            MirErrorKind::ArrayLoopLeftEarly {
+                keyword: "?",
+                element,
+            },
+            span,
+        );
     }
 
     fn check_match_block(&mut self, mb: &MatchBlock) {
@@ -4107,6 +4335,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
 
             Expr::Try { id, inner, span } => {
+                self.check_try_leaves_loops(*span);
                 let ty = self.check_try(inner, *span);
                 if !Self::is_error(&ty) {
                     let ret = self.return_ty.clone().expect("check_try admitted a return");

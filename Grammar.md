@@ -55,8 +55,8 @@ Body         = Node*
 
 A script is a sequence of semicolon-terminated statements with an optional
 tail expression. There is one statement rule, and it is the rule of every
-block: a script's top level, a lambda's block body, a `while`/`anyorder`
-body, a tag-form match-bind body, an `if`/`else` block.
+block: a script's top level, a lambda's block body, a `while`/`for`/
+`anyorder` body, a tag-form match-bind body, an `if`/`else` block.
 
 ```
 Script       = Stmt* ScriptExpr?
@@ -67,7 +67,8 @@ ScriptExpr   = IfExpr | MatchExpr | Expr
 
 ```
 Stmt         = LetBind | LetUninit | Assign | ContextStore | VarFieldStore
-             | DerefStore | While | WhileLet | Anyorder | ExprStmt
+             | DerefStore | While | WhileLet | For | Break | Continue
+             | Anyorder | ExprStmt
 
 LetBind      = "let" IDENT "=" ScriptExpr ";"           ← let x = 0;
 LetUninit    = "let" IDENT ";"                          ← let x;
@@ -77,9 +78,53 @@ VarFieldStore= IDENT ("." IDENT)+ "=" ScriptExpr ";"    ← a.x = 0;
 DerefStore   = "*" Expr "=" ScriptExpr ";"              ← *r = 0;
 While        = "while" Expr "{" Stmt* "}"
 WhileLet     = "while" "let" Pattern "=" Expr "{" Stmt* "}"
+For          = "for" IDENT "in" ForHead "{" Stmt* "}"
+ForHead      = Expr | Expr ".." Expr
+Break        = "break" ";"
+Continue     = "continue" ";"
 Anyorder     = "anyorder" "{" Stmt* "}" ";"?
 ExprStmt     = Expr ";" | IfExpr ";" | MatchExpr ";"
 ```
+
+### `for`
+
+```
+for x in &v { ... }        ← v: Vec<T> or Array<T, N>;  x: &T
+for x in &mut v { ... }    ← v: Vec<T> or Array<T, N>;  x: &mut T
+for x in a { ... }         ← a: Array<T, N>, consumed;  x: T
+for i in lo..hi { ... }    ← lo, hi: one integer width; x: that width
+```
+
+Four heads and no other (RFC-0057). The element comes through the
+container's own `as_slice` or `as_slice_mut`, the same instance an `a[i]`
+of it settles, so `&v` holds `v` shared for the loop and `&mut v` holds it
+exclusively; an array by value is consumed, and its elements are taken out
+one at a time. A head of any other shape is refused:
+
+```
+a `for` traverses `&v`, `&mut v`, an array by value, or `lo..hi`; `i64` is none of them
+a container is not consumed by a loop; write `&v` or `&mut v`
+```
+
+`lo..hi` is a `for` head and not a value: there is no `Range` type, so `..`
+appears in no expression rule and `let r = 0..3;` does not parse. The two
+bounds are one integer width:
+
+```
+a `for` over `u64..u32` needs one integer width at both bounds
+```
+
+`break` and `continue` name the innermost loop -- there are no labels -- and
+they are admitted in `for`, `while` and `while let` alike. Outside every
+loop each is refused:
+
+```
+`break` is only inside a loop
+```
+
+A `for` over an array whose element owns something cannot `break`: how many
+elements the loop had taken is a run-time number, and the elements it had
+not taken would have no release.
 
 ### `match`
 

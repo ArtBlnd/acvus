@@ -214,6 +214,7 @@ impl DataflowAnalysis for InitCheckAnalysis {
         &self,
         source_exit: &DataflowState<(RefTarget, Astr), FieldInit>,
         _params: &[ValueId],
+        _first: usize,
         _args: &[ValueId],
         target_entry: &mut DataflowState<(RefTarget, Astr), FieldInit>,
     ) -> bool {
@@ -225,6 +226,7 @@ impl DataflowAnalysis for InitCheckAnalysis {
         &self,
         _succ_entry: &DataflowState<(RefTarget, Astr), FieldInit>,
         _succ_params: &[ValueId],
+        _first: usize,
         _term_args: &[ValueId],
         _exit_state: &mut DataflowState<(RefTarget, Astr), FieldInit>,
     ) {

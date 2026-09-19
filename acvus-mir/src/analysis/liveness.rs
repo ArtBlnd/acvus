@@ -76,6 +76,13 @@ impl DataflowAnalysis for LivenessAnalysis {
             Terminator::JumpIf { cond, .. } => state.set(*cond, Liveness::Live),
             // A `Switch` reads the tag of its scrutinee (RFC-0051).
             Terminator::Switch { tag, .. } => state.set(*tag, Liveness::Live),
+            // A `For` reads the source it traverses on every iteration
+            // (RFC-0057).
+            Terminator::For { source, .. } => {
+                for v in source.uses() {
+                    state.set(v, Liveness::Live);
+                }
+            }
             _ => {}
         }
     }
@@ -84,6 +91,7 @@ impl DataflowAnalysis for LivenessAnalysis {
         &self,
         _source_exit: &DataflowState<ValueId, Liveness>,
         _params: &[ValueId],
+        _first: usize,
         _args: &[ValueId],
         _target_entry: &mut DataflowState<ValueId, Liveness>,
     ) -> bool {
@@ -94,10 +102,11 @@ impl DataflowAnalysis for LivenessAnalysis {
         &self,
         succ_entry: &DataflowState<ValueId, Liveness>,
         succ_params: &[ValueId],
+        first: usize,
         term_args: &[ValueId],
         exit_state: &mut DataflowState<ValueId, Liveness>,
     ) {
-        value_propagate_backward(succ_entry, succ_params, term_args, exit_state);
+        value_propagate_backward(succ_entry, succ_params, first, term_args, exit_state);
     }
 }
 

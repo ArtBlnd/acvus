@@ -10,7 +10,7 @@ use acvus_utils::{Astr, LocalFactory};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use crate::ir::{DebugInfo, Inst, InstKind, Label, MirBody, ValueId};
+use crate::ir::{DebugInfo, ForSource, Inst, InstKind, Label, MirBody, ValueId};
 use crate::ty::{Task, Ty};
 
 // -- BlockIdx ------------------------------------------------------
@@ -61,6 +61,18 @@ pub enum Terminator {
         tag: ValueId,
         arms: Vec<(Astr, Label, Vec<ValueId>)>,
         default: Option<(Label, Vec<ValueId>)>,
+    },
+    /// One traversal (RFC-0057). The terminator is the loop's condition: no
+    /// instruction writes the comparison, the element read or the advance.
+    /// It fills the leading parameters of `body` itself -- the element and
+    /// the counter, which `ForSource::supplied_params` counts -- and
+    /// `body_args` and `exit_args` are the carried values that follow them.
+    For {
+        source: ForSource,
+        body: Label,
+        body_args: Vec<ValueId>,
+        exit: Label,
+        exit_args: Vec<ValueId>,
     },
     Return {
         value: ValueId,
@@ -121,6 +133,13 @@ impl CfgBody {
                     .map(|(_, label, _)| label)
                     .chain(default.iter().map(|(label, _)| label));
                 for label in edges {
+                    if let Some(&bi) = self.label_to_block.get(label) {
+                        succs.push(bi);
+                    }
+                }
+            }
+            Terminator::For { body, exit, .. } => {
+                for label in [body, exit] {
                     if let Some(&bi) = self.label_to_block.get(label) {
                         succs.push(bi);
                     }
@@ -310,6 +329,23 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 insts.pop();
                 return term;
             }
+            InstKind::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_args,
+            } => {
+                let term = Terminator::For {
+                    source: *source,
+                    body: *body,
+                    body_args: body_args.clone(),
+                    exit: *exit,
+                    exit_args: exit_args.clone(),
+                };
+                insts.pop();
+                return term;
+            }
             InstKind::Return { value, order } => {
                 let term = Terminator::Return {
                     value: *value,
@@ -380,6 +416,24 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     kind: InstKind::Switch { tag, arms, default },
                 });
             }
+            Terminator::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_args,
+            } => {
+                insts.push(Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind: InstKind::For {
+                        source,
+                        body,
+                        body_args,
+                        exit,
+                        exit_args,
+                    },
+                });
+            }
             Terminator::Return { value, order } => {
                 insts.push(Inst {
                     span: acvus_ast::Span::ZERO,
@@ -419,6 +473,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 .chain(default.iter().map(|(label, _)| label.0))
                 .max()
                 .map(|l| l + 1),
+            InstKind::For { body, exit, .. } => Some(body.0.max(exit.0) + 1),
             _ => None,
         })
         .max()

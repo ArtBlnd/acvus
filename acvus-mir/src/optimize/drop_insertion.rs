@@ -207,6 +207,10 @@ enum EdgeSlot {
     SwitchArm(usize),
     /// A `Switch`'s `default` edge.
     SwitchDefault,
+    /// A `For`'s edge into its body (RFC-0057).
+    ForBody,
+    /// A `For`'s edge out of the loop.
+    ForExit,
 }
 
 /// One outgoing edge of a block's terminator. `forwarded` keeps the order of
@@ -332,6 +336,24 @@ impl<'a> EdgeRef<'a> {
                 },
                 EdgeSlot::Else,
             ) => Self { label, args },
+            (
+                Terminator::For {
+                    body, body_args, ..
+                },
+                EdgeSlot::ForBody,
+            ) => Self {
+                label: body,
+                args: body_args,
+            },
+            (
+                Terminator::For {
+                    exit, exit_args, ..
+                },
+                EdgeSlot::ForExit,
+            ) => Self {
+                label: exit,
+                args: exit_args,
+            },
             (Terminator::Switch { arms, .. }, EdgeSlot::SwitchArm(i)) => {
                 let (_, label, args) = &mut arms[i];
                 Self { label, args }
@@ -404,6 +426,18 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
             uses.extend(then_args.iter().copied());
             uses.extend(else_args.iter().copied());
         }
+        // The source a `For` traverses, which it reads on every iteration
+        // (RFC-0057), and the arguments each edge forwards.
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            uses.extend(source.uses());
+            uses.extend(body_args.iter().copied());
+            uses.extend(exit_args.iter().copied());
+        }
         // The tag a `Switch` reads, and the arguments each edge forwards.
         Terminator::Switch { tag, arms, default } => {
             uses.insert(*tag);
@@ -438,6 +472,16 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
         } => vec![
             edge(EdgeSlot::Then, then_label, then_args),
             edge(EdgeSlot::Else, else_label, else_args),
+        ],
+        Terminator::For {
+            body,
+            body_args,
+            exit,
+            exit_args,
+            ..
+        } => vec![
+            edge(EdgeSlot::ForBody, body, body_args),
+            edge(EdgeSlot::ForExit, exit, exit_args),
         ],
         Terminator::Switch { arms, default, .. } => arms
             .iter()
@@ -567,6 +611,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Switch { .. }
+        | InstKind::For { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge => false,
     }
@@ -585,6 +630,19 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
             else_args,
             ..
         } => then_args.contains(&val) || else_args.contains(&val),
+        // A `For`'s edge args are transferred, and an `Array` source is
+        // moved into the terminator: the loop takes its elements out
+        // (RFC-0057 Decision 2). A slice or a range is read-only.
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            body_args.contains(&val)
+                || exit_args.contains(&val)
+                || matches!(source, crate::ir::ForSource::Array(array) if *array == val)
+        }
         // A Switch's edge args are transferred; the tag is read-only.
         Terminator::Switch { arms, default, .. } => {
             arms.iter().any(|(_, _, args)| args.contains(&val))

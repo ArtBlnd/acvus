@@ -199,6 +199,17 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
                 collect_value_refs_expr(expr, refs);
             }
             Stmt::LetUninit { .. } => {}
+            Stmt::For { head, body, .. } => {
+                match head {
+                    acvus_ast::ForHead::Value(e) => collect_value_refs_expr(e, refs),
+                    acvus_ast::ForHead::Range { lo, hi } => {
+                        collect_value_refs_expr(lo, refs);
+                        collect_value_refs_expr(hi, refs);
+                    }
+                }
+                collect_value_refs_stmts(body, refs);
+            }
+            Stmt::Break { .. } | Stmt::Continue { .. } => {}
             Stmt::While { cond, body, .. } => {
                 collect_value_refs_expr(cond, refs);
                 collect_value_refs_stmts(body, refs);

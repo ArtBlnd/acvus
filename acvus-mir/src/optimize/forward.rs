@@ -226,6 +226,17 @@ fn edges_mut(term: &mut Terminator) -> Vec<EdgeMut<'_>> {
                     .map(|(label, args)| EdgeMut { to: label, args }),
             )
             .collect(),
+        // A `For`'s body edge is not redirected: the terminator fills that
+        // block's leading parameters by position, and a block reached
+        // through a forwarder is a different block (RFC-0057). The exit
+        // edge carries the loop's carried values and nothing else, so it
+        // redirects as a `Jump` does.
+        Terminator::For {
+            exit, exit_args, ..
+        } => vec![EdgeMut {
+            to: exit,
+            args: exit_args,
+        }],
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }
 }

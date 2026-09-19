@@ -230,6 +230,17 @@ fn debug_validate(cfg: &CfgBody) {
                 v.extend(else_args);
                 v
             }
+            crate::cfg::Terminator::For {
+                source,
+                body_args,
+                exit_args,
+                ..
+            } => {
+                let mut v = source.uses().to_vec();
+                v.extend(body_args);
+                v.extend(exit_args);
+                v
+            }
             crate::cfg::Terminator::Switch { tag, arms, default } => {
                 let mut v = vec![*tag];
                 for (_, _, args) in arms {

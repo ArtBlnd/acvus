@@ -316,6 +316,10 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::If
         | Token::Else
         | Token::While
+        | Token::For
+        | Token::In
+        | Token::Break
+        | Token::Continue
         | Token::Anyorder
         | Token::Match
         | Token::Mut

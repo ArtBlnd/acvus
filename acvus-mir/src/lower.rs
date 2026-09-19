@@ -1,7 +1,7 @@
 use acvus_ast::{
-    AstId, BinOp, ElseBranch, Expr, IndentModifier, Literal, MatchBlock, MatchExprArm, Node,
-    ObjectExprField, ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
-    TuplePatternElem, UnaryOp,
+    AstId, BinOp, ElseBranch, Expr, ForHead, IndentModifier, Literal, MatchBlock, MatchExprArm,
+    Node, ObjectExprField, ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template,
+    TupleElem, TuplePatternElem, UnaryOp,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::QualifiedRef;
 use crate::ir::{
-    Callee, CastKind, ExternCast, ExternInstance, IndexAccess, IndexMode, Inst, InstKind, Label,
-    MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
+    Callee, CastKind, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess, IndexMode, Inst,
+    InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
 };
 use crate::solver::CaptureRead;
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
@@ -45,6 +45,23 @@ pub struct Lowerer<'a> {
     /// The places the calls being lowered have cast for their callees,
     /// innermost last (RFC-0041).
     holds: Vec<Held>,
+    /// The loops enclosing the statement being lowered, innermost last: a
+    /// `break` jumps to the last one's exit and a `continue` to its header
+    /// (RFC-0057 Decision 4).
+    loops: Vec<Loop>,
+}
+
+/// Where the innermost loop's two jumps go.
+struct Loop {
+    header: Label,
+    exit: Label,
+}
+
+/// Which of the two jumps out of a loop body this is.
+#[derive(Clone, Copy)]
+enum Leave {
+    Break,
+    Continue,
 }
 
 /// A place cast for a call: until the call restores it, it holds `ty`.
@@ -367,6 +384,7 @@ impl<'a> Lowerer<'a> {
             anyorder: None,
             context_slots: BTreeMap::new(),
             holds: Vec::new(),
+            loops: Vec::new(),
         }
     }
 
@@ -802,6 +820,18 @@ impl<'a> Lowerer<'a> {
             } => {
                 self.lower_while_let(pattern, source, body, *span);
             }
+            Stmt::For {
+                id,
+                callee_id,
+                binding,
+                head,
+                body,
+                span,
+            } => {
+                self.lower_for(*id, *callee_id, *binding, head, body, *span);
+            }
+            Stmt::Break { span, .. } => self.leave_loop(Leave::Break, *span),
+            Stmt::Continue { span, .. } => self.leave_loop(Leave::Continue, *span),
         }
     }
 
@@ -1045,6 +1075,156 @@ impl<'a> Lowerer<'a> {
         self.pop_scope();
     }
 
+    /// One traversal (RFC-0057). The header block holds nothing but the
+    /// terminator: the comparison, the element read and the advance are the
+    /// terminator's, and the body takes the element and the counter as its
+    /// leading parameters.
+    fn lower_for(
+        &mut self,
+        id: AstId,
+        callee_id: AstId,
+        binding: Astr,
+        head: &ForHead,
+        body: &[Stmt],
+        span: Span,
+    ) {
+        let kind = self.for_kind(id);
+        let source = self.lower_for_source(id, callee_id, kind, head);
+
+        let header = self.alloc_label();
+        let body_label = self.alloc_label();
+        let exit = self.alloc_label();
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: header,
+                args: vec![],
+            },
+        );
+
+        let element = self.type_of_id(id);
+        let binding_ty = match kind {
+            ForKind::Slice(mutability) => {
+                Ty::Ref(mutability, Box::new(TypeArg::uniform(element.clone())))
+            }
+            ForKind::Array | ForKind::Range => element.clone(),
+        };
+        let elem = self.alloc_val();
+        self.set_val_type(elem, binding_ty.clone());
+        self.set_origin(elem, ValOrigin::Named(binding));
+        let mut params = vec![elem];
+        if kind != ForKind::Range {
+            let index = self.alloc_val();
+            self.set_val_type(index, Ty::U64);
+            params.push(index);
+        }
+
+        self.emit_label(span, header);
+        self.emit_inst(
+            span,
+            InstKind::For {
+                source,
+                body: body_label,
+                body_args: vec![],
+                exit,
+                exit_args: vec![],
+            },
+        );
+
+        self.emit_inst(
+            span,
+            InstKind::BlockLabel {
+                label: body_label,
+                params,
+            },
+        );
+        self.push_scope();
+        let slot = self.define_var(binding, binding_ty);
+        self.emit_assign(span, RefTarget::Var(slot), vec![], elem);
+        self.loops.push(Loop { header, exit });
+        for s in body {
+            self.lower_stmt(s);
+        }
+        self.loops.pop();
+        self.pop_scope();
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label: header,
+                args: vec![],
+            },
+        );
+
+        self.emit_label(span, exit);
+    }
+
+    /// The source, taken once before the header: a container's `as_slice` at
+    /// the instance the checker settled on the statement's `callee_id`, an
+    /// array moved into the loop, or the range's two bounds.
+    fn lower_for_source(
+        &mut self,
+        id: AstId,
+        callee_id: AstId,
+        kind: ForKind,
+        head: &ForHead,
+    ) -> ForSource {
+        match (kind, head) {
+            (
+                ForKind::Slice(mutability),
+                ForHead::Value(Expr::Borrow {
+                    place,
+                    span: borrow_span,
+                    ..
+                }),
+            ) => {
+                let slice = self.take_slice(place, callee_id, id, mutability, *borrow_span);
+                match mutability {
+                    Mutability::Shared => ForSource::Slice(slice),
+                    Mutability::Mut => ForSource::SliceMut(slice),
+                }
+            }
+            (ForKind::Array, ForHead::Value(array)) => ForSource::Array(self.lower_expr(array)),
+            (ForKind::Range, ForHead::Range { lo, hi }) => ForSource::Range {
+                at: self.lower_expr(lo),
+                hi: self.lower_expr(hi),
+            },
+            (kind, _) => panic!("the checker settled {kind:?} on a head of another shape"),
+        }
+    }
+
+    fn for_kind(&self, id: AstId) -> ForKind {
+        self.resolution
+            .for_kinds
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| panic!("type checking settles every `for` head"))
+    }
+
+    /// `break` and `continue` name the innermost loop (RFC-0057 Decision 4):
+    /// the jump to its exit and the jump to its header, which is its latch.
+    /// What the source wrote after one lands in a block no jump reaches, as
+    /// it does after an expression typed `!`. The drops of the scopes the
+    /// jump leaves are `optimize::drop_insertion`'s edge drops, as they are
+    /// on every other edge.
+    fn leave_loop(&mut self, leave: Leave, span: Span) {
+        let Some(loop_) = self.loops.last() else {
+            panic!("type checking refuses a `break` or a `continue` outside a loop")
+        };
+        let label = match leave {
+            Leave::Break => loop_.exit,
+            Leave::Continue => loop_.header,
+        };
+        self.emit_inst(
+            span,
+            InstKind::Jump {
+                label,
+                args: vec![],
+            },
+        );
+        let unreachable = self.alloc_label();
+        self.emit_label(span, unreachable);
+    }
+
     fn lower_while(&mut self, cond: &Expr, body: &[Stmt], span: Span) {
         let loop_label = self.alloc_label();
         let body_label = self.alloc_label();
@@ -1073,9 +1253,14 @@ impl<'a> Lowerer<'a> {
 
         self.emit_label(span, body_label);
         self.push_scope();
+        self.loops.push(Loop {
+            header: loop_label,
+            exit: end_label,
+        });
         for s in body {
             self.lower_stmt(s);
         }
+        self.loops.pop();
         self.pop_scope();
         self.emit_inst(
             span,
@@ -1128,10 +1313,15 @@ impl<'a> Lowerer<'a> {
 
         self.emit_label(span, body_label);
         self.push_scope();
+        self.loops.push(Loop {
+            header: loop_label,
+            exit: end_label,
+        });
         self.lower_pattern_bind(pattern, src.clone(), span);
         for s in body {
             self.lower_stmt(s);
         }
+        self.loops.pop();
         self.pop_scope();
         self.emit_inst(
             span,

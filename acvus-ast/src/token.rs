@@ -52,6 +52,14 @@ pub enum Token {
     Else,
     #[token("while", priority = 3)]
     While,
+    #[token("for", priority = 3)]
+    For,
+    #[token("in", priority = 3)]
+    In,
+    #[token("break", priority = 3)]
+    Break,
+    #[token("continue", priority = 3)]
+    Continue,
     #[token("anyorder", priority = 3)]
     Anyorder,
     #[token("match", priority = 3)]
@@ -202,6 +210,10 @@ impl fmt::Display for Token {
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
             Token::While => write!(f, "while"),
+            Token::For => write!(f, "for"),
+            Token::In => write!(f, "in"),
+            Token::Break => write!(f, "break"),
+            Token::Continue => write!(f, "continue"),
             Token::Anyorder => write!(f, "anyorder"),
             Token::Match => write!(f, "match"),
             Token::Mut => write!(f, "mut"),

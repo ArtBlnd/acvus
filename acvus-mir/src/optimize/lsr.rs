@@ -168,6 +168,17 @@ fn sole_edge_args(term: &Terminator, label: Label) -> Option<&Vec<ValueId>> {
                 }
             }
         }
+        // A `For`'s exit edge carries its target's whole parameter list. Its
+        // body edge carries only the parameters after the ones the
+        // terminator fills, so it is not an edge whose arguments a reader
+        // can line up with that block's parameters (RFC-0057).
+        Terminator::For {
+            exit, exit_args, ..
+        } => {
+            if *exit == label {
+                edges.push(exit_args);
+            }
+        }
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
     }
     match edges[..] {
@@ -208,6 +219,13 @@ fn sole_edge_args_mut(term: &mut Terminator, label: Label) -> &mut Vec<ValueId> 
                 if *l == label {
                     edges.push(args);
                 }
+            }
+        }
+        Terminator::For {
+            exit, exit_args, ..
+        } => {
+            if *exit == label {
+                edges.push(exit_args);
             }
         }
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
@@ -337,6 +355,17 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
         } => std::iter::once(*cond)
             .chain(then_args.iter().copied())
             .chain(else_args.iter().copied())
+            .collect(),
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => source
+            .uses()
+            .into_iter()
+            .chain(body_args.iter().copied())
+            .chain(exit_args.iter().copied())
             .collect(),
         Terminator::Switch { tag, arms, default } => std::iter::once(*tag)
             .chain(arms.iter().flat_map(|(_, _, args)| args.iter().copied()))
@@ -642,6 +671,16 @@ fn subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) 
             one(cond);
             then_args.iter_mut().for_each(&mut one);
             else_args.iter_mut().for_each(&mut one);
+        }
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            source.for_each_use(&mut one);
+            body_args.iter_mut().for_each(&mut one);
+            exit_args.iter_mut().for_each(&mut one);
         }
         Terminator::Switch { tag, arms, default } => {
             one(tag);

@@ -90,6 +90,27 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
+    /// `for x in head { body }` - one traversal (RFC-0057 Decision 1).
+    For {
+        id: AstId,
+        /// Where the head's `as_slice` instance is recorded, as an index
+        /// expression records its own (RFC-0047 rule 6).
+        callee_id: AstId,
+        binding: Astr,
+        head: ForHead,
+        body: Vec<Stmt>,
+        span: Span,
+    },
+    /// `break;` - leave the innermost loop (RFC-0057 Decision 4).
+    Break {
+        id: AstId,
+        span: Span,
+    },
+    /// `continue;` - start the innermost loop's next iteration.
+    Continue {
+        id: AstId,
+        span: Span,
+    },
     /// `while let pattern = source { body }` - pattern loop (Script mode).
     WhileLet {
         id: AstId,
@@ -105,6 +126,15 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
+}
+
+/// What a `for` traverses, as the parser reads it. Which of the four heads
+/// a `ForHead::Value` is -- `&v`, `&mut v` or an array by value -- is the
+/// expression's type, which the checker settles (RFC-0057 Decision 1).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForHead {
+    Value(Expr),
+    Range { lo: Expr, hi: Expr },
 }
 
 /// A parsed template.
@@ -730,6 +760,17 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
                 walk_expr(cond, refs);
                 walk_stmts(body, refs);
             }
+            Stmt::For { head, body, .. } => {
+                match head {
+                    ForHead::Value(e) => walk_expr(e, refs),
+                    ForHead::Range { lo, hi } => {
+                        walk_expr(lo, refs);
+                        walk_expr(hi, refs);
+                    }
+                }
+                walk_stmts(body, refs);
+            }
+            Stmt::Break { .. } | Stmt::Continue { .. } => {}
             Stmt::Anyorder { body, .. } => walk_stmts(body, refs),
         }
     }

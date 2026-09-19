@@ -12,12 +12,17 @@
 //!
 //! A retreating edge whose target does not dominate its source is
 //! irreducible control flow, which has no natural loop. The lowering emits
-//! `while` and `while let` and nothing else, so [`back_edges`] aborts
+//! `while`, `while let` and `for` and nothing else, so [`back_edges`] aborts
 //! rather than guess a shape the front end cannot produce.
+//!
+//! A `for` loop has a back edge like the other two -- its latch jumps to its
+//! header -- so it is a natural loop here without a word added. What its
+//! terminator gives on top of that is the header without the search and the
+//! induction variable without a pattern match: [`for_headers`].
 
 use crate::analysis::domtree::DomTree;
-use crate::cfg::{BlockIdx, CfgBody};
-use crate::ir::{InstKind, ValueId};
+use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::ir::{ForSource, InstKind, ValueId};
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
@@ -175,6 +180,21 @@ impl Invariants {
         }
         self.words.get(&value).cloned().map(Invariant::Word)
     }
+}
+
+/// The loop headers a terminator names, with the traversal each one is
+/// (RFC-0057 Decision 3). A `for` header is a loop header by what ends it, so
+/// a reader that wants the loop and its induction variable asks the
+/// terminator rather than searching for a back edge.
+pub fn for_headers(cfg: &CfgBody) -> FxHashMap<BlockIdx, ForSource> {
+    cfg.blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(bi, block)| match &block.terminator {
+            Terminator::For { source, .. } => Some((BlockIdx(bi), *source)),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn natural_loops_innermost_first(cfg: &CfgBody, domtree: &DomTree) -> Vec<NaturalLoop> {

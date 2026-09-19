@@ -65,6 +65,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Switch { .. }
+        | InstKind::For { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge
         | InstKind::Nop => smallvec![],
@@ -190,6 +191,20 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             let mut v: SmallVec<[ValueId; 4]> = smallvec![*cond];
             v.extend(then_args.iter().copied());
             v.extend(else_args.iter().copied());
+            v
+        }
+        // The source is read once; the two edges carry the block arguments
+        // their targets take after the ones the terminator fills itself
+        // (RFC-0057).
+        InstKind::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => {
+            let mut v: SmallVec<[ValueId; 4]> = source.uses().into_iter().collect();
+            v.extend(body_args.iter().copied());
+            v.extend(exit_args.iter().copied());
             v
         }
         // The tag is read once; every edge carries the block arguments

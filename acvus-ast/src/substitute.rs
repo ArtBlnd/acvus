@@ -504,6 +504,34 @@ fn sub_stmt(stmt: Stmt, subs: &FxHashMap<Astr, SubstValue>) -> Stmt {
             body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
             span,
         },
+        Stmt::For {
+            binding,
+            head,
+            body,
+            span,
+            ..
+        } => Stmt::For {
+            id: AstId::alloc(),
+            callee_id: AstId::alloc(),
+            binding,
+            head: match head {
+                ForHead::Value(e) => ForHead::Value(sub_expr(e, subs)),
+                ForHead::Range { lo, hi } => ForHead::Range {
+                    lo: sub_expr(lo, subs),
+                    hi: sub_expr(hi, subs),
+                },
+            },
+            body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
+            span,
+        },
+        Stmt::Break { span, .. } => Stmt::Break {
+            id: AstId::alloc(),
+            span,
+        },
+        Stmt::Continue { span, .. } => Stmt::Continue {
+            id: AstId::alloc(),
+            span,
+        },
         Stmt::Anyorder { body, span, .. } => Stmt::Anyorder {
             id: AstId::alloc(),
             body: body.into_iter().map(|s| sub_stmt(s, subs)).collect(),
@@ -793,6 +821,19 @@ fn validate_splice_stmt(stmt: &Stmt, splice_names: &[Astr], errors: &mut Vec<(As
                 validate_splice_stmt(s, splice_names, errors);
             }
         }
+        Stmt::For { head, body, .. } => {
+            match head {
+                ForHead::Value(e) => validate_splice_expr(e, false, splice_names, errors),
+                ForHead::Range { lo, hi } => {
+                    validate_splice_expr(lo, false, splice_names, errors);
+                    validate_splice_expr(hi, false, splice_names, errors);
+                }
+            }
+            for s in body {
+                validate_splice_stmt(s, splice_names, errors);
+            }
+        }
+        Stmt::Break { .. } | Stmt::Continue { .. } => {}
         Stmt::While { cond, body, .. } => {
             validate_splice_expr(cond, false, splice_names, errors);
             for s in body {

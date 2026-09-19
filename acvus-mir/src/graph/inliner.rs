@@ -1041,6 +1041,23 @@ fn remap_inst(
             else_label: rl(*else_label),
             else_args: rv(else_args),
         },
+        InstKind::For {
+            source,
+            body,
+            body_args,
+            exit,
+            exit_args,
+        } => {
+            let mut source = *source;
+            source.for_each_use(|v| *v = r(*v));
+            InstKind::For {
+                source,
+                body: rl(*body),
+                body_args: rv(body_args),
+                exit: rl(*exit),
+                exit_args: rv(exit_args),
+            }
+        }
         InstKind::Switch { tag, arms, default } => InstKind::Switch {
             tag: r(*tag),
             arms: arms

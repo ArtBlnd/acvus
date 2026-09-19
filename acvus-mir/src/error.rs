@@ -162,6 +162,27 @@ pub enum MirErrorKind {
     MoveOutOfIndex {
         ty: Ty,
     },
+    /// A `for` head that is none of the four the language has (RFC-0057
+    /// Decision 1).
+    ForSourceNotAdmitted {
+        ty: Ty,
+    },
+    /// `for x in v` where `v` is a container held by value: a loop borrows
+    /// its container and does not consume it, the one exception being an
+    /// `Array` (RFC-0057 Decision 1).
+    ForConsumesContainer,
+    /// `break` or `continue` outside a loop (RFC-0057 Decision 4).
+    OutsideLoop {
+        keyword: &'static str,
+    },
+    /// A `for` over an `Array` whose element owns something, left early:
+    /// the elements the loop did not take have no release, because how many
+    /// were taken is a run-time number and the array's own release does not
+    /// know it (RFC-0057 Decision 2).
+    ArrayLoopLeftEarly {
+        keyword: &'static str,
+        element: Ty,
+    },
     /// `e as T` where `T` is not one of the types `as` converts between
     /// (RFC-0049).
     CastToUnknownType(String),
@@ -323,6 +344,29 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::MoveOutOfIndex { ty } => {
                 write!(f, "cannot move out of index of `{}`", ty.display(interner))
+            }
+            MirErrorKind::ForSourceNotAdmitted { ty } => {
+                write!(
+                    f,
+                    "a `for` traverses `&v`, `&mut v`, an array by value, or `lo..hi`; `{}` is none of them",
+                    ty.display(interner)
+                )
+            }
+            MirErrorKind::ForConsumesContainer => {
+                write!(
+                    f,
+                    "a container is not consumed by a loop; write `&v` or `&mut v`"
+                )
+            }
+            MirErrorKind::OutsideLoop { keyword } => {
+                write!(f, "`{keyword}` is only inside a loop")
+            }
+            MirErrorKind::ArrayLoopLeftEarly { keyword, element } => {
+                write!(
+                    f,
+                    "a `for` over an array of `{}` cannot `{keyword}`: the elements the loop has not taken would have no release",
+                    element.display(interner)
+                )
             }
             MirErrorKind::CastToUnknownType(name) => {
                 write!(
