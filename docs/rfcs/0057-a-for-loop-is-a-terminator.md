@@ -31,6 +31,16 @@ The Brainfuck bench pays 337 flag `Mov`s per log line for the absence of
 
 ## Decision
 
+The rule this RFC is the second instance of, after RFC-0051's `Switch`: **a
+terminator keeps the control shape the source wrote**; a general `Jump`
+remains only for an exit that shape does not have (`break`, `continue`).
+Information a terminator drops is information a later pass rediscovers
+(`prepare`'s `Diamond` recognizer rebuilds what `JumpIf` forgot; the
+removed `merge_of` field recorded a join no pass decided on). The next
+instance is `if`: a `Diamond { cond, then, else, join }` terminator that
+makes the machine's recognizer and the `Select` decision (RFC-0052)
+questions asked of one terminator — a separate RFC, after this one.
+
 1. **Syntax.** Four heads and no other:
 
    ```
