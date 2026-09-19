@@ -1,10 +1,9 @@
-//! The text of a character, a byte and a byte-string literal, decoded.
+//! The text of a string, a character, a byte and a byte-string literal,
+//! decoded.
 //!
-//! One escape table serves all three, and it is Rust's: `\n`, `\r`, `\t`,
+//! One escape table serves all four, and it is Rust's: `\n`, `\r`, `\t`,
 //! `\\`, `\0`, `\'`, `\"`, `\xNN` and `\u{…}`. An escape outside it is an
-//! error rather than two characters — what a `"…"` string does with an
-//! unknown escape (`parse_string_literal`, `token.rs`) is the older rule
-//! and is left where it is.
+//! error rather than two characters.
 
 use std::fmt;
 
@@ -228,6 +227,13 @@ fn scalars(text: &str) -> Result<Vec<char>, LiteralErrorKind> {
     .collect()
 }
 
+/// The text `"…"` holds, where its text is what stands between the quotes.
+/// `\xNN` stops at `\x7F` and a scalar value above it is written `\u{…}`,
+/// which is Rust's rule for a string literal as well as a `char`.
+pub fn decode_str(text: &str) -> Result<String, LiteralErrorKind> {
+    Ok(scalars(text)?.into_iter().collect())
+}
+
 /// The one scalar value `'…'` holds, where its text is what stands between
 /// the quotes.
 pub fn decode_char(text: &str) -> Result<char, LiteralErrorKind> {
@@ -298,6 +304,27 @@ mod every_escape_is_rusts {
             decode_char("\\q"),
             Err(LiteralErrorKind::UnknownEscape('q'))
         );
+    }
+
+    #[test]
+    fn a_string_takes_the_same_table() {
+        assert_eq!(
+            decode_str("a\\tb\\x41\\u{1F600}"),
+            Ok("a\tb\x41\u{1F600}".into())
+        );
+        assert_eq!(decode_str("\\n\\r\\t\\0"), Ok("\n\r\t\0".into()));
+        assert_eq!(decode_str("\\\\\\'\\\""), Ok("\\'\"".into()));
+        assert_eq!(decode_str("héllo"), Ok("héllo".into()));
+    }
+
+    #[test]
+    fn a_string_refuses_an_escape_the_table_does_not_name() {
+        assert_eq!(decode_str("\\d"), Err(LiteralErrorKind::UnknownEscape('d')));
+        assert_eq!(
+            decode_str("\\xFF"),
+            Err(LiteralErrorKind::ByteEscapeOutOfRange(0xFF))
+        );
+        assert_eq!(decode_str("\\"), Err(LiteralErrorKind::UnfinishedEscape));
     }
 
     #[test]

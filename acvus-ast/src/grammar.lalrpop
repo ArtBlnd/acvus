@@ -427,8 +427,9 @@ PrimaryExpr: Expr = {
             Expr::Literal { id: AstId::alloc(), value: Literal::Bytes(b), span: Span::new(l, r) }),
     <l:@L> <n:"float"> <r:@R> =>
         Expr::Literal { id: AstId::alloc(), value: Literal::Float(n), span: Span::new(l, r) },
-    <l:@L> <s:"string"> <r:@R> =>
-        Expr::Literal { id: AstId::alloc(), value: Literal::String(s), span: Span::new(l, r) },
+    <l:@L> <s:"string"> <r:@R> =>?
+        decoded(literal::decode_str(&s), Span::new(l, r)).map(|s|
+            Expr::Literal { id: AstId::alloc(), value: Literal::String(s), span: Span::new(l, r) }),
     <l:@L> "true" <r:@R> =>
         Expr::Literal { id: AstId::alloc(), value: Literal::Bool(true), span: Span::new(l, r) },
     <l:@L> "false" <r:@R> =>
@@ -475,26 +476,31 @@ PrimaryExpr: Expr = {
 
     // Format string: "hello {{ name }}, age {{ age | to_string }}"
     // Desugars to BinOp::Add chain: "hello " + name + ", age " + (age | to_string)
-    <sl:@L> <start:"fmt_start"> <sr:@R> <first:Expr> <rest:FmtMidPair*> <el:@L> <end:"fmt_end"> <er:@R> => {
+    <sl:@L> <start:"fmt_start"> <sr:@R> <first:Expr> <rest:FmtMidPair*> <el:@L> <end:"fmt_end"> <er:@R> =>? {
         let mut parts: Vec<Expr> = Vec::new();
 
         // Start text segment (span = start token position)
+        let start_span = Span::new(sl, sr);
         if !start.is_empty() {
-            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(start), span: Span::new(sl, sr) });
+            let start = decoded(literal::decode_str(&start), start_span)?;
+            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(start), span: start_span });
         }
         parts.push(first);
 
         // Mid text + expr pairs (each mid has its own span)
         for (mid_span, mid, expr) in rest {
             if !mid.is_empty() {
+                let mid = decoded(literal::decode_str(&mid), mid_span)?;
                 parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(mid), span: mid_span });
             }
             parts.push(expr);
         }
 
         // End text segment (span = end token position)
+        let end_span = Span::new(el, er);
         if !end.is_empty() {
-            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(end), span: Span::new(el, er) });
+            let end = decoded(literal::decode_str(&end), end_span)?;
+            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(end), span: end_span });
         }
 
         // Fold into BinOp::Add chain
@@ -510,7 +516,7 @@ PrimaryExpr: Expr = {
                 span: merged,
             };
         }
-        acc
+        Ok(acc)
     },
 };
 

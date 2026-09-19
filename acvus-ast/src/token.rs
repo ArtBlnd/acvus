@@ -22,30 +22,6 @@ fn suffixed_int(lex: &mut logos::Lexer<'_, Token>) -> Option<SuffixedInt> {
     })
 }
 
-fn parse_string_literal(lex: &mut logos::Lexer<'_, Token>) -> Option<String> {
-    let slice = lex.slice();
-    let inner = &slice[1..slice.len() - 1];
-    let mut result = String::new();
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next()? {
-                'n' => result.push('\n'),
-                't' => result.push('\t'),
-                '\\' => result.push('\\'),
-                '"' => result.push('"'),
-                c => {
-                    result.push('\\');
-                    result.push(c);
-                }
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    Some(result)
-}
-
 /// Tokens produced by the expression tokenizer, driven by logos.
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\n\r]+")]
@@ -104,7 +80,13 @@ pub enum Token {
     IntLitOf(SuffixedInt),
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i128>().ok())]
     IntLit(i128),
-    #[regex(r#""([^"\\]|\\.)*""#, parse_string_literal)]
+    /// The text between the quotes of `"…"`, undecoded, as `'…'` and
+    /// `b"…"` are: the grammar decodes it against the one escape table, so
+    /// an escape the table does not name is a parse error carrying the
+    /// literal's span. Undecoded text is also what the format-string
+    /// scanner needs, because a `{{ }}` tag inside it is then at the
+    /// offsets the source has.
+    #[regex(r#""([^"\\]|\\.)*""#, |lex| inner_text(lex, 1))]
     StringLit(String),
     /// The text between the quotes of `'…'`, undecoded: the grammar
     /// decodes it, so a bad escape is a parse error carrying the

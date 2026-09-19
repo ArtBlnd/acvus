@@ -204,6 +204,15 @@ any other container is refused. A statement that begins with `[` is an
 array literal, and a postfix `[` binds to the expression before it — every
 statement ends in `;` or in a block, so the two never meet.
 
+A `-` that touches an integer literal and stands where no value ended is
+part of that literal, not a negation: `-128i8` is the `i8` literal whose
+value is `-128`, `-9223372036854775808` is the `i64` minimum, and the range
+check sees the signed value (RFC-0058). The rule is the token pair's, so
+`- 128i8` with a space, `-(128i8)`, `-x`, `-1.5` and `a -1` are what they
+were — a negation or a subtraction. The tokenizer carries it, because a
+grammar production for `"-" INT` beside `"-" UnaryExpr` is ambiguous: after
+`- 1` with `+` ahead, both parse.
+
 ### Primary Expressions
 
 ```
@@ -306,13 +315,13 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `IDENT` | `name`, `user`, `x` |
 | `$REF` | `$name`, `$user` |
 | `@REF` | `@name`, `@user` |
-| `INT` | `0`, `42`, `-1` |
-| `INT_OF` | `10u64`, `255u8`, `1i32` — the suffix is one of RFC-0037's eight widths, and a value the width does not hold is refused |
+| `INT` | `0`, `42`, `-1` — a `-` the digits touch is the literal's sign (RFC-0058) |
+| `INT_OF` | `10u64`, `255u8`, `-128i8` — the suffix is one of RFC-0037's eight widths, and a value the width does not hold is refused |
 | `FLOAT` | `3.14`, `0.0` |
 | `CHAR` | `'x'`, `'\n'`, `'\u{1F600}'` — one Unicode scalar value, Rust's escapes |
 | `BYTE` | `b'G'`, `b'\xFF'` — a `u8` |
 | `BYTES` | `b"GET"`, `b"\xFF\x00"` — an `Array<u8, N>`, ASCII and `\xNN` |
-| `STRING` | `"hello"`, `"world"` |
+| `STRING` | `"hello"`, `"a\tb\x41\u{1F600}"` — Rust's escapes, the same table `CHAR`, `BYTE` and `BYTES` use, and an escape outside it is refused |
 | `FORMAT_STRING` | `"hello {{ name }}!"` (lexer splits into `FmtStringStart`/`Mid`/`End`) |
 | `true` `false` | boolean literals |
 | `Some` `None` | variant constructors |

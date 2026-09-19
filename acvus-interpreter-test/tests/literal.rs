@@ -46,6 +46,32 @@ async fn a_suffixed_literal_is_its_width_at_run_time() {
     );
 }
 
+/// A minus that touches an integer literal is part of it, so each width's
+/// minimum is a literal and arrives as the value Rust's is.
+#[tokio::test]
+async fn a_signed_literal_is_its_widths_minimum() {
+    assert_eq!(int_at("-128i8", IntTy::I8).await, i128::from(i8::MIN));
+    assert_eq!(
+        int_at("-9223372036854775808", IntTy::I64).await,
+        i128::from(i64::MIN)
+    );
+    assert_eq!(
+        int_at("-128i8 + 1i8", IntTy::I8).await,
+        i128::from(i8::MIN + 1)
+    );
+    assert_eq!(int_at("0 - 1", IntTy::I64).await, -1);
+}
+
+/// A `"…"` decodes against the same table the other literals use, so the
+/// string that arrives holds the bytes the escapes name.
+#[tokio::test]
+async fn a_string_literal_arrives_decoded() {
+    assert_eq!(text("\"\\x41\"").await, "A");
+    assert_eq!(text("\"a\\tb\"").await, "a\tb");
+    assert_eq!(text("\"\\u{1F600}\"").await, "\u{1F600}");
+    assert_eq!(text("\"back\\\\slash\"").await, "back\\slash");
+}
+
 /// `a[i]` takes a `u64` (RFC-0047), and `1u64` is how one is written.
 #[tokio::test]
 async fn a_suffixed_literal_indexes_without_a_cast() {

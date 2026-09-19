@@ -5,6 +5,7 @@ use logos::Logos;
 
 use crate::ast::IndentModifier;
 use crate::error::{ParseError, ParseErrorKind};
+use crate::literal::SuffixedInt;
 use crate::span::Span;
 use crate::token::Token;
 
@@ -280,15 +281,166 @@ fn apply_whitespace_trimming(segments: &mut Vec<Segment>, trims: &[(bool, bool)]
 
 // -- Phase 2: Expression Tokenizer (logos-backed) -----------------------
 
+/// What logos produced for one stretch of the input.
+type Lexed = (Result<Token, ()>, std::ops::Range<usize>);
+
+/// Whether a token can be the last token of an expression, which is what
+/// decides a following `-`: after one, the minus is the subtraction
+/// operator, and everywhere else it is the sign of the literal it touches
+/// (`Signed`).
+fn ends_a_value(token: &Token) -> bool {
+    match token {
+        Token::Ident(_)
+        | Token::ParamRef(_)
+        | Token::ContextRef(_)
+        | Token::IntLit(_)
+        | Token::IntLitOf(_)
+        | Token::FloatLit(_)
+        | Token::StringLit(_)
+        | Token::CharLit(_)
+        | Token::ByteLit(_)
+        | Token::ByteStrLit(_)
+        | Token::FmtStringEnd(_)
+        | Token::True
+        | Token::False
+        | Token::None
+        | Token::Underscore
+        | Token::Question
+        | Token::RParen
+        | Token::RBracket
+        | Token::RBrace => true,
+        Token::Some
+        | Token::Ok
+        | Token::Err
+        | Token::Let
+        | Token::If
+        | Token::Else
+        | Token::While
+        | Token::Anyorder
+        | Token::Match
+        | Token::Mut
+        | Token::As
+        | Token::FmtStringStart(_)
+        | Token::FmtStringMid(_)
+        | Token::DoubleColon
+        | Token::AndAnd
+        | Token::OrOr
+        | Token::Eq
+        | Token::Neq
+        | Token::Lte
+        | Token::Gte
+        | Token::Arrow
+        | Token::FatArrow
+        | Token::DotDot
+        | Token::Plus
+        | Token::Minus
+        | Token::Star
+        | Token::Slash
+        | Token::Percent
+        | Token::Bang
+        | Token::Amp
+        | Token::Lt
+        | Token::Gt
+        | Token::Assign
+        | Token::Dot
+        | Token::Pipe
+        | Token::LParen
+        | Token::LBracket
+        | Token::LBrace
+        | Token::Comma
+        | Token::Colon
+        | Token::Semicolon => false,
+    }
+}
+
+/// logos' tokens, with a `-` folded into the integer literal it touches
+/// (RFC-0058): `-128i8` is the one `i8` literal whose value is the width's
+/// minimum, and the range check then sees the signed value.
+///
+/// The rule is the token pair's own: the minus ends where the digits begin,
+/// and the token before it does not end a value.
+///
+/// The grammar cannot carry the rule. A production for `"-" "int"` beside
+/// `"-" UnaryExpr` is 25 local ambiguities, because after `- 1` with `+`
+/// ahead both a negative literal and a negation of a literal parse, and
+/// lalrpop has no location to compare before it must choose.
+struct Signed<'input> {
+    inner: logos::SpannedIter<'input, Token>,
+    input: &'input str,
+    base_offset: usize,
+    held: Option<Lexed>,
+    after_value: bool,
+}
+
+impl<'input> Signed<'input> {
+    fn new(input: &'input str, base_offset: usize, interner: &Interner) -> Self {
+        Self {
+            inner: Token::lexer_with_extras(input, interner.clone()).spanned(),
+            input,
+            base_offset,
+            held: None,
+            after_value: false,
+        }
+    }
+
+    /// The minus and the integer literal it touches as one literal token,
+    /// or the minus alone with what followed it held for the next call.
+    fn signed(&mut self, minus: std::ops::Range<usize>) -> Lexed {
+        let Some((lexed, span)) = self.inner.next() else {
+            return (Ok(Token::Minus), minus);
+        };
+        let folded = match lexed {
+            Ok(Token::IntLit(value)) if span.start == minus.end => Token::IntLit(-value),
+            Ok(Token::IntLitOf(lit)) if span.start == minus.end => Token::IntLitOf(SuffixedInt {
+                value: -lit.value,
+                width: lit.width,
+            }),
+            other => {
+                self.held = Some((other, span));
+                return (Ok(Token::Minus), minus);
+            }
+        };
+        (Ok(folded), minus.start..span.end)
+    }
+}
+
+impl Iterator for Signed<'_> {
+    type Item = Result<(usize, Token, usize), ParseError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (lexed, span) = self.held.take().or_else(|| self.inner.next())?;
+        let (lexed, span) = match lexed {
+            Ok(Token::Minus) if !self.after_value => self.signed(span),
+            lexed => (lexed, span),
+        };
+
+        self.after_value = matches!(&lexed, Ok(token) if ends_a_value(token));
+        let start = self.base_offset + span.start;
+        let end = self.base_offset + span.end;
+        Some(match lexed {
+            Ok(token) => Ok((start, token, end)),
+            Err(()) => {
+                let c = self.input[span.start..]
+                    .chars()
+                    .next()
+                    .expect("lexer error token must contain at least one character");
+                Err(ParseError::new(
+                    ParseErrorKind::UnexpectedCharacter(c),
+                    Span::new(start, end),
+                ))
+            }
+        })
+    }
+}
+
 /// Tokenizer for expression content within `{{ }}` tags.
-/// Wraps a logos lexer and produces `(start, Token, end)` triples for LALRPOP.
+/// Produces `(start, Token, end)` triples for LALRPOP.
 ///
 /// When a `StringLit` containing `{{` is encountered, it is expanded into
 /// `FmtStringStart`, inner expression tokens, optional `FmtStringMid` segments,
 /// and a final `FmtStringEnd`.
 pub struct ExprTokenizer<'input> {
-    lexer: logos::Lexer<'input, Token>,
-    base_offset: usize,
+    tokens: Signed<'input>,
     pending: VecDeque<Result<(usize, Token, usize), ParseError>>,
     interner: Interner,
 }
@@ -296,15 +448,14 @@ pub struct ExprTokenizer<'input> {
 impl<'input> ExprTokenizer<'input> {
     pub fn new(input: &'input str, base_offset: usize, interner: &Interner) -> Self {
         Self {
-            lexer: Token::lexer_with_extras(input, interner.clone()),
-            base_offset,
+            tokens: Signed::new(input, base_offset, interner),
             pending: VecDeque::new(),
             interner: interner.clone(),
         }
     }
 }
 
-impl<'input> Iterator for ExprTokenizer<'input> {
+impl Iterator for ExprTokenizer<'_> {
     type Item = Result<(usize, Token, usize), ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -312,35 +463,21 @@ impl<'input> Iterator for ExprTokenizer<'input> {
             return Some(item);
         }
 
-        let result = self.lexer.next()?;
-        let span = self.lexer.span();
-        let start = self.base_offset + span.start;
-        let end = self.base_offset + span.end;
-        match result {
-            Ok(Token::StringLit(ref s)) if s.contains("{{") => {
-                self.pending = expand_format_string(s, start, end, &self.interner);
+        match self.tokens.next()? {
+            Ok((start, Token::StringLit(text), end)) if text.contains("{{") => {
+                self.pending = expand_format_string(&text, start, end, &self.interner);
                 self.pending.pop_front()
             }
-            Ok(token) => Some(Ok((start, token, end))),
-            Err(()) => {
-                let c = self
-                    .lexer
-                    .slice()
-                    .chars()
-                    .next()
-                    .expect("lexer error token must contain at least one character");
-                Some(Err(ParseError::new(
-                    ParseErrorKind::UnexpectedCharacter(c),
-                    Span::new(start, end),
-                )))
-            }
+            item => Some(item),
         }
     }
 }
 
 /// Expand a format string (e.g. `hello {{ name }}!`) into LALRPOP tokens.
 ///
-/// The input `content` is the already-unescaped string body (from `StringLit`).
+/// The input `content` is the undecoded string body (from `StringLit`), so a
+/// segment's offsets are the source's and the grammar decodes each segment
+/// against the one escape table.
 /// `base_start`/`base_end` are absolute offsets of the original `StringLit` token.
 ///
 /// ## Algorithm
@@ -464,25 +601,7 @@ fn expand_format_string(
         // After each text except the last, emit the corresponding expression tokens
         if let Some(expr_str) = exprs.get(i) {
             cursor += 2; // skip `{{`
-            let expr_base = cursor;
-            for (result, span) in Token::lexer_with_extras(expr_str, interner.clone()).spanned() {
-                let tok_start = expr_base + span.start;
-                let tok_end = expr_base + span.end;
-                match result {
-                    Ok(token) => {
-                        out.push_back(Ok((tok_start, token, tok_end)));
-                    }
-                    Err(()) => {
-                        let c = expr_str[span.start..].chars().next().expect(
-                            "interpolation lexer error must contain at least one character",
-                        );
-                        out.push_back(Err(ParseError::new(
-                            ParseErrorKind::UnexpectedCharacter(c),
-                            Span::new(tok_start, tok_end),
-                        )));
-                    }
-                }
-            }
+            out.extend(Signed::new(expr_str, cursor, interner));
             cursor += expr_str.len() + 2; // expr content + `}}`
         }
     }
@@ -523,6 +642,7 @@ fn parse_close_block(trimmed: &str) -> Option<((), Option<IndentModifier>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::literal::IntWidth;
 
     // -- Scanner Tests --
 
@@ -846,6 +966,8 @@ mod tests {
         assert!(matches!(&tokens[1].1, Token::FloatLit(f) if (*f - 3.14).abs() < f64::EPSILON));
     }
 
+    /// The token carries the text between the quotes as the source spells
+    /// it; the grammar decodes it (`literal::decode_str`).
     #[test]
     fn tokenize_string() {
         let interner = Interner::new();
@@ -853,7 +975,104 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tokens.len(), 1);
-        assert!(matches!(&tokens[0].1, Token::StringLit(s) if s == r#"hello "world""#));
+        assert!(matches!(&tokens[0].1, Token::StringLit(s) if s == r#"hello \"world\""#));
+    }
+
+    fn tokens_of(interner: &Interner, source: &str) -> Vec<Token> {
+        ExprTokenizer::new(source, 0, interner)
+            .map(|item| item.expect(source).1)
+            .collect()
+    }
+
+    /// The signed value is what `acvus-mir`'s range check reads, so
+    /// `-128i8` arrives there as `-128` and fits (RFC-0058).
+    #[test]
+    fn a_minus_on_a_literal_is_the_literals_sign() {
+        let i = Interner::new();
+        assert_eq!(tokens_of(&i, "-1"), vec![Token::IntLit(-1)]);
+        assert_eq!(
+            tokens_of(&i, "-128i8"),
+            vec![Token::IntLitOf(SuffixedInt {
+                value: -128,
+                width: IntWidth::I8,
+            })]
+        );
+        assert_eq!(
+            tokens_of(&i, "f(-1)"),
+            vec![
+                Token::Ident(i.intern("f")),
+                Token::LParen,
+                Token::IntLit(-1),
+                Token::RParen,
+            ]
+        );
+        assert_eq!(
+            tokens_of(&i, "2 * -1"),
+            vec![Token::IntLit(2), Token::Star, Token::IntLit(-1)]
+        );
+        assert_eq!(
+            tokens_of(&i, "[1, -1]"),
+            vec![
+                Token::LBracket,
+                Token::IntLit(1),
+                Token::Comma,
+                Token::IntLit(-1),
+                Token::RBracket,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_minus_after_a_value_or_a_space_is_subtraction() {
+        let i = Interner::new();
+        assert_eq!(
+            tokens_of(&i, "- 1"),
+            vec![Token::Minus, Token::IntLit(1)],
+            "a space between them is two tokens"
+        );
+        assert_eq!(
+            tokens_of(&i, "1 - 1"),
+            vec![Token::IntLit(1), Token::Minus, Token::IntLit(1)]
+        );
+        assert_eq!(
+            tokens_of(&i, "1-1"),
+            vec![Token::IntLit(1), Token::Minus, Token::IntLit(1)]
+        );
+        assert_eq!(
+            tokens_of(&i, "(1) -1"),
+            vec![
+                Token::LParen,
+                Token::IntLit(1),
+                Token::RParen,
+                Token::Minus,
+                Token::IntLit(1),
+            ]
+        );
+        assert_eq!(
+            tokens_of(&i, "-x"),
+            vec![Token::Minus, Token::Ident(i.intern("x"))],
+            "a name is not a literal"
+        );
+        assert_eq!(
+            tokens_of(&i, "-1.5"),
+            vec![Token::Minus, Token::FloatLit(1.5)],
+            "a float literal has no suffix and no fold"
+        );
+    }
+
+    /// A `{{ }}` tag inside a format string is tokenized by the same pass,
+    /// so the fold holds there too.
+    #[test]
+    fn a_format_string_folds_the_sign_as_well() {
+        let i = Interner::new();
+        assert_eq!(
+            tokens_of(&i, r#""at {{ -1 }}""#),
+            vec![
+                Token::FmtStringStart("at ".into()),
+                Token::IntLit(-1),
+                Token::FmtStringEnd(String::new()),
+            ]
+        );
     }
 
     #[test]

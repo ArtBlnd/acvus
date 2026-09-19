@@ -1227,6 +1227,142 @@ mod tests {
         assert!(literal_refusal(r#"b"é""#).contains("takes ASCII"));
     }
 
+    /// A `"…"` decodes against the one table every literal uses.
+    #[test]
+    fn a_string_literal_takes_rusts_escapes() {
+        assert_eq!(
+            literal_of(r#""a\tb\x41\u{1F600}""#),
+            Literal::String("a\tb\x41\u{1F600}".into())
+        );
+        assert_eq!(
+            literal_of(r#""\n\r\t\0\\\'\"""#),
+            Literal::String("\n\r\t\0\\'\"".into())
+        );
+    }
+
+    #[test]
+    fn a_string_literal_refuses_an_escape_the_table_does_not_name() {
+        assert_eq!(literal_refusal(r#""\d""#), "unknown character escape `\\d`");
+        assert!(literal_refusal(r#""\xFF""#).contains("is above `\\x7F`"));
+    }
+
+    /// A format string's text segments are pieces of one `"…"`, so each
+    /// decodes against the same table and a bad escape in one is refused.
+    #[test]
+    fn a_format_strings_text_takes_the_same_table() {
+        let interner = Interner::new();
+        let parsed = parse_expr(&interner, r#""a\tb {{ x }}\x41""#).expect("a format string");
+        let mut texts = Vec::new();
+        let mut node = &parsed;
+        while let Expr::BinaryOp { left, right, .. } = node {
+            if let Expr::Literal {
+                value: Literal::String(text),
+                ..
+            } = right.as_ref()
+            {
+                texts.push(text.clone());
+            }
+            node = left;
+        }
+        if let Expr::Literal {
+            value: Literal::String(text),
+            ..
+        } = node
+        {
+            texts.push(text.clone());
+        }
+        texts.reverse();
+        assert_eq!(texts, vec!["a\tb ".to_string(), "\x41".to_string()]);
+
+        assert_eq!(
+            parse_expr(&interner, r#""\d{{ x }}""#)
+                .expect_err("a bad escape in a format string")
+                .kind
+                .to_string(),
+            "unknown character escape `\\d`"
+        );
+    }
+
+    /// The refusal carries the whole literal's span, quotes included, which
+    /// is what the three older literals do.
+    #[test]
+    fn a_bad_escape_is_reported_at_the_literal() {
+        let interner = Interner::new();
+        let err = parse_expr(&interner, r#"1 + "a\db""#).expect_err("a bad escape");
+        assert_eq!((err.span.start, err.span.end), (4, 10));
+    }
+
+    /// A minus that touches an integer literal is the literal's sign, so
+    /// the value the range check reads is the signed one (RFC-0058).
+    #[test]
+    fn a_minus_on_an_integer_literal_is_part_of_it() {
+        assert_eq!(
+            literal_of("-128i8"),
+            Literal::IntOf(SuffixedInt {
+                value: -128,
+                width: IntWidth::I8,
+            })
+        );
+        assert_eq!(literal_of("-1"), Literal::Int(-1));
+        assert_eq!(
+            literal_of("-9223372036854775808"),
+            Literal::Int(i128::from(i64::MIN))
+        );
+    }
+
+    /// A negative literal is a pattern, where a negation of a literal is
+    /// not: the sign is inside the literal the arm matches on.
+    #[test]
+    fn a_negative_literal_is_a_pattern() {
+        let interner = Interner::new();
+        let script = parse_script(&interner, "match 0 { -1 => 1, _ => 0 }").expect("a match");
+        let Some(tail) = &script.tail else {
+            panic!("expected a trailing match expression");
+        };
+        let Expr::Match { arms, .. } = tail.as_ref() else {
+            panic!("expected a match expression");
+        };
+        assert!(matches!(
+            &arms[0].pattern,
+            Pattern::Literal {
+                value: Literal::Int(-1),
+                ..
+            }
+        ));
+    }
+
+    /// `-(128i8)` and `- 128i8` are the negation of a literal, as they were
+    /// before the fold: the rule is the token pair, and neither is one.
+    #[test]
+    fn a_minus_that_is_not_the_sign_stays_a_negation() {
+        let interner = Interner::new();
+        for source in ["-(128i8)", "- 128i8"] {
+            let parsed = parse_expr(&interner, source).expect(source);
+            assert!(
+                matches!(
+                    parsed,
+                    Expr::UnaryOp {
+                        op: UnaryOp::Neg,
+                        ..
+                    }
+                ),
+                "{source} parsed as {parsed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_minus_after_a_value_is_subtraction() {
+        let interner = Interner::new();
+        for source in ["0 - 128i8", "a -1", "a - 1"] {
+            let parsed = parse_expr(&interner, source).expect(source);
+            assert!(
+                matches!(parsed, Expr::BinaryOp { op: BinOp::Sub, .. }),
+                "{source} parsed as {parsed:?}"
+            );
+        }
+    }
+
     /// The tag scanner steps over a character literal, so one holding a
     /// quote or a brace does not end the tag (`char_literal_end`).
     #[test]

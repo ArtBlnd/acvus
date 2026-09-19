@@ -40,6 +40,15 @@ to decode it.
    and not wrapped. There are no underscore separators: the lexer had none
    and this RFC adds none.
 
+   A `-` that touches an integer literal is part of it, so every width's
+   minimum is writable: `-128i8` is the `i8` literal whose value is `-128`
+   and `-9223372036854775808` is the `i64` one, and the range check reads
+   the signed value. The rule is the token pair's — the minus ends where the
+   digits begin, and the token before it does not end a value — so `f(-1)`,
+   `[1, -1]`, `x = -1`, `2 * -1` and a leading `-1` fold, while `- 128i8`
+   with a space, `-(128i8)`, `-x` and `-1.5` are the negation they were and
+   `a -1` is a subtraction.
+
 2. **`char` is a type: one Unicode scalar value.** Rust's `char`, and it
    crosses the boundary as one. A literal is `'c'` with Rust's escapes —
    `'\n'`, `'\r'`, `'\t'`, `'\0'`, `'\''`, `'\\'`, `'\xNN'` up to `\x7F`,
@@ -103,12 +112,23 @@ script that read a character as a `String` is written with `char`, and
 `{{ c }}` in a template is `{{ c.to_string() }}` — emit takes a `String`
 and this RFC does not widen it.
 
-**One escape table, and it is not the string literal's.** `"…"` decodes
-`\n`, `\t`, `\\` and `\"` and passes any other escape through as two
-characters. `'c'`, `b'x'` and `b"…"` use Rust's table, where an unknown
-escape is an error. The two differ, and this RFC does not change `"…"`:
-a script that relies on `"\d"` being two characters keeps working, and no
-new literal inherits a rule Rust does not have.
+**One escape table, and every literal is on it.** `"…"` decoded `\n`, `\t`,
+`\\` and `\"` and passed any other escape through as two characters. It now
+takes the table `'c'`, `b'x'` and `b"…"` take — `\n`, `\r`, `\t`, `\0`,
+`\\`, `\'`, `\"`, `\xNN` up to `\x7F`, `\u{…}` — and an escape outside it is
+a compile error at the literal's span naming the escape. The cost is a
+script that spelled a backslash as `"\d"`: it is that error now, and the
+spelling is `"\\d"`. Nothing in this repository relied on the pass-through —
+every `"…"` holding a backslash already spells it `\\` or names one of
+Rust's escapes — so no script, template or expected string value changed
+with the table.
+
+**One token of lookahead, and a side for every token.** The sign is not a
+grammar rule, so `Signed` in `acvus-ast/src/lexer.rs` holds the token it read
+past a `-` and classifies each token by whether it can end an expression —
+which every token of the language answers, so a token added later states its
+side or the match does not compile. The format string's `{{ }}` tags run
+through the same pass, so the fold holds inside one.
 
 ## Rejected
 
@@ -132,16 +152,33 @@ gets the same refusal and the same message.
 values. Admitting it would mean a check, a `Result`, or a value that is not
 a `char`; the check is `int_to_char` and it already exists.
 
+**The sign as a grammar production.** A production for `"-" "int"` beside
+`"-" UnaryExpr`, choosing between the two by comparing the minus's `@R` with
+the literal's `@L`, is 25 local ambiguities in lalrpop: after `- 1` with `+`
+ahead, a negative literal and a negation of a literal both parse, and the
+parser must choose before any action runs where a location could be read.
+The token pair is decided one level below, where both offsets are in hand.
+
+**The sign left to the checker.** Rust parses `-128i8` as a negation and
+decides the literal's range with the negation around it in view. Here the
+range check is at the literal (Decision 1), so the same arrangement would
+make the value the checker reads differ from the value the literal spells,
+and every reader below the checker — the fold, the lowerer, the printer —
+would have to re-assemble the pair to know what constant it has.
+
 **A suffix on a float literal.** RFC-0037 has no `f32` and RFC-0049 added
 none, so `f64` is the only float and a suffix would name the only choice.
 
 ## Consequences
 
 - `acvus-ast`: `literal.rs` — `IntWidth`, `SuffixedInt`, `LiteralErrorKind`
-  and the three `decode_*` functions; `Token::{IntLitOf, CharLit, ByteLit,
-  ByteStrLit}`; `Literal::{IntOf, Char, Bytes}` and `Literal::desugared`;
-  `ParseErrorKind::BadLiteral`; `lexer::char_literal_end`, so a character
-  literal holding a `"` or a `}` does not end a `{{ }}` tag.
+  and the four `decode_*` functions; `Token::{IntLitOf, CharLit, ByteLit,
+  ByteStrLit}`, and `Token::StringLit` carrying the text undecoded so the
+  grammar decodes it at the literal's span; `Literal::{IntOf, Char, Bytes}`
+  and `Literal::desugared`; `ParseErrorKind::BadLiteral`;
+  `lexer::char_literal_end`, so a character literal holding a `"` or a `}`
+  does not end a `{{ }}` tag; `lexer::Signed`, which folds the sign into the
+  literal for the expression tokenizer and for a format string's tags.
 - `acvus-mir`: `TyTerm::Char`, `CastTy` (was `NumTy`) with its `Char`
   variant, `WordTy`, `CastTy::{word, admits, NAMES}`, `From<IntWidth> for
   IntTy`, `Checker::suffixed_int_literal`, `CastSite`'s `to` and
@@ -160,8 +197,8 @@ none, so `f64` is the only float and a suffix would name the only choice.
   list of its bytes, so the width and the `u8` live in the value's type,
   where RFC-0037 puts them, and no MIR reader has two spellings of one
   constant to agree about. `Literal::Char` has no older form and stays.
-- Tests: `acvus-ast`'s `literal::every_escape_is_rusts` and the parser's
-  literal tests, `acvus-mir-test/tests/literal.rs` for what is refused and
-  what the listing shows, `acvus-interpreter-test/tests/literal.rs` for
-  the values, and the `char` cases added to
-  `acvus-mir-test/tests/cast.rs`.
+- Tests: `acvus-ast`'s `literal::every_escape_is_rusts` — `"…"` included —
+  the tokenizer's fold tests and the parser's literal tests,
+  `acvus-mir-test/tests/literal.rs` for what is refused and what the listing
+  shows, `acvus-interpreter-test/tests/literal.rs` for the values, and the
+  `char` cases added to `acvus-mir-test/tests/cast.rs`.

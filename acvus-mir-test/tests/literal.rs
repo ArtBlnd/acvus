@@ -75,6 +75,25 @@ fn a_literal_that_does_not_fit_its_suffix_is_refused() {
     assert_eq!(refusal("0u8 - 1u8; 256u8"), "literal 256 does not fit u8");
 }
 
+/// A minus that touches an integer literal is part of it, so the width's
+/// minimum is writable and the range check reads the signed value.
+#[test]
+fn a_signed_literal_reaches_the_range_check_signed() {
+    let ir = listing("let low = -128i8; low");
+    assert!(ir.contains("return -128 (r0)"), "{ir}");
+    assert!(!ir.contains("neg"), "{ir}");
+    assert_eq!(returned_ty("let low = -128i8; low"), "i8");
+    assert_eq!(refusal("-129i8"), "literal -129 does not fit i8");
+}
+
+/// The fold is the token pair's rule, so a minus the literal does not touch
+/// is the negation it was, and `128i8` is refused inside it.
+#[test]
+fn a_minus_the_literal_does_not_touch_is_still_a_negation() {
+    assert_eq!(refusal("- 128i8"), "literal 128 does not fit i8");
+    assert_eq!(refusal("-(128i8)"), "literal 128 does not fit i8");
+}
+
 // -- Rule 3: `b"…"` is the array literal's form ------------------------
 
 #[test]
