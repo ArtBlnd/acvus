@@ -230,7 +230,7 @@ impl<'a> Operands<'a> {
     }
 
     #[inline(always)]
-    fn of_frame(regs: &'a Regs<'_>) -> Operands<'a> {
+    pub(crate) fn of_frame(regs: &'a Regs<'_>) -> Operands<'a> {
         Operands {
             base: regs.as_ptr(),
             len: regs.len(),
@@ -512,6 +512,19 @@ macro_rules! instances {
             }
         }
 
+        /// The root operator as a const parameter, for an operation whose
+        /// shape is one node and which therefore has no interior to walk.
+        pub(crate) fn pick_root<T, B>(root: Node, make: &mut B) -> B::Out
+        where
+            T: Num,
+            B: Rooted<T>,
+        {
+            match root {
+                Node::Any => make.of::<{ Node::Any as u8 }>(),
+                $(Node::$v => make.of::<{ Node::$v as u8 }>(),)*
+            }
+        }
+
         fn pick2<T, B>(nodes: &Nodes, make: &mut B) -> B::Out
         where
             T: Num,
@@ -589,7 +602,7 @@ fn wrong_shape(shape: Shape, nodes: usize) -> ! {
 }
 
 #[inline(always)]
-fn tree1<T, const R: u8, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> u64
+pub(crate) fn tree1<T, const R: u8, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> u64
 where
     T: Num,
 {
@@ -812,6 +825,16 @@ where
     fn one<const R: u8>(&mut self) -> Self::Out;
     fn two<const O0: u8, const R: u8>(&mut self) -> Self::Out;
     fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Self::Out;
+}
+
+/// What `pick_root`'s walk ends in: one node's operator as a const parameter.
+pub(crate) trait Rooted<T>
+where
+    T: Num,
+{
+    type Out;
+
+    fn of<const R: u8>(&mut self) -> Self::Out;
 }
 
 struct BuildOp<T, D>

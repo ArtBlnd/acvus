@@ -36,7 +36,8 @@ use crate::ops::arith::{self, Binary, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
 use crate::ops::place;
 use crate::ops::{
-    call, cast, composite, constant, control, index, pattern, storage, string, switch, variant,
+    call, cast, composite, constant, control, index, pattern, select, storage, string, switch,
+    variant,
 };
 use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
@@ -273,6 +274,69 @@ struct DiamondRegion {
     join: usize,
 }
 
+/// The facts a `Select` is built from, read off a diamond whose one arm is a
+/// single pure node and whose other arm passes the incoming word through
+/// (RFC-0052 §"a diamond of two pure arms is a select").
+struct SelectShape {
+    cond: ValueId,
+    dst: ValueId,
+    ty: ChainTy,
+    root: Root,
+    left: ValueId,
+    right: ValueId,
+    passed: ValueId,
+    computes_on_true: bool,
+}
+
+struct EdgeArgs<'r> {
+    on_true: &'r [ValueId],
+    on_false: &'r [ValueId],
+}
+
+struct Sides<'r> {
+    arm_block: Range<usize>,
+    arm_regions: &'r [Region],
+    arm_jump: usize,
+    passed_args: &'r [ValueId],
+    computes_on_true: bool,
+}
+
+impl<'r> Sides<'r> {
+    fn of(region: &'r DiamondRegion, args: EdgeArgs<'r>) -> Option<Sides<'r>> {
+        match (&region.on_true, &region.on_false) {
+            (
+                ArmRegion::Block {
+                    block,
+                    regions,
+                    jump,
+                },
+                ArmRegion::Direct,
+            ) => Some(Sides {
+                arm_block: block.clone(),
+                arm_regions: regions,
+                arm_jump: *jump,
+                passed_args: args.on_false,
+                computes_on_true: true,
+            }),
+            (
+                ArmRegion::Direct,
+                ArmRegion::Block {
+                    block,
+                    regions,
+                    jump,
+                },
+            ) => Some(Sides {
+                arm_block: block.clone(),
+                arm_regions: regions,
+                arm_jump: *jump,
+                passed_args: args.on_true,
+                computes_on_true: false,
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// One side of a diamond. `Direct` is the side the lowering gave no block
 /// of its own: the `JumpIf`'s own edge reaches the join.
 enum ArmRegion {
@@ -413,6 +477,12 @@ impl Prepare<'_> {
                 _ => None,
             },
             Unit::Chain(run) => self.rides_word(run.dst),
+            // A `Select` writes the join's one register and nothing else, so
+            // the word it leaves can ride where a `Diamond`'s cannot: the
+            // arms of a diamond each write that register themselves.
+            Unit::Region(Region::Diamond(region)) => {
+                self.rides_word(self.select_shape(region)?.dst)
+            }
             _ => None,
         }
     }
@@ -1405,7 +1475,10 @@ impl<'a> Prepare<'a> {
                 None
             }
             Unit::Region(Region::Diamond(region)) => {
-                let op = self.diamond_op(region, rides);
+                let op = match self.select_op(region, rides) {
+                    Some(op) => op,
+                    None => self.diamond_op(region, rides),
+                };
                 ops.push(op);
                 None
             }
@@ -1486,6 +1559,131 @@ impl<'a> Prepare<'a> {
             }),
         }));
         ops.extend(exit);
+    }
+
+    /// The diamond `region` is, where it is a select: one arm a single
+    /// arithmetic or comparison node, the other arm the test's own edge into
+    /// a join of one word parameter.
+    ///
+    /// Every refusal below is a soundness statement, because the node runs on
+    /// both paths once this answers `Some`. `/` and `%` are refused because
+    /// RFC-0037 names them as the only integer operations that can raise, and
+    /// an arm of more than one operation is refused because its intermediate
+    /// value would reach a register on a path the program does not take, and
+    /// `assign_slots` — which runs before this recognizer — may have given
+    /// that register to a value live outside the arm.
+    fn select_shape(&self, region: &DiamondRegion) -> Option<SelectShape> {
+        let insts = self.body.insts.as_slice();
+        let InstKind::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } = &insts[region.jump_if].kind
+        else {
+            return None;
+        };
+        let Sides {
+            arm_block,
+            arm_regions,
+            arm_jump,
+            passed_args,
+            computes_on_true,
+        } = Sides::of(
+            region,
+            EdgeArgs {
+                on_true: then_args,
+                on_false: else_args,
+            },
+        )?;
+        if !arm_regions.is_empty() {
+            return None;
+        }
+
+        let InstKind::BlockLabel { params, .. } = &insts[region.join].kind else {
+            return None;
+        };
+        let [dst] = params.as_slice() else {
+            return None;
+        };
+        let joined = self.ty(*dst);
+        if word_kind(joined).is_none() || owns_large(joined) {
+            return None;
+        }
+        let [passed] = passed_args else {
+            return None;
+        };
+        let InstKind::Jump { args, .. } = &insts[arm_jump].kind else {
+            return None;
+        };
+        let [handed] = args.as_slice() else {
+            return None;
+        };
+
+        let mut work = arm_block.filter(|at| !self.konsts.holds_inst(*at));
+        let at = work.next()?;
+        if work.next().is_some() {
+            return None;
+        }
+        let InstKind::BinOp {
+            dst: computed,
+            op,
+            left,
+            right,
+        } = &insts[at].kind
+        else {
+            return None;
+        };
+        if computed != handed || self.use_count(*computed) != 1 {
+            return None;
+        }
+        let root = match (arith_of(*op), compare_of(*op)) {
+            (Some(Arith::Div | Arith::Rem), _) => return None,
+            (Some(op), None) => Root::Num(op),
+            (None, Some(how)) => Root::Cmp(how),
+            _ => return None,
+        };
+        let ty = chain_ty(self.ty(*left))?;
+        if chain_ty(self.ty(*right)) != Some(ty) {
+            return None;
+        }
+
+        Some(SelectShape {
+            cond: *cond,
+            dst: *dst,
+            ty,
+            root,
+            left: *left,
+            right: *right,
+            passed: *passed,
+            computes_on_true,
+        })
+    }
+
+    fn select_op(&self, region: &DiamondRegion, rides: &Rides) -> Option<Node> {
+        let shape = self.select_shape(region)?;
+        let places = select::Places {
+            cond: self.place_of(rides, shape.cond),
+            dst: self.place_of(rides, shape.dst),
+        };
+        let arms = select::Arms {
+            passed: self.off(shape.passed),
+            computes_on_true: shape.computes_on_true,
+        };
+        let mut leaves =
+            [ChainBounds::byte_offset_of_word(self.off(shape.left)); ChainBounds::MAX_LEAVES];
+        leaves[1] = ChainBounds::byte_offset_of_word(self.off(shape.right));
+        let plan = Plan {
+            shape: Shape::NLL,
+            root: shape.root,
+            ops: [Arith::Add; ChainBounds::MAX_INTERIOR],
+            leaves,
+            reads: Reads::Own,
+        };
+        let ty = shape.ty;
+        Some(made(move |next| {
+            select::select_op(ty, places, plan, arms, next)
+        }))
     }
 
     fn diamond_op(&mut self, region: &DiamondRegion, rides: &Rides) -> Node {

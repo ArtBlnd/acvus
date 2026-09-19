@@ -339,6 +339,63 @@ is what would catch a disagreement between the effect the checker read and
 the body `prepare` produced, paid once per call rather than consulted per
 decision.
 
+## A diamond of two pure arms is a select
+
+A loop is bound by the dependence chain through its indirect calls, not by its
+instruction count, so a `Diamond` in a loop body costs a region entry and an
+arm chain per iteration for work Rust compiles to a `cmov`. Where the arms are
+pure word arithmetic, the recognizer produces an operation that evaluates the
+work and picks the word with no branch and no arm call:
+
+```rust
+pub struct Select<T: Num, C: Place, D: Place, const R: u8, const COMPUTES_ON_TRUE: bool>
+    { cond: C::At, plan: Plan, passed: Off, dst: D::At, next: Box<dyn Op> }
+```
+
+`plan` is a `Chain1` plan and `tree1` evaluates it inline, so the arm is not a
+chain the operation calls but the chain kernel the operation *is*. `passed` is
+the register the other arm hands the join. `Select::run` is one condition read,
+the node, the passed word's load, a `cmov`, the store, and the tail call.
+
+**The admitted shape is one node against a pass-through arm.** One arm has a
+block of its own holding exactly one `BinOp`; the other arm is the test's own
+edge into the join, carrying the incoming word; the join has one parameter of
+word type owning no `Large`; and the computed value has one use, the join edge,
+so it never reaches a register. `prepare::select_shape` holds the whole list
+and nothing is tested at run time.
+
+**What is refused, and why.**
+
+- **`/` and `%`.** The node runs on both paths, and these are the only integer
+  operations that can raise (RFC-0037). `collatz while`'s
+  `if i % 2 == 0 { i / 2 } else { i * 3 + 1 }` is refused for this reason and
+  for the next one, so it stays a `Diamond`.
+- **An arm of more than one operation.** Its intermediate value would reach a
+  register on a path the program does not take, and `assign_slots` runs before
+  this recognizer, so that register may belong to a value live outside the arm.
+  `option while`'s arm is `UnwrapOption` then `Add`, two operations, and stays a
+  `Diamond`.
+- **Both arms computing.** `assign_slots` coalesced the two arms' words into the
+  join's one register, so a select of both would read one register for two live
+  words.
+- **A join of more than one parameter.** `grade while`'s inner
+  `if i % 3 == 1 { b = b + 1 } else { a = a + 2 }` writes two different join
+  parameters, so there is no one word to select; its outer arm holds a nested
+  region, which is not one node.
+- **Anything that is not a `BinOp`**: a call, a `Large` define, a store into a
+  container, a write through a path, an indexed read. The Brainfuck `[`/`]`
+  arms are `pc = jumps[pc]`, an indexed read whose index an out-of-range value
+  would make raise, and they stay `Diamond`s by this rule rather than by a
+  bounds-check proof.
+- **Operands outside a chain's types.** `chain_ty` admits the eight integer
+  widths and `f64`; a `char` or `bool` operand is refused.
+
+**The cost rule is one operator node**, and that is what decides the shape
+rather than a chain's three. A second node needs its shape in the operation's
+type, or a `match` on a field inside `run` — and a branch in the select's own
+`run` gives back the branch the select exists to remove. A third would need the
+interference query `assign_slots` does not expose.
+
 ## What it costs
 
 - One vtable-slot load per operation that a function pointer in the stream
@@ -408,6 +465,18 @@ decision.
 - **`Flow` as a word**: removes the `sret` and the jump table but keeps a
   compare and a `cmov` per operation and a sentinel check; ending the chain
   instead removes the return altogether and leaves one compare per joint.
+- **Speculating a raising arm.** A `Select` whose refused operation is `/` or
+  `%` would divide by zero where the program branches around the division.
+  Admitting it behind a proof that the divisor is non-zero, or behind a
+  power-of-two-and-unsigned test, buys one shape — `collatz while`'s `i / 2` is
+  signed `i64`, so the test fails there anyway — and puts a numeric proof in
+  the recognizer. The refusal is a list of admitted instruction kinds instead.
+- **A select of arbitrary arm width**, with the arms as two `Box<dyn Op>` chains
+  the operation calls: a `Diamond` pays one arm chain and this would pay two, so
+  it is a loss on the dependence chain that motivates the shape. Inlining
+  arbitrary width instead puts the arm's shape and both its operators in the
+  type, squaring the chain family's instance axis for a shape whose reachable
+  arms are one node.
 - **Rebasing RFC-0048's three work-in-progress rounds** (+516 core lines, a
   384-byte register file, a marked-slice bitmap, a dynamic define at 47 of
   66 sites): the shape works and is not this RFC's; rebasing it under a new
@@ -598,6 +667,45 @@ decision.
   address the tail `Deref` takes. Closing the list means removing those
   three locals, not the argument run.
 - **The `Switch` operation** (RFC-0051), the one `todo!` in the machine.
+- **The select reaches one case of the bench set, and moves it 16.8 %.**
+  Against master `f8b5e400`, six alternating pinned reps, median, `taskset -c
+  15`, ns per iteration at n = 1e6: `branch while` **5.05 → 4.20 (−16.8 %)**,
+  the base spanning 5.0–5.3 and every one of the six new reps reading 4.2. Its
+  body loses the `Diamond`, the `Add` that was its `then` arm, and the two
+  `Yield`s that ended the arm chains, and gains one
+  `Select<i64, Slot, Slot, Add, true>`. The three diamond cases the rules above
+  refuse do not move: `option while` 5.50 → 5.50, `collatz while` 6.35 → 6.40,
+  `grade while` 10.60 → 10.90 (+2.8 %). The Brainfuck cases are within ±1.2 %
+  with all three op lists unchanged (`PROGRAMS_OPLIST`), and mandelbrot holds at
+  9.0.
+
+  Two cases read outside ±3 % — `int while` +5.7 % and `shapes field write`
+  +9.8 % — and neither source holds an `if`, so the recognizer cannot reach
+  them. Both sit at 2.4–3.4 ns where the bench prints one decimal: the base's
+  own six reps span 2.4–3.4 and 2.4–2.8 while the new side reads 2.8 flat, so
+  the median moves by one or two print steps. This is the placement the section
+  above already names, at the resolution floor, and it is not tuned.
+
+- **The branch is still in the emitted code, and the gain is not from removing
+  it.** `Select::<i64, Slot, Slot, Add, true>::run` sinks the two operand loads
+  into the two sides of a `jne` and joins them with a phi. A `match`, the
+  arithmetic mask `(a & m) | (b & !m)`, and `hint::select_unpredictable` were
+  each built at `opt-level = 3` with fat LTO and produced the **byte-identical**
+  `accum` binary, sha256 `2b924f84…`, so the shape of that select is LLVM's
+  choice and no source form on this toolchain changes it. What the 17.6 %
+  therefore buys is one region entry, two arm-chain dispatches and the arm's
+  own dispatch — five fewer indirect calls per two iterations — while the
+  condition's branch stays. Hoisting the loads so a `cmov` is reachable is not
+  built.
+
+- **The operation instance count** on the `accum` bench binary goes 5010 → 5427
+  (`nm -C | grep -c 'acvus_interpreter::ops::'`), of which 419 are the select
+  family: nine numeric types by two condition places by two destination places
+  by three root nodes by the two sides that may compute. `asm_probe` reads 1725
+  → 1925 `Op::run` symbols, with the same 26 chain ends and the same 19 stack
+  addresses in the same eight families — a `Select` holds none, so it
+  tail-jumps.
+
 - **A `Diamond` arm's value does not ride out of the region.** The arms
   already write the join's register directly, so no phi `Mov` stands between
   them and the successor; what remains is the store and the load, which a

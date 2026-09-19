@@ -75,7 +75,7 @@ async fn a_regions_head_is_one_operation_list() {
 }
 
 #[tokio::test]
-async fn a_tail_that_reads_neither_arm_sits_before_the_diamond() {
+async fn a_tail_that_reads_neither_arm_sits_before_the_select() {
     let blocks = loop_of(TAIL_ABOVE_THE_BRANCH);
     let body = part_of(one_loop(&blocks), "body");
     assert_eq!(
@@ -83,19 +83,18 @@ async fn a_tail_that_reads_neither_arm_sits_before_the_diamond() {
         [
             "Chain2<i64, Slot, 0, 0>",
             "Add<i64, Slot, Slot, Slot>",
-            "Diamond<Slot>",
+            "Select<i64, Slot, Slot, 1, true>",
             "Mov<false, true>"
         ],
         "`n = n + 1` reads neither arm, so code_motion put it above the branch; \
-         the diamond follows in the same list, and the loop's back edge is the \
+         the branch follows in the same list, and the loop's back edge is the \
          `Mov` after it"
     );
-    let diamond = &body.regions[0];
-    assert_eq!(
-        part_of(diamond, "on_true").ops,
-        ["Add<i64, Slot, Slot, Slot>"]
+    assert!(
+        body.regions.is_empty(),
+        "one arm is `acc + n` and the other passes `acc` through, so the branch \
+         is a `Select` holding a chain plan and not a region holding two arms"
     );
-    assert_eq!(part_of(diamond, "on_false").ops, Vec::<String>::new());
 }
 
 #[tokio::test]
