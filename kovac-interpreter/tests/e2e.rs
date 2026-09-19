@@ -78,7 +78,12 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
     let context_types = FxHashMap::default();
     let recursive_fns = FxHashSet::default();
 
-    let opt = optimize::optimize(result.modules, &context_types, &recursive_fns);
+    let opt = optimize::optimize(
+        result.modules,
+        &context_types,
+        &recursive_fns,
+        optimize::Opt::Full,
+    );
     // In untyped mode, validate may report type mismatches from shared
     // scalar slots - expected and safe for kovac (all scalars are u64).
     // Skip validate errors for now.

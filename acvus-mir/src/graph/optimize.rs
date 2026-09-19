@@ -21,19 +21,29 @@ pub struct OptimizeResult {
     pub errors: Vec<(QualifiedRef, Vec<ValidationError>)>,
 }
 
-/// Run the full optimization pipeline.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Opt {
+    /// Only what a program needs to reach the machine and mean what the
+    /// source says.
+    None,
+    /// Every pass.
+    Full,
+}
+
 pub fn optimize(
     modules: FxHashMap<QualifiedRef, MirModule>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
+    opt: Opt,
 ) -> OptimizeResult {
-    optimize_inner(modules, context_types, recursive_fns)
+    optimize_inner(modules, context_types, recursive_fns, opt)
 }
 
 fn optimize_inner(
     modules: FxHashMap<QualifiedRef, MirModule>,
     context_types: &FxHashMap<QualifiedRef, Ty>,
     recursive_fns: &FxHashSet<QualifiedRef>,
+    opt: Opt,
 ) -> OptimizeResult {
     // -- Pass 0: moves, borrows and exhaustiveness as the source wrote
     // them (RFC-0029, RFC-0051) --
@@ -53,23 +63,29 @@ fn optimize_inner(
     // -- Pass 1: SSA (per-module) -> Inline (cross-module) -----
 
     let mut ssa_modules = modules;
-    for module in ssa_modules.values_mut() {
-        run_pass1_body(&mut module.main);
-        for closure in module.closures.values_mut() {
-            run_pass1_body(closure);
+    let inlined = match opt {
+        Opt::None => inliner::InlineResult {
+            modules: ssa_modules,
+        },
+        Opt::Full => {
+            for module in ssa_modules.values_mut() {
+                run_pass1_body(&mut module.main);
+                for closure in module.closures.values_mut() {
+                    run_pass1_body(closure);
+                }
+            }
+            inliner::inline(&ssa_modules, recursive_fns)
         }
-    }
-
-    let inlined = inliner::inline(&ssa_modules, recursive_fns);
+    };
 
     // -- Pass 2: Optimize + Validate (per-module, direct calls) ------
 
     let mut result_modules = FxHashMap::default();
 
     for (qref, mut module) in inlined.modules {
-        run_pass2_body(&mut module.main);
+        run_pass2_body(&mut module.main, opt);
         for closure in module.closures.values_mut() {
-            run_pass2_body(closure);
+            run_pass2_body(closure, opt);
         }
 
         let errors = validate::validate(&module);
@@ -95,11 +111,22 @@ fn run_pass1_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-fn run_pass2_body(body: &mut crate::ir::MirBody) {
+fn run_pass2_body(body: &mut crate::ir::MirBody, opt: Opt) {
     let mut cfg = cfg::promote(std::mem::take(body));
-    run_pass2(&mut cfg);
+    match opt {
+        Opt::None => run_pass2_required(&mut cfg),
+        Opt::Full => run_pass2(&mut cfg),
+    }
     *body = cfg::demote(cfg);
     optimize::rejoin::run(body);
+}
+
+fn run_pass2_required(cfg: &mut CfgBody) {
+    optimize::ssa_pass::run(cfg);
+    optimize::reborrow::run(cfg);
+    optimize::dce::run(cfg);
+    debug_validate(cfg);
+    optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
 
 fn run_pass2(cfg: &mut CfgBody) {

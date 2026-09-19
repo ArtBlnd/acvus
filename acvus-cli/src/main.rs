@@ -22,6 +22,8 @@ use acvus_interpreter::{
 };
 use acvus_utils::Interner;
 
+use acvus_mir::graph::optimize::Opt;
+
 use crate::compile::{CompileTimes, Compiled, Diagnostic, Mode, Stopwatch, Timed};
 
 const EXIT_COMPILE: u8 = 1;
@@ -29,11 +31,11 @@ const EXIT_RUN: u8 = 2;
 const EXIT_USAGE: u8 = 64;
 
 const USAGE: &str = "\
-usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm] [--parallel] [--time]
-       acvus run   -e <expr>              [--context ctx.json] [--llm] [--parallel] [--time]
-       acvus check <file>                 [--context ctx.json] [--json] [--time]
-       acvus mir   <file>                 [--context ctx.json] [--json] [--time]
-       acvus ops   <file>                 [--context ctx.json] [--llm] [--json] [--time]
+usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm] [--parallel] [--opt L] [--time]
+       acvus run   -e <expr>              [--context ctx.json] [--llm] [--parallel] [--opt L] [--time]
+       acvus check <file>                 [--context ctx.json] [--json] [--opt L] [--time]
+       acvus mir   <file>                 [--context ctx.json] [--json] [--opt L] [--time]
+       acvus ops   <file>                 [--context ctx.json] [--llm] [--json] [--opt L] [--time]
        acvus space <dir>
 
   .acvus is script mode, .acvt is a template; -e runs one expression.
@@ -46,10 +48,14 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm
              has a listing to print, the listing
   --llm      register the LLM providers (keys from the environment)
   --parallel run spawned calls on the tokio executor
+  --opt      full (the default) runs every optimization; none runs only what
+             a program needs to reach the machine, and both refuse the same
+             programs
   --time     after the output, one `time:` line on stderr per stage this
-             command ran -- compile, with its parse, typeck, lower and
-             optimize; prepare; run -- in milliseconds; under --json a
-             trailing {\"time\": ...} object on stdout instead";
+             command ran -- compile, with the level it compiled at and its
+             parse, typeck, lower and optimize; prepare; run -- in
+             milliseconds; under --json a trailing {\"time\": ...} object on
+             stdout instead";
 
 enum Command {
     Run,
@@ -68,7 +74,16 @@ struct Args {
     llm: bool,
     parallel: bool,
     time: bool,
+    opt: Opt,
     space: Option<PathBuf>,
+}
+
+/// The spelling `--opt` takes and the `time:` line reports.
+fn level(opt: Opt) -> &'static str {
+    match opt {
+        Opt::None => "none",
+        Opt::Full => "full",
+    }
 }
 
 enum Source {
@@ -94,6 +109,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut llm = false;
     let mut parallel = false;
     let mut time = false;
+    let mut opt = Opt::Full;
     let mut space = None;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -110,6 +126,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--llm" => llm = true,
             "--parallel" => parallel = true,
             "--time" => time = true,
+            "--opt" => {
+                opt = match it.next().map(String::as_str) {
+                    Some("none") => Opt::None,
+                    Some("full") => Opt::Full,
+                    Some(other) => return Err(format!("--opt takes none or full, not `{other}`")),
+                    None => return Err("--opt takes none or full".to_string()),
+                }
+            }
             "--space" => {
                 let dir = it.next().ok_or("--space takes a directory")?;
                 space = Some(PathBuf::from(dir));
@@ -142,6 +166,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             llm: false,
             parallel: false,
             time: false,
+            opt: Opt::Full,
             space: Some(dir),
         });
     }
@@ -158,6 +183,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         llm,
         parallel,
         time,
+        opt,
         space,
     })
 }
@@ -307,6 +333,7 @@ impl Timings {
 
     fn report(&self, rendering: &Rendering) {
         let CompileTimes {
+            opt,
             parse,
             typeck,
             lower,
@@ -315,8 +342,9 @@ impl Timings {
         match rendering {
             Rendering::Text => {
                 eprintln!(
-                    "time: compile {:.3} ms (parse {:.3}, typeck {:.3}, lower {:.3}, optimize {:.3})",
+                    "time: compile {:.3} ms at opt {} (parse {:.3}, typeck {:.3}, lower {:.3}, optimize {:.3})",
                     ms(self.compile),
+                    level(opt),
                     ms(parse),
                     ms(typeck),
                     ms(lower),
@@ -334,6 +362,7 @@ impl Timings {
                 time.insert(
                     "compile".to_string(),
                     serde_json::json!({
+                        "opt": level(opt),
                         "total": ms(self.compile),
                         "parse": ms(parse),
                         "typeck": ms(typeck),
@@ -487,14 +516,21 @@ async fn cli() -> ExitCode {
     let rendering = Rendering::of(args.json);
     let timed = Timed::of(args.time);
     let watch = Stopwatch::start(timed);
-    let (checked, stages) =
-        match compile::check(&interner, &source, mode, &loaded.types, registries, timed) {
-            Ok(c) => c,
-            Err(diagnostics) => {
-                rendering.report(&path, &source, &diagnostics);
-                return ExitCode::from(EXIT_COMPILE);
-            }
-        };
+    let (checked, stages) = match compile::check(
+        &interner,
+        &source,
+        mode,
+        &loaded.types,
+        registries,
+        timed,
+        args.opt,
+    ) {
+        Ok(c) => c,
+        Err(diagnostics) => {
+            rendering.report(&path, &source, &diagnostics);
+            return ExitCode::from(EXIT_COMPILE);
+        }
+    };
     let mut timings = Timings::of(watch.stop(), stages);
     match args.command {
         Command::Check => {

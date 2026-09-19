@@ -71,6 +71,7 @@ async fn run(interner: &Interner, source: &str) -> Value {
         lowered.modules.into_iter().collect(),
         &FxHashMap::default(),
         &Default::default(),
+        graph_optimize::Opt::Full,
     );
     assert!(
         result.errors.is_empty(),

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acvus_interpreter::{AcvusRuntime, Executable, PrepareCtx, Prepared, prepare_module};
+use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{
     CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef, extract, infer, lower,
     optimize,
@@ -67,14 +68,15 @@ impl Stopwatch {
 /// reader of the CLI's report has nothing to do with the split, and the
 /// stage a script author knows by name is typechecking.
 pub struct CompileTimes {
+    pub opt: Opt,
     pub parse: Duration,
     pub typeck: Duration,
     pub lower: Duration,
     pub optimize: Duration,
 }
 
-#[derive(Default)]
 struct Stages {
+    opt: Opt,
     parse: Option<Duration>,
     typeck: Option<Duration>,
     lower: Option<Duration>,
@@ -82,8 +84,19 @@ struct Stages {
 }
 
 impl Stages {
+    fn of(opt: Opt) -> Self {
+        Stages {
+            opt,
+            parse: None,
+            typeck: None,
+            lower: None,
+            optimize: None,
+        }
+    }
+
     fn times(&self) -> Option<CompileTimes> {
         Some(CompileTimes {
+            opt: self.opt,
             parse: self.parse?,
             typeck: self.typeck?,
             lower: self.lower?,
@@ -173,8 +186,9 @@ pub fn check(
     context_types: &FxHashMap<Astr, Ty>,
     registries: Vec<Registry<AcvusRuntime>>,
     timed: Timed,
+    opt: Opt,
 ) -> Result<(Checked, Option<CompileTimes>), Vec<Diagnostic>> {
-    let mut stages = Stages::default();
+    let mut stages = Stages::of(opt);
     let watch = Stopwatch::start(timed);
     let parsed = match mode {
         Mode::Script => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
@@ -273,7 +287,12 @@ pub fn check(
     }
 
     let watch = Stopwatch::start(timed);
-    let optimized = optimize::optimize(lowered.modules, &inf.context_types, &FxHashSet::default());
+    let optimized = optimize::optimize(
+        lowered.modules,
+        &inf.context_types,
+        &FxHashSet::default(),
+        opt,
+    );
     stages.optimize = watch.stop();
 
     diagnostics.extend(

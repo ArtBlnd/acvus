@@ -763,3 +763,88 @@ fn print_writes_its_lines_before_the_result_and_the_times_follow_on_stderr() {
     );
     assert!(err.lines().all(|l| l.starts_with("time: ")), "{err}");
 }
+
+/// `--opt` chooses how hard the compiler works and nothing else: the value is
+/// the same at either level, and `mir --opt none` prints the program the
+/// source wrote, with the loop's slice of `xs` still inside the body that
+/// `--opt full` hoists it out of.
+#[test]
+fn opt_none_and_opt_full_run_one_program_and_print_two() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "loop.acvus",
+        "let xs = [1, 2, 3];\nlet total = 0;\nlet i = 0;\nwhile i < 3 {\n    total = total + xs[i] * 2;\n    i = i + 1;\n}\ntotal\n",
+    );
+    for level in ["none", "full"] {
+        let out = acvus(dir.path(), &["run", "loop.acvus", "--opt", level]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        assert_eq!(text(&out.stdout), "12\n", "at opt {level}");
+    }
+
+    let hoisted = |level: &str| {
+        let out = acvus(dir.path(), &["mir", "loop.acvus", "--opt", level]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        let dump = text(&out.stdout);
+        let at = |needle: &str| {
+            dump.lines()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("no `{needle}` in the dump at opt {level}:\n{dump}"))
+        };
+        at("as_slice") < at("L0(")
+    };
+    assert!(hoisted("full"));
+    assert!(!hoisted("none"));
+}
+
+#[test]
+fn the_time_line_names_the_level_it_compiled_at() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "ok.acvus", "let xs = [1, 2];\nxs.len()\n");
+
+    for level in ["none", "full"] {
+        let out = acvus(dir.path(), &["check", "ok.acvus", "--opt", level, "--time"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        let err = text(&out.stderr);
+        let compile = err
+            .lines()
+            .find(|line| line.starts_with("time: compile "))
+            .expect("the compile line");
+        assert!(compile.contains(&format!(" at opt {level} (")), "{compile}");
+    }
+
+    let out = acvus(
+        dir.path(),
+        &["check", "--json", "--time", "--opt", "none", "ok.acvus"],
+    );
+    let stdout = text(&out.stdout);
+    let trailing: serde_json::Value =
+        serde_json::from_str(stdout.lines().next_back().expect("a trailing object")).unwrap();
+    assert_eq!(trailing["time"]["compile"]["opt"], "none", "{trailing}");
+
+    let out = acvus(dir.path(), &["check", "ok.acvus", "--time"]);
+    let err = text(&out.stderr);
+    assert!(err.contains("at opt full ("), "the default is full: {err}");
+}
+
+#[test]
+fn a_level_the_compiler_does_not_have_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "ok.acvus", "let xs = [1, 2];\nxs.len()\n");
+    for args in [
+        vec!["run", "ok.acvus", "--opt", "fast"],
+        vec!["run", "ok.acvus", "--opt"],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_acvus"))
+            .current_dir(dir.path())
+            .args(&args)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(out.status.code(), Some(64), "`acvus {}`", args.join(" "));
+        assert!(
+            text(&out.stderr).contains("--opt takes none or full"),
+            "{}",
+            text(&out.stderr)
+        );
+    }
+}

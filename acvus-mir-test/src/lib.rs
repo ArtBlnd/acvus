@@ -3,6 +3,7 @@ use std::fmt;
 use acvus_ast::report::Label;
 use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::cfg;
+use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
@@ -575,6 +576,7 @@ pub fn optimized_script_module(
         result.modules,
         &inf.context_types,
         &FxHashSet::default(),
+        Opt::Full,
     );
     for (qref, errs) in &opt.errors {
         let fn_name = interner.resolve(qref.name);
@@ -651,6 +653,7 @@ pub fn compile_script_optimized(
         result.modules,
         &inf.context_types,
         &FxHashSet::default(),
+        Opt::Full,
     );
 
     for (qref, errs) in &opt_result.errors {
@@ -780,6 +783,7 @@ pub fn refuse_script_mode_optimized(
         result.modules,
         &inf.context_types,
         &FxHashSet::default(),
+        Opt::Full,
     );
 
     for (qref, errs) in &opt_result.errors {
@@ -1104,6 +1108,7 @@ pub fn compile_multi_fn_optimized(
         result.modules,
         &inf.context_types,
         &FxHashSet::default(),
+        Opt::Full,
     );
 
     for (qref, errs) in &opt_result.errors {

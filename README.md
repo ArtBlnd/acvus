@@ -10,11 +10,11 @@ runs it.
 ## Run
 
 ```sh
-cargo run -p acvus-cli -- run   script.acvus  --context ctx.json [--time]
+cargo run -p acvus-cli -- run   script.acvus  --context ctx.json [--opt none|full] [--time]
 cargo run -p acvus-cli -- run   -e '@items | map(|x| -> x.name) | join(", ")' --context ctx.json
-cargo run -p acvus-cli -- check script.acvus [--json] [--time]
-cargo run -p acvus-cli -- mir   script.acvus [--json] [--time]
-cargo run -p acvus-cli -- ops   script.acvus [--json] [--time]
+cargo run -p acvus-cli -- check script.acvus [--json] [--opt none|full] [--time]
+cargo run -p acvus-cli -- mir   script.acvus [--json] [--opt none|full] [--time]
+cargo run -p acvus-cli -- ops   script.acvus [--json] [--opt none|full] [--time]
 cargo run -p acvus-cli -- space store/
 ```
 
@@ -28,6 +28,14 @@ typecheck, lowering, optimization and validation: `check` prints nothing,
 `prepare`: `ops` prints the operations it prepares, `main` and every closure
 body, block by block, and `run` executes them. What only `prepare` refuses —
 an `@name` no context declares — therefore reaches `ops` and `run` alone.
+
+`--opt` picks how hard the compiler works. `full`, the default, runs every
+pass; `none` runs only what a program needs to reach the machine at all, so
+`mir --opt none` prints the program the source wrote -- a loop's invariants
+still inside its body. Which programs are refused does not move with the
+level: the move, borrow and exhaustiveness checks and the validator run at
+both, and `acvus-interpreter-test/tests/differential.rs` runs the corpus at
+both levels and compares the values.
 
 A diagnostic is one `error: <message>` line, then the file, line and column,
 the source line and a caret under the span. A refusal whose story needs a
@@ -45,7 +53,7 @@ listing where it has one.
 stage it ran:
 
 ```
-time: compile 1.284 ms (parse 0.112, typeck 0.731, lower 0.201, optimize 0.240)
+time: compile 1.284 ms at opt full (parse 0.112, typeck 0.731, lower 0.201, optimize 0.240)
 time: prepare 0.318 ms
 time: run     42.907 ms
 ```
