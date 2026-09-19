@@ -61,9 +61,13 @@
 //!
 //! # A second shared borrow in one block
 //!
-//! Two shared borrows of one storage in one block, with nothing between
-//! them that takes the storage exclusively, name the same address: the
-//! second is the first, and its uses read the first's value. A block is a
+//! Two shared borrows of one storage in one block name the same address
+//! when they borrow the same thing - the same kind of instruction, reading
+//! the same values, at the same type (`BorrowKey`) - and nothing between
+//! them takes the storage exclusively: the second is the first, and its
+//! uses read the first's value. An `as_slice` of `m[z]` and one of `m[one]`
+//! both reach the storage `m` and borrow two different elements of it, so
+//! the values each reads are part of what it is a borrow of. A block is a
 //! straight line, so this needs no dominance and no reachability - only a
 //! walk over the block, dropping a storage's borrow at every instruction
 //! that takes it exclusively (`taken_exclusively`: the writes above, plus a
@@ -88,7 +92,7 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::*;
 use crate::optimize::const_dedup::{remap_uses, remap_val, remap_vec};
 use crate::optimize::context_ops::{context_read, context_written};
-use crate::ty::Mutability;
+use crate::ty::{Mutability, Ty};
 
 // -- Entry point ----------------------------------------------------
 
@@ -906,9 +910,35 @@ fn remap_defs(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 
 // -- Merge pass -----------------------------------------------------
 
+/// What a shared borrow borrows, under a storage: the kind of instruction
+/// that took it, every value that instruction reads, and the type of the
+/// reference it makes. Two borrows of one storage name one address only
+/// when all three agree.
+///
+/// `operands` is what tells `as_slice(m[z])` from `as_slice(m[one])`: both
+/// reach the storage `m`, in the same kind, at the same type, and they
+/// name two different elements of it. A `ref &v` reads no value, so its
+/// operands are empty and two of them are one borrow as before.
+#[derive(PartialEq)]
+struct BorrowKey<'a> {
+    taken_by: Discriminant<InstKind>,
+    operands: SmallVec<[ValueId; 2]>,
+    ty: Option<&'a Ty>,
+}
+
+impl<'a> BorrowKey<'a> {
+    fn of(kind: &InstKind, dst: ValueId, val_types: &'a FxHashMap<ValueId, Ty>) -> Self {
+        Self {
+            taken_by: discriminant(kind),
+            operands: inst_info::uses(kind).iter().copied().collect(),
+            ty: val_types.get(&dst),
+        }
+    }
+}
+
 /// Within one block, a shared borrow of a storage becomes the borrow an
-/// earlier instruction of that block already took of it, unless something
-/// between the two takes the storage exclusively.
+/// earlier instruction of that block already took of the same thing, unless
+/// something between the two takes the storage exclusively.
 ///
 /// A block is a straight line, so the instructions between the two borrows
 /// are exactly what runs between them: the question needs no dominance and
@@ -921,11 +951,7 @@ fn merge_pass(cfg: &mut CfgBody) -> bool {
     let mut merged: FxHashMap<ValueId, ValueId> = FxHashMap::default();
 
     for block in blocks.iter_mut() {
-        // The borrows each storage currently has in this block, by the
-        // instruction that took each. A storage is borrowed in more than
-        // one way at once - a `&Vec<T>` and the `&[T]` an `AsSlice` of it
-        // takes - and a borrow replaces only one taken the same way.
-        let mut borrows_of: FxHashMap<ValueId, Vec<(Discriminant<InstKind>, ValueId)>> =
+        let mut borrows_of: FxHashMap<ValueId, Vec<(BorrowKey<'_>, ValueId)>> =
             FxHashMap::default();
 
         for inst in block.insts.iter_mut() {
@@ -942,13 +968,11 @@ fn merge_pass(cfg: &mut CfgBody) -> bool {
                 .first()
                 .expect("a shared borrow defines its destination");
 
-            let taken_by = discriminant(&inst.kind);
+            let key = BorrowKey::of(&inst.kind, dst, val_types);
             let held = borrows_of.entry(storage).or_default();
             let earlier = held
                 .iter()
-                .find(|(by, earlier)| {
-                    *by == taken_by && val_types.get(earlier) == val_types.get(&dst)
-                })
+                .find(|(held_key, _)| *held_key == key)
                 .map(|(_, earlier)| *earlier);
 
             match earlier {
@@ -956,7 +980,7 @@ fn merge_pass(cfg: &mut CfgBody) -> bool {
                     merged.insert(dst, earlier);
                     inst.kind = InstKind::Nop;
                 }
-                None => held.push((taken_by, dst)),
+                None => held.push((key, dst)),
             }
         }
     }

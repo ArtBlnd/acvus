@@ -358,3 +358,36 @@ fn two_borrows_in_two_blocks_stay_two() {
     let body = main_body(&ir);
     assert_eq!(count(body, "ref &v"), 2, "{ir}");
 }
+
+// -- What a borrow is of ---------------------------------------------
+
+const TWO_ROWS: &str = "let m = vec([vec([1, 2]), vec([3, 4])]); \
+     let z = len(&m) - len(&m); let one = z + 1u64; ";
+
+/// `m[z]` and `m[one]` are two elements of one container, so the slice of
+/// each is a borrow of its own: three in all, one of `m` and one of each
+/// element.
+#[test]
+fn a_slice_of_one_element_is_not_a_slice_of_another() {
+    let i = Interner::new();
+    let ir =
+        compile_script_mode_optimized(&i, &format!("{TWO_ROWS}m[z][z] + m[one][z]"), &ctx(&i, &[]))
+            .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "as_slice"), 3, "{ir}");
+}
+
+/// Both reads go through one element reference, so the two slices of it
+/// have one operand between them and become one.
+#[test]
+fn two_slices_of_one_element_reference_are_one() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        &format!("{TWO_ROWS}let r = &m[z]; r[z] + r[z]"),
+        &ctx(&i, &[]),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert_eq!(count(body, "as_slice"), 2, "{ir}");
+}

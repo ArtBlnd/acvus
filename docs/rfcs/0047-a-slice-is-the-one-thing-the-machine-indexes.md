@@ -302,6 +302,13 @@ they are. `bf table`'s `tape[ptr]` is the case: its five per-step blocks
 fall from 9, 9, 6, 6 and 5 operations to 3, 3, 3, 3 and 2, and its execute
 from 23 542.0 to 18 110.6 µs at a million steps (**−23.1 %**).
 
+**A shared borrow is keyed by what it borrows.** `code_motion`'s in-block
+merge keys a borrow by the storage it reaches, the kind of instruction that
+took it, every value that instruction reads and the type of the reference it
+makes, so an `as_slice` of `m[z]` and one of `m[one]` stay two borrows where
+a key without the operands made them one and `m[one][z]` answered with row
+`z`'s element.
+
 **A slice parameter costs the log bench's sync case +28.6 %, and the element
 width is why.** `benches/logs.rs`'s `sync ext` case was a `#[state]` corpus
 addressed by line index; it is now `glob_match(&@pat, &@lines[li])` over two
