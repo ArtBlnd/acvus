@@ -26,8 +26,10 @@ Each command stops where its job stops. `check` and `mir` run parse,
 typecheck, lowering, optimization and validation: `check` prints nothing,
 `mir` prints the optimized program. `ops` and `run` add the interpreter's
 `prepare`: `ops` prints the operations it prepares, `main` and every closure
-body, block by block, and `run` executes them. What only `prepare` refuses —
-an `@name` no context declares — therefore reaches `ops` and `run` alone.
+body, block by block, and `run` executes them. A program `check` admits
+reaches the machine: an `@name` no context declares, a field no path stores,
+a result that is or holds a reference, and a type the solve leaves open are
+all refused by `check`, with a diagnostic.
 
 `--opt` picks how hard the compiler works. `full`, the default, runs every
 pass; `none` runs only what a program needs to reach the machine at all, so

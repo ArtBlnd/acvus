@@ -55,7 +55,10 @@ fn compile(i: &Interner, source: &str) -> Result<String, String> {
 
 fn uninit_field(result: Result<String, String>, field: &str) -> String {
     let err = result.expect_err("the definite-assignment check reports the field");
-    assert!(err.contains(&format!("fields [\"{field}\"]")), "{err}");
+    assert!(
+        err.contains(&format!("has no `{field}` stored on every path")),
+        "{err}"
+    );
     err
 }
 
@@ -69,7 +72,7 @@ fn a_field_stored_on_one_path_is_uninitialized_on_the_other() {
         ),
         "b",
     );
-    assert!(err.contains("[62,68]"), "reported at the else call: {err}");
+    assert!(err.contains("[62..68]"), "reported at the else call: {err}");
 }
 
 #[test]
@@ -82,7 +85,7 @@ fn a_field_the_callee_requires_and_the_body_never_names_is_checked() {
 fn a_value_built_in_place_is_checked_at_the_call() {
     let i = Interner::new();
     let err = uninit_field(compile(&i, "fab({ a: 1, })"), "b");
-    assert!(err.contains("Value("), "{err}");
+    assert!(err.contains("this value has no"), "{err}");
 }
 
 #[test]

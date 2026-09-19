@@ -195,7 +195,7 @@ fn a_match_on_a_parameter_with_a_catch_all_is_accepted() {
 #[test]
 fn a_match_on_a_container_element_needs_no_catch_all() {
     let i = Interner::new();
-    let source = "let v = [E::A(1), E::B(2)]; match &v[0] { E::A(x) => x, E::B(x) => x }";
+    let source = "let v = [E::A(1), E::B(2)]; match &v[0] { E::A(x) => *x, E::B(x) => *x }";
     compile_script_ir(&i, source, &flag(&i)).unwrap();
 }
 
@@ -203,7 +203,7 @@ fn a_match_on_a_container_element_needs_no_catch_all() {
 fn a_match_on_a_field_needs_no_catch_all() {
     let i = Interner::new();
     let source = format!(
-        "{TWO_CONSTRUCTIONS}let o = {{ f: e, }}; match &o.f {{ E::A(x) => x, E::B(x) => x }}"
+        "{TWO_CONSTRUCTIONS}let o = {{ f: e, }}; match &o.f {{ E::A(x) => *x, E::B(x) => *x }}"
     );
     compile_script_ir(&i, &source, &flag(&i)).unwrap();
 }
@@ -211,7 +211,7 @@ fn a_match_on_a_field_needs_no_catch_all() {
 #[test]
 fn a_match_on_a_field_that_misses_a_variant_is_refused() {
     let i = Interner::new();
-    let source = format!("{TWO_CONSTRUCTIONS}let o = {{ f: e, }}; match &o.f {{ E::A(x) => x }}");
+    let source = format!("{TWO_CONSTRUCTIONS}let o = {{ f: e, }}; match &o.f {{ E::A(x) => *x }}");
     let err = compile_script_ir(&i, &source, &flag(&i)).unwrap_err();
     assert_eq!(
         err,

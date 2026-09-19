@@ -235,3 +235,82 @@ mod one_type_two_sources {
         assert_eq!(labels, []);
     }
 }
+
+/// A context no declaration names: the note lists what is declared, and
+/// says nothing where nothing is.
+mod undeclared_context {
+    use super::*;
+
+    #[test]
+    fn the_declared_names_are_the_note() {
+        let (message, labels) = only("@nope + 1", &query);
+        assert_eq!(message, "`@nope` is not a declared context");
+        assert_eq!(labels, [note("declared: `@query`")]);
+    }
+
+    #[test]
+    fn nothing_declared_leaves_the_refusal_with_one_place() {
+        let (message, labels) = only("@nope + 1", &nothing);
+        assert_eq!(message, "`@nope` is not a declared context");
+        assert_eq!(labels, []);
+    }
+}
+
+/// A body's result is not a reference, nor data holding one: the `&str`
+/// shape keeps the spelling that owns the text.
+mod reference_returned_from_body {
+    use super::*;
+
+    const WORDS: &str = "a body does not return a reference";
+
+    #[test]
+    fn a_reference_to_a_word_is_refused() {
+        let (message, labels) = only("let a = 1; &a", &nothing);
+        assert_eq!(message, WORDS);
+        assert_eq!(labels, []);
+    }
+
+    #[test]
+    fn a_view_carries_the_way_to_own_the_text() {
+        let (message, _) = only("let s = \"ab\"; &s", &nothing);
+        assert_eq!(
+            message,
+            format!("{WORDS}; write `.to_string()` for the owned text")
+        );
+    }
+
+    #[test]
+    fn a_reference_inside_a_variant_payload_is_refused() {
+        let (message, _) = only("let xs = [1]; nope::len(&xs)", &nothing);
+        assert_eq!(message, WORDS);
+    }
+
+    #[test]
+    fn a_reference_inside_an_option_payload_is_refused() {
+        let (message, _) = only("let a = 1; Some(&a)", &nothing);
+        assert_eq!(message, WORDS);
+    }
+}
+
+/// A field the body reads where no path stored it.
+#[test]
+fn a_field_never_stored_names_the_value_that_lacks_it() {
+    let (message, labels) = only("let x = { a: 1, }; x.b", &nothing);
+    assert_eq!(
+        message,
+        "`x` has no `b` stored on every path that reaches here"
+    );
+    assert_eq!(labels, []);
+}
+
+/// `to_string` is declared for more than one type, so a `$param` only it
+/// reads has no type the resolution can close.
+#[test]
+fn a_type_the_solve_leaves_open_is_refused_where_it_is_closed() {
+    let (message, labels) = only("$count.to_string()", &nothing);
+    assert_eq!(
+        message,
+        "cannot infer type: resolved to ! which contains unresolved type variables"
+    );
+    assert_eq!(labels, []);
+}

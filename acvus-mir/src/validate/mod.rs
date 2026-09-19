@@ -83,6 +83,12 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             ValidationErrorKind::MissingType { value_id } => {
                 write!(f, "Val({value_id}) has no type")
             }
+            ValidationErrorKind::ErrorType { value_id, origin } => write!(
+                f,
+                "{} reaches the machine with no type, and no refusal said why",
+                written_as(self.interner, origin.as_ref())
+                    .unwrap_or_else(|| format!("Val({value_id})"))
+            ),
             ValidationErrorKind::OrderEdge { inst_name, pure } => {
                 if *pure {
                     write!(f, "{inst_name} is a pure call and carries an Order")

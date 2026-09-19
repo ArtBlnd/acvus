@@ -3686,13 +3686,14 @@ impl<'a> Lowerer<'a> {
                 self.emit_const_bool(span, true)
             }
             Pattern::Literal { value, .. } => {
+                let src = self.read_word_through(span, reference);
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::Bool);
                 self.emit_inst(
                     span,
                     InstKind::TestLiteral {
                         dst,
-                        src: reference,
+                        src,
                         value: value.desugared(),
                     },
                 );

@@ -173,8 +173,10 @@ fn multiple_items_mixed_namespace() {
 // 2. Type check - Soundness (invalid specs rejected)
 // ====================================================================
 
+/// An `@name` no context declares is refused by the checker, so a block that
+/// reads one is not complete until its namespace declares the context.
 #[test]
-fn block_undeclared_context_is_complete_if_type_resolves() {
+fn block_undeclared_context_is_not_complete() {
     let i = Interner::new();
     let ns = Namespace {
         defaults: vec![],
@@ -192,8 +194,8 @@ fn block_undeclared_context_is_complete_if_type_resolves() {
         "valid syntax -> no field errors"
     );
     assert!(
-        result.is_complete(&i, "greet"),
-        "undeclared context with resolvable type -> Complete"
+        !result.is_complete(&i, "greet"),
+        "an undeclared context is a refusal, not Complete"
     );
 }
 

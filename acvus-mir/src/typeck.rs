@@ -462,6 +462,44 @@ pub use crate::ir::Intrinsic;
 pub struct OperatorCall<C, T> {
     pub callee: C,
     pub ty: T,
+    pub at: Span,
+}
+
+/// The reference a body's result names, itself or inside the data it holds.
+///
+/// A reference inside data is already refused where the data is built
+/// (`MirErrorKind::ReferenceInData`), and a variant payload is the one data
+/// constructor that check does not reach; `nope::len(&xs)` builds one whose
+/// referent the body releases before it returns, and reading the result then
+/// reads freed storage. A function type is not searched: its parameters and
+/// return are a signature, not storage this run holds.
+fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
+    match ty {
+        TyTerm::Ref(..) => Some(ty),
+        TyTerm::Array(inner, _) | TyTerm::Slice(inner) | TyTerm::Option(inner) => {
+            reference_in_result(inner)
+        }
+        TyTerm::Result(ok, err) => reference_in_result(ok).or_else(|| reference_in_result(err)),
+        TyTerm::Tuple(elems) => elems.iter().find_map(reference_in_result),
+        TyTerm::Object(object) => object
+            .iter()
+            .find_map(|(_, field)| reference_in_result(field)),
+        TyTerm::Enum { variants, .. } => variants
+            .iter()
+            .filter_map(|(_, payload)| payload.as_ref())
+            .find_map(|payload| reference_in_result(payload)),
+        _ => None,
+    }
+}
+
+/// A `$name` the body reads. A parameter a Signature declared arrives with
+/// its type already closed and no place in this body; one the body
+/// discovered carries the place it was first read, which is where a type
+/// that does not close is refused.
+struct ExternParam {
+    name: Astr,
+    ty: InferTy,
+    first_read: Option<Span>,
 }
 
 /// A call resolved to a named function, at the instance the solver fixed
@@ -720,10 +758,8 @@ struct PendingConversion {
     place: Option<AstId>,
 }
 
-/// State only active in analysis mode (partial inference for unknown contexts/params).
+/// State only active in analysis mode (partial inference for unknown params).
 struct AnalysisState {
-    /// Cached fresh Vars for unknown context entries.
-    infer_vars: FxHashMap<Astr, InferTy>,
     /// Declared parameter types from Signature, consumed in order as $params are discovered.
     declared_param_types: Vec<Ty>,
     /// Next index into declared_param_types.
@@ -739,9 +775,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     namespace: Option<Astr>,
     /// Stack of scopes: each scope maps variable names to types.
     scopes: Vec<FxHashMap<Astr, InferTy>>,
-    /// Extern parameter types (`$name`, inferred at first use).
-    /// SmallVec to preserve insertion order - iteration order must match Signature order.
-    param_types: smallvec::SmallVec<[(Astr, InferTy); 4]>,
+    /// Extern parameters in Signature order, which is the order iteration
+    /// must keep.
+    param_types: smallvec::SmallVec<[ExternParam; 4]>,
     /// Solver state (borrowed - may be shared across compilations).
     solver: &'s mut Solver<'src>,
     /// Accumulated type map (internal, uses InferTy during inference).
@@ -895,7 +931,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Called before typecheck to inject parameter names+types from Signature.
     pub fn with_params(mut self, params: &[Param]) -> Self {
         for param in params {
-            self.param_types.push((param.name, lift_ty(&param.ty)));
+            self.param_types.push(ExternParam {
+                name: param.name,
+                ty: lift_ty(&param.ty),
+                first_read: None,
+            });
         }
         self
     }
@@ -906,11 +946,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self
     }
 
-    /// Enable analysis mode: unknown `@context` refs produce fresh type
-    /// variables instead of errors, allowing partial type inference.
+    /// Enable analysis mode: unknown `$param`s produce fresh type variables
+    /// instead of errors, allowing partial type inference.
     pub fn with_analysis_mode(mut self) -> Self {
         self.analysis = Some(AnalysisState {
-            infer_vars: FxHashMap::default(),
             declared_param_types: Vec::new(),
             next_declared_param: 0,
         });
@@ -932,24 +971,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.solver.written_ty(ty).unwrap_or_else(|_| Ty::error())
     }
 
-    /// A type the resolution carries into lowering (RFC-0043).
-    fn closed_or_reported(&self, ty: &InferTy) -> Ty {
-        self.solver.close_ty(ty).unwrap_or_else(|_| {
-            debug_assert!(
-                !self.errors.is_empty(),
-                "a type the resolution carries closes, or the checker reported why it could not"
-            );
-            Ty::error()
-        })
-    }
-
-    /// A type the checker left with only a bound, which `Ty` cannot
-    /// express: `@x + @y` over undeclared contexts, a `$param` a
-    /// projection only reads. No error is reported and the outcome is
-    /// `Complete`, so the resolution carries the error token. What such
-    /// an outcome should carry is unsettled (RFC-0043, Consequences).
-    fn type_the_checker_left_open(&self, ty: &InferTy) -> Ty {
-        self.solver.close_ty(ty).unwrap_or_else(|_| Ty::error())
+    /// A type the resolution carries into lowering (RFC-0043). A type the
+    /// solve left with only a bound is one `Ty` cannot express and the
+    /// machine cannot run, so the refusal is where it stops.
+    fn closed_or_refused(&mut self, ty: &InferTy, span: Span) -> Ty {
+        match self.solver.close_ty(ty) {
+            Ok(closed) => closed,
+            Err(_) => {
+                let resolved_ty = self.type_as_written(ty);
+                self.error(MirErrorKind::AmbiguousType { resolved_ty }, span);
+                Ty::error()
+            }
+        }
     }
 
     /// Freeze the internal InferTy type_map to a concrete TypeMap.
@@ -993,20 +1026,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return Err(self.errors);
         }
         let resolved: TypeMap = self.freeze_type_map();
-        let extern_params: Vec<(Astr, Ty)> = self
-            .param_types
-            .iter()
-            .map(|(name, ty)| {
-                let resolved = self.solver.resolve_ty(ty);
-                (*name, self.type_the_checker_left_open(&resolved))
-            })
-            .collect();
+        let extern_params = self.frozen_extern_params(template.span);
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
         let operator_calls = self.frozen_operator_calls();
         let coercion_map = self.frozen_coercions();
         let direct_calls = self.frozen_direct_calls();
         let lambda_captures = self.frozen_lambda_captures();
+        // A second gate, because freezing is itself a check: a type the
+        // solve left open is found only where it is closed, and every such
+        // type is closed above.
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             coercion_map,
@@ -1079,17 +1111,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             TyTerm::Unit
         };
         self.solve_body();
-        // A body does not hand a `&str` to its caller. The result leaves in
-        // the one register a caller reads, and a view is two (RFC-0062
-        // Decision 4); a host that declares `!` reads it by kind
-        // (RFC-0054) and a pair has no kind. Every other reference is left
-        // as it was: whether a body may return one at all is a question
-        // this decision does not answer.
+        // A body does not hand a reference to its caller. The result leaves
+        // in the one register a caller reads, and a `&str` is two (RFC-0062
+        // Decision 4); a host that declares `!` reads the result by kind
+        // (RFC-0054), and what a reference names is a place this run is
+        // about to leave, so reading it is reading freed storage. Until
+        // RFC-0064 gives a body's result a lifetime, every reference is
+        // refused here.
         if let Some(tail) = &script.tail {
             let resolved = self.solver.resolve_ty(&tail_ty);
-            if matches!(&resolved, TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str)) {
-                let ty = self.type_as_written(&resolved);
-                self.error(MirErrorKind::ViewReturnedFromBody(ty), tail.span());
+            if let Some(reference) = reference_in_result(&resolved) {
+                let ty = self.type_as_written(reference);
+                self.error(MirErrorKind::ReferenceReturnedFromBody(ty), tail.span());
             }
         }
         self.check_moves_out_of_captures();
@@ -1099,15 +1132,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return Err(self.errors);
         }
         let resolved: TypeMap = self.freeze_type_map();
-        let extern_params: Vec<(Astr, Ty)> = self
-            .param_types
-            .iter()
-            .map(|(name, ty)| {
-                let resolved = self.solver.resolve_ty(ty);
-                (*name, self.closed_or_reported(&resolved))
-            })
-            .collect();
-        let frozen_tail = self.type_the_checker_left_open(&self.solver.resolve_ty(&tail_ty));
+        let extern_params = self.frozen_extern_params(script.span);
+        let tail_at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
+        let frozen_tail = self.closed_or_refused(&self.solver.resolve_ty(&tail_ty), tail_at);
         let try_returns = self.frozen_try_returns();
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
@@ -1115,6 +1142,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let coercion_map = self.frozen_coercions();
         let direct_calls = self.frozen_direct_calls();
         let lambda_captures = self.frozen_lambda_captures();
+        // A second gate, because freezing is itself a check: a type the
+        // solve left open is found only where it is closed, and every such
+        // type is closed above.
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
         Ok(Freeze::new(TypeResolution::new(
             resolved,
             coercion_map,
@@ -1500,7 +1533,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 self.param_types
                     .iter()
-                    .any(|(param, _)| param == name)
+                    .any(|param| param.name == *name)
                     .then_some(HeldRoot::Param(*name))
             }
         }
@@ -2543,7 +2576,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         let unsettled = self.solver.settle();
         self.report_unsettled(unsettled);
-        let callee_ty = self.closed_or_reported(&self.solver.resolve_ty(&inst));
+        let callee_ty = self.closed_or_refused(&self.solver.resolve_ty(&inst), span);
         PendingExternCast {
             callee: ResolvedCallee {
                 qref: fn_ref,
@@ -2752,33 +2785,69 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if let Some(ty) = self.env.contexts.get(&qref) {
             return ty.clone();
         }
-        if let Some(ref mut state) = self.analysis {
-            let solver = &mut *self.solver;
-            return state
-                .infer_vars
-                .entry(qref.name)
-                .or_insert_with(|| solver.fresh_ty_var())
-                .clone();
-        }
-        self.error(
+        let labels = self.declared_contexts().into_iter().collect();
+        self.labeled_error(
             MirErrorKind::UndefinedContext(self.interner.resolve(qref.name).to_string()),
             span,
+            labels,
         );
         Self::infer_error()
+    }
+
+    /// The contexts a reader can reach instead, as a note. A long list is
+    /// not one: past this many names the note is a wall of text where the
+    /// reader wanted the one name they misspelled, so it is left out.
+    fn declared_contexts(&self) -> Option<Label> {
+        const SHOWN: usize = 8;
+        let mut names: Vec<&str> = self
+            .env
+            .contexts
+            .keys()
+            .map(|qref| self.interner.resolve(qref.name))
+            .collect();
+        if names.is_empty() || names.len() > SHOWN {
+            return None;
+        }
+        names.sort_unstable();
+        let written: Vec<String> = names.iter().map(|name| format!("`@{name}`")).collect();
+        Some(Label::note(format!("declared: {}", written.join(", "))))
     }
 
     fn note_context_use(&mut self, qref: QualifiedRef, span: Span) {
         self.context_uses.entry(qref).or_insert(span);
     }
 
-    fn frozen_operator_calls(&self) -> FxHashMap<AstId, OperatorCall<Callee, Ty>> {
-        self.operator_calls
+    fn frozen_operator_calls(&mut self) -> FxHashMap<AstId, OperatorCall<Callee, Ty>> {
+        let calls = std::mem::take(&mut self.operator_calls);
+        calls
             .iter()
             .filter_map(|(id, call)| {
                 let callee = self.callee_of(call.callee)?;
                 let resolved = self.solver.resolve_ty(&call.ty);
-                let ty = self.closed_or_reported(&resolved);
-                Some((*id, OperatorCall { callee, ty }))
+                let ty = self.closed_or_refused(&resolved, call.at);
+                Some((
+                    *id,
+                    OperatorCall {
+                        callee,
+                        ty,
+                        at: call.at,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Every `$name` this body reads, at the type the solve closed it to.
+    /// A parameter a Signature declared has no place of its own, so a type
+    /// that does not close is refused at the body.
+    fn frozen_extern_params(&mut self, body: Span) -> Vec<(Astr, Ty)> {
+        let params = std::mem::take(&mut self.param_types);
+        params
+            .iter()
+            .map(|param| {
+                let resolved = self.solver.resolve_ty(&param.ty);
+                let at = param.first_read.unwrap_or(body);
+                (param.name, self.closed_or_refused(&resolved, at))
             })
             .collect()
     }
@@ -2793,12 +2862,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// The type a context resolved to, once every use has been checked.
     /// `None` while it is still open, or when the context is unknown.
     fn context_type(&self, qref: QualifiedRef) -> Option<Ty> {
-        let ty = self.env.contexts.get(&qref).cloned().or_else(|| {
-            self.analysis
-                .as_ref()
-                .and_then(|state| state.infer_vars.get(&qref.name).cloned())
-        })?;
-        let resolved = self.solver.resolve_ty(&ty);
+        let ty = self.env.contexts.get(&qref)?;
+        let resolved = self.solver.resolve_ty(ty);
         self.solver.freeze_ty(&resolved).ok()
     }
 
@@ -2971,7 +3036,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         {
             let referent = self.solver.resolve_ty(referent_of(&container));
             if Self::is_error(&element) {
-                let ty = self.type_the_checker_left_open(&referent);
+                let ty = self.type_as_written(&referent);
                 self.error(MirErrorKind::CannotIndex { ty }, span);
                 continue;
             }
@@ -2992,7 +3057,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 },
             );
             if moves && demand == PlaceDemand::Value {
-                let ty = self.type_the_checker_left_open(&referent);
+                let ty = self.type_as_written(&referent);
                 let note = Label::note(format!(
                     "the element is {}, which moves; take a reference with `&a[i]`",
                     element.display(self.interner)
@@ -3703,6 +3768,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             OperatorCall {
                 callee: ResolvedCallee { qref, instance },
                 ty: fn_ty,
+                at: span,
             },
         );
     }
@@ -4163,7 +4229,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             _ => {
                 self.error(
                     MirErrorKind::ForSourceNotAdmitted {
-                        ty: self.type_the_checker_left_open(&resolved),
+                        ty: self.type_as_written(&resolved),
                     },
                     array.span(),
                 );
@@ -4342,8 +4408,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             } => {
                 let ty = match ref_kind {
                     RefKind::ExternParam => {
-                        let ty = match self.param_types.iter().find(|(n, _)| *n == name.name) {
-                            Some((_, ty)) => ty.clone(),
+                        let ty = match self.param_types.iter().find(|p| p.name == name.name) {
+                            Some(param) => param.ty.clone(),
                             None => {
                                 if let Some(ref mut state) = self.analysis {
                                     // In analysis mode, unknown $params are inferred.
@@ -4359,7 +4425,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                     } else {
                                         self.solver.fresh_ty_var()
                                     };
-                                    self.param_types.push((name.name, ty.clone()));
+                                    self.param_types.push(ExternParam {
+                                        name: name.name,
+                                        ty: ty.clone(),
+                                        first_read: Some(*span),
+                                    });
                                     ty
                                 } else {
                                     self.error(

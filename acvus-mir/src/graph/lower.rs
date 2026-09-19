@@ -48,7 +48,7 @@ pub fn lower(
     infer_result: &InferResult,
 ) -> LowerResult {
     let mut modules = FxHashMap::default();
-    let errors = Vec::new();
+    let mut errors = Vec::new();
 
     for func in graph.functions.iter() {
         if matches!(func.kind, FnKind::Extern { .. }) {
@@ -67,10 +67,22 @@ pub fn lower(
             other => other.clone(),
         };
         let lowerer = crate::lower::Lowerer::new(interner, resolution, ret);
-        let module = match parsed {
+        let mut module = match parsed {
             ParsedSource::Script(script) => lowerer.lower_script(script),
             ParsedSource::Template(template) => lowerer.lower_template(template),
         };
+
+        // Definite assignment reads the pre-SSA shape the source wrote, so
+        // it runs here and not in `validate`, which sees the optimized body.
+        let cfg = crate::cfg::promote(std::mem::take(&mut module.main));
+        let uninit = crate::validate::init_check::refusals(interner, &cfg);
+        module.main = crate::cfg::demote(cfg);
+        if !uninit.is_empty() {
+            errors.push(LowerError {
+                fn_id: func.qref,
+                errors: uninit,
+            });
+        }
 
         // SSA + validate are handled by the optimize pipeline (graph/optimize.rs).
         // Lower outputs pre-SSA MIR.

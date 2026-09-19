@@ -148,6 +148,12 @@ pub enum MirErrorKind {
         field: String,
     },
     UndefinedContext(String),
+    /// A field the body reads on a path that never stored it
+    /// (`validate::init_check`, RFC-0042).
+    FieldNotStored {
+        subject: ShownValue,
+        fields: Vec<String>,
+    },
 
     // Pattern errors
     MissingCatchAll,
@@ -244,7 +250,8 @@ pub enum MirErrorKind {
     ViewInData,
     /// A lambda returned a reference.
     ReferenceReturned,
-    ViewReturnedFromBody(Ty),
+    /// A script body returned a reference.
+    ReferenceReturnedFromBody(Ty),
     /// RFC-0043.
     AmbiguousFunction {
         name: String,
@@ -475,12 +482,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                      write `.to_string()` to store the text"
                 )
             }
-            MirErrorKind::ViewReturnedFromBody(ty) => {
+            MirErrorKind::ReferenceReturnedFromBody(ty) => {
                 write!(
                     f,
-                    "a body does not return a {}{}",
-                    ty.display(interner),
-                    COPY_OF_A_VIEW
+                    "a body does not return a reference{}",
+                    match is_text_view(ty) {
+                        true => COPY_OF_A_VIEW,
+                        false => "",
+                    }
                 )
             }
             MirErrorKind::ReferenceReturned => {
@@ -622,7 +631,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::UndefinedContext(name) => {
-                write!(f, "undefined context `@{name}`")
+                write!(f, "`@{name}` is not a declared context")
+            }
+            MirErrorKind::FieldNotStored { subject, fields } => {
+                let named: Vec<String> = fields.iter().map(|f| format!("`{f}`")).collect();
+                write!(
+                    f,
+                    "{subject} has no {} stored on every path that reaches here",
+                    named.join(", ")
+                )
             }
             MirErrorKind::MatchIsNotADispatch => {
                 write!(

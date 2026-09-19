@@ -2484,22 +2484,24 @@ mod tests {
         assert_eq!(*result.context_type(&qref).unwrap(), Ty::I64);
     }
 
-    /// Undeclared context - typechecker creates fresh infer var in analysis mode.
-    /// FnRefs removed: undeclared contexts no longer cause Incomplete via fn_params;
-    /// they are handled by the typechecker's infer_vars and may resolve.
+    /// A context the graph does not declare is refused, not inferred: a
+    /// declared context with an open type is the shape that infers, and
+    /// `context_declared_inferred_is_complete` above is it.
     #[test]
-    fn context_undeclared_resolves_via_infer_var() {
+    fn context_undeclared_is_refused() {
         let i = Interner::new();
-        // No contexts declared, but source uses @x. Typechecker infers @x : Int.
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
 
         let fid = graph.functions[0].qref;
-        assert!(
-            result.outcomes[&fid].is_complete(),
-            "undeclared context with resolvable type should be Complete"
-        );
+        let words: Vec<String> = result
+            .errors()
+            .into_iter()
+            .flat_map(|(_, errs)| errs.iter().map(|e| e.display(&i).to_string()))
+            .collect();
+        assert_eq!(words, ["`@x` is not a declared context"]);
+        assert!(!result.outcomes[&fid].is_complete());
     }
 
     /// User-provided context type -> Complete.

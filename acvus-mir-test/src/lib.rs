@@ -101,31 +101,6 @@ fn run_pipeline_with_registry(
         .cloned()
         .ok_or_else(|| "no module produced for target".to_string())?;
 
-    // Init check: field-level definite assignment on CfgBody (pre-SROA).
-    {
-        let cfg_main = cfg::promote(std::mem::take(&mut module.main));
-        let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main);
-        module.main = cfg::demote(cfg_main);
-        if !init_errors.is_empty() {
-            let msgs: Vec<String> = init_errors
-                .iter()
-                .map(|e| {
-                    format!(
-                        "UninitError: {:?} fields {:?} at [{},{}]",
-                        e.subject,
-                        e.uninit_fields
-                            .iter()
-                            .map(|f| interner.resolve(*f))
-                            .collect::<Vec<_>>(),
-                        e.span.start,
-                        e.span.end,
-                    )
-                })
-                .collect();
-            return Err(msgs.join("\n"));
-        }
-    }
-
     let early_moves = acvus_mir::validate::move_check::check_moves(&module);
     if !early_moves.is_empty() {
         let msgs: Vec<String> = early_moves
@@ -337,7 +312,12 @@ pub fn compile_script_raw(
 
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start,
+            e.span.end,
+            e.display(interner)
+        ));
     }
     if !errors.is_empty() {
         return Err(errors.join("\n"));
@@ -439,7 +419,7 @@ pub fn refuse_script_mode_ir_with(
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         refusals.push(Refusal {
             stage: "lower".to_string(),
-            message: e.display(interner).to_string(),
+            message: format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)),
             labels: e.labels.clone(),
         });
     }
@@ -454,28 +434,6 @@ pub fn refuse_script_mode_ir_with(
             labels: Vec::new(),
         }]
     })?;
-    let cfg_main = cfg::promote(std::mem::take(&mut module.main));
-    let init_errors = acvus_mir::validate::init_check::check_init(&cfg_main);
-    module.main = cfg::demote(cfg_main);
-    if !init_errors.is_empty() {
-        return Err(init_errors
-            .iter()
-            .map(|e| Refusal {
-                stage: "init".to_string(),
-                message: format!(
-                    "UninitError: {:?} fields {:?} at [{},{}]",
-                    e.subject,
-                    e.uninit_fields
-                        .iter()
-                        .map(|f| interner.resolve(*f))
-                        .collect::<Vec<_>>(),
-                    e.span.start,
-                    e.span.end,
-                ),
-                labels: Vec::new(),
-            })
-            .collect());
-    }
     Ok(dump_with(interner, &module))
 }
 
@@ -549,7 +507,12 @@ fn lower_script_returning(
     }
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start,
+            e.span.end,
+            e.display(interner)
+        ));
     }
     if !errors.is_empty() {
         return Err(errors.join("\n"));
@@ -600,7 +563,12 @@ pub fn optimized_script_module(
     }
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start,
+            e.span.end,
+            e.display(interner)
+        ));
     }
     if !errors.is_empty() {
         return Err(errors.join("\n"));
@@ -677,7 +645,12 @@ pub fn compile_script_optimized(
 
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start,
+            e.span.end,
+            e.display(interner)
+        ));
     }
     if !errors.is_empty() {
         return Err(errors.join("\n"));
@@ -1036,7 +1009,12 @@ pub fn compile_multi_fn_raw(
 
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start,
+            e.span.end,
+            e.display(interner)
+        ));
     }
     if !errors.is_empty() {
         return Err(errors.join("\n"));
@@ -1132,7 +1110,12 @@ pub fn compile_multi_fn_optimized(
 
     let result = graph_lower::lower(interner, &graph, &ext, &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
-        errors.push(format!("[lower] {}", e.display(interner)));
+        errors.push(format!(
+            "[lower] [{}..{}] {}",
+            e.span.start,
+            e.span.end,
+            e.display(interner)
+        ));
     }
     if !errors.is_empty() {
         return Err(errors.join("\n"));

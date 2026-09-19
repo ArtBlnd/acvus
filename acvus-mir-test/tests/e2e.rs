@@ -459,16 +459,14 @@ fn error_emit_non_string() {
     insta::assert_snapshot!(result.unwrap_err());
 }
 
-// FnRefs removed: undeclared contexts are now handled by the typechecker's infer vars
-// in analysis mode, so @unknown no longer causes an error - it gets a fresh type var
-// that may resolve during typechecking.
 #[test]
-fn undeclared_context_resolves_via_infer_var() {
+fn undeclared_context_is_refused() {
     let i = Interner::new();
-    let result = compile_to_ir(&i, "{{ @unknown.to_string() }}", &FxHashMap::default());
+    let err = compile_to_ir(&i, "{{ @unknown.to_string() }}", &FxHashMap::default())
+        .expect_err("an undeclared context is refused");
     assert!(
-        result.is_ok(),
-        "undeclared context should resolve via infer var: {result:?}"
+        err.contains("`@unknown` is not a declared context"),
+        "{err}"
     );
 }
 
@@ -2474,11 +2472,22 @@ fn projection_param_read() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        "{{ $count.to_string() }}",
+        "{{ n = $count + 1 }}{{ n.to_string() }}",
         &FxHashMap::from_iter([(i.intern("count"), Ty::I64)]),
     )
     .unwrap();
     assert!(ir.contains("return"), "should compile and return: {ir}");
+}
+
+/// `to_string` is declared for more than one type, so a `$param` only it
+/// reads has no type the resolution can close, and the refusal says so
+/// rather than carrying an error type into lowering.
+#[test]
+fn a_param_no_use_gives_a_type_is_refused() {
+    let i = Interner::new();
+    let err = compile_to_ir(&i, "{{ $count.to_string() }}", &FxHashMap::default())
+        .expect_err("a param whose type does not close is refused");
+    assert!(err.contains("cannot infer type"), "{err}");
 }
 
 // -- Soundness: invalid programs rejected ----------------------------
@@ -2759,22 +2768,31 @@ fn var_field_store_1depth() {
 
 // -- Uninit check ----------------------------------------------------
 
+/// `@a`, declared with both fields, where the literal writes only `x`.
+fn object_xy(i: &Interner) -> FxHashMap<Astr, Ty> {
+    FxHashMap::from_iter([(
+        i.intern("a"),
+        Ty::Object(ObjectTy::written(FxHashMap::from_iter([
+            (i.intern("x"), Ty::I64),
+            (i.intern("y"), Ty::I64),
+        ]))),
+    )])
+}
+
+/// A declared context arrives from its host with every field stored, so
+/// the value whose field is never stored is a local one.
 #[test]
 fn uninit_field_load_rejected() {
     let i = Interner::new();
-    // @a is Inferred (not declared). Literal only has x, but .y access widens type.
-    // Value is missing field y -> uninit error.
     let result = compile_script_ir(
         &i,
-        "@a = { x: 0, }; @a.y.to_string()",
+        "let a = { x: 0, }; a.y.to_string()",
         &FxHashMap::default(),
     );
-    assert!(result.is_err(), "should catch uninit field access");
-    let err = result.unwrap_err();
+    let err = result.expect_err("the field is read where nothing stored it");
     assert!(
-        err.contains("UninitError"),
-        "error should be UninitError: {}",
-        err
+        err.contains("`a` has no `y` stored on every path that reaches here"),
+        "{err}"
     );
 }
 
@@ -2787,14 +2805,15 @@ fn init_field_load_passes() {
     insta::assert_snapshot!(ir);
 }
 
+/// The literal is missing `y`, and the field store fills it in.
 #[test]
 fn field_store_then_load_passes() {
-    let i = Interner::new();
-    // @a is Inferred. Literal missing y, but field store fills it in -> should pass.
+    let ie = Interner::new();
+    let i = &ie;
     let ir = compile_script_ir(
-        &i,
+        i,
         "@a = { x: 0, }; @a.y = 1; @a.y.to_string()",
-        &FxHashMap::default(),
+        &object_xy(i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);

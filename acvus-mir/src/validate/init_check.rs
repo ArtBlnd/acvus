@@ -8,13 +8,14 @@
 //! by the callee's parameter type. Required fields come from the instruction's
 //! `callee_ty`, NOT from val_types (which may have been widened by unification).
 
-use acvus_utils::Astr;
+use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::CfgBody;
-use crate::ir::{Callee, Inst, InstKind, PathSeg, RefTarget, ValueId};
+use crate::error::{MirError, MirErrorKind, ShownValue};
+use crate::ir::{Callee, Inst, InstKind, PathSeg, RefTarget, ValOrigin, ValueId};
 use crate::ty::Ty;
 use acvus_ast::Span;
 
@@ -420,5 +421,43 @@ mod tests {
         // idempotent
         let mut x = FieldInit::Uninit;
         assert!(!x.join_mut(&FieldInit::Uninit));
+    }
+}
+
+/// The definite-assignment refusals of a body, in the words a reader of the
+/// source knows it by.
+pub fn refusals(interner: &Interner, cfg: &CfgBody) -> Vec<MirError> {
+    check_init(cfg)
+        .into_iter()
+        .map(|error| MirError {
+            kind: MirErrorKind::FieldNotStored {
+                subject: subject_of(interner, cfg, &error.subject),
+                fields: error
+                    .uninit_fields
+                    .iter()
+                    .map(|field| interner.resolve(*field).to_string())
+                    .collect(),
+            },
+            span: error.span,
+            labels: Vec::new(),
+        })
+        .collect()
+}
+
+fn subject_of(interner: &Interner, cfg: &CfgBody, subject: &UninitSubject) -> ShownValue {
+    let value = match subject {
+        UninitSubject::Value(value) => *value,
+        UninitSubject::Storage(RefTarget::Var(value) | RefTarget::Param(value)) => *value,
+        UninitSubject::Storage(RefTarget::Through(value)) => *value,
+    };
+    match cfg.debug.val_origins.get(&value) {
+        Some(ValOrigin::Named(name)) => ShownValue::Named(interner.resolve(*name).to_string()),
+        Some(ValOrigin::Context(name)) => {
+            ShownValue::Named(format!("@{}", interner.resolve(*name)))
+        }
+        Some(ValOrigin::ExternParam(name)) => {
+            ShownValue::Named(format!("${}", interner.resolve(*name)))
+        }
+        _ => ShownValue::Anonymous,
     }
 }

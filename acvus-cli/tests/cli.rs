@@ -282,10 +282,10 @@ fn each_command_exits_by_the_stage_that_refused_the_script() {
         },
         Exits {
             script: "context.acvus",
-            check: 0,
-            mir: 0,
-            ops: 2,
-            run: 2,
+            check: 1,
+            mir: 1,
+            ops: 1,
+            run: 1,
         },
         Exits {
             script: "panic.acvus",
@@ -393,12 +393,12 @@ fn a_template_is_checked_as_a_script_is() {
     let out = acvus(dir.path(), &["check", "ok.acvt", "--context", "ctx.json"]);
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(text(&out.stdout), "");
-    // Without `--context` the tags are checked against an empty context, and
-    // an `@name` no context declares is one only `prepare` refuses.
     let out = acvus(dir.path(), &["check", "ok.acvt"]);
-    assert_eq!(out.status.code(), Some(0));
-    let out = acvus(dir.path(), &["run", "ok.acvt"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        "error: `@name` is not a declared context\n  --> ok.acvt:1:10\n  |\n1 | Hello {{ @name }}!\n  |          ^^^^^\n"
+    );
 }
 
 #[test]
@@ -511,7 +511,10 @@ fn time_reports_every_stage_the_command_ran_after_its_output() {
     );
     assert!(subs.iter().all(|s| s.ms >= 0.0), "{compile}");
 
-    let out = acvus(dir.path(), &["check", "bump.acvus", "--time"]);
+    let out = acvus(
+        dir.path(),
+        &["check", "bump.acvus", "--context", "ctx.json", "--time"],
+    );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     let err = text(&out.stderr);
     assert_eq!(
@@ -846,5 +849,63 @@ fn a_level_the_compiler_does_not_have_is_a_usage_error() {
             "{}",
             text(&out.stderr)
         );
+    }
+}
+
+/// Each shape the checker used to admit and the machine could not run: the
+/// refusal is the checker's, at `check`, and `run` never reaches `prepare`.
+#[test]
+fn what_the_machine_cannot_run_the_checker_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let refused = [
+        (
+            "context.acvus",
+            "@n + 1\n",
+            "`@n` is not a declared context",
+        ),
+        (
+            "namespace.acvus",
+            "let xs = [1];\nnope::len(&xs)\n",
+            "a body does not return a reference",
+        ),
+        (
+            "field.acvus",
+            "let x = { a: 1, };\nx.b\n",
+            "`x` has no `b` stored on every path that reaches here",
+        ),
+        (
+            "reference.acvus",
+            "let a = [1, 2];\n&a\n",
+            "a body does not return a reference",
+        ),
+    ];
+    for (name, source, words) in refused {
+        write(dir.path(), name, source);
+        for command in ["check", "run"] {
+            let out = acvus(dir.path(), &[command, name]);
+            assert_eq!(out.status.code(), Some(1), "{command} {name}");
+            assert!(
+                text(&out.stderr).contains(words),
+                "{command} {name}: {}",
+                text(&out.stderr)
+            );
+        }
+    }
+}
+
+/// A literal arm over a place behind a reference tests what the reference
+/// names, at both optimization levels.
+#[test]
+fn a_literal_arm_through_a_reference_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "match.acvus",
+        "let prog = [2, 1];\nlet pc = 1;\nmatch &prog[pc] { 1 => { 10 }, _ => { 20 } }\n",
+    );
+    for level in ["full", "none"] {
+        let out = acvus(dir.path(), &["run", "match.acvus", "--opt", level]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        assert_eq!(text(&out.stdout), "10\n", "at opt {level}");
     }
 }

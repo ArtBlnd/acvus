@@ -7,7 +7,8 @@
 //! fails it too, so the list only shrinks.
 //!
 //! Each `Site` is a hole in the machine or a diagnostic the checker owes, not
-//! a licence.
+//! a licence. The list is empty: every program the checker admits reaches a
+//! prepared program.
 
 use std::time::Duration;
 
@@ -23,36 +24,7 @@ struct Site {
     reached_by: &'static str,
 }
 
-const KNOWN: &[Site] = &[
-    Site {
-        message: "context: no name for QualifiedRef",
-        reached_by: "acvus-interpreter-test/tests/arith_chain.rs:114 run_script",
-    },
-    Site {
-        message: "prepare reached the unresolved type Error(ErrorToken",
-        reached_by: "acvus-interpreter-test/tests/attention_shape.rs:155 run",
-    },
-    Site {
-        message: "binop Add on Error(ErrorToken",
-        reached_by: "acvus-mir-test/tests/e2e.rs:1305 compile_to_ir",
-    },
-    Site {
-        message: "binop Add on Ref(Shared",
-        reached_by: "acvus-mir-test/tests/e2e.rs:2466 compile_script_ir",
-    },
-    Site {
-        message: "TestLiteral: an integer literal against a non-integer",
-        reached_by: "acvus-mir-test/tests/reborrow.rs:37",
-    },
-    Site {
-        message: "compile panicked: a type the resolution carries closes",
-        reached_by: "acvus-mir-test/tests/e2e.rs:2475 compile_to_ir",
-    },
-    Site {
-        message: "a field step `",
-        reached_by: "acvus-mir-test/tests/structural_union.rs:91",
-    },
-];
+const KNOWN: &[Site] = &[];
 
 const LIMIT: Duration = Duration::from_secs(30);
 

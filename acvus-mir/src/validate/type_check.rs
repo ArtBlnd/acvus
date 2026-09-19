@@ -57,6 +57,13 @@ pub enum ValidationErrorKind {
     MissingType {
         value_id: u32,
     },
+    /// A value the checker left with the poison type reached the machine.
+    /// The type exists to suppress the cascade after a reported refusal, so
+    /// one that arrives here says a refusal was not reported.
+    ErrorType {
+        value_id: u32,
+        origin: Option<ValOrigin>,
+    },
     /// A call's `Order` operand disagrees with its callee's effect: `pure`
     /// says which side the callee is on.
     OrderEdge {
@@ -377,6 +384,19 @@ impl CheckCtx {
                 &body.insts,
                 errors,
             );
+            for value in crate::analysis::inst_info::defs(&inst.kind) {
+                if matches!(body.val_types.get(&value), Some(Ty::Error(_))) {
+                    errors.push(ValidationError {
+                        scope: self.scope_name.clone(),
+                        inst_index: pc,
+                        span: inst.span,
+                        kind: ValidationErrorKind::ErrorType {
+                            value_id: value.to_raw() as u32,
+                            origin: body.debug.val_origins.get(&value).cloned(),
+                        },
+                    });
+                }
+            }
         }
 
         for branch in crate::ir::demoted_branches(&body.insts, &body.demoted_diamonds) {
