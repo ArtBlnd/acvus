@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use acvus_ast::{BinOp, UnaryOp};
 use acvus_mir::ty::IntTy;
 
-use crate::code::{Exit, Off, Op, successor};
+use crate::code::{Exit, Marked, Op, successor};
 use crate::machine::Machine;
 use crate::ops::place::{self, BinaryAt, Place, UnaryAt, at_binary, at_unary};
 use crate::value::Kind;
@@ -57,19 +57,21 @@ macro_rules! for_int_ty {
 
 pub(crate) use for_int_ty;
 
-/// The registers a two-operand operation names.
+/// The registers a two-operand operation names, each with the frame's claim on
+/// it: these carry the families that define and take whole `Value`s, where
+/// `ops::place` carries the ones that write a word and mark nothing.
 #[derive(Clone, Copy)]
 pub struct Binary {
-    pub dst: Off,
-    pub l: Off,
-    pub r: Off,
+    pub dst: Marked,
+    pub l: Marked,
+    pub r: Marked,
 }
 
 /// The registers a one-operand operation names.
 #[derive(Clone, Copy)]
 pub struct Unary {
-    pub dst: Off,
-    pub src: Off,
+    pub dst: Marked,
+    pub src: Marked,
 }
 
 /// One integer width, as the operations at that width read and write it.

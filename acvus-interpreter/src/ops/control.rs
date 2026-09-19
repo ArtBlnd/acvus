@@ -15,7 +15,7 @@
 use crate::code::OwnedOps;
 use std::marker::PhantomData;
 
-use crate::code::{BlockId, Exit, Off, Op, RETURN, SlicePair, successor};
+use crate::code::{BlockId, Exit, Marked, Off, Op, RETURN, SlicePair, successor};
 use crate::machine::Machine;
 use crate::ops::place::Place;
 use crate::value::Value;
@@ -30,8 +30,8 @@ use crate::value::Value;
 /// opened with their kind when the frame was made, so the move is the word
 /// (RFC-0052 rule 5).
 pub struct Mov<const LARGE: bool, const WORD: bool> {
-    pub dst: Off,
-    pub src: Off,
+    pub dst: Marked,
+    pub src: Marked,
     pub next: Box<dyn Op>,
 }
 
@@ -50,7 +50,7 @@ impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
         match WORD {
             true => {
                 let bits = regs.take_word(self.src);
-                regs.set_word(self.dst, bits);
+                regs.set_word(self.dst.at, bits);
             }
             false => {
                 let value = regs.take::<LARGE>(self.src);
@@ -81,8 +81,8 @@ impl Op for MovWide {
         let regs = m.regs();
         let ptr = regs.read(self.src.ptr);
         let len = regs.read(self.src.len);
-        regs.define::<false>(self.dst.ptr, ptr);
-        regs.define::<false>(self.dst.len, len);
+        regs.put(self.dst.ptr, ptr);
+        regs.put(self.dst.len, len);
         self.next.run(m, r0)
     }
 }
@@ -128,7 +128,7 @@ where
 /// The body's result, read at the width its register was written at
 /// (RFC-0052 rule 5).
 pub struct Return<const WORD: bool> {
-    pub slot: Off,
+    pub slot: Marked,
 }
 
 impl<const WORD: bool> Op for Return<WORD> {
@@ -137,7 +137,7 @@ impl<const WORD: bool> Op for Return<WORD> {
         let value = match WORD {
             true => {
                 let regs = m.regs();
-                let kind = regs.peek(self.slot).kind();
+                let kind = regs.peek(self.slot.at).kind();
                 Value::inline(kind, regs.take_word(self.slot))
             }
             false => m.regs().take::<true>(self.slot),
@@ -296,7 +296,7 @@ impl Op for Merge {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        m.regs().define::<false>(self.dst, Value::unit());
+        m.regs().put(self.dst, Value::unit());
         self.next.run(m, r0)
     }
 }
@@ -324,7 +324,7 @@ impl Op for Undef<false> {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        m.regs().define::<false>(self.dst, Value::UNDEF);
+        m.regs().put(self.dst, Value::UNDEF);
         self.next.run(m, r0)
     }
 }
@@ -356,7 +356,7 @@ impl Op for UndefWide {
 /// arriving at a slot the frame no longer marks is therefore a defect in the
 /// lowering, and `Regs::take`'s debug assert is where it surfaces.
 pub struct DropValue {
-    pub slot: Off,
+    pub slot: Marked,
     pub next: Box<dyn Op>,
 }
 

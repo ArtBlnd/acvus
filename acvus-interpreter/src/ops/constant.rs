@@ -1,6 +1,6 @@
 //! Constants: the literal an operation defines its destination with.
 
-use crate::code::{Exit, Konst, Off, Op, successor};
+use crate::code::{Exit, Konst, Marked, Off, Op, successor};
 use crate::machine::Machine;
 
 /// The word of an integer, a float, a bool or unit. The slot's kind was
@@ -26,7 +26,7 @@ impl Op for Const {
 /// the frame, not shared from the prepared body: the program may mutate what
 /// a literal defined, and a shared one would need a copy at the first write.
 pub struct ConstLarge {
-    pub dst: Off,
+    pub dst: Marked,
     pub konst: Konst,
     pub next: Box<dyn Op>,
 }

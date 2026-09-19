@@ -19,8 +19,8 @@ use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::code::{
-    BlockId, Body, Code, EntryKonst, Exit, Expr, ExprBody, ExprChain, Off, Op, Pending, Prepared,
-    RETURN, SENTINEL, SUSPEND,
+    BlockId, Body, Code, EntryKonst, Exit, Expr, ExprBody, ExprChain, Marked, Off, Op, Pending,
+    Prepared, RETURN, SENTINEL, SUSPEND,
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
@@ -133,7 +133,7 @@ impl<'c> Machine<'c> {
     #[inline]
     pub fn suspend<const LARGE: bool>(
         &mut self,
-        dst: Off,
+        dst: Marked,
         resume: BlockId,
         fut: BoxFuture<'static, Value>,
     ) {
@@ -279,7 +279,7 @@ async fn drive(mut machine: Machine<'_>) -> Value {
         let value = fut.await;
         match owns_large {
             true => machine.regs.define::<true>(dst, value),
-            false => machine.regs.define::<false>(dst, value),
+            false => machine.regs.put(dst.at, value),
         }
     }
 }
@@ -300,10 +300,10 @@ pub async fn call_module(
     let (mut regs, _) = store.bind(body);
     open_frame(body, &mut regs);
     for (slot, arg) in body.params.iter().zip(args) {
-        regs.define::<false>(*slot, arg);
+        regs.put(*slot, arg);
     }
     if let Some(order) = body.order_param {
-        regs.define::<false>(order, Value::unit());
+        regs.put(order, Value::unit());
     }
     drive(Machine::new(body, regs, &rt, &page)).await
 }
@@ -319,7 +319,7 @@ pub fn call_module_sync(
     };
     machine.call_sync(body, &id, arity, |callee| {
         if let Some(order) = body.order_param {
-            callee.regs.define::<false>(order, Value::unit());
+            callee.regs.put(order, Value::unit());
         }
     })
 }
@@ -466,10 +466,10 @@ pub fn fn_value_call_in_window(f: &FnValue, window: &mut FrameState, arity: u16)
 /// (RFC-0018).
 fn bind_captures(body: &Body, f: &FnValue, regs: &mut Regs<'_>) {
     for (slot, capture) in body.captures.iter().zip(f.captures.iter()) {
-        regs.define::<false>(*slot, Value::reference(capture));
+        regs.put(*slot, Value::reference(capture));
     }
     if let Some(order) = body.order_param {
-        regs.define::<false>(order, Value::unit());
+        regs.put(order, Value::unit());
     }
 }
 
@@ -479,7 +479,7 @@ fn bind_captures(body: &Body, f: &FnValue, regs: &mut Regs<'_>) {
 fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
     bind_captures(body, f, regs);
     for (slot, arg) in body.params.iter().zip(args) {
-        regs.define::<false>(*slot, *arg);
+        regs.put(*slot, *arg);
     }
 }
 

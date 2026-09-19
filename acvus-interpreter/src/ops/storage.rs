@@ -11,7 +11,7 @@ use acvus_utils::{Astr, Interner};
 use std::marker::PhantomData;
 use std::mem;
 
-use crate::code::{Exit, Off, Op, Step, successor};
+use crate::code::{Exit, Marked, Op, Step, successor};
 use crate::machine::{Frame, Machine};
 use crate::ops::arith::Unary;
 use crate::ops::variant::scrutinee;
@@ -287,7 +287,7 @@ pub trait Reads: Send + Sync + 'static {
     fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value;
 
     /// The destination, marked exactly where this mode hands it a `Large`.
-    fn define(regs: &mut Regs, dst: Off, value: Value);
+    fn define(regs: &mut Regs, dst: Marked, value: Value);
 }
 
 /// A word (or a reference) copied out of a place the read does not disturb.
@@ -309,8 +309,8 @@ impl<const THROUGH: bool> Reads for Copied<THROUGH> {
     }
 
     #[inline]
-    fn define(regs: &mut Regs, dst: Off, value: Value) {
-        regs.define::<false>(dst, value);
+    fn define(regs: &mut Regs, dst: Marked, value: Value) {
+        regs.put(dst.at, value);
     }
 }
 
@@ -333,7 +333,7 @@ impl<const THROUGH: bool> Reads for Cloned<THROUGH> {
     }
 
     #[inline]
-    fn define(regs: &mut Regs, dst: Off, value: Value) {
+    fn define(regs: &mut Regs, dst: Marked, value: Value) {
         regs.define::<true>(dst, value);
     }
 }
@@ -357,7 +357,7 @@ impl Reads for Moved {
     }
 
     #[inline]
-    fn define(regs: &mut Regs, dst: Off, value: Value) {
+    fn define(regs: &mut Regs, dst: Marked, value: Value) {
         regs.define::<true>(dst, value);
     }
 }
@@ -413,8 +413,8 @@ impl<const THROUGH: bool> Op for MakeRef<THROUGH> {
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let reference = Value::reference(scrutinee::<THROUGH>(regs.peek(self.slots.src)));
-        regs.define::<false>(self.slots.dst, reference);
+        let reference = Value::reference(scrutinee::<THROUGH>(regs.peek(self.slots.src.at)));
+        regs.put(self.slots.dst.at, reference);
         self.next.run(m, r0)
     }
 }
@@ -436,9 +436,9 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
-        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         let reference = reference_to(self.step.at(base, interner));
-        regs.define::<false>(self.slots.dst, reference);
+        regs.put(self.slots.dst.at, reference);
         self.next.run(m, r0)
     }
 }
@@ -454,9 +454,9 @@ impl<const THROUGH: bool> Op for MakeRefPath<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
-        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         let reference = reference_to(walk(base, &self.steps, interner));
-        regs.define::<false>(self.slots.dst, reference);
+        regs.put(self.slots.dst.at, reference);
         self.next.run(m, r0)
     }
 }
@@ -495,8 +495,8 @@ impl Op for TakeThrough {
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let value = deref_word::<false>(regs.peek(self.slots.src));
-        regs.define::<false>(self.slots.dst, value);
+        let value = deref_word::<false>(regs.peek(self.slots.src.at));
+        regs.put(self.slots.dst.at, value);
         self.next.run(m, r0)
     }
 }
@@ -521,7 +521,7 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
-        let value = M::at(regs.peek_mut(self.slots.src), &self.step, interner);
+        let value = M::at(regs.peek_mut(self.slots.src.at), &self.step, interner);
         M::define(regs, self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -545,7 +545,7 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
-        let value = M::walked(regs.peek_mut(self.slots.src), &self.steps, interner);
+        let value = M::walked(regs.peek_mut(self.slots.src.at), &self.steps, interner);
         M::define(regs, self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -555,8 +555,8 @@ where
 
 #[derive(Clone, Copy)]
 pub struct Write {
-    pub target: Off,
-    pub value: Off,
+    pub target: Marked,
+    pub value: Marked,
 }
 
 pub struct AssignVar<const LARGE: bool> {
@@ -588,7 +588,10 @@ impl<const LARGE: bool> Op for AssignThrough<LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
-        overwrite::<LARGE>(write_base::<true>(regs.peek_mut(self.slots.target)), value);
+        overwrite::<LARGE>(
+            write_base::<true>(regs.peek_mut(self.slots.target.at)),
+            value,
+        );
         self.next.run(m, r0)
     }
 }
@@ -611,7 +614,7 @@ where
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let value = regs.take::<LARGE>(self.slots.value);
-        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target));
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
         overwrite::<LARGE>(place_mut(self.step.at_mut(base, interner)), value);
         self.next.run(m, r0)
     }
@@ -629,7 +632,7 @@ impl<const THROUGH: bool, const LARGE: bool> Op for AssignPath<THROUGH, LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let Frame { regs, interner } = m.frame();
         let value = regs.take::<LARGE>(self.slots.value);
-        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target));
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
         overwrite::<LARGE>(place_mut(walk_mut(base, &self.steps, interner)), value);
         self.next.run(m, r0)
     }
@@ -641,9 +644,9 @@ impl<const THROUGH: bool, const LARGE: bool> Op for AssignPath<THROUGH, LARGE> {
 /// not what the object does: an object is a `Large` whichever field is set.
 #[derive(Clone, Copy)]
 pub struct Update {
-    pub dst: Off,
-    pub object: Off,
-    pub value: Off,
+    pub dst: Marked,
+    pub object: Marked,
+    pub value: Marked,
 }
 
 pub struct SetStep<S, const LARGE: bool>
@@ -694,7 +697,7 @@ impl<const LARGE: bool> Op for SetPath<LARGE> {
 // -- Contexts ---------------------------------------------------------
 
 pub struct Fetch<const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub key: Box<str>,
     pub next: Box<dyn Op>,
 }
@@ -714,7 +717,7 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
 }
 
 pub struct Commit<const LARGE: bool> {
-    pub src: Off,
+    pub src: Marked,
     pub key: Box<str>,
     pub next: Box<dyn Op>,
 }

@@ -78,16 +78,6 @@ impl Off {
     /// `of` cannot produce it.
     pub const PREVIOUS: Off = Off(u16::MAX);
 
-    #[inline(always)]
-    pub const fn mark_word(self) -> usize {
-        self.index() / u64::BITS as usize
-    }
-
-    #[inline(always)]
-    pub const fn mark_bit(self) -> u64 {
-        1u64 << (self.index() % u64::BITS as usize)
-    }
-
     /// # Panics
     /// As `Off::of`.
     #[inline(always)]
@@ -95,6 +85,68 @@ impl Off {
         Off::of(self.index() as Slot + at)
     }
 }
+
+/// A register and the frame's claim on the `Large` it may own: the mark word's
+/// displacement inside the mark region and the register's bit in it, both
+/// decided at `prepare` (RFC-0050 rule 2).
+///
+/// The mask is a field rather than a shift of `at` because the fourth build of
+/// rule 2 derived the word and the bit from the displacement inside
+/// `define::<true>`, `take::<true>` and `assign`. Its disassembly is the
+/// measurement: `control::DropValue::run` went 31 → 39 instructions and
+/// `storage::AssignVar<true>::run` 58 → 78, because a `{u16, u8, u8}` is one
+/// dword load and three extracting shifts. Only the operations that mark carry
+/// this, so an operation that writes a word — the whole `ops::chain` and
+/// `ops::arith` half of the machine — still names its register with a bare
+/// two-byte `Off`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Marked {
+    mask: u64,
+    word_byte: u32,
+    pub at: Off,
+}
+
+impl Marked {
+    /// # Panics
+    /// `at` is `Off::PREVIOUS`, the one `Off` that is not a register, so no
+    /// mark word holds a claim on it.
+    pub const fn of(at: Off) -> Marked {
+        assert!(
+            at.index() <= Off::MAX_INDEX as usize,
+            "a marking operation names the fused call's argument, which is not a register"
+        );
+        let index = at.index();
+        Marked {
+            mask: 1u64 << (index % crate::regs::MARK_WORD_SLOTS as usize),
+            word_byte: (index / crate::regs::MARK_WORD_SLOTS as usize * size_of::<u64>()) as u32,
+            at,
+        }
+    }
+
+    /// The displacement `Regs` adds to the first byte of its frame's mark
+    /// region.
+    #[inline(always)]
+    pub const fn word_byte(self) -> usize {
+        self.word_byte as usize
+    }
+
+    #[inline(always)]
+    pub const fn mask(self) -> u64 {
+        self.mask
+    }
+}
+
+const _: () = assert!(
+    Off::MAX_INDEX as usize / crate::regs::MARK_WORD_SLOTS as usize * size_of::<u64>()
+        <= u32::MAX as usize,
+    "the widest frame's last mark word lies within the displacement a Marked carries"
+);
+
+const _: () = assert!(
+    size_of::<Off>() == 2 && size_of::<Marked>() == 16 && align_of::<Marked>() == 8,
+    "an operation that writes a word names its register in two bytes, and one that marks reads \
+     its mask and its word with two aligned loads"
+);
 
 /// The two registers a slice occupies: `ptr` then `len`, adjacent
 /// (RFC-0047 amended, rule 1). Both are decided in `prepare`, so a `run`
@@ -329,7 +381,7 @@ where
 /// suspension in the program. It costs one branch per suspension, and RFC-0052
 /// rule 4 keeps every suspension out of a fused body.
 pub struct Pending {
-    pub dst: Off,
+    pub dst: Marked,
     pub owns_large: bool,
     pub fut: BoxFuture<'static, Value>,
 }
@@ -568,4 +620,51 @@ pub struct Body {
 pub struct Prepared {
     pub main: Arc<Code>,
     pub closures: FxHashMap<Label, Arc<Code>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An operation is reached through a `Box<dyn Op>` and its fields are read
+    /// on the one path that runs it, so a family spread over two cache lines
+    /// pays a second miss per operation. Carrying the mark word and bit as
+    /// fields (RFC-0050 rule 2) costs fourteen bytes per register an operation
+    /// marks, and this is what keeps that cost inside one line.
+    #[test]
+    fn no_operation_family_spans_two_cache_lines() {
+        use crate::ops;
+
+        const LINE: usize = 64;
+        for (name, size) in [
+            (
+                "arith::Add<i64,Slot,Slot,Slot>",
+                size_of::<ops::arith::Add<i64, ops::place::Slot, ops::place::Slot, ops::place::Slot>>(
+                ),
+            ),
+            ("control::DropValue", size_of::<ops::control::DropValue>()),
+            (
+                "control::Mov<true,false>",
+                size_of::<ops::control::Mov<true, false>>(),
+            ),
+            (
+                "storage::AssignVar<true>",
+                size_of::<ops::storage::AssignVar<true>>(),
+            ),
+            ("storage::Update", size_of::<ops::storage::Update>()),
+            (
+                "string::CloneString<false>",
+                size_of::<ops::string::CloneString<false>>(),
+            ),
+            (
+                "composite::MakeObject",
+                size_of::<ops::composite::MakeObject>(),
+            ),
+        ] {
+            assert!(
+                size <= LINE,
+                "{name} is {size} bytes, past the {LINE} one cache line holds"
+            );
+        }
+    }
 }

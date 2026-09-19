@@ -55,8 +55,8 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let matches = T::read(regs.word(self.slots.src)).wide() == self.want;
-        regs.set_word(self.slots.dst, matches as u64);
+        let matches = T::read(regs.word(self.slots.src.at)).wide() == self.want;
+        regs.set_word(self.slots.dst.at, matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -72,8 +72,8 @@ impl<const THROUGH: bool> Op for TestFloat<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let matches = place::<THROUGH>(regs.peek(self.slots.src)).as_float() == self.want;
-        regs.set_word(self.slots.dst, matches as u64);
+        let matches = place::<THROUGH>(regs.peek(self.slots.src.at)).as_float() == self.want;
+        regs.set_word(self.slots.dst.at, matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -89,8 +89,8 @@ impl<const THROUGH: bool> Op for TestBool<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let matches = place::<THROUGH>(regs.peek(self.slots.src)).as_bool() == self.want;
-        regs.set_word(self.slots.dst, matches as u64);
+        let matches = place::<THROUGH>(regs.peek(self.slots.src.at)).as_bool() == self.want;
+        regs.set_word(self.slots.dst.at, matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -106,10 +106,10 @@ impl<const THROUGH: bool> Op for TestString<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src));
+        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
         // SAFETY: the type checker matches a string literal against a string.
         let matches = unsafe { source.as_str() } == self.want.as_str();
-        regs.set_word(self.slots.dst, matches as u64);
+        regs.set_word(self.slots.dst.at, matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -140,10 +140,10 @@ impl<const THROUGH: bool> Op for TestObjectKey<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src));
+        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
         // SAFETY: is_object checked the vtable id.
         let has = source.is_object() && unsafe { source.as_object() }.contains_key(&self.key);
-        regs.set_word(self.slots.dst, has as u64);
+        regs.set_word(self.slots.dst.at, has as u64);
         self.next.run(m, r0)
     }
 }

@@ -13,7 +13,7 @@ use std::ptr::NonNull;
 
 use acvus_extern::Release;
 
-use crate::code::{Body, Off};
+use crate::code::{Body, Marked, Off};
 use crate::value::Value;
 
 /// The registers one cell holds: four cache lines of `Value`s.
@@ -465,17 +465,18 @@ impl<'f> Regs<'f> {
         }
     }
 
-    /// `word` is `Off::mark_word` of the register being marked, which `prepare`
-    /// moved into the operation's own `Off`.
+    /// `word_byte` is `Marked::word_byte` of the register being marked, which
+    /// `prepare` decided and moved into the operation.
     #[inline(always)]
-    fn mark_ptr(&self, word: usize) -> *mut u64 {
+    fn mark_ptr(&self, word_byte: usize) -> *mut u64 {
         debug_assert!(
-            word < usize::from(mark_words(self.len)),
-            "an operation marks mark word {word}, which its body's frame does not have"
+            word_byte < usize::from(mark_words(self.len)) * size_of::<u64>(),
+            "an operation marks the mark word at byte {word_byte}, which its body's frame does \
+             not have"
         );
-        let byte = usize::from(self.len) * size_of::<Value>() + word * size_of::<u64>();
+        let byte = usize::from(self.len) * size_of::<Value>() + word_byte;
         // SAFETY: `cells_for(len)` reserved `mark_slots(len)` slots at register
-        // index `len`, and the assertion above holds `word` inside them.
+        // index `len`, and the assertion above holds `word_byte` inside them.
         unsafe {
             self.cells
                 .as_ptr()
@@ -487,15 +488,15 @@ impl<'f> Regs<'f> {
     }
 
     #[inline(always)]
-    fn marked(&self, word: usize) -> u64 {
+    fn marked(&self, word_byte: usize) -> u64 {
         // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr(word) }
+        unsafe { *self.mark_ptr(word_byte) }
     }
 
     #[inline(always)]
-    fn mark(&mut self, word: usize, bits: u64) {
+    fn mark(&mut self, word_byte: usize, bits: u64) {
         // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr(word) = bits }
+        unsafe { *self.mark_ptr(word_byte) = bits }
     }
 
     /// The mark words above word 0, cleared. `Regs::of` does not clear them: it
@@ -506,7 +507,7 @@ impl<'f> Regs<'f> {
     /// where the kind bytes are written.
     pub fn open_marks(&mut self, mark_words: u16) {
         for word in 1..usize::from(mark_words) {
-            self.mark(word, 0);
+            self.mark(word * size_of::<u64>(), 0);
         }
     }
 
@@ -545,31 +546,40 @@ impl<'f> Regs<'f> {
     /// a register whose kind the frame opened holds no `Large`, so there is
     /// no mark bit to clear (RFC-0052 §5).
     #[inline(always)]
-    pub fn take_word(&mut self, off: Off) -> u64 {
+    pub fn take_word(&mut self, at: Marked) -> u64 {
         debug_assert!(
-            self.marked(off.mark_word()) & off.mark_bit() == 0,
+            self.marked(at.word_byte()) & at.mask() == 0,
             "a word-typed register carries the frame's claim on a Large"
         );
-        self.word(off)
+        self.word(at.at)
     }
 
     /// One store, and one `or` on the frame's mark word where the operation's
     /// type says the value owns a `Large` (RFC-0048 §4).
     #[inline(always)]
-    pub fn define<const LARGE: bool>(&mut self, off: Off, value: Value) {
+    pub fn define<const LARGE: bool>(&mut self, at: Marked, value: Value) {
         // SAFETY: `check_assignment`, as stated on `Regs`. A register this
         // overwrites was released by a drop instruction or never owned
         // (RFC-0041, RFC-0048 §6), so no value is lost here.
-        unsafe { self.at_mut(off).write(value) };
+        unsafe { self.at_mut(at.at).write(value) };
         if LARGE {
-            let word = off.mark_word();
-            self.mark(word, self.marked(word) | off.mark_bit());
+            let word = at.word_byte();
+            self.mark(word, self.marked(word) | at.mask());
         }
+    }
+
+    /// A whole `Value` in a register the frame claims nothing in: the
+    /// operation's type says the value owns no `Large`, so there is no mark
+    /// bit to set and no mark word to name (RFC-0048 §4).
+    #[inline(always)]
+    pub fn put(&mut self, at: Off, value: Value) {
+        // SAFETY: as `define`.
+        unsafe { self.at_mut(at).write(value) };
     }
 
     /// The store a call's result takes (RFC-0052 §5).
     #[inline(always)]
-    pub fn store<const LARGE: bool, const WORD: bool>(&mut self, off: Off, value: Value) {
+    pub fn store<const LARGE: bool, const WORD: bool>(&mut self, at: Marked, value: Value) {
         const {
             assert!(
                 !(LARGE && WORD),
@@ -577,8 +587,8 @@ impl<'f> Regs<'f> {
             )
         }
         match WORD {
-            true => self.set_word(off, value.bits()),
-            false => self.define::<LARGE>(off, value),
+            true => self.set_word(at.at, value.bits()),
+            false => self.define::<LARGE>(at, value),
         }
     }
 
@@ -595,11 +605,11 @@ impl<'f> Regs<'f> {
     /// it dropped. A word operand touches neither register nor mark word
     /// (RFC-0052 §5).
     #[inline(always)]
-    pub fn take<const LARGE: bool>(&mut self, off: Off) -> Value {
-        let value = self.read(off);
+    pub fn take<const LARGE: bool>(&mut self, at: Marked) -> Value {
+        let value = self.read(at.at);
         if LARGE {
-            let word = off.mark_word();
-            self.mark(word, self.marked(word) & !off.mark_bit());
+            let word = at.word_byte();
+            self.mark(word, self.marked(word) & !at.mask());
         }
         value
     }
@@ -621,16 +631,16 @@ impl<'f> Regs<'f> {
     }
 
     /// RFC-0045: the old value is released before the new one lands.
-    pub fn assign<const LARGE: bool>(&mut self, off: Off, value: Value) {
-        let one = off.mark_bit();
-        let word = off.mark_word();
+    pub fn assign<const LARGE: bool>(&mut self, at: Marked, value: Value) {
+        let one = at.mask();
+        let word = at.word_byte();
         let marked = self.marked(word);
         if marked & one != 0 {
-            self.read(off).release();
+            self.read(at.at).release();
         }
         // SAFETY: `check_assignment`, as stated on `Regs`, with the previous
         // owner released just above.
-        unsafe { self.at_mut(off).write(value) };
+        unsafe { self.at_mut(at.at).write(value) };
         match LARGE {
             true => self.mark(word, marked | one),
             false => self.mark(word, marked & !one),
@@ -640,10 +650,16 @@ impl<'f> Regs<'f> {
     /// Leaving: the set bits of the frame's mark words, released, and the words
     /// cleared. It iterates the set bits, never the registers — the 16-slot
     /// kind scan at every return is what RFC-0048 §6 removed.
+    /// The runtime word count costs `map cap | sum` 2.7 % against a build that
+    /// sweeps word 0 alone, which is what this cost before frames grew past one
+    /// mark word. Lifting word 0 out into an `#[inline(always)]` helper, so its
+    /// displacement and bit base fold, was measured at **+10.8 %** instead:
+    /// `sweep` inlines into every return site, and a second copy of the release
+    /// path costs more than the count does.
     pub fn sweep(&mut self, mark_words: u16) {
         let mut word = 0usize;
         loop {
-            let mut live = self.marked(word);
+            let mut live = self.marked(word * size_of::<u64>());
             while live != 0 {
                 let bit = live.trailing_zeros() as u16 + word as u16 * MARK_WORD_SLOTS;
                 debug_assert!(
@@ -653,7 +669,7 @@ impl<'f> Regs<'f> {
                 self.read(Off::of(bit)).release();
                 live &= live - 1;
             }
-            self.mark(word, 0);
+            self.mark(word * size_of::<u64>(), 0);
             word += 1;
             if word >= usize::from(mark_words) {
                 return;

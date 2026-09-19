@@ -17,7 +17,7 @@ use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
-use crate::code::{BlockId, Deref, Exit, Off, Op, SUSPEND, SlicePair, successor};
+use crate::code::{BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
 use crate::interpreter::lookup_module;
 use crate::machine::{Lent, Machine, call_module, call_module_sync, fn_value_call};
 use crate::regs::{FrameState, Store};
@@ -35,12 +35,12 @@ pub type Handler = Box<dyn acvus_extern::HandlerFactory<AcvusRuntime>>;
 /// type is known (RFC-0059 rule 4 amended).
 pub enum CallShape {
     Registers0 {
-        dst: Off,
+        dst: Marked,
         large: bool,
         next: Box<dyn Op>,
     },
     Registers1 {
-        dst: Off,
+        dst: Marked,
         a: Off,
         takes: u64,
         large: bool,
@@ -48,7 +48,7 @@ pub enum CallShape {
         next: Box<dyn Op>,
     },
     Registers2 {
-        dst: Off,
+        dst: Marked,
         a: Off,
         b: Off,
         takes: u64,
@@ -56,7 +56,7 @@ pub enum CallShape {
         next: Box<dyn Op>,
     },
     Registers3 {
-        dst: Off,
+        dst: Marked,
         a: Off,
         b: Off,
         c: Off,
@@ -65,7 +65,7 @@ pub enum CallShape {
         next: Box<dyn Op>,
     },
     Window {
-        dst: Off,
+        dst: Marked,
         window: ArgWindow,
         large: bool,
         next: Box<dyn Op>,
@@ -77,13 +77,13 @@ pub enum CallShape {
         next: Box<dyn Op>,
     },
     Heavy {
-        dst: Off,
+        dst: Marked,
         window: ArgWindow,
         large: bool,
         resume: BlockId,
     },
     Spawn {
-        dst: Off,
+        dst: Marked,
         window: ArgWindow,
         next: Box<dyn Op>,
     },
@@ -92,13 +92,13 @@ pub enum CallShape {
 /// As `CallShape`, for the sites whose handler is an `async fn`.
 pub enum AsyncShape {
     Await {
-        dst: Off,
+        dst: Marked,
         window: ArgWindow,
         large: bool,
         resume: BlockId,
     },
     Spawn {
-        dst: Off,
+        dst: Marked,
         window: ArgWindow,
         next: Box<dyn Op>,
     },
@@ -512,7 +512,7 @@ impl ArgWindow {
 }
 
 pub struct CallExtern0<H, const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub f: H,
     pub next: Box<dyn Op>,
 }
@@ -535,7 +535,7 @@ where
 }
 
 pub struct CallExtern1<H, const LARGE: bool, const WORD: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub a: Off,
     pub takes: u64,
     pub f: H,
@@ -562,7 +562,7 @@ where
 }
 
 pub struct CallExtern2<H, const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub a: Off,
     pub b: Off,
     pub takes: u64,
@@ -591,7 +591,7 @@ where
 }
 
 pub struct CallExtern3<H, const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub a: Off,
     pub b: Off,
     pub c: Off,
@@ -624,7 +624,7 @@ where
 /// A declaration whose arguments are wider than the register forms is called
 /// through its window.
 pub struct CallWindow<H, const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub window: ArgWindow,
     pub f: H,
     pub next: Box<dyn Op>,
@@ -766,7 +766,7 @@ fn arg(m: &mut Machine<'_>, held: Value, at: Off) -> Value {
 /// `CALLS` and `TAIL` are the run's shape, which `prepare` resolved like every
 /// other static fact: a body of this instance holds no loop bound.
 pub struct Fused<const CALLS: usize, const TAIL: bool, const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub calls: SmallVec<[Call; 2]>,
     pub tail: Option<Deref>,
     pub takes: u64,
@@ -807,7 +807,7 @@ pub const MAX_CALLS: usize = 3;
 /// is not a run, and the recognizer stops at `MAX_CALLS`.
 pub fn fused(
     large: bool,
-    dst: Off,
+    dst: Marked,
     calls: SmallVec<[Call; 2]>,
     tail: Option<Deref>,
     takes: u64,
@@ -826,7 +826,7 @@ struct Instance {
 }
 
 fn shape<const LARGE: bool>(
-    dst: Off,
+    dst: Marked,
     calls: SmallVec<[Call; 2]>,
     tail: Option<Deref>,
     takes: u64,
@@ -898,7 +898,7 @@ fn shape<const LARGE: bool>(
 }
 
 pub struct CallExternAsync<const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub window: ArgWindow,
     pub f: Arc<dyn SentAsync>,
     pub next: BlockId,
@@ -921,7 +921,7 @@ impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
 /// the call then awaits the handle, so the site suspends exactly as an
 /// `async fn` extern's does.
 pub struct CallHeavy<const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub window: ArgWindow,
     pub f: Arc<dyn SentCall>,
     pub next: BlockId,
@@ -953,7 +953,7 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
 /// its value on the window above this frame (RFC-0052 rule 7). Whether the
 /// callee *may* suspend is not asked — the checker settled it.
 pub struct CallDirect<const LARGE: bool, const WORD: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub callee: QualifiedRef,
     pub arity: u16,
     pub takes: u64,
@@ -977,7 +977,7 @@ impl<const LARGE: bool, const WORD: bool> Op for CallDirect<LARGE, WORD> {
 /// a future and leaves the block, which is why this one is a terminator and
 /// `CallDirect` is not.
 pub struct CallDirectAsync<const LARGE: bool> {
-    pub dst: Off,
+    pub dst: Marked,
     pub callee: QualifiedRef,
     pub args: Box<[Off]>,
     pub takes: u64,
@@ -1005,11 +1005,15 @@ impl<const LARGE: bool> Op for CallDirectAsync<LARGE> {
 /// live reference to one under `THROUGH`: the closure's register is not
 /// written during the call, and the machine holding it outlives the call.
 #[inline(always)]
-unsafe fn call_closure<const THROUGH: bool>(m: &mut Machine<'_>, callee: Off, arity: u16) -> Value {
+unsafe fn call_closure<const THROUGH: bool>(
+    m: &mut Machine<'_>,
+    callee: Marked,
+    arity: u16,
+) -> Value {
     match THROUGH {
         true => {
             let closure: &FnValue = unsafe {
-                let target = m.regs().peek(callee).target();
+                let target = m.regs().peek(callee.at).target();
                 &*(target.as_fn() as *const FnValue)
             };
             m.call_fn_sync(closure, arity)
@@ -1024,8 +1028,8 @@ unsafe fn call_closure<const THROUGH: bool>(m: &mut Machine<'_>, callee: Off, ar
 /// A closure call whose type says `Sync`: as `CallDirect`, run to its value
 /// inside the block, with no test of the closure's own `Code`.
 pub struct CallIndirect<const LARGE: bool, const WORD: bool, const THROUGH: bool> {
-    pub dst: Off,
-    pub callee: Off,
+    pub dst: Marked,
+    pub callee: Marked,
     pub arity: u16,
     pub takes: u64,
     pub next: Box<dyn Op>,
@@ -1048,8 +1052,8 @@ impl<const LARGE: bool, const WORD: bool, const THROUGH: bool> Op
 
 /// A closure call whose task is above `Sync`: the future goes to the driver.
 pub struct CallIndirectAsync<const LARGE: bool, const THROUGH: bool> {
-    pub dst: Off,
-    pub callee: Off,
+    pub dst: Marked,
+    pub callee: Marked,
     pub args: Box<[Off]>,
     pub takes: u64,
     pub next: BlockId,
@@ -1065,7 +1069,7 @@ impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THR
             // awaits.
             true => {
                 let closure: &'static FnValue = unsafe {
-                    let target = m.regs().peek(self.callee).target();
+                    let target = m.regs().peek(self.callee.at).target();
                     &*(target.as_fn() as *const FnValue)
                 };
                 Box::pin(fn_value_call(closure, &mut args))
@@ -1083,8 +1087,8 @@ impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THR
 }
 
 pub struct Eval<const LARGE: bool> {
-    pub dst: Off,
-    pub handle: Off,
+    pub dst: Marked,
+    pub handle: Marked,
     pub next: BlockId,
 }
 
@@ -1110,7 +1114,7 @@ impl<const LARGE: bool> Op for Eval<LARGE> {
 /// borrowing registers; it keeps the window at every arity, and the handler
 /// takes each argument out of it.
 pub struct SpawnExternSync {
-    pub dst: Off,
+    pub dst: Marked,
     pub window: ArgWindow,
     pub f: Arc<dyn SentCall>,
     pub next: Box<dyn Op>,
@@ -1134,7 +1138,7 @@ impl Op for SpawnExternSync {
 }
 
 pub struct SpawnExternAsync {
-    pub dst: Off,
+    pub dst: Marked,
     pub window: ArgWindow,
     pub f: Arc<dyn SentAsync>,
     pub next: Box<dyn Op>,
@@ -1155,7 +1159,7 @@ impl Op for SpawnExternAsync {
 }
 
 pub struct SpawnModule {
-    pub dst: Off,
+    pub dst: Marked,
     pub callee: QualifiedRef,
     pub args: Box<[Off]>,
     pub takes: u64,
@@ -1180,7 +1184,7 @@ impl Op for SpawnModule {
 }
 
 pub struct MakeClosure {
-    pub dst: Off,
+    pub dst: Marked,
     pub entry: Arc<dyn crate::machine::Callable>,
     pub captures: Box<[Off]>,
     pub takes: u64,

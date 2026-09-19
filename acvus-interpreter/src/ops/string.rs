@@ -3,7 +3,7 @@
 
 use acvus_extern::Release;
 
-use crate::code::{ConcatPart, Exit, Off, Op, successor};
+use crate::code::{ConcatPart, Exit, Marked, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::{Binary, Unary};
 use crate::value::Value;
@@ -29,7 +29,7 @@ impl<const THROUGH: bool> Op for CloneString<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src));
+        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
         // SAFETY: the type checker admits only a `String` here.
         let text = unsafe { source.as_str() }.to_string();
         regs.define::<true>(self.slots.dst, Value::string(text));
@@ -49,15 +49,16 @@ impl Op for StringEq {
         let regs = m.regs();
         // SAFETY: the type checker admits only live `&String`s here.
         let equal = unsafe {
-            regs.peek(self.slots.l).target().as_str() == regs.peek(self.slots.r).target().as_str()
+            regs.peek(self.slots.l.at).target().as_str()
+                == regs.peek(self.slots.r.at).target().as_str()
         };
-        regs.set_word(self.slots.dst, equal as u64);
+        regs.set_word(self.slots.dst.at, equal as u64);
         self.next.run(m, r0)
     }
 }
 
 pub struct Concat {
-    pub dst: Off,
+    pub dst: Marked,
     pub parts: Box<[ConcatPart]>,
     /// Bit `i` is "the slot of part `i` owns a `Large`", as
     /// `composite::Elements`.

@@ -9,7 +9,7 @@
 use acvus_extern::{Elements, Release, Words};
 use acvus_mir::ir::IndexMode;
 
-use crate::code::{Exit, Off, Op, SlicePair, successor};
+use crate::code::{Exit, Marked, Off, Op, SlicePair, successor};
 use crate::machine::Machine;
 use crate::regs::Regs;
 use crate::runtime::AcvusRuntime;
@@ -98,7 +98,7 @@ impl<const CHECKED: bool> Op for IndexCopy<CHECKED> {
             Kind::Large,
             "an indexed copy leaves the container owning the element"
         );
-        regs.define::<false>(self.read.dst, value);
+        regs.put(self.read.dst, value);
         self.next.run(m, r0)
     }
 }
@@ -122,7 +122,7 @@ impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
         let index = regs.word(self.read.index);
         // SAFETY: as `IndexCopy`.
         let target = unsafe { element::<CHECKED>(regs, self.read.slice, index) };
-        regs.define::<false>(self.read.dst, Value::reference(target));
+        regs.put(self.read.dst, Value::reference(target));
         self.next.run(m, r0)
     }
 }
@@ -132,7 +132,7 @@ impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
 pub struct IndexSet<const CHECKED: bool, const LARGE: bool> {
     pub slice: SlicePair,
     pub index: Off,
-    pub value: Off,
+    pub value: Marked,
     pub next: Box<dyn Op>,
 }
 

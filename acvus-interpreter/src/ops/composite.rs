@@ -3,7 +3,7 @@
 use acvus_extern::Owned;
 use rustc_hash::FxHashMap;
 
-use crate::code::{Exit, FieldSlot, Off, Op, successor};
+use crate::code::{Exit, FieldSlot, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -30,7 +30,7 @@ impl Elements {
 }
 
 pub struct MakeArray {
-    pub dst: Off,
+    pub dst: Marked,
     pub elements: Elements,
     pub next: Box<dyn Op>,
 }
@@ -46,7 +46,7 @@ impl Op for MakeArray {
 }
 
 pub struct MakeTuple {
-    pub dst: Off,
+    pub dst: Marked,
     pub elements: Elements,
     pub next: Box<dyn Op>,
 }
@@ -62,7 +62,7 @@ impl Op for MakeTuple {
 }
 
 pub struct MakeObject {
-    pub dst: Off,
+    pub dst: Marked,
     pub fields: Box<[FieldSlot]>,
     /// Bit `i` is "the slot of field `i` owns a `Large`", as `Elements`.
     pub owns_large: u64,

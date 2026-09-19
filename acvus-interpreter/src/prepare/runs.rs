@@ -296,18 +296,32 @@ fn candidates(
             depth: depths[range.lo],
         });
     }
-    out.sort_by_key(|c| (c.range.lo, c.range.hi, c.var.to_raw()));
     out
 }
 
-/// A linear scan over the candidates in live-range start order. A run takes the
-/// lowest registers free over its own range, so two runs whose ranges do not
-/// overlap share registers and a run never straddles a live one. `None` where the
-/// frame would pass `MAX_FRAME_SLOTS` or the runs `MAX_RUN_SLOTS`.
+/// RFC-0050 rule 2's placement order: deepest loop first, then live-range start.
+/// `place` gives the lowest free registers to whichever candidate it reaches
+/// first, so this order is what decides who gets them.
+fn placement_order(candidates: &[Candidate]) -> Vec<&Candidate> {
+    let mut order: Vec<&Candidate> = candidates.iter().collect();
+    order.sort_by_key(|c| {
+        (
+            std::cmp::Reverse(c.depth),
+            c.range.lo,
+            c.range.hi,
+            c.var.to_raw(),
+        )
+    });
+    order
+}
+
+/// A linear scan in `placement_order`. A run takes the lowest registers free
+/// over its own range, so two runs whose ranges do not overlap share registers
+/// and a run never straddles a live one.
 fn place(candidates: &[Candidate], base: Slot) -> Option<Vec<Run>> {
     let mut held: Vec<Held> = Vec::new();
     let mut runs = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
+    for candidate in placement_order(candidates) {
         let len = candidate.layout.len();
         if len > MAX_RUN_SLOTS {
             return None;
@@ -531,6 +545,43 @@ mod tests {
             place(&[widest()], MAX_SCALAR_SLOTS + 1).is_none(),
             "the region does not fit above a full scalar frame"
         );
+    }
+
+    fn base_of(runs: &[Run], var: usize) -> Slot {
+        runs.iter()
+            .find(|run| run.var == ValueId::from_raw(var))
+            .expect("every candidate that placed has a run")
+            .base
+    }
+
+    /// Rule 2's order, at the placement's contract: the outer scope's aggregate
+    /// is live first and would take the low registers in live-range order, and
+    /// the inner loop's takes them instead.
+    #[test]
+    fn an_inner_loop_s_run_is_placed_before_the_outer_scope_s() {
+        let outer = candidate(0, 0, 9, 2, 0);
+        let inner = candidate(1, 2, 6, 2, 1);
+        let placed = place(&[outer, inner], 9).expect("two runs fit");
+        assert_eq!(base_of(&placed, 1), 9, "the inner loop's run");
+        assert_eq!(base_of(&placed, 0), 11, "the outer scope's run");
+    }
+
+    /// The runs one loop touches are placed first and reuse registers among
+    /// themselves, so two inner runs whose ranges are apart share the lowest
+    /// registers and the outer scope's run sits above both.
+    #[test]
+    fn two_inner_runs_apart_in_range_share_registers_ahead_of_the_outer() {
+        let outer = candidate(0, 0, 9, 2, 0);
+        let first = candidate(1, 2, 4, 2, 1);
+        let second = candidate(2, 5, 7, 2, 1);
+        let placed = place(&[outer, first, second], 9).expect("three runs fit");
+        assert_eq!(base_of(&placed, 1), 9);
+        assert_eq!(
+            base_of(&placed, 2),
+            9,
+            "apart in range, so the same registers"
+        );
+        assert_eq!(base_of(&placed, 0), 11);
     }
 
     #[test]

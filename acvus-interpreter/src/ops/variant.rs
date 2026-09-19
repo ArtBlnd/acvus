@@ -7,7 +7,7 @@
 use acvus_extern::Owned;
 use acvus_utils::Astr;
 
-use crate::code::{Exit, Off, Op, successor};
+use crate::code::{Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
 use crate::value::{Kind, ResultValue, Value, VariantValue};
@@ -52,7 +52,7 @@ impl Op for MakeNone {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        m.regs().define::<false>(self.dst, Value::NONE);
+        m.regs().put(self.dst, Value::NONE);
         self.next.run(m, r0)
     }
 }
@@ -110,7 +110,7 @@ impl<const LARGE: bool> Op for MakeVariant<LARGE> {
 }
 
 pub struct MakeUnitVariant {
-    pub dst: Off,
+    pub dst: Marked,
     pub tag: Astr,
     pub next: Box<dyn Op>,
 }
@@ -136,8 +136,8 @@ impl<const THROUGH: bool, const SOME: bool> Op for TestOption<THROUGH, SOME> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let is_some = !scrutinee::<THROUGH>(regs.peek(self.slots.src)).is_none();
-        regs.set_word(self.slots.dst, (is_some == SOME) as u64);
+        let is_some = !scrutinee::<THROUGH>(regs.peek(self.slots.src.at)).is_none();
+        regs.set_word(self.slots.dst.at, (is_some == SOME) as u64);
         self.next.run(m, r0)
     }
 }
@@ -153,10 +153,10 @@ impl<const THROUGH: bool, const OK: bool> Op for TestResult<THROUGH, OK> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         // SAFETY: the preparation read `Result` from the source's type.
         let is_ok = unsafe { source.as_result() }.is_ok();
-        regs.set_word(self.slots.dst, (is_ok == OK) as u64);
+        regs.set_word(self.slots.dst.at, (is_ok == OK) as u64);
         self.next.run(m, r0)
     }
 }
@@ -172,10 +172,10 @@ impl<const THROUGH: bool> Op for TestVariant<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src));
+        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         // SAFETY: the preparation read an enum from the source's type.
         let matches = unsafe { source.as_variant() }.tag == self.tag;
-        regs.set_word(self.slots.dst, matches as u64);
+        regs.set_word(self.slots.dst.at, matches as u64);
         self.next.run(m, r0)
     }
 }

@@ -28,8 +28,8 @@ use smallvec::SmallVec;
 
 use crate::code::{
     Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
-    ExprBody, ExprChain, FieldSlot, Konst, Node, Off, Op, Prepared, Root, Shape, SlicePair, Slot,
-    SlotKind, Step, Where, chain, made, node,
+    ExprBody, ExprChain, FieldSlot, Konst, Marked, Node, Off, Op, Prepared, Root, Shape, SlicePair,
+    Slot, SlotKind, Step, Where, chain, made, node,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Binary, Unary, for_int_ty};
@@ -679,6 +679,12 @@ impl<'a> Prepare<'a> {
         Off::of(self.slot(id))
     }
 
+    /// The register and the frame's claim on it, for the operations that
+    /// define, take or assign a whole `Value` (RFC-0050 rule 2).
+    fn marked(&self, id: ValueId) -> Marked {
+        Marked::of(self.off(id))
+    }
+
     /// The two registers a slice-typed value occupies, both fixed here so no
     /// `run` computes the second (RFC-0047 amended, rule 1).
     fn pair(&self, id: ValueId) -> SlicePair {
@@ -792,7 +798,7 @@ impl<'a> Prepare<'a> {
             RefTarget::Through(r) => (*r, self.scrutinee_ty(*r)),
         };
         Under {
-            base: self.off(id),
+            base: self.marked(id),
             path: self.walked(root, path),
         }
     }
@@ -931,14 +937,14 @@ impl<'a> Prepare<'a> {
             if !self.owns(*id) {
                 continue;
             }
-            let off = self.off(*id);
+            let at = self.marked(*id);
             assert_eq!(
-                off.mark_word(),
+                at.word_byte(),
                 0,
                 "value {id:?} is in register {}, whose mark bit is outside mark word 0",
-                off.index()
+                at.at.index()
             );
-            mask |= off.mark_bit();
+            mask |= at.mask();
         }
         mask
     }
@@ -1866,7 +1872,7 @@ impl<'a> Prepare<'a> {
                 });
             }
             InstKind::Return { value, .. } => {
-                let slot = self.off(*value);
+                let slot = self.marked(*value);
                 return Some(match word_kind(self.ty(*value)).is_some() {
                     true => Box::new(control::Return::<true> { slot }) as Box<dyn Op>,
                     false => Box::new(control::Return::<false> { slot }),
@@ -1884,8 +1890,8 @@ impl<'a> Prepare<'a> {
             InstKind::Eval { dst, src, order } => {
                 self.may_suspend = true;
                 self.merge(*order, ops);
-                let slot = self.off(*dst);
-                let handle = self.off(*src);
+                let slot = self.marked(*dst);
+                let handle = self.marked(*src);
                 let resume = next.block();
                 return Some(match self.owns(*dst) {
                     true => Box::new(call::Eval::<true> {
@@ -1933,7 +1939,7 @@ impl<'a> Prepare<'a> {
                     })
                     .collect();
                 {
-                    let dst = self.off(*dst);
+                    let dst = self.marked(*dst);
                     node(move |next| string::Concat {
                         dst,
                         parts: held,
@@ -1944,16 +1950,16 @@ impl<'a> Prepare<'a> {
             }
             InstKind::StringEq { dst, a, b } => {
                 let slots = Binary {
-                    dst: self.off(*dst),
-                    l: self.off(*a),
-                    r: self.off(*b),
+                    dst: self.marked(*dst),
+                    l: self.marked(*a),
+                    r: self.marked(*b),
                 };
                 node(move |next| string::StringEq { slots, next })
             }
             InstKind::StringClone { dst, src } => {
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*src),
+                    dst: self.marked(*dst),
+                    src: self.marked(*src),
                 };
                 match self.is_ref(*src) {
                     true => node(move |next| string::CloneString::<true> { slots, next }),
@@ -1966,7 +1972,7 @@ impl<'a> Prepare<'a> {
             } => {
                 let under = self.walked_under(target, path);
                 let slots = Unary {
-                    dst: self.off(*dst),
+                    dst: self.marked(*dst),
                     src: under.base,
                 };
                 make_ref(slots, through_target(target), &under.path)
@@ -1977,7 +1983,7 @@ impl<'a> Prepare<'a> {
                 let how = Reading::of(self.ty(*dst), through);
                 let under = self.walked_under(target, path);
                 let slots = Unary {
-                    dst: self.off(*dst),
+                    dst: self.marked(*dst),
                     src: under.base,
                 };
                 match (under.path.is_empty(), through, clone) {
@@ -2005,13 +2011,13 @@ impl<'a> Prepare<'a> {
                 let under = self.walked_under(target, path);
                 let slots = storage::Write {
                     target: under.base,
-                    value: self.off(*value),
+                    value: self.marked(*value),
                 };
                 assign_place(slots, Writing { through, large }, &under.path)
             }
             InstKind::Fetch { dst, context } => {
                 let key = self.ctx.page_key(context);
-                let slot = self.off(*dst);
+                let slot = self.marked(*dst);
                 match self.owns(*dst) {
                     true => node(move |next| storage::Fetch::<true> {
                         dst: slot,
@@ -2027,7 +2033,7 @@ impl<'a> Prepare<'a> {
             }
             InstKind::Commit { context, value } => {
                 let key = self.ctx.page_key(context);
-                let src = self.off(*value);
+                let src = self.marked(*value);
                 match self.owns(*value) {
                     true => node(move |next| storage::Commit::<true> { src, key, next }),
                     false => node(move |next| storage::Commit::<false> { src, key, next }),
@@ -2042,8 +2048,8 @@ impl<'a> Prepare<'a> {
             } => {
                 let how = Reading::of(self.ty(*dst), self.is_ref(*object));
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*object),
+                    dst: self.marked(*dst),
+                    src: self.marked(*object),
                 };
                 let path: Vec<Walked> = std::iter::once(*field)
                     .chain(rest.iter().copied())
@@ -2054,8 +2060,8 @@ impl<'a> Prepare<'a> {
             InstKind::ObjectGet { dst, object, key } => {
                 let how = Reading::of(self.ty(*dst), self.is_ref(*object));
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*object),
+                    dst: self.marked(*dst),
+                    src: self.marked(*object),
                 };
                 read_place(slots, how, &[field_step(*key)])
             }
@@ -2068,9 +2074,9 @@ impl<'a> Prepare<'a> {
             } => {
                 let large = self.owns(*value);
                 let slots = storage::Update {
-                    dst: self.off(*dst),
-                    object: self.off(*object),
-                    value: self.off(*value),
+                    dst: self.marked(*dst),
+                    object: self.marked(*object),
+                    value: self.marked(*value),
                 };
                 let path: Vec<Walked> = std::iter::once(*field)
                     .chain(rest.iter().copied())
@@ -2137,7 +2143,7 @@ impl<'a> Prepare<'a> {
             InstKind::Spawn {
                 dst, callee, args, ..
             } => {
-                let dst = self.off(*dst);
+                let dst = self.marked(*dst);
                 match callee {
                     Callee::Direct(id) => {
                         let Operands { slots, takes } = self.taken(args);
@@ -2182,7 +2188,7 @@ impl<'a> Prepare<'a> {
                     takes: owns_large,
                 } = self.taken(elements);
                 {
-                    let dst = self.off(*dst);
+                    let dst = self.marked(*dst);
                     node(move |next| composite::MakeArray {
                         dst,
                         elements: composite::Elements { slots, owns_large },
@@ -2196,7 +2202,7 @@ impl<'a> Prepare<'a> {
                     takes: owns_large,
                 } = self.taken(elements);
                 {
-                    let dst = self.off(*dst);
+                    let dst = self.marked(*dst);
                     node(move |next| composite::MakeTuple {
                         dst,
                         elements: composite::Elements { slots, owns_large },
@@ -2215,7 +2221,7 @@ impl<'a> Prepare<'a> {
                     })
                     .collect();
                 {
-                    let dst = self.off(*dst);
+                    let dst = self.marked(*dst);
                     node(move |next| composite::MakeObject {
                         dst,
                         fields: held,
@@ -2227,16 +2233,16 @@ impl<'a> Prepare<'a> {
             InstKind::TupleIndex { dst, tuple, index } => {
                 let how = Reading::of(self.ty(*dst), self.is_ref(*tuple));
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*tuple),
+                    dst: self.marked(*dst),
+                    src: self.marked(*tuple),
                 };
                 read_place(slots, how, &[index_step(*index, false)])
             }
             InstKind::ArrayIndex { dst, array, index } => {
                 let how = Reading::of(self.ty(*dst), self.is_ref(*array));
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*array),
+                    dst: self.marked(*dst),
+                    src: self.marked(*array),
                 };
                 read_place(slots, how, &[index_step(*index, true)])
             }
@@ -2250,8 +2256,8 @@ impl<'a> Prepare<'a> {
             ),
             InstKind::TestObjectKey { dst, src, key } => {
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*src),
+                    dst: self.marked(*dst),
+                    src: self.marked(*src),
                 };
                 let key = *key;
                 match self.is_ref(*src) {
@@ -2317,7 +2323,8 @@ impl<'a> Prepare<'a> {
                 value,
             } => {
                 let large = self.owns(*value);
-                let (slice, index, held) = (self.pair(*slice), self.off(*index), self.off(*value));
+                let (slice, index, held) =
+                    (self.pair(*slice), self.off(*index), self.marked(*value));
                 match large {
                     true => node(move |next| index::IndexSet::<true, true> {
                         slice,
@@ -2346,7 +2353,7 @@ impl<'a> Prepare<'a> {
                     .callable();
                 let Operands { slots, takes } = self.taken(captures);
                 {
-                    let dst = self.off(*dst);
+                    let dst = self.marked(*dst);
                     node(move |next| call::MakeClosure {
                         dst,
                         entry,
@@ -2360,8 +2367,8 @@ impl<'a> Prepare<'a> {
             InstKind::MakeVariant { dst, tag, payload } => self.make_variant(*dst, *tag, *payload),
             InstKind::TestVariant { dst, src, tag } => {
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*src),
+                    dst: self.marked(*dst),
+                    src: self.marked(*src),
                 };
                 let through = self.is_ref(*src);
                 let form = variant_form(self.scrutinee_ty(*src));
@@ -2389,8 +2396,8 @@ impl<'a> Prepare<'a> {
             }
             InstKind::UnwrapVariant { dst, src } => {
                 let slots = Unary {
-                    dst: self.off(*dst),
-                    src: self.off(*src),
+                    dst: self.marked(*dst),
+                    src: self.marked(*src),
                 };
                 match (variant_form(self.ty(*src)), self.owns(*dst)) {
                     (VariantForm::Option, true) => {
@@ -2430,7 +2437,7 @@ impl<'a> Prepare<'a> {
                 }
             }
             InstKind::Drop { src } => {
-                let slot = self.off(*src);
+                let slot = self.marked(*src);
                 node(move |next| control::DropValue { slot, next })
             }
         };
@@ -2498,7 +2505,7 @@ impl<'a> Prepare<'a> {
             }
             Callee::Indirect(handle) => {
                 let through = self.is_ref(*handle);
-                let handle = self.off(*handle);
+                let handle = self.marked(*handle);
                 if !self.suspends_at(callee_ty) {
                     let laid = self.laid(args, ops);
                     ops.push(indirect_call(into, through, handle, laid));
@@ -2714,14 +2721,14 @@ impl<'a> Prepare<'a> {
     /// makes the frame the owner of a `Large` (RFC-0048 §4).
     fn dest(&self, dst: ValueId) -> Dest {
         Dest {
-            slot: self.off(dst),
+            slot: self.marked(dst),
             large: self.owns(dst),
             word: word_kind(self.ty(dst)).is_some(),
         }
     }
 
     fn constant(&mut self, dst: ValueId, value: &Literal) -> Node {
-        let out = self.off(dst);
+        let out = self.marked(dst);
         let word = match (value, self.ty(dst)) {
             (Literal::Int(n), Ty::Int(_)) => *n as u64,
             (Literal::Int(n), other) => panic!("integer literal {n} typed as {other:?}"),
@@ -2751,7 +2758,7 @@ impl<'a> Prepare<'a> {
             }
         };
         node(move |next| constant::Const {
-            dst: out,
+            dst: out.at,
             word,
             next,
         })
@@ -2761,8 +2768,8 @@ impl<'a> Prepare<'a> {
         let Tested { dst, src } = at;
         let through = self.is_ref(src);
         let slots = Unary {
-            dst: self.off(dst),
-            src: self.off(src),
+            dst: self.marked(dst),
+            src: self.marked(src),
         };
         match value {
             Literal::Int(n) => {
@@ -2796,7 +2803,7 @@ impl<'a> Prepare<'a> {
                 }
             }
             Literal::Unit => node(move |next| pattern::TestUnit {
-                dst: slots.dst,
+                dst: slots.dst.at,
                 next,
             }),
             Literal::List(_) => panic!("TestLiteral on a list literal"),
@@ -2811,10 +2818,10 @@ impl<'a> Prepare<'a> {
     }
 
     fn make_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Node {
-        let out = self.off(dst);
+        let out = self.marked(dst);
         let carried = payload.map(|id| Unary {
             dst: out,
-            src: self.off(id),
+            src: self.marked(id),
         });
         // An option is its payload's own value (RFC-0022), and a `Result`
         // or an enum boxes whatever it carries, so `LARGE` here is always
@@ -2825,7 +2832,7 @@ impl<'a> Prepare<'a> {
                 true => node(move |next| variant::MakeSome::<true> { slots, next }),
                 false => node(move |next| variant::MakeSome::<false> { slots, next }),
             },
-            (Ty::Option(_), None) => node(move |next| variant::MakeNone { dst: out, next }),
+            (Ty::Option(_), None) => node(move |next| variant::MakeNone { dst: out.at, next }),
             (Ty::Result(..), Some(slots)) => match (self.tag_is(tag, "Ok"), large) {
                 (true, true) => node(move |next| variant::MakeOk::<true> { slots, next }),
                 (true, false) => node(move |next| variant::MakeOk::<false> { slots, next }),
@@ -2928,12 +2935,12 @@ struct Carried {
 /// The ordered move as the operation of a block (RFC-0052 rule 1): what it
 /// carries is its type, not a field a `run` reads.
 fn mov_op(carried: &Carried) -> Node {
-    let dst = Off::of(carried.at.to);
-    let src = Off::of(carried.at.from);
+    let dst = Marked::of(Off::of(carried.at.to));
+    let src = Marked::of(Off::of(carried.at.from));
     match carried.moved {
         Moved::Word => node(move |next| control::Mov::<false, true> { dst, src, next }),
         Moved::Pair => {
-            let (dst, src) = (SlicePair::at(dst), SlicePair::at(src));
+            let (dst, src) = (SlicePair::at(dst.at), SlicePair::at(src.at));
             node(move |next| control::MovWide { dst, src, next })
         }
         Moved::Large => node(move |next| control::Mov::<true, false> { dst, src, next }),
@@ -3519,14 +3526,16 @@ mod call_form_tests {
         assert_eq!(CallForm::of(&width, 1), CallForm::Window);
 
         let op = factory.into_op(call::CallShape::Window {
-            dst: Off::of(2),
+            dst: Marked::of(Off::of(2)),
             window: call::ArgWindow {
                 at: Off::of(0),
                 arity: 2,
                 takes: 0,
             },
             large: false,
-            next: Box::new(crate::ops::control::Return::<false> { slot: Off::of(2) }),
+            next: Box::new(crate::ops::control::Return::<false> {
+                slot: Marked::of(Off::of(2)),
+            }),
         });
         let built = crate::listing::last_path_segment(&*op);
         assert!(
@@ -5445,7 +5454,7 @@ impl<'a> Prepare<'a> {
         };
 
         let takes = self.take_mask(&read);
-        let (large, at) = (self.owns(dst), self.off(dst));
+        let (large, at) = (self.owns(dst), self.marked(dst));
         made(move |next| call::fused(large, at, calls, tail, takes, next))
     }
 
@@ -5750,7 +5759,7 @@ struct Laid {
 /// once it has.
 #[derive(Clone, Copy)]
 struct Dest {
-    slot: Off,
+    slot: Marked,
     large: bool,
     /// `word_kind`, the same predicate `slot_kinds` opened the register by.
     word: bool,
@@ -5759,7 +5768,7 @@ struct Dest {
 /// A place under a register: the register the walk starts at, and the
 /// resolved path to the place.
 struct Under {
-    base: Off,
+    base: Marked,
     path: Vec<Walked>,
 }
 
@@ -6122,7 +6131,7 @@ fn direct_call(into: Dest, callee: QualifiedRef, laid: Laid) -> Node {
     }
 }
 
-fn indirect_call(into: Dest, through: bool, callee: Off, laid: Laid) -> Node {
+fn indirect_call(into: Dest, through: bool, callee: Marked, laid: Laid) -> Node {
     let Dest {
         slot: dst,
         large,
@@ -6178,7 +6187,7 @@ fn indirect_call(into: Dest, through: bool, callee: Off, laid: Laid) -> Node {
 fn indirect_call_async(
     into: Dest,
     through: bool,
-    callee: Off,
+    callee: Marked,
     operands: Operands,
     next: BlockId,
 ) -> Box<dyn Op> {
