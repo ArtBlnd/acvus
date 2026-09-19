@@ -41,8 +41,9 @@ keeps the control shape the source wrote.** `if` is its third instance.
    `join` is the block both arms jump to; each arm's last block ends in
    `Jump { label: join, args }` (the `if`-expression's value is the
    join's parameter, as today). The lowering emits `Diamond` for `if`
-   (statement and expression), `&&`, `||` and `?`, which rejoin by
-   construction. A branch whose arm leaves the enclosing loop (`break`,
+   (statement and expression), `&&` and `||`, which rejoin by
+   construction; `?` does not — its fail arm returns — and keeps
+   `JumpIf` (corrected 2026-09-20 by the compiler half's measurement). A branch whose arm leaves the enclosing loop (`break`,
    `continue`) does not rejoin: the lowering knows this at emission (the
    statement is syntactic) and emits `JumpIf` for it, as RFC-0057
    Decision 4 says; the machine runs that branch as joints.
