@@ -10,11 +10,11 @@ runs it.
 ## Run
 
 ```sh
-cargo run -p acvus-cli -- run   script.acvus  --context ctx.json
+cargo run -p acvus-cli -- run   script.acvus  --context ctx.json [--time]
 cargo run -p acvus-cli -- run   -e '@items | map(|x| -> x.name) | join(", ")' --context ctx.json
-cargo run -p acvus-cli -- check script.acvus [--json]
-cargo run -p acvus-cli -- mir   script.acvus [--json]
-cargo run -p acvus-cli -- ops   script.acvus [--json]
+cargo run -p acvus-cli -- check script.acvus [--json] [--time]
+cargo run -p acvus-cli -- mir   script.acvus [--json] [--time]
+cargo run -p acvus-cli -- ops   script.acvus [--json] [--time]
 cargo run -p acvus-cli -- space store/
 ```
 
@@ -40,6 +40,23 @@ span is `[start, end]` in bytes, and `line`, `col` and `span` are `null`
 where the failing stage has no span to give. Under `--json` every byte on
 stdout is JSON: `check` and `mir` print the array alone, `ops` prints its
 listing where it has one.
+
+`--time` adds, after everything else the command printed, one line per
+stage it ran:
+
+```
+time: compile 1.284 ms (parse 0.112, typeck 0.731, lower 0.201, optimize 0.240)
+time: prepare 0.318 ms
+time: run     42.907 ms
+```
+
+`check` and `mir` report `compile` alone, `ops` adds `prepare`, `run` all
+three. `compile` is the whole of `check`, of which parse, typechecking,
+lowering and optimization are the named parts; `run` is the machine and
+nothing around it, so a script's own `print` is inside it and reading or
+committing the context file is not. The lines go to stderr; under `--json`
+they are a trailing `{"time": …}` object on stdout instead, the same
+milliseconds as numbers. Without the flag no clock is read.
 
 Exit status: `0` success, `1` a diagnostic, `2` a refusal at run time, `64`
 a usage error.

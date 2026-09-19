@@ -10,6 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use acvus_ast::Span;
 use acvus_ast::report::{LineIndex, Report, Severity};
@@ -20,18 +21,18 @@ use acvus_interpreter::{
 };
 use acvus_utils::Interner;
 
-use crate::compile::{Compiled, Diagnostic, Mode};
+use crate::compile::{CompileTimes, Compiled, Diagnostic, Mode, Stopwatch, Timed};
 
 const EXIT_COMPILE: u8 = 1;
 const EXIT_RUN: u8 = 2;
 const EXIT_USAGE: u8 = 64;
 
 const USAGE: &str = "\
-usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm] [--parallel]
-       acvus run   -e <expr>              [--context ctx.json] [--llm] [--parallel]
-       acvus check <file>                 [--context ctx.json] [--json]
-       acvus mir   <file>                 [--context ctx.json] [--json]
-       acvus ops   <file>                 [--context ctx.json] [--llm] [--json]
+usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm] [--parallel] [--time]
+       acvus run   -e <expr>              [--context ctx.json] [--llm] [--parallel] [--time]
+       acvus check <file>                 [--context ctx.json] [--json] [--time]
+       acvus mir   <file>                 [--context ctx.json] [--json] [--time]
+       acvus ops   <file>                 [--context ctx.json] [--llm] [--json] [--time]
        acvus space <dir>
 
   .acvus is script mode, .acvt is a template; -e runs one expression.
@@ -43,7 +44,11 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm
              {severity, message, path, line, col, span}, and, where `ops`
              has a listing to print, the listing
   --llm      register the LLM providers (keys from the environment)
-  --parallel run spawned calls on the tokio executor";
+  --parallel run spawned calls on the tokio executor
+  --time     after the output, one `time:` line on stderr per stage this
+             command ran -- compile, with its parse, typeck, lower and
+             optimize; prepare; run -- in milliseconds; under --json a
+             trailing {\"time\": ...} object on stdout instead";
 
 enum Command {
     Run,
@@ -61,6 +66,7 @@ struct Args {
     json: bool,
     llm: bool,
     parallel: bool,
+    time: bool,
     space: Option<PathBuf>,
 }
 
@@ -86,6 +92,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut json = false;
     let mut llm = false;
     let mut parallel = false;
+    let mut time = false;
     let mut space = None;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -101,6 +108,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--json" => json = true,
             "--llm" => llm = true,
             "--parallel" => parallel = true,
+            "--time" => time = true,
             "--space" => {
                 let dir = it.next().ok_or("--space takes a directory")?;
                 space = Some(PathBuf::from(dir));
@@ -117,6 +125,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     if json && matches!(command, Command::Run | Command::Space) {
         return Err("--json is for check, mir and ops".to_string());
     }
+    if time && matches!(command, Command::Space) {
+        return Err("--time is for run, check, mir and ops".to_string());
+    }
     if matches!(command, Command::Space) {
         let Some(Source::File(dir)) = source else {
             return Err("space takes a directory".to_string());
@@ -129,6 +140,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             json: false,
             llm: false,
             parallel: false,
+            time: false,
             space: Some(dir),
         });
     }
@@ -144,6 +156,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         json,
         llm,
         parallel,
+        time,
         space,
     })
 }
@@ -266,6 +279,85 @@ impl Rendering {
     }
 }
 
+/// `run` holds the machine alone: a script's own `print` happens inside
+/// that number, and reading or committing the context file happens outside
+/// it.
+///
+/// A compile that failed reports no time at all. Its diagnostics are the
+/// answer to what the command did, a list of the stages that got as far as
+/// running would be a second answer to the same question, and every failing
+/// command keeps the output it had.
+struct Timings {
+    compile: Duration,
+    stages: CompileTimes,
+    prepare: Option<Duration>,
+    run: Option<Duration>,
+}
+
+impl Timings {
+    fn of(compile: Option<Duration>, stages: Option<CompileTimes>) -> Option<Self> {
+        Some(Timings {
+            compile: compile?,
+            stages: stages?,
+            prepare: None,
+            run: None,
+        })
+    }
+
+    fn report(&self, rendering: &Rendering) {
+        let CompileTimes {
+            parse,
+            typeck,
+            lower,
+            optimize,
+        } = self.stages;
+        match rendering {
+            Rendering::Text => {
+                eprintln!(
+                    "time: compile {:.3} ms (parse {:.3}, typeck {:.3}, lower {:.3}, optimize {:.3})",
+                    ms(self.compile),
+                    ms(parse),
+                    ms(typeck),
+                    ms(lower),
+                    ms(optimize)
+                );
+                if let Some(prepare) = self.prepare {
+                    eprintln!("time: prepare {:.3} ms", ms(prepare));
+                }
+                if let Some(run) = self.run {
+                    eprintln!("time: run     {:.3} ms", ms(run));
+                }
+            }
+            Rendering::Json => {
+                let mut time = serde_json::Map::new();
+                time.insert(
+                    "compile".to_string(),
+                    serde_json::json!({
+                        "total": ms(self.compile),
+                        "parse": ms(parse),
+                        "typeck": ms(typeck),
+                        "lower": ms(lower),
+                        "optimize": ms(optimize),
+                    }),
+                );
+                if let Some(prepare) = self.prepare {
+                    time.insert("prepare".to_string(), ms(prepare).into());
+                }
+                if let Some(run) = self.run {
+                    time.insert("run".to_string(), ms(run).into());
+                }
+                println!("{}", serde_json::json!({ "time": time }));
+            }
+        }
+    }
+}
+
+/// Milliseconds to the microsecond, so the text and the JSON carry the same
+/// number.
+fn ms(duration: Duration) -> f64 {
+    duration.as_micros() as f64 / 1_000.0
+}
+
 /// A run-time failure is a panic, and this is where the process stops
 /// being a Rust program and becomes a script runner: the operation's
 /// message on one `error:` line, the same form every other failure here
@@ -376,22 +468,32 @@ async fn cli() -> ExitCode {
         r
     };
     let rendering = Rendering::of(args.json);
-    let checked = match compile::check(&interner, &source, mode, &loaded.types, registries) {
-        Ok(c) => c,
-        Err(diagnostics) => {
-            rendering.report(&path, &source, &diagnostics);
-            return ExitCode::from(EXIT_COMPILE);
-        }
-    };
+    let timed = Timed::of(args.time);
+    let watch = Stopwatch::start(timed);
+    let (checked, stages) =
+        match compile::check(&interner, &source, mode, &loaded.types, registries, timed) {
+            Ok(c) => c,
+            Err(diagnostics) => {
+                rendering.report(&path, &source, &diagnostics);
+                return ExitCode::from(EXIT_COMPILE);
+            }
+        };
+    let mut timings = Timings::of(watch.stop(), stages);
     match args.command {
         Command::Check => {
             rendering.report(&path, &source, &[]);
+            if let Some(timings) = &timings {
+                timings.report(&rendering);
+            }
             ExitCode::SUCCESS
         }
         Command::Mir => {
             match rendering {
                 Rendering::Text => print!("{}", checked.mir_dump()),
                 Rendering::Json => rendering.report(&path, &source, &[]),
+            }
+            if let Some(timings) = &timings {
+                timings.report(&rendering);
             }
             ExitCode::SUCCESS
         }
@@ -400,9 +502,18 @@ async fn cli() -> ExitCode {
                 true => oplist::Form::Json,
                 false => oplist::Form::Text,
             };
-            match oplist::dump(checked.prepare(&interner).entry_prepared(), form) {
+            let watch = Stopwatch::start(timed);
+            let compiled = checked.prepare(&interner);
+            if let Some(timings) = &mut timings {
+                timings.prepare = watch.stop();
+            }
+
+            match oplist::dump(compiled.entry_prepared(), form) {
                 Ok(text) => {
                     print!("{text}");
+                    if let Some(timings) = &timings {
+                        timings.report(&rendering);
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
@@ -411,7 +522,18 @@ async fn cli() -> ExitCode {
                 }
             }
         }
-        Command::Run => run(&interner, checked.prepare(&interner), loaded, space, &args).await,
+        Command::Run => {
+            let watch = Stopwatch::start(timed);
+            let compiled = checked.prepare(&interner);
+            if let Some(timings) = &mut timings {
+                timings.prepare = watch.stop();
+            }
+
+            run(
+                &interner, compiled, loaded, space, &args, &rendering, timings,
+            )
+            .await
+        }
         Command::Space => unreachable!("handled before compiling"),
     }
 }
@@ -422,6 +544,8 @@ async fn run(
     loaded: context::Loaded,
     space: Option<Arc<Space>>,
     args: &Args,
+    rendering: &Rendering,
+    mut timings: Option<Timings>,
 ) -> ExitCode {
     let executor: Arc<dyn Executor> = if args.parallel {
         Arc::new(TokioExecutor)
@@ -466,7 +590,12 @@ async fn run(
             Interpreter::new(shared, entry, InMemoryContext::new(snapshot)),
         ),
     };
+    let watch = Stopwatch::start(Timed::of(args.time));
     let value = interp.execute().await;
+    if let Some(timings) = &mut timings {
+        timings.run = watch.stop();
+    }
+
     if let Some(page) = &page {
         match page.commit() {
             Ok(heads) => {
@@ -503,6 +632,9 @@ async fn run(
         return ExitCode::from(EXIT_RUN);
     }
     print_result(interner, &value);
+    if let Some(timings) = &timings {
+        timings.report(rendering);
+    }
     ExitCode::SUCCESS
 }
 

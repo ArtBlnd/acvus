@@ -7,6 +7,7 @@ use acvus_ast::Span;
 use acvus_ast::report::Label;
 use acvus_extern::{Externs, Registry};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use acvus_interpreter::{AcvusRuntime, Executable, PrepareCtx, Prepared, prepare_module};
 use acvus_mir::graph::{
@@ -29,6 +30,66 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Option<Span>,
     pub labels: Vec<Label>,
+}
+
+#[derive(Clone, Copy)]
+pub enum Timed {
+    On,
+    Off,
+}
+
+impl Timed {
+    pub fn of(time: bool) -> Self {
+        match time {
+            true => Timed::On,
+            false => Timed::Off,
+        }
+    }
+}
+
+pub struct Stopwatch(Option<Instant>);
+
+impl Stopwatch {
+    pub fn start(timed: Timed) -> Self {
+        Stopwatch(match timed {
+            Timed::On => Some(Instant::now()),
+            Timed::Off => None,
+        })
+    }
+
+    pub fn stop(self) -> Option<Duration> {
+        Some(self.0?.elapsed())
+    }
+}
+
+/// `typeck` covers two calls, `extract` and `infer`, and they are not
+/// reported apart. Extraction builds the tables inference then solves; a
+/// reader of the CLI's report has nothing to do with the split, and the
+/// stage a script author knows by name is typechecking.
+pub struct CompileTimes {
+    pub parse: Duration,
+    pub typeck: Duration,
+    pub lower: Duration,
+    pub optimize: Duration,
+}
+
+#[derive(Default)]
+struct Stages {
+    parse: Option<Duration>,
+    typeck: Option<Duration>,
+    lower: Option<Duration>,
+    optimize: Option<Duration>,
+}
+
+impl Stages {
+    fn times(&self) -> Option<CompileTimes> {
+        Some(CompileTimes {
+            parse: self.parse?,
+            typeck: self.typeck?,
+            lower: self.lower?,
+            optimize: self.optimize?,
+        })
+    }
 }
 
 /// A source every stage that can refuse it has accepted. Running it takes
@@ -111,7 +172,10 @@ pub fn check(
     mode: Mode,
     context_types: &FxHashMap<Astr, Ty>,
     registries: Vec<Registry<AcvusRuntime>>,
-) -> Result<Checked, Vec<Diagnostic>> {
+    timed: Timed,
+) -> Result<(Checked, Option<CompileTimes>), Vec<Diagnostic>> {
+    let mut stages = Stages::default();
+    let watch = Stopwatch::start(timed);
     let parsed = match mode {
         Mode::Script => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
         Mode::Expr => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
@@ -124,6 +188,7 @@ pub fn check(
             labels: Vec::new(),
         }]
     })?;
+    stages.parse = watch.stop();
 
     let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context_types
@@ -166,6 +231,7 @@ pub fn check(
         contexts: Freeze::new(contexts),
     };
 
+    let watch = Stopwatch::start(timed);
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(
         interner,
@@ -174,6 +240,8 @@ pub fn check(
         &FxHashMap::default(),
         Freeze::new(types),
     );
+    stages.typeck = watch.stop();
+
     let mut diagnostics: Vec<Diagnostic> = inf
         .errors()
         .into_iter()
@@ -184,7 +252,11 @@ pub fn check(
             labels: e.labels.clone(),
         })
         .collect();
+
+    let watch = Stopwatch::start(timed);
     let lowered = lower::lower(interner, &graph, &ext, &inf);
+    stages.lower = watch.stop();
+
     diagnostics.extend(
         lowered
             .errors
@@ -199,7 +271,11 @@ pub fn check(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
+
+    let watch = Stopwatch::start(timed);
     let optimized = optimize::optimize(lowered.modules, &inf.context_types, &FxHashSet::default());
+    stages.optimize = watch.stop();
+
     diagnostics.extend(
         optimized
             .errors
@@ -230,13 +306,16 @@ pub fn check(
         .iter()
         .map(|c| (c.qref, c.qref.name))
         .collect();
-    Ok(Checked {
-        entry,
-        modules: optimized.modules,
-        externs,
-        space,
-        fn_types,
-        context_names,
-        mir,
-    })
+    Ok((
+        Checked {
+            entry,
+            modules: optimized.modules,
+            externs,
+            space,
+            fn_types,
+            context_names,
+            mir,
+        },
+        stages.times(),
+    ))
 }

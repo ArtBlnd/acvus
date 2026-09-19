@@ -427,6 +427,162 @@ fn a_space_directory_keeps_contexts_between_runs() {
     assert!(listing.contains("2 nodes"), "{listing}");
 }
 
+struct Stage {
+    name: String,
+    ms: f64,
+}
+
+fn stages(stderr: &str) -> Vec<Stage> {
+    stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("time: "))
+        .map(|line| {
+            let mut words = line.split_whitespace();
+            let name = words.next().expect("a stage name").to_string();
+            let ms = words
+                .next()
+                .expect("a duration")
+                .parse()
+                .expect("a duration in milliseconds");
+            assert_eq!(words.next(), Some("ms"), "{line}");
+            Stage { name, ms }
+        })
+        .collect()
+}
+
+#[test]
+fn time_reports_every_stage_the_command_ran_after_its_output() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "bump.acvus", "@count = @count + 1;\n@count\n");
+    write(dir.path(), "ctx.json", "{\"count\": 7}");
+    let out = acvus(
+        dir.path(),
+        &["run", "bump.acvus", "--context", "ctx.json", "--time"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "8\n");
+
+    let err = text(&out.stderr);
+    let timed = stages(&err);
+    assert_eq!(
+        timed.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["compile", "prepare", "run"],
+        "{err}"
+    );
+    assert!(timed.iter().all(|s| s.ms >= 0.0), "{err}");
+    assert_eq!(err.lines().next(), Some("write @count = 8"), "{err}");
+    assert!(
+        err.lines().skip(1).all(|l| l.starts_with("time: ")),
+        "the times come after everything else the command printed: {err}"
+    );
+
+    let compile = err
+        .lines()
+        .find(|l| l.starts_with("time: compile "))
+        .expect("the compile line");
+    let subs = compile
+        .split_once('(')
+        .expect("compile carries its sub-stages")
+        .1
+        .trim_end_matches(')')
+        .split(", ")
+        .map(|sub| {
+            let mut words = sub.split_whitespace();
+            let name = words.next().expect("a sub-stage name").to_string();
+            let ms = words
+                .next()
+                .expect("a duration")
+                .parse()
+                .expect("a duration in milliseconds");
+            Stage { name, ms }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        subs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["parse", "typeck", "lower", "optimize"],
+        "{compile}"
+    );
+    assert!(subs.iter().all(|s| s.ms >= 0.0), "{compile}");
+
+    let out = acvus(dir.path(), &["check", "bump.acvus", "--time"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert_eq!(
+        stages(&err)
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        ["compile"],
+        "{err}"
+    );
+}
+
+#[test]
+fn json_and_time_put_the_times_in_a_trailing_object_on_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "ok.acvus", "let xs = [1, 2];\nxs.len()\n");
+
+    let out = acvus(dir.path(), &["check", "--json", "--time", "ok.acvus"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
+    let stdout = text(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("[]"));
+    let trailing: serde_json::Value =
+        serde_json::from_str(lines.next_back().expect("a trailing object")).unwrap();
+    let time = &trailing["time"];
+    for stage in ["total", "parse", "typeck", "lower", "optimize"] {
+        assert!(
+            time["compile"][stage].as_f64().is_some_and(|ms| ms >= 0.0),
+            "{trailing}"
+        );
+    }
+    assert!(time["prepare"].is_null(), "{trailing}");
+    assert!(time["run"].is_null(), "{trailing}");
+
+    let out = acvus(dir.path(), &["ops", "--json", "--time", "ok.acvus"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let trailing: serde_json::Value =
+        serde_json::from_str(stdout.lines().next_back().expect("a trailing object")).unwrap();
+    assert!(
+        trailing["time"]["prepare"]
+            .as_f64()
+            .is_some_and(|ms| ms >= 0.0),
+        "{trailing}"
+    );
+}
+
+#[test]
+fn without_time_no_command_reports_one() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "ok.acvus", "let xs = [1, 2];\nxs.len()\n");
+    for command in ["check", "mir", "ops", "run"] {
+        for args in [
+            vec![command, "ok.acvus"],
+            vec![command, "--json", "ok.acvus"],
+        ] {
+            if args.contains(&"--json") && command == "run" {
+                continue;
+            }
+            let out = acvus(dir.path(), &args);
+            assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+            assert!(
+                stages(&text(&out.stderr)).is_empty(),
+                "`acvus {}`:\n{}",
+                args.join(" "),
+                text(&out.stderr)
+            );
+            assert!(
+                !text(&out.stdout).contains("\"time\""),
+                "`acvus {}`:\n{}",
+                args.join(" "),
+                text(&out.stdout)
+            );
+        }
+    }
+}
+
 /// A refusal whose story needs a second place shows both, in source order,
 /// with the lines between them elided — and `--json` carries the same labels.
 #[test]
