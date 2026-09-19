@@ -173,6 +173,23 @@ object lives.
    the callee's own region lives in its window. The async path's future
    owns its window the same way.
 
+   **What a handler writes** (decided 2026-09-20): a borrowed aggregate
+   parameter is declared as its projection type, never as `&S` — the
+   derive emits `SRef<'a>` and `SMut<'a>` (fields `&'a A` / `&'a mut A`)
+   and the signature names them, so the body sees what it holds; a
+   `&S` in a handler signature is a compile error naming the projection.
+   A by-value `S` parameter materializes the fields (`from_run`) and is
+   matched exactly (RFC-0042 R1); a projection parameter is matched
+   **at least**: a projection that names a subset of the object's fields
+   borrows those fields alone, which is the partial projection, and it
+   is sound because a borrow touches only what it names. A returned
+   aggregate is written `-> S`; the macro writes it into `Out`. A
+   handler that needs a field by name at run time uses the runtime's
+   object handle (`Rt::Object<'a>::get(name) -> Option<&Value>`), the
+   one untyped path. No borrow allocates; only a by-value parameter and
+   a container's element (rule 7) materialize, so the cost is read off
+   the signature.
+
    **The ABI is the runtime's contract, not the macro's** (amended
    2026-09-20): it is an internal contract, so it is resolved in internal
    functions. Every fact about how a value lies in registers — how many
