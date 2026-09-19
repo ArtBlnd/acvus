@@ -1,6 +1,6 @@
 # RFC-0058: A literal says its type — `10u64`, `'c'`, `b"…"`, and `char`
 
-Status: Accepted — owner and coordinator, 2026-09-20
+Status: Accepted — 2026-09-20
 Extends: RFC-0037 (integers have a width), RFC-0049 (`expr as T`),
 RFC-0055 (a constant expression folds), RFC-0012 (the array literal)
 

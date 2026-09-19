@@ -285,7 +285,7 @@ a slice borrow, and a take per argument — so three stays by value.
 
 - **A postfix stack of micro-operations for a chain.** The first attempt
   packed four-byte micro-operations two to a `u64` and ran them on a fixed
-  stack of Rust locals indexed by `sp`. The owner refused the evaluator on
+  stack of Rust locals indexed by `sp`. That evaluator is refused on
   sight: for two to four operators the arm is hand-written straight-line
   Rust with `let` locals, not a run-time stack. Measured afterwards on the
   same machine, it was also slower than the base at mandelbrot (44.2 ns

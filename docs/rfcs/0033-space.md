@@ -57,9 +57,8 @@ where the change is O(1). Typing the layout removes the tag and the JSON;
 the op chain is what `Deque::record` already computed, given a place to
 land.
 
-Content addressing and compare-and-exchange are the store the owner has
-run before. Identity (RFC-0012) is what makes a head per context the
-unit, with no aliasing to reconcile inside a run.
+Identity (RFC-0012) is what makes a head per context the unit, with no
+aliasing to reconcile inside a run.
 
 `Deque`'s pops are tombstones on the log, not deletions of elements: a
 pop records that an item at that end is gone, never the item. The ops at

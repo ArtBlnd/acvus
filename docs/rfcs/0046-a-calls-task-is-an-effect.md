@@ -1,6 +1,6 @@
 # RFC-0046: a call's task is an effect — `Task::{Sync, Async, Heavy}`
 
-Status: Accepted (owner and coordinator, 2026-09-18)
+Status: Accepted — 2026-09-18
 Date: 2026-09-18
 Extends: RFC-0007 (order), RFC-0013 (effects), RFC-0044 (`Code.may_suspend`)
 
@@ -20,7 +20,7 @@ time knew what the type should have said.
 
 ## Decision
 
-Synchrony is an effect, on a lattice the owner fixed (2026-09-18):
+Synchrony is an effect, on a lattice:
 
 ```
 Task::Sync  <  Task::Async  <  Task::Heavy        join = max
@@ -168,9 +168,9 @@ below the instance.
   pays the pair's fixed cost instead of `CallHeavy`'s: 1.31× the sequential
   Rust twin → 1.20×.
 - The task, purity and contexts are three independent parts of one `Effect`.
-  `heavy` is the owner's marker for "worth another thread": the checker
-  propagates it, the interpreter offloads it, and a loop over it is
-  asynchronous — by type, not by discovery.
+  `heavy` marks a call worth another thread: the checker propagates it, the
+  interpreter offloads it, and a loop over it is asynchronous — by type, not
+  by discovery.
 - `Fn1::is_sync` is asserted at every `call_now`: the type's claim, checked
   against the run-time answer.
 - `MirBody` carries `task` for the main body and for every closure body, so

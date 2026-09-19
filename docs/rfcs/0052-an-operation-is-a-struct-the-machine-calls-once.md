@@ -1,6 +1,6 @@
 # RFC-0052: an operation is a struct, and the machine calls it once
 
-Status: Accepted — owner and coordinator, 2026-09-19 (phase 1 merged 17718c76; the frame a6f1d50d; a synchronous call 550de866)
+Status: Accepted — 2026-09-19 (phase 1 merged 17718c76; the frame a6f1d50d; a synchronous call 550de866)
 Supersedes: RFC-0044's machine representation (`Op`, `OpFn`, `Payload`,
 `Flow`); RFC-0044's stages (prepare once, recognizers, chain, diamond,
 loop, fused run, by-value ABI) stand as what the recognizers produce
@@ -33,9 +33,8 @@ supposed to have made, and a memory round trip to say "next". A function
 pointer means one dispatch; that machine made one dispatch and then four
 more.
 
-The owner (2026-09-18 23:50): the core is **branchless**. Every branch an
-operation takes beyond its own `call`/`ret` is a fact `prepare` knew and
-threw away.
+The core is **branchless**: every branch an operation takes beyond its own
+`call`/`ret` is a fact `prepare` knew and threw away.
 
 ## Decision
 
@@ -146,7 +145,7 @@ threw away.
    static fact is the callee's task, and the recognizer reads it.
 
 5. **A `Value` is read and written through `&mut Machine`.** The register
-   file is RFC-0048's design as the owner drew it: **a frame is one cell**,
+   file is RFC-0048's design: **a frame is one cell**,
    `#[repr(C, align(64))] Cell { slots: [MaybeUninit<Value>; 16] }`, 256
    bytes, four cache lines starting one, with the frame's mark word in the
    slot past its registers, so `own_mask` is one `or` and `take_mask` one
@@ -165,7 +164,7 @@ threw away.
    batched take clears one mask; the frame's exit releases the marked slots.
 
    **The mark word is an operand while the frame runs** (amended
-   2026-09-20; owner: "1번으로 가자"). `Op::run(&self, m, r0, marks) ->
+   2026-09-20). `Op::run(&self, m, r0, marks) ->
    Exit` carries the frame's marks by value beside `r0`, and `Exit` is
    the pair `(at, marks)` — 16 bytes, two registers — so a chain's
    `take_mask` is `marks & !takes` and a `Large` define is `marks | bit`:
@@ -404,9 +403,8 @@ decision.
   offset): one load fewer than the vtable and the best locality — but every
   jump target is a byte offset `prepare` computes, every record is laid out
   by hand, a wrong offset is memory corruption, and the facts an operation
-  holds are read through casts instead of fields. The owner
-  (2026-09-19 00:10): dyn dispatch, used well, and linearity over the last
-  load.
+  holds are read through casts instead of fields. Dyn dispatch used well,
+  and linearity, are worth more than the last load.
 - **`Flow` as a word**: removes the `sret` and the jump table but keeps a
   compare and a `cmov` per operation and a sentinel check; ending the chain
   instead removes the return altogether and leaves one compare per joint.
@@ -530,8 +528,8 @@ decision.
 - **A call's arguments cost one operation each and no allocation.** Against
   master `641cd5cc`, three alternating pinned reps, median, `taskset -c 15`:
   `call while` **10.3 → 6.9 ns** (−33 %), `bf call` **22.1 → 20.3 ns/step**
-  (−8.1 %), `logs` within the box's noise on every case (coordinator's
-  re-measure against a base rebuilt at `641cd5cc`), every other case of
+  (−8.1 %), `logs` within the box's noise on every case (re-measured
+  against a base rebuilt at `641cd5cc`), every other case of
   `accum` and `programs` inside ±3 % except `map cap | sum` at +3.7 %. `perf stat`, n = 1e7: `call
   while` runs **269.6 → 169.6 instructions** and **56.5 → 38.2 cycles** per
   iteration, and `CallIndirect::<false, true, true>::run` is **128 → 38

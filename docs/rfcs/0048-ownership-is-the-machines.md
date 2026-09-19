@@ -1,6 +1,6 @@
 # RFC-0048: ownership is the machine's — a value copies, a register is written once
 
-Status: Accepted — owner and coordinator, 2026-09-18 (rule 7 landed first, `803d4f1a`)
+Status: Accepted — 2026-09-18 (rule 7 landed first, `803d4f1a`)
 Extends: RFC-0018 (references), RFC-0039 (one crossing), RFC-0041 (drop
 insertion), RFC-0044 (a body is prepared once), RFC-0045 (`let` binds,
 `=` assigns)
@@ -58,15 +58,15 @@ and of a Rust holder that took ownership. Everything else copies.
    (RFC-0039); `Owned::from_value` is the identity, `into_value` is
    `ManuallyDrop::take`, and the glue does both. The interpreter's
    `Value` implements `Release` (a `Large` drops through its header, a
-   word does nothing) and that is all it says (owner, 17:05–17:30).
+   word does nothing) and that is all it says.
 2. **The header keeps one thing the machine cannot know: the drop.** A
    `Large` erased from an extension type carries `drop_slot::<T>` in
    its header, because a Rust holder — an `Iter` stage owning a closure,
    a `Deque` owning its elements, an `Erased` in an `Object` field —
    releases values whose language type erased their Rust type, and no
    instruction stands at that release. The rest of today's vtable
-   (registry, `type_id`, `composite`, `name`) is the next RFC's cut
-   (owner, 15:05: after this one).
+   (registry, `type_id`, `composite`, `name`) is the next RFC's cut, after
+   this one.
 3. **A frame is one aligned cell with a mark word.**
    `#[repr(C, align(64))] Cell { slots: [MaybeUninit<Value>; 16] }` — 256
    bytes, four cache lines, starting one. Bit `i` of the frame's mark word
@@ -114,8 +114,7 @@ and of a Rust holder that took ownership. Everything else copies.
   asserts nothing is left marked at frame exit; a Rust holder cannot
   leak by omission, since `Owned` drops itself.
 - `mem::drop(v)` on a `Copy` value is a no-op that reads like a release;
-  the method is named `release` so the two do not read alike (owner,
-  15:20).
+  the method is named `release` so the two do not read alike.
 - One bit test per `Large` `define`/`assign`, one mask clear per batched
   take, one bit iteration per frame exit — in place of a 16-slot kind
   scan, a store per move, a run-time `match` per use, and cleanup code
@@ -148,12 +147,12 @@ and of a Rust holder that took ownership. Everything else copies.
   containers whose element type the language names; wrong for a value a
   Rust holder owns under an erased type (an `Iter`'s closure), for which
   no instruction stands at the release. Possible as an operation with
-  more design (owner, 15:15); the header word is the simple form and
+  more design; the header word is the simple form and
   is kept.
 - **Lazy drop** (`define::<LARGE>` releases a still-marked slot, so a
   loop body carries no drop op) and **drop fusion** (`drop_mask(m)` for
   consecutive drops): later stages, measured one variable each after
-  this lands (owner, 13:58).
+  this lands.
 
 ## Consequences
 

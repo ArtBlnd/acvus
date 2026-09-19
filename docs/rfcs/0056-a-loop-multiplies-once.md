@@ -1,6 +1,6 @@
 # RFC-0056: a loop multiplies once
 
-Status: Accepted — owner and coordinator, 2026-09-19
+Status: Accepted — 2026-09-19
 Extends: RFC-0037 (integer widths — `+`, `-`, `*` wrap; only `/` and `%`
 raise), RFC-0044 (a body is prepared once — the chain a loop body
 becomes), RFC-0007 (an operation that can raise runs only where the

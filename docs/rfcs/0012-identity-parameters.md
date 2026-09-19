@@ -27,7 +27,7 @@ returns the same source it was given.
 A user-defined value with an identity parameter is one source. Every
 user-defined value moves, with or without an identity parameter: only
 the machine's word primitives — the integer widths, `f64`, `Bool`,
-`Unit` — copy (`move_check`; owner, 2026-09-20). The identity parameter
+`Unit` — copy (`move_check`). The identity parameter
 decides sameness, not whether the value moves.
 
 Identity lives in the compiler. The runtime sees none of it: what the

@@ -71,9 +71,9 @@ Refusing an assignment to a captured name rests on captures being by value
 (RFC-0018): the closure owns the captured value, so a store inside the
 lambda would write that copy and never reach the binding the writer named.
 Rust refuses the same assignment without `mut` and `FnMut`. This RFC does
-not build capture-by-reference; if the owner wants an assignment inside a
-lambda to reach the outer binding, that is a capture-mode decision, and
-this refusal is where it will surface.
+not build capture-by-reference; an assignment inside a lambda reaching the
+outer binding is a capture-mode decision, not settled here, and this
+refusal is where it will surface.
 
 ## Rejected
 
@@ -82,7 +82,7 @@ this refusal is where it will surface.
   is rejected because it is implicit: whether a line introduces a name
   depends on everything above it, a typo in a name becomes a new binding
   instead of an error, and a `let` moved or removed silently changes a
-  store into a shadow. The owner's rule is explicit.
+  store into a shadow. The accepted rule is explicit.
 - **Keeping the two rules and making only the tag-form body an assignment
   position.** A patch at the symptom: the two rules would still disagree
   about every other block.

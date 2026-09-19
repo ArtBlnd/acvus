@@ -1,6 +1,6 @@
 # RFC-0047: a slice is the one thing the machine indexes
 
-Status: Accepted — owner and coordinator, 2026-09-18
+Status: Accepted — 2026-09-18
 Extends: RFC-0018 (references), RFC-0028 (container signatures), RFC-0039
 (one crossing), RFC-0043 (a bare name is settled by evidence), RFC-0044
 (a body is prepared once), RFC-0007 (motion)
@@ -53,13 +53,12 @@ knows a container: `AsSlice` runs the container's own `as_slice` instance.
    know — a pure, **infallible** borrow projection of its container — so
    `code_motion` classifies it as a shared borrow structurally, as it does
    `Ref`, and lifts it out of every loop that does not write the container.
-   The owner ruled (12:20) that the distinction stays in the instruction
-   rather than in a declaration marker. In `prepare` an `AsSlice` is the one
-   extern call of the resolved instance, fused like any other (RFC-0044).
+   The distinction stays in the instruction rather than in a declaration
+   marker. In `prepare` an `AsSlice` is the one extern call of the resolved
+   instance, fused like any other (RFC-0044).
 4. **`Index { dst, slice, index, mode }`** reads element `index` of a slice.
-   The index is **`u64`** and nothing else (owner, 11:50): the one check is
-   `index < len`. `mode` is decided by the checker, statically, from the
-   element type:
+   The index is **`u64`** and nothing else: the one check is `index < len`.
+   `mode` is decided by the checker, statically, from the element type:
    - `Copy` — the element type is a word: `dst` is the element `Value`.
    - `Ref` — otherwise: `dst` is `Value::reference(&slice[index])`, a `Ref`
      into the slice's storage carrying the slice's loan, which is the same
@@ -93,9 +92,9 @@ knows a container: `AsSlice` runs the container's own `as_slice` instance.
    that outlives its body). A slice reference copies like every other
    reference (`move_check`: `&[T]` owns nothing). Both pair registers
    open as `Kind::U64` — `Value::inline` carries no `Kind::Ref`.
-7. **Bounds-check elimination is an interval domain and nothing more**
-   (owner, 11:40). Each `Int` value carries `[lo, hi]` whose endpoints are
-   constants or one other SSA value. Transfer: constants and `± constant`
+7. **Bounds-check elimination is an interval domain and nothing more.**
+   Each `Int` value carries `[lo, hi]` whose endpoints are constants or one
+   other SSA value. Transfer: constants and `± constant`
    are interval arithmetic; φ is join with widening; everything else is ⊤.
    Refinement: on the true edge of `i < n`, `i.hi = n − 1`. An
    `Index(s, i)` becomes `IndexUnchecked` when `i.hi < n`,
@@ -140,9 +139,9 @@ enumerate the dependents, nothing is patched around.
   `len` on `Vec`, `Array`, `Deque` and `String` returns `u64`, and
   `core::to_float` became a shared signature with an instance per integer
   type. `to_int` has no `u64` instance, so a length and an `i64` element
-  cannot be added. This is a language change beyond the RFC as accepted, and
-  it is the owner's to judge. **RFC-0049 replaced both signatures**: a
-  length reaches an `i64` and an `i64` reaches a `u64` by `as`, and
+  cannot be added. This is a language change beyond the RFC as accepted.
+  **RFC-0049 replaced both signatures**: a length reaches an `i64` and an
+  `i64` reaches a `u64` by `as`, and
   `core::to_float` is gone.
 - **A slice never reaches user code.** `TypeEnv` holds two maps:
   `functions`, which `resolve_fn` reads and which is the only place a
@@ -160,14 +159,14 @@ enumerate the dependents, nothing is patched around.
   the fusion stage measured that the remaining cost is the call's own work,
   not the dispatch.
 - **`Index` reaching into `Vec`'s layout**: the interpreter does not know
-  containers (owner).
+  containers.
 - **Three element widths** (uniform 16 / inline kind / `Cross` struct): on
   the tree every sliceable store is `Vec<Value>` and a converted container
   has no storage, so the other two widths have no case.
 - **`as_slice` as a plain `FunctionCall`, hoisted by a `total` declaration
   marker**: the hoist moves no call, so the call form needed a new marker
   and a hoist rule over every pure total call — a general mechanism for one
-  fact the instruction kind already carries (owner, 12:20).
+  fact the instruction kind already carries.
 - **Folding `ArrayIndex` into `Index` as a `Move` mode**: `ArrayIndex` acts
   on an owned `Array`, not a slice; two representations in one instruction
   is a run-time branch, or a second instruction under one name.

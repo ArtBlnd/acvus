@@ -1,6 +1,6 @@
 # RFC-0053: an aggregate that does not escape never exists
 
-Status: Accepted — owner and coordinator, 2026-09-19
+Status: Accepted — 2026-09-19
 Extends: RFC-0018 (storage and references), RFC-0024 (paths),
 RFC-0039 (an option is its payload), RFC-0041 (drop insertion),
 RFC-0048 (ownership is the machine's), RFC-0051 (a `match` is one

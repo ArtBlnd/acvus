@@ -1,6 +1,6 @@
 # RFC-0051: a `match` is one dispatch, and it is exhaustive
 
-Status: Accepted — owner and coordinator, 2026-09-19
+Status: Accepted — 2026-09-19
 Extends: RFC-0036 (variants), RFC-0039 (an option is its payload),
 RFC-0043 (types as written), RFC-0044 (a body is prepared once),
 RFC-0045 (one statement grammar)
@@ -23,8 +23,8 @@ is not a match at all: nothing says the arms are exhaustive (a value no
 arm takes passes silently), and the statement unifies the pattern's
 variant set with the source's, so `E::A(v) = e` on `e: E{B(i64)}` is a
 **type error** (`pattern type E{A(!)} incompatible with source type
-E{B(i64)}`), not an untaken arm. The owner (21:20): the form is wrong;
-replace it with `match`, and check exhaustiveness in `validate`.
+E{B(i64)}`), not an untaken arm. The form is wrong: it is replaced by
+`match`, and exhaustiveness is checked in `validate`.
 
 Exhaustiveness is hard here for one reason: the language's enums are
 structural and unify by union (memory `structural-types-unify-by-union`,
@@ -105,14 +105,14 @@ rest goes.
 
 - **Folding `MatchBind` chains into `Switch` without exhaustiveness**:
   one dispatch, but the silent fall-through and the unification error
-  stay — the owner refused the form itself.
+  stay — the form itself is refused.
 - **Exhaustiveness in `typeck`**: the union is open while checking; a
   decision there is either unsound (assumes closed) or refuses
   everything (assumes open). `validate` runs on lowered, typed MIR and
   can see the body's definitions; the closed-type answer comes from the
   solver's close phase later — also not typeck.
 - **Full Maranget + close-phase now**: the right end state, deferred for
-  time (owner, 21:30); the `known_variants` seam is where it lands.
+  time; the `known_variants` seam is where it lands.
 - **Arms contributing variants** (the scrutinee's type widened by the
   patterns): makes every match exhaustive by construction and
   exhaustiveness meaningless; Rust's rule kept.

@@ -1,6 +1,6 @@
 # RFC-0049: `expr as T` is Rust's `as`, and inside a chain it is a leaf
 
-Status: Accepted — owner and coordinator, 2026-09-19
+Status: Accepted — 2026-09-19
 Extends: RFC-0037 (integers have a width), RFC-0044 (a body is prepared
 once — the arithmetic chain), RFC-0052 (an operation is a struct the
 machine calls once), RFC-0055 (a constant expression folds)

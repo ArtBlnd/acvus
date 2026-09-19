@@ -1,6 +1,6 @@
 # RFC-0059: the macro emits only calls — the runtime owns the ABI
 
-Status: Proposed — coordinator, 2026-09-19
+Status: Proposed — 2026-09-19
 Extends: RFC-0039 (one crossing), RFC-0044 stage 2c (the by-value cut at
 three), RFC-0046 (a call's task), RFC-0047 amended (a slice is two
 registers), RFC-0050 rule 6 (a crossing's width, `from_run`/`into_run`),
@@ -180,7 +180,7 @@ or an associated type of the crossing.
 - A slice is a result and never a parameter: `ByValue<Slice<T, Rt>>` does not
   implement `Arg`, and a declaration that takes one is refused with
   `OneValue`'s message. A slice *parameter* needs a `Form = Pair` `Arg` impl
-  and a coercion in the checker — the next run, if the owner wants it.
+  and a coercion in the checker — the next run, not settled here.
 - RFC-0050's flat layout changes `acvus-extern/src/object.rs` and
   `variant.rs` only. RFC-0050's wide argument will add a `Form` beside `One`
   and `Pair`, and the window form (`Handler::call` on `&mut [Value]`) is
@@ -190,7 +190,7 @@ or an associated type of the crossing.
   declares `&Point` as an instance of the shared signature
   `eq<T>(a: &T, b: &T)` and a test asserts that signature's bound is
   `OneOf([I64, Point])`. Whether a converted struct may be borrowed at all is
-  the owner's intent and is not settled here; today it compiles and would
+  not settled here; today it compiles and would
   panic if called, and that is unchanged.
 - The frame's mark word is read-modify-written once per operation that takes
   registers, and on Zen 5 that RMW is where every blocked store-to-load

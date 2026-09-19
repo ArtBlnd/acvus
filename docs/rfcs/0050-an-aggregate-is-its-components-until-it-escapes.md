@@ -1,6 +1,6 @@
 # RFC-0050: an aggregate is its components until it escapes
 
-Status: Accepted — owner and coordinator, 2026-09-19 ("이렇게 가자"; the owner reviews the code after it is built); rules 2, 3, 5, 6 amended and 8, 9 added 2026-09-20 ("동의할게")
+Status: Accepted — 2026-09-19; rules 2, 3, 5, 6 amended and 8, 9 added 2026-09-20
 Extends: RFC-0053 (an aggregate that does not escape never exists — the
 storage-slot form of this rule), RFC-0052 (§5 the register file, §6 the
 frame, §7 the window), RFC-0048 (`Value: Copy`, `Release`, the mark
@@ -9,7 +9,7 @@ RFC-0046 (tasks), RFC-0018/0024 (storage, paths, references)
 Depends on: RFC-0051's `Switch` operation (the enum half rests on it);
 the slice's two-register form is RFC-0047's amendment, not this RFC.
 Written from: the enumeration `every-site-an-aggregate-crosses` (94
-sites, 2026-09-19) and the owner's design of the same day.
+sites, 2026-09-19).
 
 ## Problem
 
@@ -31,9 +31,9 @@ returned, matched after a merge, or read out of a container:
   does not fit one register is not spilled — it is heap-allocated, at
   construction, forever.
 
-The owner's reading of the last point (2026-09-19): the machine has
-general registers and memory and no register class between them. A CPU
-has three: general registers, wide (SIMD) registers, memory. A value
+The last point is a missing register class: the machine has general
+registers and memory and nothing between them. A CPU has three: general
+registers, wide (SIMD) registers, memory. A value
 that does not fit a general register goes to a wide one; only a value
 that fits neither is spilled. Our frame should have the same three, so
 that the heap is what a spill is — the exception — and not where every
@@ -141,7 +141,7 @@ object lives.
    from. By value: `from_run` / `into_run` (rule 6's ABI paragraph). An
    object by value into a Rust container: rule 4's realization, at the
    glue. The stack-temporary `&E` and the `&mut E` write-back are
-   withdrawn (owner, 2026-09-20). An extern that **returns** an object receives its
+   withdrawn (amended 2026-09-20). An extern that **returns** an object receives its
    destination as `Out<'_, Rt>` — a `&mut [Value]` over the caller's
    destination run, lent for the call's duration — and writes the
    components; it is not a heap object either. The frame owns the run;
@@ -154,9 +154,10 @@ object lives.
    machine, and the callee's own region lives in its window. The async
    path's future owns its window the same way.
 
-   **The ABI is the runtime's contract, not the macro's** (owner,
-   2026-09-20: "내부 계약이라 내부 함수로 푸는 게 맞다"). Every fact about
-   how a value lies in registers — how many slots a crossing takes, how
+   **The ABI is the runtime's contract, not the macro's** (amended
+   2026-09-20): it is an internal contract, so it is resolved in internal
+   functions. Every fact about how a value lies in registers — how many
+   slots a crossing takes, how
    a slice pair becomes `Elements`, how components are written to `Out`,
    how a result is read at the window's run — is a `Runtime` method or
    a `Cross` constant (`const WIDTH: usize`, `from_run`/`into_run`), and
@@ -175,7 +176,7 @@ object lives.
    into the element). Scalar replacement of a container itself is
    **refused** — an array or a `Vec` is not an object with positional
    fields, and treating it as one is a wrong implementation, not an
-   optimization (owner, 2026-09-19).
+   optimization.
 
 8. **An aggregate's layout is flat** (added 2026-09-20). The layout of
    an aggregate is the concatenation of its fields' layouts: a word or
@@ -239,8 +240,8 @@ whole-typed and `Release` decides by kind; there is no conditional
   form, the opposite of a heap object — and RFC-0041 states Object/Enum
   carry none; and the fact is the machine's (where a value lives), which
   `prepare` derives from the SSA, references and escapes it already
-  has. The owner: "안 넣어. SSA와 ref와 MakeVariant로 다 표현된다. prepare가
-  해야 한다."
+  has. So no mark is added: the SSA, the references and `MakeVariant`
+  already express it, and deriving it is `prepare`'s job.
 - **A universal `(tag, payload)` SSA with conditional drops**: rule 5
   forbids a conditional `Drop`; the whole-typed payload with `Release`
   by kind is the answer, and it is what RFC-0053 already does.
@@ -265,9 +266,7 @@ whole-typed and `Release` decides by kind; there is no conditional
   aggregate before a heap spill, and a nested aggregate (rule 8) fills
   it faster; the cost of the size itself — cache lines per call, the
   frame `Vec` growing — is why the region is sized per body and bounded
-  at 4 KB rather than fixed larger (owner, 2026-09-20: "256이 작은 건
-  동의, 4 KB보다 더 키우는 건 반대"; the spill order by loop depth is the
-  owner's).
+  at 4 KB rather than fixed larger (amended 2026-09-20).
 - **A `Context` associated type on the runtime** (the design as
   accepted): the frame's whole wide `Cell` handed to a handler as
   `&mut`. The handler does not know which slot is its destination, so an

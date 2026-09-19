@@ -1,6 +1,6 @@
 # RFC-0054: the host declares what `main` returns
 
-Status: Accepted — owner and coordinator, 2026-09-19
+Status: Accepted — 2026-09-19
 Extends: RFC-0038 (`!` is below every type), RFC-0046 (a call's task is an
 effect), RFC-0047 (the slice retry, whose T2 found this)
 

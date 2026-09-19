@@ -1,6 +1,6 @@
 # RFC-0060: a small pure closure called where it was made is its body
 
-Status: Accepted — owner and coordinator, 2026-09-20
+Status: Accepted — 2026-09-20
 Extends: RFC-0018 (references are types — a capture of word type is a copy
 the closure owns and a capture of any other type is a borrow of one),
 RFC-0044 (a body is prepared once), RFC-0052 (an operation is a struct the
@@ -40,10 +40,9 @@ Four conditions, all of them or none:
   starts or ends one;
 - every reader of the closure is one of those calls.
 
-`INLINE_MAX_INSTS` is **8**. The number is the owner's and it is a count,
-not a measurement: no experiment separates 8 from 4 or from 16, and the
-rule is written so that raising or lowering it changes nothing but which
-closures qualify.
+`INLINE_MAX_INSTS` is **8**. The number is a count, not a measurement: no
+experiment separates 8 from 4 or from 16, and the rule is written so that
+raising or lowering it changes nothing but which closures qualify.
 
 **The reader condition is asked before the size.** A closure that is also
 stored, returned or passed stays a closure and its calls stay calls: an
