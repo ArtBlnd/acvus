@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -233,7 +234,14 @@ struct Timing {
 
 struct Size {
     n: i64,
-    reps: usize,
+    reps: NonZeroUsize,
+}
+
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
+    }
 }
 
 fn median(mut samples: Vec<Duration>) -> Duration {
@@ -249,9 +257,7 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
     let Size { n, reps } = *size;
     let interner = Interner::new();
     let context_types = split_context(&interner, context(&interner, n)).0;
-    let mut execute = Vec::new();
-    let mut script_value = f64::NAN;
-    for rep in 0..reps {
+    let run_script = || {
         let ast = ParsedAst::Script(
             acvus_ast::parse_script(&interner, case.source).expect("parse error"),
         );
@@ -270,22 +276,30 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         );
         let start = Instant::now();
         let value = rt.block_on(interp.execute());
-        let elapsed = start.elapsed();
-        script_value = (case.read)(&value);
-        if rep > 0 {
-            execute.push(elapsed);
-        }
-    }
-    let mut rust = Vec::new();
-    let mut rust_value = f64::NAN;
-    for rep in 0..reps {
+        ((case.read)(&value), start.elapsed())
+    };
+    let run_rust = || {
         let start = Instant::now();
-        rust_value = black_box((case.rust)(black_box(n)));
-        let elapsed = start.elapsed();
-        if rep > 0 {
-            rust.push(elapsed);
-        }
+        let value = black_box((case.rust)(black_box(n)));
+        (value, start.elapsed())
+    };
+
+    let (mut script_value, _warm_up) = run_script();
+    let mut execute = Vec::with_capacity(reps.get());
+    for _ in 0..reps.get() {
+        let (value, elapsed) = run_script();
+        script_value = value;
+        execute.push(elapsed);
     }
+
+    let (mut rust_value, _warm_up) = run_rust();
+    let mut rust = Vec::with_capacity(reps.get());
+    for _ in 0..reps.get() {
+        let (value, elapsed) = run_rust();
+        rust_value = value;
+        rust.push(elapsed);
+    }
+
     assert!(
         script_value == rust_value,
         "{} n={n}: script produced {script_value}, Rust produced {rust_value}",
@@ -295,6 +309,21 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         execute: median(execute),
         rust: median(rust),
     }
+}
+
+fn cases_named<'a>(cases: &'a [Case], var: &str) -> Vec<&'a Case> {
+    let Ok(name) = std::env::var(var) else {
+        return cases.iter().collect();
+    };
+    let picked: Vec<&Case> = cases.iter().filter(|c| c.name == name).collect();
+    if picked.is_empty() {
+        eprintln!("{var}={name:?} names no case. The cases are:");
+        for case in cases {
+            eprintln!("  {}", case.name);
+        }
+        std::process::exit(1);
+    }
+    picked
 }
 
 fn main() {
@@ -367,27 +396,26 @@ fn main() {
             ret: Ty::I64,
         },
     ];
-    if let Ok(name) = std::env::var("SHAPES_OPLIST") {
-        oplist(&cases, &name);
+    if std::env::var_os("SHAPES_OPLIST").is_some() {
+        for case in cases_named(&cases, "SHAPES_OPLIST") {
+            oplist(case);
+        }
         return;
     }
+    let selected = cases_named(&cases, "SHAPES_CASE");
     println!(
         "{:>14} {:>10} {:>14} {:>12} {:>12} {:>14}",
         "case", "n", "execute/us", "rust/us", "ratio", "ns/iteration"
     );
-    let only = std::env::var("SHAPES_CASE").ok();
-    for case in cases
-        .iter()
-        .filter(|c| only.as_deref().is_none_or(|o| c.name == o))
-    {
+    for case in selected {
         for size in [
             Size {
                 n: 100_000,
-                reps: 20,
+                reps: reps(19),
             },
             Size {
                 n: 1_000_000,
-                reps: 5,
+                reps: reps(4),
             },
         ] {
             let Timing { execute, rust } = measure(&rt, case, &size);
@@ -438,11 +466,7 @@ fn print_listing(blocks: &[BlockListing]) {
 
 /// The prepared operations of one case, as `benches/programs.rs` prints
 /// them: what a shape costs is read here and measured above.
-fn oplist(cases: &[Case], name: &str) {
-    let case = cases
-        .iter()
-        .find(|c| c.name == name)
-        .unwrap_or_else(|| panic!("no case named {name:?}"));
+fn oplist(case: &Case) {
     let interner = Interner::new();
     let blocks = script_listing_with_externs(
         &interner,
@@ -451,6 +475,6 @@ fn oplist(cases: &[Case], name: &str) {
         (case.registries)(),
         case.ret.clone(),
     );
-    println!("== oplist: {name}");
+    println!("== oplist: {}", case.name);
     print_listing(&blocks);
 }

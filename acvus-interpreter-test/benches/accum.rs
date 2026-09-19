@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -283,7 +284,14 @@ struct Timing {
 
 struct Size {
     n: i64,
-    reps: usize,
+    reps: NonZeroUsize,
+}
+
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
+    }
 }
 
 fn median(mut samples: Vec<Duration>) -> Duration {
@@ -299,9 +307,7 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
     let Size { n, reps } = *size;
     let interner = Interner::new();
     let context_types = split_context(&interner, context(&interner, n)).0;
-    let mut execute = Vec::new();
-    let mut script_value = f64::NAN;
-    for rep in 0..reps {
+    let run_script = || {
         let ast = ParsedAst::Script(
             acvus_ast::parse_script(&interner, case.source).expect("parse error"),
         );
@@ -320,22 +326,30 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         );
         let start = Instant::now();
         let value = rt.block_on(interp.execute());
-        let elapsed = start.elapsed();
-        script_value = (case.read)(&value);
-        if rep > 0 {
-            execute.push(elapsed);
-        }
-    }
-    let mut rust = Vec::new();
-    let mut rust_value = f64::NAN;
-    for rep in 0..reps {
+        ((case.read)(&value), start.elapsed())
+    };
+    let run_rust = || {
         let start = Instant::now();
-        rust_value = black_box((case.rust)(black_box(n)));
-        let elapsed = start.elapsed();
-        if rep > 0 {
-            rust.push(elapsed);
-        }
+        let value = black_box((case.rust)(black_box(n)));
+        (value, start.elapsed())
+    };
+
+    let (mut script_value, _warm_up) = run_script();
+    let mut execute = Vec::with_capacity(reps.get());
+    for _ in 0..reps.get() {
+        let (value, elapsed) = run_script();
+        script_value = value;
+        execute.push(elapsed);
     }
+
+    let (mut rust_value, _warm_up) = run_rust();
+    let mut rust = Vec::with_capacity(reps.get());
+    for _ in 0..reps.get() {
+        let (value, elapsed) = run_rust();
+        rust_value = value;
+        rust.push(elapsed);
+    }
+
     assert!(
         script_value == rust_value,
         "{} n={n}: script produced {script_value}, Rust produced {rust_value}",
@@ -345,6 +359,44 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         execute: median(execute),
         rust: median(rust),
     }
+}
+
+fn cases_named<'a>(cases: &'a [Case], var: &str) -> Vec<&'a Case> {
+    let Ok(name) = std::env::var(var) else {
+        return cases.iter().collect();
+    };
+    let picked: Vec<&Case> = cases.iter().filter(|c| c.name == name).collect();
+    if picked.is_empty() {
+        eprintln!("{var}={name:?} names no case. The cases are:");
+        for case in cases {
+            eprintln!("  {}", case.name);
+        }
+        std::process::exit(1);
+    }
+    picked
+}
+
+fn sizes() -> Vec<Size> {
+    let Ok(raw) = std::env::var("ACCUM_N") else {
+        return vec![
+            Size {
+                n: 100_000,
+                reps: reps(19),
+            },
+            Size {
+                n: 1_000_000,
+                reps: reps(4),
+            },
+        ];
+    };
+    let Ok(n) = raw.parse::<NonZeroU32>() else {
+        eprintln!("ACCUM_N={raw:?} is not a positive integer");
+        std::process::exit(1);
+    };
+    vec![Size {
+        n: i64::from(n.get()),
+        reps: reps(1),
+    }]
 }
 
 fn main() {
@@ -497,33 +549,15 @@ fn main() {
             ret: Ty::I64,
         },
     ];
+    let selected = cases_named(&cases, "ACCUM_CASE");
+    let sizes = sizes();
     println!(
         "{:>12} {:>10} {:>14} {:>12} {:>12} {:>14}",
         "case", "n", "execute/us", "rust/us", "ratio", "ns/iteration"
     );
-    let only = std::env::var("ACCUM_CASE").ok();
-    for case in cases
-        .iter()
-        .filter(|c| only.as_deref().is_none_or(|o| c.name == o))
-    {
-        let sizes = match std::env::var("ACCUM_N").ok() {
-            Some(n) => vec![Size {
-                n: n.parse().expect("ACCUM_N is an integer"),
-                reps: 1,
-            }],
-            None => vec![
-                Size {
-                    n: 100_000,
-                    reps: 20,
-                },
-                Size {
-                    n: 1_000_000,
-                    reps: 5,
-                },
-            ],
-        };
-        for size in sizes {
-            let Timing { execute, rust } = measure(&rt, case, &size);
+    for case in selected {
+        for size in &sizes {
+            let Timing { execute, rust } = measure(&rt, case, size);
             let n = size.n;
             println!(
                 "{:>12} {:>10} {:>14.1} {:>12.2} {:>12.1} {:>14.1}",
