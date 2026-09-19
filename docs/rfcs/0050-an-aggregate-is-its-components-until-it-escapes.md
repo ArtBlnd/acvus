@@ -452,8 +452,11 @@ differ.
 
 The at-least meet is the direction of the meet at a parameter, not RFC-0042's
 join. `typeck.rs::refused_projection_parameter` raises the refusal at the
-argument, ahead of every other join of the two, because a later one would have
-widened the argument's field set by `ObjectTy::meet`'s union. An argument whose
+call and labels the argument inside it, ahead of every other join of the two,
+because a later one would have widened the argument's field set by
+`ObjectTy::meet`'s union. The registry carries no declaration span for an
+extern parameter, so the call is the only place the callee's side can be
+pointed at, and `ArgSite` carries it. An argument whose
 field set is closed — a declared value, or an object literal — and lacks a field
 the projection borrows is refused; an `AtLeast` argument, an object whose fields
 are not all known, is admitted and gains them, which is the one case where the

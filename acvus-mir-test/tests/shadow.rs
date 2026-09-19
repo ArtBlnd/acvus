@@ -297,7 +297,7 @@ fn a_parameter_alone_where_no_rule_reaches_the_extern_is_the_callee() {
 fn a_parameter_the_call_fixes_to_a_non_function_drops_from_the_set() {
     let i = Interner::new();
     let errors = errors_of(&i, "let f = |len| -> len(1); f(3)");
-    assert_eq!(errors, vec!["no `len` takes a call of type Fn(i64) -> !"]);
+    assert_eq!(errors, vec!["no `len` takes a call of type Fn(i64) -> _"]);
 }
 
 /// The place is a reference, so the lend is a reborrow and the move is a

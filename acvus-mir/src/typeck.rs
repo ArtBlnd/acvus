@@ -310,6 +310,11 @@ struct ArgumentsRefused {
 struct ArgSite {
     id: AstId,
     span: Span,
+    /// The expression that takes this argument -- the call, the `a[i]`, or
+    /// the `for` head. The registry holds no declaration span for an
+    /// extern parameter, so a refusal about the parameter marks the whole
+    /// expression that named it and labels the argument inside it.
+    taken_by: Span,
     place: Option<LentPlace>,
 }
 
@@ -329,7 +334,7 @@ impl LentPlace {
 }
 
 impl ArgSite {
-    fn of(expr: &Expr) -> Self {
+    fn of(expr: &Expr, taken_by: Span) -> Self {
         let place = match expr {
             Expr::Borrow { place, .. } => LentPlace::of(place),
             _ => None,
@@ -337,23 +342,26 @@ impl ArgSite {
         Self {
             id: expr.id(),
             span: expr.span(),
+            taken_by,
             place,
         }
     }
 
-    fn value(expr: &Expr) -> Self {
+    fn value(expr: &Expr, taken_by: Span) -> Self {
         Self {
             id: expr.id(),
             span: expr.span(),
+            taken_by,
             place: None,
         }
     }
 
     /// A receiver lent to a reference parameter: the receiver is the place.
-    fn lent(expr: &Expr) -> Self {
+    fn lent(expr: &Expr, taken_by: Span) -> Self {
         Self {
             id: expr.id(),
             span: expr.span(),
+            taken_by,
             place: LentPlace::of(expr),
         }
     }
@@ -1308,11 +1316,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// `Written` set by union, so a call placed after one still compiles
     /// and finds nothing left to refuse.
     ///
-    /// The label carries no span, which is a decision. The registry holds
-    /// no declaration span for an extern parameter -- `Function` and
-    /// `ParamTerm` are a name and a type -- and the call encloses the
-    /// argument this refusal already points at, so the two field sets are
-    /// what the reader does not have.
     fn refused_projection_parameter(
         &mut self,
         param_ty: &InferTy,
@@ -1347,8 +1350,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 object,
                 field: self.interner.resolve(field).to_string(),
             },
-            site.span,
-            vec![Label::note(note)],
+            site.taken_by,
+            vec![Label::at(site.span, "this argument"), Label::note(note)],
         );
         true
     }
@@ -1511,15 +1514,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             if self.slice_coercion(&referent, viewed, &arg, &param, at, span) {
                 continue;
             }
-            // The two referents and not the two references, so that one
-            // argument mismatch reads the same whether its container's head
-            // was named where the argument met its parameter or here.
-            let (wanted, given) = (
-                self.solver.shallow_resolve_ty(&param),
-                self.solver.shallow_resolve_ty(&arg),
-            );
-            let expected = self.type_as_written(referent_of(&wanted));
-            let got = self.type_as_written(referent_of(&given));
+            let expected = self.type_as_written(&self.solver.shallow_resolve_ty(&param));
+            let got = self.type_as_written(&self.solver.shallow_resolve_ty(&arg));
             self.error(MirErrorKind::UnificationFailure { expected, got }, span);
         }
     }
@@ -1885,6 +1881,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         fn_ty: &InferTy,
         first: Option<&FirstArg>,
         args: &[Expr],
+        call_span: Span,
     ) -> Vec<InferTy> {
         let params: Vec<InferTy> = match fn_ty {
             TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
@@ -1911,7 +1908,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         for (i, arg) in args.iter().enumerate() {
             let expected = params.get(i + offset);
             let ty = self.check_arg(arg, expected);
-            meet(self, expected, &ty, &ArgSite::of(arg));
+            meet(self, expected, &ty, &ArgSite::of(arg, call_span));
             types.push(ty);
         }
         self.holds.truncate(outer_holds);
@@ -2064,11 +2061,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.errors.push(MirError { kind, span, labels });
     }
 
-    /// Sameness is decided by the rendering because `TyDisplay` drops
-    /// identity arguments: print them again there and two types from two
-    /// sources stop reading alike, and this refusal stops being raised.
     fn one_type_two_sources(&self, expected: &Ty, got: &Ty) -> Option<Refusal> {
-        if expected.display(self.interner).to_string() != got.display(self.interner).to_string() {
+        if !expected.same_erased(got) {
             return None;
         }
         let (mut left, mut right) = (Vec::new(), Vec::new());
@@ -2963,7 +2957,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             })
             .collect();
 
-        let first = self.receiver_arg(object, ReceiverMode::Lent(mutability));
+        let first = self.receiver_arg(object, ReceiverMode::Lent(mutability), span);
         // The index is a `u64` and nothing else (RFC-0047 §4), so it is the
         // expected type here.
         let position = TyTerm::Int(IntTy::U64);
@@ -3129,7 +3123,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             [] => {}
             [SignatureCandidate::Named { qref, scheme }] => {
                 let (qref, scheme) = (*qref, scheme.clone());
-                let first = self.receiver_arg(receiver, declared_receiver_mode(&scheme.ty));
+                let first =
+                    self.receiver_arg(receiver, declared_receiver_mode(&scheme.ty), call_span);
                 return self.check_resolved_call(
                     qref,
                     &scheme,
@@ -3147,7 +3142,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ty = ty.clone();
                 let first = FirstArg {
                     ty: self.check_expr(receiver),
-                    site: ArgSite::value(receiver),
+                    site: ArgSite::value(receiver, call_span),
                 };
                 return self.check_local_call(callee_id, &ty, Some(&first), args, call_span);
             }
@@ -3159,7 +3154,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let Some(AdmittedReceiver { candidates, first }) =
                     self.admit_receiver(candidates, receiver, name, call_span)
                 else {
-                    self.check_args_in_order(&Self::infer_error(), None, args);
+                    self.check_args_in_order(&Self::infer_error(), None, args, call_span);
                     return Self::infer_error();
                 };
                 return self.check_overloaded_call(
@@ -3181,11 +3176,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A receiver that is a place is lent as the parameter asks; a receiver
     /// that is already a reference value is passed as it is (RFC-0030).
-    fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode) -> FirstArg {
+    fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
         match mode {
             ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => FirstArg {
                 ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
-                site: ArgSite::lent(receiver),
+                site: ArgSite::lent(receiver, taken_by),
             },
             ReceiverMode::Lent(_) => {
                 let ty = self.check_expr(receiver);
@@ -3197,12 +3192,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 FirstArg {
                     ty,
-                    site: ArgSite::value(receiver),
+                    site: ArgSite::value(receiver, taken_by),
                 }
             }
             ReceiverMode::Value => FirstArg {
                 ty: self.check_expr(receiver),
-                site: ArgSite::value(receiver),
+                site: ArgSite::value(receiver, taken_by),
             },
         }
     }
@@ -3225,7 +3220,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             })
             .collect();
         if place_of(receiver).is_none() {
-            let first = self.receiver_arg(receiver, lent_only_if_agreed(&per_candidate));
+            let first = self.receiver_arg(receiver, lent_only_if_agreed(&per_candidate), call_span);
             return Some(AdmittedReceiver::taking_every_candidate(
                 per_candidate,
                 first,
@@ -3246,7 +3241,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect();
         let Some(trials) = trials else {
             let mode = lent_only_if_agreed(&per_candidate);
-            let first = self.receiver_in(receiver, owned, mode);
+            let first = self.receiver_in(receiver, owned, mode, call_span);
             return Some(AdmittedReceiver::taking_every_candidate(
                 per_candidate,
                 first,
@@ -3273,7 +3268,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return None;
         };
-        let first = self.receiver_in(receiver, owned, mode);
+        let first = self.receiver_in(receiver, owned, mode, call_span);
         let kept = kept.into_iter().map(|(seen, _)| seen).collect();
         Some(AdmittedReceiver::taking_every_candidate(kept, first))
     }
@@ -3322,18 +3317,24 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// The mode the call settled on, with its bookkeeping: the lend
     /// (RFC-0029, RFC-0041) or the place by value.
-    fn receiver_in(&mut self, receiver: &Expr, owned: InferTy, mode: ReceiverMode) -> FirstArg {
+    fn receiver_in(
+        &mut self,
+        receiver: &Expr,
+        owned: InferTy,
+        mode: ReceiverMode,
+        taken_by: Span,
+    ) -> FirstArg {
         match mode {
             ReceiverMode::Lent(mutability) => FirstArg {
                 ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
-                site: ArgSite::lent(receiver),
+                site: ArgSite::lent(receiver, taken_by),
             },
             ReceiverMode::Value => {
                 let refused = self.reads_through_reference(receiver)
                     && self.refuse_deref_of_non_primitive(&owned, receiver.span());
                 FirstArg {
                     ty: if refused { Self::infer_error() } else { owned },
-                    site: ArgSite::value(receiver),
+                    site: ArgSite::value(receiver, taken_by),
                 }
             }
         }
@@ -3384,7 +3385,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect();
         match candidates.as_slice() {
             [] => {
-                let types = self.check_args_in_order(&Self::infer_error(), first.as_ref(), args);
+                let types =
+                    self.check_args_in_order(&Self::infer_error(), first.as_ref(), args, call_span);
                 return self.no_matching_function(&name_str, types, call_span);
             }
             [SignatureCandidate::Named { qref, scheme }] => {
@@ -3398,7 +3400,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             _ => {}
         }
-        let admitted = match self.admit_args(candidates, first.as_ref(), args) {
+        let admitted = match self.admit_args(candidates, first.as_ref(), args, call_span) {
             Ok(admitted) => admitted,
             Err(ArgumentsRefused { types }) => {
                 return self.no_matching_function(&name_str, types, call_span);
@@ -3494,6 +3496,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         candidates: Vec<SignatureCandidate>,
         first: Option<&FirstArg>,
         args: &[Expr],
+        call_span: Span,
     ) -> Result<Admitted, ArgumentsRefused> {
         let mut narrowing = Narrowing {
             options: candidates
@@ -3520,7 +3523,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let index = i + offset;
             let param = self.call_param(&narrowing.options, index);
             let ty = self.check_arg(arg, Some(&param.ty));
-            self.admit_arg(&mut narrowing, index, &param, &ty, &ArgSite::of(arg));
+            self.admit_arg(
+                &mut narrowing,
+                index,
+                &param,
+                &ty,
+                &ArgSite::of(arg, call_span),
+            );
             params.push(param);
             types.push(ty);
         }
@@ -3657,7 +3666,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             source_begins: callee.span,
         };
         let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, site);
-        let arg_types = self.check_args_in_order(&fn_ty, first.as_ref(), args);
+        let arg_types = self.check_args_in_order(&fn_ty, first.as_ref(), args, call_span);
         match &fn_ty {
             TyTerm::Fn {
                 params: param_tys,
@@ -4181,7 +4190,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 scheme: scheme.clone(),
             })
             .collect();
-        let first = self.receiver_arg(place, ReceiverMode::Lent(mutability));
+        let first = self.receiver_arg(place, ReceiverMode::Lent(mutability), span);
         let container = self.solver.resolve_ty(&first.ty);
         if !takes_container(
             &candidates,
@@ -4832,7 +4841,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     _ => {
                         let first = FirstArg {
                             ty: self.check_expr(left),
-                            site: ArgSite::of(left),
+                            site: ArgSite::of(left, *span),
                         };
                         let rt = self.check_expr(right);
                         self.check_callable(&rt, &[], Some(&first), *span)
@@ -5281,7 +5290,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         // Collect argument types, prepending pipe_left if present.
         let first = pipe_left.map(|e| FirstArg {
             ty: self.check_expr(e),
-            site: ArgSite::of(e),
+            site: ArgSite::of(e, call_span),
         });
 
         // Try to resolve as a named function (builtin or extern).
@@ -5383,7 +5392,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
 
-        let arg_types = self.check_args_in_order(func_ty, first, args);
+        let arg_types = self.check_args_in_order(func_ty, first, args, call_span);
 
         match func_ty {
             TyTerm::Fn {

@@ -422,7 +422,7 @@ fn an_argument_no_signature_takes_is_no_matching_function() {
     let errs = errors_of(&i, "probe(1, 1)");
     assert!(
         errs.iter()
-            .any(|e| e == "no `probe` takes a call of type Fn(i64, i64) -> !"),
+            .any(|e| e == "no `probe` takes a call of type Fn(i64, i64) -> _"),
         "{errs:?}"
     );
     assert!(!errs.iter().any(|e| e == AMBIGUOUS_PROBE), "{errs:?}");
@@ -434,7 +434,7 @@ fn an_arity_no_signature_has_is_no_matching_function() {
     let errs = errors_of(&i, "probe(1)");
     assert!(
         errs.iter()
-            .any(|e| e == "no `probe` takes a call of type Fn(i64) -> !"),
+            .any(|e| e == "no `probe` takes a call of type Fn(i64) -> _"),
         "{errs:?}"
     );
 }
@@ -529,7 +529,7 @@ fn an_element_still_a_variable_defers_its_admission_until_the_head_resolves() {
 fn an_argument_no_candidate_takes_empties_the_set_at_that_argument() {
     let i = Interner::new();
     let errors = errors_of(&i, "peek(1)");
-    assert_eq!(errors, vec!["no `peek` takes a call of type Fn(i64) -> !"]);
+    assert_eq!(errors, vec!["no `peek` takes a call of type Fn(i64) -> _"]);
 }
 
 /// Rule 1 at a bare-variable argument, which is the one resolution of the

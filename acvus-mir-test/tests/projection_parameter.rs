@@ -125,6 +125,9 @@ fn a_projection_naming_a_field_a_declared_type_lacks_is_refused_by_that_name() {
 
 /// A literal's field set is exactly what it wrote, so a projection naming a
 /// field it lacks is refused as a `Declared` value lacking one already is.
+/// The refusal marks the call and labels the argument: the registry holds no
+/// declaration span for an extern parameter, so the call is the only place
+/// the callee's side can be pointed at.
 /// The union `ObjectTy::meet` gives a `Written` set stays where RFC-0042
 /// means it -- a field store widens a literal -- and a parameter stores
 /// nothing.
@@ -138,12 +141,20 @@ fn a_projection_naming_a_field_an_object_literal_lacks_is_refused() {
         refusals[0].message,
         "`p` lacks field `y`, which the projection parameter borrows"
     );
+    assert_eq!(refusals[0].at(source), "read_y(&p)");
     assert_eq!(
         refusals[0].marked(source),
-        [Marked {
-            source: None,
-            text: "the parameter borrows at least `{y: i64}`, and `p` has `{x: i64}`".to_string(),
-        }]
+        [
+            Marked {
+                source: Some("&p".to_string()),
+                text: "this argument".to_string(),
+            },
+            Marked {
+                source: None,
+                text: "the parameter borrows at least `{y: i64}`, and `p` has `{x: i64}`"
+                    .to_string(),
+            }
+        ]
     );
 }
 

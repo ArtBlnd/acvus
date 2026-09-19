@@ -1710,7 +1710,40 @@ where
     V: Phase,
 {
     pub fn display<'a>(&'a self, interner: &'a Interner) -> TyDisplay<'a, V> {
-        TyDisplay { ty: self, interner }
+        TyDisplay {
+            ty: self,
+            interner,
+            never: NeverAs::Diverges,
+        }
+    }
+
+    /// The type as a refusal shows it. `Solver::written_ty` closes a
+    /// variable the solve never bound to `Never`, and `solver.rs` is the
+    /// only place `acvus-mir` builds one, so a `Never` here is a type the
+    /// solve never settled and `_` is what a reader can act on.
+    pub fn shown<'a>(&'a self, interner: &'a Interner) -> TyDisplay<'a, V> {
+        TyDisplay {
+            ty: self,
+            interner,
+            never: NeverAs::Unsettled,
+        }
+    }
+}
+
+/// What a `Never` is where it is printed: the type of an expression that
+/// does not return, or a variable the solve never bound.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NeverAs {
+    Diverges,
+    Unsettled,
+}
+
+impl NeverAs {
+    fn written(self) -> &'static str {
+        match self {
+            NeverAs::Diverges => "!",
+            NeverAs::Unsettled => "_",
+        }
     }
 }
 
@@ -1720,6 +1753,29 @@ where
 {
     ty: &'a TyTerm<V>,
     interner: &'a Interner,
+    never: NeverAs,
+}
+
+impl<'a, V> TyDisplay<'a, V>
+where
+    V: Phase,
+{
+    /// A type inside this one, printed with the same reading of `Never`.
+    fn nested(&self, ty: &'a TyTerm<V>) -> Self {
+        TyDisplay {
+            ty,
+            interner: self.interner,
+            never: self.never,
+        }
+    }
+
+    fn nested_arg(&self, arg: &'a TypeArg<V>) -> ArgDisplay<'a, V> {
+        ArgDisplay {
+            arg,
+            interner: self.interner,
+            never: self.never,
+        }
+    }
 }
 
 impl<V> TypeArg<V>
@@ -1730,6 +1786,7 @@ where
         ArgDisplay {
             arg: self,
             interner,
+            never: NeverAs::Diverges,
         }
     }
 }
@@ -1741,6 +1798,7 @@ where
 {
     arg: &'a TypeArg<V>,
     interner: &'a Interner,
+    never: NeverAs,
 }
 
 impl<'a, V> fmt::Display for ArgDisplay<'a, V>
@@ -1757,7 +1815,15 @@ where
             Repr::Specialized => write!(f, "#")?,
             Repr::Var(_) => write!(f, "#?")?,
         }
-        write!(f, "{}", self.arg.ty.display(self.interner))
+        write!(
+            f,
+            "{}",
+            TyDisplay {
+                ty: &self.arg.ty,
+                interner: self.interner,
+                never: self.never,
+            }
+        )
     }
 }
 
@@ -1785,14 +1851,14 @@ where
         match self.ty {
             TyTerm::Int(k) => write!(f, "{}", k.name()),
             TyTerm::Order => write!(f, "Order"),
-            TyTerm::Slice(elem) => write!(f, "[{}]", elem.display(self.interner)),
+            TyTerm::Slice(elem) => write!(f, "[{}]", self.nested(elem)),
             TyTerm::Str => write!(f, "str"),
             TyTerm::Float => write!(f, "Float"),
             TyTerm::Char => write!(f, "char"),
             TyTerm::String => write!(f, "String"),
             TyTerm::Bool => write!(f, "Bool"),
             TyTerm::Unit => write!(f, "Unit"),
-            TyTerm::Never => write!(f, "!"),
+            TyTerm::Never => f.write_str(self.never.written()),
             TyTerm::Object(object) => {
                 let mut sorted: Vec<_> = object.iter().collect();
                 sorted.sort_by_key(|(k, _)| self.interner.resolve(**k).to_string());
@@ -1804,12 +1870,7 @@ where
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(
-                        f,
-                        "{}: {}",
-                        self.interner.resolve(**k),
-                        v.display(self.interner)
-                    )?;
+                    write!(f, "{}: {}", self.interner.resolve(**k), self.nested(v))?;
                 }
                 write!(f, "}}")
             }
@@ -1819,7 +1880,7 @@ where
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", e.display(self.interner))?;
+                    write!(f, "{}", self.nested(e))?;
                 }
                 write!(f, ")")
             }
@@ -1834,9 +1895,9 @@ where
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", p.ty.display(self.interner))?;
+                    write!(f, "{}", self.nested(&p.ty))?;
                 }
-                write!(f, ") -> {}", ret.display(self.interner))?;
+                write!(f, ") -> {}", self.nested(ret))?;
                 let effect = match effect {
                     EffectTerm::Known(effect) => effect,
                     EffectTerm::Var(v) => return write!(f, " with {}", VarDisplay(v)),
@@ -1864,22 +1925,19 @@ where
                 Ok(())
             }
             TyTerm::Array(inner, len) => {
-                write!(f, "Array<{}, ", inner.display(self.interner))?;
+                write!(f, "Array<{}, ", self.nested(inner))?;
                 match len {
                     LenTerm::Known(n) => write!(f, "{n}>"),
                     LenTerm::Var(v) => write!(f, "{}>", VarDisplay(v)),
                 }
             }
             TyTerm::Handle(inner) => {
-                write!(f, "Handle<{}>", inner.display(self.interner))
+                write!(f, "Handle<{}>", self.nested(inner))
             }
-            TyTerm::Option(inner) => write!(f, "Option<{}>", inner.display(self.interner)),
-            TyTerm::Result(ok, err) => write!(
-                f,
-                "Result<{}, {}>",
-                ok.display(self.interner),
-                err.display(self.interner)
-            ),
+            TyTerm::Option(inner) => write!(f, "Option<{}>", self.nested(inner)),
+            TyTerm::Result(ok, err) => {
+                write!(f, "Result<{}, {}>", self.nested(ok), self.nested(err))
+            }
             // Identity arguments are not printed. An identity is a source,
             // and its number names that source to nobody: a reader told
             // `Iterator<i64, Pure, #1>` learns only that there is a `#1`.
@@ -1902,7 +1960,7 @@ where
                             write!(f, ", ")?;
                         }
                         first = false;
-                        write!(f, "{}", arg.display(self.interner))?;
+                        write!(f, "{}", self.nested_arg(arg))?;
                     }
                     for arg in effect_args {
                         if !first {
@@ -1928,12 +1986,12 @@ where
                     }
                     write!(f, "{}", self.interner.resolve(**tag))?;
                     if let Some(payload) = payload {
-                        write!(f, "({})", payload.display(self.interner))?;
+                        write!(f, "({})", self.nested(payload))?;
                     }
                 }
                 write!(f, "}}")
             }
-            TyTerm::Ref(m, inner) => write!(f, "{}{}", m.prefix(), inner.display(self.interner)),
+            TyTerm::Ref(m, inner) => write!(f, "{}{}", m.prefix(), self.nested_arg(inner)),
             TyTerm::Error(_) => write!(f, "<error>"),
             TyTerm::Var(v) => write!(f, "{}", VarDisplay(v)),
         }
@@ -2663,6 +2721,140 @@ impl<V: Phase> TyTerm<V> {
                     }
                 }
             }
+        }
+    }
+
+    /// Equality with identity arguments ignored. Two values minted from
+    /// two sources have the same type and different identities, which is
+    /// what `MirErrorKind::OneTypeTwoSources` reports: the funnel asks
+    /// this, and `TyDisplay` -- which drops identity arguments -- stays a
+    /// rendering.
+    pub fn same_erased(&self, other: &Self) -> bool
+    where
+        V: PartialEq,
+    {
+        match (self, other) {
+            (TyTerm::Int(a), TyTerm::Int(b)) => a == b,
+            (TyTerm::Float, TyTerm::Float)
+            | (TyTerm::Char, TyTerm::Char)
+            | (TyTerm::String, TyTerm::String)
+            | (TyTerm::Bool, TyTerm::Bool)
+            | (TyTerm::Unit, TyTerm::Unit)
+            | (TyTerm::Never, TyTerm::Never)
+            | (TyTerm::Order, TyTerm::Order)
+            | (TyTerm::Str, TyTerm::Str) => true,
+            (TyTerm::Error(a), TyTerm::Error(b)) => a == b,
+            (TyTerm::Var(a), TyTerm::Var(b)) => a == b,
+            (TyTerm::Array(a, an), TyTerm::Array(b, bn)) => an == bn && a.same_erased(b),
+            (TyTerm::Slice(a), TyTerm::Slice(b))
+            | (TyTerm::Option(a), TyTerm::Option(b))
+            | (TyTerm::Handle(a), TyTerm::Handle(b)) => a.same_erased(b),
+            (TyTerm::Result(a_ok, a_err), TyTerm::Result(b_ok, b_err)) => {
+                a_ok.same_erased(b_ok) && a_err.same_erased(b_err)
+            }
+            (TyTerm::Tuple(a), TyTerm::Tuple(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same_erased(y))
+            }
+            (TyTerm::Ref(a_mut, a), TyTerm::Ref(b_mut, b)) => {
+                a_mut == b_mut && a.repr == b.repr && a.ty.same_erased(&b.ty)
+            }
+            (TyTerm::Object(a), TyTerm::Object(b)) => {
+                a.set == b.set
+                    && a.fields.len() == b.fields.len()
+                    && a.fields.iter().all(|(name, ty)| {
+                        b.fields
+                            .get(name)
+                            .is_some_and(|other| ty.same_erased(other))
+                    })
+            }
+            (
+                TyTerm::Enum {
+                    name: a_name,
+                    variants: a,
+                },
+                TyTerm::Enum {
+                    name: b_name,
+                    variants: b,
+                },
+            ) => {
+                a_name == b_name
+                    && a.len() == b.len()
+                    && a.iter().all(|(tag, payload)| {
+                        b.get(tag).is_some_and(|other| match (payload, other) {
+                            (Some(x), Some(y)) => x.same_erased(y),
+                            (None, None) => true,
+                            _ => false,
+                        })
+                    })
+            }
+            (
+                TyTerm::Fn {
+                    params: a_params,
+                    ret: a_ret,
+                    captures: a_caps,
+                    effect: a_effect,
+                },
+                TyTerm::Fn {
+                    params: b_params,
+                    ret: b_ret,
+                    captures: b_caps,
+                    effect: b_effect,
+                },
+            ) => {
+                a_effect == b_effect
+                    && a_ret.same_erased(b_ret)
+                    && a_params.len() == b_params.len()
+                    && a_params
+                        .iter()
+                        .zip(b_params)
+                        .all(|(x, y)| x.name == y.name && x.ty.same_erased(&y.ty))
+                    && a_caps.len() == b_caps.len()
+                    && a_caps.iter().zip(b_caps).all(|(x, y)| x.same_erased(y))
+            }
+            (
+                TyTerm::UserDefined {
+                    id: a_id,
+                    type_args: a_args,
+                    effect_args: a_effects,
+                    identity_args: _,
+                },
+                TyTerm::UserDefined {
+                    id: b_id,
+                    type_args: b_args,
+                    effect_args: b_effects,
+                    identity_args: _,
+                },
+            ) => {
+                a_id == b_id
+                    && a_effects == b_effects
+                    && a_args.len() == b_args.len()
+                    && a_args
+                        .iter()
+                        .zip(b_args)
+                        .all(|(x, y)| x.repr == y.repr && x.ty.same_erased(&y.ty))
+            }
+            (TyTerm::Int(_), _)
+            | (TyTerm::Float, _)
+            | (TyTerm::Char, _)
+            | (TyTerm::String, _)
+            | (TyTerm::Bool, _)
+            | (TyTerm::Unit, _)
+            | (TyTerm::Never, _)
+            | (TyTerm::Order, _)
+            | (TyTerm::Str, _)
+            | (TyTerm::Error(_), _)
+            | (TyTerm::Var(_), _)
+            | (TyTerm::Array(..), _)
+            | (TyTerm::Slice(_), _)
+            | (TyTerm::Option(_), _)
+            | (TyTerm::Handle(_), _)
+            | (TyTerm::Result(..), _)
+            | (TyTerm::Tuple(_), _)
+            | (TyTerm::Ref(..), _)
+            | (TyTerm::Object(_), _)
+            | (TyTerm::Enum { .. }, _)
+            | (TyTerm::Fn { .. }, _)
+            | (TyTerm::UserDefined { .. }, _) => false,
         }
     }
 

@@ -156,7 +156,7 @@ fn a_context_container_reaches_a_slice_parameter() {
 fn a_value_that_is_no_container_is_refused_at_the_argument() {
     assert_eq!(
         refusal("let n = 1; total(&n)"),
-        "type mismatch: expected [i64], got i64"
+        "type mismatch: expected &[i64], got &i64"
     );
 }
 

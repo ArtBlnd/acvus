@@ -29,6 +29,9 @@ pub enum Mode {
 
 pub struct Diagnostic {
     pub message: String,
+    /// The words the primary marker carries; `None` leaves it repeating
+    /// the message where another span is marked.
+    pub primary: Option<String>,
     pub span: Option<Span>,
     pub labels: Vec<Label>,
 }
@@ -198,6 +201,7 @@ pub fn check(
     let parsed = parsed.map_err(|e| {
         vec![Diagnostic {
             message: e.kind.to_string(),
+            primary: None,
             span: span_of(e.span),
             labels: Vec::new(),
         }]
@@ -231,6 +235,7 @@ pub fn check(
     } = Externs::combine(registries, interner).map_err(|e| {
         vec![Diagnostic {
             message: format!("the registries do not combine: {e}"),
+            primary: None,
             span: None,
             labels: Vec::new(),
         }]
@@ -262,6 +267,7 @@ pub fn check(
         .flat_map(|(_, errs)| errs.iter())
         .map(|e| Diagnostic {
             message: e.display(interner).to_string(),
+            primary: e.primary(),
             span: span_of(e.span),
             labels: e.labels.clone(),
         })
@@ -278,6 +284,7 @@ pub fn check(
             .flat_map(|le| le.errors.iter())
             .map(|e| Diagnostic {
                 message: e.display(interner).to_string(),
+                primary: e.primary(),
                 span: span_of(e.span),
                 labels: e.labels.clone(),
             }),
@@ -302,6 +309,7 @@ pub fn check(
             .flat_map(|(_, errs)| errs)
             .map(|e| Diagnostic {
                 message: e.display(interner).to_string(),
+                primary: None,
                 span: span_of(e.span),
                 labels: e.labels().to_vec(),
             }),

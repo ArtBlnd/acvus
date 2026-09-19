@@ -531,7 +531,15 @@ impl CheckCtx {
                     span,
                     kind: ValidationErrorKind::InvalidConstructor {
                         inst_name: inst_name.to_string(),
-                        expected_constructor: format!("a type with {seg:?}"),
+                        expected_constructor: match seg {
+                            PathSeg::Field(_) => "an object carrying that field".to_string(),
+                            PathSeg::Index(i) => {
+                                format!("an array or tuple carrying element {i}")
+                            }
+                            PathSeg::Payload => {
+                                "an Option, a Result or an enum carrying a payload".to_string()
+                            }
+                        },
                         actual: at.clone(),
                     },
                 });
@@ -700,7 +708,7 @@ impl CheckCtx {
                         pc,
                         span,
                         "AsSlice",
-                        &format!("Ref({mutability:?}, Slice) or Ref(Shared, Str)"),
+                        &format!("{}[_] or &str", mutability.prefix()),
                         dst_ty,
                         errors,
                     );
@@ -1279,7 +1287,7 @@ impl CheckCtx {
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
                             inst_name: "Ref".to_string(),
-                            expected_constructor: format!("Ref({mutability:?})"),
+                            expected_constructor: format!("{}_", mutability.prefix()),
                             actual: other.clone(),
                         },
                     }),
@@ -1742,7 +1750,7 @@ impl CheckCtx {
                                 pc,
                                 span,
                                 "For",
-                                &format!("Ref({wanted:?}, Slice)"),
+                                &format!("{}[_]", wanted.prefix()),
                                 slice_ty,
                                 errors,
                             );

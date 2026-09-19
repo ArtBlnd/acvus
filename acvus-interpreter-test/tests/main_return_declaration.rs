@@ -70,7 +70,7 @@ async fn a_host_declaring_never_gets_the_value_and_reads_it_by_kind() {
 /// tail agrees with `i64` and the early return leaves with a `Result`, so the
 /// second one is refused.
 #[tokio::test]
-#[should_panic(expected = "`?` leaves with Result<!, String> but the function returns i64")]
+#[should_panic(expected = "`?` leaves with Result<_, String> but the function returns i64")]
 async fn a_second_return_disagreeing_with_the_declaration_is_refused() {
     let interner = Interner::new();
     let c = ok_flag(&interner, true);

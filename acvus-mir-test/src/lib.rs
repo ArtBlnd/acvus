@@ -1,5 +1,6 @@
 use std::fmt;
 
+use acvus_ast::Span;
 use acvus_ast::report::Label;
 use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::cfg;
@@ -378,6 +379,8 @@ pub fn refuse_script_mode_ir_with(
             return Err(vec![Refusal {
                 stage: "parse".to_string(),
                 message: format!("parse error: {e:?}"),
+                primary: None,
+                span: Span::new(0, 0),
                 labels: Vec::new(),
             }]);
         }
@@ -410,6 +413,8 @@ pub fn refuse_script_mode_ir_with(
             refusals.push(Refusal {
                 stage: format!("infer:{fn_name}"),
                 message: e.display(interner).to_string(),
+                primary: e.primary(),
+                span: e.span,
                 labels: e.labels.clone(),
             });
         }
@@ -420,6 +425,8 @@ pub fn refuse_script_mode_ir_with(
         refusals.push(Refusal {
             stage: "lower".to_string(),
             message: format!("[{}..{}] {}", e.span.start, e.span.end, e.display(interner)),
+            primary: e.primary(),
+            span: e.span,
             labels: e.labels.clone(),
         });
     }
@@ -431,6 +438,8 @@ pub fn refuse_script_mode_ir_with(
         vec![Refusal {
             stage: "lower".to_string(),
             message: "no module produced for target".to_string(),
+            primary: None,
+            span: Span::new(0, 0),
             labels: Vec::new(),
         }]
     })?;
@@ -680,15 +689,22 @@ pub fn compile_script_optimized(
     Ok(dump_with(interner, module))
 }
 
-/// One stage's refusal of a source: the stage that raised it, the words, and
-/// the other places it points at.
+/// One stage's refusal of a source: the stage that raised it, the words, the
+/// words its primary marker carries, and the other places it points at.
 pub struct Refusal {
     pub stage: String,
     pub message: String,
+    pub primary: Option<String>,
+    pub span: Span,
     pub labels: Vec<Label>,
 }
 
 impl Refusal {
+    /// The source the primary span covers.
+    pub fn at<'s>(&self, source: &'s str) -> &'s str {
+        &source[self.span.start..self.span.end]
+    }
+
     /// Each label as the source it covers and the words it carries, which is
     /// what a test asserting a second place can read.
     pub fn marked(&self, source: &str) -> Vec<Marked> {
@@ -738,6 +754,8 @@ pub fn refuse_script_mode_optimized(
             return Err(vec![Refusal {
                 stage: "parse".to_string(),
                 message: format!("{e:?}"),
+                primary: None,
+                span: Span::new(0, 0),
                 labels: Vec::new(),
             }]);
         }
@@ -769,6 +787,8 @@ pub fn refuse_script_mode_optimized(
             refusals.push(Refusal {
                 stage: format!("infer:{fn_name}"),
                 message: e.display(interner).to_string(),
+                primary: e.primary(),
+                span: e.span,
                 labels: e.labels.clone(),
             });
         }
@@ -779,6 +799,8 @@ pub fn refuse_script_mode_optimized(
         refusals.push(Refusal {
             stage: "lower".to_string(),
             message: e.display(interner).to_string(),
+            primary: e.primary(),
+            span: e.span,
             labels: e.labels.clone(),
         });
     }
@@ -799,6 +821,8 @@ pub fn refuse_script_mode_optimized(
             refusals.push(Refusal {
                 stage: format!("validate:{fn_name}"),
                 message: e.display(interner).to_string(),
+                primary: None,
+                span: e.span,
                 labels: e.labels().to_vec(),
             });
         }
@@ -811,6 +835,8 @@ pub fn refuse_script_mode_optimized(
         vec![Refusal {
             stage: "optimize".to_string(),
             message: "no module produced for target".to_string(),
+            primary: None,
+            span: Span::new(0, 0),
             labels: Vec::new(),
         }]
     })?;

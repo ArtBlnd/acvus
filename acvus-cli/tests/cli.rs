@@ -116,8 +116,8 @@ fn a_type_nothing_resolved_is_reported_as_written() {
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
     assert!(
-        err.contains("error: type mismatch in `<`: ! vs !"),
-        "a variable nothing resolved reads as `!` (RFC-0043): {err}"
+        err.contains("error: type mismatch in `<`: _ vs _"),
+        "a variable the solve never bound reads as `_`: {err}"
     );
     assert!(
         !err.contains("<error>"),
@@ -657,7 +657,7 @@ fn two_iterators_from_two_sources_show_where_each_source_begins() {
             "2 | let b = [3, 4] | into_iter;",
             "  |                  --------- `b`'s source begins here",
             "3 | let l = [a, b];",
-            "  |         ^^^^^^ `a` and `b` are values of one type from two different sources, and one place cannot hold both",
+            "  |         ^^^^^^ `a` and `b` meet here",
             "",
         ]
         .join("\n")
@@ -669,6 +669,7 @@ fn two_iterators_from_two_sources_show_where_each_source_begins() {
     assert_eq!(array.len(), 1);
     assert_eq!(array[0]["line"], 3);
     assert_eq!(array[0]["col"], 9);
+    assert_eq!(array[0]["primary"], "`a` and `b` meet here");
     assert_eq!(
         array[0]["labels"],
         serde_json::json!([

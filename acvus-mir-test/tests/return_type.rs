@@ -66,7 +66,7 @@ fn a_lambda_declaring_an_array_returning_a_reference_to_one_is_refused() {
     };
     assert!(refusal.starts_with("Return takes value as"), "{refusal}");
     assert!(refusal.contains("Array"), "{refusal}");
-    assert!(refusal.contains("Ref("), "{refusal}");
+    assert!(refusal.contains("&Array"), "{refusal}");
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn a_main_is_checked_against_what_the_host_declared() {
     };
     assert!(refusal.starts_with("Return takes value as"), "{refusal}");
     assert!(refusal.contains("Array"), "{refusal}");
-    assert!(refusal.contains("Ref("), "{refusal}");
+    assert!(refusal.contains("&Array"), "{refusal}");
 }
 
 /// RFC-0054, one variable from `a_main_is_checked_against_what_the_host_declared`:

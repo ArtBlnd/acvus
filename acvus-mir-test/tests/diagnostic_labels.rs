@@ -35,6 +35,13 @@ fn only(source: &str, context: &dyn Fn(&Interner) -> FxHashMap<Astr, Ty>) -> (St
     (refusals[0].message.clone(), refusals[0].marked(source))
 }
 
+/// The one refusal of `source`, as the words its primary marker carries.
+fn only_primary(source: &str) -> Option<String> {
+    let refusals = refusals(source, &nothing);
+    assert_eq!(refusals.len(), 1, "{source}: {:#?}", words(&refusals));
+    refusals[0].primary.clone()
+}
+
 fn words(refusals: &[Refusal]) -> Vec<String> {
     refusals.iter().map(Refusal::to_string).collect()
 }
@@ -220,6 +227,16 @@ mod one_type_two_sources {
         assert_eq!(labels, [begins_here("a"), begins_here("b")]);
     }
 
+    /// The message names two places, so it says nothing at either of them;
+    /// the primary marker carries the sentence that does.
+    #[test]
+    fn the_primary_marker_carries_its_own_words() {
+        assert_eq!(
+            only_primary("let a = [1, 2] | into_iter; let b = [3, 4] | into_iter; [a, b]; 0"),
+            Some("`a` and `b` meet here".to_string())
+        );
+    }
+
     /// Rule 3: where the two types differ in something a reader can see, the
     /// refusal is about the types and names no source.
     #[test]
@@ -234,6 +251,37 @@ mod one_type_two_sources {
         );
         assert_eq!(labels, []);
     }
+}
+
+/// Every refusal but the one above leaves its primary marker repeating the
+/// message, which is `Report`'s rule where no primary text is set.
+#[test]
+fn a_refusal_that_says_what_it_points_at_carries_no_primary_text() {
+    assert_eq!(only_primary("let a = [1, 2]; let b = a; a"), None);
+}
+
+/// An argument whose container the solve names only after checking is
+/// reported by the two references, not by the two referents: `expected
+/// [i64], got i64` named types no argument of the call has.
+#[test]
+fn a_deferred_argument_mismatch_names_the_two_references() {
+    let (message, labels) = only("let f = |k| -> chars(&k); f(1)", &nothing);
+    assert_eq!(message, "type mismatch: expected &str, got &i64");
+    assert_eq!(labels, []);
+}
+
+/// `k`'s type is fixed by nothing, so the solve never binds it. `!` is the
+/// type of an expression that does not return, and this is not one.
+#[test]
+fn a_type_the_solve_never_bound_prints_as_an_underscore() {
+    let refusals = refusals("let f = |k, m| -> { let a = len(k); k < m }; 0", &nothing);
+    let messages = words(&refusals);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.ends_with("type mismatch in `<`: _ vs _")),
+        "{messages:#?}"
+    );
 }
 
 /// A context no declaration names: the note lists what is declared, and
@@ -340,7 +388,7 @@ fn a_type_the_solve_leaves_open_is_refused_where_it_is_closed() {
     let (message, labels) = only("$count.to_string()", &nothing);
     assert_eq!(
         message,
-        "cannot infer type: resolved to ! which contains unresolved type variables"
+        "cannot infer type: resolved to _ which contains unresolved type variables"
     );
     assert_eq!(labels, []);
 }

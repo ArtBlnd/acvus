@@ -60,7 +60,7 @@ fn reports_as_written(source: &str, expected: &str) {
 fn a_binary_operator_over_two_variables_nothing_resolved_names_them_both() {
     reports_as_written(
         "let f = |k, m| -> { let a = len(k); k < m }; 0",
-        "type mismatch in `<`: ! vs !",
+        "type mismatch in `<`: _ vs _",
     );
 }
 
@@ -68,7 +68,7 @@ fn a_binary_operator_over_two_variables_nothing_resolved_names_them_both() {
 fn an_arithmetic_operator_over_two_variables_nothing_resolved_names_them_both() {
     reports_as_written(
         "let f = |k, m| -> { let a = len(k); k + m }; 0",
-        "type mismatch in `+`: ! vs !",
+        "type mismatch in `+`: _ vs _",
     );
 }
 
@@ -76,7 +76,7 @@ fn an_arithmetic_operator_over_two_variables_nothing_resolved_names_them_both() 
 fn an_enum_pattern_on_an_argument_names_the_enum_it_asked_for() {
     reports_as_written(
         r#"let f = |r| -> { let out = 0; if let Some(v) = r { out = v; }; out }; f(1)"#,
-        "type mismatch: expected Option<!>, got i64",
+        "type mismatch: expected Option<_>, got i64",
     );
 }
 
@@ -84,7 +84,7 @@ fn an_enum_pattern_on_an_argument_names_the_enum_it_asked_for() {
 fn a_tuple_pattern_on_an_argument_names_its_arity() {
     reports_as_written(
         r#"let f = |r| -> { let out = 0; if let (a, b) = r { out = 2; }; out }; f(1)"#,
-        "type mismatch: expected (!, !), got i64",
+        "type mismatch: expected (_, _), got i64",
     );
 }
 
@@ -92,7 +92,7 @@ fn a_tuple_pattern_on_an_argument_names_its_arity() {
 fn an_object_pattern_on_an_argument_names_the_field_it_asked_for() {
     reports_as_written(
         r#"let f = |r| -> { let out = 0; if let { a, } = r { out = 2; }; out }; f(1)"#,
-        "type mismatch: expected {a: !}, got i64",
+        "type mismatch: expected {a: _}, got i64",
     );
 }
 
@@ -100,7 +100,7 @@ fn an_object_pattern_on_an_argument_names_the_field_it_asked_for() {
 fn a_store_through_a_shared_reference_names_the_reference() {
     reports_as_written(
         "let q = 1; let r = &q; *r = 2; 0",
-        "cannot store through &!: not a `&mut`",
+        "cannot store through &_: not a `&mut`",
     );
 }
 
@@ -108,7 +108,7 @@ fn a_store_through_a_shared_reference_names_the_reference() {
 fn a_branch_that_does_not_meet_the_other_names_the_branch_type() {
     reports_as_written(
         "let f = |k, m| -> { let a = len(k); let b = if true { k } else { 1 }; b }; 0",
-        "type mismatch: expected !, got i64",
+        "type mismatch: expected _, got i64",
     );
 }
 
@@ -116,7 +116,7 @@ fn a_branch_that_does_not_meet_the_other_names_the_branch_type() {
 fn a_return_a_conversion_could_not_reach_names_the_type_it_asked_for() {
     reports_as_written(
         "let f = |k| -> { let a = len(k); k? }; f(1)",
-        "type mismatch: expected Result<Result<!, !>, !>, got i64",
+        "type mismatch: expected Result<Result<_, _>, _>, got i64",
     );
 }
 

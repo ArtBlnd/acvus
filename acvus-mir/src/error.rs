@@ -283,12 +283,31 @@ pub enum MirErrorKind {
     ParseError(String),
 }
 
+impl MirErrorKind {
+    /// The words the primary marker carries. A refusal whose message names
+    /// two places says nothing at either of them, so it gives the marker a
+    /// sentence of its own; every other refusal's marker repeats the
+    /// message, which is `Report`'s rule with no primary text.
+    pub fn primary(&self) -> Option<String> {
+        match self {
+            MirErrorKind::OneTypeTwoSources { left, right } => {
+                Some(format!("{left} and {right} meet here"))
+            }
+            _ => None,
+        }
+    }
+}
+
 impl MirError {
     pub fn display<'a>(&'a self, interner: &'a Interner) -> MirErrorDisplay<'a> {
         MirErrorDisplay {
             error: self,
             interner,
         }
+    }
+
+    pub fn primary(&self) -> Option<String> {
+        self.kind.primary()
     }
 }
 
@@ -305,8 +324,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "type mismatch in `{op}`: {} vs {}{}",
-                    left.display(interner),
-                    right.display(interner),
+                    left.shown(interner),
+                    right.shown(interner),
                     match (holds_text(left), holds_text(right)) {
                         (true, true) => COPY_OF_A_VIEW,
                         _ => "",
@@ -317,7 +336,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "emit requires String, got {}{}",
-                    actual.display(interner),
+                    actual.shown(interner),
                     match is_text_view(actual) {
                         true => COPY_OF_A_VIEW,
                         false => "",
@@ -328,8 +347,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "heterogeneous list: expected {}, got {}",
-                    expected.display(interner),
-                    got.display(interner)
+                    expected.shown(interner),
+                    got.shown(interner)
                 )
             }
             MirErrorKind::OneTypeTwoSources { left, right } => {
@@ -343,15 +362,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "cannot infer type: resolved to {} which contains unresolved type variables",
-                    resolved_ty.display(interner)
+                    resolved_ty.shown(interner)
                 )
             }
             MirErrorKind::UnificationFailure { expected, got } => {
                 write!(
                     f,
                     "type mismatch: expected {}, got {}{}",
-                    expected.display(interner),
-                    got.display(interner),
+                    expected.shown(interner),
+                    got.shown(interner),
                     copy_of_a_view(expected, got)
                 )
             }
@@ -407,17 +426,17 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "cannot index into a value of type `{}`",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::MoveOutOfIndex { ty } => {
-                write!(f, "cannot move out of index of `{}`", ty.display(interner))
+                write!(f, "cannot move out of index of `{}`", ty.shown(interner))
             }
             MirErrorKind::ForSourceNotAdmitted { ty } => {
                 write!(
                     f,
                     "a `for` traverses `&v`, `&mut v`, an array by value, or `lo..hi`; `{}` is none of them",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::ForConsumesContainer => {
@@ -433,7 +452,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "a `for` over an array of `{}` cannot `{keyword}`: the elements the loop has not taken would have no release",
-                    element.display(interner)
+                    element.shown(interner)
                 )
             }
             MirErrorKind::CastToUnknownType(name) => {
@@ -447,29 +466,29 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "`as` converts a number or a char; {} is neither",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::CastNotAdmitted { from, to } => match to {
                 Ty::Char => write!(
                     f,
                     "only `u8 as char` reaches a char; {} does not",
-                    from.display(interner)
+                    from.shown(interner)
                 ),
                 _ => write!(
                     f,
                     "`char as` reaches an integer; {} is not one",
-                    to.display(interner)
+                    to.shown(interner)
                 ),
             },
             MirErrorKind::DerefOfNonReference(ty) => {
-                write!(f, "`*` needs a reference, got {}", ty.display(interner))
+                write!(f, "`*` needs a reference, got {}", ty.shown(interner))
             }
             MirErrorKind::DerefOfNonPrimitive(ty) => {
                 write!(
                     f,
                     "`*` reads only a primitive; {} is used through the reference or cloned",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::MoveOutOfCapture { name, ty } => {
@@ -477,7 +496,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "cannot move `{name}` out of a closure's capture (type {}); \
                      act through the reference, or clone it",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::ReferenceCaptured => {
@@ -510,11 +529,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(f, "`{name}` is declared by {}", candidates.join(" and "))
             }
             MirErrorKind::NoMatchingFunction { name, ty } => {
-                write!(
-                    f,
-                    "no `{name}` takes a call of type {}",
-                    ty.display(interner)
-                )
+                write!(f, "no `{name}` takes a call of type {}", ty.shown(interner))
             }
             MirErrorKind::PlaceNamedTwice(place) => {
                 write!(f, "`{place}` is named twice in one call")
@@ -526,7 +541,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "cannot store through {}: not a `&mut`",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::MutableBorrowOfShared => {
@@ -536,21 +551,21 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "no instance of the signature has the call type {}",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::NoOperatorInstance { op, ty } => {
                 write!(
                     f,
                     "`{op}` has no instance of core::eq for {}",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::TypeOutOfBound { ty, bound } => {
                 write!(
                     f,
                     "type {} is outside the declared bound ",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )?;
                 match bound {
                     crate::ty::TyVarBound::Any => write!(f, "(any)"),
@@ -560,7 +575,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{}", t.display(interner))?;
+                            write!(f, "{}", t.shown(interner))?;
                         }
                         Ok(())
                     }
@@ -577,14 +592,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 }
             }
             MirErrorKind::IntegerLiteralOutOfRange { value, ty } => {
-                write!(f, "literal {value} does not fit {}", ty.display(interner))
+                write!(f, "literal {value} does not fit {}", ty.shown(interner))
             }
             MirErrorKind::AmbiguousConversion { from, to, rules } => {
                 write!(
                     f,
                     "more than one conversion takes {} to {}: ",
-                    from.display(interner),
-                    to.display(interner)
+                    from.shown(interner),
+                    to.shown(interner)
                 )?;
                 for (i, rule) in rules.iter().enumerate() {
                     if i > 0 {
@@ -598,8 +613,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "converting {} to {} rewrites the place the reference names, and this argument is a reference value, not a borrow of a place",
-                    from.display(interner),
-                    to.display(interner)
+                    from.shown(interner),
+                    to.shown(interner)
                 )
             }
             MirErrorKind::TryOutsideFunction => {
@@ -611,19 +626,19 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::TryOnNonResult(ty) => write!(
                 f,
                 "`?` takes a Result or an Option, not {}",
-                ty.display(interner)
+                ty.shown(interner)
             ),
             MirErrorKind::TryReturnMismatch { leaves, returns } => write!(
                 f,
                 "`?` leaves with {} but the function returns {}",
-                leaves.display(interner),
-                returns.display(interner)
+                leaves.shown(interner),
+                returns.shown(interner)
             ),
             MirErrorKind::UndefinedField { object_ty, field } => {
                 write!(
                     f,
                     "no field `{field}` on type {}",
-                    object_ty.display(interner)
+                    object_ty.shown(interner)
                 )
             }
             MirErrorKind::ObjectLacksDeclaredField { declared, field } => {
@@ -665,7 +680,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "unreachable pattern: `{pattern}` is not a variant of `{}`",
-                    scrutinee_ty.display(interner)
+                    scrutinee_ty.shown(interner)
                 )
             }
             MirErrorKind::MissingCatchAll => {
@@ -678,8 +693,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "pattern type {} incompatible with source type {}",
-                    pattern_ty.display(interner),
-                    source_ty.display(interner)
+                    pattern_ty.shown(interner),
+                    source_ty.shown(interner)
                 )
             }
             MirErrorKind::ExternParamAssign(name) => {
@@ -692,14 +707,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "`@{name}` has type {}, which is not data; a context holds only what a host keeps between runs",
-                    ty.display(interner)
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::SourceNotIterable { actual } => {
                 write!(
                     f,
                     "source type `{}` is not iterable",
-                    actual.display(interner)
+                    actual.shown(interner)
                 )
             }
             MirErrorKind::ArityMismatch {

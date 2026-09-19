@@ -260,6 +260,7 @@ impl Rendering {
                         Report {
                             severity: Severity::Error,
                             message: d.message.clone(),
+                            primary: d.primary.clone(),
                             path,
                             source,
                             span: d.span,
@@ -289,6 +290,7 @@ impl Rendering {
                         serde_json::json!({
                             "severity": Severity::Error.to_string(),
                             "message": d.message,
+                            "primary": d.primary,
                             "path": path,
                             "line": d.span.map(|s| at(s).line),
                             "col": d.span.map(|s| at(s).col),

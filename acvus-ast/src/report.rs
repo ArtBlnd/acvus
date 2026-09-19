@@ -94,6 +94,10 @@ impl Label {
 pub struct Report<'a> {
     pub severity: Severity,
     pub message: String,
+    /// The words the primary marker carries. Where a diagnostic has none,
+    /// the marker repeats the message so that a reader of a multi-span
+    /// snippet can tell which line the message is about.
+    pub primary: Option<String>,
     pub path: &'a str,
     pub source: &'a str,
     pub span: Option<Span>,
@@ -112,8 +116,9 @@ struct Marked<'a> {
 impl Report<'_> {
     /// The spans this report marks, in source order, the primary first among
     /// spans that start together. The primary is underlined with `^` and a
-    /// label with `-`; the primary carries the message where another span is
-    /// marked too, so the reader can tell which line the message is about.
+    /// label with `-`; its own text is `primary` where the diagnostic gave
+    /// one, and otherwise the message repeated where another span is marked
+    /// too, so the reader can tell which line the message is about.
     fn marked(&self, primary: Span, index: &LineIndex) -> Vec<Marked<'_>> {
         let at = |span: Span| index.line_col(span.start.min(self.source.len()));
         let another_place = self.labels.iter().any(|l| l.span.is_some());
@@ -121,9 +126,10 @@ impl Report<'_> {
             span: primary,
             at: at(primary),
             head: '^',
-            text: match another_place {
-                true => &self.message,
-                false => "",
+            text: match (&self.primary, another_place) {
+                (Some(text), _) => text,
+                (None, true) => &self.message,
+                (None, false) => "",
             },
         }];
         marked.extend(self.labels.iter().filter_map(|l| {
@@ -217,6 +223,7 @@ mod tests {
         let report = Report {
             severity: Severity::Error,
             message: "no such thing".to_string(),
+            primary: None,
             path: "a.acvus",
             source,
             span: Some(Span::new(19, 25)),
@@ -234,6 +241,7 @@ mod tests {
         let report = Report {
             severity: Severity::Error,
             message: "`a` is used here after it was moved".to_string(),
+            primary: None,
             path: "mv.acvus",
             source,
             span: Some(Span::new(27, 28)),
@@ -261,6 +269,7 @@ mod tests {
         let report = Report {
             severity: Severity::Error,
             message: "twice".to_string(),
+            primary: None,
             path: "e.acvus",
             source,
             span: Some(Span::new(35, 36)),
@@ -289,6 +298,7 @@ mod tests {
         let report = Report {
             severity: Severity::Error,
             message: "cannot move out of index of `[String; 2]`".to_string(),
+            primary: None,
             path: "i.acvus",
             source,
             span: Some(Span::new(8, 12)),
@@ -307,6 +317,61 @@ mod tests {
                 "  |         ^^^^ cannot move out of index of `[String; 2]`",
                 "  |         - this is the container",
                 "  = help: borrow with `&v[i]`",
+                "",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_primary_text_replaces_the_repeated_message_on_the_primary_marker() {
+        let source = "let a = x;\nlet b = y;\nlet l = [a, b];\n";
+        let report = Report {
+            severity: Severity::Error,
+            message: "`a` and `b` are values of one type from two different sources".to_string(),
+            primary: Some("`a` and `b` meet here".to_string()),
+            path: "s.acvus",
+            source,
+            span: Some(Span::new(30, 36)),
+            labels: vec![Label::at(Span::new(8, 9), "`a`'s source begins here")],
+        };
+        assert_eq!(
+            report.to_string(),
+            [
+                "error: `a` and `b` are values of one type from two different sources",
+                "  --> s.acvus:3:9",
+                "  |",
+                "1 | let a = x;",
+                "  |         - `a`'s source begins here",
+                "...",
+                "3 | let l = [a, b];",
+                "  |         ^^^^^^ `a` and `b` meet here",
+                "",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_primary_text_marks_the_only_span_where_no_label_has_one() {
+        let source = "let l = [a, b];\n";
+        let report = Report {
+            severity: Severity::Error,
+            message: "one type, two sources".to_string(),
+            primary: Some("`a` and `b` meet here".to_string()),
+            path: "s.acvus",
+            source,
+            span: Some(Span::new(8, 14)),
+            labels: Vec::new(),
+        };
+        assert_eq!(
+            report.to_string(),
+            [
+                "error: one type, two sources",
+                "  --> s.acvus:1:9",
+                "  |",
+                "1 | let l = [a, b];",
+                "  |         ^^^^^^ `a` and `b` meet here",
                 "",
             ]
             .join("\n")

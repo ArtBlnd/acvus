@@ -78,7 +78,9 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 actual,
             } => write!(
                 f,
-                "{inst_name} takes {desc} as {expected:?}, and it is {actual:?}"
+                "{inst_name} takes {desc} as {}, and it is {}",
+                expected.display(self.interner),
+                actual.display(self.interner)
             ),
             ValidationErrorKind::MissingType { value_id } => {
                 write!(f, "Val({value_id}) has no type")
@@ -107,7 +109,8 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 actual,
             } => write!(
                 f,
-                "{inst_name} takes {expected_constructor} and got {actual:?}"
+                "{inst_name} takes {expected_constructor} and got {}",
+                actual.display(self.interner)
             ),
             ValidationErrorKind::NonExhaustiveMatch => write!(
                 f,
