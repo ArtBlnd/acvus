@@ -1,5 +1,7 @@
-//! One file to one function, through the whole pipeline, with every
-//! diagnostic collected.
+//! One file to one function, through the stages that can refuse it, with
+//! every diagnostic collected: parse, typeck, lower, optimize — and
+//! validate, which `acvus_mir::graph::optimize` runs over every module it
+//! produces.
 
 use acvus_ast::Span;
 use acvus_extern::{Externs, Registry};
@@ -10,6 +12,7 @@ use acvus_mir::graph::{
     CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef, extract, infer, lower,
     optimize,
 };
+use acvus_mir::ir::MirModule;
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -26,23 +29,65 @@ pub struct Diagnostic {
     pub span: Option<Span>,
 }
 
+/// A source every stage that can refuse it has accepted. Running it takes
+/// one more stage, `prepare`, which belongs to the interpreter.
+pub struct Checked {
+    entry: QualifiedRef,
+    modules: FxHashMap<QualifiedRef, MirModule>,
+    externs: FxHashMap<QualifiedRef, Executable>,
+    space: acvus_interpreter::SpaceHooksByType,
+    fn_types: FxHashMap<QualifiedRef, Ty>,
+    context_names: FxHashMap<QualifiedRef, Astr>,
+    mir: String,
+}
+
+impl Checked {
+    pub fn mir_dump(&self) -> &str {
+        &self.mir
+    }
+
+    pub fn prepare(self, interner: &Interner) -> Compiled {
+        let Checked {
+            entry,
+            modules,
+            mut externs,
+            space,
+            fn_types,
+            context_names,
+            mir: _,
+        } = self;
+        let ctx = PrepareCtx {
+            interner,
+            externs: &externs,
+            context_names: &context_names,
+        };
+        let prepared: Vec<(QualifiedRef, Executable)> = modules
+            .iter()
+            .map(|(q, m)| (*q, Executable::Module(Arc::new(prepare_module(m, &ctx)))))
+            .collect();
+        externs.extend(prepared);
+        Compiled {
+            entry,
+            functions: externs,
+            space,
+            fn_types,
+            context_names,
+        }
+    }
+}
+
 pub struct Compiled {
     pub entry: QualifiedRef,
     pub functions: FxHashMap<QualifiedRef, Executable>,
     pub space: acvus_interpreter::SpaceHooksByType,
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub context_names: FxHashMap<QualifiedRef, Astr>,
-    mir: String,
 }
 
 impl Compiled {
-    pub fn mir_dump(&self, _: &Interner) -> &str {
-        &self.mir
-    }
-
-    /// The entry's prepared code: the bodies the machine would run. `compile`
-    /// prepares a module for every optimized module and the entry is a local
-    /// function, never an extern handler.
+    /// The entry's prepared code: the bodies the machine would run.
+    /// `prepare` prepares a module for every optimized module and the entry
+    /// is a local function, never an extern handler.
     pub fn entry_prepared(&self) -> &Prepared {
         match self.functions.get(&self.entry) {
             Some(Executable::Module(prepared)) => prepared,
@@ -58,13 +103,13 @@ fn span_of(span: Span) -> Option<Span> {
     (span.start != 0 || span.end != 0).then_some(span)
 }
 
-pub fn compile(
+pub fn check(
     interner: &Interner,
     source: &str,
     mode: Mode,
     context_types: &FxHashMap<Astr, Ty>,
     registries: Vec<Registry<AcvusRuntime>>,
-) -> Result<Compiled, Vec<Diagnostic>> {
+) -> Result<Checked, Vec<Diagnostic>> {
     let parsed = match mode {
         Mode::Script => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
         Mode::Expr => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
@@ -170,7 +215,7 @@ pub fn compile(
             .get(&entry)
             .expect("the entry function lowers to a module"),
     );
-    let mut executables: FxHashMap<QualifiedRef, Executable> = handlers
+    let externs: FxHashMap<QualifiedRef, Executable> = handlers
         .into_iter()
         .map(|(q, h)| (q, Executable::Extern(h)))
         .collect();
@@ -179,20 +224,10 @@ pub fn compile(
         .iter()
         .map(|c| (c.qref, c.qref.name))
         .collect();
-    let ctx = PrepareCtx {
-        interner,
-        externs: &executables,
-        context_names: &context_names,
-    };
-    let prepared: Vec<(QualifiedRef, Executable)> = optimized
-        .modules
-        .iter()
-        .map(|(q, m)| (*q, Executable::Module(Arc::new(prepare_module(m, &ctx)))))
-        .collect();
-    executables.extend(prepared);
-    Ok(Compiled {
+    Ok(Checked {
         entry,
-        functions: executables,
+        modules: optimized.modules,
+        externs,
         space,
         fn_types,
         context_names,

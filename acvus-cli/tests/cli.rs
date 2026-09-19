@@ -10,11 +10,22 @@ use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 fn acvus(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_acvus"))
+    let out = Command::new(env!("CARGO_BIN_EXE_acvus"))
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("the binary runs")
+        .expect("the binary runs");
+    let reported = [&out.stdout, &out.stderr]
+        .into_iter()
+        .any(|stream| text(stream).contains("error: "));
+    assert!(
+        !(reported && out.status.code() == Some(0)),
+        "`acvus {}` reported an error and exited 0:\n{}{}",
+        args.join(" "),
+        text(&out.stdout),
+        text(&out.stderr)
+    );
+    out
 }
 
 fn write(dir: &Path, name: &str, text: &str) {
@@ -211,6 +222,176 @@ fn ops_prints_the_prepared_listing_and_a_broken_script_is_refused() {
         "{}",
         text(&out.stderr)
     );
+}
+
+/// One script's exit status from each command.
+struct Exits {
+    script: &'static str,
+    check: i32,
+    mir: i32,
+    ops: i32,
+    run: i32,
+}
+
+fn exits(dir: &Path, command: &str, script: &str, code: i32) {
+    let out = acvus(dir, &[command, script]);
+    assert_eq!(
+        out.status.code(),
+        Some(code),
+        "`acvus {command} {script}`:\n{}",
+        text(&out.stderr)
+    );
+}
+
+/// `check` and `mir` stop where checking stops; `ops` and `run` prepare, and
+/// what only `prepare` refuses is theirs alone. An undeclared `@name` is
+/// such a refusal: nothing before `prepare` rejects it, so `check` accepts
+/// the script and the interpreter refuses it at `EXIT_RUN`.
+#[test]
+fn each_command_exits_by_the_stage_that_refused_the_script() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "parse.acvus", "let x = ;\n");
+    write(
+        dir.path(),
+        "types.acvus",
+        "let x = 1;\nlet y = x + \"a\";\n",
+    );
+    write(dir.path(), "context.acvus", "let x = @nope + 1; x\n");
+    write(dir.path(), "panic.acvus", "let xs = [1, 2, 3];\nxs[9]\n");
+    let expected = [
+        Exits {
+            script: "parse.acvus",
+            check: 1,
+            mir: 1,
+            ops: 1,
+            run: 1,
+        },
+        Exits {
+            script: "types.acvus",
+            check: 1,
+            mir: 1,
+            ops: 1,
+            run: 1,
+        },
+        Exits {
+            script: "context.acvus",
+            check: 0,
+            mir: 0,
+            ops: 2,
+            run: 2,
+        },
+        Exits {
+            script: "panic.acvus",
+            check: 0,
+            mir: 0,
+            ops: 0,
+            run: 2,
+        },
+    ];
+    for e in expected {
+        exits(dir.path(), "check", e.script, e.check);
+        exits(dir.path(), "mir", e.script, e.mir);
+        exits(dir.path(), "ops", e.script, e.ops);
+        exits(dir.path(), "run", e.script, e.run);
+    }
+    assert_eq!(
+        acvus(dir.path(), &["frob", "parse.acvus"]).status.code(),
+        Some(64)
+    );
+    assert_eq!(
+        acvus(dir.path(), &["run", "--json", "parse.acvus"])
+            .status
+            .code(),
+        Some(64)
+    );
+}
+
+#[test]
+fn a_parse_error_names_what_the_grammar_wanted_in_the_language_s_words() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "empty.acvus", "let x = ;\n");
+    let out = acvus(dir.path(), &["check", "empty.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = text(&out.stderr);
+    assert_eq!(
+        err,
+        "error: expected an expression, found `;`\n  --> empty.acvus:1:9\n  |\n1 | let x = ;\n  |         ^\n"
+    );
+    for internal in ["int_of", "fmt_start", "$ref", "@ref", "expected one of"] {
+        assert!(!err.contains(internal), "{internal} in {err}");
+    }
+
+    write(dir.path(), "stmt.acvus", "let x = 1; }\n");
+    let err = text(&acvus(dir.path(), &["check", "stmt.acvus"]).stderr);
+    assert_eq!(
+        err.lines().next(),
+        Some("error: expected a statement, found `}`")
+    );
+
+    write(dir.path(), "paren.acvus", "let x = (1;\n");
+    let err = text(&acvus(dir.path(), &["check", "paren.acvus"]).stderr);
+    assert_eq!(
+        err.lines().next(),
+        Some("error: expected `)` or `,`, found `;`")
+    );
+
+    write(dir.path(), "name.acvus", "let 1 = 2;\n");
+    let err = text(&acvus(dir.path(), &["check", "name.acvus"]).stderr);
+    assert_eq!(
+        err.lines().next(),
+        Some("error: expected a name, found `1`")
+    );
+}
+
+#[test]
+fn json_puts_the_diagnostics_on_stdout_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "bad.acvus", "let x = 1;\nlet y = x + \"a\";\n");
+    let out = acvus(dir.path(), &["check", "--json", "bad.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stderr), "");
+    let array: Vec<serde_json::Value> = serde_json::from_str(&text(&out.stdout)).unwrap();
+    assert_eq!(array.len(), 1);
+    assert_eq!(array[0]["severity"], "error");
+    assert_eq!(array[0]["message"], "type mismatch in `+`: i64 vs String");
+    assert_eq!(array[0]["path"], "bad.acvus");
+    assert_eq!(array[0]["line"], 2);
+    assert_eq!(array[0]["col"], 9);
+    assert_eq!(array[0]["span"], serde_json::json!([19, 26]));
+
+    write(dir.path(), "ok.acvus", "let x = 1;\nx\n");
+    for command in ["check", "mir"] {
+        let out = acvus(dir.path(), &[command, "--json", "ok.acvus"]);
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(text(&out.stdout), "[]\n");
+        assert_eq!(text(&out.stderr), "");
+    }
+}
+
+/// A template goes through the stages a script does, and a tag's diagnostic
+/// carries the span the tag has in the template file.
+#[test]
+fn a_template_is_checked_as_a_script_is() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "bad.acvt", "Hello {{ 1 + \"a\" }}!\n");
+    let out = acvus(dir.path(), &["check", "bad.acvt"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        "error: type mismatch in `+`: i64 vs String\n  --> bad.acvt:1:10\n  |\n1 | Hello {{ 1 + \"a\" }}!\n  |          ^^^^^^^\n"
+    );
+
+    write(dir.path(), "ok.acvt", "Hello {{ @name }}!\n");
+    write(dir.path(), "ctx.json", "{\"name\": \"acvus\"}");
+    let out = acvus(dir.path(), &["check", "ok.acvt", "--context", "ctx.json"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(text(&out.stdout), "");
+    // Without `--context` the tags are checked against an empty context, and
+    // an `@name` no context declares is one only `prepare` refuses.
+    let out = acvus(dir.path(), &["check", "ok.acvt"]);
+    assert_eq!(out.status.code(), Some(0));
+    let out = acvus(dir.path(), &["run", "ok.acvt"]);
+    assert_eq!(out.status.code(), Some(2));
 }
 
 #[test]

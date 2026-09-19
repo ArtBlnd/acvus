@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use acvus_ast::report::{Report, Severity};
+use acvus_ast::report::{LineIndex, Report, Severity};
 use acvus_interpreter::{
     Composite, ContextWrite, DirStore, Executor, InMemoryContext, Interpreter, InterpreterContext,
     Kind, Mode as SpaceMode, RuntimeContext, SequentialExecutor, Space, SpacePage, TokioExecutor,
@@ -28,8 +28,8 @@ const EXIT_USAGE: u8 = 64;
 const USAGE: &str = "\
 usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm] [--parallel]
        acvus run   -e <expr>              [--context ctx.json] [--llm] [--parallel]
-       acvus check <file>                 [--context ctx.json]
-       acvus mir   <file>                 [--context ctx.json]
+       acvus check <file>                 [--context ctx.json] [--json]
+       acvus mir   <file>                 [--context ctx.json] [--json]
        acvus ops   <file>                 [--context ctx.json] [--llm] [--json]
        acvus space <dir>
 
@@ -38,7 +38,9 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm
   --commit   write the contexts back to the context file after the run
   --space    a directory holding contexts (RFC-0033): the run fetches them
              from it and commits its changes to it; --context seeds it
-  --json     `ops` prints its listing as JSON instead of text
+  --json     stdout is JSON: the diagnostics as an array of
+             {severity, message, path, line, col, span}, and, where `ops`
+             has a listing to print, the listing
   --llm      register the LLM providers (keys from the environment)
   --parallel run spawned calls on the tokio executor";
 
@@ -110,6 +112,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 source = Some(Source::File(PathBuf::from(path)));
             }
         }
+    }
+    if json && matches!(command, Command::Run | Command::Space) {
+        return Err("--json is for check, mir and ops".to_string());
     }
     if matches!(command, Command::Space) {
         let Some(Source::File(dir)) = source else {
@@ -189,18 +194,60 @@ fn mode_of(path: &Path) -> Result<Mode, String> {
     }
 }
 
-fn report(path: &str, source: &str, diagnostics: &[Diagnostic]) {
-    for d in diagnostics {
-        eprint!(
-            "{}",
-            Report {
-                severity: Severity::Error,
-                message: d.message.clone(),
-                path,
-                source,
-                span: d.span,
+/// Where a diagnostic goes and in what shape: `error: …` with the span's
+/// line, source line and caret on stderr, or, under `--json`, the whole set
+/// as one array on stdout.
+enum Rendering {
+    Text,
+    Json,
+}
+
+impl Rendering {
+    fn of(json: bool) -> Self {
+        match json {
+            true => Rendering::Json,
+            false => Rendering::Text,
+        }
+    }
+
+    fn report(&self, path: &str, source: &str, diagnostics: &[Diagnostic]) {
+        match self {
+            Rendering::Text => {
+                for d in diagnostics {
+                    eprint!(
+                        "{}",
+                        Report {
+                            severity: Severity::Error,
+                            message: d.message.clone(),
+                            path,
+                            source,
+                            span: d.span,
+                        }
+                    );
+                }
             }
-        );
+            Rendering::Json => {
+                let index = LineIndex::new(source);
+                let array: Vec<serde_json::Value> = diagnostics
+                    .iter()
+                    .map(|d| {
+                        let at = d.span.map(|s| index.line_col(s.start.min(source.len())));
+                        serde_json::json!({
+                            "severity": Severity::Error.to_string(),
+                            "message": d.message,
+                            "path": path,
+                            "line": at.map(|a| a.line),
+                            "col": at.map(|a| a.col),
+                            "span": d.span.map(|s| [s.start, s.end]),
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string(&array).expect("a diagnostic array serializes")
+                );
+            }
+        }
     }
 }
 
@@ -313,17 +360,24 @@ async fn cli() -> ExitCode {
         }
         r
     };
-    let compiled = match compile::compile(&interner, &source, mode, &loaded.types, registries) {
+    let rendering = Rendering::of(args.json);
+    let checked = match compile::check(&interner, &source, mode, &loaded.types, registries) {
         Ok(c) => c,
         Err(diagnostics) => {
-            report(&path, &source, &diagnostics);
+            rendering.report(&path, &source, &diagnostics);
             return ExitCode::from(EXIT_COMPILE);
         }
     };
     match args.command {
-        Command::Check => ExitCode::SUCCESS,
+        Command::Check => {
+            rendering.report(&path, &source, &[]);
+            ExitCode::SUCCESS
+        }
         Command::Mir => {
-            print!("{}", compiled.mir_dump(&interner));
+            match rendering {
+                Rendering::Text => print!("{}", checked.mir_dump()),
+                Rendering::Json => rendering.report(&path, &source, &[]),
+            }
             ExitCode::SUCCESS
         }
         Command::Ops => {
@@ -331,7 +385,7 @@ async fn cli() -> ExitCode {
                 true => oplist::Form::Json,
                 false => oplist::Form::Text,
             };
-            match oplist::dump(compiled.entry_prepared(), form) {
+            match oplist::dump(checked.prepare(&interner).entry_prepared(), form) {
                 Ok(text) => {
                     print!("{text}");
                     ExitCode::SUCCESS
@@ -342,7 +396,7 @@ async fn cli() -> ExitCode {
                 }
             }
         }
-        Command::Run => run(&interner, compiled, loaded, space, &args).await,
+        Command::Run => run(&interner, checked.prepare(&interner), loaded, space, &args).await,
         Command::Space => unreachable!("handled before compiling"),
     }
 }

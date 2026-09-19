@@ -388,6 +388,33 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `(` `)` `[` `]` `{` `}` | delimiters |
 | `,` | separator |
 
+### Parse errors
+
+A parse error names what the grammar admitted at the span, in the language's
+words: `expected an expression, found `;``. The set LALRPOP reports is the
+grammar's terminal names, and a message never prints one. `Terminal` in
+`acvus-ast/src/error.rs` carries one class per terminal — `int_of` is "a
+number", `ident` "a name", `fmt_start` "a format string", and every operator
+and delimiter its own text — and a set that covers a nonterminal's whole
+opening stands for that nonterminal:
+
+| Set | Message |
+|-----|---------|
+| every operand opening, with `if`, `match`, `\|` and the statement keywords | `a statement` |
+| every operand opening | `an expression` |
+| every operand opening and `_` | `a pattern` |
+| the seven literal forms | `a literal` |
+| anything else | the terminals themselves: ``expected `)` or `,``` |
+
+Terminals the covered nonterminal does not account for follow it:
+``expected an expression, `..` or `]```.
+
+The table is closed over the terminals `extern { enum Token { … } }`
+declares: `Terminal::of_token` gives the compiler one half — a new `Token`
+variant does not compile until it has a `Terminal` — and the test
+`terminals_match_the_grammar` reads the names out of `grammar.lalrpop` and
+holds them equal to the table's.
+
 ### Operator Precedence (low → high)
 
 | Precedence | Operator | Associativity |

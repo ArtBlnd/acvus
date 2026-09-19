@@ -2,7 +2,7 @@ use acvus_utils::{Interner, QualifiedRef};
 use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
-use crate::error::{ParseError, ParseErrorKind};
+use crate::error::{Expected, Found, ParseError, ParseErrorKind};
 use crate::grammar::{ExprParser, ScriptParser, TagContentParser};
 use crate::lexer::{ExprTokenizer, Segment, scan_template};
 use crate::span::Span;
@@ -324,7 +324,9 @@ fn parse_tag_content(
         .map_err(|e| convert_lalrpop_error(e, base_offset, content.len()))
 }
 
-/// Convert a LALRPOP error to our ParseError.
+/// Convert a LALRPOP error to our ParseError. The `expected` set arrives as
+/// the grammar's terminal names, which `Expected` maps to the nonterminal
+/// they stand for.
 fn convert_lalrpop_error(
     error: LalrpopError<usize, Token, ParseError>,
     _base_offset: usize,
@@ -332,7 +334,7 @@ fn convert_lalrpop_error(
 ) -> ParseError {
     match error {
         LalrpopError::InvalidToken { location } => ParseError::new(
-            ParseErrorKind::UnexpectedToken("invalid token".into()),
+            ParseErrorKind::InvalidToken,
             Span::new(location, location + 1),
         ),
         LalrpopError::UnrecognizedEof {
@@ -343,16 +345,18 @@ fn convert_lalrpop_error(
             token: (start, tok, end),
             expected,
         } => ParseError::new(
-            ParseErrorKind::UnexpectedToken(format!(
-                "got `{tok}`, expected one of: {}",
-                expected.join(", ")
-            )),
+            ParseErrorKind::UnexpectedToken {
+                found: Found::of(&tok),
+                expected: Expected::of_grammar_names(expected.iter().map(String::as_str)),
+            },
             Span::new(start, end),
         ),
         LalrpopError::ExtraToken {
             token: (start, tok, end),
         } => ParseError::new(
-            ParseErrorKind::UnexpectedToken(format!("extra token `{tok}`")),
+            ParseErrorKind::ExtraToken {
+                found: Found::of(&tok),
+            },
             Span::new(start, end),
         ),
         LalrpopError::User { error } => error,

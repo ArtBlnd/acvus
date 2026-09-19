@@ -10,17 +10,35 @@ runs it.
 ## Run
 
 ```sh
-cargo run -p acvus-cli -- run  script.acvus  --context ctx.json
-cargo run -p acvus-cli -- run  -e '@items | map(|x| -> x.name) | join(", ")' --context ctx.json
-cargo run -p acvus-cli -- check script.acvus
-cargo run -p acvus-cli -- mir   script.acvus
+cargo run -p acvus-cli -- run   script.acvus  --context ctx.json
+cargo run -p acvus-cli -- run   -e '@items | map(|x| -> x.name) | join(", ")' --context ctx.json
+cargo run -p acvus-cli -- check script.acvus [--json]
+cargo run -p acvus-cli -- mir   script.acvus [--json]
 cargo run -p acvus-cli -- ops   script.acvus [--json]
+cargo run -p acvus-cli -- space store/
 ```
 
-`--context` is a JSON file whose keys are the script's `@names`. `check`
-type-checks without running; `mir` prints the optimized program; `ops`
-prints the operations the interpreter prepares from it, `main` and every
-closure body, block by block.
+`--context` is a JSON file whose keys are the script's `@names`. A `.acvus`
+file is a script, a `.acvt` file a template; both go through the same
+stages.
+
+Each command stops where its job stops. `check` and `mir` run parse,
+typecheck, lowering, optimization and validation: `check` prints nothing,
+`mir` prints the optimized program. `ops` and `run` add the interpreter's
+`prepare`: `ops` prints the operations it prepares, `main` and every closure
+body, block by block, and `run` executes them. What only `prepare` refuses —
+an `@name` no context declares — therefore reaches `ops` and `run` alone.
+
+A diagnostic is one `error: <message>` line, then the file, line and column,
+the source line and a caret under the span. `--json` puts them on stdout
+instead, as an array of `{severity, message, path, line, col, span}` — the
+span is `[start, end]` in bytes, and `line`, `col` and `span` are `null`
+where the failing stage has no span to give. Under `--json` every byte on
+stdout is JSON: `check` and `mir` print the array alone, `ops` prints its
+listing where it has one.
+
+Exit status: `0` success, `1` a diagnostic, `2` a refusal at run time, `64`
+a usage error.
 
 ## Scripts
 
