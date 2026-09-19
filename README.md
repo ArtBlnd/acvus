@@ -208,7 +208,7 @@ cargo run -p acvus-cli -- run examples/collatz/main.acvus --context examples/col
 
 ```
 collatz     the Collatz walk of a context number: `while`, and `if` as a value
-grades      objects in a context array: `as_iter`/`while let`, and `map | filter | fold`
+grades      objects in a context array: `for s in &@students`, and `map | filter | fold`
 word-count  `split_whitespace`, `lower`, counts in parallel vectors, the top three by count then bytes
 log-parse   log lines cut by one regex's named groups: a tally per level, and the span in seconds between the first and last timestamp
 shapes      a structural enum, an exhaustive `match`, a `Result` per entry carried out by `?`

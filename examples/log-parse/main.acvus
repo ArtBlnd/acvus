@@ -23,12 +23,11 @@ while let Some(line) = records.next() {
     let level = fields.named("level".to_string()).unwrap().text;
     let message = fields.named("message".to_string()).unwrap().text;
 
-    let i = 0u64;
-    while i < levels.len() {
+    for i in 0u64..levels.len() {
         if levels[i] == level {
             counts[i] = counts[i] + 1;
+            break;
         };
-        i = i + 1u64;
     }
 
     if seen == 0 {
@@ -48,13 +47,11 @@ let closed = last.to_string().parse_date(stamp_format.to_string())?;
 let span = closed.timestamp() - opened.timestamp();
 
 let out = "{{ &seen | to_string }} lines over {{ &span | to_string }} seconds, {{ &first }} .. {{ &last }}";
-let i = 0u64;
-while i < levels.len() {
+for i in 0u64..levels.len() {
     let level = levels[i].to_string();
     let count = counts[i];
     out = out + "
 {{ &level }} {{ &count | to_string }}";
-    i = i + 1u64;
 }
 out + "
 longest message {{ &longest | to_string }} bytes"

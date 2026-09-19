@@ -22,8 +22,7 @@ let total_area = 0.0;
 let total_perimeter = 0.0;
 let refused = vec([]);
 
-let entries = @entries.as_iter();
-while let Some(e) = entries.next() {
+for e in &@entries {
     let kind = e.kind.to_string();
     let parsed = if kind == "circle".to_string() {
         Ok(Shape::Circle(e.a))
@@ -53,11 +52,9 @@ let largest = (areas.into_iter() | max).unwrap_or(0.0);
 let out = "measured {{ &total_area | to_string }} area, {{ &total_perimeter | to_string }} perimeter
 largest {{ &largest | to_string }}";
 
-let i = 0u64;
-while i < refused.len() {
-    let kind = refused[i].to_string();
+for refused_kind in &refused {
+    let kind = refused_kind.to_string();
     out = out + "
 refused {{ &kind }}";
-    i = i + 1u64;
 }
 out

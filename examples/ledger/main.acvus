@@ -32,8 +32,7 @@ let largest_debit = 0;
 let largest_note = "none".to_string();
 let out = "".to_string();
 
-let rows = @transactions.as_iter();
-while let Some(row) = rows.next() {
+for row in &@transactions {
     let amount = to_cents(row.amount.to_string())?;
     balance = balance + amount;
     if amount < largest_debit {

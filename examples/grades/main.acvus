@@ -1,5 +1,5 @@
-// Students arrive as objects in a context array: `as_iter` and `while let`
-// walk them once and count the three bands.
+// Students arrive as objects in a context array: one `for` over `&@students`
+// walks them once and counts the three bands.
 // A `map | filter | fold` pipeline over the same array totals the scores
 // of 60 and above.
 
@@ -8,8 +8,7 @@ let pass = 0;
 let fail = 0;
 let best = 0;
 
-let students = @students.as_iter();
-while let Some(s) = students.next() {
+for s in &@students {
     let score = s.score;
     if score >= 90 {
         honor = honor + 1;

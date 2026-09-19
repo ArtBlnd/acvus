@@ -10,8 +10,7 @@ let served = vec([]);
 let high_water = 0u64;
 let round = 0;
 
-let tasks = @tasks.as_iter();
-while let Some(task) = tasks.next() {
+for task in &@tasks {
     pending.push_back(task.name.to_string());
     let depth = pending.len();
     if depth > high_water {
@@ -31,11 +30,9 @@ while let Some(name) = pending.pop_front() {
 
 let count = served.len();
 let out = "{{ &round | to_string }} rounds, deepest {{ &high_water | to_string }}, {{ &count | to_string }} served";
-let i = 0u64;
-while i < served.len() {
-    let name = served[i].to_string();
+for served_name in &served {
+    let name = served_name.to_string();
     out = out + "
 {{ &name }}";
-    i = i + 1u64;
 }
 out
