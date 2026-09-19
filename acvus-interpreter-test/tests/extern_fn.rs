@@ -120,7 +120,7 @@ async fn extern_captures_environment() {
 async fn regex_match_via_extern() {
     let i = Interner::new();
 
-    let registries = vec![acvus_ext::regex_registry(), acvus_ext::string_registry()];
+    let registries = vec![acvus_ext::regex_registry()];
     let c = ctx(&i, vec![("text", string("hello world 42"))]);
     let result = run_script_mode_with_externs(
         &i,
@@ -137,7 +137,7 @@ async fn regex_match_via_extern() {
 async fn regex_find_via_extern() {
     let i = Interner::new();
 
-    let registries = vec![acvus_ext::regex_registry(), acvus_ext::string_registry()];
+    let registries = vec![acvus_ext::regex_registry()];
     let c = ctx(&i, vec![("text", string("price is 42 dollars"))]);
     let result = run_script_mode_with_externs(
         &i,

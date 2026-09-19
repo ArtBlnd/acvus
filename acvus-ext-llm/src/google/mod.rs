@@ -346,18 +346,20 @@ mod tests {
         let registry = google_registry::<_, acvus_extern::TypesOnly>(fetch);
         let registered =
             acvus_extern::Externs::combine(vec![registry], &interner).expect("registry combines");
+        let core = interner.intern("core");
         let mut implemented = registered.functions.iter().filter(|f| {
-            registered
-                .handlers
-                .get(&f.qref)
-                .is_some_and(|h| !h.is_empty())
+            f.qref.namespace != Some(core)
+                && registered
+                    .handlers
+                    .get(&f.qref)
+                    .is_some_and(|h| !h.is_empty())
         });
         let func = implemented
             .next()
             .expect("the registry implements its function");
         assert!(
             implemented.next().is_none(),
-            "the registry implements exactly one function; the shared signatures it combines with have no handler"
+            "the registry implements exactly one function of its own; the shared signatures it combines with have no handler and `core` is what `combine` prepends"
         );
         assert_eq!(interner.resolve(func.qref.name), "google_llm");
     }

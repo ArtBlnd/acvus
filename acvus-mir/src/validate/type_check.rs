@@ -181,6 +181,7 @@ fn types_match(expected: &Ty, actual: &Ty) -> bool {
         (Ty::Float, Ty::Float) => true,
         (Ty::Char, Ty::Char) => true,
         (Ty::String, Ty::String) => true,
+        (Ty::Str, Ty::Str) => true,
         (Ty::Bool, Ty::Bool) => true,
         (Ty::Unit, Ty::Unit) => true,
         (Ty::Never, Ty::Never) => true,

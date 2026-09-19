@@ -301,10 +301,10 @@ display order, not the order the registries were combined in.
 - A `Converted` argument needs no deferral of its own: the conversion
   decision `convert_argument_at` opens already waits for the signature,
   through `Solver::awaits_signature`.
-- A view at an argument is only reachable where `string::as_str` is declared,
-  since `slice_coercion` resolves the declaration out of the environment's
-  `machine_set`. A registry set without the `string` namespace refuses a
-  `&str` parameter as an argument mismatch.
+- A view at an argument is reachable in every registry set: `slice_coercion`
+  resolves the declaration out of the environment's `machine_set`, and
+  `core::as_str` is carried by `core_registry`, which `Externs::combine`
+  prepends to whatever it is given.
 - RFC-0021's one-name rule is amended: a name two namespaces declare is a
   set, decided by this RFC.
 - A library function that exists per container type is a plain function

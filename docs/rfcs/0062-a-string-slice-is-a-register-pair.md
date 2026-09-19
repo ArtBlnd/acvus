@@ -93,7 +93,7 @@ string has no such type.
 ## Consequences
 
 Measured: `let s = "abc"; s.len()` lowers to `ref &s`, one `as_slice` whose
-instance is `string::as_str`, then the call — the view is one instruction and
+instance is `core::as_str`, then the call — the view is one instruction and
 `string::len`'s parameter is `&str`. `let v = [1, 2, 3]; v.len()` lowers to
 `ref &v` and the call, with no view considered. `let zs = labels([1, 2, 3]);
 zs[2].len()` resolves to `string::len` once the element type freezes, through
@@ -102,7 +102,10 @@ the admission order of RFC-0043.
 The `string` module's reading parameters that were already `&String` are
 `&str`: `len`, `is_empty`, `concat`, `char_at`, `find`, `rfind`,
 `eq_ignore_case`. `as_str` keeps `&String`, being the coercion's own
-declaration. `regex`'s `text` is `&str` in every synchronous entry.
+declaration, and is declared in `core` rather than in `string`: the
+instruction it lowers to is the language's one crossing (RFC-0039), so a
+`&str` parameter is reachable wherever the checker runs. `regex`'s `text` is
+`&str` in every synchronous entry.
 
 A reading parameter taken by value stays `String`: the caller has no `&str`
 to give it until a string literal is one. `regex::replace_with` and

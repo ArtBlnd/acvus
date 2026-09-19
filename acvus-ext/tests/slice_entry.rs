@@ -27,9 +27,25 @@ fn the_slice_entry_is_the_slice_returning_declarations_and_nothing_else() {
         [
             "array::as_slice",
             "array::as_slice_mut",
-            "string::as_str",
+            "core::as_str",
             "vec::as_slice",
             "vec::as_slice_mut",
         ]
     );
+}
+
+/// RFC-0062 Decision 3 reaches a `&str` parameter through `as_str`, which
+/// `slice_coercion` resolves out of the environment's machine set, so a
+/// registry set that declares no `string` module still has it.
+#[test]
+fn the_view_of_a_string_is_declared_with_no_registry_at_all() {
+    let i = Interner::new();
+    let externs = Externs::<TypesOnly>::combine(vec![], &i).expect("core alone combines");
+    let declared: Vec<String> = externs
+        .handlers
+        .iter()
+        .filter(|(_, handlers)| handlers.iter().any(|h| h.width().ret == 2))
+        .map(|(qref, _)| name(&i, qref))
+        .collect();
+    assert_eq!(declared, ["core::as_str"]);
 }

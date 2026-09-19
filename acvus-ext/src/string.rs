@@ -8,8 +8,7 @@
 //! `s.chars().nth(i)`, and `find`/`rfind` report a scalar index.
 
 use acvus_extern::{
-    EffectVar, Erased, IdentityVar, OneValue, Registry, Runtime, StrView, extern_fn,
-    extern_registry,
+    EffectVar, Erased, IdentityVar, OneValue, Registry, Runtime, extern_fn, extern_registry,
 };
 
 use crate::iter::Iter;
@@ -27,15 +26,6 @@ fn shortfall(s: &str, width: i64) -> usize {
         return 0;
     };
     width.saturating_sub(s.chars().count())
-}
-
-/// The whole string borrowed as a view, which is what a `&String` argument
-/// at a `&str` parameter becomes (RFC-0062 Decision 3). No script names it:
-/// `is_machine_signature` keeps it out of the environment a script resolves
-/// against, as it keeps `as_slice` out.
-#[extern_fn(effect = pure)]
-fn as_str(s: &String) -> StrView {
-    StrView::of(s)
 }
 
 /// The length in characters.
@@ -294,7 +284,7 @@ where
     extern_registry! {
         ns: "string",
         fns: [
-            as_str, len, is_empty, concat, trim, trim_start, trim_end, upper, lower, contains,
+            len, is_empty, concat, trim, trim_start, trim_end, upper, lower, contains,
             starts_with_str, ends_with_str, replace_str, split_str, repeat_str,
             substring, to_bytes, to_utf8, to_utf8_lossy,
             char_at, chars, lines, bytes, split_whitespace,
@@ -315,7 +305,7 @@ mod tests {
         let reg =
             Externs::combine(vec![string_registry::<TypesOnly>()], &i).expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
-        assert_eq!(reg.functions.len() - core.functions.len(), 33);
-        assert_eq!(reg.handlers.len() - core.handlers.len(), 33);
+        assert_eq!(reg.functions.len() - core.functions.len(), 32);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 32);
     }
 }

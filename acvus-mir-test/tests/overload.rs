@@ -520,3 +520,17 @@ fn an_argument_no_candidate_takes_empties_the_set_at_that_argument() {
     let errors = errors_of(&i, "peek(1)");
     assert_eq!(errors, vec!["no `peek` takes a call of type Fn(i64) -> !"]);
 }
+
+/// Rule 1 at a bare-variable argument, which is the one resolution of the
+/// four that admits no view: `k` is a `String` where the call meets the set,
+/// no `len` takes a `String` directly, and rule 2 admits a view only from a
+/// borrow of a storage — so the set empties and the call is named as written.
+#[test]
+fn a_bare_variable_receiver_at_a_value_parameter_reaches_no_view() {
+    let i = Interner::new();
+    let errors = errors_of(&i, "let f = |k| -> len(k); f(\"ab\")");
+    assert_eq!(
+        errors,
+        vec!["no `len` takes a call of type Fn(String) -> u64"]
+    );
+}
