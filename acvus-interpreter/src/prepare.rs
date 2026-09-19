@@ -3423,6 +3423,63 @@ fn window_handler() -> ExternHandler {
     >(refuses_to_run))
 }
 
+/// An extern of one parameter written `&str` in Rust, which is two of the
+/// runtime's values at one parameter.
+#[cfg(test)]
+fn str_handler() -> ExternHandler {
+    ExternHandler::sync(acvus_extern::glue1::<
+        crate::runtime::AcvusRuntime,
+        _,
+        acvus_extern::ByStr,
+        acvus_extern::Val<Value>,
+    >(refuses_a_str))
+}
+
+#[cfg(test)]
+fn refuses_a_str(
+    _: &crate::runtime::AcvusRuntime,
+    _: &mut crate::regs::FrameState,
+    s: &str,
+) -> Value {
+    let _ = s;
+    panic!("the preparation must not run a handler")
+}
+
+#[cfg(test)]
+mod call_form_tests {
+    use super::*;
+
+    /// The form is the handler's width and never its count of parameters: a
+    /// parameter written `&str` is a pair, so one of them is already past the
+    /// register forms and the call is lent its window.
+    #[test]
+    fn one_str_parameter_is_lent_its_window() {
+        let ExternHandler::Sync(factory) = str_handler() else {
+            panic!("an extern declared with a plain `fn` is a Sync handler")
+        };
+        let width = factory.width();
+        assert_eq!(width, Width { args: 2, ret: 1 });
+        assert_eq!(CallForm::of(&width, 1), CallForm::Window);
+
+        let op = factory.into_op(call::CallShape::Window {
+            dst: Off::of(2),
+            window: call::ArgWindow {
+                at: Off::of(0),
+                arity: 2,
+                takes: 0,
+            },
+            large: false,
+            next: Box::new(crate::ops::control::Return::<false> { slot: Off::of(2) }),
+        });
+        let built = crate::listing::last_path_segment(&*op);
+        assert!(
+            built.starts_with("CallWindow"),
+            "a `&str` parameter is lent its window, and the operation built for it is \
+             {built}"
+        );
+    }
+}
+
 #[cfg(test)]
 fn never_runs_awaited<'a>(
     _: &'a crate::runtime::AcvusRuntime,

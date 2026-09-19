@@ -29,8 +29,15 @@ pub struct Variant<V> {
 /// The run of the runtime's values a crossing occupies, as a type, so that a
 /// bound can name it and the width is read off the type rather than repeated
 /// as a number.
-pub trait Form: crate::handler::AtArity1 {
+pub trait Form {
     const WIDTH: usize;
+
+    /// `Run` with one more parameter of this form on it, which is how a
+    /// declaration's call form is folded out of its parameter list
+    /// (`handler::ArgRun`).
+    type Onto<Run>: crate::handler::ArgRun
+    where
+        Run: crate::handler::ArgRun;
 }
 
 /// One of the runtime's values.
@@ -41,10 +48,20 @@ pub struct Pair;
 
 impl Form for One {
     const WIDTH: usize = 1;
+
+    type Onto<Run>
+        = <Run as crate::handler::ArgRun>::WithOne
+    where
+        Run: crate::handler::ArgRun;
 }
 
 impl Form for Pair {
     const WIDTH: usize = 2;
+
+    type Onto<Run>
+        = <Run as crate::handler::ArgRun>::WithPair
+    where
+        Run: crate::handler::ArgRun;
 }
 
 /// How a type crosses the boundary (RFC-0039): as the run of the runtime's

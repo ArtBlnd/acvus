@@ -371,40 +371,138 @@ where
     }
 }
 
-/// The form a declaration of one parameter takes, which its result decides:
-/// a result that is one value goes to a register, and the two words of a
-/// run go back in the pair `AsSlice` stores. Every other arity names its
-/// form outright, so this is the one place a form is chosen by a type.
-pub trait AtArity1: Sized {
+/// An argument run of `N` of the runtime's values, one per parameter.
+pub struct InRegisters<const N: usize>;
+
+/// An argument run the register forms do not cover: a parameter wider than
+/// one of the runtime's values, or more than `REGISTER_FORM` parameters. Such
+/// a call is lent the window its arguments already sit in.
+pub struct InWindow;
+
+/// An argument run, and the run one more parameter makes of it. `Form::Onto`
+/// picks between the two, so the fold over a declaration's parameters needs
+/// no bound the parameter types do not already carry.
+///
+/// A register form passes one register per parameter, and the other half of
+/// that contract lives in the interpreter: `prepare::CallForm::of` builds a
+/// register shape only where `Width::args` equals the number of parameters.
+/// A parameter wider than one value therefore leaves the register forms here,
+/// so that both halves say the same thing.
+pub trait ArgRun {
+    type WithOne: ArgRun;
+    type WithPair: ArgRun;
+}
+
+impl ArgRun for InRegisters<0> {
+    type WithOne = InRegisters<1>;
+    type WithPair = InWindow;
+}
+impl ArgRun for InRegisters<1> {
+    type WithOne = InRegisters<2>;
+    type WithPair = InWindow;
+}
+impl ArgRun for InRegisters<2> {
+    type WithOne = InRegisters<3>;
+    type WithPair = InWindow;
+}
+impl ArgRun for InRegisters<3> {
+    type WithOne = InWindow;
+    type WithPair = InWindow;
+}
+impl ArgRun for InWindow {
+    type WithOne = InWindow;
+    type WithPair = InWindow;
+}
+
+/// The `WithOne` chain above is as long as the widest register form, and
+/// `REGISTER_FORM` is that number written once more for `prepare` to read.
+/// The assertion is what keeps the two one number.
+const _: () = assert!(
+    REGISTER_FORM == 3,
+    "the ArgRun chain covers REGISTER_FORM parameters and no other number"
+);
+
+/// The run a declaration's parameters make, as the form its call takes.
+pub trait Parameters<Rt>
+where
+    Rt: Runtime,
+{
+    type Run;
+}
+
+/// The call form a run of this shape and a result of form `R` take: which
+/// `Rt::op_*` a factory names, and which `Rt::fused_*` (RFC-0059 rule 7).
+///
+/// The choice is a trait impl and not a branch on `Handler::WIDTH` because
+/// the monomorphization collector reaches every operation a branch names,
+/// whichever way the constant goes: `str`'s `len`, `find` and `concat` take
+/// their arguments as pairs since `61da3863`, the arity macro named
+/// `CallExtern1`/`CallExtern2` over them all the same, and the bodies that
+/// came out — a bounds failure and nothing else, since a pair does not fit a
+/// one-value run — are what `asm_probe` refused.
+pub trait TakenForm<R>
+where
+    R: Form,
+{
     fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
     where
         Rt: Runtime,
         H: Handler<Rt>;
+
     fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
     where
         Rt: Runtime,
         H: Handler<Rt>;
 }
 
-impl AtArity1 for One {
-    fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
-    where
-        Rt: Runtime,
-        H: Handler<Rt>,
-    {
-        Rt::op_one_argument::<H>(handler, shape)
-    }
+macro_rules! taken_form {
+    ($run:ty, op = $op:path, fused = $fused:path) => {
+        impl TakenForm<One> for $run {
+            fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
+            where
+                Rt: Runtime,
+                H: Handler<Rt>,
+            {
+                $op(handler, shape)
+            }
 
-    fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
-    where
-        Rt: Runtime,
-        H: Handler<Rt>,
-    {
-        Rt::fused_one_argument::<H>(handler, shape)
-    }
+            fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
+            where
+                Rt: Runtime,
+                H: Handler<Rt>,
+            {
+                $fused(handler, shape)
+            }
+        }
+    };
 }
 
-impl AtArity1 for Pair {
+taken_form!(
+    InRegisters<0>,
+    op = Rt::op_no_argument,
+    fused = Rt::fused_no_argument
+);
+taken_form!(
+    InRegisters<1>,
+    op = Rt::op_one_argument,
+    fused = Rt::fused_one_argument
+);
+taken_form!(
+    InRegisters<2>,
+    op = Rt::op_two_arguments,
+    fused = Rt::fused_two_arguments
+);
+taken_form!(
+    InRegisters<3>,
+    op = Rt::op_three_arguments,
+    fused = no_fused_run
+);
+taken_form!(InWindow, op = Rt::op_wide, fused = no_fused_run);
+
+/// A result wider than one value is the run of a container's elements, which
+/// RFC-0047 §3 admits from a declaration of one parameter of one value and
+/// from nowhere else. The missing impls of every other run are that refusal.
+impl TakenForm<Pair> for InRegisters<1> {
     fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
     where
         Rt: Runtime,
@@ -516,25 +614,6 @@ where
     }
 }
 
-/// The arity-1 forms, chosen by the result's own form (`AtArity1`).
-fn op_at_arity1<Rt, H, R>(handler: H, shape: Rt::CallShape) -> Rt::Op
-where
-    Rt: Runtime,
-    H: Handler<Rt>,
-    R: Ret<Rt>,
-{
-    <R::Form as AtArity1>::op::<Rt, H>(handler, shape)
-}
-
-fn fused_at_arity1<Rt, H, R>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
-where
-    Rt: Runtime,
-    H: Handler<Rt>,
-    R: Ret<Rt>,
-{
-    <R::Form as AtArity1>::fused::<Rt, H>(handler, shape)
-}
-
 fn no_fused_run<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
 where
     Rt: Runtime,
@@ -591,14 +670,22 @@ unsafe impl<Rt, F, A> Send for AsyncGlue<Rt, F, A> where F: Send + Sync {}
 // SAFETY: as `Send`.
 unsafe impl<Rt, F, A> Sync for AsyncGlue<Rt, F, A> where F: Send + Sync {}
 
+/// The run of `InRegisters<0>` widened by each parameter in turn: the fold
+/// whose answer `TakenForm` reads.
+macro_rules! run_of {
+    ($rt:ty, $run:ty) => { $run };
+    ($rt:ty, $run:ty, $arg:ident $(, $rest:ident)*) => {
+        run_of!($rt, <<$arg as Arg<'static, $rt>>::Form as Form>::Onto<$run> $(, $rest)*)
+    };
+}
+
 /// One arity: the two `Handler` impls and the two constructors that carry
 /// their bounds. A closure is inferred higher-ranked only where the bound is
 /// in scope at its own site, which is why the constructors exist and neither
 /// `Glue` nor `AsyncGlue` has a `new`.
 macro_rules! arity {
     (
-        $glue:ident, $async_glue:ident, [$($result:tt)*],
-        op = $op:path, fused = $fused:path
+        $glue:ident, $async_glue:ident, [$($result:tt)*]
         $(, $arg:ident: $out:ident)*
     ) => {
         pub fn $glue<Rt, F, $($arg,)* R>(f: F) -> Glue<Rt, F, ($($arg,)*), R>
@@ -647,6 +734,14 @@ macro_rules! arity {
             }
         }
 
+        impl<Rt, $($arg,)*> Parameters<Rt> for ($($arg,)*)
+        where
+            Rt: Runtime,
+            $($arg: for<'a> Arg<'a, Rt>,)*
+        {
+            type Run = run_of!(Rt, InRegisters<0> $(, $arg)*);
+        }
+
         impl<Rt, F, $($arg,)* R> HandlerFactory<Rt> for Glue<Rt, F, ($($arg,)*), R>
         where
             Rt: Runtime,
@@ -655,6 +750,7 @@ macro_rules! arity {
                 -> R::Of,
             $($arg: for<'a> Arg<'a, Rt> + 'static,)*
             R: Ret<Rt> + 'static,
+            <($($arg,)*) as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
         {
             fn clone_box(&self) -> Box<dyn HandlerFactory<Rt>> {
                 Box::new(self.clone())
@@ -665,11 +761,15 @@ macro_rules! arity {
             }
 
             fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op {
-                $op(*self, shape)
+                <<($($arg,)*) as Parameters<Rt>>::Run as TakenForm<
+                    <R as Ret<Rt>>::Form,
+                >>::op::<Rt, Self>(*self, shape)
             }
 
             fn into_fused(self: Box<Self>, shape: Rt::FusedShape) -> Rt::FusedCall {
-                $fused(*self, shape)
+                <<($($arg,)*) as Parameters<Rt>>::Run as TakenForm<
+                    <R as Ret<Rt>>::Form,
+                >>::fused::<Rt, Self>(*self, shape)
             }
         }
 
@@ -730,78 +830,33 @@ macro_rules! arity {
 }
 
 // A slice is the one result wider than a value, and RFC-0047 §3 admits it
-// from a declaration of one parameter and no other: every arity but one takes
-// `Form = One`, so a slice returned anywhere else is a compile error.
-arity!(
-    glue0,
-    async_glue0,
-    [Ret<Rt, Form = One>],
-    op = Rt::op_no_argument,
-    fused = Rt::fused_no_argument
-);
-arity!(
-    glue1, async_glue1, [Ret<Rt>],
-    op = op_at_arity1::<Rt, Self, R>, fused = fused_at_arity1::<Rt, Self, R>,
-    A0: a0
-);
-arity!(
-    glue2, async_glue2, [Ret<Rt, Form = One>],
-    op = Rt::op_two_arguments, fused = Rt::fused_two_arguments,
-    A0: a0, A1: a1
-);
-arity!(
-    glue3, async_glue3, [Ret<Rt, Form = One>],
-    op = Rt::op_three_arguments, fused = no_fused_run,
-    A0: a0, A1: a1, A2: a2
-);
+// from a declaration of one parameter of one value and from no other: every
+// arity but one binds `Form = One` below, and `TakenForm<Pair>` is
+// implemented for `InRegisters<1>` alone, so a slice returned anywhere else
+// is a compile error.
+arity!(glue0, async_glue0, [Ret<Rt, Form = One>]);
+arity!(glue1, async_glue1, [Ret<Rt>], A0: a0);
+arity!(glue2, async_glue2, [Ret<Rt, Form = One>], A0: a0, A1: a1);
+arity!(glue3, async_glue3, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2);
 arity!(
     glue4, async_glue4, [Ret<Rt, Form = One>],
-    op = Rt::op_wide, fused = no_fused_run,
     A0: a0, A1: a1, A2: a2, A3: a3
 );
 arity!(
     glue5, async_glue5, [Ret<Rt, Form = One>],
-    op = Rt::op_wide, fused = no_fused_run,
     A0: a0, A1: a1, A2: a2, A3: a3, A4: a4
 );
 arity!(
-    glue6,
-    async_glue6,
-    [Ret<Rt, Form = One>],
-    op = Rt::op_wide, fused = no_fused_run,
-    A0: a0,
-    A1: a1,
-    A2: a2,
-    A3: a3,
-    A4: a4,
-    A5: a5
+    glue6, async_glue6, [Ret<Rt, Form = One>],
+    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5
 );
 arity!(
-    glue7,
-    async_glue7,
-    [Ret<Rt, Form = One>],
-    op = Rt::op_wide, fused = no_fused_run,
-    A0: a0,
-    A1: a1,
-    A2: a2,
-    A3: a3,
-    A4: a4,
-    A5: a5,
-    A6: a6
+    glue7, async_glue7, [Ret<Rt, Form = One>],
+    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5, A6: a6
 );
 arity!(
-    glue8,
-    async_glue8,
-    [Ret<Rt, Form = One>],
-    op = Rt::op_wide, fused = no_fused_run,
-    A0: a0,
-    A1: a1,
-    A2: a2,
-    A3: a3,
-    A4: a4,
-    A5: a5,
-    A6: a6,
-    A7: a7
+    glue8, async_glue8, [Ret<Rt, Form = One>],
+    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5, A6: a6, A7: a7
 );
 
 /// One handler per rung of `Task` (RFC-0046). `Sync` runs to its result in
