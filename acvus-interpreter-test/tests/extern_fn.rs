@@ -596,10 +596,7 @@ async fn a_field_of_a_context_is_a_place() {
     let n = i.intern("n");
     let a = typed(
         Ty::Object(ObjectTy::written(FxHashMap::from_iter([(n, Ty::I64)]))),
-        Value::object(FxHashMap::from_iter([(
-            n,
-            Owned::from_value(Value::int(1)),
-        )])),
+        Value::object_by_name(&i, [(n, Owned::from_value(Value::int(1)))]),
     );
     let v = run_io_script_mode_on(&i, "bump(&mut @a.n, 1); @a.n", vec![("a", a)], Ty::I64).await;
     assert_eq!(v.as_int(), 2);

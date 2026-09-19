@@ -1,90 +1,68 @@
-//! The object a derived struct crosses as (RFC-0032, RFC-0048 §7).
+//! The object a derived struct crosses as (RFC-0032, RFC-0048 §7, RFC-0050
+//! rules 3, 4 and 8).
 //!
-//! The layout — today an `Obj<Owned<Rt>>` keyed by the runtime's symbols —
-//! lives in this file alone, so a flat layout changes it and not the derive.
+//! The layout — an `Obj<Owned<Rt>>`: the type's field names in rule 8's order,
+//! shared, and one value per field in that order — lives in this file alone,
+//! so a change to it changes the derive not at all beyond the order its field
+//! table is written in.
+//!
+//! Both directions are one array of exactly `N` values, so the length of the
+//! glue's field table and the length of the object's layout are equal by type
+//! rather than by a check per field. `open_in_order` makes the one comparison
+//! there is, once per crossing: the object's own width against `N`. It is
+//! unreachable — a value crossing into a declared struct's parameter has
+//! exactly that struct's fields, since `ObjectTy::meet` refuses an object that
+//! lacks one (`Lacks`) or carries one the struct does not name (`Undeclared`),
+//! RFC-0042 R1.
 
 use acvus_utils::Astr;
-use rustc_hash::FxHashMap;
 
-use crate::obj::{Obj, OneValue, materialize_field};
+use crate::obj::{Obj, ObjectShape};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
 
-/// An object under construction: the derive adds each field by its declared
-/// name, and `erase` closes it into the value the runtime holds.
-pub struct Building<Rt>
+/// The object a derived struct erases to: `names` and `values` in one order,
+/// which is rule 8's — `acvus-extern-macro` sorts its field table by the field
+/// names as string literals at expansion.
+pub fn object_in_order<Rt, const N: usize>(
+    rt: &Rt,
+    names: [&str; N],
+    values: [Owned<Rt>; N],
+) -> Rt::Value
 where
     Rt: Runtime,
 {
-    fields: FxHashMap<Astr, Owned<Rt>>,
-}
-
-impl<Rt> Building<Rt>
-where
-    Rt: Runtime,
-{
-    pub fn new() -> Self {
-        Self {
-            fields: FxHashMap::default(),
-        }
-    }
-
-    pub fn field<T>(&mut self, rt: &Rt, name: &str, value: T)
-    where
-        T: OneValue<Rt>,
-    {
-        self.fields
-            .insert(rt.symbol(name), Owned::from_value(value.erase(rt)));
-    }
-
-    pub fn erase(self, rt: &Rt) -> Rt::Value {
-        // SAFETY: the language's object is `Obj<Owned<Rt>>`, and `Opened::of`
-        // is the only reader.
-        unsafe { rt.erase::<Obj<Owned<Rt>>>(Obj(self.fields)) }
+    let names: Box<[Astr]> = names.iter().map(|name| rt.symbol(name)).collect();
+    // SAFETY: the language's object is `Obj<Owned<Rt>>`, and `open_in_order` is
+    // the only reader.
+    unsafe {
+        rt.erase::<Obj<Owned<Rt>>>(Obj::new(
+            ObjectShape::in_order(names),
+            Box::new(values) as Box<[Owned<Rt>]>,
+        ))
     }
 }
 
-impl<Rt> Default for Building<Rt>
+/// The fields of a derived struct's object, in the same order
+/// `object_in_order` wrote them, for the derive to destructure.
+///
+/// # Safety
+/// `value` is what `object_in_order` wrote.
+///
+/// # Panics
+/// When the object's width is not `N`, which RFC-0042 R1 admits no value of.
+pub unsafe fn open_in_order<Rt, const N: usize>(rt: &Rt, value: Rt::Value) -> [Owned<Rt>; N]
 where
     Rt: Runtime,
 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// An object opened for reading: each field is taken by its declared name and
-/// removed as it is taken.
-pub struct Opened<Rt>
-where
-    Rt: Runtime,
-{
-    fields: FxHashMap<Astr, Owned<Rt>>,
-}
-
-impl<Rt> Opened<Rt>
-where
-    Rt: Runtime,
-{
-    /// # Safety
-    /// `value` is what `Building::erase` wrote.
-    pub unsafe fn of(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract.
-        let Obj(fields) = unsafe { rt.materialize::<Obj<Owned<Rt>>>(value) };
-        Self { fields }
-    }
-
-    /// # Safety
-    /// The field `name` was erased from a `T`.
-    ///
-    /// # Panics
-    /// The object lacks the field: the checker admits only objects of the
-    /// declared type.
-    pub unsafe fn field<T>(&mut self, rt: &Rt, name: &str) -> T
-    where
-        T: OneValue<Rt>,
-    {
-        // SAFETY: the caller's contract.
-        unsafe { materialize_field::<T, Rt>(rt, &mut self.fields, name) }
-    }
+    // SAFETY: the caller's contract.
+    let Obj { values, .. } = unsafe { rt.materialize::<Obj<Owned<Rt>>>(value) };
+    let width = values.len();
+    let Ok(values) = <Box<[Owned<Rt>]> as TryInto<Box<[Owned<Rt>; N]>>>::try_into(values) else {
+        panic!(
+            "an object of {width} fields crossed into a struct of {N}: the checker admits only \
+             objects of the declared type"
+        )
+    };
+    *values
 }

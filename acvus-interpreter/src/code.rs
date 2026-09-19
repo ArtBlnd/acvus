@@ -8,9 +8,8 @@
 use std::sync::Arc;
 
 use acvus_ast::Span;
-use acvus_extern::{Owned, Words};
+use acvus_extern::{FieldAt, Owned, Words};
 use acvus_mir::ir::Label;
-use acvus_utils::Astr;
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
 
@@ -464,11 +463,6 @@ pub enum LentText {
     Pair(SlicePair),
 }
 
-pub struct FieldSlot {
-    pub key: Astr,
-    pub slot: Off,
-}
-
 pub type Deref = fn(&Value) -> Value;
 
 /// The MIR's `PathSeg::Payload` resolved to the shape the preparation read
@@ -477,7 +471,7 @@ pub type Deref = fn(&Value) -> Value;
 /// payload's own value and the step is dropped (RFC-0022).
 #[derive(Clone, Copy, Debug)]
 pub enum Step {
-    Field(Astr),
+    Field(FieldAt),
     Index(usize),
     OptionPayload,
     ResultPayload,

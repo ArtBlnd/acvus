@@ -35,17 +35,15 @@ pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
                 .collect(),
         ),
         Ty::Object(fields) => {
+            let mut laid: Vec<_> = fields.iter().collect();
+            laid.sort_by(|(a, _), (b, _)| interner.resolve(**a).cmp(interner.resolve(**b)));
             let values = unsafe { value.as_object() };
-            let mut out = Map::new();
-            let mut keys: Vec<_> = fields.iter().collect();
-            keys.sort_by_key(|(k, _)| interner.resolve(**k).to_string());
-            for (k, t) in keys {
-                let v = values
-                    .get(k)
-                    .expect("an object value holds every field of its type");
-                out.insert(interner.resolve(*k).to_string(), of(interner, t, v));
-            }
-            Json::Object(out)
+            Json::Object(
+                laid.iter()
+                    .zip(values)
+                    .map(|((k, t), v)| (interner.resolve(**k).to_string(), of(interner, t, v)))
+                    .collect(),
+            )
         }
         Ty::Option(inner) => match value.option_payload() {
             Some(v) => of(interner, inner, &v),
@@ -133,14 +131,14 @@ fn by_composite(interner: &Interner, value: &Value) -> Json {
                 .map(|v| by_kind(interner, v))
                 .collect(),
         ),
-        Some(Composite::Object) => {
-            let mut fields: Vec<(String, Json)> = unsafe { value.as_object() }
+        Some(Composite::Object) => Json::Object(
+            unsafe { value.as_shape() }
+                .names()
                 .iter()
+                .zip(unsafe { value.as_object() })
                 .map(|(k, v)| (interner.resolve(*k).to_string(), by_kind(interner, v)))
-                .collect();
-            fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-            Json::Object(fields.into_iter().collect())
-        }
+                .collect(),
+        ),
         Some(Composite::Result) => {
             let (tag, v) = match unsafe { value.as_result() } {
                 Ok(v) => ("Ok", v),

@@ -77,16 +77,16 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
         }
         serde_json::Value::Object(fields) => {
             let mut tys = FxHashMap::default();
-            let mut values = FxHashMap::default();
+            let mut values = Vec::new();
             for (k, v) in fields {
                 let t = typed(interner, &format!("{at}.{k}"), v)?;
                 let key = interner.intern(k);
                 tys.insert(key, t.ty);
-                values.insert(key, Owned::from_value(t.value));
+                values.push((key, Owned::from_value(t.value)));
             }
             Typed {
                 ty: Ty::Object(ObjectTy::written(tys)),
-                value: Value::object(values),
+                value: Value::object_by_name(interner, values),
             }
         }
     })

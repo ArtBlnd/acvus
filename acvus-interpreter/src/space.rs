@@ -525,11 +525,11 @@ impl Space {
                 Ok(())
             }
             Ty::Object(fields) => {
+                let laid = layout::sorted_fields(&rt.0.interner, fields);
+                let types: Vec<Ty> = laid.iter().map(|(_, t)| (*t).clone()).collect();
                 let values = unsafe { value.as_object_mut() };
-                for (k, t) in fields {
-                    if let Some(v) = values.get_mut(k) {
-                        self.commit_nested(rt, t, v, moved)?;
-                    }
+                for (t, v) in types.iter().zip(values.iter_mut()) {
+                    self.commit_nested(rt, t, v, moved)?;
                 }
                 Ok(())
             }

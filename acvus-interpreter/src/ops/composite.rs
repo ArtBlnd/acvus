@@ -1,9 +1,10 @@
 //! Composite constructors: array, object, tuple.
 
-use acvus_extern::Owned;
-use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
-use crate::code::{Exit, FieldSlot, Marked, Off, Op, successor};
+use acvus_extern::{ObjectShape, Owned};
+
+use crate::code::{Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -63,8 +64,14 @@ impl Op for MakeTuple {
 
 pub struct MakeObject {
     pub dst: Marked,
-    pub fields: Box<[FieldSlot]>,
-    /// Bit `i` is "the slot of field `i` owns a `Large`", as `Elements`.
+    pub shape: Arc<ObjectShape>,
+    /// One per field of `shape`, in its order: the register that field's value
+    /// is read from, and `None` for a field the settled type has and this
+    /// construction does not write — `Undef` at its position (RFC-0050 rule 8).
+    pub fields: Box<[Option<Off>]>,
+    /// Bit `i` is "the slot of the `i`th written field owns a `Large`", as
+    /// `Elements`; the mask counts the registers, so a field with no register
+    /// takes no bit.
     pub owns_large: u64,
     pub next: Box<dyn Op>,
 }
@@ -74,13 +81,14 @@ impl Op for MakeObject {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let object: FxHashMap<_, Owned<AcvusRuntime>> = self
-            .fields
-            .iter()
-            .map(|field| (field.key, Owned::from_value(regs.read(field.slot))))
-            .collect();
+        let object = Value::object_filled(Arc::clone(&self.shape), |at| {
+            Owned::from_value(match self.fields[at.index()] {
+                Some(at) => regs.read(at),
+                None => Value::UNDEF,
+            })
+        });
         regs.take_mask(self.owns_large);
-        m.regs().define::<true>(self.dst, Value::object(object));
+        m.regs().define::<true>(self.dst, object);
         self.next.run(m, r0)
     }
 }

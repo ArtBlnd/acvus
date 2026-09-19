@@ -73,7 +73,8 @@ fn a_value_of_a_language_shape_comes_back_equal() {
         .into_iter()
         .collect(),
     ));
-    let mut value = Value::object(
+    let mut value = Value::object_by_name(
+        &i,
         [
             (i.intern("name"), Owned::from_value(Value::string("acvus"))),
             (
@@ -87,23 +88,21 @@ fn a_value_of_a_language_shape_comes_back_equal() {
                 i.intern("tag"),
                 Owned::from_value(Value::some(Value::bool_(true))),
             ),
-        ]
-        .into_iter()
-        .collect(),
+        ],
     );
     let head = space.commit(&rt, "o", &ty, &mut value).unwrap();
     assert_eq!(space.head("o"), Some(head));
     let back = space.load(&rt, "o", &ty).unwrap().expect("committed");
-    let fields = unsafe { back.as_object() };
-    assert_eq!(unsafe { fields[&i.intern("name")].as_str() }, "acvus");
+    let field = |name: &str| unsafe { back.field_by_name(i.intern(name)) }.expect("the field");
+    assert_eq!(unsafe { field("name").as_str() }, "acvus");
     assert_eq!(
-        unsafe { fields[&i.intern("scores")].as_array() }
+        unsafe { field("scores").as_array() }
             .iter()
             .map(|v| v.as_int())
             .collect::<Vec<_>>(),
         [7, -3]
     );
-    assert!(fields[&i.intern("tag")].as_bool());
+    assert!(field("tag").as_bool());
 }
 
 #[test]
@@ -417,16 +416,15 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
         .collect(),
     ));
     let ty = deque_ty(&i, obj_ty);
-    let obj = Value::object(
+    let obj = Value::object_by_name(
+        &i,
         [
             (i.intern("name"), Owned::from_value(Value::string("a"))),
             (
                 i.intern("log"),
                 Owned::from_value(deque_of(&rt, [Value::int(1)])),
             ),
-        ]
-        .into_iter()
-        .collect(),
+        ],
     );
     let mut outer = deque_of(&rt, [obj]);
     space.commit(&rt, "o", &ty, &mut outer).unwrap();
@@ -439,9 +437,7 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let mut loaded = space.load(&rt, "o", &ty).unwrap().unwrap();
     with_deque(&rt, &loaded, |outer| {
         let obj = outer.get_mut(0).unwrap();
-        let log = unsafe { obj.as_object_mut() }
-            .get_mut(&i.intern("log"))
-            .unwrap();
+        let log = unsafe { obj.field_by_name_mut(i.intern("log")) }.unwrap();
         with_deque(&rt, log, |inner| {
             inner.push_back(Owned::from_value(Value::int(2)))
         });
@@ -456,7 +452,8 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let again = space.load(&rt, "o", &ty).unwrap().unwrap();
     let reference = unsafe { rt.reference(&again) };
     let outer: &ValueDeque = unsafe { rt.deref::<ValueDeque>(&reference) };
-    let obj = unsafe { outer.get(0).unwrap().as_object() };
-    assert_eq!(unsafe { obj[&i.intern("name")].as_str() }, "a");
-    assert_eq!(ints(&rt, &obj[&i.intern("log")]), [1, 2]);
+    let obj = outer.get(0).unwrap();
+    let field = |name: &str| unsafe { obj.field_by_name(i.intern(name)) }.expect("the field");
+    assert_eq!(unsafe { field("name").as_str() }, "a");
+    assert_eq!(ints(&rt, field("log")), [1, 2]);
 }

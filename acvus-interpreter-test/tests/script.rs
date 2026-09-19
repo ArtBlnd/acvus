@@ -229,10 +229,7 @@ async fn iter_field_then_loop() {
             items,
             ints_ty(2),
         )]))),
-        Value::object(FxHashMap::from_iter([(
-            items,
-            Owned::from_value(ints_value(&[10, 20])),
-        )])),
+        Value::object_by_name(&i, [(items, Owned::from_value(ints_value(&[10, 20])))]),
     );
     let c = ctx(&i, vec![("data", data), ("sum", int(0))]);
     let result = run_script_mode(
@@ -365,10 +362,13 @@ async fn a_store_into_a_context_place_writes_the_context() {
                 (f, Ty::I64),
                 (g, ints_ty(2)),
             ]))),
-            Value::object(FxHashMap::from_iter([
-                (f, Owned::from_value(Value::int(1))),
-                (g, Owned::from_value(ints_value(&[1, 2]))),
-            ])),
+            Value::object_by_name(
+                &i,
+                [
+                    (f, Owned::from_value(Value::int(1))),
+                    (g, Owned::from_value(ints_value(&[1, 2]))),
+                ],
+            ),
         );
         let context = ctx(&i, vec![("c", c)]);
         run_script(&i, src, context, Ty::I64).await.as_int()

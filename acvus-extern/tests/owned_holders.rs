@@ -492,13 +492,11 @@ fn an_option_releases_its_payload_once() {
 
 // -- `Obj<Owned<Rt>>`: an object's fields --------------------------------
 
-fn one_field(rt: &Counted, drops: &Drops) -> FxHashMap<Astr, Owned<Counted>> {
-    let mut fields = FxHashMap::default();
-    fields.insert(
-        rt.symbol("payload"),
-        Owned::from_value(tracked_value(rt, drops)),
-    );
-    fields
+fn one_field(rt: &Counted, drops: &Drops) -> acvus_extern::Obj<Owned<Counted>> {
+    acvus_extern::Obj::new(
+        acvus_extern::ObjectShape::of(&SYMBOLS, [rt.symbol("payload")]),
+        Box::new([Owned::from_value(tracked_value(rt, drops))]),
+    )
 }
 
 #[test]
@@ -516,13 +514,57 @@ fn an_objects_fields_are_released_once() {
 fn an_object_field_taken_out_is_released_by_its_receiver() {
     let rt = Counted;
     let drops = Drops::default();
-    let mut fields = one_field(&rt, &drops);
+    let fields = one_field(&rt, &drops);
+    let [payload] =
+        *<Box<[Owned<Counted>]> as TryInto<Box<[Owned<Counted>; 1]>>>::try_into(fields.values)
+            .expect("one field");
     // SAFETY: the field was erased from a `Tracked`.
-    let taken = unsafe { materialize_field::<Tracked, Counted>(&rt, &mut fields, "payload") };
-    drop(fields);
+    let taken = unsafe { materialize_field::<Tracked, Counted>(&rt, payload) };
     assert_eq!(drops.count(), 0, "the field is out of the object");
     drop(taken);
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
+}
+
+/// RFC-0050 rule 8's order has two implementations of one comparison — `ObjectShape::
+/// of` over the resolved names, and `acvus-extern-macro`'s field table over the
+/// field names as string literals at expansion — and this pins them equal on a
+/// struct whose declaration order is the reverse of its name order.
+#[derive(acvus_extern::TyArg)]
+struct OutOfOrder {
+    zed: i64,
+    alpha: i64,
+}
+
+#[test]
+fn a_derived_structs_field_table_is_the_shape_order() {
+    let rt = Counted;
+    let value = OutOfOrder { zed: 1, alpha: 2 }.erase(&rt);
+    // SAFETY: the derive's `erase` wrote an `Obj<Owned<Counted>>`.
+    let obj = unsafe { rt.materialize::<acvus_extern::Obj<Owned<Counted>>>(value) };
+    let table: Vec<&str> = obj
+        .shape
+        .names()
+        .iter()
+        .map(|name| SYMBOLS.resolve(*name))
+        .collect();
+    assert_eq!(table, vec!["alpha", "zed"], "the derive's table order");
+    let sorted = acvus_extern::ObjectShape::of(&SYMBOLS, [rt.symbol("zed"), rt.symbol("alpha")]);
+    assert_eq!(
+        obj.shape.names(),
+        sorted.names(),
+        "one order, two artifacts"
+    );
+    let [alpha, zed] =
+        *<Box<[Owned<Counted>]> as TryInto<Box<[Owned<Counted>; 2]>>>::try_into(obj.values)
+            .expect("two fields");
+    // SAFETY: the derive erased each field from its declared `i64`.
+    let (alpha, zed) = unsafe {
+        (
+            materialize_field::<i64, Counted>(&rt, alpha),
+            materialize_field::<i64, Counted>(&rt, zed),
+        )
+    };
+    assert_eq!((alpha, zed), (2, 1), "each value at its own field's offset");
 }
 
 // -- `Variant<Owned<Rt>>`: a variant's payload ---------------------------

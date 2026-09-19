@@ -1,8 +1,14 @@
 # RFC-0032: An object crosses the boundary as its fields
 
-Status: Accepted
+Status: Accepted; the representation superseded by RFC-0050 rules 4 and 8
 Date: 2026-09-16
 Extends: RFC-0022, RFC-0023
+
+An object is no longer a map from field name to value. It is its type's field
+names in RFC-0050 rule 8's order, shared by every object of the type, and one
+value per field in that order. The crossing writes and reads those values by
+position, so the field-by-field conversion below stands and the name lookup it
+used to go through does not.
 
 ## Ruling
 

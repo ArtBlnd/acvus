@@ -9,10 +9,9 @@ use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
-use acvus_extern::{Owned, Release};
+use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
-use acvus_utils::Astr;
-use rustc_hash::FxHashMap;
+use acvus_utils::{Astr, Interner};
 
 use crate::interpreter::InterpreterContext;
 use crate::runtime::AcvusRuntime;
@@ -582,7 +581,7 @@ typed_debug_fn! { Tuple;
         dt.finish()
     };
 }
-typed_debug_fn! { Object; dbg_object = |d, f| f.debug_map().entries(d.0.iter()).finish(); }
+typed_debug_fn! { Object; dbg_object = |d, f| f.debug_map().entries(d.fields()).finish(); }
 typed_debug_fn! { VariantValue;
     dbg_variant = |d, f| match &d.payload {
         Some(p) => write!(f, "{:?}({:?})", d.tag, p),
@@ -695,8 +694,34 @@ impl Value {
     pub fn tuple(items: Vec<Owned<AcvusRuntime>>) -> Self {
         large(&TUPLE, Tuple(items))
     }
-    pub fn object(fields: FxHashMap<Astr, Owned<AcvusRuntime>>) -> Self {
-        large(&OBJECT, acvus_extern::Obj(fields))
+    /// A heap object: the shape its type fixes and one value per field of it,
+    /// in that order (RFC-0050 rules 4 and 8).
+    pub fn object(shape: Arc<ObjectShape>, values: Box<[Owned<AcvusRuntime>]>) -> Self {
+        large(&OBJECT, acvus_extern::Obj::new(shape, values))
+    }
+
+    /// An object whose field at each position is read where `at` says, which is
+    /// how `composite::MakeObject` fills one with no width to compare.
+    pub fn object_filled<F>(shape: Arc<ObjectShape>, at: F) -> Self
+    where
+        F: FnMut(FieldAt) -> Owned<AcvusRuntime>,
+    {
+        large(&OBJECT, acvus_extern::Obj::filled(shape, at))
+    }
+
+    /// An object built from the names it writes rather than from a type: what a
+    /// host has when it turns a JSON object into a value, whose language type is
+    /// `Written` over exactly those names. Rule 8's order for such a type is
+    /// those names sorted, so the order is computed here and nothing has to
+    /// have been told it.
+    pub fn object_by_name<I>(interner: &Interner, fields: I) -> Self
+    where
+        I: IntoIterator<Item = (Astr, Owned<AcvusRuntime>)>,
+    {
+        let mut fields: Vec<(Astr, Owned<AcvusRuntime>)> = fields.into_iter().collect();
+        fields.sort_by(|(a, _), (b, _)| interner.resolve(*a).cmp(interner.resolve(*b)));
+        let shape = ObjectShape::in_order(fields.iter().map(|(name, _)| *name).collect());
+        Value::object(shape, fields.into_iter().map(|(_, v)| v).collect())
     }
     pub fn variant(tag: Astr, payload: Option<Owned<AcvusRuntime>>) -> Self {
         large(
@@ -813,10 +838,38 @@ impl Value {
     pub unsafe fn as_tuple(&self) -> &[Owned<AcvusRuntime>] {
         unsafe { &self.peek::<Tuple>().0 }
     }
+    /// The object's fields, flat, in its shape's order: `as_object()[i]` is
+    /// the field `as_shape().names()[i]` names (RFC-0050 rule 8).
+    ///
     /// # Safety
     /// The value is an `Object`.
-    pub unsafe fn as_object(&self) -> &FxHashMap<Astr, Owned<AcvusRuntime>> {
-        unsafe { &self.peek::<Object>().0 }
+    pub unsafe fn as_object(&self) -> &[Owned<AcvusRuntime>] {
+        unsafe { &self.peek::<Object>().values }
+    }
+
+    /// # Safety
+    /// The value is an `Object`.
+    pub unsafe fn as_shape(&self) -> &Arc<ObjectShape> {
+        unsafe { &self.peek::<Object>().shape }
+    }
+
+    /// A field by name, through the object's own shape: the path RFC-0050 rule 6
+    /// leaves a reader that holds a name and no type. No operation takes it —
+    /// `prepare` resolved every field a body mentions to a position.
+    ///
+    /// # Safety
+    /// The value is an `Object`.
+    pub unsafe fn field_by_name(&self, name: Astr) -> Option<&Owned<AcvusRuntime>> {
+        let held = unsafe { self.peek::<Object>() };
+        held.shape.at(name).map(|at| &held.values[at.index()])
+    }
+
+    /// # Safety
+    /// The value is an `Object`.
+    pub unsafe fn field_by_name_mut(&mut self, name: Astr) -> Option<&mut Owned<AcvusRuntime>> {
+        let held = unsafe { self.peek_mut::<Object>() };
+        let at = held.shape.at(name)?;
+        Some(&mut held.values[at.index()])
     }
     /// # Safety
     /// The value is an `Array`.
@@ -830,8 +883,8 @@ impl Value {
     }
     /// # Safety
     /// The value is an `Object`.
-    pub unsafe fn as_object_mut(&mut self) -> &mut FxHashMap<Astr, Owned<AcvusRuntime>> {
-        unsafe { &mut self.peek_mut::<Object>().0 }
+    pub unsafe fn as_object_mut(&mut self) -> &mut [Owned<AcvusRuntime>] {
+        unsafe { &mut self.peek_mut::<Object>().values }
     }
     /// # Safety
     /// The value is a `Variant`.

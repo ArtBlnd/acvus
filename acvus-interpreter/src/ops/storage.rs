@@ -5,14 +5,13 @@
 //! facts `prepare` reads off the types at every storage instruction; nothing
 //! in this file re-derives them, so a wrong one is a defect in `prepare`.
 
-use acvus_extern::{Owned, Release};
-use acvus_utils::{Astr, Interner};
+use acvus_extern::{FieldAt, Owned, Release};
 
 use std::marker::PhantomData;
 use std::mem;
 
 use crate::code::{Exit, Marked, Op, Step, successor};
-use crate::machine::{Frame, Machine};
+use crate::machine::Machine;
 use crate::ops::arith::Unary;
 use crate::ops::variant::scrutinee;
 use crate::regs::Regs;
@@ -23,21 +22,28 @@ use crate::value::{Kind, Place, PlaceMut, Value};
 /// One resolved path segment as a type, so that a path of exactly one step
 /// reaches its place with no branch.
 pub trait Segment: Send + Sync + 'static {
-    fn at<'v>(&self, value: &'v Value, interner: &Interner) -> Place<'v>;
-    fn at_mut<'v>(&self, value: &'v mut Value, interner: &Interner) -> PlaceMut<'v>;
+    fn at<'v>(&self, value: &'v Value) -> Place<'v>;
+    fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v>;
 }
 
-pub struct Field(pub Astr);
+/// Obligation across artifacts: this position and the width of the object it
+/// reads are both `layout::sorted_fields` over the same settled `Ty::Object` —
+/// `prepare`'s field arms compute the one, `composite::MakeObject` and the
+/// crossing lay the other. Nothing in this file relates them, and a position
+/// resolved against a different field set reads a live neighbour.
+pub struct Field(pub FieldAt);
 
 impl Segment for Field {
     #[inline]
-    fn at<'v>(&self, value: &'v Value, interner: &Interner) -> Place<'v> {
-        Place::At(field(value, self.0, interner))
+    fn at<'v>(&self, value: &'v Value) -> Place<'v> {
+        // SAFETY: the preparation read `Object` from the type.
+        Place::At(&unsafe { value.as_object() }[self.0.index()])
     }
 
     #[inline]
-    fn at_mut<'v>(&self, value: &'v mut Value, interner: &Interner) -> PlaceMut<'v> {
-        PlaceMut::At(field_mut(value, self.0, interner))
+    fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
+        // SAFETY: the preparation read `Object` from the type.
+        PlaceMut::At(&mut unsafe { value.as_object_mut() }[self.0.index()])
     }
 }
 
@@ -49,7 +55,7 @@ pub struct Index<const ARRAY: bool>(pub usize);
 
 impl<const ARRAY: bool> Segment for Index<ARRAY> {
     #[inline]
-    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+    fn at<'v>(&self, value: &'v Value) -> Place<'v> {
         // SAFETY (both arms): the preparation read the shape off the type.
         Place::At(match ARRAY {
             true => unsafe { &value.as_array()[self.0] },
@@ -58,7 +64,7 @@ impl<const ARRAY: bool> Segment for Index<ARRAY> {
     }
 
     #[inline]
-    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+    fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY (both arms): the preparation read the shape off the type.
         PlaceMut::At(match ARRAY {
             true => unsafe { &mut value.as_array_mut().0[self.0] },
@@ -71,12 +77,12 @@ pub struct OptionPayload;
 
 impl Segment for OptionPayload {
     #[inline]
-    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+    fn at<'v>(&self, value: &'v Value) -> Place<'v> {
         value.option_payload().expect(PAYLOAD_OF_NONE)
     }
 
     #[inline]
-    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+    fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         if let Some(depth) = depth_payload(value) {
             return PlaceMut::Depth(depth);
         }
@@ -88,14 +94,14 @@ pub struct ResultPayload;
 
 impl Segment for ResultPayload {
     #[inline]
-    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+    fn at<'v>(&self, value: &'v Value) -> Place<'v> {
         // SAFETY: the preparation read `Result` from the type.
         let (Ok(payload) | Err(payload)) = unsafe { value.as_result() };
         Place::At(payload)
     }
 
     #[inline]
-    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+    fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY: the preparation read `Result` from the type.
         let (Ok(payload) | Err(payload)) = unsafe { value.as_result_mut() };
         PlaceMut::At(payload)
@@ -106,7 +112,7 @@ pub struct VariantPayload;
 
 impl Segment for VariantPayload {
     #[inline]
-    fn at<'v>(&self, value: &'v Value, _: &Interner) -> Place<'v> {
+    fn at<'v>(&self, value: &'v Value) -> Place<'v> {
         // SAFETY: the preparation read an enum from the type.
         let held = unsafe { value.as_variant() }
             .payload
@@ -116,7 +122,7 @@ impl Segment for VariantPayload {
     }
 
     #[inline]
-    fn at_mut<'v>(&self, value: &'v mut Value, _: &Interner) -> PlaceMut<'v> {
+    fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY: the preparation read an enum from the type.
         let held = unsafe { value.as_variant_mut() }
             .payload
@@ -129,22 +135,6 @@ impl Segment for VariantPayload {
 const PAYLOAD_OF_NONE: &str = "a payload path on None";
 const PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE: &str = "a payload path names a variant that carries one";
 
-fn field<'v>(value: &'v Value, f: Astr, interner: &Interner) -> &'v Value {
-    assert!(value.is_object(), "field load on non-object: {value:?}");
-    // SAFETY: is_object checked the vtable id.
-    unsafe { value.as_object() }
-        .get(&f)
-        .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
-}
-
-fn field_mut<'v>(value: &'v mut Value, f: Astr, interner: &Interner) -> &'v mut Value {
-    assert!(value.is_object(), "field access on non-object: {value:?}");
-    // SAFETY: is_object checked the vtable id.
-    unsafe { value.as_object_mut() }
-        .get_mut(&f)
-        .unwrap_or_else(|| panic!("missing field {}", interner.resolve(f)))
-}
-
 // -- The path walk ----------------------------------------------------
 
 /// A path of more than one step, walked step by step.
@@ -155,35 +145,35 @@ fn field_mut<'v>(value: &'v mut Value, f: Astr, interner: &Interner) -> &'v mut 
 /// writes, to save one predicted jump on a walk that already pays a
 /// dependent load per step. A path of exactly one step never arrives here —
 /// it is a `Segment` the preparation names.
-pub fn walk<'v>(value: &'v Value, steps: &[Step], interner: &Interner) -> Place<'v> {
+pub fn walk<'v>(value: &'v Value, steps: &[Step]) -> Place<'v> {
     let mut at = Place::At(value);
     for step in steps {
         at = match at {
-            Place::At(v) => segment(v, step, interner),
+            Place::At(v) => segment(v, step),
             Place::Depth(v) => depth_step(&v, step),
         };
     }
     at
 }
 
-fn segment<'v>(value: &'v Value, step: &Step, interner: &Interner) -> Place<'v> {
+fn segment<'v>(value: &'v Value, step: &Step) -> Place<'v> {
     match step {
-        Step::Field(f) => Field(*f).at(value, interner),
+        Step::Field(at) => Field(*at).at(value),
         Step::Index(i) => match value.is_array() {
-            true => Index::<true>(*i).at(value, interner),
-            false => Index::<false>(*i).at(value, interner),
+            true => Index::<true>(*i).at(value),
+            false => Index::<false>(*i).at(value),
         },
-        Step::OptionPayload => OptionPayload.at(value, interner),
-        Step::ResultPayload => ResultPayload.at(value, interner),
-        Step::VariantPayload => VariantPayload.at(value, interner),
+        Step::OptionPayload => OptionPayload.at(value),
+        Step::ResultPayload => ResultPayload.at(value),
+        Step::VariantPayload => VariantPayload.at(value),
     }
 }
 
-pub fn walk_mut<'v>(value: &'v mut Value, steps: &[Step], interner: &Interner) -> PlaceMut<'v> {
+pub fn walk_mut<'v>(value: &'v mut Value, steps: &[Step]) -> PlaceMut<'v> {
     let mut at = PlaceMut::At(value);
     for step in steps {
         at = match at {
-            PlaceMut::At(v) => segment_mut(v, step, interner),
+            PlaceMut::At(v) => segment_mut(v, step),
             PlaceMut::Depth(v) => match depth_step(&v, step) {
                 Place::At(_) => unreachable!("a depth step lands on a depth"),
                 Place::Depth(v) => PlaceMut::Depth(v),
@@ -193,16 +183,16 @@ pub fn walk_mut<'v>(value: &'v mut Value, steps: &[Step], interner: &Interner) -
     at
 }
 
-fn segment_mut<'v>(value: &'v mut Value, step: &Step, interner: &Interner) -> PlaceMut<'v> {
+fn segment_mut<'v>(value: &'v mut Value, step: &Step) -> PlaceMut<'v> {
     match step {
-        Step::Field(f) => Field(*f).at_mut(value, interner),
+        Step::Field(at) => Field(*at).at_mut(value),
         Step::Index(i) => match value.is_array() {
-            true => Index::<true>(*i).at_mut(value, interner),
-            false => Index::<false>(*i).at_mut(value, interner),
+            true => Index::<true>(*i).at_mut(value),
+            false => Index::<false>(*i).at_mut(value),
         },
-        Step::OptionPayload => OptionPayload.at_mut(value, interner),
-        Step::ResultPayload => ResultPayload.at_mut(value, interner),
-        Step::VariantPayload => VariantPayload.at_mut(value, interner),
+        Step::OptionPayload => OptionPayload.at_mut(value),
+        Step::ResultPayload => ResultPayload.at_mut(value),
+        Step::VariantPayload => VariantPayload.at_mut(value),
     }
 }
 
@@ -280,11 +270,11 @@ pub fn deref_word<const CLONE: bool>(reference: &Value) -> Value {
 /// The mode a read of a place runs in: which place it reaches, what the
 /// place keeps, and where the destination's frame is left owning a `Large`.
 pub trait Reads: Send + Sync + 'static {
-    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    fn at<S>(slot: &mut Value, step: &S) -> Value
     where
         S: Segment;
 
-    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value;
+    fn walked(slot: &mut Value, steps: &[Step]) -> Value;
 
     /// The destination, marked exactly where this mode hands it a `Large`.
     fn define(regs: &mut Regs, dst: Marked, value: Value);
@@ -296,16 +286,16 @@ pub struct Copied<const THROUGH: bool>;
 
 impl<const THROUGH: bool> Reads for Copied<THROUGH> {
     #[inline]
-    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    fn at<S>(slot: &mut Value, step: &S) -> Value
     where
         S: Segment,
     {
-        read_place::<false>(step.at(scrutinee::<THROUGH>(slot), interner))
+        read_place::<false>(step.at(scrutinee::<THROUGH>(slot)))
     }
 
     #[inline]
-    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value {
-        read_place::<false>(walk(scrutinee::<THROUGH>(slot), steps, interner))
+    fn walked(slot: &mut Value, steps: &[Step]) -> Value {
+        read_place::<false>(walk(scrutinee::<THROUGH>(slot), steps))
     }
 
     #[inline]
@@ -320,16 +310,16 @@ pub struct Cloned<const THROUGH: bool>;
 
 impl<const THROUGH: bool> Reads for Cloned<THROUGH> {
     #[inline]
-    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    fn at<S>(slot: &mut Value, step: &S) -> Value
     where
         S: Segment,
     {
-        read_place::<true>(step.at(scrutinee::<THROUGH>(slot), interner))
+        read_place::<true>(step.at(scrutinee::<THROUGH>(slot)))
     }
 
     #[inline]
-    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value {
-        read_place::<true>(walk(scrutinee::<THROUGH>(slot), steps, interner))
+    fn walked(slot: &mut Value, steps: &[Step]) -> Value {
+        read_place::<true>(walk(scrutinee::<THROUGH>(slot), steps))
     }
 
     #[inline]
@@ -344,16 +334,16 @@ pub struct Moved;
 
 impl Reads for Moved {
     #[inline]
-    fn at<S>(slot: &mut Value, step: &S, interner: &Interner) -> Value
+    fn at<S>(slot: &mut Value, step: &S) -> Value
     where
         S: Segment,
     {
-        move_place(step.at_mut(slot, interner))
+        move_place(step.at_mut(slot))
     }
 
     #[inline]
-    fn walked(slot: &mut Value, steps: &[Step], interner: &Interner) -> Value {
-        move_place(walk_mut(slot, steps, interner))
+    fn walked(slot: &mut Value, steps: &[Step]) -> Value {
+        move_place(walk_mut(slot, steps))
     }
 
     #[inline]
@@ -435,9 +425,9 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
+        let regs = m.regs();
         let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
-        let reference = reference_to(self.step.at(base, interner));
+        let reference = reference_to(self.step.at(base));
         regs.put(self.slots.dst.at, reference);
         self.next.run(m, r0)
     }
@@ -453,9 +443,9 @@ impl<const THROUGH: bool> Op for MakeRefPath<THROUGH> {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
+        let regs = m.regs();
         let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
-        let reference = reference_to(walk(base, &self.steps, interner));
+        let reference = reference_to(walk(base, &self.steps));
         regs.put(self.slots.dst.at, reference);
         self.next.run(m, r0)
     }
@@ -520,8 +510,8 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
-        let value = M::at(regs.peek_mut(self.slots.src.at), &self.step, interner);
+        let regs = m.regs();
+        let value = M::at(regs.peek_mut(self.slots.src.at), &self.step);
         M::define(regs, self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -544,8 +534,8 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
-        let value = M::walked(regs.peek_mut(self.slots.src.at), &self.steps, interner);
+        let regs = m.regs();
+        let value = M::walked(regs.peek_mut(self.slots.src.at), &self.steps);
         M::define(regs, self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -612,10 +602,10 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
+        let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
         let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
-        overwrite::<LARGE>(place_mut(self.step.at_mut(base, interner)), value);
+        overwrite::<LARGE>(place_mut(self.step.at_mut(base)), value);
         self.next.run(m, r0)
     }
 }
@@ -630,10 +620,10 @@ impl<const THROUGH: bool, const LARGE: bool> Op for AssignPath<THROUGH, LARGE> {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
+        let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
         let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
-        overwrite::<LARGE>(place_mut(walk_mut(base, &self.steps, interner)), value);
+        overwrite::<LARGE>(place_mut(walk_mut(base, &self.steps)), value);
         self.next.run(m, r0)
     }
 }
@@ -665,10 +655,10 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
+        let regs = m.regs();
         let mut object = regs.take::<true>(self.slots.object);
         let value = regs.take::<LARGE>(self.slots.value);
-        overwrite::<LARGE>(place_mut(self.step.at_mut(&mut object, interner)), value);
+        overwrite::<LARGE>(place_mut(self.step.at_mut(&mut object)), value);
         regs.define::<true>(self.slots.dst, object);
         self.next.run(m, r0)
     }
@@ -684,10 +674,10 @@ impl<const LARGE: bool> Op for SetPath<LARGE> {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let Frame { regs, interner } = m.frame();
+        let regs = m.regs();
         let mut object = regs.take::<true>(self.slots.object);
         let value = regs.take::<LARGE>(self.slots.value);
-        let at = place_mut(walk_mut(&mut object, &self.steps, interner));
+        let at = place_mut(walk_mut(&mut object, &self.steps));
         overwrite::<LARGE>(at, value);
         regs.define::<true>(self.slots.dst, object);
         self.next.run(m, r0)

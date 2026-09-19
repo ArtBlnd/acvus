@@ -92,19 +92,9 @@ const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
                         `call_module_sync`",
     },
     Exception {
-        family: "storage::SetStep",
-        handler: None,
-        stack_address: "`&mut object`, into `at_mut`",
-    },
-    Exception {
         family: "storage::SetPath",
         handler: None,
         stack_address: "`&mut object`, into `walk_mut`",
-    },
-    Exception {
-        family: "composite::MakeObject",
-        handler: None,
-        stack_address: "the field buffer the object is built in",
     },
     Exception {
         family: "call::SpawnModule",

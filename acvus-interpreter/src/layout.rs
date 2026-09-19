@@ -3,7 +3,7 @@
 //! goes through the hooks its registry declared, and a nested extension
 //! value is written as the head of its own log, which the space supplies.
 
-use acvus_extern::{NodeHash, Owned, SpaceError, SpaceHooks, SpaceResult};
+use acvus_extern::{NodeHash, ObjectShape, Owned, SpaceError, SpaceHooks, SpaceResult};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::{LenTerm, Repr, Ty};
 use acvus_utils::{Astr, Interner};
@@ -101,14 +101,17 @@ pub fn encode(
             }
         }
         Ty::Object(fields) => {
+            let laid = sorted_fields(&rt.0.interner, fields);
             let values = unsafe { value.as_object() };
-            for (k, t) in sorted_fields(&rt.0.interner, fields) {
-                let v = values.get(k).ok_or_else(|| {
-                    SpaceError::new(format!(
-                        "object lacks field `{}`",
-                        rt.0.interner.resolve(*k)
-                    ))
-                })?;
+            if values.len() != laid.len() {
+                return Err(SpaceError::new(format!(
+                    "an object of {} fields committed as {}, which lays {}",
+                    values.len(),
+                    ty.display(&rt.0.interner),
+                    laid.len()
+                )));
+            }
+            for ((_, t), v) in laid.iter().zip(values) {
                 encode(rt, nested, t, v, out)?;
             }
         }
@@ -228,11 +231,13 @@ pub fn decode(
                 .collect::<SpaceResult<_>>()?,
         ),
         Ty::Object(fields) => {
-            let mut values = FxHashMap::default();
-            for (k, t) in sorted_fields(&rt.0.interner, fields) {
-                values.insert(*k, Owned::from_value(decode(rt, nested, t, input)?));
-            }
-            Value::object(values)
+            let laid = sorted_fields(&rt.0.interner, fields);
+            let shape = ObjectShape::in_order(laid.iter().map(|(name, _)| **name).collect());
+            let values: Box<[Owned<AcvusRuntime>]> = laid
+                .iter()
+                .map(|(_, t)| decode(rt, nested, t, input).map(Owned::from_value))
+                .collect::<SpaceResult<_>>()?;
+            Value::object(shape, values)
         }
         Ty::Option(inner) => match take(input, 1)?[0] {
             0 => Value::NONE,

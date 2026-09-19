@@ -3,12 +3,12 @@
 
 use std::marker::PhantomData;
 
-use acvus_utils::Astr;
+use acvus_extern::FieldAt;
 
 use crate::code::{Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::{Int, Unary};
-use crate::value::Value;
+use crate::value::{Kind, Value};
 
 /// `THROUGH` is what the preparation read from the source's type: a
 /// reference is read through, a value in place.
@@ -129,9 +129,12 @@ impl Op for TestUnit {
     }
 }
 
+/// Whether an object holds a field: its position in the settled type's layout
+/// carries a value rather than the `Undef` RFC-0050 rule 8 leaves where a
+/// construction was silent.
 pub struct TestObjectKey<const THROUGH: bool> {
     pub slots: Unary,
-    pub key: Astr,
+    pub at: FieldAt,
     pub next: Box<dyn Op>,
 }
 
@@ -141,9 +144,10 @@ impl<const THROUGH: bool> Op for TestObjectKey<THROUGH> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let source = place::<THROUGH>(regs.peek(self.slots.src.at));
-        // SAFETY: is_object checked the vtable id.
-        let has = source.is_object() && unsafe { source.as_object() }.contains_key(&self.key);
-        regs.set_word(self.slots.dst.at, has as u64);
+        // SAFETY: the preparation read `Object` from the type, and the
+        // position is one the settled type's layout has.
+        let held = unsafe { source.as_object() }[self.at.index()].kind();
+        regs.set_word(self.slots.dst.at, (held != Kind::Undef) as u64);
         self.next.run(m, r0)
     }
 }

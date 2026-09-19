@@ -874,28 +874,28 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 
     // An object crosses as its fields (RFC-0032): the handler receives
     // `Obj<Owned<Tiny>>` and returns one.
-    let point = erased(acvus_extern::Obj(
-        [
-            (Tiny.symbol("x"), Owned::<Tiny>::from_value(erased(21i64))),
-            (
-                Tiny.symbol("label"),
-                Owned::from_value(erased("p".to_owned())),
-            ),
-        ]
-        .into_iter()
-        .collect::<acvus_extern::FxHashMap<_, _>>(),
+    // The fields are in rule 8's order: `label` before `x`, whatever order the
+    // struct declares them in.
+    let point = erased(acvus_extern::Obj::new(
+        acvus_extern::ObjectShape::of(&SYMBOLS, [Tiny.symbol("x"), Tiny.symbol("label")]),
+        Box::new([
+            Owned::<Tiny>::from_value(erased("p".to_owned())),
+            Owned::from_value(erased(21i64)),
+        ]),
     ));
     let out = call_async(handler(&reg, &i, "fetch"), vec![point]).await;
-    let acvus_extern::Obj(mut fields) = open::<acvus_extern::Obj<Owned<Tiny>>>(out);
-    assert_eq!(
-        open::<i64>(fields.remove(&Tiny.symbol("x")).unwrap().into_value()),
-        42
-    );
-    assert_eq!(
-        open::<String>(fields.remove(&Tiny.symbol("label")).unwrap().into_value()),
-        "p"
-    );
-    assert!(fields.is_empty());
+    let obj = open::<acvus_extern::Obj<Owned<Tiny>>>(out);
+    let names: Vec<&str> = obj
+        .shape
+        .names()
+        .iter()
+        .map(|name| SYMBOLS.resolve(*name))
+        .collect();
+    assert_eq!(names, vec!["label", "x"]);
+    let [label, x] = *<Box<[Owned<Tiny>]> as TryInto<Box<[Owned<Tiny>; 2]>>>::try_into(obj.values)
+        .expect("two fields");
+    assert_eq!(open::<i64>(x.into_value()), 42);
+    assert_eq!(open::<String>(label.into_value()), "p");
 }
 
 #[test]
@@ -990,7 +990,7 @@ fn stand_ins_name_their_positions() {
 }
 
 #[derive(TyArg, Debug, PartialEq)]
-enum Shape {
+enum ObjectShape {
     Dot,
     Circle(i64),
     Rect { w: i64, h: i64 },
@@ -1006,9 +1006,9 @@ fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
             .collect(),
     ));
     assert_eq!(
-        <Shape as TyArg>::poly_ty(&i, &vars),
+        <ObjectShape as TyArg>::poly_ty(&i, &vars),
         PolyTy::Enum {
-            name: i.intern("Shape"),
+            name: i.intern("ObjectShape"),
             variants: [
                 (i.intern("Dot"), None),
                 (i.intern("Circle"), Some(Box::new(PolyTy::I64))),

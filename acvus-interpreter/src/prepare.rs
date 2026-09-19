@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::Width;
+use acvus_extern::{FieldAt, ObjectShape, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
@@ -29,8 +29,8 @@ use smallvec::SmallVec;
 
 use crate::code::{
     Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
-    ExprBody, ExprChain, FieldSlot, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared,
-    Root, Shape, SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
+    ExprBody, ExprChain, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared, Root, Shape,
+    SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Unary, for_int_ty};
@@ -1028,13 +1028,22 @@ impl<'a> Prepare<'a> {
         }
     }
 
+    /// A chain of `.field` steps on `object`, resolved against its type.
+    fn field_path(&self, object: ValueId, first: Astr, rest: &[Astr]) -> Vec<Walked> {
+        let segs: Vec<PathSeg> = std::iter::once(first)
+            .chain(rest.iter().copied())
+            .map(PathSeg::Field)
+            .collect();
+        self.walked(self.scrutinee_ty(object), &segs)
+    }
+
     /// The path under `root` with each step resolved against the type it
     /// stands on, and the steps that read nothing dropped (RFC-0022).
     fn walked(&self, root: &Ty, path: &[PathSeg]) -> Vec<Walked> {
         let mut at = vec![root.clone()];
         let mut kept = Vec::with_capacity(path.len());
         for seg in path {
-            if let Some(resolved) = resolve_step(&at, seg) {
+            if let Some(resolved) = resolve_step(&at, seg, self.ctx.interner) {
                 kept.push(Walked {
                     step: resolved,
                     array: matches!(resolved, Step::Index(_)) && on_array(&at, seg),
@@ -2537,10 +2546,7 @@ impl<'a> Prepare<'a> {
                     dst: self.marked(*dst),
                     src: self.marked(*object),
                 };
-                let path: Vec<Walked> = std::iter::once(*field)
-                    .chain(rest.iter().copied())
-                    .map(field_step)
-                    .collect();
+                let path = self.field_path(*object, *field, rest);
                 read_place(slots, how, &path)
             }
             InstKind::ObjectGet { dst, object, key } => {
@@ -2549,7 +2555,8 @@ impl<'a> Prepare<'a> {
                     dst: self.marked(*dst),
                     src: self.marked(*object),
                 };
-                read_place(slots, how, &[field_step(*key)])
+                let path = self.field_path(*object, *key, &[]);
+                read_place(slots, how, &path)
             }
             InstKind::FieldSet {
                 dst,
@@ -2564,10 +2571,7 @@ impl<'a> Prepare<'a> {
                     object: self.marked(*object),
                     value: self.marked(*value),
                 };
-                let path: Vec<Walked> = std::iter::once(*field)
-                    .chain(rest.iter().copied())
-                    .map(field_step)
-                    .collect();
+                let path = self.field_path(*object, *field, rest);
                 set_place(slots, large, &path)
             }
 
@@ -2699,26 +2703,7 @@ impl<'a> Prepare<'a> {
             InstKind::MakeObject { dst, fields } if self.plan.of(*dst).is_some() => {
                 self.lay_object(*dst, fields)
             }
-            InstKind::MakeObject { dst, fields } => {
-                let values: Vec<ValueId> = fields.iter().map(|(_, value)| *value).collect();
-                let owns_large = self.take_mask(&values);
-                let held: Box<[FieldSlot]> = fields
-                    .iter()
-                    .map(|(key, value)| FieldSlot {
-                        key: *key,
-                        slot: self.off(*value),
-                    })
-                    .collect();
-                {
-                    let dst = self.marked(*dst);
-                    node(move |next| composite::MakeObject {
-                        dst,
-                        fields: held,
-                        owns_large,
-                        next,
-                    })
-                }
-            }
+            InstKind::MakeObject { dst, fields } => self.make_object(*dst, fields),
             InstKind::TupleIndex { dst, tuple, index } => {
                 let how = Reading::of(self.ty(*dst), self.is_ref(*tuple));
                 let slots = Unary {
@@ -2748,10 +2733,14 @@ impl<'a> Prepare<'a> {
                     dst: self.marked(*dst),
                     src: self.marked(*src),
                 };
-                let key = *key;
+                let at = field_at(
+                    std::slice::from_ref(self.scrutinee_ty(*src)),
+                    *key,
+                    self.ctx.interner,
+                );
                 match self.is_ref(*src) {
-                    true => node(move |next| pattern::TestObjectKey::<true> { slots, key, next }),
-                    false => node(move |next| pattern::TestObjectKey::<false> { slots, key, next }),
+                    true => node(move |next| pattern::TestObjectKey::<true> { slots, at, next }),
+                    false => node(move |next| pattern::TestObjectKey::<false> { slots, at, next }),
                 }
             }
 
@@ -3368,6 +3357,40 @@ impl<'a> Prepare<'a> {
         })
     }
 
+    /// The heap realization of an object (RFC-0050 rule 4): its settled type's
+    /// shape, and one register per field of that shape in rule 8's order — not
+    /// per field the literal writes. A field the settled union type has and
+    /// this construction lacks is `Undef` at its position, which is what
+    /// `pattern::TestObjectKey` reads and what `lay_object` writes into a run.
+    fn make_object(&mut self, dst: ValueId, fields: &[(Astr, ValueId)]) -> Node {
+        let Ty::Object(obj) = self.ty(dst) else {
+            panic!("a MakeObject whose destination is {:?}", self.ty(dst))
+        };
+        let laid: Vec<Astr> = crate::layout::sorted_fields(self.ctx.interner, obj)
+            .iter()
+            .map(|(name, _)| **name)
+            .collect();
+        let shape = ObjectShape::in_order(laid.iter().copied().collect());
+        let written: FxHashMap<Astr, ValueId> = fields.iter().copied().collect();
+        let values: Vec<ValueId> = laid
+            .iter()
+            .filter_map(|name| written.get(name).copied())
+            .collect();
+        let owns_large = self.take_mask(&values);
+        let held: Box<[Option<Off>]> = laid
+            .iter()
+            .map(|name| written.get(name).map(|value| self.off(*value)))
+            .collect();
+        let dst = self.marked(dst);
+        node(move |next| composite::MakeObject {
+            dst,
+            shape,
+            fields: held,
+            owns_large,
+            next,
+        })
+    }
+
     fn lay_object(&mut self, dst: ValueId, fields: &[(Astr, ValueId)]) -> Node {
         let run = self.plan.of(dst).expect("the arm read the same run");
         let base = run.base;
@@ -3685,12 +3708,48 @@ fn step(at: &[Ty], seg: &PathSeg) -> Vec<Ty> {
 /// The step the machine runs, or none where the type makes it a no-op: an
 /// option's payload is the option's own value, unless the payload type is
 /// itself an option and the depth word is what separates them (RFC-0022).
-fn resolve_step(at: &[Ty], seg: &PathSeg) -> Option<Step> {
+fn resolve_step(at: &[Ty], seg: &PathSeg, interner: &Interner) -> Option<Step> {
     match seg {
-        PathSeg::Field(f) => Some(Step::Field(*f)),
+        PathSeg::Field(f) => Some(Step::Field(field_at(at, *f, interner))),
         PathSeg::Index(i) => Some(Step::Index(*i)),
         PathSeg::Payload => payload_step(at),
     }
+}
+
+/// Where `name`'s field lies in the flat layout of the object types a field
+/// step could stand on (RFC-0050 rules 4 and 8).
+///
+/// Candidates that disagree on the position are a checker gap surfaced here,
+/// the way `on_array` surfaces a candidate set holding both an array and a
+/// tuple: one register is read at one displacement, so a position decided at
+/// run time is not a shape this machine has.
+fn field_at(at: &[Ty], name: Astr, interner: &Interner) -> FieldAt {
+    let mut found: Option<FieldAt> = None;
+    for ty in at {
+        let Ty::Object(obj) = ty else { continue };
+        let Some(position) = crate::layout::sorted_fields(interner, obj)
+            .iter()
+            .position(|(held, _)| **held == name)
+        else {
+            continue;
+        };
+        let position = FieldAt::of(position);
+        match found {
+            Some(first) => assert_eq!(
+                first,
+                position,
+                "the field `{}` lies at two positions over the types a step stands on: {at:?}",
+                interner.resolve(name)
+            ),
+            None => found = Some(position),
+        }
+    }
+    found.unwrap_or_else(|| {
+        panic!(
+            "a field step `{}` on {at:?}, which holds no object type with that field",
+            interner.resolve(name)
+        )
+    })
 }
 
 /// Whether an index step stands on an array rather than a tuple, over the
@@ -6463,13 +6522,6 @@ struct CallSite<'i> {
 struct Walked {
     step: Step,
     array: bool,
-}
-
-fn field_step(field: Astr) -> Walked {
-    Walked {
-        step: Step::Field(field),
-        array: false,
-    }
 }
 
 fn index_step(index: usize, array: bool) -> Walked {

@@ -476,14 +476,17 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
         }
         serde_json::Value::Object(fields) => {
             let mut tys = FxHashMap::default();
-            let mut values = FxHashMap::default();
+            let mut values = Vec::new();
             for (k, v) in fields {
                 let key = interner.intern(k);
                 let TypedValue { ty, value } = value_from_json(interner, v);
                 tys.insert(key, ty);
-                values.insert(key, Owned::from_value(value));
+                values.push((key, Owned::from_value(value)));
             }
-            typed(Ty::Object(ObjectTy::written(tys)), Value::object(values))
+            typed(
+                Ty::Object(ObjectTy::written(tys)),
+                Value::object_by_name(interner, values),
+            )
         }
     }
 }
@@ -513,11 +516,14 @@ pub fn user_context(interner: &Interner) -> Context {
                 (age, Ty::I64),
                 (email, Ty::String),
             ]))),
-            Value::object(FxHashMap::from_iter([
-                (name, Owned::from_value(Value::string("alice"))),
-                (age, Owned::from_value(Value::int(30))),
-                (email, Owned::from_value(Value::string("alice@example.com"))),
-            ])),
+            Value::object_by_name(
+                interner,
+                [
+                    (name, Owned::from_value(Value::string("alice"))),
+                    (age, Owned::from_value(Value::int(30))),
+                    (email, Owned::from_value(Value::string("alice@example.com"))),
+                ],
+            ),
         ),
     )])
 }

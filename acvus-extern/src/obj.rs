@@ -8,17 +8,150 @@
 
 use std::any::{Any, TypeId};
 use std::mem::ManuallyDrop;
+use std::sync::Arc;
 
-use acvus_utils::Astr;
-use rustc_hash::FxHashMap;
+use acvus_utils::{Astr, Interner};
 
 use crate::len::{Arr, LenVar};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{Never, TyVar};
 
-/// An object as the runtime holds it: field name to value.
-pub struct Obj<V>(pub FxHashMap<Astr, V>);
+/// A position in an object's flat layout: which of its type's fields, in the
+/// order rule 8 fixes.
+///
+/// An operation that writes a field holds this beside the frame register it
+/// reads the value from, and the two are different spaces of small unsigned
+/// numbers.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub struct FieldAt(u16);
+
+impl FieldAt {
+    /// # Panics
+    /// An object has more fields than a `u16` counts.
+    pub fn of(at: usize) -> FieldAt {
+        FieldAt(u16::try_from(at).expect("an object has fewer fields than a u16 counts"))
+    }
+
+    pub fn index(self) -> usize {
+        usize::from(self.0)
+    }
+}
+
+/// The field names of an object type, in the one order RFC-0050 rule 8 fixes:
+/// ascending by the resolved name. One `ObjectShape` is shared by every object of
+/// the type, so an object's own allocation is its field values alone and a
+/// field is a position in this list.
+///
+/// Rule 8 also gives a `Declared` struct its declaration's order, and that
+/// order does not exist to be read: `ObjectTy` carries its fields as an
+/// `FxHashMap` and `FieldSet::Declared` carries the struct's name, not its
+/// field order. So string order is the order of every object type, declared
+/// or not, which is already the order a committed object's canonical bytes
+/// take (`interpreter::layout::sorted_fields`).
+pub struct ObjectShape {
+    names: Box<[Astr]>,
+}
+
+impl ObjectShape {
+    /// `names` in rule 8's order.
+    pub fn of<I>(interner: &Interner, names: I) -> Arc<ObjectShape>
+    where
+        I: IntoIterator<Item = Astr>,
+    {
+        let mut names: Vec<Astr> = names.into_iter().collect();
+        names.sort_by(|a, b| interner.resolve(*a).cmp(interner.resolve(*b)));
+        Arc::new(ObjectShape {
+            names: names.into_boxed_slice(),
+        })
+    }
+
+    /// `names` already in rule 8's order, which the caller sorted by the same
+    /// comparison `of` makes.
+    ///
+    /// The one caller outside a test is `object_in_order`, whose names come
+    /// from `acvus-extern-macro`'s derived field table, sorted over the field
+    /// names as string literals at expansion.
+    /// `acvus-extern/tests/owned_holders.rs::
+    /// a_derived_structs_field_table_is_the_shape_order` pins the two orders
+    /// against each other.
+    pub fn in_order(names: Box<[Astr]>) -> Arc<ObjectShape> {
+        Arc::new(ObjectShape { names })
+    }
+
+    pub fn names(&self) -> &[Astr] {
+        &self.names
+    }
+
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// The position `name`'s field holds. The machine never asks — `prepare`
+    /// reads the position off the settled type — and this is the untyped path
+    /// rule 6 leaves a handler that needs a field by name at run time.
+    pub fn at(&self, name: Astr) -> Option<FieldAt> {
+        self.names
+            .iter()
+            .position(|held| *held == name)
+            .map(FieldAt::of)
+    }
+}
+
+impl PartialEq for ObjectShape {
+    fn eq(&self, other: &Self) -> bool {
+        self.names == other.names
+    }
+}
+
+impl Eq for ObjectShape {}
+
+impl std::fmt::Debug for ObjectShape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.names.iter()).finish()
+    }
+}
+
+/// An object as the runtime holds it: its type's field names, shared, and the
+/// flat run of its fields' values behind one header (RFC-0050 rules 4 and 8).
+/// `values[i]` is the field `shape.names()[i]` names.
+pub struct Obj<V> {
+    pub shape: Arc<ObjectShape>,
+    pub values: Box<[V]>,
+}
+
+impl<V> Obj<V> {
+    /// One value per field of `shape`, taken at each position in turn, so an
+    /// object's width is its shape's without a length to compare.
+    pub fn filled<F>(shape: Arc<ObjectShape>, at: F) -> Obj<V>
+    where
+        F: FnMut(FieldAt) -> V,
+    {
+        let values = (0..shape.len()).map(FieldAt::of).map(at).collect();
+        Obj { shape, values }
+    }
+
+    /// # Panics
+    /// `values` is not one per field of `shape`. `filled` is the constructor
+    /// with no width to get wrong.
+    pub fn new(shape: Arc<ObjectShape>, values: Box<[V]>) -> Obj<V> {
+        assert_eq!(
+            shape.len(),
+            values.len(),
+            "an object holds one value per field of its shape"
+        );
+        Obj { shape, values }
+    }
+
+    /// The fields by name, in the layout's order.
+    pub fn fields(&self) -> impl Iterator<Item = (Astr, &V)> + '_ {
+        self.shape.names().iter().copied().zip(self.values.iter())
+    }
+}
 
 /// A variant as the runtime holds it: the tag and its payload, if any.
 pub struct Variant<V> {
@@ -735,28 +868,17 @@ where
     Owned::from_value(value.erase(rt))
 }
 
-/// # Safety
-/// The field `name` of the object was erased from a `T`.
+/// The field of a derived object read back out of its own position.
 ///
-/// # Panics
-/// When the object lacks the field: the checker admits only objects of
-/// the declared type.
-pub unsafe fn materialize_field<T, Rt>(
-    rt: &Rt,
-    fields: &mut FxHashMap<Astr, Owned<Rt>>,
-    name: &str,
-) -> T
+/// # Safety
+/// The value held there was erased from a `T`.
+pub unsafe fn materialize_field<T, Rt>(rt: &Rt, field: Owned<Rt>) -> T
 where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    let value = fields.remove(&rt.symbol(name)).unwrap_or_else(|| {
-        panic!(
-            "object field `{name}` is missing: the checker admits only objects of the declared type"
-        )
-    });
     // SAFETY: the caller's contract.
-    unsafe { T::materialize(rt, value.into_value()) }
+    unsafe { T::materialize(rt, field.into_value()) }
 }
 
 /// # Panics

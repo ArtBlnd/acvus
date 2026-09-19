@@ -1090,15 +1090,29 @@ struct ObjectShape<'a> {
 }
 
 impl<'a> ObjectShape<'a> {
+    /// The fields in RFC-0050 rule 8's order — ascending by the field name —
+    /// and not in declaration order. Rule 8's order is what a run's layout,
+    /// a committed object's canonical bytes and this table all have to agree
+    /// on, and it is the field names sorted as strings: `ObjectTy` carries no
+    /// declaration order for a `Declared` struct to be laid by. The comparison
+    /// here is on the same strings `acvus_extern::Shape::of` resolves and
+    /// compares, and `acvus-extern/tests/owned_holders.rs::
+    /// a_derived_structs_field_table_is_the_shape_order` pins the two equal.
     fn of(fields: &'a syn::FieldsNamed) -> Self {
-        let idents: Vec<&Ident> = fields
+        let mut sorted: Vec<(String, &'a Ident, &'a syn::Type)> = fields
             .named
             .iter()
-            .map(|f| f.ident.as_ref().expect("named"))
+            .map(|f| {
+                let ident = f.ident.as_ref().expect("named");
+                (ident.to_string(), ident, &f.ty)
+            })
             .collect();
-        let names = idents.iter().map(|f| f.to_string()).collect();
-        let tys = fields.named.iter().map(|f| &f.ty).collect();
-        Self { idents, names, tys }
+        sorted.sort_by(|(a, ..), (b, ..)| a.cmp(b));
+        Self {
+            idents: sorted.iter().map(|(_, ident, _)| *ident).collect(),
+            names: sorted.iter().map(|(name, ..)| name.clone()).collect(),
+            tys: sorted.iter().map(|(.., ty)| *ty).collect(),
+        }
     }
 
     fn fields(&self) -> proc_macro2::TokenStream {
@@ -1137,21 +1151,27 @@ impl<'a> ObjectShape<'a> {
     /// owns the layout they go into.
     fn erase(&self, owner: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
-        quote! {{
-            let mut __object = ::acvus_extern::object::Building::<__R>::new();
-            #( __object.field::<#tys>(__rt, #names, #owner.#idents); )*
-            __object.erase(__rt)
-        }}
+        let width = syn::Index::from(idents.len());
+        quote! {
+            ::acvus_extern::object::object_in_order::<__R, #width>(
+                __rt,
+                [#(#names),*],
+                [#(::acvus_extern::erase_field::<#tys, __R>(__rt, #owner.#idents)),*],
+            )
+        }
     }
 
     /// Erases fields already bound to their own idents (a matched variant).
     fn erase_bound(&self) -> proc_macro2::TokenStream {
         let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
-        quote! {{
-            let mut __object = ::acvus_extern::object::Building::<__R>::new();
-            #( __object.field::<#tys>(__rt, #names, #idents); )*
-            __object.erase(__rt)
-        }}
+        let width = syn::Index::from(idents.len());
+        quote! {
+            ::acvus_extern::object::object_in_order::<__R, #width>(
+                __rt,
+                [#(#names),*],
+                [#(::acvus_extern::erase_field::<#tys, __R>(__rt, #idents)),*],
+            )
+        }
     }
 
     /// Materializes `#value` into `#path { fields }`.
@@ -1160,16 +1180,20 @@ impl<'a> ObjectShape<'a> {
         value: proc_macro2::TokenStream,
         path: proc_macro2::TokenStream,
     ) -> proc_macro2::TokenStream {
-        let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
+        let (idents, tys) = (&self.idents, &self.tys);
+        let width = syn::Index::from(idents.len());
         quote! {{
-            // SAFETY: the caller's contract, and `erase` built this object.
-            let mut __object = unsafe {
-                ::acvus_extern::object::Opened::<__R>::of(__rt, #value)
+            // SAFETY: the caller's contract, and `erase` built this object, so
+            // its width is this table's and the destructuring is exhaustive.
+            let [#(#idents),*] = unsafe {
+                ::acvus_extern::object::open_in_order::<__R, #width>(__rt, #value)
             };
             #path {
                 // SAFETY: the caller's contract, forwarded: `erase` erased each
-                // field from its declared type.
-                #(#idents: unsafe { __object.field::<#tys>(__rt, #names) },)*
+                // field from its declared type, at this position.
+                #(#idents: unsafe {
+                    ::acvus_extern::materialize_field::<#tys, __R>(__rt, #idents)
+                },)*
             }
         }}
     }

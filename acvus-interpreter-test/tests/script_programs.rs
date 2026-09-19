@@ -64,10 +64,13 @@ async fn collatz_start_1() {
 const GRADE_CLASSIFIER: &str = include_str!("scripts/grade_classifier.acvus");
 
 fn student(i: &Interner, name: &str, score: i64) -> Value {
-    Value::object(FxHashMap::from_iter([
-        (i.intern("name"), Owned::from_value(Value::string(name))),
-        (i.intern("score"), Owned::from_value(Value::int(score))),
-    ]))
+    Value::object_by_name(
+        i,
+        [
+            (i.intern("name"), Owned::from_value(Value::string(name))),
+            (i.intern("score"), Owned::from_value(Value::int(score))),
+        ],
+    )
 }
 
 fn student_ty(i: &Interner) -> Ty {

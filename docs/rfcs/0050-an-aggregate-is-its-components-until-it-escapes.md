@@ -296,9 +296,10 @@ whole-typed and `Release` decides by kind; there is no conditional
 - **Realizing at construction with a shape table and `Box<[Value]>`**
   (the earlier RFC-0050 sketch): one allocation and one query per
   access remain; RFC-0053 rejected it with that count.
-- **A hash-map layout** for realized objects: `ops/storage.rs:132-138`
-  is the cost per field; `layout.rs` already allocates a `String` per
-  field name only to order it.
+- **A hash-map layout** for realized objects: `ops/storage.rs`'s `is_object`
+  assertion plus `FxHashMap::get` was the cost per field. The `String` per
+  field name that ordering once allocated is gone from `layout.rs` and from
+  `acvus-cli/src/json.rs`; both compare the resolved names.
 - **Adjacent general registers as the projection's home** (the design
   as first drawn): a contiguity constraint per aggregate on a 64-slot
   file that a component-scattered body already fills; the wide class
@@ -369,10 +370,55 @@ misses and 1.36 G fewer instructions — a second data-dependent indirect branch
 beside the machine's own dispatch costs more than three compares save. The
 dispatch is a scan of ordinals.
 
-Rules 4, 5, 6, 7 and 9 remain unbuilt in the machine. Rule 5's realization has
+Rule 4's heap realization is flat. A heap object is its type's field names in
+rule 8's order, shared by every object of the type through one `ObjectShape`,
+and one `Value` per field in that order; `prepare` resolves every field a body
+mentions to a position against the settled type, so `code::Step::Field` carries
+an offset and not a name, `ops::storage::Field` is one indexed load, and the
+`is_object` assertion and the name lookup are gone. `TestObjectKey` reads the
+position and tests for the `Undef` this rule leaves where a construction was
+silent, which is how a field the settled union type has and a literal lacks is
+answered without a map.
+
+Measured on `benches/shapes.rs`, three alternating pinned reps of each binary,
+`vec of objects` — the one row in the bench set that still holds an object by
+the time `prepare` sees it — goes from **6.2 to 4.2 ns an iteration, −31.5 %,
+with the ranges disjoint**. `ReadStep<Field, Copied<true>>`, the operation that
+row runs, falls from **48 to 34 instructions**, and the whole `shapes` run
+executes **10.353 G instructions against 10.808 G, −4.21 %**, a count that
+repeats to seven digits across reps.
+
+`field read`, `field write` and `construct` do not move, and no representation
+the machine gives an object can move them: `optimize::sroa` scalarizes all
+three in the MIR and their listings hold no `MakeObject` and no field step at
+all. Holding the object across an inner loop does not save them the way it
+saves `enum match held` — SROA keys on the field path, and only a reference or
+a container element puts an object past it. So a container element is the
+machine's only object customer today, which is rule 7's.
+
+Rule 8's declaration order for a `Declared` struct is not built and cannot be
+from the MIR as it stands: `ObjectTy` carries its fields as an `FxHashMap` and
+`FieldSet::Declared` carries the struct's name, not its field order. One order
+therefore serves every object type, declared or not — the field names sorted as
+strings — which is the order a committed object's canonical bytes already took.
+`#[derive(TyArg)]` emits its field table in that order rather than in
+declaration order, and a test crosses a struct whose declaration order is the
+reverse of its name order to pin the derive's order against `ObjectShape::of`.
+
+A flat object's drop carries no per-type descriptor of which offsets are
+`Large`. `Owned<Rt>` releases what it holds and `Value::release` is a no-op on
+any kind but `Large`, so the `Box<[Owned<Rt>]>` releases exactly the `Large`
+fields, once each, by type. A table naming those offsets would be a second
+source of truth against the kind byte.
+
+Rules 5, 6, 7 and 9 remain unbuilt in the machine. Rule 5's realization has
 no emission site under rule 3's own predicate: a web with a member that
 escapes is placed on the heap whole, so nothing takes a whole aggregate out of
-a run. Rule 4's heap-side projection is still today's `Obj` map lookup.
+a run. Rule 3's one projection family over a run and a heap `Large` alike is
+still unbuilt — `Kind::LargeRef` is written and nothing reads through one — but
+the two layouts now agree wherever both exist: `Layout::lowerable` refuses any
+object with a nested aggregate field, so every object that takes a run is one
+word per field, which is what the heap form is.
 
 The rest here is not built yet; the first two are expectations, each with the
 count it rests on, and the measured table replaces them when the
