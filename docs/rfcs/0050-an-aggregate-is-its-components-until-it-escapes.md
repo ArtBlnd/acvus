@@ -53,29 +53,34 @@ object lives.
    aggregate SSA value, and a `Return` and a borrowed argument are no
    longer escapes (rules 4 and 5).
 
-2. **The frame has a wide region, sized per body** (amended 2026-09-20).
-   Above a body's 64 general registers its frame has a **wide region**:
-   registers laid out exactly as the general ones (`Cell`s of sixteen
-   `Value`s, `Off` addressing), allocated not one register at a time but
-   as **runs**, one run per aggregate that needs an address (rule 3). A
-   run holds the aggregate in its **flattened field layout** (rule 8).
-   `prepare` sizes the region from the body's runs and their live ranges
-   as it colors registers — a body with no addressed aggregate has no
-   region — and the region is bounded at **256 `Value`s (4 KB)** per
-   body; the earlier fixed cut (one 256-byte `Cell` as three 64-byte and
-   two 32-byte slots) is what a body of two or three small aggregates
-   will still get, as the allocator's result, not as a layout fact. When
-   a body's runs exceed the bound, aggregates are spilled to the heap
-   (rule 4) **in ascending loop depth**, the shallowest first, ties
-   broken by the longest live range first: what a loop touches stays in
-   the frame. The region is owned by the frame like every register. Its marks
-   are **one bit per run** in a second mark word that lives in the frame's
-   memory and is read or written only by an operation that builds,
-   moves or releases an aggregate run — never by a scalar chain, whose
-   marks are the by-value operand of RFC-0052 §5 as amended (2026-09-20).
-   The sweep releases a run's `Large` fields by walking the run's layout
-   for each set run bit. The projection into a run is `Regs::run_of` — nothing
-   new in the machine reads it.
+2. **A frame is registers, and an aggregate that needs an address is a
+   run of them** (amended 2026-09-20; re-amended the same day after the
+   first build showed the earlier wording made a second register class).
+   There is one kind of register. A body's frame is `frame_len` slots
+   (`Cell`s of sixteen `Value`s, `Off` addressing), bounded at **320**
+   (the 64 a scalar body may use plus 256 for runs); `prepare` colors
+   scalar values one register at a time and an aggregate that needs an
+   address (rule 3) as a **run** of adjacent registers holding its
+   flattened field layout (rule 8), by live range as it colors everything
+   else. A body with no run has the frame it has today. The scratch
+   register `order_moves` may take is reserved before emission, so
+   `frame_len` is final when the first `Off` is written and a run begins
+   where the scalar registers end — not at a constant. When the runs
+   would take the frame past 320, aggregates are spilled to the heap
+   (rule 4) **in ascending loop depth**, the shallowest first, ties broken
+   by the longest live range first: what a loop touches stays in the
+   frame. **Marks are per register, as today**: the mark word covers
+   registers 0–63, and a frame past 64 registers has ⌈`frame_len` / 64⌉
+   mark words in its mark slots; an operation's `take_mask`/define mask
+   names the word its registers fall in, decided at `prepare`. A run's
+   `Large` fields are released by the sweep exactly as any register's:
+   no run bit, no second kind of mark, no operation that only aggregates
+   run. The machine reads nothing new: a field of a run is an ordinary
+   register at `base + off(i)`, and `Regs::run_of` is the projection.
+   The window (`WINDOW_CELLS`) is a fact of the caller's frame; a callee
+   whose frame does not fit roots a `Store` as today, and the count of
+   such calls in the bench set is the number that decides whether the
+   window grows.
 
 3. **A reference to an aggregate is a projection, and an addressed
    aggregate has one home.** `&obj` / `&mut obj` is one word,
