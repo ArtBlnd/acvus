@@ -1,185 +1,26 @@
-//! A prepared body's blocks, read back as names (RFC-0052 §1, §3).
+//! A prepared body read back, over the sources a test compiles.
+//!
+//! The walk itself is `acvus_interpreter::listing`, which `acvus ops` prints
+//! from; what stays here needs this crate's compile pipeline or its probe
+//! types.
 
 use std::sync::Arc;
 
 use acvus_extern::Registry;
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::LeafRead;
-use acvus_interpreter::code::{Body, Code, Named, Op, Prepared, Shape, Slot, Where};
+use acvus_interpreter::code::{Body, Code, Op, Prepared, Shape, Slot, Where};
 use acvus_interpreter::{PrepareCtx, prepare_module};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
+pub use acvus_interpreter::listing::{
+    BlockListing, Chain, CodeText, PartListing, RegionListing, Text, code_listing, code_text,
+    family_of, last_path_segment, listing, ops_of, ops_of_anywhere, regions_named,
+    terminators_depth_first, text, walk,
+};
+
 use crate::{Context, ParsedAst, compile_script_mode, compile_source_with_externs, split_context};
-
-pub struct BlockListing {
-    pub ops: Vec<String>,
-    pub end: String,
-    pub regions: Vec<RegionListing>,
-}
-
-/// One region operation: its name, and the parts it holds.
-pub struct RegionListing {
-    pub name: String,
-    pub owns: Vec<PartListing>,
-}
-
-pub struct PartListing {
-    pub part: String,
-    pub ops: Vec<String>,
-    pub regions: Vec<RegionListing>,
-    pub leaves_with: usize,
-}
-
-/// The operation's type with every module path dropped, inside its generic
-/// arguments as well, so that `arith::Lt<i64, place::Slot, place::Slot,
-/// place::R0>` reads as `Lt<i64, Slot, Slot, R0>`.
-pub fn last_path_segment(of: &dyn Named) -> String {
-    let full = of.name();
-    let mut shortened = String::with_capacity(full.len());
-    let mut path = String::new();
-    for c in full.chars() {
-        match c.is_alphanumeric() || c == '_' || c == ':' {
-            true => path.push(c),
-            false => {
-                shortened.push_str(tail(&path));
-                path.clear();
-                shortened.push(c);
-            }
-        }
-    }
-    shortened.push_str(tail(&path));
-    shortened
-}
-
-fn tail(path: &str) -> &str {
-    match path.rsplit_once("::") {
-        Some((_, last)) => last,
-        None => path,
-    }
-}
-
-/// A chain read back as the operations it holds and the one node that ends
-/// it: the successor field is what is walked, so a listing and the machine
-/// read the same chain.
-fn walk(head: &dyn Op) -> (Vec<&dyn Op>, &dyn Op) {
-    let mut ops = Vec::new();
-    let mut at = head;
-    while let Some(next) = at.successor() {
-        ops.push(at);
-        at = next;
-    }
-    (ops, at)
-}
-
-fn names_of(ops: &[&dyn Op]) -> Vec<String> {
-    ops.iter().map(|op| last_path_segment(*op)).collect()
-}
-
-/// A region is the one operation that answers `owns`, so this is every
-/// region of an operation list, in order.
-fn regions_of(ops: &[&dyn Op]) -> Vec<RegionListing> {
-    ops.iter()
-        .filter(|op| !op.owns().is_empty())
-        .map(|op| RegionListing {
-            name: last_path_segment(*op),
-            owns: op
-                .owns()
-                .into_iter()
-                .map(|owned| {
-                    let (part_ops, _end) = walk(owned.head);
-                    PartListing {
-                        part: owned.part.to_string(),
-                        ops: names_of(&part_ops),
-                        regions: regions_of(&part_ops),
-                        leaves_with: moves_in(&part_ops),
-                    }
-                })
-                .collect(),
-        })
-        .collect()
-}
-
-pub fn listing(heads: &[Box<dyn Op>]) -> Vec<BlockListing> {
-    heads
-        .iter()
-        .map(|head| {
-            let (ops, end) = walk(head.as_ref());
-            BlockListing {
-                ops: names_of(&ops),
-                end: last_path_segment(end),
-                regions: regions_of(&ops),
-            }
-        })
-        .collect()
-}
-
-/// The moves a part leaves with: under RFC-0052 rule 1 they are `Mov`
-/// operations of the part itself, not a list a terminator walks.
-fn moves_in(ops: &[&dyn Op]) -> usize {
-    names_of(ops)
-        .iter()
-        .filter(|name| name.starts_with("Mov<"))
-        .count()
-}
-
-impl BlockListing {
-    pub fn terminators_depth_first(&self, into: &mut Vec<String>) {
-        into.push(self.end.clone());
-    }
-}
-
-impl RegionListing {
-    pub fn part(&self, part: &str) -> Option<&PartListing> {
-        self.owns.iter().find(|owned| owned.part == part)
-    }
-}
-
-pub fn terminators_depth_first(blocks: &[BlockListing]) -> Vec<String> {
-    let mut names = Vec::new();
-    for block in blocks {
-        block.terminators_depth_first(&mut names);
-    }
-    names
-}
-
-/// Every region of this name, a nested one included, in the order the
-/// operations hold them.
-pub fn regions_named<'b>(blocks: &'b [BlockListing], name: &str) -> Vec<&'b RegionListing> {
-    let mut found = Vec::new();
-    for block in blocks {
-        collect_regions(&block.regions, name, &mut found);
-    }
-    found
-}
-
-/// The operation's family: its type name without the arguments its
-/// specialization added, which is how `asm_probe` names one too.
-pub fn family_of(name: &str) -> &str {
-    match name.split_once('<') {
-        Some((head, _)) => head,
-        None => name,
-    }
-}
-
-fn collect_regions<'b>(
-    regions: &'b [RegionListing],
-    name: &str,
-    found: &mut Vec<&'b RegionListing>,
-) {
-    for region in regions {
-        for part in &region.owns {
-            collect_regions(&part.regions, name, found);
-        }
-        if family_of(&region.name) == name {
-            found.push(region);
-        }
-    }
-}
-
-pub fn ops_of(blocks: &[BlockListing]) -> Vec<String> {
-    blocks.iter().flat_map(|b| b.ops.iter().cloned()).collect()
-}
 
 pub fn prepared_script_with_externs(
     interner: &Interner,
@@ -266,8 +107,7 @@ pub struct ChainShape {
 
 fn collect_chains(heads: &[Box<dyn Op>], found: &mut Vec<ChainShape>) {
     for head in heads {
-        let (ops, _end) = walk(head.as_ref());
-        collect_chains_of(&ops, found);
+        collect_chains_of(&walk(head.as_ref()).ops, found);
     }
 }
 
@@ -288,39 +128,7 @@ fn collect_chains_of(ops: &[&dyn Op], found: &mut Vec<ChainShape>) {
             });
         }
         for owned in op.owns() {
-            let (part_ops, _end) = walk(owned.head);
-            collect_chains_of(&part_ops, found);
-        }
-    }
-}
-
-pub fn code_listing(code: &Code) -> Vec<BlockListing> {
-    match code {
-        Code::Body(body) => listing(&body.heads),
-        Code::Expr(_) => Vec::new(),
-    }
-}
-
-pub fn ops_of_anywhere(blocks: &[BlockListing]) -> Vec<String> {
-    let mut found = Vec::new();
-    collect_ops(blocks, &mut found);
-    found
-}
-
-fn collect_ops(blocks: &[BlockListing], found: &mut Vec<String>) {
-    for block in blocks {
-        found.extend(block.ops.iter().cloned());
-        for region in &block.regions {
-            collect_part_ops(&region.owns, found);
-        }
-    }
-}
-
-fn collect_part_ops(parts: &[PartListing], found: &mut Vec<String>) {
-    for part in parts {
-        found.extend(part.ops.iter().cloned());
-        for region in &part.regions {
-            collect_part_ops(&region.owns, found);
+            collect_chains_of(&walk(owned.head).ops, found);
         }
     }
 }

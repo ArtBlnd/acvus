@@ -3,6 +3,10 @@ pub mod executor;
 mod interpreter;
 pub mod journal;
 pub mod layout;
+/// The walk reads `Op::successor`, `Op::owns` and `Named::name`, which the
+/// release trait does not carry.
+#[cfg(any(debug_assertions, feature = "probe"))]
+pub mod listing;
 pub mod machine;
 mod ops;
 pub mod prepare;

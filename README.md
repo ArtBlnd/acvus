@@ -14,10 +14,13 @@ cargo run -p acvus-cli -- run  script.acvus  --context ctx.json
 cargo run -p acvus-cli -- run  -e '@items | map(|x| -> x.name) | join(", ")' --context ctx.json
 cargo run -p acvus-cli -- check script.acvus
 cargo run -p acvus-cli -- mir   script.acvus
+cargo run -p acvus-cli -- ops   script.acvus [--json]
 ```
 
 `--context` is a JSON file whose keys are the script's `@names`. `check`
-type-checks without running; `mir` prints the optimized program.
+type-checks without running; `mir` prints the optimized program; `ops`
+prints the operations the interpreter prepares from it, `main` and every
+closure body, block by block.
 
 ## Scripts
 
@@ -133,7 +136,7 @@ acvus-ext-llm       OpenAI, Anthropic, Google providers
 acvus-ext-net       HTTP
 acvus-orchestration TOML specs compiled into the same graph
 acvus-lsp           language server
-acvus-cli           `acvus run | check | mir`
+acvus-cli           `acvus run | check | mir | ops | space`
 ```
 
 `acvus-mir` knows nothing about the interpreter; `acvus-interpreter`

@@ -4,6 +4,7 @@ mod compile;
 mod context;
 mod json;
 mod llm;
+mod oplist;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm
        acvus run   -e <expr>              [--context ctx.json] [--llm] [--parallel]
        acvus check <file>                 [--context ctx.json]
        acvus mir   <file>                 [--context ctx.json]
+       acvus ops   <file>                 [--context ctx.json] [--llm] [--json]
        acvus space <dir>
 
   .acvus is script mode, .acvt is a template; -e runs one expression.
@@ -36,6 +38,7 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--commit] [--llm
   --commit   write the contexts back to the context file after the run
   --space    a directory holding contexts (RFC-0033): the run fetches them
              from it and commits its changes to it; --context seeds it
+  --json     `ops` prints its listing as JSON instead of text
   --llm      register the LLM providers (keys from the environment)
   --parallel run spawned calls on the tokio executor";
 
@@ -43,6 +46,7 @@ enum Command {
     Run,
     Check,
     Mir,
+    Ops,
     Space,
 }
 
@@ -51,6 +55,7 @@ struct Args {
     source: Source,
     context: Option<PathBuf>,
     commit: bool,
+    json: bool,
     llm: bool,
     parallel: bool,
     space: Option<PathBuf>,
@@ -67,6 +72,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         Some("run") => Command::Run,
         Some("check") => Command::Check,
         Some("mir") => Command::Mir,
+        Some("ops") => Command::Ops,
         Some("space") => Command::Space,
         Some(other) => return Err(format!("unknown command `{other}`")),
         None => return Err("no command".to_string()),
@@ -74,6 +80,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut source = None;
     let mut context = None;
     let mut commit = false;
+    let mut json = false;
     let mut llm = false;
     let mut parallel = false;
     let mut space = None;
@@ -88,6 +95,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 context = Some(PathBuf::from(path));
             }
             "--commit" => commit = true,
+            "--json" => json = true,
             "--llm" => llm = true,
             "--parallel" => parallel = true,
             "--space" => {
@@ -112,6 +120,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             source: Source::Expr(String::new()),
             context: None,
             commit: false,
+            json: false,
             llm: false,
             parallel: false,
             space: Some(dir),
@@ -126,6 +135,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         source,
         context,
         commit,
+        json,
         llm,
         parallel,
         space,
@@ -315,6 +325,22 @@ async fn cli() -> ExitCode {
         Command::Mir => {
             print!("{}", compiled.mir_dump(&interner));
             ExitCode::SUCCESS
+        }
+        Command::Ops => {
+            let form = match args.json {
+                true => oplist::Form::Json,
+                false => oplist::Form::Text,
+            };
+            match oplist::dump(compiled.entry_prepared(), form) {
+                Ok(text) => {
+                    print!("{text}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: the listing does not serialize: {e}");
+                    ExitCode::from(EXIT_RUN)
+                }
+            }
         }
         Command::Run => run(&interner, compiled, loaded, space, &args).await,
         Command::Space => unreachable!("handled before compiling"),

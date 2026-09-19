@@ -24,6 +24,7 @@ dependencies = [
  "acvus-ext-net",
  "acvus-extern",
  "acvus-interpreter",
+ "acvus-interpreter-test",
  "acvus-mir",
  "acvus-utils",
  "reqwest",

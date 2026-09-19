@@ -5,7 +5,7 @@ use acvus_ast::Span;
 use acvus_extern::{Externs, Registry};
 use std::sync::Arc;
 
-use acvus_interpreter::{AcvusRuntime, Executable, PrepareCtx, prepare_module};
+use acvus_interpreter::{AcvusRuntime, Executable, PrepareCtx, Prepared, prepare_module};
 use acvus_mir::graph::{
     CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef, extract, infer, lower,
     optimize,
@@ -38,6 +38,19 @@ pub struct Compiled {
 impl Compiled {
     pub fn mir_dump(&self, _: &Interner) -> &str {
         &self.mir
+    }
+
+    /// The entry's prepared code: the bodies the machine would run. `compile`
+    /// prepares a module for every optimized module and the entry is a local
+    /// function, never an extern handler.
+    pub fn entry_prepared(&self) -> &Prepared {
+        match self.functions.get(&self.entry) {
+            Some(Executable::Module(prepared)) => prepared,
+            Some(Executable::Extern(_)) => {
+                panic!("the entry is a local function, not an extern handler")
+            }
+            None => panic!("the entry is prepared with every other module"),
+        }
     }
 }
 

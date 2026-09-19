@@ -4,6 +4,11 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+use acvus_interpreter_test::Context;
+use acvus_interpreter_test::listing::{script_listing_with_externs, text as listing_text};
+use acvus_mir::ty::Ty;
+use acvus_utils::Interner;
+
 fn acvus(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_acvus"))
         .current_dir(dir)
@@ -171,6 +176,41 @@ fn check_and_mir_compile_without_running() {
     assert!(text(&out.stdout).contains("=== main ==="));
     let out = acvus(dir.path(), &["frob"]);
     assert_eq!(out.status.code(), Some(64));
+}
+
+/// The listing `ops` prints is the interpreter's own walk: the same source
+/// through `acvus-interpreter-test`'s compile path, with the registries and
+/// the `!` return declaration the CLI compiles with, renders the same text.
+#[test]
+fn ops_prints_the_prepared_listing_and_a_broken_script_is_refused() {
+    let source = "let xs = [3, 1];\nlet total = 0;\nlet i = 0;\nwhile i < 2 { total = total + xs[i]; i = i + 1; }\ntotal\n";
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "loop.acvus", source);
+    let out = acvus(dir.path(), &["ops", "loop.acvus"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+
+    let interner = Interner::new();
+    let registries = {
+        let mut r = acvus_ext::std_registries();
+        r.push(acvus_ext_net::http_registry());
+        r
+    };
+    let blocks =
+        script_listing_with_externs(&interner, source, Context::default(), registries, Ty::Never);
+    assert_eq!(
+        text(&out.stdout),
+        format!("main:\n{}", listing_text(&blocks))
+    );
+
+    write(dir.path(), "bad.acvus", "let a = 1;\na + \"x\"\n");
+    let out = acvus(dir.path(), &["ops", "bad.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
+    assert!(
+        text(&out.stderr).contains("type mismatch"),
+        "{}",
+        text(&out.stderr)
+    );
 }
 
 #[test]
