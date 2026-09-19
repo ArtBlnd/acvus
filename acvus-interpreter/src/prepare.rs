@@ -430,7 +430,7 @@ struct ForRegion {
 
 /// One `if/else` the recognizer matched, as indexes into `MirBody::insts`.
 struct DiamondRegion {
-    jump_if: usize,
+    branch: usize,
     on_true: ArmRegion,
     on_false: ArmRegion,
     join: usize,
@@ -500,7 +500,7 @@ impl<'r> Sides<'r> {
 }
 
 /// One side of a diamond. `Direct` is the side the lowering gave no block
-/// of its own: the `JumpIf`'s own edge reaches the join.
+/// of its own: the branch's own edge reaches the join.
 enum ArmRegion {
     Block {
         block: Range<usize>,
@@ -508,14 +508,6 @@ enum ArmRegion {
         jump: usize,
     },
     Direct,
-}
-
-/// The arm the lowering did not put directly after the test, and where
-/// the join it reaches sits.
-struct FarSide {
-    arm: ArmRegion,
-    join_at: usize,
-    join_edges: Vec<usize>,
 }
 
 /// A run of instructions the recognizer replaces with one operation.
@@ -545,7 +537,7 @@ impl Region {
         match self {
             Region::Loop(region) => region.start(),
             Region::For(region) => region.enter_jump,
-            Region::Diamond(region) => region.jump_if,
+            Region::Diamond(region) => region.branch,
         }
     }
 
@@ -670,7 +662,7 @@ impl Prepare<'_> {
     fn consumes_place(&self, unit: &Unit<'_>, value: ValueId) -> bool {
         match unit {
             Unit::Inst(at) => self.reads_place(*at, value),
-            Unit::Region(Region::Diamond(region)) => self.reads_place(region.jump_if, value),
+            Unit::Region(Region::Diamond(region)) => self.reads_place(region.branch, value),
             _ => false,
         }
     }
@@ -1615,99 +1607,74 @@ impl<'a> Prepare<'a> {
             .then_some(region)
     }
 
-    /// The shape `acvus_mir::lower` gives an `if`. One arm has a block of
-    /// its own directly after the test — `if` and `&&` put the `then` side
-    /// there, `||` the `else` side — and the other either has one after
-    /// that or is the test's own edge into the join.
-    ///
-    /// A lowering that emits another shape does not fail here; it stops
-    /// matching, and the branch prepares as the separate operations it was
-    /// before.
+    /// `acvus_mir::lower` writes the two arms and then the join between the
+    /// branch and whatever follows, so the terminator's three labels are the
+    /// whole region and the block table gives the arms their extents. A body
+    /// whose blocks a pass has reordered out of that layout prepares as
+    /// joints instead, which is what every `None` below means.
     fn recognize_diamond(&self, at: usize) -> Option<DiamondRegion> {
         let insts = self.body.insts.as_slice();
-        let TwoWay {
+        let InstKind::Diamond {
             then_label,
             else_label,
+            join,
             ..
-        } = two_way(&insts.get(at)?.kind)?;
-
-        let near_label = block_label(insts.get(at + 1)?)?;
-        let near_is_then = near_label == then_label;
-        if !near_is_then && near_label != else_label {
-            return None;
-        }
-        let far_label = if near_is_then { else_label } else { then_label };
-        if self.references(near_label).as_slice() != [at] {
-            return None;
-        }
-
-        let StraightRun {
-            stops_at: near_jump,
-            regions: near_regions,
-        } = self.straight_run(at + 2, insts.len());
-        let InstKind::Jump { label: join, .. } = &insts.get(near_jump)?.kind else {
+        } = &insts.get(at)?.kind
+        else {
             return None;
         };
-        let near = ArmRegion::Block {
-            block: at + 2..near_jump,
-            regions: near_regions,
-            jump: near_jump,
-        };
 
-        let FarSide {
-            arm: far,
-            join_at,
-            join_edges,
-        } = if far_label == *join {
-            FarSide {
-                arm: ArmRegion::Direct,
-                join_at: near_jump + 1,
-                join_edges: vec![at, near_jump],
-            }
-        } else {
-            if block_label(insts.get(near_jump + 1)?) != Some(far_label)
-                || self.references(far_label).as_slice() != [at]
-            {
-                return None;
-            }
-            let StraightRun {
-                stops_at: far_jump,
-                regions: far_regions,
-            } = self.straight_run(near_jump + 2, insts.len());
-            let InstKind::Jump { label: other, .. } = &insts.get(far_jump)?.kind else {
-                return None;
-            };
-            if other != join {
-                return None;
-            }
-            FarSide {
-                arm: ArmRegion::Block {
-                    block: near_jump + 2..far_jump,
-                    regions: far_regions,
-                    jump: far_jump,
-                },
-                join_at: far_jump + 1,
-                join_edges: vec![near_jump, far_jump],
-            }
+        let then_is_near = block_label(insts.get(at + 1)?)? == *then_label;
+        let (near_label, far_label) = match then_is_near {
+            true => (*then_label, *else_label),
+            false => (*else_label, *then_label),
         };
-
-        let (on_true, on_false) = if near_is_then {
-            (near, far)
-        } else {
-            (far, near)
-        };
-
-        if block_label(insts.get(join_at)?) != Some(*join) || self.references(*join) != join_edges {
+        let (near, after_near) = self.diamond_arm(at + 1, near_label, *join)?;
+        let (far, join_at) = self.diamond_arm(after_near, far_label, *join)?;
+        if block_label(insts.get(join_at)?) != Some(*join) {
             return None;
         }
 
+        let (on_true, on_false) = match then_is_near {
+            true => (near, far),
+            false => (far, near),
+        };
         let region = DiamondRegion {
-            jump_if: at,
+            branch: at,
             on_true,
             on_false,
             join: join_at,
         };
         self.is_closed(at..join_at + 1).then_some(region)
+    }
+
+    /// The arm the branch sends to `label`, and the index one past it. An arm
+    /// whose label is the join is the branch's own edge into it and occupies
+    /// no instruction of its own.
+    fn diamond_arm(&self, from: usize, label: Label, join: Label) -> Option<(ArmRegion, usize)> {
+        if label == join {
+            return Some((ArmRegion::Direct, from));
+        }
+        let insts = self.body.insts.as_slice();
+        if block_label(insts.get(from)?) != Some(label) {
+            return None;
+        }
+        let StraightRun {
+            stops_at: jump,
+            regions,
+        } = self.straight_run(from + 1, insts.len());
+        let InstKind::Jump { label: reached, .. } = &insts.get(jump)?.kind else {
+            return None;
+        };
+        if *reached != join {
+            return None;
+        }
+        let arm = ArmRegion::Block {
+            block: from + 1..jump,
+            regions,
+            jump,
+        };
+        Some((arm, jump + 1))
     }
 
     /// No jump from outside `range` names a block inside it, so collapsing
@@ -2106,7 +2073,7 @@ impl<'a> Prepare<'a> {
             then_args,
             else_args,
             ..
-        } = two_way(&insts[region.jump_if].kind)?;
+        } = two_way(&insts[region.branch].kind)?;
         let Sides {
             arm_block,
             arm_regions,
@@ -2217,7 +2184,7 @@ impl<'a> Prepare<'a> {
             then_args,
             else_label,
             else_args,
-        }) = two_way(&self.body.insts[region.jump_if].kind)
+        }) = two_way(&self.body.insts[region.branch].kind)
         else {
             panic!("a recognized diamond's test is not a two-way branch")
         };
@@ -4759,6 +4726,17 @@ mod recognizer_tests {
         })
     }
 
+    fn diamond(cond: usize, then_label: u32, else_label: u32, join: u32) -> Inst {
+        inst(InstKind::Diamond {
+            cond: val(cond),
+            then_label: Label(then_label),
+            then_args: Vec::new(),
+            else_label: Label(else_label),
+            else_args: Vec::new(),
+            join: Label(join),
+        })
+    }
+
     fn add(dst: usize, left: usize, right: usize) -> Inst {
         inst(InstKind::BinOp {
             dst: val(dst),
@@ -5024,7 +5002,7 @@ mod recognizer_tests {
             add(1, 2, 3),
             jump_if(1, 1, 2),
             block(1),
-            jump_if(4, 3, 4),
+            diamond(4, 3, 4, 5),
             block(3),
             jump(5),
             block(4),
@@ -5049,7 +5027,13 @@ mod recognizer_tests {
     #[test]
     fn an_if_without_an_else_takes_the_tests_own_edge_into_the_join() {
         let fixture = Fixture::new();
-        let insts = vec![jump_if(1, 3, 5), block(3), add(1, 2, 3), jump(5), block(5)];
+        let insts = vec![
+            diamond(1, 3, 5, 5),
+            block(3),
+            add(1, 2, 3),
+            jump(5),
+            block(5),
+        ];
         assert_eq!(
             fixture.recognize(insts),
             vec![Matched::Diamond {
@@ -5061,11 +5045,32 @@ mod recognizer_tests {
     }
 
     #[test]
+    fn a_diamond_whose_two_edges_both_enter_the_join_is_one_operation() {
+        let fixture = Fixture::new();
+        let insts = vec![diamond(1, 5, 5, 5), block(5), add(2, 3, 4)];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched::Diamond {
+                covers: 0..2,
+                on_true: vec![],
+                on_false: vec![]
+            }]
+        );
+    }
+
+    #[test]
+    fn the_same_blocks_under_a_jump_if_are_no_region() {
+        let fixture = Fixture::new();
+        let insts = vec![jump_if(1, 3, 5), block(3), add(1, 2, 3), jump(5), block(5)];
+        assert_eq!(fixture.recognize(insts), vec![]);
+    }
+
+    #[test]
     fn a_while_in_an_arm_is_one_operation_inside_the_diamond() {
         let mut fixture = Fixture::new();
         let stays = fixture.sync_extern("stays");
         let insts = vec![
-            jump_if(1, 3, 4),
+            diamond(1, 3, 4, 5),
             block(3),
             jump(6),
             block(6),
@@ -5098,7 +5103,7 @@ mod recognizer_tests {
         let mut fixture = Fixture::new();
         let suspends = fixture.async_extern("suspends");
         let insts = vec![
-            jump_if(1, 3, 4),
+            diamond(1, 3, 4, 5),
             block(3),
             call(9, suspends),
             jump(5),
@@ -5113,7 +5118,7 @@ mod recognizer_tests {
     fn a_jump_into_an_arm_from_outside_leaves_the_branch_alone() {
         let fixture = Fixture::new();
         let insts = vec![
-            jump_if(1, 3, 4),
+            diamond(1, 3, 4, 5),
             block(3),
             add(1, 2, 3),
             jump(5),

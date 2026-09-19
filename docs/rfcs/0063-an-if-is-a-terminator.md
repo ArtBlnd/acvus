@@ -145,9 +145,35 @@ over the instructions between the branch and the candidate join, and
 that ran after it and did not restore the terminator
 (`DemotedDiamondMeetsAgain`).
 
-Waiting: the machine half — `prepare` builds `Diamond<C>`/`Select` from the
-terminator and `recognize_diamond` and its straight-run scan go.
-`spawn_split` over a body with an `if` reads `join`.
+The machine half has landed. `prepare::recognize_diamond` is a constructor
+over `InstKind::Diamond`: the arms' extents come from the block table, the
+join from the terminator, and the forward scan and its `references` equalities
+are gone. `is_closed` stays, because collapsing a range into one operation
+still requires that no jump from outside names a block inside it.
+`select_shape` and the `Diamond<C>`/`Select` ops are unchanged.
+
+**A `JumpIf` whose arms rejoin still reaches the machine.** Over the
+`acvus-interpreter-test` corpus, 21 of the 404 diamond regions the base
+prepared were recognized from a `JumpIf`, and reading the terminator gives
+them up. Three sites write them: `lower_match_expr`'s arm chain, where a
+two-armed match's one test has both arms jumping to `merge_label`; the
+template arm chain, which is the same shape; and `optimize::sroa`'s
+`settle_joins`, which demotes a branch whose paths its threading scattered and
+which no pass promotes again once `forward` and `dce` bring the arms back
+together. The first two are Decision 2's stated price — the machine runs those
+branches as joints. The third was the defect `optimize::rejoin` closes
+(above): with it, those branches are `Diamond`s again and the `while`
+bodies holding them are `Loop` regions again.
+
+**A branch whose two edges both enter the join is a region now.** Where SSA
+leaves `if r16 -> L7(r15) else L7(r2) join L7`, the scan read `L7` as the near
+arm's block and walked off into the back edge; the terminator names the join,
+so both arms are `ArmRegion::Direct` and the branch is one operation. This is
+what `collatz while`'s loop needed to close.
+
+Waiting: `spawn_split` over a body with an `if` reads `join`. The `while` test
+is the remaining producer of `JumpIf` that the machine sees as a loop's, along
+with `while let`, the guard chains and `?`.
 
 ## Order of work
 
