@@ -116,7 +116,12 @@ object lives.
    keeps its meaning: a specialized, native representation). A body
    that needs more wide slots than the frame has, or an aggregate of
    more than four fields that must be addressed, spills to the heap the
-   same way — listed by `prepare`, never a panic.
+   same way — listed by `prepare`, never a panic. The frame is preferred
+   to the heap even where the native machine would run a little faster
+   with the heap: on wasm the heap allocation is the cost that matters,
+   so the run placement exists for every target and its quality is
+   judged first by how many aggregates it keeps off the heap, then by
+   native speed.
 
 5. **Return is multi-value, at the window's run** (amended 2026-09-20).
    The run of registers at the window boundary — where a call lays its
