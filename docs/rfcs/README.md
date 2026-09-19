@@ -108,3 +108,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0060](0060-a-small-pure-closure-called-where-it-was-made-is-its-body.md) | A small pure closure called where it was made is its body | Accepted |
 | [RFC-0061](0061-a-store-nothing-reads-is-dead.md) | A store nothing reads is dead | Accepted |
 | [RFC-0062](0062-a-string-slice-is-a-register-pair.md) | A string slice is a register pair | Accepted |
+| [RFC-0063](0063-an-if-is-a-terminator.md) | An `if` is a terminator | Accepted |
