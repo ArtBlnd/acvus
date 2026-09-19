@@ -21,11 +21,13 @@ rustc-hash = "2"
 uuid = { version = "1", features = ["v4", "js"] }
 
 [profile.release]
-opt-level = 'z'
-lto = true
-
-[profile.bench]
-inherits = "release"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+
+[profile.wasm]
+inherits = "release"
+opt-level = 'z'
