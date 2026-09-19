@@ -50,6 +50,12 @@ pub mod runs;
 /// the body is being emitted — after every run's `Off` is already written.
 const MAX_SCRATCH_SLOTS: u16 = 2;
 
+/// The scalar register count, final. `hoist_konsts` is the last thing that
+/// grows it — it gives every hoisted constant a register of its own — and it is
+/// the only constructor, so a run placement cannot take its base before the
+/// constants are in.
+struct ScalarsFinal(u32);
+
 /// The slot table's empty entry: a value that is neither defined nor live.
 const NO_SLOT: u32 = u32::MAX;
 
@@ -171,7 +177,8 @@ pub fn prepare_body(
 ) -> Code {
     let mut prep = Prepare::new(body, ctx, closures, literals, label_map(body));
 
-    prep.hoist_konsts();
+    let scalars = prep.hoist_konsts();
+    prep.plan_runs(scalars);
     let regions = prep.regions();
 
     if let BodyRole::Closure = role
@@ -250,6 +257,9 @@ struct Prepare<'a> {
     /// every call into the body, because a frame past the window a caller keeps
     /// roots a `Store` of its own.
     plan: runs::RunPlan,
+    /// The register the first run begins at: the scalars the colouring stopped
+    /// at, plus the ones `order_moves` may still take (RFC-0050 rule 2).
+    run_base: Slot,
     scratch: u32,
     /// The registers `order_moves` broke a cycle through: none, one, or the
     /// two of a slice's pair.
@@ -663,12 +673,6 @@ impl<'a> Prepare<'a> {
         labels: FxHashMap<Label, u32>,
     ) -> Self {
         let slots = assign_slots(body, ctx, &labels);
-        // A run begins above the registers `order_moves` may take while the body
-        // is being emitted, because a run's `Off` is written before it takes
-        // them (RFC-0050 rule 2).
-        let run_base = Slot::try_from(slots.frame + u32::from(MAX_SCRATCH_SLOTS))
-            .unwrap_or_else(|_| panic!("a body of {} registers has no run base", slots.frame));
-        let plan = runs::plan(body, &labels, run_base, &slots.ranges);
         let values = body.val_factory.len();
         let mut def_inst: Vec<Option<usize>> = vec![None; values];
         let mut use_counts: Vec<u32> = vec![0; values];
@@ -688,7 +692,8 @@ impl<'a> Prepare<'a> {
             labels,
             scratch: slots.frame,
             slots,
-            plan,
+            plan: runs::RunPlan::default(),
+            run_base: 0,
             scratch_used: 0,
             may_suspend: false,
             level: Level::default(),
@@ -696,6 +701,34 @@ impl<'a> Prepare<'a> {
             use_counts,
             konsts: Konsts::default(),
         }
+    }
+
+    /// Where every addressed aggregate of this body lives (RFC-0050 rule 2). A
+    /// run begins above the scalar registers and above the ones `order_moves`
+    /// may still take while the body is being emitted, because a run's `Off` is
+    /// written before it takes them.
+    fn plan_runs(&mut self, ScalarsFinal(scalars): ScalarsFinal) {
+        assert_eq!(
+            scalars, self.scratch,
+            "the scalar count grew after it was declared final, so a run would be placed on top \
+             of a register the body already colours"
+        );
+        self.run_base = Slot::try_from(scalars + u32::from(MAX_SCRATCH_SLOTS))
+            .unwrap_or_else(|_| panic!("a body of {scalars} registers has no run base"));
+        self.plan = runs::plan(
+            self.body,
+            &self.labels,
+            self.run_base,
+            &self.slots.ranges,
+            self.ctx.interner,
+        );
+        let frame = self.run_base + self.plan.total;
+        assert!(
+            frame <= crate::regs::MAX_FRAME_SLOTS,
+            "a body's {scalars} scalar registers and {} run registers reach {frame}, past the {}",
+            self.plan.total,
+            crate::regs::MAX_FRAME_SLOTS
+        );
     }
 
     fn slot(&self, id: ValueId) -> Slot {
@@ -752,16 +785,6 @@ impl<'a> Prepare<'a> {
             "a jump's cycle went through {} scratch registers, past the {MAX_SCRATCH_SLOTS} a \
              run's base is placed above",
             self.scratch_used
-        );
-        // Rule 3's frame equation, checked where both halves are final. The
-        // frame does not yet carry the runs, so this asserts what it will be
-        // rather than what it is.
-        let frame = len + MAX_SCRATCH_SLOTS + self.plan.total;
-        assert!(
-            frame <= crate::regs::MAX_FRAME_SLOTS,
-            "a body's {len} scalar registers and {} run registers reach {frame}, past the {}",
-            self.plan.total,
-            crate::regs::MAX_FRAME_SLOTS
         );
         len
     }
@@ -5535,7 +5558,7 @@ impl Prepare<'_> {
         })
     }
 
-    fn hoist_konsts(&mut self) {
+    fn hoist_konsts(&mut self) -> ScalarsFinal {
         for at in 0..self.body.insts.len() {
             let InstKind::Const { dst, value } = &self.body.insts[at].kind else {
                 continue;
@@ -5553,6 +5576,7 @@ impl Prepare<'_> {
             self.konsts.value_at.insert(slot, word);
             self.konsts.insts.push(at);
         }
+        ScalarsFinal(self.scratch)
     }
 
     fn entry_konsts(&self) -> Box<[EntryKonst]> {

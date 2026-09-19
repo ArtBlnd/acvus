@@ -11,7 +11,7 @@
 use acvus_mir::analysis::escape;
 use acvus_mir::ir::{InstKind, Label, MirBody, ValueId};
 use acvus_mir::ty::{FieldSet, Ty};
-use acvus_utils::{Astr, LocalIdOps};
+use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{LiveRange, owns_large};
@@ -52,9 +52,9 @@ impl Layout {
     /// a declared struct to take a run, `acvus-mir` has to expose the declared
     /// field order beside the field types — one method on `ObjectTy`, since the
     /// field map itself is already reachable through its `Deref`.
-    pub fn of(ty: &Ty) -> Option<Layout> {
+    pub fn of(ty: &Ty, interner: &Interner) -> Option<Layout> {
         let mut words = Vec::new();
-        lay(ty, Level::Outer, &mut words)?;
+        lay(ty, interner, Level::Outer, &mut words)?;
         Some(Layout {
             words: words.into_boxed_slice(),
         })
@@ -91,18 +91,16 @@ impl Layout {
     }
 }
 
-fn lay(ty: &Ty, level: Level, out: &mut Vec<Word>) -> Option<()> {
+fn lay(ty: &Ty, interner: &Interner, level: Level, out: &mut Vec<Word>) -> Option<()> {
     match ty {
         Ty::Object(obj) => {
             match obj.field_set() {
                 FieldSet::Declared(_) => return None,
                 FieldSet::Written | FieldSet::AtLeast => {}
             }
-            let mut names: Vec<&Astr> = obj.keys().collect();
-            names.sort();
-            for name in names {
+            for (name, field) in crate::layout::sorted_fields(interner, obj) {
                 let at = out.len();
-                lay(&obj[name], Level::Inner, out)?;
+                lay(field, interner, Level::Inner, out)?;
                 if let Level::Outer = level {
                     out[at].field = Some(*name);
                 }
@@ -110,7 +108,7 @@ fn lay(ty: &Ty, level: Level, out: &mut Vec<Word>) -> Option<()> {
         }
         Ty::Tuple(items) => {
             for item in items {
-                lay(item, Level::Inner, out)?;
+                lay(item, interner, Level::Inner, out)?;
             }
         }
         Ty::Enum { variants, .. } => {
@@ -118,20 +116,24 @@ fn lay(ty: &Ty, level: Level, out: &mut Vec<Word>) -> Option<()> {
                 field: None,
                 large: false,
             });
-            widest(variants.values().filter_map(|v| v.as_deref()), out)?;
+            widest(
+                variants.values().filter_map(|v| v.as_deref()),
+                interner,
+                out,
+            )?;
         }
         Ty::Result(ok, err) => {
             out.push(Word {
                 field: None,
                 large: false,
             });
-            widest([ok.as_ref(), err.as_ref()].into_iter(), out)?;
+            widest([ok.as_ref(), err.as_ref()].into_iter(), interner, out)?;
         }
         // Rule 9 and RFC-0039: an option is its payload, at the payload's width,
         // and the run's first register is `Kind::None` for `None`. That is why
         // the payload's own first register is the option's, and why no register
         // of the layout is spent on a discriminant.
-        Ty::Option(inner) => lay(inner, level, out)?,
+        Ty::Option(inner) => lay(inner, interner, level, out)?,
         Ty::Slice(_) | Ty::Str => return None,
         _ => out.push(Word {
             field: None,
@@ -147,14 +149,14 @@ fn lay(ty: &Ty, level: Level, out: &mut Vec<Word>) -> Option<()> {
 /// RFC-0052 rule 5 is what makes one register enough for payloads that disagree
 /// in class — the register is whole-typed and `Release` decides by kind, so there
 /// is no conditional drop for this to encode.
-fn widest<'t, I>(payloads: I, out: &mut Vec<Word>) -> Option<()>
+fn widest<'t, I>(payloads: I, interner: &Interner, out: &mut Vec<Word>) -> Option<()>
 where
     I: Iterator<Item = &'t Ty>,
 {
     let mut over: Vec<Word> = Vec::new();
     for payload in payloads {
         let mut words = Vec::new();
-        lay(payload, Level::Inner, &mut words)?;
+        lay(payload, interner, Level::Inner, &mut words)?;
         for (at, word) in words.into_iter().enumerate() {
             match over.get_mut(at) {
                 Some(held) => held.large |= word.large,
@@ -214,8 +216,9 @@ pub(crate) fn plan(
     labels: &FxHashMap<Label, u32>,
     base: Slot,
     ranges: &[Option<LiveRange>],
+    interner: &Interner,
 ) -> RunPlan {
-    let mut candidates = candidates(body, labels, ranges);
+    let mut candidates = candidates(body, labels, ranges, interner);
     let mut heaped = Vec::new();
     loop {
         if let Some(runs) = place(&candidates, base) {
@@ -257,6 +260,7 @@ fn candidates(
     body: &MirBody,
     labels: &FxHashMap<Label, u32>,
     ranges: &[Option<LiveRange>],
+    interner: &Interner,
 ) -> Vec<Candidate> {
     let escaped = escape::of_insts(body.insts.iter().map(|inst| &inst.kind));
     let depths = loop_depths(body, labels);
@@ -283,7 +287,7 @@ fn candidates(
             .val_types
             .get(&var)
             .unwrap_or_else(|| panic!("no type for value {var:?}"));
-        let Some(layout) = Layout::of(ty) else {
+        let Some(layout) = Layout::of(ty, interner) else {
             continue;
         };
         if layout.is_empty() {
@@ -416,18 +420,56 @@ mod tests {
         }
     }
 
-    fn layout(ty: &Ty) -> Layout {
-        Layout::of(ty).expect("rule 8 fixes an order for this type")
+    fn layout(ty: &Ty, i: &Interner) -> Layout {
+        Layout::of(ty, i).expect("rule 8 fixes an order for this type")
+    }
+
+    /// Rule 8's one field order, at the only contract that can hold both
+    /// artifacts: a field set interned in the reverse of its string order, laid
+    /// by this pass and ordered by `layout::encode`'s own comparison, comes out
+    /// the same both ways. Interning order is what the two would disagree on,
+    /// so the shuffle is what makes the test discriminate.
+    #[test]
+    fn a_run_and_the_canonical_encoding_order_a_shuffled_field_set_alike() {
+        let i = Interner::new();
+        let names = ["zeta", "alpha", "mu", "beta"];
+        let ty = object(
+            &i,
+            &names
+                .iter()
+                .map(|name| (*name, Ty::I64))
+                .collect::<Vec<(&str, Ty)>>(),
+        );
+        let Ty::Object(obj) = &ty else {
+            panic!("an object type")
+        };
+        let laid = layout(&ty, &i);
+        let encoded: Vec<&str> = crate::layout::sorted_fields(&i, obj)
+            .iter()
+            .map(|(name, _)| i.resolve(**name))
+            .collect();
+        assert_eq!(
+            encoded,
+            vec!["alpha", "beta", "mu", "zeta"],
+            "the canonical encoding is in string order"
+        );
+        for (at, name) in encoded.iter().enumerate() {
+            assert_eq!(
+                laid.field(i.intern(name)),
+                Some(u16::try_from(at).expect("four fields")),
+                "field {name} of the run"
+            );
+        }
     }
 
     #[test]
-    fn a_structural_object_is_its_fields_in_symbol_order() {
+    fn a_structural_object_is_its_fields_in_string_order() {
         let i = Interner::new();
         let ty = object(&i, &[("b", Ty::I64), ("a", Ty::String)]);
-        let laid = layout(&ty);
+        let laid = layout(&ty, &i);
         assert_eq!(laid.len(), 2);
         let (a, b) = (i.intern("a"), i.intern("b"));
-        assert_eq!(laid.field(a), Some(0));
+        assert_eq!(laid.field(a), Some(0), "`a` sorts before `b` as a string");
         assert_eq!(laid.field(b), Some(1));
         assert!(laid.large(0), "a String field owns a Large");
         assert!(!laid.large(1));
@@ -445,7 +487,7 @@ mod tests {
                 .into_iter()
                 .collect(),
         ));
-        assert_eq!(Layout::of(&ty), None);
+        assert_eq!(Layout::of(&ty, &i), None);
     }
 
     #[test]
@@ -453,7 +495,7 @@ mod tests {
         let i = Interner::new();
         let inner = object(&i, &[("p", Ty::String), ("q", Ty::I64)]);
         let ty = object(&i, &[("a", inner), ("z", Ty::Bool)]);
-        let laid = layout(&ty);
+        let laid = layout(&ty, &i);
         assert_eq!(laid.len(), 3, "two inner registers and one outer");
         assert_eq!(laid.field(i.intern("a")), Some(0));
         assert_eq!(laid.field(i.intern("z")), Some(2));
@@ -473,7 +515,7 @@ mod tests {
             &i,
             &[("A", Some(Ty::String)), ("B", Some(pair)), ("C", None)],
         );
-        let laid = layout(&ty);
+        let laid = layout(&ty, &i);
         assert_eq!(laid.len(), 3, "a tag and the two of the widest payload");
         assert!(!laid.large(0), "a tag owns no Large");
         assert!(
@@ -487,23 +529,23 @@ mod tests {
     fn an_option_is_its_payload_flat() {
         let i = Interner::new();
         let inner = object(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
-        let laid = layout(&Ty::Option(Box::new(inner)));
+        let laid = layout(&Ty::Option(Box::new(inner)), &i);
         assert_eq!(laid.len(), 2, "no register is spent on a discriminant");
         assert_eq!(laid.field(i.intern("a")), Some(0));
     }
 
     #[test]
     fn a_slice_has_no_layout() {
-        assert_eq!(Layout::of(&Ty::Slice(Box::new(Ty::I64))), None);
+        let i = Interner::new();
+        assert_eq!(Layout::of(&Ty::Slice(Box::new(Ty::I64)), &i), None);
     }
 
     fn candidate(var: usize, lo: usize, hi: usize, len: u16, depth: u32) -> Candidate {
         let i = Interner::new();
-        let _ = &i;
         let ty = Ty::Tuple(vec![Ty::I64; usize::from(len)]);
         Candidate {
             var: ValueId::from_raw(var),
-            layout: Layout::of(&ty).expect("a tuple of words has a layout"),
+            layout: Layout::of(&ty, &i).expect("a tuple of words has a layout"),
             range: LiveRange { lo, hi },
             depth,
         }

@@ -316,7 +316,16 @@ whole-typed and `Release` decides by kind; there is no conditional
 
 ## Consequences
 
-Nothing here is built yet; the first three are expectations, each with the
+Rule 8's field order is landed in both artifacts that have to agree on it:
+`interpreter/src/layout.rs::sorted_fields` orders a structural object's
+fields by the resolved name, and the run placement's `prepare/runs.rs::lay`
+calls that same function, so a committed object's canonical bytes and a run's
+registers cannot disagree. A test lays and encodes a field set interned in the
+reverse of its string order and pins the two orders equal. Rules 2, 3, 4 and 9
+remain unbuilt in the machine: no operation writes or reads a run, so no
+aggregate is kept off the heap yet.
+
+The rest here is not built yet; the first three are expectations, each with the
 count it rests on, and the measured table replaces them when the
 implementation lands.
 

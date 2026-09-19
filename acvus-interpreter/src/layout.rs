@@ -6,7 +6,7 @@
 use acvus_extern::{NodeHash, Owned, SpaceError, SpaceHooks, SpaceResult};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::{LenTerm, Repr, Ty};
-use acvus_utils::Astr;
+use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::runtime::AcvusRuntime;
@@ -41,21 +41,29 @@ fn not_held(rt: &AcvusRuntime, ty: &Ty) -> SpaceError {
     ))
 }
 
-fn sorted_fields<'a>(
-    rt: &AcvusRuntime,
+/// A structural object's field order: its field names as strings (RFC-0050
+/// rule 8).
+///
+/// `prepare::runs::lay` calls this for a run's layout and `encode`/`decode`
+/// call it for the canonical bytes, so a committed object and the registers it
+/// is read from cannot disagree. An interned symbol's own `Ord` is the order of
+/// first interning, which differs between programs and across a source change,
+/// and that is why the comparison is on the resolved string.
+pub(crate) fn sorted_fields<'a>(
+    interner: &Interner,
     fields: &'a FxHashMap<Astr, Ty>,
 ) -> Vec<(&'a Astr, &'a Ty)> {
     let mut out: Vec<_> = fields.iter().collect();
-    out.sort_by_key(|(k, _)| rt.0.interner.resolve(**k).to_string());
+    out.sort_by(|(a, _), (b, _)| interner.resolve(**a).cmp(interner.resolve(**b)));
     out
 }
 
 fn sorted_variants<'a>(
-    rt: &AcvusRuntime,
+    interner: &Interner,
     variants: &'a FxHashMap<Astr, Option<Box<Ty>>>,
 ) -> Vec<(&'a Astr, &'a Option<Box<Ty>>)> {
     let mut out: Vec<_> = variants.iter().collect();
-    out.sort_by_key(|(k, _)| rt.0.interner.resolve(**k).to_string());
+    out.sort_by(|(a, _), (b, _)| interner.resolve(**a).cmp(interner.resolve(**b)));
     out
 }
 
@@ -94,7 +102,7 @@ pub fn encode(
         }
         Ty::Object(fields) => {
             let values = unsafe { value.as_object() };
-            for (k, t) in sorted_fields(rt, fields) {
+            for (k, t) in sorted_fields(&rt.0.interner, fields) {
                 let v = values.get(k).ok_or_else(|| {
                     SpaceError::new(format!(
                         "object lacks field `{}`",
@@ -123,7 +131,7 @@ pub fn encode(
         },
         Ty::Enum { variants, .. } => {
             let variant = unsafe { value.as_variant() };
-            let sorted = sorted_variants(rt, variants);
+            let sorted = sorted_variants(&rt.0.interner, variants);
             let index = sorted
                 .iter()
                 .position(|(k, _)| **k == variant.tag)
@@ -221,7 +229,7 @@ pub fn decode(
         ),
         Ty::Object(fields) => {
             let mut values = FxHashMap::default();
-            for (k, t) in sorted_fields(rt, fields) {
+            for (k, t) in sorted_fields(&rt.0.interner, fields) {
                 values.insert(*k, Owned::from_value(decode(rt, nested, t, input)?));
             }
             Value::object(values)
@@ -237,7 +245,7 @@ pub fn decode(
             other => return Err(SpaceError::new(format!("Result: tag {other}"))),
         }),
         Ty::Enum { variants, .. } => {
-            let sorted = sorted_variants(rt, variants);
+            let sorted = sorted_variants(&rt.0.interner, variants);
             let index = take_u64(input)? as usize;
             let (tag, payload_ty) = sorted
                 .get(index)
