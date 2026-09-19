@@ -146,6 +146,7 @@ where
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no storage of its own type, so a parameter cannot borrow one",
     label = "this parameter is taken by reference",
+    note = "a borrowed aggregate crosses as its projection: where `{Self}` is a `#[derive(TyArg)] #[projection]` struct, write `{Self}Ref<'_>` or `{Self}Mut<'_>` (RFC-0050 rule 6).",
     note = "an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.",
     note = "a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047)."
 )]

@@ -147,6 +147,19 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// The value is `None`.
     fn unwrap_some(&self, value: Self::Value) -> Self::Value;
 
+    /// The payload of a `Some`, where it lies: an option is its payload
+    /// (RFC-0039), so a `Some(v)`'s storage is `v`'s own.
+    ///
+    /// # Safety
+    /// `value` holds an option whose payload is not itself an option. A
+    /// runtime is free to distinguish `Some(None)` from `None` by a word the
+    /// payload does not carry, and then the payload has no storage to name.
+    unsafe fn some_at<'a>(&self, value: &'a Self::Value) -> Option<&'a Self::Value>;
+
+    /// # Safety
+    /// As `some_at`, and the storage is exclusively named for `'a`.
+    unsafe fn some_at_mut<'a>(&self, value: &'a mut Self::Value) -> Option<&'a mut Self::Value>;
+
     /// The name a field key is at run time (RFC-0032).
     fn symbol(&self, name: &str) -> acvus_utils::Astr;
 
@@ -306,6 +319,12 @@ impl Runtime for TypesOnly {
         no_values()
     }
     fn unwrap_some(&self, _: ()) {
+        no_values()
+    }
+    unsafe fn some_at<'a>(&self, _: &'a ()) -> Option<&'a ()> {
+        no_values()
+    }
+    unsafe fn some_at_mut<'a>(&self, _: &'a mut ()) -> Option<&'a mut ()> {
         no_values()
     }
     fn symbol(&self, _: &str) -> acvus_utils::Astr {

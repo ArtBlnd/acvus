@@ -35,12 +35,6 @@ pub struct Lent<'r> {
     pub window: &'r mut FrameState,
 }
 
-/// The registers and the interner a path walk needs, borrowed apart.
-pub struct Frame<'m, 'f> {
-    pub regs: &'m mut Regs<'f>,
-    pub interner: &'m Interner,
-}
-
 pub struct Machine<'c> {
     body: &'c Body,
     regs: Regs<'c>,
@@ -112,14 +106,6 @@ impl<'c> Machine<'c> {
 
     pub fn interner(&self) -> &Interner {
         &self.rt.0.interner
-    }
-
-    #[inline]
-    pub fn frame(&mut self) -> Frame<'_, 'c> {
-        Frame {
-            regs: &mut self.regs,
-            interner: &self.rt.0.interner,
-        }
     }
 
     /// The body returns this value; the `Return` terminator leaves the loop.

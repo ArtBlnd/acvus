@@ -115,6 +115,9 @@ enum Mode {
     Borrow,
     BorrowMut,
     Str,
+    /// `SRef<'_>` / `SMut<'_>`, which `#[derive(TyArg)]` emits beside the
+    /// struct (RFC-0050 rule 6).
+    Projection,
 }
 
 impl Mode {
@@ -126,12 +129,50 @@ impl Mode {
             Mode::Borrow => quote! { ::acvus_extern::Ref<#ty, #rt> },
             Mode::BorrowMut => quote! { ::acvus_extern::RefMut<#ty, #rt> },
             Mode::Str => quote! { ::acvus_extern::StrView },
+            Mode::Projection => {
+                let at_static = at_static(ty);
+                quote! { #at_static }
+            }
         }
     }
 }
 
 fn is_str(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident("str"))
+}
+
+/// The test is the lifetime and not the type's name because reading a
+/// crossing out of a path's last segment is exactly what RFC-0050 rule 6
+/// withdrew `returns_slice` for: an alias defeated it.
+fn borrows_caller(ty: &Type) -> bool {
+    let Type::Path(p) = ty else {
+        return false;
+    };
+    p.path.segments.iter().any(|segment| {
+        let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+            return false;
+        };
+        args.args
+            .iter()
+            .any(|arg| matches!(arg, syn::GenericArgument::Lifetime(_)))
+    })
+}
+
+/// `TyArg` and an `Arg` marker are both `'static`, so a projection reaches
+/// them with its lifetimes at `'static`, and `Projected::At<'a>` hands the
+/// handler's body the same projection at the call's own lifetime.
+fn at_static(ty: &Type) -> Type {
+    struct Static;
+
+    impl syn::visit_mut::VisitMut for Static {
+        fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
+            *lifetime = syn::Lifetime::new("'static", lifetime.apostrophe);
+        }
+    }
+
+    let mut ty = ty.clone();
+    syn::visit_mut::VisitMut::visit_type_mut(&mut Static, &mut ty);
+    ty
 }
 
 /// A parameter marked `#[state]`: supplied when the registry is built,
@@ -360,6 +401,10 @@ fn generate_extern_fn(
                     Mode::Borrow => quote! { ::acvus_extern::ByRef<#ty, #c> },
                     Mode::BorrowMut => quote! { ::acvus_extern::ByRefMut<#ty, #c> },
                     Mode::Str => quote! { ::acvus_extern::ByStr },
+                    Mode::Projection => {
+                        let at_static = at_static(ty);
+                        quote! { ::acvus_extern::ByProjection<#at_static> }
+                    }
                 }
             })
             .collect();
@@ -653,6 +698,7 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             Type::Reference(r) if r.mutability.is_some() => ((*r.elem).clone(), Mode::BorrowMut),
             Type::Reference(r) if is_str(&r.elem) => ((*r.elem).clone(), Mode::Str),
             Type::Reference(r) => ((*r.elem).clone(), Mode::Borrow),
+            ty if borrows_caller(ty) => (ty.clone(), Mode::Projection),
             ty => (ty.clone(), Mode::Value),
         };
         params.push(RustParam::Acvus(ExternParam {
@@ -975,7 +1021,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
 
 // -- #[derive(TyArg)] ------------------------------------------------
 
-#[proc_macro_derive(TyArg)]
+#[proc_macro_derive(TyArg, attributes(projection))]
 pub fn derive_ty_arg(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match generate_ty_arg(input) {
@@ -1004,7 +1050,22 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             let ty = shape.declared_poly_ty(&ident.to_string());
             let erase = shape.erase(quote! { self });
             let materialize = shape.materialize(quote! { __value }, quote! { Self });
-            Ok(cross_impl(ident, ty, erase, materialize))
+            let projected = input.attrs.iter().any(|a| a.path().is_ident("projection"));
+            let borrowing = match projected {
+                true => Borrowing::AsProjection,
+                false => Borrowing::Whole,
+            };
+            let cross = cross_impl(
+                ident,
+                Crossing {
+                    ty,
+                    erase,
+                    materialize,
+                    borrowing,
+                },
+            );
+            let projection = projected.then(|| shape.projection(ident));
+            Ok(quote! { #cross #projection })
         }
         syn::Data::Enum(data) => generate_enum_ty_arg(ident, data),
         syn::Data::Union(_) => Err(syn::Error::new(
@@ -1014,15 +1075,42 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
     }
 }
 
-/// The `TyArg` and `Cross` impls of a derived type, given its poly type
-/// and its two crossings.
-fn cross_impl(
-    ident: &Ident,
+#[derive(Clone, Copy)]
+enum Borrowing {
+    Whole,
+    AsProjection,
+}
+
+impl Borrowing {
+    fn bound(self) -> proc_macro2::TokenStream {
+        match self {
+            Borrowing::Whole => quote! {},
+            Borrowing::AsProjection => {
+                quote! { Self: ::acvus_extern::BorrowedWhole<__R>, }
+            }
+        }
+    }
+}
+
+/// How a derived type crosses: the acvus type it names, and the two
+/// directions of the crossing itself.
+struct Crossing {
     ty: proc_macro2::TokenStream,
     erase: proc_macro2::TokenStream,
     materialize: proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
+    borrowing: Borrowing,
+}
+
+/// The `TyArg` and `Cross` impls of a derived type.
+fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
+    let Crossing {
+        ty,
+        erase,
+        materialize,
+        borrowing,
+    } = crossing;
     let one_value_run = one_value_run();
+    let borrowable_bound = borrowing.bound();
     quote! {
         impl ::acvus_extern::TyArg for #ident {
             fn poly_ty(
@@ -1036,6 +1124,7 @@ fn cross_impl(
         impl<__R> ::acvus_extern::Borrowable<__R> for #ident
         where
             __R: ::acvus_extern::Runtime,
+            #borrowable_bound
         {
         }
 
@@ -1171,6 +1260,190 @@ impl<'a> ObjectShape<'a> {
                 [#(#names),*],
                 [#(::acvus_extern::erase_field::<#tys, __R>(__rt, #idents)),*],
             )
+        }
+    }
+
+    /// `SRef<'a>` and `SMut<'a>`: one field per declared field, each a
+    /// borrow of the value in the object's own storage, and the impls that
+    /// build them out of an object the caller lent (RFC-0050 rule 6).
+    ///
+    /// The acvus type of a projection is `&S` over an **at-least** field set,
+    /// where the struct's own is `Declared`: a projection naming a subset of
+    /// the object's fields borrows those alone, which `ObjectTy::meet`
+    /// already admits and `acvus-mir-test/tests/projection_parameter.rs`
+    /// pins.
+    ///
+    /// Rule 6 gives every derived struct a projection and `#[projection]`
+    /// asks for one, which is less. A projection type carries a lifetime and
+    /// no runtime, so each of its fields must name a borrow that does not
+    /// mention the runtime either — `&'a String`, `&'a i64`, a nested
+    /// projection. A container field refutes that: the language stores a
+    /// `Vec<T>` as `Vec<Owned<Rt>>`, so the borrow of such a field is a
+    /// borrow of the runtime's own values and only `SRef<'a, Rt>` could name
+    /// it. Until the projection carries the runtime, a struct with a
+    /// container field has no projection to emit.
+    fn projection(&self, owner: &Ident) -> proc_macro2::TokenStream {
+        let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
+        let shared = format_ident!("{owner}Ref");
+        let exclusive = format_ident!("{owner}Mut");
+        let fields = self.fields();
+        let width = syn::Index::from(idents.len());
+        let doc_shared = format!("A shared projection of [`{owner}`] (RFC-0050 rule 6).");
+        let doc_exclusive = format!("An exclusive projection of [`{owner}`] (RFC-0050 rule 6).");
+        let at_least = quote! {
+            ::acvus_extern::PolyTy::Object(::acvus_extern::ObjectTy::at_least(#fields))
+        };
+        quote! {
+            #[doc = #doc_shared]
+            pub struct #shared<'__a> {
+                #(pub #idents: <#tys as ::acvus_extern::Borrowed>::Ref<'__a>,)*
+            }
+
+            #[doc = #doc_exclusive]
+            pub struct #exclusive<'__a> {
+                #(pub #idents: <#tys as ::acvus_extern::Borrowed>::Mut<'__a>,)*
+            }
+
+            impl ::acvus_extern::Borrowed for #owner {
+                type Ref<'__a> = #shared<'__a> where Self: '__a;
+                type Mut<'__a> = #exclusive<'__a> where Self: '__a;
+            }
+
+            impl<'__a> #shared<'__a> {
+                /// # Safety
+                /// `obj` holds what the owner's crossing wrote and is live
+                /// for `'__a`.
+                pub unsafe fn over<__R>(
+                    __rt: &'__a __R,
+                    __obj: &'__a ::acvus_extern::Obj<::acvus_extern::Owned<__R>>,
+                ) -> Self
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    let __fields = ::acvus_extern::Fields::of(__rt, __obj);
+                    Self {
+                        #(#idents: {
+                            let __at = __fields.at(#names);
+                            // SAFETY: the caller's contract, and the field
+                            // at that position holds what this field's own
+                            // crossing wrote.
+                            unsafe {
+                                <#tys as ::acvus_extern::Project<__R>>::project(
+                                    __rt,
+                                    __fields.field(__at),
+                                )
+                            }
+                        },)*
+                    }
+                }
+            }
+
+            impl<'__a> #exclusive<'__a> {
+                /// # Safety
+                /// As the shared projection's `over`, and `obj` is
+                /// exclusively named for `'__a`.
+                pub unsafe fn over<__R>(
+                    __rt: &'__a __R,
+                    __obj: &'__a mut ::acvus_extern::Obj<::acvus_extern::Owned<__R>>,
+                ) -> Self
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    let __fields = ::acvus_extern::FieldsMut::of(__rt, __obj);
+                    let __at = [#(__fields.at(#names)),*];
+                    let [#(#idents),*] = __fields.disjoint::<#width>(__at);
+                    Self {
+                        // SAFETY: as the shared projection's, exclusively.
+                        #(#idents: unsafe {
+                            <#tys as ::acvus_extern::Project<__R>>::project_mut(__rt, #idents)
+                        },)*
+                    }
+                }
+            }
+
+            impl<__R> ::acvus_extern::Project<__R> for #owner
+            where
+                __R: ::acvus_extern::Runtime,
+            {
+                unsafe fn project<'__a>(
+                    __rt: &'__a __R,
+                    __value: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                ) -> #shared<'__a> {
+                    // SAFETY: the caller's contract: a nested aggregate field
+                    // holds its own object.
+                    unsafe {
+                        #shared::over(__rt, ::acvus_extern::object_in(__rt, __value))
+                    }
+                }
+
+                unsafe fn project_mut<'__a>(
+                    __rt: &'__a __R,
+                    __value: &'__a mut <__R as ::acvus_extern::Runtime>::Value,
+                ) -> #exclusive<'__a> {
+                    // SAFETY: as `project`, with the caller's exclusive loan.
+                    unsafe {
+                        #exclusive::over(__rt, ::acvus_extern::object_in_mut(__rt, __value))
+                    }
+                }
+            }
+
+            impl<'__x, __R> ::acvus_extern::Projected<__R> for #shared<'__x>
+            where
+                __R: ::acvus_extern::Runtime,
+            {
+                type At<'__a> = #shared<'__a>;
+
+                unsafe fn of<'__a>(
+                    __rt: &'__a __R,
+                    __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                ) -> #shared<'__a> {
+                    // SAFETY: the caller's contract: a live object storage.
+                    unsafe {
+                        #shared::over(__rt, ::acvus_extern::object_of(__rt, __reference))
+                    }
+                }
+            }
+
+            impl<'__x, __R> ::acvus_extern::Projected<__R> for #exclusive<'__x>
+            where
+                __R: ::acvus_extern::Runtime,
+            {
+                type At<'__a> = #exclusive<'__a>;
+
+                unsafe fn of<'__a>(
+                    __rt: &'__a __R,
+                    __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                ) -> #exclusive<'__a> {
+                    // SAFETY: as the shared projection's, exclusively.
+                    unsafe {
+                        #exclusive::over(__rt, ::acvus_extern::object_of_mut(__rt, __reference))
+                    }
+                }
+            }
+
+            impl ::acvus_extern::TyArg for #shared<'static> {
+                fn poly_ty(
+                    __i: &::acvus_extern::Interner,
+                    __vars: &::acvus_extern::PolyVars,
+                ) -> ::acvus_extern::PolyTy {
+                    ::acvus_extern::PolyTy::Ref(
+                        ::acvus_extern::Mutability::Shared,
+                        ::std::boxed::Box::new(::acvus_extern::TypeArg::uniform(#at_least)),
+                    )
+                }
+            }
+
+            impl ::acvus_extern::TyArg for #exclusive<'static> {
+                fn poly_ty(
+                    __i: &::acvus_extern::Interner,
+                    __vars: &::acvus_extern::PolyVars,
+                ) -> ::acvus_extern::PolyTy {
+                    ::acvus_extern::PolyTy::Ref(
+                        ::acvus_extern::Mutability::Mut,
+                        ::std::boxed::Box::new(::acvus_extern::TypeArg::uniform(#at_least)),
+                    )
+                }
+            }
         }
     }
 
@@ -1312,7 +1585,15 @@ fn generate_enum_ty_arg(
         };
         match __at { #(#materialize_arms,)* }
     }};
-    Ok(cross_impl(ident, ty, erase, materialize))
+    Ok(cross_impl(
+        ident,
+        Crossing {
+            ty,
+            erase,
+            materialize,
+            borrowing: Borrowing::Whole,
+        },
+    ))
 }
 
 // -- extern_registry! ------------------------------------------------

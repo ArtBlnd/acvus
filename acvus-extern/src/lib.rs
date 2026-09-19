@@ -16,6 +16,7 @@ mod len;
 mod obj;
 pub mod object;
 mod owned;
+mod projection;
 mod reference;
 mod registry;
 mod runtime;
@@ -46,6 +47,10 @@ pub use obj::{
     materialize_payload, one_from_run, one_into_run, take_payload,
 };
 pub use owned::{Owned, Release};
+pub use projection::{
+    Borrowed, BorrowedWhole, ByProjection, Fields, FieldsMut, Project, Projected, object_in,
+    object_in_mut, object_of, object_of_mut,
+};
 pub use reference::{Ref, RefMut};
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,

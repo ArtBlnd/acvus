@@ -287,6 +287,23 @@ impl Runtime for Counting {
         *unsafe { Box::from_raw(cell) }
     }
 
+    unsafe fn some_at<'a>(&self, value: &'a V) -> Option<&'a V> {
+        let V::Some(cell) = value else {
+            return None;
+        };
+        // SAFETY: `some` leaked this cell, and it lives as long as the
+        // option that names it.
+        Some(unsafe { &**cell })
+    }
+
+    unsafe fn some_at_mut<'a>(&self, value: &'a mut V) -> Option<&'a mut V> {
+        let V::Some(cell) = value else {
+            return None;
+        };
+        // SAFETY: as `some_at`, with the caller's exclusive loan.
+        Some(unsafe { &mut **cell })
+    }
+
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
     }

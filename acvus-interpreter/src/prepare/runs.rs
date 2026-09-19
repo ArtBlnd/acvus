@@ -806,6 +806,13 @@ fn loop_depths(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Vec<u32> {
                 .map(|(_, label, _)| *label)
                 .chain(default.iter().map(|(label, _)| *label))
                 .collect(),
+            InstKind::For { body, exit, .. } => vec![*body, *exit],
+            InstKind::Diamond {
+                then_label,
+                else_label,
+                join,
+                ..
+            } => vec![*then_label, *else_label, *join],
             _ => Vec::new(),
         };
         for label in targets {

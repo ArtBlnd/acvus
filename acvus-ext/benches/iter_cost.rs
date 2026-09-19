@@ -205,6 +205,12 @@ impl Runtime for Words {
     fn unwrap_some(&self, _: Word) -> Word {
         no_options()
     }
+    unsafe fn some_at<'a>(&self, _: &'a Word) -> Option<&'a Word> {
+        no_options()
+    }
+    unsafe fn some_at_mut<'a>(&self, _: &'a mut Word) -> Option<&'a mut Word> {
+        no_options()
+    }
     fn call_is_sync(&self, _: &Word) -> bool {
         false
     }
@@ -516,6 +522,12 @@ impl Runtime for Tags {
         no_options()
     }
     fn unwrap_some(&self, _: TaggedWord) -> TaggedWord {
+        no_options()
+    }
+    unsafe fn some_at<'a>(&self, _: &'a TaggedWord) -> Option<&'a TaggedWord> {
+        no_options()
+    }
+    unsafe fn some_at_mut<'a>(&self, _: &'a mut TaggedWord) -> Option<&'a mut TaggedWord> {
         no_options()
     }
     fn call_is_sync(&self, _: &TaggedWord) -> bool {

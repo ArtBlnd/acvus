@@ -266,6 +266,23 @@ impl Runtime for Counted {
         *unsafe { Box::from_raw(cell) }
     }
 
+    unsafe fn some_at<'a>(&self, value: &'a V) -> Option<&'a V> {
+        let V::Some(cell) = value else {
+            return None;
+        };
+        // SAFETY: `some` leaked this cell, and it lives as long as the
+        // option that names it.
+        Some(unsafe { &**cell })
+    }
+
+    unsafe fn some_at_mut<'a>(&self, value: &'a mut V) -> Option<&'a mut V> {
+        let V::Some(cell) = value else {
+            return None;
+        };
+        // SAFETY: as `some_at`, with the caller's exclusive loan.
+        Some(unsafe { &mut **cell })
+    }
+
     fn symbol(&self, name: &str) -> Astr {
         SYMBOLS.intern(name)
     }
@@ -630,4 +647,167 @@ where
     let mut run = vec![Rt::Value::default(); A::WIDTH];
     args.into_run(rt, &mut run);
     run
+}
+
+// -- RFC-0050 rule 6: a handler borrows a projection ---------------------
+
+/// The one struct in this file that asks for a projection, and the one that
+/// therefore refuses `&Point` in a handler's signature.
+/// `acvus-extern-macro/tests/compile_fail/borrowed_aggregate.rs` is that
+/// refusal's golden.
+#[derive(acvus_extern::TyArg)]
+#[projection]
+struct Point {
+    x: i64,
+    label: String,
+}
+
+/// A projection naming a subset of the object's fields, which RFC-0050 rule
+/// 6 admits and `ObjectTy::meet` types as an at-least field set.
+#[derive(acvus_extern::TyArg)]
+#[projection]
+struct JustLabel {
+    label: String,
+}
+
+fn a_point(rt: &Counted) -> V {
+    Point {
+        x: 7,
+        label: "seven".to_owned(),
+    }
+    .erase(rt)
+}
+
+#[test]
+fn a_shared_projection_reads_every_field_where_it_lies() {
+    let rt = Counted;
+    let object = a_point(&rt);
+    // SAFETY: `object` is live for the borrow below.
+    let reference = unsafe { rt.reference(&object) };
+    // SAFETY: `reference` names the live object `a_point` just wrote.
+    let point =
+        unsafe { <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+
+    assert_eq!(*point.x, 7);
+    assert_eq!(point.label, "seven");
+
+    // SAFETY: the derive's `erase` wrote an `Obj<Owned<Counted>>`.
+    let obj = unsafe { rt.value_as_ref::<acvus_extern::Obj<Owned<Counted>>>(&object) };
+    // SAFETY: the object's second field holds the `String` this projection
+    // borrowed, and rule 8 puts `label` before `x`.
+    let stored = unsafe { rt.value_as_ref::<String>(&obj.values[0]) };
+    assert!(
+        std::ptr::eq(point.label, stored),
+        "the projection borrows the object's own String rather than a copy"
+    );
+}
+
+#[test]
+fn an_exclusive_projection_writes_through_to_the_object() {
+    let rt = Counted;
+    let object = a_point(&rt);
+    // SAFETY: `object` is live and named by nothing else for the borrow.
+    let reference = unsafe { rt.reference(&object) };
+    {
+        // SAFETY: `reference` exclusively names the live object.
+        let point =
+            unsafe { <PointMut<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+        *point.x = 9;
+        point.label.push_str("teen");
+    }
+
+    // SAFETY: the derive's `erase` wrote this object and nothing moved it.
+    let read = unsafe { Point::materialize(&rt, object) };
+    assert_eq!((read.x, read.label.as_str()), (9, "seventeen"));
+}
+
+#[test]
+fn a_partial_projection_borrows_the_field_it_names() {
+    let rt = Counted;
+    let object = a_point(&rt);
+    // SAFETY: `object` is live for the borrow below.
+    let reference = unsafe { rt.reference(&object) };
+    // SAFETY: `reference` names a live object that has every field
+    // `JustLabel` names, which is what the checker admits at an at-least
+    // parameter.
+    let only =
+        unsafe { <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+    assert_eq!(only.label, "seven");
+}
+
+// -- "No borrow allocates", as a count ----------------------------------
+
+/// The counter is per thread, so the tests that run beside this one do not
+/// enter it and `cargo test` needs no `--test-threads=1`.
+struct Counting;
+
+thread_local! {
+    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// SAFETY: every method forwards to the system allocator with the same
+// arguments; the counter is a side effect on thread-local state and changes
+// no pointer.
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        ALLOCATIONS.with(|n| n.set(n.get() + 1));
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new: usize) -> *mut u8 {
+        ALLOCATIONS.with(|n| n.set(n.get() + 1));
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { std::alloc::System.realloc(ptr, layout, new) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+fn allocations_of<T>(work: impl FnOnce() -> T) -> usize {
+    let before = ALLOCATIONS.with(std::cell::Cell::get);
+    let held = work();
+    let after = ALLOCATIONS.with(std::cell::Cell::get);
+    drop(held);
+    after - before
+}
+
+#[test]
+fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
+    let rt = Counted;
+    let object = a_point(&rt);
+    // SAFETY: `object` is live for both crossings below.
+    let reference = unsafe { rt.reference(&object) };
+
+    let borrowed = allocations_of(|| {
+        // SAFETY: `reference` names the live object.
+        let point =
+            unsafe { <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+        *point.x
+    });
+    assert_eq!(
+        borrowed, 0,
+        "a projection names the caller's values in place"
+    );
+
+    let by_value = allocations_of(|| {
+        // SAFETY: the derive's `erase` wrote this object; `materialize` is
+        // given a copy of the value and the object stays live, so this test
+        // reads the field count and nothing takes ownership twice.
+        let reference = unsafe { rt.reference(&object) };
+        // SAFETY: as above.
+        let point =
+            unsafe { <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+        point.label.clone()
+    });
+    assert!(
+        by_value > 0,
+        "materializing a field's String allocates, which is what the projection avoids"
+    );
 }

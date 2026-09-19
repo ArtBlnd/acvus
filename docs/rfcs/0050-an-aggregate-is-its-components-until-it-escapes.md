@@ -413,7 +413,66 @@ any kind but `Large`, so the `Box<[Owned<Rt>]>` releases exactly the `Large`
 fields, once each, by type. A table naming those offsets would be a second
 source of truth against the kind byte.
 
-Rules 5, 6, 7 and 9 remain unbuilt in the machine. Rule 5's realization has
+Rule 6's projection is built at the glue and is asked for per struct.
+`#[derive(TyArg)] #[projection]` emits `SRef<'a>` and `SMut<'a>` beside the
+struct — one field per declared field, each a borrow of the value in the
+object's own storage — with `Borrowed` carrying the projection types, `Project`
+building a field's borrow, and `Projected` mapping the marker a handler's
+signature names to the same projection at the call's lifetime. A handler
+declares the projection and never `&S`: the derive's `Borrowable` impl carries
+a `BorrowedWhole` bound that has no impl anywhere, so `&S` is a compile error,
+and `acvus-extern-macro/tests/compile_fail/borrowed_aggregate.stderr` reads the
+message back. The macro tells a projection from a by-value parameter by the
+lifetime argument the type carries, not by its name, because an alias defeats a
+name. **A borrowed crossing allocates nothing**, counted:
+`acvus-extern/tests/owned_holders.rs::a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does`
+measures 0 allocations for the projection against a non-zero count for
+materializing one field.
+
+The GATs are on `Borrowed` and not on `Cross` as rule 6 states. `Cross` is
+parameterized by the runtime and `SRef<'a>` is a struct with one lifetime and
+no runtime parameter, so the association naming it in that struct's own
+definition cannot come from a runtime-parameterized trait.
+
+The projection is asked for per struct rather than emitted for every derived
+one, and a container field is why. Every field of an Rt-free projection must
+name a borrow that mentions no runtime, and the language stores a `Vec<T>` as
+`Vec<Owned<Rt>>`, so the borrow of such a field is a borrow of the runtime's
+own values and only `SRef<'a, Rt>` could name it. Making the projection carry
+the runtime is what would make it universal.
+
+Two of rule 6's own sentences are not met, and both are measured rather than
+argued. **A projection resolves each field's name against the object's shape at
+call time**, where rule 6 says there is no name lookup: the offsets are to reach
+the glue as a table in the operation, and no extern call form carries one —
+`prepare.rs::extern_call` builds its operation out of registers and a window.
+The field table's index cannot stand in for the position, because rule 6 admits
+a projection naming a subset of the object's fields and the two orders then
+differ. **And a projection parameter's at-least meet does not refuse every
+object that lacks a field it names.**
+`acvus-mir-test/tests/projection_parameter.rs` measures both halves: extra
+fields are admitted, a partial projection over a wider object is admitted, a
+by-value parameter keeps RFC-0042 R1's exact meet, and a value of a declared
+struct lacking the field is refused by that field's name — but an object
+**literal** lacking it is admitted with its type unchanged, because
+`ObjectTy::meet` joins a `Written` field set with an `AtLeast` one by their
+union, which is RFC-0042's own rule that a field store adds to a literal's
+field set. The glue then panics at `projection::position_of`. Closing it is a
+change to that join and is not a change the projection may make on its own.
+
+The partial projection's loan is of the whole storage. A script writes `f(&o)`
+and the projection is a fact of the Rust signature, which the checker does not
+see, so `f(OMut { a: &mut o.a })` beside `g(&o.b)` is not admitted where
+`&mut o` would conflict. Per-field loans are a change in the loan machinery
+keyed on the parameter's field set.
+
+Rules 5, 7 and 9 remain unbuilt in the machine, and rule 6's enum half,
+`Out` and `Rt::Object<'a>` with them. `Out` has no destination to write into:
+`prepare.rs::extern_call` asserts a handler's result is one value and a call's
+destination is one register, not a run, so `Out` waits on rule 5's multi-value
+return at the window's run. `ERef`/`EMut` wait on the heap `Variant` becoming
+`[tag, payload…]`, which the flat-heap build recorded as deliberately not
+done. Rule 5's realization has
 no emission site under rule 3's own predicate: a web with a member that
 escapes is placed on the heap whole, so nothing takes a whole aggregate out of
 a run. Rule 3's one projection family over a run and a heap `Large` alike is

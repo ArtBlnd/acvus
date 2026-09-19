@@ -336,6 +336,21 @@ impl Runtime for Tiny {
         };
         *unsafe { Box::from_raw(payload) }
     }
+    unsafe fn some_at<'a>(&self, value: &'a V) -> Option<&'a V> {
+        let V::Some(payload) = value else {
+            return None;
+        };
+        // SAFETY: `some` leaked this payload, and it lives as long as the
+        // option that names it.
+        Some(unsafe { &**payload })
+    }
+    unsafe fn some_at_mut<'a>(&self, value: &'a mut V) -> Option<&'a mut V> {
+        let V::Some(payload) = value else {
+            return None;
+        };
+        // SAFETY: as `some_at`, with the caller's exclusive loan.
+        Some(unsafe { &mut **payload })
+    }
     fn call_is_sync(&self, _: &V) -> bool {
         true
     }

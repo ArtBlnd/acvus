@@ -497,6 +497,7 @@ macro_rules! cross_as_stored {
         }
 
         $crate::cross_one_value!($t $(, $($g)*)?);
+        $crate::borrowed_as_self!($t $(, $($g)*)?);
         $crate::cross_whole!(OneValue, $t $(, $($g)*)?);
         $crate::cross_whole!(CrossSpecialized, $t $(, $($g)*)?);
     };

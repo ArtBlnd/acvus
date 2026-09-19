@@ -213,6 +213,14 @@ impl Runtime for AcvusRuntime {
         Value::some_payload(value)
     }
 
+    unsafe fn some_at<'a>(&self, value: &'a Value) -> Option<&'a Value> {
+        (!value.is_none()).then_some(value)
+    }
+
+    unsafe fn some_at_mut<'a>(&self, value: &'a mut Value) -> Option<&'a mut Value> {
+        (!value.is_none()).then_some(value)
+    }
+
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
         self.0.interner.intern(name)
     }
