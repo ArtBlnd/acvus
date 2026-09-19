@@ -275,6 +275,7 @@ fn replace_n(re: &Regex, text: &String, n: u64, with: String) -> String {
 
 fn replace_with_now<E, Rt>(
     rt: &Rt,
+    frame: &mut Rt::Frame<'_>,
     re: &Regex,
     text: &String,
     f: Fn1<Match, String, E, Rt>,
@@ -283,13 +284,12 @@ where
     E: EffectVar,
     Rt: Runtime,
 {
-    let mut frame = rt.frame();
     let mut out = String::new();
     let mut last = 0;
     for m in re.0.find_iter(text) {
         out.push_str(&text[last..m.start()]);
         last = m.end();
-        out.push_str(&f.call_now(rt, &mut frame, (match_of(m),)));
+        out.push_str(&f.call_now(rt, frame, (match_of(m),)));
     }
     out.push_str(&text[last..]);
     out
@@ -300,6 +300,7 @@ where
 #[extern_fn(effect = E, sync = replace_with_now)]
 async fn replace_with<E, Rt>(
     rt: &Rt,
+    frame: &mut Rt::Frame<'_>,
     re: &Regex,
     text: &String,
     f: Fn1<Match, String, E, Rt>,
@@ -308,13 +309,12 @@ where
     E: EffectVar,
     Rt: Runtime,
 {
-    let mut frame = rt.frame();
     let mut out = String::new();
     let mut last = 0;
     for m in re.0.find_iter(text) {
         out.push_str(&text[last..m.start()]);
         last = m.end();
-        out.push_str(&f.call(rt, &mut frame, (match_of(m),)).await);
+        out.push_str(&f.call(rt, frame, (match_of(m),)).await);
     }
     out.push_str(&text[last..]);
     out
