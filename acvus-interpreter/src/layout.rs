@@ -141,6 +141,7 @@ pub fn encode(
         | Ty::Handle(_)
         | Ty::Ref(..)
         | Ty::Slice(_)
+        | Ty::Str
         | Ty::Order
         | Ty::Never
         | Ty::Error(_) => {
@@ -256,6 +257,7 @@ pub fn decode(
         | Ty::Handle(_)
         | Ty::Ref(..)
         | Ty::Slice(_)
+        | Ty::Str
         | Ty::Order
         | Ty::Never
         | Ty::Error(_) => {

@@ -218,6 +218,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
             CastKind::Slice { as_slice, .. } => {
                 format!("[{}]", i.resolve(as_slice.fn_ref.name))
             }
+            CastKind::Str { as_str } => format!("str[{}]", i.resolve(as_str.fn_ref.name)),
         })
         .collect();
     coercions.sort();

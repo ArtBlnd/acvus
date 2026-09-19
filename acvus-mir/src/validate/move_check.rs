@@ -46,7 +46,7 @@ pub fn is_move_only(ty: &Ty) -> Option<bool> {
             Some(false)
         }
         Ty::Ref(..) => Some(false),
-        Ty::Slice(_) => Some(true),
+        Ty::Slice(_) | Ty::Str => Some(true),
         Ty::Option(payload) => is_move_only(payload),
         Ty::String
         | Ty::Handle(..)

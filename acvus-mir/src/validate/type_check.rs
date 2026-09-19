@@ -605,12 +605,12 @@ impl CheckCtx {
                     self.invalid(pc, span, "AsSlice", "Ref(Mut)", container_ty, errors);
                 }
                 let dst_ty = ty!(*dst);
-                if slice_of(dst_ty).map(|(m, _)| m) != Some(*mutability) && !dst_ty.is_error() {
+                if run_of(dst_ty) != Some(*mutability) && !dst_ty.is_error() {
                     self.invalid(
                         pc,
                         span,
                         "AsSlice",
-                        &format!("Ref({mutability:?}, Slice)"),
+                        &format!("Ref({mutability:?}, Slice) or Ref(Shared, Str)"),
                         dst_ty,
                         errors,
                     );
@@ -1888,6 +1888,15 @@ impl CheckCtx {
 }
 
 /// The mutability and element type of a `&[T]` or `&mut [T]`.
+/// The mutability of the run an `AsSlice` hands back: a container's
+/// elements (RFC-0047) or a `String`'s bytes (RFC-0062).
+fn run_of(ty: &Ty) -> Option<Mutability> {
+    let Ty::Ref(mutability, target) = ty else {
+        return None;
+    };
+    matches!(target.ty, Ty::Slice(_) | Ty::Str).then_some(*mutability)
+}
+
 fn slice_of(ty: &Ty) -> Option<(Mutability, &Ty)> {
     let Ty::Ref(mutability, target) = ty else {
         return None;

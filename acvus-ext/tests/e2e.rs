@@ -1173,3 +1173,52 @@ async fn an_argument_live_after_the_call_is_not_consumed_by_it() {
     .await;
     assert_eq!(v.as_int(), 90, "each call read the same b = 5");
 }
+
+// -- A `&str` parameter (RFC-0062) --------------------------------------
+
+#[extern_fn(effect = pure)]
+fn byte_length(s: &str) -> u64 {
+    s.len() as u64
+}
+
+#[extern_fn(effect = pure)]
+fn first_byte(s: &str) -> u64 {
+    u64::from(s.as_bytes()[0])
+}
+
+fn str_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "view",
+        fns: [byte_length, first_byte],
+    }
+}
+
+#[tokio::test]
+async fn a_string_lent_to_a_str_parameter_is_the_pair_the_handler_reads() {
+    let i = Interner::new();
+    let v = run_ext(
+        &i,
+        "let s = \"héllo\"; byte_length(&s)",
+        TypedContext::default(),
+        vec![str_registry()],
+    )
+    .await;
+    assert_eq!(v.as_int(), 6, "six bytes, five scalar values");
+}
+
+#[tokio::test]
+async fn a_str_parameter_reads_the_borrowed_string_s_own_bytes() {
+    let i = Interner::new();
+    let v = run_ext(
+        &i,
+        "let s = \"abc\"; first_byte(&s)",
+        TypedContext::default(),
+        vec![str_registry()],
+    )
+    .await;
+    assert_eq!(
+        v.as_int(),
+        97,
+        "the first byte of the string the script made"
+    );
+}

@@ -265,7 +265,9 @@ impl Ty {
                     .collect(),
             },
             Ty::Handle(..) => todo!("Handle serialization not yet implemented"),
-            Ty::Ref(..) | Ty::Slice(..) => todo!("Ref serialization not yet implemented"),
+            Ty::Ref(..) | Ty::Slice(..) | Ty::Str => {
+                todo!("Ref serialization not yet implemented")
+            }
             Ty::Var(v) => match *v {},
         }
     }

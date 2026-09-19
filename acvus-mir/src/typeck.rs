@@ -92,6 +92,7 @@ struct SliceArg {
     arg: InferTy,
     param: InferTy,
     mutability: Mutability,
+    view: View,
 }
 
 /// One `a[i]` as the checker reads it (RFC-0047).
@@ -139,6 +140,46 @@ where
         TyTerm::UserDefined { id, .. } => Some(Some(*id)),
         TyTerm::Array(..) => Some(None),
         _ => None,
+    }
+}
+
+/// What the pointee of a reference parameter asks of the argument: the run
+/// of a container's elements (RFC-0047 rule 6), or the run of a `String`'s
+/// bytes (RFC-0062 Decision 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum View {
+    Slice,
+    Str,
+}
+
+impl View {
+    fn of<V>(ty: &TyTerm<V>) -> Option<View>
+    where
+        V: crate::ty::Phase,
+    {
+        match ty {
+            TyTerm::Slice(_) => Some(View::Slice),
+            TyTerm::Str => Some(View::Str),
+            _ => None,
+        }
+    }
+}
+
+/// A view at the mutability the parameter asks for, which names the one
+/// declaration that takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Viewed {
+    view: View,
+    mutability: Mutability,
+}
+
+impl Viewed {
+    fn declaration(self) -> &'static str {
+        match (self.view, self.mutability) {
+            (View::Str, _) => "as_str",
+            (View::Slice, Mutability::Shared) => "as_slice",
+            (View::Slice, Mutability::Mut) => "as_slice_mut",
+        }
     }
 }
 
@@ -385,6 +426,9 @@ enum PendingCast {
     Slice {
         mutability: Mutability,
         as_slice: PendingExternCast,
+    },
+    Str {
+        as_str: PendingExternCast,
     },
 }
 
@@ -1146,10 +1190,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// `&v` at a `&[T]` parameter is the container's own `as_slice` of it,
-    /// recorded at the argument (RFC-0047 rule 6). The two mutabilities must
-    /// agree, so `&v` at a `&mut [T]` parameter is refused where every other
-    /// argument mismatch is; so is a container that declares no `as_slice`,
-    /// and an argument already of slice type unifies as it is.
+    /// and `&s` at a `&str` parameter is the `String`'s own `as_str`,
+    /// recorded at the argument (RFC-0047 rule 6, RFC-0062 Decision 3). The
+    /// two mutabilities must agree, so `&v` at a `&mut [T]` parameter is
+    /// refused where every other argument mismatch is; so is a container
+    /// that declares no `as_slice`, and an argument already of the
+    /// parameter's own type unifies as it is.
     fn meet_slice_parameter(
         &mut self,
         arg_ty: &InferTy,
@@ -1159,9 +1205,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(mutability, wanted) = self.solver.shallow_resolve_ty(param_ty) else {
             return false;
         };
-        let TyTerm::Slice(_) = self.solver.shallow_resolve_ty(&wanted.ty) else {
+        let Some(view) = View::of(&self.solver.shallow_resolve_ty(&wanted.ty)) else {
             return false;
         };
+        if view == View::Str && mutability != Mutability::Shared {
+            return false;
+        }
         let TyTerm::Ref(lent, container) = self.solver.shallow_resolve_ty(arg_ty) else {
             return false;
         };
@@ -1176,38 +1225,52 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 arg: arg_ty.clone(),
                 param: param_ty.clone(),
                 mutability,
+                view,
             });
             return true;
         }
-        self.slice_coercion(&referent, mutability, arg_ty, param_ty, site.id, site.span)
+        self.slice_coercion(
+            &referent,
+            Viewed { view, mutability },
+            arg_ty,
+            param_ty,
+            site.id,
+            site.span,
+        )
     }
 
-    /// The `as_slice` the container's evidence settles on, recorded as the
-    /// coercion at `at`. `false` is a container that declares none, which the
+    /// The declaration the referent's evidence settles on, recorded as the
+    /// coercion at `at`. `false` is a referent that declares none, which the
     /// caller reports as the argument mismatch it is.
     fn slice_coercion(
         &mut self,
         referent: &InferTy,
-        mutability: Mutability,
+        viewed: Viewed,
         arg_ty: &InferTy,
         param_ty: &InferTy,
         at: AstId,
         span: Span,
     ) -> bool {
-        let Some(head) = sliceable_head(referent) else {
-            return false;
+        let Viewed { view, mutability } = viewed;
+        let name = self.interner.intern(viewed.declaration());
+        let head = match view {
+            View::Str => None,
+            View::Slice => match sliceable_head(referent) {
+                Some(head) => Some(head),
+                None => return false,
+            },
         };
-        let name = self.interner.intern(match mutability {
-            Mutability::Shared => "as_slice",
-            Mutability::Mut => "as_slice_mut",
-        });
+        let takes_referent = |takes: &crate::ty::PolyTy| match view {
+            View::Str => matches!(takes, TyTerm::String),
+            View::Slice => sliceable_head(takes) == head,
+        };
         let taker: Option<(QualifiedRef, crate::ty::Scheme)> = self
             .env
             .machine_set(name)
             .into_iter()
             .find(
                 |(_, scheme)| match scheme.params().first().map(|param| &param.ty) {
-                    Some(TyTerm::Ref(_, takes)) => sliceable_head(&takes.ty) == Some(head),
+                    Some(TyTerm::Ref(_, takes)) => takes_referent(&takes.ty),
                     _ => false,
                 },
             )
@@ -1215,12 +1278,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Some((qref, scheme)) = taker else {
             return false;
         };
-        let as_slice = self.applied_at(qref, &scheme, arg_ty, param_ty, span);
+        if view == View::Str && !matches!(referent, TyTerm::String) {
+            return false;
+        }
+        let taken = self.applied_at(qref, &scheme, arg_ty, param_ty, span);
         self.coercions.push(PendingCoercion {
             at,
-            cast: PendingCast::Slice {
-                mutability,
-                as_slice,
+            cast: match view {
+                View::Str => PendingCast::Str { as_str: taken },
+                View::Slice => PendingCast::Slice {
+                    mutability,
+                    as_slice: taken,
+                },
             },
         });
         true
@@ -1237,13 +1306,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             arg,
             param,
             mutability,
+            view,
         } in deferred
         {
             let referent = match self.solver.shallow_resolve_ty(&arg) {
                 TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty),
                 other => other,
             };
-            if self.slice_coercion(&referent, mutability, &arg, &param, at, span) {
+            let viewed = Viewed { view, mutability };
+            if self.slice_coercion(&referent, viewed, &arg, &param, at, span) {
                 continue;
             }
             // The two referents and not the two references, so that one
@@ -1869,6 +1940,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     } => CastKind::Slice {
                         mutability: *mutability,
                         as_slice: self.frozen_cast(as_slice)?,
+                    },
+                    PendingCast::Str { as_str } => CastKind::Str {
+                        as_str: self.frozen_cast(as_str)?,
                     },
                 };
                 Some((coercion.at, kind))
@@ -3037,6 +3111,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         site: &ArgSite,
     ) {
         let mut converts = false;
+        let mut views = false;
         options.retain_mut(
             |option| match self.solver.admits(&option.candidate, index, ty) {
                 Admission::Direct => true,
@@ -3048,10 +3123,29 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     converts = true;
                     true
                 }
+                Admission::Viewed => {
+                    option.viewed.push(ConvertedArgument {
+                        index,
+                        ty: ty.clone(),
+                    });
+                    views = true;
+                    true
+                }
                 Admission::Refused => false,
             },
         );
         if options.is_empty() {
+            return;
+        }
+        if views {
+            self.slice_args.push(SliceArg {
+                at: site.id,
+                span: site.span,
+                arg: ty.clone(),
+                param: param.ty.clone(),
+                mutability: Mutability::Shared,
+                view: View::Str,
+            });
             return;
         }
         if converts {

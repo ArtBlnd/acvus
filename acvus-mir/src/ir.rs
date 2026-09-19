@@ -49,6 +49,10 @@ pub enum CastKind {
         mutability: Mutability,
         as_slice: ExternCast,
     },
+    /// At a call argument of `&String` whose parameter is `&str`: the
+    /// `String`'s own `as_str` of the reference, which the lowering emits as
+    /// an `AsSlice` and not a call (RFC-0062 Decision 3).
+    Str { as_str: ExternCast },
 }
 
 /// A cast function at the type of one call of it.

@@ -4928,8 +4928,11 @@ impl Growing<'_> {
 
 /// Whether a value of this type is a slice: a borrow of a run, which the
 /// machine keeps in two adjacent word registers (RFC-0047 amended).
+/// Whether a value of this type is the register pair the machine keeps a
+/// run in: a container's elements (RFC-0047) or a `String`'s bytes
+/// (RFC-0062 Decision 1).
 fn is_slice(ty: &Ty) -> bool {
-    matches!(ty, Ty::Ref(_, target) if matches!(target.ty, Ty::Slice(_)))
+    matches!(ty, Ty::Ref(_, target) if matches!(target.ty, Ty::Slice(_) | Ty::Str))
 }
 
 /// How many registers a value takes, and what the frame opens them with
@@ -5741,9 +5744,9 @@ fn owns_large(ty: &Ty) -> bool {
         | Ty::Fn { .. }
         | Ty::Handle(_)
         | Ty::UserDefined { .. } => true,
-        Ty::Slice(_) => panic!(
+        Ty::Slice(_) | Ty::Str => panic!(
             "a slice has no storage of its own: it reaches a register under a reference \
-             (RFC-0047)"
+             (RFC-0047, RFC-0062)"
         ),
         Ty::Error(_) | Ty::Var(_) => panic!("prepare reached the unresolved type {ty:?}"),
     }

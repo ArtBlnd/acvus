@@ -1,5 +1,5 @@
 //! Which of the standard declarations hand a run back in two registers
-//! (RFC-0047 amended, rule 2).
+//! (RFC-0047 amended, rule 2; RFC-0062 Decision 1 for the run of bytes).
 
 use acvus_extern::{Externs, Interner, QualifiedRef, TypesOnly};
 
@@ -27,6 +27,7 @@ fn the_slice_entry_is_the_slice_returning_declarations_and_nothing_else() {
         [
             "array::as_slice",
             "array::as_slice_mut",
+            "string::as_str",
             "vec::as_slice",
             "vec::as_slice_mut",
         ]

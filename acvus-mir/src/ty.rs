@@ -557,6 +557,7 @@ where
             (TyTerm::Float, TyTerm::Float)
             | (TyTerm::Char, TyTerm::Char)
             | (TyTerm::String, TyTerm::String)
+            | (TyTerm::Str, TyTerm::Str)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
             | (TyTerm::Never, TyTerm::Never)
@@ -845,6 +846,7 @@ impl PatternSubst {
             (TyTerm::Float, TyTerm::Float)
             | (TyTerm::Char, TyTerm::Char)
             | (TyTerm::String, TyTerm::String)
+            | (TyTerm::Str, TyTerm::Str)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
             | (TyTerm::Never, TyTerm::Never)
@@ -1114,6 +1116,7 @@ enum TyHead {
     Handle,
     Ref,
     Slice,
+    Str,
     /// A user-defined type with the representation of each argument: two
     /// cast rules between `Vec<#T>` and `Vec<T>` have distinct heads.
     UserDefined(QualifiedRef, Vec<Repr<Poly>>),
@@ -1140,6 +1143,7 @@ fn ty_head(ty: &PolyTy) -> TyHead {
         TyTerm::Handle(..) => TyHead::Handle,
         TyTerm::Ref(..) => TyHead::Ref,
         TyTerm::Slice(_) => TyHead::Slice,
+        TyTerm::Str => TyHead::Str,
         TyTerm::UserDefined { id, type_args, .. } => {
             TyHead::UserDefined(*id, type_args.iter().map(|a| a.repr).collect())
         }
@@ -1694,6 +1698,7 @@ impl TyTerm<Concrete> {
             | Ty::Order
             | Ty::Ref(..)
             | Ty::Slice(_)
+            | Ty::Str
             | Ty::Error(_) => false,
             Ty::Var(v) => match *v {},
         }
@@ -1781,6 +1786,7 @@ where
             TyTerm::Int(k) => write!(f, "{}", k.name()),
             TyTerm::Order => write!(f, "Order"),
             TyTerm::Slice(elem) => write!(f, "[{}]", elem.display(self.interner)),
+            TyTerm::Str => write!(f, "str"),
             TyTerm::Float => write!(f, "Float"),
             TyTerm::Char => write!(f, "char"),
             TyTerm::String => write!(f, "String"),
@@ -1973,7 +1979,10 @@ pub struct TypeEnv {
 /// language's: `a[i]` runs `as_slice` as part of an instruction, and no
 /// script names it (RFC-0047 §5).
 pub fn is_machine_signature(interner: &Interner, qref: QualifiedRef) -> bool {
-    matches!(interner.resolve(qref.name), "as_slice" | "as_slice_mut")
+    matches!(
+        interner.resolve(qref.name),
+        "as_slice" | "as_slice_mut" | "as_str"
+    )
 }
 
 /// What a name resolves to among the environment's functions.
@@ -2476,6 +2485,14 @@ pub enum TyTerm<V: Phase> {
     /// has this type and no storage holds one; it appears only under a
     /// `Ref`, as `&[T]` and `&mut [T]` (RFC-0047).
     Slice(Box<TyTerm<V>>),
+    /// `str`: the run of UTF-8 bytes a `String` lends (RFC-0062).
+    ///
+    /// There is no `&mut str`, and that is a decision rather than an
+    /// omission: a write through one could leave the bytes invalid UTF-8,
+    /// and every operation that wants to write has the owned `String` to
+    /// write into. `Mutability::Mut` over this type is refused where a
+    /// type is written.
+    Str,
     // Resources
     Handle(Box<TyTerm<V>>),
     /// `&T` or `&mut T`: a second name for a storage holding a `T`
@@ -2589,6 +2606,7 @@ impl<V: Phase> TyTerm<V> {
                 on_len,
                 on_repr,
             ))),
+            TyTerm::Str => TyTerm::Str,
             TyTerm::Object(object) => TyTerm::Object(
                 object.with_fields(
                     object
@@ -2704,6 +2722,7 @@ impl<V: Phase> TyTerm<V> {
                 on_len,
                 on_repr,
             )?))),
+            TyTerm::Str => Ok(TyTerm::Str),
             TyTerm::Object(object) => {
                 let mapped: Result<FxHashMap<_, _>, E> = object
                     .iter()
@@ -2864,6 +2883,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
             Ty::Order => TyTerm::Order,
             Ty::Array(inner, len) => TyTerm::Array(Box::new(go(inner, builder)), lift_ty_len(len)),
             Ty::Slice(elem) => TyTerm::Slice(Box::new(go(elem, builder))),
+            Ty::Str => TyTerm::Str,
             Ty::Object(object) => TyTerm::Object(
                 object.with_fields(object.iter().map(|(k, v)| (*k, go(v, builder))).collect()),
             ),

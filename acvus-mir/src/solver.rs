@@ -309,6 +309,7 @@ impl Terms {
             }
             TyTerm::Ref(_, inner) => self.occurs_in(id, &inner.ty),
             TyTerm::Slice(elem) => self.occurs_in(id, elem),
+            TyTerm::Str => false,
             TyTerm::Result(ok, err) => self.occurs_in(id, ok) || self.occurs_in(id, err),
             TyTerm::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
             TyTerm::Object(fields) => fields.values().any(|v| self.occurs_in(id, v)),
@@ -820,6 +821,7 @@ impl Terms {
             (TyTerm::Float, TyTerm::Float)
             | (TyTerm::Char, TyTerm::Char)
             | (TyTerm::String, TyTerm::String)
+            | (TyTerm::Str, TyTerm::Str)
             | (TyTerm::Bool, TyTerm::Bool)
             | (TyTerm::Unit, TyTerm::Unit)
             | (TyTerm::Order, TyTerm::Order) => Ok(()),
@@ -1484,6 +1486,9 @@ pub struct SignatureOption {
     /// The arguments this candidate takes through one declared
     /// conversion; every other argument it takes directly.
     pub converted: Vec<ConvertedArgument>,
+    /// The arguments this candidate takes as a view of what the caller
+    /// lent: a `&String` at a `&str` parameter (RFC-0062 Decision 3).
+    pub viewed: Vec<ConvertedArgument>,
 }
 
 impl SignatureOption {
@@ -1491,6 +1496,7 @@ impl SignatureOption {
         Self {
             candidate,
             converted: Vec::new(),
+            viewed: Vec::new(),
         }
     }
 }
@@ -1545,6 +1551,10 @@ pub struct UndecidedCall {
 pub enum Admission {
     Direct,
     Converted,
+    /// The argument reaches the parameter as a view of the storage it
+    /// lends, which the checker takes at the argument and the decision
+    /// therefore cannot unify (RFC-0062 Decision 3).
+    Viewed,
     Refused,
 }
 
@@ -2502,7 +2512,7 @@ impl<'src> Solver<'src> {
         else {
             unreachable!("a candidate's scheme is a function type")
         };
-        converted.iter().all(|argument| {
+        let takes_converted = converted.iter().all(|argument| {
             let param = &instance_params[argument.index].ty;
             converts(&trial, self.registry, &argument.ty, param)
                 || trial
@@ -2514,7 +2524,12 @@ impl<'src> Solver<'src> {
                         self.registry,
                     )
                     .is_ok()
-        })
+        });
+        takes_converted
+            && option.viewed.iter().all(|argument| {
+                borrows_a_str(&trial.resolve_ty(&instance_params[argument.index].ty))
+                    && self.borrows_a_string(&argument.ty)
+            })
     }
 
     /// RFC-0030, RFC-0043.
@@ -2557,6 +2572,9 @@ impl<'src> Solver<'src> {
         if self.term_within_shapes(arg, &shapes) {
             return Admission::Direct;
         }
+        if shapes.iter().any(borrows_a_str) && self.borrows_a_string(arg) {
+            return Admission::Viewed;
+        }
         let converts = shapes.iter().any(|shape| {
             let mut trial = self.terms.clone();
             let to = trial.instantiate_open(shape, self.registry);
@@ -2567,6 +2585,13 @@ impl<'src> Solver<'src> {
         } else {
             Admission::Refused
         }
+    }
+
+    fn borrows_a_string(&self, arg: &InferTy) -> bool {
+        let TyTerm::Ref(Mutability::Shared, pointee) = self.terms.resolve_ty(arg) else {
+            return false;
+        };
+        matches!(self.terms.resolve_ty(&pointee.ty), TyTerm::String)
     }
 
     /// `take_other` binds a `OneOf`-bounded variable to any term and leaves
@@ -3291,6 +3316,15 @@ fn conversion_rules(
 
 /// One declared rule (RFC-0023) takes `from` to `to`; through a reference,
 /// the value is cast back when the call ends (RFC-0041).
+/// `&str`, the one parameter a `&String` argument reaches by the view the
+/// checker takes at the argument (RFC-0062 Decision 3).
+fn borrows_a_str<V>(shape: &TyTerm<V>) -> bool
+where
+    V: Phase,
+{
+    matches!(shape, TyTerm::Ref(Mutability::Shared, pointee) if matches!(pointee.ty, TyTerm::Str))
+}
+
 fn converts(terms: &Terms, registry: &TypeRegistry, from: &InferTy, to: &InferTy) -> bool {
     let from_r = terms.resolve_ty(from);
     let to_r = terms.resolve_ty(to);
@@ -3374,6 +3408,7 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
         TyTerm::Ref(m, inner) => TyTerm::Ref(m, Box::new(arg(*inner, true, registry))),
         TyTerm::Array(inner, len) => TyTerm::Array(Box::new(uniform_slots(*inner, registry)), len),
         TyTerm::Slice(elem) => TyTerm::Slice(Box::new(uniform_slots(*elem, registry))),
+        TyTerm::Str => TyTerm::Str,
         TyTerm::Option(inner) => TyTerm::Option(Box::new(uniform_slots(*inner, registry))),
         TyTerm::Result(ok, err) => TyTerm::Result(
             Box::new(uniform_slots(*ok, registry)),

@@ -114,6 +114,7 @@ enum Mode {
     Value,
     Borrow,
     BorrowMut,
+    Str,
 }
 
 impl Mode {
@@ -124,8 +125,13 @@ impl Mode {
             Mode::Value => quote! { #ty },
             Mode::Borrow => quote! { ::acvus_extern::Ref<#ty, #rt> },
             Mode::BorrowMut => quote! { ::acvus_extern::RefMut<#ty, #rt> },
+            Mode::Str => quote! { ::acvus_extern::StrView },
         }
     }
+}
+
+fn is_str(ty: &Type) -> bool {
+    matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident("str"))
 }
 
 /// A parameter marked `#[state]`: supplied when the registry is built,
@@ -168,6 +174,17 @@ fn generate_extern_fn(
         })
         .collect();
     let ret = parse_return(&func.sig.output);
+    if let Type::Reference(r) = &ret
+        && is_str(&r.elem)
+    {
+        return Err(syn::Error::new_spanned(
+            &ret,
+            "a declaration returning the language's `&str` is not built yet: the machine \
+             takes a result two values wide only through `AsSlice` (RFC-0047 §3, RFC-0062 \
+             Order of work). Return `String`, or `StrView` once the machine reads a \
+             pair-wide result at a call.",
+        ));
+    }
 
     let fn_ident = &func.sig.ident;
     let vis = &func.vis;
@@ -342,6 +359,7 @@ fn generate_extern_fn(
                     Mode::Value => quote! { ::acvus_extern::ByValue<#ty, #c> },
                     Mode::Borrow => quote! { ::acvus_extern::ByRef<#ty, #c> },
                     Mode::BorrowMut => quote! { ::acvus_extern::ByRefMut<#ty, #c> },
+                    Mode::Str => quote! { ::acvus_extern::ByStr },
                 }
             })
             .collect();
@@ -625,7 +643,15 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             continue;
         }
         let (ty, mode) = match pat_type.ty.as_ref() {
+            Type::Reference(r) if r.mutability.is_some() && is_str(&r.elem) => {
+                return Err(syn::Error::new_spanned(
+                    &pat_type.ty,
+                    "there is no `&mut str`: a write through one could leave the bytes \
+                     invalid UTF-8. Take `&str` to read, or `String` to own (RFC-0062).",
+                ));
+            }
             Type::Reference(r) if r.mutability.is_some() => ((*r.elem).clone(), Mode::BorrowMut),
+            Type::Reference(r) if is_str(&r.elem) => ((*r.elem).clone(), Mode::Str),
             Type::Reference(r) => ((*r.elem).clone(), Mode::Borrow),
             ty => (ty.clone(), Mode::Value),
         };

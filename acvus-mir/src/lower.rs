@@ -2244,6 +2244,9 @@ impl<'a> Lowerer<'a> {
                 mutability,
                 as_slice,
             }) => self.emit_as_slice(span, val, mutability, &as_slice),
+            Some(CastKind::Str { as_str }) => {
+                self.emit_as_slice(span, val, Mutability::Shared, &as_str)
+            }
             Some(CastKind::ThroughRef { .. }) => {
                 unreachable!("a cast through a reference is lowered where the argument is lent")
             }
@@ -3123,6 +3126,10 @@ impl<'a> Lowerer<'a> {
             }) => {
                 let reference = self.emit_ref(span, place.target, place.path, mutability, place.ty);
                 self.emit_as_slice(span, reference, sliced, &as_slice)
+            }
+            Some(CastKind::Str { as_str }) => {
+                let reference = self.emit_ref(span, place.target, place.path, mutability, place.ty);
+                self.emit_as_slice(span, reference, Mutability::Shared, &as_str)
             }
             None => self.emit_ref(span, place.target, place.path, mutability, place.ty),
         }
