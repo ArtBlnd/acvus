@@ -1,5 +1,9 @@
-"Money as whole cents: each amount arrives as text with two decimal places, is split on the point and turned into an integer, so no float appears anywhere in the run.";
-"An amount whose digits do not parse becomes an `Err` that `?` carries out of the run; the report carries the running balance after every transaction, the closing balance, and the largest single debit.";
+// Money as whole cents: each amount arrives as text with two decimal
+// places, is split on the point and turned into an integer, so no float
+// appears anywhere in the run.
+// An amount whose digits do not parse becomes an `Err` that `?` carries
+// out of the run; the report carries the running balance after every
+// transaction, the closing balance, and the largest single debit.
 
 let to_cents = |text| -> {
     let negative = starts_with_str(&text, "-");

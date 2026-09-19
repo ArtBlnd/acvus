@@ -99,6 +99,13 @@ label
   Unicode scalar value), `b"GET"` an `Array<u8, 3>`, `b'G'` a `u8`.
 - References: `&x` and `&mut x` borrow; a value passed by value moves.
   Use after move is a compile error.
+- `//` comments to the end of the line, in a script and inside a `{{ }}`
+  tag. There is no block comment.
+- `print(s)` writes one line to stdout while the script runs; the result
+  line follows everything it printed.
+- Regular expressions and dates are in the set `acvus run` registers:
+  `regex`, `is_match`, `find`, `captures`, `named`, `replace_all`, and
+  `parse_date`, `format_date`, `timestamp`, `add_days`.
 
 ## Expressions and pipes
 
@@ -126,7 +133,8 @@ Responding in English.
 ```
 
 `{{ pattern = value }} … {{ / }}` matches; `{{ x in list }} … {{ / }}`
-iterates; `{{-- … --}}` is a comment.
+iterates; `{{-- … --}}` comments out a whole tag, and `//` inside a tag
+comments out the rest of its line.
 
 ## Types
 
@@ -194,7 +202,7 @@ cargo run -p acvus-cli -- run examples/collatz/main.acvus --context examples/col
 collatz     the Collatz walk of a context number: `while`, and `if` as a value
 grades      objects in a context array: `as_iter`/`while let`, and `map | filter | fold`
 word-count  `split_whitespace`, `lower`, counts in parallel vectors, the top three by count then bytes
-log-parse   log lines cut by `lines` and `split_once`: a tally per level, the first and last timestamp
+log-parse   log lines cut by one regex's named groups: a tally per level, and the span in seconds between the first and last timestamp
 shapes      a structural enum, an exhaustive `match`, a `Result` per entry carried out by `?`
 ledger      money as whole cents: a running balance and the largest debit, no float
 queue       a `deque` as a work queue: `push_back`, `pop_front`, and the order out

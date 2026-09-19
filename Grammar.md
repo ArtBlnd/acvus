@@ -387,6 +387,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `;` | statement terminator |
 | `(` `)` `[` `]` `{` `}` | delimiters |
 | `,` | separator |
+| `//` | a comment to the end of the line, skipped where whitespace is, in a script and inside a `{{ }}` tag. A tag's extent is the scanner's, so a comment inside one ends at the line's end or the tag's `}}`, whichever is first. A `//` between the quotes of a string literal is text, because the string lexer owns the literal's extent. There is no block comment. |
 
 ### Parse errors
 

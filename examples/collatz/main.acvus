@@ -1,5 +1,7 @@
-"The Collatz walk of @start, a number the context carries: `while` drives the walk and `if` stands as a value on the right of the assignment.";
-"The report names the steps the walk took and the largest value it reached.";
+// The Collatz walk of @start, a number the context carries: `while` drives
+// the walk and `if` stands as a value on the right of the assignment.
+// The report names the steps the walk took and the largest value it
+// reached.
 
 let n = @start;
 let steps = 0;

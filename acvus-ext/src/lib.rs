@@ -5,6 +5,7 @@ mod decimal;
 mod deque;
 mod encoding;
 mod hash;
+mod io;
 mod iter;
 mod iterator;
 mod num;
@@ -21,6 +22,7 @@ pub use decimal::{Decimal, decimal_registry};
 pub use deque::{Deque, deque_registry};
 pub use encoding::encoding_registry;
 pub use hash::hash_registry;
+pub use io::io_registry;
 pub use iter::Iter;
 pub use iterator::iterator_registry;
 pub use num::num_registry;
@@ -33,6 +35,13 @@ pub use vec::vec_registry;
 use acvus_extern::{Registry, Runtime};
 
 /// The standard registries. Each registers its own types when registered.
+///
+/// `regex_registry`, `datetime_registry`, `encoding_registry` and
+/// `io_registry` are deliberately not here. They are domain libraries, each
+/// with a crate or a host resource behind it, and a host adds the ones it
+/// wants; this list is the surface every host gets whether it asked or not,
+/// so growing it moves the overload set of every program already written
+/// against it.
 pub fn std_registries<R>() -> Vec<Registry<R>>
 where
     R: Runtime,

@@ -14,10 +14,11 @@ use std::time::Duration;
 
 use acvus_ast::Span;
 use acvus_ast::report::{LineIndex, Report, Severity};
+use acvus_extern::Registry;
 use acvus_interpreter::{
-    Composite, ContextWrite, DirStore, Executor, InMemoryContext, Interpreter, InterpreterContext,
-    Kind, Mode as SpaceMode, RuntimeContext, SequentialExecutor, Space, SpacePage, TokioExecutor,
-    Value, hex,
+    AcvusRuntime, Composite, ContextWrite, DirStore, Executor, InMemoryContext, Interpreter,
+    InterpreterContext, Kind, Mode as SpaceMode, RuntimeContext, SequentialExecutor, Space,
+    SpacePage, TokioExecutor, Value, hex,
 };
 use acvus_utils::Interner;
 
@@ -352,6 +353,23 @@ impl Timings {
     }
 }
 
+/// What a script run by this CLI can call without a flag. `std_registries`
+/// is the language's own surface; the four beside it are the resources this
+/// host decides to hand a script. The `--llm` providers are not here
+/// because they are the one set a flag guards.
+///
+/// `acvus-cli` is a binary, so `tests/cli.rs` cannot call this and rebuilds
+/// the same list to compare `ops` against the interpreter's own walk. The
+/// two lists are one contract: a registry added here is added there.
+fn cli_registries() -> Vec<Registry<AcvusRuntime>> {
+    let mut registries = acvus_ext::std_registries();
+    registries.push(acvus_ext::regex_registry());
+    registries.push(acvus_ext::datetime_registry());
+    registries.push(acvus_ext::io_registry());
+    registries.push(acvus_ext_net::http_registry());
+    registries
+}
+
 /// Milliseconds to the microsecond, so the text and the JSON carry the same
 /// number.
 fn ms(duration: Duration) -> f64 {
@@ -460,8 +478,7 @@ async fn cli() -> ExitCode {
         }
     }
     let registries = {
-        let mut r = acvus_ext::std_registries();
-        r.push(acvus_ext_net::http_registry());
+        let mut r = cli_registries();
         if args.llm {
             r.extend(llm::registries());
         }

@@ -1,5 +1,9 @@
-"Word counts over the context text: `split_whitespace` cuts it, `lower` folds the case, and a trailing period or comma is stripped with `strip_suffix`.";
-"The top three words come out by count descending and, where counts tie, by the word's bytes ascending -- there is no ordering on `String`, so the tiebreak compares `to_bytes` element by element.";
+// Word counts over the context text: `split_whitespace` cuts it, `lower`
+// folds the case, and a trailing period or comma is stripped with
+// `strip_suffix`.
+// The top three words come out by count descending and, where counts tie,
+// by the word's bytes ascending -- there is no ordering on `String`, so
+// the tiebreak compares `to_bytes` element by element.
 
 let bare = |w| -> {
     let no_stop = unwrap_or(strip_suffix(&w, "."), w);

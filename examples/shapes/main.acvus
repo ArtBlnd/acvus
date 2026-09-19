@@ -1,5 +1,9 @@
-"A structural enum of three shapes: `Shape::Circle`, `Shape::Square` and `Shape::Rect` are introduced by being written, and the `match` that measures one is exhaustive over them.";
-"An entry whose kind is none of the three becomes an `Err`, `measure` carries that `Err` outward with `?`, and the largest area is an `Option` because an empty list has none.";
+// A structural enum of three shapes: `Shape::Circle`, `Shape::Square` and
+// `Shape::Rect` are introduced by being written, and the `match` that
+// measures one is exhaustive over them.
+// An entry whose kind is none of the three becomes an `Err`, `measure`
+// carries that `Err` outward with `?`, and the largest area is an `Option`
+// because an empty list has none.
 
 let pi = 3.141592653589793;
 

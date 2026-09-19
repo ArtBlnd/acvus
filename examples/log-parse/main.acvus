@@ -1,5 +1,12 @@
-"Each log line is `timestamp level message`, cut by `lines` and two `split_once` calls; the levels are tallied against a fixed list so the report's order is the list's.";
-"The longest message is measured in bytes, which is what `len` on a string counts.";
+// Each log line is `timestamp level message`, cut by one regular
+// expression whose three named groups are the fields; the levels are
+// tallied against a fixed list, so the report's order is the list's.
+// The first and the last timestamp are parsed as dates, so the span
+// between them is a count of seconds; the longest message is measured in
+// bytes, which is what `len` on a string counts.
+
+let line_re = regex("^(?<stamp>\\S+) (?<level>\\S+) (?<message>.*)$".to_string())?;
+let stamp_format = "%Y-%m-%dT%H:%M:%S".to_string();
 
 let levels = vec(["ERROR".to_string(), "WARN".to_string(), "INFO".to_string()]);
 let counts = vec([0, 0, 0]);
@@ -11,13 +18,10 @@ let longest = 0u64;
 
 let records = &@log | lines;
 while let Some(line) = next(&mut records) {
-    let head = unwrap(split_once(&line, " "));
-    let stamp = head[0u64].to_string();
-    let rest = head[1u64].to_string();
-
-    let body = unwrap(split_once(&rest, " "));
-    let level = body[0u64].to_string();
-    let message = body[1u64].to_string();
+    let fields = unwrap(captures(&line_re, &line));
+    let stamp = unwrap(named(&fields, "stamp".to_string())).text;
+    let level = unwrap(named(&fields, "level".to_string())).text;
+    let message = unwrap(named(&fields, "message".to_string())).text;
 
     let i = 0u64;
     while i < len(&levels) {
@@ -39,7 +43,11 @@ while let Some(line) = next(&mut records) {
     };
 }
 
-let out = "{{ &seen | to_string }} lines, {{ &first }} .. {{ &last }}";
+let opened = parse_date(first.to_string(), stamp_format.to_string())?;
+let closed = parse_date(last.to_string(), stamp_format.to_string())?;
+let span = timestamp(closed) - timestamp(opened);
+
+let out = "{{ &seen | to_string }} lines over {{ &span | to_string }} seconds, {{ &first }} .. {{ &last }}";
 let i = 0u64;
 while i < len(&levels) {
     let level = levels[i].to_string();

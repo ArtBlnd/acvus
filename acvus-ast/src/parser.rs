@@ -922,6 +922,60 @@ mod tests {
         assert!(s.tail.is_none());
     }
 
+    // -- `//` to end of line -------------------------------------------
+
+    #[test]
+    fn a_line_comment_and_a_trailing_comment_are_whitespace() {
+        let interner = Interner::new();
+        let source = "// what this script does\nlet x = @data; // the binding\nx\n";
+        let s = parse_script(&interner, source).unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        assert!(
+            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x")
+        );
+        let tail = s.tail.as_deref().expect("the tail is the last line");
+        let at = source.rfind('x').expect("the tail's own byte");
+        assert_eq!(tail.span(), Span::new(at, at + 1));
+    }
+
+    #[test]
+    fn a_comment_ends_at_the_newline() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "1 + // and the rest of this line\n2").unwrap();
+        assert!(s.stmts.is_empty());
+        assert!(matches!(
+            s.tail.as_deref(),
+            Some(Expr::BinaryOp { op: BinOp::Add, .. })
+        ));
+    }
+
+    /// The string lexer owns a literal's extent, so a `//` between its
+    /// quotes is two characters of text and not the start of a comment.
+    #[test]
+    fn a_double_slash_inside_a_string_is_text() {
+        assert_eq!(
+            literal_of(r#""https://acvus.example/a""#),
+            Literal::String("https://acvus.example/a".to_string())
+        );
+    }
+
+    /// A tag's extent is the template scanner's, decided before the
+    /// expression tokenizer runs, so a comment inside one ends at the
+    /// line's end or at the tag's `}}`, whichever comes first.
+    #[test]
+    fn a_comment_inside_a_tag_is_whitespace() {
+        let (interner, result) = parse("{{ user // the name the context carries\n}}");
+        let t = result.unwrap();
+        assert_eq!(t.body.len(), 1);
+        let Node::InlineExpr { expr, .. } = &t.body[0] else {
+            panic!("{:?}", t.body[0]);
+        };
+        assert!(matches!(
+            expr,
+            Expr::Ident { name, .. } if interner.resolve(name.name) == "user"
+        ));
+    }
+
     #[test]
     fn script_pipe_in_bind() {
         let interner = Interner::new();

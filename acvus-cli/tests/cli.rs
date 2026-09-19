@@ -207,6 +207,9 @@ fn ops_prints_the_prepared_listing_and_a_broken_script_is_refused() {
     let interner = Interner::new();
     let registries = {
         let mut r = acvus_ext::std_registries();
+        r.push(acvus_ext::regex_registry());
+        r.push(acvus_ext::datetime_registry());
+        r.push(acvus_ext::io_registry());
         r.push(acvus_ext_net::http_registry());
         r
     };
@@ -680,4 +683,83 @@ fn two_iterators_from_two_sources_show_where_each_source_begins() {
             },
         ])
     );
+}
+
+#[test]
+fn a_comment_runs_to_the_end_of_its_line_and_a_string_keeps_its_slashes() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "commented.acvus",
+        "// what this script does\nlet host = \"https://acvus.example//a\".to_string(); // the URL\nlet n = 1 + // the rest of this line is not read\n    2;\n\"{{ &host }} {{ &n | to_string }}\"\n",
+    );
+    let out = acvus(dir.path(), &["run", "commented.acvus"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "https://acvus.example//a 3\n");
+}
+
+#[test]
+fn a_comment_inside_a_template_tag_runs_to_the_tags_line_end() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "hi.acvt",
+        "Hello {{ @name // the context carries it\n}}!",
+    );
+    write(dir.path(), "hi.json", "{\"name\": \"world\"}");
+    let out = acvus(dir.path(), &["run", "hi.acvt", "--context", "hi.json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "Hello world!\n");
+}
+
+/// `regex` and `datetime` are in the set `acvus run` registers, so a script
+/// reaches them with no flag.
+#[test]
+fn regex_and_datetime_need_no_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = acvus(
+        dir.path(),
+        &[
+            "run",
+            "-e",
+            "let re = regex(\"a+\".to_string())?; is_match(&re, \"baaad\")",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "true\n");
+
+    let out = acvus(
+        dir.path(),
+        &[
+            "run",
+            "-e",
+            "let d = parse_date(\"2026-09-19T09:58:03\".to_string(), \"%Y-%m-%dT%H:%M:%S\".to_string())?; timestamp(d)",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "1789811883\n");
+}
+
+/// Every printed line precedes the result line, and `--time` stays behind
+/// both, on stderr.
+#[test]
+fn print_writes_its_lines_before_the_result_and_the_times_follow_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = acvus(
+        dir.path(),
+        &["run", "-e", "print(\"x\"); print(\"y\"); 1", "--time"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "x\ny\n1\n");
+
+    let err = text(&out.stderr);
+    assert_eq!(
+        stages(&err)
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        ["compile", "prepare", "run"],
+        "{err}"
+    );
+    assert!(err.lines().all(|l| l.starts_with("time: ")), "{err}");
 }

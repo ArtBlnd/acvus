@@ -1,5 +1,7 @@
-"Students arrive as objects in a context array: `as_iter` and `while let` walk them once and count the three bands.";
-"A `map | filter | fold` pipeline over the same array totals the scores of 60 and above.";
+// Students arrive as objects in a context array: `as_iter` and `while let`
+// walk them once and count the three bands.
+// A `map | filter | fold` pipeline over the same array totals the scores
+// of 60 and above.
 
 let honor = 0;
 let pass = 0;

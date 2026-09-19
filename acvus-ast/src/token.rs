@@ -25,6 +25,7 @@ fn suffixed_int(lex: &mut logos::Lexer<'_, Token>) -> Option<SuffixedInt> {
 /// Tokens produced by the expression tokenizer, driven by logos.
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\n\r]+")]
+#[logos(skip r"//[^\n]*")]
 #[logos(extras = Interner)]
 pub enum Token {
     // -- Keywords (exact match, higher priority than ident regex) --
