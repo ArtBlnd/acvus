@@ -219,8 +219,12 @@ object lives.
    `Large` field is one `Value`, a nested aggregate field is its own
    layout inline, an enum is `[tag, payload layout]`, and `off(i)` is
    the prefix sum — fixed by the settled type (the union type, RFC-0041:
-   one field order and one tag numbering per program), known to
-   `prepare` and to the glue alike. `&line.a` is `base + off(a)`, a
+   one field order per program), known to `prepare` and to the glue
+   alike; the tag word is the variant name's interned number, which
+   every writer and every reader of the value has (a numbering over the
+   settled type is not: a `MakeVariant` is typed by the one variant it
+   writes, a `Switch` by the union — measured on 31 sites by the
+   flat-variant build, 2026-09-20). `&line.a` is `base + off(a)`, a
    projection into the middle of a run. A heap realization (rule 4)
    holds the same flat `[Value; n]` behind its header, so a reader is
    the same either way. In registers (rule 1) the same flattening is
@@ -364,13 +368,15 @@ disjoint** — and **2.0 heap allocations an iteration become 0**, which is
 rule 4's first judgment. A run's registers also **execute 11.3 % fewer
 instructions** than the heap form.
 
-Rule 8's tag numbering is string order over the settled type's variants, for
-the reason rule 8 orders fields that way. The numbering makes a table of blocks
-indexed by the tag possible and that table is **refused**: measured at 46.2 ns
-an iteration, it was slower than the heap form it replaces, at equal cache
-misses and 1.36 G fewer instructions — a second data-dependent indirect branch
-beside the machine's own dispatch costs more than three compares save. The
-dispatch is a scan of ordinals.
+Rule 8's tag word is the variant name's interned number, written alike by
+the run (`Layout::tag_word`) and by the flat heap variant (`[tag, payload]`
+behind one header — one allocation where there were two; −7.6 % wall,
+−9.23 % instructions on a heap-resident enum). A table of blocks indexed by
+a dense tag was measured and **refused**: at 46.2 ns an iteration it was
+slower than the heap form it replaces, at equal cache misses and 1.36 G
+fewer instructions — a second data-dependent indirect branch beside the
+machine's own dispatch costs more than three compares save. The dispatch
+is a scan of tag words.
 
 Rule 4's heap realization is flat. A heap object is its type's field names in
 rule 8's order, shared by every object of the type through one `ObjectShape`,
