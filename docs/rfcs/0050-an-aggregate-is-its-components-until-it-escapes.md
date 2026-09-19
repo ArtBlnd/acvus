@@ -197,13 +197,17 @@ object lives.
    holds the same flat `[Value; n]` behind its header, so a reader is
    the same either way. In registers (rule 1) the same flattening is
    what SROA does today one level down (`sroa.rs`: `[PathSeg::Field]`),
-   widened to a path of any depth. A field the settled union type has
-   and a construction lacks is `Undef` at its offset — whether the
-   checker admits a read of it is the type system's question, listed
-   under Order of work. For a declared struct's type it is answered: the
-   checker refuses an object that lacks a field the struct declares
-   (RFC-0042 R1), so no value of a declared type has an `Undef` field.
-   For an object literal's type the question stays here.
+   widened to a path of any depth. **A structural object's field order
+   is its field names in interned-symbol order** (amended 2026-09-20): a
+   `Declared` struct's order is its declaration's; a `Written` or
+   `AtLeast` object's is the sorted names of its settled type, so every
+   object type has one layout without a declaration, and a union that
+   adds a field re-lays the settled type once. A field the settled union
+   type has and a construction lacks is `Undef` at its offset. For a
+   declared struct's type no such field exists: the checker refuses an
+   object that lacks a field the struct declares (RFC-0042 R1). For an
+   object literal's type a read of a field a construction may lack is
+   the open type's question, listed under Order of work.
 
 9. **`Option<Aggregate>` is flat over the run**: the run's first
    `Value` is `Kind::None` for `None` and the payload's first component
