@@ -436,6 +436,20 @@ struct DiamondRegion {
     join: usize,
 }
 
+/// One `match` whose arms all rejoin, as indexes into `MirBody::insts`.
+struct SwitchRegion {
+    dispatch: usize,
+    arms: Vec<SwitchArm>,
+    join: usize,
+}
+
+/// One successor of a rejoining `match`: the block its dispatch names, and
+/// the arm's own instructions, which take the shape a diamond's arm takes.
+struct SwitchArm {
+    label: Label,
+    region: ArmRegion,
+}
+
 /// The facts a `Select` is built from, read off a diamond whose one arm is a
 /// single pure node and whose other arm passes the incoming word through
 /// (RFC-0052 §"a diamond of two pure arms is a select").
@@ -507,6 +521,11 @@ enum ArmRegion {
         regions: Vec<Region>,
         jump: usize,
     },
+    Branch {
+        block: Range<usize>,
+        regions: Vec<Region>,
+        tail: Box<DiamondRegion>,
+    },
     Direct,
 }
 
@@ -515,11 +534,27 @@ enum Region {
     Loop(LoopRegion),
     For(ForRegion),
     Diamond(DiamondRegion),
+    Switch(SwitchRegion),
 }
 
 struct StraightRun {
     stops_at: usize,
     regions: Vec<Region>,
+}
+
+/// One shape a recognizer matched, and the index one past the instructions it
+/// covers, which is where the recognizer above it resumes.
+struct Recognized<T> {
+    shape: T,
+    after: usize,
+}
+
+/// A branch's own edge into its join: the block it names and the arguments it
+/// carries there.
+#[derive(Clone, Copy)]
+struct JoinEdge<'r> {
+    label: Label,
+    args: &'r [ValueId],
 }
 
 impl LoopRegion {
@@ -538,6 +573,7 @@ impl Region {
             Region::Loop(region) => region.start(),
             Region::For(region) => region.enter_jump,
             Region::Diamond(region) => region.branch,
+            Region::Switch(region) => region.dispatch,
         }
     }
 
@@ -546,6 +582,7 @@ impl Region {
             Region::Loop(region) => region.end(),
             Region::For(region) => region.back + 1,
             Region::Diamond(region) => region.join + 1,
+            Region::Switch(region) => region.join + 1,
         }
     }
 }
@@ -1365,6 +1402,171 @@ impl<'a> Prepare<'a> {
         }
     }
 
+    /// `switch_op`'s region form (RFC-0052 rule 3): the same four dispatches
+    /// over the same tag, each successor a chain this operation runs rather
+    /// than a block the machine enters.
+    fn switch_region_op(&mut self, region: &SwitchRegion, rides: &Rides) -> Node {
+        let InstKind::Switch { tag, arms, default } = &self.body.insts[region.dispatch].kind else {
+            panic!("a recognized `match`'s dispatch is not a `Switch`")
+        };
+        let (tag, arms, default) = (*tag, arms.clone(), default.clone());
+
+        let placed_run = self
+            .run_tag(tag)
+            .map(|run| (Off::of(run.base), run.layout.tags().clone()));
+        let src = self.off(tag);
+        let through = self.is_ref(tag);
+        let form = variant_form(self.scrutinee_ty(tag));
+        let (tested, fallback) = match &default {
+            Some((label, args)) => (
+                arms.as_slice(),
+                JoinEdge {
+                    label: *label,
+                    args,
+                },
+            ),
+            None => {
+                let ((_, label, args), tested) = arms
+                    .split_last()
+                    .expect("a Switch names at least one successor: an arm or a default");
+                (
+                    tested,
+                    JoinEdge {
+                        label: *label,
+                        args,
+                    },
+                )
+            }
+        };
+
+        if let Some(sided) = two_sided(&form) {
+            let [first, second] = sided.names();
+            let on_first = self.side_edge(tested, fallback, first);
+            let on_second = self.side_edge(tested, fallback, second);
+            let on_first = self.arm_chain(region, on_first, rides);
+            let on_second = self.arm_chain(region, on_second, rides);
+            return match (sided, through) {
+                (TwoSided::Option, true) => made(move |next| {
+                    Box::new(switch::SwitchOptionRegion::<true> {
+                        src,
+                        on_some: on_first,
+                        on_none: on_second,
+                        next,
+                    }) as Box<dyn Op>
+                }),
+                (TwoSided::Option, false) => made(move |next| {
+                    Box::new(switch::SwitchOptionRegion::<false> {
+                        src,
+                        on_some: on_first,
+                        on_none: on_second,
+                        next,
+                    }) as Box<dyn Op>
+                }),
+                (TwoSided::Result, true) => made(move |next| {
+                    Box::new(switch::SwitchResultRegion::<true> {
+                        src,
+                        on_ok: on_first,
+                        on_err: on_second,
+                        next,
+                    }) as Box<dyn Op>
+                }),
+                (TwoSided::Result, false) => made(move |next| {
+                    Box::new(switch::SwitchResultRegion::<false> {
+                        src,
+                        on_ok: on_first,
+                        on_err: on_second,
+                        next,
+                    }) as Box<dyn Op>
+                }),
+            };
+        }
+
+        let mut chains: Vec<switch::RegionArm> = Vec::with_capacity(tested.len());
+        for (key, label, args) in tested {
+            let head = self.arm_chain(
+                region,
+                JoinEdge {
+                    label: *label,
+                    args,
+                },
+                rides,
+            );
+            chains.push(switch::RegionArm { key: *key, head });
+        }
+        let otherwise = self.arm_chain(region, fallback, rides);
+
+        if let Some((src, tags)) = placed_run {
+            let arms: Box<[run_ops::RunRegionArm]> = chains
+                .into_iter()
+                .map(|arm| run_ops::RunRegionArm {
+                    tag: u64::from(tags.index(arm.key).unwrap_or_else(|| {
+                        panic!("the settled type numbers no variant {:?}", arm.key)
+                    })),
+                    head: arm.head,
+                })
+                .collect();
+            return made(move |next| {
+                Box::new(run_ops::SwitchRunRegion {
+                    src,
+                    arms,
+                    default: otherwise,
+                    next,
+                }) as Box<dyn Op>
+            });
+        }
+
+        let arms: Box<[switch::RegionArm]> = chains.into_boxed_slice();
+        match through {
+            true => made(move |next| {
+                Box::new(switch::SwitchRegion::<true> {
+                    src,
+                    arms,
+                    default: otherwise,
+                    next,
+                }) as Box<dyn Op>
+            }),
+            false => made(move |next| {
+                Box::new(switch::SwitchRegion::<false> {
+                    src,
+                    arms,
+                    default: otherwise,
+                    next,
+                }) as Box<dyn Op>
+            }),
+        }
+    }
+
+    /// The edge a two-sided dispatch takes for the tag `name`: the arm that
+    /// names it, or the edge the dispatch falls out of.
+    fn side_edge<'r>(
+        &self,
+        tested: &'r [(Astr, Label, Vec<ValueId>)],
+        fallback: JoinEdge<'r>,
+        name: &str,
+    ) -> JoinEdge<'r> {
+        tested
+            .iter()
+            .find(|(key, _, _)| self.tag_is(*key, name))
+            .map_or(fallback, |(_, label, args)| JoinEdge {
+                label: *label,
+                args,
+            })
+    }
+
+    fn arm_chain(
+        &mut self,
+        region: &SwitchRegion,
+        edge: JoinEdge<'_>,
+        rides: &Rides,
+    ) -> Box<dyn Op> {
+        let arm = region
+            .arms
+            .iter()
+            .find(|arm| arm.label == edge.label)
+            .expect("a recognized `match` laid an arm for every successor its dispatch names");
+        self.arm(&arm.region, edge, rides)
+    }
+
     /// A suspending operation is excluded along with the terminators: it
     /// leaves the block for the driver, which the machine's dispatch loop
     /// alone can reach.
@@ -1456,10 +1658,13 @@ impl<'a> Prepare<'a> {
         if let Some(region) = self.recognize_for(at) {
             return Some(Region::For(region));
         }
-        match self.recognize_loop(at) {
-            Some(region) => Some(Region::Loop(region)),
-            None => self.recognize_diamond(at).map(Region::Diamond),
+        if let Some(region) = self.recognize_loop(at) {
+            return Some(Region::Loop(region));
         }
+        if let Some(region) = self.recognize_diamond(at) {
+            return Some(Region::Diamond(region));
+        }
+        self.recognize_switch(at).map(Region::Switch)
     }
 
     fn references(&self, label: Label) -> Vec<usize> {
@@ -1613,68 +1818,183 @@ impl<'a> Prepare<'a> {
     /// whose blocks a pass has reordered out of that layout prepares as
     /// joints instead, which is what every `None` below means.
     fn recognize_diamond(&self, at: usize) -> Option<DiamondRegion> {
+        let InstKind::Diamond { join, .. } = &self.body.insts.get(at)?.kind else {
+            return None;
+        };
+        let join = *join;
+        let Recognized {
+            shape,
+            after: join_at,
+        } = self.branch_region(at, join)?;
+        if block_label(self.body.insts.get(join_at)?) != Some(join) {
+            return None;
+        }
+        self.is_closed(at..join_at + 1).then_some(shape)
+    }
+
+    /// The `Diamond` at `at` as a region reaching `join`, and the index one
+    /// past both its arms. The join's own index is where the label map puts
+    /// it, so a branch nested at the tail of an arm reads the same join as
+    /// the branch above it.
+    fn branch_region(&self, at: usize, join: Label) -> Option<Recognized<DiamondRegion>> {
         let insts = self.body.insts.as_slice();
         let InstKind::Diamond {
             then_label,
             else_label,
-            join,
+            join: named,
             ..
         } = &insts.get(at)?.kind
         else {
             return None;
         };
+        if *named != join {
+            return None;
+        }
 
         let then_is_near = block_label(insts.get(at + 1)?)? == *then_label;
         let (near_label, far_label) = match then_is_near {
             true => (*then_label, *else_label),
             false => (*else_label, *then_label),
         };
-        let (near, after_near) = self.diamond_arm(at + 1, near_label, *join)?;
-        let (far, join_at) = self.diamond_arm(after_near, far_label, *join)?;
-        if block_label(insts.get(join_at)?) != Some(*join) {
-            return None;
-        }
-
+        let near = self.arm_region(at + 1, near_label, join)?;
+        let far = self.arm_region(near.after, far_label, join)?;
         let (on_true, on_false) = match then_is_near {
-            true => (near, far),
-            false => (far, near),
+            true => (near.shape, far.shape),
+            false => (far.shape, near.shape),
         };
-        let region = DiamondRegion {
-            branch: at,
-            on_true,
-            on_false,
-            join: join_at,
-        };
-        self.is_closed(at..join_at + 1).then_some(region)
+        Some(Recognized {
+            shape: DiamondRegion {
+                branch: at,
+                on_true,
+                on_false,
+                join: self.label(&join) as usize,
+            },
+            after: far.after,
+        })
     }
 
-    /// The arm the branch sends to `label`, and the index one past it. An arm
-    /// whose label is the join is the branch's own edge into it and occupies
-    /// no instruction of its own.
-    fn diamond_arm(&self, from: usize, label: Label, join: Label) -> Option<(ArmRegion, usize)> {
+    /// The arm a terminator sends to `label`, and the index one past it. An
+    /// arm whose label is the join is the terminator's own edge into it and
+    /// occupies no instruction of its own.
+    fn arm_region(&self, from: usize, label: Label, join: Label) -> Option<Recognized<ArmRegion>> {
         if label == join {
-            return Some((ArmRegion::Direct, from));
+            return Some(Recognized {
+                shape: ArmRegion::Direct,
+                after: from,
+            });
         }
         let insts = self.body.insts.as_slice();
         if block_label(insts.get(from)?) != Some(label) {
             return None;
         }
-        let StraightRun {
-            stops_at: jump,
-            regions,
-        } = self.straight_run(from + 1, insts.len());
-        let InstKind::Jump { label: reached, .. } = &insts.get(jump)?.kind else {
+        let StraightRun { stops_at, regions } = self.straight_run(from + 1, insts.len());
+        match &insts.get(stops_at)?.kind {
+            InstKind::Jump { label: reached, .. } if *reached == join => Some(Recognized {
+                shape: ArmRegion::Block {
+                    block: from + 1..stops_at,
+                    regions,
+                    jump: stops_at,
+                },
+                after: stops_at + 1,
+            }),
+            InstKind::Diamond { .. } => {
+                let tail = self.branch_region(stops_at, join)?;
+                Some(Recognized {
+                    shape: ArmRegion::Branch {
+                        block: from + 1..stops_at,
+                        regions,
+                        tail: Box::new(tail.shape),
+                    },
+                    after: tail.after,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The shape `acvus_mir::lower` gives a `match` whose arms all rejoin
+    /// (RFC-0051): the dispatch, the arms' blocks in the order it laid them,
+    /// and the one block every arm jumps to. The terminator names the arms
+    /// and not that block, so the join is read off the first arm the
+    /// lowering laid and required of every other.
+    ///
+    /// Two successors that are the same block are refused, because each arm
+    /// of the region is a chain of its own and two tags cannot hold one; so
+    /// is a dispatch of one successor, which chooses nothing.
+    fn recognize_switch(&self, at: usize) -> Option<SwitchRegion> {
+        let insts = self.body.insts.as_slice();
+        let InstKind::Switch { tag, arms, default } = &insts.get(at)?.kind else {
             return None;
         };
-        if *reached != join {
+        let named: Vec<Label> = arms
+            .iter()
+            .map(|(_, label, _)| *label)
+            .chain(default.iter().map(|(label, _)| *label))
+            .collect();
+        let distinct = named
+            .iter()
+            .enumerate()
+            .all(|(at, label)| !named[..at].contains(label));
+        if !distinct || named.len() < 2 {
             return None;
         }
-        let arm = ArmRegion::Block {
-            block: from + 1..jump,
-            regions,
-            jump,
+
+        if let Some(names) = two_sided(&variant_form(self.scrutinee_ty(*tag))) {
+            let tested = match default {
+                Some(_) => arms.as_slice(),
+                None => arms.split_last()?.1,
+            };
+            let named_a_side =
+                |key: &Astr| names.names().iter().any(|name| self.tag_is(*key, name));
+            if !tested.iter().all(|(key, _, _)| named_a_side(key)) {
+                return None;
+            }
+        }
+
+        let join = self.switch_join(at + 1)?;
+        let mut laid: Vec<SwitchArm> = named
+            .iter()
+            .filter(|label| **label == join)
+            .map(|label| SwitchArm {
+                label: *label,
+                region: ArmRegion::Direct,
+            })
+            .collect();
+        let mut from = at + 1;
+        while laid.len() < named.len() {
+            let label = block_label(insts.get(from)?)?;
+            if !named.contains(&label) || laid.iter().any(|arm| arm.label == label) {
+                return None;
+            }
+            let found = self.arm_region(from, label, join)?;
+            laid.push(SwitchArm {
+                label,
+                region: found.shape,
+            });
+            from = found.after;
+        }
+        if block_label(insts.get(from)?) != Some(join) {
+            return None;
+        }
+
+        let region = SwitchRegion {
+            dispatch: at,
+            arms: laid,
+            join: from,
         };
-        Some((arm, jump + 1))
+        self.is_closed(at..from + 1).then_some(region)
+    }
+
+    /// The block the arm laid at `first` jumps to, which a rejoining `match`
+    /// takes as its join.
+    fn switch_join(&self, first: usize) -> Option<Label> {
+        let insts = self.body.insts.as_slice();
+        block_label(insts.get(first)?)?;
+        let StraightRun { stops_at, .. } = self.straight_run(first + 1, insts.len());
+        match &insts.get(stops_at)?.kind {
+            InstKind::Jump { label, .. } => Some(*label),
+            _ => None,
+        }
     }
 
     /// No jump from outside `range` names a block inside it, so collapsing
@@ -1844,10 +2164,12 @@ impl<'a> Prepare<'a> {
                 None
             }
             Unit::Region(Region::Diamond(region)) => {
-                let op = match self.select_op(region, rides) {
-                    Some(op) => op,
-                    None => self.diamond_op(region, rides),
-                };
+                let op = self.branch_node(region, rides);
+                ops.push(op);
+                None
+            }
+            Unit::Region(Region::Switch(region)) => {
+                let op = self.switch_region_op(region, rides);
                 ops.push(op);
                 None
             }
@@ -2177,6 +2499,13 @@ impl<'a> Prepare<'a> {
         }))
     }
 
+    fn branch_node(&mut self, region: &DiamondRegion, rides: &Rides) -> Node {
+        match self.select_op(region, rides) {
+            Some(op) => op,
+            None => self.diamond_op(region, rides),
+        }
+    }
+
     fn diamond_op(&mut self, region: &DiamondRegion, rides: &Rides) -> Node {
         let Some(TwoWay {
             cond,
@@ -2190,8 +2519,22 @@ impl<'a> Prepare<'a> {
         };
 
         let cond = self.place_of(rides, cond);
-        let on_true = self.arm(&region.on_true, &then_label, then_args);
-        let on_false = self.arm(&region.on_false, &else_label, else_args);
+        let on_true = self.arm(
+            &region.on_true,
+            JoinEdge {
+                label: then_label,
+                args: then_args,
+            },
+            rides,
+        );
+        let on_false = self.arm(
+            &region.on_false,
+            JoinEdge {
+                label: else_label,
+                args: else_args,
+            },
+            rides,
+        );
 
         made(move |next| match cond {
             Where::Frame(off) => Box::new(control::Diamond::<place::Slot> {
@@ -2211,24 +2554,33 @@ impl<'a> Prepare<'a> {
         })
     }
 
-    /// `label` and `args` are the diamond's own edge into this arm, which
-    /// a `Direct` arm takes all the way to the join.
-    fn arm(&mut self, region: &ArmRegion, label: &Label, args: &[ValueId]) -> Box<dyn Op> {
-        let ArmRegion::Block {
-            block,
-            regions,
-            jump,
-        } = region
-        else {
-            let join = self.move_ops(label, args);
-            return chain(join, Box::new(control::Yield));
-        };
-        let InstKind::Jump { label, args } = &self.body.insts[*jump].kind else {
-            panic!("a recognized diamond's arm does not end in a jump")
-        };
-        let (label, args) = (*label, args.clone());
-        let join = self.move_ops(&label, &args);
-        self.straight(block.clone(), regions, join)
+    fn arm(&mut self, region: &ArmRegion, edge: JoinEdge<'_>, rides: &Rides) -> Box<dyn Op> {
+        match region {
+            ArmRegion::Direct => {
+                let join = self.move_ops(&edge.label, edge.args);
+                chain(join, Box::new(control::Yield))
+            }
+            ArmRegion::Block {
+                block,
+                regions,
+                jump,
+            } => {
+                let InstKind::Jump { label, args } = &self.body.insts[*jump].kind else {
+                    panic!("a recognized diamond's arm does not end in a jump")
+                };
+                let (label, args) = (*label, args.clone());
+                let join = self.move_ops(&label, &args);
+                self.straight(block.clone(), regions, join)
+            }
+            ArmRegion::Branch {
+                block,
+                regions,
+                tail,
+            } => {
+                let node = self.branch_node(tail, rides);
+                self.straight(block.clone(), regions, vec![node])
+            }
+        }
     }
 
     fn op(
@@ -3681,6 +4033,31 @@ struct Placed {
     block: BlockId,
 }
 
+/// A value whose tag is its own kind (RFC-0039), which a dispatch reads
+/// without comparing a name. An enum has as many tags as it has variants and
+/// is not one of these.
+enum TwoSided {
+    Option,
+    Result,
+}
+
+impl TwoSided {
+    fn names(&self) -> [&'static str; 2] {
+        match self {
+            TwoSided::Option => ["Some", "None"],
+            TwoSided::Result => ["Ok", "Err"],
+        }
+    }
+}
+
+fn two_sided(form: &VariantForm) -> Option<TwoSided> {
+    match form {
+        VariantForm::Option => Some(TwoSided::Option),
+        VariantForm::Result => Some(TwoSided::Result),
+        VariantForm::Enum => None,
+    }
+}
+
 fn variant_form(ty: &Ty) -> VariantForm {
     match ty {
         Ty::Option(_) => VariantForm::Option,
@@ -4853,6 +5230,10 @@ mod recognizer_tests {
             on_true: Vec<Matched>,
             on_false: Vec<Matched>,
         },
+        Switch {
+            covers: Range<usize>,
+            arms: Vec<Vec<Matched>>,
+        },
     }
 
     fn matched(regions: &[Region]) -> Vec<Matched> {
@@ -4873,18 +5254,34 @@ mod recognizer_tests {
                 covers,
                 nested: matched(&region.body_regions),
             },
-            Region::Diamond(region) => Matched::Diamond {
+            Region::Diamond(region) => matched_diamond(region),
+            Region::Switch(region) => Matched::Switch {
                 covers,
-                on_true: matched(arm_regions(&region.on_true)),
-                on_false: matched(arm_regions(&region.on_false)),
+                arms: region
+                    .arms
+                    .iter()
+                    .map(|arm| matched_arm(&arm.region))
+                    .collect(),
             },
         }
     }
 
-    fn arm_regions(arm: &ArmRegion) -> &[Region] {
+    fn matched_diamond(region: &DiamondRegion) -> Matched {
+        Matched::Diamond {
+            covers: region.branch..region.join + 1,
+            on_true: matched_arm(&region.on_true),
+            on_false: matched_arm(&region.on_false),
+        }
+    }
+
+    fn matched_arm(arm: &ArmRegion) -> Vec<Matched> {
         match arm {
-            ArmRegion::Block { regions, .. } => regions,
-            ArmRegion::Direct => &[],
+            ArmRegion::Block { regions, .. } => matched(regions),
+            ArmRegion::Branch { regions, tail, .. } => matched(regions)
+                .into_iter()
+                .chain([matched_diamond(tail)])
+                .collect(),
+            ArmRegion::Direct => Vec::new(),
         }
     }
 
@@ -5102,6 +5499,94 @@ mod recognizer_tests {
                 covers: 0..2,
                 on_true: vec![],
                 on_false: vec![]
+            }]
+        );
+    }
+
+    #[test]
+    fn an_else_if_that_joins_where_the_if_joins_is_one_operation() {
+        let fixture = Fixture::new();
+        let insts = vec![
+            diamond(1, 3, 5, 7),
+            block(3),
+            add(2, 3, 4),
+            jump(7),
+            block(5),
+            diamond(5, 9, 10, 7),
+            block(9),
+            add(6, 7, 8),
+            jump(7),
+            block(10),
+            add(9, 10, 11),
+            jump(7),
+            block(7),
+        ];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched::Diamond {
+                covers: 0..13,
+                on_true: vec![],
+                on_false: vec![Matched::Diamond {
+                    covers: 5..13,
+                    on_true: vec![],
+                    on_false: vec![]
+                }]
+            }]
+        );
+    }
+
+    #[test]
+    fn an_if_in_an_arms_tail_that_joins_where_the_arm_joins_is_one_operation() {
+        let fixture = Fixture::new();
+        let insts = vec![
+            diamond(1, 3, 5, 9),
+            block(3),
+            add(2, 3, 4),
+            diamond(5, 7, 9, 9),
+            block(7),
+            add(6, 7, 8),
+            jump(9),
+            block(5),
+            add(9, 10, 11),
+            jump(9),
+            block(9),
+        ];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched::Diamond {
+                covers: 0..11,
+                on_true: vec![Matched::Diamond {
+                    covers: 3..11,
+                    on_true: vec![],
+                    on_false: vec![]
+                }],
+                on_false: vec![]
+            }]
+        );
+    }
+
+    #[test]
+    fn a_tail_branch_whose_two_edges_both_enter_the_join_is_one_operation() {
+        let fixture = Fixture::new();
+        let insts = vec![
+            diamond(1, 3, 5, 7),
+            block(3),
+            jump(7),
+            block(5),
+            add(2, 3, 4),
+            diamond(5, 7, 7, 7),
+            block(7),
+        ];
+        assert_eq!(
+            fixture.recognize(insts),
+            vec![Matched::Diamond {
+                covers: 0..7,
+                on_true: vec![],
+                on_false: vec![Matched::Diamond {
+                    covers: 5..7,
+                    on_true: vec![],
+                    on_false: vec![]
+                }]
             }]
         );
     }

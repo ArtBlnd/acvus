@@ -681,6 +681,34 @@ interference query `assign_slots` does not expose.
   → 452.56 M cycles, a wash — the dispatch loop is not instruction-bound
   there. The rule is kept for what it makes unrepresentable, not for a
   number.
+- **A branch is a region wherever it stands, including at the tail of
+  another branch's arm.** An `if`/`else if`/`else` whose arms assign
+  variables reaches the machine as one `Diamond` whose `else` arm is a block
+  ending in another `Diamond` naming the *same* join: the inner join carries
+  no parameter, so `optimize::forward` collapses it into the outer one. That
+  arm has no jump of its own, and until the recognizer read it the whole
+  enclosing body ran as joints. The `accum` row `for if chain` is that shape
+  in a `for` body: **23.0 → 11.1 ns an iteration at n = 1e6, −51.7 %**, three
+  alternating pinned reps of each binary reading 23.1/23.0/22.4 and
+  11.1/11.1/11.0, the two binaries one `prepare.rs` apart; the body goes from
+  nine blocks to two. The chain whose arms write block parameters keeps a
+  join of its own and was a region already — `grade while`'s listing is
+  byte-identical across the change.
+
+- **A `match` whose arms all rejoin is a region too.** RFC-0051's terminator
+  names the arms and not the block they meet at, so `prepare` reads that
+  block off the first arm the lowering laid and requires it of every other,
+  and refuses a dispatch whose successors are not distinct: each arm is a
+  chain of its own and two tags cannot hold one. The four dispatches gain a
+  region form apiece — `SwitchRegion`, `SwitchOptionRegion`,
+  `SwitchResultRegion`, `SwitchRunRegion` — each holding its arms as chains
+  ended by `Yield` and tail-jumping to its successor. `shapes`'s
+  `enum match held`, whose `while` body is a `match` over a run-resident
+  variant, goes **39.4 → 21.9 ns at n = 1e6, −44.4 %** (39.3/39.4/39.5
+  against 21.9/21.8/22.5) and from eleven blocks to two: with the dispatch an
+  operation, both of its `while`s close as `Loop` regions. Every other
+  `shapes` case's listing is byte-identical.
+
 - The chain, diamond, loop and fused run keep their measured shapes as
   structs; `AsSlice`/`Index` (RFC-0047) and the `switch` operation
   (RFC-0051) are structs added to the same trait.
@@ -702,7 +730,9 @@ interference query `assign_slots` does not expose.
   it must also drop after the call; `Fused`'s is the held `Value`, whose
   address the tail `Deref` takes. Closing the list means removing those
   three locals, not the argument run.
-- **The `Switch` operation** (RFC-0051), the one `todo!` in the machine.
+- The `Switch` operation (RFC-0051) is built, in four dispatches and their
+  four region forms, and `grep -rn 'todo!' acvus-interpreter/src/` finds
+  nothing.
 - **The select reaches one case of the bench set, and moves it 16.8 %.**
   Against master `f8b5e400`, six alternating pinned reps, median, `taskset -c
   15`, ns per iteration at n = 1e6: `branch while` **5.05 → 4.20 (−16.8 %)**,

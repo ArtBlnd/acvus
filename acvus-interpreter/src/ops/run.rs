@@ -4,6 +4,8 @@
 //! operation here for a field read, a field write or a payload move. That is a
 //! decision rather than an omission.
 
+#[cfg(any(debug_assertions, feature = "probe"))]
+use crate::code::OwnedOps;
 use crate::code::{BlockId, Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::value::Value;
@@ -119,5 +121,59 @@ impl Op for SwitchRun {
             .find(|arm| arm.tag == tag)
             .map_or(self.default, |arm| arm.target)
             .into()
+    }
+}
+
+/// One tested arm of a run-resident `match` whose arms all rejoin.
+pub struct RunRegionArm {
+    pub tag: u64,
+    pub head: Box<dyn Op>,
+}
+
+/// The region form of `SwitchRun`.
+pub struct SwitchRunRegion {
+    pub src: Off,
+    pub arms: Box<[RunRegionArm]>,
+    pub default: Box<dyn Op>,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for SwitchRunRegion {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let tag = m.regs().word(self.src);
+        let arm = self
+            .arms
+            .iter()
+            .find(|arm| arm.tag == tag)
+            .map_or(self.default.as_ref(), |arm| arm.head.as_ref());
+        let word = arm.run(m, r0);
+        self.next.run(m, word)
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        self.arms
+            .iter()
+            .map(|arm| OwnedOps {
+                part: "arm",
+                head: arm.head.as_ref(),
+            })
+            .chain([OwnedOps {
+                part: "default",
+                head: self.default.as_ref(),
+            }])
+            .collect()
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+        self.arms
+            .iter_mut()
+            .map(|arm| &mut arm.head)
+            .chain([&mut self.default])
+            .collect()
     }
 }

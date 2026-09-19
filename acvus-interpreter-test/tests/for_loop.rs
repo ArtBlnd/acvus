@@ -222,6 +222,71 @@ fn a_for_owns_its_body_alone_where_a_while_owns_a_head_too() {
     assert_eq!(parts, ["head", "body"], "{:?}", ops_of_anywhere(&found));
 }
 
+/// The `else if` chain whose arms assign variables. The references at the
+/// tail are what keeps `a` and `b` variables rather than block parameters,
+/// and that is the whole difference: with block parameters the inner join
+/// carries them and stays a block of its own, while without them
+/// `optimize::forward` collapses that join into the outer one, so the inner
+/// branch names the same join as the branch above it. Every example's loop
+/// body has the second shape.
+const IF_CHAIN: &str = "let a = 0; let b = 0; for i in 0..6 { \
+                        if i % 3 == 0 { a = a + 1; } \
+                        else if i % 3 == 1 { b = b + 1; } \
+                        else { a = a + 2; }; \
+                        } let ra = &a; let rb = &b; *ra + *rb";
+
+#[tokio::test]
+async fn an_else_if_chain_counts_every_band() {
+    assert_eq!(int(IF_CHAIN).await, 8);
+}
+
+#[test]
+fn an_else_if_chain_that_joins_where_the_if_joins_leaves_the_for_one_region() {
+    let found = i64_blocks(IF_CHAIN);
+    assert_eq!(
+        regions(IF_CHAIN),
+        ["For<Range<i64>>"],
+        "{:?}",
+        ops_of_anywhere(&found)
+    );
+    let body = part_ops(IF_CHAIN, "For", "body");
+    assert!(
+        !body.iter().any(|op| op.starts_with("Goto")),
+        "a region's body holds no terminator, so the chain a band takes is \
+         not a block the machine dispatches to: {body:?}"
+    );
+}
+
+/// A `match` whose arms all rejoin. RFC-0051's terminator names the arms and
+/// not the block they meet at, so the recognizer reads that block off the
+/// first arm the lowering laid and requires it of every other.
+const MATCH_BODY: &str = "let a = 0; for i in 0..6 { \
+                          let o = if i % 2 == 0 { Some(i) } else { None }; \
+                          match o { Some(v) => { a = a + v; }, None => { a = a + 1; } }; \
+                          } let ra = &a; *ra";
+
+#[tokio::test]
+async fn a_match_in_a_for_body_reaches_both_sides() {
+    assert_eq!(int(MATCH_BODY).await, 9);
+}
+
+#[test]
+fn a_match_whose_arms_all_rejoin_leaves_the_for_one_region() {
+    let found = i64_blocks(MATCH_BODY);
+    assert_eq!(
+        regions(MATCH_BODY),
+        ["For<Range<i64>>"],
+        "{:?}",
+        ops_of_anywhere(&found)
+    );
+    let body = part_ops(MATCH_BODY, "For", "body");
+    assert!(
+        body.iter().any(|op| op.starts_with("SwitchOptionRegion")),
+        "the dispatch is an operation of the body's chain, not a block the \
+         machine enters: {body:?}"
+    );
+}
+
 // -- break and continue: the joints path -------------------------------
 
 const BREAK: &str = "let v = vec([1, 2, 3]); let acc = 0; \

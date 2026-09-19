@@ -60,6 +60,17 @@ const FOR_RANGE: &str = "let acc = 0; for i in 0..@n { acc = acc + i; } acc";
 /// what a terminator-shaped header costs over a region.
 const FOR_RANGE_BREAK: &str =
     "let acc = 0; for i in 0..@n { if i == @n { break; }; acc = acc + i; } acc";
+/// The `else if` chain over variables, which is the shape every example's
+/// loop body has. The references at the tail keep `a` and `b` variables
+/// rather than block parameters, and that is what decides the shape: with
+/// block parameters the inner join carries them and stays a block of its
+/// own, while without them `optimize::forward` collapses that join into the
+/// outer one, so the inner branch names the same join as the branch above
+/// it. Before the recognizer read that shape the whole body ran as joints,
+/// at a dispatch per block edge per iteration.
+const FOR_IF_CHAIN: &str = "let a = 0; let b = 0; for i in 0..@n { \
+    if i % 3 == 0 { a = a + 1; } else if i % 3 == 1 { b = b + 1; } else { a = a + 2; }; \
+    } let ra = &a; let rb = &b; *ra + *rb";
 const FOR_SLICE: &str =
     "let v = range(0, @n) | collect; let acc = 0; for x in &v { acc = acc + *x; } acc";
 const FOR_SLICE_ADD: &str =
@@ -150,6 +161,21 @@ fn rust_for_range_break(n: i64) -> f64 {
         acc += black_box(i);
     }
     acc as f64
+}
+
+fn rust_for_if_chain(n: i64) -> f64 {
+    let mut a = 0i64;
+    let mut b = 0i64;
+    for i in 0..n {
+        if black_box(i) % 3 == 0 {
+            a += 1;
+        } else if i % 3 == 1 {
+            b += 1;
+        } else {
+            a += 2;
+        }
+    }
+    (a + b) as f64
 }
 
 fn rust_for_slice(n: i64) -> f64 {
@@ -441,6 +467,14 @@ fn main() {
             source: FOR_RANGE_BREAK,
             registries: std_only,
             rust: rust_for_range_break,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "for if chain",
+            source: FOR_IF_CHAIN,
+            registries: std_only,
+            rust: rust_for_if_chain,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

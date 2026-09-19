@@ -171,9 +171,26 @@ arm's block and walked off into the back edge; the terminator names the join,
 so both arms are `ArmRegion::Direct` and the branch is one operation. This is
 what `collatz while`'s loop needed to close.
 
+**A branch at the tail of an arm names the join the arm was going to.** An
+`if`/`else if`/`else` reaches the machine two ways, and which one depends on
+whether its arms write block parameters or variables. With parameters the
+inner join carries them and stays a block of its own that jumps to the outer
+join, which is the shape `grade while` and `shapes` have and which
+`recognize_diamond` already read through the arm's `straight_run`. With
+variables the inner join carries nothing, `optimize::forward` collapses it
+into the outer one, and the inner terminator's `join` field **is** the outer
+join — the shape `grades`, `queue` and every example's loop body have. That
+arm ends in a branch rather than a jump, which is `ArmRegion::Branch`, and
+the branch is the arm's last operation; `diamond_arm` and the arm walk recur
+through each other, so a chain of any length is one region and `is_closed` is
+asked once over the whole tree. An arm that ends in a branch is never a
+`Select`: the outer arm is not one node.
+
 Waiting: `spawn_split` over a body with an `if` reads `join`. The `while` test
 is the remaining producer of `JumpIf` that the machine sees as a loop's, along
-with `while let`, the guard chains and `?`.
+with `while let`, the guard chains and `?`. A `?` is one of them by Decision 1:
+its fail arm returns, so the body holding it stays joints, and `ledger` is the
+example that shows it.
 
 ## Order of work
 
