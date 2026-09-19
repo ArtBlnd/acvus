@@ -66,3 +66,22 @@ where
     };
     *values
 }
+
+/// The components of a derived struct, written into the destination run the
+/// caller lent (RFC-0050 rules 5, 6 and 8). The order is the one
+/// `object_in_order` writes and `open_in_order` reads, which is rule 8's, so
+/// the destination needs no names.
+pub fn fields_into_run<Rt, const N: usize>(values: [Owned<Rt>; N], out: &mut [Rt::Value])
+where
+    Rt: Runtime,
+{
+    assert_eq!(
+        out.len(),
+        N,
+        "a struct of {N} fields was lent a destination run of {} registers",
+        out.len()
+    );
+    for (slot, value) in out.iter_mut().zip(values) {
+        *slot = value.into_value();
+    }
+}

@@ -279,11 +279,38 @@ or an associated type of the crossing.
   `call_pair_run`, each handing back the `[Value; 2]` the result occupies,
   and `call_slice` is gone. Every arity's glue binds `Ret<Rt>` rather than
   `Ret<Rt, Form = One>`; `ValuesOnly` still binds `Form = One`, which is what
-  keeps a view off a `heavy` or awaited call.
+  keeps a view off a `heavy` or awaited call — and an aggregate result with
+  it, since `Run<W>` is not `One` either.
+- `TakenForm<Run<W>>` picks `Runtime::op_run_*` at every argument width
+  including zero, a view's arity-0 refusal having no counterpart here: an
+  aggregate result borrows nothing the arguments lent. `Handler` carries
+  `call_out0` through `call_out4`, each taking the destination run rather
+  than handing a value back, and the window form of the family is
+  `Handler::call` itself, which already takes a run and a destination.
 - RFC-0050's flat layout changes `acvus-extern/src/object.rs` and
-  `variant.rs` only. RFC-0050's wide argument will add a `Form` beside `One`
-  and `Pair`, and the window form (`Handler::call` on `&mut [Value]`) is
-  already the shape it needs; nothing but the window form reaches it today.
+  `variant.rs` only. The third `Form` beside `One` and `Pair` is built, and
+  it is a result form: `Run<W>` is an aggregate's `W` components, written
+  where the caller placed the result. The width `Form::WIDTH` carries no
+  longer names the family on its own — a struct of two fields and a view are
+  both two of the runtime's values — so `Form` carries `FormKind` beside it
+  and `Width` carries that tag; `prepare` matches on the tag. A wide
+  *argument* is still unbuilt: no `Arg` impl names `Run<W>`, and a by-value
+  aggregate parameter crosses as the one heap value rule 4 realizes it into.
+- `Run<W>`'s width is a literal the derive writes, not a constant read off a
+  type parameter. `type Form = Run<{ <T as _>::WIDTH }>` in a generic impl
+  needs `generic_const_exprs`, unstable on the pinned toolchain, so
+  `#[derive(TyArg)]` counts the struct's fields and emits `Run<3>`. No
+  operation carries the width as a field either: `CallRun*` reads
+  `H::WIDTH.ret`, a constant of its own type parameter.
+- A type's return crossing is `Returned<Rt>` and not `Cross<Rt>`, because a
+  `#[derive(TyArg)]` struct has two: one heap object as a field, a
+  container's element and a by-value parameter, and its own components as a
+  result. There is no blanket impl over `OneValue` for the reason rule 2
+  gives `Cross` none — coherence cannot admit one beside the derive's — so
+  every one-value type states it through `cross_one_value!`, and the
+  hand-written crossings (`StrView`, `Slice`, `SliceMut`) through
+  `returned_as_crossed!`. The proc macro is unchanged in the return position:
+  it still writes `Val<T, Uniform>`, whose `Ret::Form` is now `T`'s answer.
 - `Borrowable<Rt>` admits exactly the set today's `names_option` admitted: a
   `#[derive(TyArg)]` struct is admitted, because `decl.rs`'s `eq_point`
   declares `&Point` as an instance of the shared signature

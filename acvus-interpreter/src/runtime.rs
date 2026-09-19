@@ -124,6 +124,48 @@ impl Runtime for AcvusRuntime {
         call::op_pair_wide(handler, shape)
     }
 
+    fn op_run_no_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_run_no_argument(handler, shape)
+    }
+
+    fn op_run_one_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_run_one_argument(handler, shape)
+    }
+
+    fn op_run_two_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_run_two_arguments(handler, shape)
+    }
+
+    fn op_run_three_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_run_three_arguments(handler, shape)
+    }
+
+    fn op_run_four_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_run_four_arguments(handler, shape)
+    }
+
+    fn op_run_wide<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_run_wide(handler, shape)
+    }
+
     fn fused_no_argument<H>(handler: H, shape: call::FusedShape) -> call::Call
     where
         H: acvus_extern::Handler<AcvusRuntime>,

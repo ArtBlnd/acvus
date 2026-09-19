@@ -12,7 +12,7 @@ use std::sync::Arc;
 use acvus_mir::ty::{PolyTy, Task};
 use futures::future::BoxFuture;
 
-use crate::obj::{Cross, CrossSpecialized, Form, One, OneValue, Pair};
+use crate::obj::{Cross, CrossSpecialized, Form, FormKind, One, OneValue, Pair, Returned, Run};
 use crate::runtime::Runtime;
 
 /// Which crossing a parameter or a result takes (RFC-0040).
@@ -155,6 +155,12 @@ where
 {
 }
 
+/// The destination run a call's result is written into, lent for the call's
+/// duration by the frame that owns it (RFC-0050 rule 6). It is the caller's
+/// own registers where the result stays in the frame, and the heap object's
+/// body where it escapes; a handler writes the same components either way.
+pub type Out<'a, Rt> = &'a mut [<Rt as Runtime>::Value];
+
 pub trait Ret<Rt>: Sized
 where
     Rt: Runtime,
@@ -162,13 +168,14 @@ where
     type Of<'a>;
     /// The run the result is written into. A bound that admits only a result
     /// the caller can take away says `Form = One`: the `Pair` a view or a
-    /// slice is borrows the caller's frame (RFC-0047 §3).
+    /// slice is borrows the caller's frame (RFC-0047 §3), and the `Run<W>` an
+    /// aggregate is names the caller's destination.
     type Form: Form;
 
     /// How many of the runtime's values the result occupies.
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
 
-    fn into_run(value: Self::Of<'_>, rt: &Rt, out: &mut [Rt::Value]);
+    fn into_run(value: Self::Of<'_>, rt: &Rt, out: Out<'_, Rt>);
 }
 
 /// The arguments of a closure call, written into the callee's parameter
@@ -222,14 +229,14 @@ pub struct Val<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
 impl<T, Rt> Ret<Rt> for Val<T, Uniform>
 where
-    T: Cross<Rt>,
+    T: Returned<Rt>,
     Rt: Runtime,
 {
     type Of<'a> = T;
-    type Form = <T as Cross<Rt>>::Form;
+    type Form = <T as Returned<Rt>>::Form;
 
-    fn into_run(value: T, rt: &Rt, out: &mut [Rt::Value]) {
-        <T as Cross<Rt>>::into_run(value, rt, out)
+    fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
+        <T as Returned<Rt>>::into_run(value, rt, out)
     }
 }
 
@@ -241,7 +248,7 @@ where
     type Of<'a> = T;
     type Form = One;
 
-    fn into_run(value: T, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
         <T as CrossSpecialized<Rt>>::into_run(value, rt, out)
     }
 }
@@ -254,6 +261,7 @@ where
 pub struct Width {
     pub args: usize,
     pub ret: usize,
+    pub result: FormKind,
 }
 
 /// The widest argument run a register form covers: a call of this many of the
@@ -430,6 +438,78 @@ where
     ) -> [Rt::Value; 2] {
         // SAFETY: the caller's contract, which is `call_pair_run`'s at four.
         unsafe { self.call_pair_run(rt, frame, &[a, b, c, d]) }
+    }
+
+    /// The aggregate forms: the caller lends the destination run its
+    /// placement gave the result — its own registers, or the heap object's
+    /// body — and the handler writes `WIDTH.ret` components into it
+    /// (RFC-0050 rules 5 and 6). The window form of this family is `call`
+    /// itself, which already takes the run and the destination.
+    ///
+    /// # Safety
+    /// `WIDTH` is `Width { args: k, ret: w, result: Components }` for the
+    /// `k` this form names, the arguments are this call's own in declaration
+    /// order, and `out` is `w` of the runtime's values the caller owns.
+    #[inline]
+    unsafe fn call_out0(&self, rt: &Rt, frame: Rt::Frame<'_>, out: Out<'_, Rt>) {
+        // SAFETY: the caller's contract, which is `call`'s at no arguments.
+        unsafe { self.call(rt, frame, &[], out) }
+    }
+
+    /// # Safety
+    /// As `call_out0`, at one value.
+    #[inline]
+    unsafe fn call_out1(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value, out: Out<'_, Rt>) {
+        // SAFETY: the caller's contract, which is `call`'s at one argument.
+        unsafe { self.call(rt, frame, &[a], out) }
+    }
+
+    /// # Safety
+    /// As `call_out0`, at two values.
+    #[inline]
+    unsafe fn call_out2(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+        out: Out<'_, Rt>,
+    ) {
+        // SAFETY: the caller's contract, which is `call`'s at two arguments.
+        unsafe { self.call(rt, frame, &[a, b], out) }
+    }
+
+    /// # Safety
+    /// As `call_out0`, at three values.
+    #[inline]
+    unsafe fn call_out3(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+        c: Rt::Value,
+        out: Out<'_, Rt>,
+    ) {
+        // SAFETY: the caller's contract, which is `call`'s at three arguments.
+        unsafe { self.call(rt, frame, &[a, b, c], out) }
+    }
+
+    /// # Safety
+    /// As `call_out0`, at four values.
+    #[inline]
+    unsafe fn call_out4(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+        c: Rt::Value,
+        d: Rt::Value,
+        out: Out<'_, Rt>,
+    ) {
+        // SAFETY: the caller's contract, which is `call`'s at four arguments.
+        unsafe { self.call(rt, frame, &[a, b, c, d], out) }
     }
 
     /// # Safety
@@ -628,6 +708,35 @@ taken_form!(
     fused = no_fused_pair
 );
 
+macro_rules! taken_run_form {
+    ($run:ty, op = $op:path) => {
+        impl<const W: usize> TakenForm<Run<W>> for $run {
+            fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
+            where
+                Rt: Runtime,
+                H: Handler<Rt>,
+            {
+                $op(handler, shape)
+            }
+
+            fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
+            where
+                Rt: Runtime,
+                H: Handler<Rt>,
+            {
+                no_fused_run_result(handler, shape)
+            }
+        }
+    };
+}
+
+taken_run_form!(InRegisters<0>, op = Rt::op_run_no_argument);
+taken_run_form!(InRegisters<1>, op = Rt::op_run_one_argument);
+taken_run_form!(InRegisters<2>, op = Rt::op_run_two_arguments);
+taken_run_form!(InRegisters<3>, op = Rt::op_run_three_arguments);
+taken_run_form!(InRegisters<4>, op = Rt::op_run_four_arguments);
+taken_run_form!(InWindow, op = Rt::op_run_wide);
+
 /// What the module table holds for one declared instance: the handler with
 /// its type erased, which `prepare` turns back into a typed operation by
 /// handing it the shape it decided for the call site. This is the one `dyn`
@@ -740,6 +849,16 @@ where
     )
 }
 
+fn no_fused_run_result<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
+where
+    Rt: Runtime,
+    H: Handler<Rt>,
+{
+    panic!(
+        "a fused run hands one value from each call to the next and holds no call whose result is an aggregate's components"
+    )
+}
+
 /// A Rust closure with the crossing on both sides of it: `A` is the tuple of
 /// the declaration's parameter modes, in the order the machine lays a call's
 /// arguments (RFC-0052 §7), and `R` its result.
@@ -829,6 +948,7 @@ macro_rules! arity {
             const WIDTH: Width = Width {
                 args: 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*,
                 ret: <R as Ret<Rt>>::WIDTH,
+                result: <<R as Ret<Rt>>::Form as Form>::KIND,
             };
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
@@ -923,6 +1043,7 @@ macro_rules! arity {
             const WIDTH: Width = Width {
                 args: 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*,
                 ret: 1,
+                result: FormKind::Value,
             };
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
@@ -1180,6 +1301,12 @@ macro_rules! direct_call_forms {
         $crate::direct_call_forms!(@op op_pair_three_arguments);
         $crate::direct_call_forms!(@op op_pair_four_arguments);
         $crate::direct_call_forms!(@op op_pair_wide);
+        $crate::direct_call_forms!(@op op_run_no_argument);
+        $crate::direct_call_forms!(@op op_run_one_argument);
+        $crate::direct_call_forms!(@op op_run_two_arguments);
+        $crate::direct_call_forms!(@op op_run_three_arguments);
+        $crate::direct_call_forms!(@op op_run_four_arguments);
+        $crate::direct_call_forms!(@op op_run_wide);
         $crate::direct_call_forms!(@fused fused_no_argument);
         $crate::direct_call_forms!(@fused fused_one_argument);
         $crate::direct_call_forms!(@fused fused_two_arguments);

@@ -29,8 +29,38 @@ fn some_of(i: i64) -> Option<i64> {
     if i % 2 == 0 { Some(i) } else { None }
 }
 
+/// The aggregate an extern returns. The two rows below run one declaration
+/// at two destinations: the frame run the placement gives a result that
+/// stays in the body, and the heap object rule 4 realizes one that crosses
+/// back by value into (RFC-0050 rules 4 and 6).
+#[derive(acvus_extern::TyArg)]
+pub struct Made {
+    x: i64,
+    y: i64,
+}
+
+#[extern_fn(effect = pure)]
+fn made_of(a: i64, b: i64) -> Made {
+    Made { x: a, y: b }
+}
+
+#[extern_fn(effect = pure)]
+fn sum_made(m: Made) -> i64 {
+    m.x + m.y
+}
+
 fn std_only() -> Vec<Registry<AcvusRuntime>> {
     acvus_ext::std_registries::<AcvusRuntime>()
+}
+
+fn with_made() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = std_only();
+    regs.push(extern_registry! {
+        ns: "bench",
+        types: [],
+        fns: [made_of, sum_made],
+    });
+    regs
 }
 
 fn with_some_of() -> Vec<Registry<AcvusRuntime>> {
@@ -73,6 +103,19 @@ const OPTION_MATCH: &str = "let i = 0; let acc = 0; while i < @n { if let Some(v
 /// `v[i]` takes a `u64` index and integer literals are `i64`, so the index
 /// counter is derived from `len`, and the sweep over the thousand objects
 /// repeats `n / 1000` times to reach `n` iterations of the inner body.
+/// The result stays in the body, so it takes the registers the run
+/// allocation placed for it and the call writes them.
+const CONSTRUCT_VIA_EXTERN: &str = "let acc = 0; let i = 0; while i < @n { \
+let p = made_of(i, i + 1); acc = acc + p.x + p.y; i = i + 1; } acc";
+/// The result crosses back into a handler by value, which is one of rule 4's
+/// escape sites, so the call writes the flat body of a heap object instead.
+/// The row also pays one more extern call than the row above it, so the
+/// distance between the two bounds the destination's cost from above rather
+/// than measuring it alone; the allocation counts are what measure the
+/// destination.
+const CONSTRUCT_VIA_EXTERN_HEAPED: &str = "let acc = 0; let i = 0; while i < @n { \
+let p = made_of(i, i + 1); acc = acc + sum_made(p); i = i + 1; } acc";
+
 const VEC_OF_OBJECTS: &str = "let v = range(0, 1000) | map(|k| -> { x: k, y: k + 1, }) | collect; let m = len(&v); let one = m / m; let acc = 0; let r = 0; while r < @n / 1000 { let i = m - m; while i < m { acc = acc + v[i].x; i = i + one; } r = r + 1; } acc";
 
 struct Point {
@@ -129,6 +172,17 @@ fn rust_construct(n: i64) -> f64 {
     while i < n {
         let q = black_box(Point { x: i, y: i + 1 });
         acc += q.x;
+        i += 1;
+    }
+    acc as f64
+}
+
+fn rust_construct_via_extern(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let p = black_box(Point { x: i, y: i + 1 });
+        acc += p.x + p.y;
         i += 1;
     }
     acc as f64
@@ -420,6 +474,22 @@ fn main() {
             source: OPTION_MATCH,
             registries: with_some_of,
             rust: rust_option_match,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "construct via extern",
+            source: CONSTRUCT_VIA_EXTERN,
+            registries: with_made,
+            rust: rust_construct_via_extern,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "construct via extern heaped",
+            source: CONSTRUCT_VIA_EXTERN_HEAPED,
+            registries: with_made,
+            rust: rust_construct_via_extern,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

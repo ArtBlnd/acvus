@@ -772,7 +772,11 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     };
     assert_eq!(
         entry.width(),
-        acvus_extern::Width { args: 1, ret: 2 },
+        acvus_extern::Width {
+            args: 1,
+            ret: 2,
+            result: acvus_extern::FormKind::View,
+        },
         "a slice-returning declaration takes one container and hands back two words"
     );
     let storage = erased(vec![
@@ -822,7 +826,11 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
     };
     assert_eq!(
         entry.width(),
-        acvus_extern::Width { args: 2, ret: 1 },
+        acvus_extern::Width {
+            args: 2,
+            ret: 1,
+            result: acvus_extern::FormKind::Value,
+        },
         "a slice parameter is two of the argument run and the result is one value"
     );
     let storage = vec![erased(4i64), erased(5i64), erased(6i64)];
@@ -1479,6 +1487,7 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
 /// by materialization is taken, and one taken twice is freed twice.
 #[test]
 fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
+    use acvus_extern::FormKind;
     use acvus_extern::{ByRef, ByValue, Handler, Val, Width};
 
     fn answered<H>(handler: &H, expected: Width, args: Vec<V>) -> i64
@@ -1493,7 +1502,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     assert_eq!(
         answered(
             &acvus_extern::glue0::<Tiny, _, Val<i64>>(|_, _| 0),
-            Width { args: 0, ret: 1 },
+            Width {
+                args: 0,
+                ret: 1,
+                result: FormKind::Value,
+            },
             vec![],
         ),
         0
@@ -1501,7 +1514,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     assert_eq!(
         answered(
             &acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a),
-            Width { args: 1, ret: 1 },
+            Width {
+                args: 1,
+                ret: 1,
+                result: FormKind::Value,
+            },
             vec![erased(1i64)],
         ),
         1
@@ -1511,7 +1528,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
             &acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(
                 |_, _, a, b| a + b
             ),
-            Width { args: 2, ret: 1 },
+            Width {
+                args: 2,
+                ret: 1,
+                result: FormKind::Value,
+            },
             vec![erased(1i64), erased(2i64)],
         ),
         3
@@ -1525,7 +1546,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
             &acvus_extern::glue3::<Tiny, _, ByValue<i64>, ByRef<i64>, ByValue<i64>, Val<i64>>(
                 |_, _, a, b, c| a + *b + c
             ),
-            Width { args: 3, ret: 1 },
+            Width {
+                args: 3,
+                ret: 1,
+                result: FormKind::Value,
+            },
             vec![erased(1i64), lent, erased(3i64)],
         ),
         14,
@@ -1543,7 +1568,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 ByValue<i64>,
                 Val<i64>,
             >(|_, _, a, b, c, d| a + b + c + d),
-            Width { args: 4, ret: 1 },
+            Width {
+                args: 4,
+                ret: 1,
+                result: FormKind::Value,
+            },
             vec![erased(1i64), erased(2i64), erased(3i64), erased(4i64)],
         ),
         10
@@ -1567,14 +1596,29 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 /// answer it gives are the original's.
 #[test]
 fn a_glue_clones_into_a_box_that_is_the_same_handler() {
+    use acvus_extern::FormKind;
     use acvus_extern::{ByValue, Handler, HandlerFactory, Val, Width};
 
     let glue = acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a * 3);
     let boxed: Box<dyn HandlerFactory<Tiny>> = Box::new(glue.clone());
     let again = boxed.clone();
 
-    assert_eq!(boxed.width(), Width { args: 1, ret: 1 });
-    assert_eq!(again.width(), Width { args: 1, ret: 1 });
+    assert_eq!(
+        boxed.width(),
+        Width {
+            args: 1,
+            ret: 1,
+            result: FormKind::Value,
+        }
+    );
+    assert_eq!(
+        again.width(),
+        Width {
+            args: 1,
+            ret: 1,
+            result: FormKind::Value,
+        }
+    );
     // SAFETY: the width says one argument in and one value out, at each of
     // the three names of this one handler.
     let answers = unsafe {
@@ -1596,7 +1640,14 @@ fn a_state_capture_is_no_argument_of_the_call() {
     let ExternHandler::Sync(f) = handler(&reg, &i, "greet") else {
         panic!("greet is a synchronous declaration")
     };
-    assert_eq!(f.width(), acvus_extern::Width { args: 1, ret: 1 });
+    assert_eq!(
+        f.width(),
+        acvus_extern::Width {
+            args: 1,
+            ret: 1,
+            result: acvus_extern::FormKind::Value,
+        }
+    );
 }
 
 /// The arguments of a closure call, read back as the `Vec` this runtime's own

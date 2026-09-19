@@ -91,6 +91,8 @@ where
     }
 }
 
+crate::returned_as_crossed!(StrView);
+
 /// The macro emits this where `Val` would stand for an owned result, for a
 /// result written `&str` in Rust.
 pub struct RetStr;

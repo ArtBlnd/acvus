@@ -691,6 +691,37 @@ impl<'f> Regs<'f> {
         unsafe { run_in(self.cells, at, arity, self.len) }
     }
 
+    /// The registers an aggregate-returning call writes its components into,
+    /// lent to the handler (RFC-0050 rules 5 and 6). The caller cleared every
+    /// register of the run that held a `Large`, so a write here loses nothing.
+    #[inline]
+    pub fn run_of_mut(&mut self, at: Off, width: u16) -> &mut [Value] {
+        let from = at.index();
+        let to = from + usize::from(width);
+        assert!(
+            to <= usize::from(self.len),
+            "a destination run of {width} at register {from} leaves a frame of {} registers",
+            self.len
+        );
+        // SAFETY: `prepare` placed the run contiguously in this frame, and the
+        // bound above is the frame's.
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.cells.as_mut_ptr().cast::<Value>().add(from),
+                usize::from(width),
+            )
+        }
+    }
+
+    /// The frame's claim on a register whose value the frame did not write
+    /// itself: an aggregate-returning call's handler wrote the `Large` into
+    /// the lent run, and the frame takes ownership of it here (RFC-0048 §4).
+    #[inline]
+    pub fn claim(&mut self, at: Marked) {
+        let word = at.word_byte();
+        self.mark(word, self.marked(word) | at.mask());
+    }
+
     /// The frame's first register, which a chain's pre-multiplied leaf offsets
     /// are byte displacements from.
     #[inline]

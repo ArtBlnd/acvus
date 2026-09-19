@@ -1,7 +1,7 @@
 //! Which of the standard declarations hand a run back in two registers
 //! (RFC-0047 amended, rule 2; RFC-0062 Decision 1 for the run of bytes).
 
-use acvus_extern::{Externs, Interner, QualifiedRef, TypesOnly};
+use acvus_extern::{Externs, FormKind, Interner, QualifiedRef, TypesOnly};
 
 fn name(i: &Interner, qref: &QualifiedRef) -> String {
     match qref.namespace {
@@ -18,7 +18,7 @@ fn the_slice_entry_is_the_slice_returning_declarations_and_nothing_else() {
     let mut in_registers: Vec<String> = externs
         .handlers
         .iter()
-        .filter(|(_, handlers)| handlers.iter().any(|h| h.width().ret == 2))
+        .filter(|(_, handlers)| handlers.iter().any(|h| h.width().result == FormKind::View))
         .map(|(qref, _)| name(&i, qref))
         .collect();
     in_registers.sort();
@@ -48,8 +48,38 @@ fn the_view_of_a_string_is_declared_with_no_registry_at_all() {
     let declared: Vec<String> = externs
         .handlers
         .iter()
-        .filter(|(_, handlers)| handlers.iter().any(|h| h.width().ret == 2))
+        .filter(|(_, handlers)| handlers.iter().any(|h| h.width().result == FormKind::View))
         .map(|(qref, _)| name(&i, qref))
         .collect();
     assert_eq!(declared, ["core::as_str"]);
+}
+
+/// Which of this crate's declarations write an aggregate's components where
+/// the caller placed the result (RFC-0050 rules 5 and 6). A declaration whose
+/// Rust result is `Option<S>` is not one of them: an option is one of the
+/// runtime's values, so `regex::find` and its family stay off this list.
+///
+/// The set is every registry this crate builds, not `std_registries`, which
+/// carries neither `regex` nor `datetime` nor `encoding` nor `io`.
+#[test]
+fn the_component_entry_is_the_struct_returning_declarations_and_nothing_else() {
+    let i = Interner::new();
+    let mut registries = acvus_ext::std_registries::<TypesOnly>();
+    registries.push(acvus_ext::regex_registry());
+    registries.push(acvus_ext::datetime_registry());
+    registries.push(acvus_ext::encoding_registry());
+    registries.push(acvus_ext::io_registry());
+    let externs = Externs::combine(registries, &i).expect("registries combine");
+    let mut in_components: Vec<String> = externs
+        .handlers
+        .iter()
+        .filter(|(_, handlers)| {
+            handlers
+                .iter()
+                .any(|h| h.width().result == FormKind::Components)
+        })
+        .map(|(qref, _)| name(&i, qref))
+        .collect();
+    in_components.sort();
+    assert_eq!(in_components, ["std::regex_flags"]);
 }

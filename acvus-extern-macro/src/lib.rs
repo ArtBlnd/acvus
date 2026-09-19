@@ -971,6 +971,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
 
     let qref = qref_expr_in(attr.ns.as_deref(), &name);
     let one_value_run = one_value_run();
+    let returned_as_one_value = returned_as_one_value();
     let payload_crossing = quote! {
         fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
             ::acvus_extern::transparent::erase::<Self, #payload_ty, __R>(self, __rt)
@@ -1031,6 +1032,14 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             #where_predicates
         {
             #payload_crossing
+        }
+
+        impl<#impl_params __R> ::acvus_extern::Returned<__R> for #ident #ty_generics
+        where
+            __R: ::acvus_extern::Runtime,
+            #where_predicates
+        {
+            #returned_as_one_value
         }
 
         impl<#impl_params __R> ::acvus_extern::CrossSpecialized<__R> for #ident #ty_generics
@@ -1114,6 +1123,7 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                     erase,
                     materialize,
                     borrowing,
+                    returned: shape.returned(),
                 },
             );
             let projection = projected.then(|| shape.projection(ident));
@@ -1151,6 +1161,7 @@ struct Crossing {
     erase: proc_macro2::TokenStream,
     materialize: proc_macro2::TokenStream,
     borrowing: Borrowing,
+    returned: proc_macro2::TokenStream,
 }
 
 /// The `TyArg` and `Cross` impls of a derived type.
@@ -1160,6 +1171,7 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
         erase,
         materialize,
         borrowing,
+        returned,
     } = crossing;
     let one_value_run = one_value_run();
     let borrowable_bound = borrowing.bound();
@@ -1198,6 +1210,26 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
             unsafe fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
                 #materialize
             }
+        }
+
+        impl<__R> ::acvus_extern::Returned<__R> for #ident
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            #returned
+        }
+    }
+}
+
+/// A result that crosses back as the one heap value `OneValue::erase`
+/// builds: every derived type but a struct, whose components go to the
+/// caller's destination run instead.
+fn returned_as_one_value() -> proc_macro2::TokenStream {
+    quote! {
+        type Form = ::acvus_extern::One;
+
+        fn into_run(self, __rt: &__R, __out: &mut [<__R as ::acvus_extern::Runtime>::Value]) {
+            ::acvus_extern::one_into_run(self, __rt, __out)
         }
     }
 }
@@ -1299,6 +1331,28 @@ impl<'a> ObjectShape<'a> {
                 [#(#names),*],
                 [#(::acvus_extern::erase_field::<#tys, __R>(__rt, #owner.#idents)),*],
             )
+        }
+    }
+
+    /// The struct's components, written into the caller's destination run in
+    /// the same order `erase` writes them, which is rule 8's.
+    ///
+    /// The width is a literal because the derive counts the fields here.
+    /// `Run<W>` reached through a type parameter's associated constant would
+    /// need `generic_const_exprs`, which is unstable on the pinned
+    /// toolchain.
+    fn returned(&self) -> proc_macro2::TokenStream {
+        let (idents, tys) = (&self.idents, &self.tys);
+        let width = syn::Index::from(idents.len());
+        quote! {
+            type Form = ::acvus_extern::Run<#width>;
+
+            fn into_run(self, __rt: &__R, __out: &mut [<__R as ::acvus_extern::Runtime>::Value]) {
+                ::acvus_extern::object::fields_into_run::<__R, #width>(
+                    [#(::acvus_extern::erase_field::<#tys, __R>(__rt, self.#idents)),*],
+                    __out,
+                )
+            }
         }
     }
 
@@ -1644,6 +1698,7 @@ fn generate_enum_ty_arg(
             erase,
             materialize,
             borrowing: Borrowing::Whole,
+            returned: returned_as_one_value(),
         },
     ))
 }

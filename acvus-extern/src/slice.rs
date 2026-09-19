@@ -222,3 +222,6 @@ macro_rules! slice_cross {
 
 slice_cross!(Slice);
 slice_cross!(SliceMut);
+
+crate::returned_as_crossed!(Slice<T, __Rt>, T: TyVar);
+crate::returned_as_crossed!(SliceMut<T, __Rt>, T: TyVar);

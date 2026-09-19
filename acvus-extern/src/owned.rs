@@ -152,6 +152,23 @@ where
     }
 }
 
+/// The runtime's values behind a run of `Owned`s, for a caller that fills a
+/// destination it owns (RFC-0050 rule 6). `Owned<R>` is `#[repr(transparent)]`
+/// over `R::Value`, so the two slices have one layout.
+///
+/// # Safety
+/// Every slot of `values` owns nothing — it is `Default::default()` or was
+/// taken out — so a write through the result releases no live value.
+pub unsafe fn lend_run<R>(values: &mut [Owned<R>]) -> &mut [R::Value]
+where
+    R: Runtime,
+{
+    let len = values.len();
+    // SAFETY: the `repr(transparent)` stated above, and the caller's contract
+    // for what the slots hold.
+    unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<R::Value>(), len) }
+}
+
 impl<R> crate::Stored<R> for Owned<R> where R: Runtime {}
 
 impl<R> crate::Borrowable<R> for Owned<R> where R: Runtime {}

@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::{FieldAt, ObjectShape, Width};
+use acvus_extern::{FieldAt, FormKind, ObjectShape, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
@@ -857,12 +857,14 @@ impl<'a> Prepare<'a> {
         );
         self.run_base = Slot::try_from(scalars + u32::from(MAX_SCRATCH_SLOTS))
             .unwrap_or_else(|_| panic!("a body of {scalars} registers has no run base"));
+        let written_by_a_call = self.results_written_as_components();
         self.plan = runs::plan(
             self.body,
             &self.labels,
             self.run_base,
             &self.slots.ranges,
             self.ctx.interner,
+            &written_by_a_call,
         );
         let frame = self.run_frame_len();
         assert!(
@@ -883,6 +885,31 @@ impl<'a> Prepare<'a> {
             );
         }
         self.run_noops = noops(self.body, &self.plan);
+    }
+
+    /// The results a handler writes as an aggregate's components rather than
+    /// as one of the runtime's values. The run placement needs the callee's
+    /// handler to tell one call's result from another's, and the handler
+    /// table is the context's.
+    fn results_written_as_components(&self) -> FxHashSet<ValueId> {
+        self.body
+            .insts
+            .iter()
+            .filter_map(|inst| {
+                let InstKind::FunctionCall {
+                    dst,
+                    callee: Callee::Extern { id, instance },
+                    ..
+                } = &inst.kind
+                else {
+                    return None;
+                };
+                let ExternHandler::Sync(f) = self.ctx.handler(id, *instance) else {
+                    return None;
+                };
+                (f.width().result == FormKind::Components).then_some(*dst)
+            })
+            .collect()
     }
 
     fn run_frame_len(&self) -> u16 {
@@ -3092,7 +3119,11 @@ impl<'a> Prepare<'a> {
                 };
                 assert_eq!(
                     f.width(),
-                    Width { args: 1, ret: 2 },
+                    Width {
+                        args: 1,
+                        ret: 2,
+                        result: FormKind::View,
+                    },
                     "an AsSlice names a handler of another shape than the one container in \
                      and the two words of a run out, which is `Handler::call_pair1`'s \
                      contract (RFC-0047 amended, rule 2)"
@@ -3392,14 +3423,24 @@ impl<'a> Prepare<'a> {
             width.args
         );
         let form = CallForm::of(&width);
-        match width.ret {
-            ONE_VALUE => self.call_into_register(at, result, args, f, form, slots, takes, ops),
-            PAIR => self.call_into_pair(at, result, args, f, form, slots, takes, ops),
-            other => panic!(
-                "a handler's result is {other} of the runtime's values; a call writes the one \
-                 register a value is or the two a view is (RFC-0047 amended rule 2, RFC-0062 \
-                 Decision 4)"
-            ),
+        match width.result {
+            FormKind::Value => {
+                assert_eq!(
+                    width.ret, ONE_VALUE,
+                    "a result of one of the runtime's values is one register wide"
+                );
+                self.call_into_register(at, result, args, f, form, slots, takes, ops)
+            }
+            FormKind::View => {
+                assert_eq!(
+                    width.ret, PAIR,
+                    "a view is the two registers `assign_slots` placed for it"
+                );
+                self.call_into_pair(at, result, args, f, form, slots, takes, ops)
+            }
+            FormKind::Components => {
+                self.call_into_run(at, result, args, f, form, slots, takes, ops)
+            }
         }
     }
 
@@ -3579,6 +3620,142 @@ impl<'a> Prepare<'a> {
             CallForm::Registers(_) | CallForm::Window => {
                 let window = self.window(at, args, ops);
                 made(move |next| f.into_op(call::CallShape::PairWindow { dst, window, next }))
+            }
+        }
+    }
+
+    /// An aggregate result is written where its placement put it: the
+    /// registers `plan_runs` gave the result's web, or the flat body of the
+    /// heap object rule 4 realizes it into (RFC-0050 rules 4, 5 and 6). The
+    /// handler writes the same components either way, so the choice is made
+    /// here and the operation family is one.
+    fn run_dest(&self, result: ValueId, width: usize) -> call::RunDest {
+        if let Some(run) = self.plan.of(result) {
+            let laid = usize::from(run.layout.len());
+            assert_eq!(
+                laid, width,
+                "a handler returns {width} components and the run placed for its result holds \
+                 {laid} registers; `derive(TyArg)` counts a struct's fields and \
+                 `prepare/runs.rs::Layout` lays its registers, and the two disagree only where \
+                 a field is itself an aggregate"
+            );
+            assert!(
+                usize::from(run.base) >= usize::from(self.scalar_len()),
+                "a destination run at register {} overlaps the scalar registers an argument \
+                 window is coloured in",
+                run.base
+            );
+            return call::RunDest::Frame(call::RunAt {
+                at: Off::of(run.base),
+                width: run.layout.len(),
+                releases: run
+                    .layout
+                    .releases()
+                    .map(|at| Marked::of(Off::of(run.base + at)))
+                    .collect(),
+            });
+        }
+        let Ty::Object(obj) = self.ty(result) else {
+            panic!(
+                "a handler returns an aggregate's components and the call's result is typed \
+                 {:?}, which names no object (RFC-0050 rule 8)",
+                self.ty(result)
+            )
+        };
+        let shape = ObjectShape::of(self.ctx.interner, obj.keys().copied());
+        assert_eq!(
+            shape.len(),
+            width,
+            "a handler returns {width} components and the settled type of the call's result \
+             declares {} fields (RFC-0042 R1)",
+            shape.len()
+        );
+        assert!(
+            self.owns(result),
+            "a realized aggregate is a `Large` its register owns (RFC-0048 §4)"
+        );
+        call::RunDest::Heap {
+            dst: self.marked(result),
+            shape,
+            width,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_into_run(
+        &mut self,
+        at: usize,
+        result: ValueId,
+        args: &[ValueId],
+        f: call::Handler,
+        form: CallForm,
+        slots: Vec<Off>,
+        takes: u64,
+        ops: &mut Vec<Node>,
+    ) -> Node {
+        let dst = self.run_dest(result, f.width().ret);
+        match form {
+            CallForm::Registers(0) => {
+                made(move |next| f.into_op(call::CallShape::Run0 { dst, next }))
+            }
+            CallForm::Registers(1) => {
+                let a = nth(&slots, 0);
+                made(move |next| {
+                    f.into_op(call::CallShape::Run1 {
+                        dst,
+                        a,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(2) => {
+                let (a, b) = (nth(&slots, 0), nth(&slots, 1));
+                made(move |next| {
+                    f.into_op(call::CallShape::Run2 {
+                        dst,
+                        a,
+                        b,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(3) => {
+                let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
+                made(move |next| {
+                    f.into_op(call::CallShape::Run3 {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(4) => {
+                let (a, b, c, d) = (
+                    nth(&slots, 0),
+                    nth(&slots, 1),
+                    nth(&slots, 2),
+                    nth(&slots, 3),
+                );
+                made(move |next| {
+                    f.into_op(call::CallShape::Run4 {
+                        dst,
+                        a,
+                        b,
+                        c,
+                        d,
+                        takes,
+                        next,
+                    })
+                })
+            }
+            CallForm::Registers(_) | CallForm::Window => {
+                let window = self.window(at, args, ops);
+                made(move |next| f.into_op(call::CallShape::RunWindow { dst, window, next }))
             }
         }
     }
@@ -4724,7 +4901,14 @@ mod call_form_tests {
             panic!("an extern declared with a plain `fn` is a Sync handler")
         };
         let width = factory.width();
-        assert_eq!(width, Width { args: 2, ret: 1 });
+        assert_eq!(
+            width,
+            Width {
+                args: 2,
+                ret: 1,
+                result: FormKind::Value,
+            }
+        );
         assert_eq!(CallForm::of(&width), CallForm::Registers(2));
 
         let op = factory.into_op(call::CallShape::Registers2 {

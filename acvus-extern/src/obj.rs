@@ -204,6 +204,11 @@ impl<V> Variant<V> {
 pub trait Form {
     const WIDTH: usize;
 
+    /// Two forms share a width: a struct of two fields and a view are both
+    /// two of the runtime's values, and they land by different rules. This
+    /// is what a caller matches on.
+    const KIND: FormKind;
+
     /// `Run` with one more parameter of this form on it, which is how a
     /// declaration's call form is folded out of its parameter list
     /// (`handler::ArgRun`).
@@ -212,14 +217,30 @@ pub trait Form {
         Run: crate::handler::ArgRun;
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FormKind {
+    Value,
+    View,
+    /// `Form::WIDTH` of them, one per register of the aggregate's layout.
+    Components,
+}
+
 /// One of the runtime's values.
 pub struct One;
 
 /// The two registers the machine keeps a slice in (RFC-0047 amended).
 pub struct Pair;
 
+/// An aggregate's `W` components, written where the caller placed its
+/// destination run (RFC-0050 rules 5, 6 and 8). `W` is the flat width of the
+/// aggregate — one register per field for every struct that reaches a run,
+/// since `prepare/runs.rs::Layout::lowerable` refuses any object with a
+/// nested aggregate field.
+pub struct Run<const W: usize>;
+
 impl Form for One {
     const WIDTH: usize = 1;
+    const KIND: FormKind = FormKind::Value;
 
     type Onto<Run>
         = <Run as crate::handler::ArgRun>::WithOne
@@ -229,9 +250,25 @@ impl Form for One {
 
 impl Form for Pair {
     const WIDTH: usize = 2;
+    const KIND: FormKind = FormKind::View;
 
     type Onto<Run>
         = <Run as crate::handler::ArgRun>::WithPair
+    where
+        Run: crate::handler::ArgRun;
+}
+
+impl<const W: usize> Form for Run<W> {
+    const WIDTH: usize = W;
+    const KIND: FormKind = FormKind::Components;
+
+    /// The fold over `W` register steps is not written, and that is a
+    /// decision. No `Arg` impl names `Run<W>`: a by-value aggregate
+    /// parameter crosses as the one value rule 4 realizes it into, so
+    /// `Cross::Form` is `One` for every aggregate and this association is
+    /// never projected. A parameter that did reach it is lent its window.
+    type Onto<Run>
+        = crate::handler::InWindow
     where
         Run: crate::handler::ArgRun;
 }
@@ -324,8 +361,26 @@ where
     out[0] = value.erase(rt);
 }
 
-/// The `Cross` impl of a type whose crossing is one value: its run is that
-/// value, so both directions are `OneValue`'s.
+/// How a type crosses back at the return position, which is not always the
+/// run `Cross` names: a `#[derive(TyArg)]` struct is one heap object as a
+/// field, a container's element and a by-value parameter, and its own
+/// components as a result (RFC-0050 rules 5 and 6).
+///
+/// There is no blanket impl over `OneValue` for the reason `Cross` has none:
+/// coherence cannot admit one beside the derive's. Every one-value type
+/// states this through `cross_one_value!`.
+pub trait Returned<Rt>: Sized
+where
+    Rt: Runtime,
+{
+    type Form: Form;
+
+    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]);
+}
+
+/// The `Cross` and `Returned` impls of a type whose crossing is one value:
+/// its run is that value, so both directions are `OneValue`'s and a result
+/// is written where a result of one value goes.
 #[macro_export]
 macro_rules! cross_one_value {
     ($t:ty, at $rt:ty) => {
@@ -336,6 +391,14 @@ macro_rules! cross_one_value {
                 // SAFETY: the caller's contract, at one value.
                 unsafe { $crate::one_from_run(rt, run) }
             }
+
+            fn into_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
+                $crate::one_into_run(self, rt, out)
+            }
+        }
+
+        impl $crate::Returned<$rt> for $t {
+            type Form = $crate::One;
 
             fn into_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
                 $crate::one_into_run(self, rt, out)
@@ -359,6 +422,36 @@ macro_rules! cross_one_value {
 
             fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
                 $crate::one_into_run(self, rt, out)
+            }
+        }
+
+        impl<$($($g)*,)? __Rt> $crate::Returned<__Rt> for $t
+        where
+            __Rt: $crate::Runtime,
+        {
+            type Form = $crate::One;
+
+            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+                $crate::one_into_run(self, rt, out)
+            }
+        }
+    };
+}
+
+/// The `Returned` impl of a type that crosses back exactly as `Cross` names,
+/// for the crossings written by hand rather than through `cross_one_value!`.
+#[macro_export]
+macro_rules! returned_as_crossed {
+    ($t:ty $(, $($g:tt)*)?) => {
+        impl<$($($g)*,)? __Rt> $crate::Returned<__Rt> for $t
+        where
+            __Rt: $crate::Runtime,
+            $t: $crate::Cross<__Rt>,
+        {
+            type Form = <$t as $crate::Cross<__Rt>>::Form;
+
+            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+                <$t as $crate::Cross<__Rt>>::into_run(self, rt, out)
             }
         }
     };

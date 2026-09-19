@@ -408,7 +408,9 @@ Rule 8's declaration order for a `Declared` struct is not built and cannot be
 from the MIR as it stands: `ObjectTy` carries its fields as an `FxHashMap` and
 `FieldSet::Declared` carries the struct's name, not its field order. One order
 therefore serves every object type, declared or not — the field names sorted as
-strings — which is the order a committed object's canonical bytes already took.
+strings — which is the order a committed object's canonical bytes already took,
+and which `prepare/runs.rs::Layout` now lays a declared struct in as well as a
+written one.
 `#[derive(TyArg)]` emits its field table in that order rather than in
 declaration order, and a test crosses a struct whose declaration order is the
 reverse of its name order to pin the derive's order against `ObjectShape::of`.
@@ -478,13 +480,10 @@ see, so `f(OMut { a: &mut o.a })` beside `g(&o.b)` is not admitted where
 `&mut o` would conflict. Per-field loans are a change in the loan machinery
 keyed on the parameter's field set.
 
-Rules 5, 7 and 9 remain unbuilt in the machine, and rule 6's enum half,
-`Out` and `Rt::Object<'a>` with them. `Out` has no destination to write into:
-`prepare.rs::extern_call` asserts a handler's result is one value and a call's
-destination is one register, not a run, so `Out` waits on rule 5's multi-value
-return at the window's run. `ERef`/`EMut` wait on the heap `Variant` becoming
+Rules 7 and 9 remain unbuilt in the machine, and rule 6's enum half and
+`Rt::Object<'a>` with them. `ERef`/`EMut` wait on the heap `Variant` becoming
 `[tag, payload…]`, which the flat-heap build recorded as deliberately not
-done. Rule 5's realization has
+done. Rule 5's multi-value return from a body has
 no emission site under rule 3's own predicate: a web with a member that
 escapes is placed on the heap whole, so nothing takes a whole aggregate out of
 a run. Rule 3's one projection family over a run and a heap `Large` alike is
@@ -582,12 +581,42 @@ the escape sites with rule 3's one home → multi-value return at the
 window's run → the extern glue (`Window`, `Out`, `&[Value]` + shape,
 `#[acvus::enum]`, `&mut` write-back) → the benches.
 
-Rule 5's `Out` is not built, and rule 6's "no name lookup at call time" is
-not true. Both waited on a call destination wider than one register, and that
-half is now landed: a call whose handler declares a result two values wide
-writes the two adjacent registers `assign_slots` placed (RFC-0062
-Consequences). What `Out` still needs is a destination run of `S::WIDTH`
-registers rather than of two, which is a third `Form` beside `One` and
-`Pair`, and a `Ret` impl that hands the handler `&mut [Value]` over it. The
-offset table rule 6 asks for is independent of that: `position_of` is still
-reached per field per call, because no extern call form carries a table.
+Rule 5's `Out` is built for a struct. A declaration written `-> S` for a
+`#[derive(TyArg)]` struct writes `S`'s components into `Out<'_, Rt>` — the
+`&mut [Value]` the caller lends over the destination its placement gave the
+result — and the two destinations are one operation family away from the
+handler: the registers `prepare/runs.rs` placed for the result's web where
+the result stays in the body, and the flat body of the heap object rule 4
+realizes it into where it escapes. The third `Form` is `Run<W>`; a width no
+longer names a family on its own, since a struct of two fields and a view are
+both two of the runtime's values, so `Form` carries a `FormKind` tag beside
+its width and `prepare` matches on the tag.
+
+The run allocation reaches a declared struct because rule 8's corrected order
+applies to one: `Layout::of`'s refusal of `FieldSet::Declared` was written
+against the earlier wording, in which a declared struct took its
+declaration's field order, and rule 8 now gives every object type its field
+names sorted as strings. `prepare/runs.rs::Sites` gains one arm for a
+`FunctionCall` whose callee is a synchronous extern returning components,
+which is the one instruction kind that writes a whole aggregate the emitter
+has a register form for, and such a web is placed without a projection —
+the destination is worth its registers even where no address is taken.
+
+Measured on `benches/shapes.rs`, one binary, the two rows one after another,
+three alternating pinned reps at n = 1e6: **10.0 ns an iteration into a frame
+run against 22.0 on the heap, ranges disjoint at both sizes**. The heaped row
+also pays one more extern call — the by-value crossing back is what makes the
+result escape — so that distance bounds the destination's cost from above. The
+number that measures the destination alone is the allocation count: over 64
+iterations, `acvus-interpreter-test/tests/
+aggregate_result_allocates_nothing.rs` counts 10 allocations for the
+frame-resident result, which is the run's own fixed cost, and 138 for the
+escaping one — two an iteration and none.
+
+An enum keeps its one-value crossing. `ERef`/`EMut` and the flat heap
+`Variant` are unbuilt, so a `-> E` for a derived enum is one heap value as it
+was, and the derive emits the component form for a struct alone.
+
+Rule 6's "no name lookup at call time" is still not true, and it is
+independent of `Out`: `projection::position_of` is reached per field per call,
+because no extern call form carries an offset table.

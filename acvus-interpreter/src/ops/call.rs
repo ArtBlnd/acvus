@@ -12,14 +12,16 @@
 
 use std::sync::Arc;
 
-use acvus_extern::{Owned, Runtime, Words};
+use acvus_extern::{ObjectShape, Owned, Runtime, Words};
 use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
 use crate::code::{BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
 use crate::interpreter::lookup_module;
-use crate::machine::{Lent, Machine, call_module, call_module_sync, fn_value_call};
+use crate::machine::{
+    Lent, LentCall, LentOut, Machine, call_module, call_module_sync, fn_value_call,
+};
 use crate::regs::{FrameState, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, HandleValue, Value};
@@ -112,6 +114,45 @@ pub enum CallShape {
     },
     PairWindow {
         dst: SlicePair,
+        window: ArgWindow,
+        next: Box<dyn Op>,
+    },
+    Run0 {
+        dst: RunDest,
+        next: Box<dyn Op>,
+    },
+    Run1 {
+        dst: RunDest,
+        a: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    Run2 {
+        dst: RunDest,
+        a: Off,
+        b: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    Run3 {
+        dst: RunDest,
+        a: Off,
+        b: Off,
+        c: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    Run4 {
+        dst: RunDest,
+        a: Off,
+        b: Off,
+        c: Off,
+        d: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    RunWindow {
+        dst: RunDest,
         window: ArgWindow,
         next: Box<dyn Op>,
     },
@@ -502,6 +543,138 @@ where
     H: acvus_extern::Handler<AcvusRuntime>,
 {
     off_the_pair_register_forms(f, shape)
+}
+
+/// The aggregate family's fallback arm. It has no `Heavy` and no `Spawn` arm
+/// for the reason the pair family has none: both tasks resume after the frame
+/// the destination run lives in is gone, and `ExternHandler::heavy` takes
+/// `impl ValuesOnly<R>` while `AsyncCall::WIDTH` fixes `ret: 1`.
+fn off_the_run_register_forms<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    let CallShape::RunWindow { dst, window, next } = shape else {
+        not_this_form("an aggregate result at this arity")
+    };
+    Box::new(CallRunWindow::<H> {
+        dst,
+        window,
+        f,
+        next,
+    })
+}
+
+pub fn op_run_no_argument<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Run0 { dst, next } => Box::new(CallRun0::<H> { dst, f, next }),
+        shape => off_the_run_register_forms(f, shape),
+    }
+}
+
+pub fn op_run_one_argument<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Run1 {
+            dst,
+            a,
+            takes,
+            next,
+        } => Box::new(CallRun1::<H> {
+            dst,
+            a,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_run_register_forms(f, shape),
+    }
+}
+
+pub fn op_run_two_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Run2 {
+            dst,
+            a,
+            b,
+            takes,
+            next,
+        } => Box::new(CallRun2::<H> {
+            dst,
+            a,
+            b,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_run_register_forms(f, shape),
+    }
+}
+
+pub fn op_run_three_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Run3 {
+            dst,
+            a,
+            b,
+            c,
+            takes,
+            next,
+        } => Box::new(CallRun3::<H> {
+            dst,
+            a,
+            b,
+            c,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_run_register_forms(f, shape),
+    }
+}
+
+pub fn op_run_four_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Run4 {
+            dst,
+            a,
+            b,
+            c,
+            d,
+            takes,
+            next,
+        } => Box::new(CallRun4::<H> {
+            dst,
+            a,
+            b,
+            c,
+            d,
+            takes,
+            f,
+            next,
+        }),
+        shape => off_the_run_register_forms(f, shape),
+    }
+}
+
+pub fn op_run_wide<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    off_the_run_register_forms(f, shape)
 }
 
 pub fn fused_no_argument<H>(f: H, shape: FusedShape) -> Call
@@ -1009,6 +1182,265 @@ where
         // SAFETY: as `CallPair1`'s, at four arguments.
         let out = unsafe { self.f.call_pair4(rt, m.window(), a, b, c, d) };
         land_pair(m, self.dst, out);
+        self.next.run(m, r0)
+    }
+}
+
+/// The registers `prepare/runs.rs` placed for an aggregate that stays in its
+/// frame (RFC-0050 rules 2 and 3).
+pub struct RunAt {
+    pub at: Off,
+    pub width: u16,
+    /// The registers of the run whose value owns a `Large`, which
+    /// `prepare::runs::Layout::releases` names. The frame drops its claim on
+    /// each before lending the run and takes it again after.
+    pub releases: Box<[Marked]>,
+}
+
+/// Where an aggregate-returning call writes the components of its result. A
+/// handler writes the same run either way, which is why one operation family
+/// serves both (RFC-0050 rule 6).
+pub enum RunDest {
+    Frame(RunAt),
+    /// Rule 4's realization, for a result that outlives the frame: the flat
+    /// body of the heap object the result becomes is the run.
+    Heap {
+        dst: Marked,
+        shape: Arc<ObjectShape>,
+        width: usize,
+    },
+}
+
+/// The body every register form of the aggregate family shares: the
+/// destination run is lent, the handler writes its components, and the frame
+/// takes its claim on the `Large`s that landed.
+#[inline]
+fn land_run<F>(m: &mut Machine<'_>, dst: &RunDest, call: F)
+where
+    F: FnOnce(&AcvusRuntime, &mut FrameState, &mut [Value]),
+{
+    let rt = m.rt;
+    match dst {
+        RunDest::Frame(run) => {
+            let regs = m.regs();
+            for at in &run.releases {
+                regs.assign::<false>(*at, Value::UNDEF);
+            }
+            let LentOut { out, window } = m.lend_out_and_window(run.at, run.width);
+            call(rt, window, out);
+            let regs = m.regs();
+            for at in &run.releases {
+                regs.claim(*at);
+            }
+        }
+        RunDest::Heap { dst, shape, width } => {
+            let mut values: Box<[Owned<AcvusRuntime>]> =
+                (0..*width).map(|_| Owned::default()).collect();
+            // SAFETY: every slot is `Owned::default()`, which owns nothing, and
+            // the handler writes each at most once.
+            let out = unsafe { acvus_extern::lend_run(&mut values) };
+            call(rt, m.window(), out);
+            let object = Value::object(Arc::clone(shape), values);
+            m.regs().define::<true>(*dst, object);
+        }
+    }
+}
+
+pub struct CallRun0<H> {
+    pub dst: RunDest,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallRun0<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        // SAFETY: `prepare` read this handler's width and built this
+        // operation for the form it named; `land_run` lends a run of
+        // `WIDTH.ret` values the caller owns.
+        land_run(m, &self.dst, |rt, window, out| unsafe {
+            self.f.call_out0(rt, window, out)
+        });
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallRun1<H> {
+    pub dst: RunDest,
+    pub a: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallRun1<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallRun0`'s, at one argument.
+        land_run(m, &self.dst, |rt, window, out| unsafe {
+            self.f.call_out1(rt, window, a, out)
+        });
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallRun2<H> {
+    pub dst: RunDest,
+    pub a: Off,
+    pub b: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallRun2<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallRun0`'s, at two arguments.
+        land_run(m, &self.dst, |rt, window, out| unsafe {
+            self.f.call_out2(rt, window, a, b, out)
+        });
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallRun3<H> {
+    pub dst: RunDest,
+    pub a: Off,
+    pub b: Off,
+    pub c: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallRun3<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        let c = regs.read(self.c);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallRun0`'s, at three arguments.
+        land_run(m, &self.dst, |rt, window, out| unsafe {
+            self.f.call_out3(rt, window, a, b, c, out)
+        });
+        self.next.run(m, r0)
+    }
+}
+
+pub struct CallRun4<H> {
+    pub dst: RunDest,
+    pub a: Off,
+    pub b: Off,
+    pub c: Off,
+    pub d: Off,
+    pub takes: u64,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallRun4<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let a = regs.read(self.a);
+        let b = regs.read(self.b);
+        let c = regs.read(self.c);
+        let d = regs.read(self.d);
+        regs.take_mask(self.takes);
+        // SAFETY: as `CallRun0`'s, at four arguments.
+        land_run(m, &self.dst, |rt, window, out| unsafe {
+            self.f.call_out4(rt, window, a, b, c, d, out)
+        });
+        self.next.run(m, r0)
+    }
+}
+
+/// The window form. It does not go through `land_run`, because the argument
+/// run and the destination run are both this frame's registers and the two
+/// borrows have to be split.
+pub struct CallRunWindow<H> {
+    pub dst: RunDest,
+    pub window: ArgWindow,
+    pub f: H,
+    pub next: Box<dyn Op>,
+}
+
+impl<H> Op for CallRunWindow<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
+        m.regs().take_mask(self.window.takes);
+        match &self.dst {
+            RunDest::Frame(run) => {
+                let regs = m.regs();
+                for at in &run.releases {
+                    regs.assign::<false>(*at, Value::UNDEF);
+                }
+                // SAFETY: `Prepare::call_into_run` asserts the destination run
+                // lies above every register an argument window is coloured in.
+                let LentCall {
+                    run: args,
+                    out,
+                    window,
+                } = unsafe { m.lend_call(self.window.at, self.window.arity, run.at, run.width) };
+                // SAFETY: as `CallRun0`'s; the run is the window `prepare` laid.
+                unsafe { self.f.call(rt, window, args, out) };
+                let regs = m.regs();
+                for at in &run.releases {
+                    regs.claim(*at);
+                }
+            }
+            RunDest::Heap { dst, shape, width } => {
+                let mut values: Box<[Owned<AcvusRuntime>]> =
+                    (0..*width).map(|_| Owned::default()).collect();
+                // SAFETY: every slot is `Owned::default()`, which owns nothing.
+                let out = unsafe { acvus_extern::lend_run(&mut values) };
+                let Lent { run, window } = m.lend_and_window(self.window.at, self.window.arity);
+                // SAFETY: as `CallRun0`'s; the run is the window `prepare` laid.
+                unsafe { self.f.call(rt, window, run, out) };
+                let object = Value::object(Arc::clone(shape), values);
+                m.regs().define::<true>(*dst, object);
+            }
+        }
         self.next.run(m, r0)
     }
 }

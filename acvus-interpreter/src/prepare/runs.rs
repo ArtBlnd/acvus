@@ -18,7 +18,7 @@
 
 use acvus_mir::analysis::inst_info;
 use acvus_mir::ir::{InstKind, Label, MirBody, PathSeg, RefTarget, ValueId};
-use acvus_mir::ty::{FieldSet, Ty};
+use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Interner, LocalIdOps};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -106,13 +106,6 @@ enum Level {
 
 impl Layout {
     /// `None` where rule 8 fixes no order for `ty`.
-    ///
-    /// A `Declared` struct is the one case rule 8 names that this cannot answer.
-    /// Rule 8 gives a declared struct its declaration's field order, and
-    /// `Ty::Object` carries its fields as an `FxHashMap`, which has no order. For
-    /// a declared struct to take a run, `acvus-mir` has to expose the declared
-    /// field order beside the field types — one method on `ObjectTy`, since the
-    /// field map itself is already reachable through its `Deref`.
     pub fn of(ty: &Ty, interner: &Interner) -> Option<Layout> {
         let mut words = Vec::new();
         lay(ty, interner, Level::Outer, &mut words)?;
@@ -211,10 +204,6 @@ impl Layout {
 fn lay(ty: &Ty, interner: &Interner, level: Level, out: &mut Vec<Word>) -> Option<()> {
     match ty {
         Ty::Object(obj) => {
-            match obj.field_set() {
-                FieldSet::Declared(_) => return None,
-                FieldSet::Written | FieldSet::AtLeast => {}
-            }
             for (name, field) in crate::layout::sorted_fields(interner, obj) {
                 let at = out.len();
                 lay(field, interner, Level::Inner, out)?;
@@ -348,8 +337,9 @@ pub(crate) fn plan(
     base: Slot,
     ranges: &[Option<LiveRange>],
     interner: &Interner,
+    written_by_a_call: &FxHashSet<ValueId>,
 ) -> RunPlan {
-    let mut candidates = candidates(body, labels, ranges, interner);
+    let mut candidates = candidates(body, labels, ranges, interner, written_by_a_call);
     let mut heaped = Vec::new();
     loop {
         if let Some(runs) = place(&candidates, base) {
@@ -487,6 +477,7 @@ struct Sites<'a> {
     class_of: &'a [usize],
     web: &'a FxHashSet<usize>,
     projected: &'a FxHashMap<ValueId, usize>,
+    written_by_a_call: &'a FxHashSet<ValueId>,
     refused: FxHashSet<usize>,
 }
 
@@ -575,6 +566,11 @@ impl Sites<'_> {
             InstKind::TestVariant { src, .. } | InstKind::UnwrapVariant { src, .. } => {
                 self.refuse(*src);
             }
+            InstKind::FunctionCall { dst, .. } if self.written_by_a_call.contains(dst) => {
+                for value in inst_info::uses(kind) {
+                    self.refuse(value);
+                }
+            }
             other => {
                 for value in inst_info::uses(other) {
                     self.refuse(value);
@@ -592,6 +588,7 @@ fn candidates(
     labels: &FxHashMap<Label, u32>,
     ranges: &[Option<LiveRange>],
     interner: &Interner,
+    written_by_a_call: &FxHashSet<ValueId>,
 ) -> Vec<Candidate> {
     let depths = loop_depths(body, labels);
     let values = body.val_factory.len();
@@ -671,6 +668,7 @@ fn candidates(
         class_of: &class_of,
         web: &web,
         projected: &projected,
+        written_by_a_call: written_by_a_call,
         refused: FxHashSet::default(),
     };
     for inst in &body.insts {
@@ -691,7 +689,8 @@ fn candidates(
             .filter(|(_, at)| **at == root)
             .map(|(dst, _)| *dst)
             .collect();
-        if projections.is_empty() {
+        let lands_from_a_call = held.iter().any(|id| written_by_a_call.contains(id));
+        if projections.is_empty() && !lands_from_a_call {
             continue;
         }
         held.sort_by_key(|id| id.to_raw());
@@ -722,11 +721,7 @@ fn candidates(
 /// as fields; only an enum and a structural object are a run's own type, because
 /// only those two have the construction and the dispatch this pass lowers.
 fn laid_whole(ty: &Ty) -> bool {
-    match ty {
-        Ty::Enum { .. } => true,
-        Ty::Object(obj) => matches!(obj.field_set(), FieldSet::Written | FieldSet::AtLeast),
-        _ => false,
-    }
+    matches!(ty, Ty::Enum { .. } | Ty::Object(_))
 }
 
 /// RFC-0050 rule 2's placement order: deepest loop first, then live-range start.
@@ -911,18 +906,25 @@ mod tests {
         assert_eq!(laid.releases().collect::<Vec<u16>>(), vec![0]);
     }
 
-    /// The declared order lives in the declaration, and `Ty::Object` carries an
-    /// unordered field map, so rule 8 fixes no order this can read.
+    /// Rule 8 as corrected gives every object type one order — its field
+    /// names sorted as strings — and a struct's declaration order is not in
+    /// `ObjectTy` to contradict it. So a declared struct lays like a written
+    /// one, which is what lets an extern's `-> S` result take a run.
     #[test]
-    fn a_declared_struct_has_no_layout() {
+    fn a_declared_struct_lays_in_string_order_like_any_other_object() {
         let i = Interner::new();
         let ty = Ty::Object(ObjectTy::declared(
             i.intern("Point"),
-            [(i.intern("x"), Ty::I64), (i.intern("y"), Ty::I64)]
+            [(i.intern("y"), Ty::I64), (i.intern("x"), Ty::String)]
                 .into_iter()
                 .collect(),
         ));
-        assert_eq!(Layout::of(&ty, &i), None);
+        let laid = layout(&ty, &i);
+        assert_eq!(laid.len(), 2);
+        assert_eq!(laid.field(i.intern("x")), Some(0));
+        assert_eq!(laid.field(i.intern("y")), Some(1));
+        assert!(laid.large(0), "a String field owns a Large");
+        assert!(laid.lowerable(), "one register per field takes a run");
     }
 
     #[test]

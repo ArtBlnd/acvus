@@ -35,6 +35,17 @@ pub struct Lent<'r> {
     pub window: &'r mut FrameState,
 }
 
+pub struct LentOut<'r> {
+    pub out: &'r mut [Value],
+    pub window: &'r mut FrameState,
+}
+
+pub struct LentCall<'r> {
+    pub run: &'r [Value],
+    pub out: &'r mut [Value],
+    pub window: &'r mut FrameState,
+}
+
 pub struct Machine<'c> {
     body: &'c Body,
     regs: Regs<'c>,
@@ -136,6 +147,43 @@ impl<'c> Machine<'c> {
     #[inline(always)]
     pub fn window(&mut self) -> &mut FrameState {
         &mut self.above
+    }
+
+    /// The argument window, the destination run and the window above, for an
+    /// aggregate-returning call whose arguments do not fit the register forms.
+    ///
+    /// # Safety
+    /// The two runs are disjoint ranges of this frame's registers.
+    /// `prepare::plan_runs` places every destination run above the scalar
+    /// registers an argument window is coloured in, and
+    /// `Prepare::call_into_run` asserts that of the run it names.
+    #[inline(always)]
+    pub unsafe fn lend_call(&mut self, args: Off, arity: u16, at: Off, width: u16) -> LentCall<'_> {
+        debug_assert!(
+            args.index() + usize::from(arity) <= at.index()
+                || at.index() + usize::from(width) <= args.index(),
+            "an argument run and a destination run overlap"
+        );
+        let run = self.regs.run_of(args, arity);
+        // SAFETY: the caller's contract, which the `debug_assert!` above
+        // re-checks in a debug build: the two slices name disjoint registers.
+        let run = unsafe { std::slice::from_raw_parts(run.as_ptr(), run.len()) };
+        LentCall {
+            run,
+            out: self.regs.run_of_mut(at, width),
+            window: &mut self.above,
+        }
+    }
+
+    /// Lent together for the reason `lend_and_window` lends its pair: the
+    /// destination run is this frame's own registers and the window is the
+    /// cells above them.
+    #[inline(always)]
+    pub fn lend_out_and_window(&mut self, at: Off, width: u16) -> LentOut<'_> {
+        LentOut {
+            out: self.regs.run_of_mut(at, width),
+            window: &mut self.above,
+        }
     }
 
     /// Lent together because the run is this frame's own registers and the
