@@ -65,6 +65,11 @@ kind of admission behaves as an exception:
    the same four admissions and the same three rules, in the mode each
    candidate sees it in (below); a receiver that is a variable is admitted
    directly where bounds intersect and by no view until it resolves.
+   A local binding is a candidate like any other under these rules: where
+   it takes an argument directly, a signature that would take it by
+   conversion leaves the set (settled 2026-09-20; the earlier text that
+   named `let count = |k| -> 7.0; count(q)` ambiguous is superseded).
+
 5. **The view is the checker's, the parameter's type is the callee's.**
    Where a viewed candidate is settled on, the checker records the view
    at the argument (`CastKind::Slice`, `CastKind::Str`) and the call's
