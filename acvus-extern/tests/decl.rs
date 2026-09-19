@@ -222,6 +222,14 @@ impl acvus_extern::FromValue<Tiny> for V {
 }
 
 impl Runtime for Tiny {
+    type Op = acvus_extern::DirectOp<Tiny>;
+    type CallShape = ();
+    type AsyncShape = ();
+    type FusedCall = acvus_extern::DirectOp<Tiny>;
+    type FusedShape = ();
+
+    acvus_extern::direct_call_forms!();
+
     fn type_of(&self, value: &V) -> Option<std::any::TypeId> {
         let V::Erased(any) = value else {
             return None;
@@ -670,7 +678,7 @@ fn types_and_casts_reach_the_type_registry() {
 fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
         // SAFETY: the caller passes the declaration's own arguments.
-        ExternHandler::Sync(f) => unsafe { f.call_run(&Tiny, (), &args) },
+        ExternHandler::Sync(f) => unsafe { f.clone().into_op(()).call_run(&Tiny, &args) },
         ExternHandler::Heavy(_) => panic!("expected a sync handler, found a heavy one"),
         ExternHandler::Async(_) => panic!("expected a sync handler, found an async one"),
     }
@@ -726,7 +734,14 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
 
     // SAFETY: the handler's width says one argument in and the two words a
     // slice is out.
-    let Words { ptr, len } = unsafe { entry.call_slice(&Tiny, (), container()) }.words();
+    let mut pair = [V::default(); 2];
+    unsafe {
+        entry
+            .clone()
+            .into_op(())
+            .call(&Tiny, &[container()], &mut pair)
+    };
+    let Words { ptr, len } = unsafe { Tiny.slice_from_run(&pair) };
     assert_eq!(len, 3);
     assert_ne!(ptr, 0);
 
@@ -769,7 +784,7 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
     let mut out = [V::default(); 1];
     // SAFETY: `run` is the pair `slice_into_run` just wrote, `storage` is
     // live and unmoved, and `out` has room for the one value the width names.
-    unsafe { entry.call(&Tiny, (), &run, &mut out) };
+    unsafe { entry.clone().into_op(()).call(&Tiny, &run, &mut out) };
 
     assert_eq!(peek::<i64>(&out[0]), 15);
 }
@@ -777,7 +792,7 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
 async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
         // SAFETY: as `call_sync`'s; the future owns `args`.
-        ExternHandler::Async(f) => unsafe { f.call(Tiny, &args) }.await,
+        ExternHandler::Async(f) => unsafe { f.clone().into_op(()).call_async(Tiny, &args) }.await,
         ExternHandler::Sync(_) => panic!("expected an async handler, found a sync one"),
         ExternHandler::Heavy(_) => panic!("expected an async handler, found a heavy one"),
     }
@@ -1415,8 +1430,11 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
 fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     use acvus_extern::{ByRef, ByValue, Handler, Val, Width};
 
-    fn answered(handler: &dyn Handler<Tiny>, expected: Width, args: Vec<V>) -> i64 {
-        assert_eq!(handler.width(), expected);
+    fn answered<H>(handler: &H, expected: Width, args: Vec<V>) -> i64
+    where
+        H: Handler<Tiny>,
+    {
+        assert_eq!(H::WIDTH, expected);
         // SAFETY: the arguments are the declaration's own, at its width.
         open::<i64>(unsafe { handler.call_run(&Tiny, (), &args) })
     }
@@ -1498,21 +1516,21 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 /// answer it gives are the original's.
 #[test]
 fn a_glue_clones_into_a_box_that_is_the_same_handler() {
-    use acvus_extern::{ByValue, Handler, Val, Width};
+    use acvus_extern::{ByValue, Handler, HandlerFactory, Val, Width};
 
     let glue = acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a * 3);
-    let boxed: Box<dyn Handler<Tiny>> = glue.clone_box();
+    let boxed: Box<dyn HandlerFactory<Tiny>> = Box::new(glue.clone());
     let again = boxed.clone();
 
-    assert_eq!(boxed.width(), glue.width());
+    assert_eq!(boxed.width(), Width { args: 1, ret: 1 });
     assert_eq!(again.width(), Width { args: 1, ret: 1 });
     // SAFETY: the width says one argument in and one value out, at each of
     // the three names of this one handler.
     let answers = unsafe {
         [
             glue.call1(&Tiny, (), erased(7i64)),
-            boxed.call1(&Tiny, (), erased(7i64)),
-            again.call1(&Tiny, (), erased(7i64)),
+            boxed.into_op(()).call_run(&Tiny, &[erased(7i64)]),
+            again.into_op(()).call_run(&Tiny, &[erased(7i64)]),
         ]
     };
     assert_eq!(answers.map(open::<i64>), [21, 21, 21]);

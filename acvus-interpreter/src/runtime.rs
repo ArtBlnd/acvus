@@ -8,6 +8,7 @@ use std::sync::Arc;
 use acvus_extern::{CallToken, Runtime};
 
 use crate::interpreter::InterpreterContext;
+use crate::ops::call;
 use crate::regs::{FrameState, Store};
 use crate::value::{Kind, Value};
 
@@ -32,6 +33,11 @@ impl Runtime for AcvusRuntime {
     type Frame<'a> = &'a mut FrameState;
     type Rooted = Store;
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
+    type Op = Box<dyn crate::code::Op>;
+    type CallShape = call::CallShape;
+    type AsyncShape = call::AsyncShape;
+    type FusedCall = call::Call;
+    type FusedShape = call::FusedShape;
 
     fn rooted(&self) -> Store {
         Store::new()
@@ -39,6 +45,76 @@ impl Runtime for AcvusRuntime {
 
     fn frame_of(rooted: &mut Store) -> &mut FrameState {
         rooted.root_window()
+    }
+
+    fn op_no_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_no_argument(handler, shape)
+    }
+
+    fn op_one_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_one_argument(handler, shape)
+    }
+
+    fn op_two_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_two_arguments(handler, shape)
+    }
+
+    fn op_three_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_three_arguments(handler, shape)
+    }
+
+    fn op_wide<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::off_the_register_forms(handler, shape)
+    }
+
+    fn op_slice<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::op_slice(handler, shape)
+    }
+
+    fn fused_no_argument<H>(handler: H, shape: call::FusedShape) -> call::Call
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::fused_no_argument(handler, shape)
+    }
+
+    fn fused_one_argument<H>(handler: H, shape: call::FusedShape) -> call::Call
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::fused_one_argument(handler, shape)
+    }
+
+    fn fused_two_arguments<H>(handler: H, shape: call::FusedShape) -> call::Call
+    where
+        H: acvus_extern::Handler<AcvusRuntime>,
+    {
+        call::fused_two_arguments(handler, shape)
+    }
+
+    fn async_extern_op<H>(handler: H, shape: call::AsyncShape) -> Box<dyn crate::code::Op>
+    where
+        H: acvus_extern::AsyncCall<AcvusRuntime>,
+    {
+        call::async_extern_op(handler, shape)
     }
 
     fn type_of(&self, value: &Value) -> Option<TypeId> {

@@ -2086,19 +2086,11 @@ impl<'a> Prepare<'a> {
                              outlive the frame that lent it (RFC-0047 §3)"
                         );
                         match handler {
-                            ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
-                                node(move |next| call::SpawnExternSync {
-                                    dst,
-                                    window,
-                                    f,
-                                    next,
-                                })
-                            }
-                            ExternHandler::Async(f) => node(move |next| call::SpawnExternAsync {
-                                dst,
-                                window,
-                                f,
-                                next,
+                            ExternHandler::Sync(f) | ExternHandler::Heavy(f) => made(move |next| {
+                                f.into_op(call::CallShape::Spawn { dst, window, next })
+                            }),
+                            ExternHandler::Async(f) => made(move |next| {
+                                f.into_op(call::AsyncShape::Spawn { dst, window, next })
                             }),
                         }
                     }
@@ -2222,12 +2214,13 @@ impl<'a> Prepare<'a> {
                      and the two words of a run out, which is `Handler::call_slice`'s \
                      contract (RFC-0047 amended, rule 2)"
                 );
-                node(move |next| call::AsSlice {
-                    dst,
-                    a,
-                    takes,
-                    f,
-                    next,
+                made(move |next| {
+                    f.into_op(call::CallShape::Slice {
+                        dst,
+                        a,
+                        takes,
+                        next,
+                    })
                 })
             }
             InstKind::Index {
@@ -2455,38 +2448,22 @@ impl<'a> Prepare<'a> {
                     ExternHandler::Heavy(f) => {
                         let window = self.window(at, args, ops);
                         let resume = next.block();
-                        Some(match large {
-                            true => Box::new(call::CallHeavy::<true> {
-                                dst: slot,
-                                window,
-                                f,
-                                next: resume,
-                            }),
-                            false => Box::new(call::CallHeavy::<false> {
-                                dst: slot,
-                                window,
-                                f,
-                                next: resume,
-                            }),
-                        })
+                        Some(f.into_op(call::CallShape::Heavy {
+                            dst: slot,
+                            window,
+                            large,
+                            resume,
+                        }))
                     }
                     ExternHandler::Async(f) => {
                         let window = self.window(at, args, ops);
                         let resume = next.block();
-                        Some(match large {
-                            true => Box::new(call::CallExternAsync::<true> {
-                                dst: slot,
-                                window,
-                                f,
-                                next: resume,
-                            }),
-                            false => Box::new(call::CallExternAsync::<false> {
-                                dst: slot,
-                                window,
-                                f,
-                                next: resume,
-                            }),
-                        })
+                        Some(f.into_op(call::AsyncShape::Await {
+                            dst: slot,
+                            window,
+                            large,
+                            resume,
+                        }))
                     }
                 }
             }
@@ -2520,96 +2497,59 @@ impl<'a> Prepare<'a> {
         let takes = self.take_mask(args);
         let slots: Vec<Off> = args.iter().map(|id| self.off(*id)).collect();
         match CallForm::of(&width, args.len()) {
-            CallForm::Registers(0) => match large {
-                true => node(move |next| call::CallExtern0::<true> { dst, f, next }),
-                false => node(move |next| call::CallExtern0::<false> { dst, f, next }),
-            },
+            CallForm::Registers(0) => {
+                made(move |next| f.into_op(call::CallShape::Registers0 { dst, large, next }))
+            }
             CallForm::Registers(1) => {
                 let a = nth(&slots, 0);
-                match (large, word) {
-                    (true, _) => node(move |next| call::CallExtern1::<true, false> {
+                made(move |next| {
+                    f.into_op(call::CallShape::Registers1 {
                         dst,
                         a,
                         takes,
-                        f,
+                        large,
+                        word,
                         next,
-                    }),
-                    (false, true) => node(move |next| call::CallExtern1::<false, true> {
-                        dst,
-                        a,
-                        takes,
-                        f,
-                        next,
-                    }),
-                    (false, false) => node(move |next| call::CallExtern1::<false, false> {
-                        dst,
-                        a,
-                        takes,
-                        f,
-                        next,
-                    }),
-                }
+                    })
+                })
             }
             CallForm::Registers(2) => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
-                match large {
-                    true => node(move |next| call::CallExtern2::<true> {
+                made(move |next| {
+                    f.into_op(call::CallShape::Registers2 {
                         dst,
                         a,
                         b,
                         takes,
-                        f,
+                        large,
                         next,
-                    }),
-                    false => node(move |next| call::CallExtern2::<false> {
-                        dst,
-                        a,
-                        b,
-                        takes,
-                        f,
-                        next,
-                    }),
-                }
+                    })
+                })
             }
             CallForm::Registers(3) => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
-                match large {
-                    true => node(move |next| call::CallExtern3::<true> {
+                made(move |next| {
+                    f.into_op(call::CallShape::Registers3 {
                         dst,
                         a,
                         b,
                         c,
                         takes,
-                        f,
+                        large,
                         next,
-                    }),
-                    false => node(move |next| call::CallExtern3::<false> {
-                        dst,
-                        a,
-                        b,
-                        c,
-                        takes,
-                        f,
-                        next,
-                    }),
-                }
+                    })
+                })
             }
             CallForm::Registers(_) | CallForm::Window => {
                 let window = self.window(at, args, ops);
-                match large {
-                    true => node(move |next| call::CallWindow::<true> {
+                made(move |next| {
+                    f.into_op(call::CallShape::Window {
                         dst,
                         window,
-                        f,
+                        large,
                         next,
-                    }),
-                    false => node(move |next| call::CallWindow::<false> {
-                        dst,
-                        window,
-                        f,
-                        next,
-                    }),
-                }
+                    })
+                })
             }
         }
     }
@@ -5336,11 +5276,10 @@ impl<'a> Prepare<'a> {
             }
             previous = Some(found.dst);
             let f = found.handler;
-            calls.push(match f.width().args {
-                0 => call::Call::Nullary { f },
-                1 => call::Call::Unary { f, a: args[0] },
-                2 => call::Call::Binary {
-                    f,
+            let shape = match f.width().args {
+                0 => call::FusedShape::Nullary,
+                1 => call::FusedShape::Unary { a: args[0] },
+                2 => call::FusedShape::Binary {
                     a: args[0],
                     b: args[1],
                 },
@@ -5348,7 +5287,8 @@ impl<'a> Prepare<'a> {
                     "fusable_call admitted {other} arguments, which a fused run holds no \
                      shape for"
                 ),
-            });
+            };
+            calls.push(f.into_fused(shape));
         }
         let last = previous.expect("a recognized run holds at least one call");
 

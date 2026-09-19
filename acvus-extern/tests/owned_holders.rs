@@ -151,6 +151,14 @@ impl FromValue<Counted> for V {
 }
 
 impl Runtime for Counted {
+    type Op = acvus_extern::DirectOp<Counted>;
+    type CallShape = ();
+    type AsyncShape = ();
+    type FusedCall = acvus_extern::DirectOp<Counted>;
+    type FusedShape = ();
+
+    acvus_extern::direct_call_forms!();
+
     type Value = V;
     type Frame<'a> = ();
     type Rooted = ();

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::vec_registry;
 use acvus_extern::{
-    CallToken, ExternHandler, Externs, FnKind, Interner, Monomorphize, OneValue, PolyTy,
+    CallToken, DirectOp, ExternHandler, Externs, FnKind, Interner, Monomorphize, OneValue, PolyTy,
     QualifiedRef, Registry, Release, Repr, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
@@ -153,6 +153,14 @@ impl acvus_extern::FromValue<Counting> for V {
 }
 
 impl Runtime for Counting {
+    type Op = DirectOp<Counting>;
+    type CallShape = ();
+    type AsyncShape = ();
+    type FusedCall = DirectOp<Counting>;
+    type FusedShape = ();
+
+    acvus_extern::direct_call_forms!();
+
     type Value = V;
     type Frame<'a> = ();
     type Rooted = ();
@@ -388,8 +396,9 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[instance] else {
             panic!("{ns}::{name} is not a sync handler")
         };
+        let op = handler.clone().into_op(());
         // SAFETY: the caller passes the declaration's own arguments.
-        unsafe { handler.call_run(&self.rt, (), &args) }
+        unsafe { op.call_run(&self.rt, &args) }
     }
 
     fn function(&self, ns: &str, name: &str) -> &acvus_extern::Function {

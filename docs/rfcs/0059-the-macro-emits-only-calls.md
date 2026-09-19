@@ -1,6 +1,6 @@
 # RFC-0059: the macro emits only calls — the runtime owns the ABI
 
-Status: Proposed — 2026-09-19
+Status: Proposed — 2026-09-19; rule 4 amended 2026-09-20
 Extends: RFC-0039 (one crossing), RFC-0044 stage 2c (the by-value cut at
 three), RFC-0046 (a call's task), RFC-0047 amended (a slice is two
 registers), RFC-0050 rule 6 (a crossing's width, `from_run`/`into_run`),
@@ -75,25 +75,56 @@ or an associated type of the crossing.
    `#[diagnostic::on_unimplemented]`: the refusal of `&Option<T>` and of a
    Rust `&[T]` is a trait error, not a name check.
 
-4. **A handler is one typed trait object, and the operation holds a box.**
-   `Handler<Rt>` answers `width() -> Width { args, ret }` and calls:
-   `call(rt, run, out)`, the register forms `call0`..`call3`, `call_run` over
-   a window, and `call_slice(rt, a) -> Elements<Rt>` for the one shape
-   RFC-0047 §3 admits for a slice result. It also answers
-   `clone_box() -> Box<dyn Handler<Rt>>`, and that is how a call site gets
-   its handler: `ExternHandler`'s three task variants hold boxes, `Clone` for
-   `ExternHandler` is `clone_box`, and `prepare` clones one box per site. A
-   box's data pointer *is* the handler, so the operation loads it and jumps.
-   `ExternHandler::heavy` and `awaited` take `impl ReturnsValue`, the
-   handlers whose result is one value, because a call the caller waits for
-   outlives the frame its arguments were lent from. The library implements
-   `Handler` for closures generically, one impl per arity through a
-   `macro_rules!` over tuples of `Arg` markers; the `Width` sum is written
-   once, in that macro's body, and every arity but one binds
-   `R: Ret<Rt, Form = One>`, so a slice returned at any other arity is a
-   compile error. `#[state]` is a capture: the macro emits
-   `move |rt, a, b| f(rt, &state.0, a, b)` over an `Arc<(T0, …)>` — typed,
-   never `Any`, never downcast.
+4. **A handler is the operation's type parameter.** Amended 2026-09-20; the
+   first build of this rule put the handler behind a `dyn` in the operation
+   and is recorded under Rejected. Two traits carry a declaration now. The
+   registry's is object-safe: `HandlerFactory<Rt>` answers `width() ->
+   Width { args, ret }`, `clone_box()`, `into_op(self: Box<Self>, shape:
+   Rt::CallShape) -> Rt::Op` and `into_fused(self: Box<Self>, shape:
+   Rt::FusedShape) -> Rt::FusedCall`; `ExternHandler`'s three task variants
+   hold factories and `prepare` clones one out of the module table per call
+   site. The operation's is not object-safe: `Handler<Rt>` carries
+   `const WIDTH: Width` and the calls — `call(rt, frame, run, out)`, the
+   register forms `call0`..`call3`, `call_run` over a window, and
+   `call_slice(rt, a) -> Elements<Rt>` for the one shape RFC-0047 §3 admits
+   for a slice result. A call site's operation holds the handler **by value
+   under its own type parameter** — `CallExtern1<H, LARGE, WORD>` — so
+   `H::call1` is a static call and its body is what the operation runs. One
+   `dyn` is left on the path and it is taken at preparation, in `into_op`.
+
+   Which forms a handler's operations exist at is a fact of its type, not a
+   test at preparation: `Runtime` carries one entry per form —
+   `op_no_argument`, `op_one_argument`, `op_two_arguments`,
+   `op_three_arguments`, `op_wide`, `op_slice`, and `fused_no_argument`
+   through `fused_two_arguments` — and the arity of the glue names its entry
+   where the glue is written. The one form a type cannot name outright is
+   arity 1, whose result decides between the register and the slice form, and
+   `AtArity1`, implemented for `One` and `Pair`, is that choice as a type.
+   A handler therefore instantiates its own form, the window form, and the
+   two thread-crossing forms, and no others.
+
+   A call that crosses a thread keeps the `dyn`: `CallHeavy` and
+   `SpawnExternSync` hold an `Arc<dyn SentCall>` and `CallExternAsync` and
+   `SpawnExternAsync` an `Arc<dyn SentAsync>`, because such a call is sent to
+   a pool rather than run in the caller's frame, and the send — not the call
+   — is what its cost is. A fused run keeps the `dyn` over its nodes rather
+   than over its handlers: the calls of a run reach different declarations,
+   so `Call` is a `Box<dyn Invoke>` whose node holds one handler as its type
+   parameter (RFC-0044 stage 6).
+
+   The library implements `Handler` and `HandlerFactory` for closures
+   generically, one impl pair per arity through a `macro_rules!` over tuples
+   of `Arg` markers; the `Width` sum is written once, in that macro's body,
+   and every arity but one binds `R: Ret<Rt, Form = One>`, so a slice
+   returned at any other arity is a compile error. `ExternHandler::heavy` and
+   `awaited` take the handlers whose result is one value, because a call the
+   caller waits for outlives the frame its arguments were lent from.
+   `#[state]` is a capture: the macro emits `move |rt, a, b| f(rt, &state.0,
+   a, b)` over an `Arc<(T0, …)>` — typed, never `Any`, never downcast.
+
+   A host that has no registers to lay a call in implements the twelve
+   entries with one macro, `direct_call_forms!`, and gets `DirectOp`: the
+   handler behind a closure that takes the argument run as it comes.
 
 5. **Object and enum glue are library functions.** `#[derive(TyArg)]` calls
    `acvus_extern::object::{Building, Opened}` for a struct and
@@ -111,29 +142,40 @@ or an associated type of the crossing.
    the reverse; the body is the identity and the two markers are the whole
    conversion.
 
-6. **Async stays boxed in this run.** One `Pin<Box<dyn Future>>` per call,
-   behind `dyn AsyncHandler`, which owns the runtime and a copy of the
-   argument run so the future outlives the frame. The future in the wide run
-   is RFC-0050's, after rule 2 there; it is named here as the next step and
-   not built.
+6. **Async stays boxed.** One `Pin<Box<dyn Future>>` per call, from
+   `AsyncCall::call`, which owns the runtime and a copy of the argument run
+   so the future outlives the frame. Storing that future where it lies needs
+   `size_of` of the handler's own future type, and an `async` block's type
+   cannot be named in an associated type without
+   `impl_trait_in_assoc_type` — unstable, rust-lang/rust#63063 — on the
+   toolchain this repository pins (1.97.1 stable). Until that feature lands
+   the box is the shape, and `Pending` holds a `BoxFuture<'static, Value>`
+   as it did.
 
 7. **The interpreter reads the object.** `prepare`'s extern arm asks
-   `Handler::width()` for the form and the slot count and builds the
-   operation; the operation calls `call1`/`call2`/`call3`/`call_run` through
-   the `dyn`. `Slice` is no longer an `ExternHandler` variant: a
+   `HandlerFactory::width()` for the form and the slot count, builds the
+   `CallShape` that form names, and hands it to `into_op`; the operation the
+   factory returns calls `call1`/`call2`/`call3`/`call_run` statically. `Slice` is no longer an `ExternHandler` variant: a
    slice-returning handler is a `Glue` whose result is `Pair`, and `AsSlice`
    takes the `Elements` back in the register pair `call_slice` returns it in
    and stores the two words.
 
 ## What it costs
 
-- **One `dyn` call where a `fn` pointer was.** The operation loads the box's
-  data pointer and the vtable pointer and issues one indirect call: two loads
-  where the `fn` pointer was the call's own memory operand, and no arithmetic.
-  `CallExtern1<false, false>::run` is 36 instructions against base's 33, and
-  the handler is one instruction shorter than the `fn` shim it replaces. Three
-  instructions per call is what the object costs, and the measurements below
-  put its price at under 1.4 % of a call-per-iteration loop's cycles.
+- **One operation instance per handler and form.** The `accum` bench binary
+  grows from 17 506 680 to 20 521 808 bytes, 17.2 %, and the `asm_probe`
+  binary instantiates 2 814 `Op::run` symbols against base's 1 970. What the
+  instances buy is the call: `CallExtern1<Glue<id_of>, false, false>::run` is
+  15 instructions and holds no `call` at all, against the boxed handler's 36
+  instructions and its `call *0x38(%r8)` through the vtable.
+- **An operation now holds its handler's stack locals.** A handler is called
+  from exactly one operation after monomorphization, so LLVM inlines its body
+  there whatever the inline hints say, and a body that takes the address of a
+  local across a callee takes the operation's tail call with it. Eleven of the
+  2 814 instances are in that state — `iterator::next`, `max_by_key`,
+  `min_by_key` and their neighbours, in `CallExtern1`, `CallExtern2` and
+  `CallWindow` — where at `e4b67e70` the address stayed inside
+  `Glue::call` and every extern operation tail-jumped.
 - Nine `macro_rules!` tuple impls (arities 0–8) for `Handler` and
   `AsyncHandler`, and nine constructors: a closure is inferred higher-ranked
   only where the bound is in scope at its own site, so `Glue` has no `new`.
@@ -149,6 +191,19 @@ or an associated type of the crossing.
 
 ## Rejected
 
+- **`Box<dyn Handler>` in the operation**, this RFC's own first build. The
+  operation loaded the box's data pointer and the vtable pointer and issued
+  one indirect call, and the handler's Rust body was a function the operation
+  could not inline. The type parameter removes both: `extern while` is
+  2.9 ns per iteration against 3.6, `branch while` 3.1 against 4.2, and
+  `option while` 4.3 against 5.3.
+- **Every form instantiated for every handler.** The first build of the
+  amendment let `prepare` hand any shape to any handler, so each handler
+  emitted all twelve operations and the nine its width does not name were
+  dead code that LLVM compiled to `slice_index_fail`. It cost 222 dead
+  `Op::run` symbols, 3.9 MB of the `accum` binary, and 43 operations that
+  held no tail call because their only path was a panic. The forms as types
+  (rule 4) make the dead instance unwritable.
 - **`fn` pointers with `Arc<dyn Any>` state**, the shape being replaced. A
   `fn` pointer cannot close over a typed state, so the state had to be erased
   and re-checked on every call; and fourteen forms existed only because the
@@ -182,6 +237,26 @@ or an associated type of the crossing.
 
 ## Consequences
 
+- The inline future waits for `impl_trait_in_assoc_type`. Rule 4's amendment
+  was drafted with `CallExternAsync<H, LARGE, INLINE>` choosing between a
+  future stored in the operation and a boxed one by `size_of::<H::Fut>()` at
+  monomorphization. `H::Fut` cannot be written on a stable toolchain: the
+  future of an `async` block has no nameable type, and an associated type
+  cannot be `impl Future` (rust-lang/rust#63063). Without the name there is
+  no size, so there is no table of the 24 `async fn` externs' future sizes
+  and no `FUTURE_INLINE`. The async path keeps rule 6's box and keeps its
+  `dyn`: monomorphizing a call whose cost is an allocation and a suspension
+  buys nothing and costs instances.
+- `asm_probe`'s list of families that hold a stack address is the eight it
+  was, and the instances it counts are 19, as at `e4b67e70`; the operations
+  that tail-call their successor are 2 769 against 1 925, one per handler and
+  form. Beside them stand eleven operations in `CallExtern1`, `CallExtern2`
+  and `CallWindow` whose inlined handler holds a stack address, which no list
+  entry covers. Whether those three families join the list, or a handler that
+  materializes a large argument keeps a `dyn`, is not settled here.
+- An operation's name in a listing now carries its handler's type, closure
+  span included: `oplist` and the tests that read op names match a family by
+  prefix where they matched it by equality.
 - A slice is a result and never a parameter: `ByValue<Slice<T, Rt>>` does not
   implement `Arg`, and a declaration that takes one is refused with
   `OneValue`'s message. A slice *parameter* needs a `Form = Pair` `Arg` impl
@@ -299,3 +374,61 @@ the same code over the same stages and do not move: `map id | sum` −0.9 %,
 reversed between two sizes, and an earlier build of this tree one
 prepare-time assertion apart — a `Width` equality that no call executes —
 measured it at +12.5 % and +25.6 % instead of +8.9 % and −4.4 %.
+
+## Measured — rule 4 amended
+
+Base `e4b67e70`, three alternating pinned reps (`taskset -c 4`), bench
+profile on both sides, medians. `execute/us` unless the row says otherwise.
+
+| case | base | new | Δ |
+|---|---|---|---|
+| `accum extern while` (1e6) | 3551.2 | 2942.6 | **−17.1 %** |
+| `accum branch while` (1e6) | 4173.6 | 3051.4 | **−26.9 %** |
+| `accum option while` (1e6) | 5325.2 | 4333.7 | **−18.6 %** |
+| `accum while let vec` (1e6) | 8166.0 | 7657.5 | −6.2 % |
+| `accum while let map` (1e6) | 10514.0 | 10785.9 | +2.6 % |
+| `accum map add \| sum` (1e6) | 5725.6 | 5588.1 | −2.4 % |
+| `accum map cap \| sum` (1e6) | 7924.9 | 8106.6 | +2.3 % |
+| `accum grade while` (1e6) | 10726.0 | 10537.1 | −1.8 % |
+| `accum int while` / `float while` / `range \| sum` / `map id \| sum` / `call while` / `collatz while` | — | — | ±0.8 % |
+| `shapes option match` (1e5) | 530.2 | 437.2 | **−17.5 %** |
+| `shapes enum match three` (1e6) | 20577.8 | 19988.2 | −2.9 % |
+| `shapes field read` / `field write` / `construct` (1e6) | — | — | ±0.5 % |
+| `slice_ceiling as_slice in loop` | 9964.3 | 8195.5 | **−17.8 %** |
+| `slice_ceiling as_slice hoisted` / `unchecked` | — | — | ±0.6 % |
+| `attention vec 256x128` (in-language) | 334.9 | 303.8 | −9.3 % |
+| `attention vec 64x64` (in-language) | 48.3 | 44.0 | −8.9 % |
+| `attention deque 256x128` (in-language) | 338.2 | 310.1 | −8.3 % |
+| `logs heavy pure` (1e4) | 30063.0 | 28854.8 | −4.0 % |
+| `logs sync ext` (1e5) | 7577.9 | 7480.0 | −1.3 % |
+| `logs sync ext` (1e4) | 671.1 | 690.5 | +2.9 % |
+| `logs inline` / `closure` | — | — | ±1.2 % |
+| `mandelbrot` (both sizes) | — | — | ±0.5 % |
+| `programs bf table` / `scan` / `call` | — | — | ±1.5 % |
+| `spawn` (24 rows, `acvus/us`) | — | — | ±2.2 % |
+
+`CallExtern1<Glue<accum::id_of>, false, false>::run`, the operation
+`extern while` runs, is 15 instructions with the handler inlined:
+
+```
+movzwl 0x1a(%rdi),%eax        # self.a
+mov    0x10(%rsi),%rcx        # the frame's cells
+mov    0x8(%rcx,%rax,1),%rax  # the argument — and `id_of`'s whole body
+mov    0x10(%rdi),%r8         # self.takes
+movzwl 0x22(%rsi),%r9d
+shl    $0x4,%r9d
+not    %r8
+and    %r8,(%rcx,%r9,1)       # the mark word
+movzwl 0x18(%rdi),%r8d        # self.dst
+mov    %rax,0x8(%rcx,%r8,1)
+mov    (%rdi),%rax            # self.next
+mov    0x8(%rdi),%rcx
+mov    0x20(%rcx),%rcx
+mov    %rax,%rdi
+jmp    *%rcx
+```
+
+The identity body left no instruction of its own: the argument's load is the
+result's store. `spawn`'s rows do not move because an async or heavy call's
+cost is its allocation and its thread hop, and rule 4's amendment leaves
+both where they were.

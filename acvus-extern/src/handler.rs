@@ -6,15 +6,13 @@
 //! Every fact the ABI needs is a constant of those types, summed once in the
 //! `Handler` impl and read back through `Handler::width`.
 
-use std::future::Future;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use acvus_mir::ty::{PolyTy, Task};
 use futures::future::BoxFuture;
 
-use crate::obj::{Cross, CrossSpecialized, Form, One, OneValue};
+use crate::obj::{Cross, CrossSpecialized, Form, One, OneValue, Pair};
 use crate::runtime::Runtime;
 use crate::slice::Elements;
 
@@ -274,38 +272,37 @@ impl Width {
 }
 
 /// A declaration compiled to a Rust body, with the crossing on both sides of
-/// it. One trait object per declared instance; the call operation holds it
-/// and calls through it once.
-pub trait Handler<Rt>: Send + Sync
+/// it.
+///
+/// Obligation across artifacts: that a call form's body inlines into the
+/// operation holding it is asserted by `acvus-interpreter-test/benches/
+/// asm_probe.rs` on the release machine, which is why every form below is
+/// `#[inline]` and none of them is reachable through a `dyn`.
+pub trait Handler<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
 {
-    /// One call site's own handle on this handler. A box's data pointer is
-    /// the handler, so the call loads it and jumps; an `Arc`'s payload sits
-    /// behind a header of no static offset, which costs the call a read of
-    /// the vtable's alignment and the arithmetic over it.
-    fn clone_box(&self) -> Box<dyn Handler<Rt>>;
-
-    fn width(&self) -> Width;
+    const WIDTH: Width;
 
     /// `frame` is the window above the calling frame, which a handler that
     /// calls a closure calls it in and a handler that calls none ignores
     /// (RFC-0050 rule 6).
     ///
     /// # Safety
-    /// `run` holds `width().args` of the runtime's values in declaration
-    /// order, `out` has room for `width().ret`, and every reference the
+    /// `run` holds `WIDTH.args` of the runtime's values in declaration
+    /// order, `out` has room for `WIDTH.ret`, and every reference the
     /// handler takes out of `run` names storage live for the call
     /// (RFC-0018).
     unsafe fn call(&self, rt: &Rt, frame: Rt::Frame<'_>, run: &[Rt::Value], out: &mut [Rt::Value]);
 
     /// The register forms. A declaration whose arguments are `k` values wide
     /// and whose result is one value takes them in registers, and `prepare`
-    /// calls the one form `width()` names.
+    /// builds the operation for the one form `WIDTH` names.
     ///
     /// # Safety
-    /// `width()` is `Width { args: k, ret: 1 }` for the `k` this form names,
+    /// `WIDTH` is `Width { args: k, ret: 1 }` for the `k` this form names,
     /// and the arguments are this call's own, in declaration order.
+    #[inline]
     unsafe fn call0(&self, rt: &Rt, frame: Rt::Frame<'_>) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at no values.
         unsafe { self.call_run(rt, frame, &[]) }
@@ -313,6 +310,7 @@ where
 
     /// # Safety
     /// As `call0`, at one value.
+    #[inline]
     unsafe fn call1(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at one value.
         unsafe { self.call_run(rt, frame, &[a]) }
@@ -320,6 +318,7 @@ where
 
     /// # Safety
     /// As `call0`, at two values.
+    #[inline]
     unsafe fn call2(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value, b: Rt::Value) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at two.
         unsafe { self.call_run(rt, frame, &[a, b]) }
@@ -327,6 +326,7 @@ where
 
     /// # Safety
     /// As `call0`, at three values.
+    #[inline]
     unsafe fn call3(
         &self,
         rt: &Rt,
@@ -343,7 +343,8 @@ where
     /// in, and the result is one value.
     ///
     /// # Safety
-    /// As `call`, with `width().ret == 1`.
+    /// As `call`, with `WIDTH.ret == 1`.
+    #[inline]
     unsafe fn call_run(&self, rt: &Rt, frame: Rt::Frame<'_>, run: &[Rt::Value]) -> Rt::Value {
         let mut out = [Rt::Value::default()];
         // SAFETY: the caller's contract.
@@ -356,8 +357,9 @@ where
     /// place to write it into.
     ///
     /// # Safety
-    /// `width()` is `Width { args: 1, ret: 2 }`, and `a` is this call's own
+    /// `WIDTH` is `Width { args: 1, ret: 2 }`, and `a` is this call's own
     /// argument.
+    #[inline]
     unsafe fn call_slice(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> Elements<Rt> {
         let mut out = [Rt::Value::default(); 2];
         // SAFETY: the caller's contract, which is `call`'s at one argument
@@ -369,7 +371,72 @@ where
     }
 }
 
-impl<Rt> Clone for Box<dyn Handler<Rt>>
+/// The form a declaration of one parameter takes, which its result decides:
+/// a result that is one value goes to a register, and the two words of a
+/// run go back in the pair `AsSlice` stores. Every other arity names its
+/// form outright, so this is the one place a form is chosen by a type.
+pub trait AtArity1: Sized {
+    fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
+    where
+        Rt: Runtime,
+        H: Handler<Rt>;
+    fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
+    where
+        Rt: Runtime,
+        H: Handler<Rt>;
+}
+
+impl AtArity1 for One {
+    fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
+    where
+        Rt: Runtime,
+        H: Handler<Rt>,
+    {
+        Rt::op_one_argument::<H>(handler, shape)
+    }
+
+    fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
+    where
+        Rt: Runtime,
+        H: Handler<Rt>,
+    {
+        Rt::fused_one_argument::<H>(handler, shape)
+    }
+}
+
+impl AtArity1 for Pair {
+    fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
+    where
+        Rt: Runtime,
+        H: Handler<Rt>,
+    {
+        Rt::op_slice::<H>(handler, shape)
+    }
+
+    fn fused<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
+    where
+        Rt: Runtime,
+        H: Handler<Rt>,
+    {
+        panic!("a fused run holds no call whose result is a run of elements")
+    }
+}
+
+/// What the module table holds for one declared instance: the handler with
+/// its type erased, which `prepare` turns back into a typed operation by
+/// handing it the shape it decided for the call site. This is the one `dyn`
+/// on the path, and it is taken once, at preparation.
+pub trait HandlerFactory<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    fn clone_box(&self) -> Box<dyn HandlerFactory<Rt>>;
+    fn width(&self) -> Width;
+    fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op;
+    fn into_fused(self: Box<Self>, shape: Rt::FusedShape) -> Rt::FusedCall;
+}
+
+impl<Rt> Clone for Box<dyn HandlerFactory<Rt>>
 where
     Rt: Runtime,
 {
@@ -390,31 +457,57 @@ where
 }
 
 /// A declaration whose Rust body is an `async fn`: the call hands the
-/// runtime a future, and the arguments the future owns (RFC-0046). One
-/// `Pin<Box<dyn Future>>` per call; the future in the wide run is
-/// RFC-0050's.
-pub trait AsyncHandler<Rt>: Send + Sync
+/// runtime a future that owns its arguments and outlives the frame the call
+/// was made on (RFC-0046).
+///
+/// The future is boxed, and this trait names `BoxFuture` rather than a
+/// future type of the handler's own, because naming an `async` block's type
+/// in an associated type needs `impl_trait_in_assoc_type`, which is unstable
+/// on the toolchain this repository pins. Storing an async handler's future
+/// where it lies waits for that feature: without it `size_of` of the future
+/// is not a constant any impl can state.
+pub trait AsyncCall<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
 {
-    /// As `Handler::clone_box`.
-    fn clone_box(&self) -> Box<dyn AsyncHandler<Rt>>;
-
-    fn width(&self) -> Width;
+    const WIDTH: Width;
 
     /// # Safety
-    /// `run` holds `width().args` of the runtime's values in declaration
+    /// `run` holds `WIDTH.args` of the runtime's values in declaration
     /// order, and any storage a reference the body takes out of them names
     /// is live for as long as the future — which, a spawn's arguments being
     /// owned, it is (RFC-0046).
-    unsafe fn call(
-        &self,
-        rt: Rt,
-        run: &[Rt::Value],
-    ) -> Pin<Box<dyn Future<Output = Rt::Value> + Send>>;
+    unsafe fn call(&self, rt: Rt, run: &[Rt::Value]) -> BoxFuture<'static, Rt::Value>;
 }
 
-impl<Rt> Clone for Box<dyn AsyncHandler<Rt>>
+pub trait AsyncFactory<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    fn clone_box(&self) -> Box<dyn AsyncFactory<Rt>>;
+    fn width(&self) -> Width;
+    fn into_op(self: Box<Self>, shape: Rt::AsyncShape) -> Rt::Op;
+}
+
+impl<Rt, H> AsyncFactory<Rt> for H
+where
+    Rt: Runtime,
+    H: AsyncCall<Rt> + Clone,
+{
+    fn clone_box(&self) -> Box<dyn AsyncFactory<Rt>> {
+        Box::new(self.clone())
+    }
+
+    fn width(&self) -> Width {
+        <H as AsyncCall<Rt>>::WIDTH
+    }
+
+    fn into_op(self: Box<Self>, shape: Rt::AsyncShape) -> Rt::Op {
+        Rt::async_extern_op::<H>(*self, shape)
+    }
+}
+
+impl<Rt> Clone for Box<dyn AsyncFactory<Rt>>
 where
     Rt: Runtime,
 {
@@ -423,12 +516,51 @@ where
     }
 }
 
+/// The arity-1 forms, chosen by the result's own form (`AtArity1`).
+fn op_at_arity1<Rt, H, R>(handler: H, shape: Rt::CallShape) -> Rt::Op
+where
+    Rt: Runtime,
+    H: Handler<Rt>,
+    R: Ret<Rt>,
+{
+    <R::Form as AtArity1>::op::<Rt, H>(handler, shape)
+}
+
+fn fused_at_arity1<Rt, H, R>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
+where
+    Rt: Runtime,
+    H: Handler<Rt>,
+    R: Ret<Rt>,
+{
+    <R::Form as AtArity1>::fused::<Rt, H>(handler, shape)
+}
+
+fn no_fused_run<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
+where
+    Rt: Runtime,
+    H: Handler<Rt>,
+{
+    panic!("a fused run holds no call of this many arguments")
+}
+
 /// A Rust closure with the crossing on both sides of it: `A` is the tuple of
 /// the declaration's parameter modes, in the order the machine lays a call's
 /// arguments (RFC-0052 §7), and `R` its result.
 pub struct Glue<Rt, F, A, R> {
     f: F,
     shape: PhantomData<fn() -> (Rt, A, R)>,
+}
+
+impl<Rt, F, A, R> Clone for Glue<Rt, F, A, R>
+where
+    F: Clone,
+{
+    fn clone(&self) -> Self {
+        Glue {
+            f: self.f.clone(),
+            shape: PhantomData,
+        }
+    }
 }
 
 // SAFETY: a `Glue` holds the closure and nothing else; the `PhantomData` is
@@ -445,6 +577,15 @@ pub struct AsyncGlue<Rt, F, A> {
     shape: PhantomData<fn() -> (Rt, A)>,
 }
 
+impl<Rt, F, A> Clone for AsyncGlue<Rt, F, A> {
+    fn clone(&self) -> Self {
+        AsyncGlue {
+            f: Arc::clone(&self.f),
+            shape: PhantomData,
+        }
+    }
+}
+
 // SAFETY: as `Glue`'s, the closure being behind a shared pointer.
 unsafe impl<Rt, F, A> Send for AsyncGlue<Rt, F, A> where F: Send + Sync {}
 // SAFETY: as `Send`.
@@ -455,7 +596,11 @@ unsafe impl<Rt, F, A> Sync for AsyncGlue<Rt, F, A> where F: Send + Sync {}
 /// in scope at its own site, which is why the constructors exist and neither
 /// `Glue` nor `AsyncGlue` has a `new`.
 macro_rules! arity {
-    ($glue:ident, $async_glue:ident, [$($result:tt)*] $(, $arg:ident: $out:ident)*) => {
+    (
+        $glue:ident, $async_glue:ident, [$($result:tt)*],
+        op = $op:path, fused = $fused:path
+        $(, $arg:ident: $out:ident)*
+    ) => {
         pub fn $glue<Rt, F, $($arg,)* R>(f: F) -> Glue<Rt, F, ($($arg,)*), R>
         where
             Rt: Runtime,
@@ -476,19 +621,10 @@ macro_rules! arity {
             $($arg: for<'a> Arg<'a, Rt> + 'static,)*
             R: Ret<Rt> + 'static,
         {
-            fn clone_box(&self) -> Box<dyn Handler<Rt>> {
-                Box::new(Glue::<Rt, F, ($($arg,)*), R> {
-                    f: self.f.clone(),
-                    shape: PhantomData,
-                })
-            }
-
-            fn width(&self) -> Width {
-                Width {
-                    args: 0 $(+ <$arg as Arg<'_, Rt>>::WIDTH)*,
-                    ret: <R as Ret<Rt>>::WIDTH,
-                }
-            }
+            const WIDTH: Width = Width {
+                args: 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*,
+                ret: <R as Ret<Rt>>::WIDTH,
+            };
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
             unsafe fn call(
@@ -508,6 +644,32 @@ macro_rules! arity {
                     _at += _width;
                 )*
                 <R as Ret<Rt>>::into_run((self.f)(rt, frame $(, $out)*), rt, out)
+            }
+        }
+
+        impl<Rt, F, $($arg,)* R> HandlerFactory<Rt> for Glue<Rt, F, ($($arg,)*), R>
+        where
+            Rt: Runtime,
+            F: Clone + Send + Sync + 'static,
+            F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> R::Of,
+            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+            R: Ret<Rt> + 'static,
+        {
+            fn clone_box(&self) -> Box<dyn HandlerFactory<Rt>> {
+                Box::new(self.clone())
+            }
+
+            fn width(&self) -> Width {
+                <Self as Handler<Rt>>::WIDTH
+            }
+
+            fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op {
+                $op(*self, shape)
+            }
+
+            fn into_fused(self: Box<Self>, shape: Rt::FusedShape) -> Rt::FusedCall {
+                $fused(*self, shape)
             }
         }
 
@@ -532,7 +694,7 @@ macro_rules! arity {
             AsyncGlue { f: Arc::new(f), shape: PhantomData }
         }
 
-        impl<Rt, F, $($arg,)*> AsyncHandler<Rt> for AsyncGlue<Rt, F, ($($arg,)*)>
+        impl<Rt, F, $($arg,)*> AsyncCall<Rt> for AsyncGlue<Rt, F, ($($arg,)*)>
         where
             Rt: Runtime,
             F: Send + Sync + 'static,
@@ -540,26 +702,13 @@ macro_rules! arity {
                 -> BoxFuture<'a, Rt::Value>,
             $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
         {
-            fn clone_box(&self) -> Box<dyn AsyncHandler<Rt>> {
-                Box::new(AsyncGlue::<Rt, F, ($($arg,)*)> {
-                    f: Arc::clone(&self.f),
-                    shape: PhantomData,
-                })
-            }
-
-            fn width(&self) -> Width {
-                Width {
-                    args: 0 $(+ <$arg as Arg<'_, Rt>>::WIDTH)*,
-                    ret: 1,
-                }
-            }
+            const WIDTH: Width = Width {
+                args: 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*,
+                ret: 1,
+            };
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
-            unsafe fn call(
-                &self,
-                rt: Rt,
-                run: &[Rt::Value],
-            ) -> Pin<Box<dyn Future<Output = Rt::Value> + Send>> {
+            unsafe fn call(&self, rt: Rt, run: &[Rt::Value]) -> BoxFuture<'static, Rt::Value> {
                 let held: Vec<Rt::Value> = run.to_vec();
                 let f = Arc::clone(&self.f);
                 Box::pin(async move {
@@ -583,16 +732,43 @@ macro_rules! arity {
 // A slice is the one result wider than a value, and RFC-0047 §3 admits it
 // from a declaration of one parameter and no other: every arity but one takes
 // `Form = One`, so a slice returned anywhere else is a compile error.
-arity!(glue0, async_glue0, [Ret<Rt, Form = One>]);
-arity!(glue1, async_glue1, [Ret<Rt>], A0: a0);
-arity!(glue2, async_glue2, [Ret<Rt, Form = One>], A0: a0, A1: a1);
-arity!(glue3, async_glue3, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2);
-arity!(glue4, async_glue4, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2, A3: a3);
-arity!(glue5, async_glue5, [Ret<Rt, Form = One>], A0: a0, A1: a1, A2: a2, A3: a3, A4: a4);
+arity!(
+    glue0,
+    async_glue0,
+    [Ret<Rt, Form = One>],
+    op = Rt::op_no_argument,
+    fused = Rt::fused_no_argument
+);
+arity!(
+    glue1, async_glue1, [Ret<Rt>],
+    op = op_at_arity1::<Rt, Self, R>, fused = fused_at_arity1::<Rt, Self, R>,
+    A0: a0
+);
+arity!(
+    glue2, async_glue2, [Ret<Rt, Form = One>],
+    op = Rt::op_two_arguments, fused = Rt::fused_two_arguments,
+    A0: a0, A1: a1
+);
+arity!(
+    glue3, async_glue3, [Ret<Rt, Form = One>],
+    op = Rt::op_three_arguments, fused = no_fused_run,
+    A0: a0, A1: a1, A2: a2
+);
+arity!(
+    glue4, async_glue4, [Ret<Rt, Form = One>],
+    op = Rt::op_wide, fused = no_fused_run,
+    A0: a0, A1: a1, A2: a2, A3: a3
+);
+arity!(
+    glue5, async_glue5, [Ret<Rt, Form = One>],
+    op = Rt::op_wide, fused = no_fused_run,
+    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4
+);
 arity!(
     glue6,
     async_glue6,
     [Ret<Rt, Form = One>],
+    op = Rt::op_wide, fused = no_fused_run,
     A0: a0,
     A1: a1,
     A2: a2,
@@ -604,6 +780,7 @@ arity!(
     glue7,
     async_glue7,
     [Ret<Rt, Form = One>],
+    op = Rt::op_wide, fused = no_fused_run,
     A0: a0,
     A1: a1,
     A2: a2,
@@ -616,6 +793,7 @@ arity!(
     glue8,
     async_glue8,
     [Ret<Rt, Form = One>],
+    op = Rt::op_wide, fused = no_fused_run,
     A0: a0,
     A1: a1,
     A2: a2,
@@ -637,24 +815,24 @@ arity!(
 /// holds the object the registry built.
 #[derive(Clone)]
 pub enum ExternHandler<R: Runtime> {
-    Sync(Box<dyn Handler<R>>),
-    Heavy(Box<dyn Handler<R>>),
-    Async(Box<dyn AsyncHandler<R>>),
+    Sync(Box<dyn HandlerFactory<R>>),
+    Heavy(Box<dyn HandlerFactory<R>>),
+    Async(Box<dyn AsyncFactory<R>>),
 }
 
 impl<R: Runtime> ExternHandler<R> {
-    pub fn sync(handler: impl Handler<R> + 'static) -> Self {
+    pub fn sync(handler: impl HandlerFactory<R> + 'static) -> Self {
         Self::Sync(Box::new(handler))
     }
 
     /// A call the caller waits for is resumed after the frame it ran on is
     /// gone, so neither its arguments nor its result may borrow that frame.
     /// That is why this takes `ValuesOnly` and `sync` does not.
-    pub fn heavy(handler: impl ValuesOnly<R> + 'static) -> Self {
+    pub fn heavy(handler: impl ValuesOnly<R> + HandlerFactory<R> + 'static) -> Self {
         Self::Heavy(Box::new(handler))
     }
 
-    pub fn awaited(handler: impl AsyncHandler<R> + 'static) -> Self {
+    pub fn awaited(handler: impl AsyncFactory<R> + 'static) -> Self {
         Self::Async(Box::new(handler))
     }
 
@@ -747,4 +925,113 @@ impl<R: Runtime> Instances<R> {
             .chain(self.generic)
             .collect()
     }
+}
+
+/// The operation a host with no register machine runs a call as: the handler
+/// behind a closure that takes the argument run as it comes. A host that
+/// lays its arguments in registers builds an operation of its own instead
+/// and never reaches this one.
+pub enum DirectOp<Rt>
+where
+    Rt: Runtime,
+{
+    Call(Box<dyn Fn(&Rt, &[Rt::Value], &mut [Rt::Value]) + Send + Sync>),
+    Await(Box<dyn Fn(Rt, &[Rt::Value]) -> BoxFuture<'static, Rt::Value> + Send + Sync>),
+}
+
+impl<Rt> DirectOp<Rt>
+where
+    Rt: Runtime,
+{
+    pub fn of<H>(handler: H) -> Self
+    where
+        H: Handler<Rt>,
+    {
+        DirectOp::Call(Box::new(move |rt, run, out| {
+            let mut rooted = rt.rooted();
+            let frame = Rt::frame_of(&mut rooted);
+            // SAFETY: the contract of `DirectOp::call`, which is this
+            // closure's only caller.
+            unsafe { handler.call(rt, frame, run, out) }
+        }))
+    }
+
+    pub fn awaiting<H>(handler: H) -> Self
+    where
+        H: AsyncCall<Rt>,
+    {
+        DirectOp::Await(Box::new(move |rt, run| {
+            // SAFETY: the contract of `DirectOp::call_async`.
+            unsafe { handler.call(rt, run) }
+        }))
+    }
+
+    /// # Safety
+    /// As `Handler::call`: `run` is the declaration's whole argument run and
+    /// `out` has room for its result.
+    pub unsafe fn call(&self, rt: &Rt, run: &[Rt::Value], out: &mut [Rt::Value]) {
+        let DirectOp::Call(call) = self else {
+            panic!("an awaited handler was called for its value")
+        };
+        call(rt, run, out)
+    }
+
+    /// # Safety
+    /// As `Handler::call_run`.
+    pub unsafe fn call_run(&self, rt: &Rt, run: &[Rt::Value]) -> Rt::Value {
+        let mut out = [Rt::Value::default()];
+        // SAFETY: the caller's contract.
+        unsafe { self.call(rt, run, &mut out) };
+        out[0]
+    }
+
+    /// # Safety
+    /// As `AsyncCall::call`.
+    pub unsafe fn call_async(&self, rt: Rt, run: &[Rt::Value]) -> BoxFuture<'static, Rt::Value> {
+        let DirectOp::Await(call) = self else {
+            panic!("a synchronous handler was called for a future")
+        };
+        call(rt, run)
+    }
+}
+
+/// The ten entries of a host that runs a call where it stands: every form
+/// builds the same `DirectOp`, because such a host lays no arguments in
+/// registers and so takes every form the same way.
+#[macro_export]
+macro_rules! direct_call_forms {
+    () => {
+        $crate::direct_call_forms!(@op op_no_argument);
+        $crate::direct_call_forms!(@op op_one_argument);
+        $crate::direct_call_forms!(@op op_two_arguments);
+        $crate::direct_call_forms!(@op op_three_arguments);
+        $crate::direct_call_forms!(@op op_wide);
+        $crate::direct_call_forms!(@op op_slice);
+        $crate::direct_call_forms!(@fused fused_no_argument);
+        $crate::direct_call_forms!(@fused fused_one_argument);
+        $crate::direct_call_forms!(@fused fused_two_arguments);
+
+        fn async_extern_op<H>(handler: H, _: Self::AsyncShape) -> Self::Op
+        where
+            H: $crate::AsyncCall<Self>,
+        {
+            $crate::DirectOp::awaiting(handler)
+        }
+    };
+    (@op $name:ident) => {
+        fn $name<H>(handler: H, _: Self::CallShape) -> Self::Op
+        where
+            H: $crate::Handler<Self>,
+        {
+            $crate::DirectOp::of(handler)
+        }
+    };
+    (@fused $name:ident) => {
+        fn $name<H>(handler: H, _: Self::FusedShape) -> Self::FusedCall
+        where
+            H: $crate::Handler<Self>,
+        {
+            $crate::DirectOp::of(handler)
+        }
+    };
 }

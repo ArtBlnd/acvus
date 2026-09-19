@@ -20,16 +20,414 @@ use smallvec::SmallVec;
 use crate::code::{BlockId, Deref, Exit, Off, Op, SUSPEND, SlicePair, successor};
 use crate::interpreter::lookup_module;
 use crate::machine::{Lent, Machine, call_module, call_module_sync, fn_value_call};
-use crate::regs::Store;
+use crate::regs::{FrameState, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, HandleValue, Value};
 
 /// The declared instance a call reaches, cloned out of the module table for
-/// this site alone: a box's data pointer is the handler, so `run` loads it
-/// and jumps. The operation asked `Handler::width` once, at preparation, and
-/// calls the one form that answer names.
-pub type Handler = Box<dyn acvus_extern::Handler<AcvusRuntime>>;
-pub type AsyncHandler = Box<dyn acvus_extern::AsyncHandler<AcvusRuntime>>;
+/// this site alone. `prepare` asked `HandlerFactory::width` once and hands
+/// the factory the shape it decided; the factory builds the operation, which
+/// holds the handler by value and calls its body statically.
+pub type Handler = Box<dyn acvus_extern::HandlerFactory<AcvusRuntime>>;
+
+/// Where a synchronous call site's result goes, where its arguments are, and
+/// what runs after it — everything `prepare` settles before the handler's
+/// type is known (RFC-0059 rule 4 amended).
+pub enum CallShape {
+    Registers0 {
+        dst: Off,
+        large: bool,
+        next: Box<dyn Op>,
+    },
+    Registers1 {
+        dst: Off,
+        a: Off,
+        takes: u64,
+        large: bool,
+        word: bool,
+        next: Box<dyn Op>,
+    },
+    Registers2 {
+        dst: Off,
+        a: Off,
+        b: Off,
+        takes: u64,
+        large: bool,
+        next: Box<dyn Op>,
+    },
+    Registers3 {
+        dst: Off,
+        a: Off,
+        b: Off,
+        c: Off,
+        takes: u64,
+        large: bool,
+        next: Box<dyn Op>,
+    },
+    Window {
+        dst: Off,
+        window: ArgWindow,
+        large: bool,
+        next: Box<dyn Op>,
+    },
+    Slice {
+        dst: SlicePair,
+        a: Off,
+        takes: u64,
+        next: Box<dyn Op>,
+    },
+    Heavy {
+        dst: Off,
+        window: ArgWindow,
+        large: bool,
+        resume: BlockId,
+    },
+    Spawn {
+        dst: Off,
+        window: ArgWindow,
+        next: Box<dyn Op>,
+    },
+}
+
+/// As `CallShape`, for the sites whose handler is an `async fn`.
+pub enum AsyncShape {
+    Await {
+        dst: Off,
+        window: ArgWindow,
+        large: bool,
+        resume: BlockId,
+    },
+    Spawn {
+        dst: Off,
+        window: ArgWindow,
+        next: Box<dyn Op>,
+    },
+}
+
+/// Where one call of a fused run reads its arguments (RFC-0044 stage 6).
+pub enum FusedShape {
+    Nullary,
+    Unary { a: Off },
+    Binary { a: Off, b: Off },
+}
+
+/// The shapes a form does not take, which `prepare`'s reading of the
+/// handler's width keeps it from building.
+fn not_this_form(form: &str) -> ! {
+    panic!("a handler of {form} was given a call shape of another form")
+}
+
+/// The window, and the two ways a call leaves this thread. None of the three
+/// depends on the register form, and the thread-crossing pair holds the
+/// handler behind a `dyn`: the value is sent, not called (RFC-0059 rule 3
+/// amended).
+pub fn off_the_register_forms<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Window {
+            dst,
+            window,
+            large,
+            next,
+        } => match large {
+            true => Box::new(CallWindow::<H, true> {
+                dst,
+                window,
+                f,
+                next,
+            }),
+            false => Box::new(CallWindow::<H, false> {
+                dst,
+                window,
+                f,
+                next,
+            }),
+        },
+        CallShape::Heavy {
+            dst,
+            window,
+            large,
+            resume,
+        } => {
+            let f: Arc<dyn SentCall> = Arc::new(f);
+            match large {
+                true => Box::new(CallHeavy::<true> {
+                    dst,
+                    window,
+                    f,
+                    next: resume,
+                }),
+                false => Box::new(CallHeavy::<false> {
+                    dst,
+                    window,
+                    f,
+                    next: resume,
+                }),
+            }
+        }
+        CallShape::Spawn { dst, window, next } => Box::new(SpawnExternSync {
+            dst,
+            window,
+            f: Arc::new(f),
+            next,
+        }),
+        _ => not_this_form("this arity"),
+    }
+}
+
+pub fn op_no_argument<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Registers0 { dst, large, next } => match large {
+            true => Box::new(CallExtern0::<H, true> { dst, f, next }),
+            false => Box::new(CallExtern0::<H, false> { dst, f, next }),
+        },
+        shape => off_the_register_forms(f, shape),
+    }
+}
+
+pub fn op_one_argument<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Registers1 {
+            dst,
+            a,
+            takes,
+            large,
+            word,
+            next,
+        } => match large {
+            true => Box::new(CallExtern1::<H, true, false> {
+                dst,
+                a,
+                takes,
+                f,
+                next,
+            }),
+            false => match word {
+                true => Box::new(CallExtern1::<H, false, true> {
+                    dst,
+                    a,
+                    takes,
+                    f,
+                    next,
+                }),
+                false => Box::new(CallExtern1::<H, false, false> {
+                    dst,
+                    a,
+                    takes,
+                    f,
+                    next,
+                }),
+            },
+        },
+        shape => off_the_register_forms(f, shape),
+    }
+}
+
+pub fn op_two_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Registers2 {
+            dst,
+            a,
+            b,
+            takes,
+            large,
+            next,
+        } => match large {
+            true => Box::new(CallExtern2::<H, true> {
+                dst,
+                a,
+                b,
+                takes,
+                f,
+                next,
+            }),
+            false => Box::new(CallExtern2::<H, false> {
+                dst,
+                a,
+                b,
+                takes,
+                f,
+                next,
+            }),
+        },
+        shape => off_the_register_forms(f, shape),
+    }
+}
+
+pub fn op_three_arguments<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    match shape {
+        CallShape::Registers3 {
+            dst,
+            a,
+            b,
+            c,
+            takes,
+            large,
+            next,
+        } => match large {
+            true => Box::new(CallExtern3::<H, true> {
+                dst,
+                a,
+                b,
+                c,
+                takes,
+                f,
+                next,
+            }),
+            false => Box::new(CallExtern3::<H, false> {
+                dst,
+                a,
+                b,
+                c,
+                takes,
+                f,
+                next,
+            }),
+        },
+        shape => off_the_register_forms(f, shape),
+    }
+}
+
+pub fn op_slice<H>(f: H, shape: CallShape) -> Box<dyn Op>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    let CallShape::Slice {
+        dst,
+        a,
+        takes,
+        next,
+    } = shape
+    else {
+        not_this_form("a result that is a run of elements")
+    };
+    Box::new(AsSlice::<H> {
+        dst,
+        a,
+        takes,
+        f,
+        next,
+    })
+}
+
+pub fn fused_no_argument<H>(f: H, shape: FusedShape) -> Call
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    let FusedShape::Nullary = shape else {
+        not_this_form("no argument")
+    };
+    Box::new(Nullary::<H> { f })
+}
+
+pub fn fused_one_argument<H>(f: H, shape: FusedShape) -> Call
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    let FusedShape::Unary { a } = shape else {
+        not_this_form("one argument")
+    };
+    Box::new(Unary::<H> { f, a })
+}
+
+pub fn fused_two_arguments<H>(f: H, shape: FusedShape) -> Call
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    let FusedShape::Binary { a, b } = shape else {
+        not_this_form("two arguments")
+    };
+    Box::new(Binary::<H> { f, a, b })
+}
+
+pub fn async_extern_op<H>(f: H, shape: AsyncShape) -> Box<dyn Op>
+where
+    H: acvus_extern::AsyncCall<AcvusRuntime>,
+{
+    let f: Arc<dyn SentAsync> = Arc::new(f);
+    match shape {
+        AsyncShape::Await {
+            dst,
+            window,
+            large,
+            resume,
+        } => match large {
+            true => Box::new(CallExternAsync::<true> {
+                dst,
+                window,
+                f,
+                next: resume,
+            }),
+            false => Box::new(CallExternAsync::<false> {
+                dst,
+                window,
+                f,
+                next: resume,
+            }),
+        },
+        AsyncShape::Spawn { dst, window, next } => Box::new(SpawnExternAsync {
+            dst,
+            window,
+            f,
+            next,
+        }),
+    }
+}
+
+/// The future of an `async fn` handler is boxed at the call (RFC-0059 rule
+/// 6), so the handler behind it is reached once per call through a `dyn` and
+/// the box is what the driver holds.
+pub trait SentAsync: Send + Sync {
+    /// # Safety
+    /// As `AsyncCall::call`: `run` is the call's whole argument run and the
+    /// future owns it.
+    unsafe fn call_async(&self, rt: AcvusRuntime, run: &[Value]) -> BoxFuture<'static, Value>;
+}
+
+impl<H> SentAsync for H
+where
+    H: acvus_extern::AsyncCall<AcvusRuntime>,
+{
+    unsafe fn call_async(&self, rt: AcvusRuntime, run: &[Value]) -> BoxFuture<'static, Value> {
+        // SAFETY: the caller's contract, which is `AsyncCall::call`'s.
+        unsafe { self.call(rt, run) }
+    }
+}
+
+/// A handler whose call crosses a thread: the value is sent to the pool and
+/// called there, so a `Heavy` call and a spawn keep the `dyn` a `Sync` call
+/// no longer has (RFC-0059 rule 4 amended).
+pub trait SentCall: Send + Sync {
+    /// # Safety
+    /// `run` is the call's whole argument run, owned by the caller of this
+    /// method for as long as the call, and `frame` is a window bound to no
+    /// other frame.
+    unsafe fn call_owned(&self, rt: &AcvusRuntime, frame: &mut FrameState, run: &[Value]) -> Value;
+}
+
+impl<H> SentCall for H
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    unsafe fn call_owned(&self, rt: &AcvusRuntime, frame: &mut FrameState, run: &[Value]) -> Value {
+        // SAFETY: the caller's contract, which is `call_run`'s.
+        unsafe { self.call_run(rt, frame, run) }
+    }
+}
 
 /// A call the driver runs hands its arguments to a future that outlives this
 /// frame, so it owns them rather than lending registers.
@@ -113,13 +511,16 @@ impl ArgWindow {
     }
 }
 
-pub struct CallExtern0<const LARGE: bool> {
+pub struct CallExtern0<H, const LARGE: bool> {
     pub dst: Off,
-    pub f: Handler,
+    pub f: H,
     pub next: Box<dyn Op>,
 }
 
-impl<const LARGE: bool> Op for CallExtern0<LARGE> {
+impl<H, const LARGE: bool> Op for CallExtern0<H, LARGE>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
     successor!();
 
     #[inline]
@@ -133,15 +534,18 @@ impl<const LARGE: bool> Op for CallExtern0<LARGE> {
     }
 }
 
-pub struct CallExtern1<const LARGE: bool, const WORD: bool> {
+pub struct CallExtern1<H, const LARGE: bool, const WORD: bool> {
     pub dst: Off,
     pub a: Off,
     pub takes: u64,
-    pub f: Handler,
+    pub f: H,
     pub next: Box<dyn Op>,
 }
 
-impl<const LARGE: bool, const WORD: bool> Op for CallExtern1<LARGE, WORD> {
+impl<H, const LARGE: bool, const WORD: bool> Op for CallExtern1<H, LARGE, WORD>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
     successor!();
 
     #[inline]
@@ -157,16 +561,19 @@ impl<const LARGE: bool, const WORD: bool> Op for CallExtern1<LARGE, WORD> {
     }
 }
 
-pub struct CallExtern2<const LARGE: bool> {
+pub struct CallExtern2<H, const LARGE: bool> {
     pub dst: Off,
     pub a: Off,
     pub b: Off,
     pub takes: u64,
-    pub f: Handler,
+    pub f: H,
     pub next: Box<dyn Op>,
 }
 
-impl<const LARGE: bool> Op for CallExtern2<LARGE> {
+impl<H, const LARGE: bool> Op for CallExtern2<H, LARGE>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
     successor!();
 
     #[inline]
@@ -183,17 +590,20 @@ impl<const LARGE: bool> Op for CallExtern2<LARGE> {
     }
 }
 
-pub struct CallExtern3<const LARGE: bool> {
+pub struct CallExtern3<H, const LARGE: bool> {
     pub dst: Off,
     pub a: Off,
     pub b: Off,
     pub c: Off,
     pub takes: u64,
-    pub f: Handler,
+    pub f: H,
     pub next: Box<dyn Op>,
 }
 
-impl<const LARGE: bool> Op for CallExtern3<LARGE> {
+impl<H, const LARGE: bool> Op for CallExtern3<H, LARGE>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
     successor!();
 
     #[inline]
@@ -213,14 +623,17 @@ impl<const LARGE: bool> Op for CallExtern3<LARGE> {
 
 /// A declaration whose arguments are wider than the register forms is called
 /// through its window.
-pub struct CallWindow<const LARGE: bool> {
+pub struct CallWindow<H, const LARGE: bool> {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: Handler,
+    pub f: H,
     pub next: Box<dyn Op>,
 }
 
-impl<const LARGE: bool> Op for CallWindow<LARGE> {
+impl<H, const LARGE: bool> Op for CallWindow<H, LARGE>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
@@ -237,15 +650,18 @@ impl<const LARGE: bool> Op for CallWindow<LARGE> {
 /// this stores their words to `dst`, the first register of the pair
 /// `prepare::assign_slots` gave the slice. A slice is no `Value`, so there is
 /// no `LARGE` here and no drop anywhere.
-pub struct AsSlice {
+pub struct AsSlice<H> {
     pub dst: SlicePair,
     pub a: Off,
     pub takes: u64,
-    pub f: Handler,
+    pub f: H,
     pub next: Box<dyn Op>,
 }
 
-impl Op for AsSlice {
+impl<H> Op for AsSlice<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
     successor!();
 
     #[inline]
@@ -272,37 +688,75 @@ pub const PREVIOUS: Off = Off::PREVIOUS;
 /// three or fewer arguments including the held value. A slice-returning
 /// handler is not among them — its result is a register pair, and a run
 /// hands one `Value` from each call to the next.
-pub enum Call {
-    Nullary { f: Handler },
-    Unary { f: Handler, a: Off },
-    Binary { f: Handler, a: Off, b: Off },
+///
+/// A run of one handler type is not built: the calls of a run reach
+/// different declarations, so the run holds nodes and the `dyn` is over the
+/// node rather than over the handler (RFC-0059 rule 4 amended).
+pub type Call = Box<dyn Invoke>;
+
+pub trait Invoke: Send + Sync {
+    fn invoke(&self, m: &mut Machine<'_>, held: Value) -> Value;
 }
 
-impl Call {
+pub struct Nullary<H> {
+    f: H,
+}
+
+pub struct Unary<H> {
+    f: H,
+    a: Off,
+}
+
+pub struct Binary<H> {
+    f: H,
+    a: Off,
+    b: Off,
+}
+
+impl<H> Invoke for Nullary<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
     #[inline]
-    fn invoke(&self, m: &mut Machine<'_>, held: &mut Value) -> Value {
+    fn invoke(&self, m: &mut Machine<'_>, _: Value) -> Value {
         let rt = m.rt;
         // SAFETY: `prepare::fusable_call` admits a call into this run only at
-        // the form each arm names.
-        match self {
-            Call::Nullary { f } => unsafe { f.call0(rt, m.window()) },
-            Call::Unary { f, a } => {
-                let a = arg(m, held, *a);
-                unsafe { f.call1(rt, m.window(), a) }
-            }
-            Call::Binary { f, a, b } => {
-                let a = arg(m, held, *a);
-                let b = arg(m, held, *b);
-                unsafe { f.call2(rt, m.window(), a, b) }
-            }
-        }
+        // the form each node names.
+        unsafe { self.f.call0(rt, m.window()) }
+    }
+}
+
+impl<H> Invoke for Unary<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    #[inline]
+    fn invoke(&self, m: &mut Machine<'_>, held: Value) -> Value {
+        let rt = m.rt;
+        let a = arg(m, held, self.a);
+        // SAFETY: as `Nullary`'s, at one argument.
+        unsafe { self.f.call1(rt, m.window(), a) }
+    }
+}
+
+impl<H> Invoke for Binary<H>
+where
+    H: acvus_extern::Handler<AcvusRuntime>,
+{
+    #[inline]
+    fn invoke(&self, m: &mut Machine<'_>, held: Value) -> Value {
+        let rt = m.rt;
+        let a = arg(m, held, self.a);
+        let b = arg(m, held, self.b);
+        // SAFETY: as `Nullary`'s, at two arguments.
+        unsafe { self.f.call2(rt, m.window(), a, b) }
     }
 }
 
 #[inline]
-fn arg(m: &mut Machine<'_>, held: &mut Value, at: Off) -> Value {
+fn arg(m: &mut Machine<'_>, held: Value, at: Off) -> Value {
     match at {
-        PREVIOUS => std::mem::take(held),
+        PREVIOUS => held,
         at => m.regs().read(at),
     }
 }
@@ -331,7 +785,7 @@ impl<const CALLS: usize, const TAIL: bool, const LARGE: bool> Op for Fused<CALLS
         m.regs().take_mask(self.takes);
         let mut held = Value::UNDEF;
         for call in &self.calls[..CALLS] {
-            held = call.invoke(m, &mut held);
+            held = call.invoke(m, held);
         }
         let value = match TAIL {
             true => {
@@ -446,7 +900,7 @@ fn shape<const LARGE: bool>(
 pub struct CallExternAsync<const LARGE: bool> {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: AsyncHandler,
+    pub f: Arc<dyn SentAsync>,
     pub next: BlockId,
 }
 
@@ -456,7 +910,7 @@ impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
         let Lent { run, .. } = self.window.lend(m);
         // SAFETY: `prepare` built this operation from this handler's width,
         // and the future owns the arguments it is given.
-        let fut = unsafe { self.f.call(rt, run) };
+        let fut = unsafe { self.f.call_async(rt, run) };
         m.suspend::<LARGE>(self.dst, self.next, fut);
         SUSPEND
     }
@@ -469,7 +923,7 @@ impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
 pub struct CallHeavy<const LARGE: bool> {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: Handler,
+    pub f: Arc<dyn SentCall>,
     pub next: BlockId,
 }
 
@@ -477,13 +931,13 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let args = self.window.own(m);
         let rt = m.rt.clone();
-        let f = self.f.clone();
+        let f = Arc::clone(&self.f);
         let executor = Arc::clone(&m.shared().executor);
         // SAFETY: the window is this call's whole argument run, owned by the
         // closure the pool runs.
         let handle = executor.spawn_blocking(Box::new(move || {
             let mut rooted = Store::new();
-            unsafe { f.call_run(&rt, rooted.root_window(), &args) }
+            unsafe { f.call_owned(&rt, rooted.root_window(), &args) }
         }));
         m.suspend::<LARGE>(
             self.dst,
@@ -658,7 +1112,7 @@ impl<const LARGE: bool> Op for Eval<LARGE> {
 pub struct SpawnExternSync {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: Handler,
+    pub f: Arc<dyn SentCall>,
     pub next: Box<dyn Op>,
 }
 
@@ -668,11 +1122,11 @@ impl Op for SpawnExternSync {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = self.window.own(m);
         let rt = m.rt.clone();
-        let f = self.f.clone();
+        let f = Arc::clone(&self.f);
         // SAFETY: as `CallHeavy`'s.
         let handle = m.shared().executor.spawn_blocking(Box::new(move || {
             let mut rooted = Store::new();
-            unsafe { f.call_run(&rt, rooted.root_window(), &args) }
+            unsafe { f.call_owned(&rt, rooted.root_window(), &args) }
         }));
         m.regs().define::<true>(self.dst, Value::handle(handle));
         self.next.run(m, r0)
@@ -682,7 +1136,7 @@ impl Op for SpawnExternSync {
 pub struct SpawnExternAsync {
     pub dst: Off,
     pub window: ArgWindow,
-    pub f: AsyncHandler,
+    pub f: Arc<dyn SentAsync>,
     pub next: Box<dyn Op>,
 }
 
@@ -693,7 +1147,7 @@ impl Op for SpawnExternAsync {
         let args = self.window.own(m);
         let rt = m.rt.clone();
         // SAFETY: as `CallExternAsync`'s; the spawned future owns `args`.
-        let fut = unsafe { self.f.call(rt, &args) };
+        let fut = unsafe { self.f.call_async(rt, &args) };
         let handle = m.shared().executor.spawn_async(fut);
         m.regs().define::<true>(self.dst, Value::handle(handle));
         self.next.run(m, r0)

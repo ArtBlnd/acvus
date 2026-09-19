@@ -89,6 +89,14 @@ impl acvus_extern::FromValue<Words> for Word {
 }
 
 impl Runtime for Words {
+    type Op = acvus_extern::DirectOp<Words>;
+    type CallShape = ();
+    type AsyncShape = ();
+    type FusedCall = acvus_extern::DirectOp<Words>;
+    type FusedShape = ();
+
+    acvus_extern::direct_call_forms!();
+
     type Value = Word;
     type Frame<'a> = ();
     type Rooted = ();
@@ -367,6 +375,14 @@ where
 }
 
 impl Runtime for Tags {
+    type Op = acvus_extern::DirectOp<Tags>;
+    type CallShape = ();
+    type AsyncShape = ();
+    type FusedCall = acvus_extern::DirectOp<Tags>;
+    type FusedShape = ();
+
+    acvus_extern::direct_call_forms!();
+
     type Value = TaggedWord;
     type Frame<'a> = ();
     type Rooted = ();

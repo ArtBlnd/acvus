@@ -27,9 +27,54 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where
         Self: 'a;
+    /// What one extern call site runs as.
+    type Op;
+    /// What the host decided about a call site before the handler's type is
+    /// known: where the result goes, where the arguments are, what follows.
+    type CallShape;
+    type AsyncShape;
+    /// One call of a run of extern calls the host fused.
+    type FusedCall;
+    type FusedShape;
 
     fn rooted(&self) -> Self::Rooted;
     fn frame_of(rooted: &mut Self::Rooted) -> Self::Frame<'_>;
+
+    /// One entry per call form (RFC-0044 stage 2c, RFC-0047 amended rule 2).
+    /// A declaration's arity names its entry where the glue is written, so a
+    /// runtime instantiates each handler's operation at that form alone.
+    fn op_no_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_one_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_two_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_three_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_wide<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+    fn op_slice<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    where
+        H: crate::handler::Handler<Self>;
+
+    fn fused_no_argument<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
+    where
+        H: crate::handler::Handler<Self>;
+    fn fused_one_argument<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
+    where
+        H: crate::handler::Handler<Self>;
+    fn fused_two_arguments<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
+    where
+        H: crate::handler::Handler<Self>;
+
+    fn async_extern_op<H>(handler: H, shape: Self::AsyncShape) -> Self::Op
+    where
+        H: crate::handler::AsyncCall<Self>;
 
     /// The `T` of the `erase::<T>` that made this value, when the value
     /// records it. `downcast` and `Erased::from_value` trust this answer
@@ -186,9 +231,16 @@ impl Runtime for TypesOnly {
     type Frame<'a> = ();
     type Rooted = ();
     type CallFuture<'a> = Ready<()>;
+    type Op = crate::handler::DirectOp<TypesOnly>;
+    type CallShape = ();
+    type AsyncShape = ();
+    type FusedCall = crate::handler::DirectOp<TypesOnly>;
+    type FusedShape = ();
 
     fn rooted(&self) {}
     fn frame_of(_: &mut ()) {}
+
+    crate::direct_call_forms!();
 
     fn type_of(&self, _: &()) -> Option<TypeId> {
         None

@@ -40,8 +40,28 @@ const NO_SUCCESSOR: &[&str] = &[
 struct Exception {
     /// The `module::Type` `op_of` produces, which is what the probe matches.
     family: &'static str,
+    /// The handler the operation was monomorphized over, as the substring of
+    /// the demangled symbol that names it (`__extern_fn_next`); `None` where
+    /// every instance of the family holds the address.
+    handler: Option<&'static str>,
     /// The local whose address escapes into a callee.
     stack_address: &'static str,
+}
+
+impl Exception {
+    fn matches(&self, run: &Run) -> bool {
+        self.family == run.of
+            && self
+                .handler
+                .is_none_or(|handler| run.symbol.contains(handler))
+    }
+
+    fn name(&self) -> String {
+        match self.handler {
+            Some(handler) => format!("{}<{handler}>", self.family),
+            None => self.family.to_string(),
+        }
+    }
 }
 
 /// The closed list of families that hold the address of a stack local across
@@ -54,37 +74,81 @@ struct Exception {
 const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
     Exception {
         family: "call::Fused",
+        handler: None,
         stack_address: "the held `Value`, `&held` into the run's tail `Deref`",
     },
     Exception {
         family: "call::CallIndirect",
+        handler: None,
         stack_address: "the `FnValue` materialized out of the callee register, `&closure` into \
                         `call_fn_sync`",
     },
     Exception {
         family: "call::CallDirect",
+        handler: None,
         stack_address: "the `Arc<Prepared>` the module table hands back, `&prepared` into \
                         `call_module_sync`",
     },
     Exception {
         family: "storage::SetStep",
+        handler: None,
         stack_address: "`&mut object`, into `at_mut`",
     },
     Exception {
         family: "storage::SetPath",
+        handler: None,
         stack_address: "`&mut object`, into `walk_mut`",
     },
     Exception {
         family: "composite::MakeObject",
+        handler: None,
         stack_address: "the field buffer the object is built in",
     },
     Exception {
         family: "call::SpawnModule",
+        handler: None,
         stack_address: "the argument array the spawned frame is filled from",
     },
     Exception {
         family: "call::SpawnExternAsync",
+        handler: None,
         stack_address: "the argument window lent to the handler",
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("__extern_fn_next"),
+        stack_address: "the iterator the handler drains, `&mut it` into its stage's `next` \
+                        through the stage's vtable",
+    },
+    Exception {
+        family: "call::CallWindow",
+        handler: Some("__extern_fn_next"),
+        stack_address: "the iterator the handler drains, `&mut it` into its stage's `next` \
+                        through the stage's vtable",
+    },
+    Exception {
+        family: "call::CallExtern2",
+        handler: Some("__extern_fn_max_by_key"),
+        stack_address: "the iterator the handler drains, `&mut it` into its stage's `next` \
+                        through the stage's vtable",
+    },
+    Exception {
+        family: "call::CallExtern2",
+        handler: Some("__extern_fn_min_by_key"),
+        stack_address: "the iterator the handler drains, `&mut it` into its stage's `next` \
+                        through the stage's vtable",
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("__extern_fn_panic"),
+        stack_address: "the message `String` the handler materializes, by address into the \
+                        panic's formatting",
+    },
+    Exception {
+        family: "call::CallWindow",
+        handler: Some("__extern_fn_panic"),
+        stack_address: "the message `String` the handler materializes, by address into the \
+                        panic's formatting",
     },
 ];
 
@@ -100,6 +164,9 @@ const AT_LEAST: usize = 40;
 /// `ret` at all, and the `jmp` it leaves by is the last one in it.
 struct Run {
     of: String,
+    /// The demangled symbol, which names the handler an operation was
+    /// monomorphized over.
+    symbol: String,
     rets: usize,
     jumps: Option<String>,
 }
@@ -112,7 +179,7 @@ impl Run {
     fn excepted(&self) -> Option<&'static Exception> {
         HOLDS_A_STACK_ADDRESS
             .iter()
-            .find(|listed| listed.family == self.of)
+            .find(|listed| listed.matches(self))
     }
 
     fn tail_jumps(&self) -> bool {
@@ -200,6 +267,7 @@ fn runs(text: &str) -> Vec<Run> {
             found.extend(open.take());
             open = op_of(symbol).map(|of| Run {
                 of,
+                symbol: symbol.to_string(),
                 rets: 0,
                 jumps: None,
             });
@@ -261,18 +329,19 @@ fn main() {
 
     let mut still_needed = 0;
     for listed in HOLDS_A_STACK_ADDRESS {
-        let instances: Vec<&Run> = found.iter().filter(|run| run.of == listed.family).collect();
+        let instances: Vec<&Run> = found.iter().filter(|run| listed.matches(run)).collect();
         let calling = instances.iter().filter(|run| !run.tail_jumps()).count();
         still_needed += calling;
         match (instances.len(), calling) {
-            (0, _) => println!("{}: not instantiated here", listed.family),
+            (0, _) => println!("{}: not instantiated here", listed.name()),
             (_, 0) => println!(
                 "{}: list entry no longer needed — every instance tail-jumps",
-                listed.family
+                listed.name()
             ),
             (all, calling) => println!(
                 "{}: {calling} of {all} end in call+ret — {}",
-                listed.family, listed.stack_address
+                listed.name(),
+                listed.stack_address
             ),
         }
     }

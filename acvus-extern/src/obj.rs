@@ -29,7 +29,7 @@ pub struct Variant<V> {
 /// The run of the runtime's values a crossing occupies, as a type, so that a
 /// bound can name it and the width is read off the type rather than repeated
 /// as a number.
-pub trait Form {
+pub trait Form: crate::handler::AtArity1 {
     const WIDTH: usize;
 }
 

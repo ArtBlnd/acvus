@@ -7,6 +7,6 @@ error[E0271]: type mismatch resolving `<Val<Slice<Owned<__R>, __R>> as Ret<__R>>
 note: required by a bound in `glue2`
  --> $WORKSPACE/acvus-extern/src/handler.rs
   |
-  | arity!(glue2, async_glue2, [Ret<Rt, Form = One>], A0: a0, A1: a1);
-  |                                     ^^^^^^^^^^ required by this bound in `glue2`
+  |     glue2, async_glue2, [Ret<Rt, Form = One>],
+  |                                  ^^^^^^^^^^ required by this bound in `glue2`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

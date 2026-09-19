@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{string_registry, vec_registry};
 use acvus_extern::{
-    CallToken, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef, Ref,
-    Registry, Release, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
+    CallToken, DirectOp, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef,
+    Ref, Registry, Release, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -143,6 +143,14 @@ impl acvus_extern::FromValue<Counting> for V {
 }
 
 impl Runtime for Counting {
+    type Op = DirectOp<Counting>;
+    type CallShape = ();
+    type AsyncShape = ();
+    type FusedCall = DirectOp<Counting>;
+    type FusedShape = ();
+
+    acvus_extern::direct_call_forms!();
+
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let V::Boxed(cell) = value else {
             return None;
@@ -342,8 +350,9 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[0] else {
             panic!("{ns}::{name} is not a sync handler")
         };
+        let op = handler.clone().into_op(());
         // SAFETY: the caller passes the declaration's own arguments.
-        unsafe { handler.call_run(&self.rt, (), &args) }
+        unsafe { op.call_run(&self.rt, &args) }
     }
 
     fn string(&self, s: &str) -> V {

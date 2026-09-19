@@ -8,6 +8,6 @@ error[E0271]: type mismatch resolving `<Val<Slice<Owned<__R>, __R>> as Ret<__R>>
 note: required by a bound in `ExternHandler::<R>::heavy`
  --> $WORKSPACE/acvus-extern/src/handler.rs
   |
-  |     pub fn heavy(handler: impl ValuesOnly<R> + 'static) -> Self {
+  |     pub fn heavy(handler: impl ValuesOnly<R> + HandlerFactory<R> + 'static) -> Self {
   |                                ^^^^^^^^^^^^^ required by this bound in `ExternHandler::<R>::heavy`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
