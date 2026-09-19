@@ -34,6 +34,43 @@ argument still a variable is admitted as it is where the two bounds
 intersect; a conversion is admitted from a resolved head only. A set an
 argument empties is `NoMatchingFunction` there, and opens no decision.
 
+**Admission is ordered by evidence** (amended 2026-09-20, with RFC-0062).
+An argument is taken by one of four admissions, and they are ordered:
+`Direct` — the argument's own type is one of the parameter's shapes;
+`Converted` — one declared rule (RFC-0023) casts it there; `Viewed` — the
+argument is a borrow of a storage and the parameter takes a view of that
+storage (`&v` at `&[T]`, RFC-0047; `&s` at `&str`, RFC-0062), recorded as
+a coercion at the argument and not unified with the parameter; `Refused`.
+The rules that follow hold for `Converted` and `Viewed` alike, so that no
+kind of admission behaves as an exception:
+
+1. **Direct first.** At an argument, if any candidate takes it directly,
+   every candidate that would take it only by conversion or by view
+   leaves the set there. The argument's own type is the evidence; a
+   weaker admission would change the value the callee sees.
+2. **A weaker admission needs a resolved head.** A conversion or a view is
+   admitted only from an argument whose head is resolved. An argument
+   still a variable is admitted directly where the two bounds intersect
+   and by nothing else: it narrows the set toward no converted or viewed
+   candidate. The decision waits for the head (the deferral RFC-0047 uses
+   for a container whose element type is still open); when the variable
+   freezes to a head no remaining candidate takes directly, admission is
+   asked again at that argument with the resolved head, and rule 1
+   applies to what it finds.
+3. **Equal strength is the existing question.** Two candidates that take
+   an argument at the same admission are told apart by the rest of the
+   call, as before; two that remain at the end are `AmbiguousFunction`.
+   Two viewed candidates are no different.
+4. **A receiver is an argument.** A method call's receiver is admitted by
+   the same four admissions and the same three rules, in the mode each
+   candidate sees it in (below); a receiver that is a variable is admitted
+   directly where bounds intersect and by no view until it resolves.
+5. **The view is the checker's, the parameter's type is the callee's.**
+   Where a viewed candidate is settled on, the checker records the view
+   at the argument (`CastKind::Slice`, `CastKind::Str`) and the call's
+   parameter is the view's type; the argument's own type is untouched,
+   so a later use of the same place sees what it was.
+
 At an argument some candidate that stays takes only by conversion, the
 call's parameter is left open and one conversion decision (RFC-0023) from
 the argument to it is opened, as a direct call would. It has no answer of
