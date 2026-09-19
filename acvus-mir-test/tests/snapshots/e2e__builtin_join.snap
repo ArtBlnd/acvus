@@ -25,7 +25,7 @@ expression: ir
     ; r2 (@names) : Vec<String>
     ; r3 (v6) : Array<String, 0>
     ; r4 (vec(...)) : Vec<String>
-    ; r5 (v10) : Iterator<String, Pure, #IdentityId(1)>
+    ; r5 (v10) : Iterator<String, Pure>
     ; r6 (v11) : &str
     ; r7 (to_string(...)) : String
     ; r8 (join(...)) : String

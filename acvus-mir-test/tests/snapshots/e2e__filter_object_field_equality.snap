@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1223
 expression: ir
 ---
 === literals ===
@@ -30,9 +31,9 @@ expression: ir
     ; r2 (@users) : Vec<{active: Bool, name: String}>
     ; r3 (v6) : Array<{active: Bool, name: String}, 0>
     ; r4 (vec(...)) : Vec<{active: Bool, name: String}>
-    ; r5 (into_iter(...)) : Iterator<{active: Bool, name: String}, Pure, #IdentityId(0)>
+    ; r5 (into_iter(...)) : Iterator<{active: Bool, name: String}, Pure>
     ; r6 (v11) : Fn(&{active: Bool, name: String}) -> Bool
-    ; r7 (filter(...)) : Iterator<{active: Bool, name: String}, Pure, #IdentityId(0)>
+    ; r7 (filter(...)) : Iterator<{active: Bool, name: String}, Pure>
     ; r8 (collect(...)) : Vec<{active: Bool, name: String}>
     ; r9 (x.) : &Vec<{active: Bool, name: String}>
     ; r10 (len(...)) : u64

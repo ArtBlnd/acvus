@@ -11,6 +11,7 @@
 
 use std::convert::Infallible;
 
+use acvus_ast::Span;
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -90,19 +91,57 @@ pub enum ReprOwner {
     Local,
 }
 
+/// Where a source began, as a reader would point at it: the expression
+/// that minted the identity and the name the program gave the value.
+/// Both are what a refusal over two sources prints, and neither is known
+/// to the solver, so `Origin` is written by the checker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Origin {
+    pub span: Span,
+    pub name: Option<Astr>,
+}
+
 /// The sources of one compilation. A source number names one identity
 /// for every solver of the compilation, so a frozen type may pass from
 /// one solver to another and still name the source it was frozen with.
+///
+/// An identity minted where no expression is in hand has no `Origin`, and
+/// a refusal over it names the places it can name and no more.
 #[derive(Debug, Default)]
-pub struct Sources(acvus_utils::LocalFactory<IdentityId>);
+pub struct Sources {
+    ids: acvus_utils::LocalFactory<IdentityId>,
+    origins: FxHashMap<IdentityId, Origin>,
+}
 
 impl Sources {
     pub fn new() -> Self {
-        Self(acvus_utils::LocalFactory::new())
+        Self::default()
     }
 
     pub fn next(&mut self) -> IdentityId {
-        self.0.next()
+        self.ids.next()
+    }
+
+    /// The first expression to name a source is the one that minted it:
+    /// an instantiation that reuses the identity later is not its origin.
+    pub fn begins_at(&mut self, id: IdentityId, span: Span) {
+        self.origins
+            .entry(id)
+            .or_insert(Origin { span, name: None });
+    }
+
+    /// The first binding to hold a value of this source names it, as the
+    /// program does: a later rebinding is another name for one source.
+    pub fn named(&mut self, id: IdentityId, name: Astr) {
+        if let Some(origin) = self.origins.get_mut(&id)
+            && origin.name.is_none()
+        {
+            origin.name = Some(name);
+        }
+    }
+
+    pub fn origin(&self, id: IdentityId) -> Option<Origin> {
+        self.origins.get(&id).copied()
     }
 }
 
@@ -1786,6 +1825,20 @@ impl<'src> Solver<'src> {
 
     pub fn registry(&self) -> &'src TypeRegistry {
         self.registry
+    }
+
+    // -- Sources -----------------------------------------------------
+
+    pub fn source_begins_at(&mut self, id: IdentityId, span: Span) {
+        self.sources.begins_at(id, span);
+    }
+
+    pub fn name_source(&mut self, id: IdentityId, name: Astr) {
+        self.sources.named(id, name);
+    }
+
+    pub fn source_origin(&self, id: IdentityId) -> Option<Origin> {
+        self.sources.origin(id)
     }
 
     // -- Fresh variables ---------------------------------------------

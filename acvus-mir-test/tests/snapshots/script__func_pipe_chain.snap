@@ -1,6 +1,6 @@
 ---
 source: acvus-mir-test/tests/script.rs
-assertion_line: 168
+assertion_line: 178
 expression: ir
 ---
 === main ===
@@ -15,9 +15,9 @@ expression: ir
     ; r1 (v1) : i64
     ; r2 (v2) : i64
     ; r3 (v3) : i64
-    ; r4 (v5) : Iterator<i64, Pure, #IdentityId(1)>
+    ; r4 (v5) : Iterator<i64, Pure>
     ; r5 (v6) : Fn(&i64) -> Bool
-    ; r6 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r6 (filter(...)) : Iterator<i64, Pure>
     ; r7 (collect(...)) : Vec<i64>
 
 === closure L0 (ValueId(0)) ===

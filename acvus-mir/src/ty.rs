@@ -1880,15 +1880,21 @@ where
                 ok.display(self.interner),
                 err.display(self.interner)
             ),
+            // Identity arguments are not printed. An identity is a source,
+            // and its number names that source to nobody: a reader told
+            // `Iterator<i64, Pure, #1>` learns only that there is a `#1`.
+            // Where the difference between two sources is what the compiler
+            // must say, it says it by pointing at the two expressions that
+            // minted them, which `MirErrorKind::IdentityMismatch` does.
             TyTerm::UserDefined {
                 id,
                 type_args,
                 effect_args,
-                identity_args,
+                identity_args: _,
             } => {
                 let name = self.interner.resolve(id.name);
                 write!(f, "{name}")?;
-                if !type_args.is_empty() || !effect_args.is_empty() || !identity_args.is_empty() {
+                if !type_args.is_empty() || !effect_args.is_empty() {
                     write!(f, "<")?;
                     let mut first = true;
                     for arg in type_args {
@@ -1906,16 +1912,6 @@ where
                         match arg {
                             EffectTerm::Known(e) => write!(f, "{e}")?,
                             EffectTerm::Var(v) => write!(f, "{}", VarDisplay(v))?,
-                        }
-                    }
-                    for arg in identity_args {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        first = false;
-                        match arg {
-                            IdentityTerm::Known(id) => write!(f, "#{id:?}")?,
-                            IdentityTerm::Var(v) => write!(f, "#{}", VarDisplay(v))?,
                         }
                     }
                     write!(f, ">")?;
@@ -2572,6 +2568,85 @@ impl<V: Phase> TyTerm<V> {
                 | TyTerm::Never
                 | TyTerm::Order
         )
+    }
+
+    /// Two types that print the same and whose source lists differ are one
+    /// type held by values from two different sources, which is what
+    /// `MirErrorKind::IdentityMismatch` reports: this order is the pairing
+    /// that refusal reads, and `typeck` compares the two lists position by
+    /// position.
+    pub fn for_each_source(&self, on_source: &mut impl FnMut(IdentityId)) {
+        match self {
+            TyTerm::Int(_)
+            | TyTerm::Float
+            | TyTerm::Char
+            | TyTerm::String
+            | TyTerm::Bool
+            | TyTerm::Unit
+            | TyTerm::Never
+            | TyTerm::Order
+            | TyTerm::Str
+            | TyTerm::Error(_)
+            | TyTerm::Var(_) => {}
+            TyTerm::Array(inner, _) => inner.for_each_source(on_source),
+            TyTerm::Slice(elem) => elem.for_each_source(on_source),
+            TyTerm::Handle(inner) => inner.for_each_source(on_source),
+            TyTerm::Option(inner) => inner.for_each_source(on_source),
+            TyTerm::Ref(_, inner) => inner.ty.for_each_source(on_source),
+            TyTerm::Result(ok, err) => {
+                ok.for_each_source(on_source);
+                err.for_each_source(on_source);
+            }
+            TyTerm::Tuple(elems) => {
+                for elem in elems {
+                    elem.for_each_source(on_source);
+                }
+            }
+            TyTerm::Object(object) => {
+                let mut fields: Vec<_> = object.iter().collect();
+                fields.sort_by_key(|(name, _)| **name);
+                for (_, ty) in fields {
+                    ty.for_each_source(on_source);
+                }
+            }
+            TyTerm::Enum { variants, .. } => {
+                let mut tags: Vec<_> = variants.iter().collect();
+                tags.sort_by_key(|(tag, _)| **tag);
+                for (_, payload) in tags {
+                    if let Some(ty) = payload {
+                        ty.for_each_source(on_source);
+                    }
+                }
+            }
+            TyTerm::Fn {
+                params,
+                ret,
+                captures,
+                ..
+            } => {
+                for param in params {
+                    param.ty.for_each_source(on_source);
+                }
+                ret.for_each_source(on_source);
+                for capture in captures {
+                    capture.for_each_source(on_source);
+                }
+            }
+            TyTerm::UserDefined {
+                type_args,
+                identity_args,
+                ..
+            } => {
+                for arg in type_args {
+                    arg.ty.for_each_source(on_source);
+                }
+                for arg in identity_args {
+                    if let IdentityTerm::Known(id) = arg {
+                        on_source(*id);
+                    }
+                }
+            }
+        }
     }
 
     /// Map this type term from phase `V` to phase `W`.

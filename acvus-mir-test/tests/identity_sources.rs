@@ -170,3 +170,40 @@ fn a_declared_context_never_shares_a_source_with_a_new_one() {
         "storing the context's own source back must be accepted"
     );
 }
+
+/// A source minted where no expression is in hand has no origin, and naming
+/// one that has no origin does not invent one: a refusal over such a source
+/// shows `this value` and points at no second place.
+#[test]
+fn a_source_no_expression_minted_has_no_origin() {
+    let i = Interner::new();
+    let mut sources = Sources::new();
+    let unplaced = sources.next();
+    let placed = sources.next();
+    sources.begins_at(placed, acvus_ast::Span::new(4, 9));
+
+    sources.named(unplaced, i.intern("a"));
+    assert_eq!(sources.origin(unplaced), None);
+
+    sources.named(placed, i.intern("b"));
+    let origin = sources.origin(placed).expect("its origin was recorded");
+    assert_eq!(origin.span, acvus_ast::Span::new(4, 9));
+    assert_eq!(origin.name, Some(i.intern("b")));
+}
+
+/// The first expression to name a source is its origin, and the first name to
+/// hold one is the name a refusal prints.
+#[test]
+fn an_origin_and_a_name_are_written_once() {
+    let i = Interner::new();
+    let mut sources = Sources::new();
+    let id = sources.next();
+    sources.begins_at(id, acvus_ast::Span::new(4, 9));
+    sources.begins_at(id, acvus_ast::Span::new(20, 30));
+    sources.named(id, i.intern("a"));
+    sources.named(id, i.intern("b"));
+
+    let origin = sources.origin(id).expect("its origin was recorded");
+    assert_eq!(origin.span, acvus_ast::Span::new(4, 9));
+    assert_eq!(origin.name, Some(i.intern("a")));
+}

@@ -29,11 +29,11 @@ expression: ir
     ; r2 (@users) : Vec<{name: String}>
     ; r3 (v6) : Array<{name: String}, 0>
     ; r4 (vec(...)) : Vec<{name: String}>
-    ; r5 (into_iter(...)) : Iterator<{name: String}, Pure, #IdentityId(0)>
+    ; r5 (into_iter(...)) : Iterator<{name: String}, Pure>
     ; r6 (v11) : Fn({name: String}) -> String
-    ; r7 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r7 (map(...)) : Iterator<String, Pure>
     ; r8 (collect(...)) : Vec<String>
-    ; r9 (v14) : Iterator<String, Pure, #IdentityId(2)>
+    ; r9 (v14) : Iterator<String, Pure>
     ; r10 (v15) : &str
     ; r11 (to_string(...)) : String
     ; r12 (join(...)) : String

@@ -6,7 +6,7 @@ use acvus_ast::{
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::error::{MirError, MirErrorKind};
+use crate::error::{MirError, MirErrorKind, ShownValue};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::solver::{
@@ -42,6 +42,45 @@ pub type DirectCallMap = FxHashMap<AstId, Callee>;
 /// Contains concrete `Ty` (frozen from `InferTy` at `check_template`/`check_script`).
 /// `Ty = TyTerm<Concrete>` cannot contain unresolved variables by construction
 /// (`TyVar = Infallible`), so completeness is guaranteed structurally.
+/// One use of a scheme, with the two spans it answers for: where the
+/// program uses the scheme, and where a source the use mints begins.
+/// `@items | into_iter` is used at the whole pipe and begins a source at
+/// `into_iter`, which is the place a refusal over sources points at.
+#[derive(Clone, Copy)]
+struct SchemeUse {
+    at: Span,
+    source_begins: Span,
+}
+
+/// The callee of a call as the program wrote it: the id the checker
+/// records its type under, and the span of the name. A method call and an
+/// operator write no name of their own, so both spans are the call's.
+#[derive(Clone, Copy)]
+struct CalleeSite {
+    id: AstId,
+    span: Span,
+}
+
+/// An `if` whose two branches did not join, with the two branch types as
+/// the solver still holds them.
+struct BranchMismatch {
+    then: InferTy,
+    else_: InferTy,
+    span: Span,
+}
+
+/// A refusal with the second places it points at.
+struct Refusal {
+    kind: MirErrorKind,
+    labels: Vec<Label>,
+}
+
+/// One source as a refusal shows it.
+struct ShownSource {
+    value: ShownValue,
+    begins: Option<Label>,
+}
+
 /// A bounded type variable and where a violation of its bound is reported.
 struct BoundSite {
     var: crate::ty::TypeBoundId,
@@ -738,6 +777,11 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Bounded variables instantiated so far, each at the span that will
     /// report a violation.
     bound_sites: Vec<BoundSite>,
+    /// Each `if` whose two branches did not join, held until `solve_body`
+    /// has solved: the branch types name variables the instance decisions
+    /// bind, and a type frozen before they settle prints `!` where the
+    /// program wrote a type the solve went on to find.
+    branch_mismatches: Vec<BranchMismatch>,
     /// The return type of the function being checked, where one can be
     /// left early: a script's or a lambda's, never a template's (RFC-0038).
     return_ty: Option<InferTy>,
@@ -793,6 +837,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             context_binds_under_open_head: Vec::new(),
             demand: PlaceDemand::Value,
             bound_sites: Vec::new(),
+            branch_mismatches: Vec::new(),
             return_ty: None,
             try_sites: FxHashMap::default(),
             int_literals: Vec::new(),
@@ -1443,6 +1488,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 home
             }
         };
+        let mut held = Vec::new();
+        self.solver
+            .resolve_ty(&ty)
+            .for_each_source(&mut |id| held.push(id));
+        for id in held {
+            self.solver.name_source(id, name);
+        }
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, ty);
         }
@@ -1804,27 +1856,79 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         current
     }
 
+    /// Every refusal the checker raises without labels of its own passes
+    /// here, so a mismatch that is really one type from two sources is
+    /// restated wherever it is raised and not only where this run looked.
     fn error(&mut self, kind: MirErrorKind, span: Span) {
-        self.errors.push(MirError {
-            kind,
-            span,
-            labels: Vec::new(),
-        });
+        let sources = match &kind {
+            MirErrorKind::UnificationFailure { expected, got }
+            | MirErrorKind::HeterogeneousList { expected, got } => {
+                self.one_type_two_sources(expected, got)
+            }
+            _ => None,
+        };
+        match sources {
+            Some(refusal) => self.labeled_error(refusal.kind, span, refusal.labels),
+            None => self.errors.push(MirError {
+                kind,
+                span,
+                labels: Vec::new(),
+            }),
+        }
     }
 
     fn labeled_error(&mut self, kind: MirErrorKind, span: Span, labels: Vec<Label>) {
         self.errors.push(MirError { kind, span, labels });
     }
 
-    /// Instantiate a scheme for a use at `span`; its bounded variables are
-    /// verified and its instance decided when the body is solved. The
+    /// Sameness is decided by the rendering because `TyDisplay` drops
+    /// identity arguments: print them again there and two types from two
+    /// sources stop reading alike, and this refusal stops being raised.
+    fn one_type_two_sources(&self, expected: &Ty, got: &Ty) -> Option<Refusal> {
+        if expected.display(self.interner).to_string() != got.display(self.interner).to_string() {
+            return None;
+        }
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        expected.for_each_source(&mut |id| left.push(id));
+        got.for_each_source(&mut |id| right.push(id));
+        if left.len() != right.len() {
+            return None;
+        }
+        let (first, second) = left.into_iter().zip(right).find(|(a, b)| a != b)?;
+        let (first, second) = (self.shown_source(first), self.shown_source(second));
+        Some(Refusal {
+            kind: MirErrorKind::OneTypeTwoSources {
+                left: first.value.clone(),
+                right: second.value.clone(),
+            },
+            labels: [first.begins, second.begins]
+                .into_iter()
+                .flatten()
+                .collect(),
+        })
+    }
+
+    fn shown_source(&self, id: crate::ty::IdentityId) -> ShownSource {
+        let origin = self.solver.source_origin(id);
+        let value = match origin.and_then(|origin| origin.name) {
+            Some(name) => ShownValue::Named(self.interner.resolve(name).to_string()),
+            None => ShownValue::Anonymous,
+        };
+        let begins = origin
+            .filter(|origin| origin.span != Span::ZERO)
+            .map(|origin| Label::at(origin.span, format!("{value}'s source begins here")));
+        ShownSource { value, begins }
+    }
+
+    /// Instantiate a scheme for a use at `site.at`; its bounded variables
+    /// are verified and its instance decided when the body is solved. The
     /// compiler's own instances of a shared signature (RFC-0020) join the
     /// declared ones, and the bound admits their shapes.
     fn instantiate_at(
         &mut self,
         qref: QualifiedRef,
         scheme: &crate::ty::Scheme,
-        span: Span,
+        site: SchemeUse,
     ) -> (InferTy, Option<InstanceChoice>) {
         let compiler_instances = self.compiler_instances(qref);
         let mut scheme = scheme.clone();
@@ -1839,10 +1943,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let inst = self
             .solver
             .instantiate_scheme_with(&scheme, compiler_instances);
-        self.bound_sites
-            .extend(inst.bounded.into_iter().map(|var| BoundSite { var, span }));
+        self.bound_sites.extend(
+            inst.bounded
+                .into_iter()
+                .map(|var| BoundSite { var, span: site.at }),
+        );
         if let Some(InstanceChoice::Decided(decision)) = inst.instance {
-            self.decision_sites.insert(decision, span);
+            self.decision_sites.insert(decision, site.at);
+        }
+        let mut minted = Vec::new();
+        inst.ty.for_each_source(&mut |id| minted.push(id));
+        for id in minted {
+            self.solver.source_begins_at(id, site.source_begins);
         }
         (inst.ty, inst.instance)
     }
@@ -2036,6 +2148,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn solve_body(&mut self) {
         let unsettled = self.solver.solve();
         self.report_unsettled(unsettled);
+        for BranchMismatch { then, else_, span } in std::mem::take(&mut self.branch_mismatches) {
+            self.error(
+                MirErrorKind::UnificationFailure {
+                    expected: self.type_as_written(&then),
+                    got: self.type_as_written(&else_),
+                },
+                span,
+            );
+        }
         self.record_decided_call_types();
         self.resolve_conversions();
         self.settle_slice_args();
@@ -2253,7 +2374,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         to: &InferTy,
         span: Span,
     ) -> PendingExternCast {
-        let (inst, instance) = self.instantiate_at(fn_ref, scheme, span);
+        let site = SchemeUse {
+            at: span,
+            source_begins: span,
+        };
+        let (inst, instance) = self.instantiate_at(fn_ref, scheme, site);
         if let TyTerm::Fn {
             params,
             ret,
@@ -2652,7 +2777,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             });
             return self.record_ret(id, Self::infer_error());
         }
-        let slice = self.check_overloaded_call(candidates, callee_id, name, Some(first), &[], span);
+        let slice = self.check_overloaded_call(
+            candidates,
+            CalleeSite {
+                id: callee_id,
+                span,
+            },
+            name,
+            Some(first),
+            &[],
+            span,
+        );
         let element = match self.solver.shallow_resolve_ty(&slice) {
             TyTerm::Ref(_, inner) => match self.solver.shallow_resolve_ty(&inner.ty) {
                 TyTerm::Slice(element) => *element,
@@ -2780,7 +2915,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return self.check_resolved_call(
                     qref,
                     &scheme,
-                    callee_id,
+                    CalleeSite {
+                        id: callee_id,
+                        span: call_span,
+                    },
                     &name_str,
                     Some(first),
                     args,
@@ -2808,7 +2946,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 };
                 return self.check_overloaded_call(
                     candidates,
-                    callee_id,
+                    CalleeSite {
+                        id: callee_id,
+                        span: call_span,
+                    },
                     name,
                     Some(first),
                     args,
@@ -3011,7 +3152,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn check_overloaded_call(
         &mut self,
         candidates: Vec<SignatureCandidate>,
-        callee_id: AstId,
+        callee: CalleeSite,
         name: Astr,
         first: Option<FirstArg>,
         args: &[Expr],
@@ -3030,13 +3171,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             [SignatureCandidate::Named { qref, scheme }] => {
                 let (qref, scheme) = (*qref, scheme.clone());
-                return self.check_resolved_call(
-                    qref, &scheme, callee_id, &name_str, first, args, call_span,
-                );
+                return self
+                    .check_resolved_call(qref, &scheme, callee, &name_str, first, args, call_span);
             }
             [SignatureCandidate::Local { ty }] => {
                 let ty = ty.clone();
-                return self.check_local_call(callee_id, &ty, first.as_ref(), args, call_span);
+                return self.check_local_call(callee.id, &ty, first.as_ref(), args, call_span);
             }
             _ => {}
         }
@@ -3082,7 +3222,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         });
         self.decision_sites.insert(decision, call_span);
         self.direct_calls
-            .insert(callee_id, CalleeChoice::Decided(decision));
+            .insert(callee.id, CalleeChoice::Decided(decision));
         ret
     }
 
@@ -3288,13 +3428,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         resolved_qref: QualifiedRef,
         fn_sig: &crate::ty::Scheme,
-        callee_id: AstId,
+        callee: CalleeSite,
         name_str: &str,
         first: Option<FirstArg>,
         args: &[Expr],
         call_span: Span,
     ) -> InferTy {
-        let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, call_span);
+        let site = SchemeUse {
+            at: call_span,
+            source_begins: callee.span,
+        };
+        let (fn_ty, instance) = self.instantiate_at(resolved_qref, fn_sig, site);
         let arg_types = self.check_args_in_order(&fn_ty, first.as_ref(), args);
         match &fn_ty {
             TyTerm::Fn {
@@ -3308,9 +3452,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
                 let effect = effect.clone();
                 self.note_call_effect(&effect, call_span);
-                self.record(callee_id, fn_ty.clone());
+                self.record(callee.id, fn_ty.clone());
                 self.direct_calls.insert(
-                    callee_id,
+                    callee.id,
                     CalleeChoice::Resolved(ResolvedCallee {
                         qref: resolved_qref,
                         instance,
@@ -3378,7 +3522,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return;
         };
-        let (fn_ty, instance) = self.instantiate_at(qref, &scheme, span);
+        let site = SchemeUse {
+            at: span,
+            source_begins: span,
+        };
+        let (fn_ty, instance) = self.instantiate_at(qref, &scheme, site);
         let TyTerm::Fn { params, effect, .. } = &fn_ty else {
             unreachable!("a shared signature is a function type");
         };
@@ -3919,7 +4067,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return Self::infer_error();
         }
-        let slice = self.check_overloaded_call(candidates, callee_id, name, Some(first), &[], span);
+        let slice = self.check_overloaded_call(
+            candidates,
+            CalleeSite {
+                id: callee_id,
+                span,
+            },
+            name,
+            Some(first),
+            &[],
+            span,
+        );
         match self.solver.shallow_resolve_ty(&slice) {
             TyTerm::Ref(_, inner) => match self.solver.shallow_resolve_ty(&inner.ty) {
                 TyTerm::Slice(element) => *element,
@@ -5006,7 +5164,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return self.check_resolved_call(
                     *qref,
                     &scheme,
-                    func.id(),
+                    CalleeSite {
+                        id: func.id(),
+                        span: func.span(),
+                    },
                     name_str,
                     first,
                     args,
@@ -5020,7 +5181,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             _ => {
                 return self.check_overloaded_call(
                     candidates,
-                    func.id(),
+                    CalleeSite {
+                        id: func.id(),
+                        span: func.span(),
+                    },
                     name.name,
                     first,
                     args,
@@ -5551,13 +5715,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 None => self.solver.unify(&else_.ty, &joined).is_ok(),
             };
         if !else_ok {
-            self.error(
-                MirErrorKind::UnificationFailure {
-                    expected: self.type_as_written(&then.ty),
-                    got: self.type_as_written(&else_.ty),
-                },
+            self.branch_mismatches.push(BranchMismatch {
+                then: then.ty.clone(),
+                else_: else_.ty.clone(),
                 span,
-            );
+            });
         }
         self.solver.resolve_ty(&joined)
     }

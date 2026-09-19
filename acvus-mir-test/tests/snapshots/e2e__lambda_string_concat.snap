@@ -26,13 +26,13 @@ expression: ir
 
     ; r0 (v21) : Vec<String>
     ; r1 (v22) : Vec<String>
-    ; r2 (v23) : Iterator<String, Pure, #IdentityId(0)>
+    ; r2 (v23) : Iterator<String, Pure>
     ; r3 (@names) : Vec<String>
     ; r4 (v6) : Array<String, 0>
     ; r5 (vec(...)) : Vec<String>
-    ; r6 (into_iter(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<String, Pure>
     ; r7 (v11) : Fn(String) -> String
-    ; r8 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r8 (map(...)) : Iterator<String, Pure>
     ; r9 (v16) : &str
     ; r10 (to_string(...)) : String
     ; r11 (join(...)) : String
@@ -41,9 +41,9 @@ expression: ir
     ; r14 (v14) : String
     ; r15 (v20) : Vec<String>
     ; r16 (names) : Vec<String>
-    ; r17 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r17 (x) : Iterator<String, Pure>
     ; r18 (names) : Vec<String>
-    ; r19 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r19 (x) : Iterator<String, Pure>
     ; r20 (@names) : Vec<String>
     ; r21 (v5) : String
     ; r22 (v8) : String

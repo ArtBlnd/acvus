@@ -7,6 +7,21 @@ use acvus_utils::Interner;
 use crate::graph::QualifiedRef;
 use crate::ty::Ty;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShownValue {
+    Named(String),
+    Anonymous,
+}
+
+impl fmt::Display for ShownValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ShownValue::Named(name) => write!(f, "`{name}`"),
+            ShownValue::Anonymous => write!(f, "this value"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MirError {
     pub kind: MirErrorKind,
@@ -35,6 +50,15 @@ pub enum MirErrorKind {
     UnificationFailure {
         expected: Ty,
         got: Ty,
+    },
+    /// This refusal carries no type, and that is a decision rather than
+    /// an omission: the two types are the same as the program writes
+    /// them, so printing both would show a reader two identical lines and
+    /// say nothing about the difference. The labels say where each source
+    /// began instead.
+    OneTypeTwoSources {
+        left: ShownValue,
+        right: ShownValue,
     },
     /// A declared type variable resolved to a type outside its bound.
     TypeOutOfBound {
@@ -279,6 +303,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "heterogeneous list: expected {}, got {}",
                     expected.display(interner),
                     got.display(interner)
+                )
+            }
+            MirErrorKind::OneTypeTwoSources { left, right } => {
+                write!(
+                    f,
+                    "{left} and {right} are values of one type from two different sources, \
+                     and one place cannot hold both"
                 )
             }
             MirErrorKind::AmbiguousType { resolved_ty } => {

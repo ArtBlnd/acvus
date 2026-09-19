@@ -1,5 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
+assertion_line: 788
 expression: ir
 ---
 === literals ===
@@ -32,10 +33,10 @@ expression: ir
     ; r3 (@items) : Vec<i64>
     ; r4 (v9) : Array<i64, 0>
     ; r5 (vec(...)) : Vec<i64>
-    ; r6 (into_iter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<i64, Pure>
     ; r7 (v15) : Fn(&i64) -> Bool
     ; r8 (v3) : i64
-    ; r9 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r9 (filter(...)) : Iterator<i64, Pure>
     ; r10 (collect(...)) : Vec<i64>
     ; r11 (x.) : &Vec<i64>
     ; r12 (len(...)) : u64

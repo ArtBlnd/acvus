@@ -31,7 +31,7 @@ expression: ir
 
     ; r0 (v26) : Array<String, 3>
     ; r1 (v27) : Array<String, 3>
-    ; r2 (v28) : Iterator<String, Pure, #IdentityId(0)>
+    ; r2 (v28) : Iterator<String, Pure>
     ; r3 (@names) : Array<String, 3>
     ; r4 (v6) : &str
     ; r5 (to_string(...)) : String
@@ -40,9 +40,9 @@ expression: ir
     ; r8 (v10) : &str
     ; r9 (to_string(...)) : String
     ; r10 (v12) : Array<String, 3>
-    ; r11 (into_iter(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r11 (into_iter(...)) : Iterator<String, Pure>
     ; r12 (v16) : Fn(&String) -> Bool
-    ; r13 (filter(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r13 (filter(...)) : Iterator<String, Pure>
     ; r14 (v21) : &str
     ; r15 (to_string(...)) : String
     ; r16 (join(...)) : String
@@ -50,9 +50,9 @@ expression: ir
     ; r18 (@names) : Array<String, 3>
     ; r19 (names) : Array<String, 3>
     ; r20 (v25) : Array<String, 3>
-    ; r21 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r21 (x) : Iterator<String, Pure>
     ; r22 (v13) : String
-    ; r23 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r23 (x) : Iterator<String, Pure>
     ; r24 (@names) : Array<String, 3>
     ; r25 (names) : Array<String, 3>
     ; r26 (v5) : String

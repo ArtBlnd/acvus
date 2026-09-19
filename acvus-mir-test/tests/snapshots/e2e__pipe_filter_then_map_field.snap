@@ -27,15 +27,15 @@ expression: ir
 
     ; r0 (v23) : Vec<{age: i64, name: String}>
     ; r1 (v24) : Vec<{age: i64, name: String}>
-    ; r2 (v25) : Iterator<String, Pure, #IdentityId(0)>
+    ; r2 (v25) : Iterator<String, Pure>
     ; r3 (@users) : Vec<{age: i64, name: String}>
     ; r4 (v6) : Array<{age: i64, name: String}, 0>
     ; r5 (vec(...)) : Vec<{age: i64, name: String}>
-    ; r6 (into_iter(...)) : Iterator<{age: i64, name: String}, Pure, #IdentityId(0)>
+    ; r6 (into_iter(...)) : Iterator<{age: i64, name: String}, Pure>
     ; r7 (v11) : Fn(&{age: i64, name: String}) -> Bool
-    ; r8 (filter(...)) : Iterator<{age: i64, name: String}, Pure, #IdentityId(0)>
+    ; r8 (filter(...)) : Iterator<{age: i64, name: String}, Pure>
     ; r9 (v13) : Fn({age: i64, name: String}) -> String
-    ; r10 (map(...)) : Iterator<String, Pure, #IdentityId(0)>
+    ; r10 (map(...)) : Iterator<String, Pure>
     ; r11 (v18) : &str
     ; r12 (to_string(...)) : String
     ; r13 (join(...)) : String
@@ -43,8 +43,8 @@ expression: ir
     ; r15 (v22) : Vec<{age: i64, name: String}>
     ; r16 (@users) : Vec<{age: i64, name: String}>
     ; r17 (users) : Vec<{age: i64, name: String}>
-    ; r18 (x) : Iterator<String, Pure, #IdentityId(0)>
-    ; r19 (x) : Iterator<String, Pure, #IdentityId(0)>
+    ; r18 (x) : Iterator<String, Pure>
+    ; r19 (x) : Iterator<String, Pure>
     ; r20 (users) : Vec<{age: i64, name: String}>
     ; r21 (@users) : Vec<{age: i64, name: String}>
     ; r22 (v5) : String

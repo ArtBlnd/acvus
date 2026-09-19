@@ -629,3 +629,55 @@ fn a_use_after_move_shows_the_move_and_the_use_with_the_lines_between_elided() {
         }])
     );
 }
+
+/// Two values of one type from two sources: the refusal names the place they
+/// meet and the two places the sources begin, and `--json` carries all three.
+#[test]
+fn two_iterators_from_two_sources_show_where_each_source_begins() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "let a = [1, 2] | into_iter;\nlet b = [3, 4] | into_iter;\nlet l = [a, b];\n";
+    write(dir.path(), "id.acvus", source);
+
+    let out = acvus(dir.path(), &["check", "id.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        [
+            "error: `a` and `b` are values of one type from two different sources, and one place cannot hold both",
+            "  --> id.acvus:3:9",
+            "  |",
+            "1 | let a = [1, 2] | into_iter;",
+            "  |                  --------- `a`'s source begins here",
+            "2 | let b = [3, 4] | into_iter;",
+            "  |                  --------- `b`'s source begins here",
+            "3 | let l = [a, b];",
+            "  |         ^^^^^^ `a` and `b` are values of one type from two different sources, and one place cannot hold both",
+            "",
+        ]
+        .join("\n")
+    );
+
+    let out = acvus(dir.path(), &["check", "--json", "id.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let array: Vec<serde_json::Value> = serde_json::from_str(&text(&out.stdout)).unwrap();
+    assert_eq!(array.len(), 1);
+    assert_eq!(array[0]["line"], 3);
+    assert_eq!(array[0]["col"], 9);
+    assert_eq!(
+        array[0]["labels"],
+        serde_json::json!([
+            {
+                "line": 1,
+                "col": 18,
+                "span": [17, 26],
+                "text": "`a`'s source begins here",
+            },
+            {
+                "line": 2,
+                "col": 18,
+                "span": [45, 54],
+                "text": "`b`'s source begins here",
+            },
+        ])
+    );
+}

@@ -17,8 +17,8 @@ expression: ir
     ; r2 (v2) : i64
     ; r3 (v3) : i64
     ; r4 ($xs) : Array<i64, 3>
-    ; r5 (v9) : Iterator<i64, Pure, #IdentityId(1)>
+    ; r5 (v9) : Iterator<i64, Pure>
     ; r6 (v10) : Fn(&i64) -> Bool
-    ; r7 (filter(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r7 (filter(...)) : Iterator<i64, Pure>
     ; r8 (collect(...)) : Vec<i64>
-    ; r9 (positives(...)) : Iterator<i64, Pure, #IdentityId(0)>
+    ; r9 (positives(...)) : Iterator<i64, Pure>

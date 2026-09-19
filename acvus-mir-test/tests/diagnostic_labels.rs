@@ -175,3 +175,63 @@ fn a_context_moved_out_names_the_move_alone() {
     );
     assert_eq!(labels, []);
 }
+
+/// Two values of one type from two sources: the list, the `if` and the call
+/// each name their own place where the two meet, and both origins.
+mod one_type_two_sources {
+    use super::*;
+
+    const WORDS: &str = "`a` and `b` are values of one type from two different sources, \
+                         and one place cannot hold both";
+
+    fn begins_here(name: &str) -> Marked {
+        at("into_iter", &format!("`{name}`'s source begins here"))
+    }
+
+    #[test]
+    fn a_list_of_two_sources_labels_both() {
+        let (message, labels) = only(
+            "let a = [1, 2] | into_iter; let b = [3, 4] | into_iter; [a, b]; 0",
+            &nothing,
+        );
+        assert_eq!(message, WORDS);
+        assert_eq!(labels, [begins_here("a"), begins_here("b")]);
+    }
+
+    #[test]
+    fn two_branches_of_two_sources_label_both() {
+        let (message, labels) = only(
+            "let a = [1, 2] | into_iter; let b = [3, 4] | into_iter; \
+             let c = if true { a } else { b }; 0",
+            &nothing,
+        );
+        assert_eq!(message, WORDS);
+        assert_eq!(labels, [begins_here("a"), begins_here("b")]);
+    }
+
+    #[test]
+    fn two_calls_of_one_lambda_label_both_sources() {
+        let (message, labels) = only(
+            "let a = [1, 2] | into_iter; let b = [3, 4] | into_iter; \
+             let f = |x| -> x | collect; f(a); f(b); 0",
+            &nothing,
+        );
+        assert_eq!(message, WORDS);
+        assert_eq!(labels, [begins_here("a"), begins_here("b")]);
+    }
+
+    /// Rule 3: where the two types differ in something a reader can see, the
+    /// refusal is about the types and names no source.
+    #[test]
+    fn two_sources_of_two_types_stay_a_type_mismatch() {
+        let (message, labels) = only(
+            "let a = [1, 2] | into_iter; let b = [\"x\".to_string(), \"y\".to_string()] | into_iter; [a, b]; 0",
+            &nothing,
+        );
+        assert_eq!(
+            message,
+            "heterogeneous list: expected Iterator<i64, Pure>, got Iterator<String, Pure>"
+        );
+        assert_eq!(labels, []);
+    }
+}
