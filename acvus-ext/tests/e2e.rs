@@ -189,7 +189,7 @@ async fn regex_match_true() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { regex_match(re, "abc123") } else { false }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "abc123"; is_match(&re, &t) } else { false }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -202,7 +202,7 @@ async fn regex_match_false() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { regex_match(re, "abc") } else { true }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "abc"; is_match(&re, &t) } else { true }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -215,7 +215,7 @@ async fn regex_find_all_collect() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { regex_find_all(re, "a1b22c333") | collect } else { vec([]) }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "a1b22c333"; find_all(&re, &t) | map(|m| -> m.text) | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -228,7 +228,7 @@ async fn regex_replace() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\s+") { regex_replace("hello   world", re, " ") } else { "?" }"#,
+        r#"if let Ok(re) = regex("\\s+") { let t = "hello   world"; replace_all(&re, &t, " ") } else { "?" }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -241,7 +241,7 @@ async fn regex_split_collect() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("[,;]\\s*") { regex_split(re, "a, b;c") | collect } else { vec([]) }"#,
+        r#"if let Ok(re) = regex("[,;]\\s*") { let t = "a, b;c"; split(&re, &t) | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -364,7 +364,7 @@ async fn mixed_regex_and_encoding() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+") { let m = regex_match(re, "abc123"); base64_encode("hello") + " " + m.to_string() } else { "?" }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "abc123"; let m = is_match(&re, &t); base64_encode("hello") + " " + m.to_string() } else { "?" }"#,
         TypedContext::default(),
         vec![
             regex_registry::<AcvusRuntime>(),
@@ -952,7 +952,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     assert_str(&v, "héllo");
     let v = run_ext_script_mode(
         &i,
-        "if let Ok(re) = regex(\"[0-9]+\") { unwrap_or(regex_find(re, \"ab42cd\"), \"none\") } else { \"?\" }",
+        "if let Ok(re) = regex(\"[0-9]+\") { let t = \"ab42cd\"; if let Some(m) = find(&re, &t) { m.text } else { \"none\" } } else { \"?\" }",
         TypedContext::default(),
         vec![regex_registry()],
     )

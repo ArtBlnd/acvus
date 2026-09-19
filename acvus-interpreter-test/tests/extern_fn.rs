@@ -124,7 +124,7 @@ async fn regex_match_via_extern() {
     let c = ctx(&i, vec![("text", string("hello world 42"))]);
     let result = run_script_mode_with_externs(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+") { regex_match(re, @text) } else { false }"#,
+        r#"if let Ok(re) = regex("[0-9]+") { is_match(&re, &@text) } else { false }"#,
         c,
         vec![registry],
         Ty::Bool,
@@ -141,15 +141,15 @@ async fn regex_find_via_extern() {
     let c = ctx(&i, vec![("text", string("price is 42 dollars"))]);
     let result = run_script_mode_with_externs(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+") { regex_find(re, @text) } else { None }"#,
+        r#"if let Ok(re) = regex("[0-9]+") {
+             if let Some(m) = find(&re, &@text) { m.text } else { "no match" }
+           } else { "?" }"#,
         c,
         vec![registry],
-        Ty::Option(Box::new(Ty::String)),
+        Ty::String,
     )
     .await;
-    // SAFETY: `regex_find` returns `Option<String>`, whose `Some` is the
-    // String value itself (RFC-0022).
-    assert_eq!(unsafe { result.value.as_str() }, "42");
+    assert_str(&result.value, "42");
 }
 
 // =======================================================================
