@@ -14,16 +14,22 @@ use crate::func::CallToken;
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
     type Value: crate::OneValue<Self> + crate::FromValue<Self> + crate::Release + Copy + Default;
-    /// The frame a synchronous call runs on (RFC-0052 §6). A runtime that
-    /// needs no frame answers `()`.
-    type Frame: Send + Sync;
+    /// The frame a handler calls a closure on: the window above the calling
+    /// frame, lent for the call's duration (RFC-0050 rule 6).
+    type Frame<'a>: Send
+    where
+        Self: 'a;
+    /// The cells a call that outlives the frame it was made on runs its
+    /// closures in. A future the caller waits for cannot borrow the caller's
+    /// window — it is `'static` and the caller's frame holds it — so the
+    /// `async` glue owns one of these and lends a `Frame` out of it per call.
+    type Rooted: Send + Sync;
     type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where
         Self: 'a;
 
-    /// Obligation on the caller: one per closure-calling site, made where the
-    /// site is built, not where it calls.
-    fn frame(&self) -> Self::Frame;
+    fn rooted(&self) -> Self::Rooted;
+    fn frame_of(rooted: &mut Self::Rooted) -> Self::Frame<'_>;
 
     /// The `T` of the `erase::<T>` that made this value, when the value
     /// records it. `downcast` and `Erased::from_value` trust this answer
@@ -126,14 +132,17 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// closures can always suspend answers `false`.
     fn call_is_sync(&self, f: &Self::Value) -> bool;
     /// Run `f` to its result now, reached only where `call_is_sync`
-    /// answered true for this same value.
-    fn call_now(
+    /// answered true for this same value. Each argument crosses straight into
+    /// the parameter register `frame` holds for it (RFC-0052 §7).
+    fn call_now<A>(
         &self,
         f: &Self::Value,
-        args: &mut [Self::Value],
-        frame: &mut Self::Frame,
+        frame: &mut Self::Frame<'_>,
+        args: A,
         token: CallToken,
-    ) -> Self::Value;
+    ) -> Self::Value
+    where
+        A: crate::IntoRun<Self>;
 
     /// Run the closure `f`; each argument moves into the callee's
     /// parameter. Only `Fn0`/`Fn1`/… reach these: the token is theirs to
@@ -174,10 +183,12 @@ impl crate::FromValue<TypesOnly> for () {
 
 impl Runtime for TypesOnly {
     type Value = ();
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<()>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     fn type_of(&self, _: &()) -> Option<TypeId> {
         None
@@ -257,7 +268,10 @@ impl Runtime for TypesOnly {
     fn call_is_sync(&self, _: &()) -> bool {
         false
     }
-    fn call_now(&self, _: &(), _: &mut [()], _: &mut (), _: CallToken) {
+    fn call_now<A>(&self, _: &(), _: &mut (), _: A, _: CallToken)
+    where
+        A: crate::IntoRun<Self>,
+    {
         no_values()
     }
     fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {

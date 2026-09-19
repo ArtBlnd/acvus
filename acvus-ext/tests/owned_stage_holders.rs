@@ -149,10 +149,12 @@ impl FromValue<Counted> for V {
 
 impl Runtime for Counted {
     type Value = V;
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<V>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         match value {
@@ -273,8 +275,12 @@ impl Runtime for Counted {
         true
     }
 
-    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
-        let [a] = args else {
+    fn call_now<A>(&self, f: &V, _: &mut (), args: A, _: CallToken) -> V
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
+        let run = run_of(self, args);
+        let [a] = run.as_slice() else {
             panic!("Counted runs only unary closures")
         };
         open_ref::<UnaryClosure>(f)(self, *a)
@@ -330,7 +336,7 @@ type Predicate = Fn1<Ref<Owned<Counted>, Counted>, bool, (), Counted>;
 fn drain(rt: &Counted, mut it: Elements) -> Vec<V> {
     futures::executor::block_on(async {
         let mut out = Vec::new();
-        while let Some(value) = it.next_value(rt).await {
+        while let Some(value) = it.next_value(rt, &mut ()).await {
             out.push(value);
         }
         out
@@ -375,10 +381,7 @@ fn a_map_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Mapping::new(&rt, mapping_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(
-        &rt,
-        Elements::from_items(vec![]).map::<Owned<Counted>>(&rt, f),
-    );
+    let yielded = drain(&rt, Elements::from_items(vec![]).map::<Owned<Counted>>(f));
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }
@@ -388,7 +391,7 @@ fn a_filter_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).filter(&rt, f));
+    let yielded = drain(&rt, Elements::from_items(vec![]).filter(f));
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }
@@ -398,7 +401,7 @@ fn a_take_while_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).take_while(&rt, f));
+    let yielded = drain(&rt, Elements::from_items(vec![]).take_while(f));
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }
@@ -408,7 +411,7 @@ fn a_skip_while_stage_releases_its_closure_when_the_pipeline_ends() {
     let rt = Counted;
     let drops = Drops::default();
     let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).skip_while(&rt, f));
+    let yielded = drain(&rt, Elements::from_items(vec![]).skip_while(f));
     assert!(yielded.is_empty(), "an empty source yields nothing");
     assert_eq!(drops.count(), 1, "the stage released its closure once");
 }
@@ -442,4 +445,16 @@ fn an_undrained_pipeline_releases_the_elements_it_did_not_yield() {
         let _abandoned = Elements::from_items(items).take(1);
     }
     assert_eq!(drops.count(), 3, "the source released every element once");
+}
+
+/// The arguments of a closure call, read back as the run this runtime's own
+/// `call_now` reads them from.
+fn run_of<Rt, A>(rt: &Rt, args: A) -> Vec<Rt::Value>
+where
+    Rt: acvus_extern::Runtime,
+    A: acvus_extern::IntoRun<Rt>,
+{
+    let mut run = vec![Rt::Value::default(); A::WIDTH];
+    args.into_run(rt, &mut run);
+    run
 }

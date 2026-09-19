@@ -152,10 +152,12 @@ impl FromValue<Counted> for V {
 
 impl Runtime for Counted {
     type Value = V;
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<V>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         match value {
@@ -276,8 +278,12 @@ impl Runtime for Counted {
         true
     }
 
-    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
-        let [a] = args else {
+    fn call_now<A>(&self, f: &V, _: &mut (), args: A, _: CallToken) -> V
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
+        let run = run_of(self, args);
+        let [a] = run.as_slice() else {
             panic!("Counted runs only unary closures")
         };
         open_ref::<UnaryClosure>(f)(self, *a)
@@ -562,4 +568,16 @@ fn a_borrow_releases_nothing_and_its_storage_still_releases_once() {
     );
     storage.release();
     assert_eq!(drops.count(), 2, "the storage released each element once");
+}
+
+/// The arguments of a closure call, read back as the run this runtime's own
+/// `call_now` reads them from.
+fn run_of<Rt, A>(rt: &Rt, args: A) -> Vec<Rt::Value>
+where
+    Rt: acvus_extern::Runtime,
+    A: acvus_extern::IntoRun<Rt>,
+{
+    let mut run = vec![Rt::Value::default(); A::WIDTH];
+    args.into_run(rt, &mut run);
+    run
 }

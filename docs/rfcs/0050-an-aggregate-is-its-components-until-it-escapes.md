@@ -147,12 +147,15 @@ object lives.
    components; it is not a heap object either. The frame owns the run;
    `Out` is a borrow of it, so two callers cannot hold one and no
    runtime-level `Context` type is needed to say so. **The frame a
-   handler receives to call a closure is the `Window` above the
-   caller's `frame_len`** (`Runtime::call_now`'s `&mut Frame` narrows
-   to it), disjoint by type from the caller's registers, its wide
-   region and `Out` — so a handler holding `Out` may call back into the
-   machine, and the callee's own region lives in its window. The async
-   path's future owns its window the same way.
+   handler receives to call a closure is the window above the caller's
+   `frame_len`, and the handle to it is one word**: `Runtime::Frame<'a>`
+   is `&'a mut FrameState`, a state the frame below owns — a field of its
+   `Machine`, or the `Store`'s — so the operation passes an address that
+   already exists and builds nothing on its own stack. The window is
+   disjoint by type from the caller's registers, its wide region and
+   `Out` — so a handler holding `Out` may call back into the machine, and
+   the callee's own region lives in its window. The async path's future
+   owns its window the same way.
 
    **The ABI is the runtime's contract, not the macro's** (amended
    2026-09-20): it is an internal contract, so it is resolved in internal
@@ -295,6 +298,25 @@ implementation lands.
   no hash. `option match` holds no aggregate and is expected flat. The
   Brainfuck bench's `program[pc]` read becomes two loads through a
   projection, and its dispatch row becomes a `Switch`.
+- Rule 6's window half is built, and the handle to it is one word. Against
+  master `f3160466`, min of three alternating pinned reps: `extern while`
+  3.7 → 3.5 ns, `option while` 5.4 → 5.3, `branch while` 5.0 → 4.9,
+  `while let vec` 8.9 → 8.0, `map add | sum` 5.9 → 5.5, `map cap | sum`
+  8.4 → 7.8, `attention` -0.9 to -1.5 %, `bf table` -0.6 %; `while let map`
+  10.1 → 10.5 is the one regression, +5 instructions and +2.2 cycles per
+  element on the `CallExtern1` that calls `next`, where the same operation
+  without a closure is -3. The staging `[Value; n]` and the `fill` that
+  copied parameters out of it are gone, which is 9 instructions per element
+  off the closure path, and `CallExtern1::run` is 33 instructions against
+  master's 36 with no stack frame at all. A window passed by value instead
+  of a handle was measured first and refused: three words is past the two
+  the SysV ABI hands an argument in, so every extern call stored it and
+  passed that address, which cost 16 instructions, 3 cycles and the tail
+  call of `CallExtern0..3`, `CallWindow` and `AsSlice`, and regressed
+  `extern while` +16 %, `option while` +13 %, `while let map` +23 %.
+  What the one word still costs is one register the handler never reads
+  where it calls no closure; choosing the operation by whether the handler
+  calls a closure at all, which `Glue` already knows, is what removes that.
 - `&Obj` handlers become expressible; a Rust handler receives a real
   Rust enum.
 - A frame overflow of either class is a `prepare` refusal naming the

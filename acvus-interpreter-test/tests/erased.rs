@@ -30,6 +30,7 @@ where
 #[extern_fn(effect = E, sync = contains_erased_now)]
 async fn contains_erased<E, I, Rt>(
     rt: &Rt,
+    frame: &mut Rt::Frame<'_>,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     needle: Erased<Rt, String>,
 ) -> bool
@@ -38,7 +39,7 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(rt).await {
+    while let Some(item) = it.next(rt, frame).await {
         if item.as_ref(rt) == needle.as_ref(rt) {
             return true;
         }
@@ -48,6 +49,7 @@ where
 
 fn contains_erased_now<E, I, Rt>(
     rt: &Rt,
+    frame: &mut Rt::Frame<'_>,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     needle: Erased<Rt, String>,
 ) -> bool
@@ -56,7 +58,7 @@ where
     I: IdentityVar,
     Rt: Runtime,
 {
-    while let Some(item) = it.next_now(rt) {
+    while let Some(item) = it.next_now(rt, frame) {
         if item.as_ref(rt) == needle.as_ref(rt) {
             return true;
         }

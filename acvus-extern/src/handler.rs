@@ -176,6 +176,52 @@ where
     fn into_run(value: Self::Of, rt: &Rt, out: &mut [Rt::Value]);
 }
 
+/// The arguments of a closure call, written into the callee's parameter
+/// registers — the run the window a handler was lent begins with (RFC-0052
+/// §7). Each member crosses at its own width, as a result does through `Ret`.
+pub trait IntoRun<Rt>: Sized
+where
+    Rt: Runtime,
+{
+    const WIDTH: usize;
+
+    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]);
+}
+
+impl<Rt> IntoRun<Rt> for ()
+where
+    Rt: Runtime,
+{
+    const WIDTH: usize = 0;
+
+    fn into_run(self, _: &Rt, _: &mut [Rt::Value]) {}
+}
+
+macro_rules! into_run_tuple {
+    ($($A:ident: $at:tt),*) => {
+        impl<Rt, $($A,)*> IntoRun<Rt> for ($($A,)*)
+        where
+            Rt: Runtime,
+            $($A: Cross<Rt>,)*
+        {
+            const WIDTH: usize = 0 $(+ <<$A as Cross<Rt>>::Form as Form>::WIDTH)*;
+
+            fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+                let mut _at = 0usize;
+                $(
+                    let _width = <<$A as Cross<Rt>>::Form as Form>::WIDTH;
+                    <$A as Cross<Rt>>::into_run(self.$at, rt, &mut out[_at.._at + _width]);
+                    _at += _width;
+                )*
+            }
+        }
+    };
+}
+
+into_run_tuple!(A0: 0);
+into_run_tuple!(A0: 0, A1: 1);
+into_run_tuple!(A0: 0, A1: 1, A2: 2);
+
 /// A result crossing as itself, at whichever width its type declares.
 pub struct Val<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
@@ -242,12 +288,16 @@ where
 
     fn width(&self) -> Width;
 
+    /// `frame` is the window above the calling frame, which a handler that
+    /// calls a closure calls it in and a handler that calls none ignores
+    /// (RFC-0050 rule 6).
+    ///
     /// # Safety
     /// `run` holds `width().args` of the runtime's values in declaration
     /// order, `out` has room for `width().ret`, and every reference the
     /// handler takes out of `run` names storage live for the call
     /// (RFC-0018).
-    unsafe fn call(&self, rt: &Rt, run: &[Rt::Value], out: &mut [Rt::Value]);
+    unsafe fn call(&self, rt: &Rt, frame: Rt::Frame<'_>, run: &[Rt::Value], out: &mut [Rt::Value]);
 
     /// The register forms. A declaration whose arguments are `k` values wide
     /// and whose result is one value takes them in registers, and `prepare`
@@ -256,30 +306,37 @@ where
     /// # Safety
     /// `width()` is `Width { args: k, ret: 1 }` for the `k` this form names,
     /// and the arguments are this call's own, in declaration order.
-    unsafe fn call0(&self, rt: &Rt) -> Rt::Value {
+    unsafe fn call0(&self, rt: &Rt, frame: Rt::Frame<'_>) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at no values.
-        unsafe { self.call_run(rt, &[]) }
+        unsafe { self.call_run(rt, frame, &[]) }
     }
 
     /// # Safety
     /// As `call0`, at one value.
-    unsafe fn call1(&self, rt: &Rt, a: Rt::Value) -> Rt::Value {
+    unsafe fn call1(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at one value.
-        unsafe { self.call_run(rt, &[a]) }
+        unsafe { self.call_run(rt, frame, &[a]) }
     }
 
     /// # Safety
     /// As `call0`, at two values.
-    unsafe fn call2(&self, rt: &Rt, a: Rt::Value, b: Rt::Value) -> Rt::Value {
+    unsafe fn call2(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value, b: Rt::Value) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at two.
-        unsafe { self.call_run(rt, &[a, b]) }
+        unsafe { self.call_run(rt, frame, &[a, b]) }
     }
 
     /// # Safety
     /// As `call0`, at three values.
-    unsafe fn call3(&self, rt: &Rt, a: Rt::Value, b: Rt::Value, c: Rt::Value) -> Rt::Value {
+    unsafe fn call3(
+        &self,
+        rt: &Rt,
+        frame: Rt::Frame<'_>,
+        a: Rt::Value,
+        b: Rt::Value,
+        c: Rt::Value,
+    ) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at three.
-        unsafe { self.call_run(rt, &[a, b, c]) }
+        unsafe { self.call_run(rt, frame, &[a, b, c]) }
     }
 
     /// The window form: the arguments are lent as the run they already sit
@@ -287,10 +344,10 @@ where
     ///
     /// # Safety
     /// As `call`, with `width().ret == 1`.
-    unsafe fn call_run(&self, rt: &Rt, run: &[Rt::Value]) -> Rt::Value {
+    unsafe fn call_run(&self, rt: &Rt, frame: Rt::Frame<'_>, run: &[Rt::Value]) -> Rt::Value {
         let mut out = [Rt::Value::default()];
         // SAFETY: the caller's contract.
-        unsafe { self.call(rt, run, &mut out) };
+        unsafe { self.call(rt, frame, run, &mut out) };
         out[0]
     }
 
@@ -301,11 +358,11 @@ where
     /// # Safety
     /// `width()` is `Width { args: 1, ret: 2 }`, and `a` is this call's own
     /// argument.
-    unsafe fn call_slice(&self, rt: &Rt, a: Rt::Value) -> Elements<Rt> {
+    unsafe fn call_slice(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> Elements<Rt> {
         let mut out = [Rt::Value::default(); 2];
         // SAFETY: the caller's contract, which is `call`'s at one argument
         // and a result two values wide.
-        unsafe { self.call(rt, &[a], &mut out) };
+        unsafe { self.call(rt, frame, &[a], &mut out) };
         // SAFETY: `out` is the pair the slice's `into_run` just wrote, and
         // the elements it names are the caller's loan (RFC-0018).
         unsafe { Elements::from_words(rt.slice_from_run(&out)) }
@@ -402,7 +459,8 @@ macro_rules! arity {
         pub fn $glue<Rt, F, $($arg,)* R>(f: F) -> Glue<Rt, F, ($($arg,)*), R>
         where
             Rt: Runtime,
-            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> R::Of,
+            F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> R::Of,
             $($arg: for<'a> Arg<'a, Rt>,)*
             R: $($result)*,
         {
@@ -413,7 +471,8 @@ macro_rules! arity {
         where
             Rt: Runtime,
             F: Clone + Send + Sync + 'static,
-            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> R::Of,
+            F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> R::Of,
             $($arg: for<'a> Arg<'a, Rt> + 'static,)*
             R: Ret<Rt> + 'static,
         {
@@ -432,7 +491,13 @@ macro_rules! arity {
             }
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
-            unsafe fn call(&self, rt: &Rt, run: &[Rt::Value], out: &mut [Rt::Value]) {
+            unsafe fn call(
+                &self,
+                rt: &Rt,
+                frame: Rt::Frame<'_>,
+                run: &[Rt::Value],
+                out: &mut [Rt::Value],
+            ) {
                 let mut _at = 0usize;
                 $(
                     let _width = <$arg as Arg<'_, Rt>>::WIDTH;
@@ -442,7 +507,7 @@ macro_rules! arity {
                     let $out = unsafe { $arg::take(rt, &run[_at.._at + _width]) };
                     _at += _width;
                 )*
-                <R as Ret<Rt>>::into_run((self.f)(rt $(, $out)*), rt, out)
+                <R as Ret<Rt>>::into_run((self.f)(rt, frame $(, $out)*), rt, out)
             }
         }
 
@@ -450,7 +515,8 @@ macro_rules! arity {
         where
             Rt: Runtime,
             F: Clone + Send + Sync + 'static,
-            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> R::Of,
+            F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> R::Of,
             $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
             R: Ret<Rt, Form = One> + 'static,
         {
@@ -459,7 +525,8 @@ macro_rules! arity {
         pub fn $async_glue<Rt, F, $($arg,)*>(f: F) -> AsyncGlue<Rt, F, ($($arg,)*)>
         where
             Rt: Runtime,
-            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> BoxFuture<'a, Rt::Value>,
+            F: for<'a, 'w> Fn(&'a Rt, &'a mut Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> BoxFuture<'a, Rt::Value>,
             $($arg: for<'a> Arg<'a, Rt>,)*
         {
             AsyncGlue { f: Arc::new(f), shape: PhantomData }
@@ -469,7 +536,8 @@ macro_rules! arity {
         where
             Rt: Runtime,
             F: Send + Sync + 'static,
-            F: for<'a> Fn(&'a Rt $(, <$arg as Arg<'a, Rt>>::Out)*) -> BoxFuture<'a, Rt::Value>,
+            F: for<'a, 'w> Fn(&'a Rt, &'a mut Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> BoxFuture<'a, Rt::Value>,
             $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
         {
             fn clone_box(&self) -> Box<dyn AsyncHandler<Rt>> {
@@ -495,6 +563,8 @@ macro_rules! arity {
                 let held: Vec<Rt::Value> = run.to_vec();
                 let f = Arc::clone(&self.f);
                 Box::pin(async move {
+                    let mut rooted = rt.rooted();
+                    let mut frame = Rt::frame_of(&mut rooted);
                     let mut _at = 0usize;
                     $(
                         let _width = <$arg as Arg<'_, Rt>>::WIDTH;
@@ -503,7 +573,7 @@ macro_rules! arity {
                         let $out = unsafe { $arg::take(&rt, &held[_at.._at + _width]) };
                         _at += _width;
                     )*
-                    f(&rt $(, $out)*).await
+                    f(&rt, &mut frame $(, $out)*).await
                 })
             }
         }

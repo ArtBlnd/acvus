@@ -265,23 +265,59 @@ The core is **branchless**: every branch an operation takes beyond its own
    second call to the same body skips `open_frame` — `Store::bind`'s answer
    for a rooted frame, one compare on the machine's side.
 
+   **An extern's closure call takes the same window.** A handler is lent the
+   window above the calling frame as `Runtime::Frame<'_>`, the arguments of
+   the closure it calls cross straight into that window's run through
+   `IntoRun` — each member at its own `WIDTH`, the contract RFC-0059 gave
+   returns — and `Callable::call_in_window` binds the closure's body there.
+   The path is `Machine::call_sync`'s: one capacity compare, one `open_frame`
+   per window and body, one sweep out, and the same rooted fallback where the
+   callee does not fit. An extern therefore lays no `[Value; n]` and the
+   machine writes a closure's parameter once.
+
    A call whose future outlives the frame — `CallDirectAsync`,
    `CallIndirectAsync`, the spawns, `CallHeavy` — still owns its arguments as
-   a `Vec`, because the driver reads them after this frame is gone.
+   a `Vec`, because the driver reads them after this frame is gone. For the
+   same reason such a call cannot borrow the window: its future is `'static`
+   and the frame that would lend the cells is what holds the future. The
+   `async` glue and the two spawning operations therefore own a `Store` and
+   lend a window out of it (`Runtime::Rooted`, `Store::root_window`), which is
+   the one place a frame is made rather than lent.
 
 ## The caller owns the frame, and a closure knows its entry
 
-`Runtime` carries `type Frame` and `fn frame(&self) -> Self::Frame`, and
-`call_now` takes `frame: &mut Self::Frame`. The borrow is the whole rule: a
-synchronous closure call cannot own, make or free the frame it runs on,
-because it is only lent one. `acvus-interpreter` answers `Store`; a runtime
-with no frame answers `()`. Every site in `acvus-ext` that calls a closure
-holds one: the four lazy stages (`Map`, `Filter`, `TakeWhile`, `SkipWhile`)
-take `rt` in their constructor and keep a `Rt::Frame` for as long as the
-stage lives, and the eager consumers make one before the drain loop. Nothing
-makes one per element.
+`Runtime` carries `type Frame<'a>`, and `call_now` takes
+`frame: &mut Self::Frame<'_>`. The lifetime is the whole rule: a synchronous
+closure call cannot own, make or free the frame it runs on, because what it
+holds is a borrow of cells someone else owns. `acvus-interpreter` answers
+`&'a mut FrameState`; a runtime with no frame answers `()`. No site in
+`acvus-ext` makes a frame: a handler receives one and passes it down, a stage
+takes it as a parameter of `next` rather than keeping one alive, and
+`Iterator`'s value holds no cells at all.
 
-`Store` is `{ cells: Vec<Cell>, bound: usize }`. A `Cell` is sixteen
+**The handle is one word.** A `FrameState` is `{ cells: NonNull<[Cell]>,
+bound: BoundTo }` and the frame below owns it — a field of its `Machine`, or
+the `Store`'s — so what a call passes is an address that already exists. The
+alternative, a window built in the calling operation and passed by value, is
+three words, which is past the two the SysV ABI hands an argument in: the
+operation stored it to its own stack and passed that address, which cost 16
+instructions and 3 cycles on every extern call and, because LLVM refuses a
+sibling call out of a function whose local's address escapes, the tail call of
+`CallExtern0..3`, `CallWindow` and `AsSlice`. Measured on the loop benches,
+that form was +16 % on `extern while` and +13 % on `option while`; the
+one-word handle is -5 % and -2 % against the same base, and the twelve
+operations tail-call again. The cells are a raw slice, not a reference,
+because `Frame<'a>` has one lifetime parameter and `&mut` is invariant: a
+state that named its cells by reference would carry that reference's lifetime
+as a second parameter. `Regs::take_window` takes the cells out of the frame's
+own `Regs`, which is what keeps the two from naming the same cells.
+
+The remaining cost of the handle is one register the handler never reads where
+it calls no closure. It goes to zero when the handler is the operation's type
+parameter, which `Glue` already knows and which is the next run's work, not
+this one's.
+
+`Store` is `{ cells: Vec<Cell>, root: FrameState }`. A `Cell` is sixteen
 registers — four cache lines, starting one — and nothing else: a frame wider
 than a cell has to be one run of `Value`s, and a mark word interleaved
 between cells would break the displacement an `Off` already is. An unbound

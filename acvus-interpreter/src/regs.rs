@@ -9,10 +9,11 @@
 //! nothing for it.
 
 use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 
 use acvus_extern::Release;
 
-use crate::code::{Body, Off, SlicePair};
+use crate::code::{Body, Off};
 use crate::value::Value;
 
 /// The registers one cell holds: four cache lines of `Value`s.
@@ -98,7 +99,7 @@ impl BoundTo {
 /// per call (RFC-0052 §6).
 pub struct Store {
     cells: Vec<Cell>,
-    bound: BoundTo,
+    root: FrameState,
 }
 
 impl Store {
@@ -106,7 +107,7 @@ impl Store {
     pub fn new() -> Store {
         Store {
             cells: Vec::new(),
-            bound: BoundTo::NONE,
+            root: FrameState::UNBOUND,
         }
     }
 
@@ -122,11 +123,20 @@ impl Store {
     /// emit.
     #[inline]
     pub fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
-        let same = self.bound.rebind(body);
+        let same = self.root.bound.rebind(body);
         if !same {
             self.widen(body.frame_len);
         }
         (Regs::of(&mut self.cells, body), same)
+    }
+
+    /// The store's own cells as the handle a call out of them lends its
+    /// handler. Every call writes the cells the state names, so a `Vec` that
+    /// moved while it widened leaves no pointer behind for the next caller.
+    pub fn root_window(&mut self) -> &mut FrameState {
+        self.widen(MAX_FRAME_SLOTS);
+        self.root.cells = NonNull::from(&mut self.cells[..]);
+        &mut self.root
     }
 
     /// Room for a frame of `slots` registers and the window above it, taken
@@ -145,9 +155,177 @@ impl Store {
     }
 }
 
+/// The cells a call takes its callee's frame from, and the body they are bound
+/// to (RFC-0050 rule 6): the window above a running frame, or a `Store`'s own
+/// cells at the root of a chain. A call lays its arguments in the registers the
+/// callee reads them from and then `bind`s the callee there (RFC-0052 §7).
+///
+/// The frame below owns the state — a field of its `Machine`, or of the
+/// `Store` — and lends a handler `&mut FrameState`, which is an address that
+/// already exists. Nothing is built on the calling operation's stack, and
+/// `asm_probe` is where that shows: a `run` whose local's address escapes into
+/// a callee loses its sibling call.
+///
+/// The cells are a raw slice, not a reference, because `Runtime::Frame<'a>`
+/// has one lifetime parameter and `&mut` is invariant: a state that named its
+/// cells by reference would carry that reference's lifetime as a second
+/// parameter, and `&'a mut FrameState<'c>` does not shrink to
+/// `&'a mut FrameState<'a>`. `Regs::take_window` is the only constructor of a
+/// state over a running frame's cells, and it takes those cells out of the
+/// `Regs` it names them in, so no two handles reach them.
+pub struct FrameState {
+    cells: NonNull<[Cell]>,
+    bound: BoundTo,
+}
+
+// SAFETY: the state names cells a `&mut [Cell]` named before it, and `Cell` is
+// `Send` and `Sync` — the assertion below is what keeps that true. Reaching
+// the cells needs `&FrameState` or `&mut FrameState`, so a shared state hands
+// out no more than a `&[Cell]` would.
+unsafe impl Send for FrameState {}
+// SAFETY: as `Send`.
+unsafe impl Sync for FrameState {}
+
+const _: fn() = || {
+    fn cells_cross_threads<T>()
+    where
+        T: Send + Sync,
+    {
+    }
+    cells_cross_threads::<Cell>();
+};
+
+impl FrameState {
+    /// No cells and no body: what a `Store` holds until it is widened.
+    pub const UNBOUND: FrameState = FrameState {
+        cells: NonNull::slice_from_raw_parts(NonNull::dangling(), 0),
+        bound: BoundTo::NONE,
+    };
+
+    /// # Safety
+    /// `cells` are live and unmoved, and named by no other handle, for as long
+    /// as this state is.
+    #[inline(always)]
+    unsafe fn of(cells: NonNull<[Cell]>) -> FrameState {
+        FrameState {
+            cells,
+            bound: BoundTo::NONE,
+        }
+    }
+
+    #[inline(always)]
+    fn cells(&mut self) -> &mut [Cell] {
+        // SAFETY: the state's own invariant: the cells are live, unmoved and
+        // named by nothing else, and this borrows them for no longer than the
+        // state.
+        unsafe { self.cells.as_mut() }
+    }
+
+    #[inline(always)]
+    pub fn fits(&self, callee_len: u16) -> bool {
+        cells_for(callee_len) + ARG_CELLS <= self.cells.len()
+    }
+
+    /// The frame `body` runs in, and whether the window already carries
+    /// `body`'s slot kinds and entry constants (`machine::open_frame`): one
+    /// `open_frame` per window and body, however many calls follow.
+    ///
+    /// # Panics
+    /// The window is narrower than `body`, which `fits` answers before this
+    /// is reached.
+    #[inline]
+    pub fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
+        let same = self.bound.rebind(body);
+        (Regs::of(self.cells(), body), same)
+    }
+
+    /// The register `at` of the frame this window begins.
+    #[inline(always)]
+    fn at(&self, at: Off) -> *mut Value {
+        debug_assert!(
+            at.index() < CELL_SLOTS as usize * ARG_CELLS,
+            "a call lays an argument in the callee's register {}, past the cell the window \
+             begins with",
+            at.index()
+        );
+        // SAFETY: `Regs::of` refuses a frame without the cell this writes,
+        // `Store::root_window` holds the widest frame there is, and the debug
+        // assertion above holds the displacement inside that cell.
+        unsafe {
+            self.cells
+                .as_ptr()
+                .cast::<u8>()
+                .add(at.byte())
+                .cast::<Value>()
+        }
+    }
+
+    /// One argument of a call, written to the register the callee reads it
+    /// from (RFC-0052 rule 7).
+    #[inline(always)]
+    pub fn lay(&mut self, at: Off, value: Value) {
+        // SAFETY: as `at`. The callee's frame is unbound until the call, so
+        // nothing owns what this overwrites.
+        unsafe { self.at(at).write(value) };
+    }
+
+    /// The argument run a caller laid, read where the callee's body is one
+    /// chain and has no frame to read it from (RFC-0044, stage 4).
+    #[inline]
+    pub fn laid(&self, arity: u16) -> &[Value] {
+        let first = self.at(Off::of(0));
+        // SAFETY: `lay` wrote every register of the run, and `at` holds the
+        // widest of them inside the cell the window begins with.
+        unsafe { std::slice::from_raw_parts(first, usize::from(arity)) }
+    }
+
+    /// The callee's first `width` parameter registers, for a crossing that
+    /// writes a call's arguments into them at their own widths (RFC-0059).
+    ///
+    /// # Panics
+    /// The run leaves the cell a window's arguments sit in, which is a
+    /// closure of more parameters than `ARG_CELLS` cells hold.
+    #[inline]
+    pub fn run_mut(&mut self, width: usize) -> &mut [Value] {
+        assert!(
+            width <= CELL_SLOTS as usize * ARG_CELLS,
+            "a call lays {width} arguments, past the {} the cell a window begins with holds",
+            CELL_SLOTS as usize * ARG_CELLS
+        );
+        let run = &mut self.cells()[0].slots[..width];
+        for slot in run.iter_mut() {
+            slot.write(Value::UNDEF);
+        }
+        // SAFETY: every slot of the run was written just above, and
+        // `MaybeUninit<Value>` and `Value` are the same layout.
+        unsafe { &mut *(run as *mut [MaybeUninit<Value>] as *mut [Value]) }
+    }
+}
+
 impl Default for Store {
     fn default() -> Store {
         Store::new()
+    }
+}
+
+/// # Panics
+/// The run leaves the frame, which means `prepare` placed a call's argument
+/// window outside the frame it sized.
+///
+/// # Safety
+/// `cells` are one frame's own cells, `len` its registers, and every register
+/// of the run is defined at the call.
+#[inline]
+unsafe fn run_in(cells: &[Cell], at: Off, arity: u16, len: u16) -> &[Value] {
+    let from = at.index();
+    let to = from + usize::from(arity);
+    assert!(
+        to <= usize::from(len),
+        "an argument run of {arity} at register {from} leaves a frame of {len} registers"
+    );
+    // SAFETY: the caller's contract.
+    unsafe {
+        std::slice::from_raw_parts(cells.as_ptr().cast::<Value>().add(from), usize::from(arity))
     }
 }
 
@@ -168,7 +346,7 @@ pub struct Regs<'f> {
     /// This frame's registers. Only the two bounds checks read it.
     len: u16,
     /// The cells left over for a callee's frame, capped at the widest frame
-    /// `prepare` can emit. One compare per call reads it.
+    /// `prepare` can emit.
     above_cells: u16,
 }
 
@@ -201,71 +379,22 @@ impl<'f> Regs<'f> {
         regs
     }
 
-    /// The one capacity compare a call makes: whether the cells above this
-    /// frame hold a callee frame of `callee_len` registers and the cell that
-    /// frame's own calls lay their arguments in.
+    /// The cells above this frame, taken out of it as the handle its calls lend
+    /// a handler. Taking is what keeps the two apart: afterwards this `Regs`
+    /// reaches its registers and nothing above them, and a second take finds
+    /// no cells left.
     #[inline(always)]
-    pub fn fits_above(&self, callee_len: u16) -> bool {
-        cells_for(callee_len) + ARG_CELLS <= usize::from(self.above_cells)
-    }
-
-    /// The callee's frame: the cells above this one.
-    ///
-    /// # Panics
-    /// Too few cells are left, which `fits_above` answers before this is
-    /// called.
-    #[inline(always)]
-    pub fn window(&mut self, callee: &Body) -> Regs<'_> {
-        Regs::of(&mut self.cells[usize::from(self.own)..], callee)
-    }
-
-    /// The register `at` of the frame the window above this one begins.
-    #[inline(always)]
-    fn above(&self, at: Off) -> *mut Value {
-        debug_assert!(
-            at.index() < CELL_SLOTS as usize * ARG_CELLS,
-            "a call lays an argument in the callee's register {}, past the cell the window \
-             begins with",
-            at.index()
-        );
-        // SAFETY: `Regs::of` refuses a frame without the cell this writes, and
-        // the debug assertion above holds the displacement inside it.
-        unsafe {
-            self.cells
-                .as_ptr()
-                .add(usize::from(self.own))
-                .cast::<u8>()
-                .add(at.byte())
-                .cast::<Value>()
-                .cast_mut()
-        }
-    }
-
-    /// One argument of a call, written to the register the callee reads it
-    /// from (RFC-0052 rule 7).
-    #[inline(always)]
-    pub fn lay(&mut self, at: Off, value: Value) {
-        // SAFETY: as `above`. The callee's frame is unbound until the call, so
-        // nothing owns what this overwrites.
-        unsafe { self.above(at).write(value) };
-    }
-
-    /// The two registers of a slice argument (RFC-0047 amended, rule 4).
-    #[inline(always)]
-    pub fn lay_pair(&mut self, at: SlicePair, value: SlicePair) {
-        let (ptr, len) = (self.read(value.ptr), self.read(value.len));
-        self.lay(at.ptr, ptr);
-        self.lay(at.len, len);
-    }
-
-    /// The argument run a caller laid, read where the callee's body is one
-    /// chain and has no frame to read it from (RFC-0044, stage 4).
-    #[inline]
-    pub fn laid(&self, arity: u16) -> &[Value] {
-        let first = self.above(Off::of(0));
-        // SAFETY: `lay` wrote every register of the run, and `above` holds the
-        // widest of them inside the cell the window begins with.
-        unsafe { std::slice::from_raw_parts(first, usize::from(arity)) }
+    pub fn take_window(&mut self) -> FrameState {
+        let own = usize::from(self.own);
+        let end = own + usize::from(self.above_cells);
+        let cells = std::mem::take(&mut self.cells);
+        let (mine, above) = cells[..end].split_at_mut(own);
+        self.cells = mine;
+        self.above_cells = 0;
+        // SAFETY: `above` is a live `&mut [Cell]` that this `Regs` no longer
+        // reaches and no other handle names, borrowed from the same cells the
+        // frame below lent, which outlive the frame.
+        unsafe { FrameState::of(NonNull::from(above)) }
     }
 
     /// The register's first byte. No arithmetic: the operation's field is
@@ -472,27 +601,11 @@ impl<'f> Regs<'f> {
 
     /// The registers an extern call's arguments sit in, lent to the handler
     /// (RFC-0044, stage 2b).
-    ///
-    /// # Panics
-    /// The run leaves the frame, which means `prepare` placed a call's
-    /// argument window outside the frame it sized.
     #[inline]
     pub fn run_of(&self, at: Off, arity: u16) -> &[Value] {
-        let from = at.index();
-        let to = from + usize::from(arity);
-        assert!(
-            to <= usize::from(self.len),
-            "an argument run of {arity} at register {from} leaves a frame of {} registers",
-            self.len
-        );
         // SAFETY: `prepare` allocated the run contiguously in this frame and
         // every register of it is defined at the call.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.cells.as_ptr().cast::<Value>().add(from),
-                usize::from(arity),
-            )
-        }
+        unsafe { run_in(self.cells, at, arity, self.len) }
     }
 
     /// The frame's first register, which a chain's pre-multiplied leaf offsets

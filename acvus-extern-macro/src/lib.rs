@@ -148,7 +148,11 @@ fn generate_extern_fn(
     let is_cast = take_marker_attr(&mut func.attrs, "extern_cast");
     let is_async = func.sig.asyncness.is_some();
     let vars = Vars::from_generics(&func.sig.generics)?;
-    let (has_runtime, rust_params) = parse_params(&mut func.sig, vars.runtime_ident())?;
+    let Signature {
+        takes_runtime,
+        takes_frame,
+        params: rust_params,
+    } = parse_params(&mut func.sig, vars.runtime_ident())?;
     let params: Vec<&ExternParam> = rust_params
         .iter()
         .filter_map(|p| match p {
@@ -361,15 +365,26 @@ fn generate_extern_fn(
         let capture_state = (!states.is_empty()).then(|| {
             quote! { let __state = ::std::sync::Arc::clone(&__state); }
         });
-        let rt_arg = has_runtime.then(|| quote! { __rt, });
-        let call = quote! { #callee #turbofish (#rt_arg #(#passed),*) };
+        let rt_arg = takes_runtime.then(|| quote! { __rt, });
+        // A synchronous handler is handed the window by value and lends it
+        // onward; an `async` one is handed a borrow, because the future it
+        // returns is what holds that borrow.
+        let frame_arg = takes_frame.then(|| match awaits {
+            true => quote! { __frame, },
+            false => quote! { &mut __frame, },
+        });
+        let frame_param = match (takes_frame, awaits) {
+            (true, false) => quote! { mut __frame },
+            _ => quote! { __frame },
+        };
+        let call = quote! { #callee #turbofish (#rt_arg #frame_arg #(#passed),*) };
         if awaits {
             let builder = format_ident!("async_glue{arity}");
             quote! {
                 ::acvus_extern::ExternHandler::awaited({
                     #capture_state
                     ::acvus_extern::#builder::<__R, _, #(#arg_markers,)*>(
-                        move |__rt: &__R #(, #arg_idents)*| {
+                        move |__rt: &__R, #frame_param #(, #arg_idents)*| {
                             #capture_state
                             ::std::boxed::Box::pin(async move {
                                 let __r = (#call).await;
@@ -385,7 +400,7 @@ fn generate_extern_fn(
                 ::acvus_extern::ExternHandler::#sync_variant({
                     #capture_state
                     ::acvus_extern::#builder::<__R, _, #(#arg_markers,)* #ret_marker>(
-                        move |__rt: &__R #(, #arg_idents)*| #call
+                        move |__rt: &__R, #frame_param #(, #arg_idents)*| #call
                     )
                 })
             }
@@ -414,7 +429,7 @@ fn generate_extern_fn(
                                 _,
                                 ::acvus_extern::ByValue<#rt_ty, #from>,
                                 ::acvus_extern::Val<#rt_ty, #into>,
-                            >(|_, __v| __v)
+                            >(|_, _, __v| __v)
                         )
                     }
                 };
@@ -560,19 +575,26 @@ fn take_marker_attr(attrs: &mut Vec<Attribute>, name: &str) -> bool {
     attrs.len() != before
 }
 
-/// The parameters of a signature, `#[state]` markers taken off, and whether
-/// the first one was the runtime: `&R` with `R` the parameter bounded by
-/// `Runtime`. A function that does not use its runtime does not take it.
-fn parse_params(
-    sig: &mut syn::Signature,
-    runtime: Option<&Ident>,
-) -> syn::Result<(bool, Vec<RustParam>)> {
+/// What a declaration's Rust signature carries in front of its acvus
+/// parameters: `&R` with `R` the parameter bounded by `Runtime`, then the
+/// frame a closure call runs in. A function that uses neither takes neither.
+struct Signature {
+    takes_runtime: bool,
+    takes_frame: bool,
+    params: Vec<RustParam>,
+}
+
+fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Result<Signature> {
     let mut inputs = sig.inputs.iter_mut().peekable();
-    let has_runtime = match (runtime, inputs.peek()) {
+    let takes_runtime = match (runtime, inputs.peek()) {
         (Some(runtime), Some(first)) => is_runtime_param(first, runtime),
         _ => false,
     };
-    if has_runtime {
+    if takes_runtime {
+        inputs.next();
+    }
+    let takes_frame = inputs.peek().is_some_and(|next| is_frame_param(next));
+    if takes_frame {
         inputs.next();
     }
 
@@ -613,7 +635,11 @@ fn parse_params(
             mode,
         }));
     }
-    Ok((has_runtime, params))
+    Ok(Signature {
+        takes_runtime,
+        takes_frame,
+        params,
+    })
 }
 
 fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {
@@ -624,6 +650,28 @@ fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {
         return false;
     };
     r.mutability.is_none() && matches!(r.elem.as_ref(), Type::Path(p) if p.path.is_ident(runtime))
+}
+
+/// The frame is read by its type and not by its position, because the runtime
+/// parameter in front of it is optional: a declaration that takes the frame
+/// alone has it first, and a first acvus parameter taken `&mut T` sits in the
+/// same place.
+fn is_frame_param(arg: &FnArg) -> bool {
+    let FnArg::Typed(pat_type) = arg else {
+        return false;
+    };
+    let Type::Reference(r) = pat_type.ty.as_ref() else {
+        return false;
+    };
+    let Type::Path(p) = r.elem.as_ref() else {
+        return false;
+    };
+    let named_frame = p
+        .path
+        .segments
+        .last()
+        .is_some_and(|last| last.ident == "Frame");
+    r.mutability.is_some() && named_frame
 }
 
 fn parse_return(output: &ReturnType) -> Type {
@@ -1369,7 +1417,10 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     let mut sig = input.sig;
     let ident = sig.ident.clone();
     let vars = Vars::from_generics(&sig.generics)?;
-    let (_, rust_params) = parse_params(&mut sig, None)?;
+    let Signature {
+        params: rust_params,
+        ..
+    } = parse_params(&mut sig, None)?;
     let mut params = Vec::new();
     for p in rust_params {
         match p {

@@ -5,7 +5,7 @@
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
 
 async fn run(source: &str, ret: Ty) -> Value {
@@ -48,6 +48,47 @@ async fn a_word_reaches_the_innermost_of_three_closures_as_a_copy() {
     )
     .await;
     assert_close(&v, 16.0);
+}
+
+/// A closure called in a handler's window calls a driving extern itself, so
+/// the inner handler's window is the one above the closure's frame (RFC-0050
+/// rule 6, RFC-0052 §7).
+#[tokio::test]
+async fn a_closure_in_the_window_drives_an_extern_of_its_own() {
+    let v = run(
+        "range(0, 4) | map(|x| -> range(0, x) | sum) | sum",
+        Ty::Int(IntTy::I64),
+    )
+    .await;
+    assert_eq!(v.as_int(), 4);
+}
+
+#[tokio::test]
+async fn a_capture_crosses_two_windows_into_a_closure_a_handler_calls() {
+    let v = run(
+        "range(0, 3) | map(|x| -> range(0, 3) | map(|y| -> x * y) | sum) | sum",
+        Ty::Int(IntTy::I64),
+    )
+    .await;
+    assert_eq!(v.as_int(), 9);
+}
+
+/// Four windows stacked: the innermost callee does not fit the cells left
+/// above the third, so it roots a frame of its own (`machine::run_rooted`).
+#[tokio::test]
+async fn a_pipeline_deeper_than_the_window_roots_a_frame_and_agrees() {
+    let v = run(
+        "range(1, 3) \
+         | map(|a| -> range(1, 3) \
+             | map(|b| -> range(1, 3) \
+                 | map(|c| -> range(1, 3) | map(|d| -> d) | sum) \
+                 | sum) \
+             | sum) \
+         | sum",
+        Ty::Int(IntTy::I64),
+    )
+    .await;
+    assert_eq!(v.as_int(), 24);
 }
 
 #[tokio::test]

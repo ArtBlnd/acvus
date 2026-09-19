@@ -150,10 +150,12 @@ impl acvus_extern::FromValue<Counting> for V {
 
 impl Runtime for Counting {
     type Value = V;
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<V>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let V::Boxed(cell) = value else {
@@ -277,11 +279,15 @@ impl Runtime for Counting {
         true
     }
 
-    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
-        let [a] = args else {
+    fn call_now<A>(&self, f: &V, _: &mut (), args: A, _: CallToken) -> V
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
+        let run = run_of(self, args);
+        let [a] = run.as_slice() else {
             return self.only_unary();
         };
-        open_ref::<UnaryClosure>(f)(self, std::mem::take(a))
+        open_ref::<UnaryClosure>(f)(self, *a)
     }
 
     fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Self::CallFuture<'a> {
@@ -330,7 +336,7 @@ type It = Iter<V, (), (), Counting>;
 fn drain(rt: &Counting, mut it: It) -> Vec<i64> {
     futures::executor::block_on(async {
         let mut out = Vec::new();
-        while let Some(value) = it.next_value(rt).await {
+        while let Some(value) = it.next_value(rt, &mut ()).await {
             out.push(read_int(rt, &value));
         }
         out
@@ -496,9 +502,7 @@ fn map_then_take_two_calls_the_closure_exactly_twice() {
             int(rt, read_int(rt, &x) * 10)
         })
     };
-    let it = items(&rt, [1, 2, 3])
-        .map::<V>(&rt, Fn1::new(&rt, f))
-        .take(2);
+    let it = items(&rt, [1, 2, 3]).map::<V>(Fn1::new(&rt, f)).take(2);
     assert_eq!(drain(&rt, it), [10, 20]);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -525,8 +529,8 @@ fn filter_then_map_interleave_per_element() {
         })
     };
     let it = items(&rt, [1, 2, 3])
-        .filter(&rt, Fn1::new(&rt, keep_odd))
-        .map::<V>(&rt, Fn1::new(&rt, times_ten));
+        .filter(Fn1::new(&rt, keep_odd))
+        .map::<V>(Fn1::new(&rt, times_ten));
     assert_eq!(drain(&rt, it), [10, 30]);
     assert_eq!(
         *log.lock().unwrap(),
@@ -547,7 +551,7 @@ fn flat_map_skips_an_empty_inner_sequence() {
         };
         inner.erase(rt)
     });
-    let it = items(&rt, [1, 2, 3]).flat_map::<Vec<V>, V>(&rt, Fn1::new(&rt, twice_unless_two));
+    let it = items(&rt, [1, 2, 3]).flat_map::<Vec<V>, V>(Fn1::new(&rt, twice_unless_two));
     assert_eq!(drain(&rt, it), [1, 1, 3, 3]);
 }
 
@@ -672,4 +676,16 @@ fn a_member_under_an_option_inside_a_vec_marks_the_vec_slot_and_declares_the_vec
         ["Fn(Vec<Option<Float>>) -> Vec<#Option<Float>>"],
         "the one cast instance is at the composite Option<Float>"
     );
+}
+
+/// The arguments of a closure call, read back as the run this runtime's own
+/// `call_now` reads them from.
+fn run_of<Rt, A>(rt: &Rt, args: A) -> Vec<Rt::Value>
+where
+    Rt: acvus_extern::Runtime,
+    A: acvus_extern::IntoRun<Rt>,
+{
+    let mut run = vec![Rt::Value::default(); A::WIDTH];
+    args.into_run(rt, &mut run);
+    run
 }

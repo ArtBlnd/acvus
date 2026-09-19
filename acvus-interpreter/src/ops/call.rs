@@ -19,7 +19,8 @@ use smallvec::SmallVec;
 
 use crate::code::{BlockId, Deref, Exit, Off, Op, SUSPEND, SlicePair, successor};
 use crate::interpreter::lookup_module;
-use crate::machine::{Machine, call_module, call_module_sync, fn_value_call};
+use crate::machine::{Lent, Machine, call_module, call_module_sync, fn_value_call};
+use crate::regs::Store;
 use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, HandleValue, Value};
 
@@ -55,9 +56,8 @@ impl Op for LayArg {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let value = regs.read(self.src);
-        regs.lay(self.at, value);
+        let value = m.regs().read(self.src);
+        m.window().lay(self.at, value);
         self.next.run(m, r0)
     }
 }
@@ -75,7 +75,12 @@ impl Op for LayPair {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        m.regs().lay_pair(self.at, self.src);
+        let regs = m.regs();
+        let ptr = regs.read(self.src.ptr);
+        let len = regs.read(self.src.len);
+        let window = m.window();
+        window.lay(self.at.ptr, ptr);
+        window.lay(self.at.len, len);
         self.next.run(m, r0)
     }
 }
@@ -92,17 +97,19 @@ pub struct ArgWindow {
 
 impl ArgWindow {
     /// The registers themselves, lent to a handler that runs before this
-    /// frame moves on (RFC-0044, stage 2b).
+    /// frame moves on, with the window it calls a closure in (RFC-0044,
+    /// stage 2b; RFC-0050 rule 6).
     #[inline]
-    fn lend<'r>(&self, m: &'r mut Machine<'_>) -> &'r [Value] {
-        let regs = m.regs();
-        regs.take_mask(self.takes);
-        regs.run_of(self.at, self.arity)
+    fn lend<'r>(&self, m: &'r mut Machine<'_>) -> Lent<'r> {
+        m.regs().take_mask(self.takes);
+        m.lend_and_window(self.at, self.arity)
     }
 
     /// The arguments owned, for work that outlives this frame.
     fn own(&self, m: &mut Machine<'_>) -> Vec<Value> {
-        self.lend(m).to_vec()
+        let regs = m.regs();
+        regs.take_mask(self.takes);
+        regs.run_of(self.at, self.arity).to_vec()
     }
 }
 
@@ -117,9 +124,10 @@ impl<const LARGE: bool> Op for CallExtern0<LARGE> {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
         // SAFETY: `prepare` read this handler's width and built this
         // operation for the form it named.
-        let value = unsafe { self.f.call0(m.rt) };
+        let value = unsafe { self.f.call0(rt, m.window()) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -138,11 +146,12 @@ impl<const LARGE: bool, const WORD: bool> Op for CallExtern1<LARGE, WORD> {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s, at one argument.
-        let value = unsafe { self.f.call1(m.rt, a) };
+        let value = unsafe { self.f.call1(rt, m.window(), a) };
         m.regs().store::<LARGE, WORD>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -162,12 +171,13 @@ impl<const LARGE: bool> Op for CallExtern2<LARGE> {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s, at two arguments.
-        let value = unsafe { self.f.call2(m.rt, a, b) };
+        let value = unsafe { self.f.call2(rt, m.window(), a, b) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -188,13 +198,14 @@ impl<const LARGE: bool> Op for CallExtern3<LARGE> {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         let c = regs.read(self.c);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s, at three arguments.
-        let value = unsafe { self.f.call3(m.rt, a, b, c) };
+        let value = unsafe { self.f.call3(rt, m.window(), a, b, c) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -214,8 +225,9 @@ impl<const LARGE: bool> Op for CallWindow<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let rt = m.rt;
+        let Lent { run, window } = self.window.lend(m);
         // SAFETY: as `CallExtern0`'s; the run is the window `prepare` laid.
-        let value = unsafe { self.f.call_run(rt, self.window.lend(m)) };
+        let value = unsafe { self.f.call_run(rt, window, run) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -238,12 +250,13 @@ impl Op for AsSlice {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s; `prepare` admits only a handler whose
         // result is the two values a slice is.
-        let Words { ptr, len } = unsafe { self.f.call_slice(m.rt, a) }.words();
+        let Words { ptr, len } = unsafe { self.f.call_slice(rt, m.window(), a) }.words();
         let regs = m.regs();
         regs.set_word(self.dst.ptr, ptr);
         regs.set_word(self.dst.len, len);
@@ -272,15 +285,15 @@ impl Call {
         // SAFETY: `prepare::fusable_call` admits a call into this run only at
         // the form each arm names.
         match self {
-            Call::Nullary { f } => unsafe { f.call0(rt) },
+            Call::Nullary { f } => unsafe { f.call0(rt, m.window()) },
             Call::Unary { f, a } => {
                 let a = arg(m, held, *a);
-                unsafe { f.call1(rt, a) }
+                unsafe { f.call1(rt, m.window(), a) }
             }
             Call::Binary { f, a, b } => {
                 let a = arg(m, held, *a);
                 let b = arg(m, held, *b);
-                unsafe { f.call2(rt, a, b) }
+                unsafe { f.call2(rt, m.window(), a, b) }
             }
         }
     }
@@ -440,9 +453,10 @@ pub struct CallExternAsync<const LARGE: bool> {
 impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let rt = m.rt.clone();
+        let Lent { run, .. } = self.window.lend(m);
         // SAFETY: `prepare` built this operation from this handler's width,
         // and the future owns the arguments it is given.
-        let fut = unsafe { self.f.call(rt, self.window.lend(m)) };
+        let fut = unsafe { self.f.call(rt, run) };
         m.suspend::<LARGE>(self.dst, self.next, fut);
         SUSPEND
     }
@@ -467,7 +481,10 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
         let executor = Arc::clone(&m.shared().executor);
         // SAFETY: the window is this call's whole argument run, owned by the
         // closure the pool runs.
-        let handle = executor.spawn_blocking(Box::new(move || unsafe { f.call_run(&rt, &args) }));
+        let handle = executor.spawn_blocking(Box::new(move || {
+            let mut rooted = Store::new();
+            unsafe { f.call_run(&rt, rooted.root_window(), &args) }
+        }));
         m.suspend::<LARGE>(
             self.dst,
             self.next,
@@ -653,10 +670,10 @@ impl Op for SpawnExternSync {
         let rt = m.rt.clone();
         let f = self.f.clone();
         // SAFETY: as `CallHeavy`'s.
-        let handle = m
-            .shared()
-            .executor
-            .spawn_blocking(Box::new(move || unsafe { f.call_run(&rt, &args) }));
+        let handle = m.shared().executor.spawn_blocking(Box::new(move || {
+            let mut rooted = Store::new();
+            unsafe { f.call_run(&rt, rooted.root_window(), &args) }
+        }));
         m.regs().define::<true>(self.dst, Value::handle(handle));
         self.next.run(m, r0)
     }

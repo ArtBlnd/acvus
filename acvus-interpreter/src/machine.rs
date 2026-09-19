@@ -24,9 +24,16 @@ use crate::code::{
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
-use crate::regs::{BoundTo, Regs, Store};
+use crate::regs::{FrameState, Regs, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, Value};
+
+/// What an extern call is lent of the frame it runs in: the run its arguments
+/// sit in, and the window it calls a closure in (RFC-0050 rule 6).
+pub struct Lent<'r> {
+    pub run: &'r [Value],
+    pub window: &'r mut FrameState,
+}
 
 /// The registers and the interner a path walk needs, borrowed apart.
 pub struct Frame<'m, 'f> {
@@ -45,16 +52,17 @@ pub struct Machine<'c> {
     /// re-entering the body.
     at: BlockId,
     pending: Option<Pending>,
-    above: BoundTo,
+    above: FrameState,
 }
 
 impl<'c> Machine<'c> {
     pub fn new(
         body: &'c Body,
-        regs: Regs<'c>,
+        mut regs: Regs<'c>,
         rt: &'c AcvusRuntime,
         page: &'c Arc<dyn RuntimeContext>,
     ) -> Machine<'c> {
+        let above = regs.take_window();
         Machine {
             body,
             regs,
@@ -63,7 +71,7 @@ impl<'c> Machine<'c> {
             exit: Value::unit(),
             at: body.entry,
             pending: None,
-            above: BoundTo::NONE,
+            above,
         }
     }
 
@@ -137,48 +145,69 @@ impl<'c> Machine<'c> {
         });
     }
 
+    /// The cells a call out of this frame takes its callee's frame from, and
+    /// the body this frame's window is bound to (RFC-0050 rule 6).
+    #[inline(always)]
+    pub fn window(&mut self) -> &mut FrameState {
+        &mut self.above
+    }
+
+    /// Lent together because the run is this frame's own registers and the
+    /// window is the cells above them: two fields, two disjoint borrows.
+    #[inline(always)]
+    pub fn lend_and_window(&mut self, at: Off, arity: u16) -> Lent<'_> {
+        Lent {
+            run: self.regs.run_of(at, arity),
+            window: &mut self.above,
+        }
+    }
+
     /// Run `callee` to its result in the window above this frame (RFC-0052
     /// rule 7): no allocation, one mask store to enter and one sweep to leave.
     /// The arguments are already in the window's first registers, where the
     /// call's `LayArg` operations put them.
-    ///
-    /// # Panics
-    /// `callee` is typed pure and its prepared body can suspend, which is a
-    /// disagreement between the effect the checker read and the body
-    /// `prepare` produced.
     pub fn call_sync<F>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> Value
     where
         F: FnOnce(&mut Machine<'_>),
     {
-        if self.regs.fits_above(callee.frame_len) {
-            let opened = self.above.rebind(callee);
-            let window = self.regs.window(callee);
-            return run_frame(callee, named, window, self.rt, self.page, opened, fill);
+        let rt = self.rt;
+        let page = self.page;
+        let window = &mut self.above;
+        if window.fits(callee.frame_len) {
+            let (regs, opened) = window.bind(callee);
+            return run_frame(callee, named, regs, rt, page, opened, fill);
         }
-        self.call_rooted(callee, named, arity, fill)
-    }
-
-    /// The callee does not fit the window above this frame, so it roots a
-    /// `Store` of its own and the argument run is copied into it.
-    #[cold]
-    #[inline(never)]
-    fn call_rooted<F>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> Value
-    where
-        F: FnOnce(&mut Machine<'_>),
-    {
-        let mut store = Store::new();
-        let (mut regs, _) = store.bind(callee);
-        open_frame(callee, &mut regs);
-        for (at, arg) in self.regs.laid(arity).iter().enumerate() {
-            let slot = u16::try_from(at).expect("an argument run is at most one cell wide");
-            regs.open(Off::of(slot), *arg);
-        }
-        run_frame(callee, named, regs, self.rt, self.page, true, fill)
+        run_rooted(window, callee, named, arity, rt, page, fill)
     }
 
     pub fn call_fn_sync(&mut self, f: &FnValue, arity: u16) -> Value {
         f.entry.call_in(f, arity, self)
     }
+}
+
+/// A `Store` of the callee's own, the argument run copied into it.
+#[cold]
+#[inline(never)]
+fn run_rooted<F>(
+    window: &mut FrameState,
+    callee: &Body,
+    named: &dyn Debug,
+    arity: u16,
+    rt: &AcvusRuntime,
+    page: &Arc<dyn RuntimeContext>,
+    fill: F,
+) -> Value
+where
+    F: FnOnce(&mut Machine<'_>),
+{
+    let mut store = Store::new();
+    let (mut regs, _) = store.bind(callee);
+    open_frame(callee, &mut regs);
+    for (at, arg) in window.laid(arity).iter().enumerate() {
+        let slot = u16::try_from(at).expect("an argument run is at most one cell wide");
+        regs.open(Off::of(slot), *arg);
+    }
+    run_frame(callee, named, regs, rt, page, true, fill)
 }
 
 /// What a frame holds for as long as it is bound to one body: the kind byte
@@ -298,10 +327,11 @@ pub fn call_module_sync(
 /// `Body` or `Expr` its `Code` holds, behind the one vtable that knows which
 /// it is. A call reads the pointer and jumps; it never asks the shape.
 pub trait Callable: Send + Sync {
-    /// Run on a frame the caller owns (RFC-0052 §6). Rule 7's window comes
-    /// from a calling `Machine`, which an extern handler never holds; what it
-    /// holds instead is this frame, made once where it was built.
-    fn call_on(&self, f: &FnValue, args: &mut [Value], frame: &mut Store) -> Value;
+    /// Run in the window a handler was lent, on the argument run the handler
+    /// laid in its first `arity` registers (RFC-0050 rule 6). The handler
+    /// holds no `Machine`, so the interpreter and the page come from the
+    /// closure value.
+    fn call_in_window(&self, f: &FnValue, window: &mut FrameState, arity: u16) -> Value;
 
     /// Run in the window above the calling frame, on the argument run the
     /// caller laid in that window's first `arity` registers (RFC-0052 rule 7).
@@ -334,12 +364,23 @@ pub enum Resume<'c> {
 }
 
 impl Callable for Body {
-    fn call_on(&self, f: &FnValue, args: &mut [Value], frame: &mut Store) -> Value {
-        let (mut regs, bound) = frame.bind(self);
+    fn call_in_window(&self, f: &FnValue, window: &mut FrameState, arity: u16) -> Value {
+        if !window.fits(self.frame_len) {
+            return run_rooted(
+                window,
+                self,
+                &self.span,
+                arity,
+                AcvusRuntime::of(&f.shared),
+                &f.page,
+                |callee| bind_captures(self, f, &mut callee.regs),
+            );
+        }
+        let (mut regs, bound) = window.bind(self);
         if !bound {
             open_frame(self, &mut regs);
         }
-        fill(self, f, args, &mut regs);
+        bind_captures(self, f, &mut regs);
         let mut machine = Machine::new(self, regs, AcvusRuntime::of(&f.shared), &f.page);
         let stop = machine.run();
         assert_eq!(
@@ -378,12 +419,12 @@ impl Callable for Body {
 }
 
 impl Callable for Expr {
-    fn call_on(&self, _: &FnValue, args: &mut [Value], _: &mut Store) -> Value {
-        expr_value(self, args)
+    fn call_in_window(&self, _: &FnValue, window: &mut FrameState, arity: u16) -> Value {
+        expr_value(self, window.laid(arity))
     }
 
     fn call_in(&self, _: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value {
-        expr_value(self, m.regs().laid(arity))
+        expr_value(self, m.window().laid(arity))
     }
 
     fn start<'c>(&'c self, _: &FnValue, args: &mut [Value]) -> Resume<'c> {
@@ -416,8 +457,8 @@ pub fn fn_value_call<'f>(
     }
 }
 
-pub fn fn_value_call_sync(f: &FnValue, args: &mut [Value], frame: &mut Store) -> Value {
-    f.entry.call_on(f, args, frame)
+pub fn fn_value_call_in_window(f: &FnValue, window: &mut FrameState, arity: u16) -> Value {
+    f.entry.call_in_window(f, window, arity)
 }
 
 /// The closure owns its captures; the body sees each through a reference
@@ -431,9 +472,9 @@ fn bind_captures(body: &Body, f: &FnValue, regs: &mut Regs<'_>) {
     }
 }
 
-/// The same, for the paths that are handed their arguments as values rather
-/// than as a run of the caller's registers: an extern's frame
-/// (`Callable::call_on`) and the driver's (`Callable::start`).
+/// The same, for the one path handed its arguments as values rather than as a
+/// run of the caller's registers: the frame a suspending call runs on, which
+/// exists before the future does (`Callable::start`).
 fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
     bind_captures(body, f, regs);
     for (slot, arg) in body.params.iter().zip(args) {

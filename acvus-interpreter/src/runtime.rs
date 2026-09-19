@@ -8,7 +8,7 @@ use std::sync::Arc;
 use acvus_extern::{CallToken, Runtime};
 
 use crate::interpreter::InterpreterContext;
-use crate::regs::Store;
+use crate::regs::{FrameState, Store};
 use crate::value::{Kind, Value};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
@@ -29,11 +29,16 @@ impl AcvusRuntime {
 
 impl Runtime for AcvusRuntime {
     type Value = Value;
-    type Frame = Store;
+    type Frame<'a> = &'a mut FrameState;
+    type Rooted = Store;
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
 
-    fn frame(&self) -> Store {
+    fn rooted(&self) -> Store {
         Store::new()
+    }
+
+    fn frame_of(rooted: &mut Store) -> &mut FrameState {
+        rooted.root_window()
     }
 
     fn type_of(&self, value: &Value) -> Option<TypeId> {
@@ -153,10 +158,15 @@ impl Runtime for AcvusRuntime {
         !unsafe { f.as_fn() }.entry.may_suspend()
     }
 
-    fn call_now(&self, f: &Value, args: &mut [Value], frame: &mut Store, _: CallToken) -> Value {
+    fn call_now<A>(&self, f: &Value, frame: &mut &mut FrameState, args: A, _: CallToken) -> Value
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
+        args.into_run(self, frame.run_mut(A::WIDTH));
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        crate::machine::fn_value_call_sync(closure, args, frame)
+        let arity = u16::try_from(A::WIDTH).expect("a closure takes at most one cell of arguments");
+        crate::machine::fn_value_call_in_window(closure, frame, arity)
     }
 
     fn call_0<'a>(&'a self, f: &'a Value, _: CallToken) -> Self::CallFuture<'a> {

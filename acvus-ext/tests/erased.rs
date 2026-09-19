@@ -167,10 +167,12 @@ impl Runtime for Counting {
     }
 
     type Value = V;
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<V>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -271,7 +273,10 @@ impl Runtime for Counting {
         false
     }
 
-    fn call_now(&self, _: &V, _: &mut [V], _: &mut (), _: CallToken) -> V {
+    fn call_now<A>(&self, _: &V, _: &mut (), _: A, _: CallToken) -> V
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
         self.no_closures()
     }
 
@@ -338,7 +343,7 @@ impl World {
             panic!("{ns}::{name} is not a sync handler")
         };
         // SAFETY: the caller passes the declaration's own arguments.
-        unsafe { handler.call_run(&self.rt, &args) }
+        unsafe { handler.call_run(&self.rt, (), &args) }
     }
 
     fn string(&self, s: &str) -> V {

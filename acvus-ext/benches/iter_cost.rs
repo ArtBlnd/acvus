@@ -90,10 +90,12 @@ impl acvus_extern::FromValue<Words> for Word {
 
 impl Runtime for Words {
     type Value = Word;
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<Word>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     fn type_of(&self, _: &Word) -> Option<TypeId> {
         Some(TypeId::of::<i64>())
@@ -199,7 +201,10 @@ impl Runtime for Words {
         false
     }
 
-    fn call_now(&self, _: &Word, _: &mut [Word], _: &mut (), _: CallToken) -> Word {
+    fn call_now<A>(&self, _: &Word, _: &mut (), _: A, _: CallToken) -> Word
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
         self.no_closures()
     }
 
@@ -363,10 +368,12 @@ where
 
 impl Runtime for Tags {
     type Value = TaggedWord;
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<TaggedWord>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     fn type_of(&self, value: &TaggedWord) -> Option<TypeId> {
         match value.kind {
@@ -499,13 +506,10 @@ impl Runtime for Tags {
         false
     }
 
-    fn call_now(
-        &self,
-        _: &TaggedWord,
-        _: &mut [TaggedWord],
-        _: &mut (),
-        _: CallToken,
-    ) -> TaggedWord {
+    fn call_now<A>(&self, _: &TaggedWord, _: &mut (), _: A, _: CallToken) -> TaggedWord
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
         self.no_closures()
     }
 
@@ -538,7 +542,7 @@ impl Tags {
     }
 }
 
-async fn iter_range_sum<Rt>(rt: &Rt, n: i64) -> i64
+async fn iter_range_sum<Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, n: i64) -> i64
 where
     Rt: Runtime,
 {
@@ -552,7 +556,7 @@ where
     });
 
     let mut acc = 0i64;
-    while let Some(item) = it.next(rt).await {
+    while let Some(item) = it.next(rt, frame).await {
         acc += *item.as_ref(rt);
     }
     acc
@@ -600,13 +604,13 @@ fn main() {
         (
             "iter<word>",
             timed(reps, expected, || {
-                rt.block_on(iter_range_sum(&Words, black_box(n)))
+                rt.block_on(iter_range_sum(&Words, &mut (), black_box(n)))
             }),
         ),
         (
             "iter<tagged>",
             timed(reps, expected, || {
-                rt.block_on(iter_range_sum(&Tags, black_box(n)))
+                rt.block_on(iter_range_sum(&Tags, &mut (), black_box(n)))
             }),
         ),
     ];

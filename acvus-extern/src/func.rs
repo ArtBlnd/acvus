@@ -37,11 +37,11 @@ pub trait ClosureFn<Rt: Runtime> {
 
     /// Reached where the closure's effect said `Task::Sync`; every
     /// implementation asserts `is_sync`, the run-time answer, against it.
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame, args: Self::Args) -> Self::Ret;
+    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> Self::Ret;
     fn call<'a>(
         &'a self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame,
+        frame: &'a mut Rt::Frame<'_>,
         args: Self::Args,
     ) -> impl Future<Output = Self::Ret> + Send + 'a;
 }
@@ -154,23 +154,23 @@ where
     type Args = ();
     type Ret = R;
 
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame, _: ()) -> R {
+    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: ()) -> R {
         debug_assert!(
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
-        returned(rt, rt.call_now(&self.0, &mut [], frame, CallToken::mint()))
+        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
     }
 
     fn call<'a>(
         &'a self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame,
-        _: (),
+        frame: &'a mut Rt::Frame<'_>,
+        args: (),
     ) -> impl Future<Output = R> + Send + 'a {
         async move {
             let out = if self.1 {
-                rt.call_now(&self.0, &mut [], frame, CallToken::mint())
+                rt.call_now(&self.0, frame, args, CallToken::mint())
             } else {
                 rt.call_0(&self.0, CallToken::mint()).await
             };
@@ -188,23 +188,23 @@ where
 {
     /// The closure applied to a value the caller holds at `A`, the result
     /// left as the runtime holds it. As `ClosureFn::call_now`.
-    pub fn call_value_now(&self, rt: &Rt, frame: &mut Rt::Frame, a: Rt::Value) -> Rt::Value {
+    pub fn call_value_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, a: Rt::Value) -> Rt::Value {
         debug_assert!(
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
-        rt.call_now(&self.0, &mut [a], frame, CallToken::mint())
+        rt.call_now(&self.0, frame, (a,), CallToken::mint())
     }
 
     pub fn call_value<'a>(
         &'a self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame,
+        frame: &'a mut Rt::Frame<'_>,
         a: Rt::Value,
     ) -> impl Future<Output = Rt::Value> + Send + 'a {
         async move {
             if self.1 {
-                return rt.call_now(&self.0, &mut [a], frame, CallToken::mint());
+                return rt.call_now(&self.0, frame, (a,), CallToken::mint());
             }
             rt.call_1(&self.0, a, CallToken::mint()).await
         }
@@ -221,29 +221,26 @@ where
     type Args = (A,);
     type Ret = R;
 
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame, (a,): Self::Args) -> R {
+    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> R {
         debug_assert!(
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
-        let a = a.erase(rt);
-        returned(rt, rt.call_now(&self.0, &mut [a], frame, CallToken::mint()))
+        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
     }
 
     fn call<'a>(
         &'a self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame,
-        (a,): Self::Args,
+        frame: &'a mut Rt::Frame<'_>,
+        args: Self::Args,
     ) -> impl Future<Output = R> + Send + 'a {
         async move {
-            let a = a.erase(rt);
-            let out = if self.1 {
-                rt.call_now(&self.0, &mut [a], frame, CallToken::mint())
-            } else {
-                rt.call_1(&self.0, a, CallToken::mint()).await
-            };
-            returned(rt, out)
+            if self.1 {
+                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
+            }
+            let a = args.0.erase(rt);
+            returned(rt, rt.call_1(&self.0, a, CallToken::mint()).await)
         }
     }
 }
@@ -259,32 +256,26 @@ where
     type Args = (A, B);
     type Ret = R;
 
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame, (a, b): Self::Args) -> R {
+    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> R {
         debug_assert!(
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
-        let mut args = [a.erase(rt), b.erase(rt)];
-        returned(
-            rt,
-            rt.call_now(&self.0, &mut args, frame, CallToken::mint()),
-        )
+        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
     }
 
     fn call<'a>(
         &'a self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame,
-        (a, b): Self::Args,
+        frame: &'a mut Rt::Frame<'_>,
+        args: Self::Args,
     ) -> impl Future<Output = R> + Send + 'a {
         async move {
-            let mut args = [a.erase(rt), b.erase(rt)];
-            let out = if self.1 {
-                rt.call_now(&self.0, &mut args, frame, CallToken::mint())
-            } else {
-                rt.call_n(&self.0, &mut args, CallToken::mint()).await
-            };
-            returned(rt, out)
+            if self.1 {
+                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
+            }
+            let mut run = [args.0.erase(rt), args.1.erase(rt)];
+            returned(rt, rt.call_n(&self.0, &mut run, CallToken::mint()).await)
         }
     }
 }
@@ -301,32 +292,26 @@ where
     type Args = (A, B, C);
     type Ret = R;
 
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame, (a, b, c): Self::Args) -> R {
+    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> R {
         debug_assert!(
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
-        let mut args = [a.erase(rt), b.erase(rt), c.erase(rt)];
-        returned(
-            rt,
-            rt.call_now(&self.0, &mut args, frame, CallToken::mint()),
-        )
+        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
     }
 
     fn call<'a>(
         &'a self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame,
-        (a, b, c): Self::Args,
+        frame: &'a mut Rt::Frame<'_>,
+        args: Self::Args,
     ) -> impl Future<Output = R> + Send + 'a {
         async move {
-            let mut args = [a.erase(rt), b.erase(rt), c.erase(rt)];
-            let out = if self.1 {
-                rt.call_now(&self.0, &mut args, frame, CallToken::mint())
-            } else {
-                rt.call_n(&self.0, &mut args, CallToken::mint()).await
-            };
-            returned(rt, out)
+            if self.1 {
+                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
+            }
+            let mut run = [args.0.erase(rt), args.1.erase(rt), args.2.erase(rt)];
+            returned(rt, rt.call_n(&self.0, &mut run, CallToken::mint()).await)
         }
     }
 }

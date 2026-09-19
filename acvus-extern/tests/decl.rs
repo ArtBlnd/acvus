@@ -263,10 +263,12 @@ impl Runtime for Tiny {
     }
 
     type Value = V;
-    type Frame = ();
+    type Frame<'a> = ();
+    type Rooted = ();
     type CallFuture<'a> = Ready<V>;
 
-    fn frame(&self) {}
+    fn rooted(&self) {}
+    fn frame_of(_: &mut ()) {}
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -329,8 +331,11 @@ impl Runtime for Tiny {
     fn call_is_sync(&self, _: &V) -> bool {
         true
     }
-    fn call_now(&self, f: &V, args: &mut [V], _: &mut (), _: CallToken) -> V {
-        self.call(f, args.iter_mut().map(std::mem::take).collect())
+    fn call_now<A>(&self, f: &V, _: &mut (), args: A, _: CallToken) -> V
+    where
+        A: acvus_extern::IntoRun<Self>,
+    {
+        self.call(f, run_of(self, args))
     }
     fn call_0<'a>(&'a self, f: &'a V, _: CallToken) -> Self::CallFuture<'a> {
         std::future::ready(self.call(f, Vec::new()))
@@ -382,7 +387,12 @@ where
 }
 
 #[extern_fn(effect = pure)]
-async fn apply<T, U, E, Rt>(rt: &Rt, v: Boxed<T, E, Rt>, f: Fn1<T, U, E, Rt>) -> Boxed<U, E, Rt>
+async fn apply<T, U, E, Rt>(
+    rt: &Rt,
+    frame: &mut Rt::Frame<'_>,
+    v: Boxed<T, E, Rt>,
+    f: Fn1<T, U, E, Rt>,
+) -> Boxed<U, E, Rt>
 where
     T: TyVar,
     U: TyVar,
@@ -390,10 +400,9 @@ where
     Rt: Runtime,
 {
     let f = f.erased();
-    let mut frame = rt.frame();
     let mut out = Vec::with_capacity(v.0.len());
     for item in v.0 {
-        out.push(f.call(rt, &mut frame, (item,)).await);
+        out.push(f.call(rt, frame, (item,)).await);
     }
     Boxed(out, PhantomData)
 }
@@ -661,7 +670,7 @@ fn types_and_casts_reach_the_type_registry() {
 fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
         // SAFETY: the caller passes the declaration's own arguments.
-        ExternHandler::Sync(f) => unsafe { f.call_run(&Tiny, &args) },
+        ExternHandler::Sync(f) => unsafe { f.call_run(&Tiny, (), &args) },
         ExternHandler::Heavy(_) => panic!("expected a sync handler, found a heavy one"),
         ExternHandler::Async(_) => panic!("expected a sync handler, found an async one"),
     }
@@ -717,7 +726,7 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
 
     // SAFETY: the handler's width says one argument in and the two words a
     // slice is out.
-    let Words { ptr, len } = unsafe { entry.call_slice(&Tiny, container()) }.words();
+    let Words { ptr, len } = unsafe { entry.call_slice(&Tiny, (), container()) }.words();
     assert_eq!(len, 3);
     assert_ne!(ptr, 0);
 
@@ -760,7 +769,7 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
     let mut out = [V::default(); 1];
     // SAFETY: `run` is the pair `slice_into_run` just wrote, `storage` is
     // live and unmoved, and `out` has room for the one value the width names.
-    unsafe { entry.call(&Tiny, &run, &mut out) };
+    unsafe { entry.call(&Tiny, (), &run, &mut out) };
 
     assert_eq!(peek::<i64>(&out[0]), 15);
 }
@@ -1342,10 +1351,9 @@ fn an_option_crosses_as_the_host_shaped_it() {
 fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
     Registry::new(|i: &Interner| {
         let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("blocking"));
-        let heavy =
-            ExternHandler::heavy(acvus_extern::glue0::<Tiny, _, acvus_extern::Val<V>>(|_| {
-                V::Taken
-            }));
+        let heavy = ExternHandler::heavy(acvus_extern::glue0::<Tiny, _, acvus_extern::Val<V>>(
+            |_, _| V::Taken,
+        ));
         acvus_extern::Contribution {
             manifest: acvus_extern::Manifest {
                 types: Vec::new(),
@@ -1409,12 +1417,12 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     fn answered(handler: &dyn Handler<Tiny>, expected: Width, args: Vec<V>) -> i64 {
         assert_eq!(handler.width(), expected);
         // SAFETY: the arguments are the declaration's own, at its width.
-        open::<i64>(unsafe { handler.call_run(&Tiny, &args) })
+        open::<i64>(unsafe { handler.call_run(&Tiny, (), &args) })
     }
 
     assert_eq!(
         answered(
-            &acvus_extern::glue0::<Tiny, _, Val<i64>>(|_| 0),
+            &acvus_extern::glue0::<Tiny, _, Val<i64>>(|_, _| 0),
             Width { args: 0, ret: 1 },
             vec![],
         ),
@@ -1422,7 +1430,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            &acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, a| a),
+            &acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a),
             Width { args: 1, ret: 1 },
             vec![erased(1i64)],
         ),
@@ -1430,7 +1438,9 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            &acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(|_, a, b| a + b),
+            &acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(
+                |_, _, a, b| a + b
+            ),
             Width { args: 2, ret: 1 },
             vec![erased(1i64), erased(2i64)],
         ),
@@ -1443,7 +1453,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     assert_eq!(
         answered(
             &acvus_extern::glue3::<Tiny, _, ByValue<i64>, ByRef<i64>, ByValue<i64>, Val<i64>>(
-                |_, a, b, c| a + *b + c
+                |_, _, a, b, c| a + *b + c
             ),
             Width { args: 3, ret: 1 },
             vec![erased(1i64), lent, erased(3i64)],
@@ -1462,7 +1472,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 ByValue<i64>,
                 ByValue<i64>,
                 Val<i64>,
-            >(|_, a, b, c, d| a + b + c + d),
+            >(|_, _, a, b, c, d| a + b + c + d),
             Width { args: 4, ret: 1 },
             vec![erased(1i64), erased(2i64), erased(3i64), erased(4i64)],
         ),
@@ -1470,9 +1480,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
 
     let two_wide =
-        acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(|_, a, b| a * 10 + b);
+        acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(|_, _, a, b| {
+            a * 10 + b
+        });
     // SAFETY: the width says two arguments in and one value out.
-    let by_register = unsafe { two_wide.call2(&Tiny, erased(1i64), erased(2i64)) };
+    let by_register = unsafe { two_wide.call2(&Tiny, (), erased(1i64), erased(2i64)) };
     assert_eq!(
         open::<i64>(by_register),
         12,
@@ -1487,7 +1499,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     use acvus_extern::{ByValue, Handler, Val, Width};
 
-    let glue = acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, a| a * 3);
+    let glue = acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a * 3);
     let boxed: Box<dyn Handler<Tiny>> = glue.clone_box();
     let again = boxed.clone();
 
@@ -1497,9 +1509,9 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     // the three names of this one handler.
     let answers = unsafe {
         [
-            glue.call1(&Tiny, erased(7i64)),
-            boxed.call1(&Tiny, erased(7i64)),
-            again.call1(&Tiny, erased(7i64)),
+            glue.call1(&Tiny, (), erased(7i64)),
+            boxed.call1(&Tiny, (), erased(7i64)),
+            again.call1(&Tiny, (), erased(7i64)),
         ]
     };
     assert_eq!(answers.map(open::<i64>), [21, 21, 21]);
@@ -1515,4 +1527,16 @@ fn a_state_capture_is_no_argument_of_the_call() {
         panic!("greet is a synchronous declaration")
     };
     assert_eq!(f.width(), acvus_extern::Width { args: 1, ret: 1 });
+}
+
+/// The arguments of a closure call, read back as the `Vec` this runtime's own
+/// `call` takes.
+fn run_of<Rt, A>(rt: &Rt, args: A) -> Vec<Rt::Value>
+where
+    Rt: acvus_extern::Runtime,
+    A: acvus_extern::IntoRun<Rt>,
+{
+    let mut run = vec![Rt::Value::default(); A::WIDTH];
+    args.into_run(rt, &mut run);
+    run
 }
