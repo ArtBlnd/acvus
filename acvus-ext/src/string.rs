@@ -40,17 +40,17 @@ fn as_str(s: &String) -> StrView {
 
 /// The length in characters.
 #[extern_fn(effect = pure)]
-fn len(s: &String) -> u64 {
+fn len(s: &str) -> u64 {
     s.chars().count() as u64
 }
 
 #[extern_fn(effect = pure)]
-fn is_empty(s: &String) -> bool {
+fn is_empty(s: &str) -> bool {
     s.is_empty()
 }
 
 #[extern_fn(effect = pure)]
-fn concat(a: &String, b: &String) -> String {
+fn concat(a: &str, b: &str) -> String {
     let mut s = String::with_capacity(a.len() + b.len());
     s.push_str(a);
     s.push_str(b);
@@ -145,7 +145,7 @@ fn to_utf8_lossy(bytes: Vec<u8>) -> String {
 }
 
 #[extern_fn(effect = pure)]
-fn char_at(s: &String, i: i64) -> char {
+fn char_at(s: &str, i: i64) -> char {
     let out_of_range = || -> ! {
         panic!(
             "char_at: index {i} is out of range for length {}",
@@ -218,13 +218,13 @@ where
 
 /// The character index of the first `pat` in `s`.
 #[extern_fn(effect = pure)]
-fn find(s: &String, pat: String) -> Option<i64> {
+fn find(s: &str, pat: String) -> Option<i64> {
     s.find(&*pat).map(|byte| char_index(s, byte))
 }
 
 /// The character index of the last `pat` in `s`.
 #[extern_fn(effect = pure)]
-fn rfind(s: &String, pat: String) -> Option<i64> {
+fn rfind(s: &str, pat: String) -> Option<i64> {
     s.rfind(&*pat).map(|byte| char_index(s, byte))
 }
 
@@ -272,7 +272,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn eq_ignore_case(a: &String, b: &String) -> bool {
+fn eq_ignore_case(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
 }
 

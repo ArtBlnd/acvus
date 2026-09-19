@@ -40,51 +40,67 @@ expression: raw
      9 |   assign d = r3
     11 |   assign e = T2
     12 |   r4 = ref &a
-    13 |   r5 = ref &b
-    14 |   r6 = call #1(r4, r5)
-    15 |   assign ab = r6
-    16 |   r7 = ref &ab
-    17 |   r8 = ref &c
-    18 |   r9 = call #1(r7, r8)
-    19 |   assign abc = r9
-    20 |   r10 = ref &abc
-    21 |   r11 = ref &d
-    22 |   r12 = call #1(r10, r11)
-    23 |   assign abcd = r12
-    24 |   r13 = ref &abcd
-    25 |   r14 = ref &e
-    26 |   r15 = call #1(r13, r14)
-    27 |   return r15
+    13 |   r5 = as_slice &r4
+    14 |   r6 = ref &b
+    15 |   r7 = as_slice &r6
+    16 |   r8 = call #1(r5, r7)
+    17 |   assign ab = r8
+    18 |   r9 = ref &ab
+    19 |   r10 = as_slice &r9
+    20 |   r11 = ref &c
+    21 |   r12 = as_slice &r11
+    22 |   r13 = call #1(r10, r12)
+    23 |   assign abc = r13
+    24 |   r14 = ref &abc
+    25 |   r15 = as_slice &r14
+    26 |   r16 = ref &d
+    27 |   r17 = as_slice &r16
+    28 |   r18 = call #1(r15, r17)
+    29 |   assign abcd = r18
+    30 |   r19 = ref &abcd
+    31 |   r20 = as_slice &r19
+    32 |   r21 = ref &e
+    33 |   r22 = as_slice &r21
+    34 |   r23 = call #1(r20, r22)
+    35 |   return r23
 
     ; r0 ($param_1.) : &i64
     ; r1 (to_string(...)) : String
     ; r2 ($param_2.) : &i64
     ; r3 (to_string(...)) : String
     ; r4 (a.) : &String
-    ; r5 (b.) : &String
-    ; r6 (concat(...)) : String
-    ; r7 (ab.) : &String
-    ; r8 (c.) : &String
-    ; r9 (concat(...)) : String
-    ; r10 (abc.) : &String
-    ; r11 (d.) : &String
-    ; r12 (concat(...)) : String
-    ; r13 (abcd.) : &String
-    ; r14 (e.) : &String
-    ; r15 (concat(...)) : String
-    ; r16 (v3) : String
-    ; r17 (abc) : String
-    ; r18 (c) : String
-    ; r19 (d) : String
-    ; r20 (v8) : String
-    ; r21 (e) : String
-    ; r22 (v1) : i64
-    ; r23 (a) : String
-    ; r24 (ab) : String
-    ; r25 (v2) : i64
-    ; r26 (abcd) : String
-    ; r27 (b) : String
-    ; r28 (v13) : String
+    ; r5 (v16) : &str
+    ; r6 (b.) : &String
+    ; r7 (v18) : &str
+    ; r8 (concat(...)) : String
+    ; r9 (ab.) : &String
+    ; r10 (v22) : &str
+    ; r11 (c.) : &String
+    ; r12 (v24) : &str
+    ; r13 (concat(...)) : String
+    ; r14 (abc.) : &String
+    ; r15 (v28) : &str
+    ; r16 (d.) : &String
+    ; r17 (v30) : &str
+    ; r18 (concat(...)) : String
+    ; r19 (abcd.) : &String
+    ; r20 (v34) : &str
+    ; r21 (e.) : &String
+    ; r22 (v36) : &str
+    ; r23 (concat(...)) : String
+    ; r24 (v3) : String
+    ; r25 (c) : String
+    ; r26 (d) : String
+    ; r27 (v8) : String
+    ; r28 (e) : String
+    ; r29 (v2) : i64
+    ; r30 (ab) : String
+    ; r31 (v1) : i64
+    ; r32 (a) : String
+    ; r33 (abc) : String
+    ; r34 (b) : String
+    ; r35 (v13) : String
+    ; r36 (abcd) : String
 
 -- main --
 === main ===

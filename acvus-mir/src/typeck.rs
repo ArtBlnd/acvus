@@ -13,7 +13,7 @@ use crate::solver::{
     ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice, InstanceKind,
     LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode,
     ReferencePair, SettledSignature, SignatureCandidate, SignatureName, SignatureOption,
-    UndecidedCall, Unsettled,
+    UndecidedCall, UnjoinedArgument, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -82,17 +82,30 @@ struct IndexUse {
     demand: PlaceDemand,
 }
 
-/// One argument whose parameter is a `&[T]` and whose container was still a
-/// variable where the argument met it (RFC-0047 rule 6). What an `a[i]`
-/// argument names is settled by the index's own signature decision, so the
-/// coercion waits for the solve as `IndexUse` does.
+/// One argument whose container was still a variable where the argument met
+/// its parameter. What an `a[i]` argument names is settled by the index's own
+/// signature decision, so the coercion waits for the solve as `IndexUse`
+/// does.
 struct SliceArg {
     at: AstId,
     span: Span,
     arg: InferTy,
     param: InferTy,
-    mutability: Mutability,
-    view: View,
+    view: DeferredView,
+}
+
+/// What coercion a deferred argument owes once the solve has named what it
+/// lends.
+enum DeferredView {
+    /// The parameter is the view already (RFC-0047 rule 6): the referent owes
+    /// the declaration, and a referent that declares none is the argument
+    /// mismatch.
+    Asked(Viewed),
+    /// The parameter belongs to whichever candidate the signature decision
+    /// settled on (RFC-0043 rule 2), so a coercion is owed only where that
+    /// parameter turned out to be a view; where it did not, the decision
+    /// joined the argument with it.
+    OfSettledParam,
 }
 
 /// One `a[i]` as the checker reads it (RFC-0047).
@@ -224,14 +237,21 @@ impl AdmittedReceiver {
 
 /// What an overloaded call's arguments left of its candidate set
 /// (RFC-0043).
-enum AdmittedArgs {
-    Taken {
-        options: Vec<SignatureOption>,
-        params: Vec<ParamTerm<Infer>>,
-    },
-    Refused {
-        types: Vec<InferTy>,
-    },
+/// The candidate set as the arguments narrow it, left to right (RFC-0043).
+struct Narrowing {
+    options: Vec<SignatureOption>,
+    awaiting_head: Vec<UnjoinedArgument>,
+}
+
+struct Admitted {
+    narrowing: Narrowing,
+    params: Vec<ParamTerm<Infer>>,
+}
+
+/// The set an argument emptied, with the argument types the call was written
+/// with, which is what the report names (RFC-0043).
+struct ArgumentsRefused {
+    types: Vec<InferTy>,
 }
 
 /// A call argument at its site, with the place it borrows when it is
@@ -1224,8 +1244,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span: site.span,
                 arg: arg_ty.clone(),
                 param: param_ty.clone(),
-                mutability,
-                view,
+                view: DeferredView::Asked(Viewed { view, mutability }),
             });
             return true;
         }
@@ -1305,7 +1324,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             span,
             arg,
             param,
-            mutability,
             view,
         } in deferred
         {
@@ -1313,7 +1331,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty),
                 other => other,
             };
-            let viewed = Viewed { view, mutability };
+            let viewed = match view {
+                DeferredView::Asked(viewed) => viewed,
+                DeferredView::OfSettledParam => {
+                    let TyTerm::Ref(mutability, wanted) = self.solver.shallow_resolve_ty(&param)
+                    else {
+                        continue;
+                    };
+                    let Some(view) = View::of(&self.solver.shallow_resolve_ty(&wanted.ty)) else {
+                        continue;
+                    };
+                    Viewed { view, mutability }
+                }
+            };
             if self.slice_coercion(&referent, viewed, &arg, &param, at, span) {
                 continue;
             }
@@ -2965,12 +2995,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             _ => {}
         }
-        let (options, params) = match self.admit_args(candidates, first.as_ref(), args) {
-            AdmittedArgs::Taken { options, params } => (options, params),
-            AdmittedArgs::Refused { types } => {
+        let admitted = match self.admit_args(candidates, first.as_ref(), args) {
+            Ok(admitted) => admitted,
+            Err(ArgumentsRefused { types }) => {
                 return self.no_matching_function(&name_str, types, call_span);
             }
         };
+        let Admitted {
+            narrowing:
+                Narrowing {
+                    options,
+                    awaiting_head,
+                },
+            params,
+        } = admitted;
         let declared_returns: Option<Vec<&crate::ty::PolyTy>> = options
             .iter()
             .map(|option| match &option.candidate {
@@ -2994,6 +3032,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ret: ret.clone(),
             },
             options,
+            awaiting_head,
             body_effect: self.body_effect.clone(),
         });
         self.decision_sites.insert(decision, call_span);
@@ -3052,38 +3091,41 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         candidates: Vec<SignatureCandidate>,
         first: Option<&FirstArg>,
         args: &[Expr],
-    ) -> AdmittedArgs {
-        let mut options: Vec<SignatureOption> = candidates
-            .into_iter()
-            .map(SignatureOption::taking_every_argument_directly)
-            .collect();
+    ) -> Result<Admitted, ArgumentsRefused> {
+        let mut narrowing = Narrowing {
+            options: candidates
+                .into_iter()
+                .map(SignatureOption::taking_every_argument_directly)
+                .collect(),
+            awaiting_head: Vec::new(),
+        };
         let offset = usize::from(first.is_some());
         let mut params: Vec<ParamTerm<Infer>> = Vec::with_capacity(args.len() + offset);
         let mut types = Vec::with_capacity(args.len() + offset);
         let outer_holds = self.holds.len();
         if let Some(first) = first {
-            let param = self.call_param(&options, 0);
-            self.admit_arg(&mut options, 0, &param, &first.ty, &first.site);
+            let param = self.call_param(&narrowing.options, 0);
+            self.admit_arg(&mut narrowing, 0, &param, &first.ty, &first.site);
             params.push(param);
             types.push(first.ty.clone());
         }
         for (i, arg) in args.iter().enumerate() {
-            if options.is_empty() {
+            if narrowing.options.is_empty() {
                 types.push(self.check_arg(arg, None));
                 continue;
             }
             let index = i + offset;
-            let param = self.call_param(&options, index);
+            let param = self.call_param(&narrowing.options, index);
             let ty = self.check_arg(arg, Some(&param.ty));
-            self.admit_arg(&mut options, index, &param, &ty, &ArgSite::of(arg));
+            self.admit_arg(&mut narrowing, index, &param, &ty, &ArgSite::of(arg));
             params.push(param);
             types.push(ty);
         }
         self.holds.truncate(outer_holds);
-        if options.is_empty() {
-            return AdmittedArgs::Refused { types };
+        if narrowing.options.is_empty() {
+            return Err(ArgumentsRefused { types });
         }
-        AdmittedArgs::Taken { options, params }
+        Ok(Admitted { narrowing, params })
     }
 
     /// The call's parameter at `index` (RFC-0043). Its bound is the
@@ -3101,27 +3143,64 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         ParamTerm::new(name, self.solver.fresh_var_with(bound))
     }
 
-    /// One argument against the set (RFC-0043).
+    /// One argument against the set (RFC-0043): Direct first, then a weaker
+    /// admission from a resolved head, and an argument whose head the solve
+    /// has not named held for the decision to ask again.
     fn admit_arg(
         &mut self,
-        options: &mut Vec<SignatureOption>,
+        narrowing: &mut Narrowing,
         index: usize,
         param: &ParamTerm<Infer>,
         ty: &InferTy,
         site: &ArgSite,
     ) {
+        let options = &mut narrowing.options;
+        if options
+            .iter()
+            .any(|option| self.solver.admission_waits(&option.candidate, index, ty))
+        {
+            options.retain(|option| {
+                !matches!(
+                    self.solver.admits(&option.candidate, index, ty),
+                    Admission::Refused
+                )
+            });
+            if options.is_empty() {
+                return;
+            }
+            narrowing.awaiting_head.push(UnjoinedArgument {
+                index,
+                ty: ty.clone(),
+            });
+            self.slice_args.push(SliceArg {
+                at: site.id,
+                span: site.span,
+                arg: ty.clone(),
+                param: param.ty.clone(),
+                view: DeferredView::OfSettledParam,
+            });
+            return;
+        }
+        let admissions: Vec<Admission> = options
+            .iter()
+            .map(|option| self.solver.admits(&option.candidate, index, ty))
+            .collect();
+        let direct = admissions.contains(&Admission::Direct);
         let mut converts = false;
         let mut views = false;
-        options.retain_mut(
-            |option| match self.solver.admits(&option.candidate, index, ty) {
-                Admission::Direct => true,
+        *options = std::mem::take(options)
+            .into_iter()
+            .zip(admissions)
+            .filter_map(|(mut option, admission)| match admission {
+                Admission::Direct => Some(option),
+                Admission::Converted | Admission::Viewed if direct => None,
                 Admission::Converted => {
                     option.converted.push(ConvertedArgument {
                         index,
                         ty: ty.clone(),
                     });
                     converts = true;
-                    true
+                    Some(option)
                 }
                 Admission::Viewed => {
                     option.viewed.push(ConvertedArgument {
@@ -3129,11 +3208,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         ty: ty.clone(),
                     });
                     views = true;
-                    true
+                    Some(option)
                 }
-                Admission::Refused => false,
-            },
-        );
+                Admission::Refused => None,
+            })
+            .collect();
         if options.is_empty() {
             return;
         }
@@ -3143,8 +3222,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span: site.span,
                 arg: ty.clone(),
                 param: param.ty.clone(),
-                mutability: Mutability::Shared,
-                view: View::Str,
+                view: DeferredView::Asked(Viewed {
+                    view: View::Str,
+                    mutability: Mutability::Shared,
+                }),
             });
             return;
         }

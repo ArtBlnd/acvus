@@ -92,13 +92,33 @@ string has no such type.
 
 ## Consequences
 
-Expected, to be replaced by measurement: the `logs` bench's line
-parsing without an allocation per field; string literals without a slot;
-`regex` and `string` externs taking `&str`.
+Measured: `let s = "abc"; s.len()` lowers to `ref &s`, one `as_slice` whose
+instance is `string::as_str`, then the call — the view is one instruction and
+`string::len`'s parameter is `&str`. `let v = [1, 2, 3]; v.len()` lowers to
+`ref &v` and the call, with no view considered. `let zs = labels([1, 2, 3]);
+zs[2].len()` resolves to `string::len` once the element type freezes, through
+the admission order of RFC-0043.
+
+The `string` module's reading parameters that were already `&String` are
+`&str`: `len`, `is_empty`, `concat`, `char_at`, `find`, `rfind`,
+`eq_ignore_case`. `as_str` keeps `&String`, being the coercion's own
+declaration. `regex`'s `text` is `&str` in every synchronous entry.
+
+A reading parameter taken by value stays `String`: the caller has no `&str`
+to give it until a string literal is one. `regex::replace_with` and
+`replace_all_with` keep `&String` for a second reason: `AsyncGlue` admits
+`Arg<Form = Pair>` at no arity, so a `&str` parameter of an asynchronous
+handler does not compile.
+
+`contains` keeps `&String`. Its bare name is shared with `iter::contains`,
+whose first parameter is a value, so a method receiver whose head is still a
+variable arrives by value rather than as a lend, and RFC-0043's admission
+order reaches no view through it.
 
 ## Order of work
 
-`Ty::Str` and the coercion in the checker/lowering → the literal as a
-pair constant → the `string` module on `&str` → the machine (`SlicePair`
-for `&str`, `is_char_boundary` at `substring`) → the extern crossing
-(`Arg`/`Ret` at `Form = Pair` for `&str`) → regex on `&str`.
+`Ty::Str` and the coercion in the checker/lowering → the admission order of
+RFC-0043 → the literal as a pair constant → the rest of the `string` module
+on `&str` → the machine (`SlicePair` for `&str`, `is_char_boundary` at
+`substring`) → the extern crossing (`Arg`/`Ret` at `Form = Pair` for `&str`)
+→ regex on `&str`.

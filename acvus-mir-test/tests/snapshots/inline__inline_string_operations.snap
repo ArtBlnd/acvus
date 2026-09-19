@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/inline.rs
-assertion_line: 533
 expression: ir
 ---
 === literals ===
@@ -10,14 +9,18 @@ expression: ir
 === main ===
      2 |   assign h = T1
      3 |   r0 = ref &h
-     4 |   r1 = ref &$v1
-     5 |   r2 = call #0(r0, r1)
-     6 |   return r2
+     4 |   r1 = as_slice &r0
+     5 |   r2 = ref &$v1
+     6 |   r3 = as_slice &r2
+     7 |   r4 = call #0(r1, r3)
+     8 |   return r4
 
     ; r0 (var_3.) : &String
-    ; r1 ($param_1.) : &String
-    ; r2 (concat(...)) : String
-    ; r3 (v4) : String
-    ; r4 (h) : String
-    ; r5 (v1) : String
-    ; r6 (greet(...)) : String
+    ; r1 (v7) : &str
+    ; r2 ($param_1.) : &String
+    ; r3 (v9) : &str
+    ; r4 (concat(...)) : String
+    ; r5 (greet(...)) : String
+    ; r6 (h) : String
+    ; r7 (v1) : String
+    ; r8 (v4) : String

@@ -9,47 +9,39 @@ expression: ir
 === main ===
      1 |   assign s = T0
      2 |   r0 = take s
-     3 |   assign s = r0
-     4 |   r1 = ref &s
-     6 |   assign s = r1
-     7 |   assign x = T1
-     8 |   r2 = take s
-     9 |   r3 = ref &(*r2)
-    10 |   r4 = ref &x
-    11 |   r5 = call #0(r3, r4)
-    12 |   return r5
+     3 |   r1 = closure L0 [r0]
+     4 |   assign f = r1
+     6 |   r2 = ref &f
+     7 |   r3 = call r2(T1)
+     8 |   return r3
 
     ; r0 (s) : String
-    ; r1 (v10) : &String
-    ; r2 (v15) : &String
-    ; r3 ((*r5).) : &String
-    ; r4 (var_4.) : &String
-    ; r5 (concat(...)) : String
-    ; r6 (x) : String
-    ; r7 (v6) : String
-    ; r8 (s) : String
-    ; r9 (v1) : String
-    ; r10 (v4) : Fn(String) -> String
-    ; r11 (f(...)) : String
-    ; r12 (s) : String
-    ; r13 (s) : &String
-    ; r14 (f) : Fn(String) -> String
-    ; r15 (f) : &Fn(String) -> String
+    ; r1 (v4) : Fn(String) -> String
+    ; r2 (f) : &Fn(String) -> String
+    ; r3 (f(...)) : String
+    ; r4 (v6) : String
+    ; r5 (s) : String
+    ; r6 (f) : Fn(String) -> String
+    ; r7 (v1) : String
 
 === closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
      0 |   assign s = r0
      1 |   assign x = r1
      2 |   r2 = take s
      3 |   r3 = ref &(*r2)
-     4 |   r4 = ref &x
-     5 |   r5 = call #0(r3, r4)
-     6 |   return r5
+     4 |   r4 = as_slice &r3
+     5 |   r5 = ref &x
+     6 |   r6 = as_slice &r5
+     7 |   r7 = call #0(r4, r6)
+     8 |   return r7
 
     ; r0 (v1) : &String
     ; r1 (v2) : String
     ; r2 (v5) : &String
     ; r3 ((*r5).) : &String
-    ; r4 (x.) : &String
-    ; r5 (concat(...)) : String
-    ; r6 (s) : &String
-    ; r7 (x) : String
+    ; r4 (v7) : &str
+    ; r5 (x.) : &String
+    ; r6 (v9) : &str
+    ; r7 (concat(...)) : String
+    ; r8 (s) : &String
+    ; r9 (x) : String

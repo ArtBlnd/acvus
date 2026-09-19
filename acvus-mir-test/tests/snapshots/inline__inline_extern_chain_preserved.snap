@@ -7,16 +7,18 @@ expression: ir
 
 === main ===
      1 |   r0 = ref &$v1
-     2 |   r1 = call #0(r0)
-     3 |   assign n = r1
-     4 |   r2 = ref &n
-     5 |   r3 = call #1(r2)
-     6 |   return r3
+     2 |   r1 = as_slice &r0
+     3 |   r2 = call #0(r1)
+     4 |   assign n = r2
+     5 |   r3 = ref &n
+     6 |   r4 = call #1(r3)
+     7 |   return r4
 
     ; r0 ($param_1.) : &String
-    ; r1 (len(...)) : u64
-    ; r2 (var_4.) : &u64
-    ; r3 (to_string(...)) : String
-    ; r4 (v1) : String
+    ; r1 (v5) : &str
+    ; r2 (len(...)) : u64
+    ; r3 (var_5.) : &u64
+    ; r4 (to_string(...)) : String
     ; r5 (n) : u64
     ; r6 (process(...)) : String
+    ; r7 (v1) : String

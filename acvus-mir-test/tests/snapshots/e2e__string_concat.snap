@@ -8,22 +8,26 @@ expression: ir
      2 |   r1 = fetch @world
      3 |   assign @world = r1
      4 |   r2 = ref &@hello
-     5 |   r3 = ref &@world
-     6 |   r4 = call #0(r2, r3)
-     7 |   r5 = string_concat [r4]
-     8 |   r6 = take @hello
-     9 |   commit @hello = r6
-    10 |   r7 = take @world
-    11 |   commit @world = r7
-    12 |   return r5
+     5 |   r3 = as_slice &r2
+     6 |   r4 = ref &@world
+     7 |   r5 = as_slice &r4
+     8 |   r6 = call #0(r3, r5)
+     9 |   r7 = string_concat [r6]
+    10 |   r8 = take @hello
+    11 |   commit @hello = r8
+    12 |   r9 = take @world
+    13 |   commit @world = r9
+    14 |   return r7
 
     ; r0 (@hello) : String
     ; r1 (@world) : String
     ; r2 (@hello.) : &String
-    ; r3 (@world.) : &String
-    ; r4 (concat(...)) : String
-    ; r5 (v8) : String
-    ; r6 (v9) : String
+    ; r3 (v6) : &str
+    ; r4 (@world.) : &String
+    ; r5 (v8) : &str
+    ; r6 (concat(...)) : String
     ; r7 (v10) : String
-    ; r8 (@world) : String
-    ; r9 (@hello) : String
+    ; r8 (v11) : String
+    ; r9 (v12) : String
+    ; r10 (@world) : String
+    ; r11 (@hello) : String

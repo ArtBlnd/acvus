@@ -228,16 +228,18 @@ fn a_method_receiver_one_candidate_lends_is_lent() {
     );
 }
 
-/// Taking the call includes taking an argument through one declared
-/// conversion: `iter::count` takes the owned array by `into_iter_array`,
-/// the binding takes it as it is, and both remain.
+/// Direct first (RFC-0043 rule 1): the binding takes the owned array as it
+/// is, `iter::count` takes it only through `into_iter_array`, and the
+/// conversion leaves the set at that argument.
 #[test]
-fn a_binding_and_a_signature_that_converts_the_argument_are_ambiguous() {
+fn a_binding_that_takes_the_argument_directly_drops_the_signature_that_converts_it() {
     let i = Interner::new();
-    let errors = errors_of(&i, "let q = [1.0, 2.0]; let count = |k| -> 7.0; count(q)");
-    assert_eq!(
-        errors,
-        vec!["`count` is declared by iter::count and the binding `count`"]
+    let c = checked(&i, "let q = [1.0, 2.0]; let count = |k| -> 7.0; count(q)");
+    assert_eq!(c.ret, Ty::Float);
+    assert!(
+        c.callees.is_empty(),
+        "settling on the binding names no function: {:?}",
+        c.callees
     );
 }
 

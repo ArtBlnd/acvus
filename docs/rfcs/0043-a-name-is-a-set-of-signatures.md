@@ -131,11 +131,11 @@ A binding's parameters are inference types, not shapes a scheme names, so
 it gives the call's parameters `TyVarBound::Any` and contributes no return
 pattern. `Any` is what the union of it with any `OneOf` is, so in a set
 holding a binding every parameter is `Any` and the return is a bare
-variable. A binding takes every argument directly, which refuses nothing
-and excludes no one: a declared signature that takes an argument only
-through a cast takes the call beside it. `count(q)` over an owned array is
-`iter::count`, through `into_iter_array`; `let count = |k| -> 7.0;
-count(q)` is ambiguous between `iter::count` and the binding, and
+variable. A binding takes every argument directly, so rule 1 makes it the
+argument's strongest admission: a declared signature that takes the same
+argument only through a cast leaves the set there. `count(q)` over an owned
+array is `iter::count`, through `into_iter_array`; `let count = |k| -> 7.0;
+count(q)` is the binding, whose parameter takes the array as it is, and
 `count(&q)` is the binding alone, no rule reaching an iterator from a
 reference.
 
@@ -282,6 +282,24 @@ display order, not the order the registries were combined in.
   named call and at a method call alike, so `q.len()` settling on a
   binding lowers to `Callee::Indirect` of it.
 - `acvus-mir/src/error.rs`: `MirErrorKind::NoMatchingFunction`.
+- The admission order: `Admission::{Direct, Converted, Viewed, Refused}` and
+  `Solver::{admits, admission_waits}`; `typeck.rs`'s `admit_arg` applies rule
+  1 over the whole set at each argument, and records an argument whose
+  admission waits for a head as `UnjoinedArgument` on the decision instead of
+  joining it with the call's parameter. `Solver::admitted_again` asks
+  admission afresh at every step and applies rule 1 to what it finds;
+  `takes_signature` tests each unjoined argument against the candidate's own
+  parameter on the trial terms; `join_unjoined` joins, at the settle, the
+  unjoined arguments the settled candidate takes directly. `SliceArg`'s
+  `DeferredView::OfSettledParam` is where the view a settled parameter asks
+  for becomes the coercion.
+- A `Converted` argument needs no deferral of its own: the conversion
+  decision `convert_argument_at` opens already waits for the signature,
+  through `Solver::awaits_signature`.
+- A view at an argument is only reachable where `string::as_str` is declared,
+  since `slice_coercion` resolves the declaration out of the environment's
+  `machine_set`. A registry set without the `string` namespace refuses a
+  `&str` parameter as an argument mismatch.
 - RFC-0021's one-name rule is amended: a name two namespaces declare is a
   set, decided by this RFC.
 - A library function that exists per container type is a plain function

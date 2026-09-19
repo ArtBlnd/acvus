@@ -37,12 +37,15 @@ async fn a_binding_and_an_extern_that_both_take_the_call_are_ambiguous() {
     .await;
 }
 
+/// Direct first (RFC-0043 rule 1): the binding takes the owned array as it
+/// is and `iter::count` takes it only through `into_iter_array`, so the
+/// call runs the binding and yields its `7.0`.
 #[tokio::test]
-#[should_panic(expected = "`count` is declared by iter::count and the binding `count`")]
-async fn a_binding_and_a_signature_that_converts_the_argument_are_ambiguous() {
-    run(
+async fn a_binding_that_takes_the_argument_directly_runs_instead_of_the_conversion() {
+    let v = run(
         "let q = [1.0, 2.0]; let count = |k| -> 7.0; count(q)",
-        Ty::Never,
+        Ty::Float,
     )
     .await;
+    assert_eq!(v.as_float(), 7.0);
 }

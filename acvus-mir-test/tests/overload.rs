@@ -65,10 +65,16 @@ mod fx_a {
         unreachable!("a type-only fixture is never run")
     }
 
+    #[extern_fn(effect = pure)]
+    pub fn peek(s: &String) -> i64 {
+        let _ = s;
+        unreachable!("a type-only fixture is never run")
+    }
+
     pub fn registry() -> Registry<TypesOnly> {
         extern_registry! {
             ns: "fx_a",
-            fns: [probe, size, apply_any, only_vec],
+            fns: [probe, size, apply_any, only_vec, peek],
         }
     }
 }
@@ -88,10 +94,22 @@ mod fx_b {
         unreachable!("a type-only fixture is never run")
     }
 
+    #[extern_fn(effect = pure)]
+    pub fn peek(s: &str) -> i64 {
+        let _ = s;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn glance(s: &str) -> i64 {
+        let _ = s;
+        unreachable!("a type-only fixture is never run")
+    }
+
     pub fn registry() -> Registry<TypesOnly> {
         extern_registry! {
             ns: "fx_b",
-            fns: [probe],
+            fns: [probe, peek, glance],
         }
     }
 }
@@ -109,10 +127,19 @@ mod fx_c {
         unreachable!("a type-only fixture is never run")
     }
 
+    #[extern_fn(effect = pure)]
+    pub fn glance<T>(c: &Vec<T>) -> i64
+    where
+        T: TyVar,
+    {
+        let _ = c;
+        unreachable!("a type-only fixture is never run")
+    }
+
     pub fn registry() -> Registry<TypesOnly> {
         extern_registry! {
             ns: "fx_c",
-            fns: [size],
+            fns: [size, glance],
         }
     }
 }
@@ -430,4 +457,66 @@ fn a_piped_vec_reaches_the_fixture_iterator_probe_through_into_iter() {
     assert_eq!(c.ret, Ty::Bool);
     assert_eq!(calls(&c, "fx_b::probe"), 1, "{:?}", c.callees);
     assert_eq!(calls(&c, "fx_a::probe"), 0, "{:?}", c.callees);
+}
+
+// -- The admission order (RFC-0043, amended) --------------------------------
+
+/// Rule 1: `fx_a::peek` takes the `&String` as it is and `fx_b::peek` would
+/// take a view of it, so the view leaves the set at that argument.
+#[test]
+fn a_candidate_that_takes_the_argument_directly_drops_one_that_would_view_it() {
+    let i = Interner::new();
+    let c = checked(&i, "let s = \"ab\"; peek(&s)");
+    assert_eq!(c.callees, vec!["fx_a::peek".to_string()]);
+}
+
+/// Rule 5: no candidate takes the `&String` directly, `fx_b::glance` takes a
+/// view of it, and the view is the checker's — one `as_slice` at the
+/// argument, whose instance is the `String`'s own `as_str`.
+#[test]
+fn a_view_takes_the_call_where_no_candidate_takes_the_argument_directly() {
+    let i = Interner::new();
+    let c = checked(&i, "let s = \"ab\"; glance(&s)");
+    assert_eq!(c.callees, vec!["fx_b::glance".to_string()]);
+}
+
+/// Rule 4 and rule 1 at a receiver: a `Vec` receiver is `vec::len`'s own
+/// type, and `string::len`'s `&str` is no view of a `Vec`.
+#[test]
+fn a_container_receiver_takes_its_own_len_and_considers_no_view() {
+    let i = Interner::new();
+    let c = checked(&i, "let v = [1, 2]; v.len()");
+    assert_eq!(c.callees, vec!["array::len".to_string()]);
+}
+
+/// Rule 4 at a receiver admitted by the view alone: `string::len` declares
+/// `&str`, which no `String` is, and it is the only `len` a `String`
+/// receiver reaches.
+#[test]
+fn a_string_receiver_reaches_len_by_the_view() {
+    let i = Interner::new();
+    let c = checked(&i, "let s = \"ab\"; s.len()");
+    assert_eq!(c.callees, vec!["string::len".to_string()]);
+}
+
+/// Rule 2: what `zs[0]` names is a variable where the receiver meets the
+/// set, so admission waits for it; when the application names `String`, the
+/// re-ask refuses every container `len` and leaves the view.
+#[test]
+fn an_element_still_a_variable_defers_its_admission_until_the_head_resolves() {
+    let i = Interner::new();
+    let c = checked(&i, "let f = |zs| -> zs[0].len(); f([\"a\", \"b\"])");
+    assert_eq!(
+        c.callees,
+        vec!["array::as_slice".to_string(), "string::len".to_string()]
+    );
+}
+
+/// Refused: a set an argument empties opens no decision and names the call
+/// as it was written (RFC-0043).
+#[test]
+fn an_argument_no_candidate_takes_empties_the_set_at_that_argument() {
+    let i = Interner::new();
+    let errors = errors_of(&i, "peek(1)");
+    assert_eq!(errors, vec!["no `peek` takes a call of type Fn(i64) -> !"]);
 }

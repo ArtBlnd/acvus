@@ -1327,6 +1327,7 @@ pub enum Decision {
         name: Astr,
         call: CallShape,
         options: Vec<SignatureOption>,
+        awaiting_head: Vec<UnjoinedArgument>,
         body_effect: EffectTerm<Infer>,
     },
     /// Since no `&&T` exists (RFC-0029), what a reference to a place names
@@ -1501,6 +1502,16 @@ impl SignatureOption {
     }
 }
 
+/// An argument whose head the solve had not named where the argument met the
+/// candidate set, at a position some candidate takes a view of (RFC-0043 rule
+/// 2). The checker joins no such argument with the call's parameter, so
+/// `admits` answers it afresh at every step of the decision.
+#[derive(Debug, Clone)]
+pub struct UnjoinedArgument {
+    pub index: usize,
+    pub ty: InferTy,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConvertedArgument {
     pub index: usize,
@@ -1543,6 +1554,7 @@ pub struct UndecidedCall {
     pub name: Astr,
     pub call: CallShape,
     pub options: Vec<SignatureOption>,
+    pub awaiting_head: Vec<UnjoinedArgument>,
     pub body_effect: EffectTerm<Infer>,
 }
 
@@ -1819,12 +1831,14 @@ impl<'src> Solver<'src> {
             name,
             call,
             options,
+            awaiting_head,
             body_effect,
         } = call;
         self.decide(Decision::Signature {
             name,
             call,
             options,
+            awaiting_head,
             body_effect,
         })
     }
@@ -2138,8 +2152,9 @@ impl<'src> Solver<'src> {
                 name,
                 call,
                 options,
+                awaiting_head,
                 body_effect,
-            } => self.step_signature(id, name, &call, options, &body_effect),
+            } => self.step_signature(id, name, &call, options, &awaiting_head, &body_effect),
             Decision::Lend {
                 of,
                 referent,
@@ -2374,13 +2389,17 @@ impl<'src> Solver<'src> {
         name: Astr,
         call: &CallShape,
         options: Vec<SignatureOption>,
+        awaiting_head: &[UnjoinedArgument],
         body_effect: &EffectTerm<Infer>,
     ) -> Progress {
-        let remaining: Vec<SignatureOption> = options
+        let mut remaining: Vec<SignatureOption> = options
             .iter()
-            .filter(|option| self.takes_signature(call, option))
+            .filter(|option| self.takes_signature(call, awaiting_head, option))
             .cloned()
             .collect();
+        for argument in awaiting_head {
+            remaining = self.admitted_again(remaining, argument);
+        }
         let narrowed = remaining.len() != options.len();
         if narrowed
             && let Decision::Signature { options, .. } = &mut self.decisions[id.0 as usize].decision
@@ -2422,11 +2441,23 @@ impl<'src> Solver<'src> {
                         conflict,
                     });
                 }
+                let candidate = only.candidate.clone();
                 match self.settle_join(&call.at_effect(effect), &ty) {
-                    Ok(()) => Progress::Settled(Answer::Signature {
-                        settled,
-                        callee_ty: ty,
-                    }),
+                    Ok(()) => {
+                        if let Err(Mismatch { expected, got, .. }) =
+                            self.join_unjoined(call, &candidate, awaiting_head)
+                        {
+                            return Progress::Failed(Unsettled::InstanceMismatch {
+                                decision: id,
+                                expected,
+                                got,
+                            });
+                        }
+                        Progress::Settled(Answer::Signature {
+                            settled,
+                            callee_ty: ty,
+                        })
+                    }
                     Err(Mismatch { expected, got, .. }) => {
                         Progress::Failed(Unsettled::InstanceMismatch {
                             decision: id,
@@ -2439,6 +2470,53 @@ impl<'src> Solver<'src> {
             _ if narrowed => Progress::Narrowed,
             _ => Progress::Unchanged,
         }
+    }
+
+    /// Admission at an argument the decision held unjoined, asked again with
+    /// whatever its head has resolved to, then rule 1 of RFC-0043: a
+    /// candidate that takes the argument only by conversion or by view leaves
+    /// the set where another takes it directly.
+    fn admitted_again(
+        &self,
+        options: Vec<SignatureOption>,
+        argument: &UnjoinedArgument,
+    ) -> Vec<SignatureOption> {
+        let admissions: Vec<Admission> = options
+            .iter()
+            .map(|option| self.admits(&option.candidate, argument.index, &argument.ty))
+            .collect();
+        let direct = admissions.contains(&Admission::Direct);
+        options
+            .into_iter()
+            .zip(admissions)
+            .filter(|(_, admission)| match admission {
+                Admission::Direct => true,
+                Admission::Converted | Admission::Viewed => !direct,
+                Admission::Refused => false,
+            })
+            .map(|(option, _)| option)
+            .collect()
+    }
+
+    /// The settled candidate takes each unjoined argument directly or as a
+    /// view of what it lends. A direct one joins the call's parameter here,
+    /// which `settle_join` has just bound to the candidate's own; a viewed
+    /// one is the checker's coercion at the argument and its type stays what
+    /// the caller wrote (RFC-0043 rule 5).
+    fn join_unjoined(
+        &mut self,
+        call: &CallShape,
+        candidate: &SignatureCandidate,
+        awaiting_head: &[UnjoinedArgument],
+    ) -> Result<(), Mismatch> {
+        for argument in awaiting_head {
+            if self.admits(candidate, argument.index, &argument.ty) != Admission::Direct {
+                continue;
+            }
+            let param = call.params[argument.index].ty.clone();
+            self.settle_join(&argument.ty, &param)?;
+        }
+        Ok(())
     }
 
     fn resolve_shape(&self, call: &CallShape) -> CallShape {
@@ -2464,16 +2542,42 @@ impl<'src> Solver<'src> {
         }
     }
 
-    fn takes_signature(&self, call: &CallShape, option: &SignatureOption) -> bool {
+    fn takes_signature(
+        &self,
+        call: &CallShape,
+        awaiting_head: &[UnjoinedArgument],
+        option: &SignatureOption,
+    ) -> bool {
         let converted = option.converted.as_slice();
         let mut trial = self.terms.clone();
         let call_ty = call.at_effect(EffectTerm::Var(trial.alloc_effect_var()));
         let scheme = match &option.candidate {
             SignatureCandidate::Named { scheme, .. } => scheme,
             SignatureCandidate::Local { ty } => {
-                return trial
+                if trial
                     .join(&call_ty, ty, Position::Value, JoinKind::Flow, self.registry)
-                    .is_ok();
+                    .is_err()
+                {
+                    return false;
+                }
+                let local = trial.resolve_ty(ty);
+                let Some(params) = SignatureCandidate::local_params(&local) else {
+                    return true;
+                };
+                return awaiting_head.iter().all(|argument| {
+                    let Some(param) = params.get(argument.index) else {
+                        return true;
+                    };
+                    trial
+                        .join(
+                            &argument.ty,
+                            &param.ty,
+                            Position::Value,
+                            JoinKind::Flow,
+                            self.registry,
+                        )
+                        .is_ok()
+                });
             }
         };
         let instance = trial.instantiate_open(&scheme.ty, self.registry);
@@ -2525,11 +2629,29 @@ impl<'src> Solver<'src> {
                     )
                     .is_ok()
         });
-        takes_converted
-            && option.viewed.iter().all(|argument| {
-                borrows_a_str(&trial.resolve_ty(&instance_params[argument.index].ty))
-                    && self.borrows_a_string(&argument.ty)
-            })
+        let takes_viewed = option.viewed.iter().all(|argument| {
+            borrows_a_str(&trial.resolve_ty(&instance_params[argument.index].ty))
+                && self.borrows_a_string(&argument.ty)
+        });
+        let takes_unjoined = awaiting_head.iter().all(|argument| {
+            let param = &instance_params[argument.index].ty;
+            match self.admits(&option.candidate, argument.index, &argument.ty) {
+                Admission::Refused => false,
+                Admission::Viewed => {
+                    borrows_a_str(&trial.resolve_ty(param)) && self.borrows_a_string(&argument.ty)
+                }
+                Admission::Direct | Admission::Converted => trial
+                    .join(
+                        &argument.ty,
+                        param,
+                        Position::Value,
+                        JoinKind::Flow,
+                        self.registry,
+                    )
+                    .is_ok(),
+            }
+        });
+        takes_converted && takes_viewed && takes_unjoined
     }
 
     /// RFC-0030, RFC-0043.
@@ -2584,6 +2706,29 @@ impl<'src> Solver<'src> {
             Admission::Converted
         } else {
             Admission::Refused
+        }
+    }
+
+    /// Whether admission at this argument waits for a head (RFC-0043 rule
+    /// 2): the storage it would lend is one the solve has not named, and this
+    /// candidate takes a run of that storage rather than the storage itself,
+    /// so the argument's own type is evidence for neither `Direct` nor
+    /// `Viewed` yet.
+    pub fn admission_waits(
+        &self,
+        candidate: &SignatureCandidate,
+        index: usize,
+        arg: &InferTy,
+    ) -> bool {
+        let TyTerm::Ref(_, lent) = self.terms.shallow_resolve_ty(arg) else {
+            return false;
+        };
+        if !matches!(self.terms.resolve_ty(&lent.ty), TyTerm::Var(_)) {
+            return false;
+        }
+        match candidate.param_bound(index) {
+            TyVarBound::OneOf(shapes) => shapes.iter().any(borrows_a_view),
+            TyVarBound::Any | TyVarBound::Integer { .. } => false,
         }
     }
 
@@ -3323,6 +3468,16 @@ where
     V: Phase,
 {
     matches!(shape, TyTerm::Ref(Mutability::Shared, pointee) if matches!(pointee.ty, TyTerm::Str))
+}
+
+/// A parameter that takes a run of what its argument lends rather than the
+/// storage itself: `&[T]` or `&mut [T]` (RFC-0047 rule 6), `&str` (RFC-0062
+/// Decision 3).
+fn borrows_a_view<V>(shape: &TyTerm<V>) -> bool
+where
+    V: Phase,
+{
+    matches!(shape, TyTerm::Ref(_, pointee) if matches!(pointee.ty, TyTerm::Slice(_) | TyTerm::Str))
 }
 
 fn converts(terms: &Terms, registry: &TypeRegistry, from: &InferTy, to: &InferTy) -> bool {

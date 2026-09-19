@@ -145,7 +145,7 @@ fn escape(text: String) -> String {
 // -- Searching ----------------------------------------------------------
 
 #[extern_fn(effect = pure)]
-fn is_match(re: &Regex, text: &String) -> bool {
+fn is_match(re: &Regex, text: &str) -> bool {
     re.0.is_match(text)
 }
 
@@ -153,13 +153,13 @@ fn is_match(re: &Regex, text: &String) -> bool {
 /// of `text` or inside a character matches nothing. `^` still anchors to
 /// byte 0 of `text`, not to `start`.
 #[extern_fn(effect = pure)]
-fn is_match_at(re: &Regex, text: &String, start: u64) -> bool {
+fn is_match_at(re: &Regex, text: &str, start: u64) -> bool {
     at(text, start).is_some_and(|start| re.0.is_match_at(text, start))
 }
 
 /// The leftmost match, or `None` where the pattern does not match.
 #[extern_fn(effect = pure)]
-fn find(re: &Regex, text: &String) -> Option<Match> {
+fn find(re: &Regex, text: &str) -> Option<Match> {
     re.0.find(text).map(match_of)
 }
 
@@ -167,14 +167,14 @@ fn find(re: &Regex, text: &String) -> Option<Match> {
 /// the end of `text` or inside a character gives `None`. `^` still anchors
 /// to byte 0 of `text`, not to `start`.
 #[extern_fn(effect = pure)]
-fn find_at(re: &Regex, text: &String, start: u64) -> Option<Match> {
+fn find_at(re: &Regex, text: &str, start: u64) -> Option<Match> {
     let start = at(text, start)?;
     re.0.find_at(text, start).map(match_of)
 }
 
 /// Every non-overlapping match, left to right.
 #[extern_fn(effect = pure)]
-fn find_all<I, Rt>(re: &Regex, text: &String) -> Iter<Match, Pure, I, Rt>
+fn find_all<I, Rt>(re: &Regex, text: &str) -> Iter<Match, Pure, I, Rt>
 where
     I: IdentityVar,
     Rt: Runtime,
@@ -185,7 +185,7 @@ where
 /// The end of the shortest match beginning at the leftmost position that
 /// matches, as a byte offset; `None` where the pattern does not match.
 #[extern_fn(effect = pure)]
-fn shortest_match(re: &Regex, text: &String) -> Option<u64> {
+fn shortest_match(re: &Regex, text: &str) -> Option<u64> {
     re.0.shortest_match(text).map(|end| end as u64)
 }
 
@@ -194,13 +194,13 @@ fn shortest_match(re: &Regex, text: &String) -> Option<u64> {
 /// The groups of the leftmost match, or `None` where the pattern does not
 /// match.
 #[extern_fn(effect = pure)]
-fn captures(re: &Regex, text: &String) -> Option<Captures> {
+fn captures(re: &Regex, text: &str) -> Option<Captures> {
     re.0.captures(text).map(|caps| groups_of(&re.0, &caps))
 }
 
 /// The groups of every non-overlapping match, left to right.
 #[extern_fn(effect = pure)]
-fn captures_all<I, Rt>(re: &Regex, text: &String) -> Iter<Captures, Pure, I, Rt>
+fn captures_all<I, Rt>(re: &Regex, text: &str) -> Iter<Captures, Pure, I, Rt>
 where
     I: IdentityVar,
     Rt: Runtime,
@@ -251,23 +251,23 @@ fn group_names(re: &Regex) -> Vec<Option<String>> {
 /// `${name}` expand to the group of that number or name and `$$` is one
 /// dollar.
 #[extern_fn(effect = pure)]
-fn replace(re: &Regex, text: &String, with: String) -> String {
+fn replace(re: &Regex, text: &str, with: String) -> String {
     re.0.replace(text, with.as_str()).into_owned()
 }
 
 /// `text` with every non-overlapping match replaced, expanding `with` as
 /// `replace` does.
 #[extern_fn(effect = pure)]
-fn replace_all(re: &Regex, text: &String, with: String) -> String {
+fn replace_all(re: &Regex, text: &str, with: String) -> String {
     re.0.replace_all(text, with.as_str()).into_owned()
 }
 
 /// `text` with the first `n` matches replaced, expanding `with` as
 /// `replace` does; an `n` of 0 replaces nothing.
 #[extern_fn(effect = pure)]
-fn replace_n(re: &Regex, text: &String, n: u64, with: String) -> String {
+fn replace_n(re: &Regex, text: &str, n: u64, with: String) -> String {
     match usize::try_from(n).unwrap_or(usize::MAX) {
-        0 => text.clone(),
+        0 => text.to_owned(),
         n => re.0.replacen(text, n, with.as_str()).into_owned(),
     }
 }
@@ -324,7 +324,7 @@ where
 /// The pieces of `text` between matches. A match at either end gives an
 /// empty piece there.
 #[extern_fn(effect = pure)]
-fn split<I, Rt>(re: &Regex, text: &String) -> Iter<String, Pure, I, Rt>
+fn split<I, Rt>(re: &Regex, text: &str) -> Iter<String, Pure, I, Rt>
 where
     I: IdentityVar,
     Rt: Runtime,
@@ -335,7 +335,7 @@ where
 /// At most `n` pieces: the last one holds the rest of `text`, matches and
 /// all. An `n` of 0 gives no piece.
 #[extern_fn(effect = pure)]
-fn split_n<I, Rt>(re: &Regex, text: &String, n: u64) -> Iter<String, Pure, I, Rt>
+fn split_n<I, Rt>(re: &Regex, text: &str, n: u64) -> Iter<String, Pure, I, Rt>
 where
     I: IdentityVar,
     Rt: Runtime,
