@@ -20,6 +20,14 @@ members = [
 rustc-hash = "2"
 uuid = { version = "1", features = ["v4", "js"] }
 
+# Line tables only: a backtrace keeps its file and line, and the type and
+# variable records that made a test binary ~40 % debuginfo (measured
+# 2026-09-20: .debug_str 119 MB + .debug_info 78 MB of 534 MB) are not
+# emitted. A debugger session that needs them builds with
+# CARGO_PROFILE_DEV_DEBUG=full.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 opt-level = 3
 lto = "fat"
