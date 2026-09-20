@@ -732,6 +732,35 @@ interference query `assign_slots` does not expose.
   operation, both of its `while`s close as `Loop` regions. Every other
   `shapes` case's listing is byte-identical.
 
+- **A cold hint on the machine's rare paths is not kept, because LLVM already
+  has the layout.** Of the 1190 `Op::run` bodies in the `accum` binary holding
+  a `panic!`, an `assert!`, a bounds check or an `expect`, every one that tail-
+  jumps puts that block after its tail `jmp *` — 1148 of 1149, and 1155 of 1156
+  in `shapes`. The single exception, `SetStep<OptionPayload, true>`, keeps its
+  `expect` inline, and no bench row runs that operation. The `Kind` guards in
+  `value.rs` are `debug_assert!` and are absent from a release build; the
+  `TypeId` guards in `erase` and `materialize` and the `LARGE` and `WORD`
+  parameters of `Regs::{take, store}` are constant after monomorphization and
+  fold. One branch is laid the other way: `Regs::assign`'s release of a
+  register's previous occupant, whose drop block sits between the test and the
+  tail. `std::hint::cold_path()` there does what it promises — the block moves
+  behind the tail, `AssignVar<false>`'s hot path goes from a taken forward jump
+  to a not-taken one, four `Op::run` bodies change in `accum` and six in
+  `shapes`, and `asm_probe` stays at 2748 / 37 / 27 — and it moves no row. Over
+  five alternating pinned reps at n = 1e6 under `benches/README.md`'s protocol,
+  all 23 `accum` rows overlap, and every `shapes` row whose ranges separate
+  does so by 0.1 % to 2.8 %, in both directions, under the 7 % floor that
+  README names for a difference between two builds. `shapes`'s `field read`
+  separates by 9.8 % on the slower side and is the residual bimodality README
+  records for that row: the base arm drew 2423–2542 µs and the tree arm
+  2792–2799 µs, the row's two modes, and its body is instruction-identical
+  across the two builds. The listings say why nothing moved: no loop body of a
+  measured row reaches `Regs::assign` — the assignments sit in the prologue,
+  and `field write` and `enum match` leave SROA as `Add` and `Diamond` with no
+  storage operation at all. Hot and cold hints are worth revisiting only for a
+  branch whose rare arm runs in a loop body and which LLVM lays inline; none
+  exists today.
+
 - The chain, diamond, loop and fused run keep their measured shapes as
   structs; `AsSlice`/`Index` (RFC-0047) and the `switch` operation
   (RFC-0051) are structs added to the same trait.
