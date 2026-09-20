@@ -18,6 +18,9 @@
 //! `A` scales with `@n`. A `.` adds the cell under the pointer to `out`
 //! rather than printing it, and `,` is in the alphabet, is never executed,
 //! and is what the `match`'s catch-all arm stands for.
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;

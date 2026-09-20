@@ -6,6 +6,9 @@
 //! object as a boxed `FxHashMap<Astr, Value>` and an enum as a boxed
 //! `Variant<Value>`, so the ratio is the distance between the two layouts,
 //! not interpreter overhead alone.
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;

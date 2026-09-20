@@ -7,6 +7,9 @@
 //! `dot` is declared here rather than in `acvus-ext` because a math library
 //! is a design of its own and is not started by a bench. The signature this
 //! file measures is the one such a library would export.
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;

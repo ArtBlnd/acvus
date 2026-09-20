@@ -19,10 +19,18 @@
 //! - `sync ext`: the same matcher in the caller's frame, taking the pattern
 //!   and the line as `&[i64]` -- the script holds the corpus and the call
 //!   crosses two register pairs (RFC-0047 rule 6).
+//! - `sync native`: the same matcher in the caller's frame over a corpus Rust
+//!   holds, named by a `u64` line index. One register of argument and no
+//!   container crossing, so it is the floor an extern call can cost, and the
+//!   difference from `sync ext` is what a script pays to hold its own
+//!   container.
 //!
 //! The Rust twins are the same matcher over the same `Vec<Vec<i64>>`, once
 //! sequentially and once over `std::thread::scope` chunks -- the parallel
 //! ceiling a parallel `for` would be measured against.
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -282,10 +290,11 @@ fn rust_chunked(lines: &[Vec<i64>], pat: &[i64], chunks: usize) -> Counted {
 
 // -- The matcher, as an extern ------------------------------------------
 
-/// The corpus the `heavy` cases match against. A slice borrows the frame the
-/// call laid its arguments on, and a `heavy` call is awaited, so a parameter
-/// of one is refused there (RFC-0047 rule 6): those cases name a line by its
-/// index and the bytes live on the Rust side, built from the same `SEED`.
+/// The corpus the cases that name a line by its index match against. A slice
+/// borrows the frame the call laid its arguments on, and a `heavy` call is
+/// awaited, so a parameter of one is refused there (RFC-0047 rule 6); the
+/// `sync native` case takes an index by choice, to hold its boundary at one
+/// register. The bytes live on the Rust side, built from the same `SEED`.
 struct Corpus {
     lines: Vec<Vec<i64>>,
     pat: Vec<i64>,
@@ -325,8 +334,16 @@ fn match_heavy_opaque(#[state] corpus: &Arc<Corpus>, index: u64) -> bool {
     corpus.matches(index)
 }
 
+/// The same body as `match_heavy` in the caller's frame, one declaration
+/// variable apart from it: the sequential floor the `heavy` rows are read
+/// against, and the extern boundary at one `u64` of argument.
+#[extern_fn(effect = pure)]
+fn match_sync(#[state] corpus: &Arc<Corpus>, index: u64) -> bool {
+    corpus.matches(index)
+}
+
 /// The same matcher in the caller's frame, over the pattern and the line the
-/// script lends it: the sequential floor the `heavy` rows are read against.
+/// script lends it rather than a corpus of its own.
 #[extern_fn(effect = pure)]
 fn glob_match<Rt>(rt: &Rt, pat: Slice<i64, Rt>, line: Slice<i64, Rt>) -> bool
 where
@@ -350,12 +367,14 @@ where
 fn registries(corpus: &Arc<Corpus>) -> Vec<Registry<AcvusRuntime>> {
     let for_heavy = Arc::clone(corpus);
     let for_opaque = Arc::clone(corpus);
+    let for_sync = Arc::clone(corpus);
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(extern_registry! {
         ns: "bench",
         fns: [
             match_heavy(for_heavy),
             match_heavy_opaque(for_opaque),
+            match_sync(for_sync),
             glob_match,
         ],
     });
@@ -584,8 +603,9 @@ li = li + one; \
     )
 }
 
-/// Cases 5 and 6: the matcher as a `heavy` Rust extern over the corpus Rust
-/// holds, the script naming a line by its index.
+/// Cases 5, 6 and 7: the matcher as a Rust extern over the corpus Rust holds,
+/// the script naming a line by its index -- `sync` in the caller's frame, then
+/// `heavy` on the blocking pool at each of the two effect levels.
 fn extern_source(call: &str) -> String {
     format!(
         "{PRELUDE}\
@@ -678,11 +698,12 @@ struct Case {
     exec: Exec,
 }
 
-const CASE_NAMES: [&str; 6] = [
+const CASE_NAMES: [&str; 7] = [
     "inline",
     "inline break",
     "closure",
     "sync ext",
+    "sync native",
     "heavy pure",
     "heavy opq",
 ];
@@ -711,11 +732,16 @@ fn cases() -> Vec<Case> {
         },
         Case {
             name: CASE_NAMES[4],
+            source: extern_source("match_sync"),
+            exec: Exec::Sequential,
+        },
+        Case {
+            name: CASE_NAMES[5],
             source: extern_source("match_heavy"),
             exec: Exec::Tokio,
         },
         Case {
-            name: CASE_NAMES[5],
+            name: CASE_NAMES[6],
             source: extern_source("match_heavy_opaque"),
             exec: Exec::Tokio,
         },

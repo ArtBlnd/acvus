@@ -4,6 +4,9 @@
 //! build has no tail call in it, so a `cargo test` copy would pass on an
 //! artifact nobody runs. `cargo bench --bench asm_probe` builds the profile
 //! the numbers come from and disassembles itself.
+//!
+//! `PADDING` below is the mnemonic set `benches/README.md` names for dropping
+//! inter-function alignment padding out of an `Op::run` body diff.
 
 use std::hint::black_box;
 use std::process::Command;

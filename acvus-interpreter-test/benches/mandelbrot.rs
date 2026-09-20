@@ -1,6 +1,9 @@
 //! Mandelbrot escape counts over a grid: three nested `while`s of pure
 //! float arithmetic with a compound loop condition, next to the same
 //! loops in Rust.
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;

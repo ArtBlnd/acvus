@@ -15,6 +15,9 @@
 //!
 //! The listings are printed before the table: what the pass emitted is the
 //! measurement, and the numbers are what that emission costs.
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;

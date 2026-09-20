@@ -11,6 +11,9 @@
 //! last shape runs a handler `prepare` never emits: the probe substitutes
 //! it into the prepared body, which is the only way to reach it until the
 //! interval pass carries its own proof (RFC-0047 §7).
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;

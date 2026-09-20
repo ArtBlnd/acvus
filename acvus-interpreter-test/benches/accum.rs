@@ -1,5 +1,8 @@
 //! Accumulation loops: the per-operation cost of the machine with no
 //! extern call in the loop, next to the same loop in Rust.
+//!
+//! These timings hold only under one pinned core and a fixed load base;
+//! `benches/README.md` states the protocol.
 
 use std::collections::HashMap;
 use std::hint::black_box;
