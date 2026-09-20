@@ -47,7 +47,8 @@ pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use obj::{
     Cross, FieldAt, Form, FormKind, FromValue, Inline, Nothing, Obj, ObjectShape, One, OneValue,
-    Pair, Run, Stored, TransparentOver, Variant, expect_type, materialize_checked,
+    Pair, Run, Stored, SurvivesSuspension, TransparentOver, Variant, expect_type,
+    materialize_checked,
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{

@@ -17,7 +17,7 @@ use crate::ctx::Ctx;
 use crate::instance::InstanceRun;
 use crate::instance::{Instance, Signature};
 use crate::loan::Loan;
-use crate::obj::{Cross, Form, FormKind, Nothing, One, OneValue, Pair, Run};
+use crate::obj::{Cross, Form, FormKind, Nothing, One, OneValue, Pair, Run, SurvivesSuspension};
 use crate::registry::SharedSignature;
 use crate::runtime::Runtime;
 
@@ -804,9 +804,8 @@ where
     ) -> <Self as Parameters<Rt>>::Out<'a>;
 }
 
-/// A parameter list of which every parameter is one of the runtime's values:
-/// what a task above `Sync` admits, since a `Pair` borrows the frame the call
-/// laid its arguments on (RFC-0047 §3).
+/// A parameter list every parameter of which survives the caller
+/// suspending: what a task above `Sync` admits.
 pub trait ValueParameters<Rt>: Parameters<Rt>
 where
     Rt: Runtime,
@@ -1271,7 +1270,7 @@ macro_rules! parameters {
         impl<Rt, $($arg,)*> ValueParameters<Rt> for ($($arg,)*)
         where
             Rt: Runtime,
-            $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
+            $($arg: for<'a> Arg<'a, Rt, Form: SurvivesSuspension> + 'static,)*
         {
         }
     };

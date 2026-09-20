@@ -243,6 +243,18 @@ pub struct Pair;
 /// nested aggregate field.
 pub struct Run<const W: usize>;
 
+/// A form whose parameter still names what it named after the caller
+/// suspends: one of the runtime's values, or nothing of the run at all. A
+/// `Pair` borrows the frame the call laid its arguments on, and that frame
+/// is gone by the time an awaited call resumes (RFC-0047 §3).
+#[diagnostic::on_unimplemented(
+    message = "a parameter of form `{Self}` does not survive the caller suspending, so a declaration above `Task::Sync` cannot take one: it borrows the frame the call laid its arguments on, and that frame is gone when the call resumes (RFC-0047 §3)"
+)]
+pub trait SurvivesSuspension: Form {}
+
+impl SurvivesSuspension for Nothing {}
+impl SurvivesSuspension for One {}
+
 impl Form for Nothing {
     const WIDTH: usize = 0;
     const KIND: FormKind = FormKind::Value;

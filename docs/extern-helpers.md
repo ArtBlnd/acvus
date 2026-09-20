@@ -248,6 +248,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `FormKind` | which of the three landing rules a width takes: a value, a view, an aggregate's components | derived from `Form` — it exists because two forms share a width and land by different rules, and this is what a caller matches on |
 | `One` | one of the runtime's values | derived from `Form` — the run of every crossing but a view and an aggregate's components |
 | `Pair` | the two registers a slice or a view occupies | derived from `Form` — the borrow of the caller's frame, which is why a suspending call admits none |
+| `SurvivesSuspension` | a form whose parameter still names what it named after the caller suspends | derived from `Form` — it is the bound `ValueParameters` carries, so which forms a task above `Sync` admits is a list of impls and not a `Form = One` written at each use |
 | `Run` | an aggregate's `W` components, written where the caller placed its destination | derived from `Form` — its fold over `W` register steps is deliberately unwritten: no `Arg` impl names it, because a by-value aggregate crosses as the one value rule 4 realizes it into |
 | `Width` | how many values a call's arguments and its result occupy, and which rule the result lands by | atom — summed once in the `Handler` impl, so `prepare` reads the answer rather than counting |
 | `REGISTER_FORM` | where the register forms stop: four of the runtime's values | atom — a measured number, four being where the handlers run out, not where the operations do |
@@ -284,7 +285,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Required` | a handler's instance parameter, as the glue's parameter list names it | derived from `Sited` — it takes no argument of the call, because the site table holds its word |
 | `AtInstance` | a declaration's mono glue as a type | derived from `InstanceRun` — named where the glue's type is named, so the glue itself stays the closure |
 | `InstanceEntries` | the question a call site asks to fill its table: which instance of this signature stands at this settled type | atom — its `instance_at` is the one `dyn` between `prepare` and the registry, so nothing in the crossing names a registry type |
-| `InstanceTable` | every signature's instances, keyed by signature and ground type | derived from `InstanceAt` — the `InstanceEntries` the registry answers with; a flat lookup, because what an instance itself requires is a field of its payload |
+| `InstanceTable` | every signature's instances that have a mono glue, keyed by signature and pattern | derived from `InstanceAt` — the `InstanceEntries` the registry answers with; a flat lookup holding the glue itself and not an `Option` of one, because `Externs::combine` refuses a requirement on a signature any instance of which has none, and what an instance itself requires is a field of its payload |
 | `InstanceAt` | one instance as `InstanceSets` needs it: the pattern it stands at, what its own bounds require, and the task its body runs at | atom — the check-time half of a declared instance |
 | `BoundAt` | one bound of an instance's own declaration | `acvus_mir::ty::InnerBound` under this crate's name — the checker decides the same recursion the site table walks, so the two read one type |
 | `Requirement` | one required instance of a declaration | atom — which variable carries it, which signature it names, and the highest task an instance it reaches may run at; `#[extern_fn]` reads it off an `Instance` parameter |
@@ -379,6 +380,17 @@ repository root at `0d308c5e`.
    its impl for `Vec<E>` calls the checked materialize for the buffer and
    then its own element step. `acvus-extern/src/obj.rs:424` and `:428`;
    `:452` and `:460`.
+
+7. **`core::to_string` at `str` waits on a two-word receiver.** A receiver
+   is one word in the context — `Ctx::recv` is a `*mut Rt::Value`
+   (`acvus-extern/src/ctx.rs:12`) — and the language's `&str` is the pair
+   a view occupies (RFC-0047 §3, `acvus-extern/src/str.rs`), so
+   `#[extern_fn]` writes no mono glue for a declaration with a `&str`
+   parameter (`acvus-extern-macro/src/lib.rs:555`). That instance is the
+   one exception `acvus-interpreter-test/tests/instance_entry.rs:66` names,
+   and nothing requires `core::to_string` today; a requirement on it would
+   be refused at `Externs::combine`
+   (`CombineError::RequiredInstanceWithoutGlue`).
 
 Nothing in the export list is unplaced: every name on it stands for a
 concept the language already has a phrase for, and every name is an atom or

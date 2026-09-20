@@ -325,22 +325,42 @@ fn generate_extern_fn(
             RustParam::Acvus(_) | RustParam::State(_) => None,
         })
         .collect();
+    if attr.instance_of.is_some()
+        && let Some(r) = required.first()
+    {
+        return Err(syn::Error::new(
+            r.var.span(),
+            "an instance of a shared signature carries what it requires in a field of its \
+             own payload, laid once at construction, so it takes no `Instance` parameter \
+             (RFC-0067 Decision 1). A declaration that is both an instance and requires \
+             one has no mono glue, and a requirement is resolved to a mono glue: nothing \
+             could reach this instance. Take the `Instance` in the constructor that builds \
+             the value and store it beside the value.",
+        ));
+    }
     // The call site resolves an instance from the settled type of the
     // parameter standing at its variable, so that parameter has to be one.
+    // Any mode will do: `InstanceTable::instance_at` reads a settled `&T`
+    // or `&mut T` as the instance at `T`, which is what a reference
+    // parameter's own type says it stands at.
     let required_at: Vec<usize> = required
         .iter()
         .map(|r| {
             params
                 .iter()
-                .position(|p| Vars::is_exactly(&p.ty, &r.var) && p.mode == Mode::Value)
+                .position(|p| {
+                    Vars::is_exactly(&p.ty, &r.var)
+                        && matches!(p.mode, Mode::Value | Mode::Borrow | Mode::BorrowMut)
+                })
                 .ok_or_else(|| {
                     syn::Error::new(
                         r.var.span(),
                         format!(
-                            "a declaration requiring an instance of `{}` takes that value by \
-                             value as a parameter, because the call site resolves the instance \
-                             from that parameter's settled type (RFC-0067 Decision 1)",
-                            r.var
+                            "a declaration requiring an instance of `{}` takes a parameter \
+                             standing at `{}` — by value, by `&`, or by `&mut` — because the \
+                             call site resolves the instance from that parameter's settled \
+                             type (RFC-0067 Decision 1)",
+                            r.var, r.var
                         ),
                     )
                 })
@@ -550,12 +570,13 @@ fn generate_extern_fn(
         quote! { sync }
     };
     let state_tys: Vec<&Type> = states.iter().map(|st| &st.ty).collect();
-    // An instance's own requirement is a field of its payload, laid at
-    // construction, so a declaration with both has no mono glue to write.
+    // A mono glue is a plain `fn` of the call's own arguments and nothing
+    // else: it has no state to capture, no offloaded body, and no pair of
+    // words at a parameter. An instance that requires one is refused above,
+    // because its requirement belongs in its payload.
     let has_glue = attr.instance_of.is_some()
         && states.is_empty()
         && !attr.heavy
-        && required.is_empty()
         && !params.is_empty()
         && !params
             .iter()
@@ -693,11 +714,17 @@ fn generate_extern_fn(
                     __R: ::acvus_extern::Runtime,
                 {
                     let __rt = __ctx.rt;
-                    // SAFETY: an `Instance::call` named the receiver for
-                    // this call, and this glue is the body of an instance
-                    // standing at the type the value it named holds.
-                    #recv_binding
-                    ::std::boxed::Box::pin(async move { (#call).await })
+                    ::std::boxed::Box::pin(async move {
+                        // SAFETY: an `Instance::call` named the receiver
+                        // for this call, and this glue is the body of an
+                        // instance standing at the type the value it named
+                        // holds. The binding is inside the future because
+                        // a receiver taken by reference borrows a
+                        // reference value that has to live as long as the
+                        // body it is lent to.
+                        #recv_binding
+                        (#call).await
+                    })
                 }
 
                 #[doc(hidden)]

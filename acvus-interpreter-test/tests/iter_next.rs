@@ -16,8 +16,8 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Closure, ClosureFn, Ctx, ExternType, Instance, OneValue, Opaque, Owned, Ref, Registry, Runtime,
-    Shared, Var, extern_fn, extern_registry, kind,
+    Closure, ClosureFn, Ctx, ExternType, Instance, Later, OneValue, Opaque, Owned, Pure, Ref,
+    Registry, Runtime, Shared, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::code::Code;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
@@ -209,15 +209,89 @@ where
     acc
 }
 
+pub struct NSlowedBody<Rt>
+where
+    Rt: Runtime,
+{
+    inner: Owned<Rt>,
+    next: InnerNext<Rt>,
+}
+
+#[derive(ExternType)]
+#[extern_type(name = "NSlowed")]
+#[repr(transparent)]
+pub struct NSlowed<I, Rt>(NSlowedBody<Rt>, PhantomData<I>)
+where
+    I: Var<kind::Type>,
+    Rt: Runtime;
+
+#[extern_fn(effect = pure)]
+fn nslowed<I, Rt>(it: I, next: Instance<sig::next<I, i64, Pure, Rt>, I, Rt>) -> NSlowed<I, Rt>
+where
+    I: Var<kind::Type> + Into<Owned<Rt>>,
+    Rt: Runtime,
+{
+    NSlowed(
+        NSlowedBody {
+            inner: it.into(),
+            // SAFETY: as `nmap`'s.
+            next: unsafe { Instance::at(next.into_value()) },
+        },
+        PhantomData,
+    )
+}
+
+/// The file's async stage: it suspends once per element and reaches its
+/// inner stage through `into_async` — the sync instance `nslowed` was
+/// handed, called at the async task (RFC-0067 Decision 5).
+#[extern_fn(instance_of = sig::next, effect = pure)]
+async fn next_nslowed<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NSlowed<I, Rt>) -> Option<i64>
+where
+    I: Var<kind::Type>,
+    Rt: Runtime,
+{
+    tokio::task::yield_now().await;
+    // SAFETY: as `next_nmap`'s; `into_async` keeps the same word, and
+    // `call_await` reads the task off it.
+    unsafe {
+        it.0.next
+            .into_async()
+            .call_await(ctx, &mut it.0.inner, ())
+            .await
+    }
+}
+
+/// `nsum` at the async task: the requirement is written `Later`, so the
+/// instance the site resolves is called with `call_await`.
+#[extern_fn(effect = pure)]
+async fn nsum_await<I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, i64, Pure, Rt>, I, Rt, Later>,
+) -> i64
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut acc = 0i64;
+    // SAFETY: as `nsum`'s, at the task the requirement was written with.
+    while let Some(x) = unsafe { next.call_await(ctx, &mut it, ()).await } {
+        acc = acc.wrapping_add(x);
+    }
+    acc
+}
+
 pub fn next_registry<Rt>() -> Registry<Rt>
 where
     Rt: Runtime,
 {
     extern_registry! {
         ns: "nit",
-        types: [NRange, NMap<_, _, Rt>, NFilter<_, _, Rt>],
+        types: [NRange, NMap<_, _, Rt>, NFilter<_, _, Rt>, NSlowed<_, Rt>],
         signatures: [sig::next],
-        fns: [nrange, next_nrange, nmap, next_nmap, nfilter, next_nfilter, nsum],
+        fns: [nrange, next_nrange, nmap, next_nmap, nfilter, next_nfilter, nslowed,
+              next_nslowed, nsum, nsum_await],
     }
 }
 
@@ -259,6 +333,30 @@ fn prepared_entry(source: &str, opt: Opt) -> Code {
     Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"))
 }
 
+/// The same program at one optimization level: the async tests assert a
+/// value at both, which `run_i64`'s harness fixes at `Opt::Full`.
+async fn run_i64_at(source: &str, opt: Opt) -> i64 {
+    let i = Interner::new();
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
+    let cr = check_source(
+        &i,
+        ast,
+        &FxHashMap::default(),
+        registries(),
+        Ty::I64,
+        opt,
+        |_| {},
+    )
+    .unwrap_or_else(|refusal| panic!("compile failed: {}", refusal.messages.join("; ")));
+    let (_, mut interp) = execute_compiled(
+        &i,
+        cr,
+        std::collections::HashMap::new(),
+        Arc::new(acvus_interpreter::SequentialExecutor),
+    );
+    interp.execute().await.as_int()
+}
+
 const SOURCE_ONLY: &str = "nsum(nrange(0, 5))";
 const TWO_STAGE: &str = "nsum(nmap(nrange(0, 5), |x| -> x * 2))";
 const THREE_STAGE: &str = "nsum(nfilter(nmap(nrange(0, 5), |x| -> x * 2), |x| -> *x > 3))";
@@ -278,6 +376,61 @@ fn a_pure_pipeline_suspends_nowhere() {
             "every call in the pipeline is pure at {opt:?}"
         );
     }
+}
+
+const AWAITED_SLOWED: &str = "nsum_await(nslowed(nrange(0, 5)))";
+const AWAITED_SYNC: &str = "nsum_await(nrange(0, 5))";
+const AWAITED_TWO_STAGE: &str = "nsum_await(nmap(nrange(0, 5), |x| -> x * 2))";
+
+/// `Instance<_, _, _, Later>::call_await` drives a body that suspends —
+/// `next_nslowed` — and one that returns, `nrange`'s glue, which
+/// `Signature::call_later` tells apart by the task on the value's own
+/// word. `next_nslowed` reaches its inner stage through `into_async`.
+#[tokio::test]
+async fn an_async_instance_is_driven_through_call_await() {
+    for opt in [Opt::None, Opt::Full] {
+        assert_eq!(run_i64_at(AWAITED_SLOWED, opt).await, 0 + 1 + 2 + 3 + 4);
+        assert_eq!(run_i64_at(AWAITED_SYNC, opt).await, 0 + 1 + 2 + 3 + 4);
+        assert_eq!(run_i64_at(AWAITED_TWO_STAGE, opt).await, 0 + 2 + 4 + 6 + 8);
+    }
+}
+
+/// A pipeline holding the async stage suspends; the same consumer over
+/// only sync stages does not, because `call_later`'s `Task::Sync` arm
+/// returns a ready future rather than an awaiting glue.
+#[test]
+fn the_task_of_a_pipeline_is_its_stages() {
+    for opt in [Opt::None, Opt::Full] {
+        assert!(
+            prepared_entry(AWAITED_SLOWED, opt).may_suspend(),
+            "`nslowed`'s instance is an `async fn` at {opt:?}"
+        );
+    }
+}
+
+/// The refusal is at check: a sync body's requirement is met with the
+/// instances that run at `Task::Sync`, and `NSlowed`'s is not one.
+#[test]
+fn a_sync_consumer_given_an_async_instance_is_refused() {
+    let i = Interner::new();
+    let source = "nsum(nslowed(nrange(0, 5)))";
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
+    let refused = check_source(
+        &i,
+        ast,
+        &FxHashMap::default(),
+        registries(),
+        Ty::I64,
+        Opt::Full,
+        |_| {},
+    )
+    .err()
+    .expect("a sync consumer has no instance of nit::next at NSlowed");
+    let messages = refused.messages.join("; ");
+    assert!(
+        messages.contains("NSlowed") && messages.contains("NRange"),
+        "the refusal names the type given and the instances a sync body may reach: {messages}"
+    );
 }
 
 #[test]

@@ -314,6 +314,15 @@ pub enum CombineError {
         function: QualifiedRef,
         signature: QualifiedRef,
     },
+    /// A requirement on a signature one of whose instances has no mono
+    /// glue: the requirement resolves to a plain `fn` at whichever type the
+    /// call settles on, and for that instance there is none (RFC-0067
+    /// Decision 1).
+    RequiredInstanceWithoutGlue {
+        signature: String,
+        instance: String,
+        ty: PolyTy,
+    },
     /// An instance whose own bound stands at a variable its pattern does
     /// not hold as a type argument, so no ground type the instance is
     /// chosen at says what fills it (RFC-0067, step 3 second half).
@@ -365,6 +374,19 @@ impl fmt::Display for CombineError {
             } => write!(
                 f,
                 "{function:?} requires an instance of {signature:?}, which no registry declares"
+            ),
+            Self::RequiredInstanceWithoutGlue {
+                signature,
+                instance,
+                ty,
+            } => write!(
+                f,
+                "{signature} is required, so every instance of it is called through a mono \
+                 glue — a plain `fn` of the call's own arguments — and {instance}, its \
+                 instance at {ty:?}, has none. A declaration written `heavy`, one holding a \
+                 `#[state]` value, and one taking a `&str` or a projection parameter are the \
+                 shapes that have no mono glue. Give that instance one of the other shapes, \
+                 or drop the requirement."
             ),
             Self::RequirementIsThePattern {
                 instance,
@@ -456,11 +478,24 @@ pub struct Externs<R: Runtime> {
     pub instances: InstanceTable,
 }
 
-/// Every shared signature's instances, in the order `Externs::combine`
-/// collected them; a call site's table is filled from it once, at prepare.
+/// Every shared signature's instances that have a mono glue, in the order
+/// `Externs::combine` collected them; a call site's table is filled from it
+/// once, at prepare.
+///
+/// An instance without a glue is not a row here, and it cannot be missed:
+/// `Externs::combine` refuses a requirement on a signature that has one
+/// (`CombineError::RequiredInstanceWithoutGlue`), so no requirement ever
+/// resolves at a type only such an instance stands at.
 #[derive(Default)]
 pub struct InstanceTable {
-    by_signature: FxHashMap<QualifiedRef, Vec<InstanceAt>>,
+    by_signature: FxHashMap<QualifiedRef, Vec<GlueAt>>,
+}
+
+/// One instance as `prepare` reads it: the pattern it stands at, and the
+/// mono glue a requirement resolves to.
+struct GlueAt {
+    ty: PolyTy,
+    run: InstanceRun,
 }
 
 impl<R> crate::handler::InstanceEntries<R> for InstanceTable
@@ -481,14 +516,7 @@ where
                  was met with admitted a type it does not hold (RFC-0067 Decision 1)"
             )
         };
-        let Some(run) = found.run else {
-            panic!(
-                "the instance of {signature:?} at {ty:?} has no mono glue, so nothing can \
-                 require it; an instance holding a `#[state]` value, taking a projection \
-                 parameter, or declared `heavy` is written without one"
-            )
-        };
-        run
+        found.run
     }
 }
 
@@ -496,6 +524,9 @@ where
 /// needs it: the pattern it stands at, what its own bounds require, and the
 /// task its body runs at.
 pub struct InstanceAt {
+    /// The declaration this instance came from, which is what a refusal
+    /// naming it has to print.
+    pub qref: QualifiedRef,
     pub ty: PolyTy,
     /// Obligation across artifacts: `#[extern_fn]` decides which
     /// declarations get a mono glue, and this is `None` for the rest.
@@ -641,12 +672,14 @@ impl<R: Runtime> Externs<R> {
         ));
         let mut functions = Vec::new();
         let mut handlers: Handlers<R> = FxHashMap::default();
+        let mut required_signatures: FxHashSet<QualifiedRef> = FxHashSet::default();
         for ExternFn {
             mut decl,
             instances,
         } in plain
         {
             for required in &decl.requires {
+                required_signatures.insert(required.signature);
                 let collected = signatures.get(&required.signature).ok_or(
                     CombineError::RequiredSignatureUnknown {
                         function: decl.qref,
@@ -683,11 +716,29 @@ impl<R: Runtime> Externs<R> {
         }
         let mut collected: Vec<Collected<R>> = signatures.into_values().collect();
         collected.sort_by_key(|c| c.decl.qref);
+        required_signatures.extend(
+            collected
+                .iter()
+                .flat_map(|c| &c.entries)
+                .flat_map(|at| &at.requires)
+                .map(|bound| bound.signature),
+        );
         let mut instance_table = InstanceTable::default();
         for mut c in collected {
-            instance_table
-                .by_signature
-                .insert(c.decl.qref, std::mem::take(&mut c.entries));
+            let required = required_signatures.contains(&c.decl.qref);
+            let glues: Vec<GlueAt> = std::mem::take(&mut c.entries)
+                .into_iter()
+                .filter_map(|at| match at.run {
+                    Some(run) => Some(Ok(GlueAt { ty: at.ty, run })),
+                    None if required => Some(Err(CombineError::RequiredInstanceWithoutGlue {
+                        signature: written(interner, c.decl.qref),
+                        instance: written(interner, at.qref),
+                        ty: at.ty,
+                    })),
+                    None => None,
+                })
+                .collect::<Result<_, CombineError>>()?;
+            instance_table.by_signature.insert(c.decl.qref, glues);
             let mut bounds = c.decl.bounds;
             if let Some(first) = bounds.first_mut() {
                 *first = meet(first, c.decl.qref, &c.instance_types, &sets);
@@ -798,6 +849,7 @@ fn add_instance<R: Runtime>(
         })
         .collect::<Result<Vec<BoundAt>, CombineError>>()?;
     collected.entries.push(InstanceAt {
+        qref: decl.qref,
         ty: ty.clone(),
         run: admitted.iter().find_map(|i| i.handler.instance()),
         requires,

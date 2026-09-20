@@ -6,11 +6,13 @@ use acvus_extern::Ctx;
 use std::any::Any;
 use std::future::Ready;
 use std::marker::PhantomData;
+use std::ops::DerefMut;
 
 use acvus_extern::{
-    Arr, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs, Interner,
-    LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared, Slice, Task,
-    TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry, extern_signature, kind,
+    Arr, Borrowable, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs,
+    Instance, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime,
+    Shared, Slice, Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry,
+    extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -595,6 +597,22 @@ fn step_int(n: &mut i64) -> i64 {
     *n
 }
 
+/// A requiring handler over a signature whose receiver is `&mut I`, with
+/// the required parameter itself taken by `&mut`: what `required_at`
+/// admits since the site resolves an instance from the settled type of a
+/// reference parameter's target.
+#[extern_fn(effect = pure)]
+fn drive<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut I, step_at: Instance<step<I, Rt>, I, Rt>) -> i64
+where
+    I: Var<kind::Type> + Borrowable<Rt> + DerefMut<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    // SAFETY: `Externs::combine` met this parameter's requirement with the
+    // instance of `t::step` at the ground type `I` was filled with, and
+    // `it` names a value of that type.
+    unsafe { step_at.call(ctx, it, ()) }
+}
+
 /// A greeting held by the handler: what a `#[state]` parameter carries.
 struct Greeting(String);
 
@@ -612,7 +630,7 @@ where
         types: [Boxed<_, _, R>, Token<_>],
         signatures: [eq, step],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              sum_slice, eq_int, eq_point, step_int,
+              sum_slice, eq_int, eq_point, step_int, drive,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -830,6 +848,61 @@ fn a_receiver_is_named_in_ctx_and_written_through() {
     assert_eq!(call_instance::<step<i64, Tiny>>(h, &mut recv, ()), 8);
     assert_eq!(call_instance::<step<i64, Tiny>>(h, &mut recv, ()), 9);
     assert_eq!(peek::<i64>(&recv), 9);
+}
+
+/// One requiring handler, called at the settled argument types a site
+/// would hand it: the site table resolves every `Instance` parameter from
+/// `args`, and the run carries nothing for it.
+fn call_requiring(
+    reg: &Externs<Tiny>,
+    i: &Interner,
+    name: &str,
+    args: &[acvus_extern::Ty],
+    run: Vec<V>,
+) -> V {
+    let ExternHandler::Sync(f) = handler(reg, i, name) else {
+        panic!("`{name}` is declared with a plain `fn`")
+    };
+    let at: Vec<acvus_extern::ArgAt<'_, Tiny>> = args
+        .iter()
+        .map(|ty| acvus_extern::ArgAt {
+            interner: i,
+            ty,
+            instances: &reg.instances,
+        })
+        .collect();
+    let f = f.clone().at_site(&at);
+    // SAFETY: the run is the declaration's own arguments at the types the
+    // site table was filled from.
+    unsafe { f.into_op(()).call_run(&Tiny, &run) }
+}
+
+/// `drive` takes the parameter its requirement stands at by `&mut`, so the
+/// site's settled type is `&mut i64`: `InstanceTable::instance_at` reads
+/// that as the instance at `i64`, and `t::step` bumps the place the caller
+/// lent.
+#[test]
+fn a_required_instance_resolves_from_a_reference_parameters_target() {
+    let (i, reg) = combined::<Tiny>();
+    let mut place = erased(7i64);
+    // SAFETY: `place` outlives the call below.
+    let lent = unsafe { Tiny.reference(&place) };
+    let out = call_requiring(
+        &reg,
+        &i,
+        "drive",
+        &[acvus_extern::Ty::Ref(
+            acvus_extern::Mutability::Mut,
+            Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
+        )],
+        vec![lent],
+    );
+    assert_eq!(
+        open::<i64>(out),
+        8,
+        "t::step at i64 bumps the place it lends"
+    );
+    assert_eq!(peek::<i64>(&place), 8, "and the caller sees the write");
 }
 
 /// The declared type of `Point` at this test's registry.
@@ -2095,6 +2168,53 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
     assert!(
         format!("{err}").contains("blocking"),
         "the refusal names the extern: {err}"
+    );
+}
+
+// -- A requirement reaches a mono glue or it is refused (RFC-0067) -----
+
+/// What a stateful instance holds, and what makes it no plain `fn`.
+struct By(i64);
+
+#[extern_fn(instance_of = step, effect = pure)]
+fn step_stated(#[state] by: &By, s: &mut String) -> i64 {
+    s.push('x');
+    by.0 + s.len() as i64
+}
+
+fn a_stateful_instance_beside_a_requirement<R>() -> Registry<R>
+where
+    R: Runtime,
+{
+    extern_registry! {
+        ns: "t",
+        types: [],
+        signatures: [step],
+        fns: [step_int, step_stated(By(1)), drive],
+    }
+}
+
+/// `drive` requires `t::step`, so every instance of `t::step` is reached
+/// through a mono glue; `step_stated` holds a `#[state]` value and has
+/// none. The fact is first known where the two meet, which is `combine` —
+/// `#[extern_fn]` knows the shape but not that anything requires it.
+#[test]
+fn a_required_signature_whose_instance_has_no_mono_glue_is_refused_at_combine() {
+    let i = Interner::new();
+    let err = Externs::<Tiny>::combine(vec![a_stateful_instance_beside_a_requirement()], &i)
+        .err()
+        .expect("t::step is required and one of its instances holds a state");
+    assert!(
+        matches!(
+            err,
+            acvus_extern::CombineError::RequiredInstanceWithoutGlue { .. }
+        ),
+        "{err}"
+    );
+    let written = format!("{err}");
+    assert!(
+        written.contains("t::step_stated") && written.contains("`#[state]`"),
+        "the refusal names the instance and the shapes that have no glue: {written}"
     );
 }
 

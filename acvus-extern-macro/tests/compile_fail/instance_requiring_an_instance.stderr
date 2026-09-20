@@ -1,0 +1,5 @@
+error: an instance of a shared signature carries what it requires in a field of its own payload, laid once at construction, so it takes no `Instance` parameter (RFC-0067 Decision 1). A declaration that is both an instance and requires one has no mono glue, and a requirement is resolved to a mono glue: nothing could reach this instance. Take the `Instance` in the constructor that builds the value and store it beside the value.
+  --> tests/compile_fail/instance_requiring_an_instance.rs:16:37
+   |
+16 |     inner: Instance<advance<I, Rt>, I, Rt>,
+   |                                     ^

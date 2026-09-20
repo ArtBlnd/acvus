@@ -128,14 +128,20 @@ where
     }
 
     unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
-        // SAFETY: the caller's contract: a live storage of a runtime value,
-        // and `Self` is `repr(transparent)` over it.
-        unsafe { &*(rt.deref::<R::Value>(reference) as *const R::Value).cast::<Self>() }
+        // SAFETY: the caller's contract. The storage a reference names is
+        // read by the host's own `R::Value` reading of it and not by
+        // `Runtime::deref::<R::Value>`, whose contract is a storage erased
+        // *from* a `R::Value`; `Self` is `repr(transparent)` over it.
+        let slot = unsafe { <R::Value as crate::OneValue<R>>::deref(rt, reference) };
+        // SAFETY: as above.
+        unsafe { &*(slot as *const R::Value).cast::<Self>() }
     }
 
     unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
         // SAFETY: as `deref`, with the caller's exclusive loan.
-        unsafe { &mut *(rt.deref_mut::<R::Value>(reference) as *mut R::Value).cast::<Self>() }
+        let slot = unsafe { <R::Value as crate::OneValue<R>>::deref_mut(rt, reference) };
+        // SAFETY: as above.
+        unsafe { &mut *(slot as *mut R::Value).cast::<Self>() }
     }
 }
 
