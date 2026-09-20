@@ -306,6 +306,20 @@ pub fn prepare_body(
     }))
 }
 
+/// The one place a tag name out of the IR meets a run's tags, and so the one
+/// statement of RFC-0050 rule 8's guarantee: the MIR type checker decided, for
+/// every `Switch` arm, `TestVariant` tag and `MakeVariant` tag, that the name
+/// is a variant of the scrutinee's or destination's type, and rule 8 numbers a
+/// run's tags from that same type. A `None` here is that checker's fact having
+/// been lost between typeck and this pass.
+fn member_of(tags: &runs::Tags, tag: Astr) -> runs::Member {
+    tags.member(tag).unwrap_or_else(|| {
+        panic!(
+            "the run's type names no variant {tag:?}, which RFC-0050 rule 8 numbers from the type the MIR type checker settled for it"
+        )
+    })
+}
+
 /// The instructions a placed run leaves nothing to emit for: an `Assign`
 /// between two members of one web, which share a home, and a `Drop` of a
 /// projection, which owns nothing.
@@ -1388,9 +1402,7 @@ impl<'a> Prepare<'a> {
             let arms: Box<[run_ops::RunArm]> = placed
                 .iter()
                 .map(|arm| run_ops::RunArm {
-                    tag: tags
-                        .word(arm.key)
-                        .unwrap_or_else(|| panic!("the run's type names no variant {:?}", arm.key)),
+                    tag: member_of(&tags, arm.key).word(),
                     target: arm.block,
                 })
                 .collect();
@@ -1510,9 +1522,7 @@ impl<'a> Prepare<'a> {
             let arms: Box<[run_ops::RunRegionArm]> = chains
                 .into_iter()
                 .map(|(key, head)| run_ops::RunRegionArm {
-                    tag: tags
-                        .word(key)
-                        .unwrap_or_else(|| panic!("the run's type names no variant {key:?}")),
+                    tag: member_of(&tags, key).word(),
                     head,
                 })
                 .collect();
@@ -3200,11 +3210,7 @@ impl<'a> Prepare<'a> {
             InstKind::TestVariant { dst, src, tag } if self.run_tag(*src).is_some() => {
                 let run = self.run_tag(*src).expect("the guard read the same run");
                 let src = Off::of(run.base);
-                let word = run
-                    .layout
-                    .tags()
-                    .word(*tag)
-                    .unwrap_or_else(|| panic!("the run's type names no variant {tag:?}"));
+                let word = member_of(run.layout.tags(), *tag).word();
                 let dst = self.off(*dst);
                 node(move |next| run_ops::TestRun {
                     dst,
@@ -4005,13 +4011,9 @@ impl<'a> Prepare<'a> {
     fn lay_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Node {
         let run = self.plan.of(dst).expect("the arm read the same run");
         let (base, at) = (run.base, run.layout.payload());
-        let word = run
-            .layout
-            .tag_word(tag)
-            .unwrap_or_else(|| panic!("the settled type of {dst:?} numbers no variant {tag:?}"));
         let konsts = Box::new([LaidKonst {
             at: Marked::of(Off::of(base)),
-            value: word,
+            value: member_of(run.layout.tags(), tag).register(),
         }]);
         let register = Marked::of(Off::of(base + at));
         let moved: Box<[LaidMove]> = match payload {

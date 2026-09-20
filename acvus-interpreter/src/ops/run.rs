@@ -103,15 +103,15 @@ impl Op for TestRun {
     }
 }
 
-/// One tested arm: the tag word `prepare::runs::Tags::word` gives its name, and
-/// the block the machine enters for it.
+/// One tested arm: the tag word `prepare::runs::Member::word` gives its name,
+/// and the block the machine enters for it.
 pub struct RunArm {
     pub tag: u64,
     pub target: BlockId,
 }
 
-/// Obligation across artifacts: `arms` carry the words `Tags::word` gives their
-/// names, which is what `value::Value::tag` writes into a heap variant's tag
+/// Obligation across artifacts: `arms` carry the words `Member::word` gives
+/// their names, which is what `value::Value::tag` writes into a heap variant's tag
 /// register and what `prepare::lay_variant` writes into a run's. `default` is
 /// the edge RFC-0051's `switch_op` guarantees.
 ///

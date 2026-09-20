@@ -59,6 +59,27 @@ pub struct Tags {
     names: Box<[Astr]>,
 }
 
+/// One variant of one type. There is deliberately no way to a tag word other
+/// than `Tags::member`: the question "does this type name this variant" is the
+/// checker's, already answered, and a `u64` handed around downstream would
+/// invite each reader to ask it again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Member {
+    name: Astr,
+}
+
+impl Member {
+    /// The register at offset zero of a run holding this variant, which is the
+    /// register `value::Value::variant` writes into a heap variant's header.
+    pub fn register(self) -> crate::value::Value {
+        crate::value::Value::tag(self.name)
+    }
+
+    pub fn word(self) -> u64 {
+        self.register().bits()
+    }
+}
+
 impl Tags {
     fn of<'v, I>(variants: I, interner: &Interner) -> Tags
     where
@@ -75,12 +96,8 @@ impl Tags {
         self.names.contains(&name)
     }
 
-    /// The word a run's tag register holds for `name`, which is the word
-    /// `value::Value::variant` writes into a heap variant's, and `None` where
-    /// this type names no such variant.
-    pub fn word(&self, name: Astr) -> Option<u64> {
-        self.holds(name)
-            .then(|| crate::value::Value::tag(name).bits())
+    pub fn member(&self, name: Astr) -> Option<Member> {
+        self.holds(name).then_some(Member { name })
     }
 
     pub fn names(&self) -> &[Astr] {
@@ -125,11 +142,6 @@ impl Layout {
 
     pub fn tags(&self) -> &Tags {
         &self.tags
-    }
-
-    /// The register at offset zero of a run holding `tag`.
-    pub fn tag_word(&self, tag: Astr) -> Option<crate::value::Value> {
-        self.tags.holds(tag).then(|| crate::value::Value::tag(tag))
     }
 
     /// # Panics
@@ -1099,13 +1111,30 @@ mod tests {
         assert_eq!(held[spill_first(&held)].var, ValueId::from_raw(1));
     }
 
+    #[test]
+    fn a_member_exists_for_a_held_name_and_words_it_as_the_names_own_bits() {
+        let i = Interner::new();
+        let ty = enum_of(&i, &[("Zed", Some(Ty::I64)), ("Alpha", None)]);
+        let laid = layout(&ty, &i);
+
+        for name in ["Zed", "Alpha"] {
+            let tag = i.intern(name);
+            let member = laid
+                .tags()
+                .member(tag)
+                .expect("the type names this variant");
+            assert_eq!(member.word(), crate::value::Value::tag(tag).bits());
+        }
+        assert!(laid.tags().member(i.intern("Omega")).is_none());
+    }
+
     /// RFC-0050 rule 8 says the run and the heap realization are one layout, and
     /// this is the contract both reach it through: a run of `E::B(i64)` and a
     /// heap `Value::variant` of the same tag are compared register for
     /// register.
     ///
     /// The two writers are `prepare::lay_variant`, which writes
-    /// `Layout::tag_word` at the run's base, and `value::Value::variant`, which
+    /// `Member::register` at the run's base, and `value::Value::variant`, which
     /// writes `Value::tag` at the header's first register. Give them different
     /// numberings and only this assertion fails.
     #[test]
@@ -1133,7 +1162,11 @@ mod tests {
 
         for name in ["Zed", "Alpha", "Mu"] {
             let tag = i.intern(name);
-            let run = laid.tag_word(tag).expect("the type names this variant");
+            let run = laid
+                .tags()
+                .member(tag)
+                .expect("the type names this variant")
+                .register();
             let heap = crate::value::Value::variant(tag, None);
             // SAFETY: `Value::variant` erased a variant.
             let held = unsafe { heap.as_variant() };
@@ -1149,7 +1182,7 @@ mod tests {
 
     /// The sibling of the test above for the one variant type whose tags the
     /// language names rather than a declaration. `Ok` and `Err` reach the tag
-    /// register through `Layout::tag_word` and `Value::tag` exactly as a
+    /// register through `Member::register` and `Value::tag` exactly as a
     /// declared variant's name does, so a `Result` and an enum are one layout.
     #[test]
     fn a_heap_result_and_a_run_of_one_result_are_the_same_words() {
@@ -1165,7 +1198,11 @@ mod tests {
 
         for name in ["Ok", "Err"] {
             let tag = i.intern(name);
-            let run = laid.tag_word(tag).expect("a Result names this side");
+            let run = laid
+                .tags()
+                .member(tag)
+                .expect("a Result names this side")
+                .register();
             let payload = acvus_extern::Owned::from_value(crate::value::Value::int(7));
             let heap = crate::value::Value::variant(tag, Some(payload));
             // SAFETY: `Value::variant` erased a variant.
