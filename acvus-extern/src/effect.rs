@@ -15,9 +15,10 @@ pub struct Idempotent;
 pub struct Opaque;
 
 /// A known level fills the effect position of a declaration's type where a
-/// variable of the effect kind would stand. `Idempotent` has no such impl:
-/// no declaration stands one there, and the build says so.
+/// variable of the effect kind would stand, and the three levels stand
+/// alike: a declaration or a closure parameter may name any of them.
 impl Var<kind::Effect> for Pure {}
+impl Var<kind::Effect> for Idempotent {}
 impl Var<kind::Effect> for Opaque {}
 
 impl Term<kind::Effect> for Pure {
