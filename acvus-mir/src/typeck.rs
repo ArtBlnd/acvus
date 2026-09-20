@@ -236,6 +236,17 @@ impl Viewed {
     }
 }
 
+/// What the referent's evidence answered when a view was asked of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SliceCoercion {
+    /// The referent declares the view, and the cast is recorded at the
+    /// argument.
+    Coerced,
+    /// Nothing the referent declares takes it at that view and mutability,
+    /// so the argument is left to unification against the parameter.
+    NoDeclaration,
+}
+
 /// What an expression under check is read for (RFC-0018): its value, or a
 /// reference to the place it names, at that mutability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1453,14 +1464,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             });
             return true;
         }
-        self.slice_coercion(
+        match self.slice_coercion(
             &referent,
             Viewed { view, mutability },
             arg_ty,
             param_ty,
             site.id,
             site.span,
-        )
+        ) {
+            SliceCoercion::Coerced => true,
+            SliceCoercion::NoDeclaration => false,
+        }
     }
 
     /// The declaration the referent's evidence settles on, recorded as the
@@ -1473,14 +1487,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         param_ty: &InferTy,
         at: AstId,
         span: Span,
-    ) -> bool {
+    ) -> SliceCoercion {
         let Viewed { view, mutability } = viewed;
         let name = self.interner.intern(viewed.declaration());
         let head = match view {
             View::Str => None,
             View::Slice => match sliceable_head(referent) {
                 Some(head) => Some(head),
-                None => return false,
+                None => return SliceCoercion::NoDeclaration,
             },
         };
         let takes_referent = |takes: &crate::ty::PolyTy| match view {
@@ -1499,10 +1513,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             )
             .map(|(qref, scheme)| (qref, scheme.clone()));
         let Some((qref, scheme)) = taker else {
-            return false;
+            return SliceCoercion::NoDeclaration;
         };
         if view == View::Str && !matches!(referent, TyTerm::String) {
-            return false;
+            return SliceCoercion::NoDeclaration;
         }
         let taken = self.applied_at(qref, &scheme, arg_ty, param_ty, span);
         self.coercions.push(PendingCoercion {
@@ -1515,7 +1529,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 },
             },
         });
-        true
+        SliceCoercion::Coerced
     }
 
     /// Every argument whose container the solve has now named.
@@ -1546,10 +1560,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     Viewed { view, mutability }
                 }
             };
-            if self.slice_coercion(&referent, viewed, &arg, &param, at, span) {
-                continue;
+            match self.slice_coercion(&referent, viewed, &arg, &param, at, span) {
+                SliceCoercion::Coerced => continue,
+                SliceCoercion::NoDeclaration => self.meet_settled_argument(&arg, &param, span),
             }
-            self.meet_settled_argument(&arg, &param, span);
         }
     }
 

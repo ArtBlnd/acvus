@@ -148,33 +148,64 @@ fn a_move_out_of_a_capture_labels_the_lambda_that_captured_it() {
 
 /// RFC-0064 "What it costs": a lambda called after the storage it borrows
 /// was written is the one case worth its own words, and the two places it
-/// names are the capture and the write.
-/// Both `r` and `f` hold the loan on `a` and both are live at the write, so
-/// the exclusion rule states the conflict once per holder. This asserts the
-/// lambda's, whose labels are the pair RFC-0064 asks for.
+/// names are the capture and the call.
 #[test]
-fn a_write_while_a_capturing_lambda_is_live_names_the_capture_and_the_write() {
-    let source = "let a = [1, 2]; let r = &a; let f = |k| -> len(r) + k; a = [3, 4]; f(1)";
-    let refusals = refusals(source, &nothing);
-    let wanted = [
-        at("|k| -> len(r) + k", "captured here"),
-        at("a = [3, 4];", "written here while the lambda is live"),
-    ];
-    let lambda = refusals
-        .iter()
-        .find(|r| r.marked(source) == wanted)
-        .unwrap_or_else(|| {
-            panic!(
-                "{:#?}",
-                refusals
-                    .iter()
-                    .map(|r| r.marked(source))
-                    .collect::<Vec<_>>()
-            )
-        });
+fn a_write_while_a_capturing_lambda_is_live_names_the_capture_and_the_call() {
+    let (message, labels) = only(
+        "let a = [1, 2]; let r = &a; let f = |k| -> len(r) + k; a = [3, 4]; f(1)",
+        &nothing,
+    );
     assert_eq!(
-        lambda.message,
+        message,
         "`a` is written here while a reference to it is live"
+    );
+    assert_eq!(
+        labels,
+        [
+            at("|k| -> len(r) + k", "captured here"),
+            at("f(1)", "the lambda is called here"),
+        ]
+    );
+}
+
+#[test]
+fn a_lambda_whose_later_use_is_not_a_call_is_labelled_as_used() {
+    let (message, labels) = only(
+        "let a = [1, 2]; let r = &a; let f = |k| -> len(r) + k; \
+         let g = |h, x| -> h(x); a = [3, 4]; g(f, 1)",
+        &nothing,
+    );
+    assert_eq!(
+        message,
+        "`a` is written here while a reference to it is live"
+    );
+    assert_eq!(
+        labels,
+        [
+            at("|k| -> len(r) + k", "captured here"),
+            at("f", "the lambda is used here"),
+        ]
+    );
+}
+
+#[test]
+fn a_write_while_two_references_are_live_is_one_refusal_naming_both() {
+    let (message, labels) = only(
+        "let a = [1, 2]; let r = &a; let s = &a; a = [3, 4]; len(r) + len(s)",
+        &nothing,
+    );
+    assert_eq!(
+        message,
+        "`a` is written here while a reference to it is live"
+    );
+    assert_eq!(
+        labels,
+        [
+            at("&a", "borrowed here"),
+            at("r", "the reference is used here"),
+            at("&a", "borrowed here"),
+            at("s", "the reference is used here"),
+        ]
     );
 }
 

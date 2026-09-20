@@ -101,8 +101,8 @@ has no identity the caller can read. `Param(i)` is that identity.
   different regions — the same as two references to different storages.
 - The diagnostics gain one case worth its own words: a lambda stored in
   a slot and called after the storage it borrows was written — two
-  labels (`captured here`, `written here while the lambda is live`),
-  which the labeled `Report` already carries.
+  labels (`captured here` at the lambda, `the lambda is called here` at
+  the call), which the labeled `Report` already carries.
 
 ## Rejected
 
@@ -214,12 +214,12 @@ type starts a loan on itself as a reference parameter does
 inside the callee what the argument borrowed outside it.
 
 The store-then-call diagnostic carries `captured here` at the `MakeClosure`
-and `written here while the lambda is live` at the touch. The second label
-repeats the primary marker's span; it is there because the sentence a reader
-needs is that a lambda, not a reference, is what is still live. In `let r =
-&v; let f = |k| -> len(r) + k; v = [...]` both `r` and `f` hold the loan and
-the exclusion rule states the conflict once per holder, so that program
-reports twice.
+and `the lambda is called here` at the call, which is the form a reference
+already uses: the origin of the loan, and the later use that keeps it live.
+One write is one conflict whatever holds the loan, so `let r = &v; let f =
+|k| -> len(r) + k; v = [...]; f(1)` is one refusal naming three places, and
+two references to one storage written while both are live are one refusal
+with four labels.
 
 A call's result substitutes the callee's summary where the summary is known
 and otherwise takes the union of every argument's region. The union is a

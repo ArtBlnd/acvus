@@ -93,6 +93,7 @@ fn optimize_inner(
 
     // -- Pass 2: Optimize + Validate (per-module, direct calls) ------
 
+    let refused: FxHashSet<QualifiedRef> = all_errors.iter().map(|(qref, _)| *qref).collect();
     let mut result_modules = FxHashMap::default();
 
     for (qref, mut module) in inlined.modules {
@@ -101,9 +102,12 @@ fn optimize_inner(
             run_pass2_body(closure, opt);
         }
 
-        let errors = validate::validate(&module);
+        let errors = validate::type_check::check_types(&module);
         if !errors.is_empty() {
             all_errors.push((qref, errors));
+        }
+        if !refused.contains(&qref) {
+            debug_rules_pass_0_held(qref, &module);
         }
 
         result_modules.insert(qref, module);
@@ -231,6 +235,34 @@ fn run_pass2(cfg: &mut CfgBody) {
     debug_validate(cfg);
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
+
+/// Until this assertion replaced it, pass 2 reported these two rules to the
+/// reader. `let v = [1, 2]; let r = &v[0]; v = [3, 4]; *r` was therefore
+/// refused twice: once by pass 0, with the borrow and the use labelled, and
+/// once here with no labels at all, because the rewrites had moved the
+/// instructions the labels are read off.
+///
+/// The other half of what is asserted lives in the passes between the two.
+/// Three of them move an instruction past another — `optimize::commute`,
+/// `optimize::code_motion`, `optimize::reorder` — and each builds `Loans` and
+/// takes a storage's writes as a dependency, `code_motion` moving a shared
+/// borrow only where no block it would newly span writes the storage. A pass
+/// that stops asking `Loans` compiles, and this is what fires.
+#[cfg(debug_assertions)]
+fn debug_rules_pass_0_held(qref: QualifiedRef, module: &MirModule) {
+    let broken: Vec<ValidationErrorKind> = validate::borrow_check::check_borrows(module)
+        .into_iter()
+        .chain(validate::exhaustive::check_exhaustive(module))
+        .map(|error| error.kind)
+        .collect();
+    assert!(
+        broken.is_empty(),
+        "optimizing {qref:?} broke a rule pass 0 held: {broken:?}"
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_rules_pass_0_held(_qref: QualifiedRef, _module: &MirModule) {}
 
 /// Validate CfgBody after optimization: check use-def integrity, SSA dominance, and type coverage.
 /// Collects all violations and panics if any are found.

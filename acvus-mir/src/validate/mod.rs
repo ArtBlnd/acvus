@@ -14,10 +14,16 @@ use acvus_utils::Interner;
 
 use crate::ir::{MirModule, ValOrigin};
 
-/// The checks that hold of a MIR module at any point in the pipeline. The
-/// move check is deliberately not among them: a move is a property of the
-/// shape the source wrote, which optimization erases, so it runs once, in
-/// pass 0 of `graph::optimize` (RFC-0029).
+/// Every rule a `MirModule` answers on its own, for a module no phase of
+/// `graph::optimize` was run over — the hand-built and directly lowered
+/// modules of `acvus-mir-test` and `acvus-interpreter-test`. The move check is
+/// not among them and cannot be: a move is a property of the shape the source
+/// wrote, which optimization erases (RFC-0029).
+///
+/// The pipeline does not call this, and a call added from it would report every
+/// refusal pass 0 already reported a second time.
+/// `acvus-cli/tests/cli.rs::a_write_while_a_reference_is_live_is_refused_once`
+/// is what fails then.
 pub fn validate(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = type_check::check_types(module);
     errors.extend(borrow_check::check_borrows(module));

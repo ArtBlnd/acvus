@@ -72,8 +72,13 @@ every use of `&r` wants what `r` names.
 ## Consequences
 
 - `optimize` runs `check_borrows` in its first pass, beside
-  `check_moves`; `validate` runs `check_borrows` after optimization and
-  does not run `check_moves`.
+  `check_moves`. After optimization it runs it again as an assertion on
+  the optimizer, `graph::optimize::debug_rules_pass_0_held`, and not as a
+  refusal the reader is shown: a conflict found only there is a defect in
+  a pass, and reported to the reader it was the same refusal printed a
+  second time. `validate` is the phase-independent check the test
+  harnesses ask of a module the pipeline never ran over, and does not run
+  `check_moves`.
 - `borrow_check` counts holder uses with `Loans::uses_with_storage`.
 - `Loans::build` starts every reference-typed parameter and capture with
   a loan on itself.

@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::loans::{Loan, Loans, Summaries, Summary};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
-use crate::ir::{InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
+use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
 use crate::validate::move_check::is_move_only;
 use crate::validate::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
@@ -289,6 +289,49 @@ fn reached(target: &RefTarget, loans: &Loans) -> Reached {
 struct HolderUse {
     holder: ValueId,
     span: Span,
+    kind: UseKind,
+}
+
+/// What a holder's use does with it, where the words for it differ by the
+/// holder's form.
+///
+/// A call is the least of them because `lower.rs` emits the `Ref` of the slot a
+/// lambda was stored in with the span of the name alone, at the same offset as
+/// the call that reads it. Both uses are then at one place, and the call is the
+/// one that says what happened there.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum UseKind {
+    Call,
+    Other,
+}
+
+/// The values an indirect call names as the lambda it calls: the callee
+/// register, the storage a lambda was assigned into and read back out of, and
+/// so on to the storage itself.
+fn called_by(loans: &Loans, kind: &InstKind) -> Vec<ValueId> {
+    let callee = match kind {
+        InstKind::FunctionCall {
+            callee: Callee::Indirect(f),
+            ..
+        }
+        | InstKind::Spawn {
+            callee: Callee::Indirect(f),
+            ..
+        } => *f,
+        _ => return Vec::new(),
+    };
+    let mut names = vec![callee];
+    let mut at = 0;
+    while at < names.len() {
+        for loan in &loans.region(names[at]).loans {
+            let storage = loan.storage.value();
+            if !names.contains(&storage) {
+                names.push(storage);
+            }
+        }
+        at += 1;
+    }
+    names
 }
 
 /// Where a holder took the loan it holds, and in which of the two forms
@@ -303,6 +346,23 @@ struct Took {
 enum HolderForm {
     Reference,
     Lambda,
+}
+
+impl HolderForm {
+    fn took_it_here(self) -> &'static str {
+        match self {
+            Self::Reference => "borrowed here",
+            Self::Lambda => "captured here",
+        }
+    }
+
+    fn keeps_it_live_here(self, use_kind: UseKind) -> &'static str {
+        match (self, use_kind) {
+            (Self::Reference, _) => "the reference is used here",
+            (Self::Lambda, UseKind::Call) => "the lambda is called here",
+            (Self::Lambda, UseKind::Other) => "the lambda is used here",
+        }
+    }
 }
 
 /// A `Loan` carries no span, and it cannot gain one here: `Region`'s join
@@ -353,6 +413,7 @@ impl HolderSites {
                     }
                     _ => {}
                 }
+                let called = called_by(loans, &inst.kind);
                 named.extend(
                     loans
                         .uses_with_storage(&inst.kind)
@@ -360,6 +421,10 @@ impl HolderSites {
                         .map(|u| HolderUse {
                             holder: u,
                             span: inst.span,
+                            kind: match called.contains(&u) {
+                                true => UseKind::Call,
+                                false => UseKind::Other,
+                            },
                         }),
                 );
             }
@@ -373,38 +438,37 @@ impl HolderSites {
             .map_or(Span::ZERO, |took| took.span)
     }
 
-    /// RFC-0064 "What it costs": a lambda called after the storage it
-    /// borrows was written is the one diagnostic worth its own words, and
-    /// the two places it names are the capture and the touch. A reference
-    /// names the borrow and the use that keeps it live instead, because a
-    /// reference's later use is what the reader has to see.
-    fn labels(&self, holder: ValueId, conflict: Span, touch: ConflictTouch) -> Vec<Label> {
-        let Some(took) = self
-            .borrowed
-            .get(&holder)
-            .filter(|took| took.span != Span::ZERO)
-        else {
-            return Vec::new();
-        };
-        match took.form {
-            HolderForm::Lambda => vec![
-                Label::at(took.span, "captured here"),
-                Label::at(
-                    conflict,
-                    format!("{} here while the lambda is live", touch.word()),
-                ),
-            ],
-            HolderForm::Reference => {
-                let borrow = Label::at(took.span, "borrowed here");
-                let later = self
-                    .named
-                    .iter()
-                    .filter(|u| u.holder == holder && u.span.start > conflict.start)
-                    .min_by_key(|u| u.span.start)
-                    .map(|u| Label::at(u.span, "the reference is used here"));
-                std::iter::once(borrow).chain(later).collect()
+    /// Where each holder took the loan, and the use of it that reaches past
+    /// the conflict. Two holders given the same reference share one `Took`, so
+    /// a label already stated is not stated again.
+    fn labels(&self, holders: &[ValueId], conflict: Span) -> Vec<Label> {
+        let mut labels: Vec<Label> = Vec::new();
+        for holder in holders {
+            let Some(took) = self
+                .borrowed
+                .get(holder)
+                .filter(|took| took.span != Span::ZERO)
+            else {
+                continue;
+            };
+            let later = self.later_use(*holder, conflict);
+            let places = std::iter::once(Label::at(took.span, took.form.took_it_here())).chain(
+                later.map(|use_| Label::at(use_.span, took.form.keeps_it_live_here(use_.kind))),
+            );
+            for label in places {
+                if !labels.contains(&label) {
+                    labels.push(label);
+                }
             }
         }
+        labels
+    }
+
+    fn later_use(&self, holder: ValueId, conflict: Span) -> Option<&HolderUse> {
+        self.named
+            .iter()
+            .filter(|u| u.holder == holder && u.span.start > conflict.start)
+            .min_by_key(|u| (u.span.start, u.kind))
     }
 }
 
@@ -454,27 +518,34 @@ impl Checking {
                     continue;
                 };
                 let reach = reached(&target, &self.loans);
-                for holder in &live_before[ii] {
-                    if reach.via.contains(holder) {
-                        continue;
-                    }
-                    let hit = self.loans.region(*holder).loans.iter().any(|loan| {
-                        reach.storage.contains(&loan.storage.value()) && conflicts(loan, &touch)
-                    });
-                    if hit {
-                        errors.push(ValidationError {
-                            scope: self.scope.to_string(),
-                            inst_index: ii,
-                            span: inst.span,
-                            kind: ValidationErrorKind::BorrowConflict {
-                                storage: inst_info::storage(&target)
-                                    .and_then(|slot| self.cfg.debug.get(slot).cloned()),
-                                touch: touch.stated(),
-                                labels: self.sites.labels(*holder, inst.span, touch.stated()),
-                            },
-                        });
-                    }
+                let mut holders: Vec<ValueId> = live_before[ii]
+                    .iter()
+                    .copied()
+                    .filter(|holder| {
+                        !reach.via.contains(holder)
+                            && self.loans.region(*holder).loans.iter().any(|loan| {
+                                reach.storage.contains(&loan.storage.value())
+                                    && conflicts(loan, &touch)
+                            })
+                    })
+                    .collect();
+                if holders.is_empty() {
+                    continue;
                 }
+                holders.sort_unstable_by_key(|holder| {
+                    (self.sites.borrowed_at(*holder).start, *holder)
+                });
+                errors.push(ValidationError {
+                    scope: self.scope.to_string(),
+                    inst_index: ii,
+                    span: inst.span,
+                    kind: ValidationErrorKind::BorrowConflict {
+                        storage: inst_info::storage(&target)
+                            .and_then(|slot| self.cfg.debug.get(slot).cloned()),
+                        touch: touch.stated(),
+                        labels: self.sites.labels(&holders, inst.span),
+                    },
+                });
             }
         }
     }

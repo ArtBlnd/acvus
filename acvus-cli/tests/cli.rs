@@ -648,29 +648,77 @@ fn a_use_after_move_shows_the_move_and_the_use_with_the_lines_between_elided() {
     );
 }
 
-/// RFC-0064 "What it costs": a lambda called after the storage it borrows was
-/// written names the capture and the write.
+/// RFC-0029: the exclusion rule is asked in pass 0 of `graph::optimize` and
+/// nowhere else. Asked a second time after the rewrites, this program printed
+/// the same refusal twice, the second time with no labels at all.
 #[test]
-fn a_write_while_a_capturing_lambda_is_live_shows_the_capture_and_the_write() {
+fn a_write_while_a_reference_is_live_is_refused_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "let v = [1, 2];\nlet r = &v[0];\nv = [3, 4];\n*r\n";
+    write(dir.path(), "wr.acvus", source);
+
+    let out = acvus(dir.path(), &["check", "wr.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        [
+            "error: `v` is written here while a reference to it is live",
+            "  --> wr.acvus:3:1",
+            "  |",
+            "2 | let r = &v[0];",
+            "  |         ----- borrowed here",
+            "3 | v = [3, 4];",
+            "  | ^^^^^^^^^^^ `v` is written here while a reference to it is live",
+            "4 | *r",
+            "  |  - the reference is used here",
+            "",
+        ]
+        .join("\n")
+    );
+}
+
+/// RFC-0064 "What it costs": a lambda called after the storage it borrows was
+/// written names the capture and the call. One write is one conflict, so the
+/// reference the lambda captured adds its own labels to this refusal rather
+/// than a refusal of its own — here it has none, because `r`'s last use in
+/// `main` is the capture itself.
+#[test]
+fn a_write_while_a_capturing_lambda_is_live_shows_the_capture_and_the_call() {
     let dir = tempfile::tempdir().unwrap();
     let source =
         "let v = [1, 2, 3];\nlet r = &v;\nlet f = |k| -> len(r) + k;\nv = [4, 5, 6];\nf(1)\n";
     write(dir.path(), "cap.acvus", source);
 
+    let out = acvus(dir.path(), &["check", "cap.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        [
+            "error: `v` is written here while a reference to it is live",
+            "  --> cap.acvus:4:1",
+            "  |",
+            "3 | let f = |k| -> len(r) + k;",
+            "  |         ----------------- captured here",
+            "4 | v = [4, 5, 6];",
+            "  | ^^^^^^^^^^^^^^ `v` is written here while a reference to it is live",
+            "5 | f(1)",
+            "  | ---- the lambda is called here",
+            "",
+        ]
+        .join("\n")
+    );
+
     let out = acvus(dir.path(), &["check", "--json", "cap.acvus"]);
     assert_eq!(out.status.code(), Some(1));
     let array: Vec<serde_json::Value> = serde_json::from_str(&text(&out.stdout)).unwrap();
-    let captured = array
-        .iter()
-        .find(|d| d["labels"][0]["text"] == "captured here")
-        .unwrap_or_else(|| panic!("{}", text(&out.stdout)));
+    assert_eq!(array.len(), 1, "{}", text(&out.stdout));
     assert_eq!(
-        captured["message"],
+        array[0]["message"],
         "`v` is written here while a reference to it is live"
     );
-    assert_eq!(captured["line"], 4);
+    assert_eq!(array[0]["line"], 4);
     assert_eq!(
-        captured["labels"],
+        array[0]["labels"],
         serde_json::json!([
             {
                 "line": 3,
@@ -679,11 +727,32 @@ fn a_write_while_a_capturing_lambda_is_live_shows_the_capture_and_the_write() {
                 "text": "captured here",
             },
             {
-                "line": 4,
+                "line": 5,
                 "col": 1,
-                "span": [58, 72],
-                "text": "written here while the lambda is live",
+                "span": [73, 77],
+                "text": "the lambda is called here",
             },
+        ])
+    );
+}
+
+#[test]
+fn a_write_while_two_references_are_live_is_one_refusal_naming_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "let a = [1, 2];\nlet r = &a;\nlet s = &a;\na = [3, 4];\nlen(r) + len(s)\n";
+    write(dir.path(), "two.acvus", source);
+
+    let out = acvus(dir.path(), &["check", "--json", "two.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let array: Vec<serde_json::Value> = serde_json::from_str(&text(&out.stdout)).unwrap();
+    assert_eq!(array.len(), 1, "{}", text(&out.stdout));
+    assert_eq!(
+        array[0]["labels"],
+        serde_json::json!([
+            { "line": 2, "col": 9, "span": [24, 26], "text": "borrowed here" },
+            { "line": 5, "col": 5, "span": [56, 57], "text": "the reference is used here" },
+            { "line": 3, "col": 9, "span": [36, 38], "text": "borrowed here" },
+            { "line": 5, "col": 14, "span": [65, 66], "text": "the reference is used here" },
         ])
     );
 }
