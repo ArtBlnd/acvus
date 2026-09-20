@@ -283,7 +283,8 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `InstanceRun` | the mono glue of one instance as the registry holds it | derived from `Instance` — the address, and the task that says which `fn` type the address is |
 | `Required` | a handler's instance parameter, as the glue's parameter list names it | derived from `Sited` — it takes no argument of the call, because the site table holds its word |
 | `AtInstance` | a declaration's mono glue as a type | derived from `InstanceRun` — named where the glue's type is named, so the glue itself stays the closure |
-| `InstanceTable` | every signature's instances, keyed by signature and ground type | derived from `InstanceAt` — a flat lookup; what an instance itself requires is a field of its payload |
+| `InstanceEntries` | the question a call site asks to fill its table: which instance of this signature stands at this settled type | atom — its `instance_at` is the one `dyn` between `prepare` and the registry, so nothing in the crossing names a registry type |
+| `InstanceTable` | every signature's instances, keyed by signature and ground type | derived from `InstanceAt` — the `InstanceEntries` the registry answers with; a flat lookup, because what an instance itself requires is a field of its payload |
 | `InstanceAt` | one instance as `InstanceSets` needs it: the pattern it stands at, what its own bounds require, and the task its body runs at | atom — the check-time half of a declared instance |
 | `BoundAt` | one bound of an instance's own declaration | `acvus_mir::ty::InnerBound` under this crate's name — the checker decides the same recursion the site table walks, so the two read one type |
 | `Requirement` | one required instance of a declaration | atom — which variable carries it, which signature it names, and the highest task an instance it reaches may run at; `#[extern_fn]` reads it off an `Instance` parameter |
