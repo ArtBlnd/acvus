@@ -90,24 +90,33 @@ collections.
    extern value already has (the checker selects the instance whose
    length matches the value's Rust type).
 
-4. **A consumer pushes.** `collect`, `sum`, `count`, `fold`, `any`, `all`,
-   `find`, `join`, `contains`, `reduce` run one loop: for each source
-   element, through the stages in order, into the sink. No `Option` per
-   stage boundary, no virtual `next`. `next` (the `while let` pull) is
-   the one pull consumer: the `Iter` holds a cursor into its source and a
-   buffer for a many-out stage, and pulls one output through the same
-   stage array. **A consumer matches the stage array once**, on entry, and
-   runs a fused loop for the shapes it names (`map → collect`, `filter →
-   collect`, `filter → count`, `map → sum`, `filter → any`, and the others
-   the scripts use); every other shape runs the generic loop, which
-   matches each stage per element. The shapes are values, so an unnamed
-   shape is the generic loop and never a refusal.
+4. **A consumer pulls through the typed stack.** `collect`, `sum`, `count`,
+   `fold`, `any`, `all`, `find`, `join`, `contains`, `reduce` and `next`
+   each pull one element at a time through the list trait's `pull`,
+   which recurses outward-in over the stage tuple: typed, one Rust
+   instantiation per length, no `dyn` and no boxed stage. A pull returns
+   `Option<O>` per element; that `Option` is the cost of letting a
+   consumer `break` early and `.await` inside its loop, which the
+   existing consumer bodies do and a push sink would not admit
+   (`drain!`/`drain_now!` keep their interface over `pull`). **A consumer
+   matches the stage tuple once**, on entry, and runs a fused loop for
+   the shapes it names (`map → collect`, `filter → collect`, `filter →
+   count`, `map → sum`, `filter → any`, and the others the scripts use);
+   every other shape runs the generic pull. The shapes are values, so an
+   unnamed shape is the generic loop and never a refusal.
 
-5. **Two sources are a source, not a stage.** `chain(a, b)`, `chain_all`,
-   `zip` combine pipelines; the result is a new source (`Iter<(), T>`)
-   whose value holds the two finished pipelines, and stages after it
-   prepend as usual. `flatten` over a pipeline of containers is a stage
-   (`FlatMap` with the identity).
+5. **Two sources are a source, not a stage.** `chain(a, b)`, `chain_all`
+   (and `zip`, if it is ever declared) combine pipelines; the result is a
+   new source (`Iter<(), T>`) and stages after it prepend as usual. The
+   parts have list lengths of their own, which no source variant can hold
+   without putting the list under its own recursion, so a chained part is
+   held as **one `Pull<T, Rt>` trait object** (a sync and an async arm) —
+   one `dyn` per part, at the part boundary, never per stage. `flatten`
+   over a pipeline of containers is a stage (`FlatMap` with the identity).
+   A stage whose step needs a bound the enum cannot carry (`Dedup`'s
+   `PartialEq + Clone`, `Flatten`'s and `Chunks`' container relation)
+   receives that step as a function pointer the adaptor's instance
+   supplies, monomorphized where the type is known.
 
 6. **Effects and identity are unchanged.** `E` and `I` ride on `Iter` as
    today; a stage whose closure is `Async` makes the consumer's loop
