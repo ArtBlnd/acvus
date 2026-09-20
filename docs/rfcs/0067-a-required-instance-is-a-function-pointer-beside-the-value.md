@@ -322,24 +322,30 @@ scripts with every counter but the removed and added files' own identical.
 
 ## What waits
 
-- **The async instance's customers.** `into_async` and `call_await` compile
-  and are wired; no test drives an async instance through them yet.
 - **The word a hand-written `AtInstance` puts in `InstanceRun`.** The glue
   `#[extern_fn]` writes is typed at the signature's own `Now`, but
   `InstanceRun::at` is a public `usize`, so an impl written by hand can
   still put any address there.
-- **The pairing golden.** A `compile_fail` case pinning that an `Instance`
-  whose `I` is not the receiver's variable is refused at `call`.
-- **The refusal for a declaration that is both an instance and requires
-  one.** It gets no mono glue today, and the absence surfaces as a `prepare`
-  panic ("has no mono glue") rather than a refusal at the macro or at
-  combine. Two further `prepare` panics in `instance_at` re-check what
-  `combine` proved and should be assertions of that proof, not run-time
-  tests.
+- **Two `prepare`-time panics in `instance_at`** ("is required but no
+  registry declares it", "has no instance at this type") re-check what
+  `combine` proved. They stay because the checker decides with the `OneOf`
+  meet over `InstanceSets` while `instance_at` decides with
+  `matches_pattern` — two predicates — and because `ArgAt` is public, so an
+  unchecked path behind a safe `Sited::site` would be unsound. One
+  predicate, then `debug_assert!`.
 - **A two-word receiver.** An instance whose receiver is a `&str` view, and
-  with it a `Ctx` receiver that is a run rather than one value.
+  with it a `Ctx` receiver that is a run rather than one value;
+  `core::to_string` at `str` has no mono glue for this reason, and a
+  requirement on it is refused at `combine`.
 - **A requirement of a container's element.** `index_of(xs: &Vec<T>, x: &T)`
   requiring `eq` at `T` needs a crossing that carries the site down to an
   element.
+- **An async instance with a non-empty rest.** The crossing is written from
+  the signature for both task forms; no customer exercises the `Later`
+  form with rest positions.
+- **The consumer's receiver bound.** `I: Var<kind::Type> + DerefMut<Target =
+  Rt::Value>` (+ `Into<Owned<Rt>>` where stored, `Borrowable<Rt>` where taken
+  by `&mut`) is one `where` line every consumer writes; whether the bound
+  moves onto `Instance` or `Signature` is open.
 - **`LargeRef`, the allocator and the result channel.** Each is open and
   each is its own decision; none is settled by this one.
