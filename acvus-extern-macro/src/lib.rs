@@ -827,10 +827,10 @@ fn qref_expr_in(ns: Option<&str>, name: &str) -> proc_macro2::TokenStream {
 
 // -- #[derive(ExternType)] -------------------------------------------
 
-/// `#[extern_type(name = "...", ns = "...")]`.
 struct ExternTypeAttr {
     name: Option<String>,
     ns: Option<String>,
+    payload_per_instantiation: bool,
 }
 
 /// Whether the struct carries `#[repr(transparent)]`.
@@ -846,6 +846,7 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
     let mut out = ExternTypeAttr {
         name: None,
         ns: None,
+        payload_per_instantiation: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("extern_type") {
@@ -858,8 +859,10 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
             } else if meta.path.is_ident("ns") {
                 meta.input.parse::<Token![=]>()?;
                 out.ns = Some(meta.input.parse::<LitStr>()?.value());
+            } else if meta.path.is_ident("payload_per_instantiation") {
+                out.payload_per_instantiation = true;
             } else {
-                return Err(meta.error("expected `name` or `ns`"));
+                return Err(meta.error("expected `name`, `ns`, or `payload_per_instantiation`"));
             }
             Ok(())
         })?;
@@ -931,10 +934,18 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
     }
 
-    if vars.mentions_var(payload_ty) {
+    // The other half of this contract lives in two other artifacts. When the
+    // payload names the type parameters, `TypeId::of::<payload>()` varies with
+    // the type arguments, and what then decides whether a materialize reads
+    // the type its erase wrote is the checker's instance selection in
+    // `acvus-mir` — for `acvus-ext`'s `Iterator`, the instance whose
+    // element-type list is as long as the value's stage tuple (RFC-0065 §3).
+    // A selection that got it wrong arrives as the `debug_assert_eq!` on the
+    // vtable's `type_id` in `acvus-interpreter`'s `Value::materialize`.
+    if !attr.payload_per_instantiation && vars.mentions_var(payload_ty) {
         return Err(syn::Error::new_spanned(
             payload_ty,
-            "the payload type names no type, effect, or length parameter; every instantiation shares one payload",
+            "the payload type names no type, effect, or length parameter; every instantiation shares one payload. `#[extern_type(payload_per_instantiation)]` opts out, and then the declaring crate owes the argument that every materialize reads the type its erase wrote",
         ));
     }
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();

@@ -131,6 +131,17 @@ collections.
 
 ## What it costs
 
+- `acvus-extern-macro`: `#[derive(ExternType)]` refused a payload naming any
+  type, effect or length parameter, so that every instantiation of an
+  extension type shares one payload and `Value::materialize`'s vtable
+  `type_id` check holds whatever the type arguments are. A payload that is
+  the stage stack its element-type list names cannot share, so the derive
+  takes `#[extern_type(payload_per_instantiation)]`, which lifts the refusal
+  for that one declaration and moves the obligation to the declaring crate:
+  the checker selects the instance whose list length matches the value's
+  Rust type, and a selection that got it wrong arrives as that
+  `debug_assert_eq!` rather than as silence. The refusal stands for every
+  other extension type.
 - `acvus-extern-macro`: `extern_signature!` takes `effect = E` and emits
   that variable as the call effect instead of `Known(PURE)`, so a
   consumer can be instanced. Instance admission needs no effect rule of
