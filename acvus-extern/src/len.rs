@@ -1,33 +1,19 @@
 //! Array-length positions in ExternFn signatures.
 //!
-//! `LenArg` names a length variable; `LenVar` is the bound of a generic
-//! parameter that is one, and `()` fills it at runtime. `Arr<T, N>` is an
-//! array whose length the script decides.
+//! A length variable is named by `Nth<kind::Length, K>` while the
+//! declaration's type is built. `Arr<T, N>` is an array whose length the
+//! script decides.
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::{LenTerm, Poly, PolyTy};
+use acvus_mir::ty::PolyTy;
 use acvus_utils::Interner;
 
-use crate::ty_arg::{PolyVars, TyArg, TyVar};
+use crate::ty_arg::{PolyVars, Term, TyArg, Var, kind};
 
-pub trait LenArg: Send + Sync + 'static {
-    fn poly_len(vars: &PolyVars) -> LenTerm<Poly>;
-}
-
-pub trait LenVar: Send + Sync + 'static {}
-
-impl<N: LenArg> LenVar for N {}
-impl LenVar for () {}
-
-/// The K-th length variable of a declaration. Uninhabited.
-pub enum Len<const K: usize> {}
-
-impl<const K: usize> LenArg for Len<K> {
-    fn poly_len(vars: &PolyVars) -> LenTerm<Poly> {
-        vars.lens[K]
-    }
-}
+/// The runtime carries no length: a length variable is settled before the
+/// handler runs, so the runtime fills it with nothing.
+impl Var<kind::Length> for () {}
 
 /// `Array<T, N>` with N a length variable. Holds the elements at runtime.
 ///
@@ -38,13 +24,13 @@ impl<const K: usize> LenArg for Len<K> {
 #[repr(transparent)]
 pub struct Arr<T, N>(pub Vec<T>, PhantomData<N>)
 where
-    T: TyVar,
-    N: LenVar;
+    T: Send + Sync + 'static,
+    N: Var<kind::Length>;
 
 impl<T, N> Arr<T, N>
 where
-    T: TyVar,
-    N: LenVar,
+    T: Send + Sync + 'static,
+    N: Var<kind::Length>,
 {
     pub fn new(items: Vec<T>) -> Self {
         Self(items, PhantomData)
@@ -53,8 +39,8 @@ where
 
 impl<T, N> IntoIterator for Arr<T, N>
 where
-    T: TyVar,
-    N: LenVar,
+    T: Send + Sync + 'static,
+    N: Var<kind::Length>,
 {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
@@ -63,12 +49,19 @@ where
     }
 }
 
+impl<T, N> Var<kind::Type> for Arr<T, N>
+where
+    T: Var<kind::Type>,
+    N: Var<kind::Length>,
+{
+}
+
 impl<T, N> TyArg for Arr<T, N>
 where
-    T: TyArg + TyVar,
-    N: LenArg,
+    T: TyArg + Send + Sync + 'static,
+    N: Term<kind::Length> + Var<kind::Length>,
 {
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
-        PolyTy::Array(Box::new(T::poly_ty(i, vars)), N::poly_len(vars))
+        PolyTy::Array(Box::new(T::poly_ty(i, vars)), N::poly(vars))
     }
 }

@@ -66,8 +66,9 @@ acvus type does not mention it.
   `chat(client)` with its state value.
 - `extern_signature! { eq<T>(a: &T, b: &T) -> bool }` declares a shared
   signature and a marker type of the same name; `#[extern_fn(instance_of
-  = eq)]` declares an instance; `T: HasInstance<eq>` on a type parameter
-  declares a requirement.
+  = eq)]` declares an instance. A handler that calls a signature takes the
+  instance as a parameter; no bound on a type parameter requires one
+  (RFC-0067, pending).
 - The interpreter's context and the test harnesses take an `Externs`.
 - A script's bare name resolves to its own function if it declares one,
   else to the one extern of that name under any namespace; a name two

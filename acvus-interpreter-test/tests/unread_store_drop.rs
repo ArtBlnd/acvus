@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use acvus_extern::{ExternType, IdentityVar, Registry, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Registry, Var, extern_fn, extern_registry, kind};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::{Context, run_script_mode_with_externs};
 use acvus_mir::ty::Ty;
@@ -55,14 +55,14 @@ impl Drop for Counted {
 #[repr(transparent)]
 struct Held<I>(Vec<Counted>, PhantomData<I>)
 where
-    I: IdentityVar;
+    I: Var<kind::Identity>;
 
 /// Opaque, so the call itself is a root: what the store leaves without a
 /// reader is a value that exists and owes a release.
 #[extern_fn(effect = opaque)]
 fn held<I>(n: i64) -> Held<I>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     Held((0..n).map(|_| Counted).collect(), PhantomData)
 }
@@ -70,7 +70,7 @@ where
 #[extern_fn(effect = pure)]
 fn rank<I>(t: &Held<I>) -> i64
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     t.0.len() as i64
 }

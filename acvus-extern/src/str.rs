@@ -8,7 +8,7 @@ use crate::handler::{Arg, Ret};
 use crate::obj::{Cross, Pair};
 use crate::runtime::Runtime;
 use crate::slice::Words;
-use crate::ty_arg::{PolyVars, TyArg};
+use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
 /// A run of UTF-8 as the machine holds it: a pointer and a length in bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -67,6 +67,8 @@ impl StrView {
         unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.ptr, self.bytes)) }
     }
 }
+
+impl Var<kind::Type> for StrView {}
 
 impl TyArg for StrView {
     fn poly_ty(_: &Interner, _: &PolyVars) -> PolyTy {

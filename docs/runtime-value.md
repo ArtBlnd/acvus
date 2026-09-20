@@ -98,7 +98,7 @@ trait ClosureFn<Rt: Runtime> {
   signature `core::eq` (RFC-0019), and one with no instance cannot be
   compared.
 - **`Send + Sync + 'static` is the contract.** `Runtime`, `Value` and
-  `TyVar` carry it, and `materialize`/`erase` require it of `T`. Values
+  `Var<K>` carry it, and `materialize`/`erase` require it of `T`. Values
   cross `spawn_blocking`, sit in closure captures, and are pulled by
   spawned generators; a runtime is held by async handlers.
 
@@ -108,9 +108,9 @@ A registry contributes a manifest (types, shared signatures, function
 declarations) and a handler table (RFC-0021). `Externs::combine` joins every
 registry once, always starting with `acvus_extern::core` (the `clone` and
 `eq` signatures): it rejects a name declared twice, collects each
-signature's instances into one function, lowers `T: HasInstance<sig>` to
-`OneOf`, and yields the compiler's `functions` and `types` and the runtime's
-`handlers`. Every name lives under its registry's namespace (`std::len`,
+signature's instances into one function, and yields the compiler's
+`functions` and `types` and the runtime's `handlers`. A handler that calls
+a signature takes the instance as a parameter (RFC-0067, pending). Every name lives under its registry's namespace (`std::len`,
 `llm::chat`); a bare name two namespaces declare is the candidate set of
 RFC-0043.
 

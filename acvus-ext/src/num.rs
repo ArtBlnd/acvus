@@ -13,42 +13,42 @@ pub mod sig {
         ns: "num",
         fn abs<T>(a: T) -> T
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 
     extern_signature! {
         ns: "num",
         fn min<T>(a: T, b: T) -> T
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 
     extern_signature! {
         ns: "num",
         fn max<T>(a: T, b: T) -> T
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 
     extern_signature! {
         ns: "num",
         fn clamp<T>(x: T, lo: T, hi: T) -> T
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 
     extern_signature! {
         ns: "num",
         fn pow<T>(base: T, exp: T) -> T
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 
     extern_signature! {
         ns: "num",
         fn signum<T>(a: T) -> T
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 }
 

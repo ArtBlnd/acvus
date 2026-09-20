@@ -13,11 +13,11 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
-use crate::effect::{EffectArg, EffectVar};
 use crate::obj::{Cross, OneValue};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
-use crate::ty_arg::{PolyVars, TyArg, TyVar};
+use crate::ty_arg::{PolyVars, TyArg};
+use crate::ty_arg::{Term, Var, kind};
 
 /// Proof that a call comes through `Fn0`/`Fn1`/…: only this module mints it,
 /// so a handler cannot reach the runtime's `call_*` directly.
@@ -50,16 +50,16 @@ macro_rules! define_fn_arg {
     ($name:ident; $($A:ident : $slot:literal),*) => {
         pub struct $name<$($A,)* R, E, Rt>(Owned<Rt>, bool, PhantomData<($($A,)* R, E)>)
         where
-            $($A: TyVar,)*
-            R: TyVar,
-            E: EffectVar,
+            $($A: Send + Sync + 'static,)*
+            R: Send + Sync + 'static,
+            E: Var<kind::Effect>,
             Rt: Runtime;
 
         impl<$($A,)* R, E, Rt> $name<$($A,)* R, E, Rt>
         where
-            $($A: TyVar,)*
-            R: TyVar,
-            E: EffectVar,
+            $($A: Send + Sync + 'static,)*
+            R: Send + Sync + 'static,
+            E: Var<kind::Effect>,
             Rt: Runtime,
         {
             pub fn new(rt: &Rt, value: Rt::Value) -> Self {
@@ -86,14 +86,14 @@ macro_rules! define_fn_arg {
 
         crate::cross_one_value!(
             $name<$($A,)* R, E, __Rt>,
-            $($A: TyVar,)* R: TyVar, E: EffectVar
+            $($A: Send + Sync + 'static,)* R: Send + Sync + 'static, E: Var<kind::Effect>
         );
 
         impl<$($A,)* R, E, Rt> crate::OneValue<Rt> for $name<$($A,)* R, E, Rt>
         where
-            $($A: TyVar,)*
-            R: TyVar,
-            E: EffectVar,
+            $($A: Send + Sync + 'static,)*
+            R: Send + Sync + 'static,
+            E: Var<kind::Effect>,
             Rt: Runtime,
         {
             fn erase(self, _: &Rt) -> Rt::Value {
@@ -105,11 +105,20 @@ macro_rules! define_fn_arg {
             }
         }
 
+        impl<$($A,)* R, E, Rt> Var<kind::Type> for $name<$($A,)* R, E, Rt>
+        where
+            $($A: Var<kind::Type>,)*
+            R: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            Rt: Runtime,
+        {
+        }
+
         impl<$($A,)* R, E, Rt> TyArg for $name<$($A,)* R, E, Rt>
         where
-            $($A: TyArg + TyVar,)*
-            R: TyArg + TyVar,
-            E: EffectArg,
+            $($A: TyArg + Send + Sync + 'static,)*
+            R: TyArg + Send + Sync + 'static,
+            E: Term<kind::Effect> + Var<kind::Effect>,
             Rt: Runtime,
         {
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
@@ -117,7 +126,7 @@ macro_rules! define_fn_arg {
                     params: vec![$(ParamTerm::<Poly>::new(i.intern($slot), $A::poly_ty(i, vars))),*],
                     ret: Box::new(R::poly_ty(i, vars)),
                     captures: vec![],
-                    effect: E::poly_effect(vars),
+                    effect: E::poly(vars),
                 }
             }
         }
@@ -148,7 +157,7 @@ where
 impl<R, E, Rt> ClosureFn<Rt> for Fn0<R, E, Rt>
 where
     R: OneValue<Rt>,
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     type Args = ();
@@ -181,9 +190,9 @@ where
 
 impl<A, R, E, Rt> Fn1<A, R, E, Rt>
 where
-    A: TyVar,
-    R: TyVar,
-    E: EffectVar,
+    A: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     /// The closure applied to a value the caller holds at `A`, the result
@@ -215,7 +224,7 @@ impl<A, R, E, Rt> ClosureFn<Rt> for Fn1<A, R, E, Rt>
 where
     A: OneValue<Rt> + Cross<Rt>,
     R: OneValue<Rt>,
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     type Args = (A,);
@@ -250,7 +259,7 @@ where
     A: OneValue<Rt> + Cross<Rt>,
     B: OneValue<Rt> + Cross<Rt>,
     R: OneValue<Rt>,
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     type Args = (A, B);
@@ -286,7 +295,7 @@ where
     B: OneValue<Rt> + Cross<Rt>,
     C: OneValue<Rt> + Cross<Rt>,
     R: OneValue<Rt>,
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     type Args = (A, B, C);

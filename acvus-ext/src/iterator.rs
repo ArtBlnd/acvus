@@ -26,9 +26,8 @@
 //! representation, which `Fn1` does not have.
 
 use acvus_extern::{
-    Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar,
-    Monomorphize, OneValue, Ref, Registry, Runtime, Stored, TransparentOver, TyVar, extern_fn,
-    extern_registry,
+    Arr, ClosureFn, Cross, Erased, Fn1, Fn2, FromValue, Monomorphize, OneValue, Ref, Registry,
+    Runtime, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
 
 use crate::iter::{Iter, drain, drain_now};
@@ -100,10 +99,10 @@ pub mod sig {
         ns: "iter",
         fn into_iter<C, T, E, I, Rt>(items: C) -> Iter<T, E, I, Rt>
         where
-            C: TyVar,
-            T: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            C: Var<kind::Type>,
+            T: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 
@@ -111,10 +110,10 @@ pub mod sig {
         ns: "iter",
         fn as_iter<C, T, E, I, Rt>(items: &C) -> Iter<Ref<T, Rt>, E, I, Rt>
         where
-            C: TyVar,
-            T: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            C: Var<kind::Type>,
+            T: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 }
@@ -125,10 +124,10 @@ pub(crate) fn lent_iter<C, T, E, I, Rt>(
     at: impl Fn(&C, usize) -> Option<&T> + Send + Sync + 'static,
 ) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
-    C: TyVar,
-    T: TyVar + TransparentOver<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    C: Var<kind::Type>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut index = 0;
@@ -143,9 +142,9 @@ where
 #[extern_cast]
 fn into_iter_vec<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Iter::from_items(items)
@@ -155,10 +154,10 @@ where
 #[extern_cast]
 fn into_iter_array<T, N, E, I, Rt>(items: Arr<T, N>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + OneValue<Rt>,
-    N: LenVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Iter::from_items(items.0)
@@ -167,9 +166,9 @@ where
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_vec<T, E, I, Rt>(items: Ref<Vec<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
-    T: TyVar + TransparentOver<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     lent_iter(items, |items, i| items.get(i))
@@ -178,10 +177,10 @@ where
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_array<T, N, E, I, Rt>(items: Ref<Arr<T, N>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
-    T: TyVar + TransparentOver<Rt>,
-    N: LenVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     lent_iter(items, |array, i| array.0.get(i))
@@ -190,9 +189,9 @@ where
 #[extern_fn(effect = pure)]
 fn rev_iter<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut items = items;
@@ -203,10 +202,10 @@ where
 #[extern_fn(effect = pure)]
 fn map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
-    T: TyVar,
-    U: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.map(f)
@@ -215,10 +214,10 @@ where
 #[extern_fn(effect = pure)]
 fn pmap<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
 where
-    T: TyVar,
-    U: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.map(f)
@@ -227,9 +226,9 @@ where
 #[extern_fn(effect = pure)]
 fn filter<T, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.filter(f)
@@ -238,9 +237,9 @@ where
 #[extern_fn(effect = pure)]
 fn take<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.take(n)
@@ -249,9 +248,9 @@ where
 #[extern_fn(effect = pure)]
 fn skip<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.skip(n)
@@ -260,11 +259,11 @@ where
 #[extern_fn(effect = pure)]
 fn chain<T, E, I, J, K, Rt>(a: Iter<T, E, I, Rt>, b: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    J: IdentityVar,
-    K: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    J: Var<kind::Identity>,
+    K: Var<kind::Identity>,
     Rt: Runtime,
 {
     a.chain(b)
@@ -273,10 +272,10 @@ where
 #[extern_fn(effect = pure)]
 fn pchain<T, E, I, K, Rt>(parts: Vec<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    K: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    K: Var<kind::Identity>,
     Rt: Runtime,
 {
     Iter::chain_all(parts)
@@ -285,9 +284,9 @@ where
 #[extern_fn(effect = pure)]
 fn flatten<T, E, I, Rt>(it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.flatten()
@@ -296,10 +295,10 @@ where
 #[extern_fn(effect = pure)]
 fn flatten_arrays<T, N, E, I, Rt>(it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    N: LenVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.flatten()
@@ -308,10 +307,10 @@ where
 #[extern_fn(effect = pure)]
 fn flat_map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, Vec<U>, E, Rt>) -> Iter<U, E, I, Rt>
 where
-    T: TyVar,
-    U: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    U: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.flat_map::<Vec<U>, U>(f)
@@ -319,9 +318,9 @@ where
 
 fn collect_now<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> Vec<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut items = Vec::new();
@@ -338,9 +337,9 @@ async fn collect<T, E, I, Rt>(
     mut it: Iter<T, E, I, Rt>,
 ) -> Vec<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut items = Vec::new();
@@ -357,8 +356,8 @@ fn join_now<E, I, Rt>(
     sep: String,
 ) -> String
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut parts: Vec<String> = Vec::new();
@@ -376,8 +375,8 @@ async fn join<E, I, Rt>(
     sep: String,
 ) -> String
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut parts: Vec<String> = Vec::new();
@@ -395,8 +394,8 @@ fn contains_now<T, E, I, Rt>(
 ) -> bool
 where
     T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut found = false;
@@ -418,8 +417,8 @@ async fn contains<T, E, I, Rt>(
 ) -> bool
 where
     T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut found = false;
@@ -438,9 +437,9 @@ fn next_now<T, E, I, Rt>(
     it: &mut Iter<T, E, I, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.next_now(rt, frame)
@@ -453,9 +452,9 @@ async fn next<T, E, I, Rt>(
     it: &mut Iter<T, E, I, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.next(rt, frame).await
@@ -468,9 +467,9 @@ fn find_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.filter(f).next_now(rt, frame)
@@ -484,9 +483,9 @@ async fn find<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.filter(f).next(rt, frame).await
@@ -499,9 +498,9 @@ fn reduce_now<T, E, I, Rt>(
     f: Fn2<T, T, T, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = it.next_now(rt, frame)?;
@@ -520,9 +519,9 @@ async fn reduce<T, E, I, Rt>(
     f: Fn2<T, T, T, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = it.next(rt, frame).await?;
@@ -541,10 +540,10 @@ fn fold_now<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> U
 where
-    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    U: TyVar + OneValue<Rt> + Cross<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = init;
@@ -564,10 +563,10 @@ async fn fold<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> U
 where
-    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    U: TyVar + OneValue<Rt> + Cross<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = init;
@@ -585,9 +584,9 @@ fn any_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> bool
 where
-    T: TyVar + OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut found = false;
@@ -608,9 +607,9 @@ async fn any<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> bool
 where
-    T: TyVar + OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut found = false;
@@ -630,9 +629,9 @@ fn all_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> bool
 where
-    T: TyVar + OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut holds_throughout = true;
@@ -653,9 +652,9 @@ async fn all<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> bool
 where
-    T: TyVar + OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut holds_throughout = true;
@@ -672,8 +671,8 @@ where
 #[extern_fn(effect = pure)]
 fn range<E, I, Rt>(start: i64, end: i64) -> Iter<i64, E, I, Rt>
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut current = start;
@@ -692,8 +691,8 @@ where
 #[extern_fn(effect = pure)]
 fn range_step<E, I, Rt>(start: i64, end: i64, step: i64) -> Iter<i64, E, I, Rt>
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     assert!(step != 0, "range_step: step is zero");
@@ -716,9 +715,9 @@ where
 #[extern_fn(effect = pure)]
 fn step_by<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     assert!(n != 0, "step_by: step is zero");
@@ -731,9 +730,9 @@ fn take_while<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.take_while(f)
@@ -745,9 +744,9 @@ fn skip_while<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Iter<T, E, I, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.skip_while(f)
@@ -756,9 +755,9 @@ where
 #[extern_fn(effect = pure)]
 fn chunks<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<Vec<T>, E, I, Rt>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     assert!(n != 0, "chunks: chunk size is zero");
@@ -769,8 +768,8 @@ where
 fn dedup<T, E, I, Rt>(it: Iter<Erased<Rt, T>, E, I, Rt>) -> Iter<Erased<Rt, T>, E, I, Rt>
 where
     T: Monomorphize<(i64, f64, bool, String)> + Stored<Rt> + PartialEq + Clone,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.dedup()
@@ -778,9 +777,9 @@ where
 
 fn count_now<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> i64
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut n = 0;
@@ -793,9 +792,9 @@ where
 #[extern_fn(effect = E, sync = count_now)]
 async fn count<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> i64
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut n = 0;
@@ -807,9 +806,9 @@ where
 
 fn last_now<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut last = None;
@@ -826,9 +825,9 @@ async fn last<T, E, I, Rt>(
     mut it: Iter<T, E, I, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut last = None;
@@ -845,9 +844,9 @@ fn nth_now<T, E, I, Rt>(
     n: u64,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.skip(n).next_now(rt, frame)
@@ -861,9 +860,9 @@ async fn nth<T, E, I, Rt>(
     n: u64,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.skip(n).next(rt, frame).await
@@ -876,9 +875,9 @@ fn position_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Option<i64>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut index = 0;
@@ -901,9 +900,9 @@ async fn position<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, bool, E, Rt>,
 ) -> Option<i64>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut index = 0;
@@ -925,8 +924,8 @@ fn sum_now<T, E, I, Rt>(
 ) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = T::ZERO;
@@ -945,8 +944,8 @@ async fn sum<T, E, I, Rt>(
 ) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = T::ZERO;
@@ -964,8 +963,8 @@ fn product_now<T, E, I, Rt>(
 ) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = T::ONE;
@@ -984,8 +983,8 @@ async fn product<T, E, I, Rt>(
 ) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut acc = T::ONE;
@@ -1003,8 +1002,8 @@ fn min_now<T, E, I, Rt>(
 ) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut best: Option<T> = None;
@@ -1026,8 +1025,8 @@ async fn min<T, E, I, Rt>(
 ) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut best: Option<T> = None;
@@ -1048,8 +1047,8 @@ fn max_now<T, E, I, Rt>(
 ) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut best: Option<T> = None;
@@ -1071,8 +1070,8 @@ async fn max<T, E, I, Rt>(
 ) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut best: Option<T> = None;
@@ -1114,9 +1113,9 @@ async fn extreme_by_key<T, E, I, Rt>(
     extreme: Extreme,
 ) -> Option<T>
 where
-    T: TyVar + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut best: Option<Keyed<Rt::Value>> = None;
@@ -1140,9 +1139,9 @@ fn min_by_key_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     extreme_by_key_now(rt, frame, it, f, Extreme::Min)
@@ -1156,9 +1155,9 @@ fn extreme_by_key_now<T, E, I, Rt>(
     extreme: Extreme,
 ) -> Option<T>
 where
-    T: TyVar + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut best: Option<Keyed<Rt::Value>> = None;
@@ -1183,9 +1182,9 @@ async fn min_by_key<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     extreme_by_key(rt, frame, it, f, Extreme::Min).await
@@ -1198,9 +1197,9 @@ fn max_by_key_now<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     extreme_by_key_now(rt, frame, it, f, Extreme::Max)
@@ -1214,9 +1213,9 @@ async fn max_by_key<T, E, I, Rt>(
     f: Fn1<Ref<T, Rt>, i64, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     extreme_by_key(rt, frame, it, f, Extreme::Max).await

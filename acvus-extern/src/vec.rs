@@ -12,7 +12,7 @@ use crate::obj::{OneValue, storage_as, storage_as_mut, stored_as_container_of};
 use crate::owned::Owned;
 use crate::registry::ExternTypeDecl;
 use crate::runtime::Runtime;
-use crate::ty_arg::{PolyVars, SlotRepr, TyArg, TyVar};
+use crate::ty_arg::{PolyVars, SlotRepr, TyArg, Var, kind};
 use crate::{Interner, PolyTy, QualifiedRef, TyVarBound, UserDefinedDecl};
 
 /// # Safety
@@ -121,9 +121,11 @@ where
 {
 }
 
+impl<T> Var<kind::Type> for Vec<T> where T: Var<kind::Type> {}
+
 impl<T> TyArg for Vec<T>
 where
-    T: TyArg + TyVar,
+    T: TyArg + Send + Sync + 'static,
 {
     const SLOT: SlotRepr = T::SLOT;
 
@@ -139,7 +141,7 @@ where
 
 impl<T> ExternTypeDecl for Vec<T>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
 {
     fn type_decl(i: &Interner) -> UserDefinedDecl {
         UserDefinedDecl {

@@ -7,10 +7,10 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, EffectVar, Encode, ExternTypeDecl, IdentityVar, Interner, Journaled, NodeHash, Owned,
-    PolyTy, PolyVars, QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError,
-    SpaceHooks, SpaceResult, TransparentOver, TyArg, TyVar, TyVarBound, UserDefinedDecl, Visit,
-    extern_fn, extern_registry,
+    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
+    QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
+    TransparentOver, TyArg, TyVarBound, UserDefinedDecl, Var, Visit, extern_fn, extern_registry,
+    kind,
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
@@ -21,7 +21,7 @@ use crate::vec::vec;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Deque<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     items: VecDeque<T>,
     front: usize,
@@ -44,7 +44,7 @@ pub struct Record<'a, T> {
 
 impl<T> Default for Deque<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     fn default() -> Self {
         Self {
@@ -61,7 +61,7 @@ where
 
 impl<T> Deque<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     fn settled_remaining(&self) -> usize {
         self.settled - self.dropped_front - self.dropped_back
@@ -140,11 +140,11 @@ where
     }
 }
 
-acvus_extern::cross_as_stored!(Deque<T>, T: TyVar);
+acvus_extern::cross_as_stored!(Deque<T>, T: Var<kind::Type>);
 
 impl<T, Rt> acvus_extern::FromValue<Rt> for Deque<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
     Rt: acvus_extern::Runtime,
 {
     fn from_value(rt: &Rt, value: Rt::Value) -> Self {
@@ -152,9 +152,11 @@ where
     }
 }
 
+impl<T> Var<kind::Type> for Deque<T> where T: Var<kind::Type> {}
+
 impl<T> TyArg for Deque<T>
 where
-    T: TyArg + TyVar,
+    T: TyArg + Var<kind::Type>,
 {
     const SLOT: SlotRepr = T::SLOT;
 
@@ -170,7 +172,7 @@ where
 
 impl<T> ExternTypeDecl for Deque<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     fn type_decl(i: &Interner) -> UserDefinedDecl {
         UserDefinedDecl {
@@ -343,7 +345,7 @@ where
 #[extern_fn(effect = pure)]
 fn deque<T>() -> Deque<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     Deque::default()
 }
@@ -351,7 +353,7 @@ where
 #[extern_fn(effect = pure)]
 fn push_front<T>(d: &mut Deque<T>, item: T)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     d.push_front(item);
 }
@@ -359,7 +361,7 @@ where
 #[extern_fn(effect = pure)]
 fn push_back<T>(d: &mut Deque<T>, item: T)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     d.push_back(item);
 }
@@ -367,7 +369,7 @@ where
 #[extern_fn(effect = pure)]
 fn pop_front<T>(d: &mut Deque<T>) -> Option<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     d.pop_front()
 }
@@ -375,7 +377,7 @@ where
 #[extern_fn(effect = pure)]
 fn pop_back<T>(d: &mut Deque<T>) -> Option<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     d.pop_back()
 }
@@ -385,7 +387,7 @@ where
 #[extern_cast]
 fn vec_deque<T>(d: Deque<T>) -> Vec<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     d.items.into()
 }
@@ -393,9 +395,9 @@ where
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
 fn into_iter_deque<T, E, I, Rt>(d: Deque<T>) -> Iter<T, E, I, Rt>
 where
-    T: TyVar + acvus_extern::OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + acvus_extern::OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Iter::from_items(d.items.into())
@@ -404,9 +406,9 @@ where
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_deque<T, E, I, Rt>(d: Ref<Deque<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
 where
-    T: TyVar + TransparentOver<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     lent_iter(d, Deque::get)
@@ -415,7 +417,7 @@ where
 #[extern_fn(effect = pure)]
 fn len<T>(d: &Deque<T>) -> u64
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     d.len() as u64
 }
@@ -423,7 +425,7 @@ where
 #[extern_fn(effect = pure)]
 fn is_empty<T>(d: &Deque<T>) -> bool
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     d.is_empty()
 }
@@ -440,7 +442,7 @@ fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
 #[extern_fn(effect = pure)]
 fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Ref<T, Rt>
 where
-    T: TyVar + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
     let i = d.with(rt, |d| checked_index("get", d.len(), index));
@@ -450,7 +452,7 @@ where
 #[extern_fn(effect = pure)]
 fn get_mut<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> RefMut<T, Rt>
 where
-    T: TyVar + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
     let i = d.with_mut(rt, |d| checked_index("get_mut", d.len(), index));
@@ -460,7 +462,7 @@ where
 #[extern_fn(effect = pure)]
 fn first<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
     d.try_map(rt, |d| d.items.front())
@@ -469,7 +471,7 @@ where
 #[extern_fn(effect = pure)]
 fn last<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
     d.try_map(rt, |d| d.items.back())

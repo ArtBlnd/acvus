@@ -4,8 +4,8 @@
 //! the element is in use (RFC-0028).
 
 use acvus_extern::{
-    Arr, LenVar, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TransparentOver, TyVar,
-    extern_fn, extern_registry, extern_signature,
+    Arr, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TransparentOver, Var, extern_fn,
+    extern_registry, extern_signature, kind,
 };
 
 // A container demotes to a vec (RFC-0027).
@@ -13,8 +13,8 @@ extern_signature! {
     ns: "std",
     fn vec<C, T>(items: C) -> Vec<T>
     where
-        C: TyVar,
-        T: TyVar;
+        C: Var<kind::Type>,
+        T: Var<kind::Type>;
 }
 
 // There is no generic `filled`, and that is a decision. `Runtime` offers
@@ -26,13 +26,13 @@ extern_signature! {
     ns: "vec",
     fn filled<T>(n: u64, x: T) -> Vec<T>
     where
-        T: TyVar;
+        T: Var<kind::Type>;
 }
 
 #[extern_fn(effect = pure)]
 fn reverse<T>(mut items: Vec<T>) -> Vec<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     items.reverse();
     items
@@ -42,8 +42,8 @@ where
 #[extern_cast]
 fn vec_array<T, N>(items: Arr<T, N>) -> Vec<T>
 where
-    T: TyVar,
-    N: LenVar,
+    T: Var<kind::Type>,
+    N: Var<kind::Length>,
 {
     items.0
 }
@@ -60,7 +60,7 @@ fn as_len(n: u64) -> usize {
 #[extern_fn(effect = pure)]
 fn with_capacity<T>(n: u64) -> Vec<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     Vec::with_capacity(as_len(n))
 }
@@ -84,7 +84,7 @@ filled_of!(
 #[extern_fn(effect = pure)]
 fn len<T>(c: &Vec<T>) -> u64
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     c.len() as u64
 }
@@ -92,7 +92,7 @@ where
 #[extern_fn(effect = pure)]
 fn is_empty<T>(c: &Vec<T>) -> bool
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     c.is_empty()
 }
@@ -103,7 +103,7 @@ where
 #[extern_fn(effect = pure)]
 fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Slice<T, Rt>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     Slice::of(c.elements(rt))
@@ -112,7 +112,7 @@ where
 #[extern_fn(effect = pure)]
 fn as_slice_mut<T, Rt>(rt: &Rt, c: RefMut<Vec<T>, Rt>) -> SliceMut<T, Rt>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     SliceMut::of(c.elements_mut(rt))
@@ -121,7 +121,7 @@ where
 #[extern_fn(effect = pure)]
 fn first<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
     c.try_map(rt, |c| c.first())
@@ -130,7 +130,7 @@ where
 #[extern_fn(effect = pure)]
 fn last<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
 where
-    T: TyVar + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
     c.try_map(rt, |c| c.last())
@@ -139,7 +139,7 @@ where
 #[extern_fn(effect = pure)]
 fn push<T>(c: &mut Vec<T>, item: T)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     c.push(item);
 }
@@ -147,7 +147,7 @@ where
 #[extern_fn(effect = pure)]
 fn pop<T>(c: &mut Vec<T>) -> Option<T>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     c.pop()
 }
@@ -155,7 +155,7 @@ where
 #[extern_fn(effect = pure)]
 fn insert<T>(c: &mut Vec<T>, index: u64, item: T)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     let Ok(index) = usize::try_from(index) else {
         panic!(
@@ -169,7 +169,7 @@ where
 #[extern_fn(effect = pure)]
 fn remove<T>(c: &mut Vec<T>, index: u64) -> T
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     let Ok(index) = usize::try_from(index) else {
         panic!(
@@ -183,7 +183,7 @@ where
 #[extern_fn(effect = pure)]
 fn clear<T>(c: &mut Vec<T>)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     c.clear();
 }
@@ -191,7 +191,7 @@ where
 #[extern_fn(effect = pure)]
 fn truncate<T>(c: &mut Vec<T>, len: u64)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     c.truncate(usize::try_from(len).unwrap_or(usize::MAX));
 }
@@ -199,7 +199,7 @@ where
 #[extern_fn(effect = pure)]
 fn extend<T>(c: &mut Vec<T>, items: Vec<T>)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     c.extend(items);
 }
@@ -216,7 +216,7 @@ fn swap_index(index: u64, len: usize) -> usize {
 #[extern_fn(effect = pure)]
 fn swap<T>(c: &mut Vec<T>, i: u64, j: u64)
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     let len = c.len();
     c.swap(swap_index(i, len), swap_index(j, len));

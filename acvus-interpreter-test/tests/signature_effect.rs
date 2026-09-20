@@ -9,9 +9,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_extern::{
-    EffectVar, ExternType, Fn1, IdentityVar, Registry, Runtime, TyVar, extern_fn, extern_registry,
-};
+use acvus_extern::{ExternType, Fn1, Registry, Runtime, Var, extern_fn, extern_registry, kind};
 use acvus_interpreter::code::Code;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
 use acvus_interpreter_test::*;
@@ -25,18 +23,18 @@ use rustc_hash::FxHashMap;
 #[repr(transparent)]
 pub struct Pipe<Ts, O, E, I, Rt>(i64, PhantomData<(Ts, O, E, I, Rt)>)
 where
-    Ts: TyVar,
-    O: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    Ts: Var<kind::Type>,
+    O: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime;
 
 impl<Ts, O, E, I, Rt> Pipe<Ts, O, E, I, Rt>
 where
-    Ts: TyVar,
-    O: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    Ts: Var<kind::Type>,
+    O: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     fn stages(&self) -> i64 {
@@ -47,8 +45,8 @@ where
 #[extern_fn(effect = pure)]
 fn src<E, I, Rt>() -> Pipe<(), i64, E, I, Rt>
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Pipe(0, PhantomData)
@@ -70,11 +68,11 @@ mod sig {
         ns: "q",
         fn step<S, R, T, U, E, Rt>(it: S, f: Fn1<T, U, E, Rt>) -> R
         where
-            S: TyVar,
-            R: TyVar,
-            T: TyVar,
-            U: TyVar,
-            E: EffectVar,
+            S: Var<kind::Type>,
+            R: Var<kind::Type>,
+            T: Var<kind::Type>,
+            U: Var<kind::Type>,
+            E: Var<kind::Effect>,
             Rt: Runtime;
     }
 
@@ -83,11 +81,11 @@ mod sig {
         effect = E,
         fn drain<S, T, U, E, I, Rt>(it: S, f: Fn1<T, U, E, Rt>) -> i64
         where
-            S: TyVar,
-            T: TyVar,
-            U: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            S: Var<kind::Type>,
+            T: Var<kind::Type>,
+            U: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 
@@ -96,10 +94,10 @@ mod sig {
         effect = E,
         fn tally<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
         where
-            Ts: TyVar,
-            O: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            Ts: Var<kind::Type>,
+            O: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 
@@ -108,9 +106,9 @@ mod sig {
         effect = E,
         fn bare_tally<S, E, I, Rt>(it: S) -> i64
         where
-            S: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            S: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 }
@@ -126,11 +124,11 @@ macro_rules! step_instance {
             f: Fn1<T, U, E, Rt>,
         ) -> Pipe<(T, $ts), U, E, I, Rt>
         where
-            $($v: TyVar,)*
-            T: TyVar,
-            U: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type>,)*
+            T: Var<kind::Type>,
+            U: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             drop(f);
@@ -150,11 +148,11 @@ macro_rules! drain_instance {
             f: Fn1<T, U, E, Rt>,
         ) -> i64
         where
-            $($v: TyVar,)*
-            T: TyVar,
-            U: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type>,)*
+            T: Var<kind::Type>,
+            U: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             drop(f);
@@ -167,11 +165,11 @@ macro_rules! drain_instance {
             f: Fn1<T, U, E, Rt>,
         ) -> i64
         where
-            $($v: TyVar,)*
-            T: TyVar,
-            U: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type>,)*
+            T: Var<kind::Type>,
+            U: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             drop(f);
@@ -186,12 +184,12 @@ drain_instance!(drain_1, drain_1_now, [A], (A, ()));
 #[extern_fn(instance_of = sig::drain, effect = pure)]
 fn drain_2<A, B, T, U, E, I, Rt>(it: Pipe<(A, (B, ())), T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> i64
 where
-    A: TyVar,
-    B: TyVar,
-    T: TyVar,
-    U: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    A: Var<kind::Type>,
+    B: Var<kind::Type>,
+    T: Var<kind::Type>,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     drop(f);
@@ -202,10 +200,10 @@ macro_rules! tally_instance {
     ($name:ident, $now:ident, $sig:ident, [$($v:ident),*], $ts:tt) => {
         fn $now<$($v,)* T, E, I, Rt>(it: Pipe<$ts, T, E, I, Rt>) -> i64
         where
-            $($v: TyVar,)*
-            T: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type>,)*
+            T: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             it.stages()
@@ -214,10 +212,10 @@ macro_rules! tally_instance {
         #[extern_fn(instance_of = sig::$sig, effect = E, sync = $now)]
         async fn $name<$($v,)* T, E, I, Rt>(it: Pipe<$ts, T, E, I, Rt>) -> i64
         where
-            $($v: TyVar,)*
-            T: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type>,)*
+            T: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             it.stages()
@@ -232,10 +230,10 @@ tally_instance!(bare_tally_1, bare_tally_1_now, bare_tally, [A], (A, ()));
 
 fn depth_now<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
 where
-    Ts: TyVar,
-    O: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    Ts: Var<kind::Type>,
+    O: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.stages()
@@ -244,10 +242,10 @@ where
 #[extern_fn(effect = E, sync = depth_now)]
 async fn depth<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
 where
-    Ts: TyVar,
-    O: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    Ts: Var<kind::Type>,
+    O: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     it.stages()

@@ -1,4 +1,4 @@
-error: a signature's effect is an `EffectVar` parameter of its own generics; a signature that declares no effect is pure
+error: a signature's effect is a `Var<kind::Effect>` parameter of its own generics; a signature that declares no effect is pure
  --> tests/compile_fail/signature_effect_is_not_a_variable.rs:6:14
   |
 6 |     effect = opaque,

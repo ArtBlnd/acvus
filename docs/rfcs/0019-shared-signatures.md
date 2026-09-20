@@ -21,11 +21,10 @@ call's resolved type runs. When the registries are combined, every
 instance of a signature is collected into that one function, so the
 script sees one name whatever registry each instance came from.
 
-An ExternFn may require a signature of a type variable — `T: eq`. When
-the registries are combined the requirement becomes the bound
-`OneOf(every type with an instance)`; the solver and the checker treat it
-as any other declared bound (RFC-0011). Nothing new is inferred or
-dispatched.
+An ExternFn that needs a signature of a type variable takes the instance
+as a parameter the call site fills (RFC-0067). A type variable carries no
+requirement of its own: the bound `OneOf(every type with an instance)` is
+computed for a signature's own type, not for a caller's variable.
 
 A shared signature declares no body, a type declares no impl block, and
 no value carries a table: the signature is a helper name with a fixed
@@ -71,10 +70,12 @@ runtime never asks a value.
   checks the Rust signature against the declaration at the instance's
   type and rejects a second instance for the same type.
 - Combining registries collects instances per signature into one
-  `Monomorphize`-shaped function, and lowers every `T: sig` requirement to
-  `OneOf` over the collected types before type checking begins.
-- A Rust bound on an ExternFn's type parameter names the signature; the
-  macro reads it into the declaration's requirement.
+  `Monomorphize`-shaped function.
+- Combining registries lowers a signature's own first bound to `OneOf`
+  over the collected instance types before type checking begins. A
+  declaration carries no per-variable requirement: there is no Rust bound
+  the macro reads into one, and no error for a requirement naming an
+  unknown signature.
 
 ## Open questions
 

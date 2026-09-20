@@ -15,7 +15,7 @@ use acvus_utils::Interner;
 
 use crate::obj::Cross;
 use crate::runtime::Runtime;
-use crate::ty_arg::{PolyVars, TyArg, TyVar};
+use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
 /// A run as the machine holds it: one word per register of the pair.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -121,19 +121,19 @@ where
 /// `&[T]`: a shared borrow of a run of a container's elements.
 pub struct Slice<T, Rt>(Elements<Rt>, PhantomData<T>)
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime;
 
 /// `&mut [T]`: `Slice`'s exclusive twin. Taking one is an exclusive take of
 /// the container, so no `Slice` of it is live (RFC-0047 §2).
 pub struct SliceMut<T, Rt>(Elements<Rt>, PhantomData<T>)
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime;
 
 impl<T, Rt> Slice<T, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     /// The elements of a container read in place; the caller holds the
@@ -153,7 +153,7 @@ where
 
 impl<T, Rt> SliceMut<T, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     /// As `Slice::of`, for an exclusive take.
@@ -173,9 +173,16 @@ where
 /// The acvus type: a reference to the unsized `[T]`.
 macro_rules! slice_ty_arg {
     ($t:ident, $m:expr) => {
+        impl<T, Rt> Var<kind::Type> for $t<T, Rt>
+        where
+            T: Var<kind::Type>,
+            Rt: Runtime,
+        {
+        }
+
         impl<T, Rt> TyArg for $t<T, Rt>
         where
-            T: TyArg + TyVar,
+            T: TyArg + Send + Sync + 'static,
             Rt: Runtime,
         {
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
@@ -202,7 +209,7 @@ macro_rules! slice_cross {
     ($t:ident) => {
         impl<T, Rt> Cross<Rt> for $t<T, Rt>
         where
-            T: TyVar,
+            T: Send + Sync + 'static,
             Rt: Runtime,
         {
             type Form = crate::obj::Pair;

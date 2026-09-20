@@ -61,6 +61,10 @@ system does the choosing.
 - A registered ExternFn carries one handler per member, each with its
   instantiated signature; a call's resolved function type selects the one
   it matches, wherever the variable occurs.
+- A declaration's generic parameter carries the kind of the variable it is
+  — `Var<kind::Type>`, `Var<kind::Effect>`, `Var<kind::Length>`,
+  `Var<kind::Identity>` — and `Monomorphize<(..)>` is the type kind with a
+  finite set. The kind is the bound's argument, not the bound's name.
 
 ## Open questions
 

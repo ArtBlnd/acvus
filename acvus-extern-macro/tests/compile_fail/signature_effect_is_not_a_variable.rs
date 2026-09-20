@@ -6,7 +6,7 @@ extern_signature! {
     effect = opaque,
     fn drain<S>(it: S) -> i64
     where
-        S: acvus_extern::TyVar;
+        S: acvus_extern::Var<acvus_extern::kind::Type>;
 }
 
 fn main() {}

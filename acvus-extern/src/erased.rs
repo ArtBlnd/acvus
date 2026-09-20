@@ -9,7 +9,7 @@ use acvus_utils::Interner;
 use crate::obj::{FromValue, Inline, OneValue, Stored, TransparentOver, expect_type};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
-use crate::ty_arg::{PolyVars, TyArg};
+use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
 /// The bound is `Stored`, not `Cross`, and there is no check in `as_ref`:
 /// a type converted on the way in (a derived struct, stored as an `Obj`)
@@ -171,6 +171,13 @@ where
         expect_type::<T, R>(rt, &value);
         Self(Owned::from_value(value), PhantomData)
     }
+}
+
+impl<R, T> Var<kind::Type> for Erased<R, T>
+where
+    R: Runtime,
+    T: Stored<R> + Var<kind::Type>,
+{
 }
 
 impl<R, T> TyArg for Erased<R, T>

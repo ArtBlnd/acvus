@@ -27,7 +27,7 @@ mod ty_arg;
 mod vec;
 
 pub use derive::transparent::Transparent;
-pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
+pub use effect::{Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{
@@ -39,8 +39,7 @@ pub use handler::{
     async_glue6, async_glue7, async_glue8, glue0, glue1, glue2, glue3, glue4, glue5, glue6, glue7,
     glue8,
 };
-pub use identity::{IdentityArg, IdentityVar, Idn};
-pub use len::{Arr, Len, LenArg, LenVar};
+pub use len::Arr;
 pub use obj::{
     Cross, FieldAt, Form, FormKind, FromValue, Inline, Obj, ObjectShape, One, OneValue, Pair, Run,
     Stored, TransparentOver, Variant, expect_type, materialize_checked,
@@ -53,14 +52,16 @@ pub use projection::{
 };
 pub use reference::{Ref, RefMut};
 pub use registry::{
-    CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, HasInstance,
-    Manifest, MemberType, Registry, SharedSignature, SignatureDecl, family_casts,
+    CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, Manifest,
+    MemberType, Registry, SharedSignature, SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use slice::{Elements, Slice, SliceMut, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
-pub use ty_arg::{Monomorphize, Never, PolyVars, SlotRepr, Spec, TyArg, TyVar, Typeck, VarCounts};
+pub use ty_arg::{
+    Kind, Monomorphize, Never, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var, kind,
+};
 pub use vec::vec_ty;
 
 pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, extern_signature};

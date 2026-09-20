@@ -12,8 +12,8 @@
 //! borrow.
 
 use acvus_extern::{
-    ClosureFn, EffectVar, ExternType, Fn1, IdentityVar, Pure, Registry, Runtime, TyArg, extern_fn,
-    extern_registry,
+    ClosureFn, ExternType, Fn1, Pure, Registry, Runtime, TyArg, Var, extern_fn, extern_registry,
+    kind,
 };
 
 use crate::iter::Iter;
@@ -176,7 +176,7 @@ fn find_at(re: &Regex, text: &str, start: u64) -> Option<Match> {
 #[extern_fn(effect = pure)]
 fn find_all<I, Rt>(re: &Regex, text: &str) -> Iter<Match, Pure, I, Rt>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Iter::from_items(re.0.find_iter(text).map(match_of).collect())
@@ -202,7 +202,7 @@ fn captures(re: &Regex, text: &str) -> Option<Captures> {
 #[extern_fn(effect = pure)]
 fn captures_all<I, Rt>(re: &Regex, text: &str) -> Iter<Captures, Pure, I, Rt>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Iter::from_items(
@@ -280,7 +280,7 @@ fn replace_with_now<E, Rt>(
     f: Fn1<Match, String, E, Rt>,
 ) -> String
 where
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     let mut out = String::new();
@@ -305,7 +305,7 @@ async fn replace_with<E, Rt>(
     f: Fn1<Match, String, E, Rt>,
 ) -> String
 where
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     let mut out = String::new();
@@ -326,7 +326,7 @@ where
 #[extern_fn(effect = pure)]
 fn split<I, Rt>(re: &Regex, text: &str) -> Iter<String, Pure, I, Rt>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Iter::from_items(re.0.split(text).map(str::to_owned).collect())
@@ -337,7 +337,7 @@ where
 #[extern_fn(effect = pure)]
 fn split_n<I, Rt>(re: &Regex, text: &str, n: u64) -> Iter<String, Pure, I, Rt>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let n = usize::try_from(n).unwrap_or(usize::MAX);

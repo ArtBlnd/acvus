@@ -13,8 +13,7 @@
 
 use acvus_ext::Iter;
 use acvus_extern::{
-    Arr, EffectVar, Externs, Fn1, IdentityVar, LenVar, Registry, Runtime, TyVar, TypesOnly,
-    extern_fn, extern_registry,
+    Arr, Externs, Fn1, Registry, Runtime, TypesOnly, Var, extern_fn, extern_registry, kind,
 };
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
@@ -30,7 +29,7 @@ mod fx_a {
     #[extern_fn(effect = pure)]
     pub fn probe<T>(c: &Vec<T>, x: T) -> bool
     where
-        T: TyVar,
+        T: Var<kind::Type>,
     {
         let _ = (c, x);
         unreachable!("a type-only fixture is never run")
@@ -39,7 +38,7 @@ mod fx_a {
     #[extern_fn(effect = pure)]
     pub fn size<T>(c: &Vec<T>) -> i64
     where
-        T: TyVar,
+        T: Var<kind::Type>,
     {
         let _ = c;
         unreachable!("a type-only fixture is never run")
@@ -48,8 +47,8 @@ mod fx_a {
     #[extern_fn(effect = pure)]
     pub fn apply_any<A, E, Rt>(f: Fn1<A, bool, E, Rt>) -> bool
     where
-        A: TyVar,
-        E: EffectVar,
+        A: Var<kind::Type>,
+        E: Var<kind::Effect>,
         Rt: Runtime,
     {
         let _ = f;
@@ -59,7 +58,7 @@ mod fx_a {
     #[extern_fn(effect = pure)]
     pub fn only_vec<T>(v: &Vec<T>) -> T
     where
-        T: TyVar,
+        T: Var<kind::Type>,
     {
         let _ = v;
         unreachable!("a type-only fixture is never run")
@@ -85,9 +84,9 @@ mod fx_b {
     #[extern_fn(effect = pure)]
     pub fn probe<T, E, I, Rt>(it: Iter<T, E, I, Rt>, x: T) -> bool
     where
-        T: TyVar + acvus_extern::Cross<Rt>,
-        E: EffectVar,
-        I: IdentityVar,
+        T: Var<kind::Type> + acvus_extern::Cross<Rt>,
+        E: Var<kind::Effect>,
+        I: Var<kind::Identity>,
         Rt: Runtime,
     {
         let _ = (it, x);
@@ -120,8 +119,8 @@ mod fx_c {
     #[extern_fn(effect = pure)]
     pub fn size<T, N>(c: &Arr<T, N>) -> i64
     where
-        T: TyVar,
-        N: LenVar,
+        T: Var<kind::Type>,
+        N: Var<kind::Length>,
     {
         let _ = c;
         unreachable!("a type-only fixture is never run")
@@ -130,7 +129,7 @@ mod fx_c {
     #[extern_fn(effect = pure)]
     pub fn glance<T>(c: &Vec<T>) -> i64
     where
-        T: TyVar,
+        T: Var<kind::Type>,
     {
         let _ = c;
         unreachable!("a type-only fixture is never run")

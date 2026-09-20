@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use acvus_ext::*;
-use acvus_extern::{Arr, ExternType, Externs, LenVar, Owned, Registry, extern_fn, extern_registry};
+use acvus_extern::{
+    Arr, ExternType, Externs, Owned, Registry, Var, extern_fn, extern_registry, kind,
+};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
@@ -1080,7 +1082,7 @@ async fn a_borrowed_argument_survives_the_call_at_each_arity() {
 #[extern_fn(effect = pure)]
 fn reversed<N>(xs: Arr<i64, N>) -> Arr<i64, N>
 where
-    N: LenVar,
+    N: Var<kind::Length>,
 {
     assert_eq!(
         xs.0,
@@ -1095,7 +1097,7 @@ where
 #[extern_fn(effect = pure)]
 fn labels<N>(xs: Arr<i64, N>) -> Arr<String, N>
 where
-    N: LenVar,
+    N: Var<kind::Length>,
 {
     Arr::new(xs.0.into_iter().map(|n| format!("#{n}")).collect())
 }

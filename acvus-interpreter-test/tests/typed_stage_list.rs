@@ -10,8 +10,8 @@
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    ClosureFn, Cross, EffectVar, Erased, ExternType, Fn1, FromValue, IdentityVar, Never, OneValue,
-    Registry, Runtime, TyVar, Typeck, extern_fn, extern_registry,
+    ClosureFn, Cross, Erased, ExternType, Fn1, FromValue, Never, Nth, OneValue, Registry, Runtime,
+    Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -37,9 +37,9 @@ impl<A, B> Same<A, B> {
 
 pub enum Stage<In, Out, E, Rt>
 where
-    In: TyVar,
-    Out: TyVar,
-    E: EffectVar,
+    In: Var<kind::Type>,
+    Out: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     Map(Fn1<In, Out, E, Rt>),
@@ -80,15 +80,15 @@ where
 {
     type Body<O, E>: Send + Sync + 'static
     where
-        O: TyVar,
-        E: EffectVar;
+        O: Var<kind::Type>,
+        E: Var<kind::Effect>;
 
     const LENGTH: usize;
 
     fn pull<O, E>(body: &mut Self::Body<O, E>, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt> + Cross<Rt>,
-        E: EffectVar;
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        E: Var<kind::Effect>;
 }
 
 impl<Rt> TypeList<Rt> for ()
@@ -98,15 +98,15 @@ where
     type Body<O, E>
         = Source<O, Rt>
     where
-        O: TyVar,
-        E: EffectVar;
+        O: Var<kind::Type>,
+        E: Var<kind::Effect>;
 
     const LENGTH: usize = 0;
 
     fn pull<O, E>(body: &mut Source<O, Rt>, _: &Rt, _: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt> + Cross<Rt>,
-        E: EffectVar,
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        E: Var<kind::Effect>,
     {
         body.pull()
     }
@@ -114,22 +114,22 @@ where
 
 impl<T, Ts, Rt> TypeList<Rt> for (T, Ts)
 where
-    T: TyVar + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
     Ts: TypeList<Rt>,
     Rt: Runtime,
 {
     type Body<O, E>
         = Stages<Stage<T, O, E, Rt>, Ts::Body<T, E>>
     where
-        O: TyVar,
-        E: EffectVar;
+        O: Var<kind::Type>,
+        E: Var<kind::Effect>;
 
     const LENGTH: usize = 1 + Ts::LENGTH;
 
     fn pull<O, E>(body: &mut Self::Body<O, E>, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt> + Cross<Rt>,
-        E: EffectVar,
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        E: Var<kind::Effect>,
     {
         let Stages { stage, rest } = body;
         match stage {
@@ -146,24 +146,24 @@ where
 }
 
 /// The stand-in a shared signature's own type carries: a generic `Ts` is
-/// `Typeck<N>` while the declaration's type is built, and `Never` says no
+/// `Nth<kind::Type, N>` while the declaration's type is built, and `Never` says no
 /// pipeline of that type is a value.
-impl<const N: usize, Rt> TypeList<Rt> for Typeck<N>
+impl<const N: usize, Rt> TypeList<Rt> for Nth<kind::Type, N>
 where
     Rt: Runtime,
 {
     type Body<O, E>
         = Never
     where
-        O: TyVar,
-        E: EffectVar;
+        O: Var<kind::Type>,
+        E: Var<kind::Effect>;
 
     const LENGTH: usize = 0;
 
     fn pull<O, E>(body: &mut Never, _: &Rt, _: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt> + Cross<Rt>,
-        E: EffectVar,
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        E: Var<kind::Effect>,
     {
         match *body {}
     }
@@ -174,23 +174,23 @@ where
 #[repr(transparent)]
 pub struct Pipe<Ts, O, E, I, Rt>(<Ts as TypeList<Rt>>::Body<O, E>, PhantomData<I>)
 where
-    Ts: TyVar + TypeList<Rt>,
-    O: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    Ts: Var<kind::Type> + TypeList<Rt>,
+    O: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime;
 
 impl<Ts, O, E, I, Rt> Pipe<Ts, O, E, I, Rt>
 where
-    Ts: TyVar + TypeList<Rt>,
-    O: TyVar + OneValue<Rt> + Cross<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    Ts: Var<kind::Type> + TypeList<Rt>,
+    O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     fn push<U>(self, stage: Stage<O, U, E, Rt>) -> Pipe<(O, Ts), U, E, I, Rt>
     where
-        U: TyVar,
+        U: Var<kind::Type>,
     {
         Pipe(
             Stages {
@@ -213,9 +213,9 @@ where
 #[extern_fn(effect = pure)]
 fn ints<T, E, I, Rt>(items: Vec<T>) -> Pipe<(), T, E, I, Rt>
 where
-    T: TyVar + OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     Pipe(Source::Items(items.into_iter()), PhantomData)
@@ -233,11 +233,11 @@ mod sig {
             f: Fn1<T, U, E, Rt>,
         ) -> Pipe<(T, Ts), U, E, I, Rt>
         where
-            Ts: TyVar,
-            T: TyVar,
-            U: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            Ts: Var<kind::Type>,
+            T: Var<kind::Type>,
+            U: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 
@@ -245,10 +245,10 @@ mod sig {
         ns: "p",
         fn cut<Ts, T, E, I, Rt>(it: Pipe<Ts, T, E, I, Rt>, n: u64) -> Pipe<(T, Ts), T, E, I, Rt>
         where
-            Ts: TyVar,
-            T: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            Ts: Var<kind::Type>,
+            T: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 
@@ -257,10 +257,10 @@ mod sig {
         effect = E,
         fn total<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
         where
-            Ts: TyVar,
-            O: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            Ts: Var<kind::Type>,
+            O: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime;
     }
 }
@@ -273,11 +273,11 @@ macro_rules! adaptor_instances {
             f: Fn1<T, U, E, Rt>,
         ) -> Pipe<(T, $ts), U, E, I, Rt>
         where
-            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
-            T: TyVar + OneValue<Rt> + Cross<Rt>,
-            U: TyVar,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
+            T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            U: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             it.push(Stage::Map(f))
@@ -289,10 +289,10 @@ macro_rules! adaptor_instances {
             n: u64,
         ) -> Pipe<(T, $ts), T, E, I, Rt>
         where
-            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
-            T: TyVar + OneValue<Rt> + Cross<Rt>,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
+            T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             it.push(Stage::Take { remaining: n, same: Same::new() })
@@ -312,10 +312,10 @@ macro_rules! total_instance {
             it: Pipe<$ts, O, E, I, Rt>,
         ) -> i64
         where
-            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
-            O: TyVar + OneValue<Rt> + Cross<Rt>,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
+            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             it.drain(rt, frame)
@@ -331,10 +331,10 @@ macro_rules! total_instance {
             it: Pipe<$ts, O, E, I, Rt>,
         ) -> i64
         where
-            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
-            O: TyVar + OneValue<Rt> + Cross<Rt>,
-            E: EffectVar,
-            I: IdentityVar,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
+            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            E: Var<kind::Effect>,
+            I: Var<kind::Identity>,
             Rt: Runtime,
         {
             it.drain(rt, frame)

@@ -18,14 +18,14 @@ pub mod sig {
         ns: "core",
         fn to_string<T>(a: &T) -> String
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 
     extern_signature! {
         ns: "core",
         fn to_int<T>(a: &T) -> i64
         where
-            T: TyVar;
+            T: Var<kind::Type>;
     }
 }
 

@@ -371,7 +371,7 @@ fn generate_extern_fn(
             _ => {
                 return Err(syn::Error::new(
                     e.span(),
-                    "effect must be `pure`, `idempotent`, `opaque`, or an `EffectVar` parameter",
+                    "effect must be `pure`, `idempotent`, `opaque`, or a `Var<kind::Effect>` parameter",
                 ));
             }
         },
@@ -639,10 +639,9 @@ fn generate_extern_fn(
         }
     };
     let bounds = vars.bound_exprs();
-    let requires = vars.requires_exprs();
     let declared_ty = signature(None);
 
-    let counts = vars.counts_expr();
+    let fresh_vars = vars.fresh_vars_expr();
     let rt_bounds = quote! { __R: ::acvus_extern::Runtime, };
     let state_idents: Vec<&Ident> = states.iter().map(|st| &st.ident).collect();
     let state_arc = (!states.is_empty()).then(|| {
@@ -664,7 +663,7 @@ fn generate_extern_fn(
             #rt_bounds
             #(#state_tys: ::core::marker::Send + ::core::marker::Sync + 'static,)*
         {
-            let __vars = ::acvus_extern::PolyVars::fresh(#counts);
+            let __vars = #fresh_vars;
             #state_arc
             let mut __casts: ::std::vec::Vec<::acvus_extern::ExternFn<__R>> = ::std::vec::Vec::new();
             #(#casts)*
@@ -675,7 +674,6 @@ fn generate_extern_fn(
                     bounds: vec![#(#bounds),*],
                     cast: #is_cast,
                     instance_of: #instance_of,
-                    requires: vec![#(#requires),*],
                 },
                 instances: #instances,
             };
@@ -1014,6 +1012,9 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     };
 
     Ok(quote! {
+        impl #arg_impl_generics ::acvus_extern::Var<::acvus_extern::kind::Type>
+            for #ident #ty_generics #where_clause {}
+
         impl #arg_impl_generics ::acvus_extern::TyArg for #ident #ty_generics #where_clause {
             fn poly_ty(
                 __i: &::acvus_extern::Interner,
@@ -1189,6 +1190,8 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
     let one_value_run = one_value_run(returned);
     let borrowable_bound = borrowing.bound();
     quote! {
+        impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident {}
+
         impl ::acvus_extern::TyArg for #ident {
             fn poly_ty(
                 __i: &::acvus_extern::Interner,
@@ -1594,6 +1597,8 @@ impl<'a> ObjectShape<'a> {
                 }
             }
 
+            impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #shared<'static> {}
+
             impl ::acvus_extern::TyArg for #shared<'static> {
                 fn poly_ty(
                     __i: &::acvus_extern::Interner,
@@ -1605,6 +1610,8 @@ impl<'a> ObjectShape<'a> {
                     )
                 }
             }
+
+            impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #exclusive<'static> {}
 
             impl ::acvus_extern::TyArg for #exclusive<'static> {
                 fn poly_ty(
@@ -2119,6 +2126,8 @@ fn enum_projection(
             }
         }
 
+        impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #shared<'static> {}
+
         impl ::acvus_extern::TyArg for #shared<'static> {
             fn poly_ty(
                 __i: &::acvus_extern::Interner,
@@ -2129,6 +2138,11 @@ fn enum_projection(
                     ::std::boxed::Box::new(::acvus_extern::TypeArg::uniform(#enum_ty)),
                 )
             }
+        }
+
+        impl<__R> ::acvus_extern::Var<::acvus_extern::kind::Type> for #exclusive<'static, __R> where
+            __R: ::acvus_extern::Runtime
+        {
         }
 
         impl<__R> ::acvus_extern::TyArg for #exclusive<'static, __R>
@@ -2281,10 +2295,11 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
 
 // -- extern_signature! -----------------------------------------------
 
-/// `extern_signature! { ns: "core", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }`
-/// declares a shared signature (RFC-0019) and a marker type named after it.
-/// `extern_signature! { ns: "q", effect = E, fn drain<S, E>(it: S) -> i64
-/// where S: TyVar, E: EffectVar; }` declares one whose call effect is `E`.
+/// `extern_signature! { ns: "core", fn eq<T>(a: &T, b: &T) -> bool
+/// where T: Var<kind::Type>; }` declares a shared signature (RFC-0019) and a
+/// marker type named after it. `extern_signature! { ns: "q", effect = E,
+/// fn drain<S, E>(it: S) -> i64 where S: Var<kind::Type>,
+/// E: Var<kind::Effect>; }` declares one whose call effect is `E`.
 struct SignatureInput {
     ns: LitStr,
     effect: Option<Ident>,
@@ -2372,7 +2387,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     });
     let comp_ret = types_only(&vars.to_compile_time_instance(&ret, None));
     let bounds = vars.bound_exprs();
-    let counts = vars.counts_expr();
+    let fresh_vars = vars.fresh_vars_expr();
     let effect = match &input.effect {
         None => quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE) },
         Some(e) => match vars.lookup(e) {
@@ -2380,8 +2395,8 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             _ => {
                 return Err(syn::Error::new(
                     e.span(),
-                    "a signature's effect is an `EffectVar` parameter of its own generics; \
-                     a signature that declares no effect is pure",
+                    "a signature's effect is a `Var<kind::Effect>` parameter of its own \
+                     generics; a signature that declares no effect is pure",
                 ));
             }
         },
@@ -2395,7 +2410,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                 #qref
             }
             fn signature_decl(__i: &::acvus_extern::Interner) -> ::acvus_extern::SignatureDecl {
-                let __vars = ::acvus_extern::PolyVars::fresh(#counts);
+                let __vars = #fresh_vars;
                 ::acvus_extern::SignatureDecl {
                     qref: #qref,
                     ty: ::acvus_extern::PolyTy::Fn {

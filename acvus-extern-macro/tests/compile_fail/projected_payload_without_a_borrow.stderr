@@ -47,6 +47,63 @@ help: the trait `Project<__R>` is implemented for `Shape`
   |          ^^^^^
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error[E0277]: the trait bound `Vec<i64>: acvus_extern::Borrowed` is not satisfied in `ShapeRef<'static>`
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^ within `ShapeRef<'static>`, the trait `acvus_extern::Borrowed` is not implemented for `Vec<i64>`
+  |
+  = help: the following other types implement trait `acvus_extern::Borrowed`:
+            ()
+            Shape
+            bool
+            char
+            f64
+            i16
+            i32
+            i64
+          and $N others
+note: required because it appears within the type `ShapeRef<'static>`
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^
+note: required by a bound in `acvus_extern::Var`
+ --> $WORKSPACE/acvus-extern/src/ty_arg.rs
+  |
+  | pub trait Var<K>: Send + Sync + 'static
+  |                          ^^^^ required by this bound in `Var`
+  = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Vec<i64>: acvus_extern::Borrowed` is not satisfied in `ShapeRef<'static>`
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^ within `ShapeRef<'static>`, the trait `acvus_extern::Borrowed` is not implemented for `Vec<i64>`
+  |
+  = help: the following other types implement trait `acvus_extern::Borrowed`:
+            ()
+            Shape
+            bool
+            char
+            f64
+            i16
+            i32
+            i64
+          and $N others
+note: required because it appears within the type `ShapeRef<'static>`
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^
+  = note: required for `ShapeRef<'static>` to implement `acvus_extern::Var<acvus_extern::kind::Type>`
+note: required by a bound in `TyArg`
+ --> $WORKSPACE/acvus-extern/src/ty_arg.rs
+  |
+  | pub trait TyArg: Var<kind::Type> {
+  |                  ^^^^^^^^^^^^^^^ required by this bound in `TyArg`
+  = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied in `ShapeMut<'static, __R>`
  --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
   |
@@ -63,16 +120,35 @@ note: required because it appears within the type `ShapeMut<'static, __R>`
   |
 7 | #[derive(TyArg)]
   |          ^^^^^
+note: required by a bound in `acvus_extern::Var`
+ --> $WORKSPACE/acvus-extern/src/ty_arg.rs
+  |
+  | pub trait Var<K>: Send + Sync + 'static
+  |                          ^^^^ required by this bound in `Var`
+  = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied in `ShapeMut<'static, __R>`
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^ within `ShapeMut<'static, __R>`, the trait `Project<__R>` is not implemented for `Vec<i64>`
+  |
+help: the trait `Project<__R>` is implemented for `Shape`
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^
+note: required because it appears within the type `ShapeMut<'static, __R>`
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^
+  = note: required for `ShapeMut<'static, __R>` to implement `acvus_extern::Var<acvus_extern::kind::Type>`
 note: required by a bound in `TyArg`
  --> $WORKSPACE/acvus-extern/src/ty_arg.rs
   |
-  | / pub trait TyArg: 'static {
-  | |     const SLOT: SlotRepr = SlotRepr::Ground;
-  | |
-  | |     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy;
-... |
-  | | }
-  | |_^ required by this bound in `TyArg`
+  | pub trait TyArg: Var<kind::Type> {
+  |                  ^^^^^^^^^^^^^^^ required by this bound in `TyArg`
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied

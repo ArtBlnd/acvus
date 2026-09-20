@@ -1002,12 +1002,12 @@ fn io_compiler_pipeline_mir() {
 #[repr(transparent)]
 struct Tok<I>(i64, std::marker::PhantomData<I>)
 where
-    I: acvus_extern::IdentityVar;
+    I: acvus_extern::Var<acvus_extern::kind::Identity>;
 
 #[extern_fn(effect = pure)]
 fn mk_tok<I>() -> Tok<I>
 where
-    I: acvus_extern::IdentityVar,
+    I: acvus_extern::Var<acvus_extern::kind::Identity>,
 {
     Tok(7, std::marker::PhantomData)
 }
@@ -1015,7 +1015,7 @@ where
 #[extern_fn]
 fn consume_tok<I>(tok: Tok<I>) -> i64
 where
-    I: acvus_extern::IdentityVar,
+    I: acvus_extern::Var<acvus_extern::kind::Identity>,
 {
     tok.0
 }

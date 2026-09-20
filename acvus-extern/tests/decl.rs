@@ -7,10 +7,10 @@ use std::future::Ready;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    Arr, CallToken, ClosureFn, Eff, Effect, EffectTerm, EffectVar, Elements, ExternHandler,
-    ExternType, Externs, Fn1, HasInstance, Interner, LenTerm, LenVar, OneValue, Owned, PolyTy,
-    Pure, Ref, Registry, Runtime, Slice, Task, TyArg, TyVar, TypeArg, TypesOnly, Words, extern_fn,
-    extern_registry, extern_signature,
+    Arr, CallToken, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs,
+    Fn1, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Slice,
+    Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry, extern_signature,
+    kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -414,8 +414,8 @@ impl Runtime for Tiny {
 #[extern_type(name = "Box")]
 struct Boxed<T, E, Rt>(Vec<Rt::Value>, PhantomData<(T, E)>)
 where
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime;
 
 /// A value that is a source of its own: it carries an identity, so it moves.
@@ -423,7 +423,7 @@ where
 #[repr(transparent)]
 struct Token<I>(i64, PhantomData<I>)
 where
-    I: acvus_extern::IdentityVar;
+    I: acvus_extern::Var<acvus_extern::kind::Identity>;
 
 #[derive(TyArg, Debug, PartialEq)]
 struct Point {
@@ -439,8 +439,8 @@ fn add(a: i64, b: i64) -> i64 {
 #[extern_fn(name = "id_any", effect = E)]
 fn identity<T, E>(v: T) -> T
 where
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
 {
     v
 }
@@ -453,9 +453,9 @@ async fn apply<T, U, E, Rt>(
     f: Fn1<T, U, E, Rt>,
 ) -> Boxed<U, E, Rt>
 where
-    T: TyVar,
-    U: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     let f = f.erased();
@@ -470,8 +470,8 @@ where
 #[extern_cast]
 fn boxed<T, N, Rt>(rt: &Rt, items: Arr<T, N>) -> Boxed<T, Pure, Rt>
 where
-    T: TyVar + OneValue<Rt>,
-    N: LenVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    N: Var<kind::Length>,
     Rt: Runtime,
 {
     Boxed(
@@ -491,7 +491,7 @@ async fn fetch(p: Point) -> Point {
 #[extern_fn(effect = idempotent)]
 fn take_token<I>(t: Token<I>) -> i64
 where
-    I: acvus_extern::IdentityVar,
+    I: acvus_extern::Var<acvus_extern::kind::Identity>,
 {
     t.0
 }
@@ -517,7 +517,7 @@ fn bump(n: &mut i64, by: i64) -> i64 {
 #[extern_fn(effect = pure)]
 fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Slice<T, Rt>
 where
-    T: TyVar,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     Slice::of(c.elements(rt))
@@ -542,7 +542,7 @@ where
         .sum()
 }
 
-extern_signature! { ns: "t", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }
+extern_signature! { ns: "t", fn eq<T>(a: &T, b: &T) -> bool where T: Var<kind::Type>; }
 
 #[extern_fn(instance_of = eq, effect = pure)]
 fn eq_int(a: &i64, b: &i64) -> bool {
@@ -552,16 +552,6 @@ fn eq_int(a: &i64, b: &i64) -> bool {
 #[extern_fn(instance_of = eq, effect = pure)]
 fn eq_point(a: &Point, b: &Point) -> bool {
     a == b
-}
-
-/// Requires `eq` of its element type.
-#[extern_fn(effect = pure)]
-fn same<T, R>(rt: &R, a: T, b: T) -> Boxed<T, Pure, R>
-where
-    T: TyVar + OneValue<R> + HasInstance<eq>,
-    R: Runtime,
-{
-    Boxed(vec![a.erase(rt), b.erase(rt)], PhantomData)
 }
 
 /// A greeting held by the handler: what a `#[state]` parameter carries.
@@ -581,7 +571,7 @@ where
         types: [Boxed<_, _, R>, Token<_>],
         signatures: [eq],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              sum_slice, eq_int, eq_point, same,
+              sum_slice, eq_int, eq_point,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -931,9 +921,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     ]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]);
     // SAFETY: `boxed`'s glue erased its return from a `Boxed<T, Pure, Rt>`.
-    let Boxed::<V, Pure, Tiny>(items, _) = unsafe { OneValue::<Tiny>::materialize(&Tiny, boxed) };
+    let Boxed::<Owned<Tiny>, Pure, Tiny>(items, _) =
+        unsafe { OneValue::<Tiny>::materialize(&Tiny, boxed) };
     assert_eq!(items.len(), 2);
-    let boxed = OneValue::<Tiny>::erase(Boxed::<V, (), Tiny>(items, PhantomData), &Tiny);
+    let boxed = OneValue::<Tiny>::erase(Boxed::<Owned<Tiny>, (), Tiny>(items, PhantomData), &Tiny);
 
     let double = V::Closure(Closure::new(|args| {
         let [n] = <[V; 1]>::try_from(args)
@@ -942,7 +933,8 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     }));
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double]).await;
     // SAFETY: `apply`'s glue erased its return from a `Boxed<U, E, Rt>`.
-    let Boxed::<V, (), Tiny>(items, _) = unsafe { OneValue::<Tiny>::materialize(&Tiny, out) };
+    let Boxed::<Owned<Tiny>, (), Tiny>(items, _) =
+        unsafe { OneValue::<Tiny>::materialize(&Tiny, out) };
     let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
     assert_eq!(doubled, vec![2, 4]);
 
@@ -1006,21 +998,6 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
             acvus_extern::lift_to_poly(&point)
         ])
     );
-    let same = reg
-        .functions
-        .iter()
-        .find(|f| f.qref == qref(&i, "same"))
-        .expect("same");
-    let acvus_extern::FnKind::Extern { bounds, .. } = &same.kind else {
-        panic!("same is extern")
-    };
-    assert_eq!(
-        bounds[0],
-        acvus_extern::TyVarBound::OneOf(vec![
-            acvus_extern::PolyTy::I64,
-            acvus_extern::lift_to_poly(&point)
-        ])
-    );
     assert_eq!(reg.handlers[&qref(&i, "eq")].len(), 2);
 }
 
@@ -1043,22 +1020,17 @@ fn a_second_instance_for_one_type_is_refused() {
 #[test]
 fn stand_ins_name_their_positions() {
     let i = Interner::new();
-    let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts {
-        tys: 2,
-        effects: 1,
-        lens: 1,
-        identities: 0,
-    });
+    let vars = acvus_extern::PolyVars::fresh(2, 1, 1, 0);
     assert_eq!(
-        <acvus_extern::Typeck<1> as TyArg>::poly_ty(&i, &vars),
+        <Nth<kind::Type, 1> as TyArg>::poly_ty(&i, &vars),
         PolyTy::Var(1)
     );
     assert_eq!(
-        <Eff<0> as acvus_extern::EffectArg>::poly_effect(&vars),
+        <Nth<kind::Effect, 0> as acvus_extern::Term<acvus_extern::kind::Effect>>::poly(&vars),
         EffectTerm::Var(0)
     );
     assert_eq!(
-        <Arr<acvus_extern::Typeck<0>, acvus_extern::Len<0>> as TyArg>::poly_ty(&i, &vars),
+        <Arr<Nth<kind::Type, 0>, Nth<kind::Length, 0>> as TyArg>::poly_ty(&i, &vars),
         PolyTy::Array(Box::new(PolyTy::Var(0)), LenTerm::Var(0))
     );
 }
@@ -1073,7 +1045,7 @@ enum ObjectShape {
 #[test]
 fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
     let i = Interner::new();
-    let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts::default());
+    let vars = acvus_extern::PolyVars::fresh(0, 0, 0, 0);
     let rect = PolyTy::Object(acvus_extern::ObjectTy::written(
         [(i.intern("w"), PolyTy::I64), (i.intern("h"), PolyTy::I64)]
             .into_iter()
@@ -1097,7 +1069,7 @@ fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
 #[test]
 fn a_result_is_the_language_s_result_of_its_two_types() {
     let i = Interner::new();
-    let vars = acvus_extern::PolyVars::fresh(acvus_extern::VarCounts::default());
+    let vars = acvus_extern::PolyVars::fresh(0, 0, 0, 0);
     assert_eq!(
         <Result<i64, String> as TyArg>::poly_ty(&i, &vars),
         PolyTy::Result(Box::new(PolyTy::I64), Box::new(PolyTy::String))
@@ -1342,7 +1314,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
     );
     let fallback = instance_for(&reg, &i, "box_count", &ty).unwrap();
     let payload = OneValue::<Tiny>::erase(
-        Boxed::<V, Pure, Tiny>(
+        Boxed::<Owned<Tiny>, Pure, Tiny>(
             vec![erased(1.5f64), erased(2.5f64), erased(3.5f64)],
             PhantomData,
         ),
@@ -1381,13 +1353,13 @@ fn a_derived_type_is_read_through_a_reference_at_a_monomorphized_member() {
 
 // -- Polymorphic instances (RFC-0027) ---------------------------------
 
-extern_signature! { ns: "t", fn first<C, T>(c: C) -> T where C: TyVar, T: TyVar; }
+extern_signature! { ns: "t", fn first<C, T>(c: C) -> T where C: Var<kind::Type>, T: Var<kind::Type>; }
 
 #[extern_fn(instance_of = first, effect = pure)]
 fn first_arr<T, N>(a: Arr<T, N>) -> T
 where
-    T: TyVar,
-    N: LenVar,
+    T: Var<kind::Type>,
+    N: Var<kind::Length>,
 {
     a.0.into_iter().next().expect("first: empty array")
 }
@@ -1395,7 +1367,7 @@ where
 #[extern_fn(instance_of = first, effect = pure)]
 fn first_opt<T>(v: Option<T>) -> T
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     v.expect("first: none")
 }
@@ -1403,8 +1375,8 @@ where
 #[extern_fn(instance_of = first, effect = pure)]
 fn first_arr_again<T, N>(a: Arr<T, N>) -> T
 where
-    T: TyVar,
-    N: LenVar,
+    T: Var<kind::Type>,
+    N: Var<kind::Length>,
 {
     first_arr(a)
 }
@@ -1505,17 +1477,17 @@ extern_signature! {
     effect = E,
     fn drain<C, E>(c: C) -> i64
     where
-        C: TyVar,
-        E: EffectVar;
+        C: Var<kind::Type>,
+        E: Var<kind::Effect>;
 }
 
-extern_signature! { ns: "t", fn size<C>(c: C) -> i64 where C: TyVar; }
+extern_signature! { ns: "t", fn size<C>(c: C) -> i64 where C: Var<kind::Type>; }
 
 fn drain_arr_now<T, N, E, Rt>(_: &Rt, _: &mut Rt::Frame<'_>, a: Arr<T, N>) -> i64
 where
-    T: TyVar,
-    N: LenVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     i64::try_from(a.0.len()).expect("an array shorter than i64::MAX")
@@ -1524,9 +1496,9 @@ where
 #[extern_fn(instance_of = drain, effect = E, sync = drain_arr_now)]
 async fn drain_arr<T, N, E, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, a: Arr<T, N>) -> i64
 where
-    T: TyVar,
-    N: LenVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     drain_arr_now::<T, N, E, Rt>(rt, frame, a)
@@ -1535,7 +1507,7 @@ where
 #[extern_fn(instance_of = drain, effect = pure)]
 fn drain_opt<T>(v: Option<T>) -> i64
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     i64::from(v.is_some())
 }
@@ -1543,8 +1515,8 @@ where
 #[extern_fn(instance_of = size, effect = E)]
 fn size_opt<T, E>(v: Option<T>) -> i64
 where
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
 {
     i64::from(v.is_some())
 }
@@ -1658,15 +1630,15 @@ extern_signature! {
     ns: "t",
     fn width<T, E, Rt>(b: Boxed<T, E, Rt>) -> i64
     where
-        T: TyVar,
-        E: EffectVar,
+        T: Var<kind::Type>,
+        E: Var<kind::Effect>,
         Rt: Runtime;
 }
 
 #[extern_fn(instance_of = width, effect = pure)]
 fn width_i64<E, Rt>(b: Boxed<i64, E, Rt>) -> i64
 where
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
@@ -1675,7 +1647,7 @@ where
 #[extern_fn(instance_of = width, effect = pure)]
 fn width_string<E, Rt>(b: Boxed<String, E, Rt>) -> i64
 where
-    E: EffectVar,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
@@ -1685,17 +1657,17 @@ extern_signature! {
     ns: "t",
     fn head<T, U, E, Rt>(b: Boxed<(T, U), E, Rt>) -> i64
     where
-        T: TyVar,
-        U: TyVar,
-        E: EffectVar,
+        T: Var<kind::Type>,
+        U: Var<kind::Type>,
+        E: Var<kind::Effect>,
         Rt: Runtime;
 }
 
 #[extern_fn(instance_of = head, effect = pure)]
 fn head_i64<U, E, Rt>(b: Boxed<(i64, U), E, Rt>) -> i64
 where
-    U: TyVar,
-    E: EffectVar,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
@@ -1704,14 +1676,14 @@ where
 #[extern_fn(instance_of = head, effect = pure)]
 fn head_string<U, E, Rt>(b: Boxed<(String, U), E, Rt>) -> i64
 where
-    U: TyVar,
-    E: EffectVar,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
 }
 
-extern_signature! { ns: "t", fn present<T>(v: Option<T>) -> i64 where T: TyVar; }
+extern_signature! { ns: "t", fn present<T>(v: Option<T>) -> i64 where T: Var<kind::Type>; }
 
 #[extern_fn(instance_of = present, effect = pure)]
 fn present_i64(v: Option<i64>) -> i64 {
@@ -1853,7 +1825,6 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     bounds: Vec::new(),
                     cast: false,
                     instance_of: None,
-                    requires: Vec::new(),
                 }],
             },
             instances: acvus_extern::FxHashMap::from_iter([(

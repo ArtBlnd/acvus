@@ -1,13 +1,18 @@
-//! `TyArg`: a Rust type that names an acvus type.
-//! `TyVar`: a generic parameter that is an acvus type variable.
-//! `Typeck<N>`: the compile-time stand-in for the N-th type variable.
-//! `Spec<T>`: the compile-time stand-in for a `Monomorphize` member.
+//! A variable has a kind.
+//!
+//! `kind::{Type, Effect, Length, Identity}` are the four kinds a
+//! declaration's variables have. `Var<K>` is the bound of a generic
+//! parameter that is a variable of kind `K`; `Term<K>` is a Rust type that
+//! names a term of that kind; `Nth<K, N>` is the stand-in that fills the
+//! `N`-th variable of kind `K` while the declaration's type is built.
+//!
+//! `TyArg` names an acvus type and is not `Term<kind::Type>`: it takes the
+//! interner and carries `SLOT`, the representation a specializing slot
+//! gives its argument, and `Term` takes and carries neither.
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::{
-    EffectTerm, IdentityTerm, IntTy, LenTerm, Poly, PolyBuilder, PolyTy, Repr, TypeArg,
-};
+use acvus_mir::ty::{EffectTerm, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy, Repr, TypeArg};
 use acvus_utils::Interner;
 
 /// The variables a polymorphic ExternFn type ranges over, by kind and
@@ -19,32 +24,125 @@ pub struct PolyVars {
     pub identities: Vec<IdentityTerm<Poly>>,
 }
 
-/// How many variables of each kind a declaration has.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct VarCounts {
-    pub tys: usize,
-    pub effects: usize,
-    pub lens: usize,
-    pub identities: usize,
-}
-
 impl PolyVars {
     pub fn empty() -> Self {
-        Self::fresh(VarCounts::default())
+        Self::fresh(0, 0, 0, 0)
     }
 
-    pub fn fresh(counts: VarCounts) -> Self {
+    /// The declaration's variables: `tys` of the type kind, `effects` of the
+    /// effect kind, `lens` of the length kind, `identities` of the identity
+    /// kind. How many of each a declaration has is the length of its vector.
+    pub fn fresh(tys: usize, effects: usize, lens: usize, identities: usize) -> Self {
         let mut b = PolyBuilder::new();
         Self {
-            tys: (0..counts.tys).map(|_| b.fresh_ty_var()).collect(),
-            effects: (0..counts.effects).map(|_| b.fresh_effect_var()).collect(),
-            lens: (0..counts.lens).map(|_| b.fresh_len_var()).collect(),
-            identities: (0..counts.identities)
-                .map(|_| b.fresh_identity_var())
-                .collect(),
+            tys: (0..tys).map(|_| b.fresh_ty_var()).collect(),
+            effects: (0..effects).map(|_| b.fresh_effect_var()).collect(),
+            lens: (0..lens).map(|_| b.fresh_len_var()).collect(),
+            identities: (0..identities).map(|_| b.fresh_identity_var()).collect(),
         }
     }
 }
+
+/// The kinds a declaration's variables have. Each is uninhabited: a kind
+/// names a class of variables and is never a value.
+pub mod kind {
+    /// A variable ranging over acvus types.
+    pub enum Type {}
+    /// A variable ranging over call effects.
+    pub enum Effect {}
+    /// A variable ranging over array lengths.
+    pub enum Length {}
+    /// A variable ranging over identity sources.
+    pub enum Identity {}
+}
+
+/// One of the four kinds, with the term its variables take in a polymorphic
+/// type and the declaration's variables of that kind.
+pub trait Kind: Send + Sync + 'static {
+    /// This kind's term in a polymorphic type.
+    type Poly;
+
+    /// The declaration's `n`-th variable of this kind.
+    fn nth(vars: &PolyVars, n: usize) -> Self::Poly;
+}
+
+impl Kind for kind::Type {
+    type Poly = PolyTy;
+
+    fn nth(vars: &PolyVars, n: usize) -> PolyTy {
+        vars.tys[n].clone()
+    }
+}
+
+impl Kind for kind::Effect {
+    type Poly = EffectTerm<Poly>;
+
+    fn nth(vars: &PolyVars, n: usize) -> EffectTerm<Poly> {
+        vars.effects[n].clone()
+    }
+}
+
+impl Kind for kind::Length {
+    type Poly = LenTerm<Poly>;
+
+    fn nth(vars: &PolyVars, n: usize) -> LenTerm<Poly> {
+        vars.lens[n]
+    }
+}
+
+impl Kind for kind::Identity {
+    type Poly = IdentityTerm<Poly>;
+
+    fn nth(vars: &PolyVars, n: usize) -> IdentityTerm<Poly> {
+        vars.identities[n]
+    }
+}
+
+/// A generic parameter of a declaration that is a variable of kind `K`. The
+/// body never opens it; a body that must cross the runtime boundary goes
+/// through the runtime's `materialize`/`erase`. Filled by `Nth<K, N>` while
+/// the declaration's type is built, and at runtime by what the runtime
+/// carries a value of that kind in.
+///
+/// No kind has an impl over an unbounded parameter: a type fills a variable
+/// only where this crate wrote the impl, so a type the language does not
+/// know cannot reach a declaration by satisfying `Send + Sync`.
+pub trait Var<K>: Send + Sync + 'static
+where
+    K: Kind,
+{
+}
+
+/// A Rust type that names a term of kind `K` in a declaration's type: a
+/// known term such as `Pure`, or the declaration's `N`-th variable of that
+/// kind as `Nth<K, N>`.
+pub trait Term<K>: Send + Sync + 'static
+where
+    K: Kind,
+{
+    fn poly(vars: &PolyVars) -> K::Poly;
+}
+
+/// The `N`-th variable of kind `K` of a declaration, as a Rust type:
+/// the stand-in that fills the parameter while the declaration's type is
+/// built. Uninhabited: it names a variable and is never a value.
+pub struct Nth<K, const N: usize>(PhantomData<fn() -> K>, Never);
+
+impl<K, const N: usize> Term<K> for Nth<K, N>
+where
+    K: Kind,
+{
+    fn poly(vars: &PolyVars) -> K::Poly {
+        K::nth(vars, N)
+    }
+}
+
+/// The stand-in fills the variable it names. Written once per kind rather
+/// than once over `K`, which would be an impl over an unbounded parameter.
+impl<const N: usize> Var<kind::Type> for Nth<kind::Type, N> {}
+impl<const N: usize> Var<kind::Effect> for Nth<kind::Effect, N> {}
+impl<const N: usize> Var<kind::Length> for Nth<kind::Length, N> {}
+impl<const N: usize> Var<kind::Identity> for Nth<kind::Identity, N> {}
 
 /// The representation of a specializing slot by what it holds
 /// (hash-types.md, Signatures); a composite takes the strongest of its
@@ -78,7 +176,7 @@ impl SlotRepr {
 }
 
 /// A Rust type that names an acvus type.
-pub trait TyArg: 'static {
+pub trait TyArg: Var<kind::Type> {
     const SLOT: SlotRepr = SlotRepr::Ground;
 
     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy;
@@ -89,19 +187,7 @@ pub trait TyArg: 'static {
     }
 }
 
-/// A generic parameter that is an acvus type variable. The body never opens
-/// it; a body that must cross the runtime boundary goes through the
-/// runtime's `materialize`/`erase`. Filled by `Typeck<N>` while the type is
-/// built and by the runtime's value at runtime.
-pub trait TyVar: Send + Sync + 'static {}
-
-impl<T: Send + Sync + 'static> TyVar for T {}
-
-/// Compile-time stand-in for the N-th type variable of a declaration.
-/// Uninhabited: it names a type and is never a value.
-pub enum Typeck<const N: usize> {}
-
-impl<const N: usize> TyArg for Typeck<N> {
+impl<const N: usize> TyArg for Nth<kind::Type, N> {
     const SLOT: SlotRepr = SlotRepr::Var;
 
     fn poly_ty(_: &Interner, vars: &PolyVars) -> PolyTy {
@@ -109,10 +195,13 @@ impl<const N: usize> TyArg for Typeck<N> {
     }
 }
 
-/// Compile-time stand-in for a `Monomorphize` member `T` in a member
-/// instance's type: the acvus type is `T`'s, and a specializing slot
-/// holding it is `#`. Uninhabited: it names a type and is never a value.
+/// The member stand-in: a `Monomorphize` member in a member instance's
+/// type. Its parameter is the member and its `SLOT` is `Member`; that is
+/// the whole difference from `Nth<kind::Type, N>`, whose parameter is an
+/// index and whose `SLOT` is `Var`.
 pub struct Spec<T>(PhantomData<fn() -> T>, Never);
+
+impl<T> Var<kind::Type> for Spec<T> where T: Var<kind::Type> {}
 
 impl<T> TyArg for Spec<T>
 where
@@ -125,11 +214,11 @@ where
     }
 }
 
-crate::cross_one_value!(Typeck<N>, const N: usize);
+crate::cross_one_value!(Nth<kind::Type, N>, const N: usize);
 
 /// The stand-ins appear inside types that ask their element to be
 /// `Stored`, such as `Erased<Rt, T>`; being uninhabited, they never cross.
-impl<const N: usize, Rt> crate::OneValue<Rt> for Typeck<N>
+impl<const N: usize, Rt> crate::OneValue<Rt> for Nth<kind::Type, N>
 where
     Rt: crate::Runtime,
 {
@@ -142,13 +231,16 @@ where
     }
 }
 
-impl<const N: usize, Rt> crate::Stored<Rt> for Typeck<N> where Rt: crate::Runtime {}
+impl<const N: usize, Rt> crate::Stored<Rt> for Nth<kind::Type, N> where Rt: crate::Runtime {}
 
-impl<const N: usize, Rt> crate::Borrowable<Rt> for Typeck<N> where Rt: crate::Runtime {}
+impl<const N: usize, Rt> crate::Borrowable<Rt> for Nth<kind::Type, N> where Rt: crate::Runtime {}
 
-// SAFETY: `Typeck<N>` is uninhabited, so no `&Typeck<N>` exists and the
+// SAFETY: `Nth<kind::Type, N>` is uninhabited, so no `&Nth<kind::Type, N>` exists and the
 // layout claim is never read.
-unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Typeck<N> where Rt: crate::Runtime {}
+unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Nth<kind::Type, N> where
+    Rt: crate::Runtime
+{
+}
 
 crate::cross_one_value!(Spec<T>, T: Send + Sync + 'static);
 
@@ -180,7 +272,7 @@ where
 {
 }
 
-// SAFETY: as `Typeck<N>`: `Spec<T>` holds a `Never` and is uninhabited.
+// SAFETY: as `Nth<kind::Type, N>`: `Spec<T>` holds a `Never` and is uninhabited.
 unsafe impl<T, Rt> crate::TransparentOver<Rt> for Spec<T>
 where
     T: Send + Sync + 'static,
@@ -195,6 +287,8 @@ macro_rules! impl_scalar_ty_arg {
                 $ty
             }
         }
+
+        impl Var<kind::Type> for $T {}
     };
 }
 
@@ -220,6 +314,8 @@ pub enum Never {}
 
 impl_scalar_ty_arg!(Never, PolyTy::Never);
 
+impl<T, const N: usize> Var<kind::Type> for [T; N] where T: Var<kind::Type> {}
+
 impl<T, const N: usize> TyArg for [T; N]
 where
     T: TyArg,
@@ -231,6 +327,8 @@ where
     }
 }
 
+impl<T> Var<kind::Type> for Option<T> where T: Var<kind::Type> {}
+
 impl<T> TyArg for Option<T>
 where
     T: TyArg,
@@ -240,6 +338,13 @@ where
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Option(Box::new(T::poly_ty(i, vars)))
     }
+}
+
+impl<T, E> Var<kind::Type> for Result<T, E>
+where
+    T: Var<kind::Type>,
+    E: Var<kind::Type>,
+{
 }
 
 impl<T, E> TyArg for Result<T, E>
@@ -256,6 +361,12 @@ where
 
 macro_rules! impl_tuple_ty_arg {
     ($($T:ident),+) => {
+        impl<$($T),+> Var<kind::Type> for ($($T,)+)
+        where
+            $($T: Var<kind::Type>,)+
+        {
+        }
+
         impl<$($T),+> TyArg for ($($T,)+)
         where
             $($T: TyArg,)+
@@ -274,10 +385,32 @@ impl_tuple_ty_arg!(A, B);
 impl_tuple_ty_arg!(A, B, C);
 impl_tuple_ty_arg!(A, B, C, D);
 
-/// The bound of a generic parameter that ranges over a finite set of
-/// concrete types: `A: Monomorphize<(i64, f64)>`. The declaration carries
-/// the set; the handler is compiled once per member. Every type satisfies
-/// the Rust trait; the macro reads the set.
-pub trait Monomorphize<Types>: TyVar {}
+/// The bound of a type variable that ranges over a finite set of concrete
+/// types: `A: Monomorphize<(i64, f64)>`. The declaration carries the set;
+/// the handler is compiled once per member. The macro reads the set.
+pub trait Monomorphize<Types>: Var<kind::Type> {}
 
-impl<T: TyVar, Types> Monomorphize<Types> for T {}
+/// The run-time fill. `Owned<R>: TyArg` is not written and is not missing:
+/// the carrier holds a value of whatever acvus type the caller passed, so
+/// there is no `poly_ty` for it to answer with.
+impl<R> Var<kind::Type> for crate::Owned<R> where R: crate::Runtime {}
+
+/// One concrete type a `Monomorphize` parameter ranges over: the handler is
+/// compiled at it, so it fills the parameter there. This list is the reach
+/// of `Monomorphize` without a blanket — a member type not named here
+/// cannot be one, and the build says so at the declaration.
+macro_rules! mono_member {
+    ($T:ty) => {
+        impl<Types> Monomorphize<Types> for $T {}
+    };
+}
+
+mono_member!(i64);
+mono_member!(f64);
+mono_member!(bool);
+mono_member!(u8);
+mono_member!(String);
+
+/// A `Monomorphize` parameter carrying no bound the erased value fails also
+/// compiles one handler for the runtime's own value.
+impl<R, Types> Monomorphize<Types> for crate::Owned<R> where R: crate::Runtime {}

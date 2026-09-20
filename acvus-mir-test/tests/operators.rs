@@ -82,12 +82,12 @@ fn clone_of_a_string_is_a_string_clone() {
 // -- An operator's operand is a number (RFC-0020, RFC-0043) -----------------
 
 mod fx_vec {
-    use acvus_extern::{Registry, TyVar, TypesOnly, extern_fn, extern_registry};
+    use acvus_extern::{Registry, TypesOnly, Var, extern_fn, extern_registry, kind};
 
     #[extern_fn(effect = pure)]
     pub fn consume<T>(v: Vec<T>) -> i64
     where
-        T: TyVar,
+        T: Var<kind::Type>,
     {
         let _ = v;
         unreachable!("a type-only fixture is never run")
@@ -102,13 +102,13 @@ mod fx_vec {
 }
 
 mod fx_arr {
-    use acvus_extern::{Arr, LenVar, Registry, TyVar, TypesOnly, extern_fn, extern_registry};
+    use acvus_extern::{Arr, Registry, TypesOnly, Var, extern_fn, extern_registry, kind};
 
     #[extern_fn(effect = pure)]
     pub fn consume<T, N>(v: Arr<T, N>) -> i64
     where
-        T: TyVar,
-        N: LenVar,
+        T: Var<kind::Type>,
+        N: Var<kind::Length>,
     {
         let _ = v;
         unreachable!("a type-only fixture is never run")

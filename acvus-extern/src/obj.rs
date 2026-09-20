@@ -13,10 +13,10 @@ use std::sync::Arc;
 use acvus_utils::{Astr, Interner};
 
 use crate::handler::Uniform;
-use crate::len::{Arr, LenVar};
+use crate::len::Arr;
 use crate::owned::Owned;
 use crate::runtime::Runtime;
-use crate::ty_arg::{Never, TyVar};
+use crate::ty_arg::{Never, Var, kind};
 
 /// A position in an object's flat layout: which of its type's fields, in the
 /// order rule 8 fixes.
@@ -778,12 +778,12 @@ where
 // crossings, the concrete one through `Borrowable` and the monomorphized one
 // through the marker; adding either impl makes a case there pass silently.
 
-crate::cross_one_value!(Arr<T, N>, T: OneValue<__Rt>, N: LenVar);
+crate::cross_one_value!(Arr<T, N>, T: OneValue<__Rt>, N: Var<kind::Length>);
 
 impl<T, N, Rep, Rt> OneValue<Rt, Rep> for Arr<T, N>
 where
     T: OneValue<Rt, Rep>,
-    N: LenVar,
+    N: Var<kind::Length>,
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
@@ -840,7 +840,7 @@ where
 impl<T, N, Rt> crate::Borrowable<Rt> for Arr<T, N>
 where
     T: OneValue<Rt>,
-    N: LenVar,
+    N: Var<kind::Length>,
     Rt: Runtime,
 {
 }
@@ -879,8 +879,8 @@ where
 
 impl<E, N, Rt> FromValue<Rt> for Arr<E, N>
 where
-    E: FromValue<Rt> + TyVar,
-    N: LenVar,
+    E: FromValue<Rt> + Send + Sync + 'static,
+    N: Var<kind::Length>,
     Rt: Runtime,
 {
     fn from_value(rt: &Rt, value: Rt::Value) -> Self {

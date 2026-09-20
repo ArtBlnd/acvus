@@ -10,25 +10,25 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
-use crate::len::{Arr, LenVar};
+use crate::len::Arr;
 use crate::obj::TransparentOver;
 use crate::owned::Owned;
 use crate::runtime::Runtime;
-use crate::ty_arg::{PolyVars, TyArg, TyVar};
+use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
 pub struct Ref<T, Rt>(Rt::Value, PhantomData<T>)
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime;
 
 pub struct RefMut<T, Rt>(Rt::Value, PhantomData<T>)
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime;
 
 impl<T, Rt> Ref<T, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     pub fn new(value: Rt::Value) -> Self {
@@ -79,7 +79,7 @@ where
 
 impl<T, Rt> RefMut<T, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     pub fn new(value: Rt::Value) -> Self {
@@ -156,7 +156,7 @@ where
 /// that promises the layout.
 impl<T, Rt> Ref<Vec<T>, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     pub fn elements<'a>(&'a self, rt: &Rt) -> &'a [Rt::Value] {
@@ -168,7 +168,7 @@ where
 
 impl<T, Rt> RefMut<Vec<T>, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     pub fn elements_mut<'a>(&'a self, rt: &Rt) -> &'a mut [Rt::Value] {
@@ -181,8 +181,8 @@ where
 
 impl<T, N, Rt> Ref<Arr<T, N>, Rt>
 where
-    T: TyVar,
-    N: LenVar,
+    T: Send + Sync + 'static,
+    N: Var<kind::Length>,
     Rt: Runtime,
 {
     pub fn elements<'a>(&'a self, rt: &Rt) -> &'a [Rt::Value] {
@@ -194,8 +194,8 @@ where
 
 impl<T, N, Rt> RefMut<Arr<T, N>, Rt>
 where
-    T: TyVar,
-    N: LenVar,
+    T: Send + Sync + 'static,
+    N: Var<kind::Length>,
     Rt: Runtime,
 {
     pub fn elements_mut<'a>(&'a self, rt: &Rt) -> &'a mut [Rt::Value] {
@@ -238,9 +238,16 @@ where
     Ref::new(unsafe { rt.reference(value_of::<U, Rt>(part)) })
 }
 
+impl<T, Rt> Var<kind::Type> for Ref<T, Rt>
+where
+    T: Var<kind::Type>,
+    Rt: Runtime,
+{
+}
+
 impl<T, Rt> TyArg for Ref<T, Rt>
 where
-    T: TyArg + TyVar,
+    T: TyArg + Send + Sync + 'static,
     Rt: Runtime,
 {
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
@@ -251,9 +258,16 @@ where
     }
 }
 
+impl<T, Rt> Var<kind::Type> for RefMut<T, Rt>
+where
+    T: Var<kind::Type>,
+    Rt: Runtime,
+{
+}
+
 impl<T, Rt> TyArg for RefMut<T, Rt>
 where
-    T: TyArg + TyVar,
+    T: TyArg + Send + Sync + 'static,
     Rt: Runtime,
 {
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
@@ -264,11 +278,11 @@ where
     }
 }
 
-crate::cross_one_value!(Ref<T, __Rt>, T: TyVar);
+crate::cross_one_value!(Ref<T, __Rt>, T: Send + Sync + 'static);
 
 impl<T, Rt> crate::OneValue<Rt> for Ref<T, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     fn erase(self, _: &Rt) -> Rt::Value {
@@ -280,11 +294,11 @@ where
     }
 }
 
-crate::cross_one_value!(RefMut<T, __Rt>, T: TyVar);
+crate::cross_one_value!(RefMut<T, __Rt>, T: Send + Sync + 'static);
 
 impl<T, Rt> crate::OneValue<Rt> for RefMut<T, Rt>
 where
-    T: TyVar,
+    T: Send + Sync + 'static,
     Rt: Runtime,
 {
     fn erase(self, _: &Rt) -> Rt::Value {

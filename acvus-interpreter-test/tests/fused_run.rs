@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use acvus_extern::{ExternType, IdentityVar, Registry, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Registry, Var, extern_fn, extern_registry, kind};
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, Value, prepare_module};
 use acvus_interpreter_test::listing::{code_listing, ops_of_anywhere};
 use acvus_interpreter_test::{
@@ -48,12 +48,12 @@ const ROW_LEN: i64 = 3;
 #[repr(transparent)]
 struct Row<I>(Vec<Counted>, PhantomData<I>)
 where
-    I: IdentityVar;
+    I: Var<kind::Identity>;
 
 #[extern_fn(effect = pure)]
 fn pure_row<I>(n: i64) -> Row<I>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     Row((0..n).map(Counted).collect(), PhantomData)
 }
@@ -61,7 +61,7 @@ where
 #[extern_fn(effect = opaque)]
 fn opaque_row<I>(n: i64) -> Row<I>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     Row((0..n).map(Counted).collect(), PhantomData)
 }
@@ -69,7 +69,7 @@ where
 #[extern_fn(effect = pure)]
 fn row_at<I>(row: Row<I>, index: i64) -> i64
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     row.0[index as usize].0
 }
@@ -82,7 +82,7 @@ fn double(n: i64) -> i64 {
 #[extern_fn(effect = pure)]
 fn row_boom<I>(_row: Row<I>, _index: i64) -> i64
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     panic!("row_boom")
 }

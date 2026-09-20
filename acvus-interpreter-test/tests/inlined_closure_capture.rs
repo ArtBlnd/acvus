@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use acvus_extern::{ExternType, IdentityVar, Registry, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Registry, Var, extern_fn, extern_registry, kind};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::listing::{ops_of_anywhere, script_listing_with_externs};
 use acvus_interpreter_test::{Context, run_script_mode_with_externs};
@@ -57,12 +57,12 @@ impl Drop for Counted {
 #[repr(transparent)]
 struct Tracked<I>(Vec<Counted>, PhantomData<I>)
 where
-    I: IdentityVar;
+    I: Var<kind::Identity>;
 
 #[extern_fn(effect = pure)]
 fn tracked<I>(n: i64) -> Tracked<I>
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     Tracked((0..n).map(|_| Counted).collect(), PhantomData)
 }
@@ -70,7 +70,7 @@ where
 #[extern_fn(effect = pure)]
 fn rank<I>(t: &Tracked<I>) -> i64
 where
-    I: IdentityVar,
+    I: Var<kind::Identity>,
 {
     t.0.len() as i64
 }

@@ -24,10 +24,11 @@ What replaces it is the mechanism RFC-0019 already has. `iter::next<I, T>
 (&mut I) -> Option<T>` is a shared signature; an adaptor is an extension
 type `Map<I, U>` with a `next` instance declared at that pattern, whose body
 calls the inner `next` through the typed handle the glue fills at the site
-(`Fn1`, the same handle a lambda crosses on); a consumer is a handler over
-`I: HasInstance<next>`. That needs two extensions of RFC-0019 — an instance
-at a pattern type whose other variables are bound by matching the instance's
-signature, and a required instance callable inside the handler — and no
+(`Fn1`, the same handle a lambda crosses on); a consumer is a handler that
+takes the `next` instance as a parameter. That needs two extensions of
+RFC-0019 — an instance at a pattern type whose other variables are bound by
+matching the instance's signature, and an instance parameter callable
+inside the handler (RFC-0067, pending) — and no
 length bound, no `Len`, about forty declarations. Its per-element cost is
 one call per stage, the dyn chain's; the per-element win lives above it,
 where the consumer's call site knows the whole pipeline type and the machine

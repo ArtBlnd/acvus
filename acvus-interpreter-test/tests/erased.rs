@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use acvus_ext::Iter;
 use acvus_extern::{
-    EffectVar, Erased, FromValue, IdentityVar, RefMut, Registry, Runtime, extern_fn,
-    extern_registry,
+    Erased, FromValue, RefMut, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
@@ -35,8 +34,8 @@ async fn contains_erased<E, I, Rt>(
     needle: Erased<Rt, String>,
 ) -> bool
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     while let Some(item) = it.next(rt, frame).await {
@@ -54,8 +53,8 @@ fn contains_erased_now<E, I, Rt>(
     needle: Erased<Rt, String>,
 ) -> bool
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     while let Some(item) = it.next_now(rt, frame) {

@@ -12,9 +12,7 @@
 //! `substring` are in bytes, `char_at`, `chars` and the `pad_*` width in
 //! Unicode scalar values.
 
-use acvus_extern::{
-    EffectVar, Erased, IdentityVar, OneValue, Registry, Runtime, extern_fn, extern_registry,
-};
+use acvus_extern::{Erased, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind};
 
 use crate::iter::Iter;
 
@@ -182,9 +180,9 @@ fn char_at(s: &str, i: i64) -> char {
 
 fn iter_of<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
 where
-    T: OneValue<Rt>,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + OneValue<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut items = items.into_iter();
@@ -195,8 +193,8 @@ where
 #[extern_fn(effect = pure)]
 fn chars<E, I, Rt>(s: &str) -> Iter<char, E, I, Rt>
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     iter_of(s.chars().collect())
@@ -205,8 +203,8 @@ where
 #[extern_fn(effect = pure)]
 fn lines<E, I, Rt>(s: &str) -> Iter<String, E, I, Rt>
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     iter_of(s.lines().map(str::to_owned).collect())
@@ -216,8 +214,8 @@ where
 #[extern_fn(effect = pure)]
 fn bytes<E, I, Rt>(s: &str) -> Iter<i64, E, I, Rt>
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     iter_of(s.bytes().map(i64::from).collect())
@@ -226,8 +224,8 @@ where
 #[extern_fn(effect = pure)]
 fn split_whitespace<E, I, Rt>(s: &str) -> Iter<String, E, I, Rt>
 where
-    E: EffectVar,
-    I: IdentityVar,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     iter_of(s.split_whitespace().map(str::to_owned).collect())
@@ -277,7 +275,7 @@ fn strip_suffix(s: &str, pat: &str) -> Option<String> {
 
 /// The text before and after the first `pat`, as a two-element Vec: an
 /// extern function returns no tuple (`acvus-extern` has no `Cross` for
-/// one) and no array of a constant length (`Len<K>` is a length variable).
+/// one) and no array of a constant length (`Nth<kind::Length, K>` is a length variable).
 #[extern_fn(effect = pure)]
 fn split_once<Rt>(rt: &Rt, s: &str, pat: &str) -> Option<Vec<Erased<Rt, String>>>
 where

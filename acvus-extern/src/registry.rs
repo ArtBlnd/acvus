@@ -28,8 +28,6 @@ pub struct FnDecl {
     pub cast: bool,
     /// The shared signature this function is an instance of (RFC-0019).
     pub instance_of: Option<QualifiedRef>,
-    /// The shared signature each type variable requires, by position.
-    pub requires: Vec<Option<QualifiedRef>>,
 }
 
 /// A shared signature: a name with a polymorphic type and no body.
@@ -149,7 +147,6 @@ where
             bounds: vec![TyVarBound::Any; ty_vars.len()],
             cast: true,
             instance_of: None,
-            requires: vec![None; ty_vars.len()],
         },
         instances: Instances {
             concrete: vec![Instance {
@@ -193,11 +190,6 @@ pub trait SharedSignature {
     fn qref(interner: &Interner) -> QualifiedRef;
     fn signature_decl(interner: &Interner) -> SignatureDecl;
 }
-
-/// `T: HasInstance<sig>`: a type parameter that requires an instance of the
-/// signature `sig`. The macro reads it; every type satisfies the Rust bound.
-pub trait HasInstance<Sig> {}
-impl<T, Sig> HasInstance<Sig> for T {}
 
 pub type Handlers<R> = FxHashMap<QualifiedRef, Vec<ExternHandler<R>>>;
 
@@ -270,10 +262,6 @@ pub enum CombineError {
         signature: QualifiedRef,
         ty: PolyTy,
     },
-    RequiredSignatureUnknown {
-        function: QualifiedRef,
-        signature: QualifiedRef,
-    },
     CastShape {
         function: QualifiedRef,
         reason: &'static str,
@@ -304,10 +292,6 @@ impl fmt::Display for CombineError {
             Self::DuplicateInstance { signature, ty } => {
                 write!(f, "{signature:?} has two instances for {ty:?}")
             }
-            Self::RequiredSignatureUnknown {
-                function,
-                signature,
-            } => write!(f, "{function:?} requires unknown signature {signature:?}"),
             Self::CastShape { function, reason } => write!(f, "cast {function:?}: {reason}"),
             Self::HandlerTask {
                 function,
@@ -461,24 +445,7 @@ impl<R: Runtime> Externs<R> {
 
         let mut functions = Vec::new();
         let mut handlers: Handlers<R> = FxHashMap::default();
-        for ExternFn {
-            mut decl,
-            instances,
-        } in plain
-        {
-            for (i, required) in decl.requires.iter().enumerate() {
-                let Some(sig) = required else {
-                    continue;
-                };
-                let collected =
-                    signatures
-                        .get(sig)
-                        .ok_or_else(|| CombineError::RequiredSignatureUnknown {
-                            function: decl.qref,
-                            signature: *sig,
-                        })?;
-                decl.bounds[i] = meet(&decl.bounds[i], &collected.instance_types);
-            }
+        for ExternFn { decl, instances } in plain {
             if decl.cast {
                 types.register_cast(cast_rule(&decl)?);
             }

@@ -1,11 +1,11 @@
 //! Option operations. All pure, polymorphic.
 
-use acvus_extern::{Registry, Runtime, TyVar, extern_fn, extern_registry};
+use acvus_extern::{Registry, Runtime, Var, extern_fn, extern_registry, kind};
 
 #[extern_fn(effect = pure)]
 fn unwrap<T>(val: Option<T>) -> T
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     val.expect("unwrap: called on None")
 }
@@ -13,7 +13,7 @@ where
 #[extern_fn(effect = pure)]
 fn unwrap_or<T>(val: Option<T>, default: T) -> T
 where
-    T: TyVar,
+    T: Var<kind::Type>,
 {
     val.unwrap_or(default)
 }

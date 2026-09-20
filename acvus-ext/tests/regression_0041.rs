@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use acvus_ext::{Deque, Iter, vec_registry};
 use acvus_extern::{
     Arr, CallToken, Erased, Externs, Fn1, FnKind, FromValue, Interner, Monomorphize, OneValue,
-    QualifiedRef, Ref, RefMut, Registry, Release, Runtime, extern_fn, extern_registry,
+    Owned, QualifiedRef, Ref, RefMut, Registry, Release, Runtime, extern_fn, extern_registry,
 };
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -376,7 +376,7 @@ fn closure(rt: &Counting, f: impl Fn(&Counting, V) -> V + Send + Sync + 'static)
     erased_from(rt, f)
 }
 
-type It = Iter<V, (), (), Counting>;
+type It = Iter<Owned<Counting>, (), (), Counting>;
 
 fn drain(rt: &Counting, mut it: It) -> Vec<i64> {
     futures::executor::block_on(async {
@@ -389,7 +389,11 @@ fn drain(rt: &Counting, mut it: It) -> Vec<i64> {
 }
 
 fn items(rt: &Counting, ns: impl IntoIterator<Item = i64>) -> It {
-    Iter::from_items(ns.into_iter().map(|n| int(rt, n)).collect())
+    Iter::from_items(
+        ns.into_iter()
+            .map(|n| Owned::from_value(int(rt, n)))
+            .collect(),
+    )
 }
 
 // -- R1: every Inline type round-trips through Erased -------------------
@@ -445,7 +449,7 @@ fn from_value_on_a_bool_as_an_i64_panics_naming_both() {
 #[should_panic(expected = "expected a value erased from `alloc::vec::Vec<")]
 fn vec_from_value_refuses_a_deque() {
     let rt = Counting::default();
-    let deque = erased_from(&rt, Deque::<V>::default());
+    let deque = erased_from(&rt, Deque::<Owned<Counting>>::default());
     Vec::<Erased<Counting, String>>::from_value(&rt, deque);
 }
 
@@ -477,18 +481,20 @@ fn vec_from_value_takes_a_vec_of_values_with_no_per_element_unbox() {
 #[should_panic(expected = "expected a value erased from `acvus_extern::len::Arr<")]
 fn arr_from_value_refuses_a_deque() {
     let rt = Counting::default();
-    let deque = erased_from(&rt, Deque::<V>::default());
+    let deque = erased_from(&rt, Deque::<Owned<Counting>>::default());
     Arr::<Erased<Counting, String>, ()>::from_value(&rt, deque);
 }
 
 #[test]
 fn arr_from_value_takes_an_array_of_values_with_no_per_element_unbox() {
     let rt = Counting::default();
-    let strings = Arr::<V, ()>::new(vec![
-        erased_from(&rt, "a".to_owned()),
-        erased_from(&rt, "b".to_owned()),
-    ])
-    .erase(&rt);
+    let strings = OneValue::<Counting>::erase(
+        Arr::<Owned<Counting>, ()>::new(vec![
+            Owned::from_value(erased_from(&rt, "a".to_owned())),
+            Owned::from_value(erased_from(&rt, "b".to_owned())),
+        ]),
+        &rt,
+    );
     let start = rt.counts();
     let parts = Arr::<Erased<Counting, String>, ()>::from_value(&rt, strings);
     assert_eq!(
@@ -549,7 +555,9 @@ fn map_then_take_two_calls_the_closure_exactly_twice() {
             int(rt, read_int(rt, &x) * 10)
         })
     };
-    let it = items(&rt, [1, 2, 3]).map::<V>(Fn1::new(&rt, f)).take(2);
+    let it = items(&rt, [1, 2, 3])
+        .map::<Owned<Counting>>(Fn1::new(&rt, f))
+        .take(2);
     assert_eq!(drain(&rt, it), [10, 20]);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -577,7 +585,7 @@ fn filter_then_map_interleave_per_element() {
     };
     let it = items(&rt, [1, 2, 3])
         .filter(Fn1::new(&rt, keep_odd))
-        .map::<V>(Fn1::new(&rt, times_ten));
+        .map::<Owned<Counting>>(Fn1::new(&rt, times_ten));
     assert_eq!(drain(&rt, it), [10, 30]);
     assert_eq!(
         *log.lock().unwrap(),
@@ -591,14 +599,15 @@ fn flat_map_skips_an_empty_inner_sequence() {
     let rt = Counting::default();
     let twice_unless_two = closure(&rt, |rt, x| {
         let x = read_int(rt, &x);
-        let inner: Vec<V> = if x == 2 {
+        let inner: Vec<Owned<Counting>> = if x == 2 {
             vec![]
         } else {
-            vec![int(rt, x), int(rt, x)]
+            vec![Owned::from_value(int(rt, x)), Owned::from_value(int(rt, x))]
         };
         OneValue::<_>::erase(inner, rt)
     });
-    let it = items(&rt, [1, 2, 3]).flat_map::<Vec<V>, V>(Fn1::new(&rt, twice_unless_two));
+    let it = items(&rt, [1, 2, 3])
+        .flat_map::<Vec<Owned<Counting>>, Owned<Counting>>(Fn1::new(&rt, twice_unless_two));
     assert_eq!(drain(&rt, it), [1, 1, 3, 3]);
 }
 

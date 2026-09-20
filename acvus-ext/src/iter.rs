@@ -20,8 +20,8 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    BoxFuture, ClosureFn, EffectVar, Erased, ExternType, Fn1, FromValue, IdentityVar, OneValue,
-    Ref, Runtime, Stored, TyVar,
+    BoxFuture, ClosureFn, Erased, ExternType, Fn1, FromValue, OneValue, Ref, Runtime, Stored, Var,
+    kind,
 };
 use sync_wrapper::SyncWrapper;
 
@@ -30,9 +30,9 @@ use sync_wrapper::SyncWrapper;
 #[repr(transparent)]
 pub struct Iter<T, E, I, Rt>(Stages<Rt>, PhantomData<(T, E, I)>)
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime;
 
 pub enum Stages<Rt>
@@ -155,9 +155,9 @@ pub(crate) use {drain, drain_now};
 
 impl<T, E, I, Rt> Iter<T, E, I, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     fn sealed(stage: impl SyncStage<Rt> + 'static) -> Self {
@@ -190,7 +190,7 @@ where
 
     pub fn map<U>(self, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
     where
-        U: TyVar,
+        U: Var<kind::Type>,
     {
         match self.0 {
             Stages::Sync(source) if f.is_sync() => Iter::sealed(Map { source, f }),
@@ -307,15 +307,15 @@ where
 
     pub fn chain<J, K>(self, other: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
     where
-        J: IdentityVar,
-        K: IdentityVar,
+        J: Var<kind::Identity>,
+        K: Var<kind::Identity>,
     {
         Iter::chained(VecDeque::from([self.0, other.0]))
     }
 
     pub fn chain_all<K>(parts: Vec<Self>) -> Iter<T, E, K, Rt>
     where
-        K: IdentityVar,
+        K: Var<kind::Identity>,
     {
         Iter::chained(parts.into_iter().map(|part| part.0).collect())
     }
@@ -342,7 +342,7 @@ where
     where
         T: FromValue<Rt> + IntoIterator<Item = U>,
         T::IntoIter: Send + Sync,
-        U: OneValue<Rt>,
+        U: Var<kind::Type> + OneValue<Rt>,
     {
         match self.0 {
             Stages::Sync(source) => Iter::sealed(Flatten::<_, T> {
@@ -358,9 +358,9 @@ where
 
     pub fn flat_map<S, U>(self, f: Fn1<T, S, E, Rt>) -> Iter<U, E, I, Rt>
     where
-        S: TyVar + FromValue<Rt> + IntoIterator<Item = U>,
+        S: Var<kind::Type> + FromValue<Rt> + IntoIterator<Item = U>,
         S::IntoIter: Send + Sync,
-        U: OneValue<Rt>,
+        U: Var<kind::Type> + OneValue<Rt>,
     {
         self.map(f).flatten()
     }
@@ -392,9 +392,9 @@ where
 
 impl<T, E, I, Rt> Iter<Erased<Rt, T>, E, I, Rt>
 where
-    T: Stored<Rt> + PartialEq + Clone,
-    E: EffectVar,
-    I: IdentityVar,
+    T: Var<kind::Type> + Stored<Rt> + PartialEq + Clone,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     /// Consecutive equal elements collapsed to the first. The stage keeps a
@@ -422,9 +422,9 @@ where
 
 struct Map<S, T, U, E, Rt>
 where
-    T: TyVar,
-    U: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     source: S,
@@ -434,9 +434,9 @@ where
 impl<S, T, U, E, Rt> SyncStage<Rt> for Map<S, T, U, E, Rt>
 where
     S: SyncStage<Rt>,
-    T: TyVar,
-    U: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
@@ -448,9 +448,9 @@ where
 impl<S, T, U, E, Rt> AsyncStage<Rt> for Map<S, T, U, E, Rt>
 where
     S: AsyncStage<Rt>,
-    T: TyVar,
-    U: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next<'a>(
@@ -468,8 +468,8 @@ where
 
 struct Filter<S, T, E, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     source: S,
@@ -479,8 +479,8 @@ where
 impl<S, T, E, Rt> SyncStage<Rt> for Filter<S, T, E, Rt>
 where
     S: SyncStage<Rt>,
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
@@ -496,8 +496,8 @@ where
 impl<S, T, E, Rt> AsyncStage<Rt> for Filter<S, T, E, Rt>
 where
     S: AsyncStage<Rt>,
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next<'a>(
@@ -635,8 +635,8 @@ where
 
 struct TakeWhile<S, T, E, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     source: S,
@@ -647,8 +647,8 @@ where
 impl<S, T, E, Rt> SyncStage<Rt> for TakeWhile<S, T, E, Rt>
 where
     S: SyncStage<Rt>,
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
@@ -667,8 +667,8 @@ where
 impl<S, T, E, Rt> AsyncStage<Rt> for TakeWhile<S, T, E, Rt>
 where
     S: AsyncStage<Rt>,
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next<'a>(
@@ -693,8 +693,8 @@ where
 
 struct SkipWhile<S, T, E, Rt>
 where
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     source: S,
@@ -705,8 +705,8 @@ where
 impl<S, T, E, Rt> SyncStage<Rt> for SkipWhile<S, T, E, Rt>
 where
     S: SyncStage<Rt>,
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
@@ -724,8 +724,8 @@ where
 impl<S, T, E, Rt> AsyncStage<Rt> for SkipWhile<S, T, E, Rt>
 where
     S: AsyncStage<Rt>,
-    T: TyVar,
-    E: EffectVar,
+    T: Var<kind::Type>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next<'a>(

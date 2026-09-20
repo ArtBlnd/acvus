@@ -1,12 +1,12 @@
 //! An `async fn` declaration owns a copy of its argument run across every
 //! await point, and the elements a slice names belong to a frame that does
 //! not wait for it (RFC-0047 rule 6).
-use acvus_extern::{Runtime, Slice, TyVar, extern_fn};
+use acvus_extern::{Runtime, Slice, Var, extern_fn, kind};
 
 #[extern_fn(effect = pure)]
 async fn count<T, Rt>(rt: &Rt, s: Slice<T, Rt>) -> u64
 where
-    T: TyVar,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     let _ = rt;

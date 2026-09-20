@@ -1,4 +1,7 @@
-//! Classification of generic parameters into the three variable kinds.
+//! Classification of a declaration's generic parameters by kind.
+//!
+//! A parameter's kind is the argument of its `Var<K>` bound; the runtime
+//! parameter is bounded by `Runtime`, which is a contract, not a kind.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -6,6 +9,10 @@ use syn::spanned::Spanned;
 use syn::{GenericParam, Generics, Ident, Type, TypeParam, TypeParamBound, WherePredicate};
 
 use crate::{bound_ident, span_of, subst};
+
+/// The bounds a declaration's generic parameter may carry, by name.
+const KIND_BOUNDS: &str = "Var<kind::Type>, Var<kind::Effect>, Var<kind::Length>, \
+                           Var<kind::Identity>, Monomorphize, or Runtime";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VarKind {
@@ -15,6 +22,52 @@ pub enum VarKind {
     Identity,
     /// The runtime parameter: at most one, bounded by `Runtime`.
     Runtime,
+}
+
+impl VarKind {
+    /// The `kind::` marker naming this kind, as a type.
+    fn marker(self) -> Type {
+        match self {
+            VarKind::Ty => syn::parse_quote! { ::acvus_extern::kind::Type },
+            VarKind::Effect => syn::parse_quote! { ::acvus_extern::kind::Effect },
+            VarKind::Len => syn::parse_quote! { ::acvus_extern::kind::Length },
+            VarKind::Identity => syn::parse_quote! { ::acvus_extern::kind::Identity },
+            VarKind::Runtime => unreachable!("the runtime parameter has no kind marker"),
+        }
+    }
+}
+
+/// The kind a `Var<K>` bound names, by `K`'s last path segment.
+fn kind_of(bound: &TypeParamBound) -> Option<syn::Result<VarKind>> {
+    let TypeParamBound::Trait(t) = bound else {
+        return None;
+    };
+    let seg = t.path.segments.last()?;
+    if seg.ident == "Runtime" {
+        return Some(Ok(VarKind::Runtime));
+    }
+    if seg.ident != "Var" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return Some(Err(syn::Error::new_spanned(seg, "Var takes a kind")));
+    };
+    let Some(syn::GenericArgument::Type(Type::Path(k))) = args.args.first() else {
+        return Some(Err(syn::Error::new_spanned(seg, "Var takes a kind")));
+    };
+    let Some(name) = k.path.segments.last() else {
+        return Some(Err(syn::Error::new_spanned(seg, "Var takes a kind")));
+    };
+    Some(match name.ident.to_string().as_str() {
+        "Type" => Ok(VarKind::Ty),
+        "Effect" => Ok(VarKind::Effect),
+        "Length" => Ok(VarKind::Len),
+        "Identity" => Ok(VarKind::Identity),
+        _ => Err(syn::Error::new_spanned(
+            name,
+            "a kind is Type, Effect, Length, or Identity",
+        )),
+    })
 }
 
 /// One generic parameter, its kind, and its index among that kind. A type
@@ -28,8 +81,6 @@ pub struct Var {
     pub index: usize,
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
-    /// The shared signature a `HasInstance<sig>` bound requires (RFC-0019).
-    pub requires: Option<syn::Path>,
 }
 
 pub struct Vars(Vec<Var>);
@@ -53,37 +104,6 @@ fn bounds_of<'a>(
         })
         .flat_map(|pt| pt.bounds.iter());
     tp.bounds.iter().chain(from_where)
-}
-
-/// The signature of a `HasInstance<sig>` bound, if present.
-fn required_signature<'a>(
-    bounds: impl Iterator<Item = &'a TypeParamBound>,
-) -> syn::Result<Option<syn::Path>> {
-    for bound in bounds {
-        let TypeParamBound::Trait(t) = bound else {
-            continue;
-        };
-        let Some(seg) = t.path.segments.last() else {
-            continue;
-        };
-        if seg.ident != "HasInstance" {
-            continue;
-        }
-        let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-            return Err(syn::Error::new_spanned(
-                seg,
-                "HasInstance takes a signature",
-            ));
-        };
-        let Some(syn::GenericArgument::Type(Type::Path(sig))) = args.args.first() else {
-            return Err(syn::Error::new_spanned(
-                seg,
-                "HasInstance takes a signature",
-            ));
-        };
-        return Ok(Some(sig.path.clone()));
-    }
-    Ok(None)
 }
 
 /// The member types of a `Monomorphize<(T0, T1, ..)>` bound, if present.
@@ -138,44 +158,27 @@ impl Vars {
             let GenericParam::Type(tp) = param else {
                 return Err(syn::Error::new(
                     span_of(param),
-                    "only lifetimes and type parameters bounded by TyVar, EffectVar, LenVar, IdentityVar, Monomorphize, or Runtime are allowed",
+                    format!(
+                        "only lifetimes and type parameters bounded by {KIND_BOUNDS} are allowed"
+                    ),
                 ));
             };
             let kinds: Vec<VarKind> = bounds_of(generics, tp)
-                .filter_map(bound_ident)
-                .filter_map(|b| match b.to_string().as_str() {
-                    "TyVar" => Some(VarKind::Ty),
-                    "EffectVar" => Some(VarKind::Effect),
-                    "LenVar" => Some(VarKind::Len),
-                    "IdentityVar" => Some(VarKind::Identity),
-                    "Runtime" => Some(VarKind::Runtime),
-                    _ => None,
-                })
-                .collect();
+                .filter_map(kind_of)
+                .collect::<syn::Result<_>>()?;
             let mono = mono_members(bounds_of(generics, tp))?;
-            let requires = required_signature(bounds_of(generics, tp))?;
             let has_extra_bounds = bounds_of(generics, tp).any(|b| {
                 matches!(b, TypeParamBound::Trait(_))
-                    && !bound_ident(b).is_some_and(|i| {
-                        matches!(
-                            i.to_string().as_str(),
-                            "TyVar"
-                                | "EffectVar"
-                                | "LenVar"
-                                | "IdentityVar"
-                                | "Runtime"
-                                | "Monomorphize"
-                                | "HasInstance"
-                        )
-                    })
+                    && kind_of(b).is_none()
+                    && !bound_ident(b).is_some_and(|i| i == "Monomorphize")
             });
-            let kind = match (kinds.as_slice(), &mono, &requires) {
-                ([kind], _, _) => *kind,
-                ([], Some(_), _) | ([], None, Some(_)) => VarKind::Ty,
+            let kind = match (kinds.as_slice(), &mono) {
+                ([kind], _) => *kind,
+                ([], Some(_)) => VarKind::Ty,
                 _ => {
                     return Err(syn::Error::new(
                         tp.ident.span(),
-                        "a generic parameter has exactly one of the bounds TyVar, EffectVar, LenVar, IdentityVar, Runtime, Monomorphize",
+                        format!("a generic parameter has exactly one of the bounds {KIND_BOUNDS}"),
                     ));
                 }
             };
@@ -193,7 +196,6 @@ impl Vars {
                 index: counts[slot],
                 mono,
                 mono_fallback,
-                requires,
             });
             counts[slot] += 1;
         }
@@ -227,8 +229,8 @@ impl Vars {
             .map(|v| (v.kind, v.index))
     }
 
-    /// `VarCounts { .. }` for this declaration, as an expression.
-    pub fn counts_expr(&self) -> TokenStream {
+    /// This declaration's `PolyVars`, as an expression.
+    pub fn fresh_vars_expr(&self) -> TokenStream {
         let count = |k| self.0.iter().filter(|v| v.kind == k).count();
         let (tys, effects, lens, identities) = (
             count(VarKind::Ty),
@@ -237,12 +239,7 @@ impl Vars {
             count(VarKind::Identity),
         );
         quote! {
-            ::acvus_extern::VarCounts {
-                tys: #tys,
-                effects: #effects,
-                lens: #lens,
-                identities: #identities,
-            }
+            ::acvus_extern::PolyVars::fresh(#tys, #effects, #lens, #identities)
         }
     }
 
@@ -273,11 +270,11 @@ impl Vars {
     fn compile_time_stand_in(v: &Var) -> Type {
         let k = v.index;
         match v.kind {
-            VarKind::Ty => syn::parse_quote! { ::acvus_extern::Typeck<#k> },
-            VarKind::Effect => syn::parse_quote! { ::acvus_extern::Eff<#k> },
-            VarKind::Len => syn::parse_quote! { ::acvus_extern::Len<#k> },
-            VarKind::Identity => syn::parse_quote! { ::acvus_extern::Idn<#k> },
             VarKind::Runtime => syn::parse_quote! { __R },
+            kind => {
+                let marker = kind.marker();
+                syn::parse_quote! { ::acvus_extern::Nth<#marker, #k> }
+            }
         }
     }
 
@@ -347,22 +344,6 @@ impl Vars {
         self.0.iter().find(|v| v.mono.is_some())
     }
 
-    /// The required signature of every type variable, by position.
-    pub fn requires_exprs(&self) -> Vec<TokenStream> {
-        self.0
-            .iter()
-            .filter(|v| v.kind == VarKind::Ty)
-            .map(|v| match &v.requires {
-                None => quote! { ::core::option::Option::None },
-                Some(sig) => quote! {
-                    ::core::option::Option::Some(
-                        <#sig as ::acvus_extern::SharedSignature>::qref(__i),
-                    )
-                },
-            })
-            .collect()
-    }
-
     /// `TyVarBound` of every type variable, by position.
     pub fn bound_exprs(&self) -> Vec<TokenStream> {
         self.0
@@ -393,7 +374,7 @@ impl Vars {
         quote! { ::<#(#args),*> }
     }
 
-    /// Impl generics with the argument bounds: `<T: TyArg, E: EffectArg>`.
+    /// Impl generics with the bounds that name a term: `<T: TyArg + Var<kind::Type>, E: Term<kind::Effect>>`.
     pub fn arg_impl_generics(&self) -> TokenStream {
         if self.0.is_empty() {
             return TokenStream::new();
@@ -401,11 +382,17 @@ impl Vars {
         let params = self.0.iter().map(|v| {
             let ident = &v.ident;
             match v.kind {
-                VarKind::Ty => quote! { #ident: ::acvus_extern::TyArg + ::acvus_extern::TyVar },
-                VarKind::Effect => quote! { #ident: ::acvus_extern::EffectArg },
-                VarKind::Len => quote! { #ident: ::acvus_extern::LenArg },
-                VarKind::Identity => quote! { #ident: ::acvus_extern::IdentityArg },
+                VarKind::Ty => {
+                    let marker = VarKind::Ty.marker();
+                    quote! {
+                        #ident: ::acvus_extern::TyArg + ::acvus_extern::Var<#marker>
+                    }
+                }
                 VarKind::Runtime => quote! { #ident: ::acvus_extern::Runtime },
+                kind => {
+                    let marker = kind.marker();
+                    quote! { #ident: ::acvus_extern::Term<#marker> }
+                }
             }
         });
         quote! { <#(#params),*> }
@@ -423,23 +410,22 @@ impl Vars {
     }
 
     pub fn identity_arg_exprs(&self) -> Vec<TokenStream> {
-        self.0
-            .iter()
-            .filter(|v| v.kind == VarKind::Identity)
-            .map(|v| {
-                let ident = &v.ident;
-                quote! { <#ident as ::acvus_extern::IdentityArg>::poly_identity(__vars) }
-            })
-            .collect()
+        self.term_exprs(VarKind::Identity)
     }
 
     pub fn effect_arg_exprs(&self) -> Vec<TokenStream> {
+        self.term_exprs(VarKind::Effect)
+    }
+
+    /// `<X as Term<K>>::poly(__vars)` for every variable of kind `kind`.
+    fn term_exprs(&self, kind: VarKind) -> Vec<TokenStream> {
+        let marker = kind.marker();
         self.0
             .iter()
-            .filter(|v| v.kind == VarKind::Effect)
+            .filter(|v| v.kind == kind)
             .map(|v| {
                 let ident = &v.ident;
-                quote! { <#ident as ::acvus_extern::EffectArg>::poly_effect(__vars) }
+                quote! { <#ident as ::acvus_extern::Term<#marker>>::poly(__vars) }
             })
             .collect()
     }

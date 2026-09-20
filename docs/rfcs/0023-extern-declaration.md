@@ -29,10 +29,11 @@ its acvus type and its handler both come from that signature.
   (RFC-0019).
 
 Generic parameters are the declaration's variables, one bound each: `T:
-TyVar`, `E: EffectVar`, `N: LenVar`, `I: IdentityVar`, `R: Runtime`. A type
-variable may add `Monomorphize<(T0, ..)>` (RFC-0011) or `HasInstance<sig>`
-(RFC-0019). A body never opens a type variable; it crosses through the
-runtime (RFC-0022).
+Var<kind::Type>`, `E: Var<kind::Effect>`, `N: Var<kind::Length>`, `I:
+Var<kind::Identity>`, `R: Runtime`. A type variable may add
+`Monomorphize<(T0, ..)>` (RFC-0011). A handler that calls a shared
+signature takes the instance as a parameter (RFC-0067, pending). A body
+never opens a type variable; it crosses through the runtime (RFC-0022).
 
 Positions acvus has and Rust does not are spelled by host types:
 `Arr<T, N>` for an array of variable length, `Fn0<R, E, Rt>` ..
@@ -59,5 +60,4 @@ second forms.
 
 - The macro reads `#[state]` off a parameter, wraps the value in an `Arc`
   held by the handler, and passes `&State` to the body.
-- The macro reads `HasInstance<sig>` into the declaration's requirement
-  list and `instance_of` into its instance link.
+- The macro reads `instance_of` into the declaration's instance link.

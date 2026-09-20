@@ -1,48 +1,39 @@
 //! Effect positions in ExternFn signatures.
 //!
-//! `EffectArg` names an effect: a known level or the K-th effect variable.
-//! `EffectVar` is the bound of a generic parameter that is an effect
-//! variable; `()` fills it at runtime.
+//! A `Term<kind::Effect>` names an effect: a known level, or the K-th
+//! effect variable of a declaration as `Nth<kind::Effect, K>`.
 
-use crate::ty_arg::PolyVars;
+use crate::ty_arg::{PolyVars, Term, Var, kind};
 use acvus_mir::ty::{Effect, EffectTerm, Poly};
 
-pub trait EffectArg: Send + Sync + 'static {
-    fn poly_effect(vars: &PolyVars) -> EffectTerm<Poly>;
-}
-
-pub trait EffectVar: Send + Sync + 'static {}
-
-impl<E> EffectVar for E where E: EffectArg {}
-impl EffectVar for () {}
-
-/// The K-th effect variable of a declaration. Uninhabited.
-pub enum Eff<const K: usize> {}
-
-impl<const K: usize> EffectArg for Eff<K> {
-    fn poly_effect(vars: &PolyVars) -> EffectTerm<Poly> {
-        vars.effects[K].clone()
-    }
-}
+/// The runtime carries no effect: an effect variable is settled before the
+/// handler runs, so the runtime fills it with nothing.
+impl Var<kind::Effect> for () {}
 
 pub struct Pure;
 pub struct Idempotent;
 pub struct Opaque;
 
-impl EffectArg for Pure {
-    fn poly_effect(_: &PolyVars) -> EffectTerm<Poly> {
+/// A known level fills the effect position of a declaration's type where a
+/// variable of the effect kind would stand. `Idempotent` has no such impl:
+/// no declaration stands one there, and the build says so.
+impl Var<kind::Effect> for Pure {}
+impl Var<kind::Effect> for Opaque {}
+
+impl Term<kind::Effect> for Pure {
+    fn poly(_: &PolyVars) -> EffectTerm<Poly> {
         EffectTerm::Known(Effect::PURE)
     }
 }
 
-impl EffectArg for Idempotent {
-    fn poly_effect(_: &PolyVars) -> EffectTerm<Poly> {
+impl Term<kind::Effect> for Idempotent {
+    fn poly(_: &PolyVars) -> EffectTerm<Poly> {
         EffectTerm::Known(Effect::IDEMPOTENT)
     }
 }
 
-impl EffectArg for Opaque {
-    fn poly_effect(_: &PolyVars) -> EffectTerm<Poly> {
+impl Term<kind::Effect> for Opaque {
+    fn poly(_: &PolyVars) -> EffectTerm<Poly> {
         EffectTerm::Known(Effect::OPAQUE)
     }
 }
