@@ -139,3 +139,35 @@ has no identity the caller can read. `Param(i)` is that identity.
    then-call diagnostic.
 3. Fixpoint over recursive bodies.
 4. Extern summaries from signatures (with the pair-wide `CallShape`).
+
+## Consequences
+
+Step 1 landed. `Loan::storage` is `LoanStorage::Local(ValueId)` or
+`LoanStorage::Param { index, value }`, both halves derived at one
+constructor from the body's `params`, so no site can disagree about which
+parameter a loan names. A body's summary is the `Param` loans of its result
+with their mutability.
+
+What a body may now return is a bare reference — `Ty::Ref` over anything but
+`Slice` or `Str`. That bound is the machine's, not the checker's: a bare
+reference is the one `Kind::Ref` word `control::Return` writes and a direct
+call's destination receives, while a view is the register pair only an
+extern call's `CallShape::Pair*` opens. `-> &str` and `-> Slice<T>` from a
+body stay refused by `MirErrorKind::ReferenceReturnedFromBody` until the
+machine has a pair destination for a body's result; `substring` and `trim`
+still wait on that, as RFC-0062 said.
+
+The refusal splits across two phases because the two facts are known in
+different ones. Whether the result's type can leave at all is a type fact,
+and typeck keeps it. Which storage the result names is a region fact that
+exists only over the MIR, so `validate::borrow_check` raises
+`ReferenceToLocalLeavesBody` where the local was borrowed.
+
+A call's result substitutes the callee's summary where the summary is known
+and otherwise takes the union of every argument's region. The union is a
+superset of the substitution, so the reading without summaries refuses more
+and admits nothing extra; every optimization pass keeps it, and only the
+borrow check, which runs in dependency order, pays for the table. That order
+is Tarjan's components over the call graph in pass 0 of `graph::optimize`. A
+cyclic component is not the fixpoint of Decision 4: a body in one whose
+result holds a reference is refused by name, and step 3 lifts that.

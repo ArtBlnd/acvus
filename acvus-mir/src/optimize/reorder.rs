@@ -27,7 +27,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::Loans;
+use crate::analysis::loans::{Loans, Summaries};
 use crate::cfg::CfgBody;
 use crate::graph::QualifiedRef;
 use crate::ir::*;
@@ -36,7 +36,7 @@ use crate::ty::Ty;
 
 /// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
 pub fn run(cfg: &mut CfgBody) {
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     for block in &mut cfg.blocks {
         reorder_block(&mut block.insts, &cfg.val_types, &loans);
     }

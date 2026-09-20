@@ -4,13 +4,15 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::loans::{Summaries, Summary, contains_ref};
 use crate::cfg::{self, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::graph::inliner;
-use crate::ir::MirModule;
+use crate::ir::{Callee, InstKind, MirBody, MirModule};
 use crate::optimize;
 
 use crate::ty::Ty;
+use crate::validate::type_check::ValidationErrorKind;
 use crate::validate::{self, ValidationError};
 
 /// Result of the optimization pipeline.
@@ -49,14 +51,25 @@ fn optimize_inner(
     // them (RFC-0029, RFC-0051) --
 
     let mut all_errors = Vec::new();
-    for (qref, module) in &modules {
-        let mut errors = validate::move_check::check_moves(module);
-        errors.extend(validate::borrow_check::check_borrows(module));
-        // A `match` is exhaustive (RFC-0051). Like the move check, it reads
-        // the shape the source wrote, before any pass has moved it.
-        errors.extend(validate::exhaustive::check_exhaustive(module));
-        if !errors.is_empty() {
-            all_errors.push((*qref, errors));
+    let mut summaries: FxHashMap<QualifiedRef, Summary> = FxHashMap::default();
+    for scc in call_graph_sccs(&modules) {
+        let cyclic = is_cyclic(&scc, &modules);
+        for qref in &scc {
+            let module = &modules[qref];
+            let mut errors = validate::move_check::check_moves(module);
+            if cyclic && contains_ref(&module.ret) {
+                errors.push(recursive_reference_result(&module.main));
+            }
+            let checked =
+                validate::borrow_check::check_borrows_in_order(module, Summaries::of(&summaries));
+            errors.extend(checked.errors);
+            // A `match` is exhaustive (RFC-0051). Like the move check, it reads
+            // the shape the source wrote, before any pass has moved it.
+            errors.extend(validate::exhaustive::check_exhaustive(module));
+            if !errors.is_empty() {
+                all_errors.push((*qref, errors));
+            }
+            summaries.insert(*qref, checked.summary);
         }
     }
 
@@ -99,6 +112,66 @@ fn optimize_inner(
     OptimizeResult {
         modules: result_modules,
         errors: all_errors,
+    }
+}
+
+fn named_callees(module: &MirModule) -> Vec<QualifiedRef> {
+    let bodies = std::iter::once(&module.main).chain(module.closures.values());
+    let mut callees: Vec<QualifiedRef> = bodies
+        .flat_map(|body| &body.insts)
+        .filter_map(|inst| match &inst.kind {
+            InstKind::FunctionCall { callee, .. } | InstKind::Spawn { callee, .. } => {
+                match callee {
+                    Callee::Direct(id) => Some(*id),
+                    Callee::Extern { .. } | Callee::Indirect(_) => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    callees.sort_unstable();
+    callees.dedup();
+    callees
+}
+
+/// The order every callee's summary exists in before its callers are
+/// checked. Components, not a flat topological order, because a cycle has no
+/// such order: RFC-0064 Decision 4 answers a cycle with a fixpoint, which
+/// step 3 of its order of work builds and this does not — a cyclic component
+/// whose result is a reference is refused instead.
+fn call_graph_sccs(modules: &FxHashMap<QualifiedRef, MirModule>) -> Vec<Vec<QualifiedRef>> {
+    let mut ids: Vec<QualifiedRef> = modules.keys().copied().collect();
+    ids.sort_unstable();
+    let edges = ids
+        .iter()
+        .map(|qref| {
+            let local = named_callees(&modules[qref])
+                .into_iter()
+                .filter(|callee| modules.contains_key(callee))
+                .collect();
+            (*qref, local)
+        })
+        .collect();
+    crate::graph::infer::tarjan_scc(&ids, &edges)
+}
+
+fn is_cyclic(scc: &[QualifiedRef], modules: &FxHashMap<QualifiedRef, MirModule>) -> bool {
+    match scc {
+        [only] => named_callees(&modules[only]).contains(only),
+        _ => true,
+    }
+}
+
+fn recursive_reference_result(main: &MirBody) -> ValidationError {
+    let returned = main
+        .insts
+        .iter()
+        .find(|inst| matches!(inst.kind, InstKind::Return { .. }));
+    ValidationError {
+        scope: "main".to_string(),
+        inst_index: 0,
+        span: returned.map_or(acvus_ast::Span::ZERO, |inst| inst.span),
+        kind: ValidationErrorKind::RecursiveReferenceResult,
     }
 }
 

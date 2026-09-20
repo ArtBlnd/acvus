@@ -1079,6 +1079,31 @@ pub fn compile_multi_fn_optimized(
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
+    compile_multi_fn_at(interner, target, helpers, contexts, extern_fns, Opt::Full)
+}
+
+/// As `compile_multi_fn_optimized`, with only the passes a program needs to
+/// reach the machine. A recursive callee reaches validation through this one:
+/// `graph::optimize` is given no `recursive_fns`, so `Opt::Full` would hand
+/// `inliner::inline` a call it copies into its own copy without end.
+pub fn compile_multi_fn_required(
+    interner: &Interner,
+    target: (&str, &str),
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    contexts: &[(&str, Ty)],
+    extern_fns: &[Function],
+) -> Result<String, String> {
+    compile_multi_fn_at(interner, target, helpers, contexts, extern_fns, Opt::None)
+}
+
+fn compile_multi_fn_at(
+    interner: &Interner,
+    target: (&str, &str),
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    contexts: &[(&str, Ty)],
+    extern_fns: &[Function],
+    opt: Opt,
+) -> Result<String, String> {
     let mut pb = PolyBuilder::new();
     let ctx_vec: Vec<Context> = contexts
         .iter()
@@ -1151,7 +1176,7 @@ pub fn compile_multi_fn_optimized(
         result.modules,
         &inf.context_types,
         &FxHashSet::default(),
-        Opt::Full,
+        opt,
     );
 
     for (qref, errs) in &opt_result.errors {

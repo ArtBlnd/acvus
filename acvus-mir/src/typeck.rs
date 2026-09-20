@@ -500,6 +500,38 @@ fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
     }
 }
 
+/// The reference a body's result names that the machine has no destination
+/// for.
+///
+/// A bare reference is the one `Kind::Ref` word `control::Return` writes and
+/// a direct call's destination receives, so RFC-0064 rule 1 admits it here
+/// and the borrow check says which storage it names. A view is the register
+/// pair only an extern call's `CallShape::Pair*` opens, which is what
+/// RFC-0062 meant by a result leaving in the one register a caller reads; a
+/// body returning one waits for the machine half of RFC-0064. Below the top
+/// level nothing changes: a reference inside data is RFC-0062 Decision 5's
+/// refusal whatever its shape.
+fn unreturnable_reference(ty: &InferTy) -> Option<&InferTy> {
+    match ty {
+        TyTerm::Ref(_, target) => is_view(&target.ty).then_some(ty),
+        _ => reference_in_result(ty),
+    }
+}
+
+/// The two adjacent word registers a run occupies (RFC-0047 amended rule 1,
+/// RFC-0062 Decision 1). `acvus_interpreter::prepare::is_slice` is the same
+/// predicate on a frozen `Ty`, and the two must name the same types: this
+/// one decides what a body may return, that one lays the registers out, and
+/// a type admitted here that it calls a pair returns into one register and
+/// loses its length.
+fn is_view(ty: &InferTy) -> bool {
+    match ty {
+        TyTerm::Slice(_) | TyTerm::Str => true,
+        TyTerm::Ref(_, target) => is_view(&target.ty),
+        _ => false,
+    }
+}
+
 /// A `$name` the body reads. A parameter a Signature declared arrives with
 /// its type already closed and no place in this body; one the body
 /// discovered carries the place it was first read, which is where a type
@@ -1119,16 +1151,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             TyTerm::Unit
         };
         self.solve_body();
-        // A body does not hand a reference to its caller. The result leaves
-        // in the one register a caller reads, and a `&str` is two (RFC-0062
-        // Decision 4); a host that declares `!` reads the result by kind
-        // (RFC-0054), and what a reference names is a place this run is
-        // about to leave, so reading it is reading freed storage. Until
-        // RFC-0064 gives a body's result a lifetime, every reference is
-        // refused here.
         if let Some(tail) = &script.tail {
             let resolved = self.solver.resolve_ty(&tail_ty);
-            if let Some(reference) = reference_in_result(&resolved) {
+            if let Some(reference) = unreturnable_reference(&resolved) {
                 let ty = self.type_as_written(reference);
                 self.error(MirErrorKind::ReferenceReturnedFromBody(ty), tail.span());
             }

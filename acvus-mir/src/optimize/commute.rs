@@ -25,7 +25,7 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::domtree::{DomTree, PostDomTree};
 use crate::analysis::inst_info;
-use crate::analysis::loans::Loans;
+use crate::analysis::loans::{Loans, Summaries};
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::{Inst, InstKind, OrderEdge, ValueId};
 use crate::optimize::context_ops::{context_read, context_written};
@@ -129,7 +129,7 @@ fn find_move(cfg: &mut CfgBody) -> Option<Move> {
         } if callee_ty.effect().is_some_and(|e| e.commutes) => Some(*edge),
         _ => None,
     };
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     let touches_nothing = |inst: &Inst| match &inst.kind {
         InstKind::FunctionCall { callee_ty, .. } => {
             callee_ty

@@ -128,12 +128,14 @@ exist, so `|k| -> k + "a"` fixes nothing and is refused.
 `core::to_string` takes `T = Str` as an instance, and `"x".to_string()` is
 the spelling wherever an owned string is wanted: at a `String` parameter, in
 a list, an object, a tuple or a context, at a capture, and as a body's
-result. A body does not return a reference of any kind: the result leaves in
-the one register a caller reads, a host that declares `!` reads it by kind
-(RFC-0054), which a pair has none of, and what a reference names is a place
-the run is about to leave. `MirErrorKind::ReferenceReturnedFromBody` is that
+result. A body does not return a view: the result leaves in the one register
+a caller reads, a host that declares `!` reads it by kind (RFC-0054), which
+a pair has none of. `MirErrorKind::ReferenceReturnedFromBody` is that
 refusal, and it is what makes an extern call the only site where a call's
-destination can be the two registers a view occupies.
+destination can be the two registers a view occupies. A body does return a
+bare reference, which is one register: RFC-0064 gives its result a summary
+saying which parameters it borrows, and `validate::borrow_check` refuses one
+naming a place the run is about to leave.
 
 The `string` module's reading half takes `&str`. A producer whose result is
 a run of its argument's own bytes returns `&str` — `trim`, `trim_start`,

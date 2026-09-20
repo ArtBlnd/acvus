@@ -20,7 +20,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::Loans;
+use crate::analysis::loans::{Loans, Summaries};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
@@ -269,7 +269,7 @@ fn storage_reached(loans: &Loans, values: impl IntoIterator<Item = ValueId>) -> 
         if !reached.insert(v) {
             continue;
         }
-        work.extend(loans.region(v).loans.iter().map(|l| l.storage));
+        work.extend(loans.region(v).loans.iter().map(|l| l.storage.value()));
     }
     reached
 }
@@ -374,7 +374,7 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
 /// to observable behavior (Return, Store, Eval, effectful calls).
 pub fn run(cfg: &mut CfgBody) {
     let def_map = build_def_map(cfg);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     let stores = Stores::of(cfg, &loans);
 
     // Live instruction set.

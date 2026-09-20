@@ -13,7 +13,7 @@ use crate::analysis::dataflow::{
 };
 use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
-use crate::analysis::loans::Loans;
+use crate::analysis::loans::{Loans, Summaries};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, ValueId};
 
@@ -148,7 +148,7 @@ pub fn analyze(cfg: &CfgBody) -> LivenessResult {
     }
 
     let analysis = LivenessAnalysis {
-        loans: Loans::build(cfg),
+        loans: Loans::build(cfg, Summaries::NONE),
     };
     let result = backward_analysis(cfg, &analysis);
 

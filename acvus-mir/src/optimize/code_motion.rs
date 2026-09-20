@@ -87,7 +87,7 @@ use crate::analysis::loops::{LoopDepth, NaturalLoop, natural_loops_innermost_fir
 use std::mem::{Discriminant, discriminant};
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::{Loan, Loans};
+use crate::analysis::loans::{Loan, Loans, Summaries};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::*;
 use crate::optimize::const_dedup::{remap_uses, remap_val, remap_vec};
@@ -134,7 +134,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     let postdom = PostDomTree::build(cfg);
     let depth = LoopDepth::of(cfg, &domtree);
     let writes = StorageWrites::of(cfg);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     let mut def_block = build_def_block(cfg);
 
     // -- Collect hoists ---------------------------------------------
@@ -292,7 +292,7 @@ fn backing_storages(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         .region(through)
         .loans
         .iter()
-        .map(|loan| loan.storage)
+        .map(|loan| loan.storage.value())
         .collect()
 }
 
@@ -323,7 +323,7 @@ impl At {
 /// chain - the `Index`, then the `Ref` through it - resolves a link a pass.
 fn dedup_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     let writes = StorageWrites::of(cfg);
 
     let named: Vec<At> = cfg
@@ -506,7 +506,7 @@ struct StorageWrites {
 
 impl StorageWrites {
     fn of(cfg: &CfgBody) -> Self {
-        let loans = Loans::build(cfg);
+        let loans = Loans::build(cfg, Summaries::NONE);
         Self {
             per_block: cfg
                 .blocks
@@ -632,7 +632,9 @@ fn hoistable(loans: &Loans, kind: &InstKind) -> Hoistable {
                     storage,
                     mutability: Mutability::Shared,
                 },
-            ] => Hoistable::SharedBorrow { storage: *storage },
+            ] => Hoistable::SharedBorrow {
+                storage: storage.value(),
+            },
             _ => Hoistable::No,
         },
         InstKind::AsSlice { .. } => Hoistable::No,
@@ -810,7 +812,7 @@ fn every_touch_goes_through(
     storage: ValueId,
     pairs: &[SliceOfStorage],
 ) -> bool {
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     let slices: Vec<ValueId> = pairs
         .iter()
         .map(|p| {
@@ -944,7 +946,7 @@ impl<'a> BorrowKey<'a> {
 /// are exactly what runs between them: the question needs no dominance and
 /// no reachability, only a walk.
 fn merge_pass(cfg: &mut CfgBody) -> bool {
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     let CfgBody {
         blocks, val_types, ..
     } = cfg;
@@ -1025,7 +1027,13 @@ fn taken_exclusively(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         match target {
             RefTarget::Var(storage) | RefTarget::Param(storage) => taken.push(*storage),
             RefTarget::Through(reference) => {
-                taken.extend(loans.region(*reference).loans.iter().map(|l| l.storage));
+                taken.extend(
+                    loans
+                        .region(*reference)
+                        .loans
+                        .iter()
+                        .map(|l| l.storage.value()),
+                );
             }
         }
     }
@@ -1153,7 +1161,7 @@ fn sink_pass(cfg: &mut CfgBody) {
 
 /// Try to sink ONE Eval. Returns true if something moved.
 fn sink_one(cfg: &mut CfgBody) -> bool {
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, Summaries::NONE);
     for bi in 0..cfg.blocks.len() {
         for ii in 0..cfg.blocks[bi].insts.len() {
             let kind = &cfg.blocks[bi].insts[ii].kind;
@@ -1431,7 +1439,7 @@ mod tests {
     fn classified(insts: Vec<InstKind>) -> Hoistable {
         let last = insts.last().expect("a body to classify").clone();
         let cfg = make_cfg(insts, 8);
-        hoistable(&Loans::build(&cfg), &last)
+        hoistable(&Loans::build(&cfg, Summaries::NONE), &last)
     }
 
     fn as_slice_of(container: ValueId, mutability: Mutability) -> InstKind {

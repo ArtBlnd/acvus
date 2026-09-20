@@ -18,13 +18,88 @@ use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysi
 use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator};
-use crate::ir::{ForSource, Inst, InstKind, RefTarget, ValueId};
+use crate::graph::QualifiedRef;
+use crate::ir::{Callee, ForSource, Inst, InstKind, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoanStorage {
+    Local(ValueId),
+    Param { index: usize, value: ValueId },
+}
+
+impl LoanStorage {
+    fn in_body(value: ValueId, param_index: &FxHashMap<ValueId, usize>) -> Self {
+        match param_index.get(&value) {
+            Some(&index) => Self::Param { index, value },
+            None => Self::Local(value),
+        }
+    }
+
+    pub fn value(self) -> ValueId {
+        match self {
+            Self::Local(value) | Self::Param { value, .. } => value,
+        }
+    }
+
+    pub fn param(self) -> Option<usize> {
+        match self {
+            Self::Local(_) => None,
+            Self::Param { index, .. } => Some(index),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Loan {
-    pub storage: ValueId,
+    pub storage: LoanStorage,
     pub mutability: Mutability,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParamLoan {
+    pub index: usize,
+    pub mutability: Mutability,
+}
+
+/// What a body's result borrows from the body's parameters: the object
+/// RFC-0064 Decision 2 calls a body's summary.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Summary {
+    pub loans: Vec<ParamLoan>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Leaving {
+    pub summary: Summary,
+    pub locals: Vec<ValueId>,
+}
+
+/// The summaries of the callees a body calls by name.
+///
+/// Most consumers pass `NONE`, and that is a decision rather than an
+/// omission. Without a summary a call's result takes the union of every
+/// argument's region, which is a superset of what substitution yields, so
+/// the only cost is refusing a program a summary would have admitted — no
+/// pass can be made unsound by it. Threading a table through every
+/// optimization pass to buy precision no pass spends would be the whole
+/// pipeline's signature for nothing.
+#[derive(Clone, Copy)]
+pub struct Summaries<'a>(Option<&'a FxHashMap<QualifiedRef, Summary>>);
+
+impl<'a> Summaries<'a> {
+    pub const NONE: Self = Self(None);
+
+    pub fn of(table: &'a FxHashMap<QualifiedRef, Summary>) -> Self {
+        Self(Some(table))
+    }
+
+    fn at(&self, callee: &Callee) -> Option<&'a Summary> {
+        match callee {
+            Callee::Direct(id) => self.0?.get(id),
+            Callee::Extern { .. } | Callee::Indirect(_) => None,
+        }
+    }
 }
 
 /// The loans a value holds, and the references it was built through: a
@@ -76,10 +151,10 @@ impl StorageEffect {
             || hits(&self.reads, &other.writes)
     }
 
-    fn add(&mut self, loan: Loan) {
-        match loan.mutability {
-            Mutability::Shared => self.reads.push(loan.storage),
-            Mutability::Mut => self.writes.push(loan.storage),
+    fn add(&mut self, storage: ValueId, mutability: Mutability) {
+        match mutability {
+            Mutability::Shared => self.reads.push(storage),
+            Mutability::Mut => self.writes.push(storage),
         }
     }
 }
@@ -89,6 +164,8 @@ impl StorageEffect {
 struct RegionAnalysis<'a> {
     val_types: &'a FxHashMap<ValueId, Ty>,
     cfg: &'a CfgBody,
+    param_index: FxHashMap<ValueId, usize>,
+    summaries: Summaries<'a>,
 }
 
 /// A value with no type entry is taken to carry a reference: the stricter
@@ -97,6 +174,38 @@ struct RegionAnalysis<'a> {
 const UNTYPED_CARRIES_REFERENCE: bool = true;
 
 impl RegionAnalysis<'_> {
+    fn loan(&self, storage: ValueId, mutability: Mutability) -> Loan {
+        Loan {
+            storage: LoanStorage::in_body(storage, &self.param_index),
+            mutability,
+        }
+    }
+
+    /// RFC-0064 Decision 3: a call substitutes each `Param(i)` of the
+    /// callee's summary with argument `i`'s region.
+    fn substituted(
+        &self,
+        state: &DataflowState<ValueId, Region>,
+        callee: &Callee,
+        args: &[ValueId],
+    ) -> Option<Region> {
+        let summary = self.summaries.at(callee)?;
+        let mut region = Region::default();
+        for loan in &summary.loans {
+            let Some(arg) = args.get(loan.index) else {
+                return None;
+            };
+            let mut borrowed = state.get(*arg);
+            if loan.mutability == Mutability::Mut {
+                for held in &mut borrowed.loans {
+                    held.mutability = Mutability::Mut;
+                }
+            }
+            region.join_mut(&borrowed);
+        }
+        Some(region)
+    }
+
     fn carries_ref(&self, v: ValueId) -> bool {
         self.val_types
             .get(&v)
@@ -137,10 +246,7 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
                 RefTarget::Var(s) | RefTarget::Param(s) => state.set(
                     *dst,
                     Region {
-                        loans: vec![Loan {
-                            storage: *s,
-                            mutability: *mutability,
-                        }],
+                        loans: vec![self.loan(*s, *mutability)],
                         via: vec![],
                     },
                 ),
@@ -173,6 +279,17 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
                 for a in args {
                     self.flow(state, *a, *dst, true);
                 }
+            }
+            InstKind::FunctionCall {
+                dst, callee, args, ..
+            } => {
+                let Some(region) = self.substituted(state, callee, args) else {
+                    for a in args {
+                        self.flow(state, *a, *dst, false);
+                    }
+                    return;
+                };
+                state.set(*dst, region);
             }
             kind => {
                 for dst in inst_info::defs(kind) {
@@ -252,10 +369,17 @@ static NOTHING: Region = Region {
 };
 
 impl Loans {
-    pub fn build(cfg: &CfgBody) -> Self {
+    pub fn build(cfg: &CfgBody, summaries: Summaries<'_>) -> Self {
         let analysis = RegionAnalysis {
             val_types: &cfg.val_types,
             cfg,
+            param_index: cfg
+                .params
+                .iter()
+                .enumerate()
+                .map(|(index, (_, value))| (*value, index))
+                .collect(),
+            summaries,
         };
         let mut entry = DataflowState::new();
         for storage in cfg.entry_defs() {
@@ -263,10 +387,7 @@ impl Loans {
                 entry.set(
                     storage,
                     Region {
-                        loans: vec![Loan {
-                            storage,
-                            mutability: *mutability,
-                        }],
+                        loans: vec![analysis.loan(storage, *mutability)],
                         via: vec![],
                     },
                 );
@@ -288,6 +409,28 @@ impl Loans {
         self.region.get(&value).unwrap_or(&NOTHING)
     }
 
+    /// RFC-0064 Decision 2: a body's summary is the region of its result
+    /// over `Param` loans, and a local loan in the result is refused.
+    pub fn leaving(&self, value: ValueId) -> Leaving {
+        let mut leaving = Leaving::default();
+        for loan in &self.region(value).loans {
+            match loan.storage {
+                LoanStorage::Local(local) => leaving.locals.push(local),
+                LoanStorage::Param { index, .. } => leaving.summary.loans.push(ParamLoan {
+                    index,
+                    mutability: loan.mutability,
+                }),
+            }
+        }
+        leaving
+    }
+
+    fn add_loans(&self, effect: &mut StorageEffect, value: ValueId) {
+        for loan in &self.region(value).loans {
+            effect.add(loan.storage.value(), loan.mutability);
+        }
+    }
+
     pub fn storage_effect(&self, kind: &InstKind) -> StorageEffect {
         let mut effect = StorageEffect::default();
         match kind {
@@ -307,12 +450,10 @@ impl Loans {
             }
             InstKind::FunctionCall { args, .. } | InstKind::Spawn { args, .. } => {
                 for a in args {
-                    self.region(*a).loans.iter().for_each(|l| effect.add(*l));
+                    self.add_loans(&mut effect, *a);
                 }
             }
-            InstKind::Eval { src, .. } => {
-                self.region(*src).loans.iter().for_each(|l| effect.add(*l));
-            }
+            InstKind::Eval { src, .. } => self.add_loans(&mut effect, *src),
             // A slice is a borrow of its container taken with the slice's
             // own mutability; indexing touches the run that borrow names
             // (RFC-0047).
@@ -356,9 +497,10 @@ impl Loans {
 
     fn reachable_storage(&self, value: ValueId, out: &mut SmallVec<[ValueId; 4]>) {
         for loan in &self.region(value).loans {
-            if !out.contains(&loan.storage) {
-                out.push(loan.storage);
-                self.reachable_storage(loan.storage, out);
+            let storage = loan.storage.value();
+            if !out.contains(&storage) {
+                out.push(storage);
+                self.reachable_storage(storage, out);
             }
         }
     }
@@ -370,10 +512,7 @@ impl Loans {
     /// `&mut` and may empty it.
     fn touch(&self, effect: &mut StorageEffect, target: &RefTarget, mutability: Mutability) {
         match target {
-            RefTarget::Var(s) | RefTarget::Param(s) => effect.add(Loan {
-                storage: *s,
-                mutability,
-            }),
+            RefTarget::Var(s) | RefTarget::Param(s) => effect.add(*s, mutability),
             RefTarget::Through(r) => self.touch_region(effect, *r, mutability),
         }
     }
@@ -381,13 +520,11 @@ impl Loans {
     /// As `touch`, for a storage reached only through `reference`.
     fn touch_region(&self, effect: &mut StorageEffect, reference: ValueId, mutability: Mutability) {
         for loan in &self.region(reference).loans {
-            effect.add(Loan {
-                storage: loan.storage,
-                mutability: match (mutability, loan.mutability) {
-                    (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
-                    (Mutability::Shared, _) | (_, Mutability::Shared) => Mutability::Shared,
-                },
-            });
+            let bounded = match (mutability, loan.mutability) {
+                (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+                (Mutability::Shared, _) | (_, Mutability::Shared) => Mutability::Shared,
+            };
+            effect.add(loan.storage.value(), bounded);
         }
     }
 }
@@ -410,5 +547,99 @@ pub fn contains_ref(ty: &Ty) -> bool {
         } => !identity_args.is_empty() || type_args.iter().any(|a| contains_ref(&a.ty)),
         Ty::Enum { variants, .. } => variants.values().flatten().any(|t| contains_ref(t)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::promote;
+    use crate::ir::{DebugInfo, MirBody};
+    use crate::ty::{Task, TypeArg};
+    use acvus_ast::Span;
+    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
+
+    fn shared_string() -> Ty {
+        Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String)))
+    }
+
+    /// Two reference parameters, and a reborrow of the second returned.
+    fn two_parameters() -> CfgBody {
+        let i = Interner::new();
+        let mut factory = LocalFactory::<ValueId>::new();
+        let (p0, p1, dst) = (factory.next(), factory.next(), factory.next());
+        promote(MirBody {
+            insts: vec![
+                Inst {
+                    span: Span::ZERO,
+                    kind: InstKind::Ref {
+                        dst,
+                        target: RefTarget::Through(p1),
+                        path: vec![],
+                        mutability: Mutability::Shared,
+                    },
+                },
+                Inst {
+                    span: Span::ZERO,
+                    kind: InstKind::Return {
+                        value: dst,
+                        order: None,
+                    },
+                },
+            ],
+            val_types: [
+                (p0, shared_string()),
+                (p1, shared_string()),
+                (dst, shared_string()),
+            ]
+            .into_iter()
+            .collect(),
+            params: vec![(i.intern("a"), p0), (i.intern("b"), p1)],
+            captures: vec![],
+            order_param: None,
+            task: Task::Sync,
+            debug: DebugInfo::new(),
+            val_factory: factory,
+            label_count: 2,
+            demoted_diamonds: Default::default(),
+        })
+    }
+
+    #[test]
+    fn a_param_loan_names_the_parameter_at_its_index() {
+        let cfg = two_parameters();
+        let loans = Loans::build(&cfg, Summaries::NONE);
+        let mut seen = 0;
+        for value in cfg.val_types.keys() {
+            for loan in &loans.region(*value).loans {
+                let Some(index) = loan.storage.param() else {
+                    panic!("a body of only parameters holds {:?}", loan.storage);
+                };
+                assert_eq!(cfg.params[index].1, loan.storage.value());
+                seen += 1;
+            }
+        }
+        assert!(seen >= cfg.params.len(), "every parameter starts a region");
+    }
+
+    #[test]
+    fn the_summary_names_the_parameter_the_result_reborrows() {
+        let cfg = two_parameters();
+        let loans = Loans::build(&cfg, Summaries::NONE);
+        let returned = cfg.params[1].1;
+        let dst = *cfg
+            .val_types
+            .keys()
+            .find(|v| **v != cfg.params[0].1 && **v != returned)
+            .expect("the reborrow");
+        let leaving = loans.leaving(dst);
+        assert_eq!(leaving.locals, []);
+        assert_eq!(
+            leaving.summary.loans,
+            [ParamLoan {
+                index: 1,
+                mutability: Mutability::Shared,
+            }]
+        );
     }
 }

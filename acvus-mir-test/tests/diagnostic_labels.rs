@@ -304,17 +304,18 @@ mod undeclared_context {
     }
 }
 
-/// A body's result is not a reference, nor data holding one: the `&str`
-/// shape keeps the spelling that owns the text.
+/// A body's result is not a view, nor data holding a reference: the `&str`
+/// shape keeps the spelling that owns the text. RFC-0064 rule 1 admits a
+/// bare reference, and what it may name is the borrow check's to say.
 mod reference_returned_from_body {
     use super::*;
 
     const WORDS: &str = "a body does not return a reference";
 
     #[test]
-    fn a_reference_to_a_word_is_refused() {
+    fn a_reference_to_a_local_is_refused_where_the_local_was_borrowed() {
         let (message, labels) = only("let a = 1; &a", &nothing);
-        assert_eq!(message, WORDS);
+        assert_eq!(message, "a reference to `a` cannot leave the body");
         assert_eq!(labels, []);
     }
 

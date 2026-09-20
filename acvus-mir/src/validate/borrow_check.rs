@@ -9,7 +9,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{Loan, Loans};
+use crate::analysis::loans::{Loan, Loans, Summaries, Summary};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{InstKind, MirBody, MirModule, RefTarget, ValueId};
@@ -19,21 +19,124 @@ use crate::validate::type_check::{ConflictTouch, ValidationError, ValidationErro
 use acvus_ast::Span;
 use acvus_ast::report::Label;
 
+pub struct Checked {
+    pub errors: Vec<ValidationError>,
+    pub summary: Summary,
+}
+
+/// The exclusion rule alone, which holds of a module at any point in the
+/// pipeline.
 pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    check_body("main", &module.main, &mut errors);
-    for (label, closure) in &module.closures {
-        check_body(&format!("closure({label:?})"), closure, &mut errors);
+    for checking in Bodies::of(module, Summaries::NONE).all() {
+        checking.check_exclusion(&mut errors);
     }
     errors
 }
 
-fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
-    let cfg = promote(body.clone());
-    if cfg.blocks.is_empty() {
-        return;
+/// The exclusion rule and RFC-0064's result rule together, with the summary
+/// the module's own body leaves with.
+///
+/// The result rule is not repeated by `check_borrows` because it cannot be:
+/// what a call's result borrows is the callee's summary, so the answer
+/// depends on every callee having been checked first, and pass 0 of
+/// `graph::optimize` is the only place that order exists. Asking the same
+/// question anywhere else would answer it from `Summaries::NONE` and refuse
+/// programs pass 0 admitted.
+pub fn check_borrows_in_order(module: &MirModule, summaries: Summaries<'_>) -> Checked {
+    let bodies = Bodies::of(module, summaries);
+    let mut errors = Vec::new();
+    let summary = match &bodies.main {
+        Some(main) => {
+            let summary = main.check_result(&mut errors);
+            main.check_exclusion(&mut errors);
+            summary
+        }
+        None => Summary::default(),
+    };
+    for closure in &bodies.closures {
+        closure.check_result(&mut errors);
+        closure.check_exclusion(&mut errors);
     }
-    check_exclusion(scope, &cfg, errors);
+    Checked { errors, summary }
+}
+
+struct Bodies {
+    main: Option<Checking>,
+    closures: Vec<Checking>,
+}
+
+impl Bodies {
+    fn of(module: &MirModule, summaries: Summaries<'_>) -> Self {
+        Self {
+            main: Checking::of("main".to_string(), &module.main, summaries),
+            closures: module
+                .closures
+                .iter()
+                .filter_map(|(label, closure)| {
+                    Checking::of(format!("closure({label:?})"), closure, summaries)
+                })
+                .collect(),
+        }
+    }
+
+    fn all(&self) -> impl Iterator<Item = &Checking> {
+        self.main.iter().chain(&self.closures)
+    }
+}
+
+/// One body under the borrow check, with the analyses every rule reads.
+struct Checking {
+    scope: String,
+    cfg: CfgBody,
+    loans: Loans,
+    sites: HolderSites,
+}
+
+impl Checking {
+    fn of(scope: String, body: &MirBody, summaries: Summaries<'_>) -> Option<Self> {
+        let cfg = promote(body.clone());
+        if cfg.blocks.is_empty() {
+            return None;
+        }
+        let loans = Loans::build(&cfg, summaries);
+        let sites = HolderSites::of(&cfg, &loans);
+        Some(Self {
+            scope,
+            cfg,
+            loans,
+            sites,
+        })
+    }
+
+    /// RFC-0064 Decision 2: what the body's result borrows from its
+    /// parameters is the body's summary, and a local's loan in the result is
+    /// refused.
+    fn check_result(&self, errors: &mut Vec<ValidationError>) -> Summary {
+        let mut summary = Summary::default();
+        for block in &self.cfg.blocks {
+            let Terminator::Return { value, .. } = block.terminator else {
+                continue;
+            };
+            let leaving = self.loans.leaving(value);
+            for loan in leaving.summary.loans {
+                if !summary.loans.contains(&loan) {
+                    summary.loans.push(loan);
+                }
+            }
+            for local in leaving.locals {
+                errors.push(ValidationError {
+                    scope: self.scope.clone(),
+                    inst_index: block.insts.len(),
+                    span: self.sites.borrowed_at(value),
+                    kind: ValidationErrorKind::ReferenceToLocalLeavesBody {
+                        storage: self.cfg.debug.get(local).cloned(),
+                    },
+                });
+            }
+        }
+        summary
+    }
 }
 
 // -- Exclusion ---------------------------------------------------------
@@ -116,7 +219,7 @@ fn reached(target: &RefTarget, loans: &Loans) -> Reached {
         RefTarget::Through(r) => {
             let region = loans.region(*r);
             Reached {
-                storage: region.loans.iter().map(|l| l.storage).collect(),
+                storage: region.loans.iter().map(|l| l.storage.value()).collect(),
                 via: region.via.iter().copied().chain([*r]).collect(),
             }
         }
@@ -175,6 +278,10 @@ impl HolderSites {
         Self { borrowed, named }
     }
 
+    fn borrowed_at(&self, holder: ValueId) -> Span {
+        self.borrowed.get(&holder).copied().unwrap_or(Span::ZERO)
+    }
+
     fn labels(&self, holder: ValueId, conflict: Span) -> Vec<Label> {
         let borrow = self
             .borrowed
@@ -191,72 +298,72 @@ impl HolderSites {
     }
 }
 
-fn check_exclusion(scope: &str, cfg: &CfgBody, errors: &mut Vec<ValidationError>) {
-    let loans = Loans::build(cfg);
-    let sites = HolderSites::of(cfg, &loans);
-    let holders: FxHashSet<ValueId> = cfg
-        .val_types
-        .keys()
-        .filter(|v| !loans.region(**v).loans.is_empty())
-        .copied()
-        .collect();
-    if holders.is_empty() {
-        return;
-    }
-    let live = liveness::analyze(cfg);
-
-    for (bi, block) in cfg.blocks.iter().enumerate() {
-        // Holders live before each instruction, by a backward walk from
-        // the block's live-out set.
-        let mut live_before: Vec<FxHashSet<ValueId>> =
-            vec![FxHashSet::default(); block.insts.len()];
-        let mut current: FxHashSet<ValueId> = holders
-            .iter()
-            .filter(|v| live.is_live_out(BlockIdx(bi), **v))
+impl Checking {
+    fn check_exclusion(&self, errors: &mut Vec<ValidationError>) {
+        let holders: FxHashSet<ValueId> = self
+            .cfg
+            .val_types
+            .keys()
+            .filter(|v| !self.loans.region(**v).loans.is_empty())
             .copied()
             .collect();
-        for v in terminator_uses(&block.terminator) {
-            if holders.contains(&v) {
-                current.insert(v);
-            }
+        if holders.is_empty() {
+            return;
         }
-        for (ii, inst) in block.insts.iter().enumerate().rev() {
-            for d in inst_info::defs(&inst.kind) {
-                current.remove(&d);
-            }
-            for u in loans.uses_with_storage(&inst.kind) {
-                if holders.contains(&u) {
-                    current.insert(u);
-                }
-            }
-            live_before[ii] = current.clone();
-        }
+        let live = liveness::analyze(&self.cfg);
 
-        for (ii, inst) in block.insts.iter().enumerate() {
-            let Some((target, touch)) = touch(&inst.kind, &cfg.val_types) else {
-                continue;
-            };
-            let reach = reached(&target, &loans);
-            for holder in &live_before[ii] {
-                if reach.via.contains(holder) {
-                    continue;
+        for (bi, block) in self.cfg.blocks.iter().enumerate() {
+            // Holders live before each instruction, by a backward walk from
+            // the block's live-out set.
+            let mut live_before: Vec<FxHashSet<ValueId>> =
+                vec![FxHashSet::default(); block.insts.len()];
+            let mut current: FxHashSet<ValueId> = holders
+                .iter()
+                .filter(|v| live.is_live_out(BlockIdx(bi), **v))
+                .copied()
+                .collect();
+            for v in terminator_uses(&block.terminator) {
+                if holders.contains(&v) {
+                    current.insert(v);
                 }
-                let hit =
-                    loans.region(*holder).loans.iter().any(|loan| {
-                        reach.storage.contains(&loan.storage) && conflicts(loan, &touch)
+            }
+            for (ii, inst) in block.insts.iter().enumerate().rev() {
+                for d in inst_info::defs(&inst.kind) {
+                    current.remove(&d);
+                }
+                for u in self.loans.uses_with_storage(&inst.kind) {
+                    if holders.contains(&u) {
+                        current.insert(u);
+                    }
+                }
+                live_before[ii] = current.clone();
+            }
+
+            for (ii, inst) in block.insts.iter().enumerate() {
+                let Some((target, touch)) = touch(&inst.kind, &self.cfg.val_types) else {
+                    continue;
+                };
+                let reach = reached(&target, &self.loans);
+                for holder in &live_before[ii] {
+                    if reach.via.contains(holder) {
+                        continue;
+                    }
+                    let hit = self.loans.region(*holder).loans.iter().any(|loan| {
+                        reach.storage.contains(&loan.storage.value()) && conflicts(loan, &touch)
                     });
-                if hit {
-                    errors.push(ValidationError {
-                        scope: scope.to_string(),
-                        inst_index: ii,
-                        span: inst.span,
-                        kind: ValidationErrorKind::BorrowConflict {
-                            storage: inst_info::storage(&target)
-                                .and_then(|slot| cfg.debug.get(slot).cloned()),
-                            touch: touch.stated(),
-                            labels: sites.labels(*holder, inst.span),
-                        },
-                    });
+                    if hit {
+                        errors.push(ValidationError {
+                            scope: self.scope.to_string(),
+                            inst_index: ii,
+                            span: inst.span,
+                            kind: ValidationErrorKind::BorrowConflict {
+                                storage: inst_info::storage(&target)
+                                    .and_then(|slot| self.cfg.debug.get(slot).cloned()),
+                                touch: touch.stated(),
+                                labels: self.sites.labels(*holder, inst.span),
+                            },
+                        });
+                    }
                 }
             }
         }

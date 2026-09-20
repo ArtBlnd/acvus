@@ -21,7 +21,7 @@ use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower, optimize as graph_optimize};
 use acvus_mir::ty::{
-    LenTerm, ObjectTy, PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly,
+    LenTerm, ObjectTy, PolyBuilder, PolyParam, Ty, TyTerm, lift_declaration, try_freeze_poly,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -162,10 +162,46 @@ pub struct Refusal {
     pub dump: Option<String>,
 }
 
+/// A local function beside `main` in a compiled graph.
+///
+/// There is no result type here — not an omission, a decision. A helper's
+/// result is the thing RFC-0064 step 1 is about, and a declared one would
+/// let a test assert a result type the body never produced.
+pub struct Helper<'a> {
+    pub name: &'a str,
+    pub source: &'a str,
+    pub params: Vec<PolyParam>,
+}
+
 /// Every stage that can refuse a source, at the given optimization level.
 pub fn check_source<D>(
     interner: &Interner,
-    ast: ParsedAst,
+    main: ParsedAst,
+    context_types: &FxHashMap<Astr, Ty>,
+    extern_registries: Vec<Registry<AcvusRuntime>>,
+    ret: Ty,
+    opt: Opt,
+    declare_types: D,
+) -> Result<CompileResult, Refusal>
+where
+    D: FnOnce(&mut acvus_mir::ty::TypeRegistry),
+{
+    check_graph(
+        interner,
+        main,
+        &[],
+        context_types,
+        extern_registries,
+        ret,
+        opt,
+        declare_types,
+    )
+}
+
+pub fn check_graph<D>(
+    interner: &Interner,
+    main: ParsedAst,
+    helpers: &[Helper<'_>],
     context_types: &FxHashMap<Astr, Ty>,
     extern_registries: Vec<Registry<AcvusRuntime>>,
     ret: Ty,
@@ -188,7 +224,7 @@ where
     let mut functions = Vec::new();
     functions.push(Function {
         qref: entry_qref,
-        kind: FnKind::Local(ast),
+        kind: FnKind::Local(main),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(lift_declaration(&ret, &mut pb)),
@@ -196,6 +232,28 @@ where
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
     });
+
+    for helper in helpers {
+        let parsed = match acvus_ast::parse_script(interner, helper.source) {
+            Ok(script) => script,
+            Err(e) => {
+                return Err(Refusal {
+                    messages: vec![format!("[{}] parse error: {e:?}", helper.name)],
+                    dump: None,
+                });
+            }
+        };
+        functions.push(Function {
+            qref: QualifiedRef::root(interner.intern(helper.name)),
+            kind: FnKind::Local(ParsedAst::Script(parsed)),
+            ty: TyTerm::Fn {
+                params: helper.params.clone(),
+                ret: Box::new(pb.fresh_ty_var()),
+                captures: vec![],
+                effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            },
+        });
+    }
 
     let Externs {
         functions: extern_fns,

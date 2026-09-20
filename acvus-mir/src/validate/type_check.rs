@@ -134,6 +134,15 @@ pub enum ValidationErrorKind {
     ContextMovedOut {
         context: Astr,
     },
+    /// The body's result holds a loan on a local, whose storage the run is
+    /// about to leave (RFC-0064 Decision 2).
+    ReferenceToLocalLeavesBody {
+        storage: Option<ValOrigin>,
+    },
+    /// A body whose result holds a reference sits in a cycle of the call
+    /// graph, where its summary is the fixpoint RFC-0064 Decision 4 states
+    /// and step 3 of its order of work builds.
+    RecursiveReferenceResult,
 }
 
 /// What the conflicting instruction does to the storage, in the word the

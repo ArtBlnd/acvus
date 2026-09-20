@@ -889,7 +889,7 @@ fn what_the_machine_cannot_run_the_checker_refuses() {
         (
             "reference.acvus",
             "let a = [1, 2];\n&a\n",
-            "a body does not return a reference",
+            "a reference to `a` cannot leave the body",
         ),
     ];
     for (name, source, words) in refused {

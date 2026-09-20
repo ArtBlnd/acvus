@@ -160,6 +160,14 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 f,
                 "non-exhaustive match: an `{enum_name}` has {arity} variants and the arms cover {covered}; add the missing arm or a `_` arm"
             ),
+            ValidationErrorKind::ReferenceToLocalLeavesBody { storage } => {
+                let named = written_as(self.interner, storage.as_ref())
+                    .unwrap_or_else(|| "a local".to_string());
+                write!(f, "a reference to {named} cannot leave the body")
+            }
+            ValidationErrorKind::RecursiveReferenceResult => {
+                write!(f, "a recursive body's result may not be a reference")
+            }
             ValidationErrorKind::BorrowConflict { storage, touch, .. } => {
                 let named = written_as(self.interner, storage.as_ref())
                     .unwrap_or_else(|| "the storage".to_string());
