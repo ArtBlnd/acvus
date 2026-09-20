@@ -1,6 +1,6 @@
 # RFC-0064: A reference's extent is its loans
 
-Status: Draft (2026-09-20) — for the owner to read before any code run.
+Status: Accepted (2026-09-20)
 
 ## Problem
 

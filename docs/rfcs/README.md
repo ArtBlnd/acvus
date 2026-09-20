@@ -109,4 +109,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0061](0061-a-store-nothing-reads-is-dead.md) | A store nothing reads is dead | Accepted |
 | [RFC-0062](0062-a-string-slice-is-a-register-pair.md) | A string slice is a register pair | Accepted |
 | [RFC-0063](0063-an-if-is-a-terminator.md) | An `if` is a terminator | Accepted |
-| [RFC-0064](0064-a-references-extent-is-its-loans.md) | A reference's extent is its loans | Draft |
+| [RFC-0064](0064-a-references-extent-is-its-loans.md) | A reference's extent is its loans | Accepted |
