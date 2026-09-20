@@ -35,9 +35,9 @@ no layer holds a number nobody measured.
    later layer computes is a sum of rows of this table, in the table's
    own unit; no layer knows the unit and no source file carries a cycle
    count. The table is cached per target and invalidated when the
-   runtime binary changes; a target with no table (a fresh wasm module)
-   measures before it decides, or decides nothing (single thread) until
-   it has.
+   runtime binary changes. A target with no table decides nothing: the
+   loop runs as the plain function it already is, on one thread, until a
+   table exists.
 
 1. **An invariant table over SSA chains.** For every chain the escape and
    loan analyses already walk, the table records what is known at entry
@@ -75,11 +75,22 @@ no layer holds a number nobody measured.
    invariants and chooses the machine form: a split region whose
    chunks run as `Heavy` spawns and join through the exact reduction; a
    region evaluated in place as one operation; or a region unrolled at
-   the operation level. The choice compares table-0 costs — the
-   region's cost times the iteration count against the spawn and join
-   rows — and where the count is known only at run time, the operation
-   the lowerer emits carries both forms and the threshold, and the
-   machine takes the branch once per loop entry.
+   the operation level. The choice is one comparison of table-0 sums —
+   the region's cost per iteration times the iteration count, against
+   the spawn and join rows times the chunk count. Where the count is
+   known only at run time, the lowerer inserts **one `if`** ahead of the
+   loop whose condition is that comparison with the induction variable's
+   exit value substituted for the count: an abstract interpretation of
+   the invariant table at a handful of concrete points of `n`, folded to
+   a threshold the machine tests once per loop entry. The program is
+   otherwise unchanged; the `if` is the whole of the run-time decision.
+
+   The consequence this buys: a parser — a loop over a byte or token
+   array with a cursor as its induction variable — is divisible by the
+   same rule, because `[]` is a native primitive with a table-0 row, the
+   region's cost per element is a table-0 sum, and spawn and eval have
+   rows too. Nothing about the loop being "a parser" is known or needed;
+   the region and its invariants are.
 
 ## What it costs
 
@@ -117,6 +128,12 @@ no layer holds a number nobody measured.
 
 ## Where this is hard
 
+- The region rules of layer 2 are not settled. If they reduce to effect
+  rules alone — a region is bounded exactly where an ordered effect
+  appears — the analysis is the effect system read at loop granularity
+  and needs no separate notion; whether every jump-boundary condition is
+  expressible as an effect is the open question, and the rule set is
+  refined before layer 2 is briefed.
 - Layer 0's measurement must be reproducible enough to decide with:
   the load-base and layout effects RFC-0052 records (a docs-only commit
   moving a row ±6 %) bound what one row can mean; the table records
