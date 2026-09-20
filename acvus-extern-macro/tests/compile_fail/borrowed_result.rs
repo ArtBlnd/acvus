@@ -1,10 +1,8 @@
 //! A `Result` is a heap variant, not Rust's `Result<Owned, Owned>` (RFC-0050
 //! rule 8), so no parameter borrows one: `Borrowable` carries the refusal for a
-//! concrete parameter. A monomorphized one is refused wider than that, and
-//! deliberately so — `CrossSpecialized` is the only bound `obj.rs` can drop
-//! without reaching into `handler.rs`, and dropping it takes the family's
-//! by-value crossing with the by-reference one. Restoring a narrower refusal
-//! means a bound of its own on `ByRef<_, Specialized>`.
+//! concrete parameter and `BorrowableSpecialized` for a monomorphized one. Both
+//! markers are absent for `Result` and both crossings cross it by value, which
+//! is what `acvus-interpreter-test`'s `mono_result.rs` runs.
 use acvus_extern::{Monomorphize, Runtime, extern_fn};
 
 #[extern_fn(effect = pure)]

@@ -168,7 +168,7 @@ where
 
 impl<T, Rt> Sited<Rt> for ByRef<T, Specialized>
 where
-    T: CrossSpecialized<Rt>,
+    T: BorrowableSpecialized<Rt>,
     Rt: Runtime,
 {
     type Site = ();
@@ -178,7 +178,7 @@ where
 
 impl<T, Rt> Sited<Rt> for ByRefMut<T, Specialized>
 where
-    T: CrossSpecialized<Rt>,
+    T: BorrowableSpecialized<Rt>,
     Rt: Runtime,
 {
     type Site = ();
@@ -245,7 +245,7 @@ where
 
 impl<'a, T, Rt> Arg<'a, Rt> for ByRef<T, Specialized>
 where
-    T: CrossSpecialized<Rt>,
+    T: BorrowableSpecialized<Rt>,
     Rt: Runtime,
 {
     type Out = &'a T;
@@ -259,7 +259,7 @@ where
 
 impl<'a, T, Rt> Arg<'a, Rt> for ByRefMut<T, Specialized>
 where
-    T: CrossSpecialized<Rt>,
+    T: BorrowableSpecialized<Rt>,
     Rt: Runtime,
 {
     type Out = &'a mut T;
@@ -282,6 +282,23 @@ where
     note = "a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047)."
 )]
 pub trait Borrowable<Rt>: OneValue<Rt>
+where
+    Rt: Runtime,
+{
+}
+
+/// A type a parameter of a `Monomorphize` member may take by reference: one
+/// whose specialized crossing writes a `Self` into the storage the caller
+/// lends, which is what `CrossSpecialized::deref` reads back. `cross_whole!`'s
+/// specialized arm is where the impls come from, and it writes that `deref`
+/// in the same invocation.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no storage of its own type at a monomorphized member, so a parameter cannot borrow one",
+    label = "this parameter of a monomorphized member is taken by reference",
+    note = "a Result crosses a member by value: a crossed `Result` is the language's flat variant, not Rust's `Result<Owned, Owned>`, so nothing behind a reference is shaped like a `Result<T, E>` (RFC-0050 rule 8).",
+    note = "an Option crosses a member by value: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>` (RFC-0039)."
+)]
+pub trait BorrowableSpecialized<Rt>: CrossSpecialized<Rt>
 where
     Rt: Runtime,
 {

@@ -32,12 +32,13 @@ pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
 pub use handler::{
-    Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtSite, Borrowable, ByRef,
-    ByRefMut, ByValue, DirectOp, ExternHandler, Glue, Handler, HandlerFactory, InRegisters,
-    InWindow, Instance, Instances, IntoRun, Parameters, REGISTER_FORM, Ret, Sited,
-    SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValuesOnly, Width,
-    async_glue0, async_glue1, async_glue2, async_glue3, async_glue4, async_glue5, async_glue6,
-    async_glue7, async_glue8, glue0, glue1, glue2, glue3, glue4, glue5, glue6, glue7, glue8,
+    Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtSite, Borrowable,
+    BorrowableSpecialized, ByRef, ByRefMut, ByValue, DirectOp, ExternHandler, Glue, Handler,
+    HandlerFactory, InRegisters, InWindow, Instance, Instances, IntoRun, Parameters, REGISTER_FORM,
+    Ret, Sited, SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValuesOnly,
+    Width, async_glue0, async_glue1, async_glue2, async_glue3, async_glue4, async_glue5,
+    async_glue6, async_glue7, async_glue8, glue0, glue1, glue2, glue3, glue4, glue5, glue6, glue7,
+    glue8,
 };
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};

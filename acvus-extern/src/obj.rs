@@ -494,6 +494,15 @@ where
         out[0] = self.erase(rt);
     }
 
+    // The two defaults below are not deleted, and that is a decision. No
+    // signature reaches one: `handler.rs` bounds `ByRef<_, Specialized>` and
+    // `ByRefMut<_, Specialized>` by `BorrowableSpecialized`, which only
+    // `cross_whole!`'s specialized arm implements, and that arm overrides both
+    // methods. What keeps them declared here is the `#[extern_type]` derive in
+    // `acvus-extern-macro`, which writes its own `deref` and `deref_mut` inside
+    // this trait's impl; deleting the pair means moving them onto the marker
+    // there in the same change.
+
     /// # Safety
     /// As `Cross::deref`.
     unsafe fn deref<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a Self {
@@ -636,34 +645,62 @@ macro_rules! cross_as_stored {
 }
 
 /// One crossing trait implemented as the whole Rust value in one runtime
-/// box.
+/// box. The specialized arm states `BorrowableSpecialized` from the same
+/// invocation that writes the `deref` that marker promises.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! cross_whole {
-    ($trait:ident, $t:ty $(, $($g:tt)*)?) => {
-        impl<$($($g)*,)? __Rt> $crate::$trait<__Rt> for $t
+    (OneValue, $t:ty $(, $($g:tt)*)?) => {
+        impl<$($($g)*,)? __Rt> $crate::OneValue<__Rt> for $t
         where
             __Rt: $crate::Runtime,
         {
-            fn erase(self, rt: &__Rt) -> <__Rt as $crate::Runtime>::Value {
-                // SAFETY: stored as itself (RFC-0022).
-                unsafe { rt.erase::<$t>(self) }
-            }
+            $crate::whole_box!($t, __Rt);
+        }
+    };
+    (CrossSpecialized, $t:ty $(, $($g:tt)*)?) => {
+        impl<$($($g)*,)? __Rt> $crate::CrossSpecialized<__Rt> for $t
+        where
+            __Rt: $crate::Runtime,
+        {
+            $crate::whole_box!($t, __Rt);
+        }
 
-            unsafe fn materialize(rt: &__Rt, value: <__Rt as $crate::Runtime>::Value) -> Self {
-                // SAFETY: the caller's contract, and `erase` is `rt.erase::<$t>`.
-                unsafe { rt.materialize::<$t>(value) }
-            }
+        impl<$($($g)*,)? __Rt> $crate::BorrowableSpecialized<__Rt> for $t
+        where
+            __Rt: $crate::Runtime,
+        {
+        }
+    };
+}
 
-            unsafe fn deref<'a>(rt: &__Rt, reference: &'a <__Rt as $crate::Runtime>::Value) -> &'a Self {
-                // SAFETY: the caller's contract.
-                unsafe { rt.deref::<$t>(reference) }
-            }
+/// The four methods `OneValue` and `CrossSpecialized` declare alike, at a
+/// crossing whose runtime box holds the whole Rust value.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! whole_box {
+    ($t:ty, $rt:ident) => {
+        fn erase(self, rt: &$rt) -> <$rt as $crate::Runtime>::Value {
+            // SAFETY: stored as itself (RFC-0022).
+            unsafe { rt.erase::<$t>(self) }
+        }
 
-            unsafe fn deref_mut<'a>(rt: &__Rt, reference: &'a <__Rt as $crate::Runtime>::Value) -> &'a mut Self {
-                // SAFETY: the caller's contract.
-                unsafe { rt.deref_mut::<$t>(reference) }
-            }
+        unsafe fn materialize(rt: &$rt, value: <$rt as $crate::Runtime>::Value) -> Self {
+            // SAFETY: the caller's contract, and `erase` is `rt.erase::<$t>`.
+            unsafe { rt.materialize::<$t>(value) }
+        }
+
+        unsafe fn deref<'a>(rt: &$rt, reference: &'a <$rt as $crate::Runtime>::Value) -> &'a Self {
+            // SAFETY: the caller's contract.
+            unsafe { rt.deref::<$t>(reference) }
+        }
+
+        unsafe fn deref_mut<'a>(
+            rt: &$rt,
+            reference: &'a <$rt as $crate::Runtime>::Value,
+        ) -> &'a mut Self {
+            // SAFETY: the caller's contract.
+            unsafe { rt.deref_mut::<$t>(reference) }
         }
     };
 }
@@ -767,6 +804,52 @@ where
 
 crate::cross_one_value!(Result<T, E>, T: OneValue<__Rt>, E: OneValue<__Rt>);
 
+/// The erase half of a `Result`'s crossing. The pair handed to the runtime is
+/// a `Result<Owned<Rt>, Owned<Rt>>` because that is the type
+/// `acvus-interpreter`'s `Runtime::erase` answers with the language's flat
+/// variant; erasing a `Result` of anything else there boxes a Rust value
+/// instead (RFC-0038, RFC-0048 §7, RFC-0050 rule 8).
+fn erase_result<T, E, Rt>(
+    value: Result<T, E>,
+    rt: &Rt,
+    erase_ok: fn(T, &Rt) -> Rt::Value,
+    erase_err: fn(E, &Rt) -> Rt::Value,
+) -> Rt::Value
+where
+    Rt: Runtime,
+{
+    let inner: Result<Owned<Rt>, Owned<Rt>> = value
+        .map(|v| Owned::from_value(erase_ok(v, rt)))
+        .map_err(|e| Owned::from_value(erase_err(e, rt)));
+    // SAFETY: the language's Result is the runtime's
+    // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 §7).
+    unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
+}
+
+/// # Safety
+/// `value` was erased by `erase_result`, and the two payload steps undo the
+/// two it was given.
+unsafe fn materialize_result<T, E, Rt>(
+    rt: &Rt,
+    value: Rt::Value,
+    materialize_ok: unsafe fn(&Rt, Rt::Value) -> T,
+    materialize_err: unsafe fn(&Rt, Rt::Value) -> E,
+) -> Result<T, E>
+where
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract, and `erase_result` boxes a
+    // `Result<Owned<Rt>, Owned<Rt>>`.
+    let inner = unsafe { rt.materialize::<Result<Owned<Rt>, Owned<Rt>>>(value) };
+    // SAFETY: the caller's contract, forwarded: each arm's payload was erased
+    // by the step this one undoes.
+    unsafe {
+        inner
+            .map(|v| materialize_ok(rt, v.into_value()))
+            .map_err(|e| materialize_err(rt, e.into_value()))
+    }
+}
+
 impl<T, E, Rt> OneValue<Rt> for Result<T, E>
 where
     T: OneValue<Rt>,
@@ -774,24 +857,24 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
-        let inner: Result<Owned<Rt>, Owned<Rt>> = self
-            .map(|v| Owned::from_value(v.erase(rt)))
-            .map_err(|e| Owned::from_value(e.erase(rt)));
-        // SAFETY: the language's Result is the runtime's
-        // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 §7).
-        unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
+        erase_result(
+            self,
+            rt,
+            <T as OneValue<Rt>>::erase,
+            <E as OneValue<Rt>>::erase,
+        )
     }
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and `erase` boxes a
-        // `Result<Owned<Rt>, Owned<Rt>>`.
-        let inner = unsafe { rt.materialize::<Result<Owned<Rt>, Owned<Rt>>>(value) };
-        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
-        // from a `T` or an `E`.
+        // SAFETY: the caller's contract, and the two steps are the inverses of
+        // the ones `erase` gave.
         unsafe {
-            inner
-                .map(|v| T::materialize(rt, v.into_value()))
-                .map_err(|e| E::materialize(rt, e.into_value()))
+            materialize_result(
+                rt,
+                value,
+                <T as OneValue<Rt>>::materialize,
+                <E as OneValue<Rt>>::materialize,
+            )
         }
     }
 }
@@ -818,12 +901,41 @@ where
     }
 }
 
-// A `Result` has no `CrossSpecialized` impl. That is a decision, not an
-// omission: the impl existed until RFC-0050 rule 8, and the only thing it
-// still bought was `ByRef<Result<T, E>, Specialized>`, which inherited the
-// `NO_STORAGE` panic above rather than refusing at the signature. The
-// `borrowed_result` compile-fail case in `acvus-extern-macro` is where that
-// refusal is now pinned; restoring the impl makes it pass silently.
+impl<T, E, Rt> CrossSpecialized<Rt> for Result<T, E>
+where
+    T: CrossSpecialized<Rt>,
+    E: CrossSpecialized<Rt>,
+    Rt: Runtime,
+{
+    fn erase(self, rt: &Rt) -> Rt::Value {
+        erase_result(
+            self,
+            rt,
+            <T as CrossSpecialized<Rt>>::erase,
+            <E as CrossSpecialized<Rt>>::erase,
+        )
+    }
+
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        // SAFETY: the caller's contract, and the two steps are the inverses of
+        // the ones `erase` gave.
+        unsafe {
+            materialize_result(
+                rt,
+                value,
+                <T as CrossSpecialized<Rt>>::materialize,
+                <E as CrossSpecialized<Rt>>::materialize,
+            )
+        }
+    }
+}
+
+// A `Result` has no `BorrowableSpecialized` impl, and that is a decision: a
+// crossed `Result` is the flat heap variant, so no storage anywhere is shaped
+// like Rust's `Result<T, E>` for a reference to name. The `borrowed_result`
+// compile-fail case in `acvus-extern-macro` pins that refusal at both
+// crossings, the concrete one through `Borrowable` and the monomorphized one
+// through the marker; adding either impl makes a case there pass silently.
 
 impl<T, N, Rt> CrossSpecialized<Rt> for Arr<T, N>
 where

@@ -23,7 +23,7 @@ help: the following other types implement trait `Arg<'a, Rt>`
 ...
    | / impl<'a, T, Rt> Arg<'a, Rt> for ByRef<T, Specialized>
    | | where
-   | |     T: CrossSpecialized<Rt>,
+   | |     T: BorrowableSpecialized<Rt>,
    | |     Rt: Runtime,
    | |________________^ `ByRef<T, acvus_extern::Specialized>`
 note: required for `Shape` to implement `Borrowable<__R>`

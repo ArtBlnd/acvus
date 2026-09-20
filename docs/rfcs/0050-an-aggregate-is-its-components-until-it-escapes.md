@@ -400,14 +400,21 @@ measurement settles is only that the one layout costs nothing.
 the crossing is by tag name and `layout::result_side` is the one place the
 word becomes a side. A handler still writes and reads Rust's `Result<T, E>` by
 value (RFC-0038): `runtime.rs`'s `erase` and `materialize` translate at that
-boundary. A handler that borrows one no longer compiles. `acvus-extern`'s
-`CrossSpecialized` impl for `Result` went with the second form it read, which
-was what admitted `&Result<T, E>` into a signature — with the `NO_STORAGE`
-panic behind it rather than a refusal. Dropping the impl also refuses a
-`Result` at a monomorphized parameter or return, by value as well as by
-reference; narrowing that back to the reference alone needs a bound of its own
-on `ByRef<_, Specialized>` in `handler.rs`, and no handler in the workspace
-wants it yet.
+boundary. A handler that borrows one no longer compiles, and a handler that takes one by
+value still does — at a concrete parameter and at a monomorphized one alike.
+Each crossing carries the refusal in a marker of its own: `Borrowable` for
+`ByRef<_, Uniform>` and `BorrowableSpecialized` for `ByRef<_, Specialized>` and
+`ByRefMut<_, Specialized>`. `Result` implements neither, because a crossed
+`Result` is the flat variant and no storage anywhere is shaped like Rust's
+`Result<T, E>` for a reference to name; what `&Result<T, E>` used to reach was
+the `NO_STORAGE` panic on `CrossSpecialized::deref` rather than a refusal.
+`BorrowableSpecialized` is implemented by `cross_whole!`'s specialized arm
+alone — the leaves stored as themselves and `Vec<T>` — which is also where the
+`deref` the marker promises is written. `CrossSpecialized for Result` therefore
+stands, by value: it shares `erase_result` and `materialize_result` with the
+uniform crossing, one function a direction, so a member fn declared
+`fn f<A: Monomorphize<…>>(r: Result<A, String>) -> Result<A, String>` compiles
+and crosses both arms.
 
 A `Result` takes a run. `prepare/runs.rs::laid_whole` admits `Ty::Result`
 beside `Ty::Enum` and `Ty::Object`, and that is the whole of the admission:

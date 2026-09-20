@@ -1149,10 +1149,18 @@ where
     v.0.len() as i64
 }
 
+#[extern_fn(effect = pure)]
+fn twice_ok<A>(r: Result<A, String>) -> Result<A, String>
+where
+    A: acvus_extern::Monomorphize<(i64, String)> + Twice,
+{
+    r.map(Twice::twice)
+}
+
 fn mono_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "t",
-        fns: [double, first_or, box_count],
+        fns: [double, first_or, box_count, twice_ok],
     }
 }
 
@@ -1178,6 +1186,68 @@ fn a_monomorphized_parameter_declares_its_members_as_the_bound() {
     let shape = fn_ty(&double.ty);
     assert_eq!(shape.params, vec![PolyTy::Var(0)]);
     assert_eq!(shape.ret, PolyTy::Var(0));
+}
+
+#[test]
+fn a_result_of_the_member_type_crosses_a_member_by_value() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![mono_registry::<Tiny>()], &i).expect("registries combine");
+    let result_of = |t: acvus_extern::Ty| {
+        acvus_extern::Ty::Result(Box::new(t), Box::new(acvus_extern::Ty::String))
+    };
+
+    let on_int = call_type(
+        vec![result_of(acvus_extern::Ty::I64)],
+        result_of(acvus_extern::Ty::I64),
+        &i,
+    );
+    let h = instance_for(&reg, &i, "twice_ok", &on_int).expect("the i64 instance");
+    assert_eq!(crossed(call_sync(h, vec![crossing(Ok(21i64))])), Ok(42i64));
+    assert_eq!(
+        crossed::<i64>(call_sync(
+            h,
+            vec![crossing(Err::<i64, _>(String::from("bad")))]
+        )),
+        Err(String::from("bad"))
+    );
+
+    let on_str = call_type(
+        vec![result_of(acvus_extern::Ty::String)],
+        result_of(acvus_extern::Ty::String),
+        &i,
+    );
+    let h = instance_for(&reg, &i, "twice_ok", &on_str).expect("the String instance");
+    assert_eq!(
+        crossed(call_sync(h, vec![crossing(Ok(String::from("ab")))])),
+        Ok(String::from("abab"))
+    );
+
+    let on_float = call_type(
+        vec![result_of(acvus_extern::Ty::Float)],
+        result_of(acvus_extern::Ty::Float),
+        &i,
+    );
+    assert!(instance_for(&reg, &i, "twice_ok", &on_float).is_none());
+}
+
+/// A `Result` of a member type on its way into a member's argument slot.
+fn crossing<A>(r: Result<A, String>) -> V
+where
+    A: acvus_extern::CrossSpecialized<Tiny>,
+{
+    <Result<A, String> as acvus_extern::CrossSpecialized<Tiny>>::erase(r, &Tiny)
+}
+
+/// The `Result` a member wrote into its result slot.
+fn crossed<A>(value: V) -> Result<A, String>
+where
+    A: acvus_extern::CrossSpecialized<Tiny>,
+{
+    // SAFETY: the value is what the member's glue wrote through the same
+    // crossing.
+    unsafe {
+        <Result<A, String> as acvus_extern::CrossSpecialized<Tiny>>::materialize(&Tiny, value)
+    }
 }
 
 fn call_type(

@@ -1,68 +1,74 @@
 error[E0277]: `std::result::Result<i64, std::string::String>` has no storage of its own type, so a parameter cannot borrow one
-  --> tests/compile_fail/borrowed_result.rs:10:1
+ --> tests/compile_fail/borrowed_result.rs:8:1
+  |
+8 | #[extern_fn(effect = pure)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
+  |
+  = help: the trait `Borrowable<__R>` is not implemented for `std::result::Result<i64, std::string::String>`
+  = note: a borrowed aggregate crosses as its projection: where `std::result::Result<i64, std::string::String>` is a `#[derive(TyArg)] #[projection]` aggregate, write `std::result::Result<i64, std::string::String>Ref<'_>`, or `std::result::Result<i64, std::string::String>Mut<'_>` for a struct and `std::result::Result<i64, std::string::String>Mut<'_, Rt>` for an enum (RFC-0050 rule 6).
+  = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
+  = note: a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047).
+  = help: the following other types implement trait `Borrowable<Rt>`:
+            `()` implements `Borrowable<__Rt>`
+            `Arr<T, N>` implements `Borrowable<Rt>`
+            `Erased<R, T>` implements `Borrowable<R>`
+            `Spec<T>` implements `Borrowable<Rt>`
+            `Typeck<N>` implements `Borrowable<Rt>`
+            `Vec<T>` implements `Borrowable<Rt>`
+            `acvus_extern::Owned<R>` implements `Borrowable<R>`
+            `bool` implements `Borrowable<__Rt>`
+          and $N others
+  = note: required for `ByRef<std::result::Result<i64, std::string::String>>` to implement `for<'a> Arg<'a, __R>`
+  = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `std::result::Result<i64, std::string::String>` has no storage of its own type at a monomorphized member, so a parameter cannot borrow one
+  --> tests/compile_fail/borrowed_result.rs:13:1
    |
-10 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
+13 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter of a monomorphized member is taken by reference
    |
-   = help: the trait `Borrowable<__R>` is not implemented for `std::result::Result<i64, std::string::String>`
-   = note: a borrowed aggregate crosses as its projection: where `std::result::Result<i64, std::string::String>` is a `#[derive(TyArg)] #[projection]` aggregate, write `std::result::Result<i64, std::string::String>Ref<'_>`, or `std::result::Result<i64, std::string::String>Mut<'_>` for a struct and `std::result::Result<i64, std::string::String>Mut<'_, Rt>` for an enum (RFC-0050 rule 6).
-   = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
-   = note: a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047).
-   = help: the following other types implement trait `Borrowable<Rt>`:
-             `()` implements `Borrowable<__Rt>`
-             `Arr<T, N>` implements `Borrowable<Rt>`
-             `Erased<R, T>` implements `Borrowable<R>`
-             `Spec<T>` implements `Borrowable<Rt>`
-             `Typeck<N>` implements `Borrowable<Rt>`
-             `Vec<T>` implements `Borrowable<Rt>`
-             `acvus_extern::Owned<R>` implements `Borrowable<R>`
-             `bool` implements `Borrowable<__Rt>`
+   = help: the trait `BorrowableSpecialized<__R>` is not implemented for `std::result::Result<i64, std::string::String>`
+   = note: a Result crosses a member by value: a crossed `Result` is the language's flat variant, not Rust's `Result<Owned, Owned>`, so nothing behind a reference is shaped like a `Result<T, E>` (RFC-0050 rule 8).
+   = note: an Option crosses a member by value: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>` (RFC-0039).
+   = help: the following other types implement trait `BorrowableSpecialized<Rt>`:
+             ()
+             Vec<T>
+             bool
+             char
+             f64
+             i16
+             i32
+             i64
            and $N others
-   = note: required for `ByRef<std::result::Result<i64, std::string::String>>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<std::result::Result<i64, std::string::String>, acvus_extern::Specialized>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `std::result::Result<i64, std::string::String>: CrossSpecialized<__R>` is not satisfied
-  --> tests/compile_fail/borrowed_result.rs:15:1
+error[E0277]: `std::result::Result<std::string::String, std::string::String>` has no storage of its own type at a monomorphized member, so a parameter cannot borrow one
+  --> tests/compile_fail/borrowed_result.rs:13:1
    |
-15 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `CrossSpecialized<__R>` is not implemented for `std::result::Result<i64, std::string::String>`
+13 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter of a monomorphized member is taken by reference
    |
-   = help: the following other types implement trait `CrossSpecialized<Rt>`:
-             `()` implements `CrossSpecialized<__Rt>`
-             `Arr<T, N>` implements `CrossSpecialized<Rt>`
-             `Vec<T>` implements `CrossSpecialized<__Rt>`
-             `acvus_extern::Never` implements `CrossSpecialized<Rt>`
-             `acvus_extern::Owned<R>` implements `CrossSpecialized<R>`
-             `bool` implements `CrossSpecialized<__Rt>`
-             `char` implements `CrossSpecialized<__Rt>`
-             `f64` implements `CrossSpecialized<__Rt>`
+   = help: the trait `BorrowableSpecialized<__R>` is not implemented for `std::result::Result<std::string::String, std::string::String>`
+   = note: a Result crosses a member by value: a crossed `Result` is the language's flat variant, not Rust's `Result<Owned, Owned>`, so nothing behind a reference is shaped like a `Result<T, E>` (RFC-0050 rule 8).
+   = note: an Option crosses a member by value: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>` (RFC-0039).
+   = help: the following other types implement trait `BorrowableSpecialized<Rt>`:
+             ()
+             Vec<T>
+             bool
+             char
+             f64
+             i16
+             i32
+             i64
            and $N others
-   = note: required for `ByValue<std::result::Result<i64, std::string::String>, acvus_extern::Specialized>` to implement `for<'a> Arg<'a, __R>`
-   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `std::result::Result<std::string::String, std::string::String>: CrossSpecialized<__R>` is not satisfied
-  --> tests/compile_fail/borrowed_result.rs:15:1
-   |
-15 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `CrossSpecialized<__R>` is not implemented for `std::result::Result<std::string::String, std::string::String>`
-   |
-   = help: the following other types implement trait `CrossSpecialized<Rt>`:
-             `()` implements `CrossSpecialized<__Rt>`
-             `Arr<T, N>` implements `CrossSpecialized<Rt>`
-             `Vec<T>` implements `CrossSpecialized<__Rt>`
-             `acvus_extern::Never` implements `CrossSpecialized<Rt>`
-             `acvus_extern::Owned<R>` implements `CrossSpecialized<R>`
-             `bool` implements `CrossSpecialized<__Rt>`
-             `char` implements `CrossSpecialized<__Rt>`
-             `f64` implements `CrossSpecialized<__Rt>`
-           and $N others
-   = note: required for `ByValue<std::result::Result<std::string::String, std::string::String>, acvus_extern::Specialized>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<std::result::Result<std::string::String, std::string::String>, acvus_extern::Specialized>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `std::result::Result<acvus_extern::Owned<__R>, std::string::String>` has no storage of its own type, so a parameter cannot borrow one
-  --> tests/compile_fail/borrowed_result.rs:15:1
+  --> tests/compile_fail/borrowed_result.rs:13:1
    |
-15 | #[extern_fn(effect = pure)]
+13 | #[extern_fn(effect = pure)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
    |
    = help: the trait `Borrowable<__R>` is not implemented for `std::result::Result<acvus_extern::Owned<__R>, std::string::String>`
