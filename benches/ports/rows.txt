@@ -1,0 +1,26 @@
+# Every row docs/performance.md carries, and the value its Rust twin produces.
+# The value is what sweep.sh holds each port's result to; a port that prints
+# anything else fails the row rather than reporting a time.
+accum:int while	499999500000
+accum:float while	499999500000.0
+accum:range | sum	499999500000
+accum:map id | sum	499999500000
+accum:map add | sum	500000500000
+accum:branch while	249999500000
+accum:call while	1000000
+accum:collatz while	875000250000
+accum:grade while	1333333
+accum:while let vec	499999500000
+accum:for range	499999500000
+accum:for slice add	500000500000
+shapes:field read	3000000
+shapes:field write	499999500000
+shapes:construct	499999500000
+shapes:enum match	500000000000
+shapes:option match	249999500000
+shapes:vec of objects	499500000
+programs:bf table	1161504
+programs:bf scan	1161504
+programs:bf call	1161504
+mandelbrot:200x100x200	946598
+attention:256x128	0.49719065560641074

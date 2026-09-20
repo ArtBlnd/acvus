@@ -1,0 +1,31 @@
+== shapes field read
+== Rust twin's value: 3000000
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:53:01 up 2 days, 20:55,  1 user,  load average: 2.31, 7.27, 10.97
+acvus 2768.3
+rust 368.70
+cpython 31960.4
+node 370.9
+node-jitless 9421.2
+lua5.4 7295.0
+luajit 779.0
+== rep 2
+ 19:53:01 up 2 days, 20:55,  1 user,  load average: 2.31, 7.27, 10.97
+acvus 2766.8
+rust 368.82
+cpython 31935.9
+node 369.7
+node-jitless 9700.1
+lua5.4 7197.0
+luajit 779.0
+== rep 3
+ 19:53:02 up 2 days, 20:55,  1 user,  load average: 2.31, 7.27, 10.97
+acvus 2763.8
+rust 367.35
+cpython 31923.0
+node 374.3
+node-jitless 9689.8
+lua5.4 7194.0
+luajit 779.0

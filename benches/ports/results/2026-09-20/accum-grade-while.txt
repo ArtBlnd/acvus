@@ -1,0 +1,31 @@
+== accum grade while
+== Rust twin's value: 1333333
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:52:53 up 2 days, 20:55,  1 user,  load average: 2.25, 7.34, 11.01
+acvus 10686.3
+rust 536.49
+cpython 39113.9
+node 915.7
+node-jitless 9494.4
+lua5.4 7967.0
+luajit 1697.0
+== rep 2
+ 19:52:54 up 2 days, 20:55,  1 user,  load average: 2.25, 7.34, 11.01
+acvus 10673.6
+rust 536.84
+cpython 39148.5
+node 900.0
+node-jitless 11505.5
+lua5.4 7955.0
+luajit 1689.0
+== rep 3
+ 19:52:54 up 2 days, 20:55,  1 user,  load average: 2.25, 7.34, 11.01
+acvus 10664.4
+rust 537.05
+cpython 39007.8
+node 891.5
+node-jitless 9747.6
+lua5.4 7970.0
+luajit 1696.0
