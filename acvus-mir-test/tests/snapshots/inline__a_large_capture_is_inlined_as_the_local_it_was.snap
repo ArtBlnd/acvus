@@ -41,7 +41,7 @@ expression: ir
      7 |   r7 = call #1(r4, r6)
      8 |   return r7
 
-    ; r0 (v1) : &String
+    ; r0 (s) : &String
     ; r1 (v2) : String
     ; r2 (v5) : &String
     ; r3 ((*r5).) : &String

@@ -245,6 +245,19 @@ struct InlineTarget<'a> {
     order: Option<OrderEdge>,
 }
 
+/// A closure's `MirBody` lives in `MirModule::closures` of the module whose
+/// body makes it, and `acvus_interpreter::prepare` looks a `MakeClosure` up in
+/// the module it is preparing. So splicing a body that makes a closure would
+/// leave the caller's module holding a `MakeClosure` naming a body that module
+/// does not have, and `prepare` panics with "closure body not found". Carrying
+/// the callee's closures across would need a label namespace the two modules
+/// share; until there is one, such a callee is not spliced.
+fn makes_a_closure(body: &MirBody) -> bool {
+    body.insts
+        .iter()
+        .any(|inst| matches!(inst.kind, InstKind::MakeClosure { .. }))
+}
+
 /// The local function a `Callee::Direct` names, where this phase has its
 /// body and the call is not part of a recursion.
 fn direct_target<'a>(
@@ -265,9 +278,13 @@ fn direct_target<'a>(
     if recursive_fns.contains(callee_id) {
         return None;
     }
+    let callee = all_modules.get(callee_id)?;
+    if makes_a_closure(&callee.main) {
+        return None;
+    }
     Some(InlineTarget {
         dst: *dst,
-        callee_body: &all_modules.get(callee_id)?.main,
+        callee_body: &callee.main,
         args: args.clone(),
         captures: Vec::new(),
         skip: FxHashSet::default(),

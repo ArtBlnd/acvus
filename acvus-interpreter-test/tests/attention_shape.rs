@@ -140,14 +140,17 @@ async fn attention_written_as_chains_is_the_same_value() {
     assert_close(&second, expected[1]);
 }
 
+/// RFC-0064 Decision 2 admits the capture the inner lambda makes of `b`, a
+/// reference parameter of the outer one, and the product it reads is the
+/// dot product of `@query` with itself.
 #[tokio::test]
-#[should_panic(expected = "a lambda cannot capture a reference")]
-async fn a_reference_parameter_captured_by_an_inner_lambda_is_refused() {
-    run(
+async fn a_reference_parameter_captured_by_an_inner_lambda_is_read_at_the_call() {
+    let v = run(
         "let dot = |a, b| -> as_iter(a).map(|x| -> *x * b[0]).sum(); dot(&@query, &@query)",
-        Ty::Never,
+        Ty::Float,
     )
     .await;
+    assert_close(&v, 1.0);
 }
 
 #[tokio::test]

@@ -1,7 +1,12 @@
 //! A script whose `m`, bound by `if let Some(m) = as_iter(&scores) | max`,
-//! is `&Float`, then captured by `|s| -> exp(*s - m)`: RFC-0018 refuses a
-//! reference in a capture. In its own binary because the compile of this
-//! script must end in that report, not abort the test process.
+//! is `&Float`, then captured by `|s| -> exp(*s - m)`. In its own binary
+//! because the compile of this script must end in a report, not abort the
+//! test process.
+//!
+//! The capture is admitted now (RFC-0064 Decision 2), and the refusal that
+//! remains is one signature short of the program: no `max` takes an iterator
+//! of references. Closing that is RFC-0047's business and not this test's;
+//! what this test holds is that the compile reports rather than overflows.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -18,7 +23,7 @@ fn context(i: &Interner) -> Context {
 }
 
 #[tokio::test]
-#[should_panic(expected = "a lambda cannot capture a reference")]
+#[should_panic(expected = "no instance of the signature has the call type")]
 async fn a_reference_captured_after_if_let_over_max_is_reported_not_overflowed() {
     let i = Interner::new();
     let _: Value = run_script_mode(

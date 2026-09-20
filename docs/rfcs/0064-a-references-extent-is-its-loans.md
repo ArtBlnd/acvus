@@ -135,8 +135,9 @@ has no identity the caller can read. `Param(i)` is that identity.
 
 1. `Loan::Param(i)` and the summary of a body's result; the body-result
    refusal relaxed to "no local loans"; tests for `fn first(&v) -> &T`.
+   Landed.
 2. Lambda: captured region, call summary, capture admitted; the store-
-   then-call diagnostic.
+   then-call diagnostic. Landed.
 3. Fixpoint over recursive bodies.
 4. Extern summaries from signatures (with the pair-wide `CallShape`).
 
@@ -162,6 +163,63 @@ different ones. Whether the result's type can leave at all is a type fact,
 and typeck keeps it. Which storage the result names is a region fact that
 exists only over the MIR, so `validate::borrow_check` raises
 `ReferenceToLocalLeavesBody` where the local was borrowed.
+
+Step 2 landed. A capture of a reference is the `Kind::Ref` word itself:
+`Solver::capture_read` answers `CaptureRead::Word` for it, and every capture
+register in a closure body is a reference to the word `MakeClosure` stored,
+which the body reads one level through. That is what `machine::bind_captures`
+already did to every capture, so the machine needed no change.
+
+Two refusals narrow and one disappears. The capture refusal narrows to a
+view: a `&str` or `&Slice<T>` is the two adjacent registers of RFC-0062
+Decision 1 and a capture list holds one word per capture, so
+`MirErrorKind::ViewCaptured` stays for exactly that case — the same machine
+bound that keeps `-> &str` out of a body's result. `Solver::captured_shape`
+is the predicate, and `typeck::is_view` must name the same types. A
+reference whose target the program has not fixed yet waits on the
+`Decision::Capture` the solver already had, and one that never closes takes
+the word. `MirErrorKind::ReferenceReturned` is gone: a lambda is a body, so
+its result goes through `unreturnable_reference` like any body's, and a
+lambda returning a reference to one of its own locals is
+`ReferenceToLocalLeavesBody` at the region phase.
+
+A capture register is a local of the closure body, and that is the whole of
+what a closure may not let out. `machine::bind_captures` points the register
+at the word the closure owns, so a reference derived from a capture of an
+owned value names the closure's own storage and dies with the closure: it is
+`LoanStorage::Local` and the result rule of step 1 refuses it by name. The
+first build of this step read that register as storage of the enclosing body
+instead and admitted `let s = "a".to_string(); let f = |y| -> s; f(1)`, which
+ran and read a freed string; the `differential` gate found it as a crashed
+script. What a captured *reference* gives the body is read one level through
+the register, carries no loan of the closure at all, and reaches the caller
+through the closure value's own region at the call.
+
+Summaries are keyed two ways: by `QualifiedRef` for a named function, by
+`Label` for a closure of the module being checked. A closure is checked
+before the body that makes it, because the call that reads its summary is in
+that body. `inner_closures_first` is a post-order walk of the makes relation,
+which is a tree rooted at main, with any label the walk misses appended in
+label order so the order is total over `MirModule::closures`. A
+`Callee::Indirect` resolves to a closure through `ClosureOrigins`, which
+follows the `MakeClosure`, the `Assign` into the binding's slot, the `Ref` of
+that slot and a `Take` back out of one; a value two `MakeClosure`s reach
+resolves to neither, and its calls take the union of the arguments and of the
+callee value.
+
+A lambda that holds a loan is a holder. RFC-0062 Decision 5 refuses it in a
+container, an object or a tuple in its own words, and a parameter of such a
+type starts a loan on itself as a reference parameter does
+(`analysis::loans::entry_loan`), so a lambda passed to a function borrows
+inside the callee what the argument borrowed outside it.
+
+The store-then-call diagnostic carries `captured here` at the `MakeClosure`
+and `written here while the lambda is live` at the touch. The second label
+repeats the primary marker's span; it is there because the sentence a reader
+needs is that a lambda, not a reference, is what is still live. In `let r =
+&v; let f = |k| -> len(r) + k; v = [...]` both `r` and `f` hold the loan and
+the exclusion rule states the conflict once per holder, so that program
+reports twice.
 
 A call's result substitutes the callee's summary where the summary is known
 and otherwise takes the union of every argument's region. The union is a

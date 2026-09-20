@@ -58,6 +58,13 @@ struct Loop {
     exit: Label,
 }
 
+/// One capture register of a closure body: the type the caller handed
+/// `MakeClosure`, and the reference to it the runtime binds the register to.
+struct CaptureRegister {
+    given: Ty,
+    cap_ty: Ty,
+}
+
 #[derive(Clone, Copy)]
 struct DiamondLabels {
     then_label: Label,
@@ -2774,7 +2781,7 @@ impl<'a> Lowerer<'a> {
                             self.set_origin(dst, ValOrigin::Named(name));
                             dst
                         };
-                        self.read_word_through(*span, taken)
+                        taken
                     })
                     .collect();
                 // Create closure body.
@@ -2784,28 +2791,32 @@ impl<'a> Lowerer<'a> {
                 let mut sub_body = MirBody::new();
 
                 // Captures become the first registers. The closure owns the
-                // `T` handed to `MakeClosure`, and the runtime binds each
-                // of these registers to a reference into it; a register
-                // already holding a reference is reborrowed, since no
-                // `&&T` exists (RFC-0029). What the body reads out of the
-                // register is the checker's `CaptureRead`, below.
+                // value handed to `MakeClosure`, and `machine::bind_captures`
+                // binds each of these registers to a reference into it,
+                // whatever that value is — which is why every capture
+                // register is a reference and the body reads one level
+                // through it where it wants the value.
                 let mut closure_capture_regs = Vec::new();
                 let mut capture_tys = Vec::new();
-                for capture_reg in capture_regs.iter() {
+                for (capture, capture_reg) in captured.iter().zip(capture_regs.iter()) {
                     let reg = sub_body.val_factory.next();
                     closure_capture_regs.push(reg);
+                    sub_body
+                        .debug
+                        .val_origins
+                        .insert(reg, ValOrigin::Named(capture.name));
                     let given = self
                         .body
                         .val_types
                         .get(capture_reg)
                         .expect("a capture register is typed where it is taken")
                         .clone();
-                    let cap_ty = match given {
-                        reference @ Ty::Ref(..) => reference,
-                        owned => Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(owned))),
-                    };
+                    let cap_ty = Ty::Ref(
+                        Mutability::Shared,
+                        Box::new(TypeArg::uniform(given.clone())),
+                    );
                     sub_body.val_types.insert(reg, cap_ty.clone());
-                    capture_tys.push(cap_ty);
+                    capture_tys.push(CaptureRegister { given, cap_ty });
                 }
 
                 // Params follow captures.
@@ -2830,18 +2841,22 @@ impl<'a> Lowerer<'a> {
                 self.enter_contexts(acvus_ast::direct_expr_context_refs(body), *span);
 
                 // Captures and params are the closure body's first bindings.
-                for ((capture, capture_reg), cap_ty) in captured
+                for ((capture, capture_reg), register) in captured
                     .iter()
                     .zip(closure_capture_regs.iter())
                     .zip(capture_tys)
                 {
                     let (bound, bound_ty) = match capture.read {
                         CaptureRead::Word => {
-                            let word = self.read_word_through(*span, *capture_reg);
-                            let ty = self.slot_type(word);
-                            (word, ty)
+                            let word = self.emit_take(
+                                *span,
+                                RefTarget::Through(*capture_reg),
+                                vec![],
+                                register.given.clone(),
+                            );
+                            (word, register.given)
                         }
-                        CaptureRead::Lent => (*capture_reg, cap_ty),
+                        CaptureRead::Lent => (*capture_reg, register.cap_ty),
                     };
                     let slot = self.define_var(capture.name, bound_ty);
                     self.emit_assign(*span, RefTarget::Var(slot), vec![], bound);

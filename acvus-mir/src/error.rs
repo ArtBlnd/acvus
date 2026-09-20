@@ -258,12 +258,10 @@ pub enum MirErrorKind {
         name: String,
         ty: Ty,
     },
-    /// A lambda captured a reference.
-    ReferenceCaptured,
+    /// A lambda captured a string or slice view.
+    ViewCaptured,
     ReferenceInData(DataShape),
     ViewInData(DataShape),
-    /// A lambda returned a reference.
-    ReferenceReturned,
     /// A script body returned a reference.
     ReferenceReturnedFromBody(Ty),
     /// RFC-0043.
@@ -499,8 +497,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     ty.shown(interner)
                 )
             }
-            MirErrorKind::ReferenceCaptured => {
-                write!(f, "a lambda cannot capture a reference")
+            MirErrorKind::ViewCaptured => {
+                write!(f, "a lambda cannot capture a string or slice view")
             }
             MirErrorKind::ReferenceInData(shape) => {
                 write!(f, "a reference cannot be stored in {shape}")
@@ -521,9 +519,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                         false => "",
                     }
                 )
-            }
-            MirErrorKind::ReferenceReturned => {
-                write!(f, "a lambda cannot return a reference")
             }
             MirErrorKind::AmbiguousFunction { name, candidates } => {
                 write!(f, "`{name}` is declared by {}", candidates.join(" and "))

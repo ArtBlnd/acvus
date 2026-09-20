@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::loans::{Loan, Loans, Summaries, Summary};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
-use crate::ir::{InstKind, MirBody, MirModule, RefTarget, ValueId};
+use crate::ir::{InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
 use crate::validate::move_check::is_move_only;
 use crate::validate::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
@@ -44,9 +44,26 @@ pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
 /// question anywhere else would answer it from `Summaries::NONE` and refuse
 /// programs pass 0 admitted.
 pub fn check_borrows_in_order(module: &MirModule, summaries: Summaries<'_>) -> Checked {
-    let bodies = Bodies::of(module, summaries);
     let mut errors = Vec::new();
-    let summary = match &bodies.main {
+    let mut closures: FxHashMap<ClosureLabel, Summary> = FxHashMap::default();
+    for label in inner_closures_first(module) {
+        let body = &module.closures[&label];
+        let Some(checking) = Checking::of(
+            format!("closure({label:?})"),
+            body,
+            summaries.with_closures(&closures),
+        ) else {
+            continue;
+        };
+        let summary = checking.check_result(&mut errors);
+        checking.check_exclusion(&mut errors);
+        closures.insert(label, summary);
+    }
+    let summary = match Checking::of(
+        "main".to_string(),
+        &module.main,
+        summaries.with_closures(&closures),
+    ) {
         Some(main) => {
             let summary = main.check_result(&mut errors);
             main.check_exclusion(&mut errors);
@@ -54,11 +71,54 @@ pub fn check_borrows_in_order(module: &MirModule, summaries: Summaries<'_>) -> C
         }
         None => Summary::default(),
     };
-    for closure in &bodies.closures {
-        closure.check_result(&mut errors);
-        closure.check_exclusion(&mut errors);
-    }
     Checked { errors, summary }
+}
+
+/// Every closure of the module, each before the body that makes it.
+///
+/// A lambda's call summary is read at the call, and a lambda is called in
+/// the body that lexically contains it — main, or another lambda.
+fn inner_closures_first(module: &MirModule) -> Vec<ClosureLabel> {
+    let mut order = Vec::new();
+    let mut seen: FxHashSet<ClosureLabel> = FxHashSet::default();
+    visit_makers_first(module, &made_by(&module.main), &mut seen, &mut order);
+    let mut unreached: Vec<ClosureLabel> = module
+        .closures
+        .keys()
+        .copied()
+        .filter(|label| !seen.contains(label))
+        .collect();
+    unreached.sort_unstable_by_key(|label| label.0);
+    order.extend(unreached);
+    order
+}
+
+fn visit_makers_first(
+    module: &MirModule,
+    labels: &[ClosureLabel],
+    seen: &mut FxHashSet<ClosureLabel>,
+    order: &mut Vec<ClosureLabel>,
+) {
+    for label in labels {
+        if !seen.insert(*label) {
+            continue;
+        }
+        let Some(body) = module.closures.get(label) else {
+            continue;
+        };
+        visit_makers_first(module, &made_by(body), seen, order);
+        order.push(*label);
+    }
+}
+
+fn made_by(body: &MirBody) -> Vec<ClosureLabel> {
+    body.insts
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstKind::MakeClosure { body, .. } => Some(*body),
+            _ => None,
+        })
+        .collect()
 }
 
 struct Bodies {
@@ -231,24 +291,53 @@ struct HolderUse {
     span: Span,
 }
 
+/// Where a holder took the loan it holds, and in which of the two forms
+/// RFC-0064 gives a holder: a reference, or a lambda that captured one.
+#[derive(Clone, Copy)]
+struct Took {
+    span: Span,
+    form: HolderForm,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HolderForm {
+    Reference,
+    Lambda,
+}
+
 /// A `Loan` carries no span, and it cannot gain one here: `Region`'s join
 /// dedupes loans by equality, so a span in a `Loan` would change what the
 /// region analysis converges to. The places a conflict points at are read off
 /// the instructions instead.
 struct HolderSites {
-    borrowed: FxHashMap<ValueId, Span>,
+    borrowed: FxHashMap<ValueId, Took>,
     named: Vec<HolderUse>,
 }
 
 impl HolderSites {
     fn of(cfg: &CfgBody, loans: &Loans) -> Self {
-        let mut borrowed = FxHashMap::default();
+        let mut borrowed: FxHashMap<ValueId, Took> = FxHashMap::default();
         let mut named = Vec::new();
         for block in &cfg.blocks {
             for inst in &block.insts {
                 match &inst.kind {
                     InstKind::Ref { dst, .. } => {
-                        borrowed.insert(*dst, inst.span);
+                        borrowed.insert(
+                            *dst,
+                            Took {
+                                span: inst.span,
+                                form: HolderForm::Reference,
+                            },
+                        );
+                    }
+                    InstKind::MakeClosure { dst, .. } => {
+                        borrowed.insert(
+                            *dst,
+                            Took {
+                                span: inst.span,
+                                form: HolderForm::Lambda,
+                            },
+                        );
                     }
                     // RFC-0029: a storage a reference was assigned into holds
                     // the loan too, and it was borrowed where the reference
@@ -257,9 +346,9 @@ impl HolderSites {
                     // order and cannot say which loan is the live one.
                     InstKind::Assign { target, value, .. } => {
                         if let Some(slot) = inst_info::storage(target)
-                            && let Some(span) = borrowed.get(value).copied()
+                            && let Some(took) = borrowed.get(value).copied()
                         {
-                            borrowed.entry(slot).or_insert(span);
+                            borrowed.entry(slot).or_insert(took);
                         }
                     }
                     _ => {}
@@ -279,22 +368,43 @@ impl HolderSites {
     }
 
     fn borrowed_at(&self, holder: ValueId) -> Span {
-        self.borrowed.get(&holder).copied().unwrap_or(Span::ZERO)
+        self.borrowed
+            .get(&holder)
+            .map_or(Span::ZERO, |took| took.span)
     }
 
-    fn labels(&self, holder: ValueId, conflict: Span) -> Vec<Label> {
-        let borrow = self
+    /// RFC-0064 "What it costs": a lambda called after the storage it
+    /// borrows was written is the one diagnostic worth its own words, and
+    /// the two places it names are the capture and the touch. A reference
+    /// names the borrow and the use that keeps it live instead, because a
+    /// reference's later use is what the reader has to see.
+    fn labels(&self, holder: ValueId, conflict: Span, touch: ConflictTouch) -> Vec<Label> {
+        let Some(took) = self
             .borrowed
             .get(&holder)
-            .filter(|span| **span != Span::ZERO)
-            .map(|span| Label::at(*span, "borrowed here"));
-        let later = self
-            .named
-            .iter()
-            .filter(|u| u.holder == holder && u.span.start > conflict.start)
-            .min_by_key(|u| u.span.start)
-            .map(|u| Label::at(u.span, "the reference is used here"));
-        borrow.into_iter().chain(later).collect()
+            .filter(|took| took.span != Span::ZERO)
+        else {
+            return Vec::new();
+        };
+        match took.form {
+            HolderForm::Lambda => vec![
+                Label::at(took.span, "captured here"),
+                Label::at(
+                    conflict,
+                    format!("{} here while the lambda is live", touch.word()),
+                ),
+            ],
+            HolderForm::Reference => {
+                let borrow = Label::at(took.span, "borrowed here");
+                let later = self
+                    .named
+                    .iter()
+                    .filter(|u| u.holder == holder && u.span.start > conflict.start)
+                    .min_by_key(|u| u.span.start)
+                    .map(|u| Label::at(u.span, "the reference is used here"));
+                std::iter::once(borrow).chain(later).collect()
+            }
+        }
     }
 }
 
@@ -360,7 +470,7 @@ impl Checking {
                                 storage: inst_info::storage(&target)
                                     .and_then(|slot| self.cfg.debug.get(slot).cloned()),
                                 touch: touch.stated(),
-                                labels: self.sites.labels(*holder, inst.span),
+                                labels: self.sites.labels(*holder, inst.span, touch.stated()),
                             },
                         });
                     }
@@ -761,6 +871,54 @@ mod tests {
             types,
         );
         assert_eq!(conflict_count(&errors(m)), 1);
+    }
+
+    // -- The order the summaries are read in ---------------------------
+
+    fn makes(label: u32) -> InstKind {
+        InstKind::MakeClosure {
+            dst: v(20 + label as usize),
+            body: Label(label),
+            captures: vec![],
+        }
+    }
+
+    /// Main makes `L1`, `L1` makes `L2`, and `L3` is reached from neither.
+    fn nested_closures() -> MirModule {
+        let mut module = module(body(vec![makes(1), ret(0)], string_slot()));
+        module
+            .closures
+            .insert(Label(1), body(vec![makes(2), ret(0)], string_slot()));
+        module
+            .closures
+            .insert(Label(2), body(vec![ret(0)], string_slot()));
+        module
+            .closures
+            .insert(Label(3), body(vec![ret(0)], string_slot()));
+        module
+    }
+
+    #[test]
+    fn every_closure_is_checked_before_the_body_that_makes_it() {
+        let module = nested_closures();
+        let order = inner_closures_first(&module);
+        let at = |label: u32| {
+            order
+                .iter()
+                .position(|l| *l == Label(label))
+                .unwrap_or_else(|| panic!("{label} is missing from {order:?}"))
+        };
+        assert!(at(2) < at(1), "{order:?}");
+    }
+
+    #[test]
+    fn the_order_names_every_closure_once_reached_or_not() {
+        let module = nested_closures();
+        let mut order = inner_closures_first(&module);
+        assert_eq!(order.len(), module.closures.len(), "{order:?}");
+        order.sort_unstable_by_key(|label| label.0);
+        order.dedup();
+        assert_eq!(order.len(), module.closures.len(), "{order:?}");
     }
 
     #[test]

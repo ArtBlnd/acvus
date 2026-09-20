@@ -1,8 +1,9 @@
 //! What a reference to a place names, stated at the checker's contract:
 //! the type a lambda's lent parameter is checked at, and the error where
 //! the place already holds a reference. A borrow of a reference is a
-//! reborrow of what it names (RFC-0029); a lambda cannot capture one
-//! (RFC-0018). A test that fails is a finding, kept as it fails.
+//! reborrow of what it names (RFC-0029); a lambda captures one as the
+//! word it is (RFC-0064 Decision 2). A test that fails is a finding, kept
+//! as it fails.
 
 use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::graph::{
@@ -121,27 +122,32 @@ fn a_lent_parameter_passed_to_a_bare_call_is_reborrowed_not_doubled() {
     );
 }
 
+/// RFC-0064 Decision 2 admits the capture, and RFC-0029 still holds of it:
+/// the inner lambda's capture type is the reference `a` already is, not a
+/// reference to it.
 #[test]
-fn an_inner_lambda_capturing_a_lent_parameter_is_refused_once() {
+fn an_inner_lambda_capturing_a_lent_parameter_captures_it_without_doubling() {
     let i = Interner::new();
-    let errors = recorded_types(
+    let types = checked(
         &i,
         &format!("{OWNED}let f = |a| -> range(0, 2) | map(|i| -> a[0]) | sum; f(&q)"),
-    )
-    .expect_err("the inner lambda captures `a`, a reference");
-    assert_eq!(
-        errors
-            .iter()
-            .filter(|e| *e == "a lambda cannot capture a reference")
-            .count(),
-        1,
-        "the lend decision owns the refusal, so it is stated once: {errors:?}"
     );
-    assert_eq!(
-        errors.len(),
-        2,
-        "the refusal leaves `a` open, and `as_slice` is ambiguous on an open \
-         receiver: {errors:?}"
+    let captured: Vec<&Vec<Ty>> = types
+        .iter()
+        .filter_map(|ty| match ty {
+            Ty::Fn { captures, .. } if !captures.is_empty() => Some(captures),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        captured
+            .iter()
+            .any(|of_one| *of_one == &[shared_ref(array_of_two_floats())]),
+        "the inner lambda captures `&Array<Float, 2>`: {captured:?}"
+    );
+    assert!(
+        !types.iter().any(is_double_reference),
+        "no `&&T` exists (RFC-0029): {types:?}"
     );
 }
 

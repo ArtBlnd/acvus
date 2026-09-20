@@ -146,20 +146,36 @@ fn a_move_out_of_a_capture_labels_the_lambda_that_captured_it() {
     );
 }
 
-/// `typeck` learns a capture is a reference from the capture's resolved type
-/// and not from a use of the name, so it holds the lambda's span alone and
-/// there is no second place to label.
+/// RFC-0064 "What it costs": a lambda called after the storage it borrows
+/// was written is the one case worth its own words, and the two places it
+/// names are the capture and the write.
+/// Both `r` and `f` hold the loan on `a` and both are live at the write, so
+/// the exclusion rule states the conflict once per holder. This asserts the
+/// lambda's, whose labels are the pair RFC-0064 asks for.
 #[test]
-fn a_captured_reference_names_one_place() {
-    let refusals = refusals(
-        "let a = [1, 2]; let r = &a; let f = |k| -> len(r); f(1)",
-        &nothing,
-    );
-    let captured = refusals
+fn a_write_while_a_capturing_lambda_is_live_names_the_capture_and_the_write() {
+    let source = "let a = [1, 2]; let r = &a; let f = |k| -> len(r) + k; a = [3, 4]; f(1)";
+    let refusals = refusals(source, &nothing);
+    let wanted = [
+        at("|k| -> len(r) + k", "captured here"),
+        at("a = [3, 4];", "written here while the lambda is live"),
+    ];
+    let lambda = refusals
         .iter()
-        .find(|r| r.message == "a lambda cannot capture a reference")
-        .unwrap_or_else(|| panic!("{:#?}", words(&refusals)));
-    assert_eq!(captured.labels.len(), 0);
+        .find(|r| r.marked(source) == wanted)
+        .unwrap_or_else(|| {
+            panic!(
+                "{:#?}",
+                refusals
+                    .iter()
+                    .map(|r| r.marked(source))
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(
+        lambda.message,
+        "`a` is written here while a reference to it is live"
+    );
 }
 
 /// `Solver::lend` answers that the referent is shared without saying where

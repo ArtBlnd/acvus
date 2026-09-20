@@ -1,31 +1,21 @@
 ---
 source: acvus-mir-test/tests/inline.rs
-assertion_line: 380
 expression: ir
 ---
 === main ===
      0 |   r0 = fetch @items
      1 |   assign @items = r0
      2 |   r1 = take @items
-     4 |   r2 = take $@items
-     5 |   r3 = call #0(r2)
-     6 |   r4 = take $v4
-     7 |   r5 = closure L0 [r4]
-     8 |   r6 = call #1(r3, r5)
-     9 |   r7 = call #2(r6)
-    10 |   r8 = take @items
-    11 |   commit @items = r8
-    12 |   return r7
+     4 |   r2 = call #0(r1, 10 (r3))
+     5 |   r4 = call #1(r2)
+     6 |   r5 = take @items
+     7 |   commit @items = r5
+     8 |   return r4
 
     ; r0 (@items) : Array<i64, 3>
     ; r1 (@items) : Array<i64, 3>
-    ; r2 ($xs) : Array<i64, 3>
-    ; r3 (v11) : Iterator<i64, Pure>
-    ; r4 ($n) : i64
-    ; r5 (v13) : Fn(i64) -> i64
-    ; r6 (map(...)) : Iterator<i64, Pure>
-    ; r7 (collect(...)) : Vec<i64>
-    ; r8 (v7) : Array<i64, 3>
-    ; r9 (add_n(...)) : Iterator<i64, Pure>
-    ; r10 (@items) : Array<i64, 3>
-    ; r11 (v4) : i64
+    ; r2 (add_n(...)) : Iterator<i64, Pure>
+    ; r3 (v4) : i64
+    ; r4 (collect(...)) : Vec<i64>
+    ; r5 (v7) : Array<i64, 3>
+    ; r6 (@items) : Array<i64, 3>

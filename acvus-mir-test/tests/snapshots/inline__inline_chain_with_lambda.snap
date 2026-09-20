@@ -1,34 +1,18 @@
 ---
 source: acvus-mir-test/tests/inline.rs
-assertion_line: 413
 expression: ir
 ---
 === main ===
      3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     4 |   r4 = take $v4
-     5 |   r5 = call #0(r4)
-     6 |   r6 = closure L0 []
-     7 |   r7 = call #1(r5, r6)
-     8 |   r8 = call #2(r7)
-     9 |   r9 = take $collect(...)
-    10 |   r10 = call #0(r9)
-    12 |   r11 = closure L0 []
-    13 |   r12 = call #3(r10, 0 (r13), r11)
-    14 |   return r12
+     4 |   r4 = call #0(r0)
+     5 |   r5 = call #1(r4)
+     6 |   r6 = call #2(r5)
+     7 |   return r6
 
     ; r0 (v4) : Array<i64, 3>
     ; r1 (v1) : i64
     ; r2 (v2) : i64
     ; r3 (v3) : i64
-    ; r4 ($xs) : Array<i64, 3>
-    ; r5 (v10) : Iterator<i64, Pure>
-    ; r6 (v11) : Fn(i64) -> i64
-    ; r7 (map(...)) : Iterator<i64, Pure>
-    ; r8 (collect(...)) : Vec<i64>
-    ; r9 ($xs) : Vec<i64>
-    ; r10 (v15) : Iterator<i64, Pure>
-    ; r11 (v17) : Fn(i64, i64) -> i64
-    ; r12 (fold(...)) : i64
-    ; r13 (v16) : i64
-    ; r14 (sum_list(...)) : i64
-    ; r15 (double_all(...)) : Iterator<i64, Pure>
+    ; r4 (double_all(...)) : Iterator<i64, Pure>
+    ; r5 (collect(...)) : Vec<i64>
+    ; r6 (sum_list(...)) : i64

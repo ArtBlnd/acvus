@@ -281,6 +281,11 @@ fn inline_multiple_context_writes() {
 // =======================================================================
 //  4. Closure / Lambda - capture remap, lambda as argument
 // =======================================================================
+//
+// A named callee whose body makes a closure is not spliced, so each snapshot
+// in this group shows the call. The closure's `MirBody` lives in the callee's
+// module and the spliced copy would name a body the caller's module does not
+// have; `inliner::makes_a_closure` carries the reason.
 
 #[test]
 fn inline_callee_returns_closure_result() {

@@ -99,9 +99,12 @@ async fn a_captured_word_is_returned_by_value() {
 }
 
 /// The same program one type apart: a captured `String` is lent, so the
-/// body's `s` is a reference, and a lambda returns no reference.
+/// body's `s` is a reference into the closure's own capture and `f(1)` is a
+/// `&String`. Two rules refuse it and the declared type is the one reached
+/// first; with no declaration in the way the region phase says "a reference
+/// to `s` cannot leave the body", which is the rule that makes it unsound.
 #[tokio::test]
-#[should_panic(expected = "a lambda cannot return a reference")]
+#[should_panic(expected = "type mismatch: expected String, got &String")]
 async fn a_captured_string_is_lent_and_so_is_not_returned_by_value() {
     let i = Interner::new();
     run_script_mode(

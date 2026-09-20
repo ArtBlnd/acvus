@@ -49,7 +49,7 @@ expression: ir
      4 |   r3 = call r2(1.0 (r4))
      5 |   return r3
 
-    ; r0 (v1) : &Fn(Float) -> Float
+    ; r0 (f) : &Fn(Float) -> Float
     ; r1 (v2) : i64
     ; r2 (f) : &Fn(Float) -> Float
     ; r3 (f(...)) : Float

@@ -10,11 +10,11 @@ use crate::error::{DataShape, MirError, MirErrorKind, ShownValue};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::solver::{
-    Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, Conversion,
-    ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice, InstanceKind,
-    LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode,
-    ReferencePair, SettledSignature, SignatureCandidate, SignatureName, SignatureOption,
-    UndecidedCall, UnjoinedArgument, Unsettled,
+    Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
+    Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice,
+    InstanceKind, LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch, MismatchReason,
+    ReceiverMode, ReferencePair, SettledSignature, SignatureCandidate, SignatureName,
+    SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -511,6 +511,19 @@ fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
 /// body returning one waits for the machine half of RFC-0064. Below the top
 /// level nothing changes: a reference inside data is RFC-0062 Decision 5's
 /// refusal whatever its shape.
+/// A lambda that holds a loan: RFC-0064 Decision 5 makes it a holder like a
+/// reference, so it is refused where a reference is. `reference_in_result`
+/// stops at a function type because a signature is not storage; a capture
+/// list is, and this is where it is walked.
+fn holds_a_loan(ty: &InferTy) -> bool {
+    let TyTerm::Fn { captures, .. } = ty else {
+        return false;
+    };
+    captures
+        .iter()
+        .any(|c| reference_in_result(c).is_some() || holds_a_loan(c))
+}
+
 fn unreturnable_reference(ty: &InferTy) -> Option<&InferTy> {
     match ty {
         TyTerm::Ref(_, target) => is_view(&target.ty).then_some(ty),
@@ -1698,10 +1711,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Some(recorded) => (recorded.read, recorded.seen.clone()),
             None => match self.solver.capture_read(ty) {
                 CaptureOutcome::Reads { read, seen } => (CaptureSource::Read(read), seen),
-                CaptureOutcome::Refused => (
-                    CaptureSource::Read(CaptureRead::Lent),
-                    TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty.clone()))),
-                ),
+                // The refusal is raised where the lambda closes; the body
+                // still reads the name at the type it has, so that one
+                // refusal is the only thing the program is told.
+                CaptureOutcome::Refused => (CaptureSource::Read(CaptureRead::Word), ty.clone()),
                 CaptureOutcome::HeadOpen => {
                     let seen = self.solver.fresh_ty_var();
                     let decision = self.solver.decide(Decision::Capture {
@@ -1880,14 +1893,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .iter()
             .map(|c| self.solver.resolve_ty(&c.ty))
             .collect();
-        let captured_a_reference = capture_types.iter().zip(&ls.captures).any(|(t, c)| {
-            matches!(t, TyTerm::Ref(..)) && !matches!(c.read, CaptureSource::Decided(_))
+        let captured_a_view = capture_types.iter().zip(&ls.captures).any(|(t, c)| {
+            matches!(t, TyTerm::Ref(_, target)
+                if self.solver.captured_shape(&target.ty) == CapturedShape::Pair)
+                && !matches!(c.read, CaptureSource::Decided(_))
         });
-        if captured_a_reference {
-            self.error(MirErrorKind::ReferenceCaptured, body.span());
+        if captured_a_view {
+            self.error(MirErrorKind::ViewCaptured, body.span());
         }
-        if matches!(self.solver.resolve_ty(&ret), TyTerm::Ref(..)) {
-            self.error(MirErrorKind::ReferenceReturned, body.span());
+        let resolved_ret = self.solver.resolve_ty(&ret);
+        if let Some(unreturnable) = unreturnable_reference(&resolved_ret) {
+            let ty = self.type_as_written(unreturnable);
+            self.error(MirErrorKind::ReferenceReturnedFromBody(ty), body.span());
         }
 
         self.pop_scope();
@@ -1952,13 +1969,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         types
     }
 
-    /// A reference is never data (RFC-0018).
+    /// A reference is never data (RFC-0018), and neither is a lambda that
+    /// holds one (RFC-0064 Decision 5).
     fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span, shape: DataShape) {
         let kind = match self.solver.resolve_ty(ty) {
             TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str) => {
                 MirErrorKind::ViewInData(shape)
             }
             TyTerm::Ref(..) => MirErrorKind::ReferenceInData(shape),
+            resolved if holds_a_loan(&resolved) => MirErrorKind::ReferenceInData(shape),
             _ => return,
         };
         self.error(kind, span);
@@ -2760,7 +2779,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     name: self.interner.resolve(name).to_string(),
                     candidates: self.shown_candidates(name, candidates.iter().copied()),
                 },
-                Unsettled::ReferenceCaptured { .. } => MirErrorKind::ReferenceCaptured,
+                Unsettled::ViewCaptured { .. } => MirErrorKind::ViewCaptured,
                 Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared,
                 Unsettled::LendMismatch { expected, got, .. }
                 | Unsettled::MatchMismatch { expected, got, .. } => {
@@ -2906,7 +2925,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let moves = std::mem::take(&mut self.capture_moves);
         for m in &moves {
             let owned = self.solver.resolve_ty(&m.owned);
-            if owned.is_primitive() {
+            if matches!(
+                self.solver.capture_read(&owned),
+                CaptureOutcome::Reads {
+                    read: CaptureRead::Word,
+                    ..
+                }
+            ) {
                 continue;
             }
             let at_the_enclosing_lambda = m

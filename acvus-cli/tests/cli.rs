@@ -648,6 +648,46 @@ fn a_use_after_move_shows_the_move_and_the_use_with_the_lines_between_elided() {
     );
 }
 
+/// RFC-0064 "What it costs": a lambda called after the storage it borrows was
+/// written names the capture and the write.
+#[test]
+fn a_write_while_a_capturing_lambda_is_live_shows_the_capture_and_the_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let source =
+        "let v = [1, 2, 3];\nlet r = &v;\nlet f = |k| -> len(r) + k;\nv = [4, 5, 6];\nf(1)\n";
+    write(dir.path(), "cap.acvus", source);
+
+    let out = acvus(dir.path(), &["check", "--json", "cap.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let array: Vec<serde_json::Value> = serde_json::from_str(&text(&out.stdout)).unwrap();
+    let captured = array
+        .iter()
+        .find(|d| d["labels"][0]["text"] == "captured here")
+        .unwrap_or_else(|| panic!("{}", text(&out.stdout)));
+    assert_eq!(
+        captured["message"],
+        "`v` is written here while a reference to it is live"
+    );
+    assert_eq!(captured["line"], 4);
+    assert_eq!(
+        captured["labels"],
+        serde_json::json!([
+            {
+                "line": 3,
+                "col": 9,
+                "span": [39, 56],
+                "text": "captured here",
+            },
+            {
+                "line": 4,
+                "col": 1,
+                "span": [58, 72],
+                "text": "written here while the lambda is live",
+            },
+        ])
+    );
+}
+
 /// Two values of one type from two sources: the refusal names the place they
 /// meet and the two places the sources begin, and `--json` carries all three.
 #[test]

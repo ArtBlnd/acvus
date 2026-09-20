@@ -122,6 +122,17 @@ captured `acc` is "cannot assign to `acc`: it is captured by the lambda,
 not bound in it". Where the captured name already holds a `&mut T`, the
 capture register is that reference and the first shape substitutes it.
 
+**Carrying a callee's closures across.** A `Callee::Direct` to a local
+function whose body makes a closure is not spliced at all. The closure's
+`MirBody` lives in `MirModule::closures` of the callee's module, and
+`acvus_interpreter::prepare` looks a `MakeClosure` up in the module it is
+preparing, so a spliced copy left the caller's module naming a body it did
+not have. Until RFC-0064 step 2 ran such a program on the machine the IR was
+never prepared and the hole was invisible; the six snapshots in
+`acvus-mir-test/tests/inline.rs` group 4 recorded it. Splicing these again
+means a closure-label namespace the two modules share, and that is a
+separate decision.
+
 **A bound on the named-function path.** `Callee::Direct` to a local
 function is still spliced whatever its size. Whether an unbounded rule is
 right there is a separate question with a separate measurement, and this

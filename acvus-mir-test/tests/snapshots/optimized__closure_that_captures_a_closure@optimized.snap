@@ -44,7 +44,7 @@ expression: opt
      1 |   r1 = call r0(1.0 (r2))
      2 |   return r1
 
-    ; r0 (v1) : &Fn(Float) -> Float
+    ; r0 (f) : &Fn(Float) -> Float
     ; r1 (f(...)) : Float
     ; r2 (v5) : Float
     ; r3 (f) : &Fn(Float) -> Float

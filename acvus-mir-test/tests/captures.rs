@@ -1,13 +1,14 @@
 //! A captured name of word type is a copy of a value the closure owns and
 //! a captured name of any other type is a borrow of one (RFC-0018), at the
-//! checker's contract and at the IR the lowering writes. A test that fails
-//! is a finding, kept as it fails.
+//! checker's contract and at the IR the lowering writes. A captured
+//! reference is a word — the `Kind::Ref` word itself (RFC-0064 Decision 2).
+//! A test that fails is a finding, kept as it fails.
 
 use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
-use acvus_mir::ty::{PolyBuilder, Ty, TyTerm};
+use acvus_mir::ty::{LenTerm, Mutability, PolyBuilder, Ty, TyTerm, TypeArg};
 use acvus_mir_test::compile_script_mode_optimized;
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -135,19 +136,27 @@ fn a_two_level_capture_of_a_word_lowers_to_a_closure_that_owns_its_capture() {
 }
 
 #[test]
-fn a_lambda_capturing_a_lent_parameter_is_rejected() {
+fn a_lambda_capturing_a_lent_parameter_captures_the_reference_itself() {
     let i = Interner::new();
-    let errors = check(
+    let checked = check(
         &i,
         "let a = [[0.5, 0.5]]; \
          as_iter(&a) | map(|k| -> range(0, 2) | map(|t| -> k[0] + t as f64) | sum) | sum",
     )
-    .expect_err("a lambda cannot capture a reference");
+    .unwrap_or_else(|errors| panic!("{errors:?}"));
+    let captured = Ty::Ref(
+        Mutability::Shared,
+        Box::new(TypeArg::uniform(Ty::Array(
+            Box::new(Ty::Float),
+            LenTerm::Known(2),
+        ))),
+    );
     assert!(
-        errors
+        checked
+            .captures_by_lambda
             .iter()
-            .any(|e| e.contains("a lambda cannot capture a reference")),
-        "{errors:?}"
+            .any(|of_one| of_one == &[captured.clone()]),
+        "{checked:?}"
     );
 }
 
