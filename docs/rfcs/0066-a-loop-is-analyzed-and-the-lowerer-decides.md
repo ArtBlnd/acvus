@@ -83,7 +83,15 @@ no layer holds a number nobody measured.
    exit value substituted for the count: an abstract interpretation of
    the invariant table at a handful of concrete points of `n`, folded to
    a threshold the machine tests once per loop entry. The program is
-   otherwise unchanged; the `if` is the whole of the run-time decision.
+   otherwise unchanged; the `if` is the whole of the run-time decision,
+   and in the machine it is **one dispatch point**: an operation that
+   reads `n`, compares, and continues into one of two chains. The split
+   chain — chunk, `Heavy` spawns, join — is the cold side, laid out of
+   line as RFC-0052 lays any cold path; the other side is the region
+   evaluated in place, spawning nothing, and is the hot side. A loop
+   that is never worth splitting therefore costs exactly one compare
+   over what a plain call of the same body costs today, and the two
+   sides are the same body under two operations, not two programs.
 
    The consequence this buys: a parser — a loop over a byte or token
    array with a cursor as its induction variable — is divisible by the
@@ -128,6 +136,10 @@ no layer holds a number nobody measured.
 
 ## Where this is hard
 
+- An ordered effect inside the loop body — I/O in the middle of a parse
+  — ends the region at that point, and the loop is not divided. This is
+  the rule working, not a case to rescue: the effect system already
+  separates it in SSA, and the analysis reads that separation.
 - The region rules of layer 2 are not settled. If they reduce to effect
   rules alone — a region is bounded exactly where an ordered effect
   appears — the analysis is the effect system read at loop granularity
