@@ -384,7 +384,7 @@ where
 }
 
 /// A deque demotes to a vec: the record is dropped with the deque.
-#[extern_fn(instance_of = vec, effect = pure)]
+#[extern_fn(instance_of = crate::vec::vec, effect = pure)]
 #[extern_cast]
 fn vec_deque<T>(d: Deque<T>) -> Vec<T>
 where

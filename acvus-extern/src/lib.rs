@@ -42,7 +42,10 @@ pub use handler::{
     SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
     ValuesOnly, Width, async_glue, async_glue_at_instance, glue, glue_at_instance,
 };
-pub use instance::{CalledAt, Instance, InstanceRun, Later, Now, Signature};
+pub use instance::{
+    CalledAt, Instance, InstanceRun, Later, Now, RestRun, RestoreByValue, RestoreExclusive,
+    RestoreShared, Signature,
+};
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use obj::{

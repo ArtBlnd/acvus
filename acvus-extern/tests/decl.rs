@@ -829,7 +829,8 @@ fn a_mono_glue_runs_the_instance_the_glue_runs() {
     let args = || unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
     assert!(open::<bool>(call_sync(h, args())));
     let mut recv = left;
-    assert!(call_instance::<eq<i64, Tiny>>(h, &mut recv, (&7i64,)));
+    let other = erased(7i64);
+    assert!(call_instance::<eq<i64, Tiny>>(h, &mut recv, (&other,)));
 }
 
 #[test]
@@ -950,10 +951,7 @@ fn an_instance_whose_parameter_converts_is_unreachable_through_the_values_abi() 
     );
     let h = instance_for(&reg, &i, "eq", &on_point).expect("the Point instance of t::eq");
     let mut left = a_point(1);
-    let right = Point {
-        x: 1,
-        label: "p".to_owned(),
-    };
+    let right = a_point(1);
     let _ = call_instance::<eq<Point, Tiny>>(h, &mut left, (&right,));
 }
 

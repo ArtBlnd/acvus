@@ -31,6 +31,7 @@ mod fused_run;
 mod hash_instances;
 mod inlined_closure_capture;
 mod instance_entry;
+mod instance_rest;
 mod integers;
 mod iter_more;
 mod iter_next;

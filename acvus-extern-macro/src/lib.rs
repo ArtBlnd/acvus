@@ -581,6 +581,7 @@ fn generate_extern_fn(
         && !params
             .iter()
             .any(|p| matches!(p.mode, Mode::Projection | Mode::Str));
+    let sig_mod = attr.instance_of.as_ref().map(signature_module_path);
     let entries = std::cell::RefCell::new(Vec::<proc_macro2::TokenStream>::new());
     let glue = |member: Option<&Type>, callee: &Ident, awaits: bool| -> proc_macro2::TokenStream {
         let rt_tys: Vec<Type> = params
@@ -656,16 +657,29 @@ fn generate_extern_fn(
                 },
             }
         });
-        let rest_tys: Vec<proc_macro2::TokenStream> = params
-            .iter()
-            .zip(&rt_tys)
-            .skip(1)
-            .map(|(p, ty)| match p.mode {
-                Mode::BorrowMut => quote! { &mut #ty },
-                Mode::Borrow => quote! { &#ty },
-                _ => quote! { #ty },
-            })
-            .collect();
+        // The run after the receiver is the signature's, not this
+        // instance's: the types below only say which instance's glue this
+        // is, and the signature's own module decides what crosses.
+        let rest_markers: Vec<&proc_macro2::TokenStream> = arg_markers.iter().skip(1).collect();
+        // Nothing crosses after the receiver where the signature carries
+        // nothing, and the glue of such an instance is the code it was
+        // before a position at a variable had a crossing of its own.
+        let rest_idents: &[Ident] = arg_idents.get(1..).unwrap_or(&[]);
+        let rest_param = match rest_idents.is_empty() {
+            true => quote! { _ },
+            false => quote! { __rest },
+        };
+        let restoring = (has_glue && !rest_idents.is_empty()).then(|| {
+            let sig_mod = sig_mod.as_ref().expect("has_glue names a signature");
+            quote! {
+                let mut __lent: #sig_mod::Lent<__R> = ::core::default::Default::default();
+                // SAFETY: as the receiver's: the run is this signature's
+                // own, at the types this instance has.
+                let (#(#rest_idents,)*) = unsafe {
+                    #sig_mod::restore::<__R #(, #rest_markers)*>(__rt, __rest, &mut __lent)
+                };
+            }
+        });
         let turbofish = vars.runtime_turbofish_instance(member);
         let mut acvus_at = 0usize;
         let mut state_at = 0usize;
@@ -702,13 +716,13 @@ fn generate_extern_fn(
             let at = entries.borrow().len();
             let glue_ident = format_ident!("__instance_{}_{}", fn_ident, at);
             let entry_ty = format_ident!("__ExternInstance{}{}", fn_ident, at);
-            let rest_idents = &arg_idents[1..];
             let recv_binding = recv_binding.clone().expect("has_glue has a receiver");
+            let sig_mod = sig_mod.as_ref().expect("has_glue names a signature");
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
                 unsafe fn #glue_ident<'__a, __R>(
                     __ctx: &'__a mut ::acvus_extern::Ctx<'_, __R>,
-                    (#(#rest_idents,)*): (#(#rest_tys,)*),
+                    #rest_param: #sig_mod::Rest<'__a, __R>,
                 ) -> ::acvus_extern::BoxFuture<'__a, #rt_ret>
                 where
                     __R: ::acvus_extern::Runtime,
@@ -718,11 +732,12 @@ fn generate_extern_fn(
                         // SAFETY: an `Instance::call` named the receiver
                         // for this call, and this glue is the body of an
                         // instance standing at the type the value it named
-                        // holds. The binding is inside the future because
-                        // a receiver taken by reference borrows a
-                        // reference value that has to live as long as the
-                        // body it is lent to.
+                        // holds. The bindings are inside the future
+                        // because what a position taken by reference
+                        // borrows has to live as long as the body it is
+                        // lent to.
                         #recv_binding
+                        #restoring
                         (#call).await
                     })
                 }
@@ -736,8 +751,9 @@ fn generate_extern_fn(
                     __R: ::acvus_extern::Runtime,
                 {
                     fn run() -> ::core::option::Option<::acvus_extern::InstanceRun> {
+                        let __at: #sig_mod::Later<__R, #rt_ret> = #glue_ident::<__R>;
                         ::core::option::Option::Some(::acvus_extern::InstanceRun {
-                            at: #glue_ident::<__R> as usize,
+                            at: __at as usize,
                             task: ::acvus_extern::Task::Async,
                         })
                     }
@@ -779,13 +795,13 @@ fn generate_extern_fn(
             let at = entries.borrow().len();
             let glue_ident = format_ident!("__instance_{}_{}", fn_ident, at);
             let entry_ty = format_ident!("__ExternInstance{}{}", fn_ident, at);
-            let rest_idents = &arg_idents[1..];
             let recv_binding = recv_binding.clone().expect("has_glue has a receiver");
+            let sig_mod = sig_mod.as_ref().expect("has_glue names a signature");
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
                 unsafe fn #glue_ident<__R>(
                     __ctx: &mut ::acvus_extern::Ctx<'_, __R>,
-                    (#(#rest_idents,)*): (#(#rest_tys,)*),
+                    #rest_param: #sig_mod::Rest<'_, __R>,
                 ) -> #rt_ret
                 where
                     __R: ::acvus_extern::Runtime,
@@ -795,6 +811,7 @@ fn generate_extern_fn(
                     // this call, and this glue is the body of an instance
                     // standing at the type the value it named holds.
                     #recv_binding
+                    #restoring
                     #call
                 }
 
@@ -807,8 +824,9 @@ fn generate_extern_fn(
                     __R: ::acvus_extern::Runtime,
                 {
                     fn run() -> ::core::option::Option<::acvus_extern::InstanceRun> {
+                        let __at: #sig_mod::Now<__R, #rt_ret> = #glue_ident::<__R>;
                         ::core::option::Option::Some(::acvus_extern::InstanceRun {
-                            at: #glue_ident::<__R> as usize,
+                            at: __at as usize,
                             task: ::acvus_extern::Task::Sync,
                         })
                     }
@@ -2785,6 +2803,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             .chain(std::iter::once(runtime.clone()))
             .collect(),
     };
+    let crossing = signature_module(&ident, &vars, &runtime, &params);
     let signature_impl = signature_call(
         &input.ns,
         &ident,
@@ -2818,6 +2837,8 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                 }
             }
         }
+
+        #crossing
 
         #signature_impl
     })
@@ -2866,32 +2887,244 @@ impl Receiver {
     }
 }
 
-/// One parameter of a shared signature after the first: its type in `Rest`,
-/// and the crossing the impl has to name for it.
-struct RestParam {
-    ty: proc_macro2::TokenStream,
-    crossing: Option<proc_macro2::TokenStream>,
+/// Whether `ty` mentions `ident`.
+fn mentions(ty: &Type, ident: &Ident) -> bool {
+    let found = std::cell::Cell::new(false);
+    subst::substitute(ty, &|at| {
+        if at == ident {
+            found.set(true);
+        }
+        None
+    });
+    found.get()
 }
 
-impl RestParam {
-    /// `None` where the parameter is neither `&V` at the signature's first
-    /// variable nor one whole value.
-    fn of(p: &ExternParam, first: &Ident, runtime: &Ident) -> Option<Self> {
-        let ty = &p.ty;
-        match p.mode {
-            Mode::Borrow if Vars::is_exactly(ty, first) => Some(Self {
-                ty: quote! { &'__a #first },
-                crossing: None,
-            }),
-            Mode::Value => Some(Self {
-                ty: quote! { #ty },
-                crossing: Some(quote! {
-                    #ty: ::acvus_extern::Cross<#runtime, Form = ::acvus_extern::One>
-                }),
-            }),
-            _ => None,
+/// One parameter of a shared signature after the first, as the crossing
+/// sees it: a position standing at the signature's own variable crosses as
+/// the caller's own value, one type per runtime, and the instance's own
+/// handler type is restored on the far side; every other position crosses
+/// as the signature wrote it (RFC-0067 "The call").
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RestAt {
+    VariableShared,
+    VariableExclusive,
+    VariableValue,
+    Itself(Mode),
+}
+
+impl RestAt {
+    fn of(p: &ExternParam, vars: &Vars) -> Self {
+        let at_variable = vars.type_vars().any(|v| mentions(&p.ty, v));
+        match (p.mode, at_variable) {
+            (Mode::Borrow, true) => Self::VariableShared,
+            (Mode::BorrowMut, true) => Self::VariableExclusive,
+            (Mode::Value, true) => Self::VariableValue,
+            (mode, _) => Self::Itself(mode),
         }
     }
+
+    /// The type this position has in the signature's rest run, over the
+    /// type `ty` the signature wrote there.
+    fn crossed(self, ty: &Type, runtime: &Ident) -> proc_macro2::TokenStream {
+        let value = quote! { <#runtime as ::acvus_extern::Runtime>::Value };
+        match self {
+            Self::VariableShared => quote! { &'__a #value },
+            Self::VariableExclusive => quote! { &'__a mut #value },
+            Self::VariableValue => quote! { ::acvus_extern::Owned<#runtime> },
+            Self::Itself(Mode::Borrow) => quote! { &'__a #ty },
+            Self::Itself(Mode::BorrowMut) => quote! { &'__a mut #ty },
+            Self::Itself(Mode::Str) => quote! { &'__a str },
+            Self::Itself(_) => quote! { #ty },
+        }
+    }
+
+    /// The type the instance's own handler takes at this position, as the
+    /// marker `#[extern_fn]` wrote for that parameter projects it.
+    fn restored(self, marker: &Ident, runtime: &Ident, ty: &Type) -> proc_macro2::TokenStream {
+        match self {
+            Self::VariableShared => {
+                quote! { <#marker as ::acvus_extern::RestoreShared<#runtime>>::Out<'__b> }
+            }
+            Self::VariableExclusive => {
+                quote! { <#marker as ::acvus_extern::RestoreExclusive<#runtime>>::Out<'__b> }
+            }
+            Self::VariableValue => {
+                quote! { <#marker as ::acvus_extern::RestoreByValue<#runtime>>::Out }
+            }
+            Self::Itself(Mode::Borrow) => quote! { &'__b #ty },
+            Self::Itself(Mode::BorrowMut) => quote! { &'__b mut #ty },
+            Self::Itself(Mode::Str) => quote! { &'__b str },
+            Self::Itself(_) => quote! { #ty },
+        }
+    }
+
+    fn at_variable(self) -> bool {
+        !matches!(self, Self::Itself(_))
+    }
+
+    /// Whether the position is one a `Signature` impl can name: a borrow
+    /// stands at the signature's own variable or nowhere, because nothing
+    /// else has a uniform form a requiring handler could hold.
+    fn is_signature_shaped(self) -> bool {
+        match self {
+            Self::Itself(Mode::Borrow | Mode::BorrowMut | Mode::Str | Mode::Projection) => false,
+            Self::VariableShared
+            | Self::VariableExclusive
+            | Self::VariableValue
+            | Self::Itself(_) => true,
+        }
+    }
+}
+
+/// The crossing of one shared signature, beside the signature itself: the
+/// types `Signature` projects to and every mono glue is written at, so that
+/// the two are one definition and `call_now`'s word cannot be a `fn` of
+/// another shape.
+fn signature_module(
+    ident: &Ident,
+    vars: &Vars,
+    runtime: &Ident,
+    params: &[ExternParam],
+) -> proc_macro2::TokenStream {
+    let module = signature_module_ident(ident);
+    let tail: Vec<&ExternParam> = params.iter().skip(1).collect();
+    let rest: Vec<RestAt> = tail.iter().map(|p| RestAt::of(p, vars)).collect();
+    let tys: Vec<&Type> = tail.iter().map(|p| &p.ty).collect();
+    let markers: Vec<Ident> = (0..rest.len()).map(|at| format_ident!("__M{at}")).collect();
+    let args: Vec<Ident> = (0..rest.len()).map(|at| format_ident!("__x{at}")).collect();
+    let lent: Vec<Ident> = rest
+        .iter()
+        .enumerate()
+        .filter(|(_, at)| matches!(at, RestAt::VariableShared | RestAt::VariableExclusive))
+        .map(|(at, _)| format_ident!("__at{at}"))
+        .collect();
+    let lent_len = lent.len();
+    let crossed = rest
+        .iter()
+        .zip(&tys)
+        .map(|(at, ty)| at.crossed(ty, runtime));
+    let restored = rest
+        .iter()
+        .zip(&markers)
+        .zip(&tys)
+        .map(|((at, marker), ty)| at.restored(marker, runtime, ty));
+    let mut lent_at = lent.iter();
+    let takes: Vec<proc_macro2::TokenStream> = rest
+        .iter()
+        .zip(&markers)
+        .zip(&args)
+        .map(|((at, marker), arg)| match at {
+            RestAt::VariableShared => {
+                let slot = lent_at.next().expect("a shared position lends a slot");
+                quote! {
+                    unsafe {
+                        <#marker as ::acvus_extern::RestoreShared<#runtime>>::restore_shared(
+                            __rt, #slot, #arg,
+                        )
+                    }
+                }
+            }
+            RestAt::VariableExclusive => {
+                let slot = lent_at.next().expect("an exclusive position lends a slot");
+                quote! {
+                    unsafe {
+                        <#marker as ::acvus_extern::RestoreExclusive<#runtime>>::restore_exclusive(
+                            __rt, #slot, #arg,
+                        )
+                    }
+                }
+            }
+            RestAt::VariableValue => quote! {
+                unsafe {
+                    <#marker as ::acvus_extern::RestoreByValue<#runtime>>::restore_by_value(
+                        __rt, #arg,
+                    )
+                }
+            },
+            RestAt::Itself(_) => quote! { #arg },
+        })
+        .collect();
+    let bounds = rest
+        .iter()
+        .zip(&markers)
+        .filter_map(|(at, marker)| match at {
+            RestAt::VariableShared => {
+                Some(quote! { #marker: ::acvus_extern::RestoreShared<#runtime> })
+            }
+            RestAt::VariableExclusive => {
+                Some(quote! { #marker: ::acvus_extern::RestoreExclusive<#runtime> })
+            }
+            RestAt::VariableValue => {
+                Some(quote! { #marker: ::acvus_extern::RestoreByValue<#runtime> })
+            }
+            RestAt::Itself(_) => None,
+        });
+    // A type alias names every type parameter it takes (E0091), and a run
+    // of concrete positions names none of its own, so it names the runtime
+    // through `RestRun`.
+    let run = quote! {
+        <(#(#crossed,)*) as ::acvus_extern::RestRun<#runtime>>::Run
+    };
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub mod #module {
+            pub type Rest<'__a, #runtime> = #run;
+
+            pub type Lent<#runtime> =
+                [<#runtime as ::acvus_extern::Runtime>::Value; #lent_len];
+
+            pub type Now<#runtime, __Ret> = for<'__a> unsafe fn(
+                &mut ::acvus_extern::Ctx<'_, #runtime>,
+                Rest<'__a, #runtime>,
+            ) -> __Ret;
+
+            pub type Later<#runtime, __Ret> = for<'__a> unsafe fn(
+                &'__a mut ::acvus_extern::Ctx<'_, #runtime>,
+                Rest<'__a, #runtime>,
+            ) -> ::acvus_extern::BoxFuture<'__a, __Ret>;
+
+            /// # Safety
+            /// `rest` is the run of a call of an instance of this
+            /// signature whose parameters after the first are `__M0..`,
+            /// and the storages it names are live for `'b`.
+            #[allow(clippy::needless_lifetimes, unused_variables)]
+            #[inline(always)]
+            pub unsafe fn restore<'__a, '__b, #runtime #(, #markers)*>(
+                __rt: &#runtime,
+                __rest: Rest<'__a, #runtime>,
+                __lent: &'__b mut Lent<#runtime>,
+            ) -> (#(#restored,)*)
+            where
+                '__a: '__b,
+                #runtime: ::acvus_extern::Runtime,
+                #(#bounds,)*
+            {
+                let (#(#args,)*) = __rest;
+                let [#(#lent,)*] = __lent;
+                (#(#takes,)*)
+            }
+        }
+    }
+}
+
+/// The module `extern_signature!` writes beside a signature, as the
+/// `instance_of` path of one of its instances names it.
+fn signature_module_ident(ident: &Ident) -> Ident {
+    format_ident!("__sig_{}", ident)
+}
+
+/// The same module, from the path an `#[extern_fn(instance_of = ..)]`
+/// wrote: the signature's own last segment, with no arguments.
+fn signature_module_path(path: &Path) -> Path {
+    let mut path = path.clone();
+    let last = path
+        .segments
+        .last_mut()
+        .expect("a parsed path names at least one segment");
+    last.ident = signature_module_ident(&last.ident);
+    last.arguments = syn::PathArguments::None;
+    path
 }
 
 /// The `Signature` impl of a shared signature whose first parameter stands
@@ -2925,15 +3158,19 @@ fn signature_call(
     let Some(Receiver { recv }) = Receiver::of(head.mode, first) else {
         return proc_macro2::TokenStream::new();
     };
-    let Some(rest): Option<Vec<RestParam>> = tail
-        .iter()
-        .map(|p| RestParam::of(p, first, runtime))
-        .collect()
-    else {
+    let rest: Vec<RestAt> = tail.iter().map(|p| RestAt::of(p, vars)).collect();
+    if !rest.iter().all(|at| at.is_signature_shaped()) {
         return proc_macro2::TokenStream::new();
-    };
-    let rest_tys = rest.iter().map(|p| &p.ty);
-    let rest_crossings = rest.iter().filter_map(|p| p.crossing.as_ref());
+    }
+    // The crossing of a position that is not at a variable is the type the
+    // signature wrote there, so the signature's own types fill the run.
+    let rest_tys: Vec<&Type> = tail.iter().map(|p| &p.ty).collect();
+    let rest_crossings = rest.iter().zip(&rest_tys).filter_map(|(at, ty)| {
+        (!at.at_variable()).then(|| {
+            quote! { #ty: ::acvus_extern::Cross<#runtime, Form = ::acvus_extern::One> }
+        })
+    });
+    let module = signature_module_ident(ident);
     let kinds = vars.kind_predicates();
     quote! {
         impl<#(#marker_params,)*> ::acvus_extern::Signature<#runtime>
@@ -2947,21 +3184,20 @@ fn signature_call(
         {
             type This = #first;
             type Recv<'__a> = #recv;
-            type Rest<'__a> = (#(#rest_tys,)*);
+            type Rest<'__a> = #module::Rest<'__a, #runtime>;
             type Ret = #ret;
+            type Now = #module::Now<#runtime, #ret>;
+            type Later = #module::Later<#runtime, #ret>;
 
             unsafe fn call_now<'__r>(
                 __value: <#runtime as ::acvus_extern::Runtime>::Value,
                 __ctx: &mut ::acvus_extern::Ctx<'_, #runtime>,
                 __rest: <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__r>,
             ) -> #ret {
-                // SAFETY: the caller's contract: the word is the mono glue
-                // of an instance of this signature, which `#[extern_fn]`
-                // wrote at exactly this shape.
-                let __f: unsafe fn(
-                    &mut ::acvus_extern::Ctx<'_, #runtime>,
-                    <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__r>,
-                ) -> #ret = unsafe {
+                // SAFETY: the caller's contract: the word is the address
+                // `#[extern_fn]` took of a mono glue of this signature,
+                // which it took at this type and at no other.
+                let __f: <Self as ::acvus_extern::Signature<#runtime>>::Now = unsafe {
                     ::core::mem::transmute(
                         <#runtime as ::acvus_extern::Runtime>::instance_run(&__value).at,
                     )
@@ -2989,10 +3225,7 @@ fn signature_call(
                 }
                 // SAFETY: as `call_now`'s, at the awaiting shape the task
                 // above named.
-                let __f: unsafe fn(
-                    &'__a mut ::acvus_extern::Ctx<'_, #runtime>,
-                    <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__a>,
-                ) -> ::acvus_extern::BoxFuture<'__a, #ret> =
+                let __f: <Self as ::acvus_extern::Signature<#runtime>>::Later =
                     unsafe { ::core::mem::transmute(__run.at) };
                 // SAFETY: as `call_now`'s.
                 unsafe { __f(__ctx, __rest) }

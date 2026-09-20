@@ -128,9 +128,19 @@ where
 }
 ```
 
-`ctx` and the arguments cross as they are typed — a concrete parameter or
-result is itself, `Option<i64>` in registers, not an erased run. The
-receiver does not cross: `ctx` carries a `recv: *mut Rt::Value`,
+A parameter that is **concrete** in the signature crosses as it is typed —
+`Option<i64>` in registers, not an erased run. A parameter standing at one
+of the signature's **type variables** crosses as the caller's own value —
+`&Rt::Value`, `&mut Rt::Value`, `Owned<Rt>` by mode — because the type a
+requiring handler has there is its own variable and the type the instance
+has there is a Rust type the requirement never names; the mono glue
+restores the instance's type from that value with the loan device its
+receiver already uses. `Signature::Now` and `Later` are the `fn` types
+written from the signature's parameter list, beside the signature, so every
+instance's glue has one `fn` type and `call_now` transmutes the word to
+that type and to no other.
+
+The receiver does not cross: `ctx` carries a `recv: *mut Rt::Value`,
 `name_receiver` writes it, and the mono glue on the far side takes it out of
 `ctx` and materializes the handler's literal `&mut NRange`, then reads its
 fields natively. The receiver word is a raw pointer and is never tested
@@ -226,6 +236,9 @@ machine runs one plain function pointer per stage plus the stage's closure.
 instance word — from the payload field for an adaptor, from the site table
 for a consumer — one indirect call, and one load on the far side to take the
 receiver back out of `ctx`. Nothing is allocated, nothing is written back.
+A parameter at a type variable adds, on the far side, what the receiver
+already pays: one reference value built from the caller's value and one
+borrow through it. A signature whose rest is empty pays none of it.
 
 **The consumer's receiver bound.** A handler that takes its iterator by
 value and drives it writes `I: Var<kind::Type> + DerefMut<Target =
@@ -311,8 +324,10 @@ scripts with every counter but the removed and added files' own identical.
 
 - **The async instance's customers.** `into_async` and `call_await` compile
   and are wired; no test drives an async instance through them yet.
-- **`eq` at `T` and `step` at `&mut I`.** The shapes a by-value receiver and
-  a `&mut` receiver take, beyond the spike's one shape.
+- **The word a hand-written `AtInstance` puts in `InstanceRun`.** The glue
+  `#[extern_fn]` writes is typed at the signature's own `Now`, but
+  `InstanceRun::at` is a public `usize`, so an impl written by hand can
+  still put any address there.
 - **The pairing golden.** A `compile_fail` case pinning that an `Instance`
   whose `I` is not the receiver's variable is refused at `call`.
 - **The refusal for a declaration that is both an instance and requires
