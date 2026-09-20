@@ -168,12 +168,22 @@ fn a_shared_borrow_does_not_reach_an_exclusive_slice_parameter() {
     );
 }
 
+/// The coercion a `&[T]` parameter takes is a declaration a script may
+/// also name, and naming it takes that one view and no second one.
 #[test]
-fn a_script_cannot_name_the_coercion_it_gets() {
-    assert_eq!(
-        refusal("let v = vec([1, 2, 3]); total(as_slice(&v))"),
-        "undefined function `as_slice`"
-    );
+fn a_script_names_the_coercion_it_would_have_got() {
+    let ir = ir("let v = vec([1, 2, 3]); total(as_slice(&v))");
+    let body = main_body(&ir);
+    assert_eq!(count(body, "as_slice"), 1, "{body}");
+    let sliced = body
+        .lines()
+        .position(|line| line.contains("as_slice"))
+        .expect("the as_slice");
+    let called = body
+        .lines()
+        .position(|line| line.contains("total"))
+        .expect("the call");
+    assert!(sliced < called, "the slice is the argument:\n{body}");
 }
 
 #[test]

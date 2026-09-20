@@ -126,6 +126,6 @@ fn an_argument_no_candidate_takes_names_the_argument_as_written() {
     reports_as_written(
         "let f = |k| -> len(k); f(1)",
         "type i64 is outside the declared bound one of &Vec<#?'0>, &str, &Deque<#?'0>, \
-         &Array<'0, '0>",
+         &Array<'0, '0>, &['0]",
     );
 }

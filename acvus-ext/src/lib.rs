@@ -34,7 +34,7 @@ pub use panic::panic_registry;
 pub use regex::regex_registry;
 pub use result::result_registry;
 pub use string::string_registry;
-pub use vec::vec_registry;
+pub use vec::{slice_registry, vec_registry};
 
 use acvus_extern::{Registry, Runtime};
 
@@ -56,6 +56,7 @@ where
         conversion_registry(),
         decimal_registry(),
         vec_registry(),
+        slice_registry(),
         array_registry(),
         deque_registry(),
         option_registry(),

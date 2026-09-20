@@ -1794,12 +1794,40 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .collect(),
             crate::ty::FnLookup::Missing => Vec::new(),
         };
+        candidates.extend(self.slice_view_signatures(name));
         if name.namespace.is_none()
             && let Some(ty) = self.local_signature(name.name)
         {
             candidates.push(SignatureCandidate::Local { ty });
         }
         candidates
+    }
+
+    /// The container views of `TypeEnv::machine` (RFC-0047 §5), offered to
+    /// a script's own call as candidates alongside `resolve_fn`'s.
+    ///
+    /// `as_str` lives in that map too and is deliberately not here. A
+    /// `&String` reaches a `&str` parameter by coercion alone (RFC-0062
+    /// Decision 3); whether a script may also write `s.as_str()` is a
+    /// decision about `String`, not about a container, and it has not been
+    /// made.
+    fn slice_view_signatures(&mut self, name: QualifiedRef) -> Vec<SignatureCandidate> {
+        let is_view = matches!(
+            self.interner.resolve(name.name),
+            "as_slice" | "as_slice_mut"
+        );
+        if !is_view {
+            return Vec::new();
+        }
+        self.env
+            .machine_set(name.name)
+            .into_iter()
+            .filter(|(qref, _)| name.namespace.is_none_or(|ns| qref.namespace == Some(ns)))
+            .map(|(qref, scheme)| SignatureCandidate::Named {
+                qref,
+                scheme: scheme.clone(),
+            })
+            .collect()
     }
 
     /// The binding that is one more signature of a bare name (RFC-0043).

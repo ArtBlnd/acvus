@@ -167,15 +167,21 @@ fn an_index_that_is_not_a_u64_is_the_ordinary_unification_refusal() {
     );
 }
 
+/// The view is the coercion `a[i]` takes, and a script may also ask for it
+/// by name. Named, it is an ordinary call of the container's own
+/// declaration — not the `as_slice` instruction the coercion lowers to —
+/// and what it yields is the view at the mutability the name asked for.
 #[test]
-fn a_script_cannot_name_as_slice() {
-    assert_eq!(
-        refusal("let a = [1, 2, 3]; as_slice(&a)"),
-        "undefined function `as_slice`"
+fn a_script_names_the_view_and_gets_the_containers_own() {
+    let shared = ir("let a = [1, 2, 3]; let s = as_slice(&a); s.len()");
+    assert!(
+        main_body(&shared).contains("as_slice(...)) : &[i64]"),
+        "{shared}"
     );
-    assert_eq!(
-        refusal("let a = [1, 2, 3]; as_slice_mut(&mut a)"),
-        "undefined function `as_slice_mut`"
+    let exclusive = ir("let a = [1, 2, 3]; let s = as_slice_mut(&mut a); s.len()");
+    assert!(
+        main_body(&exclusive).contains("as_slice_mut(...)) : &mut [i64]"),
+        "{exclusive}"
     );
 }
 
