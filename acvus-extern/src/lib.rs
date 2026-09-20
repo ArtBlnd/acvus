@@ -32,11 +32,12 @@ pub use effect::{Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{ArgTypes, Args, CallArgs, CallToken, Closure, ClosureFn};
 pub use handler::{
-    Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtSite, Borrowable,
-    BorrowableSpecialized, ByRef, ByValue, DirectOp, ExternHandler, Glue, Handler, HandlerFactory,
-    InRegisters, InWindow, Instance, Instances, IntoRun, Parameters, REGISTER_FORM, Ret, Sited,
-    SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
-    ValuesOnly, Width, async_glue, glue,
+    Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtEntry, AtSite,
+    Borrowable, BorrowableSpecialized, ByRef, ByValue, DeclaredInstance, DirectOp, Entry,
+    ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, Instances, IntoRun,
+    NoEntry, NoSites, Parameters, REGISTER_FORM, Ret, Sited, SitesNoParameterReads, Specialized,
+    TakenForm, Uniform, Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, glue,
+    glue_at_entry,
 };
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};

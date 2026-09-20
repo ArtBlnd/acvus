@@ -354,6 +354,14 @@ impl Runtime for Tiny {
         // SAFETY: the target is live and, by the checker, exclusively named.
         open_mut(unsafe { &mut *(*p as *mut V) })
     }
+    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> V {
+        panic!("this runtime holds no instance entry")
+    }
+
+    unsafe fn entry_of(&self, _: &V) -> acvus_extern::Entry<Self> {
+        panic!("this runtime holds no instance entry")
+    }
+
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
@@ -728,6 +736,46 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
         ExternHandler::Heavy(_) => panic!("expected a sync handler, found a heavy one"),
         ExternHandler::Async(_) => panic!("expected a sync handler, found an async one"),
     }
+}
+
+/// One resolved instance reached without the glue: the plain function of
+/// the values ABI that a requirement is passed as (RFC-0067 Decision 3).
+fn call_entry(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
+    let entry = handler.entry().expect("this declaration has an entry");
+    let mut out = [V::default()];
+    // SAFETY: the values ABI's contract, which is `Handler::call`'s: `args`
+    // is the declaration's whole argument run and `out` has room for its
+    // one-value result.
+    unsafe { entry(&Tiny, (), &args, &mut out) };
+    out[0]
+}
+
+#[test]
+fn an_entry_runs_the_instance_the_glue_runs() {
+    let (i, reg) = combined::<Tiny>();
+    let on_int = call_type(
+        vec![
+            acvus_extern::Ty::Ref(
+                acvus_extern::Mutability::Shared,
+                Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
+            );
+            2
+        ],
+        acvus_extern::Ty::Bool,
+        &i,
+    );
+    let h = instance_for(&reg, &i, "eq", &on_int).expect("the i64 instance of t::eq");
+    let (left, right) = (erased(7i64), erased(7i64));
+    // SAFETY: both places outlive the two calls below.
+    let args = || unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
+    assert!(open::<bool>(call_sync(h, args())));
+    assert!(open::<bool>(call_entry(h, args())));
+}
+
+#[test]
+fn a_declaration_that_is_no_instance_has_no_entry() {
+    let (i, reg) = combined::<Tiny>();
+    assert!(handler(&reg, &i, "add").entry().is_none());
 }
 
 #[test]

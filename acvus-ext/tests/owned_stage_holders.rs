@@ -312,6 +312,14 @@ impl Runtime for Counted {
         panic!("{NO_SLICES}")
     }
 
+    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> V {
+        panic!("this runtime holds no instance entry")
+    }
+
+    unsafe fn entry_of(&self, _: &V) -> acvus_extern::Entry<Self> {
+        panic!("this runtime holds no instance entry")
+    }
+
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }

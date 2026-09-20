@@ -11,7 +11,7 @@ use acvus_mir::ty::{
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::handler::{ExternHandler, Instance, Instances};
+use crate::handler::{DeclaredInstance, ExternHandler, Instances};
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -149,7 +149,7 @@ where
             instance_of: None,
         },
         instances: Instances {
-            concrete: vec![Instance {
+            concrete: vec![DeclaredInstance {
                 signature: instance,
                 handler,
                 admits: Task::Heavy,
@@ -367,7 +367,7 @@ pub struct Externs<R: Runtime> {
 struct Collected<R: Runtime> {
     decl: SignatureDecl,
     instance_types: Vec<PolyTy>,
-    instances: Vec<Instance<R>>,
+    instances: Vec<DeclaredInstance<R>>,
     casts: Vec<CastRule>,
 }
 
@@ -548,7 +548,10 @@ fn add_instance<R: Runtime>(
     Ok(())
 }
 
-fn at_declared_type<R>(declared: &PolyTy, instances: Instances<R>) -> Option<Vec<Instance<R>>>
+fn at_declared_type<R>(
+    declared: &PolyTy,
+    instances: Instances<R>,
+) -> Option<Vec<DeclaredInstance<R>>>
 where
     R: Runtime,
 {
@@ -556,7 +559,7 @@ where
         Instances {
             concrete,
             generic: Some(handler),
-        } if concrete.is_empty() => Some(vec![Instance {
+        } if concrete.is_empty() => Some(vec![DeclaredInstance {
             signature: declared.clone(),
             handler,
             admits: Task::Heavy,

@@ -1486,6 +1486,7 @@ pub mod corpus {
             Kind::Ref => render(interner, unsafe { value.target() }),
             Kind::Undef => Json::from("<undef>"),
             Kind::LargeRef => Json::from("<projection>"),
+            Kind::Entry => Json::from("<instance>"),
             Kind::Large => composite(interner, value),
         }
     }

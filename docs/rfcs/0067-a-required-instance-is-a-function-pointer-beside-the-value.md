@@ -215,3 +215,86 @@ with an instance of `next`.
 4. The iterator on `next`: sources, adaptors, consumers; the dyn chain
    removed; numbers against master under `benches/README.md`'s protocol.
 5. Container handlers requiring `eq`/`ord`/`hash` of their element.
+
+## Consequences
+
+Step 2 landed its first half: the entry and the word. What a requirement is
+— the bound, the appended argument, the carrier — is not built, so nothing
+yet requires an instance and nothing yet passes one.
+
+### The entry
+
+```rust
+pub type Entry<Rt> = for<'a, 'w> unsafe fn(
+    &'a Rt,
+    <Rt as Runtime>::Frame<'w>,
+    &'a [<Rt as Runtime>::Value],
+    &'a mut [<Rt as Runtime>::Value],
+);
+```
+
+`Handler::call`'s shape without the `&self`. `#[extern_fn]` writes one `fn`
+item per instance beside the Rust body and names it through a zero-sized
+type implementing `AtEntry`, which the glue carries as a type parameter
+rather than a field — a glue stays the closure and nothing else.
+`HandlerFactory::entry` and `ExternHandler::entry` read it.
+
+An entry is written for an instance of a shared signature and for nothing
+else: a requirement resolves to an instance, and a plain declaration is
+reached only through its call site. An instance still has none if it holds
+a `#[state]` value, takes a projection parameter, or is reached only by the
+glue that suspends the caller (`heavy`, and an `async fn` without a
+`sync =` companion). Of the standard registries' synchronous instances,
+**none** is in that set: `acvus-interpreter-test/tests/instance_entry.rs`
+asserts it over the fifteen declared signatures, so rule 3's refusal list is
+empty and the refusal is a path no registered instance reaches today.
+
+### The word
+
+`acvus-interpreter`'s `Kind::Entry`: the value's word is the address of an
+`Entry<AcvusRuntime>`. The `Runtime` contract gains `entry_value` and
+`entry_of`; a runtime that carries no entry says so, as it does for every
+other shape it does not hold.
+
+### What it cost
+
+An entry is a second caller of the Rust body it names, so that body is no
+longer inlined into the operation holding it, and the operation ends in
+`call`/`ret` instead of the tail jump `benches/asm_probe.rs` asserts.
+Measured on the release machine: written for every declaration, 89
+operations lose the tail jump — 20 `CallExtern2`, 10 `CallWindow`, 3
+`CallExtern1`, 2 `CallExtern3` among them — against 2734/39/28 with no
+entry written at all. Written for instances alone, the figure is unchanged
+at 2734/39/28. That is why the entry is per instance and not per
+declaration, and it is the ceiling on how far entries may spread: a body
+that both an operation and an entry reach is a body the operation calls.
+
+The same second caller doubles an author's parameter refusal, because the
+entry `fn` restates the declaration's parameter markers and the trait
+obligation then fails at two spans. Per instance, no `compile_fail`
+expectation moves.
+
+### What waits
+
+`Instance<S>`, the bundle carrier `Bound<Rt, P>`, the macro reading
+`Instance<…>` bounds onto the declaration, the check and the appended
+argument in typeck and lowering, the `Monomorphize` member's impls, and
+both customers.
+
+Coherence is the open question the carrier meets first. The two impls the
+bundle wants —
+
+```rust
+impl<Rt, S, Rest> Instance<S> for Bound<Rt, (Ptr<S>, Rest)>
+impl<Rt, S, Head, Rest> Instance<S> for Bound<Rt, (Head, Rest)>
+    where Bound<Rt, Rest>: Instance<S>
+```
+
+— overlap at `Head = Ptr<S>`, and so does any fixed-arity set of them
+(`(Ptr<A>, Ptr<S>)` and `(Ptr<S>, Ptr<B>)` meet at `A = B = S`). That two
+requirements of one variable never name one signature at one type is true
+of every declaration and is not a fact coherence can use. The slot must
+therefore be selected by an index the trait itself carries, as `frunk`'s
+`Selector<T, Index>` does; the bound a handler writes stays
+`Instance<sig::clone<T, Rt>>`, with the macro supplying the index when it
+rewrites the handler's generics.

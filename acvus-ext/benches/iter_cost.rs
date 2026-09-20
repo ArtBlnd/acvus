@@ -183,6 +183,14 @@ impl Runtime for Words {
         panic!("Words holds no references")
     }
 
+    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> Word {
+        panic!("Words holds no instance entry")
+    }
+
+    unsafe fn entry_of(&self, _: &Word) -> acvus_extern::Entry<Self> {
+        panic!("Words holds no instance entry")
+    }
+
     unsafe fn reference(&self, _: &Word) -> Word {
         panic!("Words holds no references")
     }
@@ -516,6 +524,14 @@ impl Runtime for Tags {
         T: Send + Sync + 'static,
     {
         panic!("Tags holds no references")
+    }
+
+    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> TaggedWord {
+        panic!("Tags holds no instance entry")
+    }
+
+    unsafe fn entry_of(&self, _: &TaggedWord) -> acvus_extern::Entry<Self> {
+        panic!("Tags holds no instance entry")
     }
 
     unsafe fn reference(&self, _: &TaggedWord) -> TaggedWord {

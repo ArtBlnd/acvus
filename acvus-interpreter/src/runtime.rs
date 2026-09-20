@@ -330,6 +330,15 @@ impl Runtime for AcvusRuntime {
         Value::reference(target)
     }
 
+    fn entry_value(&self, entry: acvus_extern::Entry<Self>) -> Value {
+        Value::entry(entry)
+    }
+
+    unsafe fn entry_of(&self, value: &Value) -> acvus_extern::Entry<Self> {
+        // SAFETY: the caller's contract: `entry_value` wrote this value.
+        unsafe { value.as_entry() }
+    }
+
     fn none(&self) -> Value {
         Value::NONE
     }

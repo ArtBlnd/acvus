@@ -37,6 +37,9 @@ macro_rules! kind {
             /// An option whose payload is a `None`: the word is how many
             /// `Some`s wrap it, and zero is `None` itself (RFC-0022).
             None,
+            /// A resolved instance's entry: the word is the address of an
+            /// `acvus_extern::Entry<AcvusRuntime>` (RFC-0067 Decision 3).
+            Entry,
             $($name,)*
         }
 
@@ -55,21 +58,21 @@ macro_rules! kind {
             pub fn type_id(self) -> Option<TypeId> {
                 match self {
                     $(Kind::$name => Some(TypeId::of::<$t>()),)*
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => None,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None | Kind::Entry => None,
                 }
             }
 
             pub fn name(self) -> Option<&'static str> {
                 match self {
                     $(Kind::$name => Some(stringify!($t)),)*
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => None,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None | Kind::Entry => None,
                 }
             }
 
             pub fn is_inline(self) -> bool {
                 match self {
                     $(Kind::$name)|* => true,
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => false,
+                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None | Kind::Entry => false,
                 }
             }
         }
@@ -374,6 +377,26 @@ impl Value {
         }
     }
 
+    /// A resolved instance's entry, as the one word it is (RFC-0067
+    /// Decision 3).
+    #[inline]
+    pub fn entry(entry: acvus_extern::Entry<AcvusRuntime>) -> Value {
+        Value {
+            kind: Kind::Entry,
+            word: entry as usize as u64,
+        }
+    }
+
+    /// # Safety
+    /// The value was made by `Value::entry`.
+    #[inline]
+    pub unsafe fn as_entry(&self) -> acvus_extern::Entry<AcvusRuntime> {
+        debug_assert_eq!(self.kind, Kind::Entry, "as_entry: {self:?} is not an entry");
+        // SAFETY: the caller's contract: the word is the address `entry`
+        // wrote, which is the address of a function of this type.
+        unsafe { std::mem::transmute::<u64, acvus_extern::Entry<AcvusRuntime>>(self.word) }
+    }
+
     /// # Safety
     /// As `target`, and no other name of the storage is used meanwhile.
     #[allow(clippy::mut_from_ref)]
@@ -405,6 +428,7 @@ impl fmt::Debug for Value {
             }
             Kind::Ref => write!(f, "Ref({:p})", self.word as *const Value),
             Kind::LargeRef => write!(f, "LargeRef({:p})", self.word as *const Value),
+            Kind::Entry => write!(f, "Entry({:#x})", self.word),
             Kind::Large => {
                 let vtable = self.header().vtable;
                 match vtable.debug {

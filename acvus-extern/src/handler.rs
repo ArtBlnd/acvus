@@ -728,6 +728,44 @@ where
 {
 }
 
+/// A parameter list whose site table is a constant, so a glue over it is
+/// complete before any site is known and can be an `Entry`.
+pub trait NoSites<Rt>: Parameters<Rt>
+where
+    Rt: Runtime,
+{
+    const SITES: Self::Sites;
+}
+
+/// A resolved instance's handler as a plain function: the values ABI of
+/// `Handler::call` without the `&self` (RFC-0067 Decision 3).
+pub type Entry<Rt> = for<'a, 'w> unsafe fn(
+    &'a Rt,
+    <Rt as Runtime>::Frame<'w>,
+    &'a [<Rt as Runtime>::Value],
+    &'a mut [<Rt as Runtime>::Value],
+);
+
+/// A declaration's entry, as a type: the `fn` item `#[extern_fn]` wrote
+/// beside the Rust body, named where the glue's type is named so that the
+/// glue itself stays the closure and nothing else.
+pub trait AtEntry<Rt>: Send + Sync + 'static
+where
+    Rt: Runtime,
+{
+    const ENTRY: Option<Entry<Rt>>;
+}
+
+/// The entry of a declaration that has none.
+pub struct NoEntry;
+
+impl<Rt> AtEntry<Rt> for NoEntry
+where
+    Rt: Runtime,
+{
+    const ENTRY: Option<Entry<Rt>> = None;
+}
+
 /// The call form a run of this shape and a result of form `R` take: which
 /// `Rt::op_*` a factory names, and which `Rt::fused_*` (RFC-0059 rule 7).
 ///
@@ -887,6 +925,9 @@ where
     /// instead, and a `&str` or a slice parameter is two of them.
     fn arity(&self) -> usize;
     fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AtSite<Rt>>;
+    /// This handler as a plain function (RFC-0067 Decision 3), for the
+    /// declarations that have one.
+    fn entry(&self) -> Option<Entry<Rt>>;
 }
 
 /// One declared instance with its site table filled: the handler of one call
@@ -1013,13 +1054,13 @@ pub struct Unsited;
 ///
 /// `Handler` is implemented for the sited glue alone, so an operation cannot
 /// hold a glue whose table was never filled.
-pub struct Glue<Rt, F, A, R, S = Unsited> {
+pub struct Glue<Rt, F, A, R, S = Unsited, E = NoEntry> {
     f: F,
     sites: S,
-    shape: PhantomData<fn() -> (Rt, A, R)>,
+    shape: PhantomData<fn() -> (Rt, A, R, E)>,
 }
 
-impl<Rt, F, A, R, S> Clone for Glue<Rt, F, A, R, S>
+impl<Rt, F, A, R, S, E> Clone for Glue<Rt, F, A, R, S, E>
 where
     F: Clone,
     S: Clone,
@@ -1035,14 +1076,14 @@ where
 
 // SAFETY: a `Glue` holds the closure and the site table and nothing else;
 // the `PhantomData` is over `fn() -> _` and carries no value.
-unsafe impl<Rt, F, A, R, S> Send for Glue<Rt, F, A, R, S>
+unsafe impl<Rt, F, A, R, S, E> Send for Glue<Rt, F, A, R, S, E>
 where
     F: Send,
     S: Send,
 {
 }
 // SAFETY: as `Send`.
-unsafe impl<Rt, F, A, R, S> Sync for Glue<Rt, F, A, R, S>
+unsafe impl<Rt, F, A, R, S, E> Sync for Glue<Rt, F, A, R, S, E>
 where
     F: Sync,
     S: Sync,
@@ -1091,6 +1132,14 @@ where
 macro_rules! one_per {
     ($arg:ident) => {
         1usize
+    };
+}
+
+/// The one value a `Site = ()` parameter's table entry has, once per
+/// parameter: the fold that builds `NoSites::SITES`.
+macro_rules! no_site {
+    ($arg:ident) => {
+        ()
     };
 }
 
@@ -1166,6 +1215,14 @@ macro_rules! parameters {
             $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
         {
         }
+
+        impl<Rt, $($arg,)*> NoSites<Rt> for ($($arg,)*)
+        where
+            Rt: Runtime,
+            $($arg: for<'a> Arg<'a, Rt> + Sited<Rt, Site = ()> + 'static,)*
+        {
+            const SITES: Self::Sites = ($(no_site!($arg),)*);
+        }
     };
 }
 
@@ -1201,6 +1258,23 @@ where
     }
 }
 
+/// As `glue`, with the declaration's body also as a plain function: the
+/// entry a resolved instance of it is passed by (RFC-0067 Decision 3).
+pub fn glue_at_entry<Rt, F, A, R, E>(f: F) -> Glue<Rt, F, A, R, Unsited, E>
+where
+    Rt: Runtime,
+    A: NoSites<Rt>,
+    E: AtEntry<Rt>,
+    F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    R: Ret<Rt>,
+{
+    Glue {
+        f,
+        sites: Unsited,
+        shape: PhantomData,
+    }
+}
+
 /// As `glue`, for a body that awaits.
 pub fn async_glue<Rt, F, A>(f: F) -> AsyncGlue<Rt, F, A>
 where
@@ -1219,9 +1293,10 @@ where
     }
 }
 
-impl<Rt, F, A, R> Handler<Rt> for Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites>
+impl<Rt, F, A, R, E> Handler<Rt> for Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
+    E: AtEntry<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1240,9 +1315,10 @@ where
     }
 }
 
-impl<Rt, F, A, R> HandlerFactory<Rt> for Glue<Rt, F, A, R>
+impl<Rt, F, A, R, E> HandlerFactory<Rt> for Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
+    E: AtEntry<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1268,14 +1344,18 @@ where
     fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AtSite<Rt>> {
         Box::new(self.at(args))
     }
+
+    fn entry(&self) -> Option<Entry<Rt>> {
+        <E as AtEntry<Rt>>::ENTRY
+    }
 }
 
-impl<Rt, F, A, R> Glue<Rt, F, A, R>
+impl<Rt, F, A, R, E> Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
     A: Parameters<Rt>,
 {
-    pub fn at(self, args: &[ArgAt<'_>]) -> Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites> {
+    pub fn at(self, args: &[ArgAt<'_>]) -> Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E> {
         Glue {
             f: self.f,
             sites: <A as Parameters<Rt>>::sites(args),
@@ -1284,9 +1364,10 @@ where
     }
 }
 
-impl<Rt, F, A, R> AtSite<Rt> for Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites>
+impl<Rt, F, A, R, E> AtSite<Rt> for Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
+    E: AtEntry<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1306,9 +1387,10 @@ where
     }
 }
 
-impl<Rt, F, A, R> ValuesOnly<Rt> for Glue<Rt, F, A, R>
+impl<Rt, F, A, R, E> ValuesOnly<Rt> for Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
+    E: AtEntry<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1467,9 +1549,19 @@ impl<R: Runtime> ExternHandler<R> {
             Self::Async(f) => f.width(),
         }
     }
+
+    /// This instance's entry (RFC-0067 Decision 3). A `Heavy` or `Async`
+    /// handler has none: the glue that runs one suspends the caller, and an
+    /// entry is called where it stands.
+    pub fn entry(&self) -> Option<Entry<R>> {
+        match self {
+            Self::Sync(f) => f.entry(),
+            Self::Heavy(_) | Self::Async(_) => None,
+        }
+    }
 }
 
-pub struct Instance<R: Runtime> {
+pub struct DeclaredInstance<R: Runtime> {
     pub signature: PolyTy,
     pub handler: ExternHandler<R>,
     /// The greatest task this instance runs — a ceiling, "at most", not
@@ -1484,7 +1576,7 @@ pub struct Instance<R: Runtime> {
 /// lists are the same list in the same order, and `acvus_mir::ty::Instances`
 /// is the compiler's half of that contract.
 pub struct Instances<R: Runtime> {
-    pub concrete: Vec<Instance<R>>,
+    pub concrete: Vec<DeclaredInstance<R>>,
     pub generic: Option<ExternHandler<R>>,
 }
 
@@ -1498,7 +1590,7 @@ impl<R: Runtime> Instances<R> {
 
     /// Adds the instances of `more` whose signature is not already here:
     /// two declarations of one family cast at one member are one instance.
-    pub fn add_concrete(&mut self, more: Vec<Instance<R>>) {
+    pub fn add_concrete(&mut self, more: Vec<DeclaredInstance<R>>) {
         for instance in more {
             let present = self
                 .concrete

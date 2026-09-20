@@ -432,6 +432,11 @@ fn generate_extern_fn(
         quote! { sync }
     };
     let state_tys: Vec<&Type> = states.iter().map(|st| &st.ty).collect();
+    let has_entry = attr.instance_of.is_some()
+        && states.is_empty()
+        && !attr.heavy
+        && !params.iter().any(|p| p.mode == Mode::Projection);
+    let entries = std::cell::RefCell::new(Vec::<proc_macro2::TokenStream>::new());
     let glue = |member: Option<&Type>, callee: &Ident, awaits: bool| -> proc_macro2::TokenStream {
         let rt_tys: Vec<Type> = params
             .iter()
@@ -511,6 +516,58 @@ fn generate_extern_fn(
                     )
                 })
             }
+        } else if has_entry {
+            let at = entries.borrow().len();
+            let entry_ident = format_ident!("__extern_entry_{}_{}", fn_ident, at);
+            let entry_ty = format_ident!("__ExternEntry{}{}", fn_ident, at);
+            entries.borrow_mut().push(quote! {
+                #[doc(hidden)]
+                unsafe fn #entry_ident<__R>(
+                    __rt: &__R,
+                    mut __frame: <__R as ::acvus_extern::Runtime>::Frame<'_>,
+                    __run: &[<__R as ::acvus_extern::Runtime>::Value],
+                    __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
+                )
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    // SAFETY: the values ABI's contract — `__run` is this
+                    // declaration's whole argument run and every storage a
+                    // reference in it names is live for the call — which is
+                    // `Parameters::take`'s.
+                    let (#(#arg_idents,)*) = unsafe {
+                        <(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::take(
+                            __rt,
+                            __run,
+                            &<(#(#arg_markers,)*) as ::acvus_extern::NoSites<__R>>::SITES,
+                        )
+                    };
+                    <#ret_marker as ::acvus_extern::Ret<__R>>::into_run(#call, __rt, __out);
+                }
+
+                #[doc(hidden)]
+                #[allow(non_camel_case_types)]
+                pub struct #entry_ty;
+
+                impl<__R> ::acvus_extern::AtEntry<__R> for #entry_ty
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    const ENTRY: ::core::option::Option<::acvus_extern::Entry<__R>> =
+                        ::core::option::Option::Some(#entry_ident::<__R>);
+                }
+            });
+            quote! {
+                ::acvus_extern::ExternHandler::#sync_variant(
+                    ::acvus_extern::glue_at_entry::<
+                        __R,
+                        _,
+                        (#(#arg_markers,)*),
+                        #ret_marker,
+                        #entry_ty,
+                    >(move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| #call)
+                )
+            }
         } else {
             quote! {
                 ::acvus_extern::ExternHandler::#sync_variant({
@@ -578,7 +635,7 @@ fn generate_extern_fn(
         let declared_sig = signature(member);
         let declared_handler = glue(member, fn_ident, is_async);
         let declared = quote! {
-            ::acvus_extern::Instance {
+            ::acvus_extern::DeclaredInstance {
                 signature: #declared_sig,
                 handler: #declared_handler,
                 admits: ::acvus_extern::Task::Heavy,
@@ -591,7 +648,7 @@ fn generate_extern_fn(
         let sync_handler = glue(member, sync_fn, false);
         vec![
             quote! {
-                ::acvus_extern::Instance {
+                ::acvus_extern::DeclaredInstance {
                     signature: #sync_sig,
                     handler: #sync_handler,
                     admits: ::acvus_extern::Task::Sync,
@@ -651,8 +708,11 @@ fn generate_extern_fn(
                 ::std::sync::Arc::new((#(#state_idents,)*));
         }
     });
+    let entries = entries.into_inner();
     Ok(quote! {
         #func
+
+        #(#entries)*
 
         #[doc(hidden)]
         #vis fn #decl_ident<__R>(
