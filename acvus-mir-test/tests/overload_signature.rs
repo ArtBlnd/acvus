@@ -8,6 +8,7 @@
 //! beside `iter::max` for the same question over a consumer, and
 //! `fx_p::map` beside `iter::map` for one over a closure argument.
 
+use acvus_extern::Ctx;
 use acvus_extern::{
     Closure, Externs, Ref, Registry, Runtime, Shared, TypesOnly, Var, extern_fn, extern_registry,
     extern_signature, kind,
@@ -30,8 +31,7 @@ mod fx_p {
     }
 
     fn map_now<T, U, E, Rt>(
-        rt: &Rt,
-        frame: &mut Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         val: Option<T>,
         f: Closure<(T,), U, E, Rt>,
     ) -> Option<U>
@@ -41,14 +41,13 @@ mod fx_p {
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        let _ = (rt, frame, val, f);
+        let _ = (ctx, val, f);
         unreachable!("a type-only fixture is never run")
     }
 
     #[extern_fn(effect = E, sync = map_now)]
     pub async fn map<T, U, E, Rt>(
-        rt: &Rt,
-        frame: &mut Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         val: Option<T>,
         f: Closure<(T,), U, E, Rt>,
     ) -> Option<U>
@@ -58,7 +57,7 @@ mod fx_p {
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        let _ = (rt, frame, val, f);
+        let _ = (ctx, val, f);
         unreachable!("a type-only fixture is never run")
     }
 
@@ -88,20 +87,24 @@ mod fx_q {
     }
 
     #[extern_fn(instance_of = f, effect = pure)]
-    fn f_int<Rt>(rt: &Rt, c: Ref<Vec<i64>, Shared, Rt>, other: Ref<Vec<i64>, Shared, Rt>) -> bool
+    fn f_int<Rt>(
+        ctx: &mut Ctx<'_, Rt>,
+        c: Ref<Vec<i64>, Shared, Rt>,
+        other: Ref<Vec<i64>, Shared, Rt>,
+    ) -> bool
     where
         Rt: Runtime,
     {
-        let _ = (rt, c, other);
+        let _ = (ctx.rt, c, other);
         unreachable!("a type-only fixture is never run")
     }
 
     #[extern_fn(instance_of = max, effect = pure)]
-    fn max_int<Rt>(rt: &Rt, c: Ref<Vec<i64>, Shared, Rt>) -> Option<i64>
+    fn max_int<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<i64>, Shared, Rt>) -> Option<i64>
     where
         Rt: Runtime,
     {
-        let _ = (rt, c);
+        let _ = (ctx.rt, c);
         unreachable!("a type-only fixture is never run")
     }
 

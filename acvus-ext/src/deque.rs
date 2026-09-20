@@ -4,6 +4,7 @@
 //! last settled as counts over its own storage: an append-only journal
 //! persists that record instead of the whole value.
 
+use acvus_extern::Ctx;
 use std::collections::VecDeque;
 
 use acvus_extern::{
@@ -440,40 +441,44 @@ fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Shared, Rt>, index: i64) -> Ref<T, Shared, Rt>
+fn get<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Shared, Rt>, index: i64) -> Ref<T, Shared, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let i = d.with(rt, |d| checked_index("get", d.len(), index));
     d.map(rt, |d| &d.items[i])
 }
 
 #[extern_fn(effect = pure)]
-fn get_mut<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Mut, Rt>, index: i64) -> Ref<T, Mut, Rt>
+fn get_mut<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Mut, Rt>, index: i64) -> Ref<T, Mut, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let i = d.with(rt, |d| checked_index("get_mut", d.len(), index));
     d.map(rt, |d| &mut d.items[i])
 }
 
 #[extern_fn(effect = pure)]
-fn first<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn first<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     d.try_map(rt, |d| d.items.front())
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn last<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     d.try_map(rt, |d| d.items.back())
 }
 

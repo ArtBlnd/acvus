@@ -2,6 +2,7 @@
 //! a handler for any runtime. `Tiny` is a runtime written for this test
 //! alone, so nothing here depends on an interpreter.
 
+use acvus_extern::Ctx;
 use std::any::Any;
 use std::future::Ready;
 use std::marker::PhantomData;
@@ -308,11 +309,23 @@ impl Runtime for Tiny {
 
     type Value = V;
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<V>;
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
+        acvus_extern::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut acvus_extern::Ctx<'a, Self>,
+    ) -> &'r mut acvus_extern::Ctx<'a, Self>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -390,7 +403,7 @@ impl Runtime for Tiny {
     fn call_is_sync(&self, _: &V) -> bool {
         true
     }
-    unsafe fn call_now<A>(&self, f: &V, _: &mut (), args: A) -> V
+    unsafe fn call_now<A>(&self, f: &V, _: &mut acvus_extern::Ctx<'_, Self>, args: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -447,8 +460,7 @@ where
 
 #[extern_fn(effect = pure)]
 async fn apply<T, U, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     v: Boxed<T, E, Rt>,
     f: acvus_extern::Closure<(T,), U, E, Rt>,
 ) -> Boxed<U, E, Rt>
@@ -461,7 +473,7 @@ where
     let f = f.erased();
     let mut out = Vec::with_capacity(v.0.len());
     for item in v.0 {
-        let crossed = f.call(rt, frame, (Owned::from_value(item),)).await;
+        let crossed = f.call(ctx, (Owned::from_value(item),)).await;
         out.push(crossed.into_value());
     }
     Boxed(out, PhantomData)
@@ -469,12 +481,13 @@ where
 
 #[extern_fn(effect = pure)]
 #[extern_cast]
-fn boxed<T, N, Rt>(rt: &Rt, items: Arr<T, N>) -> Boxed<T, Pure, Rt>
+fn boxed<T, N, Rt>(ctx: &mut Ctx<'_, Rt>, items: Arr<T, N>) -> Boxed<T, Pure, Rt>
 where
     T: Var<kind::Type> + OneValue<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     Boxed(
         items.0.into_iter().map(|v| v.erase(rt)).collect(),
         PhantomData,
@@ -516,11 +529,12 @@ fn bump(n: &mut i64, by: i64) -> i64 {
 }
 
 #[extern_fn(effect = pure)]
-fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
+fn as_slice<T, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     Slice::of(c.elements(rt))
 }
 
@@ -528,10 +542,11 @@ where
 /// elements through the view the caller lent, and the pair it was handed is
 /// the only thing it was handed.
 #[extern_fn(effect = pure)]
-fn sum_slice<Rt>(rt: &Rt, s: Slice<i64, Shared, Rt>) -> i64
+fn sum_slice<Rt>(ctx: &mut Ctx<'_, Rt>, s: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let elements = s.into_elements();
     (0..elements.len())
         .map(|at| {
@@ -748,7 +763,16 @@ fn call_entry(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     // SAFETY: the values ABI's contract, which is `Handler::call`'s: `args`
     // is the declaration's whole argument run and `out` has room for its
     // one-value result.
-    unsafe { entry(&Tiny, &mut (), &args, &mut out) };
+    unsafe {
+        entry(
+            &mut Ctx {
+                rt: &Tiny,
+                frame: (),
+            },
+            &args,
+            &mut out,
+        )
+    };
     out[0]
 }
 
@@ -1649,7 +1673,7 @@ extern_signature! {
 
 extern_signature! { ns: "t", fn size<C>(c: C) -> i64 where C: Var<kind::Type>; }
 
-fn drain_arr_now<T, N, E, Rt>(_: &Rt, _: &mut Rt::Frame<'_>, a: Arr<T, N>) -> i64
+fn drain_arr_now<T, N, E, Rt>(_: &mut Ctx<'_, Rt>, a: Arr<T, N>) -> i64
 where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
@@ -1660,14 +1684,14 @@ where
 }
 
 #[extern_fn(instance_of = drain, effect = E, sync = drain_arr_now)]
-async fn drain_arr<T, N, E, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, a: Arr<T, N>) -> i64
+async fn drain_arr<T, N, E, Rt>(ctx: &mut Ctx<'_, Rt>, a: Arr<T, N>) -> i64
 where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    drain_arr_now::<T, N, E, Rt>(rt, frame, a)
+    drain_arr_now::<T, N, E, Rt>(ctx, a)
 }
 
 #[extern_fn(instance_of = drain, effect = pure)]
@@ -1986,7 +2010,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
     Registry::new(|i: &Interner| {
         let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("blocking"));
         let heavy = ExternHandler::heavy(acvus_extern::glue::<Tiny, _, (), acvus_extern::Val<V>>(
-            |_, _, ()| V::Taken,
+            |_, ()| V::Taken,
         ));
         acvus_extern::Contribution {
             manifest: acvus_extern::Manifest {
@@ -2057,12 +2081,20 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     {
         assert_eq!(H::WIDTH, expected);
         // SAFETY: the arguments are the declaration's own, at its width.
-        open::<i64>(unsafe { handler.call_run(&Tiny, (), &args) })
+        open::<i64>(unsafe {
+            handler.call_run(
+                &mut Ctx {
+                    rt: &Tiny,
+                    frame: (),
+                },
+                &args,
+            )
+        })
     }
 
     assert_eq!(
         answered(
-            acvus_extern::glue::<Tiny, _, (), Val<i64>>(|_, _, ()| 0).at(&site.args(0)),
+            acvus_extern::glue::<Tiny, _, (), Val<i64>>(|_, ()| 0).at(&site.args(0)),
             Width {
                 args: 0,
                 ret: 1,
@@ -2074,8 +2106,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, _, (a,)| a)
-                .at(&site.args(1)),
+            acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,)| a).at(&site.args(1)),
             Width {
                 args: 1,
                 ret: 1,
@@ -2088,7 +2119,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     assert_eq!(
         answered(
             acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(
-                |_, _, (a, b)| a + b
+                |_, (a, b)| a + b
             )
             .at(&site.args(2)),
             Width {
@@ -2111,7 +2142,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 _,
                 (ByValue<i64>, ByRef<i64, Shared>, ByValue<i64>),
                 Val<i64>,
-            >(|_, _, (a, b, c)| a + *b + c)
+            >(|_, (a, b, c)| a + *b + c)
             .at(&site.args(3)),
             Width {
                 args: 3,
@@ -2131,7 +2162,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 _,
                 (ByValue<i64>, ByValue<i64>, ByValue<i64>, ByValue<i64>,),
                 Val<i64>,
-            >(|_, _, (a, b, c, d)| a + b + c + d)
+            >(|_, (a, b, c, d)| a + b + c + d)
             .at(&site.args(4)),
             Width {
                 args: 4,
@@ -2144,12 +2175,21 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
 
     let two_wide =
-        acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(|_, _, (a, b)| {
+        acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(|_, (a, b)| {
             a * 10 + b
         })
         .at(&site.args(2));
     // SAFETY: the width says two arguments in and one value out.
-    let by_register = unsafe { two_wide.call2(&Tiny, (), erased(1i64), erased(2i64)) };
+    let by_register = unsafe {
+        two_wide.call2(
+            &mut Ctx {
+                rt: &Tiny,
+                frame: (),
+            },
+            erased(1i64),
+            erased(2i64),
+        )
+    };
     assert_eq!(
         open::<i64>(by_register),
         12,
@@ -2165,7 +2205,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     use acvus_extern::FormKind;
     use acvus_extern::{ByValue, Handler, HandlerFactory, Val, Width};
 
-    let glue = acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, _, (a,)| a * 3);
+    let glue = acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,)| a * 3);
     let boxed: Box<dyn HandlerFactory<Tiny>> = Box::new(glue.clone());
     let again = boxed.clone();
 
@@ -2191,7 +2231,13 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     // the three names of this one handler.
     let answers = unsafe {
         [
-            glue.call1(&Tiny, (), erased(7i64)),
+            glue.call1(
+                &mut Ctx {
+                    rt: &Tiny,
+                    frame: (),
+                },
+                erased(7i64),
+            ),
             boxed
                 .at_site(&site.args(1))
                 .into_op(())
@@ -2244,7 +2290,7 @@ fn a_plain_declarations_site_table_is_zero_sized() {
     use acvus_extern::{ByValue, SitesNoParameterReads, Val};
 
     let site = SitesNoParameterReads::default();
-    let closure = |_: &Tiny, _: (), (a, b): (i64, i64)| a + b;
+    let closure = |_: &mut Ctx<'_, Tiny>, (a, b): (i64, i64)| a + b;
     let unsited = acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(closure);
     let sited = unsited.at(&site.args(2));
 

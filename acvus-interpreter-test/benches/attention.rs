@@ -11,6 +11,7 @@
 //! These timings hold only under one pinned core and a fixed load base;
 //! `benches/README.md` states the protocol.
 
+use acvus_extern::Ctx;
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::num::NonZeroUsize;
@@ -42,10 +43,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn dot<Rt>(rt: &Rt, a: Slice<f64, Shared, Rt>, b: Slice<f64, Shared, Rt>) -> f64
+fn dot<Rt>(ctx: &mut Ctx<'_, Rt>, a: Slice<f64, Shared, Rt>, b: Slice<f64, Shared, Rt>) -> f64
 where
     Rt: acvus_extern::Runtime,
 {
+    let rt = ctx.rt;
     let (a, b) = (a.into_elements(), b.into_elements());
     assert_eq!(a.len(), b.len(), "dot takes two views of one length");
     (0..a.len())

@@ -7,6 +7,7 @@
 extern crate self as acvus_extern;
 
 pub mod core;
+mod ctx;
 pub mod derive;
 mod effect;
 mod erased;
@@ -28,6 +29,7 @@ mod str;
 mod ty_arg;
 mod vec;
 
+pub use ctx::Ctx;
 pub use derive::transparent::Transparent;
 pub use effect::{Idempotent, Opaque, Pure};
 pub use erased::Erased;

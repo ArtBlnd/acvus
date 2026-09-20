@@ -1,6 +1,7 @@
 //! A `&[T]` parameter reaches the Rust body as the container the script
 //! lent (RFC-0047 rule 6), at the contract: the number the script returns.
 
+use acvus_extern::Ctx;
 use acvus_extern::{Mut, OneValue, Registry, Runtime, Shared, Slice, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -18,10 +19,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn dot<Rt>(rt: &Rt, a: Slice<i64, Shared, Rt>, b: Slice<i64, Shared, Rt>) -> i64
+fn dot<Rt>(ctx: &mut Ctx<'_, Rt>, a: Slice<i64, Shared, Rt>, b: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let (a, b) = (a.into_elements(), b.into_elements());
     assert_eq!(a.len(), b.len(), "dot takes two views of one length");
     (0..a.len())
@@ -30,10 +32,11 @@ where
 }
 
 #[extern_fn(effect = opaque)]
-fn add_into<Rt>(rt: &Rt, dst: Slice<i64, Mut, Rt>, src: Slice<i64, Shared, Rt>) -> i64
+fn add_into<Rt>(ctx: &mut Ctx<'_, Rt>, dst: Slice<i64, Mut, Rt>, src: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let (dst, src) = (dst.into_elements(), src.into_elements());
     assert_eq!(
         dst.len(),
@@ -52,10 +55,11 @@ where
 
 /// The sum of a view.
 #[extern_fn(effect = pure)]
-fn total<Rt>(rt: &Rt, a: Slice<i64, Shared, Rt>) -> i64
+fn total<Rt>(ctx: &mut Ctx<'_, Rt>, a: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let a = a.into_elements();
     (0..a.len()).map(|at| element_of(rt, &a, at)).sum()
 }

@@ -9,6 +9,7 @@
 
 use std::marker::PhantomData;
 
+use acvus_extern::Ctx;
 use acvus_extern::{
     Closure, ClosureFn, Cross, Erased, ExternType, FromValue, Never, Nth, OneValue, Registry,
     Runtime, Var, extern_fn, extern_registry, kind,
@@ -85,7 +86,7 @@ where
 
     const LENGTH: usize;
 
-    fn pull<O, E>(body: &mut Self::Body<O, E>, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<O>
+    fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
         E: Var<kind::Effect>;
@@ -103,7 +104,7 @@ where
 
     const LENGTH: usize = 0;
 
-    fn pull<O, E>(body: &mut Source<O, Rt>, _: &Rt, _: &mut Rt::Frame<'_>) -> Option<O>
+    fn pull<O, E>(body: &mut Source<O, Rt>, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
         E: Var<kind::Effect>,
@@ -126,7 +127,7 @@ where
 
     const LENGTH: usize = 1 + Ts::LENGTH;
 
-    fn pull<O, E>(body: &mut Self::Body<O, E>, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<O>
+    fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
         E: Var<kind::Effect>,
@@ -134,12 +135,12 @@ where
         let Stages { stage, rest } = body;
         match stage {
             Stage::Map(f) => {
-                let item = Ts::pull::<T, E>(rest, rt, frame)?;
-                Some(f.call_now(rt, frame, (item,)))
+                let item = Ts::pull::<T, E>(rest, ctx)?;
+                Some(f.call_now(ctx, (item,)))
             }
             Stage::Take { remaining, same } => {
                 *remaining = remaining.checked_sub(1)?;
-                Some(same.apply(Ts::pull::<T, E>(rest, rt, frame)?))
+                Some(same.apply(Ts::pull::<T, E>(rest, ctx)?))
             }
         }
     }
@@ -160,7 +161,7 @@ where
 
     const LENGTH: usize = 0;
 
-    fn pull<O, E>(body: &mut Never, _: &Rt, _: &mut Rt::Frame<'_>) -> Option<O>
+    fn pull<O, E>(body: &mut Never, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
         E: Var<kind::Effect>,
@@ -201,9 +202,9 @@ where
         )
     }
 
-    fn drain(mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Vec<O> {
+    fn drain(mut self, ctx: &mut Ctx<'_, Rt>) -> Vec<O> {
         let mut out = Vec::new();
-        while let Some(item) = Ts::pull::<O, E>(&mut self.0, rt, frame) {
+        while let Some(item) = Ts::pull::<O, E>(&mut self.0, ctx) {
             out.push(item);
         }
         out
@@ -307,8 +308,7 @@ adaptor_instances!(step_2, cut_2, [A, B], (A, (B, ())));
 macro_rules! total_instance {
     ($name:ident, $now:ident, [$($v:ident),*], $ts:tt) => {
         fn $now<$($v,)* O, E, I, Rt>(
-            rt: &Rt,
-            frame: &mut Rt::Frame<'_>,
+            ctx: &mut Ctx<'_, Rt>,
             it: Pipe<$ts, O, E, I, Rt>,
         ) -> i64
         where
@@ -318,7 +318,8 @@ macro_rules! total_instance {
             I: Var<kind::Identity>,
             Rt: Runtime,
         {
-            it.drain(rt, frame)
+            let rt = ctx.rt;
+            it.drain(ctx)
                 .into_iter()
                 .map(|x| *Erased::<Rt, i64>::from_value(rt, x.erase(rt)).as_ref(rt))
                 .sum()
@@ -326,8 +327,7 @@ macro_rules! total_instance {
 
         #[extern_fn(instance_of = sig::total, effect = E, sync = $now)]
         async fn $name<$($v,)* O, E, I, Rt>(
-            rt: &Rt,
-            frame: &mut Rt::Frame<'_>,
+            ctx: &mut Ctx<'_, Rt>,
             it: Pipe<$ts, O, E, I, Rt>,
         ) -> i64
         where
@@ -337,7 +337,8 @@ macro_rules! total_instance {
             I: Var<kind::Identity>,
             Rt: Runtime,
         {
-            it.drain(rt, frame)
+            let rt = ctx.rt;
+            it.drain(ctx)
                 .into_iter()
                 .map(|x| *Erased::<Rt, i64>::from_value(rt, x.erase(rt)).as_ref(rt))
                 .sum()

@@ -7,6 +7,7 @@
 //! `Counting`, the runtime of `erased.rs`, extended to run a Rust closure
 //! held in a value so `map`/`filter` can be driven.
 
+use acvus_extern::Ctx;
 use std::any::{Any, TypeId, type_name};
 use std::future::Ready;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -163,11 +164,23 @@ impl Runtime for Counting {
 
     type Value = V;
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<V>;
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
+        acvus_extern::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut acvus_extern::Ctx<'a, Self>,
+    ) -> &'r mut acvus_extern::Ctx<'a, Self>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let V::Boxed(cell) = value else {
@@ -324,7 +337,7 @@ impl Runtime for Counting {
         true
     }
 
-    unsafe fn call_now<A>(&self, f: &V, _: &mut (), args: A) -> V
+    unsafe fn call_now<A>(&self, f: &V, _: &mut acvus_extern::Ctx<'_, Self>, args: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -381,7 +394,7 @@ type It = Iter<Owned<Counting>, (), (), Counting>;
 fn drain(rt: &Counting, mut it: It) -> Vec<i64> {
     futures::executor::block_on(async {
         let mut out = Vec::new();
-        while let Some(value) = it.next_value(rt, &mut ()).await {
+        while let Some(value) = it.next_value(&mut Ctx { rt, frame: () }).await {
             out.push(read_int(rt, &value));
         }
         out

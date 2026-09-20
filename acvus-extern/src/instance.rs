@@ -26,8 +26,7 @@ use crate::runtime::Runtime;
 /// cleanup landing pad instead of the tail jump — `flatten`, `vec_deque`,
 /// `skip`, `filter` and `map`.
 pub type EntryFn<Rt> = for<'a, 'w> unsafe fn(
-    &'a Rt,
-    &'a mut <Rt as Runtime>::Frame<'w>,
+    &'a mut crate::Ctx<'w, Rt>,
     &'a [<Rt as Runtime>::Value],
     &'a mut [<Rt as Runtime>::Value],
 );
@@ -44,8 +43,7 @@ pub type EntryFn<Rt> = for<'a, 'w> unsafe fn(
 /// the call. The shape here is `AsyncGlue`'s own inner closure type, with
 /// the values ABI's run in place of the taken arguments.
 pub type AsyncEntryFn<Rt> = for<'a, 'w, 'r> unsafe fn(
-    &'a Rt,
-    &'a mut <Rt as Runtime>::Frame<'w>,
+    &'a mut crate::Ctx<'w, Rt>,
     &'r [<Rt as Runtime>::Value],
 ) -> BoxFuture<'a, <Rt as Runtime>::Value>;
 

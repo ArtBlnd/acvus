@@ -23,6 +23,7 @@
 //! `Ord for str`. The `<` operator does not reach text: an operator instance
 //! for a `String` waits for RFC-0067's `ord<T>`.
 
+use acvus_extern::Ctx;
 use std::cmp::Ordering;
 
 use acvus_extern::{
@@ -505,10 +506,11 @@ fn strip_suffix(s: &str, pat: &str) -> Option<String> {
 /// extern function returns no tuple (`acvus-extern` has no `Cross` for
 /// one) and no array of a constant length (`Nth<kind::Length, K>` is a length variable).
 #[extern_fn(effect = pure)]
-fn split_once<Rt>(rt: &Rt, s: &str, pat: &str) -> Option<Vec<Erased<Rt, String>>>
+fn split_once<Rt>(ctx: &mut Ctx<'_, Rt>, s: &str, pat: &str) -> Option<Vec<Erased<Rt, String>>>
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     s.split_once(pat).map(|(head, tail)| {
         vec![
             Erased::new(rt, head.to_owned()),

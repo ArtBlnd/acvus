@@ -6,11 +6,11 @@ use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_extern::{Owned, Runtime, Variant};
+use acvus_extern::{Ctx, Owned, Runtime, Variant};
 
 use crate::interpreter::InterpreterContext;
 use crate::ops::call;
-use crate::regs::{FrameState, Store};
+use crate::regs::{FrameState, RootCells, RootFrame};
 use crate::value::{Kind, Value, VariantValue};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
@@ -70,10 +70,27 @@ impl AcvusRuntime {
     }
 }
 
+/// The `Ctx` of a call whose frame outlives the frame it was made on: the
+/// cells at the root of its own chain, and the context over them.
+pub struct RootedCtx<'a> {
+    ctx: Ctx<'a, AcvusRuntime>,
+    _cells: RootCells,
+}
+
+impl<'a> RootedCtx<'a> {
+    fn new(rt: &'a AcvusRuntime) -> RootedCtx<'a> {
+        let RootFrame { state, cells } = RootFrame::new();
+        RootedCtx {
+            ctx: Ctx { rt, frame: state },
+            _cells: cells,
+        }
+    }
+}
+
 impl Runtime for AcvusRuntime {
     type Value = Value;
-    type Frame<'a> = &'a mut FrameState;
-    type Rooted = Store;
+    type Frame<'a> = FrameState;
+    type Rooted<'a> = RootedCtx<'a>;
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
     type Op = Box<dyn crate::code::Op>;
     type CallShape = call::CallShape;
@@ -81,12 +98,15 @@ impl Runtime for AcvusRuntime {
     type FusedCall = call::Call;
     type FusedShape = call::FusedShape;
 
-    fn rooted(&self) -> Store {
-        Store::new()
+    fn rooted(&self) -> RootedCtx<'_> {
+        RootedCtx::new(self)
     }
 
-    fn frame_of(rooted: &mut Store) -> &mut FrameState {
-        rooted.root_window()
+    fn ctx_of<'a, 'r>(rooted: &'r mut RootedCtx<'a>) -> &'r mut Ctx<'a, AcvusRuntime>
+    where
+        'a: 'r,
+    {
+        &mut rooted.ctx
     }
 
     fn op_no_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
@@ -392,7 +412,7 @@ impl Runtime for AcvusRuntime {
         !unsafe { f.as_fn() }.entry.may_suspend()
     }
 
-    unsafe fn call_now<A>(&self, f: &Value, frame: &mut &mut FrameState, args: A) -> Value
+    unsafe fn call_now<A>(&self, f: &Value, ctx: &mut acvus_extern::Ctx<'_, Self>, args: A) -> Value
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -400,10 +420,10 @@ impl Runtime for AcvusRuntime {
             A::WIDTH <= usize::from(u16::MAX),
             "a closure takes at most one cell of arguments"
         );
-        args.into_run(self, frame.run_mut(A::WIDTH));
+        args.into_run(self, ctx.frame.run_mut(A::WIDTH));
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        crate::machine::fn_value_call_in_window(closure, frame, A::WIDTH as u16)
+        crate::machine::fn_value_call_in_window(closure, &mut ctx.frame, A::WIDTH as u16)
     }
 
     unsafe fn call_0<'a>(&'a self, f: &'a Value) -> Self::CallFuture<'a> {

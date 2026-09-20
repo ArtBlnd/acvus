@@ -3,6 +3,7 @@
 //! reference into it, so the container is neither moved nor changed while
 //! the element is in use (RFC-0028).
 
+use acvus_extern::Ctx;
 use acvus_extern::{
     Arr, Closure, ClosureFn, Elements, Mut, Ref, Registry, Runtime, Shared, Slice, TransparentOver,
     Var, extern_fn, extern_registry, extern_signature, kind,
@@ -102,39 +103,43 @@ where
 /// length into the container's own storage.
 #[extern_fn(effect = pure)]
 #[extern_view]
-fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
+fn as_slice<T, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     Slice::of(c.elements(rt))
 }
 
 #[extern_fn(effect = pure)]
 #[extern_view]
-fn as_slice_mut<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Mut, Rt>) -> Slice<T, Mut, Rt>
+fn as_slice_mut<T, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Mut, Rt>) -> Slice<T, Mut, Rt>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     Slice::of(c.elements(rt))
 }
 
 #[extern_fn(effect = pure)]
-fn first<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn first<T, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     c.try_map(rt, |c| c.first())
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn last<T, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     c.try_map(rt, |c| c.last())
 }
 
@@ -426,23 +431,20 @@ fn keyed_order(keys: Vec<i64>) -> Vec<usize> {
     order
 }
 
-fn sort_by_key_now<T, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    c: Ref<Vec<T>, Mut, Rt>,
-    f: KeyOf<T, E, Rt>,
-) where
+fn sort_by_key_now<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Mut, Rt>, f: KeyOf<T, E, Rt>)
+where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let run = Slice::<T, Mut, Rt>::of(c.elements(rt)).into_elements();
     let keys: Vec<i64> = (0..run.len())
         .map(|at| {
             // SAFETY: `at` is below the run's length and the container is
             // live for the call (RFC-0018); the closure only reads.
             let element = unsafe { Ref::lend(rt, run.at(at)) };
-            f.call_now(rt, frame, (element,))
+            f.call_now(ctx, (element,))
         })
         .collect();
     // SAFETY: `keyed_order` permutes `0..len`, so its inverse is one too,
@@ -451,22 +453,19 @@ fn sort_by_key_now<T, E, Rt>(
 }
 
 #[extern_fn(effect = E, sync = sort_by_key_now)]
-async fn sort_by_key<T, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    c: Ref<Vec<T>, Mut, Rt>,
-    f: KeyOf<T, E, Rt>,
-) where
+async fn sort_by_key<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Mut, Rt>, f: KeyOf<T, E, Rt>)
+where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let run = Slice::<T, Mut, Rt>::of(c.elements(rt)).into_elements();
     let mut keys: Vec<i64> = Vec::with_capacity(run.len());
     for at in 0..run.len() {
         // SAFETY: as in `sort_by_key_now`.
         let element = unsafe { Ref::lend(rt, run.at(at)) };
-        keys.push(f.call(rt, frame, (element,)).await);
+        keys.push(f.call(ctx, (element,)).await);
     }
     // SAFETY: as in `sort_by_key_now`.
     unsafe { permute(&run, destinations_of(&keyed_order(keys))) };
@@ -506,10 +505,11 @@ macro_rules! ordered_of {
         repeat: $repeat:ident,
     ) => {
         #[extern_fn(instance_of = sort, effect = pure)]
-        fn $sort<Rt>(rt: &Rt, c: Ref<Vec<$t>, Mut, Rt>)
+        fn $sort<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Mut, Rt>)
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Mut, Rt>::of(c.elements(rt)).into_elements();
             // SAFETY: the run is this container's own values, every one
             // erased from `$t`, and a `Mut` reference takes it exclusively.
@@ -517,40 +517,48 @@ macro_rules! ordered_of {
         }
 
         #[extern_fn(instance_of = contains, effect = pure)]
-        fn $contains<Rt>(rt: &Rt, c: Ref<Vec<$t>, Shared, Rt>, x: &$t) -> bool
+        fn $contains<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Shared, Rt>, x: &$t) -> bool
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             // SAFETY: as `$sort`, shared.
             unsafe { elements::<$t, Rt>(rt, &run) }.any(|element| element == x)
         }
 
         #[extern_fn(instance_of = binary_search, effect = pure)]
-        fn $binary_search<Rt>(rt: &Rt, c: Ref<Vec<$t>, Shared, Rt>, x: &$t) -> Option<u64>
+        fn $binary_search<Rt>(
+            ctx: &mut Ctx<'_, Rt>,
+            c: Ref<Vec<$t>, Shared, Rt>,
+            x: &$t,
+        ) -> Option<u64>
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             // SAFETY: as `$sort`, shared.
             unsafe { found::<$t, Rt>(rt, &run, x) }
         }
 
         #[extern_fn(instance_of = is_sorted, effect = pure)]
-        fn $is_sorted<Rt>(rt: &Rt, c: Ref<Vec<$t>, Shared, Rt>) -> bool
+        fn $is_sorted<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Shared, Rt>) -> bool
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             // SAFETY: as `$sort`, shared.
             unsafe { is_ordered::<$t, Rt>(rt, &run) }
         }
 
         #[extern_fn(instance_of = to_vec, effect = pure)]
-        fn $to_vec<Rt>(rt: &Rt, c: Ref<Vec<$t>, Shared, Rt>) -> Vec<$t>
+        fn $to_vec<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Shared, Rt>) -> Vec<$t>
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             // SAFETY: as `$sort`, shared.
             unsafe { elements::<$t, Rt>(rt, &run) }.cloned().collect()
@@ -558,13 +566,14 @@ macro_rules! ordered_of {
 
         #[extern_fn(instance_of = starts_with, effect = pure)]
         fn $starts_with<Rt>(
-            rt: &Rt,
+            ctx: &mut Ctx<'_, Rt>,
             c: Ref<Vec<$t>, Shared, Rt>,
             prefix: Ref<Vec<$t>, Shared, Rt>,
         ) -> bool
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let whole = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             let part = Slice::<$t, Shared, Rt>::of(prefix.elements(rt)).into_elements();
             // SAFETY: as `$sort`, shared, and the length guard is the
@@ -574,13 +583,14 @@ macro_rules! ordered_of {
 
         #[extern_fn(instance_of = ends_with, effect = pure)]
         fn $ends_with<Rt>(
-            rt: &Rt,
+            ctx: &mut Ctx<'_, Rt>,
             c: Ref<Vec<$t>, Shared, Rt>,
             suffix: Ref<Vec<$t>, Shared, Rt>,
         ) -> bool
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let whole = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             let part = Slice::<$t, Shared, Rt>::of(suffix.elements(rt)).into_elements();
             let Some(offset) = whole.len().checked_sub(part.len()) else {
@@ -592,10 +602,11 @@ macro_rules! ordered_of {
         }
 
         #[extern_fn(instance_of = repeat, effect = pure)]
-        fn $repeat<Rt>(rt: &Rt, c: Ref<Vec<$t>, Shared, Rt>, times: u64) -> Vec<$t>
+        fn $repeat<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Shared, Rt>, times: u64) -> Vec<$t>
         where
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             let times = as_len(times);
             let mut out: Vec<$t> = Vec::with_capacity(repeat_len(run.len(), times));
@@ -708,11 +719,16 @@ where
 // the exclusive loan at the place (RFC-0047).
 
 #[extern_fn(effect = pure)]
-fn get<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>, at: u64) -> Option<Ref<T, Shared, Rt>>
+fn get<T, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    c: Ref<Vec<T>, Shared, Rt>,
+    at: u64,
+) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let at = usize::try_from(at).ok()?;
     c.try_map(rt, |c| c.get(at))
 }
@@ -775,11 +791,16 @@ where
 }
 
 #[extern_fn(name = "get", effect = pure)]
-fn slice_get<T, Rt>(rt: &Rt, s: Slice<T, Shared, Rt>, at: u64) -> Option<Ref<T, Shared, Rt>>
+fn slice_get<T, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    s: Slice<T, Shared, Rt>,
+    at: u64,
+) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let s = s.into_elements();
     let at = usize::try_from(at).ok()?;
     (at < s.len()).then(|| {
@@ -790,11 +811,12 @@ where
 }
 
 #[extern_fn(name = "first", effect = pure)]
-fn slice_first<T, Rt>(rt: &Rt, s: Slice<T, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn slice_first<T, Rt>(ctx: &mut Ctx<'_, Rt>, s: Slice<T, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let s = s.into_elements();
     (!s.is_empty()).then(|| {
         // SAFETY: the run is non-empty, and the container the caller lent
@@ -804,11 +826,12 @@ where
 }
 
 #[extern_fn(name = "last", effect = pure)]
-fn slice_last<T, Rt>(rt: &Rt, s: Slice<T, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn slice_last<T, Rt>(ctx: &mut Ctx<'_, Rt>, s: Slice<T, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let s = s.into_elements();
     let last = s.len().checked_sub(1)?;
     // SAFETY: `last` is the final index of a non-empty run, and the
@@ -867,16 +890,13 @@ fn takes_left(verdict: i64) -> bool {
 
 type Comparator<T, E, Rt> = Closure<(Ref<T, Shared, Rt>, Ref<T, Shared, Rt>), i64, E, Rt>;
 
-fn sort_by_now<T, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    c: Ref<Vec<T>, Mut, Rt>,
-    f: Comparator<T, E, Rt>,
-) where
+fn sort_by_now<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Mut, Rt>, f: Comparator<T, E, Rt>)
+where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let s = Slice::<T, Mut, Rt>::of(c.elements(rt)).into_elements();
     let n = s.len();
     let mut order: Vec<usize> = (0..n).collect();
@@ -894,7 +914,7 @@ fn sort_by_now<T, E, Rt>(
                 // while the two references are.
                 let a = unsafe { Ref::lend(rt, s.at(order[left])) };
                 let b = unsafe { Ref::lend(rt, s.at(order[right])) };
-                let taken = if takes_left(f.call_now(rt, frame, (a, b))) {
+                let taken = if takes_left(f.call_now(ctx, (a, b))) {
                     let at = order[left];
                     left += 1;
                     at
@@ -918,16 +938,13 @@ fn sort_by_now<T, E, Rt>(
 }
 
 #[extern_fn(effect = E, sync = sort_by_now)]
-async fn sort_by<T, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    c: Ref<Vec<T>, Mut, Rt>,
-    f: Comparator<T, E, Rt>,
-) where
+async fn sort_by<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Mut, Rt>, f: Comparator<T, E, Rt>)
+where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let s = Slice::<T, Mut, Rt>::of(c.elements(rt)).into_elements();
     let n = s.len();
     let mut order: Vec<usize> = (0..n).collect();
@@ -942,7 +959,7 @@ async fn sort_by<T, E, Rt>(
                 // SAFETY: as in `sort_by_now`.
                 let a = unsafe { Ref::lend(rt, s.at(order[left])) };
                 let b = unsafe { Ref::lend(rt, s.at(order[right])) };
-                let taken = if takes_left(f.call(rt, frame, (a, b)).await) {
+                let taken = if takes_left(f.call(ctx, (a, b)).await) {
                     let at = order[left];
                     left += 1;
                     at

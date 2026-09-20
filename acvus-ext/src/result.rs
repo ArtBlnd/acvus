@@ -22,6 +22,7 @@ use acvus_extern::{
 };
 
 use crate::iter::Iter;
+use acvus_extern::Ctx;
 
 #[extern_fn(effect = pure)]
 fn is_ok<T, Er>(val: Result<T, Er>) -> bool
@@ -164,8 +165,7 @@ where
 }
 
 fn is_ok_and_now<T, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
@@ -176,15 +176,14 @@ where
     Rt: Runtime,
 {
     match val {
-        Ok(inner) => f.call_now(rt, frame, (inner,)),
+        Ok(inner) => f.call_now(ctx, (inner,)),
         Err(_) => false,
     }
 }
 
 #[extern_fn(effect = E, sync = is_ok_and_now)]
 async fn is_ok_and<T, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
@@ -195,14 +194,13 @@ where
     Rt: Runtime,
 {
     match val {
-        Ok(inner) => f.call(rt, frame, (inner,)).await,
+        Ok(inner) => f.call(ctx, (inner,)).await,
         Err(_) => false,
     }
 }
 
 fn is_err_and_now<T, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), bool, E, Rt>,
 ) -> bool
@@ -214,14 +212,13 @@ where
 {
     match val {
         Ok(_) => false,
-        Err(error) => f.call_now(rt, frame, (error,)),
+        Err(error) => f.call_now(ctx, (error,)),
     }
 }
 
 #[extern_fn(effect = E, sync = is_err_and_now)]
 async fn is_err_and<T, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), bool, E, Rt>,
 ) -> bool
@@ -233,13 +230,12 @@ where
 {
     match val {
         Ok(_) => false,
-        Err(error) => f.call(rt, frame, (error,)).await,
+        Err(error) => f.call(ctx, (error,)).await,
     }
 }
 
 fn map_err_now<T, Er, F, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), F, E, Rt>,
 ) -> Result<T, F>
@@ -250,13 +246,12 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    val.map_err(|error| f.call_now(rt, frame, (error,)))
+    val.map_err(|error| f.call_now(ctx, (error,)))
 }
 
 #[extern_fn(effect = E, sync = map_err_now)]
 async fn map_err<T, Er, F, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), F, E, Rt>,
 ) -> Result<T, F>
@@ -269,13 +264,12 @@ where
 {
     match val {
         Ok(inner) => Ok(inner),
-        Err(error) => Err(f.call(rt, frame, (error,)).await),
+        Err(error) => Err(f.call(ctx, (error,)).await),
     }
 }
 
 fn map_or_now<T, U, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     default: U,
     f: Closure<(T,), U, E, Rt>,
@@ -288,15 +282,14 @@ where
     Rt: Runtime,
 {
     match val {
-        Ok(inner) => f.call_now(rt, frame, (inner,)),
+        Ok(inner) => f.call_now(ctx, (inner,)),
         Err(_) => default,
     }
 }
 
 #[extern_fn(effect = E, sync = map_or_now)]
 async fn map_or<T, U, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     default: U,
     f: Closure<(T,), U, E, Rt>,
@@ -309,14 +302,13 @@ where
     Rt: Runtime,
 {
     match val {
-        Ok(inner) => f.call(rt, frame, (inner,)).await,
+        Ok(inner) => f.call(ctx, (inner,)).await,
         Err(_) => default,
     }
 }
 
 fn map_or_else_now<T, U, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     default: Closure<(Er,), U, E, Rt>,
     f: Closure<(T,), U, E, Rt>,
@@ -329,15 +321,14 @@ where
     Rt: Runtime,
 {
     match val {
-        Ok(inner) => f.call_now(rt, frame, (inner,)),
-        Err(error) => default.call_now(rt, frame, (error,)),
+        Ok(inner) => f.call_now(ctx, (inner,)),
+        Err(error) => default.call_now(ctx, (error,)),
     }
 }
 
 #[extern_fn(effect = E, sync = map_or_else_now)]
 async fn map_or_else<T, U, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     default: Closure<(Er,), U, E, Rt>,
     f: Closure<(T,), U, E, Rt>,
@@ -350,14 +341,13 @@ where
     Rt: Runtime,
 {
     match val {
-        Ok(inner) => f.call(rt, frame, (inner,)).await,
-        Err(error) => default.call(rt, frame, (error,)).await,
+        Ok(inner) => f.call(ctx, (inner,)).await,
+        Err(error) => default.call(ctx, (error,)).await,
     }
 }
 
 fn and_then_now<T, U, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(T,), Result<U, Er>, E, Rt>,
 ) -> Result<U, Er>
@@ -368,13 +358,12 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    val.and_then(|inner| f.call_now(rt, frame, (inner,)))
+    val.and_then(|inner| f.call_now(ctx, (inner,)))
 }
 
 #[extern_fn(effect = E, sync = and_then_now)]
 async fn and_then<T, U, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(T,), Result<U, Er>, E, Rt>,
 ) -> Result<U, Er>
@@ -386,14 +375,13 @@ where
     Rt: Runtime,
 {
     match val {
-        Ok(inner) => f.call(rt, frame, (inner,)).await,
+        Ok(inner) => f.call(ctx, (inner,)).await,
         Err(error) => Err(error),
     }
 }
 
 fn or_else_now<T, Er, F, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), Result<T, F>, E, Rt>,
 ) -> Result<T, F>
@@ -404,13 +392,12 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    val.or_else(|error| f.call_now(rt, frame, (error,)))
+    val.or_else(|error| f.call_now(ctx, (error,)))
 }
 
 #[extern_fn(effect = E, sync = or_else_now)]
 async fn or_else<T, Er, F, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), Result<T, F>, E, Rt>,
 ) -> Result<T, F>
@@ -423,13 +410,12 @@ where
 {
     match val {
         Ok(inner) => Ok(inner),
-        Err(error) => f.call(rt, frame, (error,)).await,
+        Err(error) => f.call(ctx, (error,)).await,
     }
 }
 
 fn unwrap_or_else_now<T, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), T, E, Rt>,
 ) -> T
@@ -439,13 +425,12 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    val.unwrap_or_else(|error| f.call_now(rt, frame, (error,)))
+    val.unwrap_or_else(|error| f.call_now(ctx, (error,)))
 }
 
 #[extern_fn(effect = E, sync = unwrap_or_else_now)]
 async fn unwrap_or_else<T, Er, E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     f: Closure<(Er,), T, E, Rt>,
 ) -> T
@@ -457,7 +442,7 @@ where
 {
     match val {
         Ok(inner) => inner,
-        Err(error) => f.call(rt, frame, (error,)).await,
+        Err(error) => f.call(ctx, (error,)).await,
     }
 }
 

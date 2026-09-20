@@ -6,6 +6,7 @@ use std::any::type_name;
 use std::sync::Arc;
 
 use acvus_ext::Iter;
+use acvus_extern::Ctx;
 use acvus_extern::{
     Erased, FromValue, Mut, Ref, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
@@ -16,10 +17,11 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 #[extern_fn(effect = pure)]
-fn upcase_first<Rt>(rt: &Rt, items: Ref<Vec<Erased<Rt, String>>, Mut, Rt>)
+fn upcase_first<Rt>(ctx: &mut Ctx<'_, Rt>, items: Ref<Vec<Erased<Rt, String>>, Mut, Rt>)
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let Some(first) = items.as_slice(rt).first_mut() else {
         return;
     };
@@ -28,8 +30,7 @@ where
 
 #[extern_fn(effect = E, sync = contains_erased_now)]
 async fn contains_erased<E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     needle: Erased<Rt, String>,
 ) -> bool
@@ -38,7 +39,8 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    while let Some(item) = it.next(rt, frame).await {
+    let rt = ctx.rt;
+    while let Some(item) = it.next(ctx).await {
         if item.as_ref(rt) == needle.as_ref(rt) {
             return true;
         }
@@ -47,8 +49,7 @@ where
 }
 
 fn contains_erased_now<E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     needle: Erased<Rt, String>,
 ) -> bool
@@ -57,7 +58,8 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    while let Some(item) = it.next_now(rt, frame) {
+    let rt = ctx.rt;
+    while let Some(item) = it.next_now(ctx) {
         if item.as_ref(rt) == needle.as_ref(rt) {
             return true;
         }

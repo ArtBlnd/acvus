@@ -238,8 +238,7 @@ fn generate_extern_fn(
     let is_async = func.sig.asyncness.is_some();
     let vars = Vars::from_generics(&func.sig.generics)?;
     let Signature {
-        takes_runtime,
-        takes_frame,
+        takes_ctx,
         params: rust_params,
     } = parse_params(&mut func.sig, vars.runtime_ident())?;
     let params: Vec<&ExternParam> = rust_params
@@ -515,22 +514,12 @@ fn generate_extern_fn(
         let capture_state = (!states.is_empty()).then(|| {
             quote! { let __state = ::std::sync::Arc::clone(&__state); }
         });
-        let rt_arg = takes_runtime.then(|| quote! { __rt, });
-        // A synchronous handler is handed the window by value and lends it
-        // onward; an `async` one is handed a borrow, because the future it
-        // returns is what holds that borrow. An entry is handed a borrow
-        // too: its caller is another handler, which already has one.
-        let frame_arg = takes_frame.then(|| match awaits {
-            true => quote! { __frame, },
-            false => quote! { &mut __frame, },
-        });
-        let frame_param = match (takes_frame, awaits) {
-            (true, false) => quote! { mut __frame },
-            _ => quote! { __frame },
+        let ctx_arg = takes_ctx.then(|| quote! { __ctx, });
+        let ctx_param = quote! {
+            __ctx: &mut ::acvus_extern::Ctx<'_, __R>
         };
-        let entry_frame_arg = takes_frame.then(|| quote! { __frame, });
-        let call = quote! { #callee #turbofish (#rt_arg #frame_arg #(#passed),*) };
-        let entry_call = quote! { #callee #turbofish (#rt_arg #entry_frame_arg #(#passed),*) };
+        let call = quote! { #callee #turbofish (#ctx_arg #(#passed),*) };
+        let entry_call = call.clone();
         // Every parameter an instance with an entry may take resolves its
         // site from nothing, so the entry's site table is the unit tuple.
         // A projection parameter's site is a table the call's settled type
@@ -545,13 +534,13 @@ fn generate_extern_fn(
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
                 unsafe fn #entry_ident<'__a, '__w, '__r, __R>(
-                    __rt: &'__a __R,
-                    __frame: &'__a mut <__R as ::acvus_extern::Runtime>::Frame<'__w>,
+                    __ctx: &'__a mut ::acvus_extern::Ctx<'__w, __R>,
                     __run: &'__r [<__R as ::acvus_extern::Runtime>::Value],
                 ) -> ::acvus_extern::BoxFuture<'__a, <__R as ::acvus_extern::Runtime>::Value>
                 where
                     __R: ::acvus_extern::Runtime,
                 {
+                    let __rt = __ctx.rt;
                     #sites_of_entry
                     let __held: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value> =
                         __run.to_vec();
@@ -596,7 +585,8 @@ fn generate_extern_fn(
                         _,
                         (#(#arg_markers,)*),
                         #entry_ty,
-                    >(move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| {
+                    >(move |#ctx_param, (#(#arg_idents,)*)| {
+                        let __rt = __ctx.rt;
                         ::std::boxed::Box::pin(async move {
                             let __r = (#call).await;
                             <#rt_ret as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
@@ -609,8 +599,9 @@ fn generate_extern_fn(
                 ::acvus_extern::ExternHandler::awaited({
                     #capture_state
                     ::acvus_extern::async_glue::<__R, _, (#(#arg_markers,)*)>(
-                        move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| {
+                        move |#ctx_param, (#(#arg_idents,)*)| {
                             #capture_state
+                            let __rt = __ctx.rt;
                             ::std::boxed::Box::pin(async move {
                                 let __r = (#call).await;
                                 <#rt_ret as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
@@ -626,14 +617,14 @@ fn generate_extern_fn(
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
                 unsafe fn #entry_ident<__R>(
-                    __rt: &__R,
-                    __frame: &mut <__R as ::acvus_extern::Runtime>::Frame<'_>,
+                    __ctx: &mut ::acvus_extern::Ctx<'_, __R>,
                     __run: &[<__R as ::acvus_extern::Runtime>::Value],
                     __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
                 )
                 where
                     __R: ::acvus_extern::Runtime,
                 {
+                    let __rt = __ctx.rt;
                     #sites_of_entry
                     // SAFETY: the values ABI's contract — `__run` is this
                     // declaration's whole argument run and every storage a
@@ -671,7 +662,7 @@ fn generate_extern_fn(
                         (#(#arg_markers,)*),
                         #ret_marker,
                         #entry_ty,
-                    >(move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| #call)
+                    >(move |#ctx_param, (#(#arg_idents,)*)| #call)
                 )
             }
         } else {
@@ -679,7 +670,7 @@ fn generate_extern_fn(
                 ::acvus_extern::ExternHandler::#sync_variant({
                     #capture_state
                     ::acvus_extern::glue::<__R, _, (#(#arg_markers,)*), #ret_marker>(
-                        move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| #call
+                        move |#ctx_param, (#(#arg_idents,)*)| #call
                     )
                 })
             }
@@ -708,7 +699,7 @@ fn generate_extern_fn(
                                 _,
                                 (::acvus_extern::ByValue<#rt_ty, #from>,),
                                 ::acvus_extern::Val<#rt_ty, #into>,
-                            >(|_, _, (__v,)| __v)
+                            >(|_, (__v,)| __v)
                         )
                     }
                 };
@@ -879,25 +870,17 @@ fn take_marker_attr(attrs: &mut Vec<Attribute>, name: &str) -> bool {
 }
 
 /// What a declaration's Rust signature carries in front of its acvus
-/// parameters: `&R` with `R` the parameter bounded by `Runtime`, then the
-/// frame a closure call runs in. A function that uses neither takes neither.
+/// parameters: `&mut Ctx<'_, R>`. A function that uses neither the runtime
+/// nor the window takes it not at all.
 struct Signature {
-    takes_runtime: bool,
-    takes_frame: bool,
+    takes_ctx: bool,
     params: Vec<RustParam>,
 }
 
 fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Result<Signature> {
     let mut inputs = sig.inputs.iter_mut().peekable();
-    let takes_runtime = match (runtime, inputs.peek()) {
-        (Some(runtime), Some(first)) => is_runtime_param(first, runtime),
-        _ => false,
-    };
-    if takes_runtime {
-        inputs.next();
-    }
-    let takes_frame = inputs.peek().is_some_and(|next| is_frame_param(next));
-    if takes_frame {
+    let takes_ctx = inputs.peek().is_some_and(|next| is_ctx_param(next));
+    if takes_ctx {
         inputs.next();
     }
 
@@ -927,6 +910,16 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             }));
             continue;
         }
+        if let Some(runtime) = runtime
+            && crosses_as_ctx(pat_type.ty.as_ref(), runtime)
+        {
+            return Err(syn::Error::new_spanned(
+                &pat_type.ty,
+                "the runtime and the window above the calling frame cross as one parameter, \
+                 `ctx: &mut Ctx<'_, Rt>`, written first (RFC-0050 rule 6). Write that in place \
+                 of `rt: &Rt` and `frame: &mut Rt::Frame<'_>`, and read `ctx.rt` in the body.",
+            ));
+        }
         let (ty, mode) = match pat_type.ty.as_ref() {
             Type::Reference(r) if r.mutability.is_some() && is_str(&r.elem) => {
                 return Err(syn::Error::new_spanned(
@@ -947,28 +940,23 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             mode,
         }));
     }
-    Ok(Signature {
-        takes_runtime,
-        takes_frame,
-        params,
-    })
+    Ok(Signature { takes_ctx, params })
 }
 
-fn is_runtime_param(arg: &FnArg, runtime: &Ident) -> bool {
-    let FnArg::Typed(pat_type) = arg else {
+fn crosses_as_ctx(ty: &Type, runtime: &Ident) -> bool {
+    let Type::Reference(r) = ty else {
         return false;
     };
-    let Type::Reference(r) = pat_type.ty.as_ref() else {
-        return false;
-    };
-    r.mutability.is_none() && matches!(r.elem.as_ref(), Type::Path(p) if p.path.is_ident(runtime))
+    match r.mutability {
+        None => matches!(r.elem.as_ref(), Type::Path(p) if p.path.is_ident(runtime)),
+        Some(_) => matches!(r.elem.as_ref(), Type::Path(p)
+            if p.path.segments.last().is_some_and(|last| last.ident == "Frame")),
+    }
 }
 
-/// The frame is read by its type and not by its position, because the runtime
-/// parameter in front of it is optional: a declaration that takes the frame
-/// alone has it first, and a first acvus parameter taken `&mut T` sits in the
-/// same place.
-fn is_frame_param(arg: &FnArg) -> bool {
+/// Read by its type and not by its position: a first acvus parameter taken
+/// `&mut T` sits in the same place.
+fn is_ctx_param(arg: &FnArg) -> bool {
     let FnArg::Typed(pat_type) = arg else {
         return false;
     };
@@ -978,12 +966,12 @@ fn is_frame_param(arg: &FnArg) -> bool {
     let Type::Path(p) = r.elem.as_ref() else {
         return false;
     };
-    let named_frame = p
+    let named_ctx = p
         .path
         .segments
         .last()
-        .is_some_and(|last| last.ident == "Frame");
-    r.mutability.is_some() && named_frame
+        .is_some_and(|last| last.ident == "Ctx");
+    r.mutability.is_some() && named_ctx
 }
 
 fn parse_return(output: &ReturnType) -> Type {

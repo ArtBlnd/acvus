@@ -32,6 +32,7 @@
 //! These timings hold only under one pinned core and a fixed load base;
 //! `benches/README.md` states the protocol.
 
+use acvus_extern::Ctx;
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::num::NonZeroUsize;
@@ -345,10 +346,15 @@ fn match_sync(#[state] corpus: &Arc<Corpus>, index: u64) -> bool {
 /// The same matcher in the caller's frame, over the pattern and the line the
 /// script lends it rather than a corpus of its own.
 #[extern_fn(effect = pure)]
-fn glob_match<Rt>(rt: &Rt, pat: Slice<i64, Shared, Rt>, line: Slice<i64, Shared, Rt>) -> bool
+fn glob_match<Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    pat: Slice<i64, Shared, Rt>,
+    line: Slice<i64, Shared, Rt>,
+) -> bool
 where
     Rt: acvus_extern::Runtime,
 {
+    let rt = ctx.rt;
     let (pat, line) = (pat.into_elements(), line.into_elements());
     let byte = |view: &Elements<Rt>, at: usize| {
         // SAFETY: `at` is below the length the view reports, the container the

@@ -17,29 +17,25 @@ pub trait Runtime: Sized + Send + Sync + 'static {
         + crate::Release
         + Copy
         + Default;
-    /// The frame a handler calls a closure on: the window above the calling
-    /// frame, lent for the call's duration (RFC-0050 rule 6).
+    /// The frame a handler calls a closure on: the cells above the calling
+    /// frame (RFC-0050 rule 6). This is the state **itself**, not a borrow of
+    /// it: a `Ctx` owns one, and every crossing hands out `&mut Ctx` from the
+    /// owner of that `Ctx`. Nothing returns a frame by value, so the state
+    /// never moves out of the frame below and `Regs::take_window`'s "one
+    /// handle to these cells" holds unchanged.
     ///
-    /// A `Frame` is a lent handle, and a handler therefore names it as
-    /// `&mut Rt::Frame<'_>` — a double reference for a host whose handle is
-    /// itself a reference. Making `Frame` the state itself, so that one
-    /// reference reached it, was built and does not compile: the frame below
-    /// owns the state (`acvus-interpreter`'s `Machine::above` and
-    /// `Store::root`) and keeps it for its next call, so `Machine::window`
-    /// and `Store::root_window` can only lend it, and `frame_of`, which
-    /// returns `Frame<'_>` by value, would have to move it out of its owner.
-    /// A second handle to the same cells is what `Regs::take_window` exists
-    /// to prevent. Reborrowing a `Rt::Frame<'_>` in a generic body would need
-    /// a `reborrow` on this trait, which buys one word for one more method
-    /// every host implements.
-    type Frame<'a>: Send
-    where
-        Self: 'a;
+    /// The lifetime is here for hosts whose window borrows something; a host
+    /// whose state borrows nothing ignores it.
+    type Frame<'a>: Send;
     /// The cells a call that outlives the frame it was made on runs its
-    /// closures in. A future the caller waits for cannot borrow the caller's
-    /// window — it is `'static` and the caller's frame holds it — so the
-    /// `async` glue owns one of these and lends a `Frame` out of it per call.
-    type Rooted: Send + Sync;
+    /// closures in, with the `Ctx` over them. A future the caller waits for
+    /// cannot borrow the caller's window — it is `'static` and the caller's
+    /// frame holds it — so the `async` glue owns one of these and lends its
+    /// `Ctx` per call.
+    ///
+    /// `Sync` is not asked for: a `Ctx` holds `Rt::Frame`, which is only
+    /// `Send`, and every future here is `dyn Future + Send`.
+    type Rooted<'a>: Send;
     type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a
     where
         Self: 'a;
@@ -53,8 +49,11 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     type FusedCall;
     type FusedShape;
 
-    fn rooted(&self) -> Self::Rooted;
-    fn frame_of(rooted: &mut Self::Rooted) -> Self::Frame<'_>;
+    fn rooted(&self) -> Self::Rooted<'_>;
+    /// The `Ctx` the rooted cells carry, lent from its owner.
+    fn ctx_of<'a, 'r>(rooted: &'r mut Self::Rooted<'a>) -> &'r mut crate::Ctx<'a, Self>
+    where
+        'a: 'r;
 
     /// One entry per call form (RFC-0044 stage 2c, RFC-0047 amended rule 2).
     /// A declaration's arity names its entry where the glue is written, so a
@@ -265,7 +264,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     unsafe fn call_now<A>(
         &self,
         f: &Self::Value,
-        frame: &mut Self::Frame<'_>,
+        ctx: &mut crate::Ctx<'_, Self>,
         args: A,
     ) -> Self::Value
     where
@@ -311,7 +310,7 @@ impl crate::FromValue<TypesOnly> for () {
 impl Runtime for TypesOnly {
     type Value = ();
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = crate::Ctx<'a, TypesOnly>;
     type CallFuture<'a> = Ready<()>;
     type Op = crate::handler::DirectOp<TypesOnly>;
     type CallShape = ();
@@ -319,8 +318,20 @@ impl Runtime for TypesOnly {
     type FusedCall = crate::handler::DirectOp<TypesOnly>;
     type FusedShape = ();
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> crate::Ctx<'_, TypesOnly> {
+        crate::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut crate::Ctx<'a, TypesOnly>,
+    ) -> &'r mut crate::Ctx<'a, TypesOnly>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     crate::direct_call_forms!();
 
@@ -420,7 +431,7 @@ impl Runtime for TypesOnly {
     fn call_is_sync(&self, _: &()) -> bool {
         false
     }
-    unsafe fn call_now<A>(&self, _: &(), _: &mut (), _: A)
+    unsafe fn call_now<A>(&self, _: &(), _: &mut crate::Ctx<'_, Self>, _: A)
     where
         A: crate::IntoRun<Self>,
     {

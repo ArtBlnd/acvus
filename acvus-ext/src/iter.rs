@@ -19,6 +19,7 @@
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
+use acvus_extern::Ctx;
 use acvus_extern::{
     BoxFuture, Closure, ClosureFn, Erased, ExternType, FromValue, OneValue, Owned, Ref, Runtime,
     Shared, Stored, Var, kind,
@@ -47,26 +48,22 @@ pub trait SyncStage<Rt>: Send + Sync
 where
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value>;
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value>;
 }
 
 pub trait AsyncStage<Rt>: Send + Sync
 where
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>>;
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>>;
 }
 
 impl<Rt> SyncStage<Rt> for Box<dyn SyncStage<Rt>>
 where
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
-        (**self).next(rt, frame)
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        (**self).next(ctx)
     }
 }
 
@@ -74,12 +71,8 @@ impl<Rt> AsyncStage<Rt> for Box<dyn AsyncStage<Rt>>
 where
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
-        (**self).next(rt, frame)
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        (**self).next(ctx)
     }
 }
 
@@ -90,12 +83,8 @@ where
     S: SyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(std::future::ready(self.0.next(rt, frame)))
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        Box::pin(std::future::ready(self.0.next(ctx)))
     }
 }
 
@@ -129,14 +118,14 @@ where
 /// The body may await: both arms expand inside the consumer's own
 /// `async fn`, and only the source's `next` differs between them.
 macro_rules! drain {
-    ($it:expr, $rt:expr, $frame:expr, |$value:pat_param| $body:block) => {
+    ($it:expr, $ctx:expr, |$value:pat_param| $body:block) => {
         match $it.stages_mut() {
             $crate::iter::Stages::Sync(stage) => {
-                while let Some($value) = $crate::iter::SyncStage::next(stage, $rt, $frame) $body
+                while let Some($value) = $crate::iter::SyncStage::next(stage, $ctx) $body
             }
             $crate::iter::Stages::Async(stage) => {
                 while let Some($value) =
-                    $crate::iter::AsyncStage::next(stage, $rt, $frame).await $body
+                    $crate::iter::AsyncStage::next(stage, $ctx).await $body
             }
         }
     };
@@ -145,9 +134,9 @@ macro_rules! drain {
 /// The body cannot await: the consumer is the `Task::Sync` instance, and
 /// `Stages::sync_mut` is where that is checked.
 macro_rules! drain_now {
-    ($it:expr, $rt:expr, $frame:expr, |$value:pat_param| $body:block) => {{
+    ($it:expr, $ctx:expr, |$value:pat_param| $body:block) => {{
         let stage = $it.stages_mut().sync_mut();
-        while let Some($value) = $crate::iter::SyncStage::next(stage, $rt, $frame) $body
+        while let Some($value) = $crate::iter::SyncStage::next(stage, $ctx) $body
     }};
 }
 
@@ -367,27 +356,29 @@ where
         self.map(f).flatten()
     }
 
-    pub async fn next_value(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    pub async fn next_value(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
         match &mut self.0 {
-            Stages::Sync(stage) => stage.next(rt, frame),
-            Stages::Async(stage) => stage.next(rt, frame).await,
+            Stages::Sync(stage) => stage.next(ctx),
+            Stages::Async(stage) => stage.next(ctx).await,
         }
     }
 
-    pub async fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<T>
+    pub async fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<T>
     where
         T: FromValue<Rt>,
     {
-        Some(T::from_value(rt, self.next_value(rt, frame).await?))
+        let rt = ctx.rt;
+        Some(T::from_value(rt, self.next_value(ctx).await?))
     }
 
     /// As `next`, for a consumer the solver chose the `Task::Sync`
     /// instance of.
-    pub fn next_now(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<T>
+    pub fn next_now(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<T>
     where
         T: FromValue<Rt>,
     {
-        let value = self.0.sync_mut().next(rt, frame)?;
+        let rt = ctx.rt;
+        let value = self.0.sync_mut().next(ctx)?;
         Some(T::from_value(rt, value))
     }
 }
@@ -417,7 +408,8 @@ where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, _frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let rt = ctx.rt;
         Some(self.0.get_mut()(rt)?.erase(rt))
     }
 }
@@ -440,9 +432,9 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
-        let item = self.source.next(rt, frame)?;
-        let out = self.f.call_now(rt, frame, (Owned::from_value(item),));
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let item = self.source.next(ctx)?;
+        let out = self.f.call_now(ctx, (Owned::from_value(item),));
         Some(out.into_value())
     }
 }
@@ -453,15 +445,11 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             let Map { source, f } = self;
-            let item = source.next(rt, frame).await?;
-            let out = f.call(rt, frame, (Owned::from_value(item),)).await;
+            let item = source.next(ctx).await?;
+            let out = f.call(ctx, (Owned::from_value(item),)).await;
             Some(out.into_value())
         })
     }
@@ -484,9 +472,10 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
-        while let Some(value) = self.source.next(rt, frame) {
-            if self.f.call_now(rt, frame, (Ref::lend(rt, &value),)) {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let rt = ctx.rt;
+        while let Some(value) = self.source.next(ctx) {
+            if self.f.call_now(ctx, (Ref::lend(rt, &value),)) {
                 return Some(value);
             }
         }
@@ -501,15 +490,12 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        let rt = ctx.rt;
         Box::pin(async move {
             let Filter { source, f } = self;
-            while let Some(value) = source.next(rt, frame).await {
-                if f.call(rt, frame, (Ref::lend(rt, &value),)).await {
+            while let Some(value) = source.next(ctx).await {
+                if f.call(ctx, (Ref::lend(rt, &value),)).await {
                     return Some(value);
                 }
             }
@@ -528,9 +514,9 @@ where
     S: SyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
         self.remaining = self.remaining.checked_sub(1)?;
-        self.source.next(rt, frame)
+        self.source.next(ctx)
     }
 }
 
@@ -539,14 +525,10 @@ where
     S: AsyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             self.remaining = self.remaining.checked_sub(1)?;
-            self.source.next(rt, frame).await
+            self.source.next(ctx).await
         })
     }
 }
@@ -561,12 +543,12 @@ where
     S: SyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
         while self.remaining > 0 {
             self.remaining -= 1;
-            self.source.next(rt, frame)?;
+            self.source.next(ctx)?;
         }
-        self.source.next(rt, frame)
+        self.source.next(ctx)
     }
 }
 
@@ -575,17 +557,13 @@ where
     S: AsyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             while self.remaining > 0 {
                 self.remaining -= 1;
-                self.source.next(rt, frame).await?;
+                self.source.next(ctx).await?;
             }
-            self.source.next(rt, frame).await
+            self.source.next(ctx).await
         })
     }
 }
@@ -601,14 +579,14 @@ where
     S: SyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
         if self.started {
             for _ in 1..self.step {
-                self.source.next(rt, frame)?;
+                self.source.next(ctx)?;
             }
         }
         self.started = true;
-        self.source.next(rt, frame)
+        self.source.next(ctx)
     }
 }
 
@@ -617,19 +595,15 @@ where
     S: AsyncStage<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             if self.started {
                 for _ in 1..self.step {
-                    self.source.next(rt, frame).await?;
+                    self.source.next(ctx).await?;
                 }
             }
             self.started = true;
-            self.source.next(rt, frame).await
+            self.source.next(ctx).await
         })
     }
 }
@@ -652,12 +626,13 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let rt = ctx.rt;
         if self.done {
             return None;
         }
-        let value = self.source.next(rt, frame)?;
-        if self.f.call_now(rt, frame, (Ref::lend(rt, &value),)) {
+        let value = self.source.next(ctx)?;
+        if self.f.call_now(ctx, (Ref::lend(rt, &value),)) {
             return Some(value);
         }
         self.done = true;
@@ -672,18 +647,15 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        let rt = ctx.rt;
         Box::pin(async move {
             let TakeWhile { source, f, done } = self;
             if *done {
                 return None;
             }
-            let value = source.next(rt, frame).await?;
-            if f.call(rt, frame, (Ref::lend(rt, &value),)).await {
+            let value = source.next(ctx).await?;
+            if f.call(ctx, (Ref::lend(rt, &value),)).await {
                 return Some(value);
             }
             *done = true;
@@ -710,15 +682,16 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let rt = ctx.rt;
         while self.skipping {
-            let value = self.source.next(rt, frame)?;
-            if !self.f.call_now(rt, frame, (Ref::lend(rt, &value),)) {
+            let value = self.source.next(ctx)?;
+            if !self.f.call_now(ctx, (Ref::lend(rt, &value),)) {
                 self.skipping = false;
                 return Some(value);
             }
         }
-        self.source.next(rt, frame)
+        self.source.next(ctx)
     }
 }
 
@@ -729,11 +702,8 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        let rt = ctx.rt;
         Box::pin(async move {
             let SkipWhile {
                 source,
@@ -741,13 +711,13 @@ where
                 skipping,
             } = self;
             while *skipping {
-                let value = source.next(rt, frame).await?;
-                if !f.call(rt, frame, (Ref::lend(rt, &value),)).await {
+                let value = source.next(ctx).await?;
+                if !f.call(ctx, (Ref::lend(rt, &value),)).await {
                     *skipping = false;
                     return Some(value);
                 }
             }
-            source.next(rt, frame).await
+            source.next(ctx).await
         })
     }
 }
@@ -764,10 +734,11 @@ where
     T: OneValue<Rt> + FromValue<Rt> + Send + Sync,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let rt = ctx.rt;
         let mut chunk: Vec<T> = Vec::new();
         while (chunk.len() as u64) < self.size {
-            let Some(value) = self.source.next(rt, frame) else {
+            let Some(value) = self.source.next(ctx) else {
                 break;
             };
             chunk.push(T::from_value(rt, value));
@@ -782,15 +753,12 @@ where
     T: OneValue<Rt> + FromValue<Rt> + Send + Sync,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        let rt = ctx.rt;
         Box::pin(async move {
             let mut chunk: Vec<T> = Vec::new();
             while (chunk.len() as u64) < self.size {
-                let Some(value) = self.source.next(rt, frame).await else {
+                let Some(value) = self.source.next(ctx).await else {
                     break;
                 };
                 chunk.push(T::from_value(rt, value));
@@ -811,8 +779,9 @@ where
     T: Stored<Rt> + PartialEq + Clone,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
-        while let Some(value) = self.source.next(rt, frame) {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let rt = ctx.rt;
+        while let Some(value) = self.source.next(ctx) {
             let item = Erased::<Rt, T>::from_value(rt, value);
             let current = item.as_ref(rt);
             if self.last.as_ref() == Some(current) {
@@ -831,13 +800,10 @@ where
     T: Stored<Rt> + PartialEq + Clone,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        let rt = ctx.rt;
         Box::pin(async move {
-            while let Some(value) = self.source.next(rt, frame).await {
+            while let Some(value) = self.source.next(ctx).await {
                 let item = Erased::<Rt, T>::from_value(rt, value);
                 let current = item.as_ref(rt);
                 if self.last.as_ref() == Some(current) {
@@ -860,9 +826,9 @@ where
     S: SyncStage<Rt> + Send + Sync,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
         while let Some(front) = self.parts.front_mut() {
-            if let Some(value) = front.next(rt, frame) {
+            if let Some(value) = front.next(ctx) {
                 return Some(value);
             }
             self.parts.pop_front();
@@ -876,14 +842,10 @@ where
     S: AsyncStage<Rt> + Send + Sync,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
         Box::pin(async move {
             while let Some(front) = self.parts.front_mut() {
-                if let Some(value) = front.next(rt, frame).await {
+                if let Some(value) = front.next(ctx).await {
                     return Some(value);
                 }
                 self.parts.pop_front();
@@ -909,12 +871,13 @@ where
     U: OneValue<Rt>,
     Rt: Runtime,
 {
-    fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
+    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
+        let rt = ctx.rt;
         loop {
             if let Some(item) = self.pending.as_mut().and_then(Iterator::next) {
                 return Some(item.erase(rt));
             }
-            let value = self.source.next(rt, frame)?;
+            let value = self.source.next(ctx)?;
             self.pending = Some(T::from_value(rt, value).into_iter());
         }
     }
@@ -928,17 +891,14 @@ where
     U: OneValue<Rt>,
     Rt: Runtime,
 {
-    fn next<'a>(
-        &'a mut self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-    ) -> BoxFuture<'a, Option<Rt::Value>> {
+    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
+        let rt = ctx.rt;
         Box::pin(async move {
             loop {
                 if let Some(item) = self.pending.as_mut().and_then(Iterator::next) {
                     return Some(item.erase(rt));
                 }
-                let value = self.source.next(rt, frame).await?;
+                let value = self.source.next(ctx).await?;
                 self.pending = Some(T::from_value(rt, value).into_iter());
             }
         })

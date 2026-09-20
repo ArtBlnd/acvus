@@ -31,6 +31,7 @@ use acvus_extern::{
 };
 
 use crate::iter::{Iter, drain, drain_now};
+use acvus_extern::Ctx;
 
 /// The arithmetic the aggregates need of a `Monomorphize<(i64, f64)>`
 /// member; `add` and `mul` are what `Iterator::sum` and `Iterator::product`
@@ -324,42 +325,39 @@ where
     it.flat_map::<Vec<U>, U>(f)
 }
 
-fn collect_now<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> Vec<T>
+fn collect_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Vec<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut items = Vec::new();
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         items.push(T::from_value(rt, value));
     });
     items
 }
 
 #[extern_fn(effect = E, sync = collect_now)]
-async fn collect<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<T, E, I, Rt>,
-) -> Vec<T>
+async fn collect<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Vec<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut items = Vec::new();
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         items.push(T::from_value(rt, value));
     });
     items
 }
 
 fn join_now<E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     sep: String,
 ) -> String
@@ -368,8 +366,9 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut parts: Vec<String> = Vec::new();
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         parts.push(Erased::<Rt, String>::from_value(rt, value).into_inner(rt));
     });
     parts.join(&sep)
@@ -377,8 +376,7 @@ where
 
 #[extern_fn(effect = E, sync = join_now)]
 async fn join<E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<Erased<Rt, String>, E, I, Rt>,
     sep: String,
 ) -> String
@@ -387,16 +385,16 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut parts: Vec<String> = Vec::new();
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         parts.push(Erased::<Rt, String>::from_value(rt, value).into_inner(rt));
     });
     parts.join(&sep)
 }
 
 fn contains_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<Erased<Rt, T>, E, I, Rt>,
     needle: T,
 ) -> bool
@@ -406,8 +404,9 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut found = false;
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         if *Erased::<Rt, T>::from_value(rt, value).as_ref(rt) == needle {
             found = true;
             break;
@@ -418,8 +417,7 @@ where
 
 #[extern_fn(effect = E, sync = contains_now)]
 async fn contains<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<Erased<Rt, T>, E, I, Rt>,
     needle: T,
 ) -> bool
@@ -429,8 +427,9 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut found = false;
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         if *Erased::<Rt, T>::from_value(rt, value).as_ref(rt) == needle {
             found = true;
             break;
@@ -439,38 +438,29 @@ where
     found
 }
 
-fn next_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    it: &mut Iter<T, E, I, Rt>,
-) -> Option<T>
+fn next_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Iter<T, E, I, Rt>) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.next_now(rt, frame)
+    it.next_now(ctx)
 }
 
 #[extern_fn(effect = E, sync = next_now)]
-async fn next<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    it: &mut Iter<T, E, I, Rt>,
-) -> Option<T>
+async fn next<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Iter<T, E, I, Rt>) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.next(rt, frame).await
+    it.next(ctx).await
 }
 
 fn find_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<T>
@@ -480,13 +470,12 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.filter(f).next_now(rt, frame)
+    it.filter(f).next_now(ctx)
 }
 
 #[extern_fn(effect = E, sync = find_now)]
 async fn find<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<T>
@@ -496,12 +485,11 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.filter(f).next(rt, frame).await
+    it.filter(f).next(ctx).await
 }
 
 fn reduce_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(T, T), T, E, Rt>,
 ) -> Option<T>
@@ -511,18 +499,18 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let mut acc = it.next_now(rt, frame)?;
-    drain_now!(it, rt, frame, |value| {
+    let rt = ctx.rt;
+    let mut acc = it.next_now(ctx)?;
+    drain_now!(it, ctx, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call_now(rt, frame, (acc, item));
+        acc = f.call_now(ctx, (acc, item));
     });
     Some(acc)
 }
 
 #[extern_fn(effect = E, sync = reduce_now)]
 async fn reduce<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(T, T), T, E, Rt>,
 ) -> Option<T>
@@ -532,17 +520,17 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let mut acc = it.next(rt, frame).await?;
-    drain!(it, rt, frame, |value| {
+    let rt = ctx.rt;
+    let mut acc = it.next(ctx).await?;
+    drain!(it, ctx, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call(rt, frame, (acc, item)).await;
+        acc = f.call(ctx, (acc, item)).await;
     });
     Some(acc)
 }
 
 fn fold_now<T, U, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     init: U,
     f: Closure<(U, T), U, E, Rt>,
@@ -554,18 +542,18 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut acc = init;
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call_now(rt, frame, (acc, item));
+        acc = f.call_now(ctx, (acc, item));
     });
     acc
 }
 
 #[extern_fn(effect = E, sync = fold_now)]
 async fn fold<T, U, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     init: U,
     f: Closure<(U, T), U, E, Rt>,
@@ -577,17 +565,17 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut acc = init;
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         let item = T::from_value(rt, value);
-        acc = f.call(rt, frame, (acc, item)).await;
+        acc = f.call(ctx, (acc, item)).await;
     });
     acc
 }
 
 fn any_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
@@ -597,9 +585,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut found = false;
-    drain_now!(it, rt, frame, |value| {
-        if f.call_now(rt, frame, (Ref::lend(rt, &value),)) {
+    drain_now!(it, ctx, |value| {
+        if f.call_now(ctx, (Ref::lend(rt, &value),)) {
             found = true;
             break;
         }
@@ -609,8 +598,7 @@ where
 
 #[extern_fn(effect = E, sync = any_now)]
 async fn any<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
@@ -620,9 +608,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut found = false;
-    drain!(it, rt, frame, |value| {
-        if f.call(rt, frame, (Ref::lend(rt, &value),)).await {
+    drain!(it, ctx, |value| {
+        if f.call(ctx, (Ref::lend(rt, &value),)).await {
             found = true;
             break;
         }
@@ -631,8 +620,7 @@ where
 }
 
 fn all_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
@@ -642,9 +630,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut holds_throughout = true;
-    drain_now!(it, rt, frame, |value| {
-        if !f.call_now(rt, frame, (Ref::lend(rt, &value),)) {
+    drain_now!(it, ctx, |value| {
+        if !f.call_now(ctx, (Ref::lend(rt, &value),)) {
             holds_throughout = false;
             break;
         }
@@ -654,8 +643,7 @@ where
 
 #[extern_fn(effect = E, sync = all_now)]
 async fn all<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
@@ -665,9 +653,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut holds_throughout = true;
-    drain!(it, rt, frame, |value| {
-        if !f.call(rt, frame, (Ref::lend(rt, &value),)).await {
+    drain!(it, ctx, |value| {
+        if !f.call(ctx, (Ref::lend(rt, &value),)).await {
             holds_throughout = false;
             break;
         }
@@ -783,7 +772,7 @@ where
     it.dedup()
 }
 
-fn count_now<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> i64
+fn count_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> i64
 where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -791,14 +780,14 @@ where
     Rt: Runtime,
 {
     let mut n = 0;
-    drain_now!(it, rt, frame, |_value| {
+    drain_now!(it, ctx, |_value| {
         n += 1;
     });
     n
 }
 
 #[extern_fn(effect = E, sync = count_now)]
-async fn count<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> i64
+async fn count<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> i64
 where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -806,79 +795,66 @@ where
     Rt: Runtime,
 {
     let mut n = 0;
-    drain!(it, rt, frame, |_value| {
+    drain!(it, ctx, |_value| {
         n += 1;
     });
     n
 }
 
-fn last_now<T, E, I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, mut it: Iter<T, E, I, Rt>) -> Option<T>
+fn last_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut last = None;
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         last = Some(T::from_value(rt, value));
     });
     last
 }
 
 #[extern_fn(effect = E, sync = last_now)]
-async fn last<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<T, E, I, Rt>,
-) -> Option<T>
+async fn last<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut last = None;
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         last = Some(T::from_value(rt, value));
     });
     last
 }
 
-fn nth_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    it: Iter<T, E, I, Rt>,
-    n: u64,
-) -> Option<T>
+fn nth_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.skip(n).next_now(rt, frame)
+    it.skip(n).next_now(ctx)
 }
 
 #[extern_fn(effect = E, sync = nth_now)]
-async fn nth<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    it: Iter<T, E, I, Rt>,
-    n: u64,
-) -> Option<T>
+async fn nth<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.skip(n).next(rt, frame).await
+    it.skip(n).next(ctx).await
 }
 
 fn position_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<i64>
@@ -888,10 +864,11 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut index = 0;
     let mut at = None;
-    drain_now!(it, rt, frame, |value| {
-        if f.call_now(rt, frame, (Ref::lend(rt, &value),)) {
+    drain_now!(it, ctx, |value| {
+        if f.call_now(ctx, (Ref::lend(rt, &value),)) {
             at = Some(index);
             break;
         }
@@ -902,8 +879,7 @@ where
 
 #[extern_fn(effect = E, sync = position_now)]
 async fn position<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<i64>
@@ -913,10 +889,11 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut index = 0;
     let mut at = None;
-    drain!(it, rt, frame, |value| {
-        if f.call(rt, frame, (Ref::lend(rt, &value),)).await {
+    drain!(it, ctx, |value| {
+        if f.call(ctx, (Ref::lend(rt, &value),)).await {
             at = Some(index);
             break;
         }
@@ -925,19 +902,16 @@ where
     at
 }
 
-fn sum_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> T
+fn sum_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut acc = T::ZERO;
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         let item = Erased::<Rt, T>::from_value(rt, value);
         acc = acc.add(*item.as_ref(rt));
     });
@@ -945,38 +919,32 @@ where
 }
 
 #[extern_fn(effect = E, sync = sum_now)]
-async fn sum<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> T
+async fn sum<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut acc = T::ZERO;
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         let item = Erased::<Rt, T>::from_value(rt, value);
         acc = acc.add(*item.as_ref(rt));
     });
     acc
 }
 
-fn product_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> T
+fn product_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut acc = T::ONE;
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         let item = Erased::<Rt, T>::from_value(rt, value);
         acc = acc.mul(*item.as_ref(rt));
     });
@@ -984,38 +952,32 @@ where
 }
 
 #[extern_fn(effect = E, sync = product_now)]
-async fn product<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> T
+async fn product<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut acc = T::ONE;
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         let item = Erased::<Rt, T>::from_value(rt, value);
         acc = acc.mul(*item.as_ref(rt));
     });
     acc
 }
 
-fn min_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> Option<T>
+fn min_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut best: Option<T> = None;
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
@@ -1026,19 +988,16 @@ where
 }
 
 #[extern_fn(effect = E, sync = min_now)]
-async fn min<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> Option<T>
+async fn min<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut best: Option<T> = None;
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
@@ -1048,19 +1007,16 @@ where
     best
 }
 
-fn max_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> Option<T>
+fn max_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut best: Option<T> = None;
-    drain_now!(it, rt, frame, |value| {
+    drain_now!(it, ctx, |value| {
         let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
@@ -1071,19 +1027,16 @@ where
 }
 
 #[extern_fn(effect = E, sync = max_now)]
-async fn max<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-) -> Option<T>
+async fn max<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
 where
     T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut best: Option<T> = None;
-    drain!(it, rt, frame, |value| {
+    drain!(it, ctx, |value| {
         let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
@@ -1114,8 +1067,7 @@ impl Extreme {
 }
 
 async fn extreme_by_key<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
     extreme: Extreme,
@@ -1126,9 +1078,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut best: Option<Keyed<Rt::Value>> = None;
-    drain!(it, rt, frame, |value| {
-        let key = f.call(rt, frame, (Ref::lend(rt, &value),)).await;
+    drain!(it, ctx, |value| {
+        let key = f.call(ctx, (Ref::lend(rt, &value),)).await;
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
             None => true,
@@ -1141,8 +1094,7 @@ where
 }
 
 fn min_by_key_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
@@ -1152,12 +1104,11 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    extreme_by_key_now(rt, frame, it, f, Extreme::Min)
+    extreme_by_key_now(ctx, it, f, Extreme::Min)
 }
 
 fn extreme_by_key_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     mut it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
     extreme: Extreme,
@@ -1168,9 +1119,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut best: Option<Keyed<Rt::Value>> = None;
-    drain_now!(it, rt, frame, |value| {
-        let key = f.call_now(rt, frame, (Ref::lend(rt, &value),));
+    drain_now!(it, ctx, |value| {
+        let key = f.call_now(ctx, (Ref::lend(rt, &value),));
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
             None => true,
@@ -1184,8 +1136,7 @@ where
 
 #[extern_fn(effect = E, sync = min_by_key_now)]
 async fn min_by_key<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
@@ -1195,12 +1146,11 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    extreme_by_key(rt, frame, it, f, Extreme::Min).await
+    extreme_by_key(ctx, it, f, Extreme::Min).await
 }
 
 fn max_by_key_now<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
@@ -1210,13 +1160,12 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    extreme_by_key_now(rt, frame, it, f, Extreme::Max)
+    extreme_by_key_now(ctx, it, f, Extreme::Max)
 }
 
 #[extern_fn(effect = E, sync = max_by_key_now)]
 async fn max_by_key<T, E, I, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     it: Iter<T, E, I, Rt>,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
@@ -1226,7 +1175,7 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    extreme_by_key(rt, frame, it, f, Extreme::Max).await
+    extreme_by_key(ctx, it, f, Extreme::Max).await
 }
 
 pub fn iterator_registry<Rt>() -> Registry<Rt>

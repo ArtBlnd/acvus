@@ -17,6 +17,7 @@ use acvus_extern::{
 };
 
 use crate::iter::Iter;
+use acvus_extern::Ctx;
 
 #[derive(ExternType)]
 #[repr(transparent)]
@@ -273,8 +274,7 @@ fn replace_n(re: &Regex, text: &str, n: u64, with: &str) -> String {
 }
 
 fn replace_with_now<E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     re: &Regex,
     text: &String,
     f: Closure<(Match,), String, E, Rt>,
@@ -288,7 +288,7 @@ where
     for m in re.0.find_iter(text) {
         out.push_str(&text[last..m.start()]);
         last = m.end();
-        out.push_str(&f.call_now(rt, frame, (match_of(m),)));
+        out.push_str(&f.call_now(ctx, (match_of(m),)));
     }
     out.push_str(&text[last..]);
     out
@@ -298,8 +298,7 @@ where
 /// for it. No `$1` expansion: `f` returns the replacement itself.
 #[extern_fn(effect = E, sync = replace_with_now)]
 async fn replace_with<E, Rt>(
-    rt: &Rt,
-    frame: &mut Rt::Frame<'_>,
+    ctx: &mut Ctx<'_, Rt>,
     re: &Regex,
     text: &String,
     f: Closure<(Match,), String, E, Rt>,
@@ -313,7 +312,7 @@ where
     for m in re.0.find_iter(text) {
         out.push_str(&text[last..m.start()]);
         last = m.end();
-        out.push_str(&f.call(rt, frame, (match_of(m),)).await);
+        out.push_str(&f.call(ctx, (match_of(m),)).await);
     }
     out.push_str(&text[last..]);
     out

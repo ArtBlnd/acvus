@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use acvus_extern::{ObjectShape, Owned, Runtime, Words};
+use acvus_extern::{Ctx, ObjectShape, Owned, Runtime, Words};
 use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
@@ -22,7 +22,6 @@ use crate::interpreter::lookup_module;
 use crate::machine::{
     Lent, LentCall, LentOut, Machine, call_module, call_module_sync, fn_value_call,
 };
-use crate::regs::{FrameState, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, HandleValue, Value};
 
@@ -771,18 +770,18 @@ where
 pub trait SentCall: Send + Sync {
     /// # Safety
     /// `run` is the call's whole argument run, owned by the caller of this
-    /// method for as long as the call, and `frame` is a window bound to no
-    /// other frame.
-    unsafe fn call_owned(&self, rt: &AcvusRuntime, frame: &mut FrameState, run: &[Value]) -> Value;
+    /// method for as long as the call, and `ctx`'s frame is a window bound to
+    /// no other frame.
+    unsafe fn call_owned(&self, ctx: &mut Ctx<'_, AcvusRuntime>, run: &[Value]) -> Value;
 }
 
 impl<H> SentCall for H
 where
     H: acvus_extern::Handler<AcvusRuntime>,
 {
-    unsafe fn call_owned(&self, rt: &AcvusRuntime, frame: &mut FrameState, run: &[Value]) -> Value {
+    unsafe fn call_owned(&self, ctx: &mut Ctx<'_, AcvusRuntime>, run: &[Value]) -> Value {
         // SAFETY: the caller's contract, which is `call_run`'s.
-        unsafe { self.call_run(rt, frame, run) }
+        unsafe { self.call_run(ctx, run) }
     }
 }
 
@@ -855,7 +854,7 @@ impl ArgWindow {
     /// frame moves on, with the window it calls a closure in (RFC-0044,
     /// stage 2b; RFC-0050 rule 6).
     #[inline]
-    fn lend<'r>(&self, m: &'r mut Machine<'_>) -> Lent<'r> {
+    fn lend<'r, 'c>(&self, m: &'r mut Machine<'c>) -> Lent<'r, 'c> {
         m.regs().take_mask(self.takes);
         m.lend_and_window(self.at, self.arity)
     }
@@ -882,10 +881,9 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         // SAFETY: `prepare` read this handler's width and built this
         // operation for the form it named.
-        let value = unsafe { self.f.call0(rt, m.window()) };
+        let value = unsafe { self.f.call0(&mut m.ctx) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -907,12 +905,11 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s, at one argument.
-        let value = unsafe { self.f.call1(rt, m.window(), a) };
+        let value = unsafe { self.f.call1(&mut m.ctx, a) };
         m.regs().store::<LARGE, WORD>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -935,13 +932,12 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s, at two arguments.
-        let value = unsafe { self.f.call2(rt, m.window(), a, b) };
+        let value = unsafe { self.f.call2(&mut m.ctx, a, b) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -965,14 +961,13 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         let c = regs.read(self.c);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s, at three arguments.
-        let value = unsafe { self.f.call3(rt, m.window(), a, b, c) };
+        let value = unsafe { self.f.call3(&mut m.ctx, a, b, c) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -997,7 +992,6 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
@@ -1005,7 +999,7 @@ where
         let d = regs.read(self.d);
         regs.take_mask(self.takes);
         // SAFETY: as `CallExtern0`'s, at four arguments.
-        let value = unsafe { self.f.call4(rt, m.window(), a, b, c, d) };
+        let value = unsafe { self.f.call4(&mut m.ctx, a, b, c, d) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -1045,10 +1039,9 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
-        let Lent { run, window } = self.window.lend(m);
+        let Lent { run, ctx } = self.window.lend(m);
         // SAFETY: as `CallExtern0`'s; the run is the window `prepare` laid.
-        let value = unsafe { self.f.call_run(rt, window, run) };
+        let value = unsafe { self.f.call_run(ctx, run) };
         m.regs().define::<LARGE>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -1063,7 +1056,7 @@ where
 fn land_pair(m: &mut Machine<'_>, dst: SlicePair, out: [Value; 2]) {
     // SAFETY: `out` is what the handler's `Ret::into_run` wrote at
     // `Form = Pair`, which is `slice_into_run`'s own output.
-    let words = unsafe { m.rt.slice_from_run(&out) };
+    let words = unsafe { m.ctx.rt.slice_from_run(&out) };
     land_words(m, dst, words);
 }
 
@@ -1090,13 +1083,12 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         // SAFETY: `prepare` read this handler's width and built this
         // operation for the form it named.
-        let out = unsafe { self.f.call_pair1(rt, m.window(), a) };
+        let out = unsafe { self.f.call_pair1(&mut m.ctx, a) };
         land_pair(m, self.dst, out);
         self.next.run(m, r0)
     }
@@ -1119,13 +1111,12 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         regs.take_mask(self.takes);
         // SAFETY: as `CallPair1`'s, at two arguments.
-        let out = unsafe { self.f.call_pair2(rt, m.window(), a, b) };
+        let out = unsafe { self.f.call_pair2(&mut m.ctx, a, b) };
         land_pair(m, self.dst, out);
         self.next.run(m, r0)
     }
@@ -1149,14 +1140,13 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
         let c = regs.read(self.c);
         regs.take_mask(self.takes);
         // SAFETY: as `CallPair1`'s, at three arguments.
-        let out = unsafe { self.f.call_pair3(rt, m.window(), a, b, c) };
+        let out = unsafe { self.f.call_pair3(&mut m.ctx, a, b, c) };
         land_pair(m, self.dst, out);
         self.next.run(m, r0)
     }
@@ -1181,7 +1171,6 @@ where
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         let regs = m.regs();
         let a = regs.read(self.a);
         let b = regs.read(self.b);
@@ -1189,7 +1178,7 @@ where
         let d = regs.read(self.d);
         regs.take_mask(self.takes);
         // SAFETY: as `CallPair1`'s, at four arguments.
-        let out = unsafe { self.f.call_pair4(rt, m.window(), a, b, c, d) };
+        let out = unsafe { self.f.call_pair4(&mut m.ctx, a, b, c, d) };
         land_pair(m, self.dst, out);
         self.next.run(m, r0)
     }
@@ -1226,17 +1215,16 @@ pub enum RunDest {
 #[inline]
 fn land_run<F>(m: &mut Machine<'_>, dst: &RunDest, call: F)
 where
-    F: FnOnce(&AcvusRuntime, &mut FrameState, &mut [Value]),
+    F: FnOnce(&mut Ctx<'_, AcvusRuntime>, &mut [Value]),
 {
-    let rt = m.rt;
     match dst {
         RunDest::Frame(run) => {
             let regs = m.regs();
             for at in &run.releases {
                 regs.assign::<false>(*at, Value::UNDEF);
             }
-            let LentOut { out, window } = m.lend_out_and_window(run.at, run.width);
-            call(rt, window, out);
+            let LentOut { out, ctx } = m.lend_out_and_window(run.at, run.width);
+            call(ctx, out);
             let regs = m.regs();
             for at in &run.releases {
                 regs.claim(*at);
@@ -1248,7 +1236,7 @@ where
             // SAFETY: every slot is `Owned::default()`, which owns nothing, and
             // the handler writes each at most once.
             let out = unsafe { acvus_extern::lend_run(&mut values) };
-            call(rt, m.window(), out);
+            call(&mut m.ctx, out);
             let object = Value::object(Arc::clone(shape), values);
             m.regs().define::<true>(*dst, object);
         }
@@ -1272,8 +1260,8 @@ where
         // SAFETY: `prepare` read this handler's width and built this
         // operation for the form it named; `land_run` lends a run of
         // `WIDTH.ret` values the caller owns.
-        land_run(m, &self.dst, |rt, window, out| unsafe {
-            self.f.call_out0(rt, window, out)
+        land_run(m, &self.dst, |ctx, out| unsafe {
+            self.f.call_out0(ctx, out)
         });
         self.next.run(m, r0)
     }
@@ -1299,8 +1287,8 @@ where
         let a = regs.read(self.a);
         regs.take_mask(self.takes);
         // SAFETY: as `CallRun0`'s, at one argument.
-        land_run(m, &self.dst, |rt, window, out| unsafe {
-            self.f.call_out1(rt, window, a, out)
+        land_run(m, &self.dst, |ctx, out| unsafe {
+            self.f.call_out1(ctx, a, out)
         });
         self.next.run(m, r0)
     }
@@ -1328,8 +1316,8 @@ where
         let b = regs.read(self.b);
         regs.take_mask(self.takes);
         // SAFETY: as `CallRun0`'s, at two arguments.
-        land_run(m, &self.dst, |rt, window, out| unsafe {
-            self.f.call_out2(rt, window, a, b, out)
+        land_run(m, &self.dst, |ctx, out| unsafe {
+            self.f.call_out2(ctx, a, b, out)
         });
         self.next.run(m, r0)
     }
@@ -1359,8 +1347,8 @@ where
         let c = regs.read(self.c);
         regs.take_mask(self.takes);
         // SAFETY: as `CallRun0`'s, at three arguments.
-        land_run(m, &self.dst, |rt, window, out| unsafe {
-            self.f.call_out3(rt, window, a, b, c, out)
+        land_run(m, &self.dst, |ctx, out| unsafe {
+            self.f.call_out3(ctx, a, b, c, out)
         });
         self.next.run(m, r0)
     }
@@ -1392,8 +1380,8 @@ where
         let d = regs.read(self.d);
         regs.take_mask(self.takes);
         // SAFETY: as `CallRun0`'s, at four arguments.
-        land_run(m, &self.dst, |rt, window, out| unsafe {
-            self.f.call_out4(rt, window, a, b, c, d, out)
+        land_run(m, &self.dst, |ctx, out| unsafe {
+            self.f.call_out4(ctx, a, b, c, d, out)
         });
         self.next.run(m, r0)
     }
@@ -1416,7 +1404,6 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
         m.regs().take_mask(self.window.takes);
         match &self.dst {
             RunDest::Frame(run) => {
@@ -1429,10 +1416,10 @@ where
                 let LentCall {
                     run: args,
                     out,
-                    window,
+                    ctx,
                 } = unsafe { m.lend_call(self.window.at, self.window.arity, run.at, run.width) };
                 // SAFETY: as `CallRun0`'s; the run is the window `prepare` laid.
-                unsafe { self.f.call(rt, window, args, out) };
+                unsafe { self.f.call(ctx, args, out) };
                 let regs = m.regs();
                 for at in &run.releases {
                     regs.claim(*at);
@@ -1443,9 +1430,9 @@ where
                     (0..*width).map(|_| Owned::default()).collect();
                 // SAFETY: every slot is `Owned::default()`, which owns nothing.
                 let out = unsafe { acvus_extern::lend_run(&mut values) };
-                let Lent { run, window } = m.lend_and_window(self.window.at, self.window.arity);
+                let Lent { run, ctx } = m.lend_and_window(self.window.at, self.window.arity);
                 // SAFETY: as `CallRun0`'s; the run is the window `prepare` laid.
-                unsafe { self.f.call(rt, window, run, out) };
+                unsafe { self.f.call(ctx, run, out) };
                 let object = Value::object(Arc::clone(shape), values);
                 m.regs().define::<true>(*dst, object);
             }
@@ -1468,10 +1455,9 @@ where
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let rt = m.rt;
-        let Lent { run, window } = self.window.lend(m);
+        let Lent { run, ctx } = self.window.lend(m);
         // SAFETY: as `CallPair1`'s; the run is the window `prepare` laid.
-        let out = unsafe { self.f.call_pair_run(rt, window, run) };
+        let out = unsafe { self.f.call_pair_run(ctx, run) };
         land_pair(m, self.dst, out);
         self.next.run(m, r0)
     }
@@ -1516,10 +1502,9 @@ where
 {
     #[inline]
     fn invoke(&self, m: &mut Machine<'_>, _: Value) -> Value {
-        let rt = m.rt;
         // SAFETY: `prepare::fusable_call` admits a call into this run only at
         // the form each node names.
-        unsafe { self.f.call0(rt, m.window()) }
+        unsafe { self.f.call0(&mut m.ctx) }
     }
 }
 
@@ -1529,10 +1514,9 @@ where
 {
     #[inline]
     fn invoke(&self, m: &mut Machine<'_>, held: Value) -> Value {
-        let rt = m.rt;
         let a = arg(m, held, self.a);
         // SAFETY: as `Nullary`'s, at one argument.
-        unsafe { self.f.call1(rt, m.window(), a) }
+        unsafe { self.f.call1(&mut m.ctx, a) }
     }
 }
 
@@ -1542,11 +1526,10 @@ where
 {
     #[inline]
     fn invoke(&self, m: &mut Machine<'_>, held: Value) -> Value {
-        let rt = m.rt;
         let a = arg(m, held, self.a);
         let b = arg(m, held, self.b);
         // SAFETY: as `Nullary`'s, at two arguments.
-        unsafe { self.f.call2(rt, m.window(), a, b) }
+        unsafe { self.f.call2(&mut m.ctx, a, b) }
     }
 }
 
@@ -1703,7 +1686,7 @@ pub struct CallExternAsync<const LARGE: bool> {
 
 impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
-        let rt = m.rt.clone();
+        let rt = m.ctx.rt.clone();
         let Lent { run, .. } = self.window.lend(m);
         // SAFETY: `prepare` built this operation from this handler's width,
         // and the future owns the arguments it is given.
@@ -1727,14 +1710,14 @@ pub struct CallHeavy<const LARGE: bool> {
 impl<const LARGE: bool> Op for CallHeavy<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let args = self.window.own(m);
-        let rt = m.rt.clone();
+        let rt = m.ctx.rt.clone();
         let f = Arc::clone(&self.f);
         let executor = Arc::clone(&m.shared().executor);
         // SAFETY: the window is this call's whole argument run, owned by the
         // closure the pool runs.
         let handle = executor.spawn_blocking(Box::new(move || {
-            let mut rooted = Store::new();
-            unsafe { f.call_owned(&rt, rooted.root_window(), &args) }
+            let mut rooted = rt.rooted();
+            unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
         }));
         m.suspend::<LARGE>(
             self.dst,
@@ -1950,12 +1933,12 @@ impl Op for SpawnExternSync {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = self.window.own(m);
-        let rt = m.rt.clone();
+        let rt = m.ctx.rt.clone();
         let f = Arc::clone(&self.f);
         // SAFETY: as `CallHeavy`'s.
         let handle = m.shared().executor.spawn_blocking(Box::new(move || {
-            let mut rooted = Store::new();
-            unsafe { f.call_owned(&rt, rooted.root_window(), &args) }
+            let mut rooted = rt.rooted();
+            unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
         }));
         m.regs().define::<true>(self.dst, Value::handle(handle));
         self.next.run(m, r0)
@@ -1974,7 +1957,7 @@ impl Op for SpawnExternAsync {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = self.window.own(m);
-        let rt = m.rt.clone();
+        let rt = m.ctx.rt.clone();
         // SAFETY: as `CallExternAsync`'s; the spawned future owns `args`.
         let fut = unsafe { self.f.call_async(rt, &args) };
         let handle = m.shared().executor.spawn_async(fut);

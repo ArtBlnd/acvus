@@ -2,6 +2,7 @@
 //! the handler reads the arm the tag names and writes both words back, and
 //! the script observes the write.
 
+use acvus_extern::Ctx;
 use acvus_extern::{Registry, Runtime, TyArg, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::{Context, run_script_with_externs};
@@ -19,7 +20,7 @@ pub enum Step {
 /// halves of `StepMut`: `arms` writes the payload where it lies, and `set`
 /// rewrites `[tag, payload]`.
 #[extern_fn(effect = pure)]
-fn advance<Rt>(rt: &Rt, s: StepMut<'_, Rt>) -> i64
+fn advance<Rt>(_ctx: &mut Ctx<'_, Rt>, s: StepMut<'_, Rt>) -> i64
 where
     Rt: Runtime,
 {

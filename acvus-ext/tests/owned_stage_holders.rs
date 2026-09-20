@@ -5,6 +5,7 @@
 //! uses, repeated here because a test target cannot import another
 //! crate's test target.
 
+use acvus_extern::Ctx;
 use std::any::{Any, TypeId, type_name};
 use std::future::Ready;
 use std::sync::Arc;
@@ -162,11 +163,23 @@ impl Runtime for Counted {
 
     type Value = V;
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<V>;
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
+        acvus_extern::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut acvus_extern::Ctx<'a, Self>,
+    ) -> &'r mut acvus_extern::Ctx<'a, Self>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         match value {
@@ -320,7 +333,7 @@ impl Runtime for Counted {
         true
     }
 
-    unsafe fn call_now<A>(&self, f: &V, _: &mut (), args: A) -> V
+    unsafe fn call_now<A>(&self, f: &V, _: &mut acvus_extern::Ctx<'_, Self>, args: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -381,7 +394,7 @@ type Predicate = Closure<(Ref<Owned<Counted>, Shared, Counted>,), bool, (), Coun
 fn drain(rt: &Counted, mut it: Elements) -> Vec<V> {
     futures::executor::block_on(async {
         let mut out = Vec::new();
-        while let Some(value) = it.next_value(rt, &mut ()).await {
+        while let Some(value) = it.next_value(&mut Ctx { rt, frame: () }).await {
             out.push(value);
         }
         out

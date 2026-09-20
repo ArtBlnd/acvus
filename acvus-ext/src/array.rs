@@ -1,3 +1,4 @@
+use acvus_extern::Ctx;
 use acvus_extern::{
     Arr, Mut, Ref, Registry, Runtime, Shared, Slice, TransparentOver, Var, extern_fn,
     extern_registry, extern_signature, kind,
@@ -25,53 +26,68 @@ where
 
 #[extern_fn(effect = pure)]
 #[extern_view]
-fn as_slice<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>) -> Slice<T, Shared, Rt>
+fn as_slice<T, N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<T, N>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     Slice::of(c.elements(rt))
 }
 
 #[extern_fn(effect = pure)]
 #[extern_view]
-fn as_slice_mut<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Mut, Rt>) -> Slice<T, Mut, Rt>
+fn as_slice_mut<T, N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<T, N>, Mut, Rt>) -> Slice<T, Mut, Rt>
 where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     Slice::of(c.elements(rt))
 }
 
 #[extern_fn(effect = pure)]
-fn first<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn first<T, N, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    c: Ref<Arr<T, N>, Shared, Rt>,
+) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     c.try_map(rt, |c| c.0.first())
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn last<T, N, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    c: Ref<Arr<T, N>, Shared, Rt>,
+) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     c.try_map(rt, |c| c.0.last())
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>, at: u64) -> Option<Ref<T, Shared, Rt>>
+fn get<T, N, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    c: Ref<Arr<T, N>, Shared, Rt>,
+    at: u64,
+) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let at = usize::try_from(at).ok()?;
     c.try_map(rt, |c| c.0.get(at))
 }
@@ -103,11 +119,12 @@ macro_rules! read_of {
         binary_search: $binary_search:ident,
     ) => {
         #[extern_fn(instance_of = contains, effect = pure)]
-        fn $contains<N, Rt>(rt: &Rt, c: Ref<Arr<$t, N>, Shared, Rt>, x: &$t) -> bool
+        fn $contains<N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<$t, N>, Shared, Rt>, x: &$t) -> bool
         where
             N: Var<kind::Length>,
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             // SAFETY: the run is this array's own values, every one erased
             // from `$t`, and the array is live for the call (RFC-0018).
@@ -115,11 +132,16 @@ macro_rules! read_of {
         }
 
         #[extern_fn(instance_of = binary_search, effect = pure)]
-        fn $binary_search<N, Rt>(rt: &Rt, c: Ref<Arr<$t, N>, Shared, Rt>, x: &$t) -> Option<u64>
+        fn $binary_search<N, Rt>(
+            ctx: &mut Ctx<'_, Rt>,
+            c: Ref<Arr<$t, N>, Shared, Rt>,
+            x: &$t,
+        ) -> Option<u64>
         where
             N: Var<kind::Length>,
             Rt: Runtime,
         {
+            let rt = ctx.rt;
             let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
             // SAFETY: as `$contains`.
             unsafe { found::<$t, Rt>(rt, &run, x) }

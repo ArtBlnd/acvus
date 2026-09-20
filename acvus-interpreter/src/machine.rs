@@ -14,7 +14,7 @@ use std::slice;
 use std::sync::Arc;
 
 use acvus_ast::Span;
-use acvus_extern::Words;
+use acvus_extern::{Ctx, Words};
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
@@ -30,21 +30,21 @@ use crate::runtime::AcvusRuntime;
 use crate::value::{FnValue, Value};
 
 /// What an extern call is lent of the frame it runs in: the run its arguments
-/// sit in, and the window it calls a closure in (RFC-0050 rule 6).
-pub struct Lent<'r> {
+/// sit in, and the context it runs in (RFC-0050 rule 6).
+pub struct Lent<'r, 'c> {
     pub run: &'r [Value],
-    pub window: &'r mut FrameState,
+    pub ctx: &'r mut Ctx<'c, AcvusRuntime>,
 }
 
-pub struct LentOut<'r> {
+pub struct LentOut<'r, 'c> {
     pub out: &'r mut [Value],
-    pub window: &'r mut FrameState,
+    pub ctx: &'r mut Ctx<'c, AcvusRuntime>,
 }
 
-pub struct LentCall<'r> {
+pub struct LentCall<'r, 'c> {
     pub run: &'r [Value],
     pub out: &'r mut [Value],
-    pub window: &'r mut FrameState,
+    pub ctx: &'r mut Ctx<'c, AcvusRuntime>,
 }
 
 /// Obligation across artifacts: the two-`Value` run a `Words` is read out of
@@ -75,7 +75,7 @@ impl Returned for Words {
 pub struct Machine<'c> {
     body: &'c Body,
     regs: Regs<'c>,
-    pub rt: &'c AcvusRuntime,
+    pub ctx: Ctx<'c, AcvusRuntime>,
     pub page: &'c Arc<dyn RuntimeContext>,
     exit: [Value; 2],
     /// The block `run` enters at. A suspension writes the block after
@@ -83,7 +83,6 @@ pub struct Machine<'c> {
     /// re-entering the body.
     at: BlockId,
     pending: Option<Pending>,
-    above: FrameState,
 }
 
 impl<'c> Machine<'c> {
@@ -93,16 +92,15 @@ impl<'c> Machine<'c> {
         rt: &'c AcvusRuntime,
         page: &'c Arc<dyn RuntimeContext>,
     ) -> Machine<'c> {
-        let above = regs.take_window();
+        let frame = regs.take_window();
         Machine {
             body,
             regs,
-            rt,
+            ctx: Ctx { rt, frame },
             page,
             exit: [Value::unit(); 2],
             at: body.entry,
             pending: None,
-            above,
         }
     }
 
@@ -138,11 +136,11 @@ impl<'c> Machine<'c> {
     }
 
     pub fn shared(&self) -> &Arc<InterpreterContext> {
-        &self.rt.0
+        &self.ctx.rt.0
     }
 
     pub fn interner(&self) -> &Interner {
-        &self.rt.0.interner
+        &self.ctx.rt.0.interner
     }
 
     /// The body returns this value; the `Return` terminator leaves the loop.
@@ -188,7 +186,7 @@ impl<'c> Machine<'c> {
     /// the body this frame's window is bound to (RFC-0050 rule 6).
     #[inline(always)]
     pub fn window(&mut self) -> &mut FrameState {
-        &mut self.above
+        &mut self.ctx.frame
     }
 
     /// The argument window, the destination run and the window above, for an
@@ -200,7 +198,13 @@ impl<'c> Machine<'c> {
     /// registers an argument window is coloured in, and
     /// `Prepare::call_into_run` asserts that of the run it names.
     #[inline(always)]
-    pub unsafe fn lend_call(&mut self, args: Off, arity: u16, at: Off, width: u16) -> LentCall<'_> {
+    pub unsafe fn lend_call<'r>(
+        &'r mut self,
+        args: Off,
+        arity: u16,
+        at: Off,
+        width: u16,
+    ) -> LentCall<'r, 'c> {
         debug_assert!(
             args.index() + usize::from(arity) <= at.index()
                 || at.index() + usize::from(width) <= args.index(),
@@ -213,7 +217,7 @@ impl<'c> Machine<'c> {
         LentCall {
             run,
             out: self.regs.run_of_mut(at, width),
-            window: &mut self.above,
+            ctx: &mut self.ctx,
         }
     }
 
@@ -221,20 +225,20 @@ impl<'c> Machine<'c> {
     /// destination run is this frame's own registers and the window is the
     /// cells above them.
     #[inline(always)]
-    pub fn lend_out_and_window(&mut self, at: Off, width: u16) -> LentOut<'_> {
+    pub fn lend_out_and_window<'r>(&'r mut self, at: Off, width: u16) -> LentOut<'r, 'c> {
         LentOut {
             out: self.regs.run_of_mut(at, width),
-            window: &mut self.above,
+            ctx: &mut self.ctx,
         }
     }
 
     /// Lent together because the run is this frame's own registers and the
     /// window is the cells above them: two fields, two disjoint borrows.
     #[inline(always)]
-    pub fn lend_and_window(&mut self, at: Off, arity: u16) -> Lent<'_> {
+    pub fn lend_and_window<'r>(&'r mut self, at: Off, arity: u16) -> Lent<'r, 'c> {
         Lent {
             run: self.regs.run_of(at, arity),
-            window: &mut self.above,
+            ctx: &mut self.ctx,
         }
     }
 
@@ -247,9 +251,9 @@ impl<'c> Machine<'c> {
         F: FnOnce(&mut Machine<'_>),
         R: Returned,
     {
-        let rt = self.rt;
+        let rt = self.ctx.rt;
         let page = self.page;
-        let window = &mut self.above;
+        let window = &mut self.ctx.frame;
         if window.fits(callee) {
             let (regs, opened) = window.bind(callee);
             return run_frame(callee, named, regs, rt, page, opened, fill);

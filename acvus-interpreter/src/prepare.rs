@@ -5600,8 +5600,7 @@ impl CallForm {
 /// the operation's shape, never its result.
 #[cfg(test)]
 fn refuses_to_run(
-    _: &crate::runtime::AcvusRuntime,
-    _: &mut crate::regs::FrameState,
+    _: &mut acvus_extern::Ctx<'_, crate::runtime::AcvusRuntime>,
     (a, _, _, _, _): (Value, Value, Value, Value, Value),
 ) -> Value {
     let _ = a;
@@ -5615,7 +5614,7 @@ fn nullary_handler() -> ExternHandler {
         _,
         (),
         acvus_extern::Val<Value>,
-    >(|_, _, ()| Value::default()))
+    >(|_, ()| Value::default()))
 }
 
 /// An extern lent its window: five of the runtime's values is past the
@@ -5650,8 +5649,7 @@ fn str_handler() -> ExternHandler {
 
 #[cfg(test)]
 fn refuses_a_str(
-    _: &crate::runtime::AcvusRuntime,
-    _: &mut crate::regs::FrameState,
+    _: &mut acvus_extern::Ctx<'_, crate::runtime::AcvusRuntime>,
     (s,): (&str,),
 ) -> Value {
     let _ = s;
@@ -5704,8 +5702,7 @@ mod call_form_tests {
 
 #[cfg(test)]
 fn never_runs_awaited<'a>(
-    _: &'a crate::runtime::AcvusRuntime,
-    _: &'a mut &mut crate::regs::FrameState,
+    _: &'a mut acvus_extern::Ctx<'_, crate::runtime::AcvusRuntime>,
     _: (),
 ) -> acvus_extern::BoxFuture<'a, Value> {
     Box::pin(async { panic!("the recognizer must not run a handler") })
@@ -6901,7 +6898,7 @@ mod assignment_tests {
             _,
             (acvus_extern::ByValue<Value>,),
             acvus_extern::Val<Value>,
-        >(|_, _, (v,)| v));
+        >(|_, (v,)| v));
         let window = window_handler();
         [
             (extern_ref(BY_VALUE), Executable::Extern(vec![by_value])),

@@ -158,15 +158,6 @@ impl Store {
         (Regs::of(&mut self.cells, body), same)
     }
 
-    /// The store's own cells as the handle a call out of them lends its
-    /// handler. Every call writes the cells the state names, so a `Vec` that
-    /// moved while it widened leaves no pointer behind for the next caller.
-    pub fn root_window(&mut self) -> &mut FrameState {
-        self.widen(MAX_FRAME_SLOTS);
-        self.root.cells = NonNull::from(&mut self.cells[..]);
-        &mut self.root
-    }
-
     /// Room for a frame of `slots` registers and the window above it, taken
     /// once per binding and never given back.
     #[cold]
@@ -182,16 +173,41 @@ impl Store {
     }
 }
 
+/// The cells of a `Store` whose root state has left it, with no operation on
+/// them: it keeps the cells alive and offers no `bind` and no `widen`, so the
+/// `FrameState` `new` hands back names cells that cannot move under it.
+pub struct RootCells(Store);
+
+/// A frame at the root of a call chain of its own: the state a call runs in,
+/// and the cells that state names.
+pub struct RootFrame {
+    pub state: FrameState,
+    pub cells: RootCells,
+}
+
+impl RootFrame {
+    pub fn new() -> RootFrame {
+        let mut store = Store::new();
+        store.widen(MAX_FRAME_SLOTS);
+        let mut state = std::mem::replace(&mut store.root, FrameState::UNBOUND);
+        state.cells = NonNull::from(&mut store.cells[..]);
+        RootFrame {
+            state,
+            cells: RootCells(store),
+        }
+    }
+}
+
 /// The cells a call takes its callee's frame from, and the body they are bound
 /// to (RFC-0050 rule 6): the window above a running frame, or a `Store`'s own
 /// cells at the root of a chain. A call lays its arguments in the registers the
 /// callee reads them from and then `bind`s the callee there (RFC-0052 §7).
 ///
-/// The frame below owns the state — a field of its `Machine`, or of the
-/// `Store` — and lends a handler `&mut FrameState`, which is an address that
-/// already exists. Nothing is built on the calling operation's stack, and
-/// `asm_probe` is where that shows: a `run` whose local's address escapes into
-/// a callee loses its sibling call.
+/// The frame below owns the state — inside the `Ctx` its `Machine` holds, or
+/// inside the `Ctx` a `RootCells` pair was built with — and lends a handler
+/// `&mut Ctx`, which is an address that already exists. Nothing is built on
+/// the calling operation's stack, and `asm_probe` is where that shows: a `run`
+/// whose local's address escapes into a callee loses its sibling call.
 ///
 /// The cells are a raw slice, not a reference, because `Runtime::Frame<'a>`
 /// has one lifetime parameter and `&mut` is invariant: a state that named its

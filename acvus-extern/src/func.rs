@@ -12,6 +12,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
+use crate::ctx::Ctx;
 use crate::obj::{Cross, OneValue};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
@@ -57,11 +58,10 @@ pub trait ClosureFn<Rt: Runtime> {
 
     /// Reached where the closure's effect said `Task::Sync`; every
     /// implementation asserts `is_sync`, the run-time answer, against it.
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> Self::Ret;
+    fn call_now(&self, ctx: &mut Ctx<'_, Rt>, args: Self::Args) -> Self::Ret;
     fn call<'a>(
         &'a self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
+        ctx: &'a mut Ctx<'_, Rt>,
         args: Self::Args,
     ) -> impl Future<Output = Self::Ret> + Send + 'a;
 }
@@ -168,26 +168,27 @@ where
     type Args = A;
     type Ret = R;
 
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: A) -> R {
+    fn call_now(&self, ctx: &mut Ctx<'_, Rt>, args: A) -> R {
         debug_assert!(
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
         // SAFETY: `self.0` is the closure value this `Closure` was built
         // over, and `A` is the argument list its declaration names.
-        returned(rt, unsafe { rt.call_now(&self.0, frame, args) })
+        let rt = ctx.rt;
+        returned(rt, unsafe { rt.call_now(&self.0, ctx, args) })
     }
 
     fn call<'a>(
         &'a self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
+        ctx: &'a mut Ctx<'_, Rt>,
         args: A,
     ) -> impl Future<Output = R> + Send + 'a {
         async move {
+            let rt = ctx.rt;
             if self.1 {
                 // SAFETY: as `call_now`'s.
-                return returned(rt, unsafe { rt.call_now(&self.0, frame, args) });
+                return returned(rt, unsafe { rt.call_now(&self.0, ctx, args) });
             }
             // SAFETY: as `call_now`'s.
             returned(rt, unsafe { args.awaited(rt, &self.0) }.await)

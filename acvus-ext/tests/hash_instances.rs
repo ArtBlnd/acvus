@@ -167,11 +167,23 @@ impl Runtime for Counting {
 
     type Value = V;
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<V>;
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
+        acvus_extern::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut acvus_extern::Ctx<'a, Self>,
+    ) -> &'r mut acvus_extern::Ctx<'a, Self>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     fn type_of(&self, value: &V) -> Option<TypeId> {
         let (V::Boxed(cell) | V::Word(cell)) = value else {
@@ -340,7 +352,7 @@ impl Runtime for Counting {
         false
     }
 
-    unsafe fn call_now<A>(&self, _: &V, _: &mut (), _: A) -> V
+    unsafe fn call_now<A>(&self, _: &V, _: &mut acvus_extern::Ctx<'_, Self>, _: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {

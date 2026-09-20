@@ -13,6 +13,7 @@ use acvus_mir::ty::{PolyTy, Task, Ty};
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
+use crate::ctx::Ctx;
 use crate::instance::EntryRun;
 use crate::loan::Loan;
 use crate::obj::{Cross, Form, FormKind, One, OneValue, Pair, Run};
@@ -433,7 +434,7 @@ where
     /// order, `out` has room for `WIDTH.ret`, and every reference the
     /// handler takes out of `run` names storage live for the call
     /// (RFC-0018).
-    unsafe fn call(&self, rt: &Rt, frame: Rt::Frame<'_>, run: &[Rt::Value], out: &mut [Rt::Value]);
+    unsafe fn call(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value], out: &mut [Rt::Value]);
 
     /// The register forms. A declaration whose arguments are `k` values wide
     /// and whose result is one value takes them in registers, and `prepare`
@@ -443,25 +444,25 @@ where
     /// `WIDTH` is `Width { args: k, ret: 1 }` for the `k` this form names,
     /// and the arguments are this call's own, in declaration order.
     #[inline]
-    unsafe fn call0(&self, rt: &Rt, frame: Rt::Frame<'_>) -> Rt::Value {
+    unsafe fn call0(&self, ctx: &mut Ctx<'_, Rt>) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at no values.
-        unsafe { self.call_run(rt, frame, &[]) }
+        unsafe { self.call_run(ctx, &[]) }
     }
 
     /// # Safety
     /// As `call0`, at one value.
     #[inline]
-    unsafe fn call1(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> Rt::Value {
+    unsafe fn call1(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at one value.
-        unsafe { self.call_run(rt, frame, &[a]) }
+        unsafe { self.call_run(ctx, &[a]) }
     }
 
     /// # Safety
     /// As `call0`, at two values.
     #[inline]
-    unsafe fn call2(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value, b: Rt::Value) -> Rt::Value {
+    unsafe fn call2(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value, b: Rt::Value) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at two.
-        unsafe { self.call_run(rt, frame, &[a, b]) }
+        unsafe { self.call_run(ctx, &[a, b]) }
     }
 
     /// # Safety
@@ -469,14 +470,13 @@ where
     #[inline]
     unsafe fn call3(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
         c: Rt::Value,
     ) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at three.
-        unsafe { self.call_run(rt, frame, &[a, b, c]) }
+        unsafe { self.call_run(ctx, &[a, b, c]) }
     }
 
     /// # Safety
@@ -484,15 +484,14 @@ where
     #[inline]
     unsafe fn call4(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
         c: Rt::Value,
         d: Rt::Value,
     ) -> Rt::Value {
         // SAFETY: the caller's contract, which is `call_run`'s at four.
-        unsafe { self.call_run(rt, frame, &[a, b, c, d]) }
+        unsafe { self.call_run(ctx, &[a, b, c, d]) }
     }
 
     /// The window form: the arguments are lent as the run they already sit
@@ -501,10 +500,10 @@ where
     /// # Safety
     /// As `call`, with `WIDTH.ret == 1`.
     #[inline]
-    unsafe fn call_run(&self, rt: &Rt, frame: Rt::Frame<'_>, run: &[Rt::Value]) -> Rt::Value {
+    unsafe fn call_run(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value]) -> Rt::Value {
         let mut out = [Rt::Value::default()];
         // SAFETY: the caller's contract.
-        unsafe { self.call(rt, frame, run, &mut out) };
+        unsafe { self.call(ctx, run, &mut out) };
         out[0]
     }
 
@@ -516,9 +515,9 @@ where
     /// `WIDTH` is `Width { args: k, ret: 2 }` for the `k` this form names,
     /// and the arguments are this call's own, in declaration order.
     #[inline]
-    unsafe fn call_pair1(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value) -> [Rt::Value; 2] {
+    unsafe fn call_pair1(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value) -> [Rt::Value; 2] {
         // SAFETY: the caller's contract, which is `call_pair_run`'s at one.
-        unsafe { self.call_pair_run(rt, frame, &[a]) }
+        unsafe { self.call_pair_run(ctx, &[a]) }
     }
 
     /// # Safety
@@ -526,13 +525,12 @@ where
     #[inline]
     unsafe fn call_pair2(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
     ) -> [Rt::Value; 2] {
         // SAFETY: the caller's contract, which is `call_pair_run`'s at two.
-        unsafe { self.call_pair_run(rt, frame, &[a, b]) }
+        unsafe { self.call_pair_run(ctx, &[a, b]) }
     }
 
     /// # Safety
@@ -540,14 +538,13 @@ where
     #[inline]
     unsafe fn call_pair3(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
         c: Rt::Value,
     ) -> [Rt::Value; 2] {
         // SAFETY: the caller's contract, which is `call_pair_run`'s at three.
-        unsafe { self.call_pair_run(rt, frame, &[a, b, c]) }
+        unsafe { self.call_pair_run(ctx, &[a, b, c]) }
     }
 
     /// # Safety
@@ -555,15 +552,14 @@ where
     #[inline]
     unsafe fn call_pair4(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
         c: Rt::Value,
         d: Rt::Value,
     ) -> [Rt::Value; 2] {
         // SAFETY: the caller's contract, which is `call_pair_run`'s at four.
-        unsafe { self.call_pair_run(rt, frame, &[a, b, c, d]) }
+        unsafe { self.call_pair_run(ctx, &[a, b, c, d]) }
     }
 
     /// The aggregate forms: the caller lends the destination run its
@@ -577,17 +573,17 @@ where
     /// `k` this form names, the arguments are this call's own in declaration
     /// order, and `out` is `w` of the runtime's values the caller owns.
     #[inline]
-    unsafe fn call_out0(&self, rt: &Rt, frame: Rt::Frame<'_>, out: Out<'_, Rt>) {
+    unsafe fn call_out0(&self, ctx: &mut Ctx<'_, Rt>, out: Out<'_, Rt>) {
         // SAFETY: the caller's contract, which is `call`'s at no arguments.
-        unsafe { self.call(rt, frame, &[], out) }
+        unsafe { self.call(ctx, &[], out) }
     }
 
     /// # Safety
     /// As `call_out0`, at one value.
     #[inline]
-    unsafe fn call_out1(&self, rt: &Rt, frame: Rt::Frame<'_>, a: Rt::Value, out: Out<'_, Rt>) {
+    unsafe fn call_out1(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value, out: Out<'_, Rt>) {
         // SAFETY: the caller's contract, which is `call`'s at one argument.
-        unsafe { self.call(rt, frame, &[a], out) }
+        unsafe { self.call(ctx, &[a], out) }
     }
 
     /// # Safety
@@ -595,14 +591,13 @@ where
     #[inline]
     unsafe fn call_out2(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
         out: Out<'_, Rt>,
     ) {
         // SAFETY: the caller's contract, which is `call`'s at two arguments.
-        unsafe { self.call(rt, frame, &[a, b], out) }
+        unsafe { self.call(ctx, &[a, b], out) }
     }
 
     /// # Safety
@@ -610,15 +605,14 @@ where
     #[inline]
     unsafe fn call_out3(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
         c: Rt::Value,
         out: Out<'_, Rt>,
     ) {
         // SAFETY: the caller's contract, which is `call`'s at three arguments.
-        unsafe { self.call(rt, frame, &[a, b, c], out) }
+        unsafe { self.call(ctx, &[a, b, c], out) }
     }
 
     /// # Safety
@@ -626,8 +620,7 @@ where
     #[inline]
     unsafe fn call_out4(
         &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
+        ctx: &mut Ctx<'_, Rt>,
         a: Rt::Value,
         b: Rt::Value,
         c: Rt::Value,
@@ -635,21 +628,16 @@ where
         out: Out<'_, Rt>,
     ) {
         // SAFETY: the caller's contract, which is `call`'s at four arguments.
-        unsafe { self.call(rt, frame, &[a, b, c, d], out) }
+        unsafe { self.call(ctx, &[a, b, c, d], out) }
     }
 
     /// # Safety
     /// As `call`, with `WIDTH.ret == 2`.
     #[inline]
-    unsafe fn call_pair_run(
-        &self,
-        rt: &Rt,
-        frame: Rt::Frame<'_>,
-        run: &[Rt::Value],
-    ) -> [Rt::Value; 2] {
+    unsafe fn call_pair_run(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value]) -> [Rt::Value; 2] {
         let mut out = [Rt::Value::default(); 2];
         // SAFETY: the caller's contract.
-        unsafe { self.call(rt, frame, run, &mut out) };
+        unsafe { self.call(ctx, run, &mut out) };
         out
     }
 }
@@ -1235,7 +1223,7 @@ pub fn glue<Rt, F, A, R>(f: F) -> Glue<Rt, F, A, R>
 where
     Rt: Runtime,
     A: Parameters<Rt>,
-    F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt>,
 {
     Glue {
@@ -1252,7 +1240,7 @@ where
     Rt: Runtime,
     A: Parameters<Rt>,
     E: AtEntry<Rt>,
-    F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt>,
 {
     Glue {
@@ -1268,8 +1256,7 @@ where
     Rt: Runtime,
     A: Parameters<Rt>,
     F: for<'a, 'w> Fn(
-        &'a Rt,
-        &'a mut Rt::Frame<'w>,
+        &'a mut Ctx<'w, Rt>,
         <A as Parameters<Rt>>::Out<'a>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
@@ -1287,8 +1274,7 @@ where
     A: Parameters<Rt>,
     E: AtEntry<Rt>,
     F: for<'a, 'w> Fn(
-        &'a Rt,
-        &'a mut Rt::Frame<'w>,
+        &'a mut Ctx<'w, Rt>,
         <A as Parameters<Rt>>::Out<'a>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
@@ -1305,7 +1291,7 @@ where
     E: AtEntry<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
 {
     const WIDTH: Width = Width {
@@ -1314,10 +1300,11 @@ where
         result: <<R as Ret<Rt>>::Form as Form>::KIND,
     };
 
-    unsafe fn call(&self, rt: &Rt, frame: Rt::Frame<'_>, run: &[Rt::Value], out: &mut [Rt::Value]) {
+    unsafe fn call(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value], out: &mut [Rt::Value]) {
         // SAFETY: the caller's contract, which is `Parameters::take`'s.
+        let rt = ctx.rt;
         let args = unsafe { <A as Parameters<Rt>>::take(rt, run, &self.sites) };
-        <R as Ret<Rt>>::into_run((self.f)(rt, frame, args), rt, out)
+        <R as Ret<Rt>>::into_run((self.f)(ctx, args), rt, out)
     }
 }
 
@@ -1327,7 +1314,7 @@ where
     E: AtEntry<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
     <A as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
 {
@@ -1376,7 +1363,7 @@ where
     E: AtEntry<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
     <A as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
 {
@@ -1399,7 +1386,7 @@ where
     E: AtEntry<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt, Form = One> + 'static,
     <A as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
 {
@@ -1412,8 +1399,7 @@ where
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
-        &'a Rt,
-        &'a mut Rt::Frame<'w>,
+        &'a mut Ctx<'w, Rt>,
         <A as Parameters<Rt>>::Out<'a>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
@@ -1429,10 +1415,10 @@ where
         let sites = self.sites.clone();
         Box::pin(async move {
             let mut rooted = rt.rooted();
-            let mut frame = Rt::frame_of(&mut rooted);
+            let ctx = Rt::ctx_of(&mut rooted);
             // SAFETY: as the synchronous impl's, over the run the future owns.
-            let args = unsafe { <A as Parameters<Rt>>::take(&rt, &held, &sites) };
-            f(&rt, &mut frame, args).await
+            let args = unsafe { <A as Parameters<Rt>>::take(ctx.rt, &held, &sites) };
+            f(ctx, args).await
         })
     }
 }
@@ -1444,8 +1430,7 @@ where
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
-        &'a Rt,
-        &'a mut Rt::Frame<'w>,
+        &'a mut Ctx<'w, Rt>,
         <A as Parameters<Rt>>::Out<'a>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
@@ -1498,8 +1483,7 @@ where
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
-        &'a Rt,
-        &'a mut Rt::Frame<'w>,
+        &'a mut Ctx<'w, Rt>,
         <A as Parameters<Rt>>::Out<'a>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
@@ -1669,10 +1653,10 @@ where
     {
         DirectOp::Call(Box::new(move |rt, run, out| {
             let mut rooted = rt.rooted();
-            let frame = Rt::frame_of(&mut rooted);
+            let ctx = Rt::ctx_of(&mut rooted);
             // SAFETY: the contract of `DirectOp::call`, which is this
             // closure's only caller.
-            unsafe { handler.call(rt, frame, run, out) }
+            unsafe { handler.call(ctx, run, out) }
         }))
     }
 

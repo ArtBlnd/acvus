@@ -149,6 +149,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 |---|---|---|
 | `Runtime` | the contract a host signs to run every declared ExternFn | atom — the host owns its value representation, its frame and its call entries, and nothing here names a runtime but this |
 | `TypesOnly` | a host that holds no values | derived from `Runtime` — for registering declarations where nothing will run |
+| `Ctx` | the runtime and the window above the calling frame, as a handler is called with them | atom — one parameter where `rt` and `frame` were two, built where the window is lent |
 | `Handler` | a declaration compiled to a Rust body, with the crossing on both sides | atom — the call entries the machine reaches a body through, and the one `WIDTH` they all read |
 | `HandlerFactory` | one declared instance in the module table, its type erased | atom — the one `dyn` on the path, taken once at preparation |
 | `AtSite` | that instance with its site table filled | atom — the only way to reach one, so an operation cannot hold a handler whose table was never filled |
@@ -335,12 +336,16 @@ Batch C — a borrow has one shape (`0d308c5e`):
 Facts, each with the line that states it. Every path is relative to the
 repository root at `0d308c5e`.
 
-1. **The frame is a lent handle.** A handler names it `&mut Rt::Frame<'_>`,
-   which is two references for a host whose handle is itself a reference.
-   The one-reference form — making `Frame` the state itself — was built and
-   does not compile: the frame below owns the state and keeps it for its
-   next call, so every site that hands the window out can only lend it.
-   `acvus-extern/src/runtime.rs:25` (the obligation), `:37` (the type).
+1. **The frame is a lent handle.** `Ctx` holds it by value, and a handler
+   names the `Ctx`. The one-reference form — making `Frame` the state
+   itself — was built and does not compile: the frame below owns the state
+   and keeps it for its next call, so every site that hands the window out
+   can only lend it. A `Ctx` is likewise not a field of the machine that
+   owns the state: `acvus-interpreter`'s `Machine` lends `&mut self.above`
+   beside a disjoint borrow of `self.regs`, which a whole-`Machine` borrow
+   would end. `acvus-extern/src/runtime.rs:23` (the obligation), `:33`
+   (the type), `acvus-interpreter/src/machine.rs:86` (the owner), `:216`
+   (the split).
 2. **`Monomorphize`'s members are enumerated here.** The reach of the
    bound is a list in this crate — `i64`, `f64`, `bool`, `u8`, `String`,
    and the runtime's own carrier — with no blanket impl, so a member type

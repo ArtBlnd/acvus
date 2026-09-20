@@ -3,6 +3,7 @@
 //! numbers are counted by `Counting`, a runtime whose `erase` and
 //! `materialize` count every Rust value they box or unbox.
 
+use acvus_extern::Ctx;
 use std::any::{Any, TypeId, type_name};
 use std::future::Ready;
 use std::sync::Arc;
@@ -178,11 +179,23 @@ impl Runtime for Counting {
 
     type Value = V;
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<V>;
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
+        acvus_extern::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut acvus_extern::Ctx<'a, Self>,
+    ) -> &'r mut acvus_extern::Ctx<'a, Self>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     unsafe fn materialize<T>(&self, value: V) -> T
     where
@@ -320,7 +333,7 @@ impl Runtime for Counting {
         false
     }
 
-    unsafe fn call_now<A>(&self, _: &V, _: &mut (), _: A) -> V
+    unsafe fn call_now<A>(&self, _: &V, _: &mut acvus_extern::Ctx<'_, Self>, _: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -343,10 +356,11 @@ impl Runtime for Counting {
 // -- The reader under test --------------------------------------------
 
 #[extern_fn(effect = pure)]
-fn join_erased<Rt>(rt: &Rt, items: Ref<Vec<Erased<Rt, String>>, Shared, Rt>) -> String
+fn join_erased<Rt>(ctx: &mut Ctx<'_, Rt>, items: Ref<Vec<Erased<Rt, String>>, Shared, Rt>) -> String
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let parts: Vec<&str> = items
         .as_slice(rt)
         .iter()
@@ -358,10 +372,11 @@ where
 /// The producer half of E1: a `Vec<Erased<Rt, String>>` built from `text`,
 /// which is what the counts below are counts of.
 #[extern_fn(effect = pure)]
-fn split_erased<Rt>(rt: &Rt, text: &str, sep: &str) -> Vec<Erased<Rt, String>>
+fn split_erased<Rt>(ctx: &mut Ctx<'_, Rt>, text: &str, sep: &str) -> Vec<Erased<Rt, String>>
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     text.split(sep)
         .map(|part| Erased::new(rt, part.to_owned()))
         .collect()

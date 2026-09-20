@@ -14,6 +14,7 @@ use std::mem::ManuallyDrop;
 use std::time::{Duration, Instant};
 
 use acvus_ext::Iter;
+use acvus_extern::Ctx;
 use acvus_extern::{Erased, Interner, Runtime};
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -105,11 +106,23 @@ impl Runtime for Words {
 
     type Value = Word;
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<Word>;
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
+        acvus_extern::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut acvus_extern::Ctx<'a, Self>,
+    ) -> &'r mut acvus_extern::Ctx<'a, Self>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     fn type_of(&self, _: &Word) -> Option<TypeId> {
         Some(TypeId::of::<i64>())
@@ -237,7 +250,7 @@ impl Runtime for Words {
         false
     }
 
-    unsafe fn call_now<A>(&self, _: &Word, _: &mut (), _: A) -> Word
+    unsafe fn call_now<A>(&self, _: &Word, _: &mut Ctx<'_, Words>, _: A) -> Word
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -413,11 +426,23 @@ impl Runtime for Tags {
 
     type Value = TaggedWord;
     type Frame<'a> = ();
-    type Rooted = ();
+    type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<TaggedWord>;
 
-    fn rooted(&self) {}
-    fn frame_of(_: &mut ()) {}
+    fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
+        acvus_extern::Ctx {
+            rt: self,
+            frame: (),
+        }
+    }
+    fn ctx_of<'a, 'r>(
+        rooted: &'r mut acvus_extern::Ctx<'a, Self>,
+    ) -> &'r mut acvus_extern::Ctx<'a, Self>
+    where
+        'a: 'r,
+    {
+        rooted
+    }
 
     fn type_of(&self, value: &TaggedWord) -> Option<TypeId> {
         match value.kind {
@@ -572,7 +597,7 @@ impl Runtime for Tags {
         false
     }
 
-    unsafe fn call_now<A>(&self, _: &TaggedWord, _: &mut (), _: A) -> TaggedWord
+    unsafe fn call_now<A>(&self, _: &TaggedWord, _: &mut Ctx<'_, Tags>, _: A) -> TaggedWord
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -602,10 +627,11 @@ impl Tags {
     }
 }
 
-async fn iter_range_sum<Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, n: i64) -> i64
+async fn iter_range_sum<Rt>(ctx: &mut Ctx<'_, Rt>, n: i64) -> i64
 where
     Rt: Runtime,
 {
+    let rt = ctx.rt;
     let mut next = 0i64;
     let mut it: Iter<Erased<Rt, i64>, (), (), Rt> = Iter::generate(move |rt| {
         (next < n).then(|| {
@@ -616,7 +642,7 @@ where
     });
 
     let mut acc = 0i64;
-    while let Some(item) = it.next(rt, frame).await {
+    while let Some(item) = it.next(ctx).await {
         acc += *item.as_ref(rt);
     }
     acc
@@ -664,13 +690,25 @@ fn main() {
         (
             "iter<word>",
             timed(reps, expected, || {
-                rt.block_on(iter_range_sum(&Words, &mut (), black_box(n)))
+                rt.block_on(iter_range_sum(
+                    &mut Ctx {
+                        rt: &Words,
+                        frame: (),
+                    },
+                    black_box(n),
+                ))
             }),
         ),
         (
             "iter<tagged>",
             timed(reps, expected, || {
-                rt.block_on(iter_range_sum(&Tags, &mut (), black_box(n)))
+                rt.block_on(iter_range_sum(
+                    &mut Ctx {
+                        rt: &Tags,
+                        frame: (),
+                    },
+                    black_box(n),
+                ))
             }),
         ),
     ];
