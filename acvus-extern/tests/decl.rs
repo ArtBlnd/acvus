@@ -1535,6 +1535,129 @@ fn a_pure_signature_refuses_an_effect_variable_instance() {
     );
 }
 
+// -- A signature names its argument (RFC-0065) -------------------------
+
+extern_signature! {
+    ns: "t",
+    fn width<T, E, Rt>(b: Boxed<T, E, Rt>) -> i64
+    where
+        T: TyVar,
+        E: EffectVar,
+        Rt: Runtime;
+}
+
+#[extern_fn(instance_of = width, effect = pure)]
+fn width_i64<E, Rt>(b: Boxed<i64, E, Rt>) -> i64
+where
+    E: EffectVar,
+    Rt: Runtime,
+{
+    i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
+}
+
+#[extern_fn(instance_of = width, effect = pure)]
+fn width_string<E, Rt>(b: Boxed<String, E, Rt>) -> i64
+where
+    E: EffectVar,
+    Rt: Runtime,
+{
+    i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
+}
+
+extern_signature! {
+    ns: "t",
+    fn head<T, U, E, Rt>(b: Boxed<(T, U), E, Rt>) -> i64
+    where
+        T: TyVar,
+        U: TyVar,
+        E: EffectVar,
+        Rt: Runtime;
+}
+
+#[extern_fn(instance_of = head, effect = pure)]
+fn head_i64<U, E, Rt>(b: Boxed<(i64, U), E, Rt>) -> i64
+where
+    U: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
+}
+
+#[extern_fn(instance_of = head, effect = pure)]
+fn head_string<U, E, Rt>(b: Boxed<(String, U), E, Rt>) -> i64
+where
+    U: TyVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
+}
+
+extern_signature! { ns: "t", fn present<T>(v: Option<T>) -> i64 where T: TyVar; }
+
+#[extern_fn(instance_of = present, effect = pure)]
+fn present_i64(v: Option<i64>) -> i64 {
+    i64::from(v.is_some())
+}
+
+fn named_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        types: [Boxed<_, _, R>],
+        signatures: [width, head],
+        fns: [width_i64, width_string, head_i64, head_string],
+    }
+}
+
+fn container_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        signatures: [present],
+        fns: [present_i64],
+    }
+}
+
+fn bound_of(reg: &Externs<Tiny>, i: &Interner, name: &str) -> acvus_extern::TyVarBound {
+    let function = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(i, name))
+        .expect("declared");
+    let acvus_extern::FnKind::Extern { bounds, .. } = &function.kind else {
+        panic!("{name} is extern")
+    };
+    bounds[0].clone()
+}
+
+#[test]
+fn a_signature_naming_its_argument_is_bounded_by_the_types_inside_it() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![named_registry::<Tiny>()], &i).expect("registries combine");
+    assert_eq!(
+        bound_of(&reg, &i, "width"),
+        acvus_extern::TyVarBound::OneOf(vec![PolyTy::I64, PolyTy::String])
+    );
+    assert_eq!(
+        bound_of(&reg, &i, "head"),
+        acvus_extern::TyVarBound::OneOf(vec![PolyTy::I64, PolyTy::String])
+    );
+    assert_eq!(reg.handlers[&qref(&i, "width")].len(), 2);
+    assert_eq!(reg.handlers[&qref(&i, "head")].len(), 2);
+}
+
+#[test]
+fn a_signature_reaching_its_variable_through_a_container_is_refused() {
+    let i = Interner::new();
+    let err = Externs::combine(vec![container_registry::<Tiny>()], &i)
+        .err()
+        .expect("an Option is not a head the walk descends");
+    assert!(
+        matches!(err, acvus_extern::CombineError::InstanceMismatch { .. }),
+        "{err:?}"
+    );
+}
+
 /// An `Inline` element is read, copied and edited through `Erased` with no
 /// runtime in hand; a `String` still needs one.
 #[test]

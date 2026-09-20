@@ -604,21 +604,38 @@ where
     }
 }
 
-/// The type the signature's first variable takes in `instance`: read off
-/// the first parameter whose declared type is that variable, bare or
-/// behind a reference.
 fn instance_type(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
     let (PolyTy::Fn { params: sp, .. }, PolyTy::Fn { params: ip, .. }) = (signature, instance)
     else {
         return None;
     };
-    sp.iter().zip(ip).find_map(|(s, i)| match (&s.ty, &i.ty) {
+    sp.iter()
+        .zip(ip)
+        .find_map(|(s, i)| instance_at_first_var(&s.ty, &i.ty))
+}
+
+/// The heads this walk does not descend — a function type, an array, a
+/// slice, an option, a result, a handle, an object, an enum — are a
+/// decision rather than an omission. A signature's first variable is the
+/// one the per-length instance match reads, and reaching it through a
+/// container would make it that container's element instead; a signature
+/// written that way keeps the `InstanceMismatch` it was refused with
+/// before this walk replaced the bare `Var(0)` and `&Var(0)` cases.
+fn instance_at_first_var(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
+    match (signature, instance) {
         (PolyTy::Var(0), t) => Some(t.clone()),
-        (PolyTy::Ref(_, inner), PolyTy::Ref(_, t)) if matches!(inner.ty, PolyTy::Var(0)) => {
-            Some(t.ty.clone())
+        (PolyTy::Ref(_, s), PolyTy::Ref(_, i)) => instance_at_first_var(&s.ty, &i.ty),
+        (PolyTy::UserDefined { type_args: sa, .. }, PolyTy::UserDefined { type_args: ia, .. }) => {
+            sa.iter()
+                .zip(ia)
+                .find_map(|(s, i)| instance_at_first_var(&s.ty, &i.ty))
         }
+        (PolyTy::Tuple(se), PolyTy::Tuple(ie)) => se
+            .iter()
+            .zip(ie)
+            .find_map(|(s, i)| instance_at_first_var(s, i)),
         _ => None,
-    })
+    }
 }
 
 fn cast_rule(decl: &FnDecl) -> Result<CastRule, CombineError> {

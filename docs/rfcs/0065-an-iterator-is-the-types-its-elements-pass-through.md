@@ -64,7 +64,12 @@ collections.
    taking it for the call's own effect makes `as_iter` `Async` over an
    effectful pipeline (`acvus-interpreter-test/tests/extern_fn.rs`
    `io_in_iteration` and `io_inside_iterator_pipeline` are refused with
-   "a function whose task is Async where Sync is required"). One macro in
+   "a function whose task is Async where Sync is required"). **A
+   signature names its argument**: the type the per-length instances are
+   matched by is read at the position of the signature's first variable
+   inside the first parameter that reaches it, so a consumer with no
+   closure at all is written `fn collect<Ts, O, E, I, Rt>(it: Iter<Ts,
+   O, E, I, Rt>)` and its `E` is the pipeline's. One macro in
    `acvus-ext` emits the instances.
 
 3. **A stage is typed, and the pipeline is a typed list of stages.**
@@ -132,23 +137,22 @@ collections.
   adaptor is refused today by the instance list ("outside the declared
   bound one of …"); naming the bound of 8 in that message is a
   diagnostics change in `acvus-mir/src/error.rs`.
-- A consumer with **no closure argument** (`count`, `sum`, `last`,
-  `collect`, `next`) takes no task from its signature. The signature's
-  one parameter is the bare type variable the per-length instances are
-  matched by, so nothing in the instantiated signature relates the call's
-  effect to the argument; `Solver::tightest_admitting`
-  (`acvus-mir/src/solver.rs`) reads the call's task where the instance
-  decision closes, finds it still `Sync`, and takes the `Sync` member of
-  the pair, while the same consumer declared under its own name with
-  `Iter<Ts, O, E, I, Rt>` as its parameter type is `Async` over the same
-  pipeline (measured one declaration apart in
-  `acvus-interpreter-test/tests/signature_effect.rs`:
-  `a_signature_with_no_closure_argument_leaves_its_call_sync` against
-  `a_declaration_whose_parameter_names_the_effect_is_async_over_an_async_stage`).
-  Those consumers need either a signature parameter that names `E` — at
-  the cost of the bare variable the per-length match reads — or an
-  instance decision the solver re-opens when the call's effect settles.
-  Neither is built here.
+- `acvus-extern`: `registry.rs::instance_type` walks the first parameter
+  to the position of the signature's first variable instead of demanding
+  a bare `Var(0)` or `&Var(0)`, which is what lets a consumer with **no
+  closure argument** (`count`, `sum`, `last`, `collect`, `next`) name the
+  pipeline in its parameter and take the call's task from it. The bare
+  form still hides the task: nothing in the instantiated signature
+  relates the call's effect to the argument, so
+  `Solver::tightest_admitting` (`acvus-mir/src/solver.rs`) closes the
+  instance decision with the call `Sync`. The two forms are measured one
+  variable apart in `acvus-interpreter-test/tests/signature_effect.rs`
+  (`a_signature_that_names_the_pipeline_is_async_over_an_async_stage`
+  against `a_signature_that_hides_the_pipeline_leaves_its_call_sync`).
+  The walk descends a reference, an extern type's type arguments and a
+  tuple's positions; a parameter that reaches its variable through an
+  array, an option, a slice or a function type is refused with
+  `InstanceMismatch`, as it was before the walk.
 - The pipeline's Rust type changes at every adaptor, so the `Large` box
   holding it is re-made per adaptor: one allocation per adaptor, as
   today, with no `dyn` and no `unsafe`. Zero allocations per adaptor

@@ -3,7 +3,8 @@
 //!
 //! `Pipe` stands in for `Iter`, its first parameter for the list of element
 //! types the pipeline passed through as nested pairs, `step` for every
-//! adaptor, and `drain` for every consumer that takes a closure.
+//! adaptor, `drain` for every consumer that takes a closure, and `tally`
+//! for every consumer that takes none.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -63,6 +64,8 @@ fn seen(x: i64) -> i64 {
 mod sig {
     use acvus_extern::{Fn1, extern_signature};
 
+    use super::Pipe;
+
     extern_signature! {
         ns: "q",
         fn step<S, R, T, U, E, Rt>(it: S, f: Fn1<T, U, E, Rt>) -> R
@@ -91,7 +94,19 @@ mod sig {
     extern_signature! {
         ns: "q",
         effect = E,
-        fn tally<S, E, I, Rt>(it: S) -> i64
+        fn tally<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
+        where
+            Ts: TyVar,
+            O: TyVar,
+            E: EffectVar,
+            I: IdentityVar,
+            Rt: Runtime;
+    }
+
+    extern_signature! {
+        ns: "q",
+        effect = E,
+        fn bare_tally<S, E, I, Rt>(it: S) -> i64
         where
             S: TyVar,
             E: EffectVar,
@@ -183,26 +198,37 @@ where
     it.stages()
 }
 
-fn tally_0_now<T, E, I, Rt>(it: Pipe<(), T, E, I, Rt>) -> i64
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    it.stages()
+macro_rules! tally_instance {
+    ($name:ident, $now:ident, $sig:ident, [$($v:ident),*], $ts:tt) => {
+        fn $now<$($v,)* T, E, I, Rt>(it: Pipe<$ts, T, E, I, Rt>) -> i64
+        where
+            $($v: TyVar,)*
+            T: TyVar,
+            E: EffectVar,
+            I: IdentityVar,
+            Rt: Runtime,
+        {
+            it.stages()
+        }
+
+        #[extern_fn(instance_of = sig::$sig, effect = E, sync = $now)]
+        async fn $name<$($v,)* T, E, I, Rt>(it: Pipe<$ts, T, E, I, Rt>) -> i64
+        where
+            $($v: TyVar,)*
+            T: TyVar,
+            E: EffectVar,
+            I: IdentityVar,
+            Rt: Runtime,
+        {
+            it.stages()
+        }
+    };
 }
 
-#[extern_fn(instance_of = sig::tally, effect = E, sync = tally_0_now)]
-async fn tally_0<T, E, I, Rt>(it: Pipe<(), T, E, I, Rt>) -> i64
-where
-    T: TyVar,
-    E: EffectVar,
-    I: IdentityVar,
-    Rt: Runtime,
-{
-    it.stages()
-}
+tally_instance!(tally_0, tally_0_now, tally, [], ());
+tally_instance!(tally_1, tally_1_now, tally, [A], (A, ()));
+tally_instance!(bare_tally_0, bare_tally_0_now, bare_tally, [], ());
+tally_instance!(bare_tally_1, bare_tally_1_now, bare_tally, [A], (A, ()));
 
 fn depth_now<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
 where
@@ -231,9 +257,10 @@ fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "q",
         types: [Pipe<_, _, _, _, AcvusRuntime>],
-        signatures: [sig::step, sig::drain, sig::tally],
+        signatures: [sig::step, sig::drain, sig::tally, sig::bare_tally],
         fns: [
-            src, seen, depth, tally_0,
+            src, seen, depth,
+            tally_0, tally_1, bare_tally_0, bare_tally_1,
             step_0, step_1, step_2,
             drain_0, drain_1, drain_2,
         ],
@@ -330,17 +357,30 @@ async fn a_declaration_whose_parameter_names_the_effect_is_async_over_an_async_s
     assert_eq!(run_i64(over_async).await, 1);
 }
 
-/// Measured, not intended: `tally`'s parameter is the bare variable the
-/// per-length instances are matched by, so nothing in the instantiated
-/// signature relates the call's effect to the argument. `tightest_admitting`
-/// reads the call's task where the decision closes, finds it still `Sync`,
-/// and takes the `Sync` member of the pair — while `depth`, one declaration
-/// apart, is `Async` over the same pipeline. A consumer with no closure
-/// argument therefore cannot become a signature until the solver relates
-/// the two; RFC-0065's Consequences carries the obligation.
 #[tokio::test]
-async fn a_signature_with_no_closure_argument_leaves_its_call_sync() {
-    let over_async = "src() | tally()";
+async fn a_signature_that_names_the_pipeline_is_async_over_an_async_stage() {
+    let over_sync = "src() | step(|x| -> x + 1) | tally()";
+    let over_async = "src() | step(|x| -> seen(x)) | tally()";
+    assert!(!prepared_entry(over_sync).may_suspend());
+    assert!(
+        prepared_entry(over_async).may_suspend(),
+        "the stage's closure suspends, and the signature's parameter type \
+         `Pipe<Ts, O, E, I, Rt>` makes the pipeline's effect the call's own"
+    );
+    assert_eq!(run_i64(over_sync).await, 1);
+    assert_eq!(run_i64(over_async).await, 1);
+}
+
+/// A signature that hides the pipeline hides the task, and that is the
+/// construction rather than a gap: `bare_tally`'s parameter is the bare
+/// variable the per-length instances are matched by, so the instantiated
+/// signature relates nothing to the call's effect and
+/// `Solver::tightest_admitting` closes the instance decision with the call
+/// still `Sync`. `tally`, one variable apart, names `Pipe<Ts, O, E, I, Rt>`
+/// and is `Async` over the same pipeline.
+#[tokio::test]
+async fn a_signature_that_hides_the_pipeline_leaves_its_call_sync() {
+    let over_async = "src() | step(|x| -> seen(x)) | bare_tally()";
     assert!(!prepared_entry(over_async).may_suspend());
-    assert_eq!(run_i64(over_async).await, 0);
+    assert_eq!(run_i64(over_async).await, 1);
 }
