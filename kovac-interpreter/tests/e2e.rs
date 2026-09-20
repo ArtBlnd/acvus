@@ -5,7 +5,7 @@ use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower, optimize};
 use acvus_mir::ir::MirModule;
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use kovac_interpreter::lower::lower_body;
 use kovac_interpreter::vm::execute;
@@ -76,14 +76,8 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
 
     // Run optimization pipeline (SROA -> SSA -> Inline -> RegColor -> Validate).
     let context_types = FxHashMap::default();
-    let recursive_fns = FxHashSet::default();
 
-    let opt = optimize::optimize(
-        result.modules,
-        &context_types,
-        &recursive_fns,
-        optimize::Opt::Full,
-    );
+    let opt = optimize::optimize(result.modules, &context_types, optimize::Opt::Full);
     // In untyped mode, validate may report type mismatches from shared
     // scalar slots - expected and safe for kovac (all scalars are u64).
     // Skip validate errors for now.

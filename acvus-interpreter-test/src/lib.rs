@@ -24,7 +24,7 @@ use acvus_mir::ty::{
     LenTerm, ObjectTy, PolyBuilder, PolyParam, Ty, TyTerm, lift_declaration, try_freeze_poly,
 };
 use acvus_utils::{Astr, Freeze, Interner};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 // -- Typed context values ------------------------------------------
 
@@ -316,12 +316,7 @@ where
         });
     }
 
-    let opt_result = graph_optimize::optimize(
-        result.modules.clone(),
-        &inf.context_types,
-        &FxHashSet::default(),
-        opt,
-    );
+    let opt_result = graph_optimize::optimize(result.modules.clone(), &inf.context_types, opt);
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {

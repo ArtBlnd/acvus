@@ -18,7 +18,7 @@ use acvus_mir::graph::{
 use acvus_mir::ir::MirModule;
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
 use acvus_utils::{Astr, Freeze, Interner};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -294,12 +294,7 @@ pub fn check(
     }
 
     let watch = Stopwatch::start(timed);
-    let optimized = optimize::optimize(
-        lowered.modules,
-        &inf.context_types,
-        &FxHashSet::default(),
-        opt,
-    );
+    let optimized = optimize::optimize(lowered.modules, &inf.context_types, opt);
     stages.optimize = watch.stop();
 
     diagnostics.extend(

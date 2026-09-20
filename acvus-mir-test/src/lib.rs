@@ -583,12 +583,7 @@ pub fn optimized_script_module(
         return Err(errors.join("\n"));
     }
 
-    let opt = acvus_mir::graph::optimize::optimize(
-        result.modules,
-        &inf.context_types,
-        &FxHashSet::default(),
-        Opt::Full,
-    );
+    let opt = acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, Opt::Full);
     for (qref, errs) in &opt.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
@@ -665,12 +660,8 @@ pub fn compile_script_optimized(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(
-        result.modules,
-        &inf.context_types,
-        &FxHashSet::default(),
-        Opt::Full,
-    );
+    let opt_result =
+        acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -808,12 +799,8 @@ pub fn refuse_script_mode_optimized(
         return Err(refusals);
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(
-        result.modules,
-        &inf.context_types,
-        &FxHashSet::default(),
-        Opt::Full,
-    );
+    let opt_result =
+        acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -1082,20 +1069,6 @@ pub fn compile_multi_fn_optimized(
     compile_multi_fn_at(interner, target, helpers, contexts, extern_fns, Opt::Full)
 }
 
-/// As `compile_multi_fn_optimized`, with only the passes a program needs to
-/// reach the machine. A recursive callee reaches validation through this one:
-/// `graph::optimize` is given no `recursive_fns`, so `Opt::Full` would hand
-/// `inliner::inline` a call it copies into its own copy without end.
-pub fn compile_multi_fn_required(
-    interner: &Interner,
-    target: (&str, &str),
-    helpers: &[(&str, &str, Vec<PolyParam>)],
-    contexts: &[(&str, Ty)],
-    extern_fns: &[Function],
-) -> Result<String, String> {
-    compile_multi_fn_at(interner, target, helpers, contexts, extern_fns, Opt::None)
-}
-
 fn compile_multi_fn_at(
     interner: &Interner,
     target: (&str, &str),
@@ -1172,12 +1145,7 @@ fn compile_multi_fn_at(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(
-        result.modules,
-        &inf.context_types,
-        &FxHashSet::default(),
-        opt,
-    );
+    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, opt);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);

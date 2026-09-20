@@ -117,7 +117,6 @@ async fn run_parsed(
     let result = graph_optimize::optimize(
         lowered.modules.into_iter().collect(),
         &FxHashMap::default(),
-        &Default::default(),
         graph_optimize::Opt::Full,
     );
     assert!(

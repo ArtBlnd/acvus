@@ -138,7 +138,7 @@ has no identity the caller can read. `Param(i)` is that identity.
    Landed.
 2. Lambda: captured region, call summary, capture admitted; the store-
    then-call diagnostic. Landed.
-3. Fixpoint over recursive bodies.
+3. Fixpoint over recursive bodies. Landed.
 4. Extern summaries from signatures (with the pair-wide `CallShape`).
 
 ## Consequences
@@ -226,6 +226,49 @@ and otherwise takes the union of every argument's region. The union is a
 superset of the substitution, so the reading without summaries refuses more
 and admits nothing extra; every optimization pass keeps it, and only the
 borrow check, which runs in dependency order, pays for the table. That order
-is Tarjan's components over the call graph in pass 0 of `graph::optimize`. A
-cyclic component is not the fixpoint of Decision 4: a body in one whose
-result holds a reference is refused by name, and step 3 lifts that.
+is Tarjan's components over the call graph in pass 0 of `graph::optimize`.
+
+Step 3 landed. A cyclic component is the least fixpoint of the borrow check
+over its members' summaries. Every member starts at the empty summary,
+written into the table rather than left absent, because an absent entry makes
+a call take the union of every argument's region instead, which is larger
+than any summary: seeding by omission would descend from the top rather than
+climb from the bottom. A member whose summary grew re-marks the members that
+call it, and the loop stops when nothing grows. It terminates because a
+summary is a set of distinct `ParamLoan`s, one per parameter per mutability,
+so the loans a component's summaries can hold together is a count fixed
+before the first round and every growing step spends one of them. Two
+assertions in `Component::settle` carry both halves: a summary that lost a
+loan says the substitution at a call is not monotone in the summary it reads,
+and a total growth past the count says the same of the bound.
+
+The exclusion rule is stated once, over the fixpoint. A member's region
+analysis reads the summaries of its direct callees and of nothing else, and a
+growth re-marks exactly its callers, so the answers the loop holds when it
+stops were each computed from the final summaries. Nothing is lost by
+discarding the rounds before: a smaller summary carries fewer loans and so
+raises fewer conflicts, never a different one.
+
+`MirErrorKind::RecursiveReferenceResult` is gone. `first_nonzero(xs: &[i64;
+3], i: u64) -> &i64` recursing on `i` compiles, runs at both optimization
+levels and reads the element the program names; a mutually recursive pair
+each returning a reference into the array both borrow does the same; and a
+recursive body whose result borrows one of its own locals is still
+`ReferenceToLocalLeavesBody` at the local.
+
+A module's closures join the iteration by being rebuilt inside it.
+`check_borrows_in_order` fills the `Label`-keyed table from scratch on every
+round, inner closures first, against the named table that round holds, so the
+inner-first order is the acyclic case of the same loop. A cycle among
+closures is not writable: a lambda is a value bound by `let`, so its body can
+name only what is already bound, and `let f = |k| -> f(k - 1)` is "undefined
+function `f`". What a closure can do is call a named function that calls back
+into the module the closure lives in, and that module is then a member of the
+cycle like any other.
+
+The functions of every cyclic component are exactly the ones the inliner must
+not splice, and pass 0 already computes them, so `graph::optimize` passes
+them to `inliner::inline` itself. The `recursive_fns` parameter every caller
+filled with an empty set is gone, and with it `acvus-mir-test`'s
+`compile_multi_fn_required`, which existed only to route a recursive callee
+around `Opt::Full`.

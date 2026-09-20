@@ -70,7 +70,6 @@ async fn run(interner: &Interner, source: &str) -> Value {
     let result = graph_optimize::optimize(
         lowered.modules.into_iter().collect(),
         &FxHashMap::default(),
-        &Default::default(),
         graph_optimize::Opt::Full,
     );
     assert!(
