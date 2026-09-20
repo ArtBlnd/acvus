@@ -39,17 +39,37 @@ no layer holds a number nobody measured.
    loop runs as the plain function it already is, on one thread, until a
    table exists.
 
-1. **An invariant table over SSA chains.** For every chain the escape and
-   loan analyses already walk, the table records what is known at entry
-   and at exit and what the chain costs: an induction variable's entry,
-   exit and step (RFC-0057's `for` owns its variable, so these are read
-   off the terminator, not proved); which storages the chain leaves
-   unwritten (the loans' element-write split); the cost as the sum of the
-   chain's operations in table-0 rows, with a nested loop of unknown
-   trip count counted at one iteration — a lower bound, never an
-   estimate. A bound check is absorbed here where the invariants imply
-   it (`i` in `0..n`, `n == len(xs)`, `xs` unwritten in the loop), and
-   the absorption is a row of the table, not a rewrite of the check.
+1. **An invariant table over SSA chains, and its bound.** For every
+   chain the escape and loan analyses already walk, the table records
+   what is known at entry and at exit and what the chain costs. **The
+   induction variable is `for`'s and only `for`'s**: entry, exit and
+   step are read off RFC-0057's terminator, never recovered from a
+   recurrence, and a `while` loop has no induction variable, a trip
+   count of one (a lower bound) and is never divided. A value is
+   invariant across the loop when it is defined outside it and the
+   loop's header carries no phi for it — SSA's own fact; a storage is
+   unwritten when the loans' element-write split says so. The trip
+   count is the symbolic `(exit − entry) / step` over invariant values;
+   nested `for`s multiply; the expression alphabet is constants,
+   invariant values, `+`, `×`, `min`, `max`, and nothing else — the
+   expression is not simplified, it is evaluated at layer 4's points.
+   An index is understood only as the induction variable plus a
+   constant; a bound check is absorbed where the invariants imply it
+   (`i` in `0..n`, `n == len(xs)`, `xs` unwritten), as a row of the
+   table, not a rewrite of the check; any other index is neither
+   absorbed nor divisible. The cost is the sum of the chain's operations
+   in table-0 rows times the trip-count expression — a lower bound,
+   never an estimate.
+
+   This is the whole of what this RFC takes from scalar evolution: an
+   affine variable the syntax already owns, a symbolic count over it,
+   and invariance from SSA. Non-affine recurrences, induction-variable
+   canonicalization, expression simplification, overflow reasoning and
+   address evolution are not built. A `while` whose body has the shape
+   of a `for` — a counter compared against an invariant and stepped by
+   a constant — may **later** be promoted to `for` by a recognizer that
+   rewrites the terminator; if no such promotion is exact, the `while`
+   stays undivided, and nothing else is done for it.
 
 2. **Regions.** Over the table, a region is a set of chains that can be
    evaluated as one unit without crossing a jump the analysis cannot
@@ -127,6 +147,9 @@ no layer holds a number nobody measured.
   fails otherwise; the invariant table answers a lower bound on cost and
   what is unwritten, which is what a split needs, and a failed trip
   count is still one iteration of cost.
+- **Recognizing recurrences in `while` loops** as induction variables:
+  the door to general scalar evolution. A `while` is either promoted to
+  `for` when its shape is exactly `for`'s, or left alone.
 - **Cache blocking and loop permutation**: shape the memory pattern of
   nested loops; a later RFC, once regions exist to be permuted.
 - **An explicit `par for`**: the author naming the parallelism. Kept out
