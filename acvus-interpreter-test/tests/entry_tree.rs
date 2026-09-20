@@ -16,8 +16,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Carrier, Closure, ClosureFn, ExternType, Held, InstanceOf, Pure, Registry, Runtime, Var,
-    extern_fn, extern_registry, kind,
+    Carrier, Closure, ClosureFn, ExternType, Held, InstanceOf, InstanceOfAsync, OneValue, Pure,
+    Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::code::Code;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
@@ -33,6 +33,7 @@ mod sig {
 
     extern_signature! {
         ns: "probe",
+        effect = E,
         fn advance<I, T, E, Rt>(it: &mut I) -> Option<T>
         where
             I: Var<kind::Type>,
@@ -98,6 +99,23 @@ where
     )
 }
 
+/// The constructor that builds the adaptor's pattern over an inner type
+/// that has no instance.
+#[extern_fn(effect = pure)]
+fn doubled_unchecked<I, Rt>(rt: &Rt, it: I, f: Closure<(i64,), i64, Pure, Rt>) -> Doubled<I, Rt>
+where
+    I: Var<kind::Type> + OneValue<Rt>,
+    Rt: Runtime,
+{
+    Doubled(
+        DoubledBody {
+            inner: Held::of_value(it.erase(rt)),
+            f,
+        },
+        PhantomData,
+    )
+}
+
 /// The instance at the pattern `Doubled<I>`: its own bound is reached
 /// through the entries the site resolved for it, which `#[extern_fn]`
 /// appended as `i_bound` off the `where` clause below.
@@ -118,6 +136,52 @@ where
     Some(it.0.f.call_now(rt, frame, (x,)))
 }
 
+pub struct SlowedBody<Rt>
+where
+    Rt: Runtime,
+{
+    inner: Held<Rt>,
+}
+
+#[derive(ExternType)]
+#[extern_type(name = "Slowed")]
+#[repr(transparent)]
+pub struct Slowed<I, Rt>(SlowedBody<Rt>, PhantomData<I>)
+where
+    I: Var<kind::Type>,
+    Rt: Runtime;
+
+#[extern_fn(effect = pure)]
+fn slowed<I, Rt>(it: I) -> Slowed<I, Rt>
+where
+    I: Var<kind::Type> + Carrier<Rt> + InstanceOf<sig::advance<I, i64, Pure, Rt>, Rt>,
+    Rt: Runtime,
+{
+    Slowed(
+        SlowedBody {
+            inner: Held::of(it),
+        },
+        PhantomData,
+    )
+}
+
+/// The file's async stage.
+#[extern_fn(instance_of = sig::advance, effect = pure)]
+async fn advance_slowed<I, Rt>(
+    rt: &Rt,
+    frame: &mut Rt::Frame<'_>,
+    it: &mut Slowed<I, Rt>,
+) -> Option<i64>
+where
+    I: Var<kind::Type> + Carrier<Rt> + InstanceOfAsync<sig::advance<I, i64, Pure, Rt>, Rt>,
+    Rt: Runtime,
+{
+    tokio::task::yield_now().await;
+
+    let mut held = it.0.inner.at(&i_bound);
+    <I as InstanceOfAsync<sig::advance<I, i64, Pure, Rt>, Rt>>::call(&mut held, rt, frame, ()).await
+}
+
 /// The consumer: it requires the signature and calls it until it ends.
 #[extern_fn(effect = pure)]
 fn total<I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, it: I) -> i64
@@ -133,12 +197,31 @@ where
     acc
 }
 
+/// The same consumer at the async task.
+#[extern_fn(effect = pure)]
+async fn total_await<I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, it: I) -> i64
+where
+    I: Var<kind::Type> + Carrier<Rt> + InstanceOfAsync<sig::advance<I, i64, Pure, Rt>, Rt>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut acc = 0;
+    while let Some(x) =
+        <I as InstanceOfAsync<sig::advance<I, i64, Pure, Rt>, Rt>>::call(&mut it, rt, frame, ())
+            .await
+    {
+        acc += x;
+    }
+    acc
+}
+
 fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "probe",
-        types: [Counter, Doubled<_, AcvusRuntime>],
+        types: [Counter, Doubled<_, AcvusRuntime>, Slowed<_, AcvusRuntime>],
         signatures: [sig::advance],
-        fns: [counter, advance_counter, doubled, advance_doubled, total],
+        fns: [counter, advance_counter, doubled, doubled_unchecked, advance_doubled, slowed,
+              advance_slowed, total, total_await],
     }
 }
 
@@ -238,4 +321,76 @@ fn a_pure_pipeline_suspends_nowhere() {
             "every call in the pipeline is pure at {opt:?}"
         );
     }
+}
+
+const SLOWED: &str = "total_await(slowed(doubled(counter(5), |x| -> x * 2)))";
+const AWAITED_SYNC: &str = "total_await(doubled(counter(5), |x| -> x * 2))";
+
+/// One consumer body reaching `Counter`'s and `Doubled`'s `Sync` nodes and
+/// `Slowed`'s `Await` node. `slowed` passes each element through.
+#[tokio::test]
+async fn an_async_instance_is_reached_through_its_entry() {
+    assert_eq!(run_i64(SLOWED).await, 30);
+    assert_eq!(run_i64(AWAITED_SYNC).await, 30);
+    assert_eq!(run_i64(ONE_DEEP).await, 30);
+}
+
+#[test]
+fn the_task_of_a_pipeline_is_its_stages() {
+    for opt in [Opt::None, Opt::Full] {
+        assert!(
+            prepared_entry(SLOWED, opt).may_suspend(),
+            "`slowed`'s instance is an `async fn` at {opt:?}"
+        );
+    }
+}
+
+/// The refusal is at check: the program never reaches `prepare`, where the
+/// entry it cannot call would be asked for.
+#[test]
+fn a_sync_consumer_given_an_async_instance_is_refused() {
+    let i = Interner::new();
+    let source = "total(slowed(counter(5)))";
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
+    let refused = check_source(
+        &i,
+        ast,
+        &FxHashMap::default(),
+        registries(),
+        Ty::I64,
+        Opt::Full,
+        |_| {},
+    )
+    .err()
+    .expect("a sync consumer has no instance of probe::advance at Slowed");
+    let messages = refused.messages.join("; ");
+    assert!(
+        messages.contains("Slowed") && messages.contains("Counter"),
+        "the refusal names the type given and the instances a sync body may reach: {messages}"
+    );
+}
+
+/// The instance at a pattern carries its own bound, so the ill-formed value
+/// `doubled_unchecked` builds is refused at check.
+#[test]
+fn a_pattern_instance_whose_inner_has_no_instance_is_refused() {
+    let i = Interner::new();
+    let source = "total(doubled_unchecked(7, |x| -> x * 2))";
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
+    let refused = check_source(
+        &i,
+        ast,
+        &FxHashMap::default(),
+        registries(),
+        Ty::I64,
+        Opt::Full,
+        |_| {},
+    )
+    .err()
+    .expect("an i64 inside Doubled has no instance of probe::advance");
+    let messages = refused.messages.join("; ");
+    assert!(
+        messages.contains("no instance of probe::advance at Doubled<i64>"),
+        "the refusal names the requirement the inner type fails: {messages}"
+    );
 }

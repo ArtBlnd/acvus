@@ -38,12 +38,12 @@ pub use handler::{
     DeclaredInstance, DirectOp, ExternHandler, Glue, Handler, HandlerFactory, InRegisters,
     InWindow, InstanceEntries, Instances, IntoRun, NoEntry, NoInstances, Parameters, REGISTER_FORM,
     Ret, SiteAtBound, Sited, SitedAtEntry, SitesAtEntry, SitesNoParameterReads, Specialized,
-    TakenForm, Uniform, Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, glue,
-    glue_at_entry,
+    TakenForm, Uniform, Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue,
+    async_glue_at_entry, glue, glue_at_entry,
 };
 pub use instance::{
-    Bound, Bounds, Carrier, Entry, EntryFn, EntryNode, Held, HeldMut, InstanceOf, InstanceOfAsync,
-    NodeArena, Signature, one_value,
+    AsyncEntryFn, Bound, Bounds, Carrier, Entry, EntryFn, EntryNode, EntryRun, Held, HeldMut,
+    InstanceOf, InstanceOfAsync, NodeArena, Signature, one_value,
 };
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};

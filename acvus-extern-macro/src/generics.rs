@@ -81,13 +81,20 @@ pub struct Var {
     pub index: usize,
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
-    /// The `S` of each `InstanceOf<S>` bound, in the order it was written
-    /// (RFC-0067 Decision 1).
-    pub requires: Vec<Type>,
+    /// Each `InstanceOf<S>` or `InstanceOfAsync<S>` bound, in the order it
+    /// was written (RFC-0067 Decision 1).
+    pub requires: Vec<Required>,
     /// What fills this variable when the handler runs: the carrier
     /// `#[extern_fn]` writes where the variable is bounded, and the
     /// runtime's own value where it is not.
     pub carrier: Option<Type>,
+}
+
+/// One requirement as its bound was written: the signature, and whether
+/// the spelling was the awaiting one.
+pub struct Required {
+    pub signature: Type,
+    pub awaits: bool,
 }
 
 pub struct Vars(Vec<Var>);
@@ -113,8 +120,14 @@ fn bounds_of<'a>(
     tp.bounds.iter().chain(from_where)
 }
 
-fn states_a_requirement(seg: &syn::PathSegment) -> bool {
-    seg.ident == "InstanceOf" || seg.ident == "InstanceOfAsync"
+/// Whether this bound states a requirement, and whether its spelling is
+/// the awaiting one.
+fn states_a_requirement(seg: &syn::PathSegment) -> Option<bool> {
+    match seg.ident.to_string().as_str() {
+        "InstanceOf" => Some(false),
+        "InstanceOfAsync" => Some(true),
+        _ => None,
+    }
 }
 
 /// The signature of every bound that states a requirement, in written
@@ -124,8 +137,8 @@ fn states_a_requirement(seg: &syn::PathSegment) -> bool {
 fn required_signatures<'a>(
     ident: &Ident,
     bounds: impl Iterator<Item = &'a TypeParamBound>,
-) -> syn::Result<Vec<Type>> {
-    let mut found: Vec<Type> = Vec::new();
+) -> syn::Result<Vec<Required>> {
+    let mut found: Vec<Required> = Vec::new();
     let mut named: Vec<String> = Vec::new();
     for bound in bounds {
         let TypeParamBound::Trait(t) = bound else {
@@ -134,9 +147,9 @@ fn required_signatures<'a>(
         let Some(seg) = t.path.segments.last() else {
             continue;
         };
-        if !states_a_requirement(seg) {
+        let Some(awaits) = states_a_requirement(seg) else {
             continue;
-        }
+        };
         let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
             return Err(syn::Error::new_spanned(
                 seg,
@@ -163,7 +176,10 @@ fn required_signatures<'a>(
             ));
         }
         named.push(name);
-        found.push(sig.clone());
+        found.push(Required {
+            signature: sig.clone(),
+            awaits,
+        });
     }
     Ok(found)
 }
@@ -516,7 +532,7 @@ impl Vars {
             .map(|v| match &v.mono {
                 None => quote! { ::acvus_extern::TyVarBound::Any },
                 Some(members) => quote! {
-                    ::acvus_extern::TyVarBound::OneOf(vec![#(
+                    ::acvus_extern::TyVarBound::one_of(vec![#(
                         <#members as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)
                     ),*])
                 },

@@ -393,12 +393,41 @@ holding its address can make. `Kind::Entry` carries the word, and
 
 `Externs::combine` records, per instance, where in that instance's pattern
 each of its own bounds stands — a path of type-argument positions
-(`BoundAt`). A bound standing somewhere no ground type can be walked to is
-refused there (`CombineError::RequirementOffThePattern`). `InstanceTable::
-entry_at` then walks a ground type by those paths, recursing once per
-bound, and builds the node. The recursion is structural on the declaration
-and the filling comes from the ground type, so no new solver task carries
-it; what admits the call is still the `OneOf` meet of Decision 1.
+(`InnerBound`). A bound standing somewhere no ground type can be walked to
+is refused there (`CombineError::RequirementOffThePattern`), and so is one
+whose path is empty: an instance at a bare variable requiring an instance
+of that same variable admits the types its own definition admits, and no
+ground type decides it (`RequirementIsThePattern`). That refusal is what
+makes the recursion terminate, every other step walking one type argument
+down the ground type.
+
+The same recursion runs twice, on one set of shapes. `InstanceTable::
+entry_at` walks a ground type by those paths at `prepare` and builds the
+node. `TyVarBound::OneOf`'s admission walks them at the checker: a bound
+that states a requirement carries the signature's name and an
+`Arc<InstanceSets>`, the signature-to-shapes map `combine` built, so a
+ground type whose inner has no instance is refused where it was written.
+`acvus-interpreter-test/tests/entry_tree.rs` builds that value through a
+second constructor with no bound and shows the refusal; the `Arc` is how a
+requirement inside a pattern resolves by name rather than through a value
+that would have to contain itself.
+
+The set judges the shapes it declared and no others. `typeck` joins the
+compiler's own instances of a shared signature to a bound's shapes
+(RFC-0020), and an intrinsic such as `StringClone` states no requirement,
+so a ground type standing at no shape the set holds passes the recursion
+untouched and is decided by the shapes alone. Vetoing those instead cost
+two corpus programs their admission, measured against `prepare_contract`'s
+466.
+
+What admits the call is still the `OneOf` meet of Decision 1, narrowed by
+one thing more: a requirement carries the highest task an instance it
+reaches may run at, and the meet takes only the instances at or below it.
+That task is what the bound's own spelling drives, met with what the
+requiring Rust body can do — `InstanceOf` is a call that returns, so it is
+`Task::Sync` however the body was declared, and `InstanceOfAsync` in an
+`async fn` body is `Task::Async`. A sync consumer handed a type whose only
+instance is an `async fn` is therefore refused at check, naming both.
 
 **A carrier is rebuilt at each call, never stored.** In a requiring handler
 `I` is (value, entries): `Carrier::of(value, bounds)`. `Signature::
@@ -420,15 +449,38 @@ there, and restating it as an argument blurs the split between the bound
 form here and step 5's parameter form (`Instance<S>`, a pointer passed as
 its own argument for a container's element).
 
-**Two traits, one direction.** `InstanceOf<S, Rt>` is the sync call,
-`InstanceOfAsync<S, Rt>` the async one, and every sync instance is an async
-instance through one blanket impl over a ready future. There is no impl the
-other way: an async instance suspends and a sync caller has nowhere to
-suspend to. A requiring handler's async body bounds its variable by
-`InstanceOfAsync` and its `_now` twin by `InstanceOf`; either spelling
-states the same requirement, so a site resolves the same entries for both.
-`acvus-extern/tests/decl.rs`'s `drive_await` reaches `t::step`'s sync
-instance at `i64` through the blanket impl.
+**Two traits, one direction, and the node is where it is kept.** A node's
+`run` is an `EntryRun`: the sync values-ABI `fn` (`EntryFn`), or the async
+one (`AsyncEntryFn`). `InstanceOf<S, Rt>` takes the `Sync` arm.
+`InstanceOfAsync<S, Rt>` takes either — awaiting the `Await` arm, and
+handing the `Sync` arm's result back as a ready future. There is nothing
+the other way: an async instance suspends and a sync caller has nowhere to
+suspend to.
+
+`EntryRun` is one node kind with two arms rather than two node kinds. Which
+form a node has is the registry's answer at the ground type, and what
+reaches a requiring handler is one untyped word in a `Bounds` slice, so two
+kinds would be chosen by casting that word to one of two pointer types —
+and the wrong cast compiles. `AsyncEntryFn` is not `AsyncCall::call`'s own
+form either: that takes `Rt` by value, which an entry holding `&Rt` cannot
+produce, and its `BoxFuture<'static, Value>` is a claim an entry cannot
+keep, the receiver in an entry's run being a reference into the calling
+handler's own storage. The shape is `AsyncGlue`'s inner closure with the
+values ABI's run, and the future borrows the call.
+
+`Handler::entry()` answers `Some` at `Sync` and at `Async`. `Heavy` has
+none, and that is a proof: reaching a `heavy` body through an entry is
+either running it in the caller's frame, which is `Task::Sync` and drops
+the reason the declaration said `heavy`, or offloading it — which needs the
+runtime's executor, and an entry's four arguments do not carry one.
+
+A requiring handler's async body bounds its variable by `InstanceOfAsync`
+and its `_now` twin by `InstanceOf`. Both spellings name the same signature
+and a site resolves the same entries for both; what differs is the task the
+requirement admits. `acvus-extern/tests/decl.rs`'s `drive_await` drains a
+sync instance's ready future at `i64`, and `entry_tree.rs`'s `total_await`
+drives `counter | doubled | slowed` — two `Sync` nodes and one `Await` —
+to the sum the sync pipeline reaches.
 
 An instance whose first parameter does not stand at the signature's first
 variable, or whose later parameters are not each one whole value, gets no
@@ -451,6 +503,20 @@ variable, or whose later parameters are not each one whole value, gets no
 
 #### What waits
 
+**The whole-stderr pin of the new refusal** waits on the first declaration
+in `acvus-ext` that requires an instance: `acvus-cli`'s corpus runs the
+standard registries, and none of them states a requirement today, so the
+sentence is pinned where a requirement exists — `acvus-mir-test`'s
+`bound.rs` and `acvus-interpreter-test`'s `entry_tree.rs`. `iter`'s `pmap`
+is that declaration.
+
+**A constructor that stores a carrier without calling it** pays the task
+its own body runs at. `slowed` holds its inner iterator and never calls it,
+yet its `InstanceOf` bound admits only instances a plain `fn` could call,
+so an async stage cannot be nested inside another. The requirement's task
+is the declaration's, and a declaration that stores rather than calls has
+no way to say so.
+
 **A variable that is both `Monomorphize<(A, B)>` and bounded** is refused.
 The two fill it with different Rust types in one monomorphization:
 `Monomorphize` compiles the body once per member with the variable standing
@@ -461,25 +527,10 @@ Carrier<Rt>` — and pinned by
 carrier that derefs to its member would answer it, and that is step 5's
 parameter form rather than this step's.
 
-**A refusal does not name the signature it required.** `combine` meets a
-requirement into `TyVarBound::OneOf`, which carries the patterns an
-instance stands at but not the name of the signature, so the checker's
-`TypeOutOfBound` says *"type i64 is outside the declared bound one of
-Counter, Doubled<'0>"* — the ground type and every pattern, without the
-signature. Carrying the name would widen `TyVarBound` or add `requires` to
-`FnKind::Extern`, both shared across `acvus-mir`.
-
-**The inner bound is checked at the constructor, not at the pattern.** A
-value of `Doubled<X>` can only come from a handler that itself required `X:
-InstanceOf<advance>`, so `entry_at` is total on what the checker admits.
-That is a property of the declarations, not a guarantee: a registry that
-built such a value without the bound would reach `entry_at`'s panic instead
-of a refusal.
-
 ### The entry, unchanged from the first half
 
 ```rust
-pub type Entry<Rt> = for<'a, 'w> unsafe fn(
+pub type EntryFn<Rt> = for<'a, 'w> unsafe fn(
     &'a Rt,
     &'a mut <Rt as Runtime>::Frame<'w>,
     &'a [<Rt as Runtime>::Value],
@@ -493,9 +544,8 @@ carries as a type parameter rather than a field.
 
 An entry is written for an instance of a shared signature and for nothing
 else. An instance still has none if it holds a `#[state]` value, takes a
-projection parameter, or is reached only by the glue that suspends the
-caller (`heavy`, and an `async fn` without a `sync =` companion). Of the
-standard registries' synchronous instances, **none** is in that set:
+projection parameter, or is declared `heavy`. Of the
+standard registries' instances, **none** is in that set:
 `acvus-interpreter-test/tests/instance_entry.rs` asserts it over the
 fifteen declared signatures, so the refusal list is empty and the refusal
 is a path no registered instance reaches today. An intrinsic such as

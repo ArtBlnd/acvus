@@ -282,14 +282,16 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Signature::as_this` | the carrier a receiver in any of the three modes stands at | derived from `Recv` — the entry lies in the carrier, and an opaque `Recv` is the only handle a generic caller holds |
 | `one_value` | one of the runtime's values holding what a parameter crosses as | derived from `Cross<Form = One>` — the argument run an entry is called with is built out of these |
 | `InstanceOf` | a type with an instance of a shared signature, called where it stands | atom — the handle the deleted marker bound `HasInstance<Sig>` never had |
-| `InstanceOfAsync` | the same predicate at the async task | derived from `InstanceOf` — one blanket impl lifts every sync instance over a ready future, and there is none the other way |
+| `InstanceOfAsync` | the same predicate at the async task | derived from `InstanceOf` — it drives a node of either form, awaiting the `Await` arm and handing the `Sync` arm back as a ready future, and there is no trait the other way |
 | `EntryFn` | a resolved instance's handler as a plain function | derived from `Handler::call` — without the `&self`, and with the window lent rather than moved |
-| `EntryNode` | one instance as a site resolved it: its `EntryFn`, and the entry of each of its own bounds in `requires` order | atom — the structural recursion of Decision 2, as a value the program owns |
+| `AsyncEntryFn` | the same for an instance whose body is an `async fn` | derived from `AsyncGlue`'s closure — the values ABI's run, and the future the body is; `AsyncCall`'s own `'static` form is a claim an entry cannot keep, its receiver being a reference into the calling handler's storage |
+| `EntryRun` | the task an instance's body runs at, as the function that runs it | derived from `Task` — one node kind with two arms, because which arm a node has is the registry's answer at the ground type and the site's word is untyped |
+| `EntryNode` | one instance as a site resolved it: its `EntryRun`, and the entry of each of its own bounds in `requires` order | atom — the structural recursion of Decision 2, as a value the program owns |
 | `Entry` | a resolved instance, as the one word `Kind::Entry` carries | derived from `EntryNode` — the address of one, so a run carries a whole tree in one value |
 | `Bounds` | the entries one declaration's bounds resolved to | derived from `Entry` — a node's children, read by position in `requires` order |
 | `NodeArena` | where the nodes a site resolved live | atom — owned by `InstanceTable` and held by every site table that read one, which is what makes an `Entry` an address worth reading |
 | `Held` | a bounded variable's value where a value keeps it | derived from `Owned` — the pointer-free form an `ExternType` payload holds, so the handler that wrote it and the instance that reads it back name one Rust type |
-| `HeldMut` | a carrier built over a `Held` for one call | derived from `Held` + `Carrier` — a `&mut` receiver may write its own value word, and the guard puts it back where it came from |
+| `HeldMut` | a carrier built over a `Held` for one call | derived from `Held` + `Carrier` — a `&mut` receiver may write its own value word, and the guard puts it back where it came from; the carrier is a `ManuallyDrop`, so a guard with no carrier is not a state the type has |
 | `Bound` | the entries a `Held` is read at | derived from `Bounds` — what `#[extern_fn]` appends to a declaration whose parameter holds a bounded variable rather than taking it |
 | `AtEntry` | a declaration's entry as a type | derived from `EntryFn` — named where the glue's type is named, so the glue itself stays the closure |
 | `SitesAtEntry` | a parameter list whose site table a call through an entry can rebuild | derived from `Parameters` — the glue over such a list can be an entry, because its site holds nothing the site alone knew |
@@ -298,8 +300,8 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `NoInstances` | the registry of a site built where no declaration requires an instance | derived from `InstanceEntries` — named explicitly at every such site, so no default hides one that should have had a registry |
 | `InstanceTable` | every shared signature's instances, as `Externs::combine` collected them | derived from `InstanceAt` — the registry half of `InstanceEntries` |
 | `InstanceAt` | one instance as a site table needs it: the pattern it stands at, the plain function that runs it, and what its own bounds require | atom — the entry is absent where the instance has none |
-| `BoundAt` | one bound of an instance's own declaration | derived from `Requirement` — the signature, and the type-argument path to walk down a ground type to what fills the variable carrying it |
-| `Requirement` | one `InstanceOf<sig::S<..>>` or `InstanceOfAsync<sig::S<..>>` bound of a declaration | atom — which variable carries it and which signature it names; the order is the order of the carrier's entries, and either spelling states the same requirement |
+| `BoundAt` | one bound of an instance's own declaration | `acvus_mir::ty::InnerBound` under this crate's name — the checker decides the same recursion the site table walks, so the two read one type |
+| `Requirement` | one `InstanceOf<sig::S<..>>` or `InstanceOfAsync<sig::S<..>>` bound of a declaration | atom — which variable carries it, which signature it names, and the highest task an instance it reaches may run at; the order is the order of the carrier's entries |
 | `ByBound` | a parameter whose type is a bounded variable's carrier | derived from `Carrier` — the site holds the entries, so the argument run is no wider than it would be without the bound |
 | `AtBound` | a parameter whose type *holds* a bounded variable's value | derived from `ByBound` — the parameter crosses as it would without the bound, and the site resolves this instance's own entry beside it |
 | `AtBounds` | what a site resolved for one such parameter | derived from `Bounds` — with the arena where the entries came from the site table, without it where they came through the run |

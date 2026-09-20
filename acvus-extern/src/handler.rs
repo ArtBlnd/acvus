@@ -14,7 +14,7 @@ use acvus_utils::Interner;
 use acvus_utils::QualifiedRef;
 use futures::future::BoxFuture;
 
-use crate::instance::{Bound, Bounds, Carrier, Entry, EntryFn, NodeArena};
+use crate::instance::{Bound, Bounds, Carrier, Entry, EntryRun, NodeArena};
 use crate::loan::Loan;
 use crate::obj::{Cross, Form, FormKind, One, OneValue, Pair, Run};
 use crate::registry::SharedSignature;
@@ -1046,7 +1046,7 @@ pub trait AtEntry<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
 {
-    const ENTRY: Option<EntryFn<Rt>>;
+    const ENTRY: Option<EntryRun<Rt>>;
 }
 
 /// The entry of a declaration that has none.
@@ -1056,7 +1056,7 @@ impl<Rt> AtEntry<Rt> for NoEntry
 where
     Rt: Runtime,
 {
-    const ENTRY: Option<EntryFn<Rt>> = None;
+    const ENTRY: Option<EntryRun<Rt>> = None;
 }
 
 /// The call form a run of this shape and a result of form `R` take: which
@@ -1220,7 +1220,7 @@ where
     fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AtSite<Rt>>;
     /// This handler as a plain function (RFC-0067 Decision 3), for the
     /// declarations that have one.
-    fn entry(&self) -> Option<EntryFn<Rt>>;
+    fn entry(&self) -> Option<EntryRun<Rt>>;
 }
 
 /// One declared instance with its site table filled: the handler of one call
@@ -1287,6 +1287,8 @@ where
     /// As `HandlerFactory::arity`.
     fn arity(&self) -> usize;
     fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AsyncAtSite<Rt>>;
+    /// As `HandlerFactory::entry`.
+    fn entry(&self) -> Option<EntryRun<Rt>>;
 }
 
 /// As `AtSite`, for a declaration whose Rust body is an `async fn`.
@@ -1386,13 +1388,13 @@ where
 /// As `Glue`, for a body that awaits. The closure is shared because the
 /// future it returns outlives the call that made it, so the call clones the
 /// closure into the future rather than borrowing it.
-pub struct AsyncGlue<Rt, F, A, S = Unsited> {
+pub struct AsyncGlue<Rt, F, A, S = Unsited, E = NoEntry> {
     f: Arc<F>,
     sites: S,
-    shape: PhantomData<fn() -> (Rt, A)>,
+    shape: PhantomData<fn() -> (Rt, A, E)>,
 }
 
-impl<Rt, F, A, S> Clone for AsyncGlue<Rt, F, A, S>
+impl<Rt, F, A, S, E> Clone for AsyncGlue<Rt, F, A, S, E>
 where
     S: Clone,
 {
@@ -1406,14 +1408,14 @@ where
 }
 
 // SAFETY: as `Glue`'s, the closure being behind a shared pointer.
-unsafe impl<Rt, F, A, S> Send for AsyncGlue<Rt, F, A, S>
+unsafe impl<Rt, F, A, S, E> Send for AsyncGlue<Rt, F, A, S, E>
 where
     F: Send + Sync,
     S: Send,
 {
 }
 // SAFETY: as `Send`.
-unsafe impl<Rt, F, A, S> Sync for AsyncGlue<Rt, F, A, S>
+unsafe impl<Rt, F, A, S, E> Sync for AsyncGlue<Rt, F, A, S, E>
 where
     F: Send + Sync,
     S: Sync,
@@ -1581,6 +1583,25 @@ where
     }
 }
 
+/// As `glue_at_entry`, for a body that awaits.
+pub fn async_glue_at_entry<Rt, F, A, E>(f: F) -> AsyncGlue<Rt, F, A, Unsited, E>
+where
+    Rt: Runtime,
+    A: SitesAtEntry<Rt>,
+    E: AtEntry<Rt>,
+    F: for<'a, 'w> Fn(
+        &'a Rt,
+        &'a mut Rt::Frame<'w>,
+        <A as Parameters<Rt>>::Out<'a>,
+    ) -> BoxFuture<'a, Rt::Value>,
+{
+    AsyncGlue {
+        f: Arc::new(f),
+        sites: Unsited,
+        shape: PhantomData,
+    }
+}
+
 impl<Rt, F, A, R, E> Handler<Rt> for Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
@@ -1633,7 +1654,7 @@ where
         Box::new(self.at(args))
     }
 
-    fn entry(&self) -> Option<EntryFn<Rt>> {
+    fn entry(&self) -> Option<EntryRun<Rt>> {
         <E as AtEntry<Rt>>::ENTRY
     }
 }
@@ -1687,9 +1708,10 @@ where
 {
 }
 
-impl<Rt, F, A> AsyncCall<Rt> for AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites>
+impl<Rt, F, A, E> AsyncCall<Rt> for AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
+    E: AtEntry<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
@@ -1718,9 +1740,10 @@ where
     }
 }
 
-impl<Rt, F, A> AsyncFactory<Rt> for AsyncGlue<Rt, F, A>
+impl<Rt, F, A, E> AsyncFactory<Rt> for AsyncGlue<Rt, F, A, Unsited, E>
 where
     Rt: Runtime,
+    E: AtEntry<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
@@ -1748,14 +1771,21 @@ where
     fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AsyncAtSite<Rt>> {
         Box::new(self.at(args))
     }
+
+    fn entry(&self) -> Option<EntryRun<Rt>> {
+        <E as AtEntry<Rt>>::ENTRY
+    }
 }
 
-impl<Rt, F, A> AsyncGlue<Rt, F, A>
+impl<Rt, F, A, E> AsyncGlue<Rt, F, A, Unsited, E>
 where
     Rt: Runtime,
     A: Parameters<Rt>,
 {
-    pub fn at(self, args: &[ArgAt<'_, Rt>]) -> AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites> {
+    pub fn at(
+        self,
+        args: &[ArgAt<'_, Rt>],
+    ) -> AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites, E> {
         AsyncGlue {
             f: self.f,
             sites: <A as Parameters<Rt>>::sites(args),
@@ -1764,9 +1794,10 @@ where
     }
 }
 
-impl<Rt, F, A> AsyncAtSite<Rt> for AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites>
+impl<Rt, F, A, E> AsyncAtSite<Rt> for AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
+    E: AtEntry<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
@@ -1838,13 +1869,19 @@ impl<R: Runtime> ExternHandler<R> {
         }
     }
 
-    /// This instance's entry (RFC-0067 Decision 3). A `Heavy` or `Async`
-    /// handler has none: the glue that runs one suspends the caller, and an
-    /// entry is called where it stands.
-    pub fn entry(&self) -> Option<EntryFn<R>> {
+    /// This instance's entry (RFC-0067 Decision 3), at the task its
+    /// declaration named.
+    ///
+    /// `Heavy` has none, and that is a proof rather than a gap. Reaching a
+    /// `Heavy` body through an entry is either running it in the caller's
+    /// frame, which is `Task::Sync` and drops the whole reason the
+    /// declaration said `heavy`, or offloading it — which needs the
+    /// runtime's executor, and an entry's arguments do not carry one.
+    pub fn entry(&self) -> Option<EntryRun<R>> {
         match self {
             Self::Sync(f) => f.entry(),
-            Self::Heavy(_) | Self::Async(_) => None,
+            Self::Async(f) => f.entry(),
+            Self::Heavy(_) => None,
         }
     }
 }

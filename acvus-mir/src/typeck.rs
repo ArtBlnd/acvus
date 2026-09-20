@@ -425,7 +425,7 @@ fn operand_stays_lent(op: BinOp) -> bool {
 fn operand_bound(op: BinOp) -> Option<TyVarBound> {
     let integers = || crate::ty::IntTy::ALL.iter().copied().map(TyTerm::Int);
     match op {
-        BinOp::Add => Some(TyVarBound::OneOf(
+        BinOp::Add => Some(TyVarBound::one_of(
             integers().chain([TyTerm::Float, TyTerm::String]).collect(),
         )),
         BinOp::Sub
@@ -435,11 +435,11 @@ fn operand_bound(op: BinOp) -> Option<TyVarBound> {
         | BinOp::Lt
         | BinOp::Gt
         | BinOp::Lte
-        | BinOp::Gte => Some(TyVarBound::OneOf(
+        | BinOp::Gte => Some(TyVarBound::one_of(
             integers().chain([TyTerm::Float, TyTerm::Char]).collect(),
         )),
         BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-            Some(TyVarBound::OneOf(integers().collect()))
+            Some(TyVarBound::one_of(integers().collect()))
         }
         BinOp::Eq | BinOp::Neq | BinOp::And | BinOp::Or => None,
     }
@@ -2329,7 +2329,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let compiler_instances = self.compiler_instances(qref);
         let mut scheme = scheme.clone();
         if !compiler_instances.is_empty()
-            && let Some(TyVarBound::OneOf(shapes)) = scheme.bounds.first_mut()
+            && let Some(TyVarBound::OneOf { shapes, .. }) = scheme.bounds.first_mut()
         {
             shapes.extend(compiler_instances.iter().filter_map(|c| match &c.ty {
                 TyTerm::Fn { ret, .. } => Some((**ret).clone()),
@@ -2900,7 +2900,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 } => MirErrorKind::TaskTooHigh { required, found },
                 Unsettled::NoConversion { from, to, .. } => {
                     if let TyTerm::Var(var) = self.solver.resolve_ty(&to)
-                        && let bound @ (TyVarBound::OneOf(_) | TyVarBound::Integer { .. }) =
+                        && let bound @ (TyVarBound::OneOf { .. } | TyVarBound::Integer { .. }) =
                             self.solver.bound_of_var(var)
                     {
                         self.error(
@@ -3905,7 +3905,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let bound = options
             .iter()
             .map(|option| option.candidate.param_bound(index))
-            .fold(TyVarBound::OneOf(vec![]), TyVarBound::union);
+            .fold(TyVarBound::one_of(vec![]), TyVarBound::union);
         ParamTerm::new(name, self.solver.fresh_var_with(bound))
     }
 

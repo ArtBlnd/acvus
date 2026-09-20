@@ -446,6 +446,14 @@ fn generate_extern_fn(
         (false, false) => quote! { ::acvus_extern::Task::Sync },
     };
     let at_task = quote! { .at_task(#task) };
+    // The task the Rust body runs at, which is not the declared task: a
+    // `heavy` body is a plain `fn` the runtime offloads whole, so it has
+    // nowhere to suspend to either, and an `async fn` with a `sync =` twin
+    // requires what the twin does — the twin is the body a `Sync` site runs.
+    let body_task = match is_async && attr.sync.is_none() {
+        true => quote! { ::acvus_extern::Task::Async },
+        false => quote! { ::acvus_extern::Task::Sync },
+    };
     // `optimize::spawn_split` rewrites every call whose effect is not Pure
     // into a `Spawn` and an `Eval`, and an `Eval` awaits. Such a call runs
     // at `Async` however synchronous its Rust body is, so a declaration
@@ -676,7 +684,92 @@ fn generate_extern_fn(
         let entry_frame_arg = takes_frame.then(|| quote! { __frame, });
         let call = quote! { #callee #turbofish (#rt_arg #frame_arg #(#passed),*) };
         let entry_call = quote! { #callee #turbofish (#rt_arg #entry_frame_arg #(#passed),*) };
-        if awaits {
+        // The run an entry is called with ends in the caller's own entry
+        // word, which `Signature::call_entry` wrote there; a declaration
+        // whose bounds nothing reads leaves it unread.
+        let bounds_of_run = match held.is_empty() {
+            true => quote! { let __bounds = ::acvus_extern::Bounds::none(); },
+            false => quote! {
+                // SAFETY: the run's last word is the entry `call_entry`
+                // called this one through, and its arena is the calling
+                // site's, which outlives this call.
+                let __bounds = unsafe {
+                    ::acvus_extern::Entry::bounds(::acvus_extern::Runtime::entry_of(
+                        __rt,
+                        &__run[<(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::WIDTH],
+                    ))
+                };
+            },
+        };
+        if awaits && has_entry {
+            let at = entries.borrow().len();
+            let entry_ident = format_ident!("__extern_entry_{}_{}", fn_ident, at);
+            let entry_ty = format_ident!("__ExternEntry{}{}", fn_ident, at);
+            entries.borrow_mut().push(quote! {
+                #[doc(hidden)]
+                unsafe fn #entry_ident<'__a, '__w, '__r, __R>(
+                    __rt: &'__a __R,
+                    __frame: &'__a mut <__R as ::acvus_extern::Runtime>::Frame<'__w>,
+                    __run: &'__r [<__R as ::acvus_extern::Runtime>::Value],
+                ) -> ::acvus_extern::BoxFuture<'__a, <__R as ::acvus_extern::Runtime>::Value>
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    #bounds_of_run
+                    let __sites = <(#(#arg_markers,)*) as ::acvus_extern::SitesAtEntry<__R>>
+                        ::sites_at_entry(__bounds);
+                    let __held: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value> =
+                        __run.to_vec();
+                    ::std::boxed::Box::pin(async move {
+                        // SAFETY: the values ABI's contract, over the run
+                        // this future owns — which is `Parameters::take`'s.
+                        let (#(#arg_idents,)*) = unsafe {
+                            <(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::take(
+                                __rt,
+                                &__held,
+                                &__sites,
+                            )
+                        };
+                        let __r = (#entry_call).await;
+                        let mut __out = [
+                            <<__R as ::acvus_extern::Runtime>::Value as
+                                ::core::default::Default>::default(),
+                        ];
+                        <#ret_marker as ::acvus_extern::Ret<__R>>::into_run(__r, __rt, &mut __out);
+                        __out[0]
+                    })
+                }
+
+                #[doc(hidden)]
+                #[allow(non_camel_case_types)]
+                pub struct #entry_ty;
+
+                impl<__R> ::acvus_extern::AtEntry<__R> for #entry_ty
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    const ENTRY: ::core::option::Option<::acvus_extern::EntryRun<__R>> =
+                        ::core::option::Option::Some(::acvus_extern::EntryRun::Await(
+                            #entry_ident::<__R>,
+                        ));
+                }
+            });
+            quote! {
+                ::acvus_extern::ExternHandler::awaited(
+                    ::acvus_extern::async_glue_at_entry::<
+                        __R,
+                        _,
+                        (#(#arg_markers,)*),
+                        #entry_ty,
+                    >(move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| {
+                        ::std::boxed::Box::pin(async move {
+                            let __r = (#call).await;
+                            <#rt_ret as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
+                        })
+                    })
+                )
+            }
+        } else if awaits {
             quote! {
                 ::acvus_extern::ExternHandler::awaited({
                     #capture_state
@@ -692,23 +785,6 @@ fn generate_extern_fn(
                 })
             }
         } else if has_entry {
-            // The run an entry is called with ends in the caller's own
-            // entry word, which `Signature::call_entry` wrote there; a
-            // declaration whose bounds nothing reads leaves it unread.
-            let bounds_of_run = match held.is_empty() {
-                true => quote! { let __bounds = ::acvus_extern::Bounds::none(); },
-                false => quote! {
-                    // SAFETY: the run's last word is the entry
-                    // `call_entry` called this one through, and its arena
-                    // is the calling site's, which outlives this call.
-                    let __bounds = unsafe {
-                        ::acvus_extern::Entry::bounds(::acvus_extern::Runtime::entry_of(
-                            __rt,
-                            &__run[<(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::WIDTH],
-                        ))
-                    };
-                },
-            };
             let at = entries.borrow().len();
             let entry_ident = format_ident!("__extern_entry_{}_{}", fn_ident, at);
             let entry_ty = format_ident!("__ExternEntry{}{}", fn_ident, at);
@@ -748,8 +824,10 @@ fn generate_extern_fn(
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    const ENTRY: ::core::option::Option<::acvus_extern::EntryFn<__R>> =
-                        ::core::option::Option::Some(#entry_ident::<__R>);
+                    const ENTRY: ::core::option::Option<::acvus_extern::EntryRun<__R>> =
+                        ::core::option::Option::Some(::acvus_extern::EntryRun::Sync(
+                            #entry_ident::<__R>,
+                        ));
                 }
             });
             quote! {
@@ -896,12 +974,19 @@ fn generate_extern_fn(
         .bounded()
         .flat_map(|v| {
             let at = v.index;
-            v.requires.iter().map(move |sig| {
-                let path = signature_path(sig).expect("a required signature is a path");
+            let body_task = &body_task;
+            v.requires.iter().map(move |required| {
+                let path =
+                    signature_path(&required.signature).expect("a required signature is a path");
+                let calls = match required.awaits {
+                    true => quote! { #body_task },
+                    false => quote! { ::acvus_extern::Task::Sync },
+                };
                 quote! {
                     ::acvus_extern::Requirement {
                         var: #at,
                         signature: <#path as ::acvus_extern::SharedSignature>::qref(__i),
+                        calls: #calls,
                     }
                 }
             })
@@ -920,12 +1005,12 @@ fn generate_extern_fn(
             let paths: Vec<Path> = v
                 .requires
                 .iter()
-                .map(|sig| signature_path(sig).expect("a required signature is a path"))
+                .map(|r| signature_path(&r.signature).expect("a required signature is a path"))
                 .collect();
             let at_runtime: Vec<Type> = v
                 .requires
                 .iter()
-                .map(|sig| vars.to_runtime_instance(sig, None))
+                .map(|r| vars.to_runtime_instance(&r.signature, None))
                 .collect();
             let instance_impls = at_runtime.iter().zip(&fields).map(|(sig, field)| {
                 quote! {
@@ -948,6 +1033,35 @@ fn generate_extern_fn(
                             // is the type `__this`'s value stands at.
                             unsafe {
                                 <#sig as ::acvus_extern::Signature<__R>>::call_entry(
+                                    __entry, __rt, __frame, __this, __rest,
+                                )
+                            }
+                        }
+                    }
+
+                    impl<__R> ::acvus_extern::InstanceOfAsync<#sig, __R> for #name<__R>
+                    where
+                        __R: ::acvus_extern::Runtime,
+                        #sig: ::acvus_extern::Signature<__R, This = Self>,
+                    {
+                        fn call<'__a, '__w>(
+                            __this: <#sig as ::acvus_extern::Signature<__R>>::Recv<'__a>,
+                            __rt: &'__a __R,
+                            __frame: &'__a mut <__R as ::acvus_extern::Runtime>::Frame<'__w>,
+                            __rest: <#sig as ::acvus_extern::Signature<__R>>::Rest<'__a>,
+                        ) -> ::acvus_extern::BoxFuture<
+                            '__a,
+                            <#sig as ::acvus_extern::Signature<__R>>::Ret,
+                        >
+                        where
+                            <#sig as ::acvus_extern::Signature<__R>>::Ret:
+                                ::core::marker::Send,
+                        {
+                            let __entry =
+                                <#sig as ::acvus_extern::Signature<__R>>::as_this(&__this).#field;
+                            // SAFETY: as the synchronous impl's.
+                            unsafe {
+                                <#sig as ::acvus_extern::Signature<__R>>::call_entry_async(
                                     __entry, __rt, __frame, __this, __rest,
                                 )
                             }
@@ -3028,7 +3142,8 @@ fn signature_call(
         return proc_macro2::TokenStream::new();
     };
     let rest_tys = rest.iter().map(|p| &p.ty);
-    let rest_values = rest.iter().map(|p| &p.value);
+    let rest_values: Vec<&proc_macro2::TokenStream> = rest.iter().map(|p| &p.value).collect();
+    let rest_values_async = rest_values.clone();
     let rest_crossings = rest.iter().filter_map(|p| p.crossing.as_ref());
     let kinds = vars.kind_predicates();
     quote! {
@@ -3058,6 +3173,18 @@ fn signature_call(
                 __this: Self::Recv<'_>,
                 __rest: Self::Rest<'_>,
             ) -> #ret {
+                // SAFETY: the caller's contract.
+                let ::acvus_extern::EntryRun::Sync(__run_at) =
+                    (unsafe { ::acvus_extern::Entry::run(__entry) })
+                else {
+                    panic!(
+                        "a requirement written as `InstanceOf` reached an instance whose body \
+                         is an `async fn`, which suspends where this call has nowhere to \
+                         suspend to; a declaration at `Task::Sync` requires only the \
+                         instances its own task admits, so reaching this is a defect in that \
+                         meet and not a program error (RFC-0067 Decision 1)"
+                    )
+                };
                 let __run = [
                     #head_of_run,
                     #(#rest_values,)*
@@ -3071,13 +3198,61 @@ fn signature_call(
                 // signature's instance at the type `__this` stands at — and
                 // the run above is that instance's whole argument run, one
                 // value per declared parameter in declared order.
-                unsafe {
-                    (::acvus_extern::Entry::run(__entry))(__rt, __frame, &__run, &mut __out)
-                };
+                unsafe { __run_at(__rt, __frame, &__run, &mut __out) };
                 // SAFETY: the instance wrote its result into `__out` through
                 // `Ret::into_run`, which for a one-value result is what
                 // `Cross::from_run` reads back.
                 unsafe { <#ret as ::acvus_extern::Cross<#runtime>>::from_run(__rt, &__out) }
+            }
+
+            unsafe fn call_entry_async<'__a>(
+                __entry: ::acvus_extern::Entry<#runtime>,
+                __rt: &'__a #runtime,
+                __frame: &'__a mut <#runtime as ::acvus_extern::Runtime>::Frame<'_>,
+                __this: Self::Recv<'__a>,
+                __rest: Self::Rest<'__a>,
+            ) -> ::acvus_extern::BoxFuture<'__a, #ret>
+            where
+                #ret: ::core::marker::Send,
+            {
+                let __run = [
+                    #head_of_run,
+                    #(#rest_values_async,)*
+                    ::acvus_extern::Runtime::entry_value(__rt, __entry),
+                ];
+                // SAFETY: the caller's contract.
+                match unsafe { ::acvus_extern::Entry::run(__entry) } {
+                    ::acvus_extern::EntryRun::Sync(__run_at) => {
+                        let mut __out = [
+                            <<#runtime as ::acvus_extern::Runtime>::Value as
+                                ::core::default::Default>::default(),
+                        ];
+                        // SAFETY: as `call_entry`'s.
+                        unsafe { __run_at(__rt, __frame, &__run, &mut __out) };
+                        // SAFETY: as `call_entry`'s.
+                        let __r = unsafe {
+                            <#ret as ::acvus_extern::Cross<#runtime>>::from_run(__rt, &__out)
+                        };
+                        ::std::boxed::Box::pin(::core::future::ready(__r))
+                    }
+                    ::acvus_extern::EntryRun::Await(__run_at) => {
+                        // SAFETY: as `call_entry`'s, and the future the
+                        // instance gives back does not outlive `'__a`, which
+                        // is the storage `__this` names.
+                        let __future = unsafe { __run_at(__rt, __frame, &__run) };
+                        ::std::boxed::Box::pin(async move {
+                            let __value = __future.await;
+                            // SAFETY: the instance wrote its result as one
+                            // value through `Ret::into_run`.
+                            unsafe {
+                                <#ret as ::acvus_extern::Cross<#runtime>>::from_run(
+                                    __rt,
+                                    &[__value],
+                                )
+                            }
+                        })
+                    }
+                }
             }
         }
     }

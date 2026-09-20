@@ -8,6 +8,7 @@
 //! require, before the glue was given its site.
 
 use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
 use std::sync::Mutex;
 
 use futures::future::BoxFuture;
@@ -39,6 +40,50 @@ pub type EntryFn<Rt> = for<'a, 'w> unsafe fn(
     &'a mut [<Rt as Runtime>::Value],
 );
 
+/// A resolved instance whose Rust body is an `async fn`, as a plain
+/// function: the run and the caller's window as `EntryFn` takes them, and
+/// the future the body is.
+///
+/// `AsyncCall::call`'s own form — `fn(Rt, &[Value]) -> BoxFuture<'static,
+/// Value>` — is not what an entry takes, for two reasons. `Runtime` is
+/// not `Clone`, and an entry is called from a handler holding `&Rt`. And
+/// `'static` is a claim an entry cannot keep: the receiver in its run is a
+/// reference into the calling handler's own storage, so the future borrows
+/// the call. The shape here is `AsyncGlue`'s own inner closure type, with
+/// the values ABI's run in place of the taken arguments.
+pub type AsyncEntryFn<Rt> = for<'a, 'w, 'r> unsafe fn(
+    &'a Rt,
+    &'a mut <Rt as Runtime>::Frame<'w>,
+    &'r [<Rt as Runtime>::Value],
+) -> BoxFuture<'a, <Rt as Runtime>::Value>;
+
+/// The task an instance's body runs at, as the function that runs it
+/// (RFC-0046).
+///
+/// Two node kinds, one Rust type each, were the other candidate and are not
+/// built. Which form a node has is the registry's answer at the ground
+/// type, and what reaches a requiring handler is one untyped word in a
+/// `Bounds` slice, so the two kinds would be chosen by casting that word to
+/// one of two pointer types — and the wrong cast compiles.
+pub enum EntryRun<Rt>
+where
+    Rt: Runtime,
+{
+    Sync(EntryFn<Rt>),
+    Await(AsyncEntryFn<Rt>),
+}
+
+impl<Rt> Clone for EntryRun<Rt>
+where
+    Rt: Runtime,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Rt> Copy for EntryRun<Rt> where Rt: Runtime {}
+
 /// One instance as a site resolved it: the function it runs through, and
 /// the entry of the instance each of its own bounds required, in the
 /// declaration's `requires` order.
@@ -46,7 +91,7 @@ pub struct EntryNode<Rt>
 where
     Rt: Runtime,
 {
-    run: EntryFn<Rt>,
+    run: EntryRun<Rt>,
     children: Box<[Entry<Rt>]>,
 }
 
@@ -104,7 +149,7 @@ where
     /// # Safety
     /// The arena that made this entry is alive: the site table that resolved
     /// it holds the arena, and a run's entry word is the caller's own.
-    pub unsafe fn run(self) -> EntryFn<Rt> {
+    pub unsafe fn run(self) -> EntryRun<Rt> {
         // SAFETY: the caller's contract.
         unsafe { (*self.0).run }
     }
@@ -186,7 +231,7 @@ impl<Rt> NodeArena<Rt>
 where
     Rt: Runtime,
 {
-    pub fn node(&self, run: EntryFn<Rt>, children: Vec<Entry<Rt>>) -> Entry<Rt> {
+    pub fn node(&self, run: EntryRun<Rt>, children: Vec<Entry<Rt>>) -> Entry<Rt> {
         let node = Box::new(EntryNode {
             run,
             children: children.into_boxed_slice(),
@@ -295,6 +340,12 @@ where
         Held(Owned::from_value(carrier.into_value()))
     }
 
+    /// The same field where the declaration's variable carries no bound, so
+    /// that what the call handed over is the runtime's value itself.
+    pub fn of_value(value: Rt::Value) -> Self {
+        Held(Owned::from_value(value))
+    }
+
     /// The carrier this value stands at, for the length of one call: the
     /// entries are the site's, and what the call wrote into the value is
     /// written back here when the guard drops.
@@ -304,7 +355,7 @@ where
     {
         let value = std::mem::take(&mut self.0).into_value();
         HeldMut {
-            carrier: Some(C::of(value, bound.bounds)),
+            carrier: ManuallyDrop::new(C::of(value, bound.bounds)),
             slot: self,
         }
     }
@@ -318,7 +369,7 @@ where
     C: Carrier<Rt>,
     Rt: Runtime,
 {
-    carrier: Option<C>,
+    carrier: ManuallyDrop<C>,
     slot: &'a mut Held<Rt>,
 }
 
@@ -330,9 +381,7 @@ where
     type Target = C;
 
     fn deref(&self) -> &C {
-        self.carrier
-            .as_ref()
-            .expect("the carrier lives for the guard")
+        &self.carrier
     }
 }
 
@@ -342,9 +391,7 @@ where
     Rt: Runtime,
 {
     fn deref_mut(&mut self) -> &mut C {
-        self.carrier
-            .as_mut()
-            .expect("the carrier lives for the guard")
+        &mut self.carrier
     }
 }
 
@@ -354,10 +401,9 @@ where
     Rt: Runtime,
 {
     fn drop(&mut self) {
-        let carrier = self
-            .carrier
-            .take()
-            .expect("the carrier lives for the guard");
+        // SAFETY: `ManuallyDrop::take` is called once, in the guard's own
+        // `Drop`, and nothing reads the carrier afterwards.
+        let carrier = unsafe { ManuallyDrop::take(&mut self.carrier) };
         self.slot.0 = Owned::from_value(carrier.into_value());
     }
 }
@@ -399,6 +445,23 @@ where
         this: Self::Recv<'_>,
         rest: Self::Rest<'_>,
     ) -> Self::Ret;
+
+    /// The future borrows the call. That lifetime is not consumed here: it
+    /// is what holds the calling handler's storage alive for the reference
+    /// an async instance's run carries into it, and the entry `#[extern_fn]`
+    /// writes is where that reference is read.
+    ///
+    /// # Safety
+    /// As `call_entry`'s.
+    unsafe fn call_entry_async<'a>(
+        entry: Entry<Rt>,
+        rt: &'a Rt,
+        frame: &'a mut Rt::Frame<'_>,
+        this: Self::Recv<'a>,
+        rest: Self::Rest<'a>,
+    ) -> BoxFuture<'a, Self::Ret>
+    where
+        Self::Ret: Send;
 }
 
 /// One of the runtime's values holding what `value` crosses as. The run an
@@ -440,9 +503,10 @@ where
 /// `InstanceOf`. RFC-0046's site effect picks which body runs, so a
 /// pipeline runs sync until its first async stage and async from there.
 ///
-/// The direction is one way. Every sync instance is an async instance —
-/// the blanket impl below — and nothing goes back: an async instance
-/// suspends, and a sync caller has nowhere to suspend to.
+/// The direction is one way, and the node is where it is kept: a sync
+/// instance's node runs under either trait, and an async instance's node
+/// runs only under this one. There is no impl the other way — an async
+/// instance suspends, and a sync caller has nowhere to suspend to.
 pub trait InstanceOfAsync<S, Rt>: Sized
 where
     Rt: Runtime,
@@ -453,24 +517,7 @@ where
         rt: &'a Rt,
         frame: &'a mut Rt::Frame<'w>,
         rest: <S as Signature<Rt>>::Rest<'a>,
-    ) -> BoxFuture<'a, <S as Signature<Rt>>::Ret>;
-}
-
-impl<T, S, Rt> InstanceOfAsync<S, Rt> for T
-where
-    T: InstanceOf<S, Rt>,
-    Rt: Runtime,
-    S: Signature<Rt, This = T>,
-    <S as Signature<Rt>>::Ret: Send,
-{
-    fn call<'a, 'w>(
-        this: <S as Signature<Rt>>::Recv<'a>,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'w>,
-        rest: <S as Signature<Rt>>::Rest<'a>,
-    ) -> BoxFuture<'a, <S as Signature<Rt>>::Ret> {
-        Box::pin(std::future::ready(<T as InstanceOf<S, Rt>>::call(
-            this, rt, frame, rest,
-        )))
-    }
+    ) -> BoxFuture<'a, <S as Signature<Rt>>::Ret>
+    where
+        <S as Signature<Rt>>::Ret: Send;
 }

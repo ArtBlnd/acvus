@@ -7,9 +7,9 @@ use std::future::Ready;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    Arr, CallToken, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs,
-    Held, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared,
-    Slice, Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry,
+    Arr, CallToken, ClosureFn, Effect, EffectTerm, Elements, EntryRun, ExternHandler, ExternType,
+    Externs, Held, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime,
+    Shared, Slice, Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry,
     extern_signature, kind,
 };
 
@@ -608,10 +608,9 @@ where
     I::call(&mut it, rt, frame, ())
 }
 
-/// Rule 6's one direction, executed. This body bounds `I` by the async
-/// trait; the only impl any carrier reaching it has is the sync one, so
-/// what makes the call compile is the blanket impl, and what makes a sync
-/// handler able to drain the future is that impl's readiness.
+/// The one direction, executed from the sync side: this body bounds `I` by
+/// the async trait and is a plain `fn`, and what lets it drain the future
+/// where it stands is that `t::step`'s instance at `i64` has a `Sync` node.
 #[extern_fn(effect = pure)]
 fn drive_await<I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, it: I) -> i64
 where
@@ -839,7 +838,9 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
 /// One resolved instance reached without the glue: the plain function of
 /// the values ABI that a requirement is passed as (RFC-0067 Decision 3).
 fn call_entry(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
-    let entry = handler.entry().expect("this declaration has an entry");
+    let EntryRun::Sync(entry) = handler.entry().expect("this declaration has an entry") else {
+        panic!("this declaration's body is a plain `fn`, so its node is `Sync`")
+    };
     let mut out = [V::default()];
     // SAFETY: the values ABI's contract, which is `Handler::call`'s: `args`
     // is the declaration's whole argument run and `out` has room for its
@@ -1055,7 +1056,10 @@ fn a_requirement_meets_the_variables_bound_with_the_instance_types() {
     let acvus_extern::FnKind::Extern { bounds, .. } = &same.kind else {
         panic!("same is extern")
     };
-    let acvus_extern::TyVarBound::OneOf(admitted) = &bounds[0] else {
+    let acvus_extern::TyVarBound::OneOf {
+        shapes: admitted, ..
+    } = &bounds[0]
+    else {
         panic!(
             "a variable requiring an instance is bounded by OneOf, not {:?}",
             bounds[0]
@@ -1363,12 +1367,20 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     let acvus_extern::FnKind::Extern { bounds, .. } = &eq_fn.kind else {
         panic!("eq is extern")
     };
+    let acvus_extern::TyVarBound::OneOf { shapes, required } = &bounds[0] else {
+        panic!("eq's first bound is an instance set")
+    };
     assert_eq!(
-        bounds[0],
-        acvus_extern::TyVarBound::OneOf(vec![
+        shapes,
+        &vec![
             acvus_extern::PolyTy::I64,
             acvus_extern::lift_to_poly(&point)
-        ])
+        ]
+    );
+    assert_eq!(
+        required.iter().map(|r| r.signature).collect::<Vec<_>>(),
+        vec![qref(&i, "eq")],
+        "the bound names the signature that asked for the shapes"
     );
     assert_eq!(reg.handlers[&qref(&i, "eq")].len(), 2);
 }
@@ -1573,7 +1585,7 @@ fn a_monomorphized_parameter_declares_its_members_as_the_bound() {
     };
     assert_eq!(
         bounds,
-        &vec![acvus_extern::TyVarBound::OneOf(vec![
+        &vec![acvus_extern::TyVarBound::one_of(vec![
             acvus_extern::PolyTy::I64,
             acvus_extern::PolyTy::String
         ])]
@@ -1820,7 +1832,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     };
     assert_eq!(instances.concrete.len(), 2);
     assert!(!instances.generic);
-    let acvus_extern::TyVarBound::OneOf(shapes) = &bounds[0] else {
+    let acvus_extern::TyVarBound::OneOf { shapes: shapes, .. } = &bounds[0] else {
         panic!("the instance variable is bounded")
     };
     assert!(
@@ -2117,7 +2129,13 @@ fn container_registry<R: Runtime>() -> Registry<R> {
     }
 }
 
-fn bound_of(reg: &Externs<Tiny>, i: &Interner, name: &str) -> acvus_extern::TyVarBound {
+/// The shapes of a declaration's first bound, and the signatures that
+/// asked for them.
+fn bound_of(
+    reg: &Externs<Tiny>,
+    i: &Interner,
+    name: &str,
+) -> (Vec<PolyTy>, Vec<acvus_extern::QualifiedRef>) {
     let function = reg
         .functions
         .iter()
@@ -2126,7 +2144,13 @@ fn bound_of(reg: &Externs<Tiny>, i: &Interner, name: &str) -> acvus_extern::TyVa
     let acvus_extern::FnKind::Extern { bounds, .. } = &function.kind else {
         panic!("{name} is extern")
     };
-    bounds[0].clone()
+    let acvus_extern::TyVarBound::OneOf { shapes, required } = &bounds[0] else {
+        panic!("{name}'s first bound is an instance set")
+    };
+    (
+        shapes.clone(),
+        required.iter().map(|r| r.signature).collect(),
+    )
 }
 
 #[test]
@@ -2135,11 +2159,11 @@ fn a_signature_naming_its_argument_is_bounded_by_the_types_inside_it() {
     let reg = Externs::combine(vec![named_registry::<Tiny>()], &i).expect("registries combine");
     assert_eq!(
         bound_of(&reg, &i, "width"),
-        acvus_extern::TyVarBound::OneOf(vec![PolyTy::I64, PolyTy::String])
+        (vec![PolyTy::I64, PolyTy::String], vec![qref(&i, "width")])
     );
     assert_eq!(
         bound_of(&reg, &i, "head"),
-        acvus_extern::TyVarBound::OneOf(vec![PolyTy::I64, PolyTy::String])
+        (vec![PolyTy::I64, PolyTy::String], vec![qref(&i, "head")])
     );
     assert_eq!(reg.handlers[&qref(&i, "width")].len(), 2);
     assert_eq!(reg.handlers[&qref(&i, "head")].len(), 2);

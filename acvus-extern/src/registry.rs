@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Task,
-    Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed, matches_pattern,
-    unify_patterns,
+    CastRule, Effect, EffectTerm, IdentityTerm, InstanceSets, InstanceShape, ParamTerm, Poly,
+    PolyBuilder, PolyTy, Repr, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
+    UserDefinedDecl, Viewed, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::handler::{DeclaredInstance, ExternHandler, InstanceEntries, Instances};
-use crate::instance::{Entry, EntryFn, NodeArena};
+use crate::instance::{Entry, EntryRun, NodeArena};
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -58,6 +58,13 @@ pub struct Requirement {
     /// which is its position in `FnDecl::bounds`.
     pub var: usize,
     pub signature: QualifiedRef,
+    /// The highest task an instance this bound reaches may run at
+    /// (RFC-0046): what the bound's own spelling drives, met with what the
+    /// requiring Rust body can. `InstanceOf` is a call that returns, so it
+    /// is `Task::Sync` however the body was declared; `InstanceOfAsync` in
+    /// an `async fn` body is `Task::Async`, and in a plain `fn` body —
+    /// which can only drain a ready future — `Task::Sync` again.
+    pub calls: Task,
 }
 
 /// A shared signature: a name with a polymorphic type and no body.
@@ -310,6 +317,13 @@ pub enum CombineError {
     /// An instance whose own bound stands at a variable its pattern does
     /// not hold as a type argument, so no ground type the instance is
     /// chosen at says what fills it (RFC-0067, step 3 second half).
+    /// An instance whose pattern is the bare variable it requires an
+    /// instance of: every type with an instance has one, so the set is its
+    /// own definition and no ground type ever decides it.
+    RequirementIsThePattern {
+        instance: QualifiedRef,
+        signature: QualifiedRef,
+    },
     RequirementOffThePattern {
         instance: QualifiedRef,
         signature: QualifiedRef,
@@ -351,6 +365,16 @@ impl fmt::Display for CombineError {
             } => write!(
                 f,
                 "{function:?} requires an instance of {signature:?}, which no registry declares"
+            ),
+            Self::RequirementIsThePattern {
+                instance,
+                signature,
+            } => write!(
+                f,
+                "{instance:?} is an instance of {signature:?} at a bare type variable and \
+                 requires an instance of {signature:?} of that same variable: the set of types \
+                 it admits is its own definition, and no ground type decides it. Stand the \
+                 instance at a pattern, or drop the requirement."
             ),
             Self::RequirementOffThePattern {
                 instance,
@@ -443,19 +467,19 @@ where
 {
     pub ty: PolyTy,
     /// `None` where the instance has no entry — it holds a `#[state]`
-    /// value, takes a projection parameter, or is reached only by the glue
-    /// that suspends the caller (RFC-0067, the entry's refusal list).
-    pub entry: Option<EntryFn<R>>,
+    /// value, takes a projection parameter, or is declared `heavy`
+    /// (RFC-0067, the entry's refusal list).
+    pub entry: Option<EntryRun<R>>,
     pub requires: Vec<BoundAt>,
+    /// The task this instance's own body runs at: the tightest of the
+    /// handlers the declaration contributed, which for a declaration with a
+    /// `sync =` twin is the twin's `Task::Sync`.
+    pub task: Task,
 }
 
-/// One bound of an instance's own declaration: the signature it names, and
-/// where in the instance's pattern the variable carrying it stands, as the
-/// type-argument positions to walk down a ground type.
-pub struct BoundAt {
-    pub signature: QualifiedRef,
-    pub at: Vec<usize>,
-}
+/// One bound of an instance's own declaration, as both the checker and
+/// `prepare` read it.
+pub type BoundAt = acvus_mir::ty::InnerBound;
 
 /// Where a declaration's type variable stands inside the pattern its
 /// instance is matched by. `None` where the variable stands somewhere a
@@ -535,7 +559,7 @@ where
             panic!(
                 "the instance of {signature:?} at {ty:?} has no entry, so nothing can require \
                  it; an instance holding a `#[state]` value, taking a projection parameter, or \
-                 reached only by the glue that suspends the caller is written without one"
+                 declared `heavy` is written without one"
             )
         };
         let children = found
@@ -560,6 +584,17 @@ struct Collected<R: Runtime> {
     /// with a `sync =` companion contributes two handlers and one type.
     entries: Vec<InstanceAt<R>>,
     casts: Vec<CastRule>,
+}
+
+impl<R: Runtime> Collected<R> {
+    /// The patterns of the instances a body at `task` can reach.
+    fn types_at(&self, task: Task) -> Vec<PolyTy> {
+        self.entries
+            .iter()
+            .filter(|at| at.task <= task)
+            .map(|at| at.ty.clone())
+            .collect()
+    }
 }
 
 impl<R: Runtime> Externs<R> {
@@ -635,6 +670,22 @@ impl<R: Runtime> Externs<R> {
             }
         }
 
+        let sets = Arc::new(InstanceSets::new(
+            signatures
+                .iter()
+                .map(|(sig, c)| {
+                    let shapes = c
+                        .entries
+                        .iter()
+                        .map(|at| InstanceShape {
+                            ty: at.ty.clone(),
+                            requires: at.requires.clone(),
+                        })
+                        .collect();
+                    (*sig, shapes)
+                })
+                .collect(),
+        ));
         let mut functions = Vec::new();
         let mut handlers: Handlers<R> = FxHashMap::default();
         for ExternFn {
@@ -649,8 +700,12 @@ impl<R: Runtime> Externs<R> {
                         signature: required.signature,
                     },
                 )?;
-                decl.bounds[required.var] =
-                    meet(&decl.bounds[required.var], &collected.instance_types);
+                decl.bounds[required.var] = meet(
+                    &decl.bounds[required.var],
+                    required.signature,
+                    &collected.types_at(required.calls),
+                    &sets,
+                );
             }
             match decl.coercion {
                 Some(Coercion::Cast) => types.register_cast(cast_rule(&decl)?),
@@ -680,7 +735,7 @@ impl<R: Runtime> Externs<R> {
             by_signature.insert(c.decl.qref, c.entries);
             let mut bounds = c.decl.bounds;
             if let Some(first) = bounds.first_mut() {
-                *first = meet(first, &c.instance_types);
+                *first = meet(first, c.decl.qref, &c.instance_types, &sets);
             }
             for cast in c.casts {
                 types.register_cast(cast);
@@ -712,12 +767,20 @@ impl<R: Runtime> Externs<R> {
     }
 }
 
-/// The bound a variable keeps when it must also have one of the shapes in
-/// `allowed`.
-fn meet(bound: &TyVarBound, allowed: &[PolyTy]) -> TyVarBound {
-    bound
-        .meet(&TyVarBound::OneOf(allowed.to_vec()))
-        .unwrap_or(TyVarBound::OneOf(Vec::new()))
+/// The bound a variable keeps when it must also have an instance of
+/// `signature`, which stands at the shapes in `allowed`.
+fn meet(
+    bound: &TyVarBound,
+    signature: QualifiedRef,
+    allowed: &[PolyTy],
+    sets: &Arc<InstanceSets>,
+) -> TyVarBound {
+    let required = TyVarBound::instances_of(signature, allowed.to_vec(), Arc::clone(sets));
+    bound.meet(&required).unwrap_or(TyVarBound::instances_of(
+        signature,
+        Vec::new(),
+        Arc::clone(sets),
+    ))
 }
 
 fn add_instance<R: Runtime>(
@@ -764,21 +827,33 @@ fn add_instance<R: Runtime>(
             let mut at = Vec::new();
             let var = u32::try_from(required.var)
                 .expect("a declaration's type variables are numbered by PolyVars");
-            path_to_var(&ty, var, &mut at)
-                .then_some(BoundAt {
-                    signature: required.signature,
-                    at,
-                })
-                .ok_or(CombineError::RequirementOffThePattern {
+            if !path_to_var(&ty, var, &mut at) {
+                return Err(CombineError::RequirementOffThePattern {
                     instance: decl.qref,
                     signature: required.signature,
-                })
+                });
+            }
+            if at.is_empty() {
+                return Err(CombineError::RequirementIsThePattern {
+                    instance: decl.qref,
+                    signature: required.signature,
+                });
+            }
+            Ok(BoundAt {
+                signature: required.signature,
+                at,
+            })
         })
         .collect::<Result<Vec<BoundAt>, CombineError>>()?;
     collected.entries.push(InstanceAt {
         ty: ty.clone(),
         entry: admitted.iter().find_map(|i| i.handler.entry()),
         requires,
+        task: admitted
+            .iter()
+            .map(|i| i.handler.task())
+            .min()
+            .expect("a declared instance contributes at least one handler"),
     });
     collected.instance_types.push(ty);
     collected.instances.extend(admitted);

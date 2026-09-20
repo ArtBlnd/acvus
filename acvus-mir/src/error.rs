@@ -8,6 +8,15 @@ use crate::graph::QualifiedRef;
 use crate::ir::SwitchKey;
 use crate::ty::Ty;
 
+/// A name as a script writes it: `ns::name`, or the bare name where the
+/// declaration has no namespace.
+fn qualified(interner: &Interner, qref: QualifiedRef) -> String {
+    match qref.namespace {
+        Some(ns) => format!("{}::{}", interner.resolve(ns), interner.resolve(qref.name)),
+        None => interner.resolve(qref.name).to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShownValue {
     Named(String),
@@ -690,6 +699,28 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::TypeOutOfBound { ty, bound } => {
+                let shapes = |f: &mut fmt::Formatter<'_>, tys: &[crate::ty::PolyTy]| {
+                    for (i, t) in tys.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t.shown(interner))?;
+                    }
+                    Ok(())
+                };
+                if let crate::ty::TyVarBound::OneOf {
+                    shapes: tys,
+                    required,
+                } = bound
+                    && let [first, rest @ ..] = required.as_slice()
+                {
+                    write!(f, "no instance of {}", qualified(interner, first.signature))?;
+                    for other in rest {
+                        write!(f, ", {}", qualified(interner, other.signature))?;
+                    }
+                    write!(f, " at {}; instances exist at ", ty.shown(interner))?;
+                    return shapes(f, tys);
+                }
                 write!(
                     f,
                     "type {} is outside the declared bound ",
@@ -697,15 +728,9 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )?;
                 match bound {
                     crate::ty::TyVarBound::Any => write!(f, "(any)"),
-                    crate::ty::TyVarBound::OneOf(tys) => {
+                    crate::ty::TyVarBound::OneOf { shapes: tys, .. } => {
                         write!(f, "one of ")?;
-                        for (i, t) in tys.iter().enumerate() {
-                            if i > 0 {
-                                write!(f, ", ")?;
-                            }
-                            write!(f, "{}", t.shown(interner))?;
-                        }
-                        Ok(())
+                        shapes(f, tys)
                     }
                     crate::ty::TyVarBound::Integer { signed, among } => {
                         if among.len() == crate::ty::IntTy::ALL.len() {

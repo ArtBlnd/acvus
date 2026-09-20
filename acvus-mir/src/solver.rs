@@ -2781,7 +2781,7 @@ impl<'src> Solver<'src> {
         }
         let shapes = match bound {
             TyVarBound::Any => return Admission::Direct,
-            TyVarBound::OneOf(shapes) => shapes,
+            TyVarBound::OneOf { shapes, .. } => shapes,
             TyVarBound::Integer { among, .. } => among.into_iter().map(TyTerm::Int).collect(),
         };
         if self.term_within_shapes(arg, &shapes) {
@@ -2817,7 +2817,7 @@ impl<'src> Solver<'src> {
             return false;
         }
         match candidate.param_bound(index) {
-            TyVarBound::OneOf(shapes) => shapes.iter().any(borrows_a_view),
+            TyVarBound::OneOf { shapes, .. } => shapes.iter().any(borrows_a_view),
             TyVarBound::Any | TyVarBound::Integer { .. } => false,
         }
     }
@@ -2876,7 +2876,7 @@ impl<'src> Solver<'src> {
                 let TyTerm::Var(var) = self.terms.shallow_resolve_ty(var_side) else {
                     return true;
                 };
-                let TyVarBound::OneOf(shapes) = self.bound_of_var(var) else {
+                let TyVarBound::OneOf { shapes, .. } = self.bound_of_var(var) else {
                     return true;
                 };
                 self.term_within_shapes(term_side, &shapes)
