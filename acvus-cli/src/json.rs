@@ -89,6 +89,7 @@ pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
 /// `Ty` for the value that comes back.
 pub fn by_kind(interner: &Interner, value: &Value) -> Json {
     match value.kind() {
+        Kind::Instance | Kind::InstanceAwait => Json::from("<instance>"),
         Kind::I8 => int(IntTy::I8, value),
         Kind::I16 => int(IntTy::I16, value),
         Kind::I32 => int(IntTy::I32, value),

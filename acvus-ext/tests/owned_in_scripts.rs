@@ -146,6 +146,7 @@ async fn run_parsed(
         interner,
         externs: &exec_fns,
         context_names: &context_names,
+        instances: &acvus_extern::NoInstances,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules

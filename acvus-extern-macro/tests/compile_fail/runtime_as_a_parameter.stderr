@@ -1,0 +1,13 @@
+error: the runtime and the window above the calling frame cross as one parameter, `ctx: &mut Ctx<'_, Rt>`, written first (RFC-0050 rule 6). Write that in place of `rt: &Rt` and `frame: &mut Rt::Frame<'_>`, and read `ctx.rt` in the body.
+ --> tests/compile_fail/runtime_as_a_parameter.rs:7:21
+  |
+7 | fn twice<T, Rt>(rt: &Rt, n: i64) -> i64
+  |                     ^^^
+
+warning: unused imports: `Runtime`, `Var`, and `kind`
+ --> tests/compile_fail/runtime_as_a_parameter.rs:4:20
+  |
+4 | use acvus_extern::{Runtime, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

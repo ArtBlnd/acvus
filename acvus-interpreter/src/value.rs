@@ -37,6 +37,9 @@ macro_rules! kind {
             /// An option whose payload is a `None`: the word is how many
             /// `Some`s wrap it, and zero is `None` itself (RFC-0022).
             None,
+            /// The word is the address of the instance's mono glue.
+            Instance,
+            InstanceAwait,
             $($name,)*
         }
 
@@ -55,21 +58,39 @@ macro_rules! kind {
             pub fn type_id(self) -> Option<TypeId> {
                 match self {
                     $(Kind::$name => Some(TypeId::of::<$t>()),)*
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => None,
+                    Kind::Undef
+                    | Kind::Ref
+                    | Kind::Large
+                    | Kind::LargeRef
+                    | Kind::None
+                    | Kind::Instance
+                    | Kind::InstanceAwait => None,
                 }
             }
 
             pub fn name(self) -> Option<&'static str> {
                 match self {
                     $(Kind::$name => Some(stringify!($t)),)*
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => None,
+                    Kind::Undef
+                    | Kind::Ref
+                    | Kind::Large
+                    | Kind::LargeRef
+                    | Kind::None
+                    | Kind::Instance
+                    | Kind::InstanceAwait => None,
                 }
             }
 
             pub fn is_inline(self) -> bool {
                 match self {
                     $(Kind::$name)|* => true,
-                    Kind::Undef | Kind::Ref | Kind::Large | Kind::LargeRef | Kind::None => false,
+                    Kind::Undef
+                    | Kind::Ref
+                    | Kind::Large
+                    | Kind::LargeRef
+                    | Kind::None
+                    | Kind::Instance
+                    | Kind::InstanceAwait => false,
                 }
             }
         }
@@ -359,6 +380,34 @@ impl Value {
         unsafe { &*(self.word as *const Value) }
     }
 
+    #[inline]
+    pub fn instance(at: acvus_extern::InstanceRun) -> Value {
+        Value {
+            kind: match at.task {
+                acvus_extern::Task::Sync => Kind::Instance,
+                _ => Kind::InstanceAwait,
+            },
+            word: at.at as u64,
+        }
+    }
+
+    /// # Safety
+    /// The value was made by `Value::instance`.
+    #[inline]
+    pub unsafe fn as_instance(&self) -> acvus_extern::InstanceRun {
+        debug_assert!(
+            matches!(self.kind, Kind::Instance | Kind::InstanceAwait),
+            "as_instance: {self:?} is not an instance"
+        );
+        acvus_extern::InstanceRun {
+            at: self.word as usize,
+            task: match self.kind {
+                Kind::Instance => acvus_extern::Task::Sync,
+                _ => acvus_extern::Task::Async,
+            },
+        }
+    }
+
     /// A projection onto the aggregate whose flat layout begins at `base`.
     ///
     /// Nothing reads through one yet: `prepare` knows every projected web's
@@ -404,6 +453,8 @@ impl fmt::Debug for Value {
                 Ok(())
             }
             Kind::Ref => write!(f, "Ref({:p})", self.word as *const Value),
+            Kind::Instance => write!(f, "Instance({:#x})", self.word),
+            Kind::InstanceAwait => write!(f, "InstanceAwait({:#x})", self.word),
             Kind::LargeRef => write!(f, "LargeRef({:p})", self.word as *const Value),
             Kind::Large => {
                 let vtable = self.header().vtable;

@@ -143,6 +143,7 @@ pub struct PrepareCtx<'a> {
     pub interner: &'a Interner,
     pub externs: &'a FxHashMap<QualifiedRef, Executable>,
     pub context_names: &'a FxHashMap<QualifiedRef, Astr>,
+    pub instances: &'a dyn acvus_extern::InstanceEntries<crate::runtime::AcvusRuntime>,
 }
 
 impl PrepareCtx<'_> {
@@ -1234,7 +1235,7 @@ impl<'a> Prepare<'a> {
             .map(|id| ArgAt {
                 interner: self.ctx.interner,
                 ty: self.ty(*id),
-                at: std::marker::PhantomData,
+                instances: self.ctx.instances,
             })
             .collect()
     }
@@ -6417,6 +6418,7 @@ mod recognizer_tests {
                 interner: &self.interner,
                 externs: &self.externs,
                 context_names: &context_names,
+                instances: &acvus_extern::NoInstances,
             };
             let mut body = body_of(insts);
             body.task = task;
@@ -6449,6 +6451,7 @@ mod recognizer_tests {
                 interner: &self.interner,
                 externs: &self.externs,
                 context_names: &context_names,
+                instances: &acvus_extern::NoInstances,
             };
             let closures = FxHashMap::default();
             let body = body_of(insts);
@@ -6931,6 +6934,7 @@ mod assignment_tests {
             interner: &SYMBOLS,
             externs: &externs,
             context_names: &context_names,
+            instances: &acvus_extern::NoInstances,
         };
         assign_slots(&body, &ctx, &labels)
     }

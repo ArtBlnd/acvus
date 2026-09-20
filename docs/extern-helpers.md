@@ -11,7 +11,7 @@ runs, and what the compiler was told.
 
 The principle the framework is built on is RFC-0067's: **the machine holds
 no generics.** Every type at a call is ground. An instance of a shared
-signature is a value — the entry pointer of one concrete handler. No
+signature is a value — the mono glue of one concrete handler. No
 function type crosses the boundary as a type-level list, and there is no
 position in the machine where a type is computed. A Rust generic parameter
 of a declaration is therefore not a Rust type variable that survives the
@@ -149,7 +149,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 |---|---|---|
 | `Runtime` | the contract a host signs to run every declared ExternFn | atom — the host owns its value representation, its frame and its call entries, and nothing here names a runtime but this |
 | `TypesOnly` | a host that holds no values | derived from `Runtime` — for registering declarations where nothing will run |
-| `Ctx` | the runtime and the window above the calling frame, as a handler is called with them | atom — one parameter where `rt` and `frame` were two, built where the window is lent |
+| `Ctx` | the runtime, the window above the calling frame, and where the receiver of a running instance call is | atom — one parameter where `rt` and `frame` were two, owned by the machine and lent per call |
 | `Handler` | a declaration compiled to a Rust body, with the crossing on both sides | atom — the call entries the machine reaches a body through, and the one `WIDTH` they all read |
 | `HandlerFactory` | one declared instance in the module table, its type erased | atom — the one `dyn` on the path, taken once at preparation |
 | `AtSite` | that instance with its site table filled | atom — the only way to reach one, so an operation cannot hold a handler whose table was never filled |
@@ -278,13 +278,15 @@ the hooks a registry contributed for it (`Contribution::space`,
 |---|---|---|
 | `Signature` | a shared signature as a Rust caller of one of its instances sees it: the shape of a call | atom — `extern_signature!` writes the impl, so a requiring handler restates no mode and no width |
 | `Signature::Recv` | how the first parameter takes its receiver: `&This`, `&mut This`, or `This` | derived from the declaration's mode — the mode reaches a requiring handler here and nowhere else |
-| `EntryFn` | a resolved instance's handler as a plain function | derived from `Handler::call` — without the `&self`, and with the window lent rather than moved |
-| `AsyncEntryFn` | the same for an instance whose body is an `async fn` | derived from `AsyncGlue`'s closure — the values ABI's run, and the future the body is; `AsyncCall`'s own `'static` form is a claim an entry cannot keep, its receiver being a reference into the calling handler's storage |
-| `EntryRun` | the task an instance's body runs at, as the function that runs it | derived from `Task` — two arms, because which arm an instance has is the registry's answer at the ground type |
-| `AtEntry` | a declaration's entry as a type | derived from `EntryFn` — named where the glue's type is named, so the glue itself stays the closure |
+| `Signature::call_now` | one instance of this signature called through its mono glue | derived from `Signature` — `extern_signature!` writes the one cast, where the glue's `fn` type is concrete |
+| `Instance` | a resolved instance as one value of its own, beside the value it serves | atom — one of the runtime's values, whose word is the glue's address; `I` is the requiring handler's own variable, so `call` takes only the receiver it was declared for |
+| `InstanceRun` | the mono glue of one instance as the registry holds it | derived from `Instance` — the address, and the task that says which `fn` type the address is |
+| `Required` | a handler's instance parameter, as the glue's parameter list names it | derived from `Sited` — it takes no argument of the call, because the site table holds its word |
+| `AtInstance` | a declaration's mono glue as a type | derived from `InstanceRun` — named where the glue's type is named, so the glue itself stays the closure |
+| `InstanceTable` | every signature's instances, keyed by signature and ground type | derived from `InstanceAt` — a flat lookup; what an instance itself requires is a field of its payload |
 | `InstanceAt` | one instance as `InstanceSets` needs it: the pattern it stands at, what its own bounds require, and the task its body runs at | atom — the check-time half of a declared instance |
 | `BoundAt` | one bound of an instance's own declaration | `acvus_mir::ty::InnerBound` under this crate's name — the checker decides the same recursion the site table walks, so the two read one type |
-| `Requirement` | one required instance of a declaration | atom — which variable carries it, which signature it names, and the highest task an instance it reaches may run at |
+| `Requirement` | one required instance of a declaration | atom — which variable carries it, which signature it names, and the highest task an instance it reaches may run at; `#[extern_fn]` reads it off an `Instance` parameter |
 
 ## What the pass folded
 
@@ -302,8 +304,9 @@ Batch A — a variable has a kind (`69cbd6e7`):
 - `HasInstance<Sig>` → nothing. A required instance is a function pointer
   the site fills (RFC-0067), not a marker on a type parameter.
 - `Instance<S, Rt>` → `InstanceOf<S, Rt>`, with `InstanceOfAsync<S, Rt>`
-  beside it. The name `Instance` is reserved for the parameter form a
-  container's element will take.
+  beside it. Both are gone again with RFC-0067's cut: a handler states the
+  requirement by taking an `Instance<S, I, Rt>` parameter, and the task is
+  that type's own (`Now`, `Later`) rather than two trait spellings.
 
 Batch B — a crossing is one trait (`3c2b4dec`):
 
@@ -336,16 +339,14 @@ Batch C — a borrow has one shape (`0d308c5e`):
 Facts, each with the line that states it. Every path is relative to the
 repository root at `0d308c5e`.
 
-1. **The frame is a lent handle.** `Ctx` holds it by value, and a handler
-   names the `Ctx`. The one-reference form — making `Frame` the state
-   itself — was built and does not compile: the frame below owns the state
-   and keeps it for its next call, so every site that hands the window out
-   can only lend it. A `Ctx` is likewise not a field of the machine that
-   owns the state: `acvus-interpreter`'s `Machine` lends `&mut self.above`
-   beside a disjoint borrow of `self.regs`, which a whole-`Machine` borrow
-   would end. `acvus-extern/src/runtime.rs:23` (the obligation), `:33`
-   (the type), `acvus-interpreter/src/machine.rs:86` (the owner), `:216`
-   (the split).
+1. **The frame is the state itself, and its owner lends the `Ctx`.**
+   `Runtime::Frame` is the state, not a borrow of it, and every crossing
+   hands out `&mut Ctx` from whoever owns that `Ctx` — the machine, or the
+   rooted store an async glue holds. Nothing returns a frame by value, so
+   the state never moves out. `acvus-extern/src/runtime.rs:20` (the
+   obligation), `acvus-interpreter/src/runtime.rs:92` (the type),
+   `acvus-interpreter/src/machine.rs:78` (the owner), `:203` (the split
+   that lends `&mut self.ctx` beside `self.regs`).
 2. **`Monomorphize`'s members are enumerated here.** The reach of the
    bound is a list in this crate — `i64`, `f64`, `bool`, `u8`, `String`,
    and the runtime's own carrier — with no blanket impl, so a member type

@@ -57,6 +57,7 @@ enum V {
     Some(*mut V),
     Boxed(*mut (dyn Any + Send + Sync)),
     Reference(*const V),
+    Instance(acvus_extern::InstanceRun),
 }
 
 // SAFETY: a cell is reached only through the value that owns it, and a
@@ -67,7 +68,7 @@ unsafe impl Sync for V {}
 impl Release for V {
     fn release(self) {
         match self {
-            V::None | V::Undef | V::Tag(_) | V::Reference(_) => {}
+            V::None | V::Undef | V::Tag(_) | V::Reference(_) | V::Instance(_) => {}
             // SAFETY: `some` leaked this cell and nothing else releases it.
             V::Some(cell) => unsafe { *Box::from_raw(cell) }.release(),
             // SAFETY: `erase` leaked this cell and nothing else frees it.
@@ -161,16 +162,24 @@ impl Runtime for Counted {
 
     acvus_extern::direct_call_forms!();
 
+    fn instance_value(at: acvus_extern::InstanceRun) -> V {
+        V::Instance(at)
+    }
+
+    unsafe fn instance_run(value: &V) -> acvus_extern::InstanceRun {
+        let V::Instance(at) = value else {
+            panic!("not an instance: {value:?}")
+        };
+        *at
+    }
+
     type Value = V;
     type Frame<'a> = ();
     type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<V>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx {
-            rt: self,
-            frame: (),
-        }
+        acvus_extern::Ctx::new(self, ())
     }
     fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
@@ -184,7 +193,7 @@ impl Runtime for Counted {
     fn type_of(&self, value: &V) -> Option<TypeId> {
         match value {
             V::Boxed(_) => Some(cell_ref(value).type_id()),
-            V::None | V::Undef | V::Tag(_) | V::Some(_) | V::Reference(_) => None,
+            V::None | V::Undef | V::Tag(_) | V::Some(_) | V::Reference(_) | V::Instance(_) => None,
         }
     }
 
@@ -813,7 +822,7 @@ fn a_shared_projection_reads_every_field_where_it_lies() {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
-            at: std::marker::PhantomData,
+            instances: &acvus_extern::NoInstances,
         });
     let point = unsafe {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -847,7 +856,7 @@ fn an_exclusive_projection_writes_through_to_the_object() {
             <PointMut<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
                 interner: &interner,
                 ty: &settled,
-                at: std::marker::PhantomData,
+                instances: &acvus_extern::NoInstances,
             });
         let point = unsafe {
             <PointMut<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -876,7 +885,7 @@ fn a_partial_projection_borrows_the_field_it_names() {
         <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
-            at: std::marker::PhantomData,
+            instances: &acvus_extern::NoInstances,
         });
     let only = unsafe {
         <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -939,7 +948,7 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
-            at: std::marker::PhantomData,
+            instances: &acvus_extern::NoInstances,
         });
 
     let borrowed = allocations_of(|| {
@@ -983,7 +992,7 @@ fn a_partial_projections_table_names_the_objects_position_and_not_its_own() {
     let at = acvus_extern::ArgAt {
         interner: &interner,
         ty: &settled,
-        at: std::marker::PhantomData,
+        instances: &acvus_extern::NoInstances,
     };
 
     let whole = <PointRef<'static> as acvus_extern::Projected<Counted>>::table(at);
@@ -1034,7 +1043,7 @@ fn shape_table() -> acvus_extern::VariantAt<3, ((), acvus_extern::ObjectAt<2, ((
     <ShapeRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
         interner: &SYMBOLS,
         ty: &settled,
-        at: std::marker::PhantomData,
+        instances: &acvus_extern::NoInstances,
     })
 }
 

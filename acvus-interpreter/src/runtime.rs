@@ -81,7 +81,7 @@ impl<'a> RootedCtx<'a> {
     fn new(rt: &'a AcvusRuntime) -> RootedCtx<'a> {
         let RootFrame { state, cells } = RootFrame::new();
         RootedCtx {
-            ctx: Ctx { rt, frame: state },
+            ctx: Ctx::new(rt, state),
             _cells: cells,
         }
     }
@@ -97,6 +97,15 @@ impl Runtime for AcvusRuntime {
     type AsyncShape = call::AsyncShape;
     type FusedCall = call::Call;
     type FusedShape = call::FusedShape;
+
+    fn instance_value(at: acvus_extern::InstanceRun) -> Value {
+        Value::instance(at)
+    }
+
+    unsafe fn instance_run(value: &Value) -> acvus_extern::InstanceRun {
+        // SAFETY: the caller's contract: `instance_value` wrote this value.
+        unsafe { value.as_instance() }
+    }
 
     fn rooted(&self) -> RootedCtx<'_> {
         RootedCtx::new(self)

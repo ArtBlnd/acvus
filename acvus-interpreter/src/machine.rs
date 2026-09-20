@@ -96,7 +96,7 @@ impl<'c> Machine<'c> {
         Machine {
             body,
             regs,
-            ctx: Ctx { rt, frame },
+            ctx: Ctx::new(rt, frame),
             page,
             exit: [Value::unit(); 2],
             at: body.entry,

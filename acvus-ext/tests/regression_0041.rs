@@ -154,6 +154,14 @@ impl acvus_extern::FromValue<Counting> for V {
 }
 
 impl Runtime for Counting {
+    fn instance_value(_: acvus_extern::InstanceRun) -> Self::Value {
+        panic!("Counting declares no instances")
+    }
+
+    unsafe fn instance_run(_: &Self::Value) -> acvus_extern::InstanceRun {
+        panic!("Counting declares no instances")
+    }
+
     type Op = acvus_extern::DirectOp<Counting>;
     type CallShape = ();
     type AsyncShape = ();
@@ -168,10 +176,7 @@ impl Runtime for Counting {
     type CallFuture<'a> = Ready<V>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx {
-            rt: self,
-            frame: (),
-        }
+        acvus_extern::Ctx::new(self, ())
     }
     fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
@@ -394,7 +399,7 @@ type It = Iter<Owned<Counting>, (), (), Counting>;
 fn drain(rt: &Counting, mut it: It) -> Vec<i64> {
     futures::executor::block_on(async {
         let mut out = Vec::new();
-        while let Some(value) = it.next_value(&mut Ctx { rt, frame: () }).await {
+        while let Some(value) = it.next_value(&mut Ctx::new(rt, ())).await {
             out.push(read_int(rt, &value));
         }
         out

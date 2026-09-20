@@ -1,70 +1,56 @@
-//! A requirement is a bound on a handler's own type variable, and the
-//! shape of the call it admits is the signature's (RFC-0067 Decision 1).
+//! An instance as one value of its own, beside the value it serves
+//! (RFC-0067 Decision 1).
 //!
-//! A handler declares the requirement by taking the instance as a
-//! parameter; `#[extern_fn]` reads it and records it on
-//! `FnDecl::requires`, which is what `Externs::combine` meets with the
-//! signature's instances.
+//! A handler declares a requirement by taking an `Instance` parameter;
+//! `#[extern_fn]` reads it and records it on `FnDecl::requires`, which is
+//! what `Externs::combine` meets with the signature's instances, and the
+//! call site's site table is where the resolved word lands.
 
+use std::marker::PhantomData;
+use std::mem::size_of;
+use std::ops::DerefMut;
+
+use acvus_mir::ty::Task;
 use futures::future::BoxFuture;
 
+use crate::ctx::Ctx;
 use crate::runtime::Runtime;
 
-/// A resolved instance's handler as a plain function: the values ABI of
-/// `Handler::call` without the `&self` and with the window lent rather than
-/// moved (RFC-0067 Decision 3).
-///
-/// The window is lent because an entry's caller is another handler, which
-/// was handed the window by value and keeps it for its own further calls.
-/// There is no `Runtime::reborrow` for it to make a second handle with, and
-/// that absence is a decision: one method on every host buys one word.
-///
-/// Letting `Handler`'s own closure take the window this way too was built
-/// and withdrawn. `Handler::call` then has to give the moved window a stack
-/// slot to lend, the address escapes into the closure, and
-/// `benches/asm_probe.rs` counted sixteen `Op::run` bodies that ended in the
-/// cleanup landing pad instead of the tail jump — `flatten`, `vec_deque`,
-/// `skip`, `filter` and `map`.
-pub type EntryFn<Rt> = for<'a, 'w> unsafe fn(
-    &'a mut crate::Ctx<'w, Rt>,
-    &'a [<Rt as Runtime>::Value],
-    &'a mut [<Rt as Runtime>::Value],
-);
-
-/// A resolved instance whose Rust body is an `async fn`, as a plain
-/// function: the run and the caller's window as `EntryFn` takes them, and
-/// the future the body is.
-///
-/// `AsyncCall::call`'s own form — `fn(Rt, &[Value]) -> BoxFuture<'static,
-/// Value>` — is not what an entry takes, for two reasons. `Runtime` is
-/// not `Clone`, and an entry is called from a handler holding `&Rt`. And
-/// `'static` is a claim an entry cannot keep: the receiver in its run is a
-/// reference into the calling handler's own storage, so the future borrows
-/// the call. The shape here is `AsyncGlue`'s own inner closure type, with
-/// the values ABI's run in place of the taken arguments.
-pub type AsyncEntryFn<Rt> = for<'a, 'w, 'r> unsafe fn(
-    &'a mut crate::Ctx<'w, Rt>,
-    &'r [<Rt as Runtime>::Value],
-) -> BoxFuture<'a, <Rt as Runtime>::Value>;
-
-/// The task an instance's body runs at, as the function that runs it
-/// (RFC-0046).
-///
-/// Two node kinds, one Rust type each, were the other candidate and are not
-/// built. Which form a node has is the registry's answer at the ground
-/// type, and what reaches a requiring handler is one untyped word in a
-/// `Bounds` slice, so the two kinds would be chosen by casting that word to
-/// one of two pointer types — and the wrong cast compiles.
-pub enum EntryRun<Rt>
-where
-    Rt: Runtime,
-{
-    Sync(EntryFn<Rt>),
-    Await(AsyncEntryFn<Rt>),
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InstanceRun {
+    /// The address of the mono glue `#[extern_fn]` wrote beside the handler.
+    pub at: usize,
+    pub task: Task,
 }
 
-impl<Rt> Clone for EntryRun<Rt>
+pub struct Now;
+pub struct Later;
+
+/// The task a requirement written at this marker calls its instance at.
+pub trait CalledAt {
+    const TASK: Task;
+}
+
+impl CalledAt for Now {
+    const TASK: Task = Task::Sync;
+}
+
+impl CalledAt for Later {
+    const TASK: Task = Task::Async;
+}
+
+pub struct Instance<S, I, Rt, T = Now>
 where
+    S: Signature<Rt>,
+    Rt: Runtime,
+{
+    value: Rt::Value,
+    at: PhantomData<fn() -> (S, I, T)>,
+}
+
+impl<S, I, Rt, T> Clone for Instance<S, I, Rt, T>
+where
+    S: Signature<Rt>,
     Rt: Runtime,
 {
     fn clone(&self) -> Self {
@@ -72,7 +58,92 @@ where
     }
 }
 
-impl<Rt> Copy for EntryRun<Rt> where Rt: Runtime {}
+impl<S, I, Rt, T> Copy for Instance<S, I, Rt, T>
+where
+    S: Signature<Rt>,
+    Rt: Runtime,
+{
+}
+
+impl<S, I, Rt, T> Instance<S, I, Rt, T>
+where
+    S: Signature<Rt>,
+    Rt: Runtime,
+{
+    const ONE_VALUE: () = assert!(
+        size_of::<Instance<S, I, Rt, T>>() == size_of::<Rt::Value>(),
+        "an instance is one of the runtime's values and nothing else"
+    );
+
+    /// # Safety
+    /// `value` was made by `Runtime::instance_value` from the mono glue of
+    /// an instance of `S` standing at the type `I` is filled with.
+    #[inline(always)]
+    pub unsafe fn at(value: Rt::Value) -> Self {
+        let () = Self::ONE_VALUE;
+        Instance {
+            value,
+            at: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn into_value(self) -> Rt::Value {
+        self.value
+    }
+}
+
+impl<S, I, Rt> Instance<S, I, Rt, Now>
+where
+    S: Signature<Rt>,
+    Rt: Runtime,
+{
+    #[inline(always)]
+    pub fn into_async(self) -> Instance<S, I, Rt, Later> {
+        Instance {
+            value: self.value,
+            at: PhantomData,
+        }
+    }
+
+    /// # Safety
+    /// `recv` holds a value of the type this instance stands at, which is
+    /// what `Externs::combine` met the requirement with.
+    #[inline(always)]
+    pub unsafe fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: &mut I, rest: S::Rest<'r>) -> S::Ret
+    where
+        I: DerefMut<Target = Rt::Value>,
+    {
+        ctx.name_receiver(&mut *recv);
+        // SAFETY: the caller's contract, and the word is this signature's
+        // own glue by `Instance::at`'s.
+        unsafe { S::call_now(self.value, ctx, rest) }
+    }
+}
+
+impl<S, I, Rt> Instance<S, I, Rt, Later>
+where
+    S: Signature<Rt>,
+    Rt: Runtime,
+{
+    /// # Safety
+    /// As `Instance::call`'s.
+    #[inline(always)]
+    pub unsafe fn call_await<'a>(
+        self,
+        ctx: &'a mut Ctx<'_, Rt>,
+        recv: &'a mut I,
+        rest: S::Rest<'a>,
+    ) -> BoxFuture<'a, S::Ret>
+    where
+        I: DerefMut<Target = Rt::Value>,
+        S::Ret: Send,
+    {
+        ctx.name_receiver(&mut *recv);
+        // SAFETY: as `call`'s.
+        unsafe { S::call_later(self.value, ctx, rest) }
+    }
+}
 
 /// A shared signature as a Rust caller of one of its instances sees it:
 /// the shape of a call and nothing about a receiver beyond how the first
@@ -88,9 +159,26 @@ where
     type This;
     /// The first parameter's mode: `&'a This`, `&'a mut This`, or `This`.
     /// The mode reaches a requiring handler through this projection alone,
-    /// so the handler's own `I::call` is where a wrong mode is refused.
+    /// so the handler's own `Instance::call` is where a wrong mode is
+    /// refused.
     type Recv<'a>;
     /// The arguments after the first.
     type Rest<'a>;
     type Ret;
+
+    /// # Safety
+    /// `value` is the glue of an instance of this signature, the receiver
+    /// named in `ctx` holds a value of the type that instance stands at,
+    /// and that instance's body returns rather than suspends.
+    unsafe fn call_now(value: Rt::Value, ctx: &mut Ctx<'_, Rt>, rest: Self::Rest<'_>) -> Self::Ret;
+
+    /// # Safety
+    /// As `call_now`'s, without its last clause.
+    unsafe fn call_later<'a>(
+        value: Rt::Value,
+        ctx: &'a mut Ctx<'_, Rt>,
+        rest: Self::Rest<'a>,
+    ) -> BoxFuture<'a, Self::Ret>
+    where
+        Self::Ret: Send;
 }

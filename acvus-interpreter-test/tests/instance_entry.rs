@@ -1,4 +1,4 @@
-//! Which declared instances can be reached by an entry (RFC-0067 Decision 3).
+//! Which declared instances a requirement can reach (RFC-0067 Decision 1).
 
 use acvus_extern::{Externs, Interner, QualifiedRef};
 use acvus_interpreter::AcvusRuntime;
@@ -40,7 +40,7 @@ const SIGNATURES: &[Signature] = &[
     Signature::new("vec", "filled"),
 ];
 
-fn instances_without_an_entry(i: &Interner) -> Vec<String> {
+fn instances_without_a_mono_glue(i: &Interner) -> Vec<String> {
     let externs = Externs::<AcvusRuntime>::combine(acvus_ext::std_registries(), i)
         .expect("the standard registries combine");
     SIGNATURES
@@ -53,19 +53,20 @@ fn instances_without_an_entry(i: &Interner) -> Vec<String> {
             handlers
                 .iter()
                 .enumerate()
-                .filter(|(_, h)| h.is_sync() && h.entry().is_none())
+                .filter(|(_, h)| h.is_sync() && h.instance().is_none())
                 .map(move |(at, _)| format!("{}#{at}", signature.written()))
         })
         .collect()
 }
 
 #[test]
-fn every_synchronous_instance_of_a_shared_signature_has_an_entry() {
+fn every_synchronous_instance_of_a_shared_signature_has_a_mono_glue() {
     let i = Interner::new();
     assert_eq!(
-        instances_without_an_entry(&i),
-        Vec::<String>::new(),
+        instances_without_a_mono_glue(&i),
+        // A receiver is one value in `ctx` and the language's `&str` is two.
+        vec!["core::to_string#12".to_owned()],
         "these instances hold a site table or a state, so they are no plain \
-         function of the values ABI and a requirement cannot be resolved to one"
+         function and a requirement cannot be resolved to one"
     );
 }

@@ -226,6 +226,10 @@ pub enum FormKind {
     Components,
 }
 
+/// Obligation across artifacts: a parameter of this form takes its datum
+/// from `Sited::Site` instead, so `Parameters::sites` must give it one.
+pub struct Nothing;
+
 /// One of the runtime's values.
 pub struct One;
 
@@ -238,6 +242,16 @@ pub struct Pair;
 /// since `prepare/runs.rs::Layout::lowerable` refuses any object with a
 /// nested aggregate field.
 pub struct Run<const W: usize>;
+
+impl Form for Nothing {
+    const WIDTH: usize = 0;
+    const KIND: FormKind = FormKind::Value;
+
+    type Onto<Run>
+        = Run
+    where
+        Run: crate::handler::ArgRun;
+}
 
 impl Form for One {
     const WIDTH: usize = 1;

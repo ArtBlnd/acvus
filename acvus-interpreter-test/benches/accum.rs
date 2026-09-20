@@ -60,8 +60,219 @@ fn owned_cut(s: &str, from: u64, to: u64) -> String {
     s[from as usize..to as usize].to_owned()
 }
 
+/// The `nit::` arm of RFC-0067 step 4, duplicated from
+/// `acvus-interpreter-test/tests/iter_next.rs` because a bench target
+/// cannot depend on a test target. The two copies are one declaration
+/// split across two artifacts: change a signature there and change it
+/// here, or the `n ...` rows stop measuring the design the tests pin.
+mod next_design {
+    use std::marker::PhantomData;
+    use std::ops::DerefMut;
+
+    use acvus_extern::{
+        Closure, ClosureFn, Ctx, ExternType, Instance, OneValue, Opaque, Owned, Ref, Registry,
+        Runtime, Shared, Var, extern_fn, extern_registry, kind,
+    };
+
+    mod sig {
+        use acvus_extern::extern_signature;
+
+        extern_signature! {
+            ns: "nit",
+            effect = E,
+            fn next<I, T, E, Rt>(it: &mut I) -> Option<T>
+            where
+                I: Var<kind::Type>,
+                T: Var<kind::Type>,
+                E: Var<kind::Effect>,
+                Rt: Runtime;
+        }
+    }
+
+    /// A payload may name no type or effect parameter, so it holds this at
+    /// the erased ones — as it already holds its `Closure` at `Opaque`.
+    type InnerNext<Rt> = Instance<sig::next<Owned<Rt>, i64, Opaque, Rt>, Owned<Rt>, Rt>;
+
+    pub struct NRangeBody {
+        at: i64,
+        end: i64,
+    }
+
+    #[derive(ExternType)]
+    #[extern_type(name = "NRange")]
+    #[repr(transparent)]
+    pub struct NRange(NRangeBody);
+
+    #[extern_fn(effect = pure)]
+    fn nrange(start: i64, end: i64) -> NRange {
+        NRange(NRangeBody { at: start, end })
+    }
+
+    #[extern_fn(instance_of = sig::next, effect = pure)]
+    fn next_nrange(it: &mut NRange) -> Option<i64> {
+        (it.0.at < it.0.end).then(|| {
+            let at = it.0.at;
+            it.0.at += 1;
+            at
+        })
+    }
+
+    pub struct NMapBody<Rt>
+    where
+        Rt: Runtime,
+    {
+        inner: Owned<Rt>,
+        next: InnerNext<Rt>,
+        f: Closure<(i64,), i64, Opaque, Rt>,
+    }
+
+    #[derive(ExternType)]
+    #[extern_type(name = "NMap")]
+    #[repr(transparent)]
+    pub struct NMap<I, E, Rt>(NMapBody<Rt>, PhantomData<(I, E)>)
+    where
+        I: Var<kind::Type>,
+        E: Var<kind::Effect>,
+        Rt: Runtime;
+
+    #[extern_fn(effect = pure)]
+    fn nmap<I, E, Rt>(
+        ctx: &mut Ctx<'_, Rt>,
+        it: I,
+        f: Closure<(i64,), i64, E, Rt>,
+        next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
+    ) -> NMap<I, E, Rt>
+    where
+        I: Var<kind::Type> + Into<Owned<Rt>>,
+        E: Var<kind::Effect>,
+        Rt: Runtime,
+    {
+        NMap(
+            NMapBody {
+                inner: it.into(),
+                // SAFETY: the same word, at the erased parameters the
+                // payload names.
+                next: unsafe { Instance::at(next.into_value()) },
+                f: Closure::new(ctx.rt, f.into_value()),
+            },
+            PhantomData,
+        )
+    }
+
+    #[extern_fn(instance_of = sig::next, effect = E)]
+    fn next_nmap<I, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<I, E, Rt>) -> Option<i64>
+    where
+        I: Var<kind::Type>,
+        E: Var<kind::Effect>,
+        Rt: Runtime,
+    {
+        // SAFETY: `inner` and `next` were laid side by side by `nmap`.
+        let x = unsafe { it.0.next.call(ctx, &mut it.0.inner, ()) }?;
+        Some(it.0.f.call_now(ctx, (x,)))
+    }
+
+    pub struct NFilterBody<Rt>
+    where
+        Rt: Runtime,
+    {
+        inner: Owned<Rt>,
+        next: InnerNext<Rt>,
+        f: Closure<(Ref<i64, Shared, Rt>,), bool, Opaque, Rt>,
+    }
+
+    #[derive(ExternType)]
+    #[extern_type(name = "NFilter")]
+    #[repr(transparent)]
+    pub struct NFilter<I, E, Rt>(NFilterBody<Rt>, PhantomData<(I, E)>)
+    where
+        I: Var<kind::Type>,
+        E: Var<kind::Effect>,
+        Rt: Runtime;
+
+    #[extern_fn(effect = pure)]
+    fn nfilter<I, E, Rt>(
+        ctx: &mut Ctx<'_, Rt>,
+        it: I,
+        f: Closure<(Ref<i64, Shared, Rt>,), bool, E, Rt>,
+        next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
+    ) -> NFilter<I, E, Rt>
+    where
+        I: Var<kind::Type> + Into<Owned<Rt>>,
+        E: Var<kind::Effect>,
+        Rt: Runtime,
+    {
+        NFilter(
+            NFilterBody {
+                inner: it.into(),
+                // SAFETY: as `nmap`'s.
+                next: unsafe { Instance::at(next.into_value()) },
+                f: Closure::new(ctx.rt, f.into_value()),
+            },
+            PhantomData,
+        )
+    }
+
+    #[extern_fn(instance_of = sig::next, effect = E)]
+    fn next_nfilter<I, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<I, E, Rt>) -> Option<i64>
+    where
+        I: Var<kind::Type>,
+        E: Var<kind::Effect>,
+        Rt: Runtime,
+    {
+        loop {
+            // SAFETY: as `next_nmap`'s.
+            let x = unsafe { it.0.next.call(ctx, &mut it.0.inner, ()) }?;
+            let lent = <i64 as OneValue<Rt>>::erase(x, ctx.rt);
+            let keep = it.0.f.call_now(ctx, (Ref::lend(ctx.rt, &lent),));
+            Owned::<Rt>::from_value(lent).release();
+            if keep {
+                return Some(x);
+            }
+        }
+    }
+
+    #[extern_fn(effect = E)]
+    fn nsum<I, E, Rt>(
+        ctx: &mut Ctx<'_, Rt>,
+        it: I,
+        next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
+    ) -> i64
+    where
+        I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+        E: Var<kind::Effect>,
+        Rt: Runtime,
+    {
+        let mut it = it;
+        let mut acc = 0i64;
+        // SAFETY: `Externs::combine` met this parameter's requirement with
+        // the instance of `nit::next` at the type `I` was filled with.
+        while let Some(x) = unsafe { next.call(ctx, &mut it, ()) } {
+            acc = acc.wrapping_add(x);
+        }
+        acc
+    }
+
+    pub fn next_registry<Rt>() -> Registry<Rt>
+    where
+        Rt: Runtime,
+    {
+        extern_registry! {
+            ns: "nit",
+            types: [NRange, NMap<_, _, Rt>, NFilter<_, _, Rt>],
+            signatures: [sig::next],
+            fns: [nrange, next_nrange, nmap, next_nmap, nfilter, next_nfilter, nsum],
+        }
+    }
+}
+
 fn std_only() -> Vec<Registry<AcvusRuntime>> {
     acvus_ext::std_registries::<AcvusRuntime>()
+}
+
+fn with_next() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = std_only();
+    regs.push(next_design::next_registry());
+    regs
 }
 
 fn with_some_of() -> Vec<Registry<AcvusRuntime>> {
@@ -116,6 +327,12 @@ const RANGE_SUM: &str = "range(0, @n) | sum";
 const MAP_ID_SUM: &str = "range(0, @n) | map(|x| -> x) | sum";
 const MAP_ADD_SUM: &str = "range(0, @n) | map(|x| -> x + 1) | sum";
 const MAP_CAP_SUM: &str = "let k = 1; range(0, @n) | map(|x| -> x + k) | sum";
+const MAP_ADD_FIL_SUM: &str = "range(0, @n) | map(|x| -> x + 1) | filter(|x| -> *x > 0) | sum";
+const N_RANGE_SUM: &str = "nrange(0, @n) | nsum";
+const N_MAP_ID_SUM: &str = "nrange(0, @n) | nmap(|x| -> x) | nsum";
+const N_MAP_ADD_SUM: &str = "nrange(0, @n) | nmap(|x| -> x + 1) | nsum";
+const N_MAP_ADD_FIL_SUM: &str =
+    "nrange(0, @n) | nmap(|x| -> x + 1) | nfilter(|x| -> *x > 0) | nsum";
 /// The three traversals RFC-0057 replaces a pipeline with: one `For` region
 /// per loop, and no `Iter` extern per element.
 const FOR_RANGE: &str = "let acc = 0; for i in 0..@n { acc = acc + i; } acc";
@@ -201,6 +418,14 @@ fn rust_map_id_sum(n: i64) -> f64 {
 
 fn rust_map_add_sum(n: i64) -> f64 {
     (0..n).map(black_box).map(|x| x + 1).sum::<i64>() as f64
+}
+
+fn rust_map_add_fil_sum(n: i64) -> f64 {
+    (0..n)
+        .map(black_box)
+        .map(|x| x + 1)
+        .filter(|x| *x > 0)
+        .sum::<i64>() as f64
 }
 
 fn rust_map_cap_sum(n: i64) -> f64 {
@@ -611,6 +836,46 @@ fn main() {
             source: MAP_CAP_SUM,
             registries: std_only,
             rust: rust_map_cap_sum,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "map add fil | sum",
+            source: MAP_ADD_FIL_SUM,
+            registries: std_only,
+            rust: rust_map_add_fil_sum,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "n range | sum",
+            source: N_RANGE_SUM,
+            registries: with_next,
+            rust: rust_range_sum,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "n map id | sum",
+            source: N_MAP_ID_SUM,
+            registries: with_next,
+            rust: rust_map_id_sum,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "n map add | sum",
+            source: N_MAP_ADD_SUM,
+            registries: with_next,
+            rust: rust_map_add_sum,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "n map add fil | sum",
+            source: N_MAP_ADD_FIL_SUM,
+            registries: with_next,
+            rust: rust_map_add_fil_sum,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

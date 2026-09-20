@@ -96,6 +96,14 @@ impl acvus_extern::FromValue<Words> for Word {
 }
 
 impl Runtime for Words {
+    fn instance_value(_: acvus_extern::InstanceRun) -> Self::Value {
+        panic!("Words declares no instances")
+    }
+
+    unsafe fn instance_run(_: &Self::Value) -> acvus_extern::InstanceRun {
+        panic!("Words declares no instances")
+    }
+
     type Op = acvus_extern::DirectOp<Words>;
     type CallShape = ();
     type AsyncShape = ();
@@ -110,10 +118,7 @@ impl Runtime for Words {
     type CallFuture<'a> = Ready<Word>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx {
-            rt: self,
-            frame: (),
-        }
+        acvus_extern::Ctx::new(self, ())
     }
     fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
@@ -416,6 +421,14 @@ where
 }
 
 impl Runtime for Tags {
+    fn instance_value(_: acvus_extern::InstanceRun) -> Self::Value {
+        panic!("Tags declares no instances")
+    }
+
+    unsafe fn instance_run(_: &Self::Value) -> acvus_extern::InstanceRun {
+        panic!("Tags declares no instances")
+    }
+
     type Op = acvus_extern::DirectOp<Tags>;
     type CallShape = ();
     type AsyncShape = ();
@@ -430,10 +443,7 @@ impl Runtime for Tags {
     type CallFuture<'a> = Ready<TaggedWord>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx {
-            rt: self,
-            frame: (),
-        }
+        acvus_extern::Ctx::new(self, ())
     }
     fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
@@ -690,25 +700,13 @@ fn main() {
         (
             "iter<word>",
             timed(reps, expected, || {
-                rt.block_on(iter_range_sum(
-                    &mut Ctx {
-                        rt: &Words,
-                        frame: (),
-                    },
-                    black_box(n),
-                ))
+                rt.block_on(iter_range_sum(&mut Ctx::new(&Words, ()), black_box(n)))
             }),
         ),
         (
             "iter<tagged>",
             timed(reps, expected, || {
-                rt.block_on(iter_range_sum(
-                    &mut Ctx {
-                        rt: &Tags,
-                        frame: (),
-                    },
-                    black_box(n),
-                ))
+                rt.block_on(iter_range_sum(&mut Ctx::new(&Tags, ()), black_box(n)))
             }),
         ),
     ];

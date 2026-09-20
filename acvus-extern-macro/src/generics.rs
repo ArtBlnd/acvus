@@ -81,16 +81,6 @@ pub struct Var {
     pub index: usize,
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
-    /// Each `InstanceOf<S>` or `InstanceOfAsync<S>` bound, in the order it
-    /// was written (RFC-0067 Decision 1).
-    pub requires: Vec<Required>,
-}
-
-/// One requirement as its bound was written: the signature, and whether
-/// the spelling was the awaiting one.
-pub struct Required {
-    pub signature: Type,
-    pub awaits: bool,
 }
 
 pub struct Vars(Vec<Var>);
@@ -116,70 +106,6 @@ fn bounds_of<'a>(
     tp.bounds.iter().chain(from_where)
 }
 
-/// Whether this bound states a requirement, and whether its spelling is
-/// the awaiting one.
-fn states_a_requirement(seg: &syn::PathSegment) -> Option<bool> {
-    match seg.ident.to_string().as_str() {
-        "InstanceOf" => Some(false),
-        "InstanceOfAsync" => Some(true),
-        _ => None,
-    }
-}
-
-/// The signature of every bound that states a requirement, in written
-/// order. Two bounds naming one signature are refused here: a type has at
-/// most one instance of a signature (RFC-0019), so the second could only
-/// select the same entry.
-fn required_signatures<'a>(
-    ident: &Ident,
-    bounds: impl Iterator<Item = &'a TypeParamBound>,
-) -> syn::Result<Vec<Required>> {
-    let mut found: Vec<Required> = Vec::new();
-    let mut named: Vec<String> = Vec::new();
-    for bound in bounds {
-        let TypeParamBound::Trait(t) = bound else {
-            continue;
-        };
-        let Some(seg) = t.path.segments.last() else {
-            continue;
-        };
-        let Some(awaits) = states_a_requirement(seg) else {
-            continue;
-        };
-        let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-            return Err(syn::Error::new_spanned(
-                seg,
-                "InstanceOf takes the signature it requires, at this declaration's own \
-                 variables: `InstanceOf<sig::eq<T, Rt>>`",
-            ));
-        };
-        let Some(syn::GenericArgument::Type(sig)) = args.args.first() else {
-            return Err(syn::Error::new_spanned(
-                seg,
-                "InstanceOf takes the signature it requires, at this declaration's own \
-                 variables: `InstanceOf<sig::eq<T, Rt>>`",
-            ));
-        };
-        let name = signature_head(sig)?;
-        if named.contains(&name) {
-            return Err(syn::Error::new_spanned(
-                seg,
-                format!(
-                    "`{ident}` requires `{name}` twice: a type has at most one instance of a \
-                     signature (RFC-0019), so the second bound names the same entry as the \
-                     first. Write one."
-                ),
-            ));
-        }
-        named.push(name);
-        found.push(Required {
-            signature: sig.clone(),
-            awaits,
-        });
-    }
-    Ok(found)
-}
-
 /// The signature a required instance names, as a path with its arguments
 /// dropped: `sig::eq<T, Rt>` is `sig::eq`, whose defaulted parameters make
 /// it the same marker type the `instance_of` attribute names.
@@ -192,11 +118,6 @@ pub fn signature_path(sig: &Type) -> syn::Result<syn::Path> {
         segment.arguments = syn::PathArguments::None;
     }
     Ok(path)
-}
-
-fn signature_head(sig: &Type) -> syn::Result<String> {
-    let path = signature_path(sig)?;
-    Ok(quote! { #path }.to_string())
 }
 
 /// The member types of a `Monomorphize<(T0, T1, ..)>` bound, if present.
@@ -260,7 +181,6 @@ impl Vars {
                 .filter_map(kind_of)
                 .collect::<syn::Result<_>>()?;
             let mono = mono_members(bounds_of(generics, tp))?;
-            let requires = required_signatures(&tp.ident, bounds_of(generics, tp))?;
             let has_extra_bounds = bounds_of(generics, tp).any(|b| {
                 matches!(b, TypeParamBound::Trait(_))
                     && kind_of(b).is_none()
@@ -269,7 +189,6 @@ impl Vars {
             let kind = match (kinds.as_slice(), &mono) {
                 ([kind], _) => *kind,
                 ([], Some(_)) => VarKind::Ty,
-                ([], None) if !requires.is_empty() => VarKind::Ty,
                 _ => {
                     return Err(syn::Error::new(
                         tp.ident.span(),
@@ -291,7 +210,6 @@ impl Vars {
                 index: counts[slot],
                 mono,
                 mono_fallback,
-                requires,
             });
             counts[slot] += 1;
         }
@@ -474,13 +392,6 @@ impl Vars {
                 }
             })
             .collect()
-    }
-
-    /// Every type variable with at least one `Instance` bound.
-    pub fn bounded(&self) -> impl Iterator<Item = &Var> {
-        self.0
-            .iter()
-            .filter(|v| v.kind == VarKind::Ty && !v.requires.is_empty())
     }
 
     /// Whether `ty` is exactly the variable `ident` and nothing else.

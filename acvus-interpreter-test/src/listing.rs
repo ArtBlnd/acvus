@@ -36,6 +36,7 @@ pub fn prepared_script_with_externs(
         interner,
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
+        instances: &cr.instances,
     };
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
     Arc::new(prepare_module(module, &ctx))
@@ -68,6 +69,7 @@ pub fn prepared_script(
         interner,
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
+        instances: &cr.instances,
     };
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
     Arc::new(prepare_module(module, &ctx))

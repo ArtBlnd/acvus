@@ -49,6 +49,14 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     type FusedCall;
     type FusedShape;
 
+    /// Obligation across artifacts: `Signature::call_later` branches on
+    /// the task this value carries to choose the `fn` type of the word.
+    fn instance_value(at: crate::InstanceRun) -> Self::Value;
+
+    /// # Safety
+    /// `value` was made by `instance_value`.
+    unsafe fn instance_run(value: &Self::Value) -> crate::InstanceRun;
+
     fn rooted(&self) -> Self::Rooted<'_>;
     /// The `Ctx` the rooted cells carry, lent from its owner.
     fn ctx_of<'a, 'r>(rooted: &'r mut Self::Rooted<'a>) -> &'r mut crate::Ctx<'a, Self>
@@ -318,11 +326,16 @@ impl Runtime for TypesOnly {
     type FusedCall = crate::handler::DirectOp<TypesOnly>;
     type FusedShape = ();
 
+    fn instance_value(_: crate::InstanceRun) {
+        no_values()
+    }
+
+    unsafe fn instance_run(_: &()) -> crate::InstanceRun {
+        no_values()
+    }
+
     fn rooted(&self) -> crate::Ctx<'_, TypesOnly> {
-        crate::Ctx {
-            rt: self,
-            frame: (),
-        }
+        crate::Ctx::new(self, ())
     }
     fn ctx_of<'a, 'r>(
         rooted: &'r mut crate::Ctx<'a, TypesOnly>,

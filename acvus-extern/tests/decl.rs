@@ -8,10 +8,9 @@ use std::future::Ready;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    Arr, ClosureFn, Effect, EffectTerm, Elements, EntryRun, ExternHandler, ExternType, Externs,
-    Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared, Slice,
-    Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry, extern_signature,
-    kind,
+    Arr, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs, Interner,
+    LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared, Slice, Task,
+    TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry, extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -33,6 +32,7 @@ enum V {
     Erased(*mut (dyn Any + Send + Sync)),
     Closure(Closure),
     Reference(*const V),
+    Instance(acvus_extern::InstanceRun),
 }
 
 // SAFETY: a `Reference` is used only while its target is live (RFC-0018).
@@ -47,7 +47,7 @@ impl acvus_extern::Release for V {
             V::Some(payload) => (*unsafe { Box::from_raw(payload) }).release(),
             V::Erased(any) => drop(unsafe { Box::from_raw(any) }),
             V::Closure(c) => drop(unsafe { Box::from_raw(c.0) }),
-            V::Taken | V::None | V::Undef | V::Tag(_) | V::Reference(_) => {}
+            V::Taken | V::None | V::Undef | V::Tag(_) | V::Reference(_) | V::Instance(_) => {}
         }
     }
 }
@@ -107,6 +107,10 @@ where
             "peek: value is a reference, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Instance(_) => panic!(
+            "peek: value is an instance, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::None | V::Some(_) => panic!(
             "peek: value is an option, not a {}",
             std::any::type_name::<T>()
@@ -141,6 +145,10 @@ where
             "materialize: value is a reference, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Instance(_) => panic!(
+            "materialize: value is an instance, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::None | V::Some(_) => panic!(
             "materialize: value is an option, not a {}",
             std::any::type_name::<T>()
@@ -166,6 +174,7 @@ impl Tiny {
             | V::Some(_)
             | V::Taken
             | V::Erased(_)
+            | V::Instance(_)
             | V::Reference(_) => {
                 panic!("call on a value that is not a closure")
             }
@@ -307,16 +316,24 @@ impl Runtime for Tiny {
         }
     }
 
+    fn instance_value(at: acvus_extern::InstanceRun) -> V {
+        V::Instance(at)
+    }
+
+    unsafe fn instance_run(value: &V) -> acvus_extern::InstanceRun {
+        let V::Instance(at) = value else {
+            panic!("not an instance: {value:?}")
+        };
+        *at
+    }
+
     type Value = V;
     type Frame<'a> = ();
     type Rooted<'a> = acvus_extern::Ctx<'a, Self>;
     type CallFuture<'a> = Ready<V>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx {
-            rt: self,
-            frame: (),
-        }
+        acvus_extern::Ctx::new(self, ())
     }
     fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
@@ -753,31 +770,29 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     }
 }
 
-/// One resolved instance reached without the glue: the plain function of
-/// the values ABI that a requirement is passed as (RFC-0067 Decision 3).
-fn call_entry(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
-    let EntryRun::Sync(entry) = handler.entry().expect("this declaration has an entry") else {
-        panic!("this declaration's body is a plain `fn`, so its node is `Sync`")
-    };
-    let mut out = [V::default()];
-    // SAFETY: the values ABI's contract, which is `Handler::call`'s: `args`
-    // is the declaration's whole argument run and `out` has room for its
-    // one-value result.
+/// One resolved instance reached without the glue: the mono glue a
+/// requirement is called through (RFC-0067 Decision 1). The receiver is
+/// named in `ctx` and is not an argument.
+fn call_instance<S>(handler: &ExternHandler<Tiny>, recv: &mut V, rest: S::Rest<'_>) -> S::Ret
+where
+    S: acvus_extern::Signature<Tiny>,
+{
+    let run = handler
+        .instance()
+        .expect("this declaration has a mono glue");
+    // SAFETY: `run` is the glue `#[extern_fn(instance_of = S)]` wrote, so
+    // it is an instance of `S`, and `recv` holds a value of the type it
+    // stands at.
     unsafe {
-        entry(
-            &mut Ctx {
-                rt: &Tiny,
-                frame: (),
-            },
-            &args,
-            &mut out,
-        )
-    };
-    out[0]
+        let instance: acvus_extern::Instance<S, &mut V, Tiny> =
+            acvus_extern::Instance::at(<Tiny as Runtime>::instance_value(run));
+        let mut at = recv;
+        instance.call(&mut Ctx::new(&Tiny, ()), &mut at, rest)
+    }
 }
 
 #[test]
-fn an_entry_runs_the_instance_the_glue_runs() {
+fn a_mono_glue_runs_the_instance_the_glue_runs() {
     let (i, reg) = combined::<Tiny>();
     let on_int = call_type(
         vec![
@@ -795,7 +810,26 @@ fn an_entry_runs_the_instance_the_glue_runs() {
     // SAFETY: both places outlive the two calls below.
     let args = || unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
     assert!(open::<bool>(call_sync(h, args())));
-    assert!(open::<bool>(call_entry(h, args())));
+    let mut recv = left;
+    assert!(call_instance::<eq<i64, Tiny>>(h, &mut recv, (&7i64,)));
+}
+
+#[test]
+fn a_receiver_is_named_in_ctx_and_written_through() {
+    let (i, reg) = combined::<Tiny>();
+    let on_int = call_type(
+        vec![acvus_extern::Ty::Ref(
+            acvus_extern::Mutability::Mut,
+            Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
+        )],
+        acvus_extern::Ty::I64,
+        &i,
+    );
+    let h = instance_for(&reg, &i, "step", &on_int).expect("the i64 instance of t::step");
+    let mut recv = erased(7i64);
+    assert_eq!(call_instance::<step<i64, Tiny>>(h, &mut recv, ()), 8);
+    assert_eq!(call_instance::<step<i64, Tiny>>(h, &mut recv, ()), 9);
+    assert_eq!(peek::<i64>(&recv), 9);
 }
 
 /// The declared type of `Point` at this test's registry.
@@ -821,10 +855,10 @@ fn a_point(x: i64) -> V {
     ))
 }
 
-/// `t::eq` at `Point` is declared and has an entry, and no caller of the
-/// values ABI can reach it: an object converts at the boundary, so a `&Point`
-/// argument names no storage shaped like a `Point` (RFC-0032). This holds of
-/// the entry itself, so a handler requiring `t::eq` meets it for the same
+/// `t::eq` at `Point` is declared and has a mono glue, and no caller can
+/// reach it: an object converts at the boundary, so a `&Point` argument
+/// names no storage shaped like a `Point` (RFC-0032). This holds of the
+/// mono glue too, so a handler requiring `t::eq` meets it for the same
 /// reason a call site does, and the requirement adds nothing to it.
 #[test]
 #[should_panic(expected = "has no storage of its own type to read through")]
@@ -842,10 +876,12 @@ fn an_instance_whose_parameter_converts_is_unreachable_through_the_values_abi() 
         &i,
     );
     let h = instance_for(&reg, &i, "eq", &on_point).expect("the Point instance of t::eq");
-    let (left, right) = (a_point(1), a_point(1));
-    // SAFETY: both places outlive the call.
-    let args = unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
-    let _ = call_entry(h, args);
+    let mut left = a_point(1);
+    let right = Point {
+        x: 1,
+        label: "p".to_owned(),
+    };
+    let _ = call_instance::<eq<Point, Tiny>>(h, &mut left, (&right,));
 }
 
 /// The marker `extern_signature!` writes names the signature's own
@@ -866,9 +902,9 @@ fn a_marker_names_its_variables() {
 }
 
 #[test]
-fn a_declaration_that_is_no_instance_has_no_entry() {
+fn a_declaration_that_is_no_instance_has_no_mono_glue() {
     let (i, reg) = combined::<Tiny>();
-    assert!(handler(&reg, &i, "add").entry().is_none());
+    assert!(handler(&reg, &i, "add").instance().is_none());
 }
 
 #[test]
@@ -2081,15 +2117,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     {
         assert_eq!(H::WIDTH, expected);
         // SAFETY: the arguments are the declaration's own, at its width.
-        open::<i64>(unsafe {
-            handler.call_run(
-                &mut Ctx {
-                    rt: &Tiny,
-                    frame: (),
-                },
-                &args,
-            )
-        })
+        open::<i64>(unsafe { handler.call_run(&mut Ctx::new(&Tiny, ()), &args) })
     }
 
     assert_eq!(
@@ -2180,16 +2208,8 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
         })
         .at(&site.args(2));
     // SAFETY: the width says two arguments in and one value out.
-    let by_register = unsafe {
-        two_wide.call2(
-            &mut Ctx {
-                rt: &Tiny,
-                frame: (),
-            },
-            erased(1i64),
-            erased(2i64),
-        )
-    };
+    let by_register =
+        unsafe { two_wide.call2(&mut Ctx::new(&Tiny, ()), erased(1i64), erased(2i64)) };
     assert_eq!(
         open::<i64>(by_register),
         12,
@@ -2231,13 +2251,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     // the three names of this one handler.
     let answers = unsafe {
         [
-            glue.call1(
-                &mut Ctx {
-                    rt: &Tiny,
-                    frame: (),
-                },
-                erased(7i64),
-            ),
+            glue.call1(&mut Ctx::new(&Tiny, ()), erased(7i64)),
             boxed
                 .at_site(&site.args(1))
                 .into_op(())

@@ -157,7 +157,7 @@ where
             ArgAt {
                 interner: at.interner,
                 ty,
-                at: std::marker::PhantomData,
+                instances: at.instances,
             },
         )
     })
@@ -204,7 +204,7 @@ where
         let payload = payload.as_deref().map(|ty| ArgAt {
             interner: at.interner,
             ty,
-            at: std::marker::PhantomData,
+            instances: at.instances,
         });
         (key.bits(), payload)
     })
@@ -400,7 +400,7 @@ where
         <T as Project<Rt>>::table(ArgAt {
             interner: at.interner,
             ty: payload,
-            at: std::marker::PhantomData,
+            instances: at.instances,
         })
     }
 
@@ -437,8 +437,8 @@ where
 {
     type Site = <P as Projected<Rt>>::Table;
 
-    fn site(at: ArgAt<'_, Rt>) -> Self::Site {
-        <P as Projected<Rt>>::table(at)
+    fn site(args: &[ArgAt<'_, Rt>], at: usize) -> Self::Site {
+        <P as Projected<Rt>>::table(args[at])
     }
 }
 

@@ -10,24 +10,51 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_mir::ty::{PolyTy, Task, Ty};
-use acvus_utils::Interner;
+use acvus_utils::{Interner, QualifiedRef};
 use futures::future::BoxFuture;
 
 use crate::ctx::Ctx;
-use crate::instance::EntryRun;
+use crate::instance::InstanceRun;
+use crate::instance::{Instance, Signature};
 use crate::loan::Loan;
-use crate::obj::{Cross, Form, FormKind, One, OneValue, Pair, Run};
+use crate::obj::{Cross, Form, FormKind, Nothing, One, OneValue, Pair, Run};
+use crate::registry::SharedSignature;
 use crate::runtime::Runtime;
 
-/// One argument of one call site as the host settled it: the type the
-/// checker gave it, and the interner that resolves the names in that type.
+/// What an instance itself requires is a field of its payload, laid at
+/// construction, so this lookup walks nothing (RFC-0067 Decision 1).
+pub trait InstanceEntries<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    /// # Panics
+    /// No instance of `signature` stands at `ty`. The checker admits a call
+    /// only at a type inside the `OneOf` bound `Externs::combine` met the
+    /// requirement with, so reaching this is a defect in that meet and not
+    /// a program error.
+    fn instance_at(&self, signature: QualifiedRef, ty: &Ty) -> InstanceRun;
+}
+
+pub struct NoInstances;
+
+impl<Rt> InstanceEntries<Rt> for NoInstances
+where
+    Rt: Runtime,
+{
+    fn instance_at(&self, _: QualifiedRef, _: &Ty) -> InstanceRun {
+        panic!(
+            "this call site was built with no registry, so a required instance cannot be resolved (RFC-0067 Decision 1)"
+        )
+    }
+}
+
 pub struct ArgAt<'a, Rt>
 where
     Rt: Runtime,
 {
     pub interner: &'a Interner,
     pub ty: &'a Ty,
-    pub at: PhantomData<fn() -> Rt>,
+    pub instances: &'a dyn InstanceEntries<Rt>,
 }
 
 impl<Rt> Clone for ArgAt<'_, Rt>
@@ -53,6 +80,7 @@ impl<Rt> Copy for ArgAt<'_, Rt> where Rt: Runtime {}
 pub struct SitesNoParameterReads {
     interner: Interner,
     ty: Ty,
+    instances: NoInstances,
 }
 
 impl Default for SitesNoParameterReads {
@@ -60,6 +88,7 @@ impl Default for SitesNoParameterReads {
         SitesNoParameterReads {
             interner: Interner::new(),
             ty: Ty::Unit,
+            instances: NoInstances,
         }
     }
 }
@@ -73,7 +102,7 @@ impl SitesNoParameterReads {
             ArgAt {
                 interner: &self.interner,
                 ty: &self.ty,
-                at: PhantomData,
+                instances: &self.instances,
             };
             n
         ]
@@ -106,7 +135,11 @@ where
     /// closure and nothing else.
     type Site: Clone + Send + Sync + 'static;
 
-    fn site(at: ArgAt<'_, Rt>) -> Self::Site;
+    /// How many of the call's settled argument types this parameter takes.
+    /// A required instance takes none: the site table is where its word is.
+    const ARGUMENTS: usize = 1;
+
+    fn site(args: &[ArgAt<'_, Rt>], at: usize) -> Self::Site;
 }
 
 /// How one Rust parameter takes its argument out of a call's argument run.
@@ -152,7 +185,7 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_, Rt>) {}
+    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
 }
 
 impl<T, Rt> Sited<Rt> for ByValue<T, Specialized>
@@ -162,7 +195,7 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_, Rt>) {}
+    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
 }
 
 impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Uniform>
@@ -173,7 +206,7 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_, Rt>) {}
+    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
 }
 
 impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Specialized>
@@ -184,7 +217,52 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_, Rt>) {}
+    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
+}
+
+/// A parameter that is a required instance: the call site resolved it from
+/// the settled type of argument `AT`, and the run carries nothing for it.
+pub struct Required<S, I, T, const AT: usize>(PhantomData<fn() -> (S, I, T)>);
+
+impl<S, I, T, Rt, const AT: usize> Sited<Rt> for Required<S, I, T, AT>
+where
+    S: Signature<Rt> + SharedSignature,
+    I: Send + Sync + 'static,
+    T: Send + Sync + 'static,
+    Rt: Runtime,
+{
+    type Site = Instance<S, I, Rt, T>;
+
+    const ARGUMENTS: usize = 0;
+
+    fn site(args: &[ArgAt<'_, Rt>], _: usize) -> Instance<S, I, Rt, T> {
+        let at = &args[AT];
+        let run = at
+            .instances
+            .instance_at(<S as SharedSignature>::qref(at.interner), at.ty);
+        // SAFETY: the registry answered for this signature at the settled
+        // type of the argument the requirement's variable stands at.
+        unsafe { Instance::at(<Rt as Runtime>::instance_value(run)) }
+    }
+}
+
+impl<'a, S, I, T, Rt, const AT: usize> Arg<'a, Rt> for Required<S, I, T, AT>
+where
+    S: Signature<Rt> + SharedSignature,
+    I: Send + Sync + 'static,
+    T: Send + Sync + 'static,
+    Rt: Runtime,
+{
+    type Out = Instance<S, I, Rt, T>;
+    type Form = Nothing;
+
+    unsafe fn take<'s>(
+        _: &'a Rt,
+        _: &'a [Rt::Value],
+        site: &'s Instance<S, I, Rt, T>,
+    ) -> Instance<S, I, Rt, T> {
+        *site
+    }
 }
 
 impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Uniform>
@@ -735,24 +813,25 @@ where
 {
 }
 
-/// A declaration's entry, as a type: the `fn` item `#[extern_fn]` wrote
+/// A declaration's mono glue, as a type: the `fn` item `#[extern_fn]` wrote
 /// beside the Rust body, named where the glue's type is named so that the
 /// glue itself stays the closure and nothing else.
-pub trait AtEntry<Rt>: Send + Sync + 'static
+pub trait AtInstance<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
 {
-    const ENTRY: Option<EntryRun<Rt>>;
+    fn run() -> Option<InstanceRun>;
 }
 
-/// The entry of a declaration that has none.
-pub struct NoEntry;
+pub struct NoInstance;
 
-impl<Rt> AtEntry<Rt> for NoEntry
+impl<Rt> AtInstance<Rt> for NoInstance
 where
     Rt: Runtime,
 {
-    const ENTRY: Option<EntryRun<Rt>> = None;
+    fn run() -> Option<InstanceRun> {
+        None
+    }
 }
 
 /// The call form a run of this shape and a result of form `R` take: which
@@ -914,9 +993,9 @@ where
     /// instead, and a `&str` or a slice parameter is two of them.
     fn arity(&self) -> usize;
     fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AtSite<Rt>>;
-    /// This handler as a plain function (RFC-0067 Decision 3), for the
-    /// declarations that have one.
-    fn entry(&self) -> Option<EntryRun<Rt>>;
+    /// This handler as the plain function an `Instance` value names
+    /// (RFC-0067 Decision 1), for the declarations that have one.
+    fn instance(&self) -> Option<InstanceRun>;
 }
 
 /// One declared instance with its site table filled: the handler of one call
@@ -983,8 +1062,8 @@ where
     /// As `HandlerFactory::arity`.
     fn arity(&self) -> usize;
     fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AsyncAtSite<Rt>>;
-    /// As `HandlerFactory::entry`.
-    fn entry(&self) -> Option<EntryRun<Rt>>;
+    /// As `HandlerFactory::instance`.
+    fn instance(&self) -> Option<InstanceRun>;
 }
 
 /// As `AtSite`, for a declaration whose Rust body is an `async fn`.
@@ -1045,7 +1124,7 @@ pub struct Unsited;
 ///
 /// `Handler` is implemented for the sited glue alone, so an operation cannot
 /// hold a glue whose table was never filled.
-pub struct Glue<Rt, F, A, R, S = Unsited, E = NoEntry> {
+pub struct Glue<Rt, F, A, R, S = Unsited, E = NoInstance> {
     f: F,
     sites: S,
     shape: PhantomData<fn() -> (Rt, A, R, E)>,
@@ -1084,7 +1163,7 @@ where
 /// As `Glue`, for a body that awaits. The closure is shared because the
 /// future it returns outlives the call that made it, so the call clones the
 /// closure into the future rather than borrowing it.
-pub struct AsyncGlue<Rt, F, A, S = Unsited, E = NoEntry> {
+pub struct AsyncGlue<Rt, F, A, S = Unsited, E = NoInstance> {
     f: Arc<F>,
     sites: S,
     shape: PhantomData<fn() -> (Rt, A, E)>,
@@ -1118,14 +1197,6 @@ where
 {
 }
 
-/// One per parameter, whatever the parameter's type is: the fold that counts
-/// a declaration's arity.
-macro_rules! one_per {
-    ($arg:ident) => {
-        1usize
-    };
-}
-
 /// The run of `InRegisters<0>` widened by each parameter in turn: the fold
 /// whose answer `TakenForm` reads.
 macro_rules! run_of {
@@ -1149,10 +1220,10 @@ macro_rules! parameters {
             type Sites = ($(<$arg as Sited<Rt>>::Site,)*);
             type Out<'a> = ($(<$arg as Arg<'a, Rt>>::Out,)*);
 
-            const ARITY: usize = 0 $(+ one_per!($arg))*;
+            const ARITY: usize = 0 $(+ <$arg as Sited<Rt>>::ARGUMENTS)*;
             const WIDTH: usize = 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*;
 
-            #[allow(unused_variables)]
+            #[allow(unused_variables, unused_mut, unused_assignments)]
             fn sites(args: &[ArgAt<'_, Rt>]) -> Self::Sites {
                 assert_eq!(
                     args.len(),
@@ -1162,7 +1233,12 @@ macro_rules! parameters {
                     args.len(),
                     <Self as Parameters<Rt>>::ARITY
                 );
-                ($(<$arg as Sited<Rt>>::site(args[$at]),)*)
+                let mut _at = 0usize;
+                $(
+                    let $out = <$arg as Sited<Rt>>::site(args, _at);
+                    _at += <$arg as Sited<Rt>>::ARGUMENTS;
+                )*
+                ($($out,)*)
             }
 
             /// Obligation across artifacts: `benches/asm_probe.rs` asserts
@@ -1233,13 +1309,13 @@ where
     }
 }
 
-/// As `glue`, with the declaration's body also as a plain function: the
-/// entry a resolved instance of it is passed by (RFC-0067 Decision 3).
-pub fn glue_at_entry<Rt, F, A, R, E>(f: F) -> Glue<Rt, F, A, R, Unsited, E>
+/// As `glue`, with the declaration's body also as the plain function a
+/// resolved instance of it is called through (RFC-0067 Decision 1).
+pub fn glue_at_instance<Rt, F, A, R, E>(f: F) -> Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
     A: Parameters<Rt>,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt>,
 {
@@ -1267,12 +1343,12 @@ where
     }
 }
 
-/// As `glue_at_entry`, for a body that awaits.
-pub fn async_glue_at_entry<Rt, F, A, E>(f: F) -> AsyncGlue<Rt, F, A, Unsited, E>
+/// As `glue_at_instance`, for a body that awaits.
+pub fn async_glue_at_instance<Rt, F, A, E>(f: F) -> AsyncGlue<Rt, F, A, Unsited, E>
 where
     Rt: Runtime,
     A: Parameters<Rt>,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     F: for<'a, 'w> Fn(
         &'a mut Ctx<'w, Rt>,
         <A as Parameters<Rt>>::Out<'a>,
@@ -1288,7 +1364,7 @@ where
 impl<Rt, F, A, R, E> Handler<Rt> for Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1311,7 +1387,7 @@ where
 impl<Rt, F, A, R, E> HandlerFactory<Rt> for Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1338,8 +1414,8 @@ where
         Box::new(self.at(args))
     }
 
-    fn entry(&self) -> Option<EntryRun<Rt>> {
-        <E as AtEntry<Rt>>::ENTRY
+    fn instance(&self) -> Option<InstanceRun> {
+        <E as AtInstance<Rt>>::run()
     }
 }
 
@@ -1360,7 +1436,7 @@ where
 impl<Rt, F, A, R, E> AtSite<Rt> for Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1383,7 +1459,7 @@ where
 impl<Rt, F, A, R, E> ValuesOnly<Rt> for Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
@@ -1395,7 +1471,7 @@ where
 impl<Rt, F, A, E> AsyncCall<Rt> for AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
@@ -1426,7 +1502,7 @@ where
 impl<Rt, F, A, E> AsyncFactory<Rt> for AsyncGlue<Rt, F, A, Unsited, E>
 where
     Rt: Runtime,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
@@ -1454,8 +1530,8 @@ where
         Box::new(self.at(args))
     }
 
-    fn entry(&self) -> Option<EntryRun<Rt>> {
-        <E as AtEntry<Rt>>::ENTRY
+    fn instance(&self) -> Option<InstanceRun> {
+        <E as AtInstance<Rt>>::run()
     }
 }
 
@@ -1479,7 +1555,7 @@ where
 impl<Rt, F, A, E> AsyncAtSite<Rt> for AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites, E>
 where
     Rt: Runtime,
-    E: AtEntry<Rt>,
+    E: AtInstance<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
@@ -1558,10 +1634,10 @@ impl<R: Runtime> ExternHandler<R> {
     /// frame, which is `Task::Sync` and drops the whole reason the
     /// declaration said `heavy`, or offloading it — which needs the
     /// runtime's executor, and an entry's arguments do not carry one.
-    pub fn entry(&self) -> Option<EntryRun<R>> {
+    pub fn instance(&self) -> Option<InstanceRun> {
         match self {
-            Self::Sync(f) => f.entry(),
-            Self::Async(f) => f.entry(),
+            Self::Sync(f) => f.instance(),
+            Self::Async(f) => f.instance(),
             Self::Heavy(_) => None,
         }
     }

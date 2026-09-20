@@ -65,6 +65,7 @@ pub struct CompileResult {
     pub context_names: FxHashMap<QualifiedRef, Astr>,
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
+    pub instances: acvus_extern::InstanceTable,
 }
 
 fn compile(
@@ -259,6 +260,7 @@ where
         functions: extern_fns,
         types: mut type_registry,
         handlers,
+        instances,
         ..
     } = Externs::combine(extern_registries, interner).expect("registries combine");
     declare_types(&mut type_registry);
@@ -352,6 +354,7 @@ where
         context_names,
         fn_types,
         extern_executables,
+        instances,
     })
 }
 
@@ -367,6 +370,7 @@ pub fn execute_compiled(
         interner,
         externs: &functions,
         context_names: &cr.context_names,
+        instances: &cr.instances,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = cr
         .modules
@@ -1312,6 +1316,7 @@ pub mod corpus {
                 interner: &interner,
                 externs: &functions,
                 context_names: &cr.context_names,
+                instances: &cr.instances,
             };
             catch_unwind(AssertUnwindSafe(|| {
                 cr.modules
@@ -1527,6 +1532,7 @@ pub mod corpus {
             Kind::Ref => render(interner, unsafe { value.target() }),
             Kind::Undef => Json::from("<undef>"),
             Kind::LargeRef => Json::from("<projection>"),
+            Kind::Instance | Kind::InstanceAwait => Json::from("<instance>"),
             Kind::Large => composite(interner, value),
         }
     }

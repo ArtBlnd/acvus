@@ -14,6 +14,7 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::handler::{DeclaredInstance, ExternHandler, Instances};
+use crate::instance::InstanceRun;
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -452,6 +453,43 @@ pub struct Externs<R: Runtime> {
     pub types: TypeRegistry,
     pub handlers: Handlers<R>,
     pub space: FxHashMap<QualifiedRef, SpaceHooks<R>>,
+    pub instances: InstanceTable,
+}
+
+/// Every shared signature's instances, in the order `Externs::combine`
+/// collected them; a call site's table is filled from it once, at prepare.
+#[derive(Default)]
+pub struct InstanceTable {
+    by_signature: FxHashMap<QualifiedRef, Vec<InstanceAt>>,
+}
+
+impl<R> crate::handler::InstanceEntries<R> for InstanceTable
+where
+    R: Runtime,
+{
+    fn instance_at(&self, signature: QualifiedRef, ty: &acvus_mir::ty::Ty) -> InstanceRun {
+        let ty = match ty {
+            TyTerm::Ref(_, target) => &target.ty,
+            at => at,
+        };
+        let Some(instances) = self.by_signature.get(&signature) else {
+            panic!("{signature:?} is required but no registry declares it")
+        };
+        let Some(found) = instances.iter().find(|at| matches_pattern(ty, &at.ty)) else {
+            panic!(
+                "{signature:?} has no instance at {ty:?}, so the OneOf bound the requirement \
+                 was met with admitted a type it does not hold (RFC-0067 Decision 1)"
+            )
+        };
+        let Some(run) = found.run else {
+            panic!(
+                "the instance of {signature:?} at {ty:?} has no mono glue, so nothing can \
+                 require it; an instance holding a `#[state]` value, taking a projection \
+                 parameter, or declared `heavy` is written without one"
+            )
+        };
+        run
+    }
 }
 
 /// One instance of one shared signature as the checker's `InstanceSets`
@@ -459,6 +497,9 @@ pub struct Externs<R: Runtime> {
 /// task its body runs at.
 pub struct InstanceAt {
     pub ty: PolyTy,
+    /// Obligation across artifacts: `#[extern_fn]` decides which
+    /// declarations get a mono glue, and this is `None` for the rest.
+    pub run: Option<InstanceRun>,
     pub requires: Vec<BoundAt>,
     /// The task this instance's own body runs at: the tightest of the
     /// handlers the declaration contributed, which for a declaration with a
@@ -642,7 +683,11 @@ impl<R: Runtime> Externs<R> {
         }
         let mut collected: Vec<Collected<R>> = signatures.into_values().collect();
         collected.sort_by_key(|c| c.decl.qref);
-        for c in collected {
+        let mut instance_table = InstanceTable::default();
+        for mut c in collected {
+            instance_table
+                .by_signature
+                .insert(c.decl.qref, std::mem::take(&mut c.entries));
             let mut bounds = c.decl.bounds;
             if let Some(first) = bounds.first_mut() {
                 *first = meet(first, c.decl.qref, &c.instance_types, &sets);
@@ -669,6 +714,7 @@ impl<R: Runtime> Externs<R> {
             types,
             handlers,
             space,
+            instances: instance_table,
         })
     }
 }
@@ -753,6 +799,7 @@ fn add_instance<R: Runtime>(
         .collect::<Result<Vec<BoundAt>, CombineError>>()?;
     collected.entries.push(InstanceAt {
         ty: ty.clone(),
+        run: admitted.iter().find_map(|i| i.handler.instance()),
         requires,
         task: admitted
             .iter()

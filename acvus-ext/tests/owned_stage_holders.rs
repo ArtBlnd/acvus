@@ -153,6 +153,14 @@ impl FromValue<Counted> for V {
 }
 
 impl Runtime for Counted {
+    fn instance_value(_: acvus_extern::InstanceRun) -> Self::Value {
+        panic!("Counted declares no instances")
+    }
+
+    unsafe fn instance_run(_: &Self::Value) -> acvus_extern::InstanceRun {
+        panic!("Counted declares no instances")
+    }
+
     type Op = acvus_extern::DirectOp<Counted>;
     type CallShape = ();
     type AsyncShape = ();
@@ -167,10 +175,7 @@ impl Runtime for Counted {
     type CallFuture<'a> = Ready<V>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx {
-            rt: self,
-            frame: (),
-        }
+        acvus_extern::Ctx::new(self, ())
     }
     fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
@@ -394,7 +399,7 @@ type Predicate = Closure<(Ref<Owned<Counted>, Shared, Counted>,), bool, (), Coun
 fn drain(rt: &Counted, mut it: Elements) -> Vec<V> {
     futures::executor::block_on(async {
         let mut out = Vec::new();
-        while let Some(value) = it.next_value(&mut Ctx { rt, frame: () }).await {
+        while let Some(value) = it.next_value(&mut Ctx::new(rt, ())).await {
             out.push(value);
         }
         out

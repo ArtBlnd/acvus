@@ -33,6 +33,7 @@ mod inlined_closure_capture;
 mod instance_entry;
 mod integers;
 mod iter_more;
+mod iter_next;
 mod laid_argument_drop;
 mod lambda_capture;
 mod lent_iterator;

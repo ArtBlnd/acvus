@@ -89,6 +89,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         interner,
         externs: &exec_fns,
         context_names: &context_names,
+        instances: &acvus_extern::NoInstances,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules

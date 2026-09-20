@@ -223,10 +223,73 @@ struct StateParam {
     ty: Type,
 }
 
+/// A declaration states a requirement by taking it (RFC-0067 Decision 1).
+struct RequiredParam {
+    signature: Type,
+    var: Ident,
+    task: Type,
+}
+
 /// One Rust parameter after the runtime, in declaration order.
 enum RustParam {
     Acvus(ExternParam),
     State(StateParam),
+    Required(RequiredParam),
+}
+
+fn required_of(ty: &Type) -> syn::Result<Option<RequiredParam>> {
+    let Type::Path(p) = ty else {
+        return Ok(None);
+    };
+    let Some(seg) = p.path.segments.last() else {
+        return Ok(None);
+    };
+    if seg.ident != "Instance" {
+        return Ok(None);
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return Err(syn::Error::new_spanned(
+            seg,
+            "an instance parameter names the signature it requires, the variable it stands \
+             at, and the runtime: `next: Instance<sig::next<I, i64, E, Rt>, I, Rt>`",
+        ));
+    };
+    let tys: Vec<&Type> = args
+        .args
+        .iter()
+        .filter_map(|a| match a {
+            syn::GenericArgument::Type(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    let (Some(signature), Some(var)) = (tys.first(), tys.get(1)) else {
+        return Err(syn::Error::new_spanned(
+            seg,
+            "an instance parameter names the signature it requires, the variable it stands \
+             at, and the runtime: `next: Instance<sig::next<I, i64, E, Rt>, I, Rt>`",
+        ));
+    };
+    let Type::Path(v) = var else {
+        return Err(syn::Error::new_spanned(
+            var,
+            "an instance stands at one of this declaration's own type variables",
+        ));
+    };
+    let Some(var) = v.path.get_ident() else {
+        return Err(syn::Error::new_spanned(
+            var,
+            "an instance stands at one of this declaration's own type variables",
+        ));
+    };
+    let task = match tys.get(3) {
+        Some(t) => (*t).clone(),
+        None => syn::parse_quote! { ::acvus_extern::Now },
+    };
+    Ok(Some(RequiredParam {
+        signature: (*signature).clone(),
+        var: var.clone(),
+        task,
+    }))
 }
 
 fn generate_extern_fn(
@@ -245,16 +308,44 @@ fn generate_extern_fn(
         .iter()
         .filter_map(|p| match p {
             RustParam::Acvus(a) => Some(a),
-            RustParam::State(_) => None,
+            RustParam::State(_) | RustParam::Required(_) => None,
         })
         .collect();
     let states: Vec<&StateParam> = rust_params
         .iter()
         .filter_map(|p| match p {
             RustParam::State(st) => Some(st),
-            RustParam::Acvus(_) => None,
+            RustParam::Acvus(_) | RustParam::Required(_) => None,
         })
         .collect();
+    let required: Vec<&RequiredParam> = rust_params
+        .iter()
+        .filter_map(|p| match p {
+            RustParam::Required(r) => Some(r),
+            RustParam::Acvus(_) | RustParam::State(_) => None,
+        })
+        .collect();
+    // The call site resolves an instance from the settled type of the
+    // parameter standing at its variable, so that parameter has to be one.
+    let required_at: Vec<usize> = required
+        .iter()
+        .map(|r| {
+            params
+                .iter()
+                .position(|p| Vars::is_exactly(&p.ty, &r.var) && p.mode == Mode::Value)
+                .ok_or_else(|| {
+                    syn::Error::new(
+                        r.var.span(),
+                        format!(
+                            "a declaration requiring an instance of `{}` takes that value by \
+                             value as a parameter, because the call site resolves the instance \
+                             from that parameter's settled type (RFC-0067 Decision 1)",
+                            r.var
+                        ),
+                    )
+                })
+        })
+        .collect::<syn::Result<_>>()?;
     let ret = parse_return(&func.sig.output);
     let returning = Returning::of(&ret);
     if returning == Returning::Str {
@@ -443,6 +534,9 @@ fn generate_extern_fn(
     };
 
     let arg_idents: Vec<Ident> = (0..params.len()).map(|i| format_ident!("__a{i}")).collect();
+    let inst_idents: Vec<Ident> = (0..required.len())
+        .map(|i| format_ident!("__q{i}"))
+        .collect();
     let crossing = |ty: &Type, member: Option<&Type>| -> proc_macro2::TokenStream {
         if member.is_some() && vars.mentions_mono(ty) {
             quote! { ::acvus_extern::Specialized }
@@ -456,10 +550,16 @@ fn generate_extern_fn(
         quote! { sync }
     };
     let state_tys: Vec<&Type> = states.iter().map(|st| &st.ty).collect();
-    let has_entry = attr.instance_of.is_some()
+    // An instance's own requirement is a field of its payload, laid at
+    // construction, so a declaration with both has no mono glue to write.
+    let has_glue = attr.instance_of.is_some()
         && states.is_empty()
         && !attr.heavy
-        && !params.iter().any(|p| p.mode == Mode::Projection);
+        && required.is_empty()
+        && !params.is_empty()
+        && !params
+            .iter()
+            .any(|p| matches!(p.mode, Mode::Projection | Mode::Str));
     let entries = std::cell::RefCell::new(Vec::<proc_macro2::TokenStream>::new());
     let glue = |member: Option<&Type>, callee: &Ident, awaits: bool| -> proc_macro2::TokenStream {
         let rt_tys: Vec<Type> = params
@@ -492,10 +592,64 @@ fn generate_extern_fn(
                 }
             })
             .collect();
+        let inst_markers: Vec<proc_macro2::TokenStream> = required
+            .iter()
+            .zip(&required_at)
+            .map(|(r, at)| {
+                let sig = vars.to_runtime_instance(&r.signature, member);
+                let var = &r.var;
+                let var: Type = syn::parse_quote! { #var };
+                let var = vars.to_runtime_instance(&var, member);
+                let task = &r.task;
+                quote! { ::acvus_extern::Required<#sig, #var, #task, #at> }
+            })
+            .collect();
+        // A receiver is read through the loan device, which is where a
+        // type with no storage of its own is refused; nothing else reads
+        // a value's payload in place.
+        let recv_binding = params.first().map(|p| {
+            let ty = &rt_tys[0];
+            let c = crossing(&p.ty, member);
+            let at = &arg_idents[0];
+            let loan = match p.mode {
+                Mode::BorrowMut => quote! { ::acvus_extern::Mut },
+                _ => quote! { ::acvus_extern::Shared },
+            };
+            match p.mode {
+                Mode::BorrowMut | Mode::Borrow => quote! {
+                    let __recv_at = unsafe {
+                        <__R as ::acvus_extern::Runtime>::reference(__rt, &*__ctx.receiver())
+                    };
+                    let #at = unsafe {
+                        <#loan as ::acvus_extern::Loan>::borrow::<#ty, #c, __R>(
+                            __rt, &__recv_at,
+                        )
+                    };
+                },
+                _ => quote! {
+                    let #at = unsafe {
+                        <#ty as ::acvus_extern::OneValue<__R, #c>>::materialize(
+                            __rt, *__ctx.receiver(),
+                        )
+                    };
+                },
+            }
+        });
+        let rest_tys: Vec<proc_macro2::TokenStream> = params
+            .iter()
+            .zip(&rt_tys)
+            .skip(1)
+            .map(|(p, ty)| match p.mode {
+                Mode::BorrowMut => quote! { &mut #ty },
+                Mode::Borrow => quote! { &#ty },
+                _ => quote! { #ty },
+            })
+            .collect();
         let turbofish = vars.runtime_turbofish_instance(member);
         let mut acvus_at = 0usize;
         let mut state_at = 0usize;
-        let declared: Vec<proc_macro2::TokenStream> = rust_params
+        let mut inst_at = 0usize;
+        let passed: Vec<proc_macro2::TokenStream> = rust_params
             .iter()
             .map(|p| match p {
                 RustParam::Acvus(_) => {
@@ -508,9 +662,13 @@ fn generate_extern_fn(
                     state_at += 1;
                     quote! { &__state.#at }
                 }
+                RustParam::Required(_) => {
+                    let at = &inst_idents[inst_at];
+                    inst_at += 1;
+                    quote! { #at }
+                }
             })
             .collect();
-        let passed: Vec<proc_macro2::TokenStream> = declared;
         let capture_state = (!states.is_empty()).then(|| {
             quote! { let __state = ::std::sync::Arc::clone(&__state); }
         });
@@ -519,73 +677,53 @@ fn generate_extern_fn(
             __ctx: &mut ::acvus_extern::Ctx<'_, __R>
         };
         let call = quote! { #callee #turbofish (#ctx_arg #(#passed),*) };
-        let entry_call = call.clone();
-        // Every parameter an instance with an entry may take resolves its
-        // site from nothing, so the entry's site table is the unit tuple.
-        // A projection parameter's site is a table the call's settled type
-        // built, and the type error here is the refusal `has_entry` above
-        // already states.
-        let unit_sites = arg_markers.iter().map(|_| quote! { () });
-        let sites_of_entry = quote! { let __sites = (#(#unit_sites,)*); };
-        if awaits && has_entry {
+        if awaits && has_glue {
             let at = entries.borrow().len();
-            let entry_ident = format_ident!("__extern_entry_{}_{}", fn_ident, at);
-            let entry_ty = format_ident!("__ExternEntry{}{}", fn_ident, at);
+            let glue_ident = format_ident!("__instance_{}_{}", fn_ident, at);
+            let entry_ty = format_ident!("__ExternInstance{}{}", fn_ident, at);
+            let rest_idents = &arg_idents[1..];
+            let recv_binding = recv_binding.clone().expect("has_glue has a receiver");
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
-                unsafe fn #entry_ident<'__a, '__w, '__r, __R>(
-                    __ctx: &'__a mut ::acvus_extern::Ctx<'__w, __R>,
-                    __run: &'__r [<__R as ::acvus_extern::Runtime>::Value],
-                ) -> ::acvus_extern::BoxFuture<'__a, <__R as ::acvus_extern::Runtime>::Value>
+                unsafe fn #glue_ident<'__a, __R>(
+                    __ctx: &'__a mut ::acvus_extern::Ctx<'_, __R>,
+                    (#(#rest_idents,)*): (#(#rest_tys,)*),
+                ) -> ::acvus_extern::BoxFuture<'__a, #rt_ret>
                 where
                     __R: ::acvus_extern::Runtime,
                 {
                     let __rt = __ctx.rt;
-                    #sites_of_entry
-                    let __held: ::std::vec::Vec<<__R as ::acvus_extern::Runtime>::Value> =
-                        __run.to_vec();
-                    ::std::boxed::Box::pin(async move {
-                        // SAFETY: the values ABI's contract, over the run
-                        // this future owns — which is `Parameters::take`'s.
-                        let (#(#arg_idents,)*) = unsafe {
-                            <(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::take(
-                                __rt,
-                                &__held,
-                                &__sites,
-                            )
-                        };
-                        let __r = (#entry_call).await;
-                        let mut __out = [
-                            <<__R as ::acvus_extern::Runtime>::Value as
-                                ::core::default::Default>::default(),
-                        ];
-                        <#ret_marker as ::acvus_extern::Ret<__R>>::into_run(__r, __rt, &mut __out);
-                        __out[0]
-                    })
+                    // SAFETY: an `Instance::call` named the receiver for
+                    // this call, and this glue is the body of an instance
+                    // standing at the type the value it named holds.
+                    #recv_binding
+                    ::std::boxed::Box::pin(async move { (#call).await })
                 }
 
                 #[doc(hidden)]
                 #[allow(non_camel_case_types)]
                 pub struct #entry_ty;
 
-                impl<__R> ::acvus_extern::AtEntry<__R> for #entry_ty
+                impl<__R> ::acvus_extern::AtInstance<__R> for #entry_ty
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    const ENTRY: ::core::option::Option<::acvus_extern::EntryRun<__R>> =
-                        ::core::option::Option::Some(::acvus_extern::EntryRun::Await(
-                            #entry_ident::<__R>,
-                        ));
+                    fn run() -> ::core::option::Option<::acvus_extern::InstanceRun> {
+                        ::core::option::Option::Some(::acvus_extern::InstanceRun {
+                            at: #glue_ident::<__R> as usize,
+                            task: ::acvus_extern::Task::Async,
+                        })
+                    }
                 }
             });
             quote! {
                 ::acvus_extern::ExternHandler::awaited(
-                    ::acvus_extern::async_glue_at_entry::<
+                    ::acvus_extern::async_glue_at_instance::<
                         __R,
                         _,
-                        (#(#arg_markers,)*),
+                        (#(#arg_markers,)* #(#inst_markers,)*),
                         #entry_ty,
-                    >(move |#ctx_param, (#(#arg_idents,)*)| {
+                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| {
                         let __rt = __ctx.rt;
                         ::std::boxed::Box::pin(async move {
                             let __r = (#call).await;
@@ -598,8 +736,8 @@ fn generate_extern_fn(
             quote! {
                 ::acvus_extern::ExternHandler::awaited({
                     #capture_state
-                    ::acvus_extern::async_glue::<__R, _, (#(#arg_markers,)*)>(
-                        move |#ctx_param, (#(#arg_idents,)*)| {
+                    ::acvus_extern::async_glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)*)>(
+                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| {
                             #capture_state
                             let __rt = __ctx.rt;
                             ::std::boxed::Box::pin(async move {
@@ -610,67 +748,62 @@ fn generate_extern_fn(
                     )
                 })
             }
-        } else if has_entry {
+        } else if has_glue {
             let at = entries.borrow().len();
-            let entry_ident = format_ident!("__extern_entry_{}_{}", fn_ident, at);
-            let entry_ty = format_ident!("__ExternEntry{}{}", fn_ident, at);
+            let glue_ident = format_ident!("__instance_{}_{}", fn_ident, at);
+            let entry_ty = format_ident!("__ExternInstance{}{}", fn_ident, at);
+            let rest_idents = &arg_idents[1..];
+            let recv_binding = recv_binding.clone().expect("has_glue has a receiver");
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
-                unsafe fn #entry_ident<__R>(
+                unsafe fn #glue_ident<__R>(
                     __ctx: &mut ::acvus_extern::Ctx<'_, __R>,
-                    __run: &[<__R as ::acvus_extern::Runtime>::Value],
-                    __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
-                )
+                    (#(#rest_idents,)*): (#(#rest_tys,)*),
+                ) -> #rt_ret
                 where
                     __R: ::acvus_extern::Runtime,
                 {
                     let __rt = __ctx.rt;
-                    #sites_of_entry
-                    // SAFETY: the values ABI's contract — `__run` is this
-                    // declaration's whole argument run and every storage a
-                    // reference in it names is live for the call — which is
-                    // `Parameters::take`'s.
-                    let (#(#arg_idents,)*) = unsafe {
-                        <(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::take(
-                            __rt,
-                            __run,
-                            &__sites,
-                        )
-                    };
-                    <#ret_marker as ::acvus_extern::Ret<__R>>::into_run(#entry_call, __rt, __out);
+                    // SAFETY: an `Instance::call` named the receiver for
+                    // this call, and this glue is the body of an instance
+                    // standing at the type the value it named holds.
+                    #recv_binding
+                    #call
                 }
 
                 #[doc(hidden)]
                 #[allow(non_camel_case_types)]
                 pub struct #entry_ty;
 
-                impl<__R> ::acvus_extern::AtEntry<__R> for #entry_ty
+                impl<__R> ::acvus_extern::AtInstance<__R> for #entry_ty
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    const ENTRY: ::core::option::Option<::acvus_extern::EntryRun<__R>> =
-                        ::core::option::Option::Some(::acvus_extern::EntryRun::Sync(
-                            #entry_ident::<__R>,
-                        ));
+                    fn run() -> ::core::option::Option<::acvus_extern::InstanceRun> {
+                        ::core::option::Option::Some(::acvus_extern::InstanceRun {
+                            at: #glue_ident::<__R> as usize,
+                            task: ::acvus_extern::Task::Sync,
+                        })
+                    }
                 }
             });
             quote! {
                 ::acvus_extern::ExternHandler::#sync_variant(
-                    ::acvus_extern::glue_at_entry::<
+                    ::acvus_extern::glue_at_instance::<
                         __R,
                         _,
-                        (#(#arg_markers,)*),
+                        (#(#arg_markers,)* #(#inst_markers,)*),
                         #ret_marker,
                         #entry_ty,
-                    >(move |#ctx_param, (#(#arg_idents,)*)| #call)
+                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| #call)
                 )
             }
         } else {
             quote! {
                 ::acvus_extern::ExternHandler::#sync_variant({
                     #capture_state
-                    ::acvus_extern::glue::<__R, _, (#(#arg_markers,)*), #ret_marker>(
-                        move |#ctx_param, (#(#arg_idents,)*)| #call
+                    ::acvus_extern::glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)*), #ret_marker>(
+                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| #call
                     )
                 })
             }
@@ -794,28 +927,30 @@ fn generate_extern_fn(
         }
     };
     let bounds = vars.bound_exprs();
-    let requires: Vec<proc_macro2::TokenStream> = vars
-        .bounded()
-        .flat_map(|v| {
-            let at = v.index;
-            let body_task = &body_task;
-            v.requires.iter().map(move |required| {
-                let path =
-                    signature_path(&required.signature).expect("a required signature is a path");
-                let calls = match required.awaits {
-                    true => quote! { #body_task },
-                    false => quote! { ::acvus_extern::Task::Sync },
-                };
-                quote! {
-                    ::acvus_extern::Requirement {
-                        var: #at,
-                        signature: <#path as ::acvus_extern::SharedSignature>::qref(__i),
-                        calls: #calls,
-                    }
+    let requires: Vec<proc_macro2::TokenStream> = required
+        .iter()
+        .map(|r| {
+            let path = signature_path(&r.signature)?;
+            let Some((VarKind::Ty, at)) = vars.lookup(&r.var) else {
+                return Err(syn::Error::new(
+                    r.var.span(),
+                    "an instance stands at one of this declaration's own `Var<kind::Type>` \
+                     parameters",
+                ));
+            };
+            let task = &r.task;
+            let calls = quote! {
+                <#task as ::acvus_extern::CalledAt>::TASK.meet(#body_task)
+            };
+            Ok(quote! {
+                ::acvus_extern::Requirement {
+                    var: #at,
+                    signature: <#path as ::acvus_extern::SharedSignature>::qref(__i),
+                    calls: #calls,
                 }
             })
         })
-        .collect();
+        .collect::<syn::Result<_>>()?;
     let declared_ty = signature(None);
 
     let fresh_vars = vars.fresh_vars_expr();
@@ -908,6 +1043,10 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
                 ident,
                 ty: (*r.elem).clone(),
             }));
+            continue;
+        }
+        if let Some(required) = required_of(pat_type.ty.as_ref())? {
+            params.push(RustParam::Required(required));
             continue;
         }
         if let Some(runtime) = runtime
@@ -2557,6 +2696,12 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                     "a signature declares no state",
                 ));
             }
+            RustParam::Required(r) => {
+                return Err(syn::Error::new_spanned(
+                    r.signature,
+                    "a signature requires no instance of its own",
+                ));
+            }
         }
     }
     let ret = parse_return(&sig.output);
@@ -2777,6 +2922,54 @@ fn signature_call(
             type Recv<'__a> = #recv;
             type Rest<'__a> = (#(#rest_tys,)*);
             type Ret = #ret;
+
+            unsafe fn call_now<'__r>(
+                __value: <#runtime as ::acvus_extern::Runtime>::Value,
+                __ctx: &mut ::acvus_extern::Ctx<'_, #runtime>,
+                __rest: <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__r>,
+            ) -> #ret {
+                // SAFETY: the caller's contract: the word is the mono glue
+                // of an instance of this signature, which `#[extern_fn]`
+                // wrote at exactly this shape.
+                let __f: unsafe fn(
+                    &mut ::acvus_extern::Ctx<'_, #runtime>,
+                    <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__r>,
+                ) -> #ret = unsafe {
+                    ::core::mem::transmute(
+                        <#runtime as ::acvus_extern::Runtime>::instance_run(&__value).at,
+                    )
+                };
+                // SAFETY: the caller's contract, which is the glue's own.
+                unsafe { __f(__ctx, __rest) }
+            }
+
+            unsafe fn call_later<'__a>(
+                __value: <#runtime as ::acvus_extern::Runtime>::Value,
+                __ctx: &'__a mut ::acvus_extern::Ctx<'_, #runtime>,
+                __rest: <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__a>,
+            ) -> ::acvus_extern::BoxFuture<'__a, #ret>
+            where
+                #ret: ::core::marker::Send,
+            {
+                // SAFETY: the caller's contract.
+                let __run = unsafe {
+                    <#runtime as ::acvus_extern::Runtime>::instance_run(&__value)
+                };
+                if __run.task == ::acvus_extern::Task::Sync {
+                    // SAFETY: the value's own task says the glue returns.
+                    let __r = unsafe { Self::call_now(__value, __ctx, __rest) };
+                    return ::std::boxed::Box::pin(::core::future::ready(__r));
+                }
+                // SAFETY: as `call_now`'s, at the awaiting shape the task
+                // above named.
+                let __f: unsafe fn(
+                    &'__a mut ::acvus_extern::Ctx<'_, #runtime>,
+                    <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__a>,
+                ) -> ::acvus_extern::BoxFuture<'__a, #ret> =
+                    unsafe { ::core::mem::transmute(__run.at) };
+                // SAFETY: as `call_now`'s.
+                unsafe { __f(__ctx, __rest) }
+            }
         }
     }
 }
