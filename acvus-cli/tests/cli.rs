@@ -85,6 +85,18 @@ fn a_template_prints_its_text_and_an_expression_prints_its_value() {
 }
 
 #[test]
+fn a_closure_parameter_lent_to_a_str_parameter_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = acvus(
+        dir.path(),
+        &["run", "-e", "let f = |x| -> concat(\"q\", &x); f(\"z\")"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "qz\n");
+    assert_eq!(text(&out.stderr), "");
+}
+
+#[test]
 fn a_compile_error_is_reported_at_its_line_and_column_with_status_1() {
     let dir = tempfile::tempdir().unwrap();
     write(

@@ -352,3 +352,7 @@ Rust slice.
   is what §3's "borrow projection of its container" says, stated as the one
   bound that survives. The refusal a reader meets first is the macro's, which
   names the missing parameter.
+
+**A deferred argument no declaration answers joins with its parameter exactly
+as an eagerly known one does**, so `let f = |x| -> concat("q", &x); f("z")`
+compiles as `let s = "z"; concat("q", &s)` always did.

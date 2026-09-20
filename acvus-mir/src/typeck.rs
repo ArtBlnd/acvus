@@ -1426,8 +1426,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// The declaration the referent's evidence settles on, recorded as the
-    /// coercion at `at`. `false` is a referent that declares none, which the
-    /// caller reports as the argument mismatch it is.
+    /// coercion at `at`.
     fn slice_coercion(
         &mut self,
         referent: &InferTy,
@@ -1481,9 +1480,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         true
     }
 
-    /// Every argument whose container the solve has now named. A container
-    /// that never named one, or that declares no `as_slice`, is the argument
-    /// mismatch the eager path reports at the site.
+    /// Every argument whose container the solve has now named.
     fn settle_slice_args(&mut self) {
         let deferred = std::mem::take(&mut self.slice_args);
         for SliceArg {
@@ -1514,10 +1511,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             if self.slice_coercion(&referent, viewed, &arg, &param, at, span) {
                 continue;
             }
-            let expected = self.type_as_written(&self.solver.shallow_resolve_ty(&param));
-            let got = self.type_as_written(&self.solver.shallow_resolve_ty(&arg));
-            self.error(MirErrorKind::UnificationFailure { expected, got }, span);
+            self.meet_settled_argument(&arg, &param, span);
         }
+    }
+
+    /// No conversion decision is asked here, and that is a decision, not an
+    /// omission: this runs inside `solve_body` after `Solver::solve`, where
+    /// nothing would answer one. A conversion answers `Identity` exactly
+    /// where its two sides unify, so a settled argument takes that
+    /// unification directly, and a conversion that needs a cast is out of
+    /// reach on this path.
+    fn meet_settled_argument(&mut self, arg: &InferTy, param: &InferTy, span: Span) {
+        let mismatch = MirErrorKind::UnificationFailure {
+            expected: self.type_as_written(&self.solver.shallow_resolve_ty(param)),
+            got: self.type_as_written(&self.solver.shallow_resolve_ty(arg)),
+        };
+        if self.solver.unify(arg, param).is_ok() {
+            return;
+        }
+        self.error(mismatch, span);
     }
 
     fn held_root(&self, root: &PlaceRoot) -> Option<HeldRoot> {

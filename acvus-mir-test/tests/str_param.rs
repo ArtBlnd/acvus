@@ -1,6 +1,7 @@
 //! A `&str` parameter takes `&s` by coercion (RFC-0062 Decision 3): where
-//! the `String`'s `as_str` ends up, and what a referent that is no `String`
-//! is refused with.
+//! the `String`'s `as_str` ends up, what a referent that is no `String` is
+//! refused with, and that a referent the solve names only after checking
+//! answers both the same way.
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
@@ -81,5 +82,19 @@ fn a_referent_that_is_no_string_is_the_argument_mismatch_it_is() {
     assert!(
         reported.contains("str"),
         "the refusal names the parameter: {reported}"
+    );
+}
+
+#[test]
+fn a_str_referent_the_solve_names_after_checking_needs_no_view() {
+    let ir = ir("let f = |x| -> concat(\"q\", &x); f(\"z\")");
+    assert_eq!(ir.matches("as_slice").count(), 0, "{ir}");
+}
+
+#[test]
+fn a_referent_the_solve_names_after_checking_and_is_no_string_is_refused() {
+    assert_eq!(
+        refusal("let f = |x| -> byte_length(&x); f(1)"),
+        "type mismatch: expected &str, got &i64"
     );
 }
