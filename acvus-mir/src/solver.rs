@@ -2586,7 +2586,9 @@ impl<'src> Solver<'src> {
     /// view of what it lends. A direct one joins the call's parameter here,
     /// which `settle_join` has just bound to the candidate's own; a viewed
     /// one is the checker's coercion at the argument and its type stays what
-    /// the caller wrote (RFC-0043 rule 5).
+    /// the caller wrote (RFC-0043 rule 5). An argument still waiting for its
+    /// head is joined by neither: rule 2 gives the head to the solve, not to
+    /// the candidate the other arguments settled on.
     fn join_unjoined(
         &mut self,
         call: &CallShape,
@@ -2594,6 +2596,9 @@ impl<'src> Solver<'src> {
         awaiting_head: &[UnjoinedArgument],
     ) -> Result<(), Mismatch> {
         for argument in awaiting_head {
+            if self.admission_waits(candidate, argument.index, &argument.ty) {
+                continue;
+            }
             if self.admits(candidate, argument.index, &argument.ty) != Admission::Direct {
                 continue;
             }
@@ -2626,6 +2631,10 @@ impl<'src> Solver<'src> {
         }
     }
 
+    /// Whether the candidate would still take the call. An unjoined
+    /// argument is tried with `JoinKind::Decision`, the kind `settle_join`
+    /// runs if this candidate wins: a signature's open representation is
+    /// undecided, not disagreed, and only a decision's join may name it.
     fn takes_signature(
         &self,
         call: &CallShape,
@@ -2729,7 +2738,7 @@ impl<'src> Solver<'src> {
                         &argument.ty,
                         param,
                         Position::Value,
-                        JoinKind::Flow,
+                        JoinKind::Decision,
                         self.registry,
                     )
                     .is_ok(),

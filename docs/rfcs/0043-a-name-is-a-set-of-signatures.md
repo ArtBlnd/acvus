@@ -56,7 +56,14 @@ kind of admission behaves as an exception:
    for a container whose element type is still open); when the variable
    freezes to a head no remaining candidate takes directly, admission is
    asked again at that argument with the resolved head, and rule 1
-   applies to what it finds.
+   applies to what it finds. The wait outlives the settle. The rest of the
+   call can empty the set to one candidate while this argument is still a
+   variable, and the settle does not join it then: joining would give the
+   head the candidate's parameter, which is the shape decision rule 2
+   exists to refuse. The argument stays the checker's, settled after the
+   solve against the parameter the decision chose — the coercion where the
+   head arrived and the parameter takes a view of it, the unification
+   where nothing named the head.
 3. **Equal strength is the existing question.** Two candidates that take
    an argument at the same admission are told apart by the rest of the
    call, as before; two that remain at the end are `AmbiguousFunction`.
@@ -294,10 +301,18 @@ display order, not the order the registries were combined in.
   joining it with the call's parameter. `Solver::admitted_again` asks
   admission afresh at every step and applies rule 1 to what it finds;
   `takes_signature` tests each unjoined argument against the candidate's own
-  parameter on the trial terms; `join_unjoined` joins, at the settle, the
-  unjoined arguments the settled candidate takes directly. `SliceArg`'s
-  `DeferredView::OfSettledParam` is where the view a settled parameter asks
-  for becomes the coercion.
+  parameter on the trial terms, joining there as `settle_join` will if the
+  candidate wins, so that a signature's open representation (hash-types.md,
+  R3) reads as undecided rather than as a disagreement; `join_unjoined`
+  joins, at the settle, the unjoined arguments the settled candidate takes
+  directly and whose head the solve has named, and leaves the rest to the
+  checker. `SliceArg`'s `DeferredView::OfSettledParam` is where the view a
+  settled parameter asks for becomes the coercion, and where a head nothing
+  named meets the parameter through `meet_settled_argument`.
+- A set that mixes kinds is one set. `Scheme::param_bound` answers
+  `TyVarBound::Any` for a plain declaration's unbounded parameter and the
+  `OneOf` its instances name for a shared signature's, so a signature is the
+  narrower candidate and the admission order reads both the same way.
 - A `Converted` argument needs no deferral of its own: the conversion
   decision `convert_argument_at` opens already waits for the signature,
   through `Solver::awaits_signature`.
