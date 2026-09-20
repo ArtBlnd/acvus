@@ -46,11 +46,16 @@ collections.
 
 2. **Length, not shape, is what Rust sees.** Every `T` in the tuple is a
    `TyVar`, which the extern crate erases to the runtime's value; two
-   tuples of the same length are one Rust instantiation. A consumer is
-   therefore one instance per tuple length, and **the length is bounded
-   at 8**: a pipeline of more than eight stages is refused by the checker
-   at the ninth adaptor, naming the bound. The macro emits the cons and
-   the consumers for lengths 0..=8.
+   tuples of the same length are one Rust instantiation, and a consumer
+   needs none per length at all: it is one generic declaration over the
+   list variable, since the runtime carries the stage count in the array.
+   **The length is bounded at 8**, and the bound lives on the adaptors:
+   every adaptor is a shared signature with `instance_of` instances for
+   input lengths 0..=7 (adaptors are `effect = pure`, which is what a
+   shared signature admits; consumers are `effect = E` and cannot be
+   instanced — `Externs::combine` refuses an effect-variable instance),
+   so the ninth adaptor is refused by the checker with the declared-bound
+   message. One macro in `acvus-ext` emits the eight instances per adaptor.
 
 3. **A stage is a value: one element in, zero or more out.** The runtime
    shape is one struct, `Iter { source, stages: [Stage; N] }`, `N` the
